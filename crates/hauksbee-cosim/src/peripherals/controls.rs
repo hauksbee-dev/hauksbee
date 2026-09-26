@@ -64,7 +64,7 @@ pub struct Pushbutton {
     pressed: bool,
     bounce_s: f64,
     /// Set when a press level change is requested; consumed on the next
-    /// pre_solve to start the bounce window at the correct sim time.
+    /// `pre_solve` to start the bounce window at the correct sim time.
     pending: Option<bool>,
     /// Sim time the current transition began, while bouncing.
     transition_start: Option<f64>,
@@ -76,7 +76,7 @@ impl Pushbutton {
     /// pull-to-ground button). `bounce_ms` of 0 disables the bounce model.
     pub fn new(circuit: &mut Circuit, id: &str, net: NodeId, to: NodeId, bounce_ms: f64) -> Self {
         let contact = stamp_resistor(circuit, format!("Rsw_{id}"), net, to, CONTACT_ROFF);
-        Pushbutton {
+        Self {
             id: id.to_string(),
             contact,
             ron: CONTACT_RON,
@@ -89,33 +89,18 @@ impl Pushbutton {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)] // the chatter phase is a small whole number
     fn resistance_now(&self, t: f64) -> f64 {
-        match self.transition_start {
-            None => {
-                if self.pressed {
-                    self.ron
-                } else {
-                    self.roff
-                }
-            }
-            Some(start) => {
-                let elapsed = t - start;
-                if elapsed >= self.bounce_s {
-                    if self.target_pressed {
-                        self.ron
-                    } else {
-                        self.roff
-                    }
-                } else {
-                    // ~5 chatter cycles across the bounce window.
-                    let phase = (elapsed / self.bounce_s * 10.0).floor() as i64;
-                    if phase % 2 == 0 {
-                        self.ron
-                    } else {
-                        self.roff
-                    }
-                }
-            }
+        let closed = match self.transition_start {
+            None => self.pressed,
+            Some(start) if t - start >= self.bounce_s => self.target_pressed,
+            // ~5 chatter cycles across the bounce window.
+            Some(start) => ((t - start) / self.bounce_s * 10.0).floor() as i64 % 2 == 0,
+        };
+        if closed {
+            self.ron
+        } else {
+            self.roff
         }
     }
 }
@@ -185,7 +170,7 @@ impl ToggleSwitch {
     pub fn new(circuit: &mut Circuit, id: &str, net: NodeId, to: NodeId, closed: bool) -> Self {
         let r = if closed { CONTACT_RON } else { CONTACT_ROFF };
         let contact = stamp_resistor(circuit, format!("Rsw_{id}"), net, to, r);
-        ToggleSwitch {
+        Self {
             id: id.to_string(),
             contact,
             closed,
@@ -229,11 +214,12 @@ impl Peripheral for ToggleSwitch {
 // Potentiometer (three-terminal, wiper position 0..1)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A three-terminal potentiometer: terminals `a` and `b`, wiper `w`. The total
-/// track resistance `r_total` is split between the a-w and w-b legs by the
-/// wiper position `pos` in 0..1 (0 = wiper at `a`, 1 = wiper at `b`). Tied as a
-/// voltage divider (a→rail, b→ground) it gives an analog input the firmware can
-/// read on the wiper.
+/// A three-terminal potentiometer: terminals `a` and `b`, wiper `w`.
+///
+/// The total track resistance `r_total` is split between the a-w and w-b legs
+/// by the wiper position `pos` in 0..1 (0 = wiper at `a`, 1 = wiper at `b`).
+/// Tied as a voltage divider (a→rail, b→ground) it gives an analog input the
+/// firmware can read on the wiper.
 pub struct Potentiometer {
     id: String,
     r_aw: DeviceId,
@@ -259,7 +245,7 @@ impl Potentiometer {
         let r_aw = stamp_resistor(circuit, format!("Rpot_{id}_aw"), a, w, aw_ohms);
         let wb_ohms = (r_total * (1.0 - pos)).max(1e-3);
         let r_wb = stamp_resistor(circuit, format!("Rpot_{id}_wb"), w, b, wb_ohms);
-        Potentiometer {
+        Self {
             id: id.to_string(),
             r_aw,
             r_wb,
@@ -310,10 +296,11 @@ impl Peripheral for Potentiometer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// An incremental rotary encoder producing quadrature A/B outputs on two nets,
-/// driven from a commanded angular position (in detents). Setting a new
-/// position advances the Gray-code state machine the right number of steps,
-/// flipping A then B (or B then A) per step direction. Each output is a
-/// stamped Thevenin driver pulled to `vhigh` / 0.
+/// driven from a commanded angular position (in detents).
+///
+/// Setting a new position advances the Gray-code state machine the right number
+/// of steps, flipping A then B (or B then A) per step direction. Each output is
+/// a stamped Thevenin driver pulled to `vhigh` / 0.
 pub struct Encoder {
     id: String,
     drv_a: DeviceId,
@@ -334,7 +321,7 @@ impl Encoder {
         // Each output is an ideal source behind a small series resistor.
         let drv_a = stamp_driver(circuit, a, &format!("{id}_A"), 0.0);
         let drv_b = stamp_driver(circuit, b, &format!("{id}_B"), 0.0);
-        Encoder {
+        Self {
             id: id.to_string(),
             drv_a,
             drv_b,
@@ -373,6 +360,7 @@ impl Peripheral for Encoder {
         self.drive_phase(ctx.circuit);
     }
 
+    #[allow(clippy::cast_possible_truncation)] // detent targets are small whole numbers; as saturates
     fn set_value(&mut self, value: f64) {
         // value is the target absolute position in detents. Step toward it one
         // quadrature edge per detent so A/B form a valid quadrature sequence.
@@ -388,6 +376,7 @@ impl Peripheral for Encoder {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)] // detent positions are small whole numbers
     fn state(&self) -> HashMap<String, f64> {
         let (a, b) = GRAY[self.phase as usize];
         let mut m = HashMap::new();
@@ -421,10 +410,12 @@ pub enum StimulusKind {
     },
 }
 
-/// A generic stimulus driving one net. With `is_current = false` it is a
-/// voltage source behind a small series resistor (so its branch current is
-/// measurable and it never hard-shorts the net); with `is_current = true` it is
-/// an ideal current source injecting into the net.
+/// A generic stimulus driving one net.
+///
+/// With `is_current = false` it is a voltage source behind a small series
+/// resistor (so its branch current is measurable and it never hard-shorts the
+/// net); with `is_current = true` it is an ideal current source injecting into
+/// the net.
 pub struct Stimulus {
     id: String,
     device: DeviceId,
@@ -438,7 +429,7 @@ impl Stimulus {
     /// Stamp a voltage stimulus on `net` (behind a 50 Ω series resistor).
     pub fn voltage(circuit: &mut Circuit, id: &str, net: NodeId, kind: StimulusKind) -> Self {
         let device = stamp_driver(circuit, net, id, kind.value_at(0.0));
-        Stimulus {
+        Self {
             id: id.to_string(),
             device,
             kind,
@@ -456,7 +447,7 @@ impl Stimulus {
             net,
             SourceKind::Dc(kind.value_at(0.0)),
         ));
-        Stimulus {
+        Self {
             id: id.to_string(),
             device,
             kind,
@@ -470,20 +461,21 @@ impl Stimulus {
 impl StimulusKind {
     fn value_at(&self, t: f64) -> f64 {
         match self {
-            StimulusKind::Wave(k) => k.eval(t),
-            StimulusKind::Noise { offset, .. } => *offset,
+            Self::Wave(k) => k.eval(t),
+            Self::Noise { offset, .. } => *offset,
         }
     }
 }
 
 /// Deterministic uniform in [-1, 1] from a counter (splitmix64).
+#[allow(clippy::cast_precision_loss)] // rounding 64 random bits to f64 is the intent
 fn noise_sample(seed: u64, counter: u64) -> f64 {
-    let mut x = seed ^ counter.wrapping_mul(0x9E3779B97F4A7C15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    let mut x = seed ^ counter.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^= x >> 31;
     // Map to [-1, 1).
-    (x as f64 / u64::MAX as f64) * 2.0 - 1.0
+    (x as f64 / u64::MAX as f64).mul_add(2.0, -1.0)
 }
 
 impl Peripheral for Stimulus {
@@ -565,6 +557,7 @@ fn stamp_driver(circuit: &mut Circuit, net: NodeId, tag: &str, v0: f64) -> Devic
 }
 
 /// Build a [`SourceKind`] PWL from `(t_s, value)` points.
+#[must_use]
 pub fn pwl(points: Vec<(f64, f64)>) -> SourceKind {
     SourceKind::Pwl(points.into_iter().map(|(t, v)| PwlPoint { t, v }).collect())
 }
@@ -574,7 +567,7 @@ mod tests {
     use super::*;
 
     /// Round-7 #7: a Stimulus waveform must be sampled at the chunk END (t+dt),
-    /// the same zero-order-hold instant DynamicLoad and VcdSink use, sampling
+    /// the same zero-order-hold instant `DynamicLoad` and `VcdSink` use, sampling
     /// at the chunk start put it a full chunk out of phase with every other
     /// analog source on the timeline.
     #[test]
@@ -648,7 +641,7 @@ mod tests {
         // Step forward 4 detents -> full Gray cycle back to phase 0.
         let mut seq = Vec::new();
         for step in 1..=4 {
-            enc.set_value(step as f64);
+            enc.set_value(f64::from(step));
             seq.push(GRAY[enc.phase as usize]);
         }
         assert_eq!(

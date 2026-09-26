@@ -53,7 +53,9 @@ pub use spi::{
 };
 
 /// Firmware-visible work performed by one bus slave since the previous analog
-/// chunk. Model-owned peripheral power uses this typed signal to select the
+/// chunk.
+///
+/// Model-owned peripheral power uses this typed signal to select the
 /// datasheet's idle/read/write current; no command strings or board references
 /// leak into the electrical scheduler.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -64,13 +66,14 @@ pub struct BusActivity {
 }
 
 impl BusActivity {
-    pub fn merge(&mut self, other: Self) {
+    pub const fn merge(&mut self, other: Self) {
         self.read_units = self.read_units.saturating_add(other.read_units);
         self.write_units = self.write_units.saturating_add(other.write_units);
         self.other_units = self.other_units.saturating_add(other.other_units);
     }
 
-    pub fn is_idle(self) -> bool {
+    #[must_use]
+    pub const fn is_idle(self) -> bool {
         self.read_units == 0 && self.write_units == 0 && self.other_units == 0
     }
 }
@@ -101,6 +104,7 @@ impl<'a> TickCtx<'a> {
     }
 
     /// Voltage on a node from the last solve (0 if out of range).
+    #[must_use]
     pub fn volts(&self, node: NodeId) -> f64 {
         self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0)
     }
@@ -113,7 +117,7 @@ pub trait Peripheral: Send {
     /// Stable identifier for live control / state readout (e.g. "BTN1").
     fn id(&self) -> &str;
 
-    /// Human-facing kind string ("pushbutton", "i2c_lm75", "vcd_sink", ...).
+    /// Human-facing kind string (`"pushbutton"`, `"i2c_lm75"`, `"vcd_sink"`, ...).
     fn kind(&self) -> &'static str;
 
     /// Called before the analog solve. Controls push their commanded level onto
@@ -161,6 +165,7 @@ pub struct PeripheralSet {
 }
 
 impl PeripheralSet {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -171,10 +176,12 @@ impl PeripheralSet {
     }
 
     /// Number of attached peripherals.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.peripherals.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.peripherals.is_empty()
     }
@@ -232,6 +239,7 @@ impl PeripheralSet {
     }
 
     /// State of every peripheral, keyed by id, for frame reporting.
+    #[must_use]
     pub fn states(&self) -> HashMap<String, HashMap<String, f64>> {
         self.peripherals
             .iter()
@@ -240,6 +248,7 @@ impl PeripheralSet {
     }
 
     /// Find a peripheral by id and downcast to a concrete type.
+    #[must_use]
     pub fn get<T: 'static>(&self, id: &str) -> Option<&T> {
         self.peripherals
             .iter()

@@ -1,5 +1,6 @@
-//! [`HauksbeeEngine`]: the concrete engine behind `hauksbee-server`'s [`Engine`]
-//! trait, the object that turns a bound board plus optional firmware into a
+//! [`HauksbeeEngine`]: the concrete engine behind `hauksbee-server`'s [`Engine`] trait.
+//!
+//! It is the object that turns a bound board plus optional firmware into a
 //! running co-simulation the server (and its many front-ends) can drive.
 //!
 //! It wraps a [`Scheduler`] over a [`BoundBoard`] and owns the board metadata
@@ -54,6 +55,12 @@ pub struct HauksbeeEngine {
 
 impl HauksbeeEngine {
     /// Build an engine from a bound board and optional firmware.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if [`Scheduler::new`] refuses the board: an active-low
+    /// MCU reset role wired to ground while firmware is given, or an MCU core that
+    /// cannot be instantiated or loaded with the firmware.
     pub fn from_bound(
         bound: BoundBoard,
         firmware: Option<&Path>,
@@ -86,7 +93,7 @@ impl HauksbeeEngine {
         if sched.has_external_backend() {
             sched.chunk_s = EXTERNAL_BACKEND_CHUNK_S;
         }
-        Ok(HauksbeeEngine {
+        Ok(Self {
             sched,
             board_name,
             board_url: board_url.to_string(),
@@ -100,6 +107,11 @@ impl HauksbeeEngine {
     }
 
     /// Convenience: extract + bind + build in one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the board text cannot be extracted, or if
+    /// [`Self::from_bound`] refuses the bound board.
     pub fn from_board_file(
         board_text: &str,
         firmware: Option<&Path>,
@@ -108,16 +120,18 @@ impl HauksbeeEngine {
         let board = ExtractedBoard::from_auto(board_text)?;
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&board, &lib);
-        HauksbeeEngine::from_bound(bound, firmware, board_url)
+        Self::from_bound(bound, firmware, board_url)
     }
 
     /// The bind report for this engine's board.
-    pub fn report(&self) -> &BindReport {
+    #[must_use]
+    pub const fn report(&self) -> &BindReport {
         &self.report_store
     }
 
     /// Direct access to the scheduler (headless stats, tests).
-    pub fn scheduler(&self) -> &Scheduler {
+    #[must_use]
+    pub const fn scheduler(&self) -> &Scheduler {
         &self.sched
     }
     /// Arm the LIVE-session behaviour: once the strict-abort streak trips,
@@ -127,11 +141,11 @@ impl HauksbeeEngine {
     /// so and take Reset. Only the serving surfaces call this: headless,
     /// CI and report co-sims keep the complete march, because their
     /// failed-window record over the WHOLE requested span is the product.
-    pub fn arm_live_abort(&mut self) {
+    pub const fn arm_live_abort(&mut self) {
         self.sched.stop_when_dead = true;
     }
 
-    pub fn scheduler_mut(&mut self) -> &mut Scheduler {
+    pub const fn scheduler_mut(&mut self) -> &mut Scheduler {
         &mut self.sched
     }
 
@@ -159,7 +173,8 @@ impl HauksbeeEngine {
     }
 
     /// Current sim time (s).
-    pub fn sim_time(&self) -> f64 {
+    #[must_use]
+    pub const fn sim_time(&self) -> f64 {
         self.sched.sim_time()
     }
 
@@ -377,7 +392,7 @@ impl Engine for HauksbeeEngine {
             net_v_extremes: self.sched.frame_v_extremes().clone(),
             component_states,
             uart: result.uart,
-            net_currents: Default::default(),
+            net_currents: HashMap::default(),
             faults,
             supply_states,
         }
@@ -418,7 +433,7 @@ impl Engine for HauksbeeEngine {
     }
 
     fn set_power_supply(&mut self, net: &str, supply: PowerSupplyConfig) {
-        self.sched.set_power_supply(net, config_to_supply(supply));
+        self.sched.set_power_supply(net, config_to_supply(&supply));
     }
 
     fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
@@ -438,7 +453,7 @@ impl Engine for HauksbeeEngine {
         self.refuse_taken_peripheral_id(&spec.id)?;
         let net = self.board_net(&spec.net)?;
         let to = match spec.to.as_deref() {
-            None | Some("") | Some("GND") | Some("gnd") | Some("0") => NodeId::GROUND,
+            None | Some("" | "GND" | "gnd" | "0") => NodeId::GROUND,
             Some(name) => self.board_net(name)?,
         };
         match spec.kind.as_str() {
@@ -603,8 +618,9 @@ impl Engine for HauksbeeEngine {
 }
 
 /// Map a wire [`PowerSupplyConfig`] onto the engine's behavioral [`PowerSupply`].
-pub fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
-    match c {
+#[must_use]
+pub const fn config_to_supply(c: &PowerSupplyConfig) -> PowerSupply {
+    match *c {
         PowerSupplyConfig::Ideal { volts } => PowerSupply::Ideal { volts },
         PowerSupplyConfig::Bench {
             volts,
@@ -656,7 +672,8 @@ pub fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
 }
 
 /// Map the engine's [`PowerSupply`] back to a wire [`PowerSupplyConfig`].
-pub fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
+#[must_use]
+pub const fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
     match s {
         PowerSupply::Ideal { volts } => PowerSupplyConfig::Ideal { volts: *volts },
         PowerSupply::Bench {
@@ -707,6 +724,7 @@ pub fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
 }
 
 /// Map the UI's [`SolverControls`] onto solver [`SolverOptions`].
+#[must_use]
 pub fn controls_to_options(c: &SolverControls) -> SolverOptions {
     let integration = match c.integration.as_str() {
         "gear2" => Integration::Gear2,

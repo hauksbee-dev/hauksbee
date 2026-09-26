@@ -1,4 +1,6 @@
-//! Simple-regulator validity. A simple vreg is an ideal DC source that ignores
+//! Simple-regulator validity.
+//!
+//! A simple vreg is an ideal DC source that ignores
 //! its input, so its setpoint is only a result when the input has INDEPENDENT
 //! headroom. This module establishes that or reports why not; it never
 //! substitutes a voltage of its own for an unsupported output.
@@ -7,6 +9,7 @@ use hauksbee_bind::bind_report::{OpenPart, SimpleRegulator};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{run_op, Probe, SolverOptions};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 /// One unsupported regulator: the shared reason, and everything it invalidates.
 /// `refs[0]` is the regulator itself; the rest are MCUs powered from `nets`.
@@ -21,11 +24,13 @@ pub struct RegulationTaint {
 /// Input minus return in the regulator's polarity, or why no independent solve.
 pub type Verdict = Result<f64, String>;
 
-/// `(output, return, signed setpoint)` read back from the stamped source. NaN
-/// when it is no longer a DC source, which no headroom check can pass. On an
-/// adjustable regulator the source's `n` is ADJ or a private node, so the
+/// `(output, return, signed setpoint)` read back from the stamped source.
+///
+/// NaN when it is no longer a DC source, which no headroom check can pass. On
+/// an adjustable regulator the source's `n` is ADJ or a private node, so the
 /// board return the card named is returned in its place: everything downstream
 /// measures the rail and its headroom against the same node.
+#[must_use]
 pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f64) {
     match &circuit.devices[reg.source.0 as usize] {
         Device::Vsource { p, n, kind, .. } => {
@@ -39,6 +44,7 @@ pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f
     }
 }
 
+#[must_use]
 pub fn headroom_ok(reg: &SimpleRegulator, headroom_v: f64) -> bool {
     // A datasheet-guaranteed row sits exactly on the bound (VI = VO + dropout),
     // and the solved input carries Newton residual, so a bare `>=` refuses a row
@@ -51,12 +57,16 @@ pub fn headroom_ok(reg: &SimpleRegulator, headroom_v: f64) -> bool {
         && headroom_v <= reg.max_in_v + slack(reg.max_in_v)
 }
 
-/// Decide `supported` from scratch on a CLONE with every regulator source swapped
-/// in place for a 0 A current source (device ids stay valid), re-enabling only
-/// regulators whose input passes, to a fixpoint: a cascade validates in dependency
-/// order and a regulator-only cycle never gains a member. A `barred` (already
-/// tainted) regulator stays removed, so nothing it feeds regains support. At most
-/// `regs.len() + 1` solves; returns the verdict of each one left unsupported.
+/// Decide `supported` from scratch, re-enabling regulators to a fixpoint.
+///
+/// Works on a CLONE with every regulator source swapped in place for a 0 A
+/// current source (device ids stay valid), re-enabling only regulators whose
+/// input passes, to a fixpoint: a cascade validates in dependency order and a
+/// regulator-only cycle never gains a member.
+///
+/// A `barred` (already tainted) regulator stays removed, so nothing it feeds
+/// regains support. At most `regs.len() + 1` solves; returns the verdict of each
+/// one left unsupported.
 pub fn evaluate(
     circuit: &Circuit,
     regs: &mut [SimpleRegulator],
@@ -112,9 +122,10 @@ pub fn evaluate(
         .flat_map(|(_, dev)| dev.controlling_sources());
     let orphaned = readers.any(|id| regs.iter().any(|r| r.source == id));
     loop {
-        let solved = match orphaned {
-            true => Err("a controlled source reads a regulator's branch current".to_string()),
-            false => run_op(&probe, opts, &probes).map_err(|e| e.to_string()),
+        let solved = if orphaned {
+            Err("a controlled source reads a regulator's branch current".to_string())
+        } else {
+            run_op(&probe, opts, &probes).map_err(|e| e.to_string())
         };
         let (mut unsupported, mut granted) = (Vec::new(), false);
         for (i, reg) in regs.iter().enumerate() {
@@ -124,7 +135,7 @@ pub fn evaluate(
             let verdict = solved.as_ref().map(|out| signs[i] * out.rows[0][i]);
             if verdict.is_ok_and(|v| headroom_ok(reg, v)) {
                 (supported[i], granted) = (true, true);
-                for id in [reg.source].iter().chain(&reg.helpers) {
+                for id in std::iter::once(&reg.source).chain(&reg.helpers) {
                     let id = id.0 as usize;
                     probe.devices[id] = circuit.devices[id].clone();
                 }
@@ -140,6 +151,7 @@ pub fn evaluate(
 
 /// The one disclosure every surface repeats. `revoked_at_s` marks a verdict
 /// from the post-chunk monitor (the full solve) rather than from [`evaluate`].
+#[must_use]
 pub fn reason(
     circuit: &Circuit,
     reg: &SimpleRegulator,
@@ -147,7 +159,7 @@ pub fn reason(
     revoked_at_s: Option<f64>,
 ) -> String {
     let (p, n, vout) = terminals(circuit, reg);
-    let (r, i, max) = (&reg.reference, circuit.node_name(reg.input), reg.max_in_v);
+    let (part, input, max) = (&reg.reference, circuit.node_name(reg.input), reg.max_in_v);
     let out = circuit.node_name(if p.is_ground() { n } else { p });
     let side = if vout < 0.0 { "below" } else { "above" };
     let seen = revoked_at_s.map_or_else(
@@ -170,16 +182,18 @@ pub fn reason(
             ),
         ),
     };
-    let need = match reg.dropout_v {
-        None => format!("{limit}; the model has no dropout figure"),
-        Some(d) => format!(
-            "{:.3} V {limit} + {d:.3} V declared dropout",
-            reg.min_in_v - d
-        ),
-    };
+    let need = reg.dropout_v.map_or_else(
+        || format!("{limit}; the model has no dropout figure"),
+        |d| {
+            format!(
+                "{:.3} V {limit} + {d:.3} V declared dropout",
+                reg.min_in_v - d
+            )
+        },
+    );
     let lone = |why: String| {
         format!(
-            "input {i} has no independent DC support ({why}); declare the supply that feeds {i}"
+            "input {input} has no independent DC support ({why}); declare the supply that feeds {input}"
         )
     };
     let clause = match verdict {
@@ -187,17 +201,17 @@ pub fn reason(
         Ok(x) if x.abs() < 1e-3 && revoked_at_s.is_none() => lone(format!("{x:.3} V {seen}")),
         Ok(x) if *x > max => {
             format!(
-                "input {i} is {x:.3} V {side} its return, {seen}, exceeding the {max:.3} V rating"
+                "input {input} is {x:.3} V {side} its return, {seen}, exceeding the {max:.3} V rating"
             )
         }
         Ok(x) => format!(
-            "input {i} is {x:.3} V {side} its return, {seen}, below the {:.3} V this model needs \
+            "input {input} is {x:.3} V {side} its return, {seen}, below the {:.3} V this model needs \
              ({need}, not a guaranteed bound)",
             reg.min_in_v
         ),
     };
     format!(
-        "{r} regulation of {out} is unsupported: {clause}. {held}, \
+        "{part} regulation of {out} is unsupported: {clause}. {held}, \
          not a simulated result; below-dropout, startup and recovery behaviour \
          are not modelled. Results on {out} and everything it powers are invalid for this run, \
          and stay invalid if the input recovers; start a fresh run."
@@ -213,6 +227,7 @@ pub struct Walk {
 }
 
 impl Walk {
+    #[must_use]
     pub fn new(
         circuit: &Circuit,
         regs: &[SimpleRegulator],
@@ -258,6 +273,7 @@ impl Walk {
     }
 
     /// Everything regulator `reg`'s output can power.
+    #[must_use]
     pub fn regulator(&self, circuit: &Circuit, reg: &SimpleRegulator) -> Vec<NodeId> {
         let (p, n, _) = terminals(circuit, reg);
         let seed = |x: &NodeId| !self.stop.contains(x) || (*x == p && !p.is_ground());
@@ -288,12 +304,14 @@ impl Walk {
 pub const OPEN_DRIVER: &str = "has no model, so it is absent from the simulated circuit";
 
 /// The one disclosure every surface repeats for an open part that would drive.
+#[must_use]
 pub fn open_driver_reason(r: &str, v: &str, from: &str, nets: &[String]) -> String {
     let more = nets.len().saturating_sub(6);
     let mut list = nets[..nets.len() - more].join(", ");
     if more > 0 {
-        list.push_str(&format!(" and {more} more"));
+        let _ = write!(list, " and {more} more");
     }
+
     format!(
         "{r} ({v}) {OPEN_DRIVER}, yet it is powered from {from} and can drive {list}. Any \
          voltage printed for those nets is the board without {r}, not a simulated result: a \
