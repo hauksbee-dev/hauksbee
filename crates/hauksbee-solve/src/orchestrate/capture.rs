@@ -228,7 +228,7 @@ pub fn execute_stiff_group_held_capped(
 ) -> SolveResult<Option<StiffExecution>> {
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
-        _ => {
+        StepControl::Adaptive { .. } => {
             return Err(SolveError::refused(
                 "stiff execution requires fixed step control",
             ))
@@ -322,7 +322,7 @@ pub fn execute_stiff_group_held_capped(
         }
     }
     for c in candidates {
-        if adjacent.get(&c.0).is_none_or(|v| v.is_empty()) {
+        if adjacent.get(&c.0).is_none_or(Vec::is_empty) {
             refusal_report.extend(out_of_scope_outcomes(
                 candidates,
                 "a candidate with no adjacent block to capture against",
@@ -362,11 +362,8 @@ pub fn execute_stiff_group_held_capped(
     let grew: HashMap<u32, usize> = candidates
         .iter()
         .map(|c| {
-            let base = adjacent.get(&c.0).map(|v| v.len()).unwrap_or(0);
-            (
-                c.0,
-                capture_blocks.get(&c.0).map(|v| v.len()).unwrap_or(base) - base,
-            )
+            let base = adjacent.get(&c.0).map_or(0, Vec::len);
+            (c.0, capture_blocks.get(&c.0).map_or(base, Vec::len) - base)
         })
         .collect();
     if std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok() {
@@ -529,12 +526,12 @@ pub fn execute_stiff_group_held_capped(
     let mut bootstrapped = false;
     let whole_dc = {
         let mut ws = Workspace::new(sub);
-        dc_operating_point(&mut ws, sub, opts).ok().map(|_| ws)
+        dc_operating_point(&mut ws, sub, opts).ok().map(|()| ws)
     };
     match whole_dc {
         Some(ws) => {
             for c in candidates {
-                let v = ws.layout.node(*c).map(|i| ws.x[i]).unwrap_or(0.0);
+                let v = ws.layout.node(*c).map_or(0.0, |i| ws.x[i]);
                 rest.insert(c.0, v);
             }
         }
@@ -560,8 +557,7 @@ pub fn execute_stiff_group_held_capped(
                     let v = if solved {
                         g2l.get(&c.0)
                             .and_then(|ln| ws.layout.node(NodeId(*ln)))
-                            .map(|i| ws.x[i])
-                            .unwrap_or(0.0)
+                            .map_or(0.0, |i| ws.x[i])
                     } else {
                         0.0
                     };
@@ -588,8 +584,7 @@ pub fn execute_stiff_group_held_capped(
     let reltol = opts.reltol;
     let max_rounds = 6usize;
     let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
-    let tol_of =
-        |c: &NodeId| 10.0 * reltol * rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+    let tol_of = |c: &NodeId| 10.0 * reltol * rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
 
     let mut trains: HashMap<u32, Vec<f64>> = HashMap::new();
     let mut runs: HashMap<u32, CaptureRun> = HashMap::new();
@@ -875,7 +870,7 @@ pub fn execute_composed_group(
 ) -> SolveResult<Option<StiffExecution>> {
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
-        _ => {
+        StepControl::Adaptive { .. } => {
             return Err(SolveError::refused(
                 "composed execution requires fixed step control",
             ))
@@ -906,10 +901,10 @@ pub fn execute_composed_group(
         if dc_operating_point(&mut ws, sub, opts).is_ok() {
             bootstrapped = false;
             for s in signal_cuts {
-                rest.insert(s.0, ws.layout.node(*s).map(|i| ws.x[i]).unwrap_or(0.0));
+                rest.insert(s.0, ws.layout.node(*s).map_or(0.0, |i| ws.x[i]));
             }
             for rt in rails {
-                let v = ws.layout.node(rt.rail).map(|i| ws.x[i]).unwrap_or(0.0);
+                let v = ws.layout.node(rt.rail).map_or(0.0, |i| ws.x[i]);
                 rail_vnom.insert(rt.rail.0, v.abs().max(1.0));
                 rail_seed.insert(rt.rail.0, v);
             }
@@ -1088,7 +1083,7 @@ pub fn execute_composed_group(
         let bar = signal_cuts
             .iter()
             .map(|c| {
-                let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+                let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
                 (10.0 * reltol * vnom).max(1e-6 * vnom)
             })
             .fold(0.0f64, f64::max);
@@ -1139,7 +1134,7 @@ pub fn execute_composed_group(
             // No signals to relax: just the held rails.
             for rt in rails {
                 if let Some(tr) = rail_trains.get(&rt.rail.0) {
-                    waveforms.node_voltages[rt.rail.0 as usize] = tr.clone();
+                    waveforms.node_voltages[rt.rail.0 as usize].clone_from(tr);
                 }
             }
         }
@@ -1149,14 +1144,14 @@ pub fn execute_composed_group(
     let mut outcomes = Vec::new();
     for c in signal_cuts {
         let s = sag.get(&c.0).copied().unwrap_or(0.0);
-        let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+        let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
         // Quiet-basin telemetry (pure diagnostics, no behavior change): a
         // converged train that is essentially FLAT may have relaxed into a
         // quiet basin instead of the true spiking answer (the flagship's O2
         // hazard); flag it so the outcome table names the candidates.
         let train = &signal_trains[&c.0];
-        let ptp = train.iter().cloned().fold(f64::MIN, f64::max)
-            - train.iter().cloned().fold(f64::MAX, f64::min);
+        let ptp = train.iter().copied().fold(f64::MIN, f64::max)
+            - train.iter().copied().fold(f64::MAX, f64::min);
         outcomes.push(StiffOutcome {
             node: *c,
             kind: BoundaryKind::Signal,
@@ -1328,7 +1323,7 @@ fn signal_refusals(
             node: *c,
             kind: BoundaryKind::Signal,
             sag_v: f64::NAN,
-            tol_v: 10.0 * reltol * rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0),
+            tol_v: 10.0 * reltol * rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0),
             accepted: false,
             bootstrapped,
             capture_growth: 0,
@@ -1392,7 +1387,7 @@ fn dead_capture_outcomes(
     candidates
         .iter()
         .map(|c| {
-            let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+            let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
             StiffOutcome {
                 node: *c,
                 kind: BoundaryKind::Signal,
@@ -1531,7 +1526,7 @@ fn grow_capture_blocks(
                     break;
                 }
                 // A core-scale block is not a generator: skip it (policy doc).
-                if block_devs.get(&b).map(|v| v.len()).unwrap_or(0) > policy.max_block_devices {
+                if block_devs.get(&b).map_or(0, Vec::len) > policy.max_block_devices {
                     rejected.insert(b);
                     continue;
                 }
@@ -2066,7 +2061,7 @@ mod tests {
             "composed",
         );
         let vr = &exec.waveforms.node_voltages[rail.0 as usize];
-        let vr_min = vr.iter().cloned().fold(f64::MAX, f64::min);
+        let vr_min = vr.iter().copied().fold(f64::MAX, f64::min);
         assert!(
             vr.iter().all(|&v| v <= 5.0 + 1e-9) && vr_min < 4.999,
             "rail must sag: {vr_min}"
@@ -2250,9 +2245,7 @@ mod tests {
     }
 
     fn held_vdd(vdd: NodeId, hold_v: f64, dt: f64, tstop: f64) -> HashMap<u32, Vec<f64>> {
-        [(vdd.0, vec![hold_v; uniform_grid(dt, tstop).len()])]
-            .into_iter()
-            .collect()
+        std::iter::once((vdd.0, vec![hold_v; uniform_grid(dt, tstop).len()])).collect()
     }
 
     /// Plain adjacency leaves the sense-driven output FLAT; the

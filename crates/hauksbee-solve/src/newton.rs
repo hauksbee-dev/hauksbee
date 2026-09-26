@@ -16,6 +16,7 @@ use crate::sparse::{SparseMatrix, Symbolic};
 use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 /// Debug flags, read once: `getenv` locks libc's environment on every Newton solve.
 static NEWTON_DBG: LazyLock<bool> = LazyLock::new(|| std::env::var("HAUKSBEE_NEWTON_DBG").is_ok());
@@ -90,20 +91,20 @@ pub struct Workspace {
     /// self-deciding and the path bit-identical; the staged-DC outer loop sets
     /// it so each inner Newton solve holds comparator state fixed (smooth) and
     /// re-evaluates between solves.
-    cmp_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    cmp_freeze: Option<HashMap<DeviceId, bool>>,
     /// FROZEN analog-switch on/off decisions for the event-driven staged solve,
     /// keyed by device id. `None` (every normal solve) keeps the switches'
     /// smooth tanh conductance + control tangent and the path bit-identical; the
     /// staged-DC outer loop sets it so each inner Newton solve holds switch state
     /// fixed (smooth resistor network) and re-evaluates between solves.
-    switch_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    switch_freeze: Option<HashMap<DeviceId, bool>>,
     /// LATCHED analog-switch states carried between solves under
     /// [`crate::options::SwitchModel::Hysteretic`] -- the memory that makes the
     /// SPICE3 `SW` device a relay rather than a threshold. `None` until the first
     /// solve on a circuit that actually has a `VSwitch`; a switch missing from the
     /// map is OPEN, ngspice's own power-on convention. Maintained entirely by
     /// [`newton_solve`]; the smooth switch model never touches it.
-    switch_latch: Option<std::collections::HashMap<DeviceId, bool>>,
+    switch_latch: Option<HashMap<DeviceId, bool>>,
     /// Armed by the transient driver on a stiff comparator/switch board: when a
     /// bare per-step Newton fails, retry the step through the event-freeze loop
     /// (`newton_solve_event`) before cutting the timestep. Off by default, so an
@@ -157,7 +158,7 @@ pub struct Workspace {
     /// geometric-mean conductance and bridging the two throws. Consulted when
     /// `effects.spdt_bbm` is on (the device-model default; the typed compat
     /// field restores the bridging model).
-    spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    spdt_sibling: HashMap<DeviceId, DeviceId>,
     /// Set by [`newton_solve`] when the solve it just finished COMMITTED a
     /// hysteretic switch-latch state different from the one it entered with
     /// (i.e. a relay made or broke during this step). The transient driver
@@ -191,19 +192,19 @@ impl Workspace {
     /// Arm/disarm the per-step transient event-freeze retry. Set by the transient
     /// driver only on a board that needed the staged DC (or via `TRANSIENT_DYN`);
     /// the default-false keeps ordinary circuits on the plain per-step path.
-    pub fn set_tran_event(&mut self, on: bool) {
+    pub const fn set_tran_event(&mut self, on: bool) {
         self.tran_event = on;
     }
 
     /// Whether the per-step transient event-freeze retry is armed.
-    pub fn tran_event(&self) -> bool {
+    pub const fn tran_event(&self) -> bool {
         self.tran_event
     }
 
     /// Hold device-evaluation bypass for the next solves (the transient driver
     /// sets this for the trials after an event-resolved accept; see the
     /// `bypass_hold` field). A no-op unless `NewtonBypass::On` is armed.
-    pub fn set_bypass_hold(&mut self, hold: bool) {
+    pub const fn set_bypass_hold(&mut self, hold: bool) {
         self.bypass_hold = hold;
     }
 
@@ -216,7 +217,7 @@ impl Workspace {
 
     /// Whether the most recent `newton_solve` committed a hysteretic
     /// switch-latch flip (see the `latch_flipped` field).
-    pub fn latch_flipped(&self) -> bool {
+    pub const fn latch_flipped(&self) -> bool {
         self.latch_flipped
     }
 
@@ -224,7 +225,7 @@ impl Workspace {
     /// the transient driver on the stiff-board path (same condition as
     /// `set_tran_event`); the default-false keeps ordinary per-step Newton
     /// bit-identical (and free of the extra residual evaluation).
-    pub fn set_tran_line_search(&mut self, on: bool) {
+    pub const fn set_tran_line_search(&mut self, on: bool) {
         self.tran_line_search = on;
     }
 
@@ -235,12 +236,12 @@ impl Workspace {
     /// degeneracy that collapses the cold DC also destabilizes each transient
     /// step. `reg_ohms` is the negligible series resistance (e.g. 1e-2) added to
     /// every Vsource/Inductor branch; 0.0 restores the bit-identical normal path.
-    pub fn set_staged_branch_reg(&mut self, reg_ohms: f64) {
+    pub const fn set_staged_branch_reg(&mut self, reg_ohms: f64) {
         self.staged_branch_reg = reg_ohms;
     }
 
     /// Whether the last DC operating-point solve used the staged-DC fallback.
-    pub fn used_staged_dc(&self) -> bool {
+    pub const fn used_staged_dc(&self) -> bool {
         self.used_staged_dc
     }
 
@@ -357,7 +358,7 @@ impl Workspace {
         reserve_pattern(circuit, &layout, &mut matrix);
         let symbolic = matrix.factorize_symbolic();
         let size = layout.size;
-        let linear = circuit.devices.iter().all(|d| d.is_linear());
+        let linear = circuit.devices.iter().all(Device::is_linear);
         let plan = StampPlan::compile(circuit, &layout, &matrix);
         let spdt_sibling = SpdtPairs::analyze(circuit).sibling;
         Self {
@@ -398,13 +399,13 @@ impl Workspace {
     /// must stamp the SAME device the operating point was solved with. `.ac`
     /// linearizes about that point and so needs it; without it the AC arm modelled
     /// a switch the DC solve never had.
-    pub fn switch_latch(&self) -> Option<&std::collections::HashMap<DeviceId, bool>> {
+    pub const fn switch_latch(&self) -> Option<&HashMap<DeviceId, bool>> {
         self.switch_latch.as_ref()
     }
 
     /// Seed the relay state from OUTSIDE this workspace (a co-sim chunk builds
     /// a fresh one, and a latch must not forget which way it is at the boundary).
-    pub fn set_switch_latch(&mut self, latch: Option<std::collections::HashMap<DeviceId, bool>>) {
+    pub fn set_switch_latch(&mut self, latch: Option<HashMap<DeviceId, bool>>) {
         self.switch_latch = latch;
     }
 
@@ -483,8 +484,8 @@ const STALL_WINDOW: usize = 12;
 /// smooth-switch or switch-free circuit keeps the classic self-deciding stamp.
 fn hyst_latch<'a>(
     opts: &SolverOptions,
-    latch: &'a Option<std::collections::HashMap<DeviceId, bool>>,
-) -> Option<&'a std::collections::HashMap<DeviceId, bool>> {
+    latch: &'a Option<HashMap<DeviceId, bool>>,
+) -> Option<&'a HashMap<DeviceId, bool>> {
     if opts.effects.switch_model == crate::options::SwitchModel::Hysteretic {
         latch.as_ref()
     } else {
@@ -833,10 +834,10 @@ fn newton_solve_core(
     // Same discipline for the stall site: a stale one from a previous attempt
     // would blame the wrong net.
     ws.stall_site = None;
-    for s in ws.prev_step.iter_mut() {
+    for s in &mut ws.prev_step {
         *s = 0.0;
     }
-    for c in ws.osc_count.iter_mut() {
+    for c in &mut ws.osc_count {
         *c = 0;
     }
     // Staged-path stall detection: track the best (smallest) undamped node-step
@@ -860,7 +861,7 @@ fn newton_solve_core(
         // lifetime change.
         ws.lin_point.copy_from_slice(&ws.x);
         ws.matrix.clear_values();
-        for v in ws.rhs.iter_mut() {
+        for v in &mut ws.rhs {
             *v = 0.0;
         }
         let branch_reg = ws.staged_branch_reg;
@@ -1312,7 +1313,7 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
                 ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
                 // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
                 let shrink = ws.osc_count[i].saturating_sub(1).min(8);
-                ALPHA_OSCILLATING / (1u32 << shrink) as f64
+                ALPHA_OSCILLATING / f64::from(1u32 << shrink)
             } else {
                 ws.osc_count[i] = 0;
                 ALPHA_CONVERGING
@@ -1392,7 +1393,7 @@ fn residual_argmax_at(
     branch_reg: f64,
 ) -> (f64, usize) {
     ws.matrix.clear_values();
-    for v in ws.rhs.iter_mut() {
+    for v in &mut ws.rhs {
         *v = 0.0;
     }
     {
@@ -1668,7 +1669,7 @@ fn seed_bjt_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
                 let ext = [*c, *b, *e];
                 for t in 0..3 {
                     if let Some(ii) = ints[t] {
-                        ws.x[ii] = ws.layout.node(ext[t]).map(|i| ws.x[i]).unwrap_or(0.0);
+                        ws.x[ii] = ws.layout.node(ext[t]).map_or(0.0, |i| ws.x[i]);
                     }
                 }
             }
@@ -1693,7 +1694,7 @@ fn seed_mosfet_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
                 let ext = [*d, *s];
                 for t in 0..2 {
                     if let Some(ii) = ints[t] {
-                        ws.x[ii] = ws.layout.node(ext[t]).map(|i| ws.x[i]).unwrap_or(0.0);
+                        ws.x[ii] = ws.layout.node(ext[t]).map_or(0.0, |i| ws.x[i]);
                     }
                 }
             }
@@ -1711,7 +1712,7 @@ fn seed_diode_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
     for (id, dev) in circuit.iter() {
         if let Device::Diode { a, .. } = dev {
             if let Some(int) = ws.layout.diode_internal(id) {
-                ws.x[int] = ws.layout.node(*a).map(|i| ws.x[i]).unwrap_or(0.0);
+                ws.x[int] = ws.layout.node(*a).map_or(0.0, |i| ws.x[i]);
             }
         }
     }
@@ -1792,7 +1793,7 @@ fn dc_solve(
     let steps = 50;
     let mut last = (0.0, 0);
     let src_ok = (1..=steps).all(|s| {
-        let scale = s as f64 / steps as f64;
+        let scale = f64::from(s) / f64::from(steps);
         let r = solve(ws, opts.gmin, scale);
         last = (scale, r.iters);
         if !r.converged && dbg {
@@ -2047,9 +2048,9 @@ fn eval_comparator_states(
     circuit: &Circuit,
     layout: &Layout,
     x: &[f64],
-    prev: &std::collections::HashMap<DeviceId, bool>,
-) -> std::collections::HashMap<DeviceId, bool> {
-    let mut out = std::collections::HashMap::new();
+    prev: &HashMap<DeviceId, bool>,
+) -> HashMap<DeviceId, bool> {
+    let mut out = HashMap::new();
     for (id, dev) in circuit.iter() {
         if let Device::Comparator {
             inp,
@@ -2058,8 +2059,8 @@ fn eval_comparator_states(
             ..
         } = dev
         {
-            let vp = layout.node(*inp).map(|i| x[i]).unwrap_or(0.0);
-            let vn = layout.node(*inn).map(|i| x[i]).unwrap_or(0.0);
+            let vp = layout.node(*inp).map_or(0.0, |i| x[i]);
+            let vn = layout.node(*inn).map_or(0.0, |i| x[i]);
             let d = vp - vn;
             let was_high = prev.get(&id).copied().unwrap_or(d > 0.0);
             out.insert(id, d > crate::stamp::comparator_trip(was_high, *hysteresis));
@@ -2073,9 +2074,9 @@ fn eval_comparator_states(
 /// `a` = the summing/common node, opposite control senses). The summing bus must
 /// never be simultaneously low-Z to BOTH throws, so the break-before-make logic
 /// in [`eval_switch_states`] consults these pairs.
-pub(crate) struct SpdtPairs {
+pub struct SpdtPairs {
     /// device id -> the device id of its sibling leg (only present for paired legs).
-    pub(crate) sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    pub(crate) sibling: HashMap<DeviceId, DeviceId>,
 }
 
 impl SpdtPairs {
@@ -2089,26 +2090,25 @@ impl SpdtPairs {
     #[cfg(test)]
     fn empty() -> Self {
         Self {
-            sibling: std::collections::HashMap::new(),
+            sibling: HashMap::new(),
         }
     }
 
     pub(crate) fn analyze(circuit: &Circuit) -> Self {
         // Group VSwitch legs by (common node a, base name without the _sN suffix).
-        let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
-            std::collections::HashMap::new();
+        let mut groups: HashMap<(u32, String), Vec<DeviceId>> = HashMap::new();
         for (id, dev) in circuit.iter() {
             if let Device::VSwitch { name, a, .. } = dev {
                 let base = name
                     .strip_suffix("_s0")
                     .or_else(|| name.strip_suffix("_s1"))
-                    .map(|s| s.to_string());
+                    .map(ToString::to_string);
                 if let Some(base) = base {
                     groups.entry((a.0, base)).or_default().push(id);
                 }
             }
         }
-        let mut sibling = std::collections::HashMap::new();
+        let mut sibling = HashMap::new();
         for (_, ids) in groups {
             if ids.len() == 2 {
                 sibling.insert(ids[0], ids[1]);
@@ -2156,14 +2156,14 @@ fn eval_switch_states(
     circuit: &Circuit,
     layout: &Layout,
     x: &[f64],
-    prev: &std::collections::HashMap<DeviceId, bool>,
+    prev: &HashMap<DeviceId, bool>,
     pairs: &SpdtPairs,
     transition_frac: f64,
-) -> std::collections::HashMap<DeviceId, bool> {
+) -> HashMap<DeviceId, bool> {
     // First pass: each switch's raw hysteretic decision and its "on-margin" (how
     // far the control sits past the on threshold; higher = more firmly on).
-    let mut on: std::collections::HashMap<DeviceId, bool> = std::collections::HashMap::new();
-    let mut margin: std::collections::HashMap<DeviceId, f64> = std::collections::HashMap::new();
+    let mut on: HashMap<DeviceId, bool> = HashMap::new();
+    let mut margin: HashMap<DeviceId, f64> = HashMap::new();
     for (id, dev) in circuit.iter() {
         if let Device::VSwitch {
             ctrl_p,
@@ -2173,8 +2173,8 @@ fn eval_switch_states(
             ..
         } = dev
         {
-            let vp = layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
-            let vn = layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
+            let vp = layout.node(*ctrl_p).map_or(0.0, |i| x[i]);
+            let vn = layout.node(*ctrl_n).map_or(0.0, |i| x[i]);
             let vctrl = vp - vn;
             let vmid = 0.5 * (von + voff);
             let was_on = prev.get(&id).copied().unwrap_or(vctrl > vmid);
@@ -2195,7 +2195,7 @@ fn eval_switch_states(
         }
     }
     // Break-before-make: resolve every SPDT pair so at most one leg is ON.
-    for (&id, &sib) in pairs.sibling.iter() {
+    for (&id, &sib) in &pairs.sibling {
         // Process each unordered pair once (id < sib).
         if id.0 >= sib.0 {
             continue;
@@ -2376,9 +2376,9 @@ fn event_solve(
     // Seed the discrete states from the entry iterate, anchored on no previous
     // decision (a control sitting in a hysteresis band takes its raw side).
     let mut x = ws.x.clone();
-    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &x, &Default::default());
+    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &x, &HashMap::default());
     let mut sw_states =
-        eval_switch_states(circuit, &ws.layout, &x, &Default::default(), &spdt, frac);
+        eval_switch_states(circuit, &ws.layout, &x, &HashMap::default(), &spdt, frac);
     if cmp_states.is_empty() && sw_states.is_empty() {
         return None;
     }
@@ -2435,8 +2435,8 @@ fn event_solve(
             {
                 let want = want_sw.get(&id).copied().unwrap_or(false);
                 if sw_states.get(&id).copied() != Some(want) {
-                    let vp = ws.layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
-                    let vn = ws.layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
+                    let vp = ws.layout.node(*ctrl_p).map_or(0.0, |i| x[i]);
+                    let vn = ws.layout.node(*ctrl_n).map_or(0.0, |i| x[i]);
                     disagree.push((id, want, (vp - vn - 0.5 * (von + voff)).abs()));
                 }
             }
@@ -2561,7 +2561,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     const DIODE_OFF_OHMS: f64 = 1e9;
     let mut relaxed = circuit.clone();
     let mut any = false;
-    for dev in relaxed.devices.iter_mut() {
+    for dev in &mut relaxed.devices {
         if let Device::Diode { name, a, k, .. } = dev {
             any = true;
             *dev = Device::resistor(format!("{name}__relaxed_off"), *a, *k, DIODE_OFF_OHMS);
@@ -2615,7 +2615,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
         }
         if let Some(int) = full.diode_internal(id) {
             if let Device::Diode { a, .. } = &circuit.devices[id.0 as usize] {
-                out[int] = full.node(*a).map(|i| out[i]).unwrap_or(0.0);
+                out[int] = full.node(*a).map_or(0.0, |i| out[i]);
             }
         }
     }
@@ -2706,7 +2706,6 @@ mod tests {
         cap, cap_ic, comparator, diode, divider, res, sw, vdc, vpulse, vswitch, GND,
     };
     use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, NodeId};
-    use std::collections::HashMap;
 
     fn node_v(ws: &Workspace, n: NodeId) -> f64 {
         ws.layout.node(n).map(|i| ws.x[i]).unwrap()

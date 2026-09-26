@@ -122,7 +122,7 @@ pub struct Transient {
 impl Transient {
     /// New engine with the given options.
     #[must_use]
-    pub fn new(opts: SolverOptions) -> Self {
+    pub const fn new(opts: SolverOptions) -> Self {
         Self {
             opts,
             switch_latch_seed: None,
@@ -250,7 +250,7 @@ impl Transient {
             {
                 return pt
                     .run_streaming(circuit, tstop, sink)
-                    .map(|_| TransientDiagnostics::default());
+                    .map(|()| TransientDiagnostics::default());
             }
         }
 
@@ -306,7 +306,7 @@ impl Transient {
         if from_zero {
             // Power-on: the unknown vector rests at zero. No DC solve to fail;
             // the ramp (paired Ramped sources) integrates the state up from here.
-            for v in ws.x.iter_mut() {
+            for v in &mut ws.x {
                 *v = 0.0;
             }
             for &(nid, val) in &circuit.initial_conditions {
@@ -864,7 +864,7 @@ fn for_each_reactive(
                 value,
                 ic,
                 atol,
-            })
+            });
         };
         match dev {
             Device::Capacitor { a, b, ic, .. } => push(
@@ -889,7 +889,7 @@ fn for_each_reactive(
                     diode_q(model, diode_vj(ws, id, *a, *k), opts),
                     None,
                     opts.chgtol,
-                )
+                );
             }
             // Bank A = Q_be, xb[0] = Q_bc.
             Device::Bjt { c, b, e, model, .. } if crate::stamp::bjt_has_charge(model, effects) => {
@@ -943,14 +943,14 @@ fn opamp_target(ws: &Workspace, dev: &Device) -> Option<(f64, f64, f64)> {
 /// `ws.x` at rest and no `ic` anywhere it reproduces the all-zero
 /// construction value. The op-amp EMF seeds at the DC point's clipped target:
 /// a single pole passes DC unattenuated, so the filtered EMF IS the target.
-pub(crate) fn seed_reactive_state(
+pub fn seed_reactive_state(
     state: &mut ReactiveState,
     circuit: &Circuit,
     ws: &Workspace,
     opts: &SolverOptions,
 ) {
     for_each_reactive(circuit, ws, opts, |r| {
-        state.seed(r.bank, r.dev, r.ic.unwrap_or(r.value))
+        state.seed(r.bank, r.dev, r.ic.unwrap_or(r.value));
     });
     for (id, dev) in circuit.iter() {
         if let Some((raw, lo, hi)) = opamp_target(ws, dev) {
@@ -965,7 +965,7 @@ pub(crate) fn seed_reactive_state(
 /// code), from the frozen previous EMF and the ACCEPTED inputs, so at
 /// convergence it reproduces exactly the EMF the final Newton iteration
 /// stamped; updated on acceptance only, never mid-Newton.
-pub(crate) fn advance_reactive_state(
+pub fn advance_reactive_state(
     state: &mut ReactiveState,
     circuit: &Circuit,
     ws: &Workspace,
@@ -978,7 +978,7 @@ pub(crate) fn advance_reactive_state(
     // very first step, so the derivative there is the BE one.
     let trapz = opts.integration == Integration::Trapezoidal && !first;
     for_each_reactive(circuit, ws, opts, |r| {
-        state.roll(r.bank, r.dev, r.value, h, trapz)
+        state.roll(r.bank, r.dev, r.value, h, trapz);
     });
     for (id, dev) in circuit.iter() {
         let Device::OpAmp { pole_hz, slew, .. } = dev else {
@@ -1059,7 +1059,7 @@ fn diode_vj(ws: &Workspace, id: DeviceId, a: NodeId, k: NodeId) -> f64 {
     anode - node_v(ws, k)
 }
 
-pub(crate) fn node_v(ws: &Workspace, node: NodeId) -> f64 {
+pub fn node_v(ws: &Workspace, node: NodeId) -> f64 {
     match ws.layout.node(node) {
         Some(i) => ws.x[i],
         None => 0.0,
@@ -1067,8 +1067,8 @@ pub(crate) fn node_v(ws: &Workspace, node: NodeId) -> f64 {
 }
 
 /// A device's branch current at the solution in `ws` (0 when it owns none).
-pub(crate) fn branch_i(ws: &Workspace, id: DeviceId) -> f64 {
-    ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0)
+pub fn branch_i(ws: &Workspace, id: DeviceId) -> f64 {
+    ws.layout.branch(id).map_or(0.0, |br| ws.x[br])
 }
 
 // --- LTE estimate -----------------------------------------------------------

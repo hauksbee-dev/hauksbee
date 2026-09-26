@@ -172,7 +172,7 @@ fn build_pool(policy: ParallelPolicy, n_nonlinear: usize) -> Option<rayon::Threa
                 return None;
             }
             let avail = std::thread::available_parallelism()
-                .map(|n| n.get())
+                .map(std::num::NonZero::get)
                 .unwrap_or(1);
             if avail < 2 {
                 return None; // a pool on one CPU is pure overhead
@@ -473,8 +473,8 @@ impl PartitionedTransient {
             .collect();
         let mut owned_sets: Vec<&[NodeId]> =
             Vec::with_capacity(lin_free_nodes.len() + nl_owned.len());
-        owned_sets.extend(lin_free_nodes.iter().map(|v| v.as_slice()));
-        owned_sets.extend(nl_owned.iter().map(|v| v.as_slice()));
+        owned_sets.extend(lin_free_nodes.iter().map(Vec::as_slice));
+        owned_sets.extend(nl_owned.iter().map(Vec::as_slice));
         let claimed = match verify_single_writer(&owned_sets, &rail_nodes, n_nodes) {
             Ok(claimed) => claimed,
             Err(msg) => {
@@ -548,7 +548,9 @@ impl PartitionedTransient {
     ) -> SolveResult<()> {
         let dt = match self.opts.step {
             StepControl::Fixed { dt } => dt,
-            _ => return Err(SolveError::refused("partitioned path requires fixed step")),
+            StepControl::Adaptive { .. } => {
+                return Err(SolveError::refused("partitioned path requires fixed step"))
+            }
         };
 
         // Seed all islands from a DC operating point, then exchange.
@@ -792,7 +794,7 @@ impl PartitionedTransient {
             // Inside the engine's own pool (every caller reaches `sweep`
             // through `in_pool`), so the ambient `par_iter`s below execute on
             // it, never on the global rayon pool.
-            let (_, nl_err) = rayon::join(
+            let ((), nl_err) = rayon::join(
                 || {
                     (
                         self.linear.as_slice(),
@@ -804,7 +806,9 @@ impl PartitionedTransient {
                         .into_par_iter()
                         .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
                         .for_each(|(li, state, prev, buf, vfree)| {
-                            linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree)
+                            linear_phase_a(
+                                li, circuit, vbuf, tnext, first, state, prev, buf, vfree,
+                            );
                         })
                 },
                 || {
@@ -944,7 +948,7 @@ impl PartitionedTransient {
     /// vanishes once the balance converges (typically within the first step).
     fn seed_decomposed(&mut self, circuit: &Circuit) -> SolveResult<()> {
         // 1. Boundary estimates into the exchange buffer.
-        for v in self.vbuf.iter_mut() {
+        for v in &mut self.vbuf {
             *v = 0.0;
         }
         // Cut sources (and stacked supplies) resolved at t=0.
@@ -1036,7 +1040,7 @@ impl PartitionedTransient {
         }
     }
 
-    fn global_x_len(&self) -> usize {
+    const fn global_x_len(&self) -> usize {
         // Node voltages [0..n_nodes] map to unknown indices [0..n_nodes-1]
         // exactly like the monolithic layout's node block; branch currents are
         // appended but the partitioned probe surface only fills node voltages.
@@ -1227,7 +1231,7 @@ fn linear_phase_a(
         buf[k] = vbuf[n.0 as usize];
     }
     for (k, (id, _, _)) in li.isources().iter().enumerate() {
-        if let hauksbee_ir::Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
+        if let Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
             buf[n_vin + k] = kind.eval(tnext);
         }
     }
@@ -1468,7 +1472,7 @@ impl NonlinearIsland {
             if strict {
                 return Err(e);
             }
-            for xi in self.ws.x.iter_mut() {
+            for xi in &mut self.ws.x {
                 *xi = 0.0;
             }
             for (ln, gn) in self.l2g.iter().enumerate().skip(1) {
@@ -1521,7 +1525,7 @@ impl NonlinearIsland {
             1.0,
         );
         if !r.converged {
-            let names: Vec<&str> = self.sub.devices.iter().map(|d| d.name()).take(8).collect();
+            let names: Vec<&str> = self.sub.devices.iter().map(Device::name).take(8).collect();
             let message = format!(
                 "nonlinear island Newton failed at h={h} (island of {}: {})",
                 self.sub.devices.len(),

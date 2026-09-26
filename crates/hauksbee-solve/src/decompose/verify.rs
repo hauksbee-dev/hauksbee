@@ -126,7 +126,7 @@ pub enum RefusedAnalysis {
 impl RefusedAnalysis {
     /// The plain-language reason surfaced with every refusal.
     #[must_use]
-    pub fn reason(&self) -> &'static str {
+    pub const fn reason(&self) -> &'static str {
         match self {
             Self::SupplyIntegrityOnTornRail => {
                 "a torn rail is pinned at its settled voltage, so supply sag, \
@@ -169,7 +169,7 @@ pub struct TearCertificate {
 impl TearCertificate {
     /// Whether the certificate licenses running the decomposition at all.
     #[must_use]
-    pub fn sound(&self) -> bool {
+    pub const fn sound(&self) -> bool {
         self.uncertified_boundaries.is_empty()
     }
 

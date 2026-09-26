@@ -256,10 +256,7 @@ fn synapse_array_partitioned_vs_monolithic() {
         "  speedup    : {:.2}x",
         mono_t.as_secs_f64() / part_t.as_secs_f64()
     );
-    println!(
-        "  max rel error (membranes, partitioned vs monolithic): {:.3e}",
-        max_rel
-    );
+    println!("  max rel error (membranes, partitioned vs monolithic): {max_rel:.3e}");
 
     // ngspice on the same generated netlist.
     let ngspice = "/opt/homebrew/bin/ngspice";
@@ -361,21 +358,12 @@ fn accuracy_partitioned_vs_monolithic() {
         let mut max_rel = 0.0f64;
         for node in 0..c.node_count() {
             let nm = c.node_name(NodeId(node as u32)).to_string();
-            let a = mono
-                .node(&c, &nm)
-                .map(|w| *w.last().unwrap())
-                .unwrap_or(0.0);
-            let b = parted
-                .node(&c, &nm)
-                .map(|w| *w.last().unwrap())
-                .unwrap_or(0.0);
+            let a = mono.node(&c, &nm).map_or(0.0, |w| *w.last().unwrap());
+            let b = parted.node(&c, &nm).map_or(0.0, |w| *w.last().unwrap());
             let denom = a.abs().max(0.05);
             max_rel = max_rel.max((a - b).abs() / denom);
         }
-        println!(
-            "accuracy [{name}]: max rel error partitioned vs monolithic = {:.3e}",
-            max_rel
-        );
+        println!("accuracy [{name}]: max rel error partitioned vs monolithic = {max_rel:.3e}");
         assert!(max_rel < 5e-3, "{name} exceeded 0.5%: {max_rel:.3e}");
     }
 }

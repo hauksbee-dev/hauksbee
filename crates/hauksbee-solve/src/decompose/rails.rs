@@ -144,7 +144,7 @@ pub struct BalanceTearCandidate {
 impl BalanceTearCandidate {
     /// Convenience: was this candidate accepted?
     #[must_use]
-    pub fn torn(&self) -> bool {
+    pub const fn torn(&self) -> bool {
         matches!(self.decision, TearDecision::Tear { .. })
     }
 }
@@ -383,7 +383,7 @@ pub(crate) fn fragment_blocks(
     bound: &[bool],
 ) -> Fragmentation {
     let n_nodes = circuit.max_node() as usize;
-    let mut parent: Vec<usize> = (0..n_nodes + 1).collect();
+    let mut parent: Vec<usize> = (0..=n_nodes).collect();
     fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]];

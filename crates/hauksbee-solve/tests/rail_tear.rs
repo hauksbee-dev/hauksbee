@@ -60,7 +60,7 @@ fn solve_both(blocks: usize, tstop: f64) -> (f64, f64, f64, usize, usize) {
     let (mono, mono_t) = run(&c, Partitioning::Off, tstop, dt);
     let (parted, part_t) = run(&c, Partitioning::Auto, tstop, dt);
 
-    let mut names: Vec<String> = membranes.clone();
+    let mut names: Vec<String> = membranes;
     names.push("ANALOG_VDD".to_string());
     for k in 0..blocks {
         names.push(format!("ref{k}"));

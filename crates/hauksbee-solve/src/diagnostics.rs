@@ -15,7 +15,7 @@ thread_local! {
 }
 
 /// Note that a strategy's code path engaged on this thread.
-pub(crate) fn note(s: Strategy) {
+pub fn note(s: Strategy) {
     ACTIVATED.with(|c| c.set(c.get() | s.bit()));
 }
 

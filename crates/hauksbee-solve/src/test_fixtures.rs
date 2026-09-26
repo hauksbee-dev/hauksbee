@@ -92,7 +92,7 @@ pub fn assert_matches_within_grid(
                 continue;
             }
             let edge = (0..=8).any(|j| {
-                let tt = t - dt + (j as f64) * (dt / 4.0);
+                let tt = t - dt + f64::from(j) * (dt / 4.0);
                 (lerp_at(&reference.time, m, tt) - sv).abs() <= tol
             });
             assert!(
@@ -105,7 +105,7 @@ pub fn assert_matches_within_grid(
 }
 
 pub fn swing(v: &[f64]) -> f64 {
-    v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+    v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
 }
 
 /// Up-crossings of `level`: one per spike.

@@ -133,7 +133,7 @@ impl Case {
                 .is_none_or(|r| r <= self.self_final_bound)
     }
 
-    fn accuracy_label(&self) -> &'static str {
+    const fn accuracy_label(&self) -> &'static str {
         match self.ngspice_kind {
             NgspiceAccuracy::Claim => "agreement",
             NgspiceAccuracy::DisclosedDrift => "disclosed drift",
@@ -250,12 +250,14 @@ fn faster_than_ngspice_on_the_marketed_cases() {
             c.accuracy_label(),
             c.ngspice_rel,
             c.ngspice_bound,
-            c.self_rel
-                .map(|r| format!("{r:.3e} (bound {:.3e})", c.self_bound))
-                .unwrap_or_else(|| "n/a".to_string()),
-            c.self_final_rel
-                .map(|r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound))
-                .unwrap_or_else(|| "n/a".to_string()),
+            c.self_rel.map_or_else(
+                || "n/a".to_string(),
+                |r| format!("{r:.3e} (bound {:.3e})", c.self_bound)
+            ),
+            c.self_final_rel.map_or_else(
+                || "n/a".to_string(),
+                |r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound)
+            ),
             if c.passed() { "PASS" } else { "FAIL" }
         );
     }
@@ -510,12 +512,14 @@ fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
             c.ngspice_rel,
             c.accuracy_label(),
             c.ngspice_bound,
-            c.self_rel
-                .map(|r| format!("{r:.3e} (bound {:.3e})", c.self_bound))
-                .unwrap_or_else(|| "n/a".to_string()),
-            c.self_final_rel
-                .map(|r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound))
-                .unwrap_or_else(|| "n/a".to_string()),
+            c.self_rel.map_or_else(
+                || "n/a".to_string(),
+                |r| format!("{r:.3e} (bound {:.3e})", c.self_bound)
+            ),
+            c.self_final_rel.map_or_else(
+                || "n/a".to_string(),
+                |r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound)
+            ),
             if c.passed() { "PASS" } else { "FAIL" }
         ));
     }

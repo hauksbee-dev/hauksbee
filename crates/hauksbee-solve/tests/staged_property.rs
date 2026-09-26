@@ -37,13 +37,13 @@ use hauksbee_testkit::circuits::{cap, comparator, vswitch};
 /// draw is reproducible from the seed printed on failure.
 struct Rng(u64);
 impl Rng {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
         self.0 = x;
-        x.wrapping_mul(0x2545F4914F6CDD1D)
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
     fn pick(&mut self, lo: usize, hi: usize) -> usize {
         lo + (self.next() as usize) % (hi - lo + 1)
@@ -165,7 +165,7 @@ fn diverges(
         }
         // Edge window: does the reference reach sv within +/- dt of t?
         let hit = (0..=8).any(|j| {
-            let tt = t - dt + (j as f64) * (dt / 4.0);
+            let tt = t - dt + f64::from(j) * (dt / 4.0);
             (lerp_at(&mono.time, &mono.node_voltages[node], tt) - sv).abs() <= tol
         });
         if !hit {
@@ -191,7 +191,7 @@ fn random_feedforward_boards_match_the_monolith() {
     let mut sound_boards = 0;
     let mut staged_boards = 0;
     for seed in 1..=20u64 {
-        let c = random_board(seed.wrapping_mul(0x9E3779B97F4A7C15));
+        let c = random_board(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         if !d.certificate.sound() {
             // Random boards must not be able to produce unsound certificates:

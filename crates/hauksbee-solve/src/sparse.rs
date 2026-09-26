@@ -39,7 +39,7 @@ impl SparseMatrix {
 
     /// Dimension.
     #[must_use]
-    pub fn dim(&self) -> usize {
+    pub const fn dim(&self) -> usize {
         self.n
     }
 
@@ -247,13 +247,13 @@ impl Symbolic {
 
     /// Enable/disable the dynamic-pivot fallback (off by default). The staged-DC
     /// driver turns it on only for the diode-laden solves that need it.
-    pub fn set_allow_dynamic(&mut self, allow: bool) {
+    pub const fn set_allow_dynamic(&mut self, allow: bool) {
         self.allow_dynamic = allow;
     }
 
     /// Whether the dynamic-pivot fallback is currently enabled.
     #[must_use]
-    pub fn allow_dynamic(&self) -> bool {
+    pub const fn allow_dynamic(&self) -> bool {
         self.allow_dynamic
     }
 
@@ -313,7 +313,7 @@ impl Symbolic {
         } else {
             self.fill_map.copy_from_slice(&self.csc_col_ptr[..n]);
         }
-        for v in self.csc_vals.iter_mut() {
+        for v in &mut self.csc_vals {
             *v = 0.0;
         }
         for row in &m.rows {
@@ -424,7 +424,7 @@ impl Symbolic {
 
         // Remap L's stored original rows to elimination steps now that every
         // row has a pivot position.
-        for ri in self.l.row_idx.iter_mut() {
+        for ri in &mut self.l.row_idx {
             *ri = pivot_pos[*ri];
         }
         for k in 0..n {
@@ -721,7 +721,7 @@ impl Symbolic {
         }
 
         // Remap L's stored original rows to their elimination steps.
-        for ri in self.l.row_idx.iter_mut() {
+        for ri in &mut self.l.row_idx {
             *ri = row_step[*ri];
         }
 
@@ -1060,7 +1060,7 @@ mod tests {
             }
         }
         let b: Vec<f64> = (0..n)
-            .map(|i| 2.0 - (i > 0) as i32 as f64 - (i + 1 < n) as i32 as f64)
+            .map(|i| 2.0 - f64::from((i > 0) as i32) - f64::from((i + 1 < n) as i32))
             .collect();
         assert_close(&solve_with(&m, &b, false), &[1.0; 5], 1e-9);
     }

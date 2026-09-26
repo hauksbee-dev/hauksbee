@@ -53,7 +53,7 @@ fn count_allocs<R>(f: impl FnOnce() -> R) -> (u64, R) {
     ARMED.with(|a| a.set(true));
     let r = f();
     ARMED.with(|a| a.set(false));
-    (COUNT.with(|c| c.get()), r)
+    (COUNT.with(std::cell::Cell::get), r)
 }
 
 #[cfg(test)]
@@ -142,13 +142,13 @@ mod tests {
             .expect("warm sweep");
         for k in 0..3 {
             engine
-                .sweep_for_audit(&circuit, h, (k + 2) as f64 * h, false)
+                .sweep_for_audit(&circuit, h, f64::from(k + 2) * h, false)
                 .expect("warm relax sweep");
         }
-        let (allocs, _) = count_allocs(|| {
+        let (allocs, ()) = count_allocs(|| {
             for k in 0..50 {
                 engine
-                    .sweep_for_audit(&circuit, h, (k + 10) as f64 * h, false)
+                    .sweep_for_audit(&circuit, h, f64::from(k + 10) * h, false)
                     .expect("measured sweep");
             }
         });

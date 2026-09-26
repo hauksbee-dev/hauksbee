@@ -63,7 +63,7 @@ fn adaptive_step_lands_on_pwl_corners_and_sees_the_pulse() {
     // tau = 2 us and a 2 us flat top, it reaches ~63% of 5 V. Anything above
     // 2 V proves the pulse was integrated, not aliased.
     let vout = wf.node(&c, "out").expect("out waveform");
-    let peak = vout.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let peak = vout.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     assert!(
         peak > 2.0,
         "capacitor peak {peak:.3} V: the controller aliased the 2 us pulse"

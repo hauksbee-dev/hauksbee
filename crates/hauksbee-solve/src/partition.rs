@@ -40,7 +40,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 
 /// A path-halving union-find over node indices (`1..=n_nodes`; ground excluded).
 /// Shared with the conduction graph, which unions the same index space.
-pub(crate) struct UnionFind {
+pub struct UnionFind {
     parent: Vec<usize>,
 }
 

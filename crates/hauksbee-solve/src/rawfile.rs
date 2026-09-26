@@ -29,7 +29,7 @@ pub enum RawPlot {
 }
 
 impl RawPlot {
-    fn plotname(self) -> &'static str {
+    const fn plotname(self) -> &'static str {
         match self {
             Self::OperatingPoint => "Operating Point",
             Self::Transient => "Transient Analysis",
@@ -42,7 +42,7 @@ impl RawPlot {
 /// `I(...)` is a current; everything else is a voltage.
 fn var_type(label: &str) -> &'static str {
     match label.trim_start().chars().next() {
-        Some('i') | Some('I') => "current",
+        Some('i' | 'I') => "current",
         _ => "voltage",
     }
 }
@@ -107,7 +107,7 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
         RawPlot::Dc => {
             // Column 0 is the swept source; ngspice names the scale by its kind.
             let scale = match out.columns.first().and_then(|c| c.chars().next()) {
-                Some('i') | Some('I') => ("i-sweep", "current"),
+                Some('i' | 'I') => ("i-sweep", "current"),
                 _ => ("v-sweep", "voltage"),
             };
             let mut vars = vec![(scale.0.to_string(), scale.1)];
@@ -191,7 +191,7 @@ mod tests {
 
     fn out(columns: &[&str], time: Option<Vec<f64>>, rows: Vec<Vec<f64>>) -> SimOutput {
         SimOutput {
-            columns: columns.iter().map(|s| s.to_string()).collect(),
+            columns: columns.iter().map(ToString::to_string).collect(),
             time,
             rows,
             error_budget: crate::sim::error_budget(&crate::SolverOptions::default()).unwrap(),

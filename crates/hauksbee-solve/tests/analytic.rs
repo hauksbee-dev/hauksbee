@@ -113,7 +113,7 @@ fn diode_resistor_dc_operating_point() {
     diode(&mut circuit, "D1", nd, NodeId::GROUND, model);
 
     // Reference: solve (V - Vd)/R = Is*(exp(Vd/Vt) - 1) for Vd by Newton.
-    let vt = 0.025852_f64; // kT/q at 27 C
+    let vt = 0.025_852_f64; // kT/q at 27 C
     let mut vd = 0.6_f64;
     for _ in 0..100 {
         let id = model.is * ((vd / vt).exp() - 1.0);

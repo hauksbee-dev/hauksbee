@@ -17,7 +17,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 
 /// A circuit under construction from pieces of a parent, plus both directions
 /// of its node map.
-pub(crate) struct SubCircuit {
+pub struct SubCircuit {
     pub(crate) circuit: Circuit,
     /// Parent node id -> local node id, non-ground nodes only.
     g2l: HashMap<u32, u32>,

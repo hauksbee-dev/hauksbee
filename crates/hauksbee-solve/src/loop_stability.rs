@@ -116,7 +116,7 @@ impl<'a> LoopStability<'a> {
 /// frequency and linear in the measured quantity between bracket points.
 #[must_use]
 pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
-    let dc_gain_db = bode.first().map(|p| p.1).unwrap_or(f64::NAN);
+    let dc_gain_db = bode.first().map_or(f64::NAN, |p| p.1);
     if bode.len() < 2 {
         return StabilityMargins {
             gain_crossover_hz: None,
@@ -242,7 +242,7 @@ mod tests {
         let fp = 10.0;
         let bode: Vec<_> = (0..=600)
             .map(|i| {
-                let f = 10f64.powf(i as f64 / 100.0); // 1 Hz .. 1 MHz
+                let f = 10f64.powf(f64::from(i) / 100.0); // 1 Hz .. 1 MHz
                 single_pole(a0, fp, f)
             })
             .collect();

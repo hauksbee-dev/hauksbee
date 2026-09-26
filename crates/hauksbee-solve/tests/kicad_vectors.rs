@@ -46,7 +46,9 @@ fn preprocess(path: &Path) -> Option<String> {
             let resolved = if Path::new(inc_path).is_absolute() {
                 PathBuf::from(inc_path)
             } else {
-                path.parent().unwrap_or(Path::new(".")).join(inc_path)
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(inc_path)
             };
             let Ok(inc) = std::fs::read_to_string(&resolved) else {
                 eprintln!("include missing: {}", resolved.display());

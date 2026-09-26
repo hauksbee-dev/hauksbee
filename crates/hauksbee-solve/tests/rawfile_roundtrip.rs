@@ -33,7 +33,7 @@ fn find_uv() -> Option<std::path::PathBuf> {
 
 fn out(columns: &[&str], time: Option<Vec<f64>>, rows: Vec<Vec<f64>>) -> SimOutput {
     SimOutput {
-        columns: columns.iter().map(|s| s.to_string()).collect(),
+        columns: columns.iter().map(ToString::to_string).collect(),
         time,
         rows,
         error_budget: hauksbee_ir::evidence::ErrorBudget::new(

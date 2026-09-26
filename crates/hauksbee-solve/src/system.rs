@@ -349,7 +349,7 @@ impl Layout {
             return None;
         }
         let ints = &self.bjt_internal_of[id.0 as usize];
-        if ints.iter().all(|i| i.is_none()) {
+        if ints.iter().all(std::option::Option::is_none) {
             None
         } else {
             Some(ints)
@@ -377,7 +377,7 @@ impl Layout {
             return None;
         }
         let ints = &self.mos_internal_of[id.0 as usize];
-        if ints.iter().all(|i| i.is_none()) {
+        if ints.iter().all(std::option::Option::is_none) {
             None
         } else {
             Some(ints)

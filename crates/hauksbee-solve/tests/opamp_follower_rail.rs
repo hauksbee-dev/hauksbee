@@ -43,7 +43,7 @@ fn dc_out(c: &Circuit) -> f64 {
     let mut ws = Workspace::new(c);
     dc_operating_point(&mut ws, c, &opts).expect("follower DC converges");
     let out = c.find_node("out").unwrap();
-    ws.layout.node(out).map(|i| ws.x[i]).unwrap_or(0.0)
+    ws.layout.node(out).map_or(0.0, |i| ws.x[i])
 }
 
 /// Follower's exact operating point when the loop stays linear: the classic

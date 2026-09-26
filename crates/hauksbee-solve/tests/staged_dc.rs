@@ -49,7 +49,7 @@ fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
 }
 
 fn node_v(ws: &Workspace, node: NodeId) -> f64 {
-    ws.layout.node(node).map(|i| ws.x[i]).unwrap_or(0.0)
+    ws.layout.node(node).map_or(0.0, |i| ws.x[i])
 }
 
 #[test]

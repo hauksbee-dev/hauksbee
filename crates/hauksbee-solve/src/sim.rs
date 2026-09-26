@@ -17,7 +17,7 @@ use hauksbee_ir::{AcDirective, AcSweep, Circuit, DcDirective, Device, NodeId, So
 pub(crate) const OP_KCL_TOL: f64 = 1e-6;
 
 /// One output quantity requested from a run.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Probe {
     /// `V(node)`.
     NodeVoltage(String),
@@ -101,7 +101,7 @@ impl SimOutput {
     }
 }
 
-fn integration_method(method: crate::Integration) -> IntegrationMethod {
+const fn integration_method(method: crate::Integration) -> IntegrationMethod {
     match method {
         crate::Integration::Trapezoidal => IntegrationMethod::Trapezoidal,
         crate::Integration::Gear2 => IntegrationMethod::Gear2,
@@ -119,8 +119,10 @@ fn residual_label(circuit: &Circuit, layout: &crate::Layout, unknown: usize) -> 
     (1..circuit.node_count())
         .map(|n| NodeId(n as u32))
         .find(|n| layout.node(*n) == Some(unknown))
-        .map(|n| circuit.node_name(n).to_string())
-        .unwrap_or_else(|| format!("unknown #{unknown}"))
+        .map_or_else(
+            || format!("unknown #{unknown}"),
+            |n| circuit.node_name(n).to_string(),
+        )
 }
 
 fn residual(max_abs: f64, label: String) -> SolveResult<Residual> {

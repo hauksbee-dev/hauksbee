@@ -51,7 +51,7 @@ fn comparator_astable() -> Circuit {
 /// at `win` (the power-on retry policy: `ramp_window` = 200 * dt).
 fn ramp_sources(c: &Circuit, win: f64) -> Circuit {
     let mut c = c.clone();
-    for d in c.devices.iter_mut() {
+    for d in &mut c.devices {
         if let Device::Vsource { kind, .. } | Device::Isource { kind, .. } = d {
             let inner = std::mem::replace(kind, SourceKind::Dc(0.0));
             *kind = inner.ramped(win);

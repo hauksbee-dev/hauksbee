@@ -389,7 +389,7 @@ mod tests {
                 ctx.switch_freeze = freeze_on.then_some(&sw_frozen);
                 ctx.spdt_sibling = &siblings;
                 stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
-                for dev in circuit.devices.iter() {
+                for dev in &circuit.devices {
                     assert_sense_rows_clean(
                         dev.name(),
                         &ws,

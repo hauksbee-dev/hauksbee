@@ -43,16 +43,16 @@ impl ComplexSystem {
 
     /// Dimension.
     #[must_use]
-    pub fn dim(&self) -> usize {
+    pub const fn dim(&self) -> usize {
         self.n
     }
 
     /// Zero every entry, keeping the size (reused across a frequency sweep).
     pub fn clear(&mut self) {
-        for v in self.a.iter_mut() {
+        for v in &mut self.a {
             *v = Complex64::new(0.0, 0.0);
         }
-        for v in self.b.iter_mut() {
+        for v in &mut self.b {
             *v = Complex64::new(0.0, 0.0);
         }
     }

@@ -435,7 +435,6 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
         "dc" => {
             let dc = directives
                 .dc
-                .clone()
                 .unwrap_or_else(|| panic!("{name}: dc deck has no .dc card"));
             let ours: SimOutput = run_dc(&circuit, &opts, &dc, &probes)
                 .unwrap_or_else(|e| panic!("{name}: hauksbee dc failed: {e}"));
@@ -480,8 +479,7 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
                 let node = match pr {
                     Probe::NodeVoltage(a) => a.clone(),
                     other => panic!(
-                        "{name}: the AC cross-check supports V(node) probes only, got {:?}",
-                        other
+                        "{name}: the AC cross-check supports V(node) probes only, got {other:?}"
                     ),
                 };
                 let ng_deck =

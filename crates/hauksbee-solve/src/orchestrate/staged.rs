@@ -151,7 +151,7 @@ fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
     // backsolve and RETURNS before the line-search block exists, so the grant
     // is structurally unreachable. (Uses the SAME predicate Workspace::new
     // uses to set ws.linear, so the two cannot disagree.)
-    if sub.devices.iter().all(|d| d.is_linear()) {
+    if sub.devices.iter().all(Device::is_linear) {
         opts.ladder = opts.ladder.without(Strategy::LineSearch);
     }
     opts
@@ -190,7 +190,7 @@ pub fn run_staged(
     }
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
-        _ => {
+        StepControl::Adaptive { .. } => {
             return Err(SolveError::refused(
                 "staged execution requires fixed step control: the capture grid is the step \
                  grid, and an adaptive run has no grid whose error the certificate could state",
@@ -435,7 +435,7 @@ pub fn run_staged(
                     // says only "group 3" costs another half-hour run to
                     // learn what group 3 is. Devices and a name sample turn
                     // the next failure into a standalone fixture.
-                    let sample: Vec<&str> = sub.devices.iter().take(6).map(|d| d.name()).collect();
+                    let sample: Vec<&str> = sub.devices.iter().take(6).map(Device::name).collect();
                     let stiff_note = if stiff_refusal_note.is_empty() {
                         String::new()
                     } else {
@@ -614,7 +614,7 @@ fn solve_group(
                 // A non-fixed run reached here only if run_staged's own guard
                 // were bypassed; keep the original error rather than invent a
                 // window with no grid.
-                _ => return Err(e),
+                StepControl::Adaptive { .. } => return Err(e),
             };
             // A LADDER of ramp windows, quasi-static first, step-like last.
             // Provenance: the flagship's group 2 died at t=134us of a 200us
@@ -655,7 +655,7 @@ fn solve_group(
 /// power-on retry so a DC-unreachable group starts from zero and ramps up.
 pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
     let mut c = sub.clone();
-    for dev in c.devices.iter_mut() {
+    for dev in &mut c.devices {
         match dev {
             Device::Vsource { name, kind, .. } => {
                 // Replay pins carry a CERTIFIED upstream waveform: real,
@@ -691,7 +691,7 @@ pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
 ///   nothing was measured, so the record says `Stiff`/`AssumedFeedHold`/
 ///   `Unmeasured`, an assumption on the supply leg's stiffness, not a proof.
 /// * `Signal`: the relaxation's measured sag, as the stiff executor records.
-fn boundary_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
+const fn boundary_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
     match o.kind {
         BoundaryKind::BalancedRail => TearRecord {
             node,
@@ -877,13 +877,14 @@ pub fn probe_groups_dc(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decompose::rails::TearMotive;
+    use crate::decompose::{rails::TearMotive, DriverPolicy, RailPolicy};
     use crate::options::RobustnessLadder;
     use crate::orchestrate::lerp_at;
     use crate::test_fixtures::{
         assert_matches_within_grid, cap, comparator, diode, fixed_opts, max_error, monolith,
         pnp_blocks, res, shunt_array, sw, swing, vdc, vpulse, GND,
     };
+    use hauksbee_ir::DiodeModel;
 
     /// The two structurally-justified ladder trims fire on the right island
     /// classes, everything else passes through, and an empty ladder stays empty.
@@ -913,7 +914,7 @@ mod tests {
 
         let mut dio = lin.clone();
         let c = dio.node("c");
-        diode(&mut dio, "D", b, c, Default::default());
+        diode(&mut dio, "D", b, c, DiodeModel::default());
         res(&mut dio, "R3", c, GND, 1e3);
         let sel = select_group_ladder(&dio, &full);
         assert!(sel.ladder.has(Strategy::LineSearch));
@@ -1144,7 +1145,7 @@ mod tests {
         let (dt, tstop) = (100e-9, 6e-6);
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         assert!(
-            d.balance_tears.iter().any(|t| t.torn()),
+            d.balance_tears.iter().any(BalanceTearCandidate::torn),
             "{:?}",
             d.balance_tears
         );
@@ -1235,8 +1236,8 @@ mod tests {
         let d = Decomposition::analyze_with_boundaries(
             &c,
             TearMotive::Profit,
-            Default::default(),
-            Default::default(),
+            RailPolicy::default(),
+            DriverPolicy::default(),
             StiffPolicy {
                 min_block_devices: 2,
                 max_probes_per_block: 8,

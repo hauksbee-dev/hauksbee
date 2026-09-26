@@ -99,7 +99,7 @@ struct DevCache {
 
 /// Workspace-owned bypass state: one cache per bypassable device, an id→cache
 /// index, the solve generation, and the observability counters.
-pub(crate) struct BypassState {
+pub struct BypassState {
     caches: Vec<DevCache>,
     /// `device id -> caches index`, `u32::MAX` = not bypassable.
     index: Vec<u32>,
@@ -176,20 +176,20 @@ impl BypassState {
 
     /// Whether any device on this board is bypassable at all (a linear board
     /// or a switch/comparator-only board has nothing to skip).
-    pub(crate) fn has_candidates(&self) -> bool {
+    pub(crate) const fn has_candidates(&self) -> bool {
         !self.caches.is_empty()
     }
 
     /// Invalidate every record: called at the top of each armed
     /// `newton_solve`, so no cache survives a step / retry / dt change (the
     /// per-step inputs (companion history, coeffs, time) moved).
-    pub(crate) fn begin_solve(&mut self) {
+    pub(crate) const fn begin_solve(&mut self) {
         self.gen = self.gen.wrapping_add(1);
     }
 
     /// (evaluations, skips) since construction; the observability the bypass
     /// gate wants (skip rate measured, not guessed).
-    pub(crate) fn counters(&self) -> (u64, u64) {
+    pub(crate) const fn counters(&self) -> (u64, u64) {
         (self.evals, self.skips)
     }
 }
@@ -252,7 +252,7 @@ impl StampSink for PlainSink<'_> {
 /// at least twice per step before any skip can happen.
 // The negated `<=` deliberately treats a NaN delta as "moved", never as bypassable.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub(crate) fn stamp_all_bypass(
+pub fn stamp_all_bypass(
     ctx: &StampCtx,
     st: &mut BypassState,
     g: &mut SparseMatrix,
@@ -331,7 +331,7 @@ mod tests {
     use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs};
     use crate::system::ReactiveState;
     use crate::test_fixtures::{bjt, cap, comparator, diode, res, stamp_ctx, sw, trapz, vdc, GND};
-    use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, SourceKind};
+    use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, MosfetModel, NodeId, SourceKind};
 
     /// A stamped system: the matrix rows as (column, value) entries, and the rhs.
     type Stamped = (Vec<Vec<(usize, f64)>>, Vec<f64>);
@@ -370,7 +370,7 @@ mod tests {
             g: n2,
             s: GND,
             b: None,
-            model: Default::default(),
+            model: MosfetModel::default(),
         });
         sw(&mut c, "S1", n1, n4, n2, (2.0, 1.0), 10.0);
         comparator(&mut c, "K1", n4, n1, n2, 0.1);

@@ -24,7 +24,7 @@ fn smooth_switch_opts() -> SolverOptions {
 }
 
 /// A single-frequency sweep at `f`.
-fn spot(f: f64) -> AcSpec {
+const fn spot(f: f64) -> AcSpec {
     AcSpec {
         fstart: f,
         fstop: f,

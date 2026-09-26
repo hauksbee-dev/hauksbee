@@ -170,7 +170,7 @@ impl SolveError {
 
     /// True for a failure that says the DC operating point itself was not
     /// reachable. Power-ramp retry logic uses this instead of parsing `Display`.
-    pub(crate) fn is_dc_failure(&self) -> bool {
+    pub(crate) const fn is_dc_failure(&self) -> bool {
         matches!(
             self,
             Self::NonConvergence {
@@ -187,7 +187,7 @@ impl SolveError {
 /// Result type returned by solver APIs.
 pub type SolveResult<T> = Result<T, SolveError>;
 
-pub(crate) fn behavioral_device(fault: &str) -> String {
+pub fn behavioral_device(fault: &str) -> String {
     fault
         .strip_prefix("behavioral source `")
         .and_then(|rest| rest.split_once("`: ").map(|(device, _)| device))

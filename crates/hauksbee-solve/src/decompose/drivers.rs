@@ -138,7 +138,7 @@ mod tests {
     use crate::decompose::conduction::ConductionGraph;
     use crate::decompose::feedforward::StageDag;
     use crate::test_fixtures::{cap, comparator, diode, res, sw, vdc, GND};
-    use hauksbee_ir::{Circuit, NodeId};
+    use hauksbee_ir::{Circuit, DiodeModel, NodeId};
 
     fn thevenin_driver(c: &mut Circuit) -> NodeId {
         let (vdrv, sel) = (c.node("vdrv"), c.node("sel"));
@@ -219,7 +219,7 @@ mod tests {
         vdc(&mut c, "V1", vin, 3.0);
         let drv = c.node("drv");
         res(&mut c, "R1", vin, drv, 1e3);
-        diode(&mut c, "D1", drv, GND, Default::default());
+        diode(&mut c, "D1", drv, GND, DiodeModel::default());
         switch_consumer(&mut c, "x", drv);
         assert!(
             assignments(&c).1.is_empty(),

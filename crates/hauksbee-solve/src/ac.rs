@@ -222,7 +222,7 @@ pub struct AcAnalysis {
 impl AcAnalysis {
     /// New analysis with the solver options used for the DC operating point.
     #[must_use]
-    pub fn new(opts: SolverOptions) -> Self {
+    pub const fn new(opts: SolverOptions) -> Self {
         Self { opts }
     }
 
@@ -371,7 +371,7 @@ impl OperatingPoint {
     /// Bias at a layout unknown index (`None` = ground = 0).
     #[inline]
     fn vx(&self, i: Option<usize>) -> f64 {
-        i.map(|i| self.x[i]).unwrap_or(0.0)
+        i.map_or(0.0, |i| self.x[i])
     }
 }
 
@@ -468,7 +468,7 @@ fn stamp_ac(
             sys.stamp_admittance(n(*a), n(*k), Complex64::new(gd, w * cap));
         }
         Device::Bjt { c, b, e, model, .. } => {
-            stamp_bjt_ac(sys, layout, op, id, *c, *b, *e, model, opts, w)
+            stamp_bjt_ac(sys, layout, op, id, *c, *b, *e, model, opts, w);
         }
         Device::Mosfet {
             d, g, s, b, model, ..
@@ -489,7 +489,7 @@ fn stamp_ac(
             let (lo, hi) = hauksbee_ir::Rail::band(*rail_lo, *rail_hi, |n| op.v(n));
             stamp_opamp_ac(
                 sys, layout, op, *out, *inp, *inn, *reference, *gain, *pole_hz, lo, hi, w,
-            )
+            );
         }
         // A switch is a smooth voltage-controlled conductance: small-signal it
         // is its quiescent conductance PLUS a control transconductance (below).
@@ -1096,7 +1096,7 @@ fn stamp_opamp_ac(
     w: f64,
 ) {
     let gout = 1.0;
-    let vref = reference.map(|n| op.v(n)).unwrap_or(0.0);
+    let vref = reference.map_or(0.0, |n| op.v(n));
     let target = (vref + gain * (op.v(inp) - op.v(inn))).clamp(rail_lo, rail_hi);
     let in_rail = target > rail_lo && target < rail_hi;
     let oi = layout.node(out);

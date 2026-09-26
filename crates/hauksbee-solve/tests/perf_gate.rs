@@ -176,7 +176,7 @@ fn median(samples: &[f64]) -> f64 {
 /// The gate compares quiet-vs-quiet; the median and spread are reported for
 /// transparency only.
 fn quiet(samples: &[f64]) -> f64 {
-    samples.iter().cloned().fold(f64::INFINITY, f64::min)
+    samples.iter().copied().fold(f64::INFINITY, f64::min)
 }
 
 /// Spread as (max - min) / median: the worst-case relative swing across reps.
@@ -187,8 +187,8 @@ fn spread_frac(samples: &[f64]) -> f64 {
     if med <= 0.0 {
         return f64::INFINITY;
     }
-    let min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min = samples.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     (max - min) / med
 }
 
@@ -228,7 +228,7 @@ struct BoardBaseline {
     advisory: bool,
 }
 
-fn default_tol() -> f64 {
+const fn default_tol() -> f64 {
     0.15
 }
 
@@ -427,7 +427,7 @@ fn perf_capture_baseline() {
         let q_ms = quiet(&samples) * 1e3;
         let med_ms = median(&samples) * 1e3;
         let spread = spread_frac(&samples);
-        let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * 1e3;
+        let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max) * 1e3;
         let noisy = spread > ADVISORY_SPREAD;
         eprintln!(
             "  {:<16} quiet {:>10}  median {:>10}  spread {:>6.0}%  (max {:.3} ms){}",

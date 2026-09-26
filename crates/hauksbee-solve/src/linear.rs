@@ -218,13 +218,13 @@ enum Slot {
 impl LinearIsland {
     /// Number of linear states (caps + inductors).
     #[must_use]
-    pub fn n_states(&self) -> usize {
+    pub const fn n_states(&self) -> usize {
         self.states.len()
     }
 
     /// Number of free (solvable) nodes owned by this island.
     #[must_use]
-    pub fn n_free(&self) -> usize {
+    pub const fn n_free(&self) -> usize {
         self.n_free
     }
 
@@ -243,7 +243,7 @@ impl LinearIsland {
 
     /// Total input vector length: voltage inputs then current inputs.
     #[must_use]
-    pub fn n_inputs_total(&self) -> usize {
+    pub const fn n_inputs_total(&self) -> usize {
         self.inputs.len() + self.isources.len()
     }
 
@@ -626,7 +626,7 @@ impl LinearIsland {
     }
 
     /// True if this island uses the matrix-free advance (large island).
-    fn uses_matrix_free(&self) -> bool {
+    const fn uses_matrix_free(&self) -> bool {
         self.states.len() > DENSE_EXPM_MAX
     }
 
@@ -897,7 +897,7 @@ fn expm(a: &[f64], n: usize) -> Vec<f64> {
     };
     let scale = 2f64.powi(-s);
     let mut sa = a.to_vec();
-    for v in sa.iter_mut() {
+    for v in &mut sa {
         *v *= scale;
     }
     let mut m = expm_taylor(&sa, n, 18);
@@ -1011,7 +1011,7 @@ mod tests {
         let mut x = vec![0.0];
         for step in 1..=100 {
             li.step(&mut x, &[1.0]);
-            let want = 1.0 - (-(step as f64 * dt) / 1e-3).exp();
+            let want = 1.0 - (-(f64::from(step) * dt) / 1e-3).exp();
             assert!(
                 (x[0] - want).abs() < 1e-4,
                 "step {step}: {} vs {want}",

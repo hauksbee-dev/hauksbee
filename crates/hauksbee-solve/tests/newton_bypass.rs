@@ -94,7 +94,7 @@ fn mirror_array_gate(blocks: usize, tstop: f64) -> (f64, f64) {
     // A moving rail keeps every mirror junction re-solving (3+ iterations),
     // so the ON run genuinely replays cached stamps and the tolerance
     // assertion tests something real (verified via the census skip counter).
-    for dev in c.devices.iter_mut() {
+    for dev in &mut c.devices {
         if let Device::Vsource { name, kind, .. } = dev {
             if name == "V5" {
                 *kind = SourceKind::Sin {

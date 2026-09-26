@@ -500,7 +500,7 @@ impl StampPlan {
 
     /// Number of constant conductance writes (diagnostics).
     #[must_use]
-    pub fn cond_op_count(&self) -> usize {
+    pub const fn cond_op_count(&self) -> usize {
         self.cond_ops.len()
     }
 }
@@ -552,7 +552,7 @@ mod tests {
     use crate::test_fixtures::{
         cap, cap_ic, comparator, diode, idc, res, stamp_ctx, sw, trapz, vdc, GND,
     };
-    use hauksbee_ir::{Device, NodeId, SourceKind};
+    use hauksbee_ir::{BjtModel, Device, DiodeModel, MosfetModel, NodeId, SourceKind};
 
     fn compiled(c: &Circuit) -> (Layout, SparseMatrix, StampPlan) {
         let layout = Layout::new(c);
@@ -606,15 +606,15 @@ mod tests {
         cap(&mut c, "C1", n[0], GND, 1e-9);
         c.add(Device::inductor("L1", n[1], n[2], 1e-6));
         idc(&mut c, "I1", n[2], GND, 1e-3);
-        diode(&mut c, "D1", n[0], n[3], Default::default());
-        crate::test_fixtures::bjt(&mut c, "Q1", vin, n[3], GND, &Default::default());
+        diode(&mut c, "D1", n[0], n[3], DiodeModel::default());
+        crate::test_fixtures::bjt(&mut c, "Q1", vin, n[3], GND, &BjtModel::default());
         c.add(Device::Mosfet {
             name: "M1".into(),
             d: n[1],
             g: n[0],
             s: GND,
             b: None,
-            model: Default::default(),
+            model: MosfetModel::default(),
         });
         sw(&mut c, "S1", n[2], n[4], n[0], (3.0, 2.0), 10.0);
         c.add(Device::OpAmp {

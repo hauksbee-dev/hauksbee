@@ -262,7 +262,7 @@ impl JunctionEval {
     }
 
     /// Read-and-clear the "some junction was limited this stamp" flag.
-    pub fn take_limited(&self) -> bool {
+    pub const fn take_limited(&self) -> bool {
         self.limited.replace(false)
     }
 
@@ -340,7 +340,7 @@ fn stamp_current<S: StampSink>(sink: &mut S, layout: &Layout, a: NodeId, b: Node
 /// sub-lever A). Generic and monomorphized, so the default assembly path
 /// compiles to exactly the writes it always did (its bit-exactness contract
 /// is pinned by the fixture waveform hash and the solve suites).
-pub(crate) trait StampSink {
+pub trait StampSink {
     /// Accumulate `g[row][col] += v`.
     fn g(&mut self, row: usize, col: usize, v: f64);
     /// Accumulate `rhs[row] += v`.
@@ -531,7 +531,7 @@ fn stamp_into<S: StampSink>(ctx: &StampCtx, sink: &mut S) {
 /// two-tier assembly (`plan.rs`) can re-stamp tier-2 devices through the SAME
 /// interpreted device code with a slot-resolving sink: the physics formulas
 /// exist here once, whichever assembly drives them.
-pub(crate) fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, sink: &mut S) {
+pub fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, sink: &mut S) {
     match dev {
         Device::Resistor {
             a, b, ohms, tc1, ..
@@ -700,7 +700,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-pub(crate) fn note_behavioral_fault(name: &str, detail: String) {
+pub fn note_behavioral_fault(name: &str, detail: String) {
     BEHAVIORAL_FAULT.with(|f| {
         let mut f = f.borrow_mut();
         if f.is_none() {
@@ -712,7 +712,7 @@ pub(crate) fn note_behavioral_fault(name: &str, detail: String) {
 /// Drain the fault noted by the most recent assembly on this thread, if any.
 /// Callers MUST invoke this after every assembly that can contain a
 /// [`Device::Behavioral`] and treat `Some` as "this iterate is unusable".
-pub(crate) fn take_behavioral_fault() -> Option<String> {
+pub fn take_behavioral_fault() -> Option<String> {
     BEHAVIORAL_FAULT.with(|f| f.borrow_mut().take())
 }
 
@@ -729,7 +729,7 @@ pub(crate) fn take_behavioral_fault() -> Option<String> {
 /// (IEEE semantics: `1/0 = inf`, `ln(-1) = NaN`, see `CompiledExpr::eval`)
 /// or structural eval error is a fault: partial derivatives from a poisoned
 /// point must never enter the matrix.
-pub(crate) fn behavioral_eval_partials(
+pub fn behavioral_eval_partials(
     expr: &hauksbee_ir::CompiledExpr,
     deps: &[hauksbee_ir::BDep],
     vals: &mut [f64],
@@ -1185,7 +1185,7 @@ fn vcrit(is: f64, vt: f64) -> f64 {
 ///   iterate far past breakdown cannot poison the solve. `bv` defaults to
 ///   infinity, which makes the breakdown branch unreachable: existing decks
 ///   are bit-identical.
-pub(crate) fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -> (f64, f64) {
+pub fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -> (f64, f64) {
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let nvt = model.n * hauksbee_ir_thermal(t_c, temp_on);
     if vd >= -3.0 * nvt {
@@ -1222,17 +1222,14 @@ pub(crate) fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -
 /// SPICE's standard depletion-capacitance knee: below `FC·vj` the physical
 /// `Cj(v) = cjo (1 - v/vj)^-m` applies; above it the singular expression is
 /// replaced by its tangent-matched linear continuation.
-pub(crate) const DIODE_FC: f64 = 0.5;
+pub const DIODE_FC: f64 = 0.5;
 
 /// Whether a diode carries charge under the current effects toggles: the
 /// `junction_caps` gate AND at least one charge-producing model field. A
 /// default model (`cjo == 0`, `tt == 0`) never stores charge, so decks whose
 /// diode models predate this physics are bit-identical whatever the toggle.
 #[inline]
-pub(crate) fn diode_has_charge(
-    model: &DiodeModel,
-    effects: &crate::options::DeviceEffects,
-) -> bool {
+pub fn diode_has_charge(model: &DiodeModel, effects: &crate::options::DeviceEffects) -> bool {
     effects.junction_caps && (model.cjo > 0.0 || model.tt > 0.0)
 }
 
@@ -1260,7 +1257,7 @@ pub(crate) fn diode_has_charge(
 /// what conserves charge for a NONLINEAR capacitance: the companion integrates
 /// `i = dQ/dt` exactly in `Q`, and Newton linearizes `Q(v)` afresh each
 /// iteration with `dQ/dv = C(v)`.
-pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f64, f64) {
+pub fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f64, f64) {
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cjo > 0.0 {
@@ -1281,7 +1278,7 @@ pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f6
 /// and the BJT's two junctions (`cje`/`cjc` with the card's own `vje`/`vjc`,
 /// `mje`/`mjc` and `fc`); the arithmetic is the diode's original,
 /// expression-for-expression, so extracting it moved no diode bit.
-pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, fc: f64, vd: f64) -> (f64, f64) {
+pub fn depletion_charge(cjo: f64, vj: f64, m: f64, fc: f64, vd: f64) -> (f64, f64) {
     let fcv = fc * vj;
     if vd < fcv {
         let arg = 1.0 - vd / vj;
@@ -1314,7 +1311,7 @@ pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, fc: f64, vd: f64) -> (
 /// decks whose BJT models predate this physics are bit-identical whatever
 /// the toggle; the same contract [`diode_has_charge`] pins for diodes.
 #[inline]
-pub(crate) fn bjt_has_charge(model: &BjtModel, effects: &crate::options::DeviceEffects) -> bool {
+pub fn bjt_has_charge(model: &BjtModel, effects: &crate::options::DeviceEffects) -> bool {
     effects.junction_caps
         && (model.cje > 0.0 || model.cjc > 0.0 || model.tf > 0.0 || model.tr > 0.0)
 }
@@ -1325,7 +1322,7 @@ pub(crate) fn bjt_has_charge(model: &BjtModel, effects: &crate::options::DeviceE
 /// transport current the Gummel-Poon core already evaluates (`gif` its
 /// tangent); the transit-time charge rides the core's own transport
 /// evaluation instead of recomputing it.
-pub(crate) fn bjt_charge_be(model: &BjtModel, vbe: f64, cf: f64, gif: f64) -> (f64, f64) {
+pub fn bjt_charge_be(model: &BjtModel, vbe: f64, cf: f64, gif: f64) -> (f64, f64) {
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cje > 0.0 {
@@ -1343,7 +1340,7 @@ pub(crate) fn bjt_charge_be(model: &BjtModel, vbe: f64, cf: f64, gif: f64) -> (f
 /// BJT base-collector stored charge and capacitance (folded space):
 /// depletion (`cjc`) plus reverse diffusion `tr·i_ec` with `i_ec = cr` the
 /// reverse transport current (`gir` its tangent).
-pub(crate) fn bjt_charge_bc(model: &BjtModel, vbc: f64, cr: f64, gir: f64) -> (f64, f64) {
+pub fn bjt_charge_bc(model: &BjtModel, vbc: f64, cr: f64, gir: f64) -> (f64, f64) {
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cjc > 0.0 {
@@ -1362,13 +1359,7 @@ pub(crate) fn bjt_charge_bc(model: &BjtModel, vbc: f64, cr: f64, gir: f64) -> (f
 /// recomputing the transport currents through the same clamped exponentials
 /// the stamp uses; the seed/advance/LTE entry point (the stamp itself reuses
 /// its already-evaluated `cf`/`gif`/`cr`/`gir` via the per-junction helpers).
-pub(crate) fn bjt_charges_at(
-    model: &BjtModel,
-    vbe: f64,
-    vbc: f64,
-    t_c: f64,
-    temp_on: bool,
-) -> (f64, f64) {
+pub fn bjt_charges_at(model: &BjtModel, vbe: f64, vbc: f64, t_c: f64, temp_on: bool) -> (f64, f64) {
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let vt = hauksbee_ir_thermal(t_c, temp_on);
     let nvf = model.nf * vt;
@@ -1392,7 +1383,7 @@ pub(crate) fn bjt_charges_at(
 /// and the AC stamp share with `stamp_bjt`: internal unknowns when the
 /// `series_resistance` toggle is on AND the layout allocated them, the
 /// external nodes otherwise.
-pub(crate) fn bjt_junction_voltages(
+pub fn bjt_junction_voltages(
     layout: &Layout,
     x: &[f64],
     id: DeviceId,
@@ -1403,7 +1394,7 @@ pub(crate) fn bjt_junction_voltages(
     effects: &crate::options::DeviceEffects,
 ) -> (f64, f64) {
     let [ci, bi, ei] = bjt_effective_nodes(layout, id, c, b, e, effects);
-    let v = |i: Option<usize>| i.map(|i| x[i]).unwrap_or(0.0);
+    let v = |i: Option<usize>| i.map_or(0.0, |i| x[i]);
     let sign = model.polarity.sign();
     (sign * (v(bi) - v(ei)), sign * (v(bi) - v(ci)))
 }
@@ -1413,7 +1404,7 @@ pub(crate) fn bjt_junction_voltages(
 /// the `series_resistance` toggle honors them, external node indices
 /// otherwise (per terminal, a zero-valued resistance allocated no internal
 /// node and stays external).
-pub(crate) fn bjt_effective_nodes(
+pub fn bjt_effective_nodes(
     layout: &Layout,
     id: DeviceId,
     c: NodeId,
@@ -1437,7 +1428,7 @@ pub(crate) fn bjt_effective_nodes(
 /// in deep triode (Meyer's `vds -> 0` limit); zero in saturation/cutoff where
 /// only the overlap remains; the Miller-charge asymmetry that sets switching
 /// timing.
-pub(crate) const MOS_CGD_MEYER: f64 = 0.5;
+pub const MOS_CGD_MEYER: f64 = 0.5;
 
 /// Whether a MOSFET stores charge under the current effects toggles: the
 /// `junction_caps` gate AND at least one charge-producing model field (gate
@@ -1445,7 +1436,7 @@ pub(crate) const MOS_CGD_MEYER: f64 = 0.5;
 /// charge, so decks whose MOS models predate this physics are bit-identical
 /// whatever the toggle; the [`diode_has_charge`]/[`bjt_has_charge`] contract.
 #[inline]
-pub(crate) fn mos_has_charge(model: &MosfetModel, effects: &crate::options::DeviceEffects) -> bool {
+pub fn mos_has_charge(model: &MosfetModel, effects: &crate::options::DeviceEffects) -> bool {
     effects.junction_caps && (model.has_gate_charge() || model.cbd > 0.0 || model.cbs > 0.0)
 }
 
@@ -1498,7 +1489,7 @@ fn sigmoid(x: f64) -> f64 {
 /// including the tail; the (1 + lambda·vds) factor would otherwise jump at
 /// the region switch.
 #[inline]
-pub(crate) fn mos_channel(
+pub fn mos_channel(
     beta: f64,
     nvt: f64,
     vov: f64,
@@ -1569,7 +1560,7 @@ pub(crate) fn mos_channel(
 /// as nanosecond-scale edge skew in the ngspice cross-check tolerances of
 /// those decks.
 #[inline]
-pub(crate) fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
+pub fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
     let mut q = c_ov * v;
     let mut c = c_ov;
     if c_ox > 0.0 {
@@ -1586,7 +1577,7 @@ pub(crate) fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) 
 /// Gate-drain stored charge: overlap plus the triode-side intrinsic rise
 /// (see [`mos_charge_gs`] for the model choice discussion).
 #[inline]
-pub(crate) fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
+pub fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
     let mut q = c_ov * v;
     let mut c = c_ov;
     if c_ox > 0.0 {
@@ -1605,7 +1596,7 @@ pub(crate) fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) 
 /// bulk-tied-to-source switch has none, and a body-biased charge switch
 /// would couple three terminals into what must stay a two-terminal `Q(v)`);
 /// bulk charges are the depletion helper with the model's `pb`/`mj`.
-pub(crate) fn mos_charges_at(
+pub fn mos_charges_at(
     model: &MosfetModel,
     vgs: f64,
     vgd: f64,
@@ -1642,7 +1633,7 @@ pub(crate) fn mos_charges_at(
 /// stored a charge off by `Cgs*I*rs` every step, which the trapezoid turned
 /// into a ~10 mA gate current growing as `2/dt` and a self-sustaining
 /// 300 MHz ring with its gate capacitor's ESL.
-pub(crate) fn mos_junction_voltages(
+pub fn mos_junction_voltages(
     layout: &Layout,
     x: &[f64],
     id: DeviceId,
@@ -1651,7 +1642,7 @@ pub(crate) fn mos_junction_voltages(
     model: &MosfetModel,
     series_r: bool,
 ) -> (f64, f64, f64, f64) {
-    let v = |n: NodeId| layout.node(n).map(|i| x[i]).unwrap_or(0.0);
+    let v = |n: NodeId| layout.node(n).map_or(0.0, |i| x[i]);
     let ints = layout.mos_internal(id).filter(|_| series_r);
     let at = |k: usize, n: NodeId| ints.and_then(|i| i[k]).map_or_else(|| v(n), |i| x[i]);
     let (vd, vs) = (at(0, d), at(1, s));
@@ -1713,8 +1704,8 @@ fn stamp_diode<S: StampSink>(
     // Read the junction at the EFFECTIVE unknowns. With no series resistor
     // `a_eff` IS `layout.node(a)`, reproducing `ctx.v(a) - ctx.v(k)` exactly:
     // the bit-identity fast path every existing deck takes.
-    let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
-    let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
+    let vx = |i: Option<usize>| i.map_or(0.0, |i| ctx.x[i]);
+    let vx_prev = |i: Option<usize>| i.map_or(0.0, |i| ctx.x_prev[i]);
     let vd_raw = vx(a_eff) - vx(k_i);
     // The limiting anchor: the last EVALUATION voltage where the live Newton
     // threads its junction state (see StampCtx::junction_eval), the previous
@@ -1846,8 +1837,8 @@ fn stamp_bjt<S: StampSink>(
         }
     }
     let (ci, bi, ei) = (eff[0], eff[1], eff[2]);
-    let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
-    let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
+    let vx = |i: Option<usize>| i.map_or(0.0, |i| ctx.x[i]);
+    let vx_prev = |i: Option<usize>| i.map_or(0.0, |i| ctx.x_prev[i]);
 
     // Intrinsic junction voltages with polarity folded in.
     let vbe = sign * (vx(bi) - vx(ei));
@@ -2173,8 +2164,8 @@ fn stamp_mosfet<S: StampSink>(
     // series resistor moved the intrinsic inside, external otherwise). For the
     // default rd == rs == 0 model d_eff/s_eff ARE `layout.node(d)`/`node(s)` and
     // `vx()` reproduces `ctx.v()` exactly; the bit-identity fast path.
-    let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
-    let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
+    let vx = |i: Option<usize>| i.map_or(0.0, |i| ctx.x[i]);
+    let vx_prev = |i: Option<usize>| i.map_or(0.0, |i| ctx.x_prev[i]);
 
     // Fold polarity: work in N-channel space.
     let mut vd = sign * vx(d_eff);
@@ -2377,7 +2368,7 @@ fn stamp_mosfet<S: StampSink>(
 /// `latched` is `Some(on)` for a [`crate::options::SwitchModel::Hysteretic`]
 /// relay, naming which of its two thresholds is live; `None` is the smooth pass
 /// element, whose ramp spans the whole `[voff, von]` band.
-pub(crate) fn vswitch_ramp(
+pub fn vswitch_ramp(
     vctrl: f64,
     von: f64,
     voff: f64,
@@ -2430,7 +2421,7 @@ pub(crate) fn vswitch_ramp(
 }
 
 /// Log-interpolated switch conductance at selection fraction `s`.
-pub(crate) fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
+pub fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
     let gon = 1.0 / ron.max(1e-12);
     let goff = 1.0 / roff.max(1e-12);
     (goff.ln() + s * (gon.ln() - goff.ln())).exp()
@@ -2438,7 +2429,7 @@ pub(crate) fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
 
 /// Which threshold of a hysteretic relay is live, or `None` for the smooth model
 /// (and for any switch the latch has no entry for yet).
-pub(crate) fn vswitch_latched(
+pub fn vswitch_latched(
     opts: &SolverOptions,
     latch: Option<&std::collections::HashMap<DeviceId, bool>>,
     id: DeviceId,
@@ -2653,7 +2644,7 @@ fn stamp_vswitch<S: StampSink>(
 /// pole, 0 when a rail or the slew clip pins the output, which is then this
 /// step's constant, like a frozen comparator rail). Infinite `rails` skip the
 /// saturation (the rail-crossing limiter's interior segment, below).
-pub(crate) fn opamp_transient_output(
+pub fn opamp_transient_output(
     v_prev: f64,
     target: f64,
     pole_hz: Option<f64>,
@@ -2731,7 +2722,7 @@ fn stamp_opamp<S: StampSink>(
     let (rail_lo, rail_hi) = hauksbee_ir::Rail::band(rail_lo, rail_hi, |n| ctx.v(n));
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
-    let vref = reference.map(|n| ctx.v(n)).unwrap_or(0.0);
+    let vref = reference.map_or(0.0, |n| ctx.v(n));
     let raw = vref + gain * (vp - vn);
     let target = raw.clamp(rail_lo, rail_hi);
     // Linearize: out = target + gain*(d vp - d vn) within rails.
@@ -2754,7 +2745,7 @@ fn stamp_opamp<S: StampSink>(
     let crossed = !in_rail && {
         let vp0 = ctx.v_prev(inp);
         let vn0 = ctx.v_prev(inn);
-        let vref0 = reference.map(|n| ctx.v_prev(n)).unwrap_or(0.0);
+        let vref0 = reference.map_or(0.0, |n| ctx.v_prev(n));
         let raw0 = vref0 + gain * (vp0 - vn0);
         (raw >= rail_hi && raw0 <= rail_lo) || (raw <= rail_lo && raw0 >= rail_hi)
     };
@@ -2780,7 +2771,7 @@ fn stamp_opamp<S: StampSink>(
     // saturated, which is what the guard on the couplings below used to say:
     // bit-identical to the classic instantaneous stamp, in DC and transient.
     let flat = if in_rail || crossed { 1.0 } else { 0.0 };
-    let (emf, dscale) = dynamics.unwrap_or((raw.clamp(rails.0, rails.1), flat));
+    let (emf, dscale) = dynamics.unwrap_or_else(|| (raw.clamp(rails.0, rails.1), flat));
     let oi = ctx.layout.node(out);
     if let Some(oi) = oi {
         sink.g(oi, oi, gout);
@@ -2806,7 +2797,7 @@ fn stamp_opamp<S: StampSink>(
 /// The differential input `V(inp) - V(inn)` at which a comparator whose output
 /// is `high` flips. `hysteresis` is the FULL band width, the datasheet VHYS
 /// (VT+ minus VT-), so the two trip points sit at plus/minus half of it.
-pub(crate) fn comparator_trip(high: bool, hysteresis: f64) -> f64 {
+pub fn comparator_trip(high: bool, hysteresis: f64) -> f64 {
     0.5 * if high { -hysteresis } else { hysteresis }
 }
 
@@ -3021,8 +3012,7 @@ mod tests {
         m.row(r)
             .iter()
             .find(|(j, _)| *j == c)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0)
+            .map_or(0.0, |(_, v)| *v)
     }
 
     fn fd_matches_cap(q: impl Fn(f64) -> (f64, f64), points: &[f64], what: &str) {
@@ -3397,8 +3387,8 @@ mod tests {
             let h = 1e-4;
             let mut prev = f(-0.3);
             let mut k = 1;
-            while -0.3 + (k as f64) * h <= 0.3 {
-                let vov = -0.3 + (k as f64) * h;
+            while -0.3 + f64::from(k) * h <= 0.3 {
+                let vov = -0.3 + f64::from(k) * h;
                 let cur = f(vov);
                 assert!(
                     (cur.0 - prev.0).abs() <= prev.1.max(cur.1) * h * 1.5 + 1e-18,
