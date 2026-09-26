@@ -2834,12 +2834,29 @@ fn claude_confinement(ws: &Workspace) -> String {
     .to_string()
 }
 
-/// `path` without any directory holding a `hauksbee` executable, so the only
-/// checker an agent can reach is the absolute one its prompt names.
-fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
-    let kept = std::env::split_paths(path)
-        .filter(|d| !d.join("hauksbee").is_file() && !d.join("hauksbee.exe").is_file());
-    std::env::join_paths(kept).unwrap_or_default()
+/// The user's PATH behind the workspace's `.bin`, whose `hauksbee` shim runs only the
+/// checker the prompt names (or fails when there is none), so a bare `hauksbee`
+/// never reaches another install while every other tool on the user's PATH,
+/// such as a wrapper's `claude` sharing `~/.local/bin` with `hauksbee`, stays
+/// reachable. The shim is a `/bin/sh` script inside the workspace, which both
+/// confinements already let the agent read, and it execs the allowed checker.
+/// Windows would not run an extensionless shim, so there the directories
+/// holding `hauksbee.exe` are still dropped.
+fn agent_path(ws: &Workspace) -> Result<std::ffi::OsString> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let (bin, shim) = (ws.path().join(".bin"), ws.path().join(".bin/hauksbee"));
+    let quote = |c: &PathBuf| c.to_string_lossy().replace('\'', r"'\''");
+    let run = ws.checker.as_ref().map_or_else(
+        || "exit 127".into(),
+        |c| format!("exec '{}' \"$@\"", quote(c)),
+    );
+    std::fs::create_dir_all(&bin)?;
+    std::fs::write(&shim, format!("#!/bin/sh\n{run}\n"))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+    let kept =
+        std::env::split_paths(&path).filter(|d| cfg!(unix) || !d.join("hauksbee.exe").is_file());
+    Ok(std::env::join_paths(std::iter::once(bin).chain(kept))?)
 }
 
 /// One sandboxed run of whichever agent CLI the settings name.
@@ -2876,7 +2893,7 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 ///     agy's own terminal sandbox (workspace-only files, no network, per its
 ///     docs); hauksbee cannot verify it or confine agy's file tools.
 ///
-/// Every CLI gets a PATH from `scrub_path` and the workspace as its cwd.
+/// Every CLI gets a PATH from `agent_path` and the workspace as its cwd.
 /// This is the one place an agent CLI is launched (`model-extract`, the smoke
 /// test and `resource-extract` all come here), so confinement cannot drift.
 ///
@@ -2955,9 +2972,7 @@ pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Resu
         }
         Backend::Api => unreachable!("handled above"),
     }
-    if let Some(path) = std::env::var_os("PATH") {
-        cmd.env("PATH", scrub_path(&path));
-    }
+    cmd.env("PATH", agent_path(ws)?);
     cmd.args(&a.extra_args).current_dir(ws.path());
     run_cli_agent(
         tool,
@@ -4169,7 +4184,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let command = dir.path().join("custom wrapper");
         std::fs::write(
             &command,
-            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\nprintf '%s' \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS$CLAUDE_CODE_DISABLE_AUTO_MEMORY\" > env.txt\nprintf '%s' \"$PATH\" > path.txt\npwd -P > cwd.txt\n",
+            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\nprintf '%s' \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS$CLAUDE_CODE_DISABLE_AUTO_MEMORY\" > env.txt\n{ x; hauksbee lint; } > tools.txt\npwd -P > cwd.txt\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -4186,6 +4201,14 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         require_tool(&resolved).unwrap();
         let mut ws = Workspace::scratch().unwrap();
         ws.checker = Some(dir.path().join("hauksbee"));
+        std::fs::create_dir(dir.path().join("t")).unwrap();
+        for (file, out) in [("hauksbee", "ok $1"), ("t/hauksbee", "no"), ("t/x", "hi")] {
+            let file = dir.path().join(file);
+            std::fs::write(&file, format!("#!/bin/sh\necho {out}\n")).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let old_path = std::env::var("PATH").unwrap();
+        std::env::set_var("PATH", format!("{}/t:{old_path}", dir.path().display()));
         let settings = claude_confinement(&ws);
         let sandbox: serde_json::Value = serde_json::from_str(&settings).unwrap();
         let fs = &sandbox["sandbox"]["filesystem"];
@@ -4219,10 +4242,10 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             );
             let read = |name: &str| std::fs::read_to_string(ws.path().join(name)).unwrap();
             assert_eq!(read("env.txt"), "11", "no background tasks or auto memory");
-            let path = std::env::var_os("PATH").unwrap();
-            assert_eq!(read("path.txt"), scrub_path(&path).to_str().unwrap());
+            assert_eq!(read("tools.txt"), "hi\nok lint\n"); // not t/hauksbee
             assert_eq!(read("cwd.txt").trim_end(), ws.path().to_str().unwrap());
         }
+        std::env::set_var("PATH", old_path);
         assert_eq!(
             std::fs::read_to_string(ws.path().join("claude-code-stderr.log")).unwrap(),
             "wrapper stderr"
@@ -4376,14 +4399,6 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(clean.to_string().contains("INCOMPLETE"), "{clean}");
         assert!(kept.is_some_and(|k| k.contains("datasheet-derived") && k.contains("sha256")));
         assert!(bad.2.is_none() && dropped.is_none(), "{bad}");
-    }
-
-    #[test]
-    fn scrubbed_path_drops_every_directory_holding_a_hauksbee() {
-        let other = tempfile::tempdir().unwrap();
-        std::fs::write(other.path().join("hauksbee"), "").unwrap();
-        let path = std::env::join_paths([other.path(), Path::new("/usr/bin")]).unwrap();
-        assert_eq!(scrub_path(&path), "/usr/bin");
     }
 
     #[test]
