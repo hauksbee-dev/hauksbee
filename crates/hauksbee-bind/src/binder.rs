@@ -7793,7 +7793,7 @@ style = "i2c_pointer"
         ] {
             let mut circuit = Circuit::new();
             let (a, b) = (circuit.node("A"), circuit.node("B"));
-            let node_of = |n: Option<i64>| [None, Some(a), Some(b)][n.unwrap_or(0) as usize];
+            let node_of = |n: Option<i64>| [None, Some(a), Some(b)][usize::try_from(n?).ok()?];
             let mut l = comp("L1", value);
             l.footprint = "Inductor_SMD:L_0805_2012Metric".into();
             l.pins = vec![pin("1", 1), pin("2", 2)];
@@ -7803,9 +7803,8 @@ style = "i2c_pointer"
                 Device::Inductor { henries, .. } => Some(*henries),
                 _ => None,
             });
-            let ok = henries.map_or(got.is_none(), |h| {
-                got.is_some_and(|g| (g - h).abs() < h * 1e-9)
-            });
+            let close_to = |h: f64| got.is_some_and(|g| (g - h).abs() < h * 1e-9);
+            let ok = henries.map_or_else(|| got.is_none(), close_to);
             assert!(ok, "{value}: {got:?} H, {outcome:?}, model {}", model.id);
         }
         // Ohm-marked resistors and jumpers stay resistors, not beads.
