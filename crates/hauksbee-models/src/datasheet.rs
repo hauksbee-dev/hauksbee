@@ -544,6 +544,7 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
     {
         bail!("reply for {part} has no model-error record (rule 5)");
     }
+    supply_relative_rows(spec.sensor.source.as_ref())?;
     Ok(spec)
 }
 
@@ -952,46 +953,25 @@ fn split_pdf_pages_text(text: &str) -> Vec<PdfPageText> {
         .collect()
 }
 
+/// Heading terms per topic; a `|`-joined CJK term is the topic word a heading
+/// contains (电路应用信息 holds 应用信息), matched by [`topic_score`]'s first-token rule.
+#[rustfmt::skip] // one topic per line; a vertical list of short terms hides the table
 const PAGE_TOPICS: &[(&str, &[&str])] = &[
-    (
-        "recommended operating conditions",
-        &["recommended operating conditions"],
-    ),
-    (
-        "absolute maximum ratings",
-        &["absolute maximum ratings", "limiting values"],
-    ),
-    ("switching characteristics", &["switching characteristics"]),
-    (
-        "electrical characteristics",
-        &["electrical characteristics"],
-    ),
-    (
-        "pin functions or package pinout",
-        &[
-            "pin functions",
-            "terminal functions",
-            "pin configuration",
-            "package pinout",
-            "top view",
-        ],
-    ),
-    (
-        "functional description or function table",
-        &["functional description", "function table", "truth table"],
-    ),
-    (
-        "application information or programming equations",
-        &[
-            "application information",
-            "typical application",
-            "design procedure",
-            "programming equation",
-        ],
-    ),
+    ("recommended operating conditions", &["recommended operating conditions", "推荐工作条件|推荐操作条件|推奨動作条件"]),
+    ("absolute maximum ratings", &["absolute maximum ratings", "limiting values", "极限|最大额定值|絶対最大定格"]),
+    ("switching characteristics", &["switching characteristics", "开关特性|时序特性|スイッチング特性"]),
+    ("electrical characteristics", &["electrical characteristics", "电特性|电气特性|电气参数|電気的特性"]),
+    ("pin functions or package pinout", &["pin functions", "terminal functions", "pin configuration",
+        "package pinout", "top view", "引脚|管脚|顶视图|ピン配置|端子説明"]),
+    ("functional description or function table", &["functional description", "function table",
+        "truth table", "功能描述|真值表|逻辑功能|機能説明"]),
+    ("application information or programming equations", &["application information",
+        "typical application", "design procedure", "programming equation", "典型应用|应用信息|应用电路|アプリケーション"]),
+    ("ordering or package information", &["ordering information", "订购信息|订货信息|封装信息|外形尺寸"]),
 ];
 
 fn topic_score(text: &str, terms: &[&str]) -> usize {
+    let terms: Vec<&str> = terms.iter().flat_map(|t| t.split('|')).collect();
     let lower = text.to_ascii_lowercase();
     let occurrences: usize = terms.iter().map(|term| lower.matches(term).count()).sum();
     if occurrences == 0 {
@@ -1001,17 +981,24 @@ fn topic_score(text: &str, terms: &[&str]) -> usize {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .any(|line| {
-            let heading_text = line
-                .trim()
-                .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c.is_whitespace());
+            let heading_text = line.trim().trim_start_matches(|c: char| {
+                c.is_ascii_digit() || ".、".contains(c) || c.is_whitespace()
+            });
+            let first = heading_text
+                .split_whitespace()
+                .next()
+                .filter(|t| t.chars().count() <= 10);
             let table_heading = heading_text
                 .strip_prefix("table ")
                 .and_then(|text| text.split_once(". ").map(|(_, title)| title));
             let detailed_heading = heading_text.strip_prefix("detailed ");
-            terms.iter().any(|term| {
-                heading_text.starts_with(term)
-                    || table_heading.is_some_and(|title| title.starts_with(term))
-                    || detailed_heading.is_some_and(|title| title.starts_with(term))
+            terms.iter().any(|term| match term.is_ascii() {
+                false => first.is_some_and(|t| t.contains(term)),
+                true => {
+                    heading_text.starts_with(term)
+                        || table_heading.is_some_and(|title| title.starts_with(term))
+                        || detailed_heading.is_some_and(|title| title.starts_with(term))
+                }
             })
         });
     if !heading {
@@ -1594,9 +1581,10 @@ IMPORTANT RULES:
      unit = "<printed unit>"
      conditions = "<the row's test conditions>"
      basis = "<table/row citation>, <printed columns, e.g. typ/max>"
-   Each number keeps its printed sign and reference in its printed column (±5
-   is min = -5, max = 5; 0.7 VDD is 0.7 with unit = "VDD"; a "—" column stays
-   out), min <= typ <= max by signed value (a row printed negative may keep its
+   Each number keeps its printed sign in its printed column (±5 is min = -5,
+   max = 5; a "—" column stays out). A supply-relative limit (0.7 VDD, VDD + 0.5)
+   is no number: quote it in `conditions` and omit that column, never a rail as
+   `unit`. min <= typ <= max by signed value (a row printed negative may keep its
    magnitude order); a threshold printed as an offset from another spec is a
    signed offset, ascending, with that spec named in conditions. Never invent a
    percentage, derive a bound from a typical value, or substitute a model clamp
@@ -1628,7 +1616,9 @@ IMPORTANT RULES:
    `ABSTAIN: datasheet does not state ...` in the description or an unknown source
    record. A named abstention is correct; a guessed field is wrong.
 4. For every real behavior the selected schema and params do not represent,
-   the description must say `does not model ...` and name that behavior. Do not
+   the description must say `does not model ...` and name that behavior, and
+   `[models.coverage]` must list each as a snake_case id in `missing` (what the
+   card does model goes in `implements`, e.g. `missing = ["thermal_shutdown"]`). Do not
    let a partial card read as a complete model of the component. Never delete a
    sourced fact or drop a record between drafts to pass validation: fix the
    record, or move the fact into a characteristic record (rule 0).
@@ -2025,6 +2015,9 @@ od_out = "0"
 [models.logic.tristate]
 od_out = { enable = "right", active = "low" }
 ```
+A level-sensitive (transparent) latch is combinational feedback on its own output:
+`q = "le & d | !le & q"` passes `d` while `le` is high and holds otherwise (`d` may be
+a `register[bit]`); `[models.logic.init]` may set its power-on level (`q = 0`).
 
 In `[models.params]`, `supply_pin` and `gnd_pin` are STRINGS containing physical
 pad identifiers exactly as keyed in `[models.pins]` (for example `"pad_id"`), not
@@ -2399,6 +2392,15 @@ fn reply_is_kind_or_fragment(raw: &str, table: &str) -> bool {
     bare_scalar || one_key_table
 }
 
+/// Measured: "fix exactly those issues" alone read as "produce a number", and a
+/// part with no regulated output was given a vout. The honest exits come first.
+const HONEST_EXITS: &str = "\n\nA missing required param is NOT a request for a number. If the \
+    datasheet states no value for it on this part, do not supply one: record it as an `unknown` \
+    source record naming why (rule 3) where the kind allows, else write the identity-only form \
+    (`identity_only = true`, `warning`, `unlocked_by`, keeping every sourced field). If the kind \
+    does not describe the part at all, use the identity-only form and say in `warning` which kind \
+    would; an invented value is the only wrong answer.";
+
 /// The retry appendix for the latest failure. Quoting a short reply back to
 /// the model makes the classification-vs-card mistake concrete.
 fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
@@ -2414,11 +2416,14 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
     } else {
         String::new()
     };
+    let missing_param = validation_error.contains("missing required param");
+    let honest_exits = (table == "[[models]]" && missing_param).then_some(HONEST_EXITS);
+    let honest_exits = honest_exits.unwrap_or_default();
     format!(
         "{fragment_correction}YOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n\
          {validation_error}\n\n\
          Fix exactly those issues and write the corrected WHOLE `{table}` TOML table \
-         to model.toml."
+         to model.toml.{honest_exits}"
     )
 }
 
@@ -2431,22 +2436,34 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
 /// it, and a mis-identified kind is the one error they are best placed to
 /// catch.
 fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
-    let part = &args.part;
+    let reply = call_backend(&identify_prompt(&args.part, pdf_text), args, Reply::Word)?;
+    kind_from_reply(&args.part, &reply.to_ascii_lowercase())
+}
+
+fn identify_prompt(part: &str, pdf_text: &str) -> String {
     // The front of the datasheet is where the part describes itself. Sending
     // the whole thing to answer one question would cost far more for no gain.
-    let prompt = format!(
+    format!(
         "You are identifying what kind of electronic part a datasheet describes, so a \
          simulator can pick the right model schema.\n\n\
          Part number: {part}\n\n\
-         Answer with EXACTLY ONE of these identifiers and nothing else:\n\
-         {}\n\n\
-         If the part does not fit any of them, answer exactly: unsupported\n\n\
+         Answer with EXACTLY ONE identifier (before the colon) and nothing else:\n\
+         {}\n\
+         No kind need model everything: pick the one closest to the part's primary \
+         pins and supply. The extraction then writes what that kind holds, else an \
+         identity-only card (ratings, supply envelope, pin map) declaring the unmodelled \
+         behaviour. Answer exactly `unsupported` only when not even that fits.\n\n\
          Do not explain. Do not add punctuation. One word.\n\n\
          Datasheet (first pages):\n{}",
-        supported_kinds().join("\n"),
+        supported_kinds()
+            .iter()
+            .map(|k| format!("{k}: {}\n", kind_definition(k)))
+            .collect::<String>(),
         truncate_to_chars(pdf_text, 6000)
-    );
-    let reply = call_backend(&prompt, args, Reply::Word)?.to_ascii_lowercase();
+    )
+}
+
+fn kind_from_reply(part: &str, reply: &str) -> Result<String> {
     // The model may answer with surrounding prose despite the instruction, so
     // look for a supported kind rather than trusting the whole reply.
     let found: Vec<&str> = supported_kinds()
@@ -2461,9 +2478,10 @@ fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
     match found.as_slice() {
         [one] => Ok((*one).to_string()),
         [] if reply.contains("unsupported") => bail!(
-            "the datasheet for {part} does not describe a part hauksbee models yet. That is an \
-             honest answer rather than a failure: forcing it into the nearest kind would \
-             produce a confident model of the wrong device. Supported kinds: {kinds}"
+            "the datasheet for {part} matched no hauksbee model kind, so no card was written. \
+             Next: rerun with --kind <closest of: {kinds}> for a card holding what that kind \
+             can (else an identity-only card: ratings, supply envelope, pin map), or scaffold \
+             one by hand with `hauksbee models new <REF> --board <board>`."
         ),
         [] => bail!(
             "could not identify what kind of part {part} is from its datasheet. Say so \
@@ -2474,6 +2492,30 @@ fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
              ours to guess. Pick one with --kind.",
             many.join(", ")
         ),
+    }
+}
+
+/// The one-line meaning the identification prompt gives each kind.
+fn kind_definition(kind: &str) -> &'static str {
+    match kind {
+        "passive" => "resistor, capacitor, inductor, ferrite or crystal",
+        "diode" => "rectifier, Schottky, Zener, TVS or LED",
+        "bjt_npn" | "bjt_pnp" => "discrete bipolar transistor of that polarity",
+        "nmos" | "pmos" => "discrete MOSFET of that channel type",
+        "vreg" => "linear or switching regulator, reference, or other part whose job is a rail",
+        "opamp" => "amplifier with an analog output (op-amp, instrumentation, audio)",
+        "comparator" => "comparator or supervisor with a two-level output",
+        "analog_switch" => "analog switch, multiplexer or load switch",
+        "digital" => "logic, buffer, level shifter or driver whose outputs follow logic inputs",
+        "shift_register" => "shift or storage register (serial/parallel in or out)",
+        "dac" | "adc" => "digital-to-analog (dac) or analog-to-digital (adc) converter",
+        "mcu" => "programmable microcontroller",
+        "connector" => "connector, header or test point",
+        "i2c_sensor" | "spi_sensor" => "register-map sensor or peripheral on that bus",
+        "charger" => "battery charger",
+        "pmic" => "multi-rail power-management IC",
+        "balancer" => "battery cell balancer",
+        _ => "",
     }
 }
 
@@ -3121,6 +3163,7 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
     {
         bail!("reply for {part} has no model-error record (rule 0)");
     }
+    supply_relative_rows(entry.source.as_ref())?;
     if let Some([is, n, rs]) = crate::param_names::diode_refit(entry) {
         bail!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}");
     }
@@ -3128,6 +3171,12 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
         anyhow::anyhow!("validation failed: {}", msg.join("; "))
     })
+}
+
+fn supply_relative_rows(source: Option<&crate::schema::ModelSourceSpec>) -> Result<()> {
+    let mut rows = source.into_iter().flat_map(|s| &s.characteristic);
+    let problem = rows.find_map(crate::schema::Characteristic::supply_relative_problem);
+    problem.map_or(Ok(()), |e| Err(anyhow::anyhow!(e)))
 }
 
 /// The snake_case name a kind serialises as (the serde `rename_all`).
@@ -3275,29 +3324,25 @@ mod tests {
 
     #[test]
     fn page_selection_includes_function_tables_within_the_render_budget() {
-        let headings = [
-            "Features",
-            "Recommended Operating Conditions",
-            "Absolute Maximum Ratings",
-            "Switching Characteristics",
-            "Electrical Characteristics",
-            "Pin Functions",
-            "Functional Description",
-            "Application Information",
-        ];
-        let pages = headings
-            .iter()
-            .enumerate()
-            .map(|(index, text)| PdfPageText {
-                number: index + 1,
-                text: (*text).into(),
-            })
-            .collect::<Vec<_>>();
-        let selected = select_relevant_pages(&pages, MAX_RENDERED_PAGES);
-        assert_eq!(
-            selected.iter().map(|page| page.number).collect::<Vec<_>>(),
-            [1, 2, 3, 4, 5, 6, 7]
-        );
+        let english = "Features|Recommended Operating Conditions|Absolute Maximum Ratings|\
+            Switching Characteristics|Electrical Characteristics|Pin Functions|\
+            Functional Description|Application Information";
+        // Chinese headings prefix or number their topic word; prose naming a pin is no heading.
+        let chinese = "产品概述|推荐工作条件|6 极限工作参数|时序特性|电特性 at Ta = 25°C|\
+            5、管脚配置|模块功能描述|4 典型应用电路|管脚上的电压是被忽略的，经过一个固定时间后";
+        let (all, budget) = ([1, 2, 3, 4, 5, 6, 7, 8], MAX_RENDERED_PAGES);
+        for (headings, limit, want) in [(english, budget, &all[..7]), (chinese, 20, &all)] {
+            let pages = headings
+                .split('|')
+                .enumerate()
+                .map(|(index, text)| PdfPageText {
+                    number: index + 1,
+                    text: text.into(),
+                });
+            let selected = select_relevant_pages(&pages.collect::<Vec<_>>(), limit);
+            let numbers = selected.iter().map(|page| page.number).collect::<Vec<_>>();
+            assert_eq!(numbers, want, "{headings}");
+        }
     }
 
     #[test]
@@ -3431,6 +3476,27 @@ mod tests {
         ));
         assert!(retry_feedback("digital", "no table", "[[models]]")
             .contains("--- BEGIN REPLY ---\ndigital\n"));
+        // A missing required param offers the honest exits, never "produce a number".
+        let card = FORMAT_EXAMPLES[0].card;
+        let missing = retry_feedback(card, "missing required param 'vout'", "[[models]]");
+        assert!(missing.contains("NOT a request") && missing.contains("identity_only"));
+        assert!(!retry_feedback(card, "no table", "[[models]]").contains("identity_only"));
+    }
+
+    #[test]
+    fn kind_identification_defines_kinds_and_names_next_steps() {
+        let prompt = identify_prompt("P", "text");
+        for kind in supported_kinds() {
+            assert!(!kind_definition(kind).is_empty(), "{kind}");
+            assert!(prompt.contains(&format!("{kind}: {}", kind_definition(kind))));
+        }
+        assert!(prompt.contains("identity-only card"));
+        assert_eq!(kind_from_reply("P", "digital").unwrap(), "digital");
+        let none = kind_from_reply("P", "unsupported").unwrap_err().to_string();
+        assert!(
+            none.contains("--kind") && none.contains("models new"),
+            "{none}"
+        );
     }
 
     #[test]
@@ -3802,7 +3868,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         // Completion adds it (rule 5), also beside a rail-relative row, once.
         let (part, kind) = ("X", "i2c_sensor");
         let sensor = Reply::Sensor { part, kind };
-        let row = "[sensor.source]\ntier = \"datasheet-derived\"\n[[sensor.source.characteristic]]\nparameter = \"VIH\"\nmin = 0.7\nunit = \"VDDIO\"\nconditions = \"\"\nbasis = \"T1, min\"\n";
+        let row = "[sensor.source]\ntier = \"datasheet-derived\"\n[[sensor.source.characteristic]]\nparameter = \"VIL\"\nmin = -0.3\nunit = \"V\"\nconditions = \"max 0.3 VDDIO\"\nbasis = \"T1, min\"\n";
         for draft in ["", row] {
             let filled = sensor.complete(format!("{no_source}{draft}"));
             assert!(validate_sensor_reply(&filled, part, kind).is_ok());
