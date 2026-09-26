@@ -326,7 +326,7 @@
       "type": "object"
     },
     "AssumptionId": {
-      "description": "Stable identity for one assumption within a run. Deterministic:\n`\"{kind_slug}:{subject}\"`, e.g. `\"open-part:R7\"`,\n`\"not-exercised:i2c0/U4\"`, `\"not-checked:drc\"`,\n`\"waived:si/controlled_impedance/DDR_CLK\"`. Re-running the same board yields\nthe same ids, so an acknowledgment file can name one, a diff can track one\nacross runs, and a renderer can cross-reference one.\n\nThe subject keeps its own case (a reference designator is `R7`, not `r7`)\nand reserved bytes are percent-encoded, so distinct subjects never collapse\nwhile the kind slug remains everything before the first `:`.\n\nA subject the board fails to name uniquely still needs a unique id, because\ntwo different gaps sharing one is a duplicate the registry rejects rather than\na cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there\nis no designator at all, encoding the typed claim that distinguishes it, and\n`open-part:R7#2` for the second distinct claim on a designator the board\nreuses. Both are pure functions of the input, so a re-run of the same input\nmints the same bytes.\n\nThe ordinal form is the one exception to tracking a subject across BOARD\nREVISIONS, and it is a limit of the input rather than of the scheme: a\ndesignator carrying two claims does not identify either of them, so there is\nnothing stable to key on. Adding or removing a claim on that designator\nrenumbers the rest. A designator the board uses once is unaffected and keeps\nits bare `open-part:R7`.",
+      "description": "Stable identity for one assumption within a run.\n\nDeterministic: `\"{kind_slug}:{subject}\"`, e.g. `\"open-part:R7\"`,\n`\"not-exercised:i2c0/U4\"`, `\"not-checked:drc\"`,\n`\"waived:si/controlled_impedance/DDR_CLK\"`. Re-running the same board yields\nthe same ids, so an acknowledgment file can name one, a diff can track one\nacross runs, and a renderer can cross-reference one.\n\nThe subject keeps its own case (a reference designator is `R7`, not `r7`)\nand reserved bytes are percent-encoded, so distinct subjects never collapse\nwhile the kind slug remains everything before the first `:`.\n\nA subject the board fails to name uniquely still needs a unique id, because\ntwo different gaps sharing one is a duplicate the registry rejects rather than\na cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there\nis no designator at all, encoding the typed claim that distinguishes it, and\n`open-part:R7#2` for the second distinct claim on a designator the board\nreuses. Both are pure functions of the input, so a re-run of the same input\nmints the same bytes.\n\nThe ordinal form is the one exception to tracking a subject across BOARD\nREVISIONS, and it is a limit of the input rather than of the scheme: a\ndesignator carrying two claims does not identify either of them, so there is\nnothing stable to key on. Adding or removing a claim on that designator\nrenumbers the rest. A designator the board uses once is unaffected and keeps\nits bare `open-part:R7`.",
       "type": "string"
     },
     "AssumptionKind": {
@@ -1053,7 +1053,7 @@
       "type": "object"
     },
     "CrossCheck": {
-      "description": "A cross-check the reader ran between two sources inside (or across)\nartifacts, and whether they agreed. A disagreement additionally raises a\nparser-limitation assumption; an agreement is positive evidence and belongs\nin the inventory in its own right.",
+      "description": "A cross-check the reader ran between two sources, and whether they agreed.\n\nThe sources sit inside (or across) artifacts. A disagreement additionally\nraises a parser-limitation assumption; an agreement is positive evidence and\nbelongs in the inventory in its own right.",
       "properties": {
         "agreed": {
           "description": "Whether the two sources agreed.",
@@ -1340,7 +1340,7 @@
       "type": "object"
     },
     "EntityKind": {
-      "description": "What results the assumption taints. Scope is the input to the on-path\ndecision: the causal-path traversal compares an assertion's subject nets and\nrefs against these, and only assumptions that match land in an\n[`EvidenceMap`].",
+      "description": "What results the assumption taints.\n\nScope is the input to the on-path decision: the causal-path traversal\ncompares an assertion's subject nets and refs against these, and only\nassumptions that match land in an [`EvidenceMap`].",
       "oneOf": [
         {
           "const": "part",
@@ -1808,7 +1808,7 @@
       "type": "string"
     },
     "ModelIntervalKind": {
-      "description": "Interval bounds a model places on a derived quantity. This is the socket for\ninterval models: shaped before its producer exists so that work lands in\nthis vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
+      "description": "Interval bounds a model places on a derived quantity.\n\nThis is the socket for interval models: shaped before its producer exists so\nthat work lands in this vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
       "oneOf": [
         {
           "const": "specification-limits",
@@ -1936,7 +1936,7 @@
       "type": "object"
     },
     "ModelSourceTier": {
-      "description": "Semantic rung in the model-source policy. This is deliberately distinct\nfrom [`ModelLayer`]: a layer says where bytes were loaded from, while a tier\nsays how authoritative the model is. An explicit user model remains the\noverride escape hatch; otherwise vendor SPICE and curated sources outrank an\nextracted draft, which outranks a deliberately estimated fallback.",
+      "description": "Semantic rung in the model-source policy.\n\nThis is deliberately distinct from [`ModelLayer`]: a layer says where bytes\nwere loaded from, while a tier says how authoritative the model is. An explicit user model remains the\noverride escape hatch; otherwise vendor SPICE and curated sources outrank an\nextracted draft, which outranks a deliberately estimated fallback.",
       "enum": [
         "open",
         "estimated-fallback",
@@ -2631,7 +2631,7 @@
       ]
     },
     "WindowMethod": {
-      "description": "One window and the integration method that produced it. The primary method\ncovers most runs in a single entry; a per-chunk fallback ladder contributes\none entry per fallback-solved window, using that machinery's own stable\nmethod names verbatim (\"trapezoidal\", \"gear2\", \"backward-euler\",\n\"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
+      "description": "One window and the integration method that produced it.\n\nThe primary method covers most runs in a single entry; a per-chunk fallback\nladder contributes one entry per fallback-solved window, using that\nmachinery's own stable method names verbatim (\"trapezoidal\", \"gear2\",\n\"backward-euler\", \"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
       "properties": {
         "method": {
           "allOf": [

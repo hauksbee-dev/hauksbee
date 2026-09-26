@@ -1228,7 +1228,7 @@
       "type": "object"
     },
     "Refusal": {
-      "description": "The C5.3 refusal contract.  Exit 3 means the requested claim could not be\nmade; it is neither a finding nor a malformed-input error.  Every renderer\ncarries these same four answers so a refusal is actionable and does not\ndiscard work that remains valid.",
+      "description": "The C5.3 refusal contract.\n\nExit 3 means the requested claim could not be made; it is neither a finding\nnor a malformed-input error.  Every renderer carries these same four answers\nso a refusal is actionable and does not discard work that remains valid.",
       "properties": {
         "claim": {
           "description": "The conclusion the run declined to make.",
