@@ -95,8 +95,12 @@ hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml
 
 `hauksbee-ci run` and `hauksbee-ci check` bind the board against the same layered model library as
 `hauksbee run`: the builtin db, then installed packs, then the user model dirs
-(`~/.hauksbee/models`, `~/.config/hauksbee/models`), then `--models-dir DIR`
-(highest priority). A custom `[[models]]` entry, including a
+(`~/.hauksbee/models`, `~/.config/hauksbee/models`), then the spec's
+`models_dir` key (resolved against the spec file) or, when given,
+`--models-dir DIR` in its place (highest priority). The flag replaces the key
+rather than adding to it, as `$HAUKSBEE_MCU_DIR` replaces `[mcu]
+descriptor_dir`: the operator's setting wins. A directory that does not exist
+is an error, whichever of the two named it. A custom `[[models]]` entry, including a
 `kind = "mcu"` routing entry that maps a part value to a `renode:<part>` /
 `qemu:<part>` backend and its SoC descriptor, therefore binds in CI exactly
 as it does interactively:
@@ -104,6 +108,7 @@ as it does interactively:
 ```bash
 hauksbee-ci run ci/board.toml --models-dir hardware/models
 hauksbee-ci check ci/board.toml --models-dir hardware/models
+# or, once, in ci/board.toml:  models_dir = "../hardware/models"
 ```
 
 `--spice-models FILE` (repeatable, `hauksbee-ci run` only) loads a vendor's
@@ -135,7 +140,7 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | `bom`           | path     | none          | BOM read and fail-closed reconciled before binding through the same production reader as `hauksbee run --bom`. See [assembly inputs](#assembly-inputs-bom-placement-variant). |
 | `bom_columns`   | [string] | `[]`          | Explicit `role=Header` mappings for an ambiguous BOM, equivalent to repeatable `--bom-column`; requires `bom`. |
 | `placement`     | path     | none          | Pick-and-place file reconciled against layout identity, package, position, side and rotation before binding. |
-| `models_dir`    | path     | none          | Highest-priority model-library directory, resolved relative to the spec; used by the browser and CLI Checks paths alike. |
+| `models_dir`    | path     | none          | Highest-priority model-library directory, resolved relative to the spec; used by `hauksbee-ci run`/`check` and the browser Checks path. A missing directory is an error; `--models-dir` replaces it. |
 | `variant`       | path     | none          | Assembly-variant TOML with `name`, `fit` and/or `no_fit`; exact bytes and population decisions are separate evidence. |
 | `firmware`      | path     | none          | Firmware to boot on the detected MCU: a compiled ELF/hex, a PlatformIO project directory, or a zip of either (same three input tiers as `run --firmware`, see [`../cosim/MCU.md`](../cosim/MCU.md)). |
 | `mcu`           | string   | none          | Informational note only, nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. Distinct from the `mcu` field inside a `uart` `[[assert]]`, which IS load-bearing (it selects which MCU's UART the assertion reads). |
@@ -865,6 +870,20 @@ is nothing to excuse them from.
   an untrustworthy run outranks a spec error, which outranks a red). One
   desynced spec does not stop the others from running. With `--json`, one
   JSON object is printed per spec, one per line.
+- **Waveforms** with `--waveforms DIR` (opt-in; every other output is
+  unchanged): the sampled series behind each assertion, so you can plot what
+  happened rather than read only the window's min and max. Every net an
+  assertion names is recorded at the frame cadence and written per seed under
+  `DIR/<spec-stem>/`: `seed<N>/net_<net>.csv` holds the whole run and
+  `seed<N>/a<index>_<net>.csv` the assertion's own window (a scoped
+  `rail_window` uses its scenario window). Each file is `time_s,<net>` CSV, the
+  shape `hauksbee run --probe-csv` writes, and `index.json` maps every file to
+  its net, assertion, kind, scenario and `window_s`. The samples are the
+  settled per-frame values; an intra-frame extreme folded into a window's
+  min/max has no timestamp, so the reported min can sit below the lowest
+  sample. A series longer than 20,000 points is min/max-bucket decimated, which
+  keeps every bucket's extremes (`index.json` gives `samples` and `points`).
+  Non-analog assertions (`uart`, `no_faults`, `peripheral`, AC) have no file.
 - **`--json`**: one object per spec on stdout, NDJSON. The shape is published
   as a JSON Schema (`crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json`,
   generated from the types and drift-tested against them) and the field-by-field
