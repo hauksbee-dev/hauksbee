@@ -141,7 +141,7 @@
       ]
     },
     "models_dir": {
-      "description": "Optional highest-priority model-library directory, resolved relative to\nthe spec. The browser stages selected model TOMLs here so Checks binds\nagainst the same model context as report analysis and Live Sim.",
+      "description": "Optional highest-priority model-library directory, resolved relative to\nthe spec file. `hauksbee-ci run` and `check` load it above the builtin\ndb, packs and user model dirs; a missing directory is an error. A CLI\n`--models-dir` replaces it for that run (the operator's setting wins,\nas `$HAUKSBEE_MCU_DIR` does over `[mcu] descriptor_dir`). The browser\nstages selected model TOMLs here so Checks binds against the same model\ncontext as report analysis and Live Sim.",
       "type": [
         "string",
         "null"
