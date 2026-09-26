@@ -1,6 +1,11 @@
-//! Embed the git commit hash into the binary so `hauksbee --version` can name
-//! the exact build (an agent operator diffing behaviour across sessions needs
-//! more than a crate version that changes once a release).
+//! Embed the git commit hash into the binaries so `hauksbee --version`,
+//! `hauksbee-ci --version` and `hauksbee-mcp --version` can name the exact
+//! build (an agent operator diffing behaviour across sessions needs more than a
+//! crate version that changes once a release). The CI and MCP crates read it
+//! back as `hauksbee_engine::GIT_HASH` rather than stamping it again; the
+//! installed pre-commit hook records the version string and warns at run time
+//! when the binary on PATH is a different build (see hauksbee-ci's
+//! src/integrate.rs).
 //!
 //! Best-effort by design: outside this repository's own Git root (a crates.io
 //! build, source tarball, or vendored copy inside a consumer repo) `GIT_HASH`
@@ -9,9 +14,23 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// One linear pass: validate the env, find the owned git root, watch it, stamp the build.
+#[allow(clippy::too_many_lines)]
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT");
+    println!("cargo:rerun-if-env-changed=HAUKSBEE_RELEASE_TAG");
+    let release_tag = std::env::var("HAUKSBEE_RELEASE_TAG").ok();
+    if let Some(tag) = release_tag.as_deref() {
+        let version = std::env::var("CARGO_PKG_VERSION")
+            .expect("Cargo must provide CARGO_PKG_VERSION for a release-tagged build");
+        let expected = format!("v{version}");
+        assert!(
+            tag == expected,
+            "HAUKSBEE_RELEASE_TAG must equal v followed by this package's CARGO_PKG_VERSION"
+        );
+        println!("cargo:rustc-env=GIT_TAG={tag}");
+    }
     if let Ok(hash) = std::env::var("HAUKSBEE_SOURCE_COMMIT") {
         assert!(
             is_commit(&hash),
@@ -105,12 +124,23 @@ fn main() {
                 println!("cargo:rustc-env=GIT_HASH={hash}");
             }
         }
+        if release_tag.is_none() {
+            if let Ok(version) = std::env::var("CARGO_PKG_VERSION") {
+                let expected = format!("v{version}");
+                let tag = Command::new("git")
+                    .arg("-C")
+                    .arg(&source_root)
+                    .args(["describe", "--tags", "--exact-match", "HEAD"])
+                    .output();
+                if tag.is_ok_and(|out| {
+                    out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == expected
+                }) {
+                    println!("cargo:rustc-env=GIT_TAG={expected}");
+                }
+            }
+        }
     }
-    watch_git_state(&source_root, &watch);
-}
-
-/// Rerun when the checked-out commit changes (branch switch or new commit).
-fn watch_git_state(source_root: &Path, watch: &impl Fn(&Path)) {
+    // Re-run when the checked-out commit changes (branch switch or new commit).
     let dot_git = source_root.join(".git");
     if dot_git.is_file() {
         println!("cargo:rerun-if-changed={}", dot_git.display());

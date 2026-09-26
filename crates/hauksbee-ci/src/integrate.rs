@@ -211,13 +211,13 @@ fn plain_hook_script() -> String {
 pub fn try_github_workflow_yaml() -> anyhow::Result<String> {
     #[cfg(test)]
     let source_commit =
-        option_env!("GIT_HASH").or(Some("0123456789abcdef0123456789abcdef01234567"));
+        hauksbee_engine::GIT_HASH.or(Some("0123456789abcdef0123456789abcdef01234567"));
     #[cfg(not(test))]
-    let source_commit = option_env!("GIT_HASH");
+    let source_commit = hauksbee_engine::GIT_HASH;
     #[cfg(test)]
     let release_tag = None;
     #[cfg(not(test))]
-    let release_tag = option_env!("GIT_TAG");
+    let release_tag = hauksbee_engine::GIT_TAG;
     github_workflow_yaml_for(source_commit, release_tag)
 }
 

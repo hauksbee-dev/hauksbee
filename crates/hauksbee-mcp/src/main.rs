@@ -21,20 +21,13 @@ const HELP: &str = concat!(
     \x20   -V, --version    Print the version and exit\n"
 );
 
-fn version_string() -> String {
-    option_env!("GIT_HASH").map_or_else(
-        || env!("CARGO_PKG_VERSION").to_string(),
-        |hash| format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
-    )
-}
-
 fn main() {
     // A flag answer must be a real answer: exiting 0 with nothing on stdout
     // (the old behaviour) told a packaging smoke test precisely nothing.
     if let Some(arg) = std::env::args().nth(1) {
         match arg.as_str() {
             "--version" | "-V" => {
-                println!("hauksbee-mcp {}", version_string());
+                println!("hauksbee-mcp {}", hauksbee_engine::version_string());
                 return;
             }
             "--help" | "-h" => {

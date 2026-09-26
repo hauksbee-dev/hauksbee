@@ -602,10 +602,7 @@ fn version_flag_prints_the_version_and_exits_zero() {
         let out = run_flag(flag);
         assert!(out.status.success(), "{flag} must exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let expected = option_env!("GIT_HASH").map_or_else(
-            || format!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION")),
-            |hash| format!("hauksbee-mcp {} (git {hash})", env!("CARGO_PKG_VERSION")),
-        );
+        let expected = format!("hauksbee-mcp {}", hauksbee_engine::version_string());
         assert_eq!(stdout.trim(), expected, "{flag} stdout: {stdout:?}");
     }
 }

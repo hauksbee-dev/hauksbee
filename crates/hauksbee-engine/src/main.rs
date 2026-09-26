@@ -19,22 +19,10 @@ use clap::{Parser, Subcommand};
 /// Point `hauksbee` at any board file (`KiCad`, Eagle, IPC-D-356, or gerbers) and
 /// it extracts the circuit, binds device models, runs the static checks, and can
 /// co-simulate the firmware on an emulated MCU. Start with `run --report`.
-/// The `--version` string: crate version plus the git hash this binary was
-/// built from (`build.rs` sets `GIT_HASH`; absent outside a git checkout, e.g.
-/// a source tarball, in which case the bare crate version is all we honestly
-/// have). The hash is what lets an operator tie behaviour to an exact build.
-/// Returned as `&'static str` because that is what clap's `version` wants; the
-/// one-time `OnceLock` init is the cheapest way to a static composed string.
-fn version_string() -> &'static str {
-    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    let v = env!("CARGO_PKG_VERSION");
-    V.get_or_init(|| option_env!("GIT_HASH").map_or_else(|| v.into(), |h| format!("{v} (git {h})")))
-}
-
 #[derive(Parser)]
 #[command(
     name = "hauksbee",
-    version = version_string(),
+    version = hauksbee_engine::version_string(),
     about = "CI for hardware: hand it a PCB; it tells you what blows up before you order boards.",
     long_about = None,
     // No propagate_version: with it, `hauksbee run --version` reported itself

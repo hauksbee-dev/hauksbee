@@ -37,11 +37,10 @@ REGISTRY_USER = ROOT / "integrations" / "github-action" / "resolve-registry-user
 
 def provenance_checkout(root: Path) -> None:
     """Use a real existing commit, without creating commits or configuring identity."""
-    source = (ROOT / "crates/hauksbee-ci/build.rs").read_text()
+    source = (ROOT / "crates/hauksbee-engine/build.rs").read_text()
     watched = re.findall(r'"../../([^"\n]+)"', source)
     files = [p for p in watched if Path(p).suffix or p in ("LICENSE", "NOTICE")]
-    files += ["docs/START_HERE.md", *(f"crates/{c}/build.rs" for c in
-              ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"))]
+    files += ["docs/START_HERE.md", "crates/hauksbee-engine/build.rs"]
     subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "sparse-checkout", "set", "--no-cone", "--stdin"],
                    input="".join(f"/{p}\n" for p in files), text=True, check=True)
@@ -109,43 +108,43 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             consumer = tmp / "consumer"
             provenance_checkout(consumer)
             env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
-            for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
-                source = ROOT / "crates" / crate / "build.rs"
-                binary = tmp / f"{crate}-build-script"
-                subprocess.run(["rustc", str(source), "-o", str(binary)], check=True)
-                watches = [
-                    "cargo:rerun-if-changed=build.rs",
-                    "cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT",
-                ]
-                if crate == "hauksbee-ci":
-                    watches.append("cargo:rerun-if-env-changed=HAUKSBEE_RELEASE_TAG")
-                # Both a workspace-shaped copy and Cargo's flat vendor layout
-                # must avoid borrowing identity or watching the consumer tree.
-                for layout in ("vendor/hauksbee/crates", "vendor"):
-                    manifest = consumer / layout / crate
-                    manifest.mkdir(parents=True)
-                    result = subprocess.check_output(
-                        [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+            # hauksbee-ci and hauksbee-mcp read the identity the engine stamps.
+            crate = "hauksbee-engine"
+            source = ROOT / "crates" / crate / "build.rs"
+            binary = tmp / f"{crate}-build-script"
+            subprocess.run(["rustc", str(source), "-o", str(binary)], check=True)
+            watches = [
+                "cargo:rerun-if-changed=build.rs",
+                "cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT",
+                "cargo:rerun-if-env-changed=HAUKSBEE_RELEASE_TAG",
+            ]
+            # Both a workspace-shaped copy and Cargo's flat vendor layout
+            # must avoid borrowing identity or watching the consumer tree.
+            for layout in ("vendor/hauksbee/crates", "vendor"):
+                manifest = consumer / layout / crate
+                manifest.mkdir(parents=True)
+                result = subprocess.check_output(
+                    [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                )
+                self.assertEqual(result.splitlines(), watches, (crate, layout))
+            # An explicit identity must not even need a manifest path or Git.
+            for sha in ("a" * 40, "A" * 40, "a" * 39, "g" * 40, ""):
+                result = subprocess.run(
+                    [str(binary)], env={"PATH": "", "HAUKSBEE_SOURCE_COMMIT": sha},
+                    text=True, capture_output=True,
+                )
+                if sha == "a" * 40:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        result.stdout.splitlines(), watches + [f"cargo:rustc-env=GIT_HASH={sha}"]
                     )
-                    self.assertEqual(result.splitlines(), watches, (crate, layout))
-                # An explicit identity must not even need a manifest path or Git.
-                for sha in ("a" * 40, "A" * 40, "a" * 39, "g" * 40, ""):
-                    result = subprocess.run(
-                        [str(binary)], env={"PATH": "", "HAUKSBEE_SOURCE_COMMIT": sha},
-                        text=True, capture_output=True,
-                    )
-                    if sha == "a" * 40:
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(
-                            result.stdout.splitlines(), watches + [f"cargo:rustc-env=GIT_HASH={sha}"]
-                        )
-                    else:
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertIn("HAUKSBEE_SOURCE_COMMIT must be", result.stderr)
-                        self.assertEqual(result.stdout.splitlines(), watches)
-                self.assertNotIn('println!("cargo:rerun-if-changed=../../.git");', source.read_text())
-                for name in ('"HEAD"', '"index"', '"packed-refs"', '"refs"'):
-                    self.assertIn(name, source.read_text())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("HAUKSBEE_SOURCE_COMMIT must be", result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), watches)
+            self.assertNotIn('println!("cargo:rerun-if-changed=../../.git");', source.read_text())
+            for name in ('"HEAD"', '"index"', '"packed-refs"', '"refs"'):
+                self.assertIn(name, source.read_text())
 
     def test_build_provenance_refuses_a_dirty_owned_source_tree(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -153,38 +152,38 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             root = tmp / "hauksbee"
             provenance_checkout(root)
             env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
-            for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
-                manifest = root / "crates" / crate
-                binary = tmp / crate
-                subprocess.run(["rustc", str(ROOT / "crates" / crate / "build.rs"), "-o", str(binary)], check=True)
-                for relative in ("docs/START_HERE.md", f"crates/{crate}/build.rs",
-                                 "docs/untracked.txt", "crates/untracked.txt"):
-                    path = root / relative
-                    original = path.read_bytes() if path.exists() else None
-                    clean = subprocess.check_output(
-                        [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
-                    )
-                    self.assertIn("cargo:rustc-env=GIT_HASH=", clean, crate)
-                    for watched in ("crates", "vendor", "frontend/src", "integrations", "docs"):
-                        self.assertIn(f"cargo:rerun-if-changed=../../{watched}\n", clean)
-                    self.assertNotIn("cargo:rerun-if-changed=../../site\n", clean)
-                    path.write_text("dirty\n")
-                    dirty = subprocess.check_output(
-                        [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
-                    )
-                    self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty, (crate, relative))
-                    if original is None:
-                        path.unlink()
-                    else:
-                        path.write_bytes(original)
+            crate = "hauksbee-engine"
+            manifest = root / "crates" / crate
+            binary = tmp / crate
+            subprocess.run(["rustc", str(ROOT / "crates" / crate / "build.rs"), "-o", str(binary)], check=True)
+            for relative in ("docs/START_HERE.md", f"crates/{crate}/build.rs",
+                             "docs/untracked.txt", "crates/untracked.txt"):
+                path = root / relative
+                original = path.read_bytes() if path.exists() else None
+                clean = subprocess.check_output(
+                    [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                )
+                self.assertIn("cargo:rustc-env=GIT_HASH=", clean, crate)
+                for watched in ("crates", "vendor", "frontend/src", "integrations", "docs"):
+                    self.assertIn(f"cargo:rerun-if-changed=../../{watched}\n", clean)
+                self.assertNotIn("cargo:rerun-if-changed=../../site\n", clean)
+                path.write_text("dirty\n")
+                dirty = subprocess.check_output(
+                    [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                )
+                self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty, (crate, relative))
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
 
     def test_cargo_rechecks_provenance_when_a_workspace_sibling_becomes_dirty(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp) / "hauksbee"
             provenance_checkout(root)
-            manifest = root / "crates/hauksbee-ci"
+            manifest = root / "crates/hauksbee-engine"
             binary = Path(raw_tmp) / "build-script"
-            subprocess.run(["rustc", str(ROOT / "crates/hauksbee-ci/build.rs"), "-o", str(binary)], check=True)
+            subprocess.run(["rustc", str(ROOT / "crates/hauksbee-engine/build.rs"), "-o", str(binary)], check=True)
             crate = Path(raw_tmp) / "probe"
             (crate / "src").mkdir(parents=True)
             # Cargo runs a tiny external probe; the unmodified production build

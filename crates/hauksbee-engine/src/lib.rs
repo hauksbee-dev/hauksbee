@@ -51,6 +51,29 @@ pub mod webcheck;
 pub mod webextract;
 pub mod websettings;
 
+/// The verified Hauksbee source commit `build.rs` stamped into this build.
+///
+/// Absent outside this repository's own clean checkout (a source tarball, a
+/// vendored copy), in which case the bare crate version is all we honestly
+/// have. `hauksbee-ci` and `hauksbee-mcp` report this same commit.
+pub const GIT_HASH: Option<&str> = option_env!("GIT_HASH");
+
+/// The release tag (`v` + the workspace version) `build.rs` verified for this
+/// build, if any.
+pub const GIT_TAG: Option<&str> = option_env!("GIT_TAG");
+
+/// The `--version` string: crate version plus [`GIT_HASH`].
+///
+/// The hash is what lets an operator tie behaviour to an exact build. Returned
+/// as `&'static str` because that is what clap's `version` wants; the one-time
+/// `OnceLock` init is the cheapest way to a static composed string.
+#[must_use]
+pub fn version_string() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let v = env!("CARGO_PKG_VERSION");
+    V.get_or_init(|| GIT_HASH.map_or_else(|| v.into(), |h| format!("{v} (git {h})")))
+}
+
 // Lower layers, under their pre-split paths.
 pub use hauksbee_bind::{
     asbuilt, behavioral, bind_report, binder, board_input, component_evidence, digital, drivers,
