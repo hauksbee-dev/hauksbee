@@ -1732,14 +1732,16 @@ IMPORTANT RULES:
 3. Identity-only is a last resort. A typ-only or max-only row is usable, cited
    as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
    from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
-   card whose cited rows suffice. Unnumbered leads take pad names A/K, G/D/S or
-   B/C/E. A required param genuinely absent and not derivable or fittable is never
-   estimated: one missing param takes an `unknown` record where the kind's params
-   above allow one. Only when the kind's behaviour cannot be written even so, emit
-   an identity-only card (`identity_only = true`, `warning`, `unlocked_by`) still
-   carrying every field the datasheet states, and name the missing fact as
-   `ABSTAIN: datasheet does not state ...` in the description or an unknown source
-   record. A named abstention is correct; a guessed field is wrong.
+   card whose cited rows suffice. Key [models.pins] by pad number wherever one is
+   printed (pin table, package drawing, beside the letters); only when the sheet shows
+   letters alone, key by lead letters A/K, G/S/D or B/C/E and list `pad_numbers` in
+   [models.coverage] missing. A required param genuinely absent and not derivable or
+   fittable is never estimated: one missing param takes an `unknown` record where the
+   kind's params above allow one. Only when the kind's behaviour cannot be written
+   even so, emit an identity-only card (`identity_only = true`, `warning`,
+   `unlocked_by`) still carrying every field the datasheet states, and name the
+   missing fact as `ABSTAIN: datasheet does not state ...` in the description or an
+   unknown source record. A named abstention is correct; a guessed field is wrong.
 4. For every real behavior the selected schema and params do not represent,
    the description must say `does not model ...` and name that behavior, and
    `[models.coverage]` must list each as a snake_case id in `missing` (what the
@@ -2084,7 +2086,7 @@ fn pin_roles_for_kind(kind: &str) -> &'static str {
         "diode" => "anode, cathode; an array indexes each diode's own pad: cathode1, cathode2",
         "bjt_npn" | "bjt_pnp" => "collector, base, emitter; a dual: collector_q1, base_q1, ..._q2",
         "nmos" | "pmos" => "drain, gate, source",
-        "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them)",
+        "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them; a fixed-output part's ADJ/GND pin is gnd)",
         "opamp" | "comparator" => {
             "in_plus, in_minus, out, vcc, vee; a dual or quad suffixes each unit's signal roles \
              _a to _d (out_a, in_minus_a, in_plus_a, out_b, in_minus_b, ...), supplies unsuffixed"
@@ -3637,7 +3639,10 @@ mod tests {
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
         assert!(comparator.contains("from the 25 °C row when a full-temperature-range row"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
-        assert!(bjt.contains("pad names A/K, G/D/S or\n   B/C/E") && bjt.contains("one missing"));
+        assert!(
+            bjt.contains("letters alone, key by lead letters A/K, G/S/D")
+                && bjt.contains("one missing")
+        );
         assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
         assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));
         assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));
@@ -3806,7 +3811,8 @@ v_sense_full = 0.0463
             .replace("<programming pin role>", "prog")
             .replace("<highest specified programmed current, A>", "0.5")
             .replace("<typical K in volts>", "1000.0");
-        let pins = "[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\"3\" = \"prog\"\n";
+        let pins =
+            "[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\"3\" = \"prog\"\n\"4\" = \"gnd\"\n";
         let linear = format!("{plain}{pins}{snippet}{MODEL_SOURCE}");
         let entry = parse_and_validate_reply(&linear, "X", "charger").unwrap();
         assert!(entry.behavioral.is_empty() && entry.current_program.is_some());

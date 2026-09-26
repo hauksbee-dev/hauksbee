@@ -1845,11 +1845,8 @@ fn cosim_caveat_headline(
             || !coverage.timing_refusals.is_empty()
             || !coverage.fallback_windows.is_empty()
             || has_note);
-    if caveat && current_headline == overall_headline(0, 0, false, false) {
-        Some(overall_headline(0, 0, true, false))
-    } else {
-        None
-    }
+    (caveat && current_headline == overall_headline(0, 0, false, false))
+        .then(|| overall_headline(0, 0, true, false))
 }
 
 /// A skipped/failed co-sim section carrying the reason as a single note-level

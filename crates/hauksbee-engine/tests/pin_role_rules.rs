@@ -14,9 +14,10 @@
 //! 3. A user-supplied rule overrides the built-in (different pad→role map), and
 //!    its id appears in the guess-warning.
 
-use hauksbee_engine::bind_board;
 use hauksbee_engine::binder::bind_board_with;
+use hauksbee_engine::{bind_board, BoardEvidence};
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::evidence::{Assumption, EvidenceStatus, RunDate};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
@@ -106,6 +107,14 @@ fn layout_only_diode_binds_via_rule_with_guess_warning() {
         "names the matched rule: {joined}"
     );
     assert!(joined.contains("pad"), "names a pad: {joined}");
+
+    // Each guess is a disclosed pin-role assumption: a verdict on D1 is Qualified.
+    let evidence = BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::unknown());
+    let evidence = evidence.unwrap();
+    let said = |a: &Assumption| a.statement() == "D1 pin 2 is taken to be its anode pin.";
+    assert!(evidence.assumptions().iter().any(said));
+    let map = evidence.ci_assertion_map("d1", &["ANODE_NET".into()], &[], None, None);
+    assert_eq!(map.unwrap().status(), EvidenceStatus::Qualified);
 }
 
 #[test]

@@ -1125,13 +1125,9 @@ impl Hc165Chain {
                 self.lvl_qh = self.seq.get(self.pos).copied().unwrap_or(false);
             }
         }
-        if self.lvl_qh != prev_qh || pin == self.pl_n {
-            // Always (re)assert MISO on a load so the first bit is present before
-            // the firmware's first read, even when it equals the prior level.
-            Some((self.miso, self.lvl_qh))
-        } else {
-            None
-        }
+        // Always (re)assert MISO on a load so the first bit is present before
+        // the firmware's first read, even when it equals the prior level.
+        (self.lvl_qh != prev_qh || pin == self.pl_n).then_some((self.miso, self.lvl_qh))
     }
 
     /// Logic thresholds of the head chip (for input sampling). The chips share a

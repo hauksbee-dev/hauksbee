@@ -1145,12 +1145,11 @@ pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
         }
         // A set-point regulator binds its input by the exact `in` role (a
         // datasheet's VDD/VIN name leaves it OPEN); a shunt reference has none.
-        ComponentKind::Vreg
-            if !entry.params.get_bool("shunt").unwrap_or(false)
-                && (entry.params.get_f64("vout").is_some()
-                    || entry.params.get_f64("vref").is_some()) =>
-        {
-            &[&["in"], &["out"]]
+        // A fixed one returns through `gnd`; an adjustable one may through ADJ alone.
+        ComponentKind::Vreg if entry.params.get_bool("shunt").unwrap_or(false) => &[&["out"]],
+        ComponentKind::Vreg if entry.params.get_f64("vref").is_some() => &[&["in"], &["out"]],
+        ComponentKind::Vreg if entry.params.get_f64("vout").is_some() => {
+            &[&["in"], &["out"], &["gnd"]]
         }
         ComponentKind::Vreg => &[&["out"]],
         ComponentKind::Opamp | ComponentKind::Comparator => &[
@@ -1166,7 +1165,8 @@ pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
         .filter(|f| !f.iter().any(|n| declared.contains(&fold_role(n))));
     let why = |f: &&[&str]| {
         let (role, kind, names) = (f[0], entry.kind, f.join(" / "));
-        format!("[models.pins] declares no '{role}' pin (a {kind:?} needs it); the part would bind OPEN. Accepted role names: {names}")
+        let adj = (role == "gnd" && declared.contains("adj")).then_some(". A fixed-output part's ADJ/GND pin is its ground: map it 'gnd'; 'adj' is for an adjustable card (vref, no vout)");
+        format!("[models.pins] declares no '{role}' pin (a {kind:?} needs it); the part would bind OPEN. Accepted role names: {names}{}", adj.unwrap_or_default())
     };
     missing.map(why).collect()
 }
@@ -1503,10 +1503,7 @@ mod tests {
     }
 
     fn pins(e: &mut ModelEntry, roles: &[(&str, &str)]) {
-        e.pins = roles
-            .iter()
-            .map(|(p, r)| (p.to_string(), r.to_string()))
-            .collect();
+        e.pins = roles.iter().map(|&(p, r)| (p.into(), r.into())).collect();
     }
 
     /// The entry fails, and one error names `needle` (so the right rule fired).
@@ -1858,6 +1855,8 @@ mod tests {
         let mut ok = diode();
         pins(&mut ok, &[("1", "a"), ("2", "k"), ("3", "case")]);
         accepts(&ok);
+        pins(&mut ok, &[("A", "anode"), ("K", "cathode")]); // letters bind by board pin names only
+        accepts(&ok);
         accepts(&diode());
 
         let mut op = entry(
@@ -2130,6 +2129,7 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             (vec![(vout, row("min = -3.3, max = 3.3"))], "param 'vout' spans -3.3 to 3.3"),
             (vec![("iq_a = 0.0001", "iq_a = 0.0001\nmax_current_a = 0.5".into())], "move max_current_a there"),
             (vec![(unknown[0].0, unknown[0].1.into())], "pinout prints 'VIN' on it: name each pad"),
+            (vec![("\"2\" = \"gnd\"", "\"2\" = \"adj\"".into())], "ADJ/GND pin is its ground: map it 'gnd'"),
         ] {
             let e = card(&edits.iter().map(|(a, b)| (*a, b.as_str())).collect::<Vec<_>>());
             if needle.is_empty() { accepts(&e) } else { rejects(&e, needle) }

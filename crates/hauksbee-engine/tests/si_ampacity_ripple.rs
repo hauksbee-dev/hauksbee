@@ -57,7 +57,7 @@ iq_a = 0.001
 
 [models.pins]
 "1" = "in"
-"2" = "ground"
+"2" = "gnd"
 "3" = "prog"
 "4" = "out"
 
