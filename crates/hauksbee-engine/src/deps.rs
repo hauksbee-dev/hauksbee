@@ -206,7 +206,7 @@ fn probe_claude_code() -> DepStatus {
         unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
         cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
         manual: "npm install -g @anthropic-ai/claude-code   # then: claude login".to_string(),
-        privacy: "Using this sends the datasheet's text to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
         absent_detail: "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
             .to_string(),
         present_detail: "claude CLI found; sign-in is checked only when datasheet extraction is requested."
@@ -227,7 +227,7 @@ fn probe_agy() -> DepStatus {
         manual: hauksbee_models::datasheet::Backend::Agy
             .install_hint()
             .to_string(),
-        privacy: "Using this sends the datasheet's text to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        privacy: "Using this sends the datasheet, and anything the agent reads (agy is not read-confined), to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
         absent_detail: "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
             .to_string(),
         present_detail: "agy CLI found; sign-in is checked only when datasheet extraction is requested."
@@ -254,7 +254,7 @@ fn probe_codex() -> DepStatus {
     // and it is not knowing.
     let cost = "free if you already pay for ChatGPT: codex signs in with that account".to_string();
     let manual = "npm install -g @openai/codex   # then: codex login".to_string();
-    let privacy = "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
+    let privacy = "Using this sends the datasheet, and what the agent reads in its sandbox, to OpenAI. Nothing is sent unless \
                    you ask for an extraction, and hauksbee never runs it on its own.";
 
     // Deliberately never auto-installable: an account and a login are the

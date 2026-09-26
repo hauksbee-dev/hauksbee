@@ -1298,7 +1298,8 @@ pub fn extract(
         .effort(effort)
         .backend(backend)
         .api_base(api_base)
-        .api_key_env(api_key_env);
+        .api_key_env(api_key_env)
+        .checker(std::env::current_exe().ok());
 
     // Resolve (and therefore any bad config file) before consent, not after:
     // the user is told exactly what is about to read their datasheet, and a
