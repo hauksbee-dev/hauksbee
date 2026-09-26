@@ -426,6 +426,8 @@ impl Characteristic {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ModelSourceReference {
+    /// Empty only for a local file pinned by `sha256` (an extraction's own PDF).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub url: String,
     pub title: String,
     pub locator: String,
@@ -521,7 +523,8 @@ impl ModelSourceReference {
     /// A citation must be fetchable over TLS, name what it cites, and carry a
     /// well-formed digest when it carries one.
     pub fn validate(&self) -> Result<(), String> {
-        if !self.url.starts_with("https://") {
+        let local = self.url.is_empty() && self.sha256.is_some();
+        if !local && !self.url.starts_with("https://") {
             return Err(format!("url must use https://, got '{}'", self.url));
         }
         if self.title.trim().is_empty() || self.locator.trim().is_empty() {

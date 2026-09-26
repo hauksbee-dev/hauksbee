@@ -113,6 +113,15 @@ impl CompiledEntry {
             + 50 * rules.properties.len() as u32
     }
 
+    /// Confidence points for a value rule that lists the matched value
+    /// outright: an anchored, finite set of spellings (case and separators,
+    /// ordering codes), not a family pattern, is an exact match (50) whatever
+    /// other fields the rule has.
+    pub fn outright_bonus(&self) -> u32 {
+        let rule = self.entry.r#match.value_re.as_deref();
+        50 * u32::from(rule.and_then(crate::extract_output::literal_set).is_some())
+    }
+
     /// Fine-grained regex constrainedness, used as a same-layer tie-break.
     ///
     /// [`specificity_score`](Self::specificity_score) only counts *which*

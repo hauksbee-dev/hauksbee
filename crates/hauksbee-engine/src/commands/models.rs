@@ -1250,6 +1250,7 @@ pub fn extract(
     effort: Option<String>,
     api_base: Option<String>,
     api_key_env: Option<String>,
+    force: bool,
 ) -> anyhow::Result<()> {
     use hauksbee_models::datasheet;
 
@@ -1299,6 +1300,7 @@ pub fn extract(
         .backend(backend)
         .api_base(api_base)
         .api_key_env(api_key_env);
+    let args = datasheet::Args { force, ..args };
 
     // Resolve (and therefore any bad config file) before consent, not after:
     // the user is told exactly what is about to read their datasheet, and a
@@ -1329,7 +1331,7 @@ pub fn extract(
 
     println!();
     println!(
-        "This model is a draft with provenance \"datasheet-extracted\". Read it before you \
+        "This model is a draft (tier \"datasheet-derived\", citing the PDF's sha256). Read it before you \
          trust a result that depends on it, and check any value the datasheet did not state \
          outright."
     );
@@ -2893,6 +2895,20 @@ mod tests {
         );
         assert!(all.contains("│ C1 ") && all.contains("│ R1 "), "{all}");
         assert!(!all.contains("Use --all"), "{all}");
+
+        // A card whose pin map has no output would bind OPEN, so it is refused
+        // at load with that reason (resolve prints it) instead of showing bound.
+        let dir = tempfile::tempdir().unwrap();
+        let card = "[[models]]\nid = 's'\nkind = 'vreg'\nmatch.value_re = '^MYSTERY$'\n\
+                    params.vout = 5.0\npins = { 1 = 'in', 2 = 'gnd' }";
+        std::fs::write(dir.path().join("s.toml"), card).unwrap();
+        let mut lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+        let errors = format!("{:?}", lib.load_models_dir(dir.path()));
+        assert!(
+            errors.contains("no 'out' pin (a Vreg needs it)"),
+            "{errors}"
+        );
+        assert!(resolve_report(&lib, &board).contains("UNRESOLVED"));
     }
 
     /// Lint a descriptor source the way `models lint` does, from the parse

@@ -539,6 +539,10 @@ struct ModelsExtractArgs {
     /// the environment at call time and is never stored.
     #[arg(long, value_name = "NAME")]
     api_key_env: Option<String>,
+    /// Replace an existing model of the same name. Without it the command
+    /// refuses before sending anything, since that file may hold your fixes.
+    #[arg(long)]
+    force: bool,
 }
 
 /// CLI spelling of the extraction backend. Separate from
@@ -1693,6 +1697,7 @@ fn main() -> anyhow::Result<()> {
                 args.effort,
                 args.api_base,
                 args.api_key_env,
+                args.force,
             ),
             ModelsCommand::Backend(cmd) => match cmd {
                 ModelsBackendCommand::Show(args) => {
