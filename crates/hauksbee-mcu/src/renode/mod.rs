@@ -48,7 +48,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, PoisonError,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -373,6 +373,7 @@ impl RenodeConfig {
     /// descriptor that has one, the rendered command runs during machine setup,
     /// before the first firmware instruction.
     #[must_use]
+    #[allow(clippy::literal_string_with_formatting_args)] // `{present}` is a template placeholder
     pub fn with_external_clock_present(mut self, present: bool) -> Self {
         if let Some(clock) = &self.clock_control {
             self.extra_setup.push(
@@ -396,12 +397,16 @@ impl RenodeConfig {
 /// `Analog.RP2040ADC` takes a `double` of volts). `{volts}` is rendered with
 /// three decimals: sub-millivolt precision would be a lie about what the
 /// caller's clamped millivolt value carries.
+#[allow(clippy::literal_string_with_formatting_args)] // `{count}` etc. are template placeholders
 fn render_adc_inject(inject: &AdcInject, count: u32, millivolts: u64) -> String {
     match inject {
         AdcInject::MonitorCommand(template) => template
             .replace("{count}", &count.to_string())
             .replace("{millivolts}", &millivolts.to_string())
-            .replace("{volts}", &format!("{:.3}", millivolts as f64 / 1000.0)),
+            .replace(
+                "{volts}",
+                &format!("{}.{:03}", millivolts / 1000, millivolts % 1000),
+            ),
         AdcInject::MemoryWord(addr) => {
             format!("sysbus WriteDoubleWord 0x{addr:X} 0x{count:X}")
         }
@@ -534,11 +539,7 @@ impl<C: Send + 'static> BridgeServer<C> {
     }
 
     fn replace_callback(&self, cb: C) {
-        let mut guard = self
-            .callback
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = cb;
+        *self.callback.lock().unwrap_or_else(PoisonError::into_inner) = cb;
     }
 }
 
@@ -681,53 +682,49 @@ impl I2cBridgeState {
             );
         }
 
-        let response = {
-            let mut cb = callback
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match op {
-                I2C_OP_WRITE => {
-                    self.txn.ensure(addr, false, &mut *cb);
-                    for data in payload {
-                        let _ = cb(I2cEvent::Write { addr, data });
-                    }
-                    Vec::new()
+        let mut cb = callback.lock().unwrap_or_else(PoisonError::into_inner);
+        let response = match op {
+            I2C_OP_WRITE => {
+                self.txn.ensure(addr, false, &mut *cb);
+                for data in payload {
+                    let _ = cb(I2cEvent::Write { addr, data });
                 }
-                I2C_OP_READ => {
-                    self.txn.ensure(addr, true, &mut *cb);
-                    // See `single_read_prefetch`: with the flag off (every
-                    // platform but the gated STM32F1s) a single-byte read
-                    // consumes exactly one byte from the slave callback and
-                    // returns exactly one byte. With it on, EVERY count==1
-                    // request over-fetches, deliberately: the field docs
-                    // prove the wire carries no signal that could separate a
-                    // standalone one-byte read from the first half of the
-                    // RM0008 two-byte receive under Renode 1.16.1's
-                    // STM32F4_I2C, so a finer key does not exist.
-                    let fetch_count = if read_count == 1 && self.single_read_prefetch {
-                        2
-                    } else {
-                        read_count
-                    };
-                    let mut response = Vec::with_capacity(fetch_count);
-                    for _ in 0..fetch_count {
-                        response.push(cb(I2cEvent::Read { addr }).unwrap_or(0xFF));
-                    }
-                    if trace {
-                        eprintln!("renode-i2c response addr=0x{addr:02X} bytes={response:02X?}");
-                    }
-                    response
-                }
-                I2C_OP_FINISH => {
-                    self.txn.stop(&mut *cb);
-                    Vec::new()
-                }
-                other => bail!("Renode I2C bridge: unknown op code 0x{other:02X}"),
+                Vec::new()
             }
+            I2C_OP_READ => {
+                self.txn.ensure(addr, true, &mut *cb);
+                // See `single_read_prefetch`: with the flag off (every
+                // platform but the gated STM32F1s) a single-byte read
+                // consumes exactly one byte from the slave callback and
+                // returns exactly one byte. With it on, EVERY count==1
+                // request over-fetches, deliberately: the field docs
+                // prove the wire carries no signal that could separate a
+                // standalone one-byte read from the first half of the
+                // RM0008 two-byte receive under Renode 1.16.1's
+                // STM32F4_I2C, so a finer key does not exist.
+                let fetch_count = if read_count == 1 && self.single_read_prefetch {
+                    2
+                } else {
+                    read_count
+                };
+                let response: Vec<u8> = (0..fetch_count)
+                    .map(|_| cb(I2cEvent::Read { addr }).unwrap_or(0xFF))
+                    .collect();
+                if trace {
+                    eprintln!("renode-i2c response addr=0x{addr:02X} bytes={response:02X?}");
+                }
+                response
+            }
+            I2C_OP_FINISH => {
+                self.txn.stop(&mut *cb);
+                Vec::new()
+            }
+            other => bail!("Renode I2C bridge: unknown op code 0x{other:02X}"),
         };
+        drop(cb);
 
         stream
-            .write_all(&(response.len() as u32).to_be_bytes())
+            .write_all(&u32::try_from(response.len())?.to_be_bytes())
             .context("I2C bridge: failed to write response length to Renode")?;
         stream
             .write_all(&response)
@@ -780,16 +777,11 @@ fn handle_spi_stream(
                 .read_exact(&mut mosi_buf)
                 .context("SPI bridge: socket closed before MOSI byte arrived")?;
             let mosi = mosi_buf[0];
-            let miso = {
-                let mut cb = callback
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                cb(SpiEvent {
-                    mosi,
-                    deselect: false,
-                    cycle: cyc,
-                })
-            };
+            let miso = callback.lock().unwrap_or_else(PoisonError::into_inner)(SpiEvent {
+                mosi,
+                deselect: false,
+                cycle: cyc,
+            });
             if trace {
                 eprintln!("renode-spi mosi=0x{mosi:02X} miso=0x{miso:02X}");
             }
@@ -805,14 +797,12 @@ fn handle_spi_stream(
             if trace {
                 eprintln!("renode-spi FinishTransmission");
             }
-            let mut cb = callback
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let _ = cb(SpiEvent {
+            let event = SpiEvent {
                 mosi: 0,
                 deselect: true,
                 cycle: cyc,
-            });
+            };
+            let _ = callback.lock().unwrap_or_else(PoisonError::into_inner)(event);
             Ok(())
         }
         other => bail!("SPI bridge: unknown op code 0x{other:02X}"),
@@ -830,10 +820,10 @@ fn dir_covers_ports(config: &RenodeConfig, active: Option<&[char]>) -> bool {
             .iter()
             .any(|p| p.letter == letter && p.dir.is_some())
     };
-    match active {
-        Some(active) => active.iter().all(|&l| covered(l)),
-        None => config.ports.iter().all(|p| p.dir.is_some()),
-    }
+    active.map_or_else(
+        || config.ports.iter().all(|p| p.dir.is_some()),
+        |active| active.iter().all(|&l| covered(l)),
+    )
 }
 
 /// Renode-backed [`Mcu`].
@@ -892,6 +882,12 @@ pub struct RenodeBackend {
 impl RenodeBackend {
     /// Spawn a Renode process, bring up the machine from `config`, and connect
     /// the Monitor and (optional) UART socket.
+    ///
+    /// # Errors
+    ///
+    /// When Renode cannot be spawned or connected, the support bundle is
+    /// unknown or fails to load, any setup Monitor command fails, or the UART
+    /// socket does not connect.
     pub fn new(config: RenodeConfig) -> Result<Self> {
         let (process, mut monitor, uart_port) = spawn_and_connect()?;
         // Cold macOS/.NET startup and platform parsing have both been observed
@@ -908,8 +904,7 @@ impl RenodeBackend {
         // description names types (`Miscellaneous.RP2040SIO`, ...) that only
         // exist once Renode has compiled the bundle's C#. Compiling ~380 KB of
         // C# takes a few seconds, hence the generous Monitor timeout above.
-        let mut support_dir = None;
-        if let Some(name) = &config.support_bundle {
+        let support_dir = if let Some(name) = &config.support_bundle {
             let bundle = support::lookup(name).with_context(|| {
                 format!(
                     "unknown Renode support bundle \"{name}\"; this build carries {:?}",
@@ -928,8 +923,10 @@ impl RenodeBackend {
                     )
                 })?;
             }
-            support_dir = Some(dir);
-        }
+            Some(dir)
+        } else {
+            None
+        };
         let config = substitute_support_dir(config, support_dir.as_deref());
 
         // Inline platform source (multi-line `platform_repl`) cannot travel over
@@ -943,18 +940,19 @@ impl RenodeBackend {
 
         // Optional UART bridge: a server socket terminal on the pre-allocated
         // port (distinct from the monitor port by construction).
-        let mut uart = None;
-        if let Some(usart) = &config.uart {
+        let uart = if let Some(usart) = &config.uart {
             monitor.run(&format!(
                 "emulation CreateServerSocketTerminal {uart_port} \"hauksbee_uart\" false"
             ))?;
             monitor.run(&format!("connector Connect {usart} hauksbee_uart"))?;
-            uart = Some(UartSocket::connect(
+            Some(UartSocket::connect(
                 "Renode",
                 uart_port,
                 Duration::from_secs(10),
-            )?);
-        }
+            )?)
+        } else {
+            None
+        };
 
         // Any platform-specific extra setup (e.g. attaching a button).
         for cmd in &config.extra_setup {
@@ -990,6 +988,10 @@ impl RenodeBackend {
     }
 
     /// Convenience constructor for the STM32F103 blue pill.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
     pub fn stm32f103() -> Result<Self> {
         Self::new(RenodeConfig::stm32f103())
     }
@@ -1266,6 +1268,8 @@ fn substitute_support_dir(mut config: RenodeConfig, dir: Option<&Path>) -> Renod
 /// still contains its `using "platforms/cpus/stm32f1..."` line, so the gate
 /// keeps firing for inline descriptors.
 fn materialize_platform(platform: &str) -> Result<(String, Option<PathBuf>)> {
+    use std::hash::{Hash, Hasher};
+    static NEXT_PLATFORM_FILE: AtomicU64 = AtomicU64::new(0);
     if !platform.contains('\n') {
         return Ok((platform.to_string(), None));
     }
@@ -1273,12 +1277,6 @@ fn materialize_platform(platform: &str) -> Result<(String, Option<PathBuf>)> {
     // several Renode backends can load the same descriptor concurrently. If
     // they shared one path, dropping the first backend would unlink the file
     // while a peer was still asking Renode to load it.
-    use std::hash::{Hash, Hasher};
-    use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_PLATFORM_FILE: AtomicU64 = AtomicU64::new(0);
-
     let mut h = std::collections::hash_map::DefaultHasher::new();
     platform.hash(&mut h);
     let hash = h.finish();
@@ -1302,7 +1300,7 @@ fn materialize_platform(platform: &str) -> Result<(String, Option<PathBuf>)> {
                 }
                 return Ok((format!("@{}", path.display()), Some(path)));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("creating inline platform at {}", path.display()));
@@ -1348,17 +1346,21 @@ fn resolve_single_read_prefetch(override_var: Option<&str>, platform: &str) -> b
     }
 }
 
+// One C# source template; splitting it would scatter the class across functions.
+#[allow(clippy::too_many_lines)]
 fn render_i2c_bridge_source(port: u16, addresses: &[u8]) -> String {
+    use std::fmt::Write as _;
     let mut classes = String::new();
     for addr in addresses {
-        classes.push_str(&format!(
+        let _ = write!(
+            classes,
             r"
     public class HauksbeeI2CBridge_{addr:02X} : HauksbeeI2CBridgeBase
     {{
         public HauksbeeI2CBridge_{addr:02X}() : base({port}, 0x{addr:02X}) {{ }}
     }}
 "
-        ));
+        );
     }
 
     format!(
@@ -1602,6 +1604,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 }
 
 impl Mcu for RenodeBackend {
+    #[allow(clippy::literal_string_with_formatting_args)] // `{cpu}` is a template placeholder
     fn load_firmware(&mut self, path: &Path) -> Result<()> {
         // Renode resolves `@<path>` against ITS OWN working directory, not ours, so
         // a relative firmware path (e.g. `../hunt-boards/.../fw.elf`) makes
@@ -1673,6 +1676,7 @@ impl Mcu for RenodeBackend {
         Ok(())
     }
 
+    #[allow(clippy::cast_precision_loss)] // cycle counts and clock rates are far below 2^53
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let seconds = n as f64 / self.config.frequency_hz as f64;
         let run = self.run_seconds(seconds);
@@ -1683,6 +1687,7 @@ impl Mcu for RenodeBackend {
     // Renode's own: a failed run folds the process's exit status and stderr
     // tail into the error, which is the only evidence of why the emulator
     // died. The shared macro cannot do that; every other method is identical.
+    #[allow(clippy::cast_precision_loss)] // a chunk's microseconds are far below 2^53
     fn run_micros(&mut self, us: u64) -> Result<()> {
         let run = self.run_seconds(us as f64 / 1_000_000.0);
         run.map_err(|e| self.with_death_reason(e))
@@ -1711,6 +1716,7 @@ impl Mcu for RenodeBackend {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped non-negative mV
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
         // ADC injection through the Monitor/RAM path: translate the
         // modeled voltage into a count and deliver it per this channel's
@@ -1870,6 +1876,10 @@ impl RenodeBackend {
     }
 
     /// Advance virtual time by `seconds`, then exchange GPIO/UART state.
+    // A positive sub-minute chunk rounds to whole microseconds; `{micros}` is a
+    // template placeholder.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(clippy::literal_string_with_formatting_args)]
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
         if !self.core.firmware_loaded {
             bail!("no firmware loaded into the Renode machine");
@@ -1960,11 +1970,9 @@ impl RenodeBackend {
 /// Parse a Renode register value, which prints as `0xHEX` or a decimal.
 fn parse_hex_or_dec(s: &str) -> Option<u32> {
     let tok = s.split_whitespace().next()?.trim();
-    if let Some(hex) = tok.strip_prefix("0x").or_else(|| tok.strip_prefix("0X")) {
-        u32::from_str_radix(hex, 16).ok()
-    } else {
-        tok.parse::<u32>().ok()
-    }
+    tok.strip_prefix("0x")
+        .or_else(|| tok.strip_prefix("0X"))
+        .map_or_else(|| tok.parse().ok(), |hex| u32::from_str_radix(hex, 16).ok())
 }
 
 #[cfg(test)]
@@ -2243,15 +2251,10 @@ mod tests {
         // Stateful slave: serves 0x10, 0x11, 0x12, ... and advances its
         // register pointer once per byte read. Start/Stop are acknowledged
         // without advancing anything.
-        let pointer = Arc::new(Mutex::new(0u8));
+        let pointer = Arc::new(std::sync::atomic::AtomicU8::new(0));
         let slave_pointer = Arc::clone(&pointer);
         let cb: I2cCb = Box::new(move |event| match event {
-            I2cEvent::Read { .. } => {
-                let mut p = slave_pointer.lock().unwrap();
-                let value = 0x10 + *p;
-                *p += 1;
-                Some(value)
-            }
+            I2cEvent::Read { .. } => Some(0x10 + slave_pointer.fetch_add(1, Ordering::Relaxed)),
             _ => None,
         });
         let callback = Arc::new(Mutex::new(cb));
@@ -2284,8 +2287,7 @@ mod tests {
             responses.push(response);
         }
 
-        let final_pointer = *pointer.lock().unwrap();
-        (responses, final_pointer)
+        (responses, pointer.load(Ordering::Relaxed))
     }
 
     /// BUG #18 regression: a genuine single-byte read must invoke the slave

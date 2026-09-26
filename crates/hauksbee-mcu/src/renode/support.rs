@@ -97,9 +97,9 @@ impl SupportBundle {
         self.files
             .iter()
             .filter(|f| {
-                std::path::Path::new(f.name)
+                Path::new(f.name)
                     .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("repl"))
+                    .is_some_and(|ext| ext == "repl")
             })
             .filter_map(|f| String::from_utf8(f.bytes.to_vec()).ok())
             .collect()
@@ -112,6 +112,10 @@ impl SupportBundle {
     /// and a counter so two machines inside one process (the co-sim test suite
     /// runs several) get their own copy rather than one racing the other's
     /// cleanup.
+    ///
+    /// # Errors
+    ///
+    /// When the directory or any of its files cannot be written.
     pub fn unpack(&self) -> Result<PathBuf> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -252,10 +256,7 @@ mod tests {
                 );
             }
             for name in &carried {
-                if std::path::Path::new(name)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cs"))
-                {
+                if Path::new(name).extension().is_some_and(|ext| ext == "cs") {
                     assert!(
                         bundle.sources.contains(name),
                         "{}: {name} is carried but never included, so its \

@@ -23,6 +23,10 @@ use std::process::Command;
 use std::time::Duration;
 
 /// Locate the Renode executable, or return an error describing what to install.
+///
+/// # Errors
+///
+/// When `HAUKSBEE_RENODE` names a missing file, or no Renode install is found.
 pub fn find_renode() -> Result<PathBuf> {
     if let Some(p) = env_override("HAUKSBEE_RENODE")? {
         return Ok(p);
@@ -126,6 +130,10 @@ impl RenodeProcess {
     /// The working directory is set to the binary's directory so that
     /// `@platforms/...` and `@scripts/...` relative paths resolve against the
     /// install tree (Renode resolves `@` paths relative to its base directory).
+    ///
+    /// # Errors
+    ///
+    /// When Renode cannot be found or the process cannot be spawned.
     pub fn spawn(monitor_port: u16) -> Result<Self> {
         let bin = find_renode()?;
         let workdir = bin
