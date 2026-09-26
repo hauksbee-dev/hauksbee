@@ -1,13 +1,15 @@
-//! Evaluate a spec's assertions against the per-seed run outcomes. An assertion
-//! passes only if it holds on *every* seed (that is what makes initial-state
+//! Evaluate a spec's assertions against the per-seed run outcomes.
+//!
+//! An assertion passes only if it holds on *every* seed (that is what makes initial-state
 //! fuzzing meaningful: the rail must come up across all random power-up states).
 
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
 use std::fmt::Write as _;
 
-/// The result of one assertion across all seeds. Serialized verbatim into the
-/// `results` array of the `hauksbee-ci run --json` document, so the published
+/// The result of one assertion across all seeds.
+///
+/// Serialized verbatim into the `results` array of the `hauksbee-ci run --json` document, so the published
 /// schema is generated from this type: see
 /// `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`. `why` and `waived` are
 /// the only two fields a consumer may find ABSENT rather than null.
@@ -85,7 +87,7 @@ impl AssertResult {
         Self {
             label,
             kind: kind.into(),
-            seeds_total: seeds_total as u32,
+            seeds_total: u32::try_from(seeds_total).unwrap_or(u32::MAX),
             ..Default::default()
         }
     }
@@ -168,21 +170,14 @@ fn evaluate_hwtrace(
     // In corners mode a member index is a corner number, not a random seed,
     // label it to match evaluate_one, the coverage banner, and every sibling
     // assertion.
-    let member = match mode {
-        Some(crate::tolerance::Mode::Corners) => "corner",
-        _ => "seed",
-    };
+    let member = member_noun(mode);
 
     let hard_fail = |label: String, detail: String| AssertResult {
         detail,
         ..AssertResult::shell(label, "hwtrace", outcomes.len())
     };
 
-    let path = match hwtrace::trace_path(spec, a) {
-        Ok(p) => p,
-        Err(e) => return vec![hard_fail(a.label(), e.to_string())],
-    };
-    let trace = match hwtrace::Trace::load(&path) {
+    let trace = match hwtrace::trace_path(spec, a).and_then(|p| hwtrace::Trace::load(&p)) {
         Ok(t) => t,
         Err(e) => return vec![hard_fail(a.label(), e.to_string())],
     };
@@ -257,11 +252,7 @@ fn evaluate_hwtrace(
                             "{}INVALID: the analog solve failed within {:.2}-{:.2} ms of the \
                              run; the simulated waveform contains held-stale samples, so no \
                              feature comparison against the capture can be trusted.",
-                            if outcomes.len() > 1 {
-                                format!("{}: ", member_label(member, out))
-                            } else {
-                                String::new()
-                            },
+                            member_prefix(member, out, outcomes.len()),
                             fs * 1e3,
                             fe * 1e3
                         ),
@@ -276,14 +267,11 @@ fn evaluate_hwtrace(
 
             let (passed, mut detail, failing_seeds) = match failures.first() {
                 None => (true, last_detail, Vec::new()),
-                Some((out, d)) => {
-                    let d = if outcomes.len() > 1 {
-                        format!("{}: {d}", member_label(member, out))
-                    } else {
-                        d.clone()
-                    };
-                    (false, d, failures.iter().map(|(o, _)| o.seed).collect())
-                }
+                Some((out, d)) => (
+                    false,
+                    member_prefix(member, out, outcomes.len()) + d,
+                    failures.iter().map(|(o, _)| o.seed).collect(),
+                ),
             };
             detail.push_str(provenance);
             results.push(AssertResult {
@@ -312,6 +300,24 @@ fn member_label(member: &str, out: &RunOutcome) -> String {
         format!("interior probe {}{variants}", out.seed)
     } else {
         format!("{member} {}{variants}", out.seed)
+    }
+}
+
+/// [`member_label`] and `": "` to lead a detail line, or nothing for a single run,
+/// where there is no member to tell apart.
+fn member_prefix(member: &str, out: &RunOutcome, members: usize) -> String {
+    if members > 1 {
+        format!("{}: ", member_label(member, out))
+    } else {
+        String::new()
+    }
+}
+
+/// The noun for an ensemble member index: a corner number in corner mode, else a seed.
+const fn member_noun(mode: Option<crate::tolerance::Mode>) -> &'static str {
+    match mode {
+        Some(crate::tolerance::Mode::Corners) => "corner",
+        _ => "seed",
     }
 }
 
@@ -378,10 +384,7 @@ fn evaluate_one(
     let label = a.label();
     let kind = a.kind.clone();
     // In corner mode a member index is a corner number, not a random seed.
-    let member = match mode {
-        Some(crate::tolerance::Mode::Corners) => "corner",
-        _ => "seed",
-    };
+    let member = member_noun(mode);
 
     // Is this member's analog evaluation window held-stale, i.e. does it overlap
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
@@ -426,11 +429,7 @@ fn evaluate_one(
         // Lead with the first failing member's measurement, then the exact
         // sampled component values it ran with (the actionable artifact), then
         // the ensemble pass-rate.
-        let mut detail = if outcomes.len() > 1 {
-            format!("{}: {first_detail}", member_label(member, first))
-        } else {
-            first_detail.clone()
-        };
+        let mut detail = member_prefix(member, first, outcomes.len()) + first_detail;
         // Non-monotonicity, caught: an interior probe failed where the corners
         // did not. The corner set's whole claim is that an extreme of the inputs
         // produces an extreme of the output, and this is that claim disproved on
@@ -461,48 +460,19 @@ fn evaluate_one(
                 crate::tolerance::describe_values(&first.sampled_values)
             );
         }
+        let failing_seeds: Vec<u32> = failures.iter().map(|(o, _, _)| o.seed).collect();
         if outcomes.len() > 1 {
-            let failing: Vec<String> = failures
-                .iter()
-                .take(8)
-                .map(|(o, _, _)| o.seed.to_string())
-                .collect();
-            let elided = if failures.len() > 8 { ", …" } else { "" };
             // The passed count must exclude held-stale (INVALID) members, not fold
             // them into "passed": those members were SKIPPED (member_invalid) and
             // never evaluated, so counting them green over-claims worst-case
-            // coverage on the very surface a reviewer trusts. passed = total −
-            // failed − invalid; surface the invalid count when any occurred.
+            // coverage on the very surface a reviewer trusts.
             let invalid = outcomes.iter().filter(|o| member_invalid(o)).count();
-            let passed = outcomes.len() - failures.len() - invalid;
-            let invalid_note = if invalid > 0 {
-                format!(", {invalid} invalid")
-            } else {
-                String::new()
-            };
-            // The pass-rate must not fold the interior probes into the corner
-            // count. "passed 7/10 corners" on a 2-component board is a lie a
-            // reader can catch with arithmetic (2 components is 4 corners), and
-            // the corner total is exactly what they check the coverage banner
-            // against.
-            let probes = outcomes.iter().filter(|o| o.interior).count();
-            let noun = if probes > 0 {
-                format!("{member}s + interior probes")
-            } else {
-                format!("{member}s")
-            };
-            let _ = write!(
-                detail,
-                "; passed {}/{} {noun} (failing: {}{elided}{invalid_note})",
-                passed,
-                outcomes.len(),
-                failing.join(", "),
-            );
+            detail.push_str(&pass_rate_note(member, outcomes, &failing_seeds, invalid));
         }
         return AssertResult {
             detail,
             failing_seed: Some(failures[0].0.seed),
-            failing_seeds: failures.iter().map(|(o, _, _)| o.seed).collect(),
+            failing_seeds,
             why: first_why.clone(),
             subject_nets,
             subject_refs,
@@ -519,14 +489,9 @@ fn evaluate_one(
         .iter()
         .find_map(|out| member_invalid_reason(a, out, frame_ms).map(|r| (out, r)))
     {
-        let per_seed = if outcomes.len() > 1 {
-            format!("{}: ", member_label(member, out))
-        } else {
-            String::new()
-        };
         return AssertResult {
             invalid: true,
-            detail: format!("{per_seed}INVALID: {reason}"),
+            detail: member_prefix(member, out, outcomes.len()) + "INVALID: " + &reason,
             failing_seed: Some(out.seed),
             failing_seeds: vec![out.seed],
             subject_nets,
@@ -552,6 +517,42 @@ fn evaluate_one(
         subject_refs,
         ..AssertResult::shell(label, kind, outcomes.len())
     }
+}
+
+/// The ensemble pass-rate a failing assertion's detail line ends with:
+/// `; passed 7/10 seeds (failing: 3, 5, 9)`.
+///
+/// `invalid` members were skipped, never evaluated, so passed = total − failed −
+/// invalid, and the invalid count is surfaced when any occurred.
+fn pass_rate_note(
+    member: &str,
+    outcomes: &[RunOutcome],
+    failing: &[u32],
+    invalid: usize,
+) -> String {
+    let shown: Vec<String> = failing.iter().take(8).map(u32::to_string).collect();
+    let elided = if failing.len() > 8 { ", …" } else { "" };
+    let passed = outcomes.len() - failing.len() - invalid;
+    let invalid_note = if invalid > 0 {
+        format!(", {invalid} invalid")
+    } else {
+        String::new()
+    };
+    // The pass-rate must not fold the interior probes into the corner
+    // count. "passed 7/10 corners" on a 2-component board is a lie a
+    // reader can catch with arithmetic (2 components is 4 corners), and
+    // the corner total is exactly what they check the coverage banner
+    // against.
+    let probes = outcomes
+        .iter()
+        .any(|o| o.interior)
+        .then_some(" + interior probes");
+    format!(
+        "; passed {passed}/{} {member}s{} (failing: {}{elided}{invalid_note})",
+        outcomes.len(),
+        probes.unwrap_or_default(),
+        shown.join(", "),
+    )
 }
 
 /// The all-members-green detail string for an assertion, worded to the ensemble
@@ -689,6 +690,8 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
 /// list IS the user's next action: each name is either a model to write (the
 /// extending guides take one TOML file) or a part whose vendor keeps its model
 /// encrypted, and those two need different responses.
+// Part counts are far below 2^52, so usize -> f64 is exact.
+#[allow(clippy::cast_precision_loss)]
 fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
     let Some(bind) = out.bind.as_ref() else {
         return (
@@ -895,75 +898,11 @@ fn check_rail_window(
             ),
         );
     }
-    // The four duration clauses are one shape: a measured interval in ms, the
-    // budget it must fit, the fragment that names it, and the sentence that
-    // names the excess. `dip`/`spike` bound how long the rail sat out of band;
-    // `recover`/`settle` bound how long it took to come back.
-    //
     // A duration needs at least two samples to measure (windows(2) yields
     // nothing from one point, so dip_duration_s folds to 0 and silently
     // auto-passes). A window that spans less than one frame is degenerate:
     // fail loudly rather than claim a timing spec we could not evaluate.
-    let over = |ms: f64, budget: f64| ms - budget;
-    let durations = [
-        a.dip_below.zip(a.for_max_ms).map(|(d, budget)| {
-            let ms = win.dip_duration_s(d) * 1000.0;
-            (
-                format!("dip<{d}V for"),
-                ms,
-                budget,
-                format!(
-                    "{net} sat below {d} V for {ms:.2} ms, {:.2} ms longer than your budget",
-                    over(ms, budget)
-                ),
-            )
-        }),
-        a.dip_below
-            .zip(a.recover_to)
-            .zip(a.recover_within_ms)
-            .map(|((d, r), budget)| {
-                let ms = win.recovery_s(d, r) * 1000.0;
-                (
-                    format!("recover-to-{r}V in"),
-                    ms,
-                    budget,
-                    format!(
-                        "{net} took {ms:.2} ms to climb back to {r} V after dipping below \
-                 {d} V, {:.2} ms past your recovery deadline",
-                        over(ms, budget)
-                    ),
-                )
-            }),
-        a.spike_above.zip(a.spike_for_max_ms).map(|(sp, budget)| {
-            let ms = win.spike_duration_s(sp) * 1000.0;
-            (
-                format!("spike>{sp}V for"),
-                ms,
-                budget,
-                format!(
-                    "{net} stayed above {sp} V for {ms:.2} ms, {:.2} ms longer than your budget",
-                    over(ms, budget)
-                ),
-            )
-        }),
-        a.spike_above
-            .zip(a.settle_to)
-            .zip(a.settle_within_ms)
-            .map(|((sp, settle), budget)| {
-                let ms = win.settling_s(sp, settle) * 1000.0;
-                (
-                    format!("settle-to-{settle}V in"),
-                    ms,
-                    budget,
-                    format!(
-                        "{net} took {ms:.2} ms to settle to {settle} V after spiking above \
-                 {sp} V, {:.2} ms past your settling deadline",
-                        over(ms, budget)
-                    ),
-                )
-            }),
-    ];
-    for (what, ms, budget, why) in durations.into_iter().flatten() {
+    for (what, ms, budget, why) in rail_durations(a, win, &net).into_iter().flatten() {
         if win.samples.len() < 2 {
             v.fail(
                 format!(
@@ -988,6 +927,78 @@ fn check_rail_window(
         win.max_v
     );
     v.finish(detail)
+}
+
+/// The rail window's configured duration clauses, each as `(fragment, measured
+/// ms, budget ms, excess sentence)`.
+///
+/// The four duration clauses are one shape: a measured interval in ms, the
+/// budget it must fit, the fragment that names it, and the sentence that
+/// names the excess. `dip`/`spike` bound how long the rail sat out of band;
+/// `recover`/`settle` bound how long it took to come back.
+fn rail_durations(
+    a: &crate::spec::Assertion,
+    win: &crate::scenarios::RailWindow,
+    net: &str,
+) -> [Option<(String, f64, f64, String)>; 4] {
+    [
+        a.dip_below.zip(a.for_max_ms).map(|(d, budget)| {
+            let ms = win.dip_duration_s(d) * 1000.0;
+            (
+                format!("dip<{d}V for"),
+                ms,
+                budget,
+                format!(
+                    "{net} sat below {d} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    ms - budget
+                ),
+            )
+        }),
+        a.dip_below
+            .zip(a.recover_to)
+            .zip(a.recover_within_ms)
+            .map(|((d, r), budget)| {
+                let ms = win.recovery_s(d, r) * 1000.0;
+                (
+                    format!("recover-to-{r}V in"),
+                    ms,
+                    budget,
+                    format!(
+                        "{net} took {ms:.2} ms to climb back to {r} V after dipping below \
+                 {d} V, {:.2} ms past your recovery deadline",
+                        ms - budget
+                    ),
+                )
+            }),
+        a.spike_above.zip(a.spike_for_max_ms).map(|(sp, budget)| {
+            let ms = win.spike_duration_s(sp) * 1000.0;
+            (
+                format!("spike>{sp}V for"),
+                ms,
+                budget,
+                format!(
+                    "{net} stayed above {sp} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    ms - budget
+                ),
+            )
+        }),
+        a.spike_above
+            .zip(a.settle_to)
+            .zip(a.settle_within_ms)
+            .map(|((sp, settle), budget)| {
+                let ms = win.settling_s(sp, settle) * 1000.0;
+                (
+                    format!("settle-to-{settle}V in"),
+                    ms,
+                    budget,
+                    format!(
+                        "{net} took {ms:.2} ms to settle to {settle} V after spiking above \
+                 {sp} V, {:.2} ms past your settling deadline",
+                        ms - budget
+                    ),
+                )
+            }),
+    ]
 }
 
 /// `protection_trip`: whether a supply net's battery protection latched.
@@ -1429,13 +1440,13 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // STABLE (sorted-by-key) order: iterating a HashMap's values put the
     // streams in nondeterministic order, so an anchored/boundary-spanning
     // match (`^BOOT`) flaked run to run.
-    let text: String = if let Some(m) = &a.mcu {
-        out.uart.get(m).cloned().unwrap_or_default()
-    } else {
-        let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
-        items.sort();
-        items.into_iter().map(|(_, v)| v.as_str()).collect()
-    };
+    let text: String = a.mcu.as_ref().map_or_else(
+        || {
+            let sorted: std::collections::BTreeMap<_, _> = out.uart.iter().collect();
+            sorted.into_values().map(String::as_str).collect()
+        },
+        |m| out.uart.get(m).cloned().unwrap_or_default(),
+    );
     let preview = truncate(&text.replace(['\r', '\n'], "·"), 60);
 
     if let Some(needle) = &a.contains {
@@ -1637,6 +1648,8 @@ fn bound_clauses(
 /// changes and divide by the run: that charged the rate for the partial periods
 /// at BOTH ends and for a start-up cycle unlike the rest (a 555's first charge
 /// runs to ln 3, not ln 2: 4% low on a board right to 0.3%, needing 7% to pass).
+// A period count is far below 2^52, so usize -> f64 is exact.
+#[allow(clippy::cast_precision_loss)]
 pub(crate) fn edge_rate(series: &[(f64, f64)], dt_s: f64) -> Result<(f64, String), String> {
     let edges = crate::hwtrace::detect_edges(series, None);
     let rising: Vec<f64> = edges.iter().filter(|e| e.rising).map(|e| e.t).collect();
@@ -2014,12 +2027,12 @@ mod tests {
     }
 
     /// `n` samples at `dt` of a 0-5 V `P`-long wave: `duty` high, `rise` edges.
-    fn wave(duty: f64, phase: f64, rise: f64, dt: f64, n: usize) -> Vec<(f64, f64)> {
+    fn wave(duty: f64, phase: f64, rise: f64, dt: f64, n: u32) -> Vec<(f64, f64)> {
         const P: f64 = 1e-3;
         let ramp = |x: f64| 5.0 * (x / rise.max(1e-12)).min(1.0);
         (0..n)
             .map(|i| {
-                let (t, hi) = (i as f64 * dt, duty * P);
+                let (t, hi) = (f64::from(i) * dt, duty * P);
                 let u = (t / P + phase).fract() * P;
                 let v = if u < hi { ramp(u) } else { 5.0 - ramp(u - hi) };
                 (t, v)
@@ -2611,10 +2624,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hb_hwtrace_prec_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let csv: String = square(0.2)
+        let csv = square(0.2)
             .iter()
-            .map(|(t, v)| format!("{t:.4},{v:.3}\n"))
-            .collect();
+            .map(|(t, v)| format!("{t:.4},{v:.3}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         std::fs::write(dir.join("d.csv"), format!("time_s,volts\n{csv}")).unwrap();
         std::fs::write(
             dir.join("trace.toml"),

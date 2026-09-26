@@ -52,8 +52,9 @@ use crate::error::SpecError;
 use crate::spec::Spec;
 use hauksbee_extract::ExtractedBoard;
 
-/// Full-factorial corner enumeration is capped at `2^CORNER_CAP` runs. Above
-/// this many toleranced components, corner mode refuses and points at
+/// Full-factorial corner enumeration is capped at `2^CORNER_CAP` runs.
+///
+/// Above this many toleranced components, corner mode refuses and points at
 /// Monte-Carlo instead, silently truncating the corner set would fake the
 /// bounded claim the mode exists to make.
 pub const CORNER_CAP: usize = 10;
@@ -100,6 +101,11 @@ pub enum Distribution {
 }
 
 impl Distribution {
+    /// Parse a spec's `distribution` token.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Invalid`] for anything but `uniform` or `gaussian`.
     pub fn parse(s: &str) -> Result<Self, SpecError> {
         match s {
             "uniform" => Ok(Self::Uniform),
@@ -179,9 +185,10 @@ pub struct SeedPlan {
     pub variants: Vec<(String, String)>,
 }
 
-/// Cross every plan with every combination of the undetermined same-pinout variant
-/// sets `(reference, member ids)`, so the ensemble passes only if every member does.
-/// `None` above 2^[`CORNER_CAP`] runs: the part then keeps its flagged stand-in.
+/// Cross every plan with every combination of the undetermined variant sets.
+///
+/// The sets are same-pinout `(reference, member ids)`, so the ensemble passes
+/// only if every member does. `None` above 2^[`CORNER_CAP`] runs: the part then keeps its flagged stand-in.
 #[must_use]
 pub fn with_variants(
     mut runs: Vec<SeedPlan>,
@@ -210,6 +217,11 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// Parse a spec's `[ensemble] mode` token.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Invalid`] for anything but `monte-carlo` or `corners`.
     pub fn parse(s: &str) -> Result<Self, SpecError> {
         match s {
             "monte-carlo" => Ok(Self::MonteCarlo),
@@ -232,6 +244,12 @@ impl Mode {
 /// `[[tolerance]]` rules, with the override's `value` as the nominal.
 /// The result is sorted by reference so corner bit-ordering and reports are
 /// deterministic regardless of rule order.
+///
+/// # Errors
+///
+/// [`SpecError::Invalid`] if a distribution token is unknown, a
+/// `[[tolerance]]` ref pattern matches no component, or a matched component's
+/// effective value does not parse as a positive number.
 pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolerance>, SpecError> {
     use std::collections::BTreeMap;
 
@@ -323,8 +341,9 @@ fn parse_nominal(reference: &str, value: &str) -> Result<f64, SpecError> {
     }
 }
 
-/// Minimal glob: `*` matches any (possibly empty) run of characters; every
-/// other character matches itself. Enough for `R*` / `R1?`-free use; we
+/// Minimal glob: `*` matches any (possibly empty) run of characters.
+///
+/// Every other character matches itself. Enough for `R*` / `R1?`-free use; we
 /// deliberately support only `*` to keep the matching teachable.
 #[must_use]
 pub fn glob_match(pattern: &str, s: &str) -> bool {
@@ -348,6 +367,11 @@ pub fn glob_match(pattern: &str, s: &str) -> bool {
 /// [`CORNER_CAP`]); member k puts component i (in sorted-reference order) at
 /// its min when bit i of k is 0 and its max when bit i is 1, so member 0 is
 /// all-min and member 2^n - 1 is all-max.
+///
+/// # Errors
+///
+/// [`SpecError::Invalid`] in corner mode when there are no tolerances, or
+/// more than [`CORNER_CAP`] of them.
 pub fn build_plans(
     mode: Mode,
     seed_count: u32,
@@ -387,30 +411,24 @@ pub fn build_plans(
             let mut plans: Vec<SeedPlan> = (0..count)
                 .map(|k| SeedPlan {
                     seed: k,
-                    variants: Vec::new(),
-                    interior: false,
                     values: tolerances
                         .iter()
                         .enumerate()
                         .map(|(i, t)| {
-                            let corner = if (k >> i) & 1 == 0 {
-                                Corner::Min
+                            let (corner, sign) = if (k >> i) & 1 == 0 {
+                                (Corner::Min, -1.0)
                             } else {
-                                Corner::Max
-                            };
-                            let tol = t.percent / 100.0;
-                            let si = match corner {
-                                Corner::Min => t.nominal_si * (1.0 - tol),
-                                Corner::Max => t.nominal_si * (1.0 + tol),
+                                (Corner::Max, 1.0)
                             };
                             SampledValue {
                                 reference: t.reference.clone(),
-                                si,
+                                si: t.nominal_si * (1.0 + sign * t.percent / 100.0),
                                 nominal_si: t.nominal_si,
                                 corner: Some(corner),
                             }
                         })
                         .collect(),
+                    ..SeedPlan::default()
                 })
                 .collect();
             // The interior probes follow the corners, numbered on from the last
@@ -449,6 +467,8 @@ pub fn build_plans(
 /// indices have the same property (a corner is a bit pattern over a
 /// sorted-by-reference list) and this is the existing contract, not a new
 /// weakening of it.
+// `probes` is at most 8, so every index and count cast here is exact.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<SeedPlan> {
     let probes = interior_probe_count(tolerances.len());
 
@@ -492,8 +512,9 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
         .collect()
 }
 
-/// Sample one component's value for one seed. Pure in `(seed, reference,
-/// rule)`: the PRNG stream is seeded from a domain-separated hash of the seed
+/// Sample one component's value for one seed.
+///
+/// Pure in `(seed, reference, rule)`: the PRNG stream is seeded from a domain-separated hash of the seed
 /// and the reference, so the value does not depend on what other components
 /// are toleranced or on evaluation order, that is what makes `--seed N`
 /// re-runs byte-identical.
@@ -506,7 +527,7 @@ pub fn sample(seed: u32, t: &ResolvedTolerance) -> SampledValue {
         let mut rng = SplitMix::for_component(seed, &t.reference);
         match t.distribution {
             // Uniform over [-1, 1).
-            Distribution::Uniform => 2.0 * rng.next_f64() - 1.0,
+            Distribution::Uniform => rng.next_f64().mul_add(2.0, -1.0),
             // Truncated gaussian: sigma = tol/3 => unit-sigma normal truncated
             // at |z| <= 3, by rejection (deterministic: the stream is private
             // to this (seed, ref) pair, so extra draws perturb nothing else).
@@ -554,6 +575,8 @@ impl SplitMix {
     }
 
     /// Uniform in [0, 1) with 53 bits of precision.
+    // A 53-bit integer and 2^53 are both exactly representable in f64.
+    #[allow(clippy::cast_precision_loss)]
     fn next_f64(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
@@ -607,17 +630,9 @@ pub fn format_engineering(v: f64) -> String {
         return format!("{v}");
     }
     // Three significant digits on the scaled mantissa (which lives in [1, 1000)).
-    let sig_digits = |m: f64| {
-        if m >= 100.0 {
-            0
-        } else if m >= 10.0 {
-            1
-        } else {
-            2
-        }
-    };
+    let sig_digits = |m: f64| usize::from(m < 100.0) + usize::from(m < 10.0);
     let round_to = |m: f64, digits: usize| {
-        let factor = 10f64.powi(digits as i32);
+        let factor = [1.0, 10.0, 100.0][digits];
         (m * factor).round() / factor
     };
 
@@ -742,8 +757,8 @@ mod tests {
         let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
         let corners: Vec<&SeedPlan> = plans.iter().filter(|p| !p.interior).collect();
         assert_eq!(corners.len(), 4);
-        assert!(corners[0].values.iter().all(|v| v.si == 9_000.0));
-        assert!(corners[3].values.iter().all(|v| v.si == 11_000.0));
+        let all_at = |p: &SeedPlan, si: f64| p.values.iter().all(|v| (v.si - si).abs() < 1e-9);
+        assert!(all_at(corners[0], 9_000.0) && all_at(corners[3], 11_000.0));
         assert_eq!(corners[1].values[0].si, 11_000.0);
         assert_eq!(corners[1].values[1].si, 9_000.0);
         assert_eq!(plans.len() - corners.len(), interior_probe_count(2));
@@ -764,6 +779,8 @@ mod tests {
     /// a regression collapsing the axes onto one order shows up as a
     /// permanent diagonal.
     #[test]
+    // A unit fraction in (0, 1) times six probes: the stratum index is small and non-negative.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn interior_probes_cover_every_stratum_and_are_not_diagonal() {
         let ts = vec![
             rule("R1", 1_000.0, 10.0, Distribution::Uniform),
@@ -774,7 +791,7 @@ mod tests {
         let interior: Vec<&SeedPlan> = plans.iter().filter(|p| p.interior).collect();
         let stratum = |v: &SampledValue| -> usize {
             let unit = (v.si / v.nominal_si - 1.0) / 0.10; // in (-1, +1)
-            (f64::midpoint(unit, 1.0) * probes as f64).floor() as usize
+            (f64::midpoint(unit, 1.0) * f64::from(u8::try_from(probes).unwrap())).floor() as usize
         };
         for i in 0..2 {
             let mut hit: Vec<usize> = interior.iter().map(|p| stratum(&p.values[i])).collect();
@@ -821,18 +838,18 @@ mod tests {
     /// many draws every residue appears within a few percent of its share.
     #[test]
     fn below_is_uniform_over_its_range() {
-        for n in [3u64, 5, 6, 7, 8] {
+        for n in [3u32, 5, 6, 7, 8] {
             let mut rng = SplitMix::for_component(1, "uniformity");
-            let draws = 120_000usize;
-            let mut counts = vec![0usize; n as usize];
+            let draws = 120_000u32;
+            let mut counts = vec![0u32; n as usize];
             for _ in 0..draws {
-                let v = rng.below(n);
-                assert!(v < n, "below({n}) returned {v}");
-                counts[v as usize] += 1;
+                let v = rng.below(u64::from(n));
+                assert!(v < u64::from(n), "below({n}) returned {v}");
+                counts[usize::try_from(v).unwrap()] += 1;
             }
-            let expected = draws as f64 / n as f64;
+            let expected = f64::from(draws) / f64::from(n);
             for (r, c) in counts.iter().enumerate() {
-                let dev = (*c as f64 - expected).abs() / expected;
+                let dev = (f64::from(*c) - expected).abs() / expected;
                 assert!(
                     dev < 0.05,
                     "n = {n}, residue {r}: {c} draws, {:.1}% off",

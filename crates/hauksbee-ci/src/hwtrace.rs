@@ -106,8 +106,10 @@ pub struct Channel {
     pub features: Vec<Feature>,
 }
 
-/// One feature assertion: extract the same quantity from the captured and the
-/// simulated waveform, compare within the stated tolerance. Each kind is
+/// One feature assertion, compared between the capture and the simulation.
+///
+/// The same quantity is extracted from the captured and the simulated
+/// waveform and compared within the stated tolerance. Each kind is
 /// something an EE would read off a scope's measure menu, nothing fancier.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +161,14 @@ impl Feature {
 impl Trace {
     /// Load and validate a `trace.toml`. Fails loud with a named reason on any
     /// structural problem, a bad trace must never silently skip.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Io`] if the file cannot be read, [`SpecError::Toml`] if it
+    /// does not parse as a trace, and [`SpecError::Invalid`] if it fails
+    /// validation: unknown provenance, no channels, a channel with no
+    /// features, an unknown feature kind, a feature without a tolerance, or a
+    /// voltage feature on a VCD channel.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         let text = std::fs::read_to_string(path)
             .map_err(SpecError::io(format!("reading trace {}", path.display())))?;
@@ -230,6 +240,14 @@ impl Trace {
     }
 
     /// Load one channel's captured waveform as a `(t_seconds, value)` series.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Io`] if the data file cannot be read, and
+    /// [`SpecError::Invalid`] if it is not a usable capture: a CSV with fewer
+    /// than 8 numeric rows, a non-finite sample or a decreasing time column, or
+    /// a VCD with no timescale, an ambiguous or missing signal, or fewer than
+    /// two value changes.
     pub fn load_channel(&self, ch: &Channel) -> Result<Vec<(f64, f64)>, SpecError> {
         let path = crate::spec::resolve_in(&self.base_dir, &ch.file);
         if ch.file.to_ascii_lowercase().ends_with(".vcd") {
@@ -240,9 +258,16 @@ impl Trace {
     }
 }
 
-/// Every net referenced by the spec's `hwtrace` assertions, with each trace
-/// loaded and validated up front (fail loud before the sim spends minutes).
-/// The runner records these nets' simulated waveforms during the run.
+/// Every net referenced by the spec's `hwtrace` assertions.
+///
+/// Each trace is loaded and validated up front (fail loud before the sim
+/// spends minutes). The runner records these nets' simulated waveforms during
+/// the run.
+///
+/// # Errors
+///
+/// Any error from [`trace_path`] or [`Trace::load`] for the first `hwtrace`
+/// assertion whose trace is missing, unreadable or invalid.
 pub fn assert_nets(spec: &Spec) -> Result<HashSet<String>, SpecError> {
     let mut nets = HashSet::new();
     for a in spec.asserts.iter().filter(|a| a.kind == "hwtrace") {
@@ -253,6 +278,10 @@ pub fn assert_nets(spec: &Spec) -> Result<HashSet<String>, SpecError> {
 }
 
 /// Resolve an hwtrace assertion's `trace` path against the spec's directory.
+///
+/// # Errors
+///
+/// [`SpecError::Invalid`] if the assertion has no `trace` field.
 pub fn trace_path(spec: &Spec, a: &crate::spec::Assertion) -> Result<PathBuf, SpecError> {
     let rel = a
         .trace
@@ -413,10 +442,9 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
     // The capture observed the signal (holding its last value) up to the final
     // time marker; record that endpoint so the observation window, which the
     // edge_count comparison depends on, is the capture's, not the last edge's.
-    if let Some(&(t_last, v_last)) = out.last() {
-        if last_marker > t_last {
-            out.push((last_marker, v_last));
-        }
+    let (t_last, v_last) = out[out.len() - 1];
+    if last_marker > t_last {
+        out.push((last_marker, v_last));
     }
     Ok(out)
 }
@@ -457,9 +485,9 @@ pub(crate) fn detect_edges(series: &[(f64, f64)], threshold: Option<f64>) -> Vec
     if swing <= 1e-9 {
         return Vec::new(); // a flat line has no edges
     }
-    let thr = threshold.unwrap_or(min + 0.5 * swing);
-    let hi = thr + 0.05 * swing;
-    let lo = thr - 0.05 * swing;
+    let thr = threshold.unwrap_or_else(|| swing.mul_add(0.5, min));
+    let hi = swing.mul_add(0.05, thr);
+    let lo = swing.mul_add(-0.05, thr);
 
     // An edge's time is the crossing of `thr`, not that of the sample confirming
     // it through the hysteresis: a confirming sample pins the edge to the grid
@@ -468,7 +496,7 @@ pub(crate) fn detect_edges(series: &[(f64, f64)], threshold: Option<f64>) -> Vec
     // VCD change point) already timed exactly, so it is left alone.
     let cross = |a: (f64, f64), b: (f64, f64)| match b.1 - a.1 {
         dv if dv.abs() >= 0.9 * swing => b.0,
-        dv => (thr - a.1) / dv * (b.0 - a.0) + a.0,
+        dv => ((thr - a.1) / dv).mul_add(b.0 - a.0, a.0),
     };
     let mut edges = Vec::new();
     let mut state_high = series[0].1 > thr;
@@ -503,9 +531,16 @@ fn extremes(series: &[(f64, f64)]) -> (f64, f64) {
     (min, max)
 }
 
-/// Extract one feature's value from a waveform. Returns a named reason when
-/// the waveform cannot honestly yield the feature (too few edges, empty
-/// window); the comparison surfaces that reason as a failure, never a skip.
+/// Extract one feature's value from a waveform.
+///
+/// # Errors
+///
+/// A named reason when the waveform cannot honestly yield the feature: no
+/// samples after `after_ms`, a zero time span, too few edges, no complete
+/// pulse or period, or an unknown feature kind. The comparison surfaces that
+/// reason as a failure, never a skip.
+// Edge and sample counts are far below 2^52, so usize -> f64 is exact.
+#[allow(clippy::cast_precision_loss)]
 pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
     let start_s = f.after_ms / 1000.0;
     let win: Vec<(f64, f64)> = series
@@ -526,10 +561,10 @@ pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
             if win.len() == 1 {
                 return Ok(win[0].1);
             }
-            let mut area = 0.0;
-            for w in win.windows(2) {
-                area += 0.5 * (w[0].1 + w[1].1) * (w[1].0 - w[0].0);
-            }
+            let area: f64 = win
+                .windows(2)
+                .map(|w| 0.5 * (w[0].1 + w[1].1) * (w[1].0 - w[0].0))
+                .sum();
             let span = win[win.len() - 1].0 - win[0].0;
             if span <= 0.0 {
                 return Err("window has zero time span".to_string());
@@ -552,13 +587,11 @@ pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
             Ok(span / (rising.len() - 1) as f64 * 1000.0) // ms
         }
         "pulse_width" => {
-            let edges = detect_edges(&win, f.threshold);
-            let mut widths = Vec::new();
-            for w in edges.windows(2) {
-                if w[0].rising && !w[1].rising {
-                    widths.push(w[1].t - w[0].t);
-                }
-            }
+            let widths: Vec<f64> = detect_edges(&win, f.threshold)
+                .windows(2)
+                .filter(|w| w[0].rising && !w[1].rising)
+                .map(|w| w[1].t - w[0].t)
+                .collect();
             if widths.is_empty() {
                 return Err("no complete high pulse (rising→falling) in the window".to_string());
             }
@@ -617,8 +650,9 @@ pub struct FeatureResult {
     pub detail: String,
 }
 
-/// Compare one feature across the captured and simulated waveforms. The
-/// tolerance band is `max(abstol, reltol * |captured|)` of whichever are
+/// Compare one feature across the captured and simulated waveforms.
+///
+/// The tolerance band is `max(abstol, reltol * |captured|)` of whichever are
 /// stated; the captured value is the oracle, so the relative band is
 /// anchored on it.
 pub fn compare(
@@ -696,18 +730,11 @@ mod tests {
         total_s: f64,
         dt: f64,
     ) -> Vec<(f64, f64)> {
-        let mut out = Vec::new();
-        let mut t = 0.0;
-        while t <= total_s {
-            let v = if (t / period_s).fract() >= 1.0 - duty {
-                hi
-            } else {
-                lo
-            };
-            out.push((t, v));
-            t += dt;
-        }
-        out
+        let high = |t: f64| (t / period_s).fract() >= 1.0 - duty;
+        std::iter::successors(Some(0.0), |t| Some(t + dt))
+            .take_while(|&t| t <= total_s)
+            .map(|t| (t, if high(t) { hi } else { lo }))
+            .collect()
     }
 
     fn feat(kind: &str) -> Feature {
@@ -778,8 +805,8 @@ mod tests {
         // Small noise around the swing must not manufacture edges: the
         // hysteresis scales with the swing.
         let mut noisy = s;
-        for (i, p) in noisy.iter_mut().enumerate() {
-            p.1 += 0.06 * ((i as f64 * 0.7).sin());
+        for (i, p) in (0_u32..).zip(noisy.iter_mut()) {
+            p.1 += 0.06 * ((f64::from(i) * 0.7).sin());
         }
         let edges = extract(&noisy, &feat("edge_count")).unwrap();
         assert!((9.0..=11.0).contains(&edges), "noisy edges {edges}");
