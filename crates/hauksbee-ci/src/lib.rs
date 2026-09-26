@@ -178,6 +178,67 @@ pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String>
     notes
 }
 
+/// A `(start_s, end_s, method)` span a member solved on a fallback rung.
+type FallbackWindow = (f64, f64, String);
+
+/// Every member's failed and fallback windows on the ensemble's one timeline.
+/// Two seeds failing over overlapping spans is one failed span, not a
+/// contradiction, so the failed windows become their union; a fallback span
+/// keeps only what no failure covers, and where members fell back differently
+/// it carries the latest rung of the scheduler's ladder any of them needed.
+/// An unknown method outranks them all, so the budget still refuses it.
+fn ensemble_windows(outcomes: &[runner::RunOutcome]) -> (Vec<(f64, f64)>, Vec<FallbackWindow>) {
+    use hauksbee_engine::scheduler::ChunkFallbackMethod as M;
+    let ladder = [
+        M::ReducedStep,
+        M::BackwardEuler,
+        M::ColdStartBackwardEuler,
+        M::SubdividedBackwardEuler,
+    ]
+    .map(|m| m.as_str());
+    let rank = |m: &str| ladder.iter().position(|l| *l == m).unwrap_or(usize::MAX);
+    let mut failed: Vec<(f64, f64)> = outcomes
+        .iter()
+        .flat_map(|o| o.failed_windows.clone())
+        .collect();
+    failed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut union: Vec<(f64, f64)> = Vec::new();
+    for (start, end) in failed {
+        match union.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => union.push((start, end)),
+        }
+    }
+    let fallback: Vec<&FallbackWindow> =
+        outcomes.iter().flat_map(|o| &o.fallback_windows).collect();
+    let mut cuts: Vec<f64> = fallback.iter().flat_map(|w| [w.0, w.1]).collect();
+    cuts.extend(union.iter().flat_map(|w| [w.0, w.1]));
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup();
+    let mut merged: Vec<FallbackWindow> = Vec::new();
+    for pair in cuts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let mid = 0.5 * (a + b);
+        let inside = |w: &(f64, f64)| w.0 <= mid && mid < w.1;
+        let method = fallback
+            .iter()
+            .filter(|w| inside(&(w.0, w.1)))
+            .map(|w| &w.2);
+        let Some(method) = method.max_by_key(|m| rank(m)) else {
+            continue;
+        };
+        if union.iter().any(inside) {
+            continue;
+        }
+        match merged.last_mut() {
+            // Adjacent spans share the very cut value, so exact equality is meant.
+            Some(last) if last.1.total_cmp(&a).is_eq() && last.2 == *method => last.1 = b,
+            _ => merged.push((a, b, method.clone())),
+        }
+    }
+    (union, merged)
+}
+
 fn refuse_timing_claims(results: &mut [assertions::AssertResult], refusals: &[String]) {
     if refusals.is_empty() {
         return;
@@ -409,14 +470,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .map_err(SpecError::invalid("building live-waiver evidence"))?;
     }
 
-    let failed_windows: Vec<(f64, f64)> = outcomes
-        .iter()
-        .flat_map(|outcome| outcome.failed_windows.iter().copied())
-        .collect();
-    let fallback_owned: Vec<(f64, f64, String)> = outcomes
-        .iter()
-        .flat_map(|outcome| outcome.fallback_windows.iter().cloned())
-        .collect();
+    let (failed_windows, fallback_owned) = ensemble_windows(&outcomes);
     let fallback_windows: Vec<(f64, f64, &str)> = fallback_owned
         .iter()
         .map(|(start, end, method)| (*start, *end, method.as_str()))
@@ -762,5 +816,46 @@ mod timing_validity_tests {
         assert!(results[0].invalid);
         assert!(results[0].waived.is_none());
         assert!(results[0].detail.contains("minimum pulse 1.000 us"));
+    }
+}
+
+#[cfg(test)]
+mod ensemble_window_tests {
+    use super::*;
+
+    /// Seeds failing over overlapping spans make one failed span, and a
+    /// fallback keeps only what no failure covers, at the latest rung any
+    /// seed needed there.
+    #[test]
+    fn member_windows_merge_on_one_timeline() {
+        let member =
+            |failed: Vec<(f64, f64)>, fallback: Vec<(f64, f64, &str)>| runner::RunOutcome {
+                failed_windows: failed,
+                fallback_windows: fallback
+                    .into_iter()
+                    .map(|(a, b, m)| (a, b, m.to_string()))
+                    .collect(),
+                ..Default::default()
+            };
+        let outcomes = [
+            member(vec![(1.0, 3.0)], vec![(0.0, 2.0, "reduced-step")]),
+            member(
+                vec![(2.0, 4.0), (6.0, 7.0)],
+                vec![(5.0, 5.5, "reduced-step")],
+            ),
+            member(vec![], vec![(4.5, 5.2, "backward-euler")]),
+        ];
+        let (failed, fallback) = ensemble_windows(&outcomes);
+        assert_eq!(failed, vec![(1.0, 4.0), (6.0, 7.0)]);
+        let want = [
+            (0.0, 1.0, "reduced-step"),
+            (4.5, 5.2, "backward-euler"),
+            (5.2, 5.5, "reduced-step"),
+        ];
+        let want: Vec<_> = want
+            .iter()
+            .map(|&(a, b, m)| (a, b, m.to_string()))
+            .collect();
+        assert_eq!(fallback, want);
     }
 }

@@ -62,7 +62,9 @@ jitter_s   = 0.0                 # optional deterministic period jitter (s),
                                  #   seeded from (scenario seed, segment index)
 ```
 
-A segment ramps over `rise_s` from the previous level to `level_a`, then holds
+A segment ramps over `rise_s` from the previous level to `level_a` (the first
+segment from zero: nothing is drawn before `start_ms`, so the initial operating
+point is the pre-stimulus board), then holds
 for `duration_s`. A segment with `period_s > 0` is a **burst train**: it fires
 for `rise_s + duration_s`, idles at `idle_a` for the rest of the period, and
 repeats. Jitter is deterministic (splitmix64 over `(seed, index)`), so a run is

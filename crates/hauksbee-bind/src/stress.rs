@@ -637,6 +637,50 @@ pub struct StressMonitor {
     run: Vec<RunStats>,
     /// Each meta's (power rating, `theta_JA`, Tj max): footprint parses, so resolved once.
     limits: Vec<(Option<f64>, f64, f64)>,
+    /// Where each regulator meta's dissipation comes from (see [`RegulatorHeat`]).
+    reg_heat: Vec<Option<RegulatorHeat>>,
+}
+
+/// How a regulator's dissipation is estimated.
+///
+/// Its monitored device is the ideal output source, which carries no input, so without this a regulator
+/// read as dissipating nothing and every `max_temp` on one was skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegulatorHeat {
+    /// A linear pass element: `(V(input) - V(out)) * I_out`.
+    Linear { input: NodeId },
+    /// An averaged converter: the input power its reflected-draw source
+    /// `in_source` takes from `input`, minus the output power. The draw already
+    /// carries the card's efficiency, so this is `Pout * (1/eff - 1)`: every
+    /// conversion loss, the inductor's included, charged to the package.
+    Converter { input: NodeId, in_source: DeviceId },
+}
+
+impl RegulatorHeat {
+    fn watts(
+        self,
+        circuit: &Circuit,
+        source: DeviceId,
+        node_v: &dyn Fn(NodeId) -> f64,
+        branch_current: &dyn Fn(DeviceId) -> Option<f64>,
+    ) -> f64 {
+        let Some(Device::Vsource { p, .. }) = circuit.devices.get(source.0 as usize) else {
+            return 0.0;
+        };
+        let i_out = branch_current(source).unwrap_or(0.0).abs();
+        let i_in = match self {
+            Self::Linear { .. } => i_out,
+            Self::Converter { in_source, .. } => match circuit.devices.get(in_source.0 as usize) {
+                Some(Device::Isource {
+                    kind: hauksbee_ir::SourceKind::Dc(i),
+                    ..
+                }) => *i,
+                _ => 0.0,
+            },
+        };
+        let (Self::Linear { input } | Self::Converter { input, .. }) = self;
+        node_v(input).mul_add(i_in, -node_v(*p) * i_out).max(0.0)
+    }
 }
 
 /// What the whole run saw of one device, as opposed to one chunk of it.
@@ -665,7 +709,38 @@ struct RunStats {
     worst_vgs: Option<f64>,
     /// Hottest estimated junction temperature (C). `None` if it never dissipated.
     peak_tj_c: Option<f64>,
+    /// The deposits `(elapsed s, energy J)` inside the trailing [`TJ_AVG_S`]
+    /// window, with their running sums: the junction heats on this average.
+    heat: std::collections::VecDeque<(f64, f64)>,
+    heat_sum: (f64, f64),
 }
+
+impl RunStats {
+    /// Add one chunk's deposit and return the average power (W) over the
+    /// trailing [`TJ_AVG_S`] (all of it while the run is shorter).
+    fn heat_w(&mut self, elapsed_s: f64, energy_j: f64) -> f64 {
+        self.heat.push_back((elapsed_s, energy_j));
+        self.heat_sum = (self.heat_sum.0 + elapsed_s, self.heat_sum.1 + energy_j);
+        while self.heat.len() > 1 {
+            let (t, e) = self.heat[0];
+            if self.heat_sum.0 - t < TJ_AVG_S {
+                break;
+            }
+            self.heat.pop_front();
+            self.heat_sum = (self.heat_sum.0 - t, self.heat_sum.1 - e);
+        }
+        self.heat_sum.1 / self.heat_sum.0
+    }
+}
+
+/// Window (s) the junction-heating power is averaged over. The steady-state
+/// `Ta + P*theta_JA` estimate used to take one chunk's power, so a
+/// microseconds-long switching or ringing excursion read as a sustained load
+/// (a load switch "reached" 5e6 C). Junction-to-ambient thermal time
+/// constants of even the smallest packages are far longer than a
+/// millisecond, so this still reads a sustained load in full after one window;
+/// what it no longer does is extrapolate a single chunk to steady state.
+const TJ_AVG_S: f64 = 1e-3;
 
 /// The fraction of its continuous rating at which a MOSFET counts as
 /// CONDUCTING for the gate-drive check. Leakage and a decaying gate transient
@@ -714,7 +789,34 @@ impl StressMonitor {
             chunk_energy_j: vec![0.0; n],
             chunk_elapsed_s: 0.0,
             run: vec![RunStats::default(); n],
+            reg_heat: vec![None; n],
         }
+    }
+
+    /// Estimate the dissipation of the regulator whose output source is
+    /// `source` by `heat`.
+    pub fn watch_regulator_heat(&mut self, source: DeviceId, heat: RegulatorHeat) {
+        for (meta, slot) in self.metas.iter().zip(&mut self.reg_heat) {
+            if meta.device == source {
+                *slot = Some(heat);
+            }
+        }
+    }
+
+    /// The operating point of meta `i`, with a regulator's estimated dissipation.
+    fn op_of(
+        &self,
+        circuit: &Circuit,
+        i: usize,
+        node_v: &dyn Fn(NodeId) -> f64,
+        branch_current: &dyn Fn(DeviceId) -> Option<f64>,
+    ) -> OperatingPoint {
+        let meta = &self.metas[i];
+        let mut op = operating_point(circuit, meta, node_v, branch_current);
+        if let Some(heat) = self.reg_heat[i] {
+            op.power_w = heat.watts(circuit, meta.device, node_v, branch_current);
+        }
+        op
     }
 
     /// What the run measured about a part that no per-chunk fault check can
@@ -876,14 +978,12 @@ impl StressMonitor {
         node_v: &dyn Fn(NodeId) -> f64,
         branch_current: &dyn Fn(DeviceId) -> Option<f64>,
     ) -> Vec<f64> {
-        self.metas
-            .iter()
-            .enumerate()
-            .map(|(i, meta)| {
+        (0..self.metas.len())
+            .map(|i| {
                 if self.tracks[i].destroyed {
                     0.0
                 } else {
-                    operating_point(circuit, meta, node_v, branch_current).power_w
+                    self.op_of(circuit, i, node_v, branch_current).power_w
                 }
             })
             .collect()
@@ -1025,15 +1125,12 @@ impl StressMonitor {
         // after an earlier device's same-chunk destruction see mutated
         // parameters under stale node voltages. The next chunk re-solves
         // either way.
-        let ops: Vec<Option<OperatingPoint>> = self
-            .metas
-            .iter()
-            .enumerate()
-            .map(|(i, meta)| {
+        let ops: Vec<Option<OperatingPoint>> = (0..self.metas.len())
+            .map(|i| {
                 if self.tracks[i].destroyed {
                     None
                 } else {
-                    Some(operating_point(circuit, meta, node_v, branch_current))
+                    Some(self.op_of(circuit, i, node_v, branch_current))
                 }
             })
             .collect();
@@ -1087,10 +1184,16 @@ impl StressMonitor {
             .collect();
         let mut package_power: HashMap<String, f64> = HashMap::new();
         for (i, meta) in self.metas.iter().enumerate() {
-            if unit_avg_w[i] > 0.0 {
+            let heat_w = match (&ops[i], self.chunk_energy_j.get(i)) {
+                (Some(_), Some(&e)) if thermal_elapsed > 0.0 => {
+                    self.run[i].heat_w(thermal_elapsed, e)
+                }
+                _ => unit_avg_w[i],
+            };
+            if heat_w > 0.0 {
                 *package_power
                     .entry(strip_unit_suffix(&meta.reference).to_string())
-                    .or_insert(0.0) += unit_avg_w[i];
+                    .or_insert(0.0) += heat_w;
             }
         }
         // The deposit covers exactly the chunk this evaluate closes; drain it
@@ -1418,8 +1521,10 @@ fn operating_point(
             let mut vd = sign * node_v(*d);
             let vg = sign * node_v(*g);
             let mut vs = sign * node_v(*s);
+            let (mut rd, mut rs) = (model.rd.max(0.0), model.rs.max(0.0));
             if vd < vs {
                 std::mem::swap(&mut vd, &mut vs);
+                std::mem::swap(&mut rd, &mut rs);
             }
             let vgs = vg - vs;
             let vds_f = vd - vs;
@@ -1441,28 +1546,46 @@ fn operating_point(
             // below (see `mos_channel` for why the blend, not two branches).
             let vt = hauksbee_ir::thermal_voltage_c(circuit.temp_c);
             let two_nvt = 2.0 * model.n_sub.max(1.0) * vt;
-            let u = (vgs - vth) / two_nvt;
-            // Numerically stable softplus ln(1 + e^u).
-            let softplus = if u > 40.0 {
-                u
-            } else if u < -40.0 {
-                u.exp()
-            } else {
-                u.exp().ln_1p()
+            let channel = |vgs: f64, vds: f64| {
+                let u = (vgs - vth) / two_nvt;
+                // Numerically stable softplus ln(1 + e^u).
+                let softplus = if u > 40.0 {
+                    u
+                } else if u < -40.0 {
+                    u.exp()
+                } else {
+                    u.exp().ln_1p()
+                };
+                let vov_eff = two_nvt * softplus;
+                // Channel-length modulation is always applied here (the solver
+                // gates it on a sim option the monitor cannot see); lambda is 0
+                // for most models, and when it isn't, including it errs toward
+                // the slightly *higher* current, conservative for a limit check.
+                let clm = model.lambda.mul_add(vds, 1.0);
+                if vds < vov_eff {
+                    // Triode.
+                    model.beta() * (vov_eff * vds - 0.5 * vds * vds) * clm
+                } else {
+                    // Saturation.
+                    0.5 * model.beta() * vov_eff * vov_eff * clm
+                }
             };
-            let vov_eff = two_nvt * softplus;
-            // Channel-length modulation is always applied here (the solver
-            // gates it on a sim option the monitor cannot see); lambda is 0
-            // for most models, and when it isn't, including it errs toward
-            // the slightly *higher* current, conservative for a limit check.
-            let clm = model.lambda.mul_add(vds_f, 1.0);
-            let ids = if vds_f < vov_eff {
-                // Triode.
-                model.beta() * (vov_eff * vds_f - 0.5 * vds_f * vds_f) * clm
-            } else {
-                // Saturation.
-                0.5 * model.beta() * vov_eff * vov_eff * clm
-            };
+            // The solver puts the channel between internal nodes behind
+            // `rd`/`rs`, so the terminal voltages overstate its drive: a 20 mOhm
+            // channel behind 100 mOhm read at the terminals carries ~6x the
+            // current and power the solve settled at. Solve the one current
+            // both agree on, `I = channel(vgs - I*rs, vds - I*(rd+rs))`, by
+            // bisection (the right side falls as I rises).
+            let (mut lo, mut hi) = (0.0, channel(vgs, vds_f).max(0.0));
+            for _ in 0..(if rd + rs > 0.0 { 60 } else { 0 }) {
+                let mid = 0.5 * (lo + hi);
+                if channel(vgs - mid * rs, vds_f - mid * (rd + rs)) > mid {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let ids = hi;
             // Report the real (unfolded) drain-source voltage; the fold and
             // swap preserve its magnitude, so |vds·ids| is the channel
             // dissipation either way. Clamps mirror the BJT arm.
@@ -2219,5 +2342,117 @@ mod monitor_temp_tests {
             i_hot > nominal * 1.5,
             "temp-corrected current must exceed the nominal-Is current it replaced"
         );
+    }
+
+    /// One chunk of heat must not read as a steady state: the junction heats on
+    /// the trailing `TJ_AVG_S` average, so a 0.1 ms spike in an idle millisecond
+    /// is a tenth of its power, and only a sustained load reaches the full rise.
+    #[test]
+    fn junction_heats_on_the_trailing_average_not_one_chunk() {
+        let ratings = Ratings {
+            theta_ja_c_per_w: Some(100.0),
+            ..Default::default()
+        };
+        let (mut circuit, node, mut monitor) = resistor_monitor(100.0, ratings);
+        let mut chunk = |k: u32, volts: f64| {
+            let node_v = |n| if n == node { volts } else { 0.0 };
+            monitor.accumulate_step(&circuit, &node_v, &|_| None, 1e-4);
+            monitor.evaluate(&mut circuit, &node_v, &|_| None, f64::from(k) * 1e-4);
+            monitor.temp_by_ref().get("R1").copied()
+        };
+        (0..9).for_each(|k| _ = chunk(k, 0.0));
+        // 0.25 W for one chunk in ten: 25 C + 0.025 W * 100 C/W.
+        let spike = chunk(9, 5.0);
+        assert!(
+            spike.is_some_and(|t| (t - 27.5).abs() < 1e-6),
+            "one-chunk spike read {spike:?}"
+        );
+        let sustained = (10..20).map(|k| chunk(k, 5.0)).last().flatten();
+        assert!(
+            sustained.is_some_and(|t| (t - 50.0).abs() < 1e-6),
+            "sustained read {sustained:?}"
+        );
+    }
+
+    /// The solver puts the channel behind rd/rs; reading it at the terminals
+    /// hands a hard-on FET the current of a bare channel across the full vds.
+    #[test]
+    fn mosfet_power_is_read_behind_its_series_resistance() {
+        let mut circuit = Circuit::new();
+        let (d, g) = (circuit.node("D"), circuit.node("G"));
+        let model = hauksbee_ir::MosfetModel {
+            vto: 1.0,
+            kp: 100.0,
+            rd: 0.5,
+            rs: 0.5,
+            ..Default::default()
+        };
+        let device = circuit.add(Device::Mosfet {
+            name: "M1".into(),
+            d,
+            g,
+            s: NodeId::GROUND,
+            b: None,
+            model,
+        });
+        let meta = DeviceMeta {
+            device,
+            ..meta("Q1", ComponentKind::Nmos, "", Ratings::default())
+        };
+        let node_v = |n| {
+            [(d, 1.0), (g, 10.0)]
+                .into_iter()
+                .find(|p| p.0 == n)
+                .map_or(0.0, |p| p.1)
+        };
+        // A near-short channel behind 1 ohm carries just under 1 A at 1 V.
+        let op = operating_point(&circuit, &meta, &node_v, &|_| None);
+        let (i, w) = (op.current_a, op.power_w);
+        assert!((0.95..1.0).contains(&i), "{i} A");
+        assert!((w - i).abs() < 1e-9, "{w} W at {i} A");
+    }
+
+    /// A regulator's monitored device is its ideal output source, so its heat
+    /// comes from the input it draws: (Vin - Vout) * Iout for a linear pass
+    /// element, reflected input power minus output power for a converter.
+    #[test]
+    fn regulator_dissipation_is_estimated_from_its_input() {
+        use hauksbee_ir::SourceKind::Dc;
+        let mut circuit = Circuit::new();
+        let (vin, out) = (circuit.node("VIN"), circuit.node("OUT"));
+        let src = circuit.add(Device::vsource("Vreg_U1", out, NodeId::GROUND, Dc(3.3)));
+        let draw = circuit.add(Device::isource("Ibeh_U1_in", vin, NodeId::GROUND, Dc(0.08)));
+        let node_v = |n| {
+            if n == vin {
+                5.0
+            } else if n == out {
+                3.3
+            } else {
+                0.0
+            }
+        };
+        let branch = |id| (id == src).then_some(-0.1);
+        let meta = DeviceMeta {
+            device: src,
+            ..meta("U1", ComponentKind::Vreg, "", Ratings::default())
+        };
+        for (heat, want) in [
+            (None, 0.0),
+            (Some(RegulatorHeat::Linear { input: vin }), 0.17),
+            (
+                Some(RegulatorHeat::Converter {
+                    input: vin,
+                    in_source: draw,
+                }),
+                0.07,
+            ),
+        ] {
+            let mut monitor = StressMonitor::new(vec![meta.clone()]);
+            if let Some(heat) = heat {
+                monitor.watch_regulator_heat(src, heat);
+            }
+            let watts = monitor.op_of(&circuit, 0, &node_v, &branch).power_w;
+            assert!((watts - want).abs() < 1e-9, "{heat:?}: {watts} W");
+        }
     }
 }

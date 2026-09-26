@@ -322,6 +322,14 @@ pub struct Converter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub out_r_ohms: Option<f64>,
 
+    /// Datasheet maximum duty cycle (0..1) of a buck: its averaged switch node
+    /// never exceeds `max_duty * vin`, so an input near the output drops out
+    /// below it instead of passing through. Absent means the card states none
+    /// and the ceiling is `vin` itself. A minimum off-time converts as
+    /// `1 - t_off_min * f_sw`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duty: Option<f64>,
+
     /// Programmable input-current limit: a sense resistor on `in_pin` (the
     /// shunt the converter measures across) plus a programming resistor on
     /// `prog_pin`. When present, the runtime computes `iin_limit_a` from the
@@ -625,6 +633,14 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 format!("converter: efficiency must be in (0,1], got {e}")
             });
         }
+        if let Some(d) = c.max_duty {
+            p.require(d.is_finite() && d > 0.0 && d <= 1.0, || {
+                format!("converter: max_duty must be in (0,1], got {d}")
+            });
+            p.require(c.topology == Topology::Buck, || {
+                "converter: max_duty is only modelled for a buck".to_string()
+            });
+        }
         for (name, lim) in [
             ("iout_limit_a", c.iout_limit_a),
             ("iin_limit_a", c.iin_limit_a),
@@ -918,6 +934,21 @@ mod tests {
             "iin_limit_a",
         );
         clean(&conv("vout_setpoint = 5.0\niout_limit_a = 1.0"));
+        flags(&conv("vout_setpoint = 5.0\nmax_duty = 1.2"), "max_duty");
+        clean(&conv("vout_setpoint = 5.0\nmax_duty = 0.9"));
+        let boost = conv("vout_setpoint = 5.0\nmax_duty = 0.9")
+            .converter
+            .map(|c| Converter {
+                topology: Topology::Boost,
+                ..c
+            });
+        flags(
+            &Behavioral {
+                converter: boost,
+                ..Default::default()
+            },
+            "only modelled for a buck",
+        );
     }
 
     #[test]
