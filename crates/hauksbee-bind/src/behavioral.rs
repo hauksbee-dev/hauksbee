@@ -221,8 +221,8 @@ fn out_farads(circuit: &Circuit, node: NodeId) -> f64 {
     circuit.iter().filter_map(farads).sum()
 }
 
-/// The converter loop's switch-node drive and PI-state expressions over deps
-/// `[out, pi, sense, lim, vin, ref, drv]` (see `stamp_converter`), for
+/// The converter loop's delivered-current and PI-state expressions over deps
+/// `[out, pi, sense, lim, vin, ref]` (see `stamp_converter`), for
 /// `farads_per_ratio = C_out / k`.
 fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String; 2] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
@@ -236,10 +236,9 @@ fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String
     let err = format!("{g:?}*(__d5-__d2)");
     let cmd =
         format!("min(max(__d1+{err},0.0),{iout_max:?},__d3*{eff:?}*max(__d4,0.0)/max(__d0,1e-3))");
-    [
-        format!("min(max(__d0+{r:?}*{cmd},0.0),{hi})"),
-        format!("1e-6*({wz:?}*{err}-{wc:?}*(__d1+{err}-(__d6-__d0)/{r:?})-{wl:?}*__d1)"),
-    ]
+    let i = format!("min(max({cmd},-__d0/{r:?}),({hi}-__d0)/{r:?})");
+    let pi = format!("1e-6*({wz:?}*({i}-__d1)-{wl:?}*__d1)");
+    [i, pi]
 }
 
 /// The fraction of the regulated voltage a resistive divider presents at a
@@ -908,15 +907,19 @@ impl BehavioralDevice {
     /// The averaged converter as an in-circuit current-mode regulation loop,
     /// so Newton, not a per-chunk relaxation, closes it:
     ///
-    /// * `i_cmd = clamp(x + g*(ref - V(sense)), 0, iout_limit, lim*eff*V(in)/V(out))`,
-    ///   the current pushed through `out_r` into the output pin;
-    /// * the averaged switch node `V(sw) = V(out) + out_r*i_cmd`, held within
-    ///   `[0, max_duty*V(in)]` for a buck (`[0, V(in)]` while disarmed: the
-    ///   high-side body diode), so the output inductor slews at
-    ///   `(V(in) - V(out))/L` instead of stepping, and `i_cmd >= 0` never
-    ///   sinks output current while regulating;
-    /// * the PI state `x' = wz*g*e - wc*(x + g*e - i_delivered) - wl*x`, whose
-    ///   tracking term stops windup against any clamp.
+    /// * `i_cmd = clamp(x + g*(ref - V(sense)), 0, iout_limit, lim*eff*V(in)/V(out))`;
+    /// * the delivered current `i`, `i_cmd` held where the averaged switch
+    ///   node `V(out) + out_r*i` stays within `[0, max_duty*V(in)]` for a buck
+    ///   (`[0, V(in)]` while disarmed: the high-side body diode), so the
+    ///   output inductor slews at `(V(in) - V(out))/L` instead of stepping, and
+    ///   `i_cmd >= 0` never sinks output current while regulating. `i` is
+    ///   injected as a current through `out_r` into the output pin: as a
+    ///   millivolt drop between volt-scale nodes, Newton's voltage tolerance
+    ///   could not resolve it;
+    /// * the PI state `x' = wz*(i - x) - wl*x`: integral action `wz*g*e`
+    ///   while regulating (`i = x + g*e`), tracking `i` against any clamp
+    ///   instead of winding up, which also keeps the DC solve off a
+    ///   limit cycle between the regulating and the clamped branch.
     ///
     /// `g = 2 pi f_c C_out / k` crosses the loop over at `f_c` against the
     /// output capacitance `C_out` on the regulated node, `k` being the
@@ -961,36 +964,18 @@ impl BehavioralDevice {
         // The reference as a source, so DC source stepping ramps it with the
         // supplies: a soft start, which is how Newton finds a clamped loop.
         let ref_node = hidden_dc_node(circuit, reference, "conv_ref", vref).0;
-        let deps: Vec<_> = [out, pi_node, sense, lim, vin, ref_node, drv]
+        let deps: Vec<_> = [out, pi_node, sense, lim, vin, ref_node]
             .map(BDep::Volt)
             .into();
-        for (name, p, n, output, expr, deps) in [
-            (
-                "sw",
-                src,
-                NodeId::GROUND,
-                BOutput::Voltage,
-                drive,
-                &deps[..6],
-            ),
-            (
-                "pi",
-                NodeId::GROUND,
-                pi_node,
-                BOutput::Current,
-                pi,
-                &deps[..],
-            ),
-        ] {
+        for (name, n, expr) in [("sw", src, drive), ("pi", pi_node, pi)] {
             let expr = CompiledExpr::compile(&expr).expect("converter loop expression compiles");
-            let name = format!("Bbeh_{reference}_conv_{name}");
             circuit.add(Device::Behavioral {
-                name,
-                p,
+                name: format!("Bbeh_{reference}_conv_{name}"),
+                p: NodeId::GROUND,
                 n,
-                output,
+                output: BOutput::Current,
                 expr,
-                deps: deps.to_vec(),
+                deps: deps.clone(),
             });
         }
         circuit.add(Device::capacitor(

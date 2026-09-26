@@ -348,6 +348,20 @@ fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
     );
 }
 
+/// An input-current-limited converter settles where its limited input power
+/// meets the load, `V = sqrt(lim * eff * Vin * R)`: 2.67 V here. Newton used
+/// to limit-cycle between the regulating and the clamped branch.
+#[test]
+fn input_limited_converter_finds_its_operating_point() {
+    let lib = lib_with_card("iin", 3.3, "iin_limit_a = 0.02", false);
+    let (_, trace) = run_lc_buck(&lc_buck_board("+12V", "33R", false), &lib, 5);
+    let want = (0.02 * 0.9 * 12.0 * 33.0_f64).sqrt();
+    assert!(
+        trace.iter().all(|v| (v - want).abs() < 0.01 * want),
+        "{trace:?}"
+    );
+}
+
 /// The 3.3 V feedback buck from +12V with `cout` on +OUT, stepped by 1.5 A at
 /// 1 ms: the rail's lowest 1 us sample over the next 300 us, where it ends,
 /// and the bound board's evidence.
