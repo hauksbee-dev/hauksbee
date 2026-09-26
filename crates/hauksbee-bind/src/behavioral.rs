@@ -170,14 +170,9 @@ fn hidden_dc_node(
     volts: f64,
 ) -> (NodeId, DeviceId) {
     let node = circuit.node(&format!("__beh_{reference}_{tag}"));
-    let dc = SourceKind::Dc(volts);
-    let source = circuit.add(Device::vsource(
-        format!("Vbeh_{reference}_{tag}"),
-        node,
-        NodeId::GROUND,
-        dc,
-    ));
-    (node, source)
+    let name = format!("Vbeh_{reference}_{tag}");
+    let source = Device::vsource(name, node, NodeId::GROUND, SourceKind::Dc(volts));
+    (node, circuit.add(source))
 }
 
 /// A named device's terminals.
@@ -227,15 +222,19 @@ fn out_farads(circuit: &Circuit, node: NodeId) -> f64 {
 fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String; 2] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
     let (g, wz, wl) = (wc * farads_per_ratio, wc / 4.0, wc * 1e-5);
-    let dmax = c.max_duty.unwrap_or(1.0);
+    let (dmax, armed) = (c.max_duty.unwrap_or(1.0), "min(max(__d3*100.0,0.0),1.0)");
     let hi = match c.topology {
-        Topology::Buck => format!("if(__d3>0.0,{dmax:?},1.0)*max(__d4,0.0)"),
+        Topology::Buck => format!("(1.0-{:?}*{armed})*max(__d4,0.0)", 1.0 - dmax),
         _ => "1e9".into(),
     };
     let iout_max = c.iout_limit_a.unwrap_or(1e9);
     let err = format!("{g:?}*(__d5-__d2)");
-    let cmd =
-        format!("min(max(__d1+{err},0.0),{iout_max:?},__d3*{eff:?}*max(__d4,0.0)/max(__d0,1e-3))");
+    let cap = if c.iin_limit_a.is_some() || c.iin_program.is_some() {
+        format!("min({iout_max:?},max(__d3,0.0)*{eff:?}*max(__d4,0.0)/max(__d0,1e-3))")
+    } else {
+        format!("{armed}*{iout_max:?}")
+    };
+    let cmd = format!("max(min(__d1+{err},{cap}),-{cap})");
     let i = format!("min(max({cmd},-__d0/{r:?}),({hi}-__d0)/{r:?})");
     let pi = format!("1e-6*({wz:?}*({i}-__d1)-{wl:?}*__d1)");
     [i, pi]
@@ -907,14 +906,21 @@ impl BehavioralDevice {
     /// The averaged converter as an in-circuit current-mode regulation loop,
     /// so Newton, not a per-chunk relaxation, closes it:
     ///
-    /// * `i_cmd = clamp(x + g*(ref - V(sense)), 0, iout_limit, lim*eff*V(in)/V(out))`;
+    /// * `i_cmd = clamp(x + g*(ref - V(sense)), -cap, cap)`: a synchronous
+    ///   switch sinks as it sources, so a light load's operating point sits
+    ///   inside the linear range, not on a no-sink kink within one
+    ///   finite-difference probe, whose straddled partial Newton cannot
+    ///   converge on. `cap = min(iout_limit, lim*eff*V(in)/V(out))` under an
+    ///   input-current limit, else `iout_limit` gated by `clamp(100*lim, 0, 1)`
+    ///   (so is a buck's `max_duty`): a 1e9 "no limit" or a step gate would
+    ///   kick Newton on arming, or on a damped step landing on the switch,
+    ///   while a ramp full from `lim = 0.01` survives DC source stepping;
     /// * the delivered current `i`, `i_cmd` held where the averaged switch
     ///   node `V(out) + out_r*i` stays within `[0, max_duty*V(in)]` for a buck
     ///   (`[0, V(in)]` while disarmed: the high-side body diode), so the
-    ///   output inductor slews at `(V(in) - V(out))/L` instead of stepping, and
-    ///   `i_cmd >= 0` never sinks output current while regulating. `i` is
-    ///   injected as a current through `out_r` into the output pin: as a
-    ///   millivolt drop between volt-scale nodes, Newton's voltage tolerance
+    ///   output inductor slews at `(V(in) - V(out))/L` instead of stepping.
+    ///   `i` is injected as a current through `out_r` into the output pin: as
+    ///   a millivolt drop between volt-scale nodes, Newton's voltage tolerance
     ///   could not resolve it;
     /// * the PI state `x' = wz*(i - x) - wl*x`: integral action `wz*g*e`
     ///   while regulating (`i = x + g*e`), tracking `i` against any clamp
@@ -926,7 +932,8 @@ impl BehavioralDevice {
     /// feedback divider's ratio; `wz = wc/4` damps it critically, so a step
     /// `dI` dips the output about `0.74 dI / (2 pi f_c C_out)`. A buck's
     /// regulated node is the far side of its one output inductor. `lim` is a
-    /// hidden source holding the input-current limit, 0 while disabled.
+    /// hidden source holding the input-current limit (1 if none), -1 while
+    /// disarmed, so no finite-difference probe of it straddles the switch.
     /// Skipped when a programmable limit has no board evidence to read, or
     /// when either power pin is unconnected.
     fn stamp_converter(
@@ -960,7 +967,7 @@ impl BehavioralDevice {
         let [drive, pi] = loop_exprs(c, out_farads(circuit, reg).max(1e-6) / k, r, eff);
         let [drv, src, pi_node] =
             ["out", "sw", "pi"].map(|t| circuit.node(&format!("__beh_{reference}_conv_{t}")));
-        let (lim, limit_vsource) = hidden_dc_node(circuit, reference, "conv_lim", 0.0);
+        let (lim, limit_vsource) = hidden_dc_node(circuit, reference, "conv_lim", -1.0);
         // The reference as a source, so DC source stepping ramps it with the
         // supplies: a soft start, which is how Newton finds a clamped loop.
         let ref_node = hidden_dc_node(circuit, reference, "conv_ref", vref).0;
@@ -978,12 +985,8 @@ impl BehavioralDevice {
                 deps: deps.clone(),
             });
         }
-        circuit.add(Device::capacitor(
-            format!("Cbeh_{reference}_conv_pi"),
-            pi_node,
-            NodeId::GROUND,
-            1e-6,
-        ));
+        let cpi = format!("Cbeh_{reference}_conv_pi");
+        circuit.add(Device::capacitor(cpi, pi_node, NodeId::GROUND, 1e-6));
         let out_vsource = circuit.add(Device::vsource(
             format!("Vbeh_{reference}_conv"),
             drv,
@@ -1444,9 +1447,9 @@ impl BehavioralDevice {
         let evidenced = c.cfg.iin_program.is_none() || c.iin_limit_a.is_some();
         let on = c.sensed && evidenced && c.cfg.enable.as_ref().is_none_or(high);
         let limit = if on {
-            c.iin_limit_a.unwrap_or(1e9)
+            c.iin_limit_a.unwrap_or(1.0)
         } else {
-            0.0
+            -1.0
         };
         // Delivered current from the drop across `out_r`, a node-voltage read
         // that holds on the partitioned path, whose x carries no branch currents.

@@ -315,21 +315,25 @@ fn run_lc_buck(board: &ExtractedBoard, lib: &ModelLibrary, chunks: usize) -> (Sc
 
 /// A feedback buck starts in regulation (settled like a DC operating point)
 /// and holds there: the old per-chunk relaxation rang against the output LC
-/// and could swing the rail through zero.
+/// and could swing the rail through zero. Unloaded but for its divider it
+/// does too: a no-sink clamp put that operating point on a kink the loop
+/// gain's finite-difference probe straddled, so the DC solve never converged.
 #[test]
 fn feedback_buck_starts_in_regulation_and_holds_against_its_output_lc() {
     let lib = lib_with_card("fb", 3.3, "", true);
-    let (_, trace) = run_lc_buck(&lc_buck_board("+5V", "33R", true), &lib, 30);
-    let want = 0.6 * (1.0 + 45.0 / 10.0);
-    assert!(
-        trace.iter().all(|v| (v - want).abs() < 0.05 * want),
-        "{want} V wanted, got {trace:?}"
-    );
-    assert!(
-        (trace[0] - want).abs() < 0.01 * want,
-        "first chunk {} V",
-        trace[0]
-    );
+    for load in ["33R", "1Meg"] {
+        let (_, trace) = run_lc_buck(&lc_buck_board("+5V", load, true), &lib, 30);
+        let want = 0.6 * (1.0 + 45.0 / 10.0);
+        assert!(
+            trace.iter().all(|v| (v - want).abs() < 0.05 * want),
+            "{want} V wanted, got {trace:?}"
+        );
+        assert!(
+            (trace[0] - want).abs() < 0.01 * want,
+            "first chunk {} V",
+            trace[0]
+        );
+    }
 }
 
 /// A buck cannot exceed its maximum duty: a 12 V setpoint on a 9 V input
