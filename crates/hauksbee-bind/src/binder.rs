@@ -1770,43 +1770,14 @@ fn make_entry(
     params: hauksbee_models::Params,
     pins: std::collections::BTreeMap<String, String>,
 ) -> ModelEntry {
-    // Parse a tiny TOML stub to get a fully-defaulted entry, then fill it in.
-    // This keeps us forward-compatible with new `#[serde(default)]` fields on
-    // ModelEntry without hand-listing them.
-    let stub = format!("id = \"{id}\"\nkind = \"{}\"\n", kind_str(kind));
-    let mut entry: ModelEntry = toml::from_str(&stub).expect("fallback ModelEntry stub parses");
-    entry.description = description.to_string();
-    entry.params = params;
-    entry.pins = pins;
-    entry
-}
-
-/// The `snake_case` discriminant string for a [`ComponentKind`] (matches the
-/// TOML `#[serde(rename_all = "snake_case")]` encoding).
-const fn kind_str(kind: ComponentKind) -> &'static str {
-    use ComponentKind::{
-        Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Connector, Dac, Digital, Diode, Ignore, Mcu,
-        Nmos, Opamp, Passive, Pmos, ShiftRegister, Timer, Vreg,
-    };
-    match kind {
-        Passive => "passive",
-        Diode => "diode",
-        BjtNpn => "bjt_npn",
-        BjtPnp => "bjt_pnp",
-        Nmos => "nmos",
-        Pmos => "pmos",
-        Vreg => "vreg",
-        Opamp => "opamp",
-        Comparator => "comparator",
-        AnalogSwitch => "analog_switch",
-        Timer => "timer",
-        Digital => "digital",
-        Dac => "dac",
-        Adc => "adc",
-        ShiftRegister => "shift_register",
-        Mcu => "mcu",
-        Connector => "connector",
-        Ignore => "ignore",
+    // Every other field defaults, so a new optional field needs no edit here.
+    ModelEntry {
+        id: id.to_string(),
+        kind,
+        description: description.to_string(),
+        params,
+        pins,
+        ..Default::default()
     }
 }
 
@@ -1848,11 +1819,7 @@ fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
 }
 
 fn non_empty(s: &str) -> Option<String> {
-    if s.trim().is_empty() {
-        None
-    } else {
-        Some(s.to_string())
-    }
+    (!s.trim().is_empty()).then(|| s.to_string())
 }
 
 /// Collapse a multi-line TOML string into one report sentence: the abstention
@@ -3293,15 +3260,13 @@ fn bind_bjt(
         if stamped == 0 {
             return open_warning(comp, "paired BJT: no complete c/b/e group connected");
         }
-        let warning = if partial.is_empty() {
-            None
-        } else {
-            Some(format!(
-                "{}: paired BJT unit(s) {} missing a c/b/e connection, left open",
-                comp.reference,
-                partial.join(", ")
-            ))
-        };
+        let warning = (!partial.is_empty()).then(|| {
+            let units = partial.join(", ");
+            format!(
+                "{}: paired BJT unit(s) {units} missing a c/b/e connection, left open",
+                comp.reference
+            )
+        });
         return (
             BindOutcome::Analog {
                 device: format!("bjt x{stamped}"),
@@ -3514,11 +3479,7 @@ fn unparseable(comp: &Component) -> (BindOutcome, Option<String>) {
 }
 
 fn merge_bind_warnings(a: Option<String>, b: Option<String>) -> Option<String> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
-        (Some(a), None) | (None, Some(a)) => Some(a),
-        (None, None) => None,
-    }
+    a.into_iter().chain(b).reduce(|a, b| format!("{a}; {b}"))
 }
 
 /// The control loop of a linear regulator is not simulated, so its datasheet
@@ -3726,37 +3687,24 @@ fn bind_vreg(
     // are joined rather than one silently winning. Each is a full sentence already;
     // the leading one keeps the marker that makes the whole string evidence, and the
     // followers drop their own "REF (VALUE): " so the reference is not repeated.
-    let mut caveats: Vec<String> = [
+    let caveats = [
         vreg_stability_warning(comp, model, (out, gnd), components, node_of),
         entry_warning(comp, model),
         enable_warning,
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    let warning = if caveats.is_empty() {
-        None
-    } else {
-        let lead = caveats.remove(0);
-        // The follower's own "REF (VALUE): " comes off so the reference is not said
-        // twice in one sentence. The KNOWN prefix is stripped rather than cutting at
-        // the first ": ", which a component value containing a colon would break.
-        let prefix = format!("{} ({}): ", comp.reference, comp.value);
-        let rest: Vec<String> = caveats
-            .iter()
-            .map(|c| {
-                let c = c
-                    .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
-                    .unwrap_or(c);
-                c.strip_prefix(prefix.as_str()).unwrap_or(c).to_string()
-            })
-            .collect();
-        if rest.is_empty() {
-            Some(lead)
-        } else {
-            Some(format!("{lead}; also {}", rest.join("; also ")))
-        }
-    };
+    ];
+    // The follower's own "REF (VALUE): " comes off so the reference is not said
+    // twice in one sentence. The KNOWN prefix is stripped rather than cutting at
+    // the first ": ", which a component value containing a colon would break.
+    let prefix = format!("{} ({}): ", comp.reference, comp.value);
+    let warning = caveats.into_iter().flatten().reduce(|lead, c| {
+        let c = c
+            .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
+            .unwrap_or(&c);
+        format!(
+            "{lead}; also {}",
+            c.strip_prefix(prefix.as_str()).unwrap_or(c)
+        )
+    });
     (
         BindOutcome::Behavioral {
             device: format!("vreg {vout:.1}V source"),
@@ -4625,19 +4573,14 @@ fn bind_analog_switch(
             stamped += 1;
         }
         if stamped > 0 {
-            let warning = if partial.is_empty() {
-                None
-            } else {
-                Some(format!(
+            let warning = (!partial.is_empty()).then(|| {
+                let gates = partial.iter().map(ToString::to_string).collect::<Vec<_>>();
+                format!(
                     "{}: analog-switch gate(s) {} missing a connection, left open",
                     comp.reference,
-                    partial
-                        .iter()
-                        .map(std::string::ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            };
+                    gates.join(", ")
+                )
+            });
             return (
                 BindOutcome::Behavioral {
                     device: format!("vswitch x{stamped}"),
@@ -7423,6 +7366,52 @@ style = "i2c_pointer"
             assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
             assert!(warning.is_some_and(|w| w.contains(token)), "{case}");
             assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
+        }
+    }
+
+    /// A card's pins bind by pad NUMBER, after the board's own pin names. On a
+    /// layout-only board lead-letter keys bind nothing: the FET is left OPEN, or
+    /// on a SOT-23 takes the generic pin rule's order, not its datasheet's
+    /// (1 = S, 2 = G here). A fixed regulator whose ADJ/GND pad is `adj` has no
+    /// `gnd` return and is left OPEN too; mapped `gnd`, it binds.
+    #[test]
+    fn letter_keyed_pins_and_a_fixed_regulators_adj_pad_bind_open_or_wrong() {
+        let node_of = |net: Option<i64>| net.map(|id| NodeId(u32::try_from(id).unwrap()));
+        let kv = |s: &'static str| s.split(' ').filter_map(|kv| kv.split_once('='));
+        let bind = |kind, footprint: &str, params, pins| {
+            let mut p = hauksbee_models::Params::default();
+            kv(params).for_each(|(k, v)| p.set_f64(k, v.parse().unwrap()));
+            let pins = kv(pins).map(|(k, v)| (k.into(), v.into())).collect();
+            let mut c = comp("U1", "FIXTURE");
+            (c.footprint, c.pins) = (footprint.into(), pins_on(&[("1", 1), ("2", 2), ("3", 3)]));
+            let mut circuit = Circuit::new();
+            let model = make_entry("fixture", kind, "", p, pins);
+            let (outcome, _) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
+            let gate = circuit.devices.iter().find_map(|d| match d {
+                Device::Mosfet { g, .. } => Some(*g),
+                _ => None,
+            });
+            (outcome, gate)
+        };
+        let (letters, numbers) = ("G=gate S=source D=drain", "1=source 2=gate 3=drain");
+        for (footprint, pins, gate) in [
+            ("SOT-89-3", letters, None),
+            ("SOT-23", letters, Some(NodeId(1))),
+            ("SOT-89-3", numbers, Some(NodeId(2))),
+            ("SOT-23", numbers, Some(NodeId(2))),
+        ] {
+            let got = bind(ComponentKind::Nmos, footprint, "vto=1 kp=0.1", pins);
+            assert_eq!(got.1, gate, "{footprint} {pins}: {:?}", got.0);
+        }
+        let ldo = "vout=3.3 dropout_v=1 iq_a=1e-3 cout_min_f=0";
+        for (pins, open) in [("1=adj 2=out 3=in", true), ("1=gnd 2=out 3=in", false)] {
+            let (outcome, _) = bind(ComponentKind::Vreg, "SOT-223", ldo, pins);
+            let why = format!("{outcome:?}");
+            assert_eq!(
+                why.contains("local return not connected"),
+                open,
+                "{pins}: {why}"
+            );
         }
     }
 
