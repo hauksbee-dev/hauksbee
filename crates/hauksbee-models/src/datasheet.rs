@@ -1732,13 +1732,13 @@ IMPORTANT RULES:
 3. Identity-only is a last resort. A typ-only or max-only row is usable, cited
    as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
    from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
-   card whose cited rows suffice. Key [models.pins] by pad number, never by lead
-   letters (G/D/S, A/K, B/C/E): read the numbers from the pin table, the drawing or
-   beside the letters; if none are printed, omit [models.pins] and list `pad_numbers`
-   in [models.coverage] missing. A required param genuinely absent and not derivable
-   or fittable is never estimated: one missing param takes an `unknown` record where
-   the kind's params above allow one. Only when the kind's behaviour cannot be
-   written even so, emit an identity-only card (`identity_only = true`, `warning`,
+   card whose cited rows suffice. Key [models.pins] by pad number wherever one is
+   printed (pin table, package drawing, beside the letters); only when the sheet shows
+   letters alone, key by lead letters A/K, G/S/D or B/C/E and list `pad_numbers` in
+   [models.coverage] missing. A required param genuinely absent and not derivable or
+   fittable is never estimated: one missing param takes an `unknown` record where the
+   kind's params above allow one. Only when the kind's behaviour cannot be written
+   even so, emit an identity-only card (`identity_only = true`, `warning`,
    `unlocked_by`) still carrying every field the datasheet states, and name the
    missing fact as `ABSTAIN: datasheet does not state ...` in the description or an
    unknown source record. A named abstention is correct; a guessed field is wrong.
@@ -3639,7 +3639,10 @@ mod tests {
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
         assert!(comparator.contains("from the 25 °C row when a full-temperature-range row"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
-        assert!(bjt.contains("never by lead\n   letters (G/D/S") && bjt.contains("one missing"));
+        assert!(
+            bjt.contains("letters alone, key by lead letters A/K, G/S/D")
+                && bjt.contains("one missing")
+        );
         assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
         assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));
         assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));

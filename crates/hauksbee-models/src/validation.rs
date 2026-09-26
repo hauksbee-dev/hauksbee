@@ -14,7 +14,7 @@ use crate::schema::{
     CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec, Pinout,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
-use hauksbee_ir::evidence::{ModelSourceTier, ModelUncertainty};
+use hauksbee_ir::evidence::ModelUncertainty;
 use thiserror::Error;
 
 /// A validation error.
@@ -1218,24 +1218,15 @@ fn pin_name_keys(name: &str) -> Vec<String> {
 /// (`[models.variant] package`, else the one package the description names,
 /// else a lone column): the same pads, and no pad whose role is the name that
 /// column prints on another pad, the mark of a map read off another package.
-///
-/// An extracted card keys every pad by its number or ball id: the binder reads a
-/// card's pins by the board footprint's pad numbers, so a lead letter binds nothing.
 fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
-    let source = entry.source.as_ref();
-    let plain = |s: &str| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
-    let pad = |k: &&String| {
-        let k = plain(k);
-        k.contains(char::is_numeric) || k.ends_with("pad") || ["ep", "tab", "dap"].contains(&&*k)
-    };
-    let lettered: Vec<_> = entry.pins.keys().filter(|k| !pad(k)).cloned().collect();
-    if source.is_some_and(|s| s.tier == ModelSourceTier::DatasheetDerived) && !lettered.is_empty() {
-        p.push(format!("[models.pins] keys {} are lead letters or pin names, not pad numbers: a card binds by the footprint's pad numbers, so they bind nothing. Key each pad by its number (ball id on a BGA) from the pin-configuration table, the package drawing, or the numbers printed beside the letters; if the datasheet prints none, omit [models.pins] and list \"pad_numbers\" in [models.coverage] missing rather than guess", lettered.join(", ")));
-    }
-    let pinouts = source.map_or(&[][..], |s| s.pinout.as_slice());
+    let pinouts = entry
+        .source
+        .as_ref()
+        .map_or(&[][..], |s| s.pinout.as_slice());
     if pinouts.is_empty() || entry.pins.is_empty() {
         return;
     }
+    let plain = |s: &str| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
     let description = plain(&entry.description);
     let declared = entry.variant.as_ref().and_then(|v| v.package.as_deref());
     let named: Vec<&Pinout> = pinouts
@@ -2139,8 +2130,6 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             (vec![("iq_a = 0.0001", "iq_a = 0.0001\nmax_current_a = 0.5".into())], "move max_current_a there"),
             (vec![(unknown[0].0, unknown[0].1.into())], "pinout prints 'VIN' on it: name each pad"),
             (vec![("\"2\" = \"gnd\"", "\"2\" = \"adj\"".into())], "ADJ/GND pin is its ground: map it 'gnd'"),
-            (vec![("\"1\" = \"in\"", "\"VIN\" = \"in\"".into())], "keys VIN are lead letters or pin names"),
-            (vec![(pinouts, String::new()), ("\"4\" = \"nc\"", "\"EP\" = \"nc\"\n\"A4\" = \"nc\"".into())], ""),
         ] {
             let e = card(&edits.iter().map(|(a, b)| (*a, b.as_str())).collect::<Vec<_>>());
             if needle.is_empty() { accepts(&e) } else { rejects(&e, needle) }

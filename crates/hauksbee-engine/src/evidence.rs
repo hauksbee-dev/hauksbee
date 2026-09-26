@@ -305,13 +305,11 @@ fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<As
     let mut out = Vec::with_capacity(order.len());
     for key in &order {
         let (count, reference, value, reason, subjects) = &groups[key];
-        let ordinal = if claims_per_id[&key.0] > 1 {
+        let ordinal = (claims_per_id[&key.0] > 1).then(|| {
             let next = ordinals.entry(&key.0).or_default();
             *next += 1;
-            Some(*next)
-        } else {
-            None
-        };
+            *next
+        });
         out.push(Assumption::open_part_group_for_components(
             reference, value, reason, *count, ordinal, subjects,
         ));

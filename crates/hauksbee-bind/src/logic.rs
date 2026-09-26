@@ -1510,10 +1510,8 @@ impl LogicComponent {
         // 1. Sample every input.
         for i in 0..self.input_names.len() {
             let prev = self.input_levels[i];
-            self.input_levels[i] = match sample(&self.input_names[i], prev) {
-                Some(level) => level,
-                None => self.input_defaults[i],
-            };
+            let default = self.input_defaults[i];
+            self.input_levels[i] = sample(&self.input_names[i], prev).unwrap_or(default);
         }
         // Bidirectional memory data pins may be declared outputs, so they do
         // not occur in `input_names`. Sample them explicitly while the memory

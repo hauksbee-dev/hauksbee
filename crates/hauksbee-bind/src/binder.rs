@@ -684,13 +684,10 @@ fn bind_behavioral(
             continue;
         }
         if comp.reference.starts_with('R') {
-            let observed = if state.is_present() {
-                parse_value(&comp.value)
-                    .map(|parsed| parsed.si)
-                    .filter(|ohms| ohms.is_finite() && *ohms > 0.0)
-            } else {
-                None
-            };
+            let observed = parse_value(&comp.value)
+                .filter(|_| state.is_present())
+                .map(|parsed| parsed.si)
+                .filter(|ohms| ohms.is_finite() && *ohms > 0.0);
             // A second populated physical record with the same designator is
             // contradictory identity evidence. Never make iteration order a
             // circuit fact, even if the two values happen to match.
@@ -1852,14 +1849,12 @@ fn unresolved_outcome(
     }
     let connected = comp.pins.iter().any(|p| node_of(p.net).is_some());
     let two_terminal = comp.pins.len() == 2;
-    let warning = if connected {
-        Some(format!(
+    let warning = connected.then(|| {
+        format!(
             "unresolved part '{}' ({}) on connected net(s): defaulting to OPEN circuit",
             comp.reference, comp.value
-        ))
-    } else {
-        None
-    };
+        )
+    });
     // A valueless Altium part carries the extractor's explanation as a
     // component property; surface it as the row's reason so the table says
     // WHY there is nothing to resolve, not a bare "no model".
@@ -1965,8 +1960,8 @@ fn bind_component(
     // and the model's pad map come first; for any role-dependent pad still
     // without a role the pin-rule table is consulted, and each such inference is
     // recorded as a guess-warning (so nothing is silently guessed).
-    let (role_nets, guesses) = role_node_map_guessed(comp, model, node_of, pin_rules);
-    if let Some(reason) = split_role(comp, model, node_of) {
+    let (role_nets, guesses, clash) = role_node_map_guessed(comp, model, node_of, pin_rules);
+    if let Some(reason) = clash.or_else(|| split_role(comp, model, node_of)) {
         let warning = format!("{}: {reason}; the part is left OPEN", comp.reference);
         return (BindOutcome::Unresolved { reason }, Some(warning), guesses);
     }
@@ -2457,44 +2452,48 @@ fn role_node_map(
 /// Precedence is preserved: a role an explicit pin-function or the model's pad
 /// map already filled is left untouched (no rule, no warning). The rule only
 /// fills a *gap*, exactly the layout-only case where the pad carries a bare
-/// number and no electrode name.
+/// number and no electrode name, and never re-roles a pad the board or card
+/// names: a rule that names such a pad otherwise is the wrong pinout, so when it
+/// would fill a gap the part is refused (the third element) rather than rewired.
 fn role_node_map_guessed(
     comp: &Component,
     model: &ModelEntry,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     pin_rules: &hauksbee_models::PinRuleTable,
-) -> (HashMap<String, NodeId>, Vec<String>) {
-    let mut m = role_node_map(comp, model, node_of);
-    let mut guesses = Vec::new();
-
-    // Nothing to infer when the rule table is empty or the part has no pads.
-    if pin_rules.is_empty() {
-        return (m, guesses);
-    }
-    let pad_count = comp.pins.len();
-    // The set of roles already filled by an explicit source, never overwritten.
+) -> (HashMap<String, NodeId>, Vec<String>, Option<String>) {
+    let (mut m, kind) = (role_node_map(comp, model, node_of), model.kind);
+    let (mut guesses, mut clash, pad_count) = (Vec::new(), None, comp.pins.len());
+    let canon = |r: &str| role_from_pinfunction(kind, r).unwrap_or_else(|| r.to_ascii_lowercase());
+    let named = |pin: &hauksbee_extract::Pin| {
+        let card = |pad: &str| model.pins.get(pad).cloned();
+        role_from_pinfunction(kind, &pin.function)
+            .or_else(|| card(&pin.number))
+            .or_else(|| role_from_electrode_pad(kind, &pin.number))
+            .or_else(|| ordinal_pad(&pin.number).and_then(|o| card(&o)))
+    };
     for pin in &comp.pins {
-        let Some(node) = node_of(pin.net) else {
+        let found = pin_rules.role_for_pad(&comp.footprint, Some(kind), pad_count, &pin.number);
+        let (Some(node), Some(inf)) = (node_of(pin.net), found) else {
             continue;
         };
-        let Some(inf) =
-            pin_rules.role_for_pad(&comp.footprint, Some(model.kind), pad_count, &pin.number)
-        else {
-            continue;
-        };
-        // Only a guess if this role is not already present from an explicit
-        // pin-function or the model pad map.
-        if m.contains_key(&inf.role) {
-            continue;
+        let (n, id, role) = (&pin.number, &inf.rule_id, &inf.role);
+        if let Some(own) = named(pin) {
+            let why = format!("pad {n} is named '{own}', not '{role}' as pin rule '{id}' reads it");
+            clash = clash.or_else(|| (canon(&own) != canon(role)).then_some(why));
+        } else if !m.contains_key(role) {
+            m.insert(role.clone(), node);
+            guesses.push(format!(
+                "pad {n} role '{role}' guessed from rule '{id}' (no explicit pin-function; \
+                 footprint \"{}\", {pad_count} pads)",
+                comp.footprint
+            ));
         }
-        m.insert(inf.role.clone(), node);
-        guesses.push(format!(
-            "pad {} role '{}' guessed from rule '{}' (no explicit pin-function; \
-             footprint \"{}\", {} pads)",
-            pin.number, inf.role, inf.rule_id, comp.footprint, pad_count,
-        ));
     }
-    (m, guesses)
+    // A clash matters only when the rule would supply a role.
+    match clash.filter(|_| !guesses.is_empty()) {
+        Some(why) => (m, Vec::new(), Some(why)),
+        None => (m, guesses, None),
+    }
 }
 
 /// Two pads of one signal role on two nets: the role map keeps one, floating a
@@ -4998,11 +4997,7 @@ fn bind_mcu(
     // in an SDK/extending-guide model) must NOT activate the Arduino-header pad
     // mapping. Only `module = true` does.
     let module = model.params.get_bool("module").unwrap_or(false);
-    let derived_when_empty = if model.pins.is_empty() {
-        Some(derive_mcu_pin_roles(comp))
-    } else {
-        None
-    };
+    let derived_when_empty = model.pins.is_empty().then(|| derive_mcu_pin_roles(comp));
     // Merge the two role sources PER PAD instead of treating a non-empty model
     // map as exhaustive. A DB pin map is curated for one package's numbering
     // (often a module, e.g. the ESP32-S3 entry's WROOM-1 strap pads); applied to
@@ -7380,49 +7375,59 @@ style = "i2c_pointer"
         }
     }
 
-    /// A card's pins bind by pad NUMBER, after the board's own pin names. On a
-    /// layout-only board lead-letter keys bind nothing: the FET is left OPEN, or
-    /// on a SOT-23 takes the generic pin rule's order, not its datasheet's
-    /// (1 = S, 2 = G here). A fixed regulator whose ADJ/GND pad is `adj` has no
-    /// `gnd` return and is left OPEN too; mapped `gnd`, it binds.
+    /// Lead-letter keys bind by the board's pin names; on a layout-only board a
+    /// SOT-23 takes the generic pin rule's order as a disclosed guess, one with no
+    /// rule stays OPEN, and a rule that names a board-named pad otherwise is
+    /// refused, never rewired. A numbered card wins over the rule. A fixed
+    /// regulator whose ADJ/GND pad is `adj` has no `gnd` return and is left OPEN.
     #[test]
-    fn letter_keyed_pins_and_a_fixed_regulators_adj_pad_bind_open_or_wrong() {
+    fn letter_keyed_pins_bind_by_name_or_disclosed_rule_and_adj_pad_is_open() {
         let node_of = |net: Option<i64>| net.map(|id| NodeId(u32::try_from(id).unwrap()));
         let kv = |s: &'static str| s.split(' ').filter_map(|kv| kv.split_once('='));
-        let bind = |kind, footprint: &str, params, pins| {
+        let bind = |kind, footprint: &str, params, pins, names: &str| {
             let mut p = hauksbee_models::Params::default();
             kv(params).for_each(|(k, v)| p.set_f64(k, v.parse().unwrap()));
             let pins = kv(pins).map(|(k, v)| (k.into(), v.into())).collect();
             let mut c = comp("U1", "FIXTURE");
             (c.footprint, c.pins) = (footprint.into(), pins_on(&[("1", 1), ("2", 2), ("3", 3)]));
+            for (pin, f) in c.pins.iter_mut().zip(names.split(' ')) {
+                pin.function = f.into();
+            }
             let mut circuit = Circuit::new();
             let model = make_entry("fixture", kind, "", p, pins);
+            let lib = ModelLibrary::builtin();
+            let guesses = role_node_map_guessed(&c, &model, &node_of, lib.pin_rules()).1;
             let (outcome, _) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
             let gate = circuit.devices.iter().find_map(|d| match d {
                 Device::Mosfet { g, .. } => Some(*g),
                 _ => None,
             });
-            (outcome, gate)
+            (format!("{outcome:?} {guesses:?}"), gate, guesses.len())
         };
         let (letters, numbers) = ("G=gate S=source D=drain", "1=source 2=gate 3=drain");
-        for (footprint, pins, gate) in [
-            ("SOT-89-3", letters, None),
-            ("SOT-23", letters, Some(NodeId(1))),
-            ("SOT-89-3", numbers, Some(NodeId(2))),
-            ("SOT-23", numbers, Some(NodeId(2))),
+        let (rule, open) = (
+            "guessed from rule 'nmos_sot23_g1_s2_d3'",
+            "not all connected",
+        );
+        let clash = "pad 1 is named 'source', not 'gate' as pin rule 'nmos_sot23_g1_s2_d3'";
+        for (footprint, pins, names, gate, guessed, needle) in [
+            ("SOT-23", letters, "S G D", Some(NodeId(2)), 0, "Analog"),
+            ("SOT-23", letters, "", Some(NodeId(1)), 3, rule),
+            ("SOT-89-3", letters, "", None, 0, open),
+            ("SOT-23", letters, "S", None, 0, clash),
+            ("SOT-89-3", numbers, "", Some(NodeId(2)), 0, "Analog"),
+            ("SOT-23", numbers, "", Some(NodeId(2)), 0, "Analog"),
         ] {
-            let got = bind(ComponentKind::Nmos, footprint, "vto=1 kp=0.1", pins);
-            assert_eq!(got.1, gate, "{footprint} {pins}: {:?}", got.0);
+            let (why, got, n) = bind(ComponentKind::Nmos, footprint, "vto=1 kp=0.1", pins, names);
+            assert!(
+                (got, n) == (gate, guessed) && why.contains(needle),
+                "{footprint} {pins} {names}: {why}"
+            );
         }
         let ldo = "vout=3.3 dropout_v=1 iq_a=1e-3 cout_min_f=0";
         for (pins, open) in [("1=adj 2=out 3=in", true), ("1=gnd 2=out 3=in", false)] {
-            let (outcome, _) = bind(ComponentKind::Vreg, "SOT-223", ldo, pins);
-            let why = format!("{outcome:?}");
-            assert_eq!(
-                why.contains("local return not connected"),
-                open,
-                "{pins}: {why}"
-            );
+            let (why, _, _) = bind(ComponentKind::Vreg, "SOT-223", ldo, pins, "");
+            assert_eq!(why.contains("return not connected"), open, "{pins}: {why}");
         }
     }
 
