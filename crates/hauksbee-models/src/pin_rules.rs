@@ -92,6 +92,7 @@ pub struct InferredRole {
 
 impl PinRuleTable {
     /// An empty table (no rules).
+    #[must_use]
     pub fn empty() -> Self {
         Self { rules: Vec::new() }
     }
@@ -140,11 +141,13 @@ impl PinRuleTable {
     }
 
     /// Number of loaded rules.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.rules.len()
     }
 
     /// Whether the table has no rules.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
@@ -154,6 +157,7 @@ impl PinRuleTable {
     /// `footprint` and `kind` describe the component; `pad_count` is its number
     /// of pads; `pad_number` is the pad we want a role for. The first rule whose
     /// conditions all hold *and* that maps this pad number wins.
+    #[must_use]
     pub fn role_for_pad(
         &self,
         footprint: &str,

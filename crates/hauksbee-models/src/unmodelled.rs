@@ -105,6 +105,7 @@ pub struct UnmodelledNote {
 
 impl UnmodelledTable {
     /// An empty table.
+    #[must_use]
     pub fn empty() -> Self {
         Self { parts: Vec::new() }
     }
@@ -163,11 +164,13 @@ impl UnmodelledTable {
     }
 
     /// Number of loaded abstentions.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.parts.len()
     }
 
     /// Whether the table is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.parts.is_empty()
     }
@@ -176,6 +179,7 @@ impl UnmodelledTable {
     ///
     /// `value` and `mpn` are both consulted because a board may carry the part
     /// number in either; the first entry matching either wins.
+    #[must_use]
     pub fn note_for(&self, value: &str, mpn: &str) -> Option<&UnmodelledNote> {
         self.parts
             .iter()

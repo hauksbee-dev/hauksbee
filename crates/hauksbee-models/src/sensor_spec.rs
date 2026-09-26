@@ -210,6 +210,7 @@ pub enum Encoding {
 
 impl Encoding {
     /// The natural byte width of this encoding (the default for `bytes`).
+    #[must_use]
     pub fn natural_width(self) -> usize {
         match self {
             Self::U8 => 1,
@@ -317,6 +318,7 @@ pub struct BitFieldSpec {
 
 impl BitFieldSpec {
     /// Extract this field from a decoded integer.
+    #[must_use]
     pub fn extract(&self, value: u32) -> u32 {
         let [high, low] = self.bits;
         let width = high - low + 1;
@@ -593,6 +595,7 @@ impl Sensor {
     /// `RegisterMapSensor::from_spec` key construction call this, so there is one
     /// definition of the key mapping. The engine's live-transaction
     /// `normalize_addr` is the runtime analog and must stay consistent with it.
+    #[must_use]
     pub fn register_key(&self, addr: u8) -> u8 {
         if self.bus == Bus::Spi && self.protocol.style == ProtocolStyle::SpiReg {
             addr & self.protocol.addr_mask
@@ -602,6 +605,7 @@ impl Sensor {
     }
 
     /// The bus roles `[sensor.pins]` must name for this bus.
+    #[must_use]
     pub fn bus_roles(&self) -> &'static [&'static str] {
         match self.bus {
             Bus::I2c => &["scl", "sda"],
@@ -729,6 +733,7 @@ impl SensorSpec {
     }
 
     /// Convenience accessor.
+    #[must_use]
     pub fn sensor(&self) -> &Sensor {
         &self.sensor
     }

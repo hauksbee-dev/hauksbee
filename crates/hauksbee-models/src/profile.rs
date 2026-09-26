@@ -82,6 +82,7 @@ const EMBEDDED_PROFILES: &str = include_str!("../db/load_profiles.toml");
 
 impl LoadProfile {
     /// All built-in profiles parsed from the embedded TOML.
+    #[must_use]
     pub fn builtin() -> Vec<Self> {
         let file: ProfileFile = toml::from_str(EMBEDDED_PROFILES)
             .unwrap_or_else(|e| panic!("built-in load_profiles.toml failed to parse: {e}"));
@@ -89,11 +90,13 @@ impl LoadProfile {
     }
 
     /// Look up a built-in profile by id.
+    #[must_use]
     pub fn by_id(id: &str) -> Option<Self> {
         Self::builtin().into_iter().find(|p| p.id == id)
     }
 
     /// The profile's baseline current (the first segment's level, or 0).
+    #[must_use]
     pub fn baseline_a(&self) -> f64 {
         self.segments.first().map_or(0.0, |s| s.level_a)
     }
@@ -108,6 +111,7 @@ impl LoadProfile {
     /// (ramping then holding `level_a`), and in the remainder it sits at
     /// `idle_a`. The final non-periodic segment with `duration_s <= 0` holds its
     /// level to the end of the window.
+    #[must_use]
     pub fn current_at(&self, t: f64, seed: u64) -> f64 {
         if self.segments.is_empty() {
             return 0.0;

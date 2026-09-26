@@ -164,6 +164,7 @@ const ADC_TO: usize = 18; // everything before `supply_cpd_pf`
 /// A kind with an empty slice carries no numeric physics at all (a connector
 /// models pin continuity; `Ignore` models nothing), so every param on it is
 /// unread by construction and the lint says so.
+#[must_use]
 pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
     match kind {
         ComponentKind::Passive => &["ohms", "series_ohms", "value_override", "esr", "esl"],
@@ -273,6 +274,7 @@ fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
 }
 
 /// The unit `name` is documented in: its glossary entry, else its suffix.
+#[must_use]
 pub fn param_unit(name: &str) -> Option<&'static str> {
     glossary()
         .find(|[n, ..]| *n == name)
@@ -285,6 +287,7 @@ pub fn param_unit(name: &str) -> Option<&'static str> {
 /// threshold or output level (VIH/VOH min, VIL/VOL max), a headroom or dropout
 /// (max), and any name carrying a `min` or `max` word. Everything else reads
 /// its nominal, the typ.
+#[must_use]
 pub fn row_column(name: &str) -> &'static str {
     const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi"];
     const MAX: &[&str] = &["vil", "vol", "out_lo", "rail_lo", "vol_v", "voh_drop_v"];
@@ -355,6 +358,7 @@ pub(crate) fn row_characteristic(name: &str, row: &Characteristic) -> Option<Cha
 }
 
 /// `name = meaning (unit)` for each glossary param `kind` reads, for the prompt.
+#[must_use]
 pub fn param_meanings(kind: ComponentKind) -> String {
     let names = known_param_names(kind);
     let lines: Vec<String> = glossary()
@@ -379,6 +383,7 @@ fn form_ignored(entry: &ModelEntry) -> &'static [&'static str] {
 /// nominal equal to the min or max of a row that prints no typ (unless another
 /// row prints it as a typ). The unit check only looks below 1e-3, where a copied
 /// current or capacitance lives and a round volt or ohm value cannot collide.
+#[must_use]
 pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     let rows = cited_rows(entry);
     let (mut out, mut derived) = (Vec::new(), derivations(entry));
@@ -821,6 +826,7 @@ impl UnknownParam {
     /// The warning line, phrased as a suspicion rather than a verdict: the lint
     /// cannot tell a typo from an extension, and saying "unused" would be a
     /// claim about the future.
+    #[must_use]
     pub fn message(&self) -> String {
         match &self.suggestion {
             Some(s) => format!(
@@ -841,6 +847,7 @@ impl UnknownParam {
 ///
 /// Empty for a clean entry. See the module docs for the three ways a name
 /// counts as known.
+#[must_use]
 pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
     let vocab = known_param_names(entry.kind);
     let referenced = behavioral_identifiers(entry);

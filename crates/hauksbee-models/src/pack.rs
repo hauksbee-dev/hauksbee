@@ -262,6 +262,7 @@ impl PackManifest {
     }
 
     /// The install directory name: `<name>@<version>`.
+    #[must_use]
     pub fn dir_name(&self) -> String {
         format!("{}@{}", self.name, self.version)
     }
@@ -419,6 +420,7 @@ pub struct PackStore {
 impl PackStore {
     /// The store under an explicit home directory (tests pass a temp dir; the
     /// CLI passes `$HOME`). Nothing is created until the first install.
+    #[must_use]
     pub fn in_home(home: &Path) -> Self {
         let base = home.join(".hauksbee");
         Self {
@@ -428,16 +430,19 @@ impl PackStore {
     }
 
     /// The store for the current user (`$HOME`), or `None` when HOME is unset.
+    #[must_use]
     pub fn default_location() -> Option<Self> {
         std::env::var_os("HOME").map(|h| Self::in_home(Path::new(&h)))
     }
 
     /// Where installed packs live.
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// The `packs.toml` record path.
+    #[must_use]
     pub fn record_path(&self) -> &Path {
         &self.record
     }
@@ -504,6 +509,7 @@ impl PackStore {
     }
 
     /// The install directory of a recorded pack.
+    #[must_use]
     pub fn pack_dir(&self, record: &PackRecord) -> PathBuf {
         self.root
             .join(format!("{}@{}", record.name, record.version))

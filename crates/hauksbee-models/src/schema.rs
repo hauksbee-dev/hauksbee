@@ -278,6 +278,7 @@ default_roles!(
 );
 
 impl ModelCoverage {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.implements.is_empty() && self.missing.is_empty()
     }
@@ -380,6 +381,7 @@ impl Characteristic {
     /// ordered min <= typ <= max by signed value; a row printed as negative
     /// values may instead keep the datasheet's magnitude order (PNP and
     /// negative-rail tables print |min| <= |max|), never a mix of the two.
+    #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let columns = [self.min, self.typ, self.max];
         let values: Vec<f64> = columns.iter().flatten().copied().collect();
@@ -420,6 +422,7 @@ impl Characteristic {
     /// A drafted row writing a supply-relative limit as a number: under a rail
     /// unit (`VDD`), or as the bare offset its own text quotes (`VDD + 0.5 V`
     /// stored as 0.5). Extraction only: a curated card may keep a checked ratio.
+    #[must_use]
     pub fn supply_relative_problem(&self) -> Option<String> {
         static OFFSET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
             regex::Regex::new(r"\bV([A-Z][A-Z0-9]*)\s*([-+−])\s*(\d+(?:\.\d+)?)")
@@ -475,6 +478,7 @@ impl ModelSourceSpec {
     /// reports them all. An interval whose basis cites columns must cite both a
     /// min and a max: a typ never becomes a bound, and an absent column is
     /// never an invented 0.
+    #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         for (index, reference) in self.references.iter().enumerate() {
@@ -528,6 +532,7 @@ impl ModelSourceSpec {
     }
 
     /// Whether any uncertainty record covers model-form error (`parameter = "model"`).
+    #[must_use]
     pub fn declares_model_error(&self) -> bool {
         self.uncertainty.iter().any(|u| {
             matches!(u, ModelUncertainty::Interval { parameter, .. }
@@ -537,6 +542,7 @@ impl ModelSourceSpec {
 }
 
 /// The lint warning for a datasheet-derived source with no model-error record.
+#[must_use]
 pub fn model_error_warning(source: Option<&ModelSourceSpec>) -> Option<&'static str> {
     let source = source.filter(|s| s.tier == ModelSourceTier::DatasheetDerived)?;
     let warning = "model-error record missing (extraction inserts the unknown record)";
@@ -739,6 +745,7 @@ impl CurrentProgram {
     /// Evaluate the published resistor equation without applying the part's
     /// normal-operating ceiling. Returns `None` for a non-positive/non-finite
     /// resistance or if malformed data would produce a non-physical result.
+    #[must_use]
     pub fn equation_current_a(&self, resistance_ohms: f64) -> Option<f64> {
         if !positive_finite(resistance_ohms) {
             return None;
@@ -779,6 +786,7 @@ impl CurrentProgram {
     /// For one-resistor equations `sense_resistance_ohms` is intentionally
     /// ignored; for the sense-scaled form both positive finite resistances are
     /// required.
+    #[must_use]
     pub fn equation_current_with_sense_a(
         &self,
         program_resistance_ohms: f64,
@@ -807,11 +815,13 @@ impl CurrentProgram {
     /// Evaluate the board's nominal programmed current, applying only the
     /// explicit normal-operating ceiling from this block—not a device rating.
     /// Datasheet/resistor tolerances are not implied by a point equation.
+    #[must_use]
     pub fn operating_current_a(&self, resistance_ohms: f64) -> Option<f64> {
         self.apply_operating_domain(self.equation_current_a(resistance_ohms)?)
     }
 
     /// Sense-aware counterpart to [`Self::operating_current_a`].
+    #[must_use]
     pub fn operating_current_with_sense_a(
         &self,
         program_resistance_ohms: f64,
@@ -901,6 +911,7 @@ pub enum StrapLevel {
 }
 
 impl StrapLevel {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
@@ -1046,6 +1057,7 @@ pub enum OperatingEnvelope {
 }
 
 impl OperatingEnvelope {
+    #[must_use]
     pub fn basis(&self) -> &str {
         match self {
             Self::SupplyRange { basis, .. }
@@ -1054,6 +1066,7 @@ impl OperatingEnvelope {
         }
     }
 
+    #[must_use]
     pub fn severity(&self) -> EnvelopeSeverity {
         match self {
             Self::SupplyRange { severity, .. }
@@ -1081,6 +1094,7 @@ impl Ratings {
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
   vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics";
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -1175,6 +1189,7 @@ impl PassiveClass {
     /// asks "can this be a pull-up / pull-down / series termination?" uses, so
     /// no call site re-derives the answer from the variant list and drifts when
     /// a variant is added.
+    #[must_use]
     pub fn is_resistor(self) -> bool {
         matches!(self, Self::Resistor)
     }
@@ -1218,6 +1233,7 @@ pub struct MatchRules {
 
 impl MatchRules {
     /// True when at least one rule field is populated.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.lib_id.is_none()
             && self.value_re.is_none()
@@ -1240,6 +1256,7 @@ pub struct Params(pub BTreeMap<String, ParamValue>);
 impl Params {
     /// Retrieve a floating-point param by name: a number, or the column of a
     /// printed row that [`crate::param_names::row_value`] picks for `key`.
+    #[must_use]
     pub fn get_f64(&self, key: &str) -> Option<f64> {
         match self.0.get(key)? {
             ParamValue::Row(row) => crate::param_names::row_value(key, row).ok(),
@@ -1256,12 +1273,14 @@ impl Params {
     }
 
     /// Retrieve a string param by name.
+    #[must_use]
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.0.get(key)?.as_str()
     }
 
     /// Retrieve a boolean param by name. `None` when the key is absent or its
     /// value is not a bool, so `flag = false` is distinguishable from omitted.
+    #[must_use]
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.0.get(key)?.as_bool()
     }
@@ -1292,6 +1311,7 @@ impl Params {
     }
 
     /// True when no params are present.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -1323,6 +1343,7 @@ param_from!(f64 => Float, i64 => Int, bool => Bool, String => String);
 impl ParamValue {
     /// Return as `f64`, converting integers; `None` for a row, whose value
     /// depends on its key.
+    #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Self::Float(v) => Some(*v),
@@ -1332,6 +1353,7 @@ impl ParamValue {
     }
 
     /// Return as `&str` for string values.
+    #[must_use]
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s.as_str()),
@@ -1341,6 +1363,7 @@ impl ParamValue {
 
     /// Return as `bool` for boolean values. `None` for non-bool params, so a
     /// caller can distinguish `flag = false` from an omitted/non-bool `flag`.
+    #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(b) => Some(*b),

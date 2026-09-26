@@ -40,6 +40,7 @@ fn has_role_ci(entry: &ModelEntry, role: &str) -> bool {
 }
 
 /// A role several pads may share as one net inside: supply, ground, NC, exposed pad.
+#[must_use]
 pub fn repeatable_role(role: &str) -> bool {
     let role = role.to_ascii_lowercase();
     let base = role.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
@@ -75,6 +76,7 @@ fn merged_unit_roles(entry: &ModelEntry) -> Vec<String> {
 }
 
 /// True when the generic digital binder has executable logic for this card.
+#[must_use]
 pub fn digital_has_behavior(entry: &ModelEntry) -> bool {
     entry.kind != ComponentKind::Digital
         || !entry.logic.is_empty()
@@ -1103,6 +1105,7 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
 /// binder's path for its kind reads (`bind_vreg`, `bind_adj_vreg`, the device
 /// binders) that the map does not declare. `models resolve` reports the same
 /// lines, so a card that lints clean is not left open for its pin map.
+#[must_use]
 pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     // A behavioral part (converter/FSM/DAC power IC) references its pins from
     // the [models.behavioral] block by arbitrary datasheet names, NOT through
@@ -1285,6 +1288,7 @@ pub const KIND_NAMES: &[&str] = &[
 
 /// Every bound [`validate`] holds `kind`'s params to, across the variants a param
 /// selects, so the extraction prompt quotes the checker, not a drifting copy.
+#[must_use]
 pub fn param_bounds(kind: ComponentKind) -> Vec<String> {
     let num = |v: f64| match v.abs() {
         a if a == 0.0 || (1e-3..1e5).contains(&a) => v.to_string(),
@@ -1317,6 +1321,7 @@ pub fn param_bounds(kind: ComponentKind) -> Vec<String> {
 /// synonyms map directly (an author typing `ldo` should be told `vreg`, not
 /// left to guess which of seventeen names we meant); anything else falls back
 /// to nearest-edit-distance over [`KIND_NAMES`].
+#[must_use]
 pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
     let lower = unknown.trim().to_ascii_lowercase();
     let alias = match lower.as_str() {
@@ -1353,6 +1358,7 @@ pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
 /// the note to append: the did-you-mean, or the full vocabulary. Detected
 /// from the error text (serde owns the wording); the `bjt_npn` probe keeps it
 /// from firing on some other enum's unknown-variant error.
+#[must_use]
 pub fn kind_error_note(err_text: &str) -> Option<String> {
     if !err_text.contains("unknown variant") || !err_text.contains("bjt_npn") {
         return None;

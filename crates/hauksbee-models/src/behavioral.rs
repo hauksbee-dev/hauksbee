@@ -83,6 +83,7 @@ pub struct Behavioral {
 
 impl Behavioral {
     /// True when the block carries nothing the runtime would stamp.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pins.is_empty()
             && self.fsm.is_none()
@@ -466,6 +467,7 @@ pub struct Law {
 /// each gate refuses NaN and the infinities as well as the wrong sign: a `nan`
 /// that "validated OK" poisons the whole MNA solve or panics a `clamp`, and a
 /// negative limit silently folds a regulated rail to 0 V for the whole run.
+#[must_use]
 pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut p = Problems::default();
 

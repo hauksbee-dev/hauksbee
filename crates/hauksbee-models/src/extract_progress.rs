@@ -55,6 +55,7 @@ pub fn pages(count: usize) {
 }
 
 /// The current phase and the estimated whole-run seconds.
+#[must_use]
 pub fn snapshot() -> (String, u64) {
     let s = state();
     (s.phase.clone(), s.estimate)

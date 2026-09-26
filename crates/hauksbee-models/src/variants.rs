@@ -80,24 +80,28 @@ impl Selection {
 
     /// The member to bind: the determined one, else for a same-pinout set the
     /// first survivor as a flagged stand-in, else none (the part stays open).
+    #[must_use]
     pub fn bound(&self) -> Option<&str> {
         let stand_in = self.survivors().find(|_| self.same_pinout);
         self.determined.as_deref().or(stand_in.map(|m| &*m.id))
     }
 
     /// The spec line that settles the set for `reference`.
+    #[must_use]
     pub fn override_line(&self, reference: &str) -> String {
         let id = self.survivors().next().map_or("<member id>", |m| &m.id);
         format!("[[override]] ref=\"{reference}\" select=\"{id}\"")
     }
 
     /// The member ids, for a sentence.
+    #[must_use]
     pub fn ids(&self) -> String {
         let ids: Vec<&str> = self.members.iter().map(|m| &*m.id).collect();
         ids.join(", ")
     }
 
     /// Every member with its selector, source and verdict, for a message.
+    #[must_use]
     pub fn listing(&self) -> String {
         let head = |m: &Member| format!("{} ({}; {})", m.id, m.selector, m.basis);
         let line = |m: &Member| format!("{}: {:?}, {}", head(m), m.verdict, m.reason);
@@ -105,6 +109,7 @@ impl Selection {
     }
 
     /// Why a set with nothing to bind leaves `reference` open, and what closes it.
+    #[must_use]
     pub fn open_reason(&self, reference: &str) -> String {
         let (n, family, listing) = (self.members.len(), &self.family, self.listing());
         let unlock = Assumption::UNLOCKED_BY_MARKER;
@@ -124,6 +129,7 @@ impl Selection {
 }
 
 /// The package family a package or footprint name spells (`SOT` for `SOT-23-5`).
+#[must_use]
 pub fn package_family(package: &str) -> Option<&'static str> {
     let upper = package.to_ascii_uppercase();
     let squashed = upper.replace(|c: char| !c.is_ascii_alphanumeric(), "");
@@ -200,6 +206,7 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
 }
 
 /// Variant-set findings over the entries of one file; the rules are the messages below.
+#[must_use]
 pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
     let mut out = Vec::new();
     let mut families = std::collections::BTreeMap::<&str, Vec<&ModelEntry>>::new();

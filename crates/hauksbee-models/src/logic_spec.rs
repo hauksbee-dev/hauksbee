@@ -111,6 +111,7 @@ pub enum Level {
 
 impl Level {
     /// Is a sampled logic level "active" for this polarity?
+    #[must_use]
     pub fn is_active(self, level: bool) -> bool {
         match self {
             Self::Low => !level,
@@ -372,6 +373,7 @@ pub struct Logic {
 
 impl Logic {
     /// True when no logic block was declared (the serde default).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inputs.is_empty()
             && self.outputs.is_empty()

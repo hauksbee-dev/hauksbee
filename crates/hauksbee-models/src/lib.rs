@@ -201,6 +201,7 @@ pub enum SourceLayer {
 impl SourceLayer {
     /// Layer priority integer: builtin=0, pack=10, user dir=20,
     /// user config dir=25, `--models-dir`=30, user SPICE=40.
+    #[must_use]
     pub fn priority(self) -> u32 {
         match self {
             Self::Builtin => 0,
@@ -213,6 +214,7 @@ impl SourceLayer {
     }
 
     /// Short name for reports.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
@@ -226,6 +228,7 @@ impl SourceLayer {
 
     /// The coarse source string [`Resolution::source`] keeps for existing
     /// consumers: every user layer collapses to the historical `"user"`.
+    #[must_use]
     pub fn coarse_name(self) -> &'static str {
         match self {
             Self::UserDir | Self::UserConfigDir | Self::ModelsDirFlag => "user",
@@ -299,6 +302,7 @@ pub struct Resolution {
 }
 
 impl Resolution {
+    #[must_use]
     pub fn unresolved(query: ComponentQuery) -> Self {
         Self {
             model: None,
@@ -365,6 +369,7 @@ use matcher::CompiledEntry;
 
 impl ModelLibrary {
     /// Create an empty library with no entries.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             entries: Vec::new(),
@@ -377,6 +382,7 @@ impl ModelLibrary {
     /// Create a library loaded with all built-in database entries.
     ///
     /// Panics if the embedded TOML is malformed (compile-time guarantee).
+    #[must_use]
     pub fn builtin() -> Self {
         let mut lib = Self::empty();
         for (name, toml_src) in BUILTIN_TOML_FILES {
@@ -395,6 +401,7 @@ impl ModelLibrary {
     /// The pin-role inference table (built-in rules plus any user
     /// `pin_rules.toml`). Consulted by the binder when a pad lacks an explicit
     /// pin-function role.
+    #[must_use]
     pub fn pin_rules(&self) -> &PinRuleTable {
         &self.pin_rules
     }
@@ -404,11 +411,13 @@ impl ModelLibrary {
     /// Consulted by the binder ONLY when nothing resolved, and only to replace the
     /// disclosure's two generic sentences with specific ones. It cannot make a part
     /// bind; see `unmodelled.rs` for why that containment is the point.
+    #[must_use]
     pub fn unmodelled(&self) -> &UnmodelledTable {
         &self.unmodelled
     }
 
     /// Lazily-initialised shared built-in library.
+    #[must_use]
     pub fn builtin_shared() -> &'static Self {
         static LIB: Lazy<ModelLibrary> = Lazy::new(ModelLibrary::builtin);
         &LIB
@@ -759,6 +768,7 @@ impl ModelLibrary {
     }
 
     /// Resolve a batch of queries and return a resolution report table.
+    #[must_use]
     pub fn report(&self, queries: &[ComponentQuery]) -> ResolutionReport {
         let resolutions: Vec<Resolution> = queries.iter().map(|q| self.resolve(q)).collect();
         ResolutionReport { resolutions }
@@ -1050,6 +1060,7 @@ pub struct ResolutionReport {
 impl ResolutionReport {
     /// Count resolutions by confidence level: `(exact, family, guessed,
     /// unresolved)`.
+    #[must_use]
     pub fn counts(&self) -> (usize, usize, usize, usize) {
         let mut n = [0usize; 4];
         for r in &self.resolutions {
@@ -1059,6 +1070,7 @@ impl ResolutionReport {
     }
 
     /// All unresolved queries.
+    #[must_use]
     pub fn unresolved(&self) -> Vec<&Resolution> {
         self.resolutions
             .iter()

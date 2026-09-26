@@ -54,6 +54,7 @@ impl CompiledEntry {
     /// Whether this entry's match rules fire for the given query fields.
     ///
     /// Rules are ANDed: every populated rule must match.
+    #[must_use]
     pub fn matches(&self, q: &ComponentQuery) -> bool {
         fn field(v: &Option<String>) -> &str {
             v.as_deref().unwrap_or("")
@@ -92,6 +93,7 @@ impl CompiledEntry {
     /// - Exact lib_id match is more specific than a prefix.
     /// - Value regex is fairly specific.
     /// - Footprint regex is a catch-all fallback.
+    #[must_use]
     pub fn specificity_score(&self, q: &ComponentQuery) -> u32 {
         let rules = &self.entry.r#match;
         let lib = match &rules.lib_id {
@@ -130,6 +132,7 @@ impl CompiledEntry {
     /// same value. This score ranks the patterns themselves: an exact literal
     /// outranks a character-class/alternation family pattern, so the override
     /// wins deterministically instead of by load order.
+    #[must_use]
     pub fn regex_specificity(&self) -> u32 {
         let rules = &self.entry.r#match;
         [&rules.value_re, &rules.mpn_re, &rules.footprint_re]

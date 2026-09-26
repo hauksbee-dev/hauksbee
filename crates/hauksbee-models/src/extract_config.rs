@@ -145,6 +145,7 @@ pub const AGENTS: [AgentSpec; 3] = [
 ];
 
 /// The spec for an agent backend; `None` for the API.
+#[must_use]
 pub fn agent_spec(backend: Backend) -> Option<&'static AgentSpec> {
     AGENTS.iter().find(|a| a.backend == backend)
 }
@@ -158,6 +159,7 @@ pub const DEFAULT_CODEX_MODEL: &str = AGENTS[2].model;
 pub const DEFAULT_CODEX_EFFORT: &str = AGENTS[2].effort;
 
 /// Model names worth offering in a picker, per backend.
+#[must_use]
 pub fn suggested_models(backend: Backend) -> &'static [&'static str] {
     match agent_spec(backend) {
         Some(a) => a.models,
@@ -234,11 +236,13 @@ pub struct ApiConfig {
 }
 
 impl AgentConfig {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 impl ApiConfig {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -284,6 +288,7 @@ fn agent_slot<T>(backend: Backend, [claude_code, agy, codex]: [T; 3]) -> Option<
 
 impl ExtractConfig {
     /// The section for an agent backend; `None` for the API.
+    #[must_use]
     pub fn agent(&self, backend: Backend) -> Option<&AgentConfig> {
         agent_slot(backend, [&self.claude_code, &self.agy, &self.codex])
     }
@@ -357,6 +362,7 @@ impl ExtractConfig {
 
     /// Every settable key, its meaning, and its default, for `--help` and the
     /// web form's hints. Order is display order.
+    #[must_use]
     pub fn keys() -> Vec<KeyInfo> {
         let mut keys = vec![
             KeyInfo::new(
@@ -496,6 +502,7 @@ impl ExtractConfig {
     }
 
     /// The file's contents, as they would be written.
+    #[must_use]
     pub fn to_toml(&self) -> String {
         format!(
             "{FILE_HEADER}\n{}",
@@ -738,6 +745,7 @@ const fn api_preset(
     }
 }
 
+#[must_use]
 pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
@@ -845,6 +853,7 @@ pub struct FakeHost {
 
 impl FakeHost {
     /// A host with these environment variables and these tools installed.
+    #[must_use]
     pub fn new(vars: &[(&str, &str)], tools: &[&str]) -> Self {
         Self {
             vars: vars
@@ -883,6 +892,7 @@ pub enum BackendSource {
 }
 
 impl BackendSource {
+    #[must_use]
     pub fn describe(self) -> String {
         match self {
             Self::Flag => "chosen with --backend".to_string(),
@@ -928,6 +938,7 @@ pub struct Resolved {
 
 impl Resolved {
     /// The effective settings for an agent backend; `None` for the API.
+    #[must_use]
     pub fn agent(&self, backend: Backend) -> Option<&ResolvedAgent> {
         agent_slot(backend, [&self.claude_code, &self.agy, &self.codex])
     }
@@ -940,12 +951,14 @@ impl Resolved {
     }
 
     /// The active backend's model.
+    #[must_use]
     pub fn model(&self) -> &str {
         self.agent(self.backend)
             .map_or(&self.api.model, |a| &a.model)
     }
 
     /// The active backend's reasoning effort (the API backend has none).
+    #[must_use]
     pub fn effort(&self) -> Option<&str> {
         self.agent(self.backend).map(|a| a.effort.as_str())
     }
@@ -977,6 +990,7 @@ impl Resolved {
     }
 
     /// The command override, if this protocol is run through a custom wrapper.
+    #[must_use]
     pub fn custom_command(&self, backend: Backend) -> Option<&str> {
         self.agent(backend)
             .map(|a| a.command.as_str())
@@ -984,6 +998,7 @@ impl Resolved {
     }
 
     /// The same routing disclosure for consent, availability and run summaries.
+    #[must_use]
     pub fn sends_data_to(&self, backend: Backend) -> String {
         self.custom_command(backend).map_or_else(
             || backend.sends_data_to().to_string(),
@@ -992,6 +1007,7 @@ impl Resolved {
     }
 
     /// Tell every consent surface exactly what is about to read the datasheet.
+    #[must_use]
     pub fn summary(&self) -> String {
         let detail = match self.effort() {
             Some(effort) => format!("{}, {effort} effort", self.model()),
@@ -1073,6 +1089,7 @@ impl Resolved {
 }
 
 /// A loopback endpoint: nothing leaves the machine and no key is expected.
+#[must_use]
 pub fn is_local_url(url: &str) -> bool {
     let rest = url
         .trim_start_matches("http://")

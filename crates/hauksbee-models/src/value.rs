@@ -51,6 +51,7 @@ impl fmt::Display for ParsedValue {
 /// assert_eq!(parse_value("10MEG").unwrap().si, 10_000_000.0);
 /// assert_eq!(parse_value("22uH").unwrap().si, 22e-6);
 /// ```
+#[must_use]
 pub fn parse_value(s: &str) -> Option<ParsedValue> {
     let s = s.trim();
     if s.is_empty() {
@@ -147,6 +148,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
 /// assert_eq!(parse_frequency_hz("600@100MHz"), None);
 /// assert_eq!(parse_frequency_hz("10k"), None);
 /// ```
+#[must_use]
 pub fn parse_frequency_hz(s: &str) -> Option<f64> {
     let cleaned = normalise_frequency_comma(&normalise_unicode(s.trim()));
     let p = parse_inner(&cleaned)?;
