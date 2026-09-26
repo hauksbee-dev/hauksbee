@@ -107,6 +107,14 @@ pub(crate) fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
     Some((scale / prefixed_unit(den).map_or(1.0, |(s, _)| s), base))
 }
 
+/// A unit naming a supply or an expression on one (`VDD`, `VCC+0.3`), not a
+/// physical quantity: its number would read as a ratio or offset of an unstated rail.
+pub(crate) fn rail_relative_unit(unit: &str) -> bool {
+    let after_v = unit.trim().strip_prefix('V').unwrap_or_default();
+    let rail = after_v.starts_with(|c: char| c.is_ascii_uppercase() || c == '-');
+    si_unit(unit).is_none() && !matches!(after_v, "AC" | "DC") && (rail || unit.contains('+'))
+}
+
 /// `AΩ` or `mA·kΩ` is volts: the current-resistance product a programming
 /// constant (I = K / R) is printed in.
 fn product_unit(num: &str) -> Option<(f64, &'static str)> {

@@ -2,7 +2,7 @@
 //! a schematic (no layout required), and agrees with the same spec run against
 //! the project's PCB.
 //!
-//! The board under test is KiCad's `pic_programmer` demo, a 2-sheet KiCad 10
+//! The board under test is `KiCad`'s `pic_programmer` demo, a 2-sheet `KiCad` 10
 //! hierarchy whose schematic extraction is cross-validated net-for-net against
 //! its layout (see hauksbee-extract's `schematic.rs` tests). That makes it the
 //! right fixture for the powerful guarantee here: **schematic-stage CI and
@@ -50,7 +50,7 @@ fn schematic_example() -> Option<tempfile::NamedTempFile> {
     Some(file)
 }
 
-/// The corpus pic_programmer project directory, if the corpus is present in
+/// The corpus `pic_programmer` project directory, if the corpus is present in
 /// this checkout.
 ///
 /// Resolved through the testkit helper rather than joining one hardcoded name,

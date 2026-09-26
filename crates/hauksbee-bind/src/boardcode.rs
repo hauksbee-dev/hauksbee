@@ -18,6 +18,11 @@ use forge_model::Pcb;
 use hauksbee_extract::ExtractedBoard;
 
 /// Decompile a parsed-or-raw `.kicad_pcb` text into editable Board-as-Code.
+///
+/// # Errors
+///
+/// Fails when the text is not a parseable `.kicad_pcb`, or when a component
+/// is DNP or identity-refused and so cannot be expressed as Board-as-Code.
 pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
     let extracted = ExtractedBoard::from_kicad_pcb(kicad_pcb_text)?;
     ensure_boardcode_serializable(&extracted)?;
@@ -31,7 +36,7 @@ pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
 /// through `Pcb::parse`, which rejects a `.net`/IPC/Eagle file). This bridge
 /// handles every text format the extractor understands: a `.kicad_pcb` keeps
 /// the geometry-rich layout path (so blocks/clusters and pad geometry survive),
-/// and everything else (KiCad `.net`, IPC-D-356, Eagle `.brd`, KiCad `.sch`)
+/// and everything else (`KiCad` `.net`, IPC-D-356, Eagle `.brd`, `KiCad` `.sch`)
 /// goes through [`ExtractedBoard::from_auto`] + [`program_from_extracted`].
 ///
 /// A `.net` carries pin *functions* (`pinfunction "A"`/`"K"`) that a layout
@@ -40,6 +45,11 @@ pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
 /// the pad *number*, which the binder's pin-role rule table maps back to a role
 ///. For a netlist with a generic diode the standard `1->K, 2->A`
 /// numbering binds the part directly, with a guess-warning naming the rule.
+///
+/// # Errors
+///
+/// Fails when no extractor recognises the text, or when a component cannot
+/// be expressed as Board-as-Code (see [`program_from_extracted`]).
 pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
     let head: String = board_text.chars().take(512).collect();
     if head.contains("(kicad_pcb") {
@@ -54,12 +64,17 @@ pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
 /// Build an editable Board-as-Code [`Program`] directly from an
 /// [`ExtractedBoard`].
 ///
-/// This is the bridge that lets an extracted board (KiCad netlist, IPC-356,
+/// This is the bridge that lets an extracted board (`KiCad` netlist, IPC-356,
 /// Eagle) become editable code without a `.kicad_pcb` round-trip. Net ids are
 /// resolved to names; each component becomes a singleton [`Stmt::Single`] so the
 /// program is flat and every pad-net is explicit and editable. Pad geometry the
 /// extractor does not carry is filled with sane SMD defaults (connectivity, not
 /// geometry, is what matters for the simulate loop).
+///
+/// # Errors
+///
+/// Fails when a component is DNP or identity-refused: the DSL can only
+/// express a fitted part, so either state would be silently lost.
 pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program> {
     ensure_boardcode_serializable(board)?;
     let mut id_to_name = std::collections::HashMap::new();
@@ -107,10 +122,10 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program>
             // is what survives the round-trip and what the binder + pin-rule
             // table match on, so prefer it. Fall back to the symbol lib_id only
             // when no footprint is known.
-            lib_id: if !c.footprint.is_empty() {
-                c.footprint.clone()
-            } else {
+            lib_id: if c.footprint.is_empty() {
                 c.lib_id.clone()
+            } else {
+                c.footprint.clone()
             },
             value: c.value.clone(),
             layer: if c.layer.is_empty() {
@@ -126,7 +141,7 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program>
     }
 
     Ok(Program {
-        version: 20241229,
+        version: 20_241_229,
         blocks: Vec::new(),
         body,
         outline: None,
@@ -161,8 +176,12 @@ fn ensure_boardcode_serializable(board: &ExtractedBoard) -> anyhow::Result<()> {
 
 /// Recompile Board-as-Code text into a `.kicad_pcb` string.
 ///
-/// Parses the DSL, interprets it into a [`Pcb`], and emits KiCad s-expression
+/// Parses the DSL, interprets it into a [`Pcb`], and emits `KiCad` s-expression
 /// text. Errors carry the offending line number from the DSL parser.
+///
+/// # Errors
+///
+/// Fails when the Board-as-Code text does not parse; the error names the line.
 pub fn code_to_board_text(code: &str) -> anyhow::Result<String> {
     let prog = Program::parse(code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
     let pcb = prog.build();
@@ -171,12 +190,17 @@ pub fn code_to_board_text(code: &str) -> anyhow::Result<String> {
 
 /// Load Board-as-Code from a path that is either a `.board` file or a directory
 /// containing exactly one `.board` file.
+///
+/// # Errors
+///
+/// Fails when the path cannot be read, or when a directory holds no `.board`
+/// file or more than one.
 pub fn load_code(path: &Path) -> anyhow::Result<String> {
     if path.is_dir() {
         let mut found = None;
         for entry in std::fs::read_dir(path)? {
             let p = entry?.path();
-            if p.extension().map(|e| e == "board").unwrap_or(false) {
+            if p.extension().is_some_and(|e| e == "board") {
                 if found.is_some() {
                     anyhow::bail!(
                         "{} contains more than one .board file; pass the file directly",

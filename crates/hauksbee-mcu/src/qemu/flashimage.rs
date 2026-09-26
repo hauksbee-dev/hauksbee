@@ -33,7 +33,7 @@ const FLASH_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 /// The espflash target chip for a QEMU `-machine` name, `None` when the
 /// machine is not one this converter knows how to lay an image out for.
-pub(crate) fn chip_for_machine(machine: &str) -> Option<Chip> {
+pub fn chip_for_machine(machine: &str) -> Option<Chip> {
     match machine {
         "esp32" => Some(Chip::Esp32),
         "esp32s2" => Some(Chip::Esp32s2),
@@ -49,7 +49,7 @@ pub(crate) fn chip_for_machine(machine: &str) -> Option<Chip> {
 /// bootloader when building an image and to sanity-check a user-supplied
 /// merged image BEFORE booting it (a wrong-chip image otherwise boot-loops
 /// the ROM forever with "invalid header: 0xffffffff" and no useful error).
-pub(crate) fn bootloader_offset(machine: &str) -> u64 {
+pub fn bootloader_offset(machine: &str) -> u64 {
     match machine {
         "esp32" | "esp32s2" => 0x1000,
         _ => 0x0,
@@ -85,10 +85,7 @@ fn quietly<T>(f: impl FnOnce() -> T) -> std::thread::Result<T> {
 /// Build a bootable, QEMU-sized merged flash image from the app ELF at
 /// `elf_path`, returning the temp file holding it. The caller must keep the
 /// returned handle alive as long as QEMU runs from it.
-pub(crate) fn merged_image_from_elf(
-    elf_path: &Path,
-    machine: &str,
-) -> Result<tempfile::NamedTempFile> {
+pub fn merged_image_from_elf(elf_path: &Path, machine: &str) -> Result<tempfile::NamedTempFile> {
     let Some(chip) = chip_for_machine(machine) else {
         bail!(
             "don't know the flash layout for QEMU machine '{machine}'; supply a \
@@ -160,7 +157,7 @@ pub(crate) fn merged_image_from_elf(
         .tempfile()
         .context("creating temp file for the merged flash image")?;
     tmp.write_all(&flash)
-        .and_then(|_| tmp.flush())
+        .and_then(|()| tmp.flush())
         .context("writing the merged flash image")?;
     Ok(tmp)
 }

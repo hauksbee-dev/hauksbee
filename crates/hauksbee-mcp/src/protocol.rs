@@ -1,5 +1,6 @@
-//! The MCP protocol layer: JSON-RPC 2.0 over newline-delimited stdio, per the
-//! Model Context Protocol stdio transport. Hand-rolled on `serde_json` rather
+//! The MCP protocol layer: JSON-RPC 2.0 over newline-delimited stdio.
+//!
+//! It follows the Model Context Protocol stdio transport. Hand-rolled on `serde_json` rather
 //! than an SDK because the subset a tools-only server needs (initialize /
 //! initialized / ping / tools/list / tools/call) is a few hundred lines, and a
 //! hand-rolled implementation keeps the dependency tree clean and auditable.
@@ -9,10 +10,11 @@
 
 use serde_json::{json, Value};
 
-/// The protocol revision this server implements. Offered back verbatim when
-/// the client requests a revision we know; otherwise this is the counter-offer
-/// (the MCP version-negotiation rule: the server answers with the version it
-/// is willing to speak, and the client disconnects if it cannot).
+/// The protocol revision this server implements.
+///
+/// Offered back verbatim when the client requests a revision we know; otherwise this is
+/// the counter-offer (the MCP version-negotiation rule: the server answers with the
+/// version it is willing to speak, and the client disconnects if it cannot).
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Revisions we can speak. The tools-only subset is identical across these,
@@ -33,7 +35,8 @@ impl Default for Server {
 }
 
 impl Server {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { initialized: false }
     }
 
@@ -44,7 +47,7 @@ impl Server {
             Ok(v) => v,
             Err(e) => {
                 return Some(
-                    error_response(Value::Null, -32700, &format!("parse error: {e}")).to_string(),
+                    error_response(&Value::Null, -32700, &format!("parse error: {e}")).to_string(),
                 )
             }
         };
@@ -64,11 +67,11 @@ impl Server {
         };
 
         let response = match method {
-            "initialize" => self.initialize(id, &params),
-            "ping" => ok_response(id, json!({})),
-            "tools/list" => ok_response(id, json!({ "tools": crate::tools::definitions() })),
-            "tools/call" => self.tools_call(id, &params),
-            other => error_response(id, -32601, &format!("method not found: {other}")),
+            "initialize" => Self::initialize(&id, &params),
+            "ping" => ok_response(&id, &json!({})),
+            "tools/list" => ok_response(&id, &json!({ "tools": crate::tools::definitions() })),
+            "tools/call" => self.tools_call(&id, &params),
+            other => error_response(&id, -32601, &format!("method not found: {other}")),
         };
         Some(response.to_string())
     }
@@ -76,7 +79,7 @@ impl Server {
     /// The MCP handshake. Capabilities: tools only (no resources, prompts,
     /// sampling, or subscriptions), stated as exactly that so a client never
     /// probes for surfaces that do not exist.
-    fn initialize(&mut self, id: Value, params: &Value) -> Value {
+    fn initialize(id: &Value, params: &Value) -> Value {
         let requested = params
             .get("protocolVersion")
             .and_then(Value::as_str)
@@ -88,7 +91,7 @@ impl Server {
         };
         ok_response(
             id,
-            json!({
+            &json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": {} },
                 "serverInfo": {
@@ -104,7 +107,7 @@ impl Server {
     /// `tools/call`: dispatch to the tool table. Tool-level failures are
     /// reported inside the result with `isError: true` (per MCP), reserving
     /// JSON-RPC errors for protocol misuse like calling before initialize.
-    fn tools_call(&mut self, id: Value, params: &Value) -> Value {
+    fn tools_call(&self, id: &Value, params: &Value) -> Value {
         if !self.initialized {
             return error_response(
                 id,
@@ -113,9 +116,8 @@ impl Server {
                  notification, before calling tools",
             );
         }
-        let name = match params.get("name").and_then(Value::as_str) {
-            Some(n) => n,
-            None => return error_response(id, -32602, "tools/call requires a 'name' parameter"),
+        let Some(name) = params.get("name").and_then(Value::as_str) else {
+            return error_response(id, -32602, "tools/call requires a 'name' parameter");
         };
         let args = params
             .get("arguments")
@@ -126,7 +128,7 @@ impl Server {
             .unwrap_or_else(|e| format!("{{\"error\":\"could not serialize result: {e}\"}}"));
         ok_response(
             id,
-            json!({
+            &json!({
                 "content": [ { "type": "text", "text": text } ],
                 "structuredContent": outcome.value,
                 "isError": outcome.is_error,
@@ -136,12 +138,12 @@ impl Server {
 }
 
 /// A JSON-RPC 2.0 success envelope.
-fn ok_response(id: Value, result: Value) -> Value {
+fn ok_response(id: &Value, result: &Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
 /// A JSON-RPC 2.0 error envelope.
-fn error_response(id: Value, code: i64, message: &str) -> Value {
+fn error_response(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 

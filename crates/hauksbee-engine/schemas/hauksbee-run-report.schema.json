@@ -326,7 +326,7 @@
       "type": "object"
     },
     "AssumptionId": {
-      "description": "Stable identity for one assumption within a run. Deterministic:\n`\"{kind_slug}:{subject}\"`, e.g. `\"open-part:R7\"`,\n`\"not-exercised:i2c0/U4\"`, `\"not-checked:drc\"`,\n`\"waived:si/controlled_impedance/DDR_CLK\"`. Re-running the same board yields\nthe same ids, so an acknowledgment file can name one, a diff can track one\nacross runs, and a renderer can cross-reference one.\n\nThe subject keeps its own case (a reference designator is `R7`, not `r7`)\nand reserved bytes are percent-encoded, so distinct subjects never collapse\nwhile the kind slug remains everything before the first `:`.\n\nA subject the board fails to name uniquely still needs a unique id, because\ntwo different gaps sharing one is a duplicate the registry rejects rather than\na cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there\nis no designator at all, encoding the typed claim that distinguishes it, and\n`open-part:R7#2` for the second distinct claim on a designator the board\nreuses. Both are pure functions of the input, so a re-run of the same input\nmints the same bytes.\n\nThe ordinal form is the one exception to tracking a subject across BOARD\nREVISIONS, and it is a limit of the input rather than of the scheme: a\ndesignator carrying two claims does not identify either of them, so there is\nnothing stable to key on. Adding or removing a claim on that designator\nrenumbers the rest. A designator the board uses once is unaffected and keeps\nits bare `open-part:R7`.",
+      "description": "Stable identity for one assumption within a run.\n\nDeterministic: `\"{kind_slug}:{subject}\"`, e.g. `\"open-part:R7\"`,\n`\"not-exercised:i2c0/U4\"`, `\"not-checked:drc\"`,\n`\"waived:si/controlled_impedance/DDR_CLK\"`. Re-running the same board yields\nthe same ids, so an acknowledgment file can name one, a diff can track one\nacross runs, and a renderer can cross-reference one.\n\nThe subject keeps its own case (a reference designator is `R7`, not `r7`)\nand reserved bytes are percent-encoded, so distinct subjects never collapse\nwhile the kind slug remains everything before the first `:`.\n\nA subject the board fails to name uniquely still needs a unique id, because\ntwo different gaps sharing one is a duplicate the registry rejects rather than\na cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there\nis no designator at all, encoding the typed claim that distinguishes it, and\n`open-part:R7#2` for the second distinct claim on a designator the board\nreuses. Both are pure functions of the input, so a re-run of the same input\nmints the same bytes.\n\nThe ordinal form is the one exception to tracking a subject across BOARD\nREVISIONS, and it is a limit of the input rather than of the scheme: a\ndesignator carrying two claims does not identify either of them, so there is\nnothing stable to key on. Adding or removing a claim on that designator\nrenumbers the rest. A designator the board uses once is unaffected and keeps\nits bare `open-part:R7`.",
       "type": "string"
     },
     "AssumptionKind": {
@@ -488,7 +488,7 @@
       "type": "object"
     },
     "BootGateJson": {
-      "description": "One row of the boot-state panel: a transistor gate and what the firmware does\nto it at power-up (`driven_high` / `driven_low` / `floating`). Informational\n(reported, not judged), so a consumer can read it without it being a verdict.",
+      "description": "One row of the boot-state panel.\n\nA transistor gate and what the firmware does to it at power-up\n(`driven_high` / `driven_low` / `floating`). Informational (reported, not\njudged), so a consumer can read it without it being a verdict.",
       "properties": {
         "net": {
           "type": "string"
@@ -508,7 +508,7 @@
       "type": "object"
     },
     "CheckCoverage": {
-      "description": "Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives\nexit 3. `CheckCoverage` is the honest \"N of M active parts actually entered\nthis check\" metric: it is ALWAYS emittable and NEVER changes the exit code on\nits own (the partial-coverage thermal escalation is applied by the thermal\nreport, by default; `--no-strict-thermal` opts out). `partial == true` means\na renderer should print a coverage caveat even though the check itself\nproduced rows.",
+      "description": "Coverage is distinct from [`Validity`].\n\n`Validity` stays BINARY and drives exit 3. `CheckCoverage` is the honest \"N of\nM active parts actually entered this check\" metric: it is ALWAYS emittable and\nNEVER changes the exit code on its own (the partial-coverage thermal\nescalation is applied by the thermal report, by default; `--no-strict-thermal`\nopts out). `partial == true` means a renderer should print a coverage caveat\neven though the check itself produced rows.",
       "properties": {
         "dissipating_count": {
           "description": "Devices that actually produced a row in the check's table.",
@@ -594,7 +594,7 @@
       "oneOf": [
         {
           "const": "project_file_found",
-          "description": "Netclass rules were read from the sibling KiCad project file.",
+          "description": "Netclass rules were read from the sibling `KiCad` project file.",
           "type": "string"
         },
         {
@@ -614,7 +614,7 @@
         },
         {
           "const": "custom_rules_file",
-          "description": "A sibling KiCad custom-rules file supplied the report-wide value.",
+          "description": "A sibling `KiCad` custom-rules file supplied the report-wide value.",
           "type": "string"
         }
       ]
@@ -703,7 +703,7 @@
       "type": "object"
     },
     "CosimFailedWindow": {
-      "description": "One sim-time window `[start_s, end_s)` where the analog solve failed to\nconverge and the co-sim held stale voltages. Reported so a consumer knows the\nexact span that cannot be trusted rather than inferring a quiet run.",
+      "description": "One sim-time window `[start_s, end_s)` where the analog solve failed to converge.\n\nThe co-sim held stale voltages there. Reported so a consumer knows the exact\nspan that cannot be trusted rather than inferring a quiet run.",
       "properties": {
         "end_s": {
           "format": "double",
@@ -725,7 +725,7 @@
       "type": "object"
     },
     "CosimFallbackWindow": {
-      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names\nthe known algorithmic trade-off, and `error_estimate_v` is a MEASURED\nestimate, in volts, of the chunk-end node-voltage error each chunk's march\nadded relative to its own chunk-start state, from a companion re-solve at\na 4x-shifted accuracy dial (tighter first, a coarser leg when the tight\ncompanion will not converge), conservatively Richardson-scaled. Worst\nchunk of a merged window, not a sum across it; omitted when no companion\nconverged, never invented. The record travels with the number it\nqualifies.",
+      "description": "One sim-time window `[start_s, end_s)` whose answer came from a fallback rung.\n\nThe answer was produced by a per-chunk fallback integration rung after the\nprimary analog solve failed there. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names the\nknown algorithmic trade-off, and `error_estimate_v` is a MEASURED estimate, in\nvolts, of the chunk-end node-voltage error each chunk's march added relative\nto its own chunk-start state, from a companion re-solve at a 4x-shifted\naccuracy dial (tighter first, a coarser leg when the tight companion will not\nconverge), conservatively Richardson-scaled. Worst chunk of a merged window,\nnot a sum across it; omitted when no companion converged, never invented. The\nrecord travels with the number it qualifies.",
       "properties": {
         "end_s": {
           "format": "double",
@@ -758,7 +758,7 @@
       "type": "object"
     },
     "CosimJson": {
-      "description": "Machine-readable co-sim summary (today only emitted as CLI text). Populated\nfrom the headless run + the MCU binding. `substituted` is true when the part\nthe user asked for was modelled by a less-specific core (Track B).",
+      "description": "Machine-readable co-sim summary (today only emitted as CLI text).\n\nPopulated from the headless run + the MCU binding. `substituted` is true when\nthe part the user asked for was modelled by a less-specific core (Track B).",
       "properties": {
         "activity_summary": {
           "description": "Top-N nets by activity: name, toggle count, observed min/max voltage.",
@@ -1053,7 +1053,7 @@
       "type": "object"
     },
     "CrossCheck": {
-      "description": "A cross-check the reader ran between two sources inside (or across)\nartifacts, and whether they agreed. A disagreement additionally raises a\nparser-limitation assumption; an agreement is positive evidence and belongs\nin the inventory in its own right.",
+      "description": "A cross-check the reader ran between two sources, and whether they agreed.\n\nThe sources sit inside (or across) artifacts. A disagreement additionally\nraises a parser-limitation assumption; an agreement is positive evidence and\nbelongs in the inventory in its own right.",
       "properties": {
         "agreed": {
           "description": "Whether the two sources agreed.",
@@ -1078,7 +1078,7 @@
     "CustomRuleScopeOmission": {
       "properties": {
         "bare_value_constraint_types": {
-          "description": "Constraint types whose bounds contain a bare, unitless value. KiCad\n10.0.5 deactivates the whole rules file, so this is disclosure, not a\nfidelity qualification on otherwise matching findings.",
+          "description": "Constraint types whose bounds contain a bare, unitless value. `KiCad`\n10.0.5 deactivates the whole rules file, so this is disclosure, not a\nfidelity qualification on otherwise matching findings.",
           "items": {
             "type": "string"
           },
@@ -1121,7 +1121,7 @@
     "CustomRulesCoverage": {
       "properties": {
         "file_inactive_due_to_bare_values": {
-          "description": "KiCad 10.0.5 silently deactivates every custom rule in a file when any\nconstraint bound omits its unit.",
+          "description": "`KiCad` 10.0.5 silently deactivates every custom rule in a file when any\nconstraint bound omits its unit.",
           "type": "boolean"
         },
         "file_name": {
@@ -1158,7 +1158,7 @@
       "type": "object"
     },
     "DrcGroup": {
-      "description": "A group of clearance findings that share (net_a, net_b, layer, root cause),\ncollapsed to one line with a count. `at_limit` separates `gap == rule` (no\nmargin, but not below) from genuine sub-clearance violations.",
+      "description": "A group of clearance findings that share (`net_a`, `net_b`, layer, root cause).\n\nCollapsed to one line with a count. `at_limit` separates `gap == rule` (no\nmargin, but not below) from genuine sub-clearance violations.",
       "properties": {
         "at_limit": {
           "description": "True when every member sits exactly at the rule (gap == rule, no margin),\nfalse when at least one is genuinely *below* the rule.",
@@ -1267,7 +1267,7 @@
           "type": "string"
         },
         "severity": {
-          "description": "\"serious\" for a validated-format short or an unvalidated-format short\nindependently confirmed by KiCad's own DRC. \"note\" remains for a\ntool-only unvalidated-format claim or where board-local physical\nauthority qualifies this location. A companion Eagle schematic adds\ncontext but cannot change severity.",
+          "description": "\"serious\" for a validated-format short or an unvalidated-format short\nindependently confirmed by `KiCad`'s own DRC. \"note\" remains for a\ntool-only unvalidated-format claim or where board-local physical\nauthority qualifies this location. A companion Eagle schematic adds\ncontext but cannot change severity.",
           "type": "string"
         }
       },
@@ -1316,7 +1316,7 @@
           ]
         },
         "version_warning": {
-          "description": "Set when the board's format is newer than hauksbee's validated copper\nextraction (KiCad 10+), making tool-only shorts above unreliable.\nSurfaced by every renderer; CI gates ignore those tool-only shorts, but\nan exact net-pair match from KiCad's own DRC restores a short's serious\nseverity and gate status.",
+          "description": "Set when the board's format is newer than hauksbee's validated copper\nextraction (`KiCad` 10+), making tool-only shorts above unreliable.\nSurfaced by every renderer; CI gates ignore those tool-only shorts, but\nan exact net-pair match from `KiCad`'s own DRC restores a short's serious\nseverity and gate status.",
           "type": [
             "string",
             "null"
@@ -1340,7 +1340,7 @@
       "type": "object"
     },
     "EntityKind": {
-      "description": "What results the assumption taints. Scope is the input to the on-path\ndecision: the causal-path traversal compares an assertion's subject nets and\nrefs against these, and only assumptions that match land in an\n[`EvidenceMap`].",
+      "description": "What results the assumption taints.\n\nScope is the input to the on-path decision: the causal-path traversal\ncompares an assertion's subject nets and refs against these, and only\nassumptions that match land in an [`EvidenceMap`].",
       "oneOf": [
         {
           "const": "part",
@@ -1626,7 +1626,7 @@
           "type": "boolean"
         },
         "kind": {
-          "description": "The specific rule (e.g. \"controlled_impedance\", \"strap_pin\").",
+          "description": "The specific rule (e.g. `\"controlled_impedance\"`, `\"strap_pin\"`).",
           "type": "string"
         },
         "layer": {
@@ -1808,7 +1808,7 @@
       "type": "string"
     },
     "ModelIntervalKind": {
-      "description": "Interval bounds a model places on a derived quantity. This is the socket for\ninterval models: shaped before its producer exists so that work lands in\nthis vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
+      "description": "Interval bounds a model places on a derived quantity.\n\nThis is the socket for interval models: shaped before its producer exists so\nthat work lands in this vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
       "oneOf": [
         {
           "const": "specification-limits",
@@ -1936,7 +1936,7 @@
       "type": "object"
     },
     "ModelSourceTier": {
-      "description": "Semantic rung in the model-source policy. This is deliberately distinct\nfrom [`ModelLayer`]: a layer says where bytes were loaded from, while a tier\nsays how authoritative the model is. An explicit user model remains the\noverride escape hatch; otherwise vendor SPICE and curated sources outrank an\nextracted draft, which outranks a deliberately estimated fallback.",
+      "description": "Semantic rung in the model-source policy.\n\nThis is deliberately distinct from [`ModelLayer`]: a layer says where bytes\nwere loaded from, while a tier says how authoritative the model is. An explicit user model remains the\noverride escape hatch; otherwise vendor SPICE and curated sources outrank an\nextracted draft, which outranks a deliberately estimated fallback.",
       "enum": [
         "open",
         "estimated-fallback",
@@ -2157,7 +2157,7 @@
       "type": "object"
     },
     "Refusal": {
-      "description": "The C5.3 refusal contract.  Exit 3 means the requested claim could not be\nmade; it is neither a finding nor a malformed-input error.  Every renderer\ncarries these same four answers so a refusal is actionable and does not\ndiscard work that remains valid.",
+      "description": "The C5.3 refusal contract.\n\nExit 3 means the requested claim could not be made; it is neither a finding\nnor a malformed-input error.  Every renderer carries these same four answers\nso a refusal is actionable and does not discard work that remains valid.",
       "properties": {
         "claim": {
           "description": "The conclusion the run declined to make.",
@@ -2631,7 +2631,7 @@
       ]
     },
     "WindowMethod": {
-      "description": "One window and the integration method that produced it. The primary method\ncovers most runs in a single entry; a per-chunk fallback ladder contributes\none entry per fallback-solved window, using that machinery's own stable\nmethod names verbatim (\"trapezoidal\", \"gear2\", \"backward-euler\",\n\"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
+      "description": "One window and the integration method that produced it.\n\nThe primary method covers most runs in a single entry; a per-chunk fallback\nladder contributes one entry per fallback-solved window, using that\nmachinery's own stable method names verbatim (\"trapezoidal\", \"gear2\",\n\"backward-euler\", \"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
       "properties": {
         "method": {
           "allOf": [

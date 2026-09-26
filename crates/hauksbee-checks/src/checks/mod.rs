@@ -11,8 +11,8 @@
 //!
 //! - [`usb_c`]: the USB Type-C CC attach classifier. It attaches a generic
 //!   source + cable model to a board's CC termination and classifies the result
-//!   against the USB Type-C spec windows (Sink / AudioAccessory / ...). This is
-//!   what re-derives the RPi 4 shared-CC-pulldown fault cold.
+//!   against the USB Type-C spec windows (Sink / `AudioAccessory` / ...). This is
+//!   what re-derives the `RPi` 4 shared-CC-pulldown fault cold.
 //! - [`straps`]: the boot strapping-pin lint. It reads each MCU's strap table
 //!   from the model db and flags a strap net that cannot hold the level the part
 //!   needs at reset (a free-running clock on it, or a pull to the wrong rail).
@@ -76,15 +76,18 @@ pub(crate) fn resolved_components<'a>(
     })
 }
 
-/// The full engine-level lint: the connectivity net-lint plus the model-aware
+/// The full engine-level lint.
+///
+/// It is the connectivity net-lint plus the model-aware
 /// checks, strap pins, MCU resource conflicts, the unmodelled-MCU coverage
 /// note, configured-device decode faults (e.g. a CYPD3177 PD-sink divider), and
 /// model-aware driver contention.
 /// Kept as one function so every surface (`--lint`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set and no caller can
-/// reopen the "Looks healthy" hole by forgetting one: splice device_decode in
+/// reopen the "Looks healthy" hole by forgetting one: splice `device_decode` in
 /// on the `--lint` path alone and every other surface returns a false PASS on
 /// those faults.
+#[must_use]
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
     report
@@ -128,7 +131,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
 }
 
-/// The full engine-level signal-integrity report: the extract-layer SI checks
+/// The full engine-level signal-integrity report.
+///
+/// It is the extract-layer SI checks
 /// (`board.si_checks`) PLUS the model-aware engine-layer checks whose attribution
 /// needs the bound DB models, trace ampacity (IPC-2221) and input-cap ripple.
 /// Kept as one chokepoint so every SI surface (`--si`, `--check`, the JSON
@@ -139,6 +144,7 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
 /// cap that `--si` flags; the SI twin of the `engine_lint` hole above.
 /// `geo_text` is the raw layout text (None for Altium, whose geometry is not yet
 /// threaded into the text-based SI checks).
+#[must_use]
 pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&str>) -> SiReport {
     let mut report = board.si_checks(geo_text);
     ampacity::append_ampacity(board, lib, geo_text, &mut report);
@@ -147,9 +153,12 @@ pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&s
 }
 
 /// The `--resources` view: the MCU internal resource-conflict check PLUS the
-/// unchecked-strap-bearing-MCU coverage note. A named chokepoint so neither the
+/// unchecked-strap-bearing-MCU coverage note.
+///
+/// A named chokepoint so neither the
 /// `--resources` path nor `engine_lint` can drop the coverage note by forgetting
 /// to append it.
+#[must_use]
 pub fn resources_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.resource_conflicts();
     report

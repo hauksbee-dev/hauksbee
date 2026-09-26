@@ -23,6 +23,7 @@ use hauksbee_solve::SolverOptions;
 /// Mirror the CLI's `build_cosim_json` field wiring so the test exercises the
 /// real JSON serialization shape (the binary's builder is not reachable from an
 /// integration test, but the struct and its serialization live in the library).
+#[allow(clippy::too_many_lines, reason = "mirrors build_cosim_json fields")]
 fn cosim_json_from(sched: &Scheduler) -> CosimJson {
     CosimJson {
         mcu_ref: "none".to_string(),
@@ -190,7 +191,7 @@ fn cosim_failed_chunk_marks_analog_invalid() {
     let windows = sched.failed_windows();
     assert_eq!(windows.len(), 1, "contiguous failures merge to one window");
     assert!(
-        windows[0].0.abs() < 1e-12 && (windows[0].1 - 3.0 * chunk).abs() < chunk * 1e-6,
+        windows[0].0.abs() < 1e-12 && 3.0f64.mul_add(-chunk, windows[0].1).abs() < chunk * 1e-6,
         "the failed window covers the whole run, got {windows:?}"
     );
 

@@ -1,7 +1,7 @@
 //! The editor-schema drift test. The VS Code extension validates spec TOML
 //! against `editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json`,
 //! and that file is GENERATED from the Rust [`Spec`] type via schemars: the
-//! serde derives (deny_unknown_fields, defaults, renames) and the doc comments
+//! serde derives (`deny_unknown_fields`, defaults, renames) and the doc comments
 //! on each field ARE the schema, so adding a field to `Spec` updates the
 //! schema instead of silently drifting from it. Same coupling pattern as
 //! `hauksbee-ir/tests/compat_drift.rs` for the SPICE compatibility doc.
@@ -12,7 +12,7 @@
 //!   `UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift`
 //! * `generated_schema_is_strict_and_documented`: the generator actually
 //!   carries the properties the editor experience depends on (doc comments as
-//!   hover descriptions, deny_unknown_fields as additionalProperties: false),
+//!   hover descriptions, `deny_unknown_fields` as additionalProperties: false),
 //!   so a schemars regression cannot quietly ship an empty-but-matching file.
 
 use hauksbee_ci::Spec;
@@ -68,12 +68,12 @@ fn generated_schema() -> String {
     // rustdoc preserves CRLF from a Windows checkout in derived field
     // descriptions. Canonicalize the encoded newlines so one checked-in schema
     // is byte-identical on every supported host.
-    let mut text = canonical_schema_newlines(text);
+    let mut text = canonical_schema_newlines(&text);
     text.push('\n');
     text
 }
 
-fn canonical_schema_newlines(text: String) -> String {
+fn canonical_schema_newlines(text: &str) -> String {
     // Git for Windows can materialize the checked-in JSON with physical CRLF
     // line endings. Separately, rustdoc can preserve CRLF from Rust source as
     // the encoded characters `\r\n` inside generated descriptions. Normalize
@@ -102,7 +102,7 @@ fn schema_file_matches_spec_type() {
             path.display()
         )
     });
-    let current = canonical_schema_newlines(current);
+    let current = canonical_schema_newlines(&current);
     assert!(
         current == want,
         "editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json is out of \
@@ -166,12 +166,12 @@ fn generated_schema_is_strict_and_documented() {
 
 #[test]
 fn generated_schema_is_independent_of_checkout_line_endings() {
-    let encoded = r#"{"description":"first\r\nsecond"}"#.to_string();
+    let encoded = r#"{"description":"first\r\nsecond"}"#;
     assert_eq!(
         canonical_schema_newlines(encoded),
         r#"{"description":"first\nsecond"}"#
     );
-    let physical = "{\r\n  \"description\": \"first\"\r\n}\r\n".to_string();
+    let physical = "{\r\n  \"description\": \"first\"\r\n}\r\n";
     assert_eq!(
         canonical_schema_newlines(physical),
         "{\n  \"description\": \"first\"\n}\n"

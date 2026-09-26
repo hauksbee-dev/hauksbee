@@ -2,7 +2,7 @@
 //!
 //! A sample is the first thing a stranger clicks. On a tool whose whole claim
 //! is that it starts from the copper, a sample with no copper argues against
-//! the product, and two of the three shipped with none: blinky and boot_gate
+//! the product, and two of the three shipped with none: blinky and `boot_gate`
 //! were pad-and-netlist fixtures with zero segments, zero vias and no board
 //! outline. They are routed now, and this stops that regressing.
 //!
@@ -138,7 +138,7 @@ fn watchy_bind_table_has_no_duplicate_refdes_rows() {
 /// The samples must stay in step with the fixtures they were copied from.
 ///
 /// The deliberate exceptions are recorded in frontend/public/samples/README.md:
-/// boot_gate is routed clean, and browser Watchy carries the 0.150 mm default
+/// `boot_gate` is routed clean, and browser Watchy carries the 0.150 mm default
 /// clearance that its checkout fixture reads from the sibling `.kicad_pro`.
 /// Any OTHER divergence is stale-copy drift.
 #[test]

@@ -4,7 +4,7 @@
 //! missing value, and the binder's RKM value parser then happily decoded the
 //! refdes: "R74" bound as a 0.74 ohm resistor and "RED" (an LED designator)
 //! as 1 ohm, both at guessed confidence, fabricating overpower faults on real
-//! boards (elk-audio ElkPi, miniFOC). The extractor now leaves the value
+//! boards (elk-audio `ElkPi`, miniFOC). The extractor now leaves the value
 //! empty (with the `.SchDoc` reason exposed as a property); this test pins
 //! the binder half of the contract: an EMPTY value on an R-class or D-class
 //! reference stays UNRESOLVED, no magnitude appears from the refdes at any

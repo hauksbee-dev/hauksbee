@@ -37,7 +37,7 @@ impl McpClient {
         };
         let init = client.request(
             "initialize",
-            json!({
+            &json!({
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "clientInfo": { "name": "mcp-test", "version": "0" },
@@ -52,7 +52,7 @@ impl McpClient {
         client
     }
 
-    fn request(&mut self, method: &str, params: Value) -> Value {
+    fn request(&mut self, method: &str, params: &Value) -> Value {
         self.next_id += 1;
         let msg = json!({ "jsonrpc": "2.0", "id": self.next_id, "method": method,
                           "params": params });
@@ -72,10 +72,10 @@ impl McpClient {
     }
 
     /// Call a tool and return (structuredContent, isError).
-    fn call_tool(&mut self, name: &str, arguments: Value) -> (Value, bool) {
+    fn call_tool(&mut self, name: &str, arguments: &Value) -> (Value, bool) {
         let resp = self.request(
             "tools/call",
-            json!({ "name": name, "arguments": arguments }),
+            &json!({ "name": name, "arguments": arguments }),
         );
         let result = &resp["result"];
         assert!(
@@ -116,7 +116,7 @@ fn fixture(rel: &str) -> String {
 #[test]
 fn handshake_lists_every_tool_with_schemas() {
     let mut c = McpClient::start();
-    let resp = c.request("tools/list", json!({}));
+    let resp = c.request("tools/list", &json!({}));
     let tools = resp["result"]["tools"].as_array().expect("tools array");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     for expected in [
@@ -147,7 +147,7 @@ fn handshake_lists_every_tool_with_schemas() {
 fn model_coverage_is_read_only_and_keeps_executable_scope() {
     let mut client = McpClient::start();
     let board = fixture("testdata/boards/button_pullup.kicad_pcb");
-    let (value, is_error) = client.call_tool("model_coverage", json!({ "board_path": board }));
+    let (value, is_error) = client.call_tool("model_coverage", &json!({ "board_path": board }));
     assert!(!is_error, "{value}");
     assert_eq!(value["read_only"], true);
     assert_eq!(value["workflow"]["llm_required"], false);
@@ -172,7 +172,7 @@ fn analyze_board_returns_the_front_door_report_structure() {
     let mut c = McpClient::start();
     let (report, is_error) = c.call_tool(
         "analyze_board",
-        json!({ "board_path": fixture("testdata/boards/button_pullup.kicad_pcb") }),
+        &json!({ "board_path": fixture("testdata/boards/button_pullup.kicad_pcb") }),
     );
     assert!(
         !is_error,
@@ -217,7 +217,7 @@ fn analyze_board_resolves_eagle_schematic_siblings_and_explicit_paths_like_the_c
     std::fs::write(&sibling_schematic, schematic_bytes).expect("write schematic");
 
     let mut c = McpClient::start();
-    let (sibling, is_error) = c.call_tool("analyze_board", json!({ "board_path": sibling_board }));
+    let (sibling, is_error) = c.call_tool("analyze_board", &json!({ "board_path": sibling_board }));
     assert!(
         !is_error,
         "sibling resolution is not an input error: {sibling}"
@@ -246,7 +246,7 @@ fn analyze_board_resolves_eagle_schematic_siblings_and_explicit_paths_like_the_c
     std::fs::write(&explicit_schematic, schematic_bytes).expect("write schematic");
     let (explicit, is_error) = c.call_tool(
         "analyze_board",
-        json!({
+        &json!({
             "board_path": explicit_board,
             "schematic_path": explicit_schematic,
         }),
@@ -280,7 +280,7 @@ kind = "no_faults"
 "#;
     let (verdict, is_error) = c.call_tool(
         "run_checks",
-        json!({
+        &json!({
             "board_path": fixture("testdata/boards/button_pullup.kicad_pcb"),
             "spec_toml": spec,
         }),
@@ -317,7 +317,7 @@ fn run_checks_retains_an_explicit_eagle_schematic() {
         .join("../hauksbee-extract/tests/fixtures/eagle_ties");
     let (verdict, is_error) = c.call_tool(
         "run_checks",
-        json!({
+        &json!({
             "board_path": root.join("declared.brd"),
             "schematic_path": root.join("declared.sch"),
             "spec_toml": "duration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
@@ -357,7 +357,7 @@ fn run_checks_rejects_a_board_key_in_the_spec_body() {
     let mut c = McpClient::start();
     let (v, is_error) = c.call_tool(
         "run_checks",
-        json!({
+        &json!({
             "board_path": fixture("testdata/boards/button_pullup.kicad_pcb"),
             "spec_toml": "board = \"elsewhere.kicad_pcb\"\n",
         }),
@@ -375,7 +375,7 @@ fn firmware_on_a_processorless_board_returns_the_refusal_shape() {
     let mut c = McpClient::start();
     let (v, is_error) = c.call_tool(
         "analyze_board",
-        json!({
+        &json!({
             "board_path": fixture("testdata/boards/button_pullup.kicad_pcb"),
             "firmware_path": fixture("testdata/firmware/demo/demo.hex"),
         }),
@@ -411,7 +411,7 @@ fn firmware_on_a_processorless_board_returns_the_refusal_shape() {
 #[test]
 fn list_capabilities_reports_backends_probed_on_this_machine() {
     let mut c = McpClient::start();
-    let (v, is_error) = c.call_tool("list_capabilities", json!({}));
+    let (v, is_error) = c.call_tool("list_capabilities", &json!({}));
     assert!(!is_error);
     let backends = v["backends"].as_array().expect("backends");
     let names: Vec<&str> = backends
@@ -464,7 +464,7 @@ fn board_to_code_returns_the_editable_text_form() {
     let mut c = McpClient::start();
     let (v, is_error) = c.call_tool(
         "board_to_code",
-        json!({ "board_path": fixture("testdata/boards/button_pullup.kicad_pcb") }),
+        &json!({ "board_path": fixture("testdata/boards/button_pullup.kicad_pcb") }),
     );
     assert!(!is_error, "{v}");
     assert_eq!(v["board"], "button_pullup.kicad_pcb");
@@ -480,7 +480,7 @@ fn missing_board_file_is_a_tool_error_not_a_refusal() {
     let mut c = McpClient::start();
     let (v, is_error) = c.call_tool(
         "analyze_board",
-        json!({ "board_path": "/nonexistent/nowhere.kicad_pcb" }),
+        &json!({ "board_path": "/nonexistent/nowhere.kicad_pcb" }),
     );
     assert!(is_error, "an unreadable path is an input error");
     assert!(v["error"].as_str().unwrap().contains("nowhere.kicad_pcb"));
@@ -516,7 +516,7 @@ return {{
 }};
 "#
     );
-    let (v, is_error) = c.call_tool("run_script", json!({ "source": source }));
+    let (v, is_error) = c.call_tool("run_script", &json!({ "source": source }));
     assert!(!is_error, "script should complete: {v}");
     let result = &v["result"];
     assert_eq!(result["board"], "button_pullup.kicad_pcb");
@@ -558,7 +558,7 @@ return {{
 }};
 "#
     );
-    let (v, is_error) = c.call_tool("run_script", json!({ "source": source }));
+    let (v, is_error) = c.call_tool("run_script", &json!({ "source": source }));
     assert!(!is_error, "{v}");
     assert_eq!(v["result"]["status"], "invalid_for_analysis", "{v}");
     assert_eq!(v["result"]["hasReason"], true);
@@ -576,7 +576,7 @@ fn run_script_uncaught_refusal_carries_the_structured_throw() {
     let board = fixture("testdata/boards/button_pullup.kicad_pcb");
     let fw = fixture("testdata/firmware/demo/demo.hex");
     let source = format!("hauksbee.analyzeBoard({board:?}, {fw:?}); return 1;");
-    let (v, is_error) = c.call_tool("run_script", json!({ "source": source }));
+    let (v, is_error) = c.call_tool("run_script", &json!({ "source": source }));
     assert!(is_error, "uncaught throw is an error result: {v}");
     assert_eq!(v["thrown"]["status"], "invalid_for_analysis", "{v}");
 }
@@ -602,10 +602,10 @@ fn version_flag_prints_the_version_and_exits_zero() {
         let out = run_flag(flag);
         assert!(out.status.success(), "{flag} must exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let expected = match option_env!("GIT_HASH") {
-            Some(hash) => format!("hauksbee-mcp {} (git {hash})", env!("CARGO_PKG_VERSION")),
-            None => format!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION")),
-        };
+        let expected = option_env!("GIT_HASH").map_or_else(
+            || format!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION")),
+            |hash| format!("hauksbee-mcp {} (git {hash})", env!("CARGO_PKG_VERSION")),
+        );
         assert_eq!(stdout.trim(), expected, "{flag} stdout: {stdout:?}");
     }
 }

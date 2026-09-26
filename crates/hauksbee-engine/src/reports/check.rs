@@ -17,6 +17,7 @@ use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode, StaticInputs}
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
 /// non-zero if any real finding gates. `quiet` suppresses the text surface and
 /// `oracle` cross-checks against kicad-cli.
+#[allow(clippy::fn_params_excessive_bools, reason = "independent CLI switches")]
 pub(crate) fn emit_with_schematic_quiet(
     input: &StaticInputs,
     mode: OutputMode,
@@ -31,7 +32,7 @@ pub(crate) fn emit_with_schematic_quiet(
         schematic_ties,
     }
     .emit(
-        CheckDisplay::Full {
+        &CheckDisplay::Full {
             mode,
             verbose,
             oracle,
@@ -59,7 +60,8 @@ enum CheckDisplay {
 }
 
 impl CheckReport<'_> {
-    fn emit(self, display: CheckDisplay, strict: bool) -> anyhow::Result<()> {
+    #[allow(clippy::too_many_lines, reason = "one static-suite pass, then render")]
+    fn emit(self, display: &CheckDisplay, strict: bool) -> anyhow::Result<()> {
         let Self {
             input,
             schematic_ties,
@@ -73,7 +75,7 @@ impl CheckReport<'_> {
             ..
         } = *input;
         let combined = matches!(display, CheckDisplay::CombinedJson);
-        let (mode, verbose, oracle, quiet) = match display {
+        let (mode, verbose, oracle, quiet) = match *display {
             CheckDisplay::Full {
                 mode,
                 verbose,
@@ -124,7 +126,7 @@ impl CheckReport<'_> {
             qualification.as_ref(),
             text.contains("<eagle") && schematic_ties.is_none(),
         )
-        .with_clearance_rule_provenance(provenance.clone());
+        .with_clearance_rule_provenance(&provenance);
         let oracle_summary = (oracle && mode != OutputMode::Json).then(|| {
             super::drc::oracle_cross_check_and_annotate(
                 board_path,
@@ -180,7 +182,7 @@ impl CheckReport<'_> {
         // An unvalidated board format (KiCad 10+) yields possibly-phantom shorts
         // that do not gate unless KiCad's own DRC confirms the exact net pair; the
         // unmatched caveat is printed instead.
-        let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+        let usbc_serious = matches!(&usbc, Some(u) if u.is_serious());
         let drc_gates = if combined {
             drc_gate_fails(&drc, qualification.as_ref())
         } else {
@@ -198,8 +200,8 @@ impl CheckReport<'_> {
                     .with_inputs(input.inputs)
                     .with_evidence(&evidence);
                 jr.drc = Some(drc_structured.clone());
-                jr.triage = Some(triage.clone());
-                jr.clearance_rule_source = Some(provenance.clone());
+                jr.triage = Some(triage);
+                jr.clearance_rule_source = Some(provenance);
                 if unrouted {
                     jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
                 }
@@ -253,11 +255,11 @@ impl CheckReport<'_> {
                     "\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) =="
                 );
                 let mut lint_plain = crate::plain_netlint(&lint);
-                lint_plain.unmodelled_critical = blockers.clone();
+                lint_plain.unmodelled_critical.clone_from(&blockers);
                 print!("{}", lint_plain.render());
                 println!("\n== Signal integrity ==");
                 let mut si_plain = crate::plain_si(&si);
-                si_plain.unmodelled_critical = blockers.clone();
+                si_plain.unmodelled_critical.clone_from(&blockers);
                 print!("{}", si_plain.render());
                 if let Some(u) = &usbc {
                     println!("\n== USB-C CC compliance ==");
@@ -276,7 +278,7 @@ impl CheckReport<'_> {
                 );
             }
             OutputMode::Text => {
-                let mut display_report = bound.report.clone();
+                let mut display_report = bound.report;
                 super::bind::mark_decode_only_rows(&mut display_report, &lint);
                 print!(
                     "{}",
@@ -326,7 +328,8 @@ impl CheckReport<'_> {
             actual_findings.iter().any(|f| f.message == a)
         });
         if !matches!(mode, OutputMode::Json) {
-            let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
+            let (serious, worth_a_look) =
+                verdict_counts(&drc_structured, &lint, &si, usbc.as_ref());
             print!(
                 "{}",
                 super::render_evidence_appendix(&evidence, quiet, verbose)
@@ -349,7 +352,10 @@ impl CheckReport<'_> {
         }
         super::note_ungated_findings(strict, would_gate);
         if strict && would_gate {
-            super::strict_gate_exit(mode, &gate_items(&drc_structured, &lint, &si, &usbc));
+            super::strict_gate_exit(
+                mode,
+                &gate_items(&drc_structured, &lint, &si, usbc.as_ref()),
+            );
         }
         // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
         // evidence or unbound verdict-critical parts), not on any undermined map:
@@ -370,7 +376,7 @@ fn verdict_counts(
     drc_structured: &DrcStructured,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
-    usbc: &Option<crate::checks::usb_c::UsbcReport>,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
 ) -> (usize, usize) {
     use crate::plain::PlainLevel;
     let drc_plain = crate::plain::plain_drc_structured(drc_structured);
@@ -392,10 +398,8 @@ fn verdict_counts(
     // Heads-up notes are actionable observations: they count as worth a look,
     // exactly as the web headline refuses "Looks healthy" over one.
     worth_a_look += drc_plain.heads_up.len() + lint_plain.heads_up.len() + si_plain.heads_up.len();
-    if let Some(u) = usbc {
-        if u.is_serious() {
-            serious += 1;
-        }
+    if usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious) {
+        serious += 1;
     }
     (serious, worth_a_look)
 }
@@ -416,6 +420,8 @@ fn verdict_line(
     coverage_undermined: bool,
     copper_unvalidated: Option<&str>,
 ) -> String {
+    const COVERAGE: &str = "an input-coverage claim is undermined, so a clean result here \
+                            is not a clean bill (see the evidence section)";
     // The shared sentence, minus its leading tag where the line carries its
     // own, so the vocabulary stays single-sourced without stuttering
     // "inconclusive ... INCONCLUSIVE".
@@ -423,8 +429,6 @@ fn verdict_line(
         let s = crate::result::inconclusive_verdict(blockers);
         s.strip_prefix("INCONCLUSIVE: ").unwrap_or(&s).to_string()
     });
-    const COVERAGE: &str = "an input-coverage claim is undermined, so a clean result here \
-                            is not a clean bill (see the evidence section)";
     if let Some(reason) = copper_unvalidated {
         return if serious == 0 {
             format!(
@@ -466,24 +470,28 @@ fn gate_items(
     drc: &DrcStructured,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
-    usbc: &Option<crate::checks::usb_c::UsbcReport>,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
 ) -> Vec<String> {
     let mut items = super::drc_structured_gate_items(drc);
     items.extend(super::lint_gate_items(lint));
     items.extend(super::si_gate_items(si));
-    if let Some(u) = usbc {
-        if u.is_serious() {
-            items.push(format!("usb_c_cc {}", u.headline));
-        }
+    if let Some(u) = usbc.filter(|u| u.is_serious()) {
+        items.push(format!("usb_c_cc {}", u.headline));
     }
     items
 }
 
-/// The full static suite (DRC shorts + lint + SI + USB-C) as DATA, for the
-/// `--junit`/`--sarif` artifact writers: the same checks and the same waiver
-/// discipline as `emit_with_schematic_quiet`, without rendering a report. Waived findings are
-/// excluded here exactly as they are excluded from the gate, so a SARIF error
-/// can never fail a pipeline the report command would pass.
+/// The full static suite (DRC shorts + lint + SI + USB-C) as DATA.
+///
+/// For the `--junit`/`--sarif` artifact writers: the same checks and the same
+/// waiver discipline as `emit_with_schematic_quiet`, without rendering a report.
+/// Waived findings are excluded here exactly as they are excluded from the gate,
+/// so a SARIF error can never fail a pipeline the report command would pass.
+///
+/// # Errors
+///
+/// Returns an error if the sibling `KiCad` project/custom clearance rules cannot
+/// be loaded, or if the DRC cannot run over the board (`KiCad` or Altium).
 pub fn gather_findings_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -593,7 +601,7 @@ pub(crate) fn waive_drc(
     let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
         let kind = match f.kind {
             hauksbee_extract::ViolationKind::Short => "short",
-            _ => "clearance-not-waivable",
+            hauksbee_extract::ViolationKind::Clearance => "clearance-not-waivable",
         };
         (
             kind.to_string(),
@@ -632,6 +640,14 @@ pub(crate) fn drc_short_findings(
         .map(|f| {
             let authorized_tie = qualification.and_then(|ties| ties.tie_for(f));
             let declared_tie = qualification.and_then(|ties| ties.declaration_for(f));
+            let tie_note = |what: &str| {
+                declared_tie.map_or_else(String::new, |tie| {
+                    format!(
+                        "; the schematic names this pair {what} ({})",
+                        tie.declaration
+                    )
+                })
+            };
             // Only board-local physical authority can downgrade a short. A
             // companion Eagle schematic names a net pair but cannot locate
             // the intended join, so it remains actionable/gating context.
@@ -651,28 +667,20 @@ pub(crate) fn drc_short_findings(
                 // A board-authorized join is not actionable; a schematic-only
                 // declaration remains actionable because its location is unknown.
                 actionable: authorized_tie.is_none(),
-                message: match declared_tie {
-                    Some(tie) => format!(
-                        "copper short: {} touches {} on {}; the schematic names this pair but \
-                     does not authorize the physical location ({})",
-                        f.net_a_name, f.net_b_name, f.layer, tie.declaration
-                    ),
-                    None => format!(
-                        "copper short: {} touches {} on {}",
-                        f.net_a_name, f.net_b_name, f.layer
-                    ),
-                },
-                plain: match declared_tie {
-                    Some(tie) => format!(
-                        "two different nets ({} and {}) are touching on layer {}; the schematic \
-                     names this pair without locating the intended join ({})",
-                        f.net_a_name, f.net_b_name, f.layer, tie.declaration
-                    ),
-                    None => format!(
-                        "two different nets ({} and {}) are touching on layer {}",
-                        f.net_a_name, f.net_b_name, f.layer
-                    ),
-                },
+                message: format!(
+                    "copper short: {} touches {} on {}{}",
+                    f.net_a_name,
+                    f.net_b_name,
+                    f.layer,
+                    tie_note("but does not authorize the physical location")
+                ),
+                plain: format!(
+                    "two different nets ({} and {}) are touching on layer {}{}",
+                    f.net_a_name,
+                    f.net_b_name,
+                    f.layer,
+                    tie_note("without locating the intended join")
+                ),
                 fix: None,
             }
         })
@@ -688,7 +696,7 @@ pub(crate) fn drc_gate_fails(
 ) -> bool {
     drc_short_findings(drc, qualification)
         .iter()
-        .any(|f| f.gates())
+        .any(crate::result::JsonFinding::gates)
 }
 
 /// What a static pass cannot see, said at the end of one.
@@ -884,7 +892,7 @@ pub(crate) fn emit_combined_json_with_schematic(
         input,
         schematic_ties,
     }
-    .emit(CheckDisplay::CombinedJson, strict)
+    .emit(&CheckDisplay::CombinedJson, strict)
 }
 
 #[cfg(test)]

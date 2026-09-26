@@ -31,7 +31,8 @@ use std::path::PathBuf;
 fn board_text() -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/stm32_spi_adc_demo.kicad_pcb");
-    std::fs::read_to_string(&p).unwrap_or_else(|_| panic!("read stm32 SPI ADC board from {p:?}"))
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|_| panic!("read stm32 SPI ADC board from {}", p.display()))
 }
 
 fn firmware() -> Option<PathBuf> {
@@ -45,13 +46,10 @@ fn preconditions() -> Option<PathBuf> {
         eprintln!("SKIP: Renode not installed");
         return None;
     }
-    match firmware() {
-        Some(fw) => Some(fw),
-        None => {
-            eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
-            None
-        }
-    }
+    firmware().or_else(|| {
+        eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
+        None
+    })
 }
 
 /// Run the co-sim for `ms` of virtual time with the MCP3008 channel-0 voltage
@@ -77,10 +75,10 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
     let mut adc = Mcp3008::new(3.3);
     adc.set_channel(0, ch0_volts);
     let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(adc))));
-    engine.scheduler_mut().attach_spi_bus(bus.clone(), None);
+    engine.scheduler_mut().attach_spi_bus(bus, None);
 
     let frame_dt = 5e-3_f64;
-    let n = (ms as f64 / 1000.0 / frame_dt).round() as usize;
+    let n = usize::try_from(ms / 5).expect("frame count fits"); // 5 ms frames
     crate::support::last_flag(&mut engine, frame_dt, n)
 }
 
@@ -152,7 +150,6 @@ fn stm32_spi_adc_flag_follows_voltage_sweep() {
     }
     assert!(
         failures.is_empty(),
-        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for Renode): {:?}",
-        failures
+        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for Renode): {failures:?}"
     );
 }

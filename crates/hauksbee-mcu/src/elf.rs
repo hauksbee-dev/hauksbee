@@ -54,6 +54,7 @@ pub const EM_RISCV: u16 = 0xF3; // 243
 /// example shape) rather than a raw `40`, and the loader resolves it here.
 /// Returns `None` for an unrecognised name so the loader raises a named
 /// "unknown `e_machine`" error instead of silently accepting garbage.
+#[must_use]
 pub fn e_machine_from_name(name: &str) -> Option<u16> {
     match name {
         "EM_ARM" => Some(EM_ARM),
@@ -65,7 +66,8 @@ pub fn e_machine_from_name(name: &str) -> Option<u16> {
 }
 
 /// Human-readable name for an `e_machine` value, for error messages.
-pub fn machine_name(e_machine: u16) -> &'static str {
+#[must_use]
+pub const fn machine_name(e_machine: u16) -> &'static str {
     match e_machine {
         EM_ARM => "ARM",
         EM_AVR => "AVR",
@@ -88,10 +90,13 @@ pub fn machine_name(e_machine: u16) -> &'static str {
 /// The endianness of the half-word follows `e_ident[EI_DATA]` (offset 5):
 /// `1` = little-endian, `2` = big-endian. All supported targets are
 /// little-endian, but honouring the flag keeps the reader correct for any ELF.
+///
+/// # Errors
+///
+/// When the file cannot be opened or read.
 pub fn read_e_machine(path: &Path) -> Result<Option<u16>> {
-    let header = match read_header(path)? {
-        Some(h) => h,
-        None => return Ok(None), // not an ELF
+    let Some(header) = read_header(path)? else {
+        return Ok(None);
     };
     let little_endian = header[5] != 2; // EI_DATA: 2 = big-endian, else little
     let lo = header[E_MACHINE_OFFSET];
@@ -123,7 +128,7 @@ fn read_header(path: &Path) -> Result<Option<[u8; E_MACHINE_OFFSET + 2]>> {
                     break;
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => bail!("reading firmware '{}': {e}", path.display()),
         }
     }
@@ -133,12 +138,18 @@ fn read_header(path: &Path) -> Result<Option<[u8; E_MACHINE_OFFSET + 2]>> {
     Ok(Some(buf))
 }
 
-/// Validate that the firmware ELF at `path` targets `expected` (the ISA the
-/// selected backend/MCU executes), refusing with a clear, two-sided error if
-/// not. `mcu_label` names the board/MCU in the message (e.g. `"ESP32-C3"`).
+/// Validate that the firmware ELF at `path` targets `expected`.
+///
+/// `expected` is the ISA the selected backend/MCU executes; a mismatch is
+/// refused with a clear, two-sided error. `mcu_label` names the board/MCU in
+/// the message (e.g. `"ESP32-C3"`).
 ///
 /// Raw `.bin` images (no ELF header) cannot be checked, so this is a no-op for
 /// them; it returns `Ok(())` without guessing.
+///
+/// # Errors
+///
+/// When the file cannot be read, or its `e_machine` is not `expected`.
 pub fn validate_arch(path: &Path, expected: u16, mcu_label: &str) -> Result<()> {
     let Some(found) = read_e_machine(path)? else {
         // Not an ELF (raw .bin / .hex without a recoverable arch): skip.

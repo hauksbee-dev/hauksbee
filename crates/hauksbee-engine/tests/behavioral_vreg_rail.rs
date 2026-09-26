@@ -207,7 +207,7 @@ fn converter_vreg_with_out_role_stamps_no_ideal_source() {
 
 /// End to end: the converter actually regulates the rail and reflects a real
 /// input current. 33R on 3.3 V is 100 mA out, so the reflected 5 V input draw
-/// must be ~73 mA (P_out / (0.9 * 5V)), and emphatically not zero, zero input
+/// must be ~73 mA (`P_out` / (0.9 * 5V)), and emphatically not zero, zero input
 /// current was the ideal-rail-wins symptom.
 #[test]
 fn converter_vreg_regulates_and_draws_real_input_current() {

@@ -72,9 +72,13 @@ pub struct CompiledExpr {
 
 impl CompiledExpr {
     /// Parse a CANONICAL expression (identifiers restricted to `__d{k}` and
-    /// `time`). Anything else, a syntax error, an unknown identifier, is an
-    /// `Err(String)`; the loader wraps it with a line number, serde with a
-    /// deserialization error.
+    /// `time`).
+    ///
+    /// # Errors
+    ///
+    /// A syntax error, or any identifier other than a `__d<k>` slot or `time`,
+    /// as an `Err(String)`; the loader wraps it with a line number, serde with
+    /// a deserialization error.
     pub fn compile(src: &str) -> Result<Self, String> {
         let tree = build_operator_tree(src)
             .map_err(|e| format!("malformed behavioral expression `{src}`: {e}"))?;
@@ -105,23 +109,31 @@ impl CompiledExpr {
     }
 
     /// The canonical source text.
+    #[must_use]
     pub fn src(&self) -> &str {
         &self.src
     }
 
     /// Number of dependency slots (`__d0 .. __d{n-1}`) the expression reads.
-    pub fn n_slots(&self) -> usize {
+    #[must_use]
+    pub const fn n_slots(&self) -> usize {
         self.n_slots
     }
 
     /// Evaluate at the given dependency-slot values and time. `deps.len()`
     /// must be at least [`CompiledExpr::n_slots`] (the device's `deps` vec is
-    /// exactly that long by construction). Returns `Err` on an evaluation
-    /// fault (evalexpr error, or a non-float result); the caller decides what
-    /// a fault means (the stamp turns it into a device-named solver refusal).
+    /// exactly that long by construction).
+    ///
     /// NOTE: IEEE float semantics apply inside, `1/0` is `inf`, `ln(-1)` is
     /// NaN, not an error, so callers must ALSO guard the returned value with
     /// `is_finite()`; this function reports only structural faults.
+    ///
+    /// # Errors
+    ///
+    /// Fewer `deps` than [`CompiledExpr::n_slots`], an evalexpr evaluation
+    /// fault, or a result that is neither a number nor a boolean. The caller
+    /// decides what a fault means (the stamp turns it into a device-named
+    /// solver refusal).
     pub fn eval(&self, deps: &[f64], time: f64) -> Result<f64, String> {
         if deps.len() < self.n_slots {
             return Err(format!(
@@ -134,13 +146,13 @@ impl CompiledExpr {
         let vals = deps.iter().map(|&v| Value::Float(v)).collect();
         let ctx = Slots(vals, self.uses_time.then_some(Value::Float(time)));
         match self.tree.eval_with_context(&ctx) {
-            Ok(Value::Float(f)) => Ok(f),
-            Ok(Value::Int(i)) => Ok(i as f64),
             Ok(Value::Boolean(b)) => Ok(if b { 1.0 } else { 0.0 }),
-            Ok(other) => Err(format!(
-                "behavioral expression `{}` evaluated to a non-number ({other:?})",
-                self.src
-            )),
+            Ok(other) => other.as_number().map_err(|_| {
+                format!(
+                    "behavioral expression `{}` evaluated to a non-number ({other:?})",
+                    self.src
+                )
+            }),
             Err(e) => Err(format!(
                 "behavioral expression `{}` failed to evaluate: {e}",
                 self.src
@@ -149,7 +161,7 @@ impl CompiledExpr {
     }
 }
 
-/// One eval's `__d{k}` values, then `time` (all compile admits): a HashMapContext cost more.
+/// One eval's `__d{k}` values, then `time` (all compile admits): a `HashMapContext` cost more.
 struct Slots(Vec<Value>, Option<Value>);
 
 impl Context for Slots {
@@ -212,7 +224,7 @@ mod tests {
         let back: CompiledExpr = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
         assert_eq!(format!("{e:?}"), format!("{back:?}"));
-        assert_eq!(back.eval(&[1.0, 0.0], 2.0).unwrap(), v);
+        assert_eq!(back.eval(&[1.0, 0.0], 2.0).unwrap().to_bits(), v.to_bits());
     }
 
     #[test]

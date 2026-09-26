@@ -44,7 +44,7 @@
 //! mutations, no transient, no DC, preserving the prep-stays-solve-free
 //! invariant `tarski_prep` established.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -54,16 +54,20 @@ use hauksbee_ir::{Device, NodeId};
 
 use crate::binder::BoundBoard;
 
-/// First node id handed to floated (cut/lifted) terminals. Must clear the
-/// binder's node namespace entirely, [`apply`](AsBuiltOverlay::apply) fails
-/// loudly if any bound node reaches it. The value is the historical base
-/// `tarski_prep::fault1_cut` used, kept so the overlay's result is
-/// byte-identical to the proven imperative surgery.
+/// First node id handed to floated (cut/lifted) terminals.
+///
+/// Must clear the binder's node namespace entirely,
+/// [`apply`](AsBuiltOverlay::apply) fails loudly if any bound node reaches
+/// it. The value is the historical base `tarski_prep::fault1_cut` used,
+/// kept so the overlay's result is byte-identical to the proven imperative
+/// surgery.
 pub const FLOAT_NODE_BASE: u32 = 800_000;
 
-/// Everything that can go wrong loading or applying an overlay. Messages are
-/// self-contained: they carry the overlay origin (path), the 1-based line of
-/// the offending entry, and near-match suggestions where a name was unknown.
+/// Everything that can go wrong loading or applying an overlay.
+///
+/// Messages are self-contained: they carry the overlay origin (path), the
+/// 1-based line of the offending entry, and near-match suggestions where a
+/// name was unknown.
 #[derive(Debug, thiserror::Error)]
 pub enum AsBuiltError {
     #[error("as-built overlay {origin}: TOML parse error: {source}")]
@@ -194,7 +198,7 @@ pub struct SetValues {
 }
 
 impl SetValues {
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.ohms.is_none() && self.farads.is_none() && self.von.is_none() && self.voff.is_none()
     }
     /// `was`-refinement: does `dev`'s current value match every declared key
@@ -202,9 +206,8 @@ impl SetValues {
     /// match rather than erroring: `was` selects, `set` demands.)
     fn matches_current(&self, dev: &Device) -> bool {
         let near = |actual: f64, expected: f64| (actual - expected).abs() < 0.01 * expected.abs();
-        let ok = |declared: Option<f64>, actual: Option<f64>| match declared {
-            None => true,
-            Some(exp) => actual.is_some_and(|act| near(act, exp)),
+        let ok = |declared: Option<f64>, actual: Option<f64>| {
+            declared.is_none_or(|exp| actual.is_some_and(|act| near(act, exp)))
         };
         let (ohms, farads, von, voff) = match dev {
             Device::Resistor { ohms, .. } => (Some(*ohms), None, None, None),
@@ -245,11 +248,11 @@ pub enum Terminal {
 
 impl Terminal {
     /// The mutable node this role names on `dev`, when the variant has it.
-    fn node_mut<'d>(&self, dev: &'d mut Device) -> Option<&'d mut NodeId> {
+    const fn node_mut(self, dev: &mut Device) -> Option<&mut NodeId> {
         match (self, dev) {
-            (Terminal::Base, Device::Bjt { b, .. }) => Some(b),
-            (Terminal::Collector, Device::Bjt { c, .. }) => Some(c),
-            (Terminal::Emitter, Device::Bjt { e, .. }) => Some(e),
+            (Self::Base, Device::Bjt { b, .. }) => Some(b),
+            (Self::Collector, Device::Bjt { c, .. }) => Some(c),
+            (Self::Emitter, Device::Bjt { e, .. }) => Some(e),
             _ => None,
         }
     }
@@ -293,12 +296,14 @@ pub struct Jumper {
 
 /// A part wired ON during rework: a new two-terminal device soldered between
 /// two existing nets (a pull resistor onto a floating control line, a bulk
-/// capacitor across a rail). Exactly one of `ohms` / `farads` names the part;
-/// `ref` is the rework record's own designator and must not collide with a
-/// fabricated device, so the overlay can never silently shadow the board.
-/// Nets are named as on the board; a fresh node from a `[[cut]]` cannot be a
-/// terminal (it has no name by construction; when a rework wires into a cut,
-/// record the wire side with a `[[jumper]]` onto a real net instead).
+/// capacitor across a rail).
+///
+/// Exactly one of `ohms` / `farads` names the part; `ref` is the rework
+/// record's own designator and must not collide with a fabricated device, so
+/// the overlay can never silently shadow the board. Nets are named as on the
+/// board; a fresh node from a `[[cut]]` cannot be a terminal (it has no name
+/// by construction; when a rework wires into a cut, record the wire side with
+/// a `[[jumper]]` onto a real net instead).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fit {
@@ -362,6 +367,10 @@ pub struct AsBuiltReport {
 impl AsBuiltOverlay {
     /// Parse an overlay from TOML text. `origin` labels errors (a path, or a
     /// symbolic name for embedded overlays).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AsBuiltError::Parse`] when `src` is not a valid overlay TOML document.
     pub fn parse(src: &str, origin: &str) -> Result<Self, AsBuiltError> {
         let doc: AsBuiltDoc = toml::from_str(src).map_err(|e| AsBuiltError::Parse {
             origin: origin.to_string(),
@@ -375,6 +384,11 @@ impl AsBuiltOverlay {
     }
 
     /// Load an overlay from a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AsBuiltError::Io`] when the file cannot be read, or
+    /// [`AsBuiltError::Parse`] when its contents are not a valid overlay.
     pub fn load(path: &Path) -> Result<Self, AsBuiltError> {
         let origin = path.display().to_string();
         let src = std::fs::read_to_string(path).map_err(|e| AsBuiltError::Io {
@@ -385,7 +399,8 @@ impl AsBuiltOverlay {
     }
 
     /// The `[board]` provenance block, if the overlay carries one.
-    pub fn board(&self) -> Option<&BoardMeta> {
+    #[must_use]
+    pub const fn board(&self) -> Option<&BoardMeta> {
         self.doc.board.as_ref()
     }
 
@@ -399,6 +414,12 @@ impl AsBuiltOverlay {
     /// → jumper. Fail-loud: the first entry that does not describe this board
     /// (unknown ref/net, match-count drift, key/variant mismatch) aborts with
     /// a line-numbered error and the board must be considered poisoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first entry that does not describe this board: an unknown
+    /// reference or net, a match count that drifted, a key/variant mismatch, or a
+    /// node space too full to allocate floating nodes for cuts and lifts.
     pub fn apply(&self, bound: &mut BoundBoard) -> Result<AsBuiltReport, AsBuiltError> {
         let mut report = AsBuiltReport::default();
         for rep in &self.doc.replaces {
@@ -485,7 +506,7 @@ impl AsBuiltOverlay {
             .circuit
             .devices
             .iter()
-            .flat_map(|d| d.nodes())
+            .flat_map(hauksbee_ir::Device::nodes)
             .chain(bound.net_nodes.values().copied())
             .map(|n| n.0)
             .max()
@@ -622,7 +643,7 @@ impl AsBuiltOverlay {
             });
         }
         let mut severed = 0usize;
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             if let Some(node) = cut.terminal.node_mut(dev) {
                 if matched_nodes.contains(node) {
                     *node = NodeId(*next_float);
@@ -660,7 +681,7 @@ impl AsBuiltOverlay {
         let reference = lift.reference.get_ref().as_str();
         let mut lifted = 0usize;
         let mut name_matches = 0usize;
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             if !dev.name().contains(reference) {
                 continue;
             }
@@ -740,7 +761,7 @@ impl AsBuiltOverlay {
                 net: jumper.to.get_ref().clone(),
             });
         }
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             dev.map_nodes(&mut |n| if n == to { from } else { n });
         }
         for nid in bound.net_nodes.values_mut() {
@@ -755,7 +776,7 @@ impl AsBuiltOverlay {
         // node, so ADC injection, GPIO drive, rail stamping, and DAC output all
         // read/write the wrong (now-floating) node after a bodge-wire. (R8 #6)
         let remap = |n: NodeId| if n == to { from } else { n };
-        for mcu in bound.mcus.iter_mut() {
+        for mcu in &mut bound.mcus {
             for n in mcu.role_nets.values_mut() {
                 *n = remap(*n);
             }
@@ -766,15 +787,15 @@ impl AsBuiltOverlay {
                 drv.net = remap(drv.net);
             }
         }
-        for dac in bound.dacs.iter_mut() {
+        for dac in &mut bound.dacs {
             for drv in dac.vout_drivers.iter_mut().flatten() {
                 drv.net = remap(drv.net);
             }
         }
-        for leg in bound.supplies.iter_mut() {
+        for leg in &mut bound.supplies {
             leg.net = remap(leg.net);
         }
-        for b in bound.behavioral.iter_mut() {
+        for b in &mut bound.behavioral {
             b.remap_node(remap);
         }
         // Digital components cache raw NodeIds the same way: `roles` maps each
@@ -784,7 +805,7 @@ impl AsBuiltOverlay {
         // unremapped after a bodge wire, an input role samples the orphaned
         // (now floating ~0 V) `to` node instead of the merged net, so a buffer
         // or shift-register reads a stale LOW regardless of the real signal.
-        for d in bound.digital.iter_mut() {
+        for d in &mut bound.digital {
             for n in d.roles.values_mut() {
                 *n = remap(*n);
             }
@@ -801,7 +822,7 @@ impl AsBuiltOverlay {
     }
 }
 
-fn variant_name(dev: &Device) -> &'static str {
+const fn variant_name(dev: &Device) -> &'static str {
     match dev {
         Device::Resistor { .. } => "resistor",
         Device::Capacitor { .. } => "capacitor",
@@ -849,16 +870,16 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 /// Mirrors `hauksbee-ci/src/error.rs::near_matches` (that crate depends on
 /// this one, so the helper cannot be imported without inverting the edge).
 fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
-    let mut scored: BTreeMap<(usize, &str), ()> = BTreeMap::new();
+    let mut scored: BTreeSet<(usize, &str)> = BTreeSet::new();
     for k in known {
         let d = levenshtein(target, k);
         // Only offer plausible neighbours: within half the target's length.
         if d <= target.len().div_ceil(2).max(2) {
-            scored.insert((d, k.as_str()), ());
+            scored.insert((d, k.as_str()));
         }
     }
     scored
-        .keys()
+        .iter()
         .take(limit)
         .map(|(_, k)| k.to_string())
         .collect()
@@ -947,7 +968,7 @@ mod tests {
             } => {
                 assert_eq!(name, "R_PULL_OE");
                 assert_eq!((a.0, b.0), (1, 2));
-                assert_eq!(*ohms, 10_000.0);
+                assert!((*ohms - 10_000.0).abs() < 1e-9, "{ohms}");
             }
             other => panic!("expected the fitted resistor, got {other:?}"),
         }
@@ -1019,14 +1040,15 @@ mod tests {
         assert_eq!(levenshtein("same", "same"), 0);
     }
 
-    /// Round-8 #6: an as-built `[[jumper]]` merging net `N` (NodeId 2) onto
-    /// `BUS` (NodeId 1) must remap not only the circuit devices and net_nodes
-    /// but also the cached NodeIds the binder stashed on the event-driven layer;
+    /// Round-8 #6: an as-built `[[jumper]]` merging net `N` (`NodeId` 2) onto
+    /// `BUS` (`NodeId` 1) must remap not only the circuit devices and `net_nodes`
+    /// but also the cached `NodeIds` the binder stashed on the event-driven layer;
     /// the MCU's role/ADC/GPIO node maps and the DAC output drivers. Left
     /// stale they point at the orphaned node.
     #[test]
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {
         use crate::binder::{BoundBoard, DacBinding, McuBinding};
+        use crate::digital::{DigitalComponent, LogicLevels};
         use crate::drivers::PinDriver;
         use hauksbee_ir::{DeviceId, NodeId};
         use std::collections::HashMap;
@@ -1042,21 +1064,15 @@ mod tests {
             ron: 25.0,
         };
 
-        let mut role_nets = HashMap::new();
-        role_nets.insert("adc0".to_string(), n);
-        let mut adc_nets = HashMap::new();
-        adc_nets.insert(0u8, n);
-        let mut gpio_drivers = HashMap::new();
-        gpio_drivers.insert(('A', 5u8), drv(n));
         let mcu = McuBinding {
             reference: "U1".to_string(),
             backend: String::new(),
             requested_part: String::new(),
             external_clock_present: false,
             pad_roles: HashMap::new(),
-            role_nets,
-            gpio_drivers,
-            adc_nets,
+            role_nets: HashMap::from([("adc0".to_string(), n)]),
+            gpio_drivers: HashMap::from([(('A', 5u8), drv(n))]),
+            adc_nets: HashMap::from([(0u8, n)]),
             adc_pin: HashMap::new(),
             module: false,
             max_supply_v: None,
@@ -1073,11 +1089,6 @@ mod tests {
         // sit on the net being merged away: after the jumper its cached role
         // NodeId and driver net must follow to BUS or it samples/drives the
         // orphaned floating node.
-        use crate::digital::{DigitalComponent, LogicLevels};
-        let mut dig_roles = HashMap::new();
-        dig_roles.insert("a0".to_string(), n);
-        let mut dig_drivers = HashMap::new();
-        dig_drivers.insert("y0".to_string(), drv(n));
         let digital = DigitalComponent {
             reference: "U7".to_string(),
             levels: LogicLevels {
@@ -1087,18 +1098,14 @@ mod tests {
                 vil: 1.35,
                 ro: 25.0,
             },
-            roles: dig_roles,
-            drivers: dig_drivers,
+            roles: HashMap::from([("a0".to_string(), n)]),
+            drivers: HashMap::from([("y0".to_string(), drv(n))]),
             logic: None,
             supply: None,
         };
 
-        let mut net_nodes = HashMap::new();
-        net_nodes.insert("BUS".to_string(), bus);
-        net_nodes.insert("N".to_string(), n);
-
         let mut bound = BoundBoard {
-            net_nodes,
+            net_nodes: HashMap::from([("BUS".to_string(), bus), ("N".to_string(), n)]),
             digital: vec![digital],
             mcus: vec![mcu],
             dacs: vec![dac],

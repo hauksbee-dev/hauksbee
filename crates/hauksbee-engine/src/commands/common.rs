@@ -1,6 +1,8 @@
-//! Small helpers shared by more than one command handler: board-text loading,
-//! the Board-as-Code header sniff, the served-file name, and the websocket server
-//! launcher (`hauksbee serve` and `run --serve` both reach it).
+//! Small helpers shared by more than one command handler.
+//!
+//! They cover board-text loading, the Board-as-Code header sniff, the served-file name,
+//! and the websocket server launcher (`hauksbee serve` and `run --serve` both reach
+//! it).
 
 use std::path::{Path, PathBuf};
 
@@ -9,6 +11,12 @@ use hauksbee_server::Server;
 
 use crate::engine::HauksbeeEngine;
 
+/// Read a text board file for `to-code`, refusing directories and binary formats.
+///
+/// # Errors
+///
+/// Returns an error if `path` is a directory, does not exist or cannot be read, is
+/// a recognised but unsupported board format, or is not valid UTF-8 text.
 pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
     // A directory here would surface as the raw OS errno ("Is a directory");
     // say what is wrong and note the asymmetry with from-code, which accepts
@@ -71,10 +79,12 @@ fn read_board_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
 /// without that extension still route through the recompile path.
 pub use hauksbee_bind::board_input::is_board_code_header;
 
-/// Width-cap every line of an error message that quotes file content (a TOML
-/// parser's caret-annotated snippet). A machine-written input can be one
+/// Width-cap every line of an error message that quotes file content.
+///
+/// The typical input is a TOML parser's caret-annotated snippet. A machine-written input can be one
 /// enormous line, and quoting it whole buries the actual error; anything past
 /// the cap is elided with a marker. Lines within the cap pass through intact.
+#[must_use]
 pub fn cap_context_width(msg: &str) -> String {
     const MAX: usize = 200;
     msg.lines()
@@ -90,6 +100,7 @@ pub fn cap_context_width(msg: &str) -> String {
         .join("\n")
 }
 
+#[must_use]
 pub fn file_name(p: &Path) -> String {
     p.file_name()
         .and_then(|s| s.to_str())
@@ -97,8 +108,9 @@ pub fn file_name(p: &Path) -> String {
         .to_string()
 }
 
-/// The browser tool panels' backend hooks, shared by `hauksbee serve` and
-/// `run --serve`: dependency status is the engine's own discovery
+/// The browser tool panels' backend hooks, shared by `hauksbee serve` and `run --serve`.
+///
+/// Dependency status is the engine's own discovery
 /// (`deps::deps_json`), installs go through the engine's streaming installer
 /// (`deps::install_dep`, which enforces its own one-at-a-time slot, timeout, and
 /// output cap), and datasheet extraction goes through `webextract` (which holds
@@ -115,11 +127,12 @@ pub fn deps_hooks() -> hauksbee_frontdoor_api::frontdoor::ToolHooks {
 /// The shipped browser analyzer, including optional Eagle schematic identity
 /// and net-tie evidence. A supplied but invalid companion is a report refusal,
 /// never a silent fallback to board-only analysis.
+#[must_use]
 pub fn schematic_analyzer() -> hauksbee_frontdoor_api::frontdoor::SchematicAnalyzer {
     std::sync::Arc::new(|name, contents, firmware, schematic| {
         let norm = match crate::board_input::from_bytes(name, contents) {
             Ok(norm) => norm,
-            Err(error) => return crate::frontdoor::unreadable_input_json(name, contents, error),
+            Err(error) => return crate::frontdoor::unreadable_input_json(name, contents, &error),
         };
         let board_is_eagle = norm
             .layout_text
@@ -140,7 +153,7 @@ pub fn schematic_analyzer() -> hauksbee_frontdoor_api::frontdoor::SchematicAnaly
                 return crate::frontdoor::unreadable_input_json(
                     name,
                     companion_bytes,
-                    crate::board_input::BoardInputError::Schematic(error.to_string()),
+                    &crate::board_input::BoardInputError::Schematic(error.to_string()),
                 );
             }
         };
@@ -161,10 +174,12 @@ pub fn design_analyzer() -> hauksbee_frontdoor_api::frontdoor::DesignAnalyzer {
     std::sync::Arc::new(crate::frontdoor::analyze_design_json)
 }
 
-/// The browser deck panel's backend: run one uploaded SPICE deck through the
-/// very function `hauksbee sim` runs, and answer with its numbers AND the CSV
-/// bytes the CLI would have written. The panel therefore has no CSV writer and
-/// no second formatting rule that could drift from the command line.
+/// The browser deck panel's backend: run one uploaded SPICE deck as `hauksbee sim` does.
+///
+/// It runs the deck through the very function `hauksbee sim` runs, and answers with its
+/// numbers AND the CSV bytes the CLI would have written. The panel therefore has no CSV
+/// writer and no second formatting rule that could drift from the command line.
+#[must_use]
 pub fn deck_simulator() -> hauksbee_frontdoor_api::frontdoor::DeckSimulator {
     use crate::commands::sim::{sim_output_to_csv, simulate_deck_within, DECK_TIME_LIMIT};
     std::sync::Arc::new(|name: &str, deck: &str| {
@@ -217,7 +232,7 @@ fn csv_fields(line: &str) -> Vec<&str> {
 
 /// Retain the exact uploaded text behind `/boards/{name}` for an honest saved-
 /// session re-run. In particular, Board-as-Code evidence authenticates the DSL
-/// bytes, not the compiled KiCad layout used internally by the solver.
+/// bytes, not the compiled `KiCad` layout used internally by the solver.
 pub(crate) fn resumable_board_file(
     name: &str,
     contents: &[u8],
@@ -235,7 +250,9 @@ pub(crate) fn resumable_board_file(
         .map(|text| (name.to_string(), text.to_string()))
 }
 
+#[must_use]
 pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::SchematicLiveLauncher {
+    use hauksbee_extract::ExtractedBoard;
     use hauksbee_frontdoor_api::frontdoor::LiveLaunch;
     use std::io::Write as _;
     use std::sync::Arc;
@@ -266,11 +283,10 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
             // the live sim silently simulated the un-shorted board while the
             // report's co-sim block (for the same board) ran with the shorts
             // bridged and said so.
-            use hauksbee_extract::ExtractedBoard;
             let drc = if norm.is_binary() {
                 ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
             } else if norm.is_gerber() {
-                Default::default()
+                hauksbee_extract::DrcReport::default()
             } else {
                 ExtractedBoard::drc(norm.layout_text.as_deref().unwrap_or_default())
                     .unwrap_or_default()
@@ -279,7 +295,7 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
             let mut board = norm.board;
             // Same DNP default as bare `hauksbee run` (no --fit/--no-fit here).
             board
-                .apply_dnp_policy(Default::default(), &[], &[])
+                .apply_dnp_policy(hauksbee_extract::dnp::DnpPolicy::default(), &[], &[])
                 .map_err(|e| e.to_string())?;
             let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
             let bound = crate::binder::bind_board(&board, &lib);
@@ -309,7 +325,7 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
                     .tempfile()
                     .map_err(|e| format!("could not stage the firmware: {e}"))?;
                 tmp.write_all(&resolved.bytes)
-                    .and_then(|_| tmp.flush())
+                    .and_then(|()| tmp.flush())
                     .map_err(|e| format!("could not write the firmware: {e}"))?;
                 fw_path = Some(tmp.path().to_path_buf());
                 keepalive = Some(Box::new(tmp));
@@ -337,6 +353,7 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
 
 /// Complete browser live-launch path: the same BOM/placement/as-built/model
 /// bundle used by the report is applied before the engine is constructed.
+#[must_use]
 pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLauncher {
     use hauksbee_frontdoor_api::frontdoor::LiveLaunch;
     use std::io::Write as _;
@@ -350,7 +367,7 @@ pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLa
         let drc = if prepared.norm.is_binary() {
             hauksbee_extract::ExtractedBoard::altium_drc(&prepared.norm.raw).unwrap_or_default()
         } else if prepared.norm.is_gerber() {
-            Default::default()
+            hauksbee_extract::DrcReport::default()
         } else {
             hauksbee_extract::ExtractedBoard::drc(
                 prepared.norm.layout_text.as_deref().unwrap_or_default(),
@@ -382,7 +399,7 @@ pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLa
                 .tempfile()
                 .map_err(|error| format!("could not stage the firmware: {error}"))?;
             temp.write_all(&resolved.bytes)
-                .and_then(|_| temp.flush())
+                .and_then(|()| temp.flush())
                 .map_err(|error| format!("could not write the firmware: {error}"))?;
             firmware_path = Some(temp.path().to_path_buf());
             firmware_temp = Some(temp);
@@ -407,6 +424,12 @@ pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLa
     })
 }
 
+/// Serve the web app and live websocket session for a preloaded engine.
+///
+/// # Errors
+///
+/// Returns an error if the Tokio runtime cannot be created, if no listening port can
+/// be bound, or if the server stops with an error.
 #[cfg(feature = "serve")]
 pub fn serve(
     mut engine: HauksbeeEngine,
@@ -429,7 +452,7 @@ pub fn serve(
         let session_name = board_file
             .as_ref()
             .and_then(|(url, _)| url.rsplit('/').next())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let server = Server::new_named(Box::new(engine), session_name);
         // Resolve the web app via the ladder (HAUKSBEE_WEB_DIST override ->
         // checkout dist -> embedded copy), so an installed release binary shows
@@ -498,6 +521,10 @@ pub fn serve(
 }
 
 /// Preserve the CLI contract in builds that deliberately omit the web server.
+///
+/// # Errors
+///
+/// Always returns an error naming the rebuild command, since this build has no server.
 #[cfg(not(feature = "serve"))]
 pub fn serve(
     _engine: HauksbeeEngine,
@@ -518,8 +545,9 @@ pub const NO_SERVE: &str = "hauksbee was built without the serve feature: rebuil
      `cargo build --release -p hauksbee-engine --features serve` (`serve` is on by default, so a \
      plain `cargo build --release` also gets it).";
 
-/// Advisory staleness check for the served React bundle. `frontend/dist` is a
-/// gitignored build artifact: `git pull` updates `frontend/src` but never
+/// Advisory staleness check for the served React bundle.
+///
+/// `frontend/dist` is a gitignored build artifact: `git pull` updates `frontend/src` but never
 /// `dist/`, so `hauksbee serve` happily serves a stale bundle and the user
 /// re-hits bugs that are already fixed in the sources. If any file under the
 /// sibling `frontend/src` (or `frontend/index.html`) is newer than
@@ -539,6 +567,7 @@ pub fn warn_if_dist_stale(dist_dir: &Path) {
 
 /// Testable core of [`warn_if_dist_stale`]: returns the warning to print when
 /// `dist_dir/index.html` is older than any file under `source_paths`.
+#[must_use]
 pub fn dist_stale_message(dist_dir: &Path, source_paths: &[PathBuf]) -> Option<String> {
     let built = std::fs::metadata(dist_dir.join("index.html"))
         .and_then(|m| m.modified())

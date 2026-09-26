@@ -3,7 +3,7 @@
 //!   - a VCD sink records the right transitions to a gtkwave-compatible file
 //!     (the third required proof).
 
-use std::path::PathBuf;
+use std::{fmt::Write as _, path::PathBuf};
 
 use hauksbee_ci::{run, RunConfig};
 
@@ -71,12 +71,9 @@ fn ci_vcd_sink_records_transitions() {
     // 1 kHz square wave on CLK for 10 ms via a PWL stimulus pulse train: 0/5 V
     // every 0.5 ms. The sink logs CLK; we expect ~20 transitions in 10 ms.
     let mut pwl = String::new();
-    let mut t = 0.0;
-    let mut level = 0.0;
-    while t <= 10.0 {
-        pwl.push_str(&format!("  [{t}, {level}],\n"));
-        level = if level == 0.0 { 5.0 } else { 0.0 };
-        t += 0.5;
+    for step in 0..=20_u8 {
+        let (t, level) = (f64::from(step) * 0.5, f64::from(step % 2) * 5.0);
+        let _ = writeln!(pwl, "  [{t}, {level}],");
     }
     let spec = format!(
         r#"name = "vcd sink records a clock"

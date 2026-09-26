@@ -23,8 +23,9 @@ pub struct NamedUpload {
     pub bytes: Vec<u8>,
 }
 
-/// The complete design-input bundle shared by browser analysis, Checks, and
-/// Live Sim. Keeping this contract in one type prevents a surface from quietly
+/// The complete design-input bundle shared by browser analysis, Checks, and Live Sim.
+///
+/// Keeping this contract in one type prevents a surface from quietly
 /// dropping manufacturing identity or model context accepted by another.
 #[derive(Debug, Clone)]
 pub struct DesignUpload {
@@ -41,8 +42,9 @@ pub struct DesignUpload {
 /// Analyze the complete browser design-input bundle.
 pub type DesignAnalyzer = Arc<dyn Fn(DesignUpload) -> String + Send + Sync>;
 
-/// Simulate a raw SPICE deck: `(file_name, deck_text) -> JSON result`, or the
-/// reason it was refused. The result carries the same CSV bytes
+/// Simulate a raw SPICE deck: `(file_name, deck_text) -> JSON result`.
+///
+/// On refusal it returns the reason instead. The result carries the same CSV bytes
 /// `hauksbee sim` writes, so the browser needs no CSV writer of its own.
 pub type DeckSimulator = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
 

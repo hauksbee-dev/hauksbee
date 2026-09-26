@@ -2,7 +2,7 @@
 //!
 //! The board (`stm32_adc_divider_demo.kicad_pcb`) is the blue pill demo plus a
 //! 10k/10k divider on PA0; the binder maps LQFP-48 pin 10 (`pa0_adc0`) to
-//! engine ADC channel 0, so the scheduler pushes the solved TEMP_SENSE voltage
+//! engine ADC channel 0, so the scheduler pushes the solved `TEMP_SENSE` voltage
 //! into the core every chunk. The stock Renode 1.16.1 STM32F103 platform
 //! models NO ADC and the shipped descriptor honestly carries no `[[soc.adc]]`
 //! map, so every one of those injections is DROPPED by the backend.
@@ -13,7 +13,7 @@
 //!
 //!   1. the backend records the drop and the scheduler resolves it to the MCU,
 //!      channel, and board net (`adc_dropped()`), and
-//!   2. `build_cosim_json` carries it into the machine-readable CosimJson (the
+//!   2. `build_cosim_json` carries it into the machine-readable `CosimJson` (the
 //!      exact struct `hauksbee run --json` serializes), so no machine consumer
 //!      can miss it.
 //!

@@ -13,7 +13,7 @@
 //! but the spec's `net_drive` is a no-op on a rail that already has a source, its
 //! `stimulus` injects through a 50 ohm series resistor (never singular), a
 //! `[[supply]]` reconfigures the existing leg rather than adding a second, and a
-//! KiCad board file cannot express two ideal rails on one net. So the divergence
+//! `KiCad` board file cannot express two ideal rails on one net. So the divergence
 //! itself is proven at the scheduler level (`cosim_failed_chunk.rs`), and the
 //! CI-layer consequences are proven here at the outcome/evaluation boundary.
 

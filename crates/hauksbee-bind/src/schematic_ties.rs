@@ -51,10 +51,16 @@ pub struct SchematicTies {
 /// `<eagle>` test `ExtractedBoard::drc_with_clearance_rules` dispatches on.
 ///
 /// Auto-discovery is silent on absence, which is the common case, and silent on
-/// a sibling `.sch` that turns out to be some other tool's format. A KiCad 5
+/// a sibling `.sch` that turns out to be some other tool's format. A `KiCad` 5
 /// legacy `.sch` sits beside plenty of boards and is not an Eagle file; guessing
 /// from the extension alone and then failing the run would break every such
 /// project for no gain.
+///
+/// # Errors
+///
+/// Fails when an explicit `--schematic` is given for a non-Eagle board, does
+/// not share the board's file stem, cannot be read, is not an Eagle 6+ XML
+/// schematic, or describes a different design.
 pub fn resolve(
     board_path: &Path,
     board: &hauksbee_extract::ExtractedBoard,
@@ -152,8 +158,16 @@ pub fn resolve(
 }
 
 /// Validate and resolve a browser-uploaded companion schematic without
-/// inventing a filesystem path. Unlike sibling discovery, a supplied upload is
-/// explicit input: malformed, mismatched, or non-Eagle data fails closed.
+/// inventing a filesystem path.
+///
+/// Unlike sibling discovery, a supplied upload is explicit input: malformed,
+/// mismatched, or non-Eagle data fails closed.
+///
+/// # Errors
+///
+/// Fails when a schematic is supplied for a non-Eagle board, its name does
+/// not share the board's basename, it is not an Eagle 6+ XML schematic, or it
+/// describes a different design.
 pub fn resolve_uploaded(
     board_name: &str,
     board: &hauksbee_extract::ExtractedBoard,
@@ -167,15 +181,12 @@ pub fn resolve_uploaded(
     let schematic_path = Path::new(schematic_name);
     if !board_is_eagle {
         anyhow::bail!(
-            "schematic upload {}: this board is not an Eagle .brd; refusing unrelated companion input",
-            schematic_name
+            "schematic upload {schematic_name}: this board is not an Eagle .brd; refusing unrelated companion input"
         );
     }
     if board_path.file_stem() != schematic_path.file_stem() {
         anyhow::bail!(
-            "schematic upload {}: design identity does not match board {}: Eagle companion files must share a basename",
-            schematic_name,
-            board_name
+            "schematic upload {schematic_name}: design identity does not match board {board_name}: Eagle companion files must share a basename"
         );
     }
     if hauksbee_extract::looks_like_eagle_binary(raw) {
@@ -287,6 +298,7 @@ fn verify_design_identity(
 impl SchematicTies {
     /// Qualify the measured report without changing its established public
     /// shape. Renderers and gates consume the returned side data.
+    #[must_use]
     pub fn qualify(
         &self,
         report: &hauksbee_extract::DrcReport,
@@ -294,6 +306,7 @@ impl SchematicTies {
         report.qualify_with_declared_ties(&self.path.to_string_lossy(), &self.ties)
     }
 
+    #[must_use]
     pub fn contribution(&self, qualification: &hauksbee_extract::DrcTieQualification) -> String {
         let matched = qualification.matched_declaration_count();
         format!(

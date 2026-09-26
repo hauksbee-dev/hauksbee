@@ -2,7 +2,7 @@
 //! place a dropped ADC injection and an unexercised bus already appear.
 //!
 //! Two findings ride `CiResult::coverage_warnings` and therefore the human,
-//! JUnit, and GitHub-annotation formats:
+//! `JUnit`, and GitHub-annotation formats:
 //!
 //!   1. an armed watchdog that CANNOT reboot the core the way silicon does
 //!      (`renode:nrf52840`, the ESP32 timer groups), which means firmware that
@@ -29,8 +29,8 @@ use hauksbee_ci::run;
 
 use crate::support::{self, repo};
 
-/// A spec that runs `firmware` on the ATmega blinky board for 200 ms in 5 ms
-/// frames. The WDTO_15MS timeout bites in frame 3 or 4 of every reboot cycle, so
+/// A spec that runs `firmware` on the `ATmega` blinky board for 200 ms in 5 ms
+/// frames. The `WDTO_15MS` timeout bites in frame 3 or 4 of every reboot cycle, so
 /// the window holds about a dozen reboots rather than resting on the first.
 ///
 /// The assertion is deliberately unrelated to the watchdog: a green verdict here

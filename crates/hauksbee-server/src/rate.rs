@@ -68,7 +68,8 @@ impl Default for RateMeter {
 }
 
 impl RateMeter {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             progress: VecDeque::new(),
             costs: VecDeque::new(),
@@ -83,15 +84,15 @@ impl RateMeter {
     }
 
     /// Record one completed engine step: it consumed `step_wall` wall seconds
-    /// to produce `sim_dt` sim seconds, and afterwards the sim clock stands at
+    /// to produce `step_sim` sim seconds, and afterwards the sim clock stands at
     /// `sim_t` at wall time `wall_s` (seconds on any monotonic axis).
-    pub fn record(&mut self, wall_s: f64, sim_t: f64, step_wall: f64, sim_dt: f64) {
+    pub fn record(&mut self, wall_s: f64, sim_t: f64, step_wall: f64, step_sim: f64) {
         self.progress.push_back(Progress { wall_s, sim_t });
-        if sim_dt > 0.0 {
+        if step_sim > 0.0 {
             self.costs.push_back(StepCost {
                 wall_s,
                 step_wall,
-                sim_dt,
+                sim_dt: step_sim,
             });
         }
         let cutoff = wall_s - WINDOW_WALL_S;
@@ -110,6 +111,7 @@ impl RateMeter {
     /// while the window is too short to measure, and to `None` before any
     /// step has been recorded (a caller with nothing measured must not claim
     /// a rate).
+    #[must_use]
     pub fn achieved(&self) -> Option<f64> {
         if let (Some(first), Some(last)) = (self.progress.front(), self.progress.back()) {
             let span = last.wall_s - first.wall_s;
@@ -150,6 +152,7 @@ impl RateMeter {
     /// The factor the loop should pace this tick: the requested factor, capped
     /// to the measured sustainable ceiling (floored so the sim never wedges).
     /// Returns the paced factor and whether the cap engaged.
+    #[must_use]
     pub fn paced_factor(&self, requested: f64) -> (f64, bool) {
         match self.ceiling() {
             Some(ceiling) if ceiling < requested => (ceiling.max(MIN_FACTOR), true),
@@ -162,15 +165,15 @@ impl RateMeter {
 mod tests {
     use super::*;
 
-    /// Drive the meter as a loop would: each tick advances `tick_s` of wall
-    /// time from `wall0`, the engine produces `sim_dt` sim seconds at `cost`
+    /// Drive the meter as a loop would: each tick advances `tick_wall` of wall
+    /// time from `wall0`, the engine produces `dt` sim seconds at `cost`
     /// wall seconds per sim second.
-    fn drive(meter: &mut RateMeter, wall0: f64, ticks: usize, tick_s: f64, sim_dt: f64, cost: f64) {
+    fn drive(meter: &mut RateMeter, wall0: f64, ticks: usize, tick_wall: f64, dt: f64, cost: f64) {
         let (mut wall, mut sim_t) = (wall0, 0.0);
         for _ in 0..ticks {
-            wall += tick_s;
-            sim_t += sim_dt;
-            meter.record(wall, sim_t, sim_dt * cost, sim_dt);
+            wall += tick_wall;
+            sim_t += dt;
+            meter.record(wall, sim_t, dt * cost, dt);
         }
     }
 
@@ -212,7 +215,7 @@ mod tests {
         let (paced, limited) = meter.paced_factor(1.0);
         assert!(limited);
         assert!(
-            (paced - 0.1 * HEADROOM).abs() < 0.01,
+            0.1f64.mul_add(-HEADROOM, paced).abs() < 0.01,
             "paced {paced} should be ~{}",
             0.1 * HEADROOM
         );

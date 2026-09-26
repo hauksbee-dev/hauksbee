@@ -59,6 +59,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt::Write as _;
 
 mod date;
 pub use date::{parse_ymd_epoch_days, RunDate, WaiverState};
@@ -136,8 +137,9 @@ pub enum EvidenceError {
 // Assumptions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stable identity for one assumption within a run. Deterministic:
-/// `"{kind_slug}:{subject}"`, e.g. `"open-part:R7"`,
+/// Stable identity for one assumption within a run.
+///
+/// Deterministic: `"{kind_slug}:{subject}"`, e.g. `"open-part:R7"`,
 /// `"not-exercised:i2c0/U4"`, `"not-checked:drc"`,
 /// `"waived:si/controlled_impedance/DDR_CLK"`. Re-running the same board yields
 /// the same ids, so an acknowledgment file can name one, a diff can track one
@@ -179,6 +181,7 @@ impl AssumptionId {
     /// injectively; an empty subject becomes [`Self::UNNAMED_SUBJECT`] followed by
     /// the claim disambiguator, since the sentinel alone would collide with the next
     /// unnameable subject.
+    #[must_use]
     pub fn new(kind: AssumptionKind, subject: &str) -> Self {
         Self::disambiguated(kind, subject, "")
     }
@@ -219,6 +222,7 @@ impl AssumptionId {
     }
 
     /// The id as a string.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -247,8 +251,7 @@ fn escape_id_component(value: &str) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/') {
             out.push(char::from(byte));
         } else {
-            out.push('%');
-            out.push_str(&format!("{byte:02X}"));
+            let _ = write!(out, "%{byte:02X}");
         }
     }
     out
@@ -257,7 +260,7 @@ fn escape_id_component(value: &str) -> String {
 fn hex_bytes(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+        let _ = write!(out, "{byte:02x}");
     }
     out
 }
@@ -275,7 +278,7 @@ impl std::fmt::Display for AssumptionId {
 macro_rules! wire_enum {
     ($ty:ident, $what:literal, { $($variant:ident => $s:literal),+ $(,)? }) => {
         impl $ty {
-            pub fn as_str(self) -> &'static str {
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $s,)+
                 }
@@ -362,7 +365,8 @@ pub enum AssumptionKind {
 impl AssumptionKind {
     /// The wire form, identical to what serde writes (`snake_case`). The one
     /// place this vocabulary is spelled.
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::OpenPart => "open_part",
             Self::SubstituteModel => "substitute_model",
@@ -380,7 +384,8 @@ impl AssumptionKind {
 
     /// The id slug for this kind, `kebab-case`. Stable: ids are compared across
     /// runs and named in acknowledgment files.
-    pub fn slug(self) -> &'static str {
+    #[must_use]
+    pub const fn slug(self) -> &'static str {
         match self {
             Self::OpenPart => "open-part",
             Self::SubstituteModel => "substitute-model",
@@ -417,10 +422,11 @@ pub enum AssumptionSource {
     User,
 }
 
-/// What results the assumption taints. Scope is the input to the on-path
-/// decision: the causal-path traversal compares an assertion's subject nets and
-/// refs against these, and only assumptions that match land in an
-/// [`EvidenceMap`].
+/// What results the assumption taints.
+///
+/// Scope is the input to the on-path decision: the causal-path traversal
+/// compares an assertion's subject nets and refs against these, and only
+/// assumptions that match land in an [`EvidenceMap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityKind {
@@ -445,22 +451,24 @@ pub struct EntityRef {
 
 impl EntityRef {
     /// Construct a named subject.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `id` is blank.
     pub fn new(kind: EntityKind, id: impl Into<String>) -> Result<Self, EvidenceError> {
         let id = id.into();
-        if id.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "entity_ref.id",
-            });
-        }
+        non_blank("entity_ref.id", &id)?;
         Ok(Self { kind, id })
     }
 
     /// The subject category.
-    pub fn kind(&self) -> EntityKind {
+    #[must_use]
+    pub const fn kind(&self) -> EntityKind {
         self.kind
     }
 
     /// The stable subject id.
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -472,6 +480,10 @@ pub struct SubjectSet(Vec<EntityRef>);
 
 impl SubjectSet {
     /// Construct a set in deterministic first-seen order.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `subjects` yields nothing.
     pub fn new<I>(subjects: I) -> Result<Self, EvidenceError>
     where
         I: IntoIterator<Item = EntityRef>,
@@ -491,6 +503,7 @@ impl SubjectSet {
     }
 
     /// The subjects in deterministic first-seen order.
+    #[must_use]
     pub fn as_slice(&self) -> &[EntityRef] {
         &self.0
     }
@@ -505,22 +518,24 @@ pub struct ParameterRef {
 
 impl ParameterRef {
     /// Construct a subject-qualified parameter.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `parameter` is blank.
     pub fn new(subject: EntityRef, parameter: impl Into<String>) -> Result<Self, EvidenceError> {
         let parameter = parameter.into();
-        if parameter.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "parameter_ref.parameter",
-            });
-        }
+        non_blank("parameter_ref.parameter", &parameter)?;
         Ok(Self { subject, parameter })
     }
 
     /// The subject carrying the parameter.
-    pub fn subject(&self) -> &EntityRef {
+    #[must_use]
+    pub const fn subject(&self) -> &EntityRef {
         &self.subject
     }
 
     /// The parameter's stable name.
+    #[must_use]
     pub fn parameter(&self) -> &str {
         &self.parameter
     }
@@ -718,10 +733,11 @@ fn or_else(s: &str, fallback: &str) -> String {
     }
 }
 
-/// What an assumption is about, in the two forms an assumption needs it: the
-/// `key` that goes into the id (short, stable, slug-shaped, because ids are
-/// named in acknowledgment files and compared across runs) and the `text` that
-/// goes into the sentences (prose, because a reader is reading English).
+/// What an assumption is about, in the two forms an assumption needs it.
+///
+/// The `key` goes into the id (short, stable, slug-shaped, because ids are
+/// named in acknowledgment files and compared across runs); the `text` goes
+/// into the sentences (prose, because a reader is reading English).
 ///
 /// They are separate parameters because collapsing them produces either an
 /// unreadable sentence ("Odbpp carries no BOM") or an unusable id
@@ -737,12 +753,14 @@ pub struct Subject<'a> {
 
 impl<'a> Subject<'a> {
     /// Distinct id key and prose.
-    pub fn new(key: &'a str, text: &'a str) -> Self {
+    #[must_use]
+    pub const fn new(key: &'a str, text: &'a str) -> Self {
         Self { key, text }
     }
 
     /// One string serving as both, for subjects that already read as prose.
-    pub fn same(both: &'a str) -> Self {
+    #[must_use]
+    pub const fn same(both: &'a str) -> Self {
         Self {
             key: both,
             text: both,
@@ -758,46 +776,55 @@ impl<'a> Subject<'a> {
 
 impl Assumption {
     /// The stable id.
-    pub fn id(&self) -> &AssumptionId {
+    #[must_use]
+    pub const fn id(&self) -> &AssumptionId {
         &self.id
     }
 
     /// What kind of gap this is. Read-only: it is the input to the status rule.
-    pub fn kind(&self) -> AssumptionKind {
+    #[must_use]
+    pub const fn kind(&self) -> AssumptionKind {
         self.kind
     }
 
     /// Which pipeline stage raised it.
-    pub fn source(&self) -> AssumptionSource {
+    #[must_use]
+    pub const fn source(&self) -> AssumptionSource {
         self.source
     }
 
     /// What it taints, which is what the causal-path traversal matches against.
-    pub fn scope(&self) -> &Scope {
+    #[must_use]
+    pub const fn scope(&self) -> &Scope {
         &self.scope
     }
 
     /// What is being taken as true.
+    #[must_use]
     pub fn statement(&self) -> &str {
         &self.statement
     }
 
     /// Why the run had to assume it.
+    #[must_use]
     pub fn because(&self) -> &str {
         &self.because
     }
 
     /// What it does to results.
+    #[must_use]
     pub fn consequence(&self) -> &str {
         &self.consequence
     }
 
     /// What a user does so this stops being an assumption.
+    #[must_use]
     pub fn replacement(&self) -> &str {
         &self.replacement
     }
 
     /// The `YYYY-MM-DD` a waiver lapses, for `Waived` only.
+    #[must_use]
     pub fn expires(&self) -> Option<&str> {
         self.expires.as_deref()
     }
@@ -810,6 +837,12 @@ impl Assumption {
     ///
     /// The digest covers the complete typed claim, so ordering two sibling CI
     /// assertions differently cannot decide which one inherits a bare id.
+    ///
+    /// # Panics
+    ///
+    /// Only on an internal invariant breach: every field of a constructed
+    /// assumption serializes to JSON, so the digest input cannot fail.
+    #[must_use]
     pub fn disambiguate_colliding_id(mut self) -> Self {
         let claim = serde_json::to_vec(&(
             self.kind,
@@ -832,12 +865,15 @@ impl Assumption {
     /// The concise producer id shared by every member of this claim's
     /// collision domain. Kept so independently normalized registries can be
     /// merged without treating a content suffix as a new base namespace.
-    pub fn collision_base_id(&self) -> &AssumptionId {
+    #[must_use]
+    pub const fn collision_base_id(&self) -> &AssumptionId {
         &self.collision_base_id
     }
 
     /// Raw constructor, private on purpose: every public constructor below goes
     /// through it, so there is exactly one place a sentence set is assembled.
+    // Every caller hands over freshly composed prose; owning it keeps them borrow-free.
+    #[allow(clippy::needless_pass_by_value)]
     fn build(
         kind: AssumptionKind,
         source: AssumptionSource,
@@ -949,6 +985,7 @@ impl Assumption {
     /// assert!(a.statement().contains("U5 (TXS0108E)"));
     /// assert!(a.because().starts_with("One channel of eight"));
     /// ```
+    #[must_use]
     pub fn partial_model(reference: &str, value: &str, gap: &str, replacement: &str) -> Self {
         Self::partial_model_for_component(reference.trim(), reference, value, gap, replacement)
     }
@@ -957,6 +994,7 @@ impl Assumption {
     /// board adapter. This is needed when an input repeats or omits reference
     /// designators: `reference` remains reader-facing prose while
     /// `component_subject` stays unique and citeable.
+    #[must_use]
     pub fn partial_model_for_component(
         component_subject: &str,
         reference: &str,
@@ -966,7 +1004,7 @@ impl Assumption {
     ) -> Self {
         let subject = component_subject.trim().to_string();
         let subject_text = if value.trim().is_empty() {
-            or_else(reference, "an unnamed part").to_string()
+            or_else(reference, "an unnamed part")
         } else {
             format!(
                 "{} ({})",
@@ -1006,8 +1044,9 @@ impl Assumption {
     /// [`Self::partial_model_for_component`]'s `gap`/`fix` sentences and board
     /// scope, but the critical kind and its own what/cost: the part IS
     /// modelled, and it is the BOARD that is outside what the card covers.
+    #[must_use]
     pub fn operating_limit_violated(subject: &str, reference: &str, gap: &str, fix: &str) -> Self {
-        let part = or_else(reference, "an unnamed part").to_string();
+        let part = or_else(reference, "an unnamed part");
         let mut built = Self::partial_model_for_component(subject, reference, "", gap, fix);
         built.kind = AssumptionKind::OperatingLimitViolated;
         built.id = AssumptionId::new(built.kind, subject); // named subject, no disambiguator
@@ -1026,6 +1065,7 @@ impl Assumption {
     /// let a = Assumption::open_part("U2", "XC6206", "no model matched");
     /// assert!(a.replacement().contains("U2"));
     /// ```
+    #[must_use]
     pub fn open_part(reference: &str, value: &str, reason: &str) -> Self {
         Self::open_part_group(reference, value, reason, 1, None)
     }
@@ -1056,6 +1096,7 @@ impl Assumption {
     /// Ordinals are numbered in board order, so they are stable for a given input
     /// and renumber when the board's own set of claims on that designator changes.
     /// That is inherent: a designator used twice identifies neither part.
+    #[must_use]
     pub fn open_part_group(
         reference: &str,
         value: &str,
@@ -1081,6 +1122,12 @@ impl Assumption {
     /// [`Self::open_part_group`] with the exact component occurrences covered
     /// by the claim. A group may describe several indistinguishable rows, but
     /// its causal scope must still reach only those occurrences' nets.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: blank component ids are filtered out and an empty
+    /// remainder falls back to the part scope, so the subject set is non-empty.
+    #[must_use]
     pub fn open_part_group_for_components(
         reference: &str,
         value: &str,
@@ -1111,7 +1158,7 @@ impl Assumption {
         let reference = or_else(reference, "an unnamed part");
         let value = fragment(value);
         let named = if value.is_empty() {
-            reference.to_string()
+            reference.clone()
         } else {
             format!("{reference} ({value})")
         };
@@ -1218,6 +1265,7 @@ impl Assumption {
     /// (`source: Binder`) or a substitute MCU core (`source: Scheduler`).
     /// `requested` is what the board asked for, `stand_in` what actually
     /// modelled it.
+    #[must_use]
     pub fn substitute_model(
         source: AssumptionSource,
         reference: &str,
@@ -1234,6 +1282,7 @@ impl Assumption {
     }
 
     /// [`Self::substitute_model`] with an occurrence-safe causal component id.
+    #[must_use]
     pub fn substitute_model_for_component(
         source: AssumptionSource,
         component_subject: &str,
@@ -1272,6 +1321,7 @@ impl Assumption {
 
     /// An orderable-variant set the board could not narrow to one member, all
     /// sharing one pinout: `bound` stands in for every member for simulation only.
+    #[must_use]
     pub fn undetermined_variant(subject: &str, reference: &str, bound: &str, ids: &str) -> Self {
         Self::build(
             AssumptionKind::SubstituteModel,
@@ -1288,11 +1338,13 @@ impl Assumption {
 
     /// A pin's role was inferred from the pin-rule table rather than read from
     /// the schematic.
+    #[must_use]
     pub fn inferred_pin_role(reference: &str, pin: &str, role: &str) -> Self {
         Self::inferred_pin_role_for_component(reference.trim(), reference, pin, role)
     }
 
     /// [`Self::inferred_pin_role`] with an occurrence-safe causal component id.
+    #[must_use]
     pub fn inferred_pin_role_for_component(
         component_subject: &str,
         reference: &str,
@@ -1330,11 +1382,13 @@ impl Assumption {
     }
 
     /// A parameter took a documented default because no input carried a value.
+    #[must_use]
     pub fn default_parameter(reference: &str, parameter: &str, value: &str) -> Self {
         Self::default_parameter_for_component(reference.trim(), reference, parameter, value)
     }
 
     /// [`Self::default_parameter`] with an occurrence-safe causal component id.
+    #[must_use]
     pub fn default_parameter_for_component(
         component_subject: &str,
         reference: &str,
@@ -1379,6 +1433,7 @@ impl Assumption {
     /// that knows which placed parts are actually in question should scope it to
     /// `Scope::Parts` instead, which is the reading the status table's
     /// "`FittedByDefault` (subject part)" row asks for.
+    #[must_use]
     pub fn fitted_by_default(source: AssumptionSource, input: Subject<'_>, scope: Scope) -> Self {
         let input_key = input.key;
         let input = or_else(&input.text_or_key(), "this input");
@@ -1424,10 +1479,10 @@ impl Assumption {
         // the sentinel.
         let raw = fragment(check);
         let check = or_else(check, AssumptionId::UNNAMED_SUBJECT);
-        let (subject, named) = match &rule {
-            Some(r) => (format!("{raw}/{r}"), format!("{check} {r}")),
-            None => (raw.clone(), check.clone()),
-        };
+        let (subject, named) = rule.as_ref().map_or_else(
+            || (raw.clone(), check.clone()),
+            |r| (format!("{raw}/{r}"), format!("{check} {r}")),
+        );
         let subject = if raw.is_empty() && rule.is_none() {
             String::new()
         } else {
@@ -1437,10 +1492,7 @@ impl Assumption {
             AssumptionKind::NotChecked,
             source,
             &subject,
-            Scope::Check {
-                check: check.clone(),
-                kind: rule,
-            },
+            Scope::Check { check, kind: rule },
             format!("The {named} check did not run."),
             sentence_or(
                 because,
@@ -1462,6 +1514,7 @@ impl Assumption {
     /// firmware, a programmed current limit), so nothing here tests it.
     /// `because` and `replacement` are data fragments; this constructor owns
     /// the statement and the consequence.
+    #[must_use]
     pub fn not_exercised(
         source: AssumptionSource,
         subject: Subject<'_>,
@@ -1492,6 +1545,7 @@ impl Assumption {
 
     /// The result was produced at reduced fidelity by a documented degraded
     /// mechanism. `mechanism` names the degraded path.
+    #[must_use]
     pub fn reduced_fidelity(
         source: AssumptionSource,
         subject: Subject<'_>,
@@ -1525,6 +1579,7 @@ impl Assumption {
     /// reason, so a pass on it vouches for nothing. A named `ReducedFidelity`
     /// constructor because this wording is load-bearing and appears on several
     /// surfaces.
+    #[must_use]
     pub fn held_by_ideal_source(net: &str) -> Self {
         // An unnamed net is ordinary board data, not a producer bug. Prose in the
         // sentences, raw subject in the id: see `open_part`.
@@ -1551,6 +1606,7 @@ impl Assumption {
 
     /// The producing parser has a known limitation that can fabricate or miss
     /// findings about `subject`.
+    #[must_use]
     pub fn parser_limitation(
         source: AssumptionSource,
         subject: Subject<'_>,
@@ -1587,6 +1643,11 @@ impl Assumption {
     /// `YYYY-MM-DD` expiry and lands in [`Assumption::expires`], which is what
     /// lets [`EvidenceMap::derive_status`] treat a lapsed waiver as undermining
     /// rather than qualifying.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::InvalidDate`] when `until` is not a real `YYYY-MM-DD`
+    /// date.
     pub fn waived(
         check: &str,
         kind: &str,
@@ -1664,6 +1725,11 @@ impl Assumption {
     /// are identical to [`Self::waived`], while the causal scope uses the
     /// assertion's stable label so another result of the same kind does not
     /// inherit this authorization.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::waived`]: [`EvidenceError::InvalidDate`] for an unreadable
+    /// `until`.
     pub fn waived_assertion(
         check: &str,
         kind: &str,
@@ -1691,18 +1757,6 @@ impl Assumption {
         Ok(assumption.checked())
     }
 
-    /// Structural well-formedness, which a registry asserts as it collects and
-    /// which every constructor's output satisfies. The rules:
-    ///
-    /// - all four sentences are present, and none has a gap where a datum
-    ///   belonged;
-    /// - the id names a subject, and its kind slug is this assumption's kind;
-    /// - only a `Waived` assumption carries an expiry (an expiry on a machine
-    ///   observation is meaningless, so it is a construction error rather than a
-    ///   warning), and a `Waived` one must;
-    /// - a `TimeWindow` scope's bounds are real numbers, because they reach the
-    ///   published JSON and NaN or infinity is not JSON.
-    ///
     /// Every constructor's output must satisfy the rules [`Self::validate`]
     /// states, and a debug build is where a producer that hands over an empty
     /// datum finds out. A debug assert rather than a `Result` because ninety
@@ -1713,6 +1767,21 @@ impl Assumption {
         self
     }
 
+    /// Structural well-formedness, which a registry asserts as it collects and
+    /// which every constructor's output satisfies.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the assumption's id and the first rule it breaks:
+    ///
+    /// - all four sentences are present, and none has a gap where a datum
+    ///   belonged;
+    /// - the id names a subject, and its kind slug is this assumption's kind;
+    /// - only a `Waived` assumption carries an expiry (an expiry on a machine
+    ///   observation is meaningless, so it is a construction error rather than a
+    ///   warning), and a `Waived` one must;
+    /// - a `TimeWindow` scope's bounds are real numbers, because they reach the
+    ///   published JSON and NaN or infinity is not JSON.
     pub fn validate(&self) -> Result<(), String> {
         for (name, text) in [
             ("statement", &self.statement),
@@ -1855,9 +1924,10 @@ pub enum ModelLayer {
     EngineFallback,
 }
 
-/// Semantic rung in the model-source policy. This is deliberately distinct
-/// from [`ModelLayer`]: a layer says where bytes were loaded from, while a tier
-/// says how authoritative the model is. An explicit user model remains the
+/// Semantic rung in the model-source policy.
+///
+/// This is deliberately distinct from [`ModelLayer`]: a layer says where bytes
+/// were loaded from, while a tier says how authoritative the model is. An explicit user model remains the
 /// override escape hatch; otherwise vendor SPICE and curated sources outrank an
 /// extracted draft, which outranks a deliberately estimated fallback.
 #[derive(
@@ -1878,7 +1948,8 @@ pub enum ModelSourceTier {
 impl ModelSourceTier {
     /// Policy precedence. The number is internal ordering, not an accuracy
     /// percentage: tiers never invent a numeric error bound.
-    pub fn priority(self) -> u8 {
+    #[must_use]
+    pub const fn priority(self) -> u8 {
         match self {
             Self::Open => 0,
             Self::EstimatedFallback => 10,
@@ -1915,7 +1986,8 @@ pub enum ModelValidation {
 }
 
 impl ModelValidation {
-    pub fn priority(self) -> u8 {
+    #[must_use]
+    pub const fn priority(self) -> u8 {
         match self {
             Self::Unvalidated => 0,
             Self::PhysicalBoundsOnly => 10,
@@ -1952,7 +2024,7 @@ pub enum OverrideSource {
 }
 
 /// One concrete thing an artifact contributed to the run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Contribution {
     /// What, as a stable slug: "connectivity", "`copper_geometry`",
     /// "placements", "`component_values`", "`dnp_flags`", "`firmware_image`",
@@ -1964,7 +2036,7 @@ pub struct Contribution {
 }
 
 /// One member or section of an artifact that was deliberately not used.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IgnoredInput {
     /// The member: a file inside an archive, a section of a document, or a
     /// sibling file the reader saw and skipped.
@@ -1973,11 +2045,12 @@ pub struct IgnoredInput {
     pub why: String,
 }
 
-/// A cross-check the reader ran between two sources inside (or across)
-/// artifacts, and whether they agreed. A disagreement additionally raises a
-/// parser-limitation assumption; an agreement is positive evidence and belongs
-/// in the inventory in its own right.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+/// A cross-check the reader ran between two sources, and whether they agreed.
+///
+/// The sources sit inside (or across) artifacts. A disagreement additionally
+/// raises a parser-limitation assumption; an agreement is positive evidence and
+/// belongs in the inventory in its own right.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CrossCheck {
     /// What was cross-checked.
     pub what: String,
@@ -2003,7 +2076,7 @@ pub struct CrossCheck {
 ///     }]);
 /// assert_eq!(a.role(), ArtifactRole::Layout);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[schemars(
     description = "One input artifact: what it was, what it gave the run, \
                           what in it was ignored, and which cross-checks it passed."
@@ -2049,6 +2122,12 @@ pub struct ArtifactProvenance {
 impl ArtifactProvenance {
     /// Construct one artifact record. Referential integrity for `assumptions`
     /// is checked when the artifact enters an [`EvidenceRegistry`].
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] for a blank `path`, and
+    /// [`EvidenceError::InvalidSha256`] for a non-empty `sha256` that is not 64
+    /// hex digits.
     pub fn new(
         path: impl Into<String>,
         kind: ArtifactKind,
@@ -2058,11 +2137,7 @@ impl ArtifactProvenance {
     ) -> Result<Self, EvidenceError> {
         let path = path.into();
         let sha256 = sha256.into();
-        if path.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "artifact.path",
-            });
-        }
+        non_blank("artifact.path", &path)?;
         if !sha256.is_empty()
             && (sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
         {
@@ -2081,45 +2156,55 @@ impl ArtifactProvenance {
         })
     }
 
+    #[must_use]
     pub fn path(&self) -> &str {
         &self.path
     }
 
-    pub fn kind(&self) -> ArtifactKind {
+    #[must_use]
+    pub const fn kind(&self) -> ArtifactKind {
         self.kind
     }
 
+    #[must_use]
     pub fn format(&self) -> Option<&str> {
         self.format.as_deref()
     }
 
-    pub fn role(&self) -> ArtifactRole {
+    #[must_use]
+    pub const fn role(&self) -> ArtifactRole {
         self.role
     }
 
+    #[must_use]
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
 
+    #[must_use]
     pub fn assumptions(&self) -> &[AssumptionId] {
         &self.assumptions
     }
 
+    #[must_use]
     pub fn with_contributions(mut self, contributions: Vec<Contribution>) -> Self {
         self.contributed = contributions;
         self
     }
 
+    #[must_use]
     pub fn with_format(mut self, format: impl Into<String>) -> Self {
         self.format = Some(format.into());
         self
     }
 
+    #[must_use]
     pub fn with_ignored(mut self, ignored: Vec<IgnoredInput>) -> Self {
         self.ignored = ignored;
         self
     }
 
+    #[must_use]
     pub fn with_cross_checks(mut self, cross_checks: Vec<CrossCheck>) -> Self {
         self.cross_checks = cross_checks;
         self
@@ -2147,7 +2232,7 @@ impl ArtifactProvenance {
 }
 
 /// Where a bound parameter's value came from.
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ValueOrigin {
     /// Read from an input artifact, by index into the run inventory.
@@ -2182,7 +2267,7 @@ pub enum ValueOrigin {
 }
 
 /// Provenance for one bound parameter of one device.
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct ParameterProvenance {
     /// Injective causal identity of the component occurrence, when the
     /// producer has one. Kept separate from human-readable `parameter` so a
@@ -2200,6 +2285,11 @@ pub struct ParameterProvenance {
 }
 
 impl ParameterProvenance {
+    /// Construct provenance for one parameter's rendered value.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `parameter` or `value` is blank.
     pub fn new(
         parameter: impl Into<String>,
         value: impl Into<String>,
@@ -2207,16 +2297,8 @@ impl ParameterProvenance {
     ) -> Result<Self, EvidenceError> {
         let parameter = parameter.into();
         let value = value.into();
-        if parameter.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "parameter_provenance.parameter",
-            });
-        }
-        if value.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "parameter_provenance.value",
-            });
-        }
+        non_blank("parameter_provenance.parameter", &parameter)?;
+        non_blank("parameter_provenance.value", &value)?;
         Ok(Self {
             subject: None,
             parameter,
@@ -2227,6 +2309,10 @@ impl ParameterProvenance {
 
     /// Construct parameter provenance tied to an injective component
     /// occurrence while retaining a readable parameter label.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `subject`, `parameter` or `value` is blank.
     pub fn for_subject(
         subject: impl Into<String>,
         parameter: impl Into<String>,
@@ -2234,29 +2320,29 @@ impl ParameterProvenance {
         origin: ValueOrigin,
     ) -> Result<Self, EvidenceError> {
         let subject = subject.into();
-        if subject.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "parameter_provenance.subject",
-            });
-        }
+        non_blank("parameter_provenance.subject", &subject)?;
         let mut provenance = Self::new(parameter, value, origin)?;
         provenance.subject = Some(subject);
         Ok(provenance)
     }
 
+    #[must_use]
     pub fn subject(&self) -> Option<&str> {
         self.subject.as_deref()
     }
 
+    #[must_use]
     pub fn parameter(&self) -> &str {
         &self.parameter
     }
 
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
 
-    pub fn origin(&self) -> &ValueOrigin {
+    #[must_use]
+    pub const fn origin(&self) -> &ValueOrigin {
         &self.origin
     }
 }
@@ -2276,6 +2362,11 @@ pub struct TimeWindow {
 
 impl TimeWindow {
     /// Construct a finite, ordered half-open time window.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::NonFinite`] for a NaN or infinite bound, and
+    /// [`EvidenceError::InvertedWindow`] when `end_s` precedes `start_s`.
     pub fn new(start_s: f64, end_s: f64) -> Result<Self, EvidenceError> {
         finite("time_window.start_s", start_s)?;
         finite("time_window.end_s", end_s)?;
@@ -2286,24 +2377,28 @@ impl TimeWindow {
     }
 
     /// Whether both bounds are real numbers.
-    pub fn is_finite(&self) -> bool {
+    #[must_use]
+    pub const fn is_finite(&self) -> bool {
         self.start_s.is_finite() && self.end_s.is_finite()
     }
 
-    pub fn start_s(self) -> f64 {
+    #[must_use]
+    pub const fn start_s(self) -> f64 {
         self.start_s
     }
 
-    pub fn end_s(self) -> f64 {
+    #[must_use]
+    pub const fn end_s(self) -> f64 {
         self.end_s
     }
 }
 
-/// One window and the integration method that produced it. The primary method
-/// covers most runs in a single entry; a per-chunk fallback ladder contributes
-/// one entry per fallback-solved window, using that machinery's own stable
-/// method names verbatim ("trapezoidal", "gear2", "backward-euler",
-/// "reduced-step", "cold-start-backward-euler",
+/// One window and the integration method that produced it.
+///
+/// The primary method covers most runs in a single entry; a per-chunk fallback
+/// ladder contributes one entry per fallback-solved window, using that
+/// machinery's own stable method names verbatim ("trapezoidal", "gear2",
+/// "backward-euler", "reduced-step", "cold-start-backward-euler",
 /// "subdivided-backward-euler").
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct WindowMethod {
@@ -2338,15 +2433,22 @@ impl WindowMethod {
     /// An integration algorithm and timestep are provenance, not an empirical
     /// error bound. A producer may report a measured comparison elsewhere, but
     /// it must not translate "first order" into an unsupported relative error.
-    pub fn new(window: TimeWindow, method: IntegrationMethod) -> Result<Self, EvidenceError> {
+    ///
+    /// # Errors
+    ///
+    /// None today: `window` is already validated. The `Result` keeps this
+    /// constructor shaped like its siblings so a future check is not breaking.
+    pub const fn new(window: TimeWindow, method: IntegrationMethod) -> Result<Self, EvidenceError> {
         Ok(Self { window, method })
     }
 
-    pub fn window(&self) -> TimeWindow {
+    #[must_use]
+    pub const fn window(&self) -> TimeWindow {
         self.window
     }
 
-    pub fn method(&self) -> IntegrationMethod {
+    #[must_use]
+    pub const fn method(&self) -> IntegrationMethod {
         self.method
     }
 }
@@ -2367,6 +2469,11 @@ pub struct IntegrationTolerance {
 
 impl IntegrationTolerance {
     /// Construct strictly-positive, finite solver tolerances.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::NonFinite`] or [`EvidenceError::NonPositive`] naming the
+    /// first tolerance that is not a finite positive number.
     pub fn new(reltol: f64, vntol: f64, abstol: f64, chgtol: f64) -> Result<Self, EvidenceError> {
         positive("integration_tolerance.reltol", reltol)?;
         positive("integration_tolerance.vntol", vntol)?;
@@ -2380,19 +2487,23 @@ impl IntegrationTolerance {
         })
     }
 
-    pub fn reltol(self) -> f64 {
+    #[must_use]
+    pub const fn reltol(self) -> f64 {
         self.reltol
     }
 
-    pub fn vntol(self) -> f64 {
+    #[must_use]
+    pub const fn vntol(self) -> f64 {
         self.vntol
     }
 
-    pub fn abstol(self) -> f64 {
+    #[must_use]
+    pub const fn abstol(self) -> f64 {
         self.abstol
     }
 
-    pub fn chgtol(self) -> f64 {
+    #[must_use]
+    pub const fn chgtol(self) -> f64 {
         self.chgtol
     }
 }
@@ -2407,29 +2518,34 @@ pub struct Residual {
 }
 
 impl Residual {
+    /// Construct the worst accepted residual and where it sat.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::NonFinite`] or [`EvidenceError::Negative`] for a bad
+    /// `max_abs`, and [`EvidenceError::Empty`] for a blank `at`.
     pub fn new(max_abs: f64, at: impl Into<String>) -> Result<Self, EvidenceError> {
         non_negative("residual.max_abs", max_abs)?;
         let at = at.into();
-        if at.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "residual.at",
-            });
-        }
+        non_blank("residual.at", &at)?;
         Ok(Self { max_abs, at })
     }
 
-    pub fn max_abs(&self) -> f64 {
+    #[must_use]
+    pub const fn max_abs(&self) -> f64 {
         self.max_abs
     }
 
+    #[must_use]
     pub fn at(&self) -> &str {
         &self.at
     }
 }
 
-/// Interval bounds a model places on a derived quantity. This is the socket for
-/// interval models: shaped before its producer exists so that work lands in
-/// this vocabulary instead of inventing a second one.
+/// Interval bounds a model places on a derived quantity.
+///
+/// This is the socket for interval models: shaped before its producer exists so
+/// that work lands in this vocabulary instead of inventing a second one.
 ///
 /// Both bounds are real numbers. A one-sided datasheet limit ("at least 100")
 /// is [`ModelUncertainty::Unknown`] until a defensible other bound exists. A
@@ -2474,6 +2590,10 @@ pub enum ModelUncertainty {
 
 impl ModelUncertainty {
     /// Construct a finite, ordered uncertainty interval.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::interval_with_kind`].
     pub fn new(
         parameter: impl Into<String>,
         low: f64,
@@ -2483,6 +2603,11 @@ impl ModelUncertainty {
         Self::interval(parameter, low, high, "", basis)
     }
 
+    /// A specification-limits interval with a unit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::interval_with_kind`].
     pub fn interval(
         parameter: impl Into<String>,
         low: f64,
@@ -2500,6 +2625,12 @@ impl ModelUncertainty {
         )
     }
 
+    /// An interval of the given kind.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::validate`] rejects: a non-finite or inverted bound, or
+    /// a blank `parameter` or `basis`.
     pub fn interval_with_kind(
         parameter: impl Into<String>,
         low: f64,
@@ -2520,6 +2651,11 @@ impl ModelUncertainty {
         Ok(out)
     }
 
+    /// A parameter whose bounds are not defensibly known, and why.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `parameter` or `reason` is blank.
     pub fn unknown(
         parameter: impl Into<String>,
         reason: impl Into<String>,
@@ -2532,6 +2668,13 @@ impl ModelUncertainty {
         Ok(out)
     }
 
+    /// Check the record's invariants.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::NonFinite`] or [`EvidenceError::InvertedInterval`] for
+    /// bad interval bounds, and [`EvidenceError::Empty`] for a blank parameter,
+    /// basis or reason.
     pub fn validate(&self) -> Result<(), EvidenceError> {
         match self {
             Self::Interval {
@@ -2550,28 +2693,12 @@ impl ModelUncertainty {
                         high: *high,
                     });
                 }
-                if parameter.trim().is_empty() {
-                    return Err(EvidenceError::Empty {
-                        field: "model_uncertainty.parameter",
-                    });
-                }
-                if basis.trim().is_empty() {
-                    return Err(EvidenceError::Empty {
-                        field: "model_uncertainty.basis",
-                    });
-                }
+                non_blank("model_uncertainty.parameter", parameter)?;
+                non_blank("model_uncertainty.basis", basis)?;
             }
             Self::Unknown { parameter, reason } => {
-                if parameter.trim().is_empty() {
-                    return Err(EvidenceError::Empty {
-                        field: "model_uncertainty.parameter",
-                    });
-                }
-                if reason.trim().is_empty() {
-                    return Err(EvidenceError::Empty {
-                        field: "model_uncertainty.reason",
-                    });
-                }
+                non_blank("model_uncertainty.parameter", parameter)?;
+                non_blank("model_uncertainty.reason", reason)?;
             }
         }
         Ok(())
@@ -2579,7 +2706,8 @@ impl ModelUncertainty {
 
     /// Whether this interval can satisfy a fail-closed accuracy requirement.
     /// Typical and estimated ranges stay visible but never become guarantees.
-    pub fn is_strict_bound(&self) -> bool {
+    #[must_use]
+    pub const fn is_strict_bound(&self) -> bool {
         matches!(
             self,
             Self::Interval {
@@ -2589,7 +2717,8 @@ impl ModelUncertainty {
         )
     }
 
-    pub fn interval_kind(&self) -> Option<ModelIntervalKind> {
+    #[must_use]
+    pub const fn interval_kind(&self) -> Option<ModelIntervalKind> {
         match self {
             Self::Interval { kind, .. } => Some(*kind),
             Self::Unknown { .. } => None,
@@ -2609,6 +2738,13 @@ pub struct ModelSource {
 }
 
 impl ModelSource {
+    /// Construct a validated model-source record.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] for a blank `origin` or an empty `uncertainty`
+    /// list, and any error [`ModelUncertainty::validate`] reports for one of
+    /// its entries.
     pub fn new(
         tier: ModelSourceTier,
         layer: ModelLayer,
@@ -2617,11 +2753,7 @@ impl ModelSource {
         uncertainty: Vec<ModelUncertainty>,
     ) -> Result<Self, EvidenceError> {
         let origin = origin.into();
-        if origin.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_source.origin",
-            });
-        }
+        non_blank("model_source.origin", &origin)?;
         if uncertainty.is_empty() {
             return Err(EvidenceError::Empty {
                 field: "model_source.uncertainty",
@@ -2639,24 +2771,29 @@ impl ModelSource {
         })
     }
 
-    pub fn tier(&self) -> ModelSourceTier {
+    #[must_use]
+    pub const fn tier(&self) -> ModelSourceTier {
         self.tier
     }
-    pub fn layer(&self) -> ModelLayer {
+    #[must_use]
+    pub const fn layer(&self) -> ModelLayer {
         self.layer
     }
+    #[must_use]
     pub fn origin(&self) -> &str {
         &self.origin
     }
-    pub fn validation(&self) -> ModelValidation {
+    #[must_use]
+    pub const fn validation(&self) -> ModelValidation {
         self.validation
     }
+    #[must_use]
     pub fn uncertainty(&self) -> &[ModelUncertainty] {
         &self.uncertainty
     }
 }
 
-fn finite(field: &'static str, value: f64) -> Result<(), EvidenceError> {
+const fn finite(field: &'static str, value: f64) -> Result<(), EvidenceError> {
     if value.is_finite() {
         Ok(())
     } else {
@@ -2679,6 +2816,14 @@ fn non_negative(field: &'static str, value: f64) -> Result<(), EvidenceError> {
         Ok(())
     } else {
         Err(EvidenceError::Negative { field, value })
+    }
+}
+
+fn non_blank(field: &'static str, value: &str) -> Result<(), EvidenceError> {
+    if value.trim().is_empty() {
+        Err(EvidenceError::Empty { field })
+    } else {
+        Ok(())
     }
 }
 
@@ -2733,6 +2878,7 @@ impl ErrorBudget {
     /// Compact human rendering of the same typed data carried in JSON. This
     /// deliberately labels tolerances as solver settings and an absent
     /// residual as unmeasured; it never turns method order into a percentage.
+    #[must_use]
     pub fn plain_summary(&self) -> String {
         let tolerance = self.tolerance;
         let residual = self.residual.as_ref().map_or_else(
@@ -2775,52 +2921,66 @@ impl ErrorBudget {
         )
     }
 
+    #[must_use]
     pub fn with_method(mut self, method: WindowMethod) -> Self {
         self.methods.push(method);
         self
     }
 
+    #[must_use]
     pub fn with_residual(mut self, residual: Residual) -> Self {
         self.residual = Some(residual);
         self
     }
 
+    #[must_use]
     pub fn with_failed_window(mut self, window: TimeWindow) -> Self {
         self.failed_windows.push(window);
         self
     }
 
+    #[must_use]
     pub fn with_uncertainty(mut self, uncertainty: ModelUncertainty) -> Self {
         self.model_uncertainty.push(uncertainty);
         self
     }
 
-    pub fn tolerance(&self) -> IntegrationTolerance {
+    #[must_use]
+    pub const fn tolerance(&self) -> IntegrationTolerance {
         self.tolerance
     }
 
+    #[must_use]
     pub fn methods(&self) -> &[WindowMethod] {
         &self.methods
     }
 
-    pub fn residual(&self) -> Option<&Residual> {
+    #[must_use]
+    pub const fn residual(&self) -> Option<&Residual> {
         self.residual.as_ref()
     }
 
+    #[must_use]
     pub fn failed_windows(&self) -> &[TimeWindow] {
         &self.failed_windows
     }
 
+    #[must_use]
     pub fn model_uncertainty(&self) -> &[ModelUncertainty] {
         &self.model_uncertainty
     }
 
-    pub fn event_time_error_s(&self) -> Option<f64> {
+    #[must_use]
+    pub const fn event_time_error_s(&self) -> Option<f64> {
         self.event_time_error_s
     }
 
-    /// Attach a finite, non-negative event timestamp error. Invalid values are
-    /// errors, not absent fields.
+    /// Attach a finite, non-negative event timestamp error.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::NonFinite`] or [`EvidenceError::Negative`] for an
+    /// invalid `seconds`: invalid values are errors, not absent fields.
     pub fn with_event_time_error(mut self, seconds: f64) -> Result<Self, EvidenceError> {
         non_negative("error_budget.event_time_error_s", seconds)?;
         self.event_time_error_s = Some(seconds);
@@ -2828,7 +2988,8 @@ impl ErrorBudget {
     }
 
     /// The common shape: known tolerances, nothing else measured yet.
-    pub fn new(tolerance: IntegrationTolerance) -> Self {
+    #[must_use]
+    pub const fn new(tolerance: IntegrationTolerance) -> Self {
         Self {
             tolerance,
             methods: Vec::new(),
@@ -2863,6 +3024,10 @@ pub struct ModelOnPath {
 
 impl ModelOnPath {
     /// Construct a typed model-path record.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::for_subject`].
     pub fn new(
         reference: impl Into<String>,
         model_id: impl Into<String>,
@@ -2875,6 +3040,11 @@ impl ModelOnPath {
 
     /// Construct a model-path record with machine identity separate from the
     /// human reference shown by report renderers.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] when `subject`, `reference` or `model_id` is
+    /// blank.
     pub fn for_subject(
         subject: impl Into<String>,
         reference: impl Into<String>,
@@ -2885,21 +3055,9 @@ impl ModelOnPath {
         let subject = subject.into();
         let reference = reference.into();
         let model_id = model_id.into();
-        if subject.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_on_path.subject",
-            });
-        }
-        if reference.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_on_path.reference",
-            });
-        }
-        if model_id.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_on_path.model_id",
-            });
-        }
+        non_blank("model_on_path.subject", &subject)?;
+        non_blank("model_on_path.reference", &reference)?;
+        non_blank("model_on_path.model_id", &model_id)?;
         Ok(Self {
             subject,
             reference,
@@ -2910,10 +3068,12 @@ impl ModelOnPath {
         })
     }
 
+    #[must_use]
     pub fn subject(&self) -> &str {
         &self.subject
     }
 
+    #[must_use]
     pub fn reference(&self) -> &str {
         &self.reference
     }
@@ -2921,6 +3081,7 @@ impl ModelOnPath {
     /// A human citation that remains occurrence-specific when the readable
     /// reference is reused. The debug-string form quotes and escapes the
     /// opaque subject, so spaces or punctuation cannot blur its boundary.
+    #[must_use]
     pub fn cited_reference(&self) -> String {
         if self.subject == self.reference {
             self.reference.clone()
@@ -2929,19 +3090,23 @@ impl ModelOnPath {
         }
     }
 
+    #[must_use]
     pub fn model_id(&self) -> &str {
         &self.model_id
     }
 
-    pub fn layer(&self) -> ModelLayer {
+    #[must_use]
+    pub const fn layer(&self) -> ModelLayer {
         self.layer
     }
 
-    pub fn source(&self) -> &ModelSource {
+    #[must_use]
+    pub const fn source(&self) -> &ModelSource {
         &self.source
     }
 
-    pub fn confidence(&self) -> MatchConfidence {
+    #[must_use]
+    pub const fn confidence(&self) -> MatchConfidence {
         self.confidence
     }
 }
@@ -2952,19 +3117,21 @@ impl ModelOnPath {
 #[serde(transparent)]
 pub struct ArtifactId(usize);
 
-/// A registry whose stable ids are unique and whose assumptions have passed
-/// structural validation. Traversal and map construction share this instance,
-/// so an evidence map cannot cite an assumption absent from the run registry.
+/// A registry whose stable ids are unique and whose assumptions are valid.
+///
+/// Every assumption has passed structural validation. Traversal and map
+/// construction share this instance, so an evidence map cannot cite an
+/// assumption absent from the run registry.
 #[derive(Debug, Clone)]
 pub struct EvidenceRegistry {
     assumptions: Vec<Assumption>,
     artifacts: Vec<ArtifactProvenance>,
 }
 
-/// A complete, validated replacement for every object participating in one
-/// assumption-id rekey. The private fields prevent callers from observing or
-/// serializing a registry/map/default-reference combination halfway through
-/// the transaction.
+/// A complete, validated replacement for every object in one assumption-id rekey.
+///
+/// The private fields prevent callers from observing or serializing a
+/// registry/map/default-reference combination halfway through the transaction.
 #[derive(Debug)]
 pub struct EvidenceRekeyTransaction {
     registry: EvidenceRegistry,
@@ -2974,6 +3141,7 @@ pub struct EvidenceRekeyTransaction {
 
 impl EvidenceRekeyTransaction {
     /// Consume the transaction and return all validated replacement objects.
+    #[must_use]
     pub fn into_parts(self) -> (EvidenceRegistry, Vec<EvidenceMap>, Vec<AssumptionId>) {
         (
             self.registry,
@@ -2985,6 +3153,12 @@ impl EvidenceRekeyTransaction {
 
 impl EvidenceRegistry {
     /// Validate and index a run's assumption registry.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::InvalidAssumption`] for an assumption that fails
+    /// [`Assumption::validate`], and [`EvidenceError::DuplicateAssumption`] for
+    /// a repeated id.
     pub fn new(assumptions: Vec<Assumption>) -> Result<Self, EvidenceError> {
         let mut ids = HashSet::with_capacity(assumptions.len());
         for assumption in &assumptions {
@@ -3004,11 +3178,17 @@ impl EvidenceRegistry {
     }
 
     /// The validated assumptions in deterministic registry order.
+    #[must_use]
     pub fn assumptions(&self) -> &[Assumption] {
         &self.assumptions
     }
 
     /// Add an artifact after resolving all assumption references.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::MissingAssumption`] when the artifact cites an id this
+    /// registry does not hold.
     pub fn add_artifact(
         &mut self,
         artifact: ArtifactProvenance,
@@ -3024,6 +3204,7 @@ impl EvidenceRegistry {
         Ok(id)
     }
 
+    #[must_use]
     pub fn artifacts(&self) -> &[ArtifactProvenance] {
         &self.artifacts
     }
@@ -3032,6 +3213,13 @@ impl EvidenceRegistry {
     /// every supplied evidence map, and any additional assumption references.
     /// Inputs are borrowed immutably, so an error leaves every caller-owned
     /// object untouched and no half-rekeyed serializable state is exposed.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::InvalidAssumption`] when `to` is not `from`'s collision
+    /// id, [`EvidenceError::MissingAssumption`] when `from` is not registered or
+    /// a rekeyed reference dangles, and any error from rebuilding the registry,
+    /// its artifacts or the maps under the new id.
     pub fn rekey_collision_transaction(
         &self,
         maps: &[EvidenceMap],
@@ -3112,6 +3300,10 @@ pub struct NetScope {
 
 impl NetScope {
     /// Construct a non-empty net scope.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] for a blank net name or when `nets` yields none.
     pub fn new<I, S>(nets: I, window: Option<TimeWindow>) -> Result<Self, EvidenceError>
     where
         I: IntoIterator<Item = S>,
@@ -3120,11 +3312,7 @@ impl NetScope {
         let mut out = Vec::new();
         for net in nets {
             let net = net.into();
-            if net.trim().is_empty() {
-                return Err(EvidenceError::Empty {
-                    field: "net_scope.net",
-                });
-            }
+            non_blank("net_scope.net", &net)?;
             if !out.contains(&net) {
                 out.push(net);
             }
@@ -3138,12 +3326,14 @@ impl NetScope {
     }
 
     /// The named nets in deterministic input order.
+    #[must_use]
     pub fn nets(&self) -> &[String] {
         &self.nets
     }
 
     /// The assertion observation window, when it has one.
-    pub fn window(&self) -> Option<TimeWindow> {
+    #[must_use]
+    pub const fn window(&self) -> Option<TimeWindow> {
         self.window
     }
 }
@@ -3156,7 +3346,12 @@ pub struct CausalPathIndex {
 
 impl CausalPathIndex {
     /// Build deterministic incidence from the binder-shaped `net -> refs`
-    /// boundary. Empty names are rejected rather than becoming unreachable.
+    /// boundary.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::Empty`] for a blank net or reference name: empty names
+    /// are rejected rather than becoming unreachable.
     pub fn from_net_parts<'a, I, R>(incidence: I) -> Result<Self, EvidenceError>
     where
         I: IntoIterator<Item = (&'a str, &'a [R])>,
@@ -3164,21 +3359,13 @@ impl CausalPathIndex {
     {
         let mut net_parts = BTreeMap::new();
         for (net, refs) in incidence {
-            if net.trim().is_empty() {
-                return Err(EvidenceError::Empty {
-                    field: "causal_path.net",
-                });
-            }
+            non_blank("causal_path.net", net)?;
             let entry = net_parts
                 .entry(net.to_string())
                 .or_insert_with(BTreeSet::new);
             for reference in refs {
                 let reference = reference.as_ref();
-                if reference.trim().is_empty() {
-                    return Err(EvidenceError::Empty {
-                        field: "causal_path.reference",
-                    });
-                }
+                non_blank("causal_path.reference", reference)?;
                 entry.insert(reference.to_string());
             }
         }
@@ -3186,6 +3373,11 @@ impl CausalPathIndex {
     }
 
     /// Traverse one assertion's net scope against a validated registry.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::UnknownNet`] when `subject` names a net this incidence
+    /// does not hold.
     pub fn traverse(
         &self,
         subject: &NetScope,
@@ -3199,6 +3391,10 @@ impl CausalPathIndex {
     /// path for facts such as a live waiver or a peripheral that never ran:
     /// attaching every `ci` fact to every CI assertion would make the evidence
     /// registry loud but causally useless.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::traverse`].
     pub fn traverse_assertion(
         &self,
         subject: &NetScope,
@@ -3218,6 +3414,10 @@ impl CausalPathIndex {
     /// (`FittedByDefault`; the claim read the part's value, so whether the
     /// part is really fitted IS its evidence), every net-scoped and
     /// board-scoped limitation, and the check's own scoped assumptions.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::traverse`].
     pub fn traverse_value_claim(
         &self,
         subject: &NetScope,
@@ -3429,6 +3629,13 @@ impl EvidenceMap {
     /// Construct from an opaque result emitted by the validated causal
     /// traversal. The registry is repeated here deliberately: it is the
     /// referential-integrity boundary and will grow the artifact checks too.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::InvalidAssumption`] when the traversal cites an
+    /// assumption that `registry` does not hold.
+    // Consuming the traversal is the contract: one validated result backs one map.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_traversal(
         assertion: impl Into<String>,
         traversal: TraversalResult,
@@ -3483,6 +3690,7 @@ impl EvidenceMap {
     }
 
     /// The assertion this map belongs to.
+    #[must_use]
     pub fn assertion(&self) -> &str {
         &self.assertion
     }
@@ -3533,7 +3741,8 @@ impl EvidenceMap {
     }
 
     /// The derived status. There is no setter, by design.
-    pub fn status(&self) -> EvidenceStatus {
+    #[must_use]
+    pub const fn status(&self) -> EvidenceStatus {
         self.status
     }
 
@@ -3549,6 +3758,11 @@ impl EvidenceMap {
     /// undermines. The caller owes the rendered surface an explanation of
     /// why the opens were downgraded; this method only makes the status
     /// consistent with that explanation.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::InvalidAssumption`] when the map cites an assumption
+    /// `registry` does not hold, so the status cannot be recomputed.
     pub fn assuming_open_parts_high_impedance(
         mut self,
         registry: &EvidenceRegistry,
@@ -3582,11 +3796,13 @@ impl EvidenceMap {
 
     /// How good the numbers behind this assertion are, when the producing path
     /// measured them.
-    pub fn error_budget(&self) -> Option<&ErrorBudget> {
+    #[must_use]
+    pub const fn error_budget(&self) -> Option<&ErrorBudget> {
         self.error_budget.as_ref()
     }
 
     /// Statistical coverage wording, for an ensemble assertion.
+    #[must_use]
     pub fn coverage(&self) -> Option<&str> {
         self.coverage.as_deref()
     }
@@ -3595,17 +3811,24 @@ impl EvidenceMap {
     /// them. The traversal owes that order determinism: a set-iteration order
     /// here would make the JSON, the human output and every golden file
     /// nondeterministic.
+    #[must_use]
     pub fn assumptions(&self) -> &[AssumptionId] {
         &self.assumptions
     }
 
     /// True when this assertion is not entitled to a verdict: the caller maps
     /// this onto the run's invalid-for-analysis outcome.
+    #[must_use]
     pub fn is_undermined(&self) -> bool {
         self.status == EvidenceStatus::Undermined
     }
 
     /// Attach the causal artifact indices.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::MissingArtifact`] for an index past the registry's
+    /// artifact list.
     pub fn with_artifacts<I>(
         mut self,
         registry: &EvidenceRegistry,
@@ -3630,25 +3853,35 @@ impl EvidenceMap {
         Ok(self)
     }
 
+    #[must_use]
     pub fn artifacts(&self) -> &[ArtifactId] {
         &self.artifacts
     }
 
+    #[must_use]
     pub fn models(&self) -> &[ModelOnPath] {
         &self.models
     }
 
+    #[must_use]
     pub fn parameters(&self) -> &[ParameterProvenance] {
         &self.parameters
     }
 
     /// Attach the models on the causal path.
+    #[must_use]
     pub fn with_models(mut self, models: Vec<ModelOnPath>) -> Self {
         self.models = models;
         self
     }
 
     /// Attach the parameters read on the causal path.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::MissingArtifact`] or [`EvidenceError::MissingAssumption`]
+    /// when a parameter's origin cites an artifact or assumption `registry`
+    /// does not hold.
     pub fn with_parameters(
         mut self,
         registry: &EvidenceRegistry,
@@ -3680,12 +3913,14 @@ impl EvidenceMap {
     /// invariant-bearing member has private fields and a fallible constructor,
     /// so malformed numeric evidence cannot reach this method or disappear on
     /// the way to JSON.
+    #[must_use]
     pub fn with_error_budget(mut self, budget: ErrorBudget) -> Self {
         self.error_budget = Some(budget);
         self
     }
 
     /// Attach ensemble coverage wording.
+    #[must_use]
     pub fn with_coverage(mut self, coverage: impl Into<String>) -> Self {
         self.coverage = Some(coverage.into());
         self

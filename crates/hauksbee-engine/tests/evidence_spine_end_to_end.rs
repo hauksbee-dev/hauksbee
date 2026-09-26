@@ -454,7 +454,11 @@ fn reader_accounting_is_decomposed_into_typed_facts_not_one_generic_caveat() {
     )
     .unwrap();
 
-    let kinds: Vec<_> = evidence.assumptions().iter().map(|a| a.kind()).collect();
+    let kinds: Vec<_> = evidence
+        .assumptions()
+        .iter()
+        .map(hauksbee_ir::evidence::Assumption::kind)
+        .collect();
     assert!(kinds.contains(&AssumptionKind::NotChecked), "{kinds:?}");
     assert!(
         kinds.contains(&AssumptionKind::FittedByDefault),

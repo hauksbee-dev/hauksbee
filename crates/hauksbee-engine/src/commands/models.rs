@@ -1,9 +1,12 @@
-//! The `hauksbee models` subcommand family: `lint` (standalone validation of
-//! model / sensor TOML), `add`/`remove`/`list` (installed model packs,
+//! The `hauksbee models` subcommand family: `lint`, `add`/`remove`/`list` and `resolve`.
+//!
+//! `lint` is standalone validation of
+//! model / sensor TOML, `add`/`remove`/`list` (installed model packs,
 //! 06-extensibility-sdk §3), and `resolve` (the per-component
 //! which-entry-won-from-which-layer report, the pack author's debugging
 //! surface).
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use hauksbee_ir::evidence::{
@@ -11,7 +14,6 @@ use hauksbee_ir::evidence::{
 };
 use hauksbee_models::schema::model_error_warning;
 use hauksbee_models::{ModelLibrary, Pack, PackStore};
-use sha2::{Digest, Sha256};
 
 /// `hauksbee models lint <file>`: standalone validation of model TOML.
 ///
@@ -26,6 +28,12 @@ use sha2::{Digest, Sha256};
 /// MCU descriptor through the same loader a co-simulation uses, plus the checks
 /// the loader leaves to author intent, plus an inspection of what the descriptor
 /// will actually do (see `lint_soc`).
+///
+/// # Errors
+///
+/// Returns an error if `file` is a board rather than a model spec, cannot be read,
+/// is not TOML, or has no `[sensor]`, `[[models]]` or `[soc]` content to lint. Lint
+/// findings exit the process with status 2.
 pub fn lint(file: &Path) -> anyhow::Result<()> {
     // A board file handed to `models lint` would fall into the TOML parser,
     // which dumps the whole one-line board file as error context. Detect it
@@ -34,19 +42,14 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
     let ext = file
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     let board_ext = matches!(
         ext.as_str(),
         "kicad_pcb" | "kicad_sch" | "brd" | "pcbdoc" | "d356" | "net" | "board" | "zip"
     );
     if board_ext {
-        anyhow::bail!(
-            "'{}' is a board, not a model spec: to see which model entry each \
-             board part resolves to, run  hauksbee models resolve {}",
-            file.display(),
-            file.display()
-        );
+        return Err(board_not_model_spec(file));
     }
     let text = std::fs::read_to_string(file)
         .map_err(|e| anyhow::anyhow!("reading '{}': {e}", file.display()))?;
@@ -55,12 +58,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         || head.starts_with("(kicad_sch")
         || head.starts_with("(export")
     {
-        anyhow::bail!(
-            "'{}' is a board, not a model spec: to see which model entry each \
-             board part resolves to, run  hauksbee models resolve {}",
-            file.display(),
-            file.display()
-        );
+        return Err(board_not_model_spec(file));
     }
     let root: toml::Value = toml::from_str(&text).map_err(|e| {
         anyhow::anyhow!(
@@ -118,87 +116,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             }
         }
     } else if root.get("models").is_some() {
-        // An unknown `kind` is the classic first-model mistake; serde's
-        // unknown-variant wording lists the vocabulary but a synonym deserves
-        // its direct answer (ldo -> vreg).
-        let db = toml::from_str::<hauksbee_models::schema::DbFile>(&text).unwrap_or_else(|e| {
-            findings += 1;
-            let note = hauksbee_models::validation::kind_error_note(&e.to_string());
-            let note = note.map_or(String::new(), |n| format!("\n  {n}"));
-            println!("'{}': [[models]] parse ERROR: {e}{note}", file.display());
-            hauksbee_models::schema::DbFile { models: Vec::new() }
-        });
-        for entry in &db.models {
-            checked += 1;
-            let mut entry_findings = 0usize;
-            let mut entry_warnings = 0usize;
-            if let Err(errors) = hauksbee_models::validation::validate(entry) {
-                for err in errors {
-                    entry_findings += 1;
-                    println!("model '{}': ERROR: {err}", entry.id);
-                }
-            }
-            if entry.r#match.is_empty() {
-                entry_findings += 1;
-                println!(
-                    "model '{}': ERROR: entry has no match rules (lib_id / value_re / \
-                     footprint_re / mpn_re all absent); it cannot claim a board component",
-                    entry.id
-                );
-            }
-            // Parameter-name vocabulary (warning tier, no exit-code effect). The
-            // params bag is free-form on purpose, so a misspelled key is not an
-            // error, it is a key nothing reads: the entry validates and then
-            // silently runs on the default. This is the only place that key is
-            // ever mentioned, so it says so, and adds the nearest real name when
-            // one is close enough to be worth naming. Unknown names can also be
-            // genuine extensions, which is why it cannot gate.
-            let unknown = hauksbee_models::param_names::unknown_params(entry);
-            let cited = hauksbee_models::param_names::source_warnings(entry);
-            if let Some(w) = model_error_warning(entry.source.as_ref()) {
-                entry_warnings += 1;
-                println!("model '{}' [models.source]: warning: {w}", entry.id);
-            }
-            for w in unknown.iter().map(|u| u.message()).chain(cited) {
-                entry_warnings += 1;
-                println!("model '{}' [models.params]: warning: {w}", entry.id);
-            }
-            if !entry.logic.is_empty() {
-                match crate::logic::LogicComponent::compile(&entry.id, &entry.logic) {
-                    Ok(compiled) => {
-                        for w in &compiled.warnings {
-                            entry_warnings += 1;
-                            println!("model '{}' [models.logic]: warning: {w}", entry.id);
-                        }
-                    }
-                    Err(e) => {
-                        entry_findings += 1;
-                        println!("model '{}' [models.logic]: ERROR: {e}", entry.id);
-                    }
-                }
-            }
-            // The behavioural block's own validation (converter/pin/FSM finiteness
-            // gates) must run here too, or `hauksbee models lint` prints "ok" for a
-            // model that panics the solver at sim time (e.g. vout_setpoint = nan).
-            if !entry.behavioral.is_empty() {
-                for err in hauksbee_models::behavioral::validate_behavioral(&entry.behavioral) {
-                    entry_findings += 1;
-                    println!("model '{}' [models.behavioral]: ERROR: {err}", entry.id);
-                }
-            }
-            if entry_findings == 0 {
-                match entry_warnings {
-                    0 => println!("model '{}': ok", entry.id),
-                    n => println!("model '{}': ok, {n} warning(s) above", entry.id),
-                }
-            }
-            findings += entry_findings;
-            warnings += entry_warnings;
-        }
-        for problem in hauksbee_models::variants::lint(&db.models) {
-            findings += 1;
-            println!("variant set: ERROR: {problem}");
-        }
+        checked += lint_model_db(file, &text, &mut findings, &mut warnings);
     } else if root.get("soc").is_some() {
         checked += 1;
         findings += lint_soc(file, &text, &root);
@@ -227,6 +145,106 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// Lint every `[[models]]` entry in `text`, printing each finding and adding the
+/// finding and warning counts; returns how many entries were checked.
+fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut usize) -> usize {
+    // An unknown `kind` is the classic first-model mistake; serde's
+    // unknown-variant wording lists the vocabulary but a synonym deserves
+    // its direct answer (ldo -> vreg).
+    let db = toml::from_str::<hauksbee_models::schema::DbFile>(text).unwrap_or_else(|e| {
+        *findings += 1;
+        let note = hauksbee_models::validation::kind_error_note(&e.to_string());
+        let note = note.map_or(String::new(), |n| format!("\n  {n}"));
+        println!("'{}': [[models]] parse ERROR: {e}{note}", file.display());
+        hauksbee_models::schema::DbFile { models: Vec::new() }
+    });
+    for entry in &db.models {
+        let mut entry_findings = 0usize;
+        let mut entry_warnings = 0usize;
+        if let Err(errors) = hauksbee_models::validation::validate(entry) {
+            for err in errors {
+                entry_findings += 1;
+                println!("model '{}': ERROR: {err}", entry.id);
+            }
+        }
+        if entry.r#match.is_empty() {
+            entry_findings += 1;
+            println!(
+                "model '{}': ERROR: entry has no match rules (lib_id / value_re / \
+                 footprint_re / mpn_re all absent); it cannot claim a board component",
+                entry.id
+            );
+        }
+        // Parameter-name vocabulary (warning tier, no exit-code effect). The
+        // params bag is free-form on purpose, so a misspelled key is not an
+        // error, it is a key nothing reads: the entry validates and then
+        // silently runs on the default. This is the only place that key is
+        // ever mentioned, so it says so, and adds the nearest real name when
+        // one is close enough to be worth naming. Unknown names can also be
+        // genuine extensions, which is why it cannot gate.
+        let unknown = hauksbee_models::param_names::unknown_params(entry);
+        let cited = hauksbee_models::param_names::source_warnings(entry);
+        if let Some(w) = model_error_warning(entry.source.as_ref()) {
+            entry_warnings += 1;
+            println!("model '{}' [models.source]: warning: {w}", entry.id);
+        }
+        for w in unknown
+            .iter()
+            .map(hauksbee_models::param_names::UnknownParam::message)
+            .chain(cited)
+        {
+            entry_warnings += 1;
+            println!("model '{}' [models.params]: warning: {w}", entry.id);
+        }
+        if !entry.logic.is_empty() {
+            match crate::logic::LogicComponent::compile(&entry.id, &entry.logic) {
+                Ok(compiled) => {
+                    for w in &compiled.warnings {
+                        entry_warnings += 1;
+                        println!("model '{}' [models.logic]: warning: {w}", entry.id);
+                    }
+                }
+                Err(e) => {
+                    entry_findings += 1;
+                    println!("model '{}' [models.logic]: ERROR: {e}", entry.id);
+                }
+            }
+        }
+        // The behavioural block's own validation (converter/pin/FSM finiteness
+        // gates) must run here too, or `hauksbee models lint` prints "ok" for a
+        // model that panics the solver at sim time (e.g. vout_setpoint = nan).
+        if !entry.behavioral.is_empty() {
+            for err in hauksbee_models::behavioral::validate_behavioral(&entry.behavioral) {
+                entry_findings += 1;
+                println!("model '{}' [models.behavioral]: ERROR: {err}", entry.id);
+            }
+        }
+        if entry_findings == 0 {
+            match entry_warnings {
+                0 => println!("model '{}': ok", entry.id),
+                n => println!("model '{}': ok, {n} warning(s) above", entry.id),
+            }
+        }
+        *findings += entry_findings;
+        *warnings += entry_warnings;
+    }
+    for problem in hauksbee_models::variants::lint(&db.models) {
+        *findings += 1;
+        println!("variant set: ERROR: {problem}");
+    }
+    db.models.len()
+}
+
+/// The error for a board file handed to `models lint`, naming the command meant.
+fn board_not_model_spec(file: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "'{}' is a board, not a model spec: to see which model entry each \
+         board part resolves to, run  hauksbee models resolve {}",
+        file.display(),
+        file.display()
+    )
 }
 
 /// Validate and inspect a `[soc]` MCU descriptor, returning the finding count.
@@ -312,7 +330,7 @@ fn soc_lint_report(file: &Path, text: &str, root: &toml::Value) -> (Vec<String>,
             };
             let channel = entry
                 .get("channel")
-                .and_then(|v| v.as_integer())
+                .and_then(toml::Value::as_integer)
                 .unwrap_or(-1);
             let Some(cmd) = entry.get("monitor_command").and_then(|v| v.as_str()) else {
                 continue;
@@ -362,82 +380,7 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
     let mut out = Vec::new();
     match config {
         #[cfg(feature = "renode")]
-        hauksbee_mcu::SocConfig::Renode(c) => {
-            out.push(format!("part: {} on machine {:?}", c.mcu_label, c.machine));
-            out.push(if c.platform.contains('\n') {
-                format!(
-                    "platform: {} line(s) of inline .repl source",
-                    c.platform.lines().count()
-                )
-            } else {
-                format!("platform: {}", c.platform)
-            });
-            if let Some(b) = &c.support_bundle {
-                out.push(format!(
-                    "support bundle: {b} (unpacked before the platform loads)"
-                ));
-            }
-            out.push(format!(
-                "cpu: {}   clock: {} Hz (cross-checked at load against the platform's own \
-                 `cpu PerformanceInMips` / `nvic systickFrequency` declarations)",
-                c.cpu, c.frequency_hz
-            ));
-            out.push(match &c.watchdog_limitation {
-                Some(l) => format!("watchdog: {l}"),
-                None => "watchdog: this part claims full fidelity, an armed watchdog that is \
-                         never fed reboots the core the way silicon does"
-                    .to_string(),
-            });
-            out.push(match &c.timing_limitation {
-                Some(l) => format!("timing: {l}"),
-                None => "timing: this part claims a firmware delay costs the virtual time \
-                         it costs on silicon (measured by the clock-truth gate)"
-                    .to_string(),
-            });
-            out.push(match &c.uart {
-                Some(u) => format!("uart bridge: {u}"),
-                None => "uart bridge: none".to_string(),
-            });
-            for p in &c.ports {
-                out.push(format!(
-                    "gpio port {}: {} pins on sysbus.{}, output state at +{:#x}, direction {}",
-                    p.letter,
-                    p.width,
-                    p.peripheral,
-                    p.odr_offset,
-                    match &p.dir {
-                        Some(d) => format!("at +{:#x} ({:?})", d.offset, d.encoding),
-                        None => "not observable".to_string(),
-                    }
-                ));
-            }
-            out.push(format!(
-                "i2c controllers: {}",
-                name_list(&c.i2c_controllers)
-            ));
-            out.push(format!(
-                "spi controllers: {}",
-                name_list(&c.spi_controllers)
-            ));
-            for a in &c.adc_channels {
-                out.push(format!(
-                    "adc channel {}: 0..{} counts over 0..{} V via {}",
-                    a.channel,
-                    a.max_count,
-                    a.full_scale_volts,
-                    match &a.inject {
-                        hauksbee_mcu::AdcInject::MonitorCommand(cmd) => format!("monitor {cmd:?}"),
-                        hauksbee_mcu::AdcInject::MemoryWord(addr) =>
-                            format!("a write to {addr:#010x}"),
-                    }
-                ));
-            }
-            out.push(format!(
-                "setup commands: {} before the firmware loads, {} after",
-                c.extra_setup.len(),
-                c.post_load_setup.len()
-            ));
-        }
+        hauksbee_mcu::SocConfig::Renode(c) => renode_inspection(c, &mut out),
         #[cfg(feature = "qemu")]
         hauksbee_mcu::SocConfig::Qemu(c) => {
             out.push(format!("part: {} on machine {:?}", c.mcu_label, c.machine));
@@ -484,6 +427,88 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
         _ => out.push("this build carries no emulator backend".to_string()),
     }
     out
+}
+
+/// The [`soc_inspection`] lines for a Renode descriptor.
+#[cfg(feature = "renode")]
+fn renode_inspection(c: &hauksbee_mcu::RenodeConfig, out: &mut Vec<String>) {
+    out.push(format!("part: {} on machine {:?}", c.mcu_label, c.machine));
+    out.push(if c.platform.contains('\n') {
+        format!(
+            "platform: {} line(s) of inline .repl source",
+            c.platform.lines().count()
+        )
+    } else {
+        format!("platform: {}", c.platform)
+    });
+    if let Some(b) = &c.support_bundle {
+        out.push(format!(
+            "support bundle: {b} (unpacked before the platform loads)"
+        ));
+    }
+    out.push(format!(
+        "cpu: {}   clock: {} Hz (cross-checked at load against the platform's own \
+         `cpu PerformanceInMips` / `nvic systickFrequency` declarations)",
+        c.cpu, c.frequency_hz
+    ));
+    out.push(c.watchdog_limitation.as_ref().map_or_else(
+        || {
+            "watchdog: this part claims full fidelity, an armed watchdog that is \
+                 never fed reboots the core the way silicon does"
+                .to_string()
+        },
+        |l| format!("watchdog: {l}"),
+    ));
+    out.push(c.timing_limitation.as_ref().map_or_else(
+        || {
+            "timing: this part claims a firmware delay costs the virtual time \
+                 it costs on silicon (measured by the clock-truth gate)"
+                .to_string()
+        },
+        |l| format!("timing: {l}"),
+    ));
+    out.push(c.uart.as_ref().map_or_else(
+        || "uart bridge: none".to_string(),
+        |u| format!("uart bridge: {u}"),
+    ));
+    for p in &c.ports {
+        out.push(format!(
+            "gpio port {}: {} pins on sysbus.{}, output state at +{:#x}, direction {}",
+            p.letter,
+            p.width,
+            p.peripheral,
+            p.odr_offset,
+            p.dir.as_ref().map_or_else(
+                || "not observable".to_string(),
+                |d| format!("at +{:#x} ({:?})", d.offset, d.encoding)
+            )
+        ));
+    }
+    out.push(format!(
+        "i2c controllers: {}",
+        name_list(&c.i2c_controllers)
+    ));
+    out.push(format!(
+        "spi controllers: {}",
+        name_list(&c.spi_controllers)
+    ));
+    for a in &c.adc_channels {
+        out.push(format!(
+            "adc channel {}: 0..{} counts over 0..{} V via {}",
+            a.channel,
+            a.max_count,
+            a.full_scale_volts,
+            match &a.inject {
+                hauksbee_mcu::AdcInject::MonitorCommand(cmd) => format!("monitor {cmd:?}"),
+                hauksbee_mcu::AdcInject::MemoryWord(addr) => format!("a write to {addr:#010x}"),
+            }
+        ));
+    }
+    out.push(format!(
+        "setup commands: {} before the firmware loads, {} after",
+        c.extra_setup.len(),
+        c.post_load_setup.len()
+    ));
 }
 
 /// A comma-separated controller list, or the word `none`, so an empty list reads
@@ -585,12 +610,22 @@ fn default_store() -> anyhow::Result<PackStore> {
 /// Plain `http://` URLs are refused: no HTTP client ships in hauksbee, and an
 /// unencrypted model source is a bad default anyway, clone or download it
 /// yourself and pass the path.
+///
+/// # Errors
+///
+/// Returns an error if `HOME` is not set, if `source` is a plain-http URL, a missing
+/// path or a non-tarball file, if `git clone` or `tar` fails, if no single
+/// `pack.toml` root is found, if the pack or one of its model files fails to load,
+/// parse or compile, or if the pack cannot be installed into the store.
+///
+/// # Panics
+///
+/// Panics if a temporary directory path or the tarball path is not valid UTF-8.
 pub fn add(source: &str) -> anyhow::Result<()> {
     let store = default_store()?;
 
     // Keep any temp dir alive until the install (which copies) finishes.
-    let _staging: Option<tempfile::TempDir>;
-    let src_dir: PathBuf = if source.starts_with("http://") {
+    let (src_dir, _staging) = if source.starts_with("http://") {
         anyhow::bail!(
             "plain-http URLs are not supported: pass an https git URL, or download \
              the tarball yourself and `hauksbee models add <path>`"
@@ -603,9 +638,7 @@ pub fn add(source: &str) -> anyhow::Result<()> {
             &["clone", "--depth", "1", source, dest.to_str().unwrap()],
             "cloning the pack repo",
         )?;
-        let dir = find_pack_root(&dest)?;
-        _staging = Some(tmp);
-        dir
+        (find_pack_root(&dest)?, Some(tmp))
     } else {
         let path = PathBuf::from(source);
         let is_tar = ["tar.gz", "tgz", "tar"]
@@ -629,9 +662,7 @@ pub fn add(source: &str) -> anyhow::Result<()> {
                 ],
                 "unpacking the pack tarball",
             )?;
-            let dir = find_pack_root(tmp.path())?;
-            _staging = Some(tmp);
-            dir
+            (find_pack_root(tmp.path())?, Some(tmp))
         } else if path.is_file() {
             anyhow::bail!(
                 "'{source}' is a file but not a tarball hauksbee can unpack: pass a \
@@ -639,8 +670,7 @@ pub fn add(source: &str) -> anyhow::Result<()> {
                  (https://…, git@…, ssh://…)"
             );
         } else {
-            _staging = None;
-            path
+            (path, None)
         }
     };
 
@@ -678,6 +708,11 @@ pub fn add(source: &str) -> anyhow::Result<()> {
 }
 
 /// `hauksbee models remove <name>`: delete an installed pack and its record.
+///
+/// # Errors
+///
+/// Returns an error if `HOME` is not set, if no pack by that name is installed, or
+/// if its directory or record cannot be removed.
 pub fn remove(name: &str) -> anyhow::Result<()> {
     let store = default_store()?;
     let record = store.remove(name)?;
@@ -685,10 +720,15 @@ pub fn remove(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `hauksbee models list`: the installed packs, from `packs.toml`. With
-/// `--builtin`, first the embedded MCU SoC descriptors; the `backend:part`
+/// `hauksbee models list`: the installed packs, from `packs.toml`.
+///
+/// With `--builtin`, first the embedded MCU `SoC` descriptors; the `backend:part`
 /// specs a board's `renode:<part>` / `qemu:<part>` backend string resolves to
 /// when no override-dir descriptor shadows them.
+///
+/// # Errors
+///
+/// Returns an error if `HOME` is not set or if `packs.toml` cannot be read or parsed.
 pub fn list(builtin: bool) -> anyhow::Result<()> {
     if builtin {
         // Say up front that this list is NOT the set of co-simulatable MCUs.
@@ -737,9 +777,15 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `hauksbee models resolve <board> [--json]`: per component, which model entry
-/// won and from which priority layer: the pack author's debugging surface
-/// (the layer-annotated extension of `run --report`'s bind table).
+/// `hauksbee models resolve <board> [--json]`: per component, which model entry won.
+///
+/// It also shows which priority layer each entry came from: the pack author's
+/// debugging surface (the layer-annotated extension of `run --report`'s bind table).
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read or normalised, or if the JSON report
+/// cannot be built.
 pub fn resolve(board_path: &Path, models_dir: Option<&Path>, json: bool) -> anyhow::Result<()> {
     resolve_checked(board_path, models_dir, json, ModelRequirement::default())
 }
@@ -747,6 +793,11 @@ pub fn resolve(board_path: &Path, models_dir: Option<&Path>, json: bool) -> anyh
 /// Resolve and optionally refuse when selected sources do not meet an explicit
 /// accuracy policy. A refusal is exit 3: the input parsed, but the requested
 /// analysis accuracy cannot be vouched for.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read or normalised, or if the JSON report
+/// cannot be built.
 pub fn resolve_checked(
     board_path: &Path,
     models_dir: Option<&Path>,
@@ -758,6 +809,12 @@ pub fn resolve_checked(
 
 /// Variant used by the CLI's `--all` human-output switch. JSON intentionally
 /// ignores the switch and always preserves every per-component record.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read or normalised, or if the JSON report
+/// cannot be built or extended with the refusals. Refusals exit the process with
+/// `EXIT_INVALID_FOR_ANALYSIS`.
 pub fn resolve_checked_with_all(
     board_path: &Path,
     models_dir: Option<&Path>,
@@ -820,6 +877,13 @@ pub struct ModelRequirementRefusal {
     pub reason: String,
 }
 
+/// The components whose resolved model falls short of `requirement`, with the reason.
+///
+/// # Panics
+///
+/// Never panics in practice: each `expect` reads a requirement field only after
+/// `is_some_and` has confirmed it is set.
+#[must_use]
 pub fn model_requirement_refusals(
     lib: &ModelLibrary,
     board: &hauksbee_extract::ExtractedBoard,
@@ -953,7 +1017,7 @@ fn natural_ref_key(reference: &str) -> (String, u64, String) {
         prefix.to_ascii_uppercase(),
         digits
             .chars()
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .collect::<String>()
             .parse()
             .unwrap_or(u64::MAX),
@@ -1017,8 +1081,9 @@ fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) ->
     rows
 }
 
-/// Render a Unicode box-drawing table from a header row and data rows, the
-/// same style as the bind table in `report.rs`. Column widths fit the widest
+/// Render a Unicode box-drawing table from a header row and data rows.
+///
+/// It uses the same style as the bind table in `report.rs`. Column widths fit the widest
 /// cell; a row shorter than the header renders its missing cells empty.
 pub fn box_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let cols = headers.len();
@@ -1041,8 +1106,8 @@ pub fn box_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let line = |cells: &[String]| {
         let mut s = String::from("│");
         for (i, w) in widths.iter().enumerate() {
-            let cell = cells.get(i).map(String::as_str).unwrap_or("");
-            s.push_str(&format!(" {cell:<w$} │", w = w));
+            let cell = cells.get(i).map_or("", String::as_str);
+            let _ = write!(s, " {cell:<w$} │");
         }
         s.push('\n');
         s
@@ -1051,7 +1116,7 @@ pub fn box_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let mut out = String::new();
     out.push_str(&rule("┌", "┬", "┐"));
     out.push_str(&line(
-        &headers.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+        &headers.iter().map(ToString::to_string).collect::<Vec<_>>(),
     ));
     out.push_str(&rule("├", "┼", "┤"));
     for row in rows {
@@ -1062,11 +1127,13 @@ pub fn box_table(headers: &[&str], rows: &[Vec<String>]) -> String {
 }
 
 /// The `models resolve` table, separated from I/O so tests can assert on it.
+#[must_use]
 pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
     resolve_report_with_all(lib, board, false)
 }
 
 /// Full historical human table, selected explicitly by `models resolve --all`.
+#[must_use]
 pub fn resolve_report_all(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
     resolve_report_with_all(lib, board, true)
 }
@@ -1143,10 +1210,11 @@ fn resolve_report_with_all(
                     if inductors == 1 { "" } else { "s" }
                 ));
             }
-            out.push_str(&format!(
-                "{total} passives bound by footprint/value fallback: {}. Use --all to show every component row.\n",
+            let _ = writeln!(
+                out,
+                "{total} passives bound by footprint/value fallback: {}. Use --all to show every component row.",
                 kinds.join(", ")
-            ));
+            );
         }
     }
     out
@@ -1166,6 +1234,7 @@ fn bulk_fallback_passive_kind(row: &ResolveRow) -> Option<&'static str> {
 
 /// The `models resolve --json` object: the same rows as the text table, plus a
 /// resolved/unresolved rollup so a consumer needs no counting pass.
+#[must_use]
 pub fn resolve_report_json(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
     let rows = resolve_rows(lib, board);
     let unresolved = rows.iter().filter(|r| !r.resolved).count();
@@ -1239,6 +1308,12 @@ fn run_tool(tool: &str, args: &[&str], doing: &str) -> anyhow::Result<()> {
 /// unless the caller has said yes, either interactively or with `--yes` for a
 /// script. Running the extraction and mentioning the fact afterwards would be
 /// the wrong order: the user cannot unsend it.
+///
+/// # Errors
+///
+/// Returns an error if `api_key_env` is not a valid variable name, if `pdf` is not a
+/// file, if the extraction settings or config file are invalid, if consent is needed
+/// but stdin is not a terminal, or if the extraction backend run fails.
 pub fn extract(
     pdf: &std::path::Path,
     part: &str,
@@ -1250,6 +1325,7 @@ pub fn extract(
     effort: Option<String>,
     api_base: Option<String>,
     api_key_env: Option<String>,
+    force: bool,
 ) -> anyhow::Result<()> {
     use hauksbee_models::datasheet;
 
@@ -1298,7 +1374,9 @@ pub fn extract(
         .effort(effort)
         .backend(backend)
         .api_base(api_base)
-        .api_key_env(api_key_env);
+        .api_key_env(api_key_env)
+        .checker(std::env::current_exe().ok());
+    let args = datasheet::Args { force, ..args };
 
     // Resolve (and therefore any bad config file) before consent, not after:
     // the user is told exactly what is about to read their datasheet, and a
@@ -1329,7 +1407,7 @@ pub fn extract(
 
     println!();
     println!(
-        "This model is a draft with provenance \"datasheet-extracted\". Read it before you \
+        "This model is a draft (tier \"datasheet-derived\", citing the PDF's sha256). Read it before you \
          trust a result that depends on it, and check any value the datasheet did not state \
          outright."
     );
@@ -1346,21 +1424,27 @@ pub fn extract(
             "It landed in the standing user model directory ({}), which every run \
              already reads: re-run your board and it binds.\n\
              check the binding:  hauksbee models resolve <your-board>",
-            written
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "~/.hauksbee/models".to_string())
+            written.parent().map_or_else(
+                || "~/.hauksbee/models".to_string(),
+                |p| p.display().to_string()
+            )
         ),
     }
     Ok(())
 }
 
-/// `hauksbee models new <REF> --board <board>`: scaffold a model entry for
-/// one board component, pre-seeded only from the board's own identity (value
+/// `hauksbee models new <REF> --board <board>`: scaffold a model entry for one component.
+///
+/// The entry is pre-seeded only from the board's own identity (value
 /// as the match regex). It never invents datasheet parameters or guesses the
 /// device kind: until the author chooses a kind and supplies evidence,
 /// `models lint` must refuse it. `--pack-dir` additionally writes a pack
 /// manifest and the model under `models/`.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read, if it has no component
+/// `reference`, if the output file already exists, or if it cannot be written.
 pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Result<()> {
     new_with_kind(reference, board_path, out, None, None)
 }
@@ -1485,7 +1569,7 @@ fn scaffold_template(
 
 /// Retain exact board-provided identity evidence in a scaffold without
 /// mistaking it for device behavior. These keys commonly carry MPNs or exact
-/// distributor/library order codes. Every emitted rule is ANDed with the value
+/// distributor/library order codes. Every emitted rule is `ANDed` with the value
 /// rule, so the draft cannot accidentally generalise from one sourced board to
 /// every component with a similar display value.
 fn scaffold_property_match_rules(properties: &[(String, String)]) -> String {
@@ -1559,6 +1643,12 @@ fn model_id(comp: &hauksbee_extract::Component) -> String {
 
 /// Variant used by the CLI when the author supplies an explicit device kind.
 /// The compatibility wrapper above keeps the public Rust API additive.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read, if it has no component
+/// `reference`, if `kind_override` is not a known model kind, if the model file or
+/// pack manifest already exists, or if either cannot be written.
 pub fn new_with_kind(
     reference: &str,
     board_path: &Path,
@@ -1594,18 +1684,19 @@ pub fn new_with_kind(
     let template = scaffold_template(board_path, comp, kind_override)?;
     let id = model_id(comp);
 
-    let (out_path, pack_manifest): (PathBuf, Option<(PathBuf, String)>) =
-        if let Some(pack_dir) = pack_dir {
+    let (out_path, pack_manifest): (PathBuf, Option<(PathBuf, String)>) = pack_dir.map_or_else(
+        || {
+            (
+                out.map_or_else(|| PathBuf::from(format!("{id}.toml")), Path::to_path_buf),
+                None,
+            )
+        },
+        |pack_dir| {
             let (manifest_path, manifest) = pack_manifest(pack_dir);
             let model_path = pack_dir.join("models").join(format!("{id}.toml"));
             (model_path, Some((manifest_path, manifest)))
-        } else {
-            (
-                out.map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from(format!("{id}.toml"))),
-                None,
-            )
-        };
+        },
+    );
     if out_path.exists() {
         anyhow::bail!(
             "'{}' already exists; refusing to overwrite (pass --out for another path)",
@@ -1632,8 +1723,7 @@ pub fn new_with_kind(
     let dir = out_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| ".".to_string());
+        .map_or_else(|| ".".to_string(), |p| p.display().to_string());
     println!("wrote {}", out_path.display());
     if let Some((manifest_path, _)) = &pack_manifest {
         println!("wrote {}", manifest_path.display());
@@ -1711,7 +1801,7 @@ pub struct CoverageComponent {
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct CoverageSummary {
     pub active_connected: usize,
-    /// Resolved to at least an identity card (active_connected - unresolved).
+    /// Resolved to at least an identity card (`active_connected` - unresolved).
     pub identified: usize,
     /// Has an executable model, whether its scope is unspecified, partial, or
     /// complete for every capability the card declares.
@@ -1801,11 +1891,7 @@ fn model_kind_name(kind: hauksbee_models::ComponentKind) -> String {
 
 fn input_sha256(path: &Path) -> (Option<String>, Option<String>) {
     match std::fs::read(path) {
-        Ok(bytes) => {
-            let digest = Sha256::digest(bytes);
-            let hex = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-            (Some(hex), None)
-        }
+        Ok(bytes) => (Some(crate::run_manifest::hex_digest(&bytes)), None),
         Err(_error) if path.is_dir() => (
             None,
             Some("input is a directory; no single-file SHA-256 exists".to_string()),
@@ -1900,16 +1986,16 @@ fn coverage_component(
         actionable_behavior_gap,
         model_id: model.map(|entry| entry.id.clone()),
         model_kind: model.map(|entry| model_kind_name(entry.kind)),
-        layer: resolution
-            .layer
-            .map(|layer| layer.to_string())
-            .unwrap_or_else(|| {
+        layer: resolution.layer.map_or_else(
+            || {
                 if model.is_some() {
                     "engine-fallback".to_string()
                 } else {
                     "-".to_string()
                 }
-            }),
+            },
+            |layer| layer.to_string(),
+        ),
         origin: resolution.origin.unwrap_or_else(|| "-".to_string()),
         source,
         references: resolution.references.clone(),
@@ -1976,9 +2062,11 @@ fn coverage_summary(components: &[CoverageComponent]) -> CoverageSummary {
     summary
 }
 
-/// Compute the shared, read-only model coverage payload used by the CLI,
-/// browser report and MCP tool. `models prepare` is a separate explicit write
+/// Compute the shared, read-only model coverage payload.
+///
+/// The CLI, browser report and MCP tool all use it. `models prepare` is a separate explicit write
 /// action; merely asking what is missing never mutates the user's model store.
+#[must_use]
 pub fn coverage_snapshot(
     board: &hauksbee_extract::ExtractedBoard,
     lib: &ModelLibrary,
@@ -2012,10 +2100,15 @@ pub fn coverage_snapshot(
     }
 }
 
-/// Read a board from disk and return model coverage without printing or
-/// writing. This is the programmatic entry used by MCP and other automation;
+/// Read a board from disk and return model coverage without printing or writing.
+///
+/// This is the programmatic entry used by MCP and other automation;
 /// callers that want to create scaffolds must invoke the separately
 /// approval-gated [`prepare`] workflow.
+///
+/// # Errors
+///
+/// Returns an error if the board file cannot be read or normalised.
 pub fn coverage_snapshot_for_path(
     board_path: &Path,
     models_dir: Option<&Path>,
@@ -2060,8 +2153,15 @@ fn coverage_report(
                         })
                         .map(|comp| coverage_component(comp, &net_names, lib))
                 });
-            match row.as_ref() {
-                Some(row) => {
+            row.as_ref().map_or_else(|| CoverageRequirementResult {
+                    reference: requirement.reference.clone(),
+                    capability: requirement.capability.clone(),
+                    met: false,
+                    model_id: None,
+                    stage: CoverageStage::Unresolved,
+                    reason: "reference is not a connected device on this board".to_string(),
+                    references: Vec::new(),
+                }, |row| {
                     let met = row
                         .implements
                         .iter()
@@ -2096,17 +2196,7 @@ fn coverage_report(
                         reason,
                         references: row.references.clone(),
                     }
-                }
-                None => CoverageRequirementResult {
-                    reference: requirement.reference.clone(),
-                    capability: requirement.capability.clone(),
-                    met: false,
-                    model_id: None,
-                    stage: CoverageStage::Unresolved,
-                    reason: "reference is not a connected device on this board".to_string(),
-                    references: Vec::new(),
-                },
-            }
+                })
         })
         .collect::<Vec<_>>();
     let mut summary = coverage_summary(&components);
@@ -2155,10 +2245,17 @@ fn parse_coverage_requirements(values: &[String]) -> anyhow::Result<Vec<Coverage
         .collect()
 }
 
-/// `hauksbee models coverage <BOARD>`: report what was extracted, what model
-/// identity won, what static and executable scope is present, and what remains.
-/// This is deliberately read-only; `models prepare` is the separate,
-/// approval-gated transition from inventory to files.
+/// `hauksbee models coverage <BOARD>`: report model coverage for a board.
+///
+/// It reports what was extracted, what model identity won, what static and executable
+/// scope is present, and what remains. This is deliberately read-only; `models prepare`
+/// is the separate, approval-gated transition from inventory to files.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read or normalised, if a `required`
+/// entry is not `REF:CAPABILITY`, if the JSON report cannot be serialised, or if any
+/// requested model capability is unmet.
 pub fn coverage(
     board_path: &Path,
     models_dir: Option<&Path>,
@@ -2172,15 +2269,22 @@ pub fn coverage(
     let report = coverage_report(board_path, &normalized, &lib, &requirements);
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
-        if report.summary.requirements_unmet > 0 {
-            anyhow::bail!(
-                "{} of {} requested model capabilities are unmet",
-                report.summary.requirements_unmet,
-                report.summary.requirements_total
-            );
-        }
-        return Ok(());
+    } else {
+        print_coverage_text(board_path, &report);
     }
+    if report.summary.requirements_unmet > 0 {
+        anyhow::bail!(
+            "{} of {} requested model capabilities are unmet",
+            report.summary.requirements_unmet,
+            report.summary.requirements_total
+        );
+    }
+    Ok(())
+}
+
+/// The human view of [`coverage`]: the summary sentence, the authoring queue,
+/// the per-component table and the requested-capability table.
+fn print_coverage_text(board_path: &Path, report: &CoverageReport) {
     println!(
         "Model coverage for {}: {}/{} connected active devices identified; {}/{} have executable behavior; {} unresolved; {} identity-only; {} executable with unspecified scope; {} executable partial; {} executable with no declared gaps.",
         board_path.display(),
@@ -2202,20 +2306,7 @@ pub fn coverage(
         let targets = report
             .authoring_targets
             .iter()
-            .map(|component| {
-                vec![
-                    component.reference.clone(),
-                    component.value.clone(),
-                    serde_json::to_value(component.stage)
-                        .ok()
-                        .and_then(|value| value.as_str().map(str::to_owned))
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    component
-                        .model_id
-                        .clone()
-                        .unwrap_or_else(|| "UNRESOLVED".to_string()),
-                ]
-            })
+            .map(coverage_row_head)
             .collect::<Vec<_>>();
         print!(
             "{}",
@@ -2226,28 +2317,10 @@ pub fn coverage(
         .components
         .iter()
         .map(|component| {
-            vec![
-                component.reference.clone(),
-                component.value.clone(),
-                serde_json::to_value(component.stage)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "unknown".to_string()),
-                component
-                    .model_id
-                    .clone()
-                    .unwrap_or_else(|| "UNRESOLVED".to_string()),
-                if component.implements.is_empty() {
-                    "-".to_string()
-                } else {
-                    component.implements.join(",")
-                },
-                if component.missing.is_empty() {
-                    "-".to_string()
-                } else {
-                    component.missing.join(",")
-                },
-            ]
+            let mut row = coverage_row_head(component);
+            row.push(dash_join(&component.implements));
+            row.push(dash_join(&component.missing));
+            row
         })
         .collect::<Vec<_>>();
     print!(
@@ -2282,21 +2355,51 @@ pub fn coverage(
         "Read-only. To draft unresolved identities and extend partial executable models, run: hauksbee models prepare {} --pack-dir <DIR>",
         board_path.display()
     );
-    if report.summary.requirements_unmet > 0 {
-        anyhow::bail!(
-            "{} of {} requested model capabilities are unmet",
-            report.summary.requirements_unmet,
-            report.summary.requirements_total
-        );
-    }
-    Ok(())
 }
 
-/// `hauksbee models prepare <BOARD> --pack-dir <DIR>`: enumerate connected
-/// identities that remain unresolved and copy partial executable cards into
-/// safe board-local extensions, then ask before writing any file. This command is
+/// The ref, value, stage and model columns both coverage tables open with.
+fn coverage_row_head(component: &CoverageComponent) -> Vec<String> {
+    vec![
+        component.reference.clone(),
+        component.value.clone(),
+        serde_json::to_value(component.stage)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_string()),
+        component
+            .model_id
+            .clone()
+            .unwrap_or_else(|| "UNRESOLVED".to_string()),
+    ]
+}
+
+/// A comma-joined list, or `-` when it is empty.
+fn dash_join(list: &[String]) -> String {
+    if list.is_empty() {
+        "-".to_string()
+    } else {
+        list.join(",")
+    }
+}
+
+/// `hauksbee models prepare <BOARD> --pack-dir <DIR>`: plan and write model scaffolds.
+///
+/// It enumerates connected identities that remain unresolved and copies partial
+/// executable cards into safe board-local extensions, then asks before writing any
+/// file. This command is
 /// intentionally local and deterministic: it does not fetch datasheets,
 /// invoke an LLM, install a pack, or mutate the model library.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read, if a scaffold or upgrade draft
+/// cannot be rendered, if any planned file already exists, if approval is needed
+/// but stdin is not a terminal, or if the pack files cannot be written.
+///
+/// # Panics
+///
+/// Never panics in practice: every authoring component is selected from the
+/// coverage report, so its report row always exists.
 pub fn prepare(
     board_path: &Path,
     pack_dir: &Path,
@@ -2323,34 +2426,10 @@ pub fn prepare(
         return Ok(());
     }
 
-    #[derive(serde::Serialize)]
-    struct WorkItem {
-        reference: String,
-        value: String,
-        stage_before: CoverageStage,
-        base_model_id: Option<String>,
-        prepared_file: String,
-        implements_before: Vec<String>,
-        missing_before: Vec<String>,
-        required_actions: Vec<String>,
-    }
-    #[derive(serde::Serialize)]
-    struct WorkPlan {
-        schema_version: u32,
-        board: String,
-        inventory: String,
-        approval: String,
-        items: Vec<WorkItem>,
-        validation_commands: Vec<String>,
-    }
-
     let mut plans = Vec::with_capacity(components.len() + 3);
     let mut work_items = Vec::with_capacity(components.len());
-    let (manifest_path, manifest) = pack_manifest(pack_dir);
-    plans.push(PlannedFile {
-        path: manifest_path,
-        contents: manifest,
-    });
+    let (path, contents) = pack_manifest(pack_dir);
+    plans.push(PlannedFile { path, contents });
     plans.push(PlannedFile {
         path: pack_dir.join("inventory.json"),
         // Retain the whole read-only report: the active-device denominator and
@@ -2365,40 +2444,7 @@ pub fn prepare(
             .chain(report.authoring_targets.iter())
             .find(|row| row.reference == comp.reference);
         let resolution = crate::binder::library_resolution(&lib, comp);
-        let executable_upgrade = existing.is_some_and(|row| {
-            matches!(
-                row.stage,
-                CoverageStage::ExecutableScopeUnspecified | CoverageStage::ExecutablePartial
-            )
-        });
-        let contents = if executable_upgrade {
-            editable_model_upgrade(&board_path.display().to_string(), comp, &resolution)?
-        } else {
-            let context = existing
-                .and_then(|row| row.model_id.as_deref().map(|model| (row, model)))
-                .map(|(row, model)| {
-                    let missing = if row.missing.is_empty() {
-                        "not declared by the identity card".to_string()
-                    } else {
-                        row.missing.join(", ")
-                    };
-                    let unlocked_by = resolution
-                        .model
-                        .as_ref()
-                        .and_then(|entry| entry.params.get_str("unlocked_by"))
-                        .unwrap_or("a source-bound executable model for the behavior this analysis requires")
-                        .to_string();
-                    format!(
-                        "# Upgrade target: source-bound identity model '{model}' already resolves.\n\
-                         # Declared missing behavior: {missing}.\n\
-                         # Existing card says behavior is unlocked by: {unlocked_by}.\n\
-                         # Board-observed pins/nets and provenance are retained in ../inventory.json.\n\
-                         # This draft deliberately remains lint-invalid until executable behavior is supplied.\n"
-                    )
-                })
-                .unwrap_or_default();
-            format!("{context}{}", scaffold_template(board_path, comp, None)?)
-        };
+        let contents = draft_contents(board_path, comp, existing, &resolution)?;
         plans.push(PlannedFile {
             path: pack_dir.join("models").join(format!("{id}.toml")),
             contents,
@@ -2421,29 +2467,7 @@ pub fn prepare(
             ],
         });
     }
-    // Keep every handoff command directly runnable. `models lint` accepts one
-    // file, so a shell glob would expand to an invalid multi-argument command
-    // as soon as the pack contains more than one card. Exact per-file commands
-    // are also easier for humans and agents to retry selectively.
-    let mut validation_commands = work_items
-        .iter()
-        .map(|item| {
-            format!(
-                "hauksbee models lint {}",
-                shell_quote(&pack_dir.join(&item.prepared_file).display().to_string())
-            )
-        })
-        .collect::<Vec<_>>();
-    validation_commands.push(format!(
-        "hauksbee models coverage {} --models-dir {} --json",
-        shell_quote(&board_path.display().to_string()),
-        shell_quote(&pack_dir.join("models").display().to_string())
-    ));
-    validation_commands.push(format!(
-        "hauksbee run {} --check --json --strict --models-dir {}",
-        shell_quote(&board_path.display().to_string()),
-        shell_quote(&pack_dir.join("models").display().to_string())
-    ));
+    let validation_commands = handoff_commands(board_path, pack_dir, &work_items);
     let work_plan = WorkPlan {
         schema_version: 1,
         board: board_path.display().to_string(),
@@ -2461,12 +2485,133 @@ pub fn prepare(
         },
     );
 
+    show_plans(&plans, &components, pack_dir)?;
+
+    if !request_prepare_approval(assume_yes)? {
+        println!("Nothing was written.");
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(pack_dir.join("models")).map_err(|e| {
+        anyhow::anyhow!(
+            "creating model-pack directory '{}': {e}",
+            pack_dir.join("models").display()
+        )
+    })?;
+    for plan in &plans {
+        std::fs::write(&plan.path, &plan.contents)
+            .map_err(|e| anyhow::anyhow!("writing '{}': {e}", plan.path.display()))?;
+        println!("wrote {}", plan.path.display());
+    }
+    Ok(())
+}
+
+/// One component's entry in the `models prepare` work plan.
+#[derive(serde::Serialize)]
+struct WorkItem {
+    reference: String,
+    value: String,
+    stage_before: CoverageStage,
+    base_model_id: Option<String>,
+    prepared_file: String,
+    implements_before: Vec<String>,
+    missing_before: Vec<String>,
+    required_actions: Vec<String>,
+}
+/// The `workplan.json` handoff `models prepare` writes beside the drafts.
+#[derive(serde::Serialize)]
+struct WorkPlan {
+    schema_version: u32,
+    board: String,
+    inventory: String,
+    approval: String,
+    items: Vec<WorkItem>,
+    validation_commands: Vec<String>,
+}
+
+/// The draft card for one authoring component: an editable copy of a partial
+/// executable model, or a fresh scaffold headed by its upgrade context.
+fn draft_contents(
+    board_path: &Path,
+    comp: &hauksbee_extract::Component,
+    existing: Option<&CoverageComponent>,
+    resolution: &hauksbee_models::Resolution,
+) -> anyhow::Result<String> {
+    let executable_upgrade = existing.is_some_and(|row| {
+        matches!(
+            row.stage,
+            CoverageStage::ExecutableScopeUnspecified | CoverageStage::ExecutablePartial
+        )
+    });
+    if executable_upgrade {
+        editable_model_upgrade(&board_path.display().to_string(), comp, resolution)
+    } else {
+        let context = existing
+            .and_then(|row| row.model_id.as_deref().map(|model| (row, model)))
+            .map(|(row, model)| {
+                let missing = if row.missing.is_empty() {
+                    "not declared by the identity card".to_string()
+                } else {
+                    row.missing.join(", ")
+                };
+                let unlocked_by = resolution
+                    .model
+                    .as_ref()
+                    .and_then(|entry| entry.params.get_str("unlocked_by"))
+                    .unwrap_or("a source-bound executable model for the behavior this analysis requires")
+                    .to_string();
+                format!(
+                    "# Upgrade target: source-bound identity model '{model}' already resolves.\n\
+                     # Declared missing behavior: {missing}.\n\
+                     # Existing card says behavior is unlocked by: {unlocked_by}.\n\
+                     # Board-observed pins/nets and provenance are retained in ../inventory.json.\n\
+                     # This draft deliberately remains lint-invalid until executable behavior is supplied.\n"
+                )
+            })
+            .unwrap_or_default();
+        scaffold_template(board_path, comp, None).map(|draft| format!("{context}{draft}"))
+    }
+}
+
+/// Keep every handoff command directly runnable. `models lint` accepts one
+/// file, so a shell glob would expand to an invalid multi-argument command
+/// as soon as the pack contains more than one card. Exact per-file commands
+/// are also easier for humans and agents to retry selectively.
+fn handoff_commands(board_path: &Path, pack_dir: &Path, work_items: &[WorkItem]) -> Vec<String> {
+    let mut commands = work_items
+        .iter()
+        .map(|item| {
+            format!(
+                "hauksbee models lint {}",
+                shell_quote(&pack_dir.join(&item.prepared_file).display().to_string())
+            )
+        })
+        .collect::<Vec<_>>();
+    commands.push(format!(
+        "hauksbee models coverage {} --models-dir {} --json",
+        shell_quote(&board_path.display().to_string()),
+        shell_quote(&pack_dir.join("models").display().to_string())
+    ));
+    commands.push(format!(
+        "hauksbee run {} --check --json --strict --models-dir {}",
+        shell_quote(&board_path.display().to_string()),
+        shell_quote(&pack_dir.join("models").display().to_string())
+    ));
+    commands
+}
+
+/// List the files `models prepare` would write, refusing if any already exists.
+fn show_plans(
+    plans: &[PlannedFile],
+    components: &[&hauksbee_extract::Component],
+    pack_dir: &Path,
+) -> anyhow::Result<()> {
     println!(
         "This will write exactly {} file(s) under {} (no network, LLM, installer, or pack registration):",
         plans.len(),
         pack_dir.display()
     );
-    for plan in &plans {
+    for plan in plans {
         let comp = components.iter().find(|c| {
             plan.path
                 .file_stem()
@@ -2484,30 +2629,13 @@ pub fn prepare(
             println!("  {}", plan.path.display());
         }
     }
-    for plan in &plans {
+    for plan in plans {
         if plan.path.exists() {
             anyhow::bail!(
                 "'{}' already exists; refusing to overwrite (nothing was written)",
                 plan.path.display()
             );
         }
-    }
-
-    if !request_prepare_approval(assume_yes)? {
-        println!("Nothing was written.");
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(pack_dir.join("models")).map_err(|e| {
-        anyhow::anyhow!(
-            "creating model-pack directory '{}': {e}",
-            pack_dir.join("models").display()
-        )
-    })?;
-    for plan in &plans {
-        std::fs::write(&plan.path, &plan.contents)
-            .map_err(|e| anyhow::anyhow!("writing '{}': {e}", plan.path.display()))?;
-        println!("wrote {}", plan.path.display());
     }
     Ok(())
 }
@@ -2537,13 +2665,19 @@ fn coverage_authoring_components<'a>(
     components
 }
 
-/// Draft a model for a browser-selected component, read-only: it returns
-/// reviewable TOML and never creates a pack, saves a model, fetches a
+/// Draft a model for a browser-selected component, read-only.
+///
+/// It returns reviewable TOML and never creates a pack, saves a model, fetches a
 /// datasheet, or invokes an LLM. With no `expected_model_id` this is the
 /// unresolved, evidence-first scaffold of `models new`/`models prepare`;
 /// otherwise it is the conservative partial-model extension of `models
 /// prepare`, and the expected winning id prevents a stale browser report from
 /// silently drafting against a different installed model library.
+///
+/// # Errors
+///
+/// Returns an error if the library now resolves a model other than
+/// `expected_model_id`, or if the draft TOML cannot be rendered.
 pub fn draft_model(
     board_label: &str,
     reference: &str,
@@ -2608,7 +2742,7 @@ fn editable_model_upgrade(
         footprint_re: (!comp.footprint.trim().is_empty())
             .then(|| format!("^{}$", escape_regex(comp.footprint.trim()))),
         mpn_re: None,
-        properties: Default::default(),
+        properties: std::collections::BTreeMap::default(),
     };
 
     model.source = Some(hauksbee_models::schema::ModelSourceSpec {
@@ -2669,8 +2803,7 @@ fn request_prepare_approval(assume_yes: bool) -> anyhow::Result<bool> {
     }
     prepare_approval(false, stdin_is_tty, None)?;
     print!("Write exactly these files? [y/N] ");
-    use std::io::Write;
-    std::io::stdout().flush().ok();
+    std::io::Write::flush(&mut std::io::stdout()).ok();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     prepare_approval(false, true, Some(&answer))
@@ -2893,6 +3026,20 @@ mod tests {
         );
         assert!(all.contains("│ C1 ") && all.contains("│ R1 "), "{all}");
         assert!(!all.contains("Use --all"), "{all}");
+
+        // A card whose pin map has no output would bind OPEN, so it is refused
+        // at load with that reason (resolve prints it) instead of showing bound.
+        let dir = tempfile::tempdir().unwrap();
+        let card = "[[models]]\nid = 's'\nkind = 'vreg'\nmatch.value_re = '^MYSTERY$'\n\
+                    params.vout = 5.0\npins = { 1 = 'in', 2 = 'gnd' }";
+        std::fs::write(dir.path().join("s.toml"), card).unwrap();
+        let mut lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+        let errors = format!("{:?}", lib.load_models_dir(dir.path()));
+        assert!(
+            errors.contains("no 'out' pin (a Vreg needs it)"),
+            "{errors}"
+        );
+        assert!(resolve_report(&lib, &board).contains("UNRESOLVED"));
     }
 
     /// Lint a descriptor source the way `models lint` does, from the parse
@@ -2912,7 +3059,7 @@ mod tests {
         for spec in hauksbee_mcu::SocConfig::builtin_specs() {
             let src = hauksbee_mcu::SocConfig::builtin_source(spec)
                 .unwrap_or_else(|| panic!("{spec} is advertised but carries no source"));
-            let part = spec.split_once(':').map(|(_, p)| p).unwrap_or(spec);
+            let part = spec.split_once(':').map_or(spec, |(_, p)| p);
             let (lines, findings) = lint_descriptor(&format!("{part}.soc.toml"), src);
             assert_eq!(findings, 0, "{spec} must lint clean:\n{}", lines.join("\n"));
             // A clean descriptor prints its inspection, not just a verdict: an

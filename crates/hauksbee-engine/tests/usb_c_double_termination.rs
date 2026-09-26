@@ -1,6 +1,6 @@
 //! USB-C CC double-termination audit, and the DNP discipline behind it.
 //!
-//! Round 2 of the famous-board hunt raised a candidate: the ZSWatch DevKit's
+//! Round 2 of the famous-board hunt raised a candidate: the `ZSWatch` `DevKit`'s
 //! receptacle CC lines each carry a discrete 5.1 kOhm Rd footprint AND route into
 //! the nPM1300 PMIC (whose CC pins have an internal 5.1 kOhm Rd). If both were
 //! populated they would parallel to 2.55 kOhm and the board would mis-detect
@@ -11,15 +11,15 @@
 //! board ships with the nPM1300 internal Rd alone, the datasheet-correct design.
 //! hauksbee was blind to DNP and counted the unplaced footprints as live, which
 //! manufactured the phantom 2.55 kOhm. The fix teaches the extractor to read DNP
-//! and the audit to skip DNP parts. Full write-up in docs/evidence/FAMOUS_SWEEP.md (R2).
+//! and the audit to skip DNP parts. Full write-up in `docs/evidence/FAMOUS_SWEEP.md` (R2).
 //!
-//! These tests pin the corrected behaviour: the DevKit, the mainboard and the
-//! repaired RPi 4 all present a single, correct 5.1 kOhm Rd and the audit reports
-//! NO double-termination on any of them. The DevKit case is the regression guard:
+//! These tests pin the corrected behaviour: the `DevKit`, the mainboard and the
+//! repaired `RPi` 4 all present a single, correct 5.1 kOhm Rd and the audit reports
+//! NO double-termination on any of them. The `DevKit` case is the regression guard:
 //! if the extractor ever stops honouring DNP, it goes back to firing here.
 //!
 //! Corpus-gated like the other corpus tests: absent corpus skips, but
-//! HAUKSBEE_REQUIRE_CORPUS=1 makes absence a hard fail.
+//! `HAUKSBEE_REQUIRE_CORPUS=1` makes absence a hard fail.
 
 use std::path::{Path, PathBuf};
 
@@ -49,7 +49,7 @@ fn load(root: &Path, rel: &str) -> ExtractedBoard {
 /// [`load`] for a board that is not redistributable, so absence is a skip.
 ///
 /// `corpus.toml` lists the boards it cannot point at and states that nothing in
-/// the public test suite depends on them. This suite did: it read the RPi 4
+/// the public test suite depends on them. This suite did: it read the `RPi` 4
 /// reconstruction through [`load`], which panics on a missing file, so the claim
 /// held only for as long as nobody ran the sweep on a corpus without it. Under
 /// `HAUKSBEE_REQUIRE_CORPUS` a missing local-only board is still a skip rather

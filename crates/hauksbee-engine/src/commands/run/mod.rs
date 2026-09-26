@@ -1,7 +1,8 @@
-//! `hauksbee run <board>`: the run orchestrator. Loads/binds the board, then
-//! dispatches to the right report (reports/), the interactive TUI, a headless
-//! co-sim, or the websocket server. Argument parsing lives in the binary; this
-//! takes a plain [`RunConfig`].
+//! `hauksbee run <board>`: the run orchestrator.
+//!
+//! Loads/binds the board, then dispatches to the right report (reports/), the
+//! interactive TUI, a headless co-sim, or the websocket server. Argument parsing lives
+//! in the binary; this takes a plain [`RunConfig`].
 
 use crate::result::Refusal;
 
@@ -13,9 +14,12 @@ mod serve_flow;
 mod simulation;
 mod static_surfaces;
 
-/// Plain (non-clap) mirror of the binary's `RunArgs`, so the `run` orchestrator
-/// lives in the library while argument parsing stays in `main.rs`. Field types
+/// Plain (non-clap) mirror of the binary's `RunArgs`.
+///
+/// It lets the `run` orchestrator live in the library while argument parsing stays
+/// in `main.rs`. Field types
 /// match `RunArgs` exactly; the binary builds one and hands it over.
+#[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
 pub struct RunConfig {
     pub board: std::path::PathBuf,
     /// Embedded example name when the board path was materialized from the
@@ -105,7 +109,7 @@ pub struct RunConfig {
     /// fitted values) between the design files and the real reworked board,
     /// applied to the bound board before the engine is built.
     pub asbuilt: Option<std::path::PathBuf>,
-    /// Write this invocation's selected checks as JUnit XML (CI artifact).
+    /// Write this invocation's selected checks as `JUnit` XML (CI artifact).
     pub junit: Option<std::path::PathBuf>,
     /// Write this invocation's selected checks as SARIF 2.1.0 (CI artifact).
     pub sarif: Option<std::path::PathBuf>,
@@ -116,7 +120,7 @@ pub struct RunConfig {
     pub manifest_command: Vec<String>,
 }
 
-pub(crate) fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
+pub(crate) const fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
     use crate::board_input::InputKind;
     match kind {
         InputKind::Text => "layout_or_netlist",
@@ -131,7 +135,7 @@ pub(crate) fn input_kind_name(kind: crate::board_input::InputKind) -> &'static s
 }
 
 /// The bytes served for a preloaded browser session must be the same primary
-/// input bytes authenticated by the report. Board-as-Code uses compiled KiCad
+/// input bytes authenticated by the report. Board-as-Code uses compiled `KiCad`
 /// text internally, but a saved `.board` session can only resume from its DSL.
 pub(crate) fn preloaded_board_file(
     board_url: &str,
@@ -171,7 +175,7 @@ enum SelectedSurface {
 /// Select once, in the same order the orchestrator executes. Every artifact,
 /// evidence gate and dispatch branch reads this value rather than independently
 /// reconstructing precedence from the raw flags.
-fn selected_surface(cfg: &RunConfig) -> SelectedSurface {
+const fn selected_surface(cfg: &RunConfig) -> SelectedSurface {
     if cfg.list_nets {
         SelectedSurface::Inventory
     } else if cfg.emit_netlist {
@@ -223,7 +227,7 @@ fn ci_check_selected(surface: SelectedSurface, finding: &crate::result::JsonFind
     }
 }
 
-fn ci_surface_is_model_dependent(surface: SelectedSurface) -> bool {
+const fn ci_surface_is_model_dependent(surface: SelectedSurface) -> bool {
     matches!(
         surface,
         SelectedSurface::Check
@@ -324,11 +328,14 @@ fn begin_ci_artifact_run(cfg: &RunConfig, surface: SelectedSurface) -> anyhow::R
     Err(error)
 }
 
-/// Preserve the typed invalid-for-analysis contract through anyhow's shared CLI
+/// Map a run error to its process exit code.
+///
+/// Preserves the typed invalid-for-analysis contract through anyhow's shared CLI
 /// error envelope. Parser and reconciliation errors are not failed checks:
 /// there was no trustworthy board state to check, so they exit 3 in text and
 /// JSON modes alike. Shared with the binary's top-level error handler so both
 /// map the same errors to the same codes.
+#[must_use]
 pub fn error_exit_code(error: &anyhow::Error) -> i32 {
     if let Some(error) = error.downcast_ref::<hauksbee_extract::bom::BomError>() {
         return error.exit_code();
@@ -342,6 +349,13 @@ pub fn error_exit_code(error: &anyhow::Error) -> i32 {
     1
 }
 
+/// Run `hauksbee run` for `cfg` with no companion schematic.
+///
+/// # Errors
+///
+/// Returns an error if the CI artifacts cannot be initialised or finalised, if the
+/// named example does not exist, if the board, BOM, placement or firmware inputs
+/// cannot be loaded or bound, or if the selected report, co-sim or server fails.
 pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     run_with_schematic(cfg, quiet, None)
 }
@@ -349,10 +363,17 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 /// Run with an optional explicit Eagle companion schematic. Kept out of
 /// [`RunConfig`] so adding the CLI input does not break downstream struct
 /// literals of the established public configuration type.
+///
+/// # Errors
+///
+/// Returns an error if the CI artifacts cannot be initialised or finalised, if the
+/// named example does not exist, if the board, schematic, BOM, placement or firmware
+/// inputs cannot be loaded or bound, or if the selected report, co-sim or server
+/// fails.
 pub fn run_with_schematic(
     mut cfg: RunConfig,
     quiet: bool,
-    schematic: Option<std::path::PathBuf>,
+    schematic: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     // Bare --plain means the combined check surface. Normalize that convenience
     // before selecting or initializing artifacts, so every consumer sees the
@@ -398,7 +419,7 @@ fn run_inner(
     mut cfg: RunConfig,
     quiet: bool,
     surface: SelectedSurface,
-    schematic: Option<std::path::PathBuf>,
+    schematic: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     let any_report_flag = cfg.report
         || cfg.drc
@@ -409,13 +430,8 @@ fn run_inner(
         || cfg.usb_c
         || cfg.thermal
         || cfg.check;
-    let (run_inputs, mut artifacts) = prepare::prepare_run_inputs(
-        &mut cfg,
-        quiet,
-        surface,
-        schematic.as_deref(),
-        any_report_flag,
-    )?;
+    let (run_inputs, mut artifacts) =
+        prepare::prepare_run_inputs(&mut cfg, quiet, surface, schematic, any_report_flag)?;
     if static_surfaces::emit_selected(&cfg, quiet, surface, &run_inputs, &mut artifacts)? {
         return Ok(());
     }
@@ -450,11 +466,11 @@ fn run_inner(
 /// redirected (not a TTY), so report and pipeline output stays clean while the
 /// note stays discoverable for interactive users. Pure so it is unit-testable
 /// without a real terminal.
-fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
+const fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
     !quiet && !json && stdout_is_tty
 }
 
-/// The `--list-nets --json` array, serialized through serde_json rather than
+/// The `--list-nets --json` array, serialized through `serde_json` rather than
 /// Rust `Debug`. The two agree on the common escapes but diverge on control
 /// characters, Debug emits variable-length brace-hex, whereas JSON mandates a
 /// fixed four-hex-digit escape, so a net name carrying a control char from a
@@ -534,7 +550,7 @@ pub(crate) fn netlist_doc(board: &hauksbee_extract::ExtractedBoard) -> NetlistDo
     }
 }
 
-/// The `--emit-netlist --json` document, serialized through serde_json for the
+/// The `--emit-netlist --json` document, serialized through `serde_json` for the
 /// same reason [`list_nets_json`] is: a net or pin name out of a malformed
 /// board file must not be able to produce a document no JSON parser accepts.
 pub(crate) fn netlist_json(board: &hauksbee_extract::ExtractedBoard) -> String {
@@ -572,7 +588,7 @@ pub(crate) struct Notes {
 
 impl Notes {
     fn new(quiet: bool, json: bool) -> Self {
-        Notes {
+        Self {
             enabled: notes_visible(
                 quiet,
                 json,
@@ -583,7 +599,7 @@ impl Notes {
 
     /// Emit a single-line informational note (prefixed `note:`) on stderr, unless
     /// notes are suppressed for this invocation.
-    fn say(&self, msg: impl std::fmt::Display) {
+    fn say(self, msg: impl std::fmt::Display) {
         if self.enabled {
             eprintln!("note: {msg}");
         }

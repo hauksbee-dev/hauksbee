@@ -3,7 +3,7 @@
 //! and the old binder treated any non-empty model map as exhaustive, so on a
 //! bare-chip footprint every OTHER pad's own pinfunction was discarded. On the
 //! Watchy v3 QFN-56 that left all display pins (RES/DC/CS, SCK/MOSI, SDA/SCL,
-//! each named "GPIOnn/..." in the board file itself) with no GPIO driver at
+//! each named "`GPIOnn`/..." in the board file itself) with no GPIO driver at
 //! all: firmware could never drive them, and the live sim presented their
 //! static pull-up/floating levels as measurements.
 //!

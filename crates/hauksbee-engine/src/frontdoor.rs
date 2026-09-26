@@ -47,8 +47,9 @@ pub struct WebFinding {
     pub y: Option<f64>,
 }
 
-/// A heads-up note in the shape the browser renders. Carries the same
-/// what / why / what-to-do gloss a finding does. `why` / `fix` are
+/// A heads-up note in the shape the browser renders.
+///
+/// Carries the same what / why / what-to-do gloss a finding does. `why` / `fix` are
 /// omitted from the JSON when empty (a self-contained note), so the browser
 /// renders only the lines that exist.
 #[derive(Debug, Clone, Serialize)]
@@ -62,7 +63,7 @@ pub struct WebHeadsUp {
 
 impl From<&HeadsUp> for WebHeadsUp {
     fn from(h: &HeadsUp) -> Self {
-        WebHeadsUp {
+        Self {
             what: h.what.clone(),
             why: h.why.clone(),
             fix: h.fix.clone(),
@@ -91,7 +92,7 @@ impl WebFinding {
 
 impl From<&PlainFinding> for WebFinding {
     fn from(f: &PlainFinding) -> Self {
-        WebFinding {
+        Self {
             level: match f.level {
                 PlainLevel::Serious => "serious",
                 PlainLevel::Warning => "warning",
@@ -125,7 +126,7 @@ pub struct WebSection {
 
 impl WebSection {
     fn from_plain(title: &str, p: &PlainReport) -> Self {
-        WebSection {
+        Self {
             title: title.to_string(),
             verdict: p.verdict(),
             findings: p.findings.iter().map(WebFinding::from).collect(),
@@ -134,10 +135,12 @@ impl WebSection {
     }
 }
 
-/// The web mirror of the bind-honesty summary. Populated from [`BindSummary`]
-/// (computed once on the already-bound board), NEVER recomputed, so the web
-/// report carries the SAME bind-role honesty data as the CLI/JSON surfaces. The
-/// browser uses `active_path_unresolved` to refuse a false "Looks healthy".
+/// The web mirror of the bind-honesty summary.
+///
+/// Populated from [`BindSummary`] (computed once on the already-bound board), NEVER
+/// recomputed, so the web report carries the SAME bind-role honesty data as the
+/// CLI/JSON surfaces. The browser uses `active_path_unresolved` to refuse a false
+/// "Looks healthy".
 #[derive(Debug, Clone, Serialize)]
 pub struct BindSummaryWeb {
     /// `"M/N"`, active ICs that bound, over the total active ICs on the board.
@@ -193,6 +196,7 @@ impl BindSummaryWeb {
     /// `crate::result::is_verdict_critical` predicate the CLI INCONCLUSIVE
     /// verdict uses, so the browser can never print a clean bill over an
     /// unbound FET the CLI refuses to bless.
+    #[must_use]
     pub fn from_summary(s: &BindSummary) -> Self {
         // The two buckets, one entry each. `bound` separates them: an
         // unresolved part has no model, a resolved-but-open one has a model and
@@ -224,7 +228,7 @@ impl BindSummaryWeb {
         open_parts.sort_by_key(|p| crate::reports::bind::natural_ref_key(&p.reference));
         open_parts.dedup_by(|a, b| a.reference == b.reference);
 
-        BindSummaryWeb {
+        Self {
             critical_parts_bound: s.critical_parts_bound.clone(),
             // Projected from the detail list, so the banner and the per-part
             // detail can never name different parts in a different order.
@@ -236,13 +240,15 @@ impl BindSummaryWeb {
 
     /// Whether an active IC is open on the live circuit; the predicate that must
     /// override a "Looks healthy" verdict on the web report.
-    pub fn active_path_open(&self) -> bool {
+    #[must_use]
+    pub const fn active_path_open(&self) -> bool {
         !self.active_path_unresolved.is_empty()
     }
 }
 
-/// One watched net's activity after a firmware co-sim run, for the web GPIO
-/// table. `driven` marks a net that actually moved (toggled) during the run, so
+/// One watched net's activity after a firmware co-sim run, for the web GPIO table.
+///
+/// `driven` marks a net that actually moved (toggled) during the run, so
 /// the browser can show at a glance whether the firmware drove anything.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebGpioNet {
@@ -253,14 +259,16 @@ pub struct WebGpioNet {
     pub driven: bool,
 }
 
-/// The firmware co-sim result, attached to [`WebReport::cosim`] only when a
-/// firmware file was supplied. `ran` is false (with `findings`/`uart_output`
-/// carrying the reason) when the board has no MCU, the backend is an external
-/// emulator we skip on the web path, or the firmware failed to load. The
-/// findings reuse the exact same `{what, why, fix}` cards as the static sections
-/// (via [`crate::plain::plain_faults`]), so the web and CLI co-sim surfaces can
-/// never disagree.
+/// The firmware co-sim result, attached to [`WebReport::cosim`].
+///
+/// It is attached only when a firmware file was supplied. `ran` is false (with
+/// `findings`/`uart_output` carrying the reason) when the board has no MCU, the backend
+/// is an external emulator we skip on the web path, or the firmware failed to load. The
+/// findings reuse the exact same `{what, why, fix}` cards as the static sections (via
+/// [`crate::plain::plain_faults`]), so the web and CLI co-sim surfaces can never
+/// disagree.
 #[derive(Debug, Clone, Default, Serialize)]
+#[allow(clippy::struct_excessive_bools, reason = "each bool is a wire field")]
 pub struct WebCosimSection {
     /// Whether a co-sim actually executed against the firmware.
     pub ran: bool,
@@ -288,7 +296,7 @@ pub struct WebCosimSection {
     pub failed_windows: Vec<WebFailedWindow>,
     /// Per-SPI-slave chip-select framing tier (05 §2): `exact` (framed from the
     /// resolved CS pin's real GPIO edges), `backend` (the backend surfaced CS
-    /// itself, e.g. Renode hardware-NSS FinishTransmission), or `heuristic` (no
+    /// itself, e.g. Renode hardware-NSS `FinishTransmission`), or `heuristic` (no
     /// resolved CS, the chunk-boundary fallback, whose two failure modes are
     /// surfaced here rather than hidden). Empty (and omitted) when the board has
     /// no SPI slaves, so the common JSON shape is unchanged for existing consumers.
@@ -320,8 +328,9 @@ pub struct WebCosimSection {
     pub error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
-/// Additive JSON-only data for the synchronous firmware report. Keeping this
-/// out of [`WebCosimSection`] preserves source compatibility for downstream
+/// Additive JSON-only data for the synchronous firmware report.
+///
+/// Keeping this out of [`WebCosimSection`] preserves source compatibility for downstream
 /// Rust code that constructs the planned 0.1 public struct with a literal;
 /// [`analyze_with_firmware_json`] inserts these optional keys into the nested
 /// `cosim` object for HTTP/MCP/frontend consumers.
@@ -350,6 +359,11 @@ pub struct WebFirmwareAnalysis {
 impl WebFirmwareAnalysis {
     /// Serialize the detailed result in the same nested shape as the HTTP/MCP
     /// front door, including the additive coverage fields under `cosim`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the report or a coverage field cannot be serialised to
+    /// JSON.
     pub fn to_json_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(&self.report)?;
         if let Some(cosim) = value
@@ -414,10 +428,11 @@ pub struct WebSpiFraming {
     pub cs_provenance: Option<String>,
 }
 
-/// One sim-time window `[start_s, end_s)` where the analog co-sim solve failed to
-/// converge and the run held stale voltages. Reported so the browser can show the
-/// exact span whose electrical results are untrustworthy. Mirrors the CLI/JSON
-/// `CosimFailedWindow`.
+/// One sim-time window `[start_s, end_s)` where the analog co-sim solve failed.
+///
+/// The solve failed to converge and the run held stale voltages. Reported so the
+/// browser can show the exact span whose electrical results are untrustworthy. Mirrors
+/// the CLI/JSON `CosimFailedWindow`.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebFailedWindow {
     pub start_s: f64,
@@ -442,6 +457,7 @@ pub struct WebComponent {
 }
 
 /// One imported object and the exact completeness of what the reader recovered.
+///
 /// Coordinates are optional because a netlist/schematic can recover the
 /// electrical object without carrying a board location; the browser lists those
 /// rows but cannot honestly paint them on the board overlay.
@@ -463,8 +479,9 @@ pub struct WebImportObject {
     pub nets: Vec<String>,
 }
 
-/// One import limitation that needs explanation rather than a false object
-/// marker. A `net` is carried only when the reader named one exact reconstructed
+/// One import limitation that needs explanation rather than a false object marker.
+///
+/// A `net` is carried only when the reader named one exact reconstructed
 /// net, which lets the browser make the explanation clickable.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebImportIssue {
@@ -476,7 +493,9 @@ pub struct WebImportIssue {
     pub net: Option<String>,
 }
 
-/// Typed import coverage for the browser. Counts are over actual recovered
+/// Typed import coverage for the browser.
+///
+/// Counts are over actual recovered
 /// component objects; `missing_or_refused` counts reader limitations whose
 /// absent object cannot be enumerated or located without fabricating it.
 #[derive(Debug, Clone, Serialize)]
@@ -491,7 +510,9 @@ pub struct WebImportDiagnostics {
     pub issues: Vec<WebImportIssue>,
 }
 
-/// Actionable context for a board the parser refused. `excerpt` is present only
+/// Actionable context for a board the parser refused.
+///
+/// `excerpt` is present only
 /// when the underlying parser identified an exact line; no arbitrary first line
 /// is presented as the cause when the parser did not localise it.
 #[derive(Debug, Clone, Serialize)]
@@ -574,9 +595,9 @@ pub struct WebReport {
     /// Empty (and omitted) on an error report; additive for compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nets: Vec<String>,
-    /// reference -> resolved model kind ("mcu", "bjt_npn", ...), from the same
+    /// reference -> resolved model kind ("mcu", `"bjt_npn"`, ...), from the same
     /// bind the summary uses: what a component click on the board map reports
-    /// as the part's bound model. A BTreeMap so the JSON is deterministic
+    /// as the part's bound model. A `BTreeMap` so the JSON is deterministic
     /// (the golden-parity test compares bytes). Additive; omitted when empty.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub component_kinds: std::collections::BTreeMap<String, String>,
@@ -614,6 +635,7 @@ pub struct WebSupply {
 
 /// The "could not read the file" report shape, shared by every early-return in
 /// [`analyze`] so the error surface stays consistent.
+#[allow(clippy::too_many_lines, reason = "one pass: objects, then note issues")]
 fn web_import_diagnostics(norm: &crate::board_input::NormalizedBoard) -> WebImportDiagnostics {
     use crate::board_input::InputKind;
 
@@ -692,8 +714,7 @@ fn web_import_diagnostics(norm: &crate::board_input::NormalizedBoard) -> WebImpo
         nets.dedup();
         let (x, y) = component
             .position
-            .map(|(x, y, _)| (Some(x), Some(y)))
-            .unwrap_or((None, None));
+            .map_or((None, None), |(x, y, _)| (Some(x), Some(y)));
         objects.push(WebImportObject {
             id: if component.reference.trim().is_empty() {
                 format!("unnamed component {}", component_index + 1)
@@ -809,8 +830,8 @@ fn error_line_number(message: &str) -> Option<usize> {
         };
         let digits: String = tail
             .chars()
-            .skip_while(|ch| ch.is_ascii_whitespace())
-            .take_while(|ch| ch.is_ascii_digit())
+            .skip_while(char::is_ascii_whitespace)
+            .take_while(char::is_ascii_digit)
             .collect();
         if let Ok(line) = digits.parse::<usize>() {
             if line > 0 {
@@ -944,7 +965,7 @@ fn component_assertion_capabilities(
 pub(crate) fn unreadable_input_json(
     file_name: &str,
     contents: &[u8],
-    error: crate::board_input::BoardInputError,
+    error: &crate::board_input::BoardInputError,
 ) -> String {
     to_json_or_failure(&unreadable_input(file_name, contents, error))
 }
@@ -952,9 +973,9 @@ pub(crate) fn unreadable_input_json(
 fn unreadable_input(
     file_name: &str,
     contents: &[u8],
-    error: crate::board_input::BoardInputError,
+    error: &crate::board_input::BoardInputError,
 ) -> WebReport {
-    let failure = web_import_failure(&error, contents);
+    let failure = web_import_failure(error, contents);
     unreadable_with_import_failure(file_name, error.web_message(), Some(failure))
 }
 
@@ -979,10 +1000,11 @@ fn to_json_or_failure(value: &impl Serialize) -> String {
 /// lives in [`crate::board_input::from_bytes`], the SAME normalizer the CLI
 /// path uses, so the web and CLI surfaces can never disagree about what a
 /// board file is.
+#[must_use]
 pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     match crate::board_input::from_bytes(file_name, contents) {
         Ok(norm) => analyze_normalized_with_ties(file_name, &norm, None).0,
-        Err(e) => unreadable_input(file_name, contents, e),
+        Err(e) => unreadable_input(file_name, contents, &e),
     }
 }
 
@@ -1011,6 +1033,7 @@ fn analyze_normalized_with_ties(
     analyze_normalized_with_context(file_name, norm, schematic_ties, &lib, None, &[])
 }
 
+#[allow(clippy::too_many_lines, reason = "linear: DRC, bind, evidence, report")]
 fn analyze_normalized_with_context(
     file_name: &str,
     norm: &crate::board_input::NormalizedBoard,
@@ -1034,7 +1057,7 @@ fn analyze_normalized_with_context(
     let drc = if is_binary {
         ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
     } else if is_gerber {
-        Default::default()
+        hauksbee_extract::DrcReport::default()
     } else {
         ExtractedBoard::drc(text_view.unwrap_or_default()).unwrap_or_default()
     };
@@ -1067,7 +1090,7 @@ fn analyze_normalized_with_context(
             && schematic_ties.is_none(),
     )
     .with_clearance_rule_provenance(
-        clearance_rule_source
+        &clearance_rule_source
             .clone()
             .unwrap_or_else(|| crate::result::ClearanceRuleProvenance::defaulted(0.0, false)),
     );
@@ -1083,6 +1106,11 @@ fn analyze_normalized_with_context(
     // web sections read INCONCLUSIVE, not "Looks healthy", over an unbound
     // main IC or power FET, the same contract as the CLI surfaces.
     let fallback_bound;
+    #[allow(
+        clippy::option_if_let_else,
+        clippy::single_match_else,
+        reason = "a closure cannot init the deferred borrow"
+    )]
     let bound = match prebound {
         Some(bound) => bound,
         None => {
@@ -1099,7 +1127,7 @@ fn analyze_normalized_with_context(
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
     let lint = crate::checks::engine_lint(board, lib);
     let mut lint_plain = plain_netlint(&lint);
-    lint_plain.unmodelled_critical = verdict_blockers.clone();
+    lint_plain.unmodelled_critical.clone_from(&verdict_blockers);
 
     // SI needs the layout text for the geometry-bearing checks; a binary board
     // has none, so it gets the netlist-only subset (`None`). Route through the SI
@@ -1108,7 +1136,7 @@ fn analyze_normalized_with_context(
     // silently missing an under-width power trace the CLI `--si` flags.
     let si = crate::checks::engine_si(board, lib, text_view);
     let mut si_plain = plain_si(&si);
-    si_plain.unmodelled_critical = verdict_blockers.clone();
+    si_plain.unmodelled_critical.clone_from(&verdict_blockers);
 
     let mut sections = vec![
         if is_gerber {
@@ -1181,121 +1209,24 @@ fn analyze_normalized_with_context(
     let mut bind_web = BindSummaryWeb::from_summary(&bind_summary);
     let all = bound.report.selections.values();
     bind_web.open_selections = all.filter(|s| s.determined.is_none()).cloned().collect();
-    // Reader notes plus the binder's own coverage gaps, so an overpower check
-    // that never ran is visible on the human report, not only in CI.
-    let mut notes = norm.notes.clone();
-    notes.extend(bound.power_coverage_gaps());
-    let evidence = match crate::evidence::BoardEvidence::from_bound(
-        board,
-        &bound.report,
-        &notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )
-    .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
-    {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            return (
-                unreadable(file_name, format!("could not build evidence map: {error}")),
-                drc,
-            )
-        }
-    };
-    let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) => match evidence.with_schematic_artifact(
-            &ties.path,
-            &ties.raw,
-            ties.contribution(qualification),
-        ) {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                return (
-                    unreadable(
-                        file_name,
-                        format!("could not record schematic evidence: {error}"),
-                    ),
-                    drc,
-                )
-            }
-        },
-        _ => evidence,
-    };
-    let evidence = match supporting_artifacts
-        .iter()
-        .try_fold(evidence, |evidence, artifact| {
-            evidence.with_supporting_artifact(artifact.clone())
-        }) {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            return (
-                unreadable(
-                    file_name,
-                    format!("could not record supplemental evidence: {error}"),
-                ),
-                drc,
-            )
-        }
-    };
     let mut actual_findings = crate::result::lint_findings_json(&lint);
     actual_findings.extend(crate::result::si_findings_json(&si));
     actual_findings.extend(usbc.as_ref().and_then(crate::result::usbc_finding_json));
-    let mut actual_maps =
-        match evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref()) {
-            Ok(maps) => maps,
-            Err(error) => {
-                return (
-                    unreadable(file_name, format!("could not build DRC evidence: {error}")),
-                    drc,
-                )
-            }
-        };
-    match evidence.maps_for_findings(&actual_findings) {
-        Ok(maps) => actual_maps.extend(maps),
-        Err(error) => {
-            return (
-                unreadable(
-                    file_name,
-                    format!("could not build finding evidence: {error}"),
-                ),
-                drc,
-            )
-        }
-    }
-    for (check, assertion) in [
-        ("drc", "DRC input coverage"),
-        ("si", "Signal-integrity input coverage"),
-    ] {
-        match evidence.check_coverage_map(check, assertion) {
-            Ok(map) if map.status() != hauksbee_ir::evidence::EvidenceStatus::Clean => {
-                actual_maps.push(map)
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return (
-                    unreadable(
-                        file_name,
-                        format!("could not build coverage evidence: {error}"),
-                    ),
-                    drc,
-                )
-            }
-        }
-    }
-    if actual_maps.is_empty() {
-        match evidence.static_coverage_map() {
-            Ok(map) => actual_maps.push(map),
-            Err(error) => {
-                return (
-                    unreadable(
-                        file_name,
-                        format!("could not build coverage evidence: {error}"),
-                    ),
-                    drc,
-                )
-            }
-        }
-    }
-    let evidence = evidence.with_maps(actual_maps);
+    let qualification = qualification.as_ref();
+    let evidence = match web_board_evidence(
+        file_name,
+        norm,
+        bound,
+        schematic_ties,
+        qualification,
+        supporting_artifacts,
+    )
+    .and_then(|evidence| {
+        with_web_evidence_maps(evidence, &drc_structured, qualification, &actual_findings)
+    }) {
+        Ok(evidence) => evidence,
+        Err(error) => return (unreadable(file_name, error), drc),
+    };
 
     // Notes: bind-role caveat (active IC open on the live circuit). These mirror
     // the CLI/JSON `notes` so the web never silently omits an honesty annotation.
@@ -1419,6 +1350,74 @@ fn analyze_normalized_with_context(
     (report, drc)
 }
 
+/// The run's evidence: bind provenance plus the input, schematic and supporting artifacts.
+fn web_board_evidence(
+    file_name: &str,
+    norm: &crate::board_input::NormalizedBoard,
+    bound: &BoundBoard,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    supporting_artifacts: &[hauksbee_ir::evidence::ArtifactProvenance],
+) -> Result<crate::evidence::BoardEvidence, String> {
+    // Reader notes plus the binder's own coverage gaps, so an overpower check
+    // that never ran is visible on the human report, not only in CI.
+    let mut notes = norm.notes.clone();
+    notes.extend(bound.power_coverage_gaps());
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        &norm.board,
+        &bound.report,
+        &notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )
+    .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
+    .map_err(|error| format!("could not build evidence map: {error}"))?;
+    let evidence = match (schematic_ties, qualification) {
+        (Some(ties), Some(qualification)) => evidence
+            .with_schematic_artifact(&ties.path, &ties.raw, ties.contribution(qualification))
+            .map_err(|error| format!("could not record schematic evidence: {error}"))?,
+        _ => evidence,
+    };
+    supporting_artifacts
+        .iter()
+        .try_fold(evidence, |evidence, artifact| {
+            evidence.with_supporting_artifact(artifact.clone())
+        })
+        .map_err(|error| format!("could not record supplemental evidence: {error}"))
+}
+
+/// Attach the web report's evidence maps: DRC, findings, non-clean coverage, else static coverage.
+fn with_web_evidence_maps(
+    evidence: crate::evidence::BoardEvidence,
+    drc_structured: &crate::result::DrcStructured,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    actual_findings: &[crate::result::JsonFinding],
+) -> Result<crate::evidence::BoardEvidence, String> {
+    let coverage_error = |error| format!("could not build coverage evidence: {error}");
+    let mut actual_maps = evidence
+        .maps_for_drc_with_ties(drc_structured, qualification)
+        .map_err(|error| format!("could not build DRC evidence: {error}"))?;
+    actual_maps.extend(
+        evidence
+            .maps_for_findings(actual_findings)
+            .map_err(|error| format!("could not build finding evidence: {error}"))?,
+    );
+    for (check, assertion) in [
+        ("drc", "DRC input coverage"),
+        ("si", "Signal-integrity input coverage"),
+    ] {
+        let map = evidence
+            .check_coverage_map(check, assertion)
+            .map_err(coverage_error)?;
+        if map.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+            actual_maps.push(map);
+        }
+    }
+    if actual_maps.is_empty() {
+        actual_maps.push(evidence.static_coverage_map().map_err(coverage_error)?);
+    }
+    Ok(evidence.with_maps(actual_maps))
+}
+
 /// Run the full static analysis, then (when the board has a bound MCU on an
 /// in-process backend) a short firmware co-sim, and attach the result as
 /// [`WebReport::cosim`].
@@ -1436,6 +1435,7 @@ fn analyze_normalized_with_context(
 ///
 /// The static [`WebReport`] is always returned intact; only `cosim` reflects
 /// whether the firmware run succeeded.
+#[must_use]
 pub fn analyze_with_firmware(
     file_name: &str,
     contents: &[u8],
@@ -1445,6 +1445,7 @@ pub fn analyze_with_firmware(
     analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes).report
 }
 
+#[must_use]
 pub fn analyze_with_firmware_detailed(
     file_name: &str,
     contents: &[u8],
@@ -1454,6 +1455,7 @@ pub fn analyze_with_firmware_detailed(
     analyze_with_firmware_detailed_with_ties(file_name, contents, fw_name, fw_bytes, None)
 }
 
+#[must_use]
 pub fn analyze_with_firmware_detailed_with_ties(
     file_name: &str,
     contents: &[u8],
@@ -1470,7 +1472,7 @@ pub fn analyze_with_firmware_detailed_with_ties(
         // No board to co-sim against; return the normalization error as-is.
         Err(e) => {
             return WebFirmwareAnalysis {
-                report: unreadable_input(file_name, contents, e),
+                report: unreadable_input(file_name, contents, &e),
                 coverage: WebCosimCoverage::default(),
             }
         }
@@ -1494,6 +1496,7 @@ pub fn analyze_with_firmware_detailed_with_ties(
     WebFirmwareAnalysis { report, coverage }
 }
 
+#[allow(clippy::too_many_lines, reason = "linear: static report, co-sim, fold")]
 fn analyze_with_firmware_context(
     file_name: &str,
     norm: &crate::board_input::NormalizedBoard,
@@ -1575,13 +1578,10 @@ fn analyze_with_firmware_context(
                 })
         });
         if let Ok(mut evidence) = evidence_result {
-            evidence = match evidence
+            evidence = evidence
                 .clone()
                 .with_scoped_substitutions(&captured.scoped_substitutions)
-            {
-                Ok(evidence) => evidence,
-                Err(_) => evidence,
-            };
+                .unwrap_or(evidence);
             if let Some(budget) = captured.error_budget.clone() {
                 let mut maps = report.evidence.clone();
                 for fault in &captured.faults {
@@ -1744,11 +1744,13 @@ fn refusal_for_cosim(cosim: &WebCosimSection, coverage: &WebCosimCoverage) -> Op
             .findings
             .iter()
             .find(|finding| finding.what.starts_with("Analog co-sim did not converge"))
-            .map(|finding| finding.fix.clone())
-            .unwrap_or_else(|| {
-                "fix the first failed analog window, then rerun the same firmware co-simulation"
-                    .to_string()
-            });
+            .map_or_else(
+                || {
+                    "fix the first failed analog window, then rerun the same firmware co-simulation"
+                        .to_string()
+                },
+                |finding| finding.fix.clone(),
+            );
         return Some(Refusal::new(
             "electrical conclusions across the complete firmware co-simulation",
             diagnosis,
@@ -1954,8 +1956,7 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 fn cli_cosim_command(board_file: &str, fw_file: &str) -> String {
     let exe = std::env::current_exe()
         .ok()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "hauksbee".to_string());
+        .map_or_else(|| "hauksbee".to_string(), |p| p.display().to_string());
     format!("\"{exe}\" run \"{board_file}\" --firmware \"{fw_file}\" --headless")
 }
 
@@ -2006,6 +2007,7 @@ fn run_web_cosim(
     )
 }
 
+#[allow(clippy::too_many_lines, reason = "linear: stage, step, honesty notes")]
 fn run_web_cosim_with_bound(
     board: &ExtractedBoard,
     bound: crate::binder::BoundBoard,
@@ -2020,12 +2022,15 @@ fn run_web_cosim_with_bound(
     use hauksbee_frontdoor_api::engine::Engine;
     use std::io::Write;
 
-    /// Simulated window this synchronous report runs, mirroring run_headless's
+    /// Simulated window this synchronous report runs, mirroring `run_headless`'s
     /// short fixed window. Named here because the external-emulator refusal
     /// below quotes it: the honest reason that path is skipped is that 0.2 s
     /// of simulated time is less than such a chip's boot ROM needs, so the
     /// user would be shown a processor that has not started.
     const SECONDS: f64 = 0.2;
+    /// `SECONDS` in 1 kHz frames. An integer count, so the step count does not
+    /// hinge on float accumulation (summing 1 ms steps also stops after 200).
+    const FRAMES: u32 = 200;
 
     // No MCU => firmware drives nothing. Inspect the bound board before paying
     // for a temp file / engine build, and say so plainly.
@@ -2083,7 +2088,7 @@ fn run_web_cosim_with_bound(
     let suffix = match std::path::Path::new(fw_name)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
     {
         Some(e) if e == "hex" => ".hex",
         _ => ".elf",
@@ -2101,7 +2106,7 @@ fn run_web_cosim_with_bound(
             )
         }
     };
-    if let Err(e) = tmp.write_all(fw_bytes).and_then(|_| tmp.flush()) {
+    if let Err(e) = tmp.write_all(fw_bytes).and_then(|()| tmp.flush()) {
         return (
             cosim_unavailable(format!("Could not write the firmware for co-sim: {e}.")),
             None,
@@ -2142,12 +2147,10 @@ fn run_web_cosim_with_bound(
     };
 
     // Short fixed window mirroring run_headless: 1 kHz frame cadence.
-    let seconds = SECONDS;
     let frame_dt = 1.0 / 1000.0;
-    let mut t = 0.0;
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
-    while t < seconds {
+    for _ in 0..FRAMES {
         let frame = engine.step(frame_dt);
         // Concatenate per-MCU UART in a STABLE (sorted-by-MCU-key) order, plain
         // `values()` is HashMap iteration order, so a multi-MCU board's merged
@@ -2168,7 +2171,6 @@ fn run_web_cosim_with_bound(
                 destroyed: f.destroyed,
             });
         }
-        t += frame_dt;
     }
 
     // De-duplicate faults by (component, kind), keeping the worst value, exactly
@@ -2586,13 +2588,16 @@ fn overall_headline(total: usize, serious: usize, has_heads_up: bool, bind_open:
 
 /// Serialize an [`analyze`] result to a JSON string for the HTTP layer. Board
 /// bytes are passed raw so binary formats (Altium `.PcbDoc`) survive intact.
+#[must_use]
 pub fn analyze_json(file_name: &str, contents: &[u8]) -> String {
     analyze_json_with_ties(file_name, contents, None)
 }
 
-/// [`analyze_json`] for a board read from a PATH, where a companion Eagle `.sch`
-/// may sit beside it. Used by `run --serve`, whose preloaded report must agree
-/// with what `--drc` and `--check` say about the same board on disk.
+/// [`analyze_json`] for a board read from a PATH.
+///
+/// A companion Eagle `.sch` may sit beside it. Used by `run --serve`, whose preloaded
+/// report must agree with what `--drc` and `--check` say about the same board on disk.
+#[must_use]
 pub fn analyze_json_with_ties(
     file_name: &str,
     contents: &[u8],
@@ -2600,15 +2605,17 @@ pub fn analyze_json_with_ties(
 ) -> String {
     let report = match crate::board_input::from_bytes(file_name, contents) {
         Ok(norm) => analyze_normalized_with_ties(file_name, &norm, schematic_ties).0,
-        Err(e) => return unreadable_input_json(file_name, contents, e),
+        Err(e) => return unreadable_input_json(file_name, contents, &e),
     };
     to_json_or_failure(&report)
 }
 
-/// Serialize an [`analyze_with_firmware`] result to a JSON string for the HTTP
-/// layer (the `/api/analyze-with-firmware` endpoint). Board AND firmware bytes
+/// Serialize an [`analyze_with_firmware`] result to a JSON string for the HTTP layer.
+///
+/// This backs the `/api/analyze-with-firmware` endpoint. Board AND firmware bytes
 /// are passed as `&[u8]` end-to-end, never lossy-decoded, so an uploaded
 /// binary board or ELF stays intact.
+#[must_use]
 pub fn analyze_with_firmware_json(
     file_name: &str,
     contents: &[u8],
@@ -2618,6 +2625,7 @@ pub fn analyze_with_firmware_json(
     analyze_with_firmware_json_with_ties(file_name, contents, fw_name, fw_bytes, None)
 }
 
+#[must_use]
 pub fn analyze_with_firmware_json_with_ties(
     file_name: &str,
     contents: &[u8],
@@ -2638,9 +2646,12 @@ pub fn analyze_with_firmware_json_with_ties(
     )
 }
 
-/// Analyze the complete browser design bundle with the same manufacturing and
-/// model context used by Live Sim. Supplemental parse/apply errors are returned
-/// as the ordinary web error document, never silently ignored.
+/// Analyze the complete browser design bundle.
+///
+/// It uses the same manufacturing and model context as Live Sim. Supplemental
+/// parse/apply errors are returned as the ordinary web error document, never silently
+/// ignored.
+#[must_use]
 pub fn analyze_design_json(upload: hauksbee_frontdoor_api::frontdoor::DesignUpload) -> String {
     let error_json = |name: &str, message: String| to_json_or_failure(&unreadable(name, message));
     let name = upload.board.name.clone();
@@ -2695,7 +2706,7 @@ pub fn analyze_design_json(upload: hauksbee_frontdoor_api::frontdoor::DesignUplo
 /// The web co-sim GPIO activity table: the `limit` most-active nets, ranked by
 /// TOGGLE COUNT descending, then VOLTAGE RANGE descending, then name; the exact
 /// three-key "top movers first" contract the CLI toggle table and JSON
-/// activity_summary use (see `reports::cosim`). Ranking by the driven flag then
+/// `activity_summary` use (see `reports::cosim`). Ranking by the driven flag then
 /// alphabetically truncates away the genuinely most-active nets whenever more
 /// than `limit` nets are driven; dropping the voltage-range middle key makes the
 /// web keep a DIFFERENT subset than the CLI/JSON at the truncation boundary when
@@ -2738,7 +2749,7 @@ mod tests {
         include_bytes!("../../hauksbee-ci/examples/boards/power_resistor.kicad_pcb");
     const BOOT_GATE_FW: &[u8] =
         include_bytes!("../../../testdata/firmware/boot_gate_a/boot_gate.elf");
-    /// A minimal binary Altium .PcbDoc (OLE2 container, two resistors). Its
+    /// A minimal binary Altium .`PcbDoc` (OLE2 container, two resistors). Its
     /// bytes do not survive a lossy UTF-8 round-trip.
     const ALTIUM: &[u8] = include_bytes!("../../../testdata/boards/altium_two_resistor.PcbDoc");
     const EAGLE_TIES_BRD: &[u8] =
@@ -3037,7 +3048,7 @@ fn main {
         let json = unreadable_input_json(
             "design.brd",
             b"<eagle>\nmalformed schematic record\n",
-            crate::board_input::BoardInputError::Schematic(
+            &crate::board_input::BoardInputError::Schematic(
                 "schematic parser failed at line 2".to_string(),
             ),
         );
@@ -3468,7 +3479,7 @@ fn main {
         }
     }
 
-    /// Byte-for-byte golden of the plain .kicad_pcb web report; additive
+    /// Byte-for-byte golden of the plain .`kicad_pcb` web report; additive
     /// evidence / diagnostic fields and the two DRC wording changes are
     /// normalised before comparing.
     #[test]
@@ -3701,7 +3712,7 @@ fn main {
         );
     }
 
-    /// boot_gate is an ATmega328 and boot_gate.elf its firmware: the co-sim
+    /// `boot_gate` is an `ATmega328` and `boot_gate.elf` its firmware: the co-sim
     /// either really runs (with cited inventory and an error budget) or, on a
     /// build without the AVR backend, explains why not.
     #[test]
@@ -3793,7 +3804,7 @@ fn main {
                         "note",
                         "Control net 'GATE_CTRL' may be energised at power-up",
                     ),
-                )
+                );
             },
             |s| {
                 s.analog_valid = false;
@@ -4006,7 +4017,7 @@ fn main {
     }
 
     /// The web firmware co-sim surfaces the same boot power-up advisory and
-    /// boot_gates panel as the CLI for boot_gate + variant-A firmware.
+    /// `boot_gates` panel as the CLI for `boot_gate` + variant-A firmware.
     #[cfg(feature = "avr")]
     #[test]
     fn web_cosim_carries_the_boot_advisory() {

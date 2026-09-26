@@ -4,7 +4,7 @@
 //! with real logic in the migration, and the 74HC74 dual D flip-flop.
 //!
 //! Each vector is the part's DATASHEET function table (Texas Instruments
-//! SN74HCxx datasheets; the db entry for each part cites its source next to
+//! `SN74HCxx` datasheets; the db entry for each part cites its source next to
 //! the `[models.logic]` block), driven through the same builtin model entry a
 //! board bind resolves, so these tests pin the shipped data, not a copy.
 
@@ -201,11 +201,11 @@ fn hc125_tristate_buffer_function_table() {
 }
 
 /// TI SN74HC74 function table, one row at a time:
-///   PRE_n L, CLR_n H          -> Q=H, Q_n=L   (async preset)
-///   PRE_n H, CLR_n L          -> Q=L, Q_n=H   (async clear)
-///   PRE_n H, CLR_n H, CLK ^  D=H -> Q=H
-///   PRE_n H, CLR_n H, CLK ^  D=L -> Q=L
-///   PRE_n H, CLR_n H, CLK=L  D=X -> Q holds (level-insensitive)
+///   `PRE_n` L, `CLR_n` H          -> Q=H, `Q_n=L`   (async preset)
+///   `PRE_n` H, `CLR_n` L          -> Q=L, `Q_n=H`   (async clear)
+///   `PRE_n` H, `CLR_n` H, CLK ^  D=H -> Q=H
+///   `PRE_n` H, `CLR_n` H, CLK ^  D=L -> Q=L
+///   `PRE_n` H, `CLR_n` H, CLK=L  D=X -> Q holds (level-insensitive)
 #[test]
 fn hc74_dff_function_table() {
     let mut lc = compile_builtin("74HC74");

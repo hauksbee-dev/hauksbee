@@ -1,7 +1,7 @@
 //! Strap-pin lint, calibrated against the famous corpus.
 //!
 //! Ground truth: the Olimex ESP32-EVB carries the Ethernet PHY's free-running
-//! 50 MHz REF_CLK on GPIO0, which is an ESP32 boot strapping pin that must be a
+//! 50 MHz `REF_CLK` on GPIO0, which is an ESP32 boot strapping pin that must be a
 //! stable HIGH at the reset latch. ESP-IDF documents this exact failure (the
 //! ESP32 randomly enters download mode), and Olimex fixed it in rev E by gating
 //! PHY power until the oscillator stabilises. `docs/evidence/KNOWN_FAULTS_VALIDATION.md`
@@ -17,13 +17,13 @@
 //!      vacuous;
 //!   3. HONEST REACH LIMIT, encoded as a test: the lint fires on the rev-E-FIXED
 //!      revisions too (e.g. rev L), because the fix is a *time-domain power-
-//!      sequencing* change (FET3/FET4 gating PHY power via OSC_DIS) that does NOT
+//!      sequencing* change (FET3/FET4 gating PHY power via `OSC_DIS`) that does NOT
 //!      alter the GPIO0 net - the 50 MHz oscillator still reaches GPIO0 through
 //!      R36 in every revision. A static netlist check cannot see the fix. This is
 //!      recorded as ground truth (verified from the rev-D and rev-L files), not
 //!      papered over with a forced "clean on fixed".
 //!
-//! Corpus-gated (skipped when board-corpus is absent), with HAUKSBEE_REQUIRE_CORPUS=1
+//! Corpus-gated (skipped when board-corpus is absent), with `HAUKSBEE_REQUIRE_CORPUS=1`
 //! turning absence into a hard fail so the calibration cannot vacuously green-out.
 
 use std::path::PathBuf;
@@ -133,7 +133,7 @@ fn watchy_esp32_straps_are_clean() {
     );
 }
 
-/// Known-good RP2040 board (rp2040-minimal): its QSPI_SS / BOOTSEL strap idles
+/// Known-good RP2040 board (rp2040-minimal): its `QSPI_SS` / BOOTSEL strap idles
 /// high (the flash chip-select) with a series-R to the BOOTSEL header, no clock,
 /// no wrong-rail pull. The strap lint examines it and is silent.
 #[test]

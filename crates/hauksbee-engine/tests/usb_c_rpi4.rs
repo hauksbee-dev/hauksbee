@@ -23,8 +23,8 @@ use hauksbee_engine::checks::usb_c::{
 };
 use hauksbee_extract::ExtractedBoard;
 
-/// Shared 5.1k (the RPi 4 rev 1.0/1.1 defect): CC1 and CC2 are one net.
-fn as_designed() -> SinkTermination {
+/// Shared 5.1k (the `RPi` 4 rev 1.0/1.1 defect): CC1 and CC2 are one net.
+const fn as_designed() -> SinkTermination {
     SinkTermination {
         cc1_rd_ohms: Some(5100.0),
         cc2_rd_ohms: Some(5100.0),
@@ -33,7 +33,7 @@ fn as_designed() -> SinkTermination {
 }
 
 /// Independent 5.1k per CC pin (the rev 1.2 repair).
-fn repaired() -> SinkTermination {
+const fn repaired() -> SinkTermination {
     SinkTermination {
         cc1_rd_ohms: Some(5100.0),
         cc2_rd_ohms: Some(5100.0),

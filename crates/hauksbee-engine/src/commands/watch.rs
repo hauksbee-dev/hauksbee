@@ -33,8 +33,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
-/// How long to wait for the filesystem to go quiet after a change before firing a
-/// run. Editors save a file as several syscalls (truncate, write, rename), which
+/// How long to wait for the filesystem to go quiet after a change before firing a run.
+///
+/// Editors save a file as several syscalls (truncate, write, rename), which
 /// fire a burst of events within a few milliseconds; this settle window coalesces
 /// that burst so one save triggers exactly one run. Long enough to swallow an
 /// editor's write burst, short enough to feel instant.
@@ -84,23 +85,28 @@ impl Target {
     /// Board-as-Code header sniff the rest of the CLI uses). Returns a loud,
     /// actionable error listing the accepted targets when nothing matches, so an
     /// unrecognized target refuses rather than silently doing the wrong check.
-    pub fn detect(path: &Path) -> anyhow::Result<Target> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error listing the accepted targets if neither the extension nor a
+    /// Board-as-Code header identifies the file.
+    pub fn detect(path: &Path) -> anyhow::Result<Self> {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase);
         match ext.as_deref() {
-            Some("kicad_sch") => return Ok(Target::Schematic),
-            Some("board") => return Ok(Target::BoardCode),
-            Some("toml") => return Ok(Target::Spec),
-            Some(e) if BOARD_EXTS.contains(&e) => return Ok(Target::Board),
+            Some("kicad_sch") => return Ok(Self::Schematic),
+            Some("board") => return Ok(Self::BoardCode),
+            Some("toml") => return Ok(Self::Spec),
+            Some(e) if BOARD_EXTS.contains(&e) => return Ok(Self::Board),
             _ => {}
         }
         // No decisive extension: a `.board` saved under another name is still
         // recognized by its DSL header (mirrors `run`'s content sniff).
         if let Ok(text) = std::fs::read_to_string(path) {
             if crate::commands::common::is_board_code_header(&text) {
-                return Ok(Target::BoardCode);
+                return Ok(Self::BoardCode);
             }
         }
         anyhow::bail!("{}", accepted_targets_msg(path));
@@ -119,9 +125,10 @@ fn accepted_targets_msg(path: &Path) -> String {
     )
 }
 
-/// A run's verdict, derived from the child's exit code. `Fail` is "the check ran
-/// and found a problem"; `Error` is "the check could not run" (bad input, a spec
-/// error); `Invalid` is a spec whose analog co-sim did not converge.
+/// A run's verdict, derived from the child's exit code.
+///
+/// `Fail` is "the check ran and found a problem"; `Error` is "the check could not run"
+/// (bad input, a spec error); `Invalid` is a spec whose analog co-sim did not converge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Pass,
@@ -134,32 +141,33 @@ impl Verdict {
     /// Map a target kind + child exit code to a verdict. The exit-code contracts
     /// come from each subcommand's own docs (`run --strict` gates on 2;
     /// `hauksbee-ci` uses 0/1/2/3; `check-code` exits 1 when unhealthy).
-    pub fn classify(target: Target, code: i32) -> Verdict {
+    #[must_use]
+    pub const fn classify(target: Target, code: i32) -> Self {
         match target {
             Target::Board | Target::Schematic => match code {
-                0 => Verdict::Pass,
-                2 => Verdict::Fail,
-                _ => Verdict::Error,
+                0 => Self::Pass,
+                2 => Self::Fail,
+                _ => Self::Error,
             },
             Target::BoardCode => match code {
-                0 => Verdict::Pass,
-                _ => Verdict::Fail,
+                0 => Self::Pass,
+                _ => Self::Fail,
             },
             Target::Spec => match code {
-                0 => Verdict::Pass,
-                1 => Verdict::Fail,
-                3 => Verdict::Invalid,
-                _ => Verdict::Error, // 2 = spec/usage error
+                0 => Self::Pass,
+                1 => Self::Fail,
+                3 => Self::Invalid,
+                _ => Self::Error, // 2 = spec/usage error
             },
         }
     }
 
-    fn tag(self) -> &'static str {
+    const fn tag(self) -> &'static str {
         match self {
-            Verdict::Pass => "PASS",
-            Verdict::Fail => "FAIL",
-            Verdict::Invalid => "INVALID",
-            Verdict::Error => "ERROR",
+            Self::Pass => "PASS",
+            Self::Fail => "FAIL",
+            Self::Invalid => "INVALID",
+            Self::Error => "ERROR",
         }
     }
 }
@@ -210,10 +218,11 @@ fn ci_binary(self_exe: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// The set of files whose change re-runs the check, plus the directories to hand
-/// to notify. We watch whole directories (non-recursive) and filter events down
-/// to `files`, which is notify's recommended pattern and means an unrelated file
-/// changing in the same directory never triggers a run.
+/// The set of files whose change re-runs the check, plus the directories to watch.
+///
+/// Those directories are handed to notify. We watch whole directories (non-recursive)
+/// and filter events down to `files`, which is notify's recommended pattern and means
+/// an unrelated file changing in the same directory never triggers a run.
 #[derive(Debug, Clone)]
 pub struct WatchSet {
     /// Normalized (canonical-parent + filename) paths that trigger a re-run.
@@ -229,15 +238,16 @@ impl WatchSet {
     ///
     /// - **Board**: the board file + its sibling `.kicad_pro` (DRC reads netclass
     ///   clearances from there).
-    /// - **Schematic**: every `*.kicad_sch` in the directory (KiCad keeps a
+    /// - **Schematic**: every `*.kicad_sch` in the directory (`KiCad` keeps a
     ///   sheet hierarchy's sub-sheets beside the root sheet) + the `.kicad_pro`.
-    /// - **BoardCode**: just the `.board` file.
+    /// - **`BoardCode`**: just the `.board` file.
     /// - **Spec**: the spec TOML + the board and firmware it names + any sensor
     ///   `spec_file`s, resolved relative to the spec's directory (a minimal TOML
     ///   extract of just those path fields; the engine cannot reach hauksbee-ci's
     ///   loader without a dependency cycle). A spec that fails to parse degrades
     ///   to watching the spec file alone; the run itself then surfaces the error.
-    pub fn derive(target: Target, path: &Path) -> WatchSet {
+    #[must_use]
+    pub fn derive(target: Target, path: &Path) -> Self {
         let mut raw: Vec<PathBuf> = vec![path.to_path_buf()];
         match target {
             Target::Board => {
@@ -262,7 +272,7 @@ impl WatchSet {
         Self::from_paths(raw)
     }
 
-    fn from_paths(raw: Vec<PathBuf>) -> WatchSet {
+    fn from_paths(raw: Vec<PathBuf>) -> Self {
         let mut files = BTreeSet::new();
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut display: Vec<PathBuf> = Vec::new();
@@ -279,7 +289,7 @@ impl WatchSet {
                 }
             }
         }
-        WatchSet {
+        Self {
             files,
             dirs,
             display,
@@ -289,13 +299,13 @@ impl WatchSet {
     /// Does a filesystem event on `path` fall inside the watched set? Compared on
     /// the normalized (canonical-parent + filename) form so an editor that
     /// replaces a file (new inode) still matches.
+    #[must_use]
     pub fn matches(&self, path: &Path) -> bool {
-        normalize(path)
-            .map(|n| self.files.contains(&n))
-            .unwrap_or(false)
+        normalize(path).is_some_and(|n| self.files.contains(&n))
     }
 
     /// The directories to register with notify.
+    #[must_use]
     pub fn dirs(&self) -> &[PathBuf] {
         &self.dirs
     }
@@ -359,6 +369,12 @@ fn spec_referenced_paths(spec_path: &Path) -> Vec<PathBuf> {
 }
 
 /// Entry point from the binary: detect, derive the watch set, then run the loop.
+///
+/// # Errors
+///
+/// Returns an error if the target kind cannot be detected, if the Tokio runtime or
+/// file watchers cannot be started, if none of the target's directories can be
+/// watched, or if the watcher cannot take its initial baseline.
 pub fn run(target_path: PathBuf, plain: bool, once: bool) -> anyhow::Result<()> {
     let target = Target::detect(&target_path)?; // refuses here for unknown targets
     let watch_set = WatchSet::derive(target, &target_path);
@@ -440,40 +456,7 @@ async fn watch_loop(
         );
     }
 
-    // Do not print the first run's header until the poller has taken a baseline
-    // of every existing dependency. Otherwise a fast caller can edit while the
-    // startup check is running and have that edit absorbed into the baseline.
-    let mut baseline_pending: BTreeSet<PathBuf> = watch_set
-        .files
-        .iter()
-        .filter(|path| path.exists())
-        .cloned()
-        .collect();
-    let baseline_deadline = Instant::now() + Duration::from_secs(5);
-    while !baseline_pending.is_empty() && Instant::now() < baseline_deadline {
-        match scan_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(path)) => {
-                if let Some(path) = normalize(&path) {
-                    baseline_pending.remove(&path);
-                }
-            }
-            Ok(Err(error)) => {
-                eprintln!("note: initial watch scan could not read an entry: {error}");
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    if !baseline_pending.is_empty() {
-        anyhow::bail!(
-            "file watcher did not establish its initial baseline for: {}",
-            baseline_pending
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
+    await_baseline(&watch_set, &scan_rx)?;
 
     // Bridge the blocking std receiver onto an async channel on a blocking thread.
     let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel::<notify::Event>();
@@ -519,14 +502,13 @@ async fn watch_loop(
         //    cannot hold the window open forever.
         let mut last_relevant = Instant::now();
         loop {
-            let elapsed = last_relevant.elapsed();
-            if elapsed >= DEBOUNCE {
+            let wait = DEBOUNCE.saturating_sub(last_relevant.elapsed());
+            if wait.is_zero() {
                 break;
             }
-            let wait = DEBOUNCE - elapsed;
             tokio::select! {
                 _ = sig_rx.recv() => exit_with_last(),
-                _ = tokio::time::sleep(wait) => break,
+                () = tokio::time::sleep(wait) => break,
                 ev = ev_rx.recv() => {
                     let Some(ev) = ev else { exit_with_last(); };
                     if relevant_path(&ev, &watch_set).is_some() {
@@ -549,6 +531,46 @@ async fn watch_loop(
     }
 }
 
+/// Do not print the first run's header until the poller has taken a baseline
+/// of every existing dependency. Otherwise a fast caller can edit while the
+/// startup check is running and have that edit absorbed into the baseline.
+fn await_baseline(
+    watch_set: &WatchSet,
+    scan_rx: &std::sync::mpsc::Receiver<notify::Result<PathBuf>>,
+) -> anyhow::Result<()> {
+    let mut baseline_pending: BTreeSet<PathBuf> = watch_set
+        .files
+        .iter()
+        .filter(|path| path.exists())
+        .cloned()
+        .collect();
+    let baseline_deadline = Instant::now() + Duration::from_secs(5);
+    while !baseline_pending.is_empty() && Instant::now() < baseline_deadline {
+        match scan_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(path)) => {
+                if let Some(path) = normalize(&path) {
+                    baseline_pending.remove(&path);
+                }
+            }
+            Ok(Err(error)) => {
+                eprintln!("note: initial watch scan could not read an entry: {error}");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    anyhow::ensure!(
+        baseline_pending.is_empty(),
+        "file watcher did not establish its initial baseline for: {}",
+        baseline_pending
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(())
+}
+
 /// Exit with the last completed run's code (Ctrl-C passthrough). Prints a newline
 /// so the shell prompt starts clean after the `^C`.
 fn exit_with_last() -> ! {
@@ -564,8 +586,7 @@ fn relevant_path(ev: &notify::Event, set: &WatchSet) -> Option<PathBuf> {
 fn display_name(p: &Path) -> String {
     p.file_name()
         .and_then(|s| s.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| p.display().to_string())
+        .map_or_else(|| p.display().to_string(), str::to_string)
 }
 
 /// Run one check as a subprocess, stream its output under a separator, print a

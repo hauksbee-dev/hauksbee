@@ -1,16 +1,16 @@
 //! Proof: AVR firmware bit-bangs SPI mode 0 on plain GPIOs and reads a
 //! spec-driven SPI sensor through the synchronous input responder (05 §1.5).
 //!
-//! The firmware (testdata/firmware/bitbang_spi_imu) toggles SCLK/MOSI/CS_n on
+//! The firmware (`testdata/firmware/bitbang_spi_imu`) toggles `SCLK/MOSI/CS_n` on
 //! PD4..PD6 and samples MISO on PD7 with a plain `PIND` read one instruction
-//! after each rising clock edge, deliberately NOT the ATmega328P's hardware
+//! after each rising clock edge, deliberately NOT the `ATmega328P`'s hardware
 //! SPI pins, so only the engine's [`BitBangSpiResponder`] bridging to the
 //! byte-level [`SpiBus`] slave can answer. The slave is the shipped ICM-42605
 //! declarative spec (crates/hauksbee-server/assets/sensor-specs/icm42605.toml) loaded into a
 //! [`RegisterMapSensor`]; the existing SPI slave model, no parallel device.
 //!
-//! The firmware reads WHO_AM_I (0x75 -> 0x42) and a two-byte burst from
-//! GYRO_CONFIG1 (0x4F -> 0x06, auto-incrementing to 0x50 -> 0x06) and reports
+//! The firmware reads `WHO_AM_I` (0x75 -> 0x42) and a two-byte burst from
+//! `GYRO_CONFIG1` (0x4F -> 0x06, auto-incrementing to 0x50 -> 0x06) and reports
 //! "W<who>G<b0><b1>" in hex over UART; the test asserts the exact line. Every
 //! byte of that report crossed the bit-level bridge inside the firmware's own
 //! clock loop; the read-inside-`run_micros` shape the 74HC165 fix pioneered,
@@ -27,10 +27,10 @@ use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
 
 /// The shipped declarative ICM-42605 spec (same file the boot-coverage hunts
-/// use); WHO_AM_I = 0x42, GYRO_CONFIG1/GYRO_ACCEL_CONFIG0 = 0x06.
+/// use); `WHO_AM_I` = 0x42, `GYRO_CONFIG1/GYRO_ACCEL_CONFIG0` = 0x06.
 const ICM42605_SPEC: &str = include_str!("../../hauksbee-server/assets/sensor-specs/icm42605.toml");
 
-/// Minimal board: U1 ATmega328P with the software-SPI GPIOs on PD4..PD7
+/// Minimal board: U1 `ATmega328P` with the software-SPI GPIOs on PD4..PD7
 /// (DIP-28 pads 6, 11, 12, 13), power/ground wired, and the IMU U2's SPI pins
 /// on the same nets. 10k pulls give each SPI net a second real component the
 /// way a routed board would.
@@ -134,7 +134,7 @@ fn firmware_reads_spi_sensor_over_bitbanged_gpios() {
         if let Some(bytes) = frame.uart.get("U1") {
             out.extend_from_slice(bytes);
         }
-        if out.iter().filter(|&&b| b == b'\n').count() >= 2 {
+        if out.iter().filter(|&&b| b == b'\n').nth(1).is_some() {
             break;
         }
     }

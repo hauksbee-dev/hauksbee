@@ -10,6 +10,7 @@
 use crate::support;
 use hauksbee_ci::report::CiResult;
 use hauksbee_engine::scheduler::open_driver_reason;
+use std::fmt::Write as _;
 
 /// Run `fixtures/open_parts.board` under voltage assertions `(net, min, max)`.
 fn run(name: &str, asserts: &[(&str, f64, f64)]) -> CiResult {
@@ -19,10 +20,11 @@ fn run(name: &str, asserts: &[(&str, f64, f64)]) -> CiResult {
         support::toml_path(&board)
     );
     for (i, (net, min, max)) in asserts.iter().enumerate() {
-        spec.push_str(&format!(
+        let _ = writeln!(
+            spec,
             "[[assert]]\nkind = \"voltage\"\nname = \"a{i}\"\nnet = \"{net}\"\nmin = {min}\n\
-             max = {max}\nafter_ms = 1.0\n"
-        ));
+             max = {max}\nafter_ms = 1.0"
+        );
     }
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(name);

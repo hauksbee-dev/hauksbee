@@ -56,6 +56,7 @@ pub enum NetDcDefinition {
 
 /// Classify one node. Pure function of the circuit; the caller maps net
 /// names to [`NodeId`]s (`BoundBoard::net_nodes`).
+#[must_use]
 pub fn net_dc_definition(circuit: &Circuit, start: NodeId) -> NetDcDefinition {
     // Reference nodes: ground, plus every terminal of an independent source.
     // A source terminal defines its node's level (or ties it, through the
@@ -171,7 +172,7 @@ fn device_nodes(device: &Device) -> Vec<NodeId> {
 /// Fallback for device variants added after this module: read no nodes,
 /// which errs toward `Floating`, the direction that REFUSES a numeric pass
 /// rather than inventing one.
-fn other_nodes_conservative(_device: &Device) -> Vec<NodeId> {
+const fn other_nodes_conservative(_device: &Device) -> Vec<NodeId> {
     Vec::new()
 }
 

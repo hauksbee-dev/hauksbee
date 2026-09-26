@@ -1,5 +1,6 @@
-//! The unified board-input normalizer: every surface that accepts "a board"
-//! (the web front door, `hauksbee run`, `hauksbee models resolve`, and
+//! The unified board-input normalizer.
+//!
+//! Every surface that accepts "a board" (the web front door, `hauksbee run`, `hauksbee models resolve`, and
 //! `hauksbee-ci`) routes through this one module, so the set of accepted
 //! formats can never drift between surfaces again.
 //!
@@ -13,7 +14,7 @@
 //! * [`from_bytes`]: the web path. A file name (display/sniff hint only) plus
 //!   the file's RAW bytes. Binary formats are sniffed from the bytes first, a
 //!   `PK\x03\x04` prefix routes through the zip classifier, Board-as-Code is
-//!   compiled to KiCad board text, and everything else falls through to the
+//!   compiled to `KiCad` board text, and everything else falls through to the
 //!   text sniffer. It never invents a board name: a titleless board keeps its
 //!   empty name so the web report's `board_name` is unchanged.
 //! * [`from_path`]: the CLI/CI path. Adds what only a path can give you:
@@ -55,21 +56,23 @@ use hauksbee_extract::{ExtractError, ExtractedBoard};
 
 /// Whether `text` starts like a Board-as-Code file: a tiny sniff on the first
 /// 256 characters, shared by the input classifier and the watch loop.
+#[must_use]
 pub fn is_board_code_header(text: &str) -> bool {
     let head: String = text.chars().take(256).collect();
     head.contains("Board-as-Code") || head.contains("board version ")
 }
 
-/// What kind of input the normalizer recognised. Call sites use this where
-/// they would otherwise keep `is_binary` / `is_gerber` flags; the
-/// `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need different DRC
-/// handling from the text ones and from each other.
+/// What kind of input the normalizer recognised.
+///
+/// Call sites use this where they would otherwise keep `is_binary` / `is_gerber`
+/// flags; the `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need
+/// different DRC handling from the text ones and from each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
-    /// A text layout/netlist format (KiCad `.kicad_pcb`, Eagle `.brd`,
+    /// A text layout/netlist format (`KiCad` `.kicad_pcb`, Eagle `.brd`,
     /// IPC-D-356, `.net`), sniffed from content.
     Text,
-    /// A KiCad schematic loaded BY PATH so its sheet hierarchy recurses
+    /// A `KiCad` schematic loaded BY PATH so its sheet hierarchy recurses
     /// ([`from_path`] only; [`from_bytes`] content-sniffs a lone sheet as
     /// [`InputKind::Text`] because it cannot see sibling files).
     Schematic,
@@ -81,13 +84,13 @@ pub enum InputKind {
     /// connectivity, so copper reconstruction was deliberately not used.
     Ipc356Archive,
     /// An ODB++ job (directory, `.tgz` or `.zip`). Like a gerber archive it has
-    /// no KiCad layout text, but unlike one its connectivity is READ from the
+    /// no `KiCad` layout text, but unlike one its connectivity is READ from the
     /// job's own EDA data rather than reconstructed from copper.
     Odb,
     /// An IPC-2581 (DPMX) design-exchange document. Text, but not KiCad-parseable
     /// text, so it carries no `layout_text` either.
     Ipc2581,
-    /// A Board-as-Code `.board` source (bare or zipped), compiled to KiCad
+    /// A Board-as-Code `.board` source (bare or zipped), compiled to `KiCad`
     /// board text; `layout_text` carries the COMPILED text.
     BoardCode,
 }
@@ -125,11 +128,12 @@ pub struct NormalizedBoard {
 impl NormalizedBoard {
     /// A binary Altium board: DRC comes from the raw bytes twin, and there is
     /// no layout text. What call sites mean by `is_binary` / `altium.is_some()`.
+    #[must_use]
     pub fn is_binary(&self) -> bool {
         self.kind == InputKind::Altium
     }
 
-    /// A fab/exchange input with **no KiCad layout text**: a gerber archive, a
+    /// A fab/exchange input with **no `KiCad` layout text**: a gerber archive, a
     /// fab ZIP using IPC-D-356 connectivity, an ODB++ job or an IPC-2581
     /// document. Clearance DRC and trace-geometry SI must report "Not checked"
     /// for these rather than a vacuous pass, which is what call sites use this
@@ -138,7 +142,8 @@ impl NormalizedBoard {
     /// The three differ in how connectivity was obtained (reconstructed from
     /// copper for gerbers, read from the file for the other two) but not in what
     /// the geometry-bearing checks can do, which is nothing.
-    pub fn is_gerber(&self) -> bool {
+    #[must_use]
+    pub const fn is_gerber(&self) -> bool {
         matches!(
             self.kind,
             InputKind::Gerber | InputKind::Ipc356Archive | InputKind::Odb | InputKind::Ipc2581
@@ -147,6 +152,7 @@ impl NormalizedBoard {
 
     /// Specifically a gerber archive, as opposed to the other two geometry-less
     /// inputs [`is_gerber`](Self::is_gerber) also covers.
+    #[must_use]
     pub fn is_gerber_archive(&self) -> bool {
         self.kind == InputKind::Gerber
     }
@@ -159,7 +165,8 @@ impl NormalizedBoard {
 /// carry" over an ODB++ job is stating something false about where the
 /// connectivity came from — on exactly the axis these readers exist to be honest
 /// about.
-pub fn input_kind_phrase(kind: InputKind) -> &'static str {
+#[must_use]
+pub const fn input_kind_phrase(kind: InputKind) -> &'static str {
     match kind {
         InputKind::Gerber => "a gerber archive",
         InputKind::Ipc356Archive => "a fab archive carrying an IPC-D-356 netlist",
@@ -185,8 +192,9 @@ fn board_not_found_message(path: &str) -> String {
     format!("no board file at '{path}'. Check the path, or try a bundled example:\n  {suggestion}")
 }
 
-/// Why a board input could not be normalized. Variants keep the semantic
-/// content; `Display` renders the CLI-facing message and [`web_message`]
+/// Why a board input could not be normalized.
+///
+/// Variants keep the semantic content; `Display` renders the CLI-facing message and [`web_message`]
 /// renders the web front door's wording, so one normalizer still speaks to
 /// each surface in the wording that surface needs.
 ///
@@ -238,12 +246,13 @@ impl BoardInputError {
     /// The web front door's wording for this failure: what `/api/analyze`
     /// returns, phrased for someone who just dropped a file in a browser
     /// rather than for a terminal.
+    #[must_use]
     pub fn web_message(&self) -> String {
         match self {
-            BoardInputError::BoardCode(e) => {
+            Self::BoardCode(e) => {
                 format!("Could not compile this Board-as-Code file: {e}.")
             }
-            BoardInputError::Extract(e) => {
+            Self::Extract(e) => {
                 format!("Could not read this board file: {e}. Supported: {SUPPORTED_FORMATS}.")
             }
             other => format!("Could not read this board file: {other}"),
@@ -272,10 +281,8 @@ impl BoardInputError {
 /// So it runs ahead of reader selection rather than as a nicer message for an
 /// `Unrecognized` result.
 fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputError> {
-    match unsupported_format_refusal(file_name, raw) {
-        Some(message) => Err(BoardInputError::Unsupported(message)),
-        None => Ok(()),
-    }
+    unsupported_format_refusal(file_name, raw)
+        .map_or(Ok(()), |message| Err(BoardInputError::Unsupported(message)))
 }
 
 /// The refusal for a format hauksbee RECOGNISES and deliberately does not read,
@@ -285,8 +292,9 @@ fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputErro
 /// through [`from_path`]: `hauksbee to-code` and the MCP `board_to_code` tool.
 /// Both decode UTF-8 directly, so without this they answered a pre-Eagle-6
 /// board with "stream did not contain valid UTF-8" and "this board file is
-/// binary (e.g. Altium .PcbDoc)" respectively — one meaningless, one naming the
+/// binary (e.g. Altium .`PcbDoc`)" respectively — one meaningless, one naming the
 /// wrong vendor, and neither telling the user the one thing that would work.
+#[must_use]
 pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String> {
     hauksbee_extract::looks_like_eagle_binary(raw).then(|| {
         format!(
@@ -306,6 +314,12 @@ pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String>
 /// it was ever parsed. Deliberately NO file-stem name fallback here: a
 /// titleless board keeps its empty name so the web report's `board_name` does
 /// not change under the normalizer.
+///
+/// # Errors
+///
+/// Returns a [`BoardInputError`] when the bytes are a binary Eagle board, a
+/// zip that cannot be routed, Board-as-Code that does not compile, or content
+/// no reader recognises or can parse.
 pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, BoardInputError> {
     refuse_eagle_binary(file_name, contents)?;
 
@@ -347,29 +361,28 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     // reverse-extracted from copper.
     let mut zip_code: Option<String> = None;
     if contents.starts_with(b"PK\x03\x04") {
-        match zip_board_code(file_name, contents)? {
-            Some(src) => zip_code = Some(src),
-            None => {
-                if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
-                    return Ok(norm);
-                }
-                let out = gerber_from_zip_bytes(file_name, contents)?;
-                let notes = out.stats.coverage_notes();
-                return Ok(NormalizedBoard {
-                    board: out.board,
-                    layout_text: None,
-                    raw: contents.to_vec(),
-                    kind: InputKind::Gerber,
-                    notes,
-                });
+        if let Some(src) = zip_board_code(file_name, contents)? {
+            zip_code = Some(src);
+        } else {
+            if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
+                return Ok(norm);
             }
+            let out = gerber_from_zip_bytes(file_name, contents)?;
+            let notes = out.stats.coverage_notes();
+            return Ok(NormalizedBoard {
+                board: out.board,
+                layout_text: None,
+                raw: contents.to_vec(),
+                kind: InputKind::Gerber,
+                notes,
+            });
         }
     }
 
-    let text: Cow<'_, str> = match &zip_code {
-        Some(src) => Cow::Borrowed(src.as_str()),
-        None => String::from_utf8_lossy(contents),
-    };
+    let text: Cow<'_, str> = zip_code.as_ref().map_or_else(
+        || String::from_utf8_lossy(contents),
+        |src| Cow::Borrowed(src.as_str()),
+    );
     // Board-as-Code (`hauksbee to-code` output, usually `*.board`, possibly
     // zipped) is a DSL, not a CAD format, so the extractor cannot sniff it.
     // Compile it to KiCad board text first; the emitted text then flows
@@ -431,6 +444,13 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
 ///   name, `board.name` becomes the file stem so every downstream identifier
 ///   (JSON `board` field, report headers) is usable instead of blank. This
 ///   fallback lives HERE only; [`from_bytes`] must not invent a name.
+///
+/// # Errors
+///
+/// Returns [`BoardInputError::NotFound`] or [`BoardInputError::Io`] when the
+/// path cannot be read, and the same format errors as [`from_bytes`] plus
+/// gerber-directory and `.kicad_sch` hierarchy failures.
+#[allow(clippy::too_many_lines)] // the format-dispatch ladder, in precedence order
 pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let file_name = path
         .file_name()
@@ -501,7 +521,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let ext_lower = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     if ext_lower == "kicad_pro" || ext_lower == "kicad_prl" {
         let sibling = path.with_extension("kicad_pcb");
@@ -574,11 +594,10 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             // A zip that is neither a gerber set nor a .board export is often
             // a FIRMWARE project zipped by mistake; say where firmware goes
             // instead of only rejecting.
-            if let Some(marker) = zip_firmware_marker(&raw) {
-                BoardInputError::Zip(firmware_zip_message(&file_name, marker))
-            } else {
-                BoardInputError::Gerber(gerber_path_message(path, &e.to_string()))
-            }
+            zip_firmware_marker(&raw).map_or_else(
+                || BoardInputError::Gerber(gerber_path_message(path, &e.to_string())),
+                |marker| BoardInputError::Zip(firmware_zip_message(&file_name, marker)),
+            )
         })?;
         return gerber_job(path, out, raw);
     }
@@ -662,13 +681,15 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             "net" => Some("a KiCad netlist"),
             _ => None,
         };
-        match known {
-            Some(desc) => BoardInputError::Extract(format!(
-                "'{file_name}' looks like {desc} by extension, but its content \
+        known.map_or_else(
+            || BoardInputError::Extract(format!("'{file_name}': {e}")),
+            |desc| {
+                BoardInputError::Extract(format!(
+                    "'{file_name}' looks like {desc} by extension, but its content \
                  did not parse: {e}"
-            )),
-            None => BoardInputError::Extract(format!("'{file_name}': {e}")),
-        }
+                ))
+            },
+        )
     })?;
     Ok(normalized(
         path,
@@ -691,7 +712,7 @@ fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
             let ext = p
                 .extension()
                 .and_then(|x| x.to_str())
-                .map(|x| x.to_ascii_lowercase())
+                .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
             if !p.is_file() {
                 continue;
@@ -721,10 +742,8 @@ fn ipc2581_head(path: &Path) -> bool {
         return false;
     };
     let mut head = vec![0u8; 4096];
-    match f.read(&mut head) {
-        Ok(n) => hauksbee_extract::ipc2581::looks_like_ipc2581(&head[..n]),
-        Err(_) => false,
-    }
+    f.read(&mut head)
+        .is_ok_and(|n| hauksbee_extract::ipc2581::looks_like_ipc2581(&head[..n]))
 }
 
 /// The CLI/CI wording for a failed gerber reverse-extraction from a path.
@@ -1049,7 +1068,7 @@ fn uploaded_board_name(file_name: &str) -> String {
 }
 
 /// What marks a zip as a firmware project rather than a gerber fab archive:
-/// a PlatformIO config, a `.pio` build tree, or a compiled `.hex` image.
+/// a `PlatformIO` config, a `.pio` build tree, or a compiled `.hex` image.
 /// Returns a human name for the first marker found, `None` for anything else.
 fn zip_firmware_marker(contents: &[u8]) -> Option<&'static str> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents)).ok()?;
@@ -1065,7 +1084,10 @@ fn zip_firmware_marker(contents: &[u8]) -> Option<&'static str> {
         if name.starts_with(".pio/") || name.contains("/.pio/") {
             return Some("a .pio build tree");
         }
-        if name.ends_with(".hex") {
+        if std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("hex"))
+        {
             return Some("compiled .hex firmware");
         }
     }
@@ -1090,9 +1112,9 @@ mod tests {
 
     const KICAD: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     const ALTIUM: &[u8] = include_bytes!("../../../testdata/boards/altium_two_resistor.PcbDoc");
-    /// boot_gate exported by kicad-cli 9.0.3; the same fixtures the extract
+    /// `boot_gate` exported by kicad-cli 9.0.3; the same fixtures the extract
     /// crate's cross-format agreement test uses (see its module docs for
-    /// provenance). boot_gate reads as 3 components / 4 nets natively.
+    /// provenance). `boot_gate` reads as 3 components / 4 nets natively.
     const ODB_ZIP: &[u8] =
         include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.odb.zip");
     const IPC2581: &[u8] =
@@ -1518,7 +1540,7 @@ fn main {
         assert!(!norm.board.nets.is_empty(), "nets recovered from copper");
     }
 
-    /// The counts boot_gate reads as through the native KiCad path, so the two
+    /// The counts `boot_gate` reads as through the native `KiCad` path, so the two
     /// exchange normalizer paths are checked against a real number and not just
     /// against "non-empty".
     const BOOT_GATE: (usize, usize) = (3, 4);

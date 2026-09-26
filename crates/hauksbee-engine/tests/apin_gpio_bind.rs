@@ -1,8 +1,8 @@
-//! Dual bind of analog-capable pins on a BARE ATmega328P (roles "pc2_adc2"
+//! Dual bind of analog-capable pins on a BARE `ATmega328P` (roles `"pc2_adc2"`
 //! style, complementing the module-level "a2" coverage in
 //! `binder_gpio_promotion.rs`).
 //!
-//! On the ATmega328P A0..A5 are PC0..PC5, dual-purpose ADC/GPIO. The Tarski
+//! On the `ATmega328P` A0..A5 are PC0..PC5, dual-purpose ADC/GPIO. The Tarski
 //! board drives A2 = OE'_S and A3 = SRCLR'_S as digital control for the 74HC595
 //! chain. The original binder claimed any analog-capable role as an ADC channel
 //! before checking GPIO, so those pins got no output driver and floated,
@@ -17,9 +17,9 @@ use hauksbee_engine::binder::bind_board;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
-/// Bare ATmega328P (TQFP-32 pad map) plus one 74HC595:
-///   - PC2 (pad 25) -> net "OE_S"   -> 595 ~OE  (pad 13)   : digital control
-///   - PC3 (pad 26) -> net "SRCLR_S"-> 595 ~MR  (pad 10)   : digital control
+/// Bare `ATmega328P` (TQFP-32 pad map) plus one 74HC595:
+///   - PC2 (pad 25) -> net `"OE_S"`   -> 595 ~OE  (pad 13)   : digital control
+///   - PC3 (pad 26) -> net `"SRCLR_S"`-> 595 ~MR  (pad 10)   : digital control
 ///   - PC0 (pad 23) -> net "AIN0"   -> 10k/10k divider      : genuine analog
 ///   - PB5 (pad 19) -> net "SCLK"   -> 595 SHCP (pad 11)    : ordinary GPIO
 ///   - PB3 (pad 17) -> net "MOSI"   -> 595 DS   (pad 14)    : ordinary GPIO (SER)

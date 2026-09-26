@@ -37,7 +37,7 @@ pub const DEFAULT_WAIVER_FILE: &str = "hauksbee-waivers.toml";
 pub struct Waiver {
     /// Which check produced the finding: "si", "lint", "drc".
     pub check: String,
-    /// The specific rule, e.g. "controlled_impedance", "strap_pin", "short".
+    /// The specific rule, e.g. "`controlled_impedance`", "`strap_pin`", "short".
     pub kind: String,
     /// Nets the finding must touch. A waiver matches only if every net listed
     /// here appears in the finding.
@@ -87,7 +87,7 @@ pub enum WaiverError {
 impl std::fmt::Display for WaiverError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WaiverError::Io(m) | WaiverError::Toml(m) | WaiverError::Invalid(m) => write!(f, "{m}"),
+            Self::Io(m) | Self::Toml(m) | Self::Invalid(m) => write!(f, "{m}"),
         }
     }
 }
@@ -103,6 +103,12 @@ struct WaiverFile {
 
 impl WaiverSet {
     /// Load a waiver file using the run's captured, credibility-checked date.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaiverError::Io`] when the file cannot be read,
+    /// [`WaiverError::Toml`] when it does not parse, and [`WaiverError::Invalid`]
+    /// when a waiver entry fails validation.
     pub fn load_at(path: &Path, today: RunDate) -> Result<Self, WaiverError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| WaiverError::Io(format!("reading {}: {e}", path.display())))?;
@@ -113,7 +119,7 @@ impl WaiverSet {
             w.validate(i, path)?;
         }
         let hits = vec![0; file.waive.len()];
-        Ok(WaiverSet {
+        Ok(Self {
             waivers: file.waive,
             hits,
             today,
@@ -121,12 +127,21 @@ impl WaiverSet {
     }
 
     /// Load a waiver file, dating it against the system clock.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`Self::load_at`].
     pub fn load(path: &Path) -> Result<Self, WaiverError> {
         Self::load_at(path, RunDate::from_system_clock())
     }
 
     /// Look for the default waiver file beside `board`. Absent is not an error:
     /// most boards have no waivers, and that is the healthy state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Self::load`] error when a default waiver file exists but
+    /// cannot be loaded.
     pub fn discover(board: &Path) -> Result<Self, WaiverError> {
         let candidate = board
             .parent()
@@ -139,11 +154,13 @@ impl WaiverSet {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.waivers.is_empty()
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.waivers.len()
     }
 
@@ -199,6 +216,7 @@ impl WaiverSet {
 
     /// Waivers that are past their date. Their findings gate the build again,
     /// and the report names them so the red is explainable.
+    #[must_use]
     pub fn expired(&self) -> Vec<&Waiver> {
         self.waivers
             .iter()
@@ -232,6 +250,7 @@ impl WaiverSet {
 
     /// Active waivers that matched nothing this run. Either the finding is
     /// fixed and the waiver should go, or it no longer describes what fires.
+    #[must_use]
     pub fn stale(&self) -> Vec<&Waiver> {
         self.waivers
             .iter()

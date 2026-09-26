@@ -1,7 +1,9 @@
 //! Spec-loading and validation errors, plus the "did you mean ...?" net-name
-//! suggester. [`SpecError`] carries the IO / TOML / invalid / unknown-net cases a
-//! spec can fail on, and [`near_matches`] ranks known net names by edit distance
-//! so a typo'd net reference points the user at the real name instead of failing
+//! suggester.
+//!
+//! [`SpecError`] carries the IO / TOML / invalid / unknown-net cases a spec can
+//! fail on, and [`near_matches`] ranks known net names by edit distance so a
+//! typo'd net reference points the user at the real name instead of failing
 //! blankly.
 
 use std::fmt;
@@ -31,21 +33,21 @@ pub enum SpecError {
     /// Several independent errors found in ONE pass. Validation collects every
     /// error it can rather than stopping at the first, so a spec author fixes
     /// one invocation's worth of findings, not one finding per invocation.
-    Many(Vec<SpecError>),
+    Many(Vec<Self>),
 }
 
 impl fmt::Display for SpecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SpecError::Io(m) => write!(f, "{m}"),
-            SpecError::Toml { file, message } => {
+            Self::Io(m) => write!(f, "{m}"),
+            Self::Toml { file, message } => {
                 write!(f, "could not parse spec {file}: {message}")
             }
-            SpecError::Invalid(m) => write!(f, "invalid spec: {m}"),
-            SpecError::Solver { context, source } => {
+            Self::Invalid(m) => write!(f, "invalid spec: {m}"),
+            Self::Solver { context, source } => {
                 write!(f, "invalid spec: {context}: {source}")
             }
-            SpecError::UnknownNets(items) => {
+            Self::UnknownNets(items) => {
                 writeln!(f, "spec references net(s) not found on the board:")?;
                 for (net, ctx, suggestions) in items {
                     write!(f, "  '{net}' (in {ctx})")?;
@@ -57,7 +59,7 @@ impl fmt::Display for SpecError {
                 }
                 Ok(())
             }
-            SpecError::Many(errors) => {
+            Self::Many(errors) => {
                 for (i, e) in errors.iter().enumerate() {
                     if i > 0 {
                         writeln!(f)?;
@@ -82,25 +84,29 @@ impl std::error::Error for SpecError {
 impl SpecError {
     /// Fold independently collected errors into one result: none is `Ok`, one
     /// comes back as itself, several as [`SpecError::Many`].
-    pub fn from_many(mut errs: Vec<SpecError>) -> Result<(), SpecError> {
+    ///
+    /// # Errors
+    ///
+    /// The single error, or [`SpecError::Many`], whenever `errs` is non-empty.
+    pub fn from_many(mut errs: Vec<Self>) -> Result<(), Self> {
         match errs.len() {
             0 => Ok(()),
             1 => Err(errs.remove(0)),
-            _ => Err(SpecError::Many(errs)),
+            _ => Err(Self::Many(errs)),
         }
     }
 
     /// A `map_err` adapter: `.map_err(SpecError::invalid("reading BOM"))`
     /// yields `Invalid("reading BOM: <cause>")`.
-    pub fn invalid<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> SpecError {
+    pub fn invalid<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> Self {
         let context = context.into();
-        move |e| SpecError::Invalid(format!("{context}: {e}"))
+        move |e| Self::Invalid(format!("{context}: {e}"))
     }
 
     /// The [`SpecError::Io`] twin of [`SpecError::invalid`].
-    pub fn io<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> SpecError {
+    pub fn io<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> Self {
         let context = context.into();
-        move |e| SpecError::Io(format!("{context}: {e}"))
+        move |e| Self::Io(format!("{context}: {e}"))
     }
 
     /// CLI exit code for this pre-verdict error. A typed solver refusal means
@@ -117,9 +123,12 @@ impl SpecError {
     }
 }
 
-/// Return up to `limit` known names closest to `target`, ranked by edit
-/// distance, preferring substring/case-insensitive matches. Only returns names
-/// within a sensible distance so the suggestions are actually useful.
+/// Return up to `limit` known names closest to `target`.
+///
+/// Ranked by edit distance, preferring substring/case-insensitive matches. Only
+/// returns names within a sensible distance so the suggestions are actually
+/// useful.
+#[must_use]
 pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let t_lower = target.to_ascii_lowercase();
     let mut scored: Vec<(usize, &String)> = known
@@ -166,6 +175,7 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
 /// first letter is the component CLASS, the one character of a reference nobody
 /// fat-fingers into a different one, and it is what makes `R99 -> D1` obviously
 /// not a typo while `R_Shnt15301 -> R_Shunt15301` obviously is.
+#[must_use]
 pub fn near_refs(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let class = designator_class(target);
     let t = target.to_ascii_lowercase();
@@ -199,9 +209,11 @@ fn designator_class(r: &str) -> Option<char> {
         .map(|c| c.to_ascii_lowercase())
 }
 
-/// The `; did you mean: a, b?` clause for a suggestion list, or empty when
-/// there is nothing worth suggesting. One formatter so every call site's
-/// wording (and the parser in `check` that splits it back out) agrees.
+/// The `; did you mean: a, b?` clause for a suggestion list.
+///
+/// Empty when there is nothing worth suggesting. One formatter so every call
+/// site's wording (and the parser in `check` that splits it back out) agrees.
+#[must_use]
 pub fn suggestion_clause(suggestions: &[String]) -> String {
     if suggestions.is_empty() {
         String::new()
@@ -210,12 +222,14 @@ pub fn suggestion_clause(suggestions: &[String]) -> String {
     }
 }
 
-/// The closest option to `target` within edit distance 2, for a "did you
-/// mean ...?" hint on a closed vocabulary (assertion kinds, supply kinds,
-/// peripheral types). Distance 2 covers the real mistakes (a dropped letter, a
-/// swapped pair, an added character) without ever suggesting something the
-/// user plainly did not type; a full-list dump already follows in the error,
-/// so a wild guess here would only mislead.
+/// The closest option to `target` within edit distance 2.
+///
+/// For a "did you mean ...?" hint on a closed vocabulary (assertion kinds,
+/// supply kinds, peripheral types). Distance 2 covers the real mistakes (a
+/// dropped letter, a swapped pair, an added character) without ever suggesting
+/// something the user plainly did not type; a full-list dump already follows in
+/// the error, so a wild guess here would only mislead.
+#[must_use]
 pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
     let t = target.to_ascii_lowercase();
     options
@@ -231,11 +245,9 @@ pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
 
 /// Format the `did_you_mean` hint as the parenthetical the error messages
 /// splice in: `" (did you mean 'voltage'?)"`, or empty when nothing is close.
+#[must_use]
 pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
-    match did_you_mean(target, options) {
-        Some(s) => format!(" (did you mean '{s}'?)"),
-        None => String::new(),
-    }
+    did_you_mean(target, options).map_or_else(String::new, |s| format!(" (did you mean '{s}'?)"))
 }
 
 #[cfg(test)]
@@ -243,7 +255,7 @@ mod tests {
     use super::*;
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]
@@ -293,7 +305,10 @@ mod tests {
         );
         // KiCad's unnamed "no net" bucket must not leak (it renders as a bare comma).
         let s = near_matches("+5W", &known, 5);
-        assert!(!s.iter().any(|n| n.is_empty()), "empty net leaked: {s:?}");
+        assert!(
+            !s.iter().any(std::string::String::is_empty),
+            "empty net leaked: {s:?}"
+        );
         assert_eq!(s.first().map(String::as_str), Some("+5V"));
         assert!(
             near_matches("zzzzzzzzzz", &known, 3).is_empty(),

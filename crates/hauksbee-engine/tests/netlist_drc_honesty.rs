@@ -12,7 +12,7 @@
 use hauksbee_engine::result::DrcStructured;
 
 /// A DRC result over input that carried no copper.
-fn empty_drc() -> DrcStructured {
+const fn empty_drc() -> DrcStructured {
     DrcStructured {
         clearance_rule_mm: 0.0,
         primitive_count: 0,

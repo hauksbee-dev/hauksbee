@@ -96,6 +96,7 @@ struct Driver {
 }
 
 /// One component that bound to a digital-kind model, as this check saw it.
+///
 /// This is the calibration's evidence surface: it says how far each candidate
 /// part got through the classification, so a corpus sweep can prove its silence
 /// is real (parts bound, outputs presented, exclusions applied) rather than
@@ -140,6 +141,7 @@ impl Scan {
     /// measure: a board full of 3-state buffers exercises resolution, role
     /// enumeration, and the tri-state exclusion even though it yields zero
     /// push-pull pins.
+    #[must_use]
     pub fn output_roles_presented(&self) -> usize {
         self.parts.iter().map(|p| p.output_roles).sum()
     }
@@ -148,7 +150,7 @@ impl Scan {
 /// Kinds the binder routes through `bind_digital`, i.e. the kinds whose
 /// connected output roles get a stamped Thevenin driver. Kept in step with
 /// `binder::bind_component`'s match arms.
-fn is_digital_kind(kind: ComponentKind) -> bool {
+const fn is_digital_kind(kind: ComponentKind) -> bool {
     matches!(
         kind,
         ComponentKind::Digital | ComponentKind::ShiftRegister | ComponentKind::Adc
@@ -170,7 +172,7 @@ fn is_ground_net(name: &str) -> bool {
     ) || n.starts_with("GND")
 }
 
-/// KiCad's placeholder net for a pin that is on no net at all.
+/// `KiCad`'s placeholder net for a pin that is on no net at all.
 fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
@@ -268,6 +270,7 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
 
 /// Flag every net carrying push-pull outputs of two or more different modelled
 /// digital parts. See the module docs for the classification and the exclusions.
+#[must_use]
 pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
 
@@ -299,7 +302,7 @@ pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 refs.len(),
                 listed.join(", ")
             ),
-            refs: refs.iter().map(|r| r.to_string()).collect(),
+            refs: refs.iter().map(std::string::ToString::to_string).collect(),
             nets: vec![name],
         });
     }
@@ -354,7 +357,7 @@ mod tests {
     }
 
     /// THE FIELD CASE, as reported: a 74HC08 whose gate-4 output (pad 11 =
-    /// `y4`) was mis-mapped onto net STROBE, which an ATmega328P also drives as
+    /// `y4`) was mis-mapped onto net STROBE, which an `ATmega328P` also drives as
     /// a GPIO output (PB1, pad 13 on the TQFP-32) because the firmware set DDRB
     /// bit 1. Two push-pull drivers, one net, no series element.
     ///
@@ -503,7 +506,7 @@ mod tests {
     }
 
     /// Ground is not a net to contend over (a mis-mapped pad landing on GND is
-    /// another check's problem), and neither is KiCad's unconnected placeholder.
+    /// another check's problem), and neither is `KiCad`'s unconnected placeholder.
     #[test]
     fn ground_and_unconnected_nets_are_skipped() {
         let b = board(

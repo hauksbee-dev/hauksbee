@@ -2,7 +2,7 @@
 //!
 //! The project ships a check only if it is provably SILENT on boards known to be
 //! good. This sweeps every CAD file in the board corpus (the famous schematic /
-//! layout set, the KiCad demos, the Eagle and Altium cross-validation boards, and
+//! layout set, the `KiCad` demos, the Eagle and Altium cross-validation boards, and
 //! the Arduino-class reference designs) and asserts the contention lint finds
 //! nothing. If a future change to the check or to the model db makes it fire on a
 //! known-good board, this goes red before the false positive ships.
@@ -37,12 +37,11 @@ fn corpus_root() -> Option<PathBuf> {
     if p.exists() {
         return Some(p);
     }
-    if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!(
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing: {}",
-            p.display()
-        );
-    }
+    assert!(
+        std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+        "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing: {}",
+        p.display()
+    );
     eprintln!("board-corpus absent; skipping contention-lint calibration");
     None
 }

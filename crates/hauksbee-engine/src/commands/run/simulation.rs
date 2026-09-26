@@ -12,13 +12,13 @@ use crate::result::{BindSummary, JsonReport, Refusal};
 
 use super::{prepare::RunInputs, RunConfig, SelectedSurface};
 
-pub(crate) struct SimulationContext {
+pub struct SimulationContext {
     pub(crate) engine: HauksbeeEngine,
     pub(crate) board_evidence: BoardEvidence,
     pub(crate) probe_known_nets: Vec<String>,
 }
 
-pub(crate) fn build_live_simulation(
+pub fn build_live_simulation(
     cfg: &RunConfig,
     run_inputs: &RunInputs,
     mut prebound: Option<BoundBoard>,
@@ -35,10 +35,7 @@ pub(crate) fn build_live_simulation(
     // in scope), then build the engine from the bound board. When --asbuilt was
     // given, the overlay was already validated, applied and narrated up front;
     // reuse that bound board rather than re-binding and re-applying.
-    let bound = match prebound.take() {
-        Some(b) => b,
-        None => bind_board(board, lib),
-    };
+    let bound = prebound.take().unwrap_or_else(|| bind_board(board, lib));
     let mut board_evidence = crate::evidence::board_evidence(
         board,
         &bound.report,
@@ -145,7 +142,7 @@ pub(crate) fn build_live_simulation(
     })
 }
 
-pub(crate) fn run_selected_simulation_surface(
+pub fn run_selected_simulation_surface(
     cfg: &RunConfig,
     quiet: bool,
     surface: SelectedSurface,

@@ -27,7 +27,7 @@ use hauksbee_ci::{run, RunConfig};
 /// asserts on rails, UART, blink rate and stress faults. Exits 0 if every
 /// assertion passed, 1 if any failed, 2 on a spec/usage error, 3 when the analog
 /// co-sim did not converge under an assertion's window (invalid for analysis).
-/// Writes JUnit XML with --junit and emits GitHub annotations under GITHUB_ACTIONS.
+/// Writes `JUnit` XML with --junit and emits GitHub annotations under `GITHUB_ACTIONS`.
 #[derive(Parser)]
 #[command(
     name = "hauksbee-ci",
@@ -103,7 +103,7 @@ enum Command {
     /// an existing spec.
     ///
     /// Example:
-    ///   cd ci && hauksbee-ci init ../hardware/board.kicad_pcb
+    ///   cd ci && hauksbee-ci init ../`hardware/board.kicad_pcb`
     Init(InitArgs),
 
     /// Install the pre-commit gate into this repository.
@@ -169,7 +169,7 @@ struct RunArgs {
     #[arg(long, value_name = "NAME", conflicts_with = "specs")]
     example: Option<String>,
 
-    /// Write JUnit XML to this path (for the CI test-report step).
+    /// Write `JUnit` XML to this path (for the CI test-report step).
     #[arg(long, value_name = "OUT.XML")]
     junit: Option<PathBuf>,
 
@@ -182,7 +182,7 @@ struct RunArgs {
     /// unchanged; a spec/board error prints `{"ok":false,"error":...}`. The
     /// shape is published as a JSON Schema in
     /// crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json and documented
-    /// in docs/ci/JSON_OUTPUT.md.
+    /// in `docs/ci/JSON_OUTPUT.md`.
     #[arg(long)]
     json: bool,
 
@@ -196,7 +196,7 @@ struct RunArgs {
     /// and the user model dirs (`~/.hauksbee/models`, `~/.config/hauksbee/models`);
     /// the same layer order as `hauksbee run --models-dir`. Lets a spec's
     /// board bind custom parts checked into the hardware repo, including
-    /// `[[models]] kind = "mcu"` routing entries for user SoC descriptors.
+    /// `[[models]] kind = "mcu"` routing entries for user `SoC` descriptors.
     /// Replaces the spec's `models_dir` key for this run.
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
@@ -255,7 +255,7 @@ struct CheckArgs {
 
 #[derive(Parser)]
 struct InitArgs {
-    /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .PcbDoc, .d356, .board).
+    /// Board file to scaffold a spec from (.`kicad_pcb`, .`kicad_sch`, .net, .brd, .`PcbDoc`, .d356, .board).
     /// With no argument, looks for exactly one board file in the current
     /// directory and tells you the command to run on it.
     #[arg(value_name = "BOARD")]
@@ -269,32 +269,36 @@ struct InitArgs {
 }
 
 fn main() -> ExitCode {
+    use hauksbee_ci::integrate;
     // A killed CI run must not orphan its co-sim emulators: reap every live
     // Renode/QEMU child on SIGTERM/SIGINT. See hauksbee_mcu::children.
     hauksbee_mcu::children::install_signal_reaper();
-    use hauksbee_ci::integrate;
     let cli = Cli::parse();
-    let mut args = match cli.command {
-        Command::Run(args) => args,
-        Command::Check(args) => return cmd_check(args),
-        Command::Init(args) => return cmd_init(args),
+    match cli.command {
+        Command::Run(args) => cmd_run(args),
+        Command::Check(args) => cmd_check(args),
+        Command::Init(args) => cmd_init(args),
         Command::Hook(HookCommand::Install) => {
-            return report(cwd().and_then(|cwd| integrate::hook_install(&cwd)))
+            report(cwd().and_then(|cwd| integrate::hook_install(&cwd)))
         }
         Command::Hook(HookCommand::Uninstall) => {
-            return report(cwd().and_then(|cwd| integrate::hook_uninstall(&cwd)))
+            report(cwd().and_then(|cwd| integrate::hook_uninstall(&cwd)))
         }
         Command::GithubAction(GithubActionArgs { write: None }) => {
-            return report(integrate::try_github_workflow_yaml().map(|yaml| {
+            report(integrate::try_github_workflow_yaml().map(|yaml| {
                 print!("{yaml}");
                 String::new()
             }))
         }
         Command::GithubAction(GithubActionArgs { write: Some(path) }) => {
-            return report(cwd().and_then(|cwd| integrate::github_action_write(&cwd, &path)))
+            report(cwd().and_then(|cwd| integrate::github_action_write(&cwd, &path)))
         }
-    };
+    }
+}
 
+// The run command end to end: the per-spec loop and the aggregate output share its state.
+#[allow(clippy::too_many_lines)]
+fn cmd_run(mut args: RunArgs) -> ExitCode {
     if args.specs.is_empty() && args.example.is_none() {
         eprintln!("{}", missing_spec_error());
         return ExitCode::from(2);
@@ -393,7 +397,7 @@ fn main() -> ExitCode {
                     // second, non-JSON output line.
                     eprint!("{}", result.render_github_annotations());
                 }
-                let code = result.exit_code() as u8;
+                let code = u8::try_from(result.exit_code()).unwrap_or(u8::MAX);
                 verdicts.push((spec.display().to_string(), code));
                 worst = worst.max(code);
             }
@@ -428,7 +432,7 @@ fn main() -> ExitCode {
                         hauksbee_ci::report::gh_escape(&e.to_string())
                     );
                 }
-                let code = e.exit_code() as u8;
+                let code = u8::try_from(e.exit_code()).unwrap_or(u8::MAX);
                 verdicts.push((spec.display().to_string(), code));
                 worst = worst.max(code);
             }
@@ -588,7 +592,7 @@ fn suggest_board_in_cwd() -> anyhow::Error {
     const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "net", "brd", "d356", "board"];
     let mut boards: Vec<String> = std::fs::read_dir(".")
         .into_iter()
-        .flat_map(|entries| entries.flatten())
+        .flat_map(std::iter::Iterator::flatten)
         .filter(|entry| {
             let path = entry.path();
             path.is_file()
@@ -619,8 +623,8 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
     use std::collections::BTreeMap;
 
     use hauksbee_engine::run_manifest::{
-        absolutize_argv_paths, board_sidecar_inputs, implicit_model_inputs, ManifestInput,
-        ManifestRequest, RunManifest, ToolIdentity,
+        absolutize_argv_paths, implicit_model_inputs, ManifestInput, ManifestRequest, RunManifest,
+        ToolIdentity,
     };
 
     let mut inputs = Vec::new();
@@ -630,86 +634,7 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         .enumerate()
         .filter(|_| args.example.is_none())
     {
-        let spec = hauksbee_ci::Spec::load(spec_path)?;
-        inputs.push(ManifestInput::new(format!("spec[{index}]"), spec_path));
-        let board_path = spec.board_path();
-        inputs.push(ManifestInput::new(format!("board[{index}]"), &board_path));
-        inputs.extend(board_sidecar_inputs(
-            &board_path,
-            &format!("board[{index}]"),
-        ));
-        if let Some(path) = spec.bom_path() {
-            inputs.push(ManifestInput::new(format!("bom[{index}]"), path));
-        }
-        if let Some(path) = spec.placement_path() {
-            inputs.push(ManifestInput::new(format!("placement[{index}]"), path));
-        }
-        if let Some(path) = spec.variant_path() {
-            inputs.push(ManifestInput::new(format!("variant[{index}]"), path));
-        }
-        if let Some(path) = spec.models_dir_path().filter(|_| args.models_dir.is_none()) {
-            inputs.push(ManifestInput::new(format!("models_dir[{index}]"), path));
-        }
-        if let Some(path) = spec.firmware_path() {
-            inputs.push(ManifestInput::new(
-                format!("firmware_source[{index}]"),
-                &path,
-            ));
-            if let Some(resolved) = hauksbee_engine::firmware_input::resolve_firmware_cli(&path)? {
-                if resolved.path != path {
-                    inputs.push(ManifestInput::new(
-                        format!("firmware_resolved[{index}]"),
-                        resolved.path,
-                    ));
-                }
-            }
-        }
-        if let Some(path) = spec.asbuilt_path() {
-            inputs.push(ManifestInput::new(format!("asbuilt[{index}]"), path));
-        }
-        if let Some(path) = spec.mcu_descriptor_dir() {
-            inputs.push(ManifestInput::new(
-                format!("mcu_descriptor_dir[{index}]"),
-                path,
-            ));
-        }
-        for (sensor_index, sensor) in spec.sensors.iter().enumerate() {
-            if let Some(path) = &sensor.spec_file {
-                let path = std::path::Path::new(path);
-                let path = if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    spec.base_dir.join(path)
-                };
-                inputs.push(ManifestInput::new(
-                    format!("sensor_spec[{index}][{sensor_index}]"),
-                    path,
-                ));
-            }
-        }
-        for (assert_index, assertion) in spec.asserts.iter().enumerate() {
-            if assertion.kind != "hwtrace" {
-                continue;
-            }
-            let trace_path = hauksbee_ci::hwtrace::trace_path(&spec, assertion)?;
-            let trace = hauksbee_ci::hwtrace::Trace::load(&trace_path)?;
-            inputs.push(ManifestInput::new(
-                format!("hardware_trace[{index}][{assert_index}]"),
-                &trace_path,
-            ));
-            for (channel_index, channel) in trace.channels.iter().enumerate() {
-                let path = std::path::Path::new(&channel.file);
-                let path = if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    trace.base_dir.join(path)
-                };
-                inputs.push(ManifestInput::new(
-                    format!("hardware_trace_data[{index}][{assert_index}][{channel_index}]"),
-                    path,
-                ));
-            }
-        }
+        spec_inputs(&mut inputs, index, spec_path, args.models_dir.is_none())?;
     }
     if let Some(path) = &args.models_dir {
         inputs.push(ManifestInput::new("models_dir", path));
@@ -737,16 +662,15 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
             },
         ),
     ]);
-    let mut features = Vec::new();
-    if cfg!(feature = "avr") {
-        features.push("avr".to_string());
-    }
-    if cfg!(feature = "qemu") {
-        features.push("qemu".to_string());
-    }
-    if cfg!(feature = "renode") {
-        features.push("renode".to_string());
-    }
+    let features = [
+        ("avr", cfg!(feature = "avr")),
+        ("qemu", cfg!(feature = "qemu")),
+        ("renode", cfg!(feature = "renode")),
+    ]
+    .into_iter()
+    .filter(|&(_, on)| on)
+    .map(|(name, _)| name.to_string())
+    .collect();
     let replay_paths = args
         .specs
         .iter()
@@ -768,4 +692,87 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         inputs,
         feature_flags: features,
     })
+}
+
+/// The manifest inputs one spec (the `index`th) reads: the spec, its board and
+/// sidecars, every optional file it names, and its sensor and trace data.
+/// `spec_models_dir` is false when `--models-dir` replaces the spec's own.
+fn spec_inputs(
+    inputs: &mut Vec<hauksbee_engine::run_manifest::ManifestInput>,
+    index: usize,
+    spec_path: &std::path::Path,
+    spec_models_dir: bool,
+) -> anyhow::Result<()> {
+    use hauksbee_engine::run_manifest::{board_sidecar_inputs, ManifestInput};
+
+    let spec = hauksbee_ci::Spec::load(spec_path)?;
+    inputs.push(ManifestInput::new(format!("spec[{index}]"), spec_path));
+    let board_path = spec.board_path();
+    inputs.push(ManifestInput::new(format!("board[{index}]"), &board_path));
+    inputs.extend(board_sidecar_inputs(
+        &board_path,
+        &format!("board[{index}]"),
+    ));
+    if let Some(path) = spec.bom_path() {
+        inputs.push(ManifestInput::new(format!("bom[{index}]"), path));
+    }
+    if let Some(path) = spec.placement_path() {
+        inputs.push(ManifestInput::new(format!("placement[{index}]"), path));
+    }
+    if let Some(path) = spec.variant_path() {
+        inputs.push(ManifestInput::new(format!("variant[{index}]"), path));
+    }
+    if let Some(path) = spec.models_dir_path().filter(|_| spec_models_dir) {
+        inputs.push(ManifestInput::new(format!("models_dir[{index}]"), path));
+    }
+    if let Some(path) = spec.firmware_path() {
+        inputs.push(ManifestInput::new(
+            format!("firmware_source[{index}]"),
+            &path,
+        ));
+        if let Some(resolved) = hauksbee_engine::firmware_input::resolve_firmware_cli(&path)? {
+            if resolved.path != path {
+                inputs.push(ManifestInput::new(
+                    format!("firmware_resolved[{index}]"),
+                    resolved.path,
+                ));
+            }
+        }
+    }
+    if let Some(path) = spec.asbuilt_path() {
+        inputs.push(ManifestInput::new(format!("asbuilt[{index}]"), path));
+    }
+    if let Some(path) = spec.mcu_descriptor_dir() {
+        inputs.push(ManifestInput::new(
+            format!("mcu_descriptor_dir[{index}]"),
+            path,
+        ));
+    }
+    for (sensor_index, sensor) in spec.sensors.iter().enumerate() {
+        if let Some(path) = &sensor.spec_file {
+            // `join` keeps an absolute path as it is.
+            inputs.push(ManifestInput::new(
+                format!("sensor_spec[{index}][{sensor_index}]"),
+                spec.base_dir.join(path),
+            ));
+        }
+    }
+    for (assert_index, assertion) in spec.asserts.iter().enumerate() {
+        if assertion.kind != "hwtrace" {
+            continue;
+        }
+        let trace_path = hauksbee_ci::hwtrace::trace_path(&spec, assertion)?;
+        let trace = hauksbee_ci::hwtrace::Trace::load(&trace_path)?;
+        inputs.push(ManifestInput::new(
+            format!("hardware_trace[{index}][{assert_index}]"),
+            &trace_path,
+        ));
+        for (channel_index, channel) in trace.channels.iter().enumerate() {
+            inputs.push(ManifestInput::new(
+                format!("hardware_trace_data[{index}][{assert_index}][{channel_index}]"),
+                trace.base_dir.join(&channel.file),
+            ));
+        }
+    }
+    Ok(())
 }

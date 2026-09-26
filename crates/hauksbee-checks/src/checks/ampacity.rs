@@ -26,14 +26,14 @@
 //! Everything else (signal nets, parts with no current rating, poured rails) is
 //! left un-attributed, and [`audit_trace_currents`] then skips it. The result is
 //! a check that fires on a genuinely under-width *routed* trace carrying a cited
-//! current, and stays silent on the known-good corpus, exactly as the LumenPnP
+//! current, and stays silent on the known-good corpus, exactly as the `LumenPnP`
 //! sweep (`trace_current_corpus.rs`) pins.
 
 use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet, VecDeque};
 
 use hauksbee_extract::{
     audit_trace_currents, net_copper_from_text, ExtractedBoard, SiCheck, SiFinding, SiReport,
-    SiSeverity, TraceAudit,
+    SiSeverity, TraceAudit, TraceCurrentFinding,
 };
 use hauksbee_models::ModelLibrary;
 
@@ -77,10 +77,10 @@ impl Attribution {
             .collect::<Vec<_>>()
             .join("; plus ");
         if self.into_components_a > 0.0 && self.out_of_components_a > 0.0 {
-            citation.push_str(&format!(
-                "; net-flow balance uses max({:.3} A load side, {:.3} A source side), not their double-counted sum",
+            citation = format!(
+                "{citation}; net-flow balance uses max({:.3} A load side, {:.3} A source side), not their double-counted sum",
                 self.into_components_a, self.out_of_components_a
-            ));
+            );
         }
         (current_a, citation)
     }
@@ -180,7 +180,7 @@ fn component_hint(component: &hauksbee_extract::Component) -> String {
 }
 
 /// Conventional single-part designator grammar: one class letter followed by
-/// a digit (or KiCad's unannotated `?`). This keeps R10/C10 useful without
+/// a digit (or `KiCad`'s unannotated `?`). This keeps R10/C10 useful without
 /// misclassifying RLY1, RF1, CON1, or CR1 merely because they share a prefix.
 fn conventional_designator(reference: &str, class: char) -> bool {
     let mut chars = reference.trim().chars();
@@ -265,7 +265,7 @@ fn classify_series(comp: &hauksbee_extract::Component) -> Series {
         // A value with a farad/henry unit in this position is not a resistor, and
         // a capacitor to ground on a PROG pin is a filter, not the programming
         // element.
-        Some(p) if matches!(p.unit.as_deref(), Some("F") | Some("H")) => Series::Unknown,
+        Some(p) if matches!(p.unit.as_deref(), Some("F" | "H")) => Series::Unknown,
         Some(p) if p.si == 0.0 => Series::Closed,
         Some(p) if p.si > 0.0 => Series::Ohms(p.si),
         _ => Series::Unknown,
@@ -325,30 +325,35 @@ fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f64>
     Some(solution)
 }
 
-/// The populated DC-equivalent resistance from `start` to ground, plus the
-/// conductive components that support the solved network.
+/// Union-find root of `index`, compressing the path as it goes.
+fn root(parents: &mut [usize], index: usize) -> usize {
+    if parents[index] != index {
+        parents[index] = root(parents, parents[index]);
+    }
+    parents[index]
+}
+
+/// Union-find merge of the sets holding `left` and `right`.
+fn unite(parents: &mut [usize], left: usize, right: usize) {
+    let left = root(parents, left);
+    let right = root(parents, right);
+    if left != right {
+        parents[right] = left;
+    }
+}
+
+/// The resistive/closed edges of the programming network around `start`.
 ///
-/// This is a bounded nodal-conductance solve, not a shortest-path heuristic:
-/// simultaneously populated parallel/bridge branches all affect the result.
-/// Known-open capacitors/jumpers are excluded. Any unreadable two-terminal part
-/// touching the reachable network makes the result undetermined rather than
-/// being silently assumed open or resistive. Positive-resistance branches with
-/// zero solved test current are omitted from the citation. Closed ideal links
-/// are retained because current division through a zero-ohm subnetwork is not
-/// uniquely recoverable from this equivalent-resistance solve.
-fn program_resistance_to_ground(
+/// The walk goes at most `max_hops` nets deep. `None` when it meets an
+/// unreadable part, exceeds its size bounds, or never reaches ground.
+fn program_network_edges(
     board: &ExtractedBoard,
     start: i64,
     max_hops: usize,
     excluded_component: Option<usize>,
-) -> Option<(f64, Vec<String>)> {
+) -> Option<Vec<ResistanceEdge>> {
     const MAX_PROGRAM_NODES: usize = 32;
     const MAX_PROGRAM_EDGES: usize = 64;
-
-    let start_net = board.net(start)?;
-    if super::converter::is_ground_net(&start_net.name) {
-        return None;
-    }
 
     let mut queue = VecDeque::from([(start, 0usize)]);
     let mut depth_by_net = HashMap::from([(start, 0usize)]);
@@ -367,23 +372,14 @@ fn program_resistance_to_ground(
             {
                 continue;
             }
-            let terminals = match electrical_terminal_net_options(component) {
-                Ok(Some(terminals)) => terminals,
-                Ok(None) => {
-                    // A multi-/single-terminal device on the programming net
-                    // can change its DC equivalent (a trim pot is the common
-                    // case). Ignore only the programmed IC itself, passed above.
-                    if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
-                        return None;
-                    }
-                    continue;
+            let Ok(Some(terminals)) = electrical_terminal_net_options(component) else {
+                // A multi-/single-terminal (or contradictory) device on the
+                // programming net can change its DC equivalent (a trim pot is the
+                // common case). Ignore only the programmed IC itself, passed above.
+                if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
+                    return None;
                 }
-                Err(()) => {
-                    if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
-                        return None;
-                    }
-                    continue;
-                }
+                continue;
             };
             let far = match terminals {
                 (Some(first), Some(second)) if first == net_id && second != net_id => second,
@@ -428,9 +424,32 @@ fn program_resistance_to_ground(
             }
         }
     }
-    if !reached_ground {
+    reached_ground.then_some(edges)
+}
+
+/// The populated DC-equivalent resistance from `start` to ground, plus the
+/// conductive components that support the solved network.
+///
+/// This is a bounded nodal-conductance solve, not a shortest-path heuristic:
+/// simultaneously populated parallel/bridge branches all affect the result.
+/// Known-open capacitors/jumpers are excluded. Any unreadable two-terminal part
+/// touching the reachable network makes the result undetermined rather than
+/// being silently assumed open or resistive. Positive-resistance branches with
+/// zero solved test current are omitted from the citation. Closed ideal links
+/// are retained because current division through a zero-ohm subnetwork is not
+/// uniquely recoverable from this equivalent-resistance solve.
+fn program_resistance_to_ground(
+    board: &ExtractedBoard,
+    start: i64,
+    max_hops: usize,
+    excluded_component: Option<usize>,
+) -> Option<(f64, Vec<String>)> {
+    let start_net = board.net(start)?;
+    if super::converter::is_ground_net(&start_net.name) {
         return None;
     }
+
+    let edges = program_network_edges(board, start, max_hops, excluded_component)?;
 
     let mut node_ids: Vec<i64> = edges
         .iter()
@@ -446,19 +465,6 @@ fn program_resistance_to_ground(
         .collect();
 
     let mut parents: Vec<usize> = (0..node_ids.len()).collect();
-    fn root(parents: &mut [usize], index: usize) -> usize {
-        if parents[index] != index {
-            parents[index] = root(parents, parents[index]);
-        }
-        parents[index]
-    }
-    fn unite(parents: &mut [usize], left: usize, right: usize) {
-        let left = root(parents, left);
-        let right = root(parents, right);
-        if left != right {
-            parents[right] = left;
-        }
-    }
     for edge in &edges {
         if edge.closed {
             unite(
@@ -470,28 +476,24 @@ fn program_resistance_to_ground(
     }
 
     let start_root = root(&mut parents, node_index[&start]);
-    let mut ground_roots = HashSet::new();
-    for net_id in &node_ids {
-        if board
-            .net(*net_id)
-            .is_some_and(|net| super::converter::is_ground_net(&net.name))
-        {
-            let index = node_index[net_id];
-            ground_roots.insert(root(&mut parents, index));
-        }
-    }
+    let ground_roots: HashSet<usize> = node_ids
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| {
+            board
+                .net(**id)
+                .is_some_and(|net| super::converter::is_ground_net(&net.name))
+        })
+        .map(|(index, _)| root(&mut parents, index))
+        .collect();
     if ground_roots.contains(&start_root) {
         return None;
     }
 
-    let mut variable_roots = BTreeSet::new();
-    for index in 0..node_ids.len() {
-        let component_root = root(&mut parents, index);
-        if !ground_roots.contains(&component_root) {
-            variable_roots.insert(component_root);
-        }
-    }
-    let variable_roots: Vec<usize> = variable_roots.into_iter().collect();
+    let variable_roots: BTreeSet<usize> = (0..node_ids.len())
+        .map(|index| root(&mut parents, index))
+        .filter(|component_root| !ground_roots.contains(component_root))
+        .collect();
     let variable_index: HashMap<usize, usize> = variable_roots
         .iter()
         .enumerate()
@@ -585,14 +587,11 @@ fn adjacent_sense_resistor(
         {
             continue;
         }
-        let terminals = match electrical_terminal_nets(component) {
-            Some(terminals) => terminals,
-            None => {
-                if component.pins.iter().any(|pin| pin.net == Some(sense_net)) {
-                    return None;
-                }
-                continue;
+        let Some(terminals) = electrical_terminal_nets(component) else {
+            if component.pins.iter().any(|pin| pin.net == Some(sense_net)) {
+                return None;
             }
+            continue;
         };
         let far_net = if terminals.0 == sense_net {
             terminals.1
@@ -602,7 +601,7 @@ fn adjacent_sense_resistor(
             continue;
         };
         match classify_series(component) {
-            Series::Open => continue,
+            Series::Open => {}
             Series::Ohms(ohms)
                 if ohms.is_finite() && ohms > 0.0 && expected_far.matches(board, far_net) =>
             {
@@ -617,23 +616,45 @@ fn adjacent_sense_resistor(
     candidate
 }
 
+/// Read the sense shunts a sense-scaled current program declares, one per
+/// `(sense role, far-side role)` pair. `None` when any shunt cannot be read or
+/// the shunts disagree; otherwise their shared value and the shunts themselves.
+fn read_sense_shunts(
+    board: &ExtractedBoard,
+    part: FittedComponent<'_>,
+    model: &hauksbee_models::ModelEntry,
+    sense_roles: &[String],
+    sense_far_roles: &[String],
+    excluded_component: usize,
+) -> Option<(f64, Vec<(f64, String)>)> {
+    let sense_shunts = sense_roles
+        .iter()
+        .zip(sense_far_roles)
+        .map(|(sense_role, far_role)| {
+            let sense_net = pin_net_for_role(part, model, sense_role)?;
+            let expected_far = if far_role.eq_ignore_ascii_case("ground") {
+                ExpectedSenseFar::Ground
+            } else {
+                ExpectedSenseFar::Net(pin_net_for_role(part, model, far_role)?)
+            };
+            adjacent_sense_resistor(board, sense_net, &expected_far, excluded_component)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let sense_ohms = sense_shunts.first()?.0;
+    let disagree = sense_shunts
+        .iter()
+        .any(|(ohms, _)| (*ohms - sense_ohms).abs() > sense_ohms.abs().max(ohms.abs()) * 1e-6);
+    (!disagree).then_some((sense_ohms, sense_shunts))
+}
+
 /// Attribute cited currents to nets from the bound DB models. Returns a map of
 /// `net name -> (current, citation)` in the shape [`audit_trace_currents`] wants.
+// One pass per part; the regulated-current read and its citation share much local state.
+#[allow(clippy::too_many_lines)]
 fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attributions {
     let mut out: HashMap<String, Attribution> = HashMap::new();
     let mut undetermined: Vec<Undetermined> = Vec::new();
     let mut skipped_identity: Vec<(String, String)> = Vec::new();
-
-    let mut consider = |net_id: Option<i64>, current_a: f64, citation: String, flow: RailFlow| {
-        let Some(id) = net_id else { return };
-        if current_a <= 0.0 {
-            return;
-        }
-        let Some(net) = board.net(id) else { return };
-        out.entry(net.name.clone())
-            .or_default()
-            .add(current_a, citation, flow);
-    };
 
     for (component_index, comp) in board.components.iter().enumerate() {
         // The three-state contract, asked once: a DNP part is absent (its
@@ -653,133 +674,117 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
             continue;
         };
 
-        let is_generic = model.id.starts_with("generic");
-
         // A regulated operating current selected by the board's programming resistor. The
         // equation and its normal-operating limit live together; an absolute
         // rating is never substituted for either one. The block itself is enough
         // evidence that this part can carry a programmed rail current only when
         // the model explicitly distinguishes regulation from protection.
-        if let Some(program) = &model.current_program {
-            if !is_generic {
-                if program.semantics
-                    == hauksbee_models::schema::CurrentProgramSemantics::ProtectionLimit
-                {
-                    // An OCP/current-limit setting is a protection threshold,
-                    // not evidence that the protected rail continuously draws
-                    // that current. `current_program` currently records and
-                    // validates that meaning; model-specific behavioural blocks
-                    // implement any dynamic protection simulation separately.
+        let Some(program) = model
+            .current_program
+            .as_ref()
+            .filter(|_| !model.id.starts_with("generic"))
+        else {
+            continue;
+        };
+        if program.semantics == hauksbee_models::schema::CurrentProgramSemantics::ProtectionLimit {
+            // An OCP/current-limit setting is a protection threshold,
+            // not evidence that the protected rail continuously draws
+            // that current. `current_program` currently records and
+            // validates that meaning; model-specific behavioural blocks
+            // implement any dynamic protection simulation separately.
+            continue;
+        }
+        let role = program.pin.clone();
+        let programmed = pin_net_for_role(part, model, &program.pin).and_then(|net| {
+            let (ohms, path) = program_resistance_to_ground(board, net, 4, Some(component_index))?;
+            let sense = match &program.equation {
+                hauksbee_models::schema::CurrentProgramEquation::SenseScaledResistance {
+                    sense_roles,
+                    sense_far_roles,
+                    ..
+                } => Some(read_sense_shunts(
+                    board,
+                    part,
+                    model,
+                    sense_roles,
+                    sense_far_roles,
+                    component_index,
+                )?),
+                _ => None,
+            };
+            let (equation_current_a, operating_current_a) = match &sense {
+                Some((sense_ohms, _)) => (
+                    program.equation_current_with_sense_a(ohms, *sense_ohms)?,
+                    program.operating_current_with_sense_a(ohms, *sense_ohms)?,
+                ),
+                None => (
+                    program.equation_current_a(ohms)?,
+                    program.operating_current_a(ohms)?,
+                ),
+            };
+            Some((
+                equation_current_a,
+                operating_current_a,
+                ohms,
+                path,
+                programmed_power_rails(board, part, model, program)?,
+                sense,
+            ))
+        });
+        match programmed {
+            Some((equation_current_a, current_a, ohms, path, nets, sense)) => {
+                let limit_note = if equation_current_a > current_a {
+                    format!(
+                        "; equation requests {equation_current_a:.3} A, bounded by the \
+                         {current_a:.3} A normal-operating limit"
+                    )
+                } else {
+                    String::new()
+                };
+                let sense_note = sense
+                    .map(|(sense_ohms, shunts)| {
+                        let references = shunts
+                            .into_iter()
+                            .map(|(_, reference)| reference)
+                            .collect::<Vec<_>>()
+                            .join("+");
+                        format!(
+                            "; equal sense shunt(s) {references} ({sense_ohms:.6} ohm) connect the model's declared sense paths"
+                        )
+                    })
+                    .unwrap_or_default();
+                let citation = format!(
+                    "{} ({}) regulated current {:.3} A programmed by {} on {} \
+                     ({:.0} ohm){}{} [datasheet equation]",
+                    comp.reference,
+                    model.id,
+                    current_a,
+                    path.join("+"),
+                    role,
+                    ohms,
+                    sense_note,
+                    limit_note,
+                );
+                if current_a <= 0.0 {
                     continue;
                 }
-                let role = program.pin.clone();
-                let programmed = pin_net_for_role(part, model, &program.pin).and_then(|net| {
-                    let (ohms, path) =
-                        program_resistance_to_ground(board, net, 4, Some(component_index))?;
-                    let sense = match &program.equation {
-                        hauksbee_models::schema::CurrentProgramEquation::SenseScaledResistance {
-                            sense_roles,
-                            sense_far_roles,
-                            ..
-                        } => {
-                            let mut sense_shunts = Vec::new();
-                            for (sense_role, far_role) in
-                                sense_roles.iter().zip(sense_far_roles)
-                            {
-                                let sense_net = pin_net_for_role(part, model, sense_role)?;
-                                let expected_far = if far_role.eq_ignore_ascii_case("ground") {
-                                    ExpectedSenseFar::Ground
-                                } else {
-                                    ExpectedSenseFar::Net(pin_net_for_role(
-                                        part, model, far_role,
-                                    )?)
-                                };
-                                let (sense_ohms, reference) = adjacent_sense_resistor(
-                                    board,
-                                    sense_net,
-                                    &expected_far,
-                                    component_index,
-                                )?;
-                                sense_shunts.push((sense_ohms, reference));
-                            }
-                            let sense_ohms = sense_shunts.first()?.0;
-                            if sense_shunts.iter().any(|(ohms, _)| {
-                                (*ohms - sense_ohms).abs()
-                                    > sense_ohms.abs().max(ohms.abs()) * 1e-6
-                            }) {
-                                return None;
-                            }
-                            Some((sense_ohms, sense_shunts))
-                        }
-                        _ => None,
-                    };
-                    let (equation_current_a, operating_current_a) = match &sense {
-                        Some((sense_ohms, _)) => (
-                            program.equation_current_with_sense_a(ohms, *sense_ohms)?,
-                            program.operating_current_with_sense_a(ohms, *sense_ohms)?,
-                        ),
-                        None => (
-                            program.equation_current_a(ohms)?,
-                            program.operating_current_a(ohms)?,
-                        ),
-                    };
-                    Some((
-                        equation_current_a,
-                        operating_current_a,
-                        ohms,
-                        path,
-                        programmed_power_rails(board, part, model, program)?,
-                        sense,
-                    ))
-                });
-                match programmed {
-                    Some((equation_current_a, current_a, ohms, path, nets, sense)) => {
-                        let limit_note = if equation_current_a > current_a {
-                            format!(
-                                "; equation requests {equation_current_a:.3} A, bounded by the \
-                                 {current_a:.3} A normal-operating limit"
-                            )
-                        } else {
-                            String::new()
-                        };
-                        let sense_note = sense
-                            .map(|(sense_ohms, shunts)| {
-                                let references = shunts
-                                    .into_iter()
-                                    .map(|(_, reference)| reference)
-                                    .collect::<Vec<_>>()
-                                    .join("+");
-                                format!(
-                                    "; equal sense shunt(s) {references} ({sense_ohms:.6} ohm) connect the model's declared sense paths"
-                                )
-                            })
-                            .unwrap_or_default();
-                        let citation = format!(
-                            "{} ({}) regulated current {:.3} A programmed by {} on {} \
-                             ({:.0} ohm){}{} [datasheet equation]",
-                            comp.reference,
-                            model.id,
+                for (net_id, flow) in nets {
+                    if let Some(net) = board.net(net_id) {
+                        out.entry(net.name.clone()).or_default().add(
                             current_a,
-                            path.join("+"),
-                            role,
-                            ohms,
-                            sense_note,
-                            limit_note,
+                            citation.clone(),
+                            flow,
                         );
-                        for (net_id, flow) in nets {
-                            consider(Some(net_id), current_a, citation.clone(), flow);
-                        }
                     }
-                    None => undetermined.push(Undetermined {
-                        reference: comp.reference.clone(),
-                        model_id: model.id.clone(),
-                        role,
-                        ceiling_a: program.max_operating_current_a,
-                        reason: "the programming or required sense-resistor path could not be read",
-                    }),
                 }
             }
-            continue;
+            None => undetermined.push(Undetermined {
+                reference: comp.reference.clone(),
+                model_id: model.id.clone(),
+                role,
+                ceiling_a: program.max_operating_current_a,
+                reason: "the programming or required sense-resistor path could not be read",
+            }),
         }
     }
 
@@ -873,9 +878,69 @@ fn power_nets_of(
         .collect()
 }
 
+/// The severity and message of one trace-ampacity finding: a verdict when the board
+/// declared the copper weight behind the shortfall, a conditional note otherwise.
+fn ampacity_message(f: &TraceCurrentFinding, dt_c: f64) -> (SiSeverity, String) {
+    let Some(d) = f.declared_shortfall.as_ref() else {
+        return (
+            SiSeverity::Info,
+            format!(
+                "net '{}' carries a cited {:.2} A, and its lowest-rated routed trace is \
+                 {:.2} mm, which IPC-2221 rates at only {:.2} A ({}, {:.0} C rise); that \
+                 would need >= {:.2} mm. This is NOT a verdict: the copper weight was \
+                 assumed, and the real board may be heavier copper that carries it. \
+                 Declare the stackup (or upload a fab drawing) to turn this into a \
+                 decision. Attributed from: {}",
+                f.net,
+                f.cited_current_a,
+                f.bottleneck_width_mm,
+                f.ampacity_a,
+                f.describe_copper(),
+                dt_c,
+                f.required_width_mm,
+                f.citation,
+            ),
+        );
+    };
+    // Name the declared segment the conclusion rests on whenever it is not the
+    // same one the reported bottleneck came from, so the evidence and the
+    // width-to-fix are both visible.
+    let evidence = if d.layer == f.layer {
+        String::new()
+    } else {
+        format!(
+            " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
+             only {:.2} A, which is what makes this a verdict rather than an \
+             artefact of an assumed copper weight.",
+            d.layer.as_deref().unwrap_or("(unnamed layer)"),
+            d.width_mm,
+            d.ampacity_a,
+        )
+    };
+    (
+        SiSeverity::High,
+        format!(
+            "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
+             {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
+             needs >= {:.2} mm.{} Attributed from: {}",
+            f.net,
+            f.cited_current_a,
+            f.bottleneck_width_mm,
+            f.ampacity_a,
+            f.describe_copper(),
+            dt_c,
+            f.required_width_mm,
+            evidence,
+            f.citation,
+        ),
+    )
+}
+
 /// Run the trace-ampacity check and append its findings (and an info note) to an
-/// SI report. `pcb_text` is the raw `.kicad_pcb` text (the copper geometry source);
-/// when it is absent or not a KiCad layout, the check is inert.
+/// SI report.
+///
+/// `pcb_text` is the raw `.kicad_pcb` text (the copper geometry source);
+/// when it is absent or not a `KiCad` layout, the check is inert.
 pub fn append_ampacity(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -914,64 +979,11 @@ pub fn append_ampacity(
         // A verdict needs a segment whose copper weight the BOARD declared to fail
         // on its own. The reported bottleneck may be an assumed-weight layer that
         // rates lower; that is still worth reporting, but it is not a conviction.
-        let verdict = f.declared_shortfall.as_ref();
-        let assumed = verdict.is_none();
+        let (severity, message) = ampacity_message(f, audit.dt_c);
         report.findings.push(SiFinding {
             check: SiCheck::TraceAmpacity,
-            severity: if assumed {
-                SiSeverity::Info
-            } else {
-                SiSeverity::High
-            },
-            message: if assumed {
-                format!(
-                    "net '{}' carries a cited {:.2} A, and its lowest-rated routed trace is \
-                     {:.2} mm, which IPC-2221 rates at only {:.2} A ({}, {:.0} C rise); that \
-                     would need >= {:.2} mm. This is NOT a verdict: the copper weight was \
-                     assumed, and the real board may be heavier copper that carries it. \
-                     Declare the stackup (or upload a fab drawing) to turn this into a \
-                     decision. Attributed from: {}",
-                    f.net,
-                    f.cited_current_a,
-                    f.bottleneck_width_mm,
-                    f.ampacity_a,
-                    f.describe_copper(),
-                    audit.dt_c,
-                    f.required_width_mm,
-                    f.citation,
-                )
-            } else {
-                // Name the declared segment the conclusion rests on whenever it is
-                // not the same one the reported bottleneck came from, so the
-                // evidence and the width-to-fix are both visible.
-                let d = verdict.expect("a verdict has a declared shortfall");
-                let evidence = if d.layer == f.layer {
-                    String::new()
-                } else {
-                    format!(
-                        " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
-                         only {:.2} A, which is what makes this a verdict rather than an \
-                         artefact of an assumed copper weight.",
-                        d.layer.as_deref().unwrap_or("(unnamed layer)"),
-                        d.width_mm,
-                        d.ampacity_a,
-                    )
-                };
-                format!(
-                    "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
-                     {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
-                     needs >= {:.2} mm.{} Attributed from: {}",
-                    f.net,
-                    f.cited_current_a,
-                    f.bottleneck_width_mm,
-                    f.ampacity_a,
-                    f.describe_copper(),
-                    audit.dt_c,
-                    f.required_width_mm,
-                    evidence,
-                    f.citation,
-                )
-            },
+            severity,
+            message,
             refs: vec![],
             nets: vec![f.net.clone()],
         });

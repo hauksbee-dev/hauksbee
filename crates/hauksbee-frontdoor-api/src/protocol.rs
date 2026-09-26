@@ -1,5 +1,6 @@
-//! The wire protocol between a simulation engine and a web frontend: tagged
-//! JSON messages in both directions, evolved from the Tarski emulator's protocol
+//! The wire protocol between a simulation engine and a web frontend.
+//!
+//! It carries tagged JSON messages in both directions, evolved from the Tarski emulator's protocol
 //! with generalized board and solver controls. [`ServerMessage`] is the
 //! engine→client stream (board info, sim frames, probe data, status, errors); the
 //! client→engine [`ClientMessage`] carries the play / pause / step and control
@@ -67,12 +68,12 @@ pub struct SessionBacklog {
 pub struct BoardInfo {
     pub name: String,
     /// Relative URL the frontend fetches the original board file from for
-    /// rendering (it has its own KiCad parser).
+    /// rendering (it has its own `KiCad` parser).
     pub board_url: String,
     pub num_components: usize,
     pub num_nets: usize,
     pub nets: Vec<String>,
-    /// reference -> resolved model kind ("bjt_npn", "mcu", ...). Drives
+    /// reference -> resolved model kind (`"bjt_npn"`, "mcu", ...). Drives
     /// component-state coloring.
     pub component_kinds: HashMap<String, String>,
     /// MCUs available for interaction (reference, backend name).
@@ -83,8 +84,8 @@ pub struct BoardInfo {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub power_supplies: HashMap<String, PowerSupplyConfig>,
     /// Attached peripherals the UI can wire controls to (id, kind). E.g.
-    /// ("BTN1","pushbutton"), ("POT1","potentiometer"), ("U2","i2c_bus"),
-    /// ("VCD","vcd_sink"). Additive; older clients ignore it.
+    /// `("BTN1", "pushbutton")`, `("POT1", "potentiometer")`, `("U2", "i2c_bus")`,
+    /// `("VCD", "vcd_sink")`. Additive; older clients ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peripherals: Vec<PeripheralInfo>,
     /// Explicit engine-owned scalar inputs. Never inferred from a net name:
@@ -121,7 +122,7 @@ pub struct ShortsDisclosure {
 pub struct PeripheralInfo {
     /// Stable id used in `SetPeripheral { id, .. }`.
     pub id: String,
-    /// Kind string ("pushbutton", "potentiometer", "i2c_bus", ...).
+    /// Kind string ("pushbutton", "potentiometer", `"i2c_bus"`, ...).
     pub kind: String,
 }
 
@@ -190,7 +191,7 @@ pub struct SimFrame {
     /// omitted when empty, so older clients ignore it.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub net_v_extremes: HashMap<String, (f64, f64)>,
-    /// reference -> small state map ("dissipation_mw", "conducting", ...).
+    /// reference -> small state map (`"dissipation_mw"`, "conducting", ...).
     pub component_states: HashMap<String, HashMap<String, f64>>,
     /// UART bytes since last frame, per MCU reference.
     pub uart: HashMap<String, Vec<u8>>,
@@ -201,7 +202,7 @@ pub struct SimFrame {
     /// ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub faults: Vec<FaultInfo>,
-    /// Live supply readout per supply net (Feature 1): rail current and SoC.
+    /// Live supply readout per supply net (Feature 1): rail current and `SoC`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub supply_states: HashMap<String, SupplyState>,
 }
@@ -211,8 +212,8 @@ pub struct SimFrame {
 pub struct FaultInfo {
     /// Component reference designator (e.g. "D1").
     pub component: String,
-    /// Fault kind: "overcurrent" | "surge_current" | "overpower" |
-    /// "overvoltage" | "reverse_bias" | "pin_overcurrent".
+    /// Fault kind: "overcurrent" | `"surge_current"` | "overpower" |
+    /// `"overvoltage"` | `"reverse_bias"` | `"pin_overcurrent"`.
     pub kind: String,
     /// The offending live value (A, V, or W depending on kind).
     pub value: f64,
@@ -254,7 +255,7 @@ pub enum PowerSupplyConfig {
     },
     /// USB source: 5 V with droop and a hard foldback at the spec limit.
     Usb { spec: UsbSpecConfig },
-    /// Battery pack: cells in series, draining a capacity from an initial SoC.
+    /// Battery pack: cells in series, draining a capacity from an initial `SoC`.
     Battery {
         chemistry: ChemistryConfig,
         cells: u32,
@@ -302,6 +303,7 @@ pub struct Status {
 /// hauksbee-solve's options; kept stringly-light here so the server does not
 /// depend on solver internals.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools, reason = "wire-format UI toggles")]
 pub struct SolverControls {
     pub temperature_c: f64,
     pub parasitics: bool,
@@ -324,7 +326,7 @@ pub struct SolverControls {
 
 impl Default for SolverControls {
     fn default() -> Self {
-        SolverControls {
+        Self {
             temperature_c: 27.0,
             parasitics: false,
             junction_caps: true,

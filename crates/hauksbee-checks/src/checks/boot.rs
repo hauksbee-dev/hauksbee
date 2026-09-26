@@ -1,5 +1,6 @@
-//! Boot-safety advisory: the business logic behind the co-sim's power-up
-//! findings, kept in the library so the CLI, the TUI and the web front door all
+//! Boot-safety advisory: the business logic behind the co-sim's power-up findings.
+//!
+//! It is kept in the library so the CLI, the TUI and the web front door all
 //! derive the same advisory from the same call rather than each re-deriving it.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
@@ -43,6 +44,7 @@ pub struct BootAdvisory {
 /// strong HIGH from a weak pull-up); `driven` is the union of output-configured
 /// and written nets. `firmware_ran` is `true` only when firmware was supplied and
 /// actually exercised the board; the gate-state panel is suppressed otherwise.
+#[must_use]
 pub fn analyze(
     board: &ExtractedBoard,
     firmware_held_high: &[String],
@@ -70,7 +72,7 @@ pub fn analyze(
         // the warning-level Floating row with a factual, non-warning bias note
         // naming the resistor. A gate with NO bias network stays Floating and
         // fires exactly as before.
-        for (_, net, state) in rows.iter_mut() {
+        for (_, net, state) in &mut rows {
             if *state == BootGateState::Floating {
                 if let Some(bias) = gate_bias(board, net) {
                     *state = BootGateState::HeldByBias(bias);
@@ -88,8 +90,9 @@ pub fn analyze(
     }
 }
 
-/// True when a net has no *bias* resistor, no resistor tying it toward a power
-/// rail or ground, so nothing on the board fixes its power-up level (it is set
+/// True when a net has no *bias* resistor tying it toward a power rail or ground.
+///
+/// Then nothing on the board fixes its power-up level (it is set
 /// entirely by firmware). Used to sharpen the boot-control-net heads-up to nets
 /// with no hardware fail-safe. A resistor whose other terminal is NOT a rail or
 /// ground is a series element (e.g. GPIO -> R -> MOSFET gate), which sets no
@@ -100,6 +103,7 @@ pub fn analyze(
 /// plain R refs only. An RV varistor / RT thermistor / RN network is `R…`-prefixed
 /// but sets no DC level (a varistor is high-impedance below its clamp), so crediting
 /// one as a bias would silently suppress a real boot hazard.
+#[must_use]
 pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
@@ -122,8 +126,9 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
     true
 }
 
-/// The bias resistor that fixes a gate net's power-up level, if one exists: a
-/// resistor tying the net to a rail/ground, directly (1 hop) or through one
+/// The bias resistor that fixes a gate net's power-up level, if one exists.
+///
+/// That is a resistor tying the net to a rail/ground, directly (1 hop) or through one
 /// series resistor (2 hops, a plain pull chain or divider). Returns the resistor
 /// *on the gate net* (its reference + value) and the rail it reaches, so the
 /// boot panel can report "held low by R1 (100k to GND)" instead of "floating".
@@ -139,6 +144,7 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
 /// "Resistor" is the same strict predicate the hazard filter uses
 /// (`super::straps::is_assembled_resistor`), plain assembled R refs only, so a
 /// varistor / thermistor / DNP part is never miscredited as a bias.
+#[must_use]
 pub fn gate_bias(board: &ExtractedBoard, net_name: &str) -> Option<GateBias> {
     let net = board.nets.iter().find(|n| n.name == net_name)?;
     let bias_of = |comp: &Component, rail_id: i64| -> Option<GateBias> {
@@ -216,16 +222,19 @@ fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, B
     Some((net.name.clone(), level))
 }
 
-/// True when a net connects to a transistor or relay, a switch whose control
+/// True when a net connects to a transistor or relay that can switch a load.
+///
+/// Such a switch's control
 /// input (a MOSFET/BJT gate-base, a relay coil) at the wrong level at power-up
 /// switches a load. This is the load-bearing zero-FP guard for the boot
 /// advisory: it separates a genuine load-control net (e.g. an igniter gate fed
 /// by a mis-mapped pull-up) from an ordinary `INPUT_PULLUP` button input, both
 /// read HIGH at boot, but only the former switches anything. Reference prefix
-/// 'Q' = transistor, 'K' = relay (standard KiCad designators). DNP (not
+/// 'Q' = transistor, 'K' = relay (standard `KiCad` designators). DNP (not
 /// assembled) switches don't count. (Pin-function data that would let us require
 /// the *control* terminal specifically is absent in PCB-only extraction, so any
 /// terminal of a populated Q/K qualifies, a deliberate, conservative breadth.)
+#[must_use]
 pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
@@ -234,7 +243,7 @@ pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
         AssemblyState::of(c).is_present()
             && matches!(
                 c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()),
-                Some('Q') | Some('K')
+                Some('Q' | 'K')
             )
     })
 }
@@ -274,6 +283,12 @@ fn is_power_or_ground_net(board: &ExtractedBoard, net_id: i64) -> bool {
 /// (e.g. TO-92, whose lead order varies by part), so the boot-state panel simply
 /// omits that device rather than mislabelling a row.
 fn switch_control_pad(footprint: &str) -> Option<&'static str> {
+    // 3-lead discrete packages where the control terminal is pad 1 (MOSFET gate
+    // G-D-S, BJT base B-C-E/B-E-C, pad 1 is the control either way).
+    const THREE_LEAD: [&str; 12] = [
+        "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
+        "D2PAK", "TO-220", "TO-247",
+    ];
     let f = footprint.to_ascii_uppercase();
     // 8-lead SINGLE power MOSFET (Power-SO-8 family): gate on pad 4, source on
     // 1-3, drain on 5-8. Checked before the 3-lead group ("SOT-23-8" also
@@ -287,12 +302,6 @@ fn switch_control_pad(footprint: &str) -> Option<&'static str> {
     if eight_lead_single {
         return Some("4");
     }
-    // 3-lead discrete packages where the control terminal is pad 1 (MOSFET gate
-    // G-D-S, BJT base B-C-E/B-E-C, pad 1 is the control either way).
-    const THREE_LEAD: [&str; 12] = [
-        "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
-        "D2PAK", "TO-220", "TO-247",
-    ];
     if THREE_LEAD.iter().any(|p| is_three_lead_variant(&f, p)) {
         return Some("1");
     }
@@ -311,7 +320,7 @@ fn is_three_lead_variant(f: &str, p: &str) -> bool {
     };
     let after = &f[idx + p.len()..];
     if let Some(rest) = after.strip_prefix('-') {
-        let count: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let count: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if !count.is_empty() {
             return count == "3";
         }
@@ -332,14 +341,16 @@ fn is_base_pad_name(s: &str) -> bool {
 }
 
 /// Every transistor (`Q…`) whose control terminal can be identified, paired with
-/// the net on that terminal; the rows of the boot-state panel. The control pad
+/// the net on that terminal; the rows of the boot-state panel.
+///
+/// The control pad
 /// is found first by an explicit `G`/`GATE` pad name (then `B`/`BASE`), else by
 /// footprint convention. DNP transistors and unidentifiable parts are skipped
 /// (the panel omits a device rather than mislabel it).
 ///
 /// Public because a boot-state test has to ask the same question, and asking it
 /// a second way is how a corpus test ends up hardcoding the reference
-/// designators of one board revision: the LumenPnP fuzz spec named Q1..Q4, and
+/// designators of one board revision: the `LumenPnP` fuzz spec named Q1..Q4, and
 /// the revision the corpus fetches has three gates at Q2, Q5 and Q6.
 pub fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -376,7 +387,9 @@ pub fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
     out
 }
 
-/// What the firmware does to a gate net at power-up. Reported factually (no
+/// What the firmware does to a gate net at power-up.
+///
+/// Reported factually (no
 /// channel-type safety claim, a HIGH gate is "on" for a low-side N-MOSFET but
 /// "off" for a high-side P-MOSFET, which the netlist can't disambiguate).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,7 +414,9 @@ pub enum BootGateState {
 }
 
 /// The bias resistor that fixes a not-firmware-driven gate's power-up level, and
-/// the rail it ties to. Populated by [`gate_bias`] so the panel can name the
+/// the rail it ties to.
+///
+/// Populated by [`gate_bias`] so the panel can name the
 /// resistor, its value, and the rail instead of crying "floating".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateBias {
@@ -424,22 +439,23 @@ pub enum BiasLevel {
 }
 
 impl BiasLevel {
-    fn word(self) -> &'static str {
+    const fn word(self) -> &'static str {
         match self {
-            BiasLevel::Low => "low",
-            BiasLevel::High => "high",
+            Self::Low => "low",
+            Self::High => "high",
         }
     }
 }
 
 impl BootGateState {
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
-            BootGateState::DrivenHigh => "driven HIGH and held".to_string(),
-            BootGateState::PulledHigh => "pulled HIGH (weak internal pull-up)".to_string(),
-            BootGateState::DrivenLow => "driven LOW and held".to_string(),
-            BootGateState::Floating => "never driven (floating)".to_string(),
-            BootGateState::HeldByBias(b) => {
+            Self::DrivenHigh => "driven HIGH and held".to_string(),
+            Self::PulledHigh => "pulled HIGH (weak internal pull-up)".to_string(),
+            Self::DrivenLow => "driven LOW and held".to_string(),
+            Self::Floating => "never driven (floating)".to_string(),
+            Self::HeldByBias(b) => {
                 let paren = if b.value.is_empty() {
                     format!("to {}", b.rail)
                 } else {
@@ -456,20 +472,22 @@ impl BootGateState {
     /// A short marker for the states worth a look (active or undefined at reset);
     /// LOW and a hardware-biased gate are reported without a marker (both are the
     /// common held-at-a-defined-level case, nothing for a reader to chase).
-    pub fn marker(&self) -> &'static str {
+    #[must_use]
+    pub const fn marker(&self) -> &'static str {
         match self {
-            BootGateState::DrivenHigh | BootGateState::PulledHigh => "  <- switched at power-up",
-            BootGateState::Floating => "  <- undefined until firmware drives it",
-            BootGateState::DrivenLow | BootGateState::HeldByBias(_) => "",
+            Self::DrivenHigh | Self::PulledHigh => "  <- switched at power-up",
+            Self::Floating => "  <- undefined until firmware drives it",
+            Self::DrivenLow | Self::HeldByBias(_) => "",
         }
     }
-    pub fn json(&self) -> &'static str {
+    #[must_use]
+    pub const fn json(&self) -> &'static str {
         match self {
-            BootGateState::DrivenHigh => "driven_high",
-            BootGateState::PulledHigh => "pulled_high",
-            BootGateState::DrivenLow => "driven_low",
-            BootGateState::Floating => "floating",
-            BootGateState::HeldByBias(b) => match b.level {
+            Self::DrivenHigh => "driven_high",
+            Self::PulledHigh => "pulled_high",
+            Self::DrivenLow => "driven_low",
+            Self::Floating => "floating",
+            Self::HeldByBias(b) => match b.level {
                 BiasLevel::Low => "held_low_by_bias",
                 BiasLevel::High => "held_high_by_bias",
             },
@@ -511,10 +529,12 @@ fn boot_gate_states(
         .collect()
 }
 
-/// Render the informational boot-state panel for the `--plain` surface: aligned
-/// plain-language lines, one per transistor gate, reporting (not judging) what
+/// Render the informational boot-state panel for the `--plain` surface.
+///
+/// It prints aligned plain-language lines, one per transistor gate, reporting (not judging) what
 /// the firmware does to it at power-up. The arrows flag the active / undefined
 /// cases for a non-engineer to verify; LOW is reported without a flag.
+#[must_use]
 pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> String {
     let ref_w = rows
         .iter()
@@ -533,13 +553,13 @@ pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> Strin
          switch the moment the board powers up. Verify each is the level you intend\n\
          (a HIGH or floating gate can switch a load on before the firmware means to):\n",
     );
-    for (reference, net, state) in rows {
-        s.push_str(&format!(
+    s.extend(rows.iter().map(|(reference, net, state)| {
+        format!(
             "  {reference:<ref_w$}  {net:<net_w$}  {}{}\n",
             state.label(),
             state.marker(),
-        ));
-    }
+        )
+    }));
     s
 }
 
@@ -899,7 +919,7 @@ mod tests {
             ("Q4".to_string(), "FloatNet".to_string()),
         ];
         let set = |xs: &[&str]| -> std::collections::HashSet<String> {
-            xs.iter().map(|s| s.to_string()).collect()
+            xs.iter().map(std::string::ToString::to_string).collect()
         };
         let held_high = set(&["DrivenHi", "PulledHi"]);
         let configured = set(&["DrivenHi", "LoNet"]);

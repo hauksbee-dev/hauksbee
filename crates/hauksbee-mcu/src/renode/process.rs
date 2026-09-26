@@ -23,6 +23,10 @@ use std::process::Command;
 use std::time::Duration;
 
 /// Locate the Renode executable, or return an error describing what to install.
+///
+/// # Errors
+///
+/// When `HAUKSBEE_RENODE` names a missing file, or no Renode install is found.
 pub fn find_renode() -> Result<PathBuf> {
     if let Some(p) = env_override("HAUKSBEE_RENODE")? {
         return Ok(p);
@@ -109,6 +113,7 @@ fn windows_install_candidates(root: &Path) -> Vec<PathBuf> {
 }
 
 /// True if a usable Renode install can be located. Used to skip tests cleanly.
+#[must_use]
 pub fn is_available() -> bool {
     find_renode().is_ok()
 }
@@ -125,6 +130,10 @@ impl RenodeProcess {
     /// The working directory is set to the binary's directory so that
     /// `@platforms/...` and `@scripts/...` relative paths resolve against the
     /// install tree (Renode resolves `@` paths relative to its base directory).
+    ///
+    /// # Errors
+    ///
+    /// When Renode cannot be found or the process cannot be spawned.
     pub fn spawn(monitor_port: u16) -> Result<Self> {
         let bin = find_renode()?;
         let workdir = bin
@@ -151,11 +160,13 @@ impl RenodeProcess {
     /// first launch on macOS can spend more than 30 seconds in code-signing
     /// and .NET cold start even though Renode is healthy, so this is bounded
     /// but leaves room for that rather than exhausting the port retries.
-    pub fn startup_timeout() -> Duration {
+    #[must_use]
+    pub const fn startup_timeout() -> Duration {
         Duration::from_secs(60)
     }
 
     /// The spawned Renode's OS process id (diagnostics and the reaping tests).
+    #[must_use]
     pub fn pid(&self) -> u32 {
         self.inner.pid()
     }

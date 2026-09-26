@@ -1,14 +1,14 @@
-//! The `run_script` code-mode sandbox: an embedded `QuickJS` (via rquickjs, MIT
-//! licensed, bundled C, no system dependency) whose ONLY capability is the
-//! `hauksbee` API. An agent submits one JavaScript program; it runs
-//! server-side, composing analyzeBoard / runChecks / listCapabilities /
-//! boardToCode calls and returning one result, instead of paying a round-trip
-//! per tool call (the Cloudflare "code mode" pattern). The bridge is
-//! deliberately narrow: one native function that takes a tool name and a JSON
-//! args string and returns a JSON result string, one native log sink, and a
-//! JS prelude that wraps them in the typed `hauksbee` object. Everything else
-//! (no filesystem, no network, no timers, no imports) simply does not exist in
-//! the `QuickJS` instance we build.
+//! The `run_script` code-mode sandbox: an embedded `QuickJS` limited to the `hauksbee` API.
+//!
+//! The interpreter comes via rquickjs (MIT licensed, bundled C, no system dependency),
+//! and its ONLY capability is the `hauksbee` API. An agent submits one JavaScript
+//! program; it runs server-side, composing analyzeBoard / runChecks / listCapabilities
+//! / boardToCode calls and returning one result, instead of paying a round-trip per
+//! tool call (the Cloudflare "code mode" pattern). The bridge is deliberately narrow:
+//! one native function that takes a tool name and a JSON args string and returns a JSON
+//! result string, one native log sink, and a JS prelude that wraps them in the typed
+//! `hauksbee` object. Everything else (no filesystem, no network, no timers, no
+//! imports) simply does not exist in the `QuickJS` instance we build.
 //!
 //! Read that narrowly. The JS environment has no filesystem, but the bridge it
 //! reaches through does: `analyzeBoard` is an unrestricted read of any path,
@@ -84,6 +84,12 @@ globalThis.hauksbee = {
 /// Run one script. Ok carries `{result, logs}`; Err carries `{error, thrown?,
 /// logs}`. Logs ride along on BOTH paths: a failed script's console output is
 /// the only forensic trail the caller has.
+///
+/// # Errors
+///
+/// Returns the failure object if the JS runtime, context or bridge cannot be set
+/// up, if the script throws (including a thrown tool refusal), exceeds `timeout` or
+/// the memory ceiling, or returns a value that is not JSON-serialisable.
 pub fn run(source: &str, timeout: Duration) -> Result<Value, Value> {
     let logs: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     let outcome = run_inner(source, timeout, logs.clone());

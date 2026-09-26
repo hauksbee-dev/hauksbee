@@ -60,7 +60,7 @@ fn the_notice_is_shown_before_anything_is_sent() {
         "the notice must state what leaves:\n{all}"
     );
     assert!(
-        all.contains("datasheet-extracted"),
+        all.contains("datasheet-derived"),
         "and that the result is a labelled draft:\n{all}"
     );
 }

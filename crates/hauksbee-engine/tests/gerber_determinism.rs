@@ -113,9 +113,10 @@ fn gerber_zip_analysis_is_byte_identical_across_runs() {
 #[test]
 fn inkplate_gerber_zip_analysis_is_byte_identical_across_runs() {
     let Some(dir) = inkplate_dir() else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("corpus required but inkplate6_gerber missing");
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "corpus required but inkplate6_gerber missing"
+        );
         eprintln!("skipping Inkplate gerber determinism (corpus absent)");
         return;
     };

@@ -19,6 +19,8 @@
 #![cfg(unix)]
 #![cfg(feature = "qemu")]
 
+use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -57,7 +59,7 @@ impl Drop for FakeQemuEnv {
 
 /// True while the OS still knows the pid (signal 0 probes existence).
 fn alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    unsafe { libc::kill(i32::try_from(pid).expect("a kernel pid"), 0) == 0 }
 }
 
 /// Poll until `pid` is gone, up to a timeout. SIGKILL delivery is fast; the
@@ -90,7 +92,6 @@ fn write_fake_qemu(dir: &Path) -> std::path::PathBuf {
         ),
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
@@ -108,7 +109,6 @@ fn write_dying_fake_qemu(dir: &Path) -> std::path::PathBuf {
          exit 73\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
@@ -313,7 +313,8 @@ fn sigterm_to_the_owner_reaps_the_emulator() {
 
     // Kill the OWNER, not the emulator. Default SIGTERM disposition would
     // never run Drop; only the installed reaper can save the children.
-    unsafe { libc::kill(helper.id() as i32, libc::SIGTERM) };
+    let helper_pid = i32::try_from(helper.id()).expect("a kernel pid");
+    unsafe { libc::kill(helper_pid, libc::SIGTERM) };
     let status = helper.wait().expect("helper reaped");
     assert!(!status.success(), "helper died from the signal: {status}");
 
@@ -341,7 +342,6 @@ fn reaper_helper_process() {
     )
     .expect("fake emulator spawns in helper");
     println!("SPAWNED {}", proc.pid());
-    use std::io::Write;
     std::io::stdout().flush().ok();
     // Hold the emulator alive until the parent SIGTERMs us. The reaper's
     // re-raise makes this process die of SIGTERM without ever unwinding, so

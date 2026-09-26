@@ -31,7 +31,7 @@ use hauksbee_models::behavioral::Behavioral;
 use hauksbee_models::Params;
 use hauksbee_solve::SolverOptions;
 
-/// Wrap a hand-built circuit + behavioural devices as a minimal BoundBoard.
+/// Wrap a hand-built circuit + behavioural devices as a minimal `BoundBoard`.
 fn board_with(
     circuit: Circuit,
     nets: &[(&str, NodeId)],
@@ -219,12 +219,11 @@ fn lily58_pro_v2_marches_past_one_millisecond_with_sane_voltages() {
     };
     let path: PathBuf = root.join("lily58/Pro_V2/Pro_V2.kicad_pcb");
     if !path.exists() {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!(
-                "HAUKSBEE_REQUIRE_CORPUS set but {} is missing",
-                path.display()
-            );
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "HAUKSBEE_REQUIRE_CORPUS set but {} is missing",
+            path.display()
+        );
         eprintln!("corpus board absent ({}); skipping", path.display());
         return;
     }
@@ -235,7 +234,7 @@ fn lily58_pro_v2_marches_past_one_millisecond_with_sane_voltages() {
     let drc = hauksbee_extract::ExtractedBoard::drc(&text).unwrap_or_default();
     let mut board = hauksbee_extract::ExtractedBoard::from_auto(&text).expect("parse lily58");
     board
-        .apply_dnp_policy(Default::default(), &[], &[])
+        .apply_dnp_policy(hauksbee_extract::dnp::DnpPolicy::default(), &[], &[])
         .expect("dnp policy");
     let bound = hauksbee_engine::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
     let mut engine = hauksbee_engine::HauksbeeEngine::from_bound(bound, None, "/boards/lily58")

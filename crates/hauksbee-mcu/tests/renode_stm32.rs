@@ -30,6 +30,7 @@ fn clock_ready_markers(
     external_clock_present: bool,
     budget_us: u64,
 ) -> Option<(u64, u64)> {
+    const CHUNK_US: u64 = 50;
     if !is_available() {
         eprintln!("SKIP: Renode not installed");
         return None;
@@ -48,7 +49,6 @@ fn clock_ready_markers(
     mcu.load_firmware(&elf).expect("load clock readiness probe");
     mcu.set_active_ports(&['A', 'C']);
 
-    const CHUNK_US: u64 = 50;
     let now_us = Arc::new(Mutex::new(0u64));
     let hse_us = Arc::new(Mutex::new(None));
     let pll_us = Arc::new(Mutex::new(None));
@@ -68,7 +68,7 @@ fn clock_ready_markers(
         }
     }));
 
-    for t in (CHUNK_US..=budget_us).step_by(CHUNK_US as usize) {
+    for t in (1..=budget_us / CHUNK_US).map(|i| i * CHUNK_US) {
         *now_us.lock().unwrap() = t;
         mcu.run_micros(CHUNK_US).expect("run clock readiness slice");
     }

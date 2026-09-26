@@ -27,7 +27,7 @@
 //!   - Tables 4-28/4-29/4-30: the source-side CC voltage windows (vRa / vRd /
 //!     vOPEN) per Rp level.
 //!
-//! The RPi 4 reconstruction in `board-corpus/famous/rpi4_usbc_reconstruction/`
+//! The `RPi` 4 reconstruction in `board-corpus/famous/rpi4_usbc_reconstruction/`
 //! is the flagship caller: its as-designed CC subcircuit ties CC1 and CC2 to a
 //! single shared 5.1 kΩ (R79), and this classifier re-derives, cold, the famous
 //! "e-marked charger refuses to power the Pi" fault from the topology and these
@@ -40,6 +40,7 @@ use hauksbee_models::value::parse_value;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
 /// The Rp termination a source advertises, per USB Type-C spec Table 4-20.
+///
 /// Modelled as a current source into the CC pin (the spec's "Current
 /// Source/Pull-Down CC Model", Figure 4-6), which is the model the source-side
 /// voltage windows in Tables 4-28/4-29/4-30 are defined against.
@@ -55,22 +56,24 @@ pub enum Rp {
 
 impl Rp {
     /// Rp modelled as a current source: the spec current value (A), Table 4-20.
-    pub fn current_a(self) -> f64 {
+    #[must_use]
+    pub const fn current_a(self) -> f64 {
         match self {
-            Rp::Default => 80e-6,
-            Rp::Med1A5 => 180e-6,
-            Rp::High3A => 330e-6,
+            Self::Default => 80e-6,
+            Self::Med1A5 => 180e-6,
+            Self::High3A => 330e-6,
         }
     }
 
     /// Rp modelled as a resistor pull-up to 4.75..5.5 V (Table 4-20, middle
     /// column). Provided for the alternative resistive-Rp model; the classifier
     /// defaults to the current-source model.
-    pub fn pullup_ohms(self) -> f64 {
+    #[must_use]
+    pub const fn pullup_ohms(self) -> f64 {
         match self {
-            Rp::Default => 56_000.0,
-            Rp::Med1A5 => 22_000.0,
-            Rp::High3A => 10_000.0,
+            Self::Default => 56_000.0,
+            Self::Med1A5 => 22_000.0,
+            Self::High3A => 10_000.0,
         }
     }
 
@@ -82,22 +85,23 @@ impl Rp {
     ///   - **between** `vra_threshold` and `vrd_max_threshold` reads as Rd (a
     ///     sink's pull-down is attached);
     ///   - **at or above** `vopen` reads as open (nothing attached).
-    pub fn thresholds(self) -> CcThresholds {
+    #[must_use]
+    pub const fn thresholds(self) -> CcThresholds {
         match self {
             // Table 4-28: vRa max 0.20 V, vRd 0.25..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
-            Rp::Default => CcThresholds {
+            Self::Default => CcThresholds {
                 vra_max: 0.20,
                 vrd_max: 1.60,
                 vopen: 1.65,
             },
             // Table 4-29: vRa max 0.40 V, vRd 0.45..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
-            Rp::Med1A5 => CcThresholds {
+            Self::Med1A5 => CcThresholds {
                 vra_max: 0.40,
                 vrd_max: 1.60,
                 vopen: 1.65,
             },
             // Table 4-30: vRa max 0.80 V, vRd 0.85..2.45 V (threshold 2.60 V), vOPEN 2.75 V.
-            Rp::High3A => CcThresholds {
+            Self::High3A => CcThresholds {
                 vra_max: 0.80,
                 vrd_max: 2.60,
                 vopen: 2.75,
@@ -130,20 +134,21 @@ pub enum PinState {
 
 impl PinState {
     /// Classify a solved CC voltage against the source thresholds for an Rp.
-    pub fn classify(v: f64, t: CcThresholds) -> PinState {
+    #[must_use]
+    pub fn classify(v: f64, t: CcThresholds) -> Self {
         if v >= t.vopen {
-            PinState::Open
+            Self::Open
         } else if v < t.vra_max {
-            PinState::Ra
+            Self::Ra
         } else {
             // Between vra_max and vopen. The Rd window's upper threshold sits
             // below vOPEN; a voltage above vrd_max but below vOPEN is an
             // out-of-spec grey zone the source does not credit as a sink. We
             // fold it to Open (undetected) rather than invent a fourth state.
             if v < t.vrd_max {
-                PinState::Rd
+                Self::Rd
             } else {
-                PinState::Open
+                Self::Open
             }
         }
     }
@@ -164,37 +169,40 @@ pub enum Attach {
     PoweredCableNoSink,
     /// Rd/Rd: Debug Accessory Mode. No normal VBUS.
     DebugAccessory,
-    /// Ra/Ra: Audio Adapter Accessory Mode. **No VBUS**; this is the RPi 4 fault.
+    /// Ra/Ra: Audio Adapter Accessory Mode. **No VBUS**; this is the `RPi` 4 fault.
     AudioAccessory,
 }
 
 impl Attach {
     /// Whether a compliant source applies VBUS power in this state.
-    pub fn powers(self) -> bool {
-        matches!(self, Attach::SinkAttached | Attach::PoweredCableWithSink)
+    #[must_use]
+    pub const fn powers(self) -> bool {
+        matches!(self, Self::SinkAttached | Self::PoweredCableWithSink)
     }
 
     /// Map a (CC1, CC2) pin-state pair to the port state (Table 4-10).
-    pub fn from_pins(cc1: PinState, cc2: PinState) -> Attach {
+    #[must_use]
+    pub const fn from_pins(cc1: PinState, cc2: PinState) -> Self {
         use PinState::{Open, Ra, Rd};
         match (cc1, cc2) {
-            (Open, Open) => Attach::Nothing,
-            (Rd, Open) | (Open, Rd) => Attach::SinkAttached,
-            (Rd, Ra) | (Ra, Rd) => Attach::PoweredCableWithSink,
-            (Ra, Open) | (Open, Ra) => Attach::PoweredCableNoSink,
-            (Rd, Rd) => Attach::DebugAccessory,
-            (Ra, Ra) => Attach::AudioAccessory,
+            (Open, Open) => Self::Nothing,
+            (Rd, Open) | (Open, Rd) => Self::SinkAttached,
+            (Rd, Ra) | (Ra, Rd) => Self::PoweredCableWithSink,
+            (Ra, Open) | (Open, Ra) => Self::PoweredCableNoSink,
+            (Rd, Rd) => Self::DebugAccessory,
+            (Ra, Ra) => Self::AudioAccessory,
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Attach::Nothing => "Nothing",
-            Attach::SinkAttached => "SinkAttached",
-            Attach::PoweredCableWithSink => "PoweredCableWithSink",
-            Attach::PoweredCableNoSink => "PoweredCableNoSink",
-            Attach::DebugAccessory => "DebugAccessory",
-            Attach::AudioAccessory => "AudioAccessory",
+            Self::Nothing => "Nothing",
+            Self::SinkAttached => "SinkAttached",
+            Self::PoweredCableWithSink => "PoweredCableWithSink",
+            Self::PoweredCableNoSink => "PoweredCableNoSink",
+            Self::DebugAccessory => "DebugAccessory",
+            Self::AudioAccessory => "AudioAccessory",
         }
     }
 }
@@ -218,14 +226,15 @@ pub enum Cable {
 
 impl Cable {
     /// Canonical e-marked cable with a 1.0 kΩ Ra (mid of the 800 Ω..1.2 kΩ band).
-    pub fn emarked() -> Cable {
-        Cable::EMarked { ra_ohms: 1000.0 }
+    #[must_use]
+    pub const fn emarked() -> Self {
+        Self::EMarked { ra_ohms: 1000.0 }
     }
 }
 
 /// The sink's CC termination as seen at the receptacle: the resistance each CC
 /// pin presents to GND, and whether the two CC pins are physically the *same*
-/// net (the RPi 4 defect).
+/// net (the `RPi` 4 defect).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SinkTermination {
     /// Ohms from CC1 to GND (the parallel combination of every resistor found
@@ -234,7 +243,7 @@ pub struct SinkTermination {
     /// Ohms from CC2 to GND. `None` if CC2 has no path to GND.
     pub cc2_rd_ohms: Option<f64>,
     /// True when CC1 and CC2 resolve to the *same* electrical net (so a single
-    /// shared pulldown terminates both). This is the RPi 4 rev 1.0/1.1 bug.
+    /// shared pulldown terminates both). This is the `RPi` 4 rev 1.0/1.1 bug.
     pub shared_net: bool,
 }
 
@@ -256,7 +265,8 @@ pub struct CcResult {
 
 impl CcResult {
     /// Whether the source applies VBUS.
-    pub fn powers(&self) -> bool {
+    #[must_use]
+    pub const fn powers(&self) -> bool {
         self.attach.powers()
     }
 }
@@ -273,8 +283,9 @@ impl CcResult {
 ///     independent nodes.
 ///
 /// When `term.shared_net` is true the two source CC pins drive a single node,
-/// which is exactly why the RPi 4 reads two Ra terminations under an e-marked
+/// which is exactly why the `RPi` 4 reads two Ra terminations under an e-marked
 /// cable.
+#[must_use]
 pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult {
     let mut c = Circuit::new();
 
@@ -394,6 +405,7 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 /// false "no VBUS" verdict.
 ///
 /// Returns `None` if no receptacle with identifiable CC pins is found.
+#[must_use]
 pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTermination> {
     let grounds = ground_net_ids(board);
     let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
@@ -413,7 +425,7 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
 /// (GNDA/AGND, GNDD/DGND), power/earth grounds (GNDPWR/PGND/EGND), shield/USB
 /// grounds, and numbered grounds (GND1, GND2, ...). Deliberately conservative:
 /// it matches only names whose alphabetic-only core is exactly a ground token,
-/// so a signal like "GND_SENSE" or "GNDLED" (an LED return that is *not* the
+/// so a signal like "`GND_SENSE`" or "GNDLED" (an LED return that is *not* the
 /// system ground) does not masquerade as ground and credit a phantom Rd.
 fn is_ground_name(name: &str) -> bool {
     // Drop digits and separators so "GND1", "GNDA_2", "GND-3" all reduce to
@@ -421,7 +433,7 @@ fn is_ground_name(name: &str) -> bool {
     let core: String = name
         .to_ascii_uppercase()
         .chars()
-        .filter(|c| c.is_ascii_alphabetic())
+        .filter(char::is_ascii_alphabetic)
         .collect();
     matches!(
         core.as_str(),
@@ -452,16 +464,17 @@ fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
         .collect()
 }
 
-/// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
-/// over any downstream CC controller / PMIC that also carries CC pin functions.
 /// The names of every net the CC audit actually walks, for scoping which
-/// unbound parts can make the CC verdict inconclusive: every receptacle's CC
+/// unbound parts can make the CC verdict inconclusive.
+///
+/// That is every receptacle's CC
 /// nets (not just the primary's), each expanded across the same 0 ohm /
 /// ferrite bridges `audit_one_cc` follows to reach a controller's internal
 /// Rd. Built from the audit's own helpers (`all_receptacle_cc_nets`,
 /// `receptacle_cc_nets`, `nets_bridged_to`) so the scope cannot drift from
 /// the walk. `None` when the board carries no identifiable USB-C receptacle
 /// CC termination.
+#[must_use]
 pub fn receptacle_cc_net_names(
     board: &ExtractedBoard,
 ) -> Option<std::collections::HashSet<String>> {
@@ -484,6 +497,8 @@ pub fn receptacle_cc_net_names(
     Some(names)
 }
 
+/// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
+/// over any downstream CC controller / PMIC that also carries CC pin functions.
 fn receptacle_cc_nets(board: &ExtractedBoard) -> Option<(i64, i64)> {
     // The receptacle's CC1/CC2 nets. A CC pin function (or the A5/B5 pad numbers)
     // can appear on *several* components: the USB-C connector itself, AND any CC
@@ -666,6 +681,7 @@ pub struct CcPinTermination {
 impl CcPinTermination {
     /// The effective Rd a source sees: external Rd in parallel with the
     /// controller's internal Rd (whichever are present).
+    #[must_use]
     pub fn effective_rd_ohms(&self) -> Option<f64> {
         match (self.external_rd_ohms, self.internal_rd_ohms) {
             (Some(e), Some(i)) => Some(1.0 / (1.0 / e + 1.0 / i)),
@@ -679,7 +695,8 @@ impl CcPinTermination {
     /// same CC line: the double-termination defect. The effective Rd is then well
     /// below the nominal 5.1 kΩ a source expects, so the source under-reads the
     /// CC voltage and mis-detects the advertised current.
-    pub fn is_double_terminated(&self) -> bool {
+    #[must_use]
+    pub const fn is_double_terminated(&self) -> bool {
         self.external_rd_ohms.is_some() && self.internal_rd_ohms.is_some()
     }
 }
@@ -695,7 +712,8 @@ pub struct ReceptacleCc {
 
 impl ReceptacleCc {
     /// True when either CC pin of this receptacle is double-terminated.
-    pub fn has_double_termination(&self) -> bool {
+    #[must_use]
+    pub const fn has_double_termination(&self) -> bool {
         self.cc1.is_double_terminated() || self.cc2.is_double_terminated()
     }
 }
@@ -720,14 +738,18 @@ pub struct CcTerminationAudit {
 impl CcTerminationAudit {
     /// True when *any* receptacle's CC pin carries both an external and an
     /// internal Rd (the double-termination defect, on any half of the board).
+    #[must_use]
     pub fn has_double_termination(&self) -> bool {
-        self.receptacles.iter().any(|r| r.has_double_termination())
+        self.receptacles
+            .iter()
+            .any(ReceptacleCc::has_double_termination)
     }
 
     /// True when *every* receptacle presents a credited Rd on at least one CC
     /// pin (external or internal). A receptacle with no Rd at all is either a
     /// power-only / debug receptacle or an under-read; this lets a caller
     /// distinguish "all halves terminated" from "primary terminated only".
+    #[must_use]
     pub fn all_receptacles_terminated(&self) -> bool {
         !self.receptacles.is_empty()
             && self
@@ -737,14 +759,16 @@ impl CcTerminationAudit {
     }
 }
 
-/// Audit the receptacle's CC1/CC2 terminations for the double-Rd defect: a
-/// discrete external 5.1 kΩ Rd on a CC line that *also* routes into a PMIC /
+/// Audit the receptacle's CC1/CC2 terminations for the double-Rd defect.
+///
+/// The defect is a discrete external 5.1 kΩ Rd on a CC line that *also* routes into a PMIC /
 /// controller which already provides an internal Rd of its own (e.g. the Nordic
 /// nPM1300, whose datasheet states its CC pins "have internal pull-downs with
 /// resistance equal to Rd" = 5.1 kΩ). Both in parallel halve the effective Rd to
 /// ~2.55 kΩ, dragging the CC voltage out of spec.
 ///
 /// Returns `None` if the board has no identifiable USB-C receptacle CC nets.
+#[must_use]
 pub fn audit_cc_termination(board: &ExtractedBoard) -> Option<CcTerminationAudit> {
     let grounds = ground_net_ids(board);
 
@@ -799,7 +823,7 @@ fn audit_one_cc(
             let on_cc = comp.pins.iter().any(|p| {
                 let f = p.function.to_ascii_uppercase();
                 (f == "CC1" || f == "CC2" || f == "CC")
-                    && p.net.map(|n| reachable.contains(&n)).unwrap_or(false)
+                    && p.net.is_some_and(|n| reachable.contains(&n))
             });
             if on_cc {
                 internal_rd_ohms = Some(internal);
@@ -955,6 +979,7 @@ fn is_resistor(comp: &hauksbee_extract::Component) -> bool {
 /// Convenience: parse a board, extract its sink CC termination, attach the given
 /// source + cable, and classify. Returns `None` if the board carries no
 /// identifiable USB-C receptacle CC termination.
+#[must_use]
 pub fn classify_board(board: &ExtractedBoard, rp: Rp, cable: Cable) -> Option<CcResult> {
     let term = extract_sink_termination(board)?;
     Some(classify_attach(term, rp, cable))
@@ -972,7 +997,9 @@ pub enum UsbcLevel {
     Serious,
 }
 
-/// A board-level USB-C CC compliance verdict for `hauksbee run --usb-c`. Built
+/// A board-level USB-C CC compliance verdict for `hauksbee run --usb-c`.
+///
+/// Built
 /// from the primary receptacle's termination classified against a default-Rp
 /// source through a passive cable; the standard "plug it into a charger" case.
 #[derive(Debug, Clone)]
@@ -993,11 +1020,11 @@ pub struct UsbcReport {
 ///
 /// The board is classified against a default-Rp source through BOTH a passive
 /// cable AND an e-marked (electronically-marked) cable, because the canonical
-/// failure; the RPi 4 rev-1.0/1.1 shared-CC-pulldown, only manifests with an
+/// failure; the `RPi` 4 rev-1.0/1.1 shared-CC-pulldown, only manifests with an
 /// e-marked cable: the e-marker's Ra drags the shared node into the Ra band so a
 /// compliant source declares an Audio Adapter Accessory and withholds VBUS, while
 /// a passive cable still reads the same node as a sink. (This matches the
-/// documented hardware behaviour: the RPi 4 failed to charge from USB-C-to-C
+/// documented hardware behaviour: the `RPi` 4 failed to charge from USB-C-to-C
 /// cables but worked from A-to-C.) `attach`/`powers_vbus` report the e-marked
 /// case, the stricter and more modern one.
 ///
@@ -1007,9 +1034,8 @@ pub struct UsbcReport {
 /// hauksbee cannot see from copper. `Serious` is reserved for a board that
 /// clearly intends to be a self-terminated sink (a discrete Rd is present) yet a
 /// compliant cable still leaves it without VBUS.
+#[must_use]
 pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
-    let term = extract_sink_termination(board)?;
-    let audit = audit_cc_termination(board);
     // "Intends to be a self-terminated sink" means a discrete pulldown in a
     // *plausible Rd band*, not any resistor to GND. USB-C Rd is nominally 5.1 kΩ;
     // anything well above that (a bleeder, an ESD/EMC resistor, a non-Rd part on
@@ -1017,6 +1043,8 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     // would false-positive on a fine controller-terminated board. Trade-off: a
     // grossly-wrong Rd (e.g. a 51 kΩ typo) reads as Info, not Serious.
     const RD_PLAUSIBLE_MAX_OHMS: f64 = 10_000.0;
+    let term = extract_sink_termination(board)?;
+    let audit = audit_cc_termination(board);
     let plausible_rd = |r: Option<f64>| r.is_some_and(|ohms| ohms <= RD_PLAUSIBLE_MAX_OHMS);
     let has_discrete_rd = plausible_rd(term.cc1_rd_ohms) || plausible_rd(term.cc2_rd_ohms);
 
@@ -1026,7 +1054,9 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     let (level, headline) = apply_double_termination(
         level,
         headline,
-        audit.as_ref().is_some_and(|a| a.has_double_termination()),
+        audit
+            .as_ref()
+            .is_some_and(CcTerminationAudit::has_double_termination),
     );
 
     // Report the EFFECTIVE Rd (external ∥ controller-internal) of the primary
@@ -1037,8 +1067,9 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     // a cross-surface disagreement. Fall back to the external Rd when no audit ran.
     let (cc1_rd_ohms, cc2_rd_ohms) = audit
         .as_ref()
-        .map(|a| (a.cc1.effective_rd_ohms(), a.cc2.effective_rd_ohms()))
-        .unwrap_or((term.cc1_rd_ohms, term.cc2_rd_ohms));
+        .map_or((term.cc1_rd_ohms, term.cc2_rd_ohms), |a| {
+            (a.cc1.effective_rd_ohms(), a.cc2.effective_rd_ohms())
+        });
 
     Some(UsbcReport {
         receptacles: audit.map(|a| a.receptacles).unwrap_or_default(),
@@ -1061,7 +1092,7 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
 /// the 5.1k spec, dragging CC voltage out of range and making the source
 /// mis-detect current. That audit was computed but never influenced the verdict,
 /// so the defect graded Ok, invisible to `--json`, the web report, and `--strict`.
-/// Surfacing it as Info reaches every persona (web_gloss returns a section for
+/// Surfacing it as Info reaches every persona (`web_gloss` returns a section for
 /// Info) and denies a false "looks healthy". A Serious verdict is NOT downgraded.
 fn apply_double_termination(
     level: UsbcLevel,
@@ -1142,6 +1173,7 @@ fn fmt_rd(r: Option<f64>) -> String {
 
 impl UsbcReport {
     /// True when a CI gate (`--strict`) should fail on this verdict.
+    #[must_use]
     pub fn is_serious(&self) -> bool {
         self.level == UsbcLevel::Serious
     }
@@ -1151,6 +1183,7 @@ impl UsbcReport {
     /// USB-C verdict. `None` for `Ok` (nothing actionable to surface). `Serious`
     /// carries the standard split-pulldown remedy in `fix`; `Info` leaves `fix`
     /// empty (a self-contained observation).
+    #[must_use]
     pub fn web_gloss(&self) -> Option<(String, String, String)> {
         match self.level {
             UsbcLevel::Ok => None,
@@ -1166,7 +1199,7 @@ impl UsbcReport {
     }
 
     /// One-line verdict tag.
-    fn tag(&self) -> &'static str {
+    const fn tag(&self) -> &'static str {
         match self.level {
             UsbcLevel::Ok => "OK",
             UsbcLevel::Info => "INFO",
@@ -1203,6 +1236,7 @@ impl UsbcReport {
     }
 
     /// The engineer-facing text report.
+    #[must_use]
     pub fn render(&self) -> String {
         format!(
             "USB-C CC compliance: [{}] {}\n  attach (default Rp, e-marked cable): {}; VBUS applied: {}\n{}",
@@ -1215,6 +1249,7 @@ impl UsbcReport {
     }
 
     /// The plain-language report (what / why / what-to-do for the serious case).
+    #[must_use]
     pub fn render_plain(&self) -> String {
         let verdict = match self.level {
             UsbcLevel::Ok => "USB-C looks healthy: a charger will power this board.",
@@ -1236,11 +1271,9 @@ impl UsbcReport {
     }
 
     /// Machine-readable JSON (hand-built; the CC types are not `Serialize`).
+    #[must_use]
     pub fn to_json(&self) -> String {
-        let rd = |r: Option<f64>| match r {
-            Some(v) => format!("{v:.1}"),
-            None => "null".to_string(),
-        };
+        let rd = |r: Option<f64>| r.map_or_else(|| "null".to_string(), |v| format!("{v:.1}"));
         format!(
             "{{\"check\":\"usb_c_cc\",\"level\":\"{}\",\"attach\":\"{}\",\"powers_vbus\":{},\
              \"shared_net\":{},\"has_discrete_rd\":{},\"cc1_rd_ohms\":{},\"cc2_rd_ohms\":{},\
@@ -1398,6 +1431,7 @@ mod tests {
     // --- Spec constants (Tables 4-20, 4-21, 4-22) ---------------------------
 
     #[test]
+    #[allow(clippy::float_cmp)] // spec constants returned verbatim, so exact equality holds
     fn rp_current_values_match_spec_table_4_20() {
         assert_eq!(Rp::Default.current_a(), 80e-6);
         assert_eq!(Rp::Med1A5.current_a(), 180e-6);
@@ -1405,6 +1439,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // spec constants returned verbatim, so exact equality holds
     fn rp_resistor_pullups_match_spec_table_4_20() {
         assert_eq!(Rp::Default.pullup_ohms(), 56_000.0);
         assert_eq!(Rp::Med1A5.pullup_ohms(), 22_000.0);
@@ -1427,6 +1462,7 @@ mod tests {
     // --- Source-side thresholds (Tables 4-28/29/30) -------------------------
 
     #[test]
+    #[allow(clippy::float_cmp)] // spec constants returned verbatim, so exact equality holds
     fn default_rp_thresholds_match_table_4_28() {
         let t = Rp::Default.thresholds();
         assert_eq!(t.vra_max, 0.20);

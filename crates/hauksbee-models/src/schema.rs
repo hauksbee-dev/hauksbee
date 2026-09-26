@@ -342,8 +342,10 @@ pub struct Characteristic {
 const COLUMNS: [&str; 3] = ["min", "typ", "max"];
 
 /// How a rail-relative or signed row is recorded (the lint and the prompts).
-pub const PRINTED_REFERENCE: &str = "record each printed number with its reference (0.7 VDD \
-    is 0.7 with unit = \"VDD\", ±5 is min = -5 and max = 5), never delete the record";
+pub const PRINTED_REFERENCE: &str = "record each printed number with its sign in its column (±5 \
+    is min = -5 and max = 5), never delete the record; a supply-relative limit (0.7 VDD, VDD + 0.5 V) \
+    is no number: quote it in `conditions` and omit that column (a row left with none becomes an \
+    `unknown` uncertainty record quoting it), never a rail as `unit`";
 
 /// Which of min, typ, max a record's own text cites ("typ/max columns"); a
 /// negated mention ("no typ published") cites nothing.
@@ -415,6 +417,28 @@ impl Characteristic {
         out
     }
 
+    /// A drafted row writing a supply-relative limit as a number: under a rail
+    /// unit (`VDD`), or as the bare offset its own text quotes (`VDD + 0.5 V`
+    /// stored as 0.5). Extraction only: a curated card may keep a checked ratio.
+    pub fn supply_relative_problem(&self) -> Option<String> {
+        static OFFSET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"\bV([A-Z][A-Z0-9]*)\s*([-+−])\s*(\d+(?:\.\d+)?)")
+                .expect("valid regex")
+        });
+        let volts = crate::units::si_unit(&self.unit).is_some_and(|(_, base)| base == "V");
+        let texts = [self.conditions.as_str(), &self.basis];
+        let offsets = texts.into_iter().flat_map(|t| OFFSET.captures_iter(t));
+        let offsets = offsets.filter(|c| &c[1] != "SS").filter_map(|c| {
+            let sign = if &c[2] == "+" { 1.0 } else { -1.0 };
+            c[3].parse::<f64>().ok().map(|v| sign * v)
+        });
+        let columns = [self.min, self.typ, self.max];
+        let bare = |o: f64| columns.iter().flatten().any(|v| (v - o).abs() < 1e-9);
+        let bad = crate::units::rail_relative_unit(&self.unit)
+            || (volts && offsets.into_iter().any(bare));
+        bad.then(|| format!("characteristic '{}' writes a supply-relative limit as a number: {PRINTED_REFERENCE}", self.parameter))
+    }
+
     /// The specification-limits interval a row printing both min and max
     /// states; the typ stays in the row.
     pub(crate) fn interval(&self) -> Option<ModelUncertainty> {
@@ -426,6 +450,8 @@ impl Characteristic {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ModelSourceReference {
+    /// Empty only for a local file pinned by `sha256` (an extraction's own PDF).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub url: String,
     pub title: String,
     pub locator: String,
@@ -521,7 +547,8 @@ impl ModelSourceReference {
     /// A citation must be fetchable over TLS, name what it cites, and carry a
     /// well-formed digest when it carries one.
     pub fn validate(&self) -> Result<(), String> {
-        if !self.url.starts_with("https://") {
+        let local = self.url.is_empty() && self.sha256.is_some();
+        if !local && !self.url.starts_with("https://") {
             return Err(format!("url must use https://, got '{}'", self.url));
         }
         if self.title.trim().is_empty() || self.locator.trim().is_empty() {
@@ -1407,9 +1434,19 @@ mod tests {
                 (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
             }
         }
-        let rail = "[[characteristic]]\nparameter = \"VIH\"\nmin = 0.7\nunit = \"VDD\"\nconditions = \"c\"\nbasis = \"b\"";
-        let rail = parse(rail).map(|s| s.validate());
-        assert_eq!(rail, Ok(Ok(())), "a rail-relative bound validates");
+        for (unit, max) in [("VDD", "max = 1"), ("V", "max = 0.5"), ("V", "")] {
+            let row = format!("[[characteristic]]\nparameter = \"VI\"\nmin = -0.5\n{max}\nunit = \"{unit}\"\nconditions = \"VSS - 0.5 V to VDD + 0.5 V\"\nbasis = \"b\"");
+            let row = &parse(&row).unwrap().characteristic[0];
+            assert_eq!(
+                row.supply_relative_problem().is_none(),
+                max.is_empty(),
+                "{unit}"
+            );
+            assert!(
+                row.problems().is_empty(),
+                "a curated card may keep a rail ratio"
+            );
+        }
         let mut blank = spec("typ = 2.0", "").unwrap();
         blank.characteristic[0].basis = " ".into();
         assert_eq!(

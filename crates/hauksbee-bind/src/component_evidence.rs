@@ -68,10 +68,18 @@ pub(crate) fn logical_pin_nets(
     Ok(logical)
 }
 
-/// The net a model-declared pin role sits on, for a part that has already
-/// answered the three-state assembled-component question: taking the
+/// The net a model-declared pin role sits on.
+///
+/// The part has already answered the three-state assembled-component question:
+/// taking the
 /// [`FittedComponent`] witness (the only source of a bindable model) means an
 /// identity-refused or DNP-absent record cannot reach this at all.
+///
+/// # Errors
+///
+/// Returns a [`RoleEvidenceError`] when the part's pin evidence is unusable,
+/// the model declares no pad for `role`, those pads are unconnected, or they
+/// sit on conflicting nets.
 pub fn role_net(
     part: FittedComponent<'_>,
     model: &ModelEntry,

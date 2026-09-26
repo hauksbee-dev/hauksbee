@@ -1,12 +1,15 @@
-//! Evaluate a spec's assertions against the per-seed run outcomes. An assertion
-//! passes only if it holds on *every* seed (that is what makes initial-state
+//! Evaluate a spec's assertions against the per-seed run outcomes.
+//!
+//! An assertion passes only if it holds on *every* seed (that is what makes initial-state
 //! fuzzing meaningful: the rail must come up across all random power-up states).
 
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
+use std::fmt::Write as _;
 
-/// The result of one assertion across all seeds. Serialized verbatim into the
-/// `results` array of the `hauksbee-ci run --json` document, so the published
+/// The result of one assertion across all seeds.
+///
+/// Serialized verbatim into the `results` array of the `hauksbee-ci run --json` document, so the published
 /// schema is generated from this type: see
 /// `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`. `why` and `waived` are
 /// the only two fields a consumer may find ABSENT rather than null.
@@ -42,7 +45,7 @@ pub struct AssertResult {
     pub failing_seed: Option<u32>,
     /// Every ensemble member this assertion failed on (empty on a pass). For a
     /// tolerance ensemble this is the per-seed failure list the report and
-    /// JUnit surface, together with the pass-rate.
+    /// `JUnit` surface, together with the pass-rate.
     pub failing_seeds: Vec<u32>,
     /// How many ensemble members were evaluated.
     pub seeds_total: u32,
@@ -84,7 +87,7 @@ impl AssertResult {
         Self {
             label,
             kind: kind.into(),
-            seeds_total: seeds_total as u32,
+            seeds_total: u32::try_from(seeds_total).unwrap_or(u32::MAX),
             ..Default::default()
         }
     }
@@ -111,6 +114,7 @@ pub(crate) fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> sche
 }
 
 /// Evaluate every assertion in the spec; returns one result per assertion.
+#[must_use]
 pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
     // Ensemble flavor drives the honest wording: None = plain fuzz/single run,
     // Some(mode) = tolerance ensemble (sampled coverage vs bounded corners).
@@ -166,21 +170,14 @@ fn evaluate_hwtrace(
     // In corners mode a member index is a corner number, not a random seed,
     // label it to match evaluate_one, the coverage banner, and every sibling
     // assertion.
-    let member = match mode {
-        Some(crate::tolerance::Mode::Corners) => "corner",
-        _ => "seed",
-    };
+    let member = member_noun(mode);
 
     let hard_fail = |label: String, detail: String| AssertResult {
         detail,
         ..AssertResult::shell(label, "hwtrace", outcomes.len())
     };
 
-    let path = match hwtrace::trace_path(spec, a) {
-        Ok(p) => p,
-        Err(e) => return vec![hard_fail(a.label(), e.to_string())],
-    };
-    let trace = match hwtrace::Trace::load(&path) {
+    let trace = match hwtrace::trace_path(spec, a).and_then(|p| hwtrace::Trace::load(&p)) {
         Ok(t) => t,
         Err(e) => return vec![hard_fail(a.label(), e.to_string())],
     };
@@ -255,11 +252,7 @@ fn evaluate_hwtrace(
                             "{}INVALID: the analog solve failed within {:.2}-{:.2} ms of the \
                              run; the simulated waveform contains held-stale samples, so no \
                              feature comparison against the capture can be trusted.",
-                            if outcomes.len() > 1 {
-                                format!("{}: ", member_label(member, out))
-                            } else {
-                                String::new()
-                            },
+                            member_prefix(member, out, outcomes.len()),
                             fs * 1e3,
                             fe * 1e3
                         ),
@@ -274,14 +267,11 @@ fn evaluate_hwtrace(
 
             let (passed, mut detail, failing_seeds) = match failures.first() {
                 None => (true, last_detail, Vec::new()),
-                Some((out, d)) => {
-                    let d = if outcomes.len() > 1 {
-                        format!("{}: {d}", member_label(member, out))
-                    } else {
-                        d.clone()
-                    };
-                    (false, d, failures.iter().map(|(o, _)| o.seed).collect())
-                }
+                Some((out, d)) => (
+                    false,
+                    member_prefix(member, out, outcomes.len()) + d,
+                    failures.iter().map(|(o, _)| o.seed).collect(),
+                ),
             };
             detail.push_str(provenance);
             results.push(AssertResult {
@@ -313,6 +303,24 @@ fn member_label(member: &str, out: &RunOutcome) -> String {
     }
 }
 
+/// [`member_label`] and `": "` to lead a detail line, or nothing for a single run,
+/// where there is no member to tell apart.
+fn member_prefix(member: &str, out: &RunOutcome, members: usize) -> String {
+    if members > 1 {
+        format!("{}: ", member_label(member, out))
+    } else {
+        String::new()
+    }
+}
+
+/// The noun for an ensemble member index: a corner number in corner mode, else a seed.
+const fn member_noun(mode: Option<crate::tolerance::Mode>) -> &'static str {
+    match mode {
+        Some(crate::tolerance::Mode::Corners) => "corner",
+        _ => "seed",
+    }
+}
+
 /// The shared regulation reason that invalidates this assertion on this member: an
 /// unsupported regulator's output is an ideal source's setpoint, so nothing it
 /// reaches can be judged. `model_coverage` counts bound models, not voltages, and
@@ -321,11 +329,11 @@ fn member_label(member: &str, out: &RunOutcome) -> String {
 /// tainted MCU (`refs[0]` is the regulator; later entries are MCUs it powers) even
 /// when it names no net of its own.
 fn regulation_reason<'a>(a: &Assertion, out: &'a RunOutcome) -> Option<&'a str> {
-    if a.kind == "model_coverage" {
-        return None;
-    }
     fn named(o: [Option<&String>; 2]) -> Vec<&String> {
         o.into_iter().flatten().collect()
+    }
+    if a.kind == "model_coverage" {
+        return None;
     }
     let nets = named([a.net.as_ref(), a.supply_net.as_ref()]);
     let refs = named([a.reference.as_ref(), a.mcu.as_ref()]);
@@ -396,10 +404,7 @@ fn evaluate_one(
     let label = a.label();
     let kind = a.kind.clone();
     // In corner mode a member index is a corner number, not a random seed.
-    let member = match mode {
-        Some(crate::tolerance::Mode::Corners) => "corner",
-        _ => "seed",
-    };
+    let member = member_noun(mode);
 
     // Is this member's analog evaluation window held-stale, i.e. does it overlap
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
@@ -444,11 +449,7 @@ fn evaluate_one(
         // Lead with the first failing member's measurement, then the exact
         // sampled component values it ran with (the actionable artifact), then
         // the ensemble pass-rate.
-        let mut detail = if outcomes.len() > 1 {
-            format!("{}: {first_detail}", member_label(member, first))
-        } else {
-            first_detail.clone()
-        };
+        let mut detail = member_prefix(member, first, outcomes.len()) + first_detail;
         // Non-monotonicity, caught: an interior probe failed where the corners
         // did not. The corner set's whole claim is that an extreme of the inputs
         // produces an extreme of the output, and this is that claim disproved on
@@ -473,52 +474,25 @@ fn evaluate_one(
             );
         }
         if !first.sampled_values.is_empty() {
-            detail.push_str(&format!(
+            let _ = write!(
+                detail,
                 " [{}]",
                 crate::tolerance::describe_values(&first.sampled_values)
-            ));
+            );
         }
+        let failing_seeds: Vec<u32> = failures.iter().map(|(o, _, _)| o.seed).collect();
         if outcomes.len() > 1 {
-            let failing: Vec<String> = failures
-                .iter()
-                .take(8)
-                .map(|(o, _, _)| o.seed.to_string())
-                .collect();
-            let more = if failures.len() > 8 { ", …" } else { "" };
             // The passed count must exclude held-stale (INVALID) members, not fold
             // them into "passed": those members were SKIPPED (member_invalid) and
             // never evaluated, so counting them green over-claims worst-case
-            // coverage on the very surface a reviewer trusts. passed = total −
-            // failed − invalid; surface the invalid count when any occurred.
+            // coverage on the very surface a reviewer trusts.
             let invalid = outcomes.iter().filter(|o| member_invalid(o)).count();
-            let passed = outcomes.len() - failures.len() - invalid;
-            let invalid_note = if invalid > 0 {
-                format!(", {invalid} invalid")
-            } else {
-                String::new()
-            };
-            // The pass-rate must not fold the interior probes into the corner
-            // count. "passed 7/10 corners" on a 2-component board is a lie a
-            // reader can catch with arithmetic (2 components is 4 corners), and
-            // the corner total is exactly what they check the coverage banner
-            // against.
-            let probes = outcomes.iter().filter(|o| o.interior).count();
-            let noun = if probes > 0 {
-                format!("{member}s + interior probes")
-            } else {
-                format!("{member}s")
-            };
-            detail.push_str(&format!(
-                "; passed {}/{} {noun} (failing: {}{more}{invalid_note})",
-                passed,
-                outcomes.len(),
-                failing.join(", "),
-            ));
+            detail.push_str(&pass_rate_note(member, outcomes, &failing_seeds, invalid));
         }
         return AssertResult {
             detail,
             failing_seed: Some(failures[0].0.seed),
-            failing_seeds: failures.iter().map(|(o, _, _)| o.seed).collect(),
+            failing_seeds,
             why: first_why.clone(),
             subject_nets,
             subject_refs,
@@ -535,14 +509,9 @@ fn evaluate_one(
         .iter()
         .find_map(|out| member_invalid_reason(a, out, frame_ms).map(|r| (out, r)))
     {
-        let per_seed = if outcomes.len() > 1 {
-            format!("{}: ", member_label(member, out))
-        } else {
-            String::new()
-        };
         return AssertResult {
             invalid: true,
-            detail: format!("{per_seed}INVALID: {reason}"),
+            detail: member_prefix(member, out, outcomes.len()) + "INVALID: " + &reason,
             failing_seed: Some(out.seed),
             failing_seeds: vec![out.seed],
             subject_nets,
@@ -570,9 +539,45 @@ fn evaluate_one(
     }
 }
 
+/// The ensemble pass-rate a failing assertion's detail line ends with:
+/// `; passed 7/10 seeds (failing: 3, 5, 9)`.
+///
+/// `invalid` members were skipped, never evaluated, so passed = total − failed −
+/// invalid, and the invalid count is surfaced when any occurred.
+fn pass_rate_note(
+    member: &str,
+    outcomes: &[RunOutcome],
+    failing: &[u32],
+    invalid: usize,
+) -> String {
+    let shown: Vec<String> = failing.iter().take(8).map(u32::to_string).collect();
+    let elided = if failing.len() > 8 { ", …" } else { "" };
+    let passed = outcomes.len() - failing.len() - invalid;
+    let invalid_note = if invalid > 0 {
+        format!(", {invalid} invalid")
+    } else {
+        String::new()
+    };
+    // The pass-rate must not fold the interior probes into the corner
+    // count. "passed 7/10 corners" on a 2-component board is a lie a
+    // reader can catch with arithmetic (2 components is 4 corners), and
+    // the corner total is exactly what they check the coverage banner
+    // against.
+    let probes = outcomes
+        .iter()
+        .any(|o| o.interior)
+        .then_some(" + interior probes");
+    format!(
+        "; passed {passed}/{} {member}s{} (failing: {}{elided}{invalid_note})",
+        outcomes.len(),
+        probes.unwrap_or_default(),
+        shown.join(", "),
+    )
+}
+
 /// The all-members-green detail string for an assertion, worded to the ensemble
 /// mode. `members` is the total member count INCLUDING the nominal baseline
-/// (member 0), so a MonteCarlo run reports `members - 1` sampled seeds; the
+/// (member 0), so a `MonteCarlo` run reports `members - 1` sampled seeds; the
 /// nominal draws no random sample and must not be counted as one (mirrors the
 /// run banner in `lib.rs`, which also subtracts the nominal).
 fn all_green_detail(
@@ -658,12 +663,8 @@ pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
         "voltage" | "pulse_width" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
-        "toggle" => Some((0.0, end)),
-        "max_current" | "max_temp" => Some((0.0, end)),
-        "boot_coverage" | "boot-coverage" => {
-            Some((0.0, a.deadline_ms.map(|d| d / 1000.0).unwrap_or(end)))
-        }
-        "rail_window" => Some((0.0, end)),
+        "toggle" | "max_current" | "max_temp" | "rail_window" => Some((0.0, end)),
+        "boot_coverage" | "boot-coverage" => Some((0.0, a.deadline_ms.map_or(end, |d| d / 1000.0))),
         // A vcd_sink's `transitions` field counts analog per-frame threshold
         // crossings (exactly like `toggle`), so a chunk the solver failed on
         // corrupts it and it must be INVALID, not a definite pass/fail. Digital
@@ -678,7 +679,7 @@ pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64
 /// Check one assertion against one seed's outcome. Returns (passed, detail,
 /// why): `why` is the observed-shortfall sentence a failing bound computes
 /// (`None` on a pass, and on kinds whose detail already IS the diagnosis,
-/// e.g. boot_coverage's drive-state analysis).
+/// e.g. `boot_coverage`'s drive-state analysis).
 fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, Option<String>) {
     // Adapter for the kinds whose checks carry no separate `why`.
     fn plain((ok, detail): (bool, String)) -> (bool, String, Option<String>) {
@@ -703,12 +704,14 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
     }
 }
 
-/// model_coverage: hold the line on how much of the board bound to a real model.
+/// `model_coverage`: hold the line on how much of the board bound to a real model.
 ///
 /// The failure text names the parts rather than only the shortfall, because the
 /// list IS the user's next action: each name is either a model to write (the
 /// extending guides take one TOML file) or a part whose vendor keeps its model
 /// encrypted, and those two need different responses.
+// Part counts are far below 2^52, so usize -> f64 is exact.
+#[allow(clippy::cast_precision_loss)]
 fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
     let Some(bind) = out.bind.as_ref() else {
         return (
@@ -818,8 +821,8 @@ struct Verdict {
 }
 
 impl Verdict {
-    fn new() -> Self {
-        Verdict {
+    const fn new() -> Self {
+        Self {
             ok: true,
             parts: Vec::new(),
             whys: Vec::new(),
@@ -845,7 +848,7 @@ impl Verdict {
         if held {
             self.pass(pass_part);
         } else {
-            self.fail(format!("{fail_part} <- FAILED HERE"), Some(why));
+            self.fail(fail_part + " <- FAILED HERE", Some(why));
         }
     }
 
@@ -865,11 +868,11 @@ impl Verdict {
 }
 
 /// A `(false, reason, None)` verdict for a check that never got data.
-fn no_data(reason: String) -> (bool, String, Option<String>) {
+const fn no_data(reason: String) -> (bool, String, Option<String>) {
     (false, reason, None)
 }
 
-/// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
+/// `rail_window`: judge a rail's behaviour over a scenario window: min/max bounds,
 /// dip/spike duration, and recovery/settling time.
 fn check_rail_window(
     a: &crate::spec::Assertion,
@@ -915,75 +918,11 @@ fn check_rail_window(
             ),
         );
     }
-    // The four duration clauses are one shape: a measured interval in ms, the
-    // budget it must fit, the fragment that names it, and the sentence that
-    // names the excess. `dip`/`spike` bound how long the rail sat out of band;
-    // `recover`/`settle` bound how long it took to come back.
-    //
     // A duration needs at least two samples to measure (windows(2) yields
     // nothing from one point, so dip_duration_s folds to 0 and silently
     // auto-passes). A window that spans less than one frame is degenerate:
     // fail loudly rather than claim a timing spec we could not evaluate.
-    let over = |ms: f64, budget: f64| ms - budget;
-    let durations = [
-        a.dip_below.zip(a.for_max_ms).map(|(d, budget)| {
-            let ms = win.dip_duration_s(d) * 1000.0;
-            (
-                format!("dip<{d}V for"),
-                ms,
-                budget,
-                format!(
-                    "{net} sat below {d} V for {ms:.2} ms, {:.2} ms longer than your budget",
-                    over(ms, budget)
-                ),
-            )
-        }),
-        a.dip_below
-            .zip(a.recover_to)
-            .zip(a.recover_within_ms)
-            .map(|((d, r), budget)| {
-                let ms = win.recovery_s(d, r) * 1000.0;
-                (
-                    format!("recover-to-{r}V in"),
-                    ms,
-                    budget,
-                    format!(
-                        "{net} took {ms:.2} ms to climb back to {r} V after dipping below \
-                 {d} V, {:.2} ms past your recovery deadline",
-                        over(ms, budget)
-                    ),
-                )
-            }),
-        a.spike_above.zip(a.spike_for_max_ms).map(|(sp, budget)| {
-            let ms = win.spike_duration_s(sp) * 1000.0;
-            (
-                format!("spike>{sp}V for"),
-                ms,
-                budget,
-                format!(
-                    "{net} stayed above {sp} V for {ms:.2} ms, {:.2} ms longer than your budget",
-                    over(ms, budget)
-                ),
-            )
-        }),
-        a.spike_above
-            .zip(a.settle_to)
-            .zip(a.settle_within_ms)
-            .map(|((sp, settle), budget)| {
-                let ms = win.settling_s(sp, settle) * 1000.0;
-                (
-                    format!("settle-to-{settle}V in"),
-                    ms,
-                    budget,
-                    format!(
-                        "{net} took {ms:.2} ms to settle to {settle} V after spiking above \
-                 {sp} V, {:.2} ms past your settling deadline",
-                        over(ms, budget)
-                    ),
-                )
-            }),
-    ];
-    for (what, ms, budget, why) in durations.into_iter().flatten() {
+    for (what, ms, budget, why) in rail_durations(a, win, &net).into_iter().flatten() {
         if win.samples.len() < 2 {
             v.fail(
                 format!(
@@ -1010,7 +949,79 @@ fn check_rail_window(
     v.finish(detail)
 }
 
-/// protection_trip: whether a supply net's battery protection latched.
+/// The rail window's configured duration clauses, each as `(fragment, measured
+/// ms, budget ms, excess sentence)`.
+///
+/// The four duration clauses are one shape: a measured interval in ms, the
+/// budget it must fit, the fragment that names it, and the sentence that
+/// names the excess. `dip`/`spike` bound how long the rail sat out of band;
+/// `recover`/`settle` bound how long it took to come back.
+fn rail_durations(
+    a: &crate::spec::Assertion,
+    win: &crate::scenarios::RailWindow,
+    net: &str,
+) -> [Option<(String, f64, f64, String)>; 4] {
+    [
+        a.dip_below.zip(a.for_max_ms).map(|(d, budget)| {
+            let ms = win.dip_duration_s(d) * 1000.0;
+            (
+                format!("dip<{d}V for"),
+                ms,
+                budget,
+                format!(
+                    "{net} sat below {d} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    ms - budget
+                ),
+            )
+        }),
+        a.dip_below
+            .zip(a.recover_to)
+            .zip(a.recover_within_ms)
+            .map(|((d, r), budget)| {
+                let ms = win.recovery_s(d, r) * 1000.0;
+                (
+                    format!("recover-to-{r}V in"),
+                    ms,
+                    budget,
+                    format!(
+                        "{net} took {ms:.2} ms to climb back to {r} V after dipping below \
+                 {d} V, {:.2} ms past your recovery deadline",
+                        ms - budget
+                    ),
+                )
+            }),
+        a.spike_above.zip(a.spike_for_max_ms).map(|(sp, budget)| {
+            let ms = win.spike_duration_s(sp) * 1000.0;
+            (
+                format!("spike>{sp}V for"),
+                ms,
+                budget,
+                format!(
+                    "{net} stayed above {sp} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    ms - budget
+                ),
+            )
+        }),
+        a.spike_above
+            .zip(a.settle_to)
+            .zip(a.settle_within_ms)
+            .map(|((sp, settle), budget)| {
+                let ms = win.settling_s(sp, settle) * 1000.0;
+                (
+                    format!("settle-to-{settle}V in"),
+                    ms,
+                    budget,
+                    format!(
+                        "{net} took {ms:.2} ms to settle to {settle} V after spiking above \
+                 {sp} V, {:.2} ms past your settling deadline",
+                        ms - budget
+                    ),
+                )
+            }),
+    ]
+}
+
+/// `protection_trip`: whether a supply net's battery protection latched.
 fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.supply_net.clone().unwrap_or_default();
     let want = a.expect_trip.unwrap_or(false);
@@ -1042,23 +1053,18 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
         }
         None => out.protection_tripped.get(&net).copied(),
     };
-    match tripped {
-        Some(t) => {
-            let ok = t == want;
-            (
-                ok,
-                format!(
-                    "{net} protection {} (expected {})",
-                    if t { "TRIPPED" } else { "held" },
-                    if want { "trip" } else { "no trip" }
-                ),
-            )
-        }
-        None => (
-            false,
-            format!("{net} has no battery protection supply leg (nothing to trip)"),
+    let Some(t) = tripped else {
+        let why = format!("{net} has no battery protection supply leg (nothing to trip)");
+        return (false, why);
+    };
+    (
+        t == want,
+        format!(
+            "{net} protection {} (expected {})",
+            if t { "TRIPPED" } else { "held" },
+            if want { "trip" } else { "no trip" }
         ),
-    }
+    )
 }
 
 /// Boot-coverage: the control net named by `net` must reach its defined level
@@ -1222,7 +1228,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 ///     it was driven, the voltage just never crossed the threshold;
 ///   - it is not driven and the backend can report drive direction (the AVR
 ///     backend reads DDR; a Renode part with a direction-register map in its
-///     SoC descriptor reads MODER/CRL+CRH/DIR, either way a held-LOW pin is
+///     `SoC` descriptor reads MODER/CRL+CRH/DIR, either way a held-LOW pin is
 ///     known driven): a net absent here is genuinely undriven / Hi-Z;
 ///   - it is not driven and the backend cannot report drive direction (QEMU,
 ///     or a Renode part without a dir map, those see drive state only through
@@ -1454,14 +1460,13 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // STABLE (sorted-by-key) order: iterating a HashMap's values put the
     // streams in nondeterministic order, so an anchored/boundary-spanning
     // match (`^BOOT`) flaked run to run.
-    let text: String = match &a.mcu {
-        Some(m) => out.uart.get(m).cloned().unwrap_or_default(),
-        None => {
-            let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
-            items.sort();
-            items.into_iter().map(|(_, v)| v.as_str()).collect()
-        }
-    };
+    let text: String = a.mcu.as_ref().map_or_else(
+        || {
+            let sorted: std::collections::BTreeMap<_, _> = out.uart.iter().collect();
+            sorted.into_values().map(String::as_str).collect()
+        },
+        |m| out.uart.get(m).cloned().unwrap_or_default(),
+    );
     let preview = truncate(&text.replace(['\r', '\n'], "·"), 60);
 
     if let Some(needle) = &a.contains {
@@ -1567,7 +1572,7 @@ fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String
     }
 }
 
-/// pulse_width: the width of the first COMPLETE pulse on `net` at or after
+/// `pulse_width`: the width of the first COMPLETE pulse on `net` at or after
 /// `after_ms`, high by default and low under `level = "low"`, in milliseconds.
 ///
 /// The threshold and the interpolation are the frequency path's
@@ -1663,6 +1668,8 @@ fn bound_clauses(
 /// changes and divide by the run: that charged the rate for the partial periods
 /// at BOTH ends and for a start-up cycle unlike the rest (a 555's first charge
 /// runs to ln 3, not ln 2: 4% low on a board right to 0.3%, needing 7% to pass).
+// A period count is far below 2^52, so usize -> f64 is exact.
+#[allow(clippy::cast_precision_loss)]
 pub(crate) fn edge_rate(series: &[(f64, f64)], dt_s: f64) -> Result<(f64, String), String> {
     let edges = crate::hwtrace::detect_edges(series, None);
     let rising: Vec<f64> = edges.iter().filter(|e| e.rising).map(|e| e.t).collect();
@@ -1683,7 +1690,7 @@ pub(crate) fn edge_rate(series: &[(f64, f64)], dt_s: f64) -> Result<(f64, String
     ))
 }
 
-/// phase_margin: the loop's phase margin (degrees) at gain crossover must lie in
+/// `phase_margin`: the loop's phase margin (degrees) at gain crossover must lie in
 /// the requested bound. The loop gain is read at `net` from the shared AC sweep.
 fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
@@ -1715,7 +1722,7 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<
     v.finish(detail)
 }
 
-/// ac_gain: the magnitude (dB) at `net` must lie in the requested bound, at the
+/// `ac_gain`: the magnitude (dB) at `net` must lie in the requested bound, at the
 /// frequency `freq_hz` (interpolated) or, if absent, over the whole sweep.
 fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
@@ -1851,7 +1858,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<S
 ///
 /// A multi-unit package stamps one device per unit, so a bare `.get(reference)`
 /// would always miss and silently drop a safety assert into its no-data branch.
-/// Ties break on the unit key so the reported unit is stable across HashMap
+/// Ties break on the unit key so the reported unit is stable across `HashMap`
 /// iteration order.
 fn peak_for_ref(
     map: &std::collections::HashMap<String, f64>,
@@ -1876,7 +1883,7 @@ fn unit_note(noun: &str, key: &str, reference: &str) -> String {
 /// Does a per-device map key (or fault component name) belong to `reference`?
 /// True for the bare ref itself and for any of its per-unit keys: a multi-unit
 /// package stamps one device per unit with a `_q<N>` / `_s<N>` suffix
-/// ("IC3906_q2", "SW1_s0"), so per-unit producers (`peak_temp_c`, faults) never
+/// ("`IC3906_q2`", "`SW1_s0`"), so per-unit producers (`peak_temp_c`, faults) never
 /// record the bare package ref. Mirrors the binder's suffix rule; the runner's
 /// trackability gate uses this same test to accept a bare ref whose units are
 /// monitored, so the consumers here match exactly the keys the gate admitted,
@@ -1895,7 +1902,7 @@ pub(crate) fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
         })
 }
 
-/// max_temp: the steady-state junction temperature of `ref` must stay at or
+/// `max_temp`: the steady-state junction temperature of `ref` must stay at or
 /// below `celsius` (if given) or below the device's own max junction temp (if
 /// not, in which case we lean on whether an overtemperature fault fired).
 ///
@@ -1978,8 +1985,8 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         .faults
         .iter()
         .find(|f| key_belongs_to_ref(&reference, &f.component) && f.kind == "overtemperature");
-    match over {
-        Some(f) => (
+    if let Some(f) = over {
+        (
             false,
             format!(
                 "Tj({}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
@@ -1992,28 +1999,27 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
                 f.limit,
                 f.t_ms
             )),
-        ),
-        None => {
-            // No sample at all: the junction was never estimated, so this
-            // guard was never evaluated. Reporting it green would be the
-            // same vacuous pass the load-time untracked-ref refusal exists to
-            // prevent; fail with the reason instead (max_current's no-data
-            // branch is the same discipline).
-            let Some((_, tj)) = peak else {
-                return (
-                    false,
-                    format!(
-                        "Tj({reference}): no dissipation was ever measured, so its junction \
-                         temperature was never estimated; the guard was never evaluated and \
-                         cannot be reported green (give the assert an explicit `celsius`, \
-                         or point it at a part this run actually stresses)"
-                    ),
-                    None,
-                );
-            };
-            let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
-            (true, detail, None)
-        }
+        )
+    } else {
+        // No sample at all: the junction was never estimated, so this
+        // guard was never evaluated. Reporting it green would be the
+        // same vacuous pass the load-time untracked-ref refusal exists to
+        // prevent; fail with the reason instead (max_current's no-data
+        // branch is the same discipline).
+        let Some((_, tj)) = peak else {
+            return (
+                false,
+                format!(
+                    "Tj({reference}): no dissipation was ever measured, so its junction \
+                     temperature was never estimated; the guard was never evaluated and \
+                     cannot be reported green (give the assert an explicit `celsius`, \
+                     or point it at a part this run actually stresses)"
+                ),
+                None,
+            );
+        };
+        let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
+        (true, detail, None)
     }
 }
 
@@ -2041,12 +2047,12 @@ mod tests {
     }
 
     /// `n` samples at `dt` of a 0-5 V `P`-long wave: `duty` high, `rise` edges.
-    fn wave(duty: f64, phase: f64, rise: f64, dt: f64, n: usize) -> Vec<(f64, f64)> {
+    fn wave(duty: f64, phase: f64, rise: f64, dt: f64, n: u32) -> Vec<(f64, f64)> {
         const P: f64 = 1e-3;
         let ramp = |x: f64| 5.0 * (x / rise.max(1e-12)).min(1.0);
         (0..n)
             .map(|i| {
-                let (t, hi) = (i as f64 * dt, duty * P);
+                let (t, hi) = (f64::from(i) * dt, duty * P);
                 let u = (t / P + phase).fract() * P;
                 let v = if u < hi { ramp(u) } else { 5.0 - ramp(u - hi) };
                 (t, v)
@@ -2641,7 +2647,7 @@ mod tests {
         fn square(period_s: f64) -> Vec<(f64, f64)> {
             (0..=1000)
                 .map(|i| {
-                    let t = i as f64 * 0.001;
+                    let t = f64::from(i) * 0.001;
                     let v = if (t / period_s).fract() >= 0.5 {
                         4.9
                     } else {
@@ -2654,10 +2660,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hb_hwtrace_prec_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let csv: String = square(0.2)
+        let csv = square(0.2)
             .iter()
-            .map(|(t, v)| format!("{t:.4},{v:.3}\n"))
-            .collect();
+            .map(|(t, v)| format!("{t:.4},{v:.3}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         std::fs::write(dir.join("d.csv"), format!("time_s,volts\n{csv}")).unwrap();
         std::fs::write(
             dir.join("trace.toml"),

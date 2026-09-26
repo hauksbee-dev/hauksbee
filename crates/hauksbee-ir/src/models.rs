@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 mod nonfinite_f64 {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    // serde's `serialize_with` contract fixes the `&T` parameter.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
         if v.is_finite() {
             s.serialize_f64(*v)
@@ -59,6 +61,7 @@ pub fn celsius_to_kelvin(t_c: f64) -> f64 {
 }
 
 /// Thermal voltage `Vt = kT/q` at temperature `t_c` (Celsius).
+#[must_use]
 pub fn thermal_voltage(t_c: f64) -> f64 {
     KB_OVER_Q * celsius_to_kelvin(t_c)
 }
@@ -86,7 +89,8 @@ pub enum Polarity {
 impl Polarity {
     /// `+1.0` for N-type, `-1.0` for P-type; multiplies terminal voltages and
     /// currents so one set of equations serves both polarities.
-    pub fn sign(self) -> f64 {
+    #[must_use]
+    pub const fn sign(self) -> f64 {
         match self {
             Self::N => 1.0,
             Self::P => -1.0,
@@ -153,6 +157,7 @@ impl Default for DiodeModel {
 
 impl DiodeModel {
     /// Temperature-corrected saturation current at `t_c` (Celsius).
+    #[must_use]
     pub fn is_at(&self, t_c: f64) -> f64 {
         saturation_current(self.is, self.n, self.xti, self.eg, t_c)
     }
@@ -264,24 +269,25 @@ impl Default for BjtModel {
 }
 
 /// serde defaults for the SGP parameters whose "off" value is not zero.
-fn f64_infinity() -> f64 {
+const fn f64_infinity() -> f64 {
     f64::INFINITY
 }
-fn f64_two() -> f64 {
+const fn f64_two() -> f64 {
     2.0
 }
-fn f64_mj() -> f64 {
+const fn f64_mj() -> f64 {
     0.33
 }
-fn f64_vj() -> f64 {
+const fn f64_vj() -> f64 {
     0.75
 }
-fn f64_fc() -> f64 {
+const fn f64_fc() -> f64 {
     0.5
 }
 
 impl BjtModel {
     /// Temperature-corrected transport saturation current.
+    #[must_use]
     pub fn is_at(&self, t_c: f64) -> f64 {
         saturation_current(self.is, self.nf, self.xti, self.eg, t_c)
     }
@@ -394,6 +400,7 @@ impl Default for MosfetModel {
 
 impl MosfetModel {
     /// Effective transconductance `beta = KP * (W/L)`.
+    #[must_use]
     pub fn beta(&self) -> f64 {
         self.kp * self.w_over_l
     }
@@ -401,6 +408,7 @@ impl MosfetModel {
     /// Whether the model carries any gate capacitance (overlap or intrinsic).
     /// The gate terminal conducts (displacement current) exactly when this
     /// holds; a default model keeps the gate an ideal open, bit-identically.
+    #[must_use]
     pub fn has_gate_charge(&self) -> bool {
         self.cgs_ov > 0.0 || self.cgd_ov > 0.0 || self.c_ox > 0.0
     }
@@ -408,6 +416,7 @@ impl MosfetModel {
     /// Whether the model carries bulk-junction physics: the body-diode DC
     /// branch (`body_is`) or either depletion capacitance. The bulk terminal
     /// conducts exactly when this holds.
+    #[must_use]
     pub fn has_body_diode(&self) -> bool {
         self.body_is > 0.0 || self.cbd > 0.0 || self.cbs > 0.0
     }

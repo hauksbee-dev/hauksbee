@@ -56,10 +56,11 @@ pub const ESP_QEMU_REPO: &str = "espressif/qemu";
 /// reached to resolve `releases/latest`. Verified live on 2026-07-10.
 pub const FALLBACK_TAG: &str = "esp-develop-9.2.2-20260417";
 
-/// What Intel macOS installs instead of `BROKEN_INTEL_MAC_TAG` (a private
-/// sibling constant naming the mislabeled release): the
-/// previous release of the same QEMU 9.2.2 fork, whose `x86_64-apple-darwin`
-/// archives contain genuine `x86_64` binaries.
+/// What Intel macOS installs instead of `BROKEN_INTEL_MAC_TAG`.
+///
+/// `BROKEN_INTEL_MAC_TAG` is a private sibling constant naming the mislabeled
+/// release; this is the previous release of the same QEMU 9.2.2 fork, whose
+/// `x86_64-apple-darwin` archives contain genuine `x86_64` binaries.
 pub const INTEL_MAC_FALLBACK_TAG: &str = "esp-develop-9.2.2-20250817";
 
 /// This release's `x86_64-apple-darwin` archives are mislabeled upstream:
@@ -72,6 +73,10 @@ const BROKEN_INTEL_MAC_TAG: &str = "esp-develop-9.2.2-20260417";
 /// Where the installer unpacks: `~/.hauksbee-qemu-esp`. The binaries land in
 /// `<root>/qemu/bin/`, which is the first conventional location `find_qemu`
 /// checks.
+///
+/// # Errors
+///
+/// When `HOME` is not set.
 pub fn install_root() -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .ok_or_else(|| anyhow::anyhow!("HOME is not set; cannot pick an install directory"))?;
@@ -80,7 +85,8 @@ pub fn install_root() -> Result<PathBuf> {
 
 /// The release-asset tool prefix for an architecture (`qemu-xtensa` /
 /// `qemu-riscv32`), as used in the published asset names.
-pub fn tool_name(arch: QemuArch) -> &'static str {
+#[must_use]
+pub const fn tool_name(arch: QemuArch) -> &'static str {
     match arch {
         QemuArch::Xtensa => "qemu-xtensa",
         QemuArch::Riscv32 => "qemu-riscv32",
@@ -88,13 +94,20 @@ pub fn tool_name(arch: QemuArch) -> &'static str {
 }
 
 /// The `<os>-<arch>` suffix Espressif uses in its release asset names, for
-/// this host. The four supported unix targets mirror
+/// this host.
+///
+/// The four supported unix targets mirror
 /// `scripts/install-sims.sh`. Windows publishes a `x86_64-w64-mingw32` asset
 /// and discovery (`qemu::process`) does resolve a manually unpacked `.exe`
 /// tree, but this installer shells `curl` and `tar`, which a stock Windows
 /// box may not have in compatible form and which no native Windows runner has
 /// exercised; auto-install is therefore refused there with manual guidance
 /// rather than half-installed.
+///
+/// # Errors
+///
+/// On any host other than macOS or Linux on `aarch64`/`x86_64`, with manual
+/// install guidance.
 pub fn host_asset_triple() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
@@ -123,12 +136,15 @@ pub fn host_asset_triple() -> Result<&'static str> {
 /// The asset's version fragment for a release tag: dashes become underscores
 /// (`esp-develop-9.2.2-20260417` -> `esp_develop_9.2.2_20260417`). Verified
 /// against the live release's published names.
+#[must_use]
 pub fn tag_to_asset_version(tag: &str) -> String {
     tag.replace('-', "_")
 }
 
 /// Pick the published asset for `arch` + `triple` out of a release's asset
-/// list. Matches the shape `qemu-<tool>-softmmu-*-<triple>.tar.{xz,bz2,gz}`
+/// list.
+///
+/// Matches the shape `qemu-<tool>-softmmu-*-<triple>.tar.{xz,bz2,gz}`
 /// so it survives upstream's historical renames (separator and compression
 /// changes) without constructing a name that 404s.
 pub fn pick_asset<'a, I>(names: I, arch: QemuArch, triple: &str) -> Option<String>
@@ -146,6 +162,7 @@ where
 
 /// The constructed (fallback) asset name for when the release's asset list
 /// cannot be fetched: the modern `.tar.xz` form with the underscored version.
+#[must_use]
 pub fn constructed_asset_name(arch: QemuArch, tag: &str, triple: &str) -> String {
     format!(
         "{}-softmmu-{}-{}.tar.xz",
@@ -157,6 +174,7 @@ pub fn constructed_asset_name(arch: QemuArch, tag: &str, triple: &str) -> String
 
 /// The checksum-manifest asset name for a release
 /// (`qemu-<ver>-checksum.sha256`).
+#[must_use]
 pub fn checksum_asset_name(tag: &str) -> String {
     format!("qemu-{}-checksum.sha256", tag_to_asset_version(tag))
 }
@@ -164,6 +182,7 @@ pub fn checksum_asset_name(tag: &str) -> String {
 /// Extract `asset`'s sha256 from the release's checksum manifest. Lines look
 /// like `<hex> *<asset-name>` (a leading `*` marks binary mode); `#` lines
 /// are comments.
+#[must_use]
 pub fn checksum_for(manifest: &str, asset: &str) -> Option<String> {
     for line in manifest.lines() {
         let line = line.trim();
@@ -284,8 +303,15 @@ fn tar(what: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
 }
 
 /// Resolve the release tag and per-arch asset names/URLs/checksums for this
-/// host. Network-touching (GitHub API + the checksum asset); everything it
+/// host.
+///
+/// Network-touching (GitHub API + the checksum asset); everything it
 /// returns is inspectable before any archive is downloaded.
+///
+/// # Errors
+///
+/// When the host has no published asset triple, the latest release carries no
+/// `tag_name`, or it publishes no asset for a requested arch.
 pub fn plan(arches: &[QemuArch], progress: &mut dyn FnMut(&str)) -> Result<InstallPlan> {
     let triple = host_asset_triple()?;
 
@@ -381,9 +407,16 @@ fn sha256_file(path: &Path) -> Result<String> {
     bail!("neither sha256sum nor shasum is available to verify the download")
 }
 
-/// Unpack one downloaded release archive into `root`. The archive carries a
-/// top-level `qemu/` directory, so this yields `<root>/qemu/bin/...`. The
-/// system `tar` sniffs the compression (xz today, bz2 historically).
+/// Unpack one downloaded release archive into `root`.
+///
+/// The archive carries a top-level `qemu/` directory, so this yields
+/// `<root>/qemu/bin/...`. The system `tar` sniffs the compression (xz today,
+/// bz2 historically).
+///
+/// # Errors
+///
+/// When the archive holds an unsafe member (traversal, link or device),
+/// `root` cannot be created, or `tar` fails.
 pub fn unpack_archive(archive: &Path, root: &Path) -> Result<()> {
     validate_archive_members(archive)?;
     std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
@@ -432,9 +465,16 @@ fn validate_archive_members(archive: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Post-unpack acceptance for one arch under `root`: the binary must exist at
-/// the discovery path AND pass the same Espressif-fork machine-list check
-/// `find_qemu` applies. No half-installs: a failure names what to fix.
+/// Post-unpack acceptance for one arch under `root`.
+///
+/// The binary must exist at the discovery path AND pass the same
+/// Espressif-fork machine-list check `find_qemu` applies. No half-installs: a
+/// failure names what to fix.
+///
+/// # Errors
+///
+/// When the binary is missing, its permissions cannot be set, or it is not
+/// the Espressif fork.
 pub fn verify_installed(arch: QemuArch, root: &Path) -> Result<PathBuf> {
     let bin = root.join("qemu/bin").join(arch.binary_name());
     if !bin.is_file() {
@@ -650,6 +690,11 @@ fn recover_interrupted_install(
 /// the accepted binary paths in `arches` order. On any failure the error
 /// carries the manual-install pointer; nothing is left half-accepted (the
 /// fork check gates every binary).
+///
+/// # Errors
+///
+/// When `HOME` is unset, planning, download, checksum verification, unpack
+/// or acceptance fails, or the candidate tree cannot be swapped into place.
 pub fn install_esp_qemu(
     arches: &[QemuArch],
     progress: &mut dyn FnMut(&str),
@@ -659,16 +704,15 @@ pub fn install_esp_qemu(
         .iter()
         .copied()
         .filter(|&a| {
-            if let Ok(existing) = super::find_qemu(a) {
-                progress(&format!(
-                    "{} already discoverable at {}; skipping",
-                    a.binary_name(),
-                    existing.display()
-                ));
-                false
-            } else {
-                true
-            }
+            let Ok(existing) = super::find_qemu(a) else {
+                return true;
+            };
+            progress(&format!(
+                "{} already discoverable at {}; skipping",
+                a.binary_name(),
+                existing.display()
+            ));
+            false
         })
         .collect();
     if missing.is_empty() {

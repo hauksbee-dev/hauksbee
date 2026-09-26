@@ -6,23 +6,25 @@
 
 use crate::support::{self, repo_root};
 use hauksbee_ci::{report::CiResult, RunConfig};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// A board with two supply-ish nets: `VCC` (5 V by convention, so it resolves)
 /// and `ANALOG_VDD` (a supply with no readable magnitude). Enough parts hang off
-/// ANALOG_VDD for it to read as a rail rather than a signal.
+/// `ANALOG_VDD` for it to read as a rail rather than a signal.
 fn board_with_a_nameless_rail(dir: &Path) -> PathBuf {
     let mut nodes_vcc = String::new();
     let mut nodes_avdd = String::new();
     let mut comps = String::new();
     for i in 1..=8 {
-        comps.push_str(&format!(
+        let _ = writeln!(
+            comps,
             "    (comp (ref \"R{i}\") (value \"10k\") \
              (footprint \"Resistor_SMD:R_0603_1608Metric\") \
-             (libsource (lib \"Device\") (part \"R\")))\n"
-        ));
-        nodes_avdd.push_str(&format!("      (node (ref \"R{i}\") (pin \"1\"))\n"));
-        nodes_vcc.push_str(&format!("      (node (ref \"R{i}\") (pin \"2\"))\n"));
+             (libsource (lib \"Device\") (part \"R\")))"
+        );
+        let _ = writeln!(nodes_avdd, "      (node (ref \"R{i}\") (pin \"1\"))");
+        let _ = writeln!(nodes_vcc, "      (node (ref \"R{i}\") (pin \"2\"))");
     }
     let net = format!(
         "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\
@@ -176,7 +178,7 @@ fn the_scaffold_asks_about_the_rail_it_cannot_resolve() {
     );
 }
 
-/// The AeroFC shape: a rail the binder can price by name (`+3V3`) next to a
+/// The `AeroFC` shape: a rail the binder can price by name (`+3V3`) next to a
 /// battery rail it cannot (`VBAT`, in the engine's supply-token list but with
 /// no readable magnitude). Enough parts on VBAT for it to read as a rail.
 fn board_with_a_battery_rail(dir: &Path) -> PathBuf {
@@ -184,13 +186,14 @@ fn board_with_a_battery_rail(dir: &Path) -> PathBuf {
     let mut nodes_vbat = String::new();
     let mut comps = String::new();
     for i in 1..=8 {
-        comps.push_str(&format!(
+        let _ = writeln!(
+            comps,
             "    (comp (ref \"R{i}\") (value \"10k\") \
              (footprint \"Resistor_SMD:R_0603_1608Metric\") \
-             (libsource (lib \"Device\") (part \"R\")))\n"
-        ));
-        nodes_vbat.push_str(&format!("      (node (ref \"R{i}\") (pin \"1\"))\n"));
-        nodes_3v3.push_str(&format!("      (node (ref \"R{i}\") (pin \"2\"))\n"));
+             (libsource (lib \"Device\") (part \"R\")))"
+        );
+        let _ = writeln!(nodes_vbat, "      (node (ref \"R{i}\") (pin \"1\"))");
+        let _ = writeln!(nodes_3v3, "      (node (ref \"R{i}\") (pin \"2\"))");
     }
     let net = format!(
         "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\

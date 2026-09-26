@@ -335,7 +335,7 @@ fn assertion_scenario_scopes_are_validated() {
     ));
 }
 
-/// The vendor-recommended ESP32 CHIP_PU delay, as a board: 10k from the rail to
+/// The vendor-recommended ESP32 `CHIP_PU` delay, as a board: 10k from the rail to
 /// PU, 1 uF from PU to ground, so the crossing time is `R*C*ln(4)` = 13.86 ms.
 fn rc_delay_board() -> String {
     let parts = support::comp(

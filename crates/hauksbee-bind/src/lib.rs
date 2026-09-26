@@ -40,8 +40,10 @@ pub mod thermal;
 pub mod waiver;
 
 /// Distinct process exit code for "the board is invalid for the analysis you
-/// asked for", a meaningless result, not a clean one. Kept at this layer so the
-/// binder's refusals, the CLI and hauksbee-ci share one source of truth.
+/// asked for", a meaningless result, not a clean one.
+///
+/// Kept at this layer so the binder's refusals, the CLI and hauksbee-ci share
+/// one source of truth.
 pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};

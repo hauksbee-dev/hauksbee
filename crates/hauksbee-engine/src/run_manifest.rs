@@ -155,13 +155,13 @@ pub struct EnvironmentContract {
     pub selectors: Vec<EnvironmentSelector>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invocation {
     pub argv: Vec<String>,
     pub options: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunManifest {
     pub schema_version: u32,
     pub manifest_id: String,
@@ -181,6 +181,14 @@ pub struct RunManifest {
 }
 
 impl RunManifest {
+    /// Hash every requested input and capture the tool, build and environment
+    /// identity into a new manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command is empty, if an input is a symlink or
+    /// cannot be read or hashed, if two inputs share a role and path, or if the
+    /// manifest cannot be serialized to compute its id.
     pub fn capture(mut request: ManifestRequest) -> Result<Self> {
         if request.command.is_empty() {
             bail!("manifest command must contain argv[0]");
@@ -234,8 +242,12 @@ impl RunManifest {
     }
 
     /// Stable pretty JSON with a single trailing newline. Struct field order,
-    /// BTreeMap keys, input order, feature order, and environment order are all
+    /// `BTreeMap` keys, input order, feature order, and environment order are all
     /// canonicalized before this point.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the manifest cannot be serialized to JSON.
     pub fn canonical_json(&self) -> Result<String> {
         let mut json = serde_json::to_string_pretty(self).context("serializing run manifest")?;
         json.push('\n');
@@ -245,11 +257,17 @@ impl RunManifest {
     /// Persist without replacing an existing artifact. The complete bytes are
     /// staged beside the destination and installed with `persist_noclobber`, so
     /// interruption cannot expose a partially-written manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output directory does not exist or cannot be
+    /// resolved, if the output lies inside a hashed input directory, if staging,
+    /// writing or syncing the temporary file fails, or if `path` already exists.
     pub fn write_new(&self, path: &Path) -> Result<()> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
+            .unwrap_or_else(|| Path::new("."));
         if !parent.is_dir() {
             bail!(
                 "manifest output directory '{}' does not exist",
@@ -294,6 +312,13 @@ impl RunManifest {
         Ok(())
     }
 
+    /// Read a manifest and check its schema version and self-describing id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or parsed, if its
+    /// `schema_version` is unsupported, or if its `manifest_id` does not match
+    /// the id computed from its content.
     pub fn read_verified(path: &Path) -> Result<Self> {
         let bytes =
             fs::read(path).with_context(|| format!("reading run manifest '{}'", path.display()))?;
@@ -317,6 +342,12 @@ impl RunManifest {
         Ok(manifest)
     }
 
+    /// Re-hash every recorded input and compare it with the manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an input can no longer be read or hashed, or if its
+    /// kind, digest, size or file count differs from the recorded value.
     pub fn verify_inputs(&self) -> Result<()> {
         for expected in &self.inputs {
             let actual = hash_input(&ManifestInput::new(&expected.role, &expected.path))?;
@@ -337,6 +368,12 @@ impl RunManifest {
         Ok(())
     }
 
+    /// Check that the reproducibility environment selectors match this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming each selector whose hashed value (or presence)
+    /// differs from the recorded environment; the values themselves are withheld.
     pub fn verify_environment(&self) -> Result<()> {
         let current = capture_environment();
         if current != self.environment {
@@ -365,6 +402,11 @@ impl RunManifest {
         Ok(())
     }
 
+    /// Check that the running build's tool identity matches the manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool name, version or git revision differs.
     pub fn verify_tool(&self, current: &ToolIdentity) -> Result<()> {
         if &self.tool != current {
             bail!(
@@ -404,11 +446,14 @@ fn capture_plugins() -> Vec<PluginRevision> {
     plugins
 }
 
-/// Current process argv normalized for a portable replay. The executable is
-/// the published tool name, not a checkout-specific `target/` path, and the
-/// emission option is removed so replay cannot overwrite its source manifest.
+/// Current process argv normalized for a portable replay.
+///
+/// The executable is the published tool name, not a checkout-specific `target/`
+/// path, and the emission option is removed so replay cannot overwrite its
+/// source manifest.
+#[must_use]
 pub fn replay_argv(tool_name: &str) -> Vec<String> {
-    let mut source = std::env::args().skip(1).peekable();
+    let mut source = std::env::args().skip(1);
     let mut argv = vec![tool_name.to_string()];
     while let Some(arg) = source.next() {
         if arg == "--emit-manifest" {
@@ -423,9 +468,11 @@ pub fn replay_argv(tool_name: &str) -> Vec<String> {
     argv
 }
 
-/// Replace path-valued argv tokens (including `--flag=PATH`) with absolute
-/// paths. This removes the original process cwd from the replay contract
-/// without serializing that cwd as a separate ambient/private field.
+/// Replace path-valued argv tokens (including `--flag=PATH`) with absolute paths.
+///
+/// This removes the original process cwd from the replay contract without
+/// serializing that cwd as a separate ambient/private field.
+#[must_use]
 pub fn absolutize_argv_paths(mut argv: Vec<String>, base: &Path, paths: &[PathBuf]) -> Vec<String> {
     let replacements = paths
         .iter()
@@ -442,7 +489,7 @@ pub fn absolutize_argv_paths(mut argv: Vec<String>, base: &Path, paths: &[PathBu
     for arg in &mut argv {
         for (original, absolute) in &replacements {
             if arg == original {
-                *arg = absolute.clone();
+                arg.clone_from(absolute);
                 break;
             }
             if let Some((flag, value)) = arg.split_once('=') {
@@ -477,9 +524,11 @@ pub fn implicit_model_inputs() -> Vec<ManifestInput> {
     .collect()
 }
 
-/// Auto-discovered files beside a board which change a run without appearing
-/// as explicit CLI arguments: KiCad project clearance rules and Hauksbee
-/// waivers. Missing sidecars are the ordinary case and are omitted.
+/// Auto-discovered files beside a board which change a run without appearing in argv.
+///
+/// These are `KiCad` project clearance rules and Hauksbee waivers, which are not
+/// explicit CLI arguments. Missing sidecars are the ordinary case and are
+/// omitted.
 pub fn board_sidecar_inputs(board: &Path, role_prefix: &str) -> Vec<ManifestInput> {
     let mut inputs = Vec::new();
     if board
@@ -506,8 +555,16 @@ pub fn board_sidecar_inputs(board: &Path, role_prefix: &str) -> Vec<ManifestInpu
 }
 
 /// Verify and execute a manifest through one of the two fixed run binaries.
+///
 /// The document cannot nominate an arbitrary program: only `hauksbee` and
-/// `hauksbee-ci` are accepted, and `argv[0]` must agree with the signed tool name.
+/// `hauksbee-ci` are accepted, and `argv[0]` must agree with the signed tool
+/// name. On success the process exits with the replayed run's code.
+///
+/// # Errors
+///
+/// Returns an error if the manifest fails [`RunManifest::read_verified`], names
+/// an unsupported tool or a mismatched `argv[0]`, fails the tool, environment or
+/// input verification, or if the executable cannot be located or launched.
 pub fn reproduce(path: &Path) -> Result<()> {
     let manifest = RunManifest::read_verified(path)?;
     if !matches!(manifest.tool.name.as_str(), "hauksbee" | "hauksbee-ci") {
@@ -670,11 +727,12 @@ fn directory_files(root: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(files)
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+/// Lowercase hex SHA-256 of `bytes`.
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     bytes_to_hex(&Sha256::digest(bytes))
 }
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
+pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

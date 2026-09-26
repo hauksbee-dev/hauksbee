@@ -1,6 +1,6 @@
 //! Two-sided validation of the behavioural power-IC models against the
-//! documented MNT Reform / ZSWatch DevKit revision faults
-//! (docs/evidence/KNOWN_FAULTS_VALIDATION.md). Each test flags the faulty revision for
+//! documented MNT Reform / `ZSWatch` `DevKit` revision faults
+//! (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`). Each test flags the faulty revision for
 //! exactly the thing the next revision fixed, and goes clean on the fix, the
 //! strongest calibration the tool can have.
 //!
@@ -37,9 +37,10 @@ fn corpus_root() -> Option<PathBuf> {
 }
 
 fn require_corpus(what: &str) {
-    if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but required corpus path is missing: {what}");
-    }
+    assert!(
+        std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+        "HAUKSBEE_REQUIRE_CORPUS set but required corpus path is missing: {what}"
+    );
     eprintln!("corpus path absent ({what}); skipping (set HAUKSBEE_REQUIRE_CORPUS=1 to fail)");
 }
 
@@ -423,7 +424,7 @@ fn behavioral_parts_do_not_manufacture_faults_on_clean_board() {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// True if the LTC4020's RNG/SS pin (pad 15) is on a real (non-unconnected)
-/// net, i.e. externally driven (the mb2.0 fault). Returns (driven, net_name).
+/// net, i.e. externally driven (the mb2.0 fault). Returns (driven, `net_name`).
 fn rng_ss_driven(path: &PathBuf) -> Option<(bool, String)> {
     let name = pin_net_name(path, "U2", "15")?;
     Some((!name.starts_with("unconnected-"), name))

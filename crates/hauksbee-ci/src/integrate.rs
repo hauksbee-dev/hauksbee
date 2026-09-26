@@ -45,6 +45,7 @@ fn installed_by() -> String {
 
 /// Walk up from `start` to the repository root (the first directory that
 /// contains `.git`).
+#[must_use]
 pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut dir = start.canonicalize().ok()?;
     loop {
@@ -59,6 +60,7 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
 
 /// Is the pre-commit gate already wired in this repo (either framework
 /// config or plain hook mentioning hauksbee)?
+#[must_use]
 pub fn hook_wired(root: &Path) -> bool {
     let config = root.join(".pre-commit-config.yaml");
     if let Ok(text) = fs::read_to_string(&config) {
@@ -71,6 +73,7 @@ pub fn hook_wired(root: &Path) -> bool {
 }
 
 /// Is a GitHub workflow that runs hauksbee already present?
+#[must_use]
 pub fn action_wired(root: &Path) -> bool {
     let dir = root.join(".github/workflows");
     let Ok(entries) = fs::read_dir(&dir) else {
@@ -124,6 +127,8 @@ fn pre_commit_entry() -> String {
 ///
 /// Specs run one at a time so the script can count RED ones honestly; the
 /// blocked-commit line reports that count and the `--no-verify` escape hatch.
+// False positive: the flagged braces are real args of this multi-line format! literal.
+#[allow(clippy::literal_string_with_formatting_args)]
 fn plain_hook_script() -> String {
     let installed = installed_by();
     format!(
@@ -193,9 +198,13 @@ fn plain_hook_script() -> String {
     )
 }
 
-/// The GitHub workflow YAML `github-action` prints/writes. `mode: auto` in
-/// the action detects the repo's spec or board, so the generated file needs
-/// no per-repo editing to start.
+/// The GitHub workflow YAML `github-action` prints/writes.
+///
+/// `mode: auto` in the action detects the repo's spec or board, so the
+/// generated file needs no per-repo editing to start.
+///
+/// # Errors
+///
 /// A build without a verified Hauksbee identity errors rather than emitting a
 /// credential-bearing workflow pinned to zeros or to a foreign repository; the
 /// CLI turns that into a normal exit-2 diagnostic.
@@ -274,15 +283,12 @@ fn github_workflow_yaml_for(
          \x20         persist-credentials: false\n\
          \x20       # Pinned to the exact release commit: a tag can move after\n\
          \x20       # review, while an object ID cannot redirect the Action code.\n\
-         \x20     - uses: hauksbee-dev/hauksbee/integrations/github-action@{}\n\
+         \x20     - uses: hauksbee-dev/hauksbee/integrations/github-action@{release_commit}\n\
          \x20       with:\n\
-         \x20         hauksbee-ref: {}\n\
-         {}\
+         \x20         hauksbee-ref: {release_commit}\n\
+         {acquisition}\
          \x20         junit: hauksbee-ci-results.xml\n\
-         \x20         publish-report: ${{{{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}}}\n",
-        release_commit,
-        release_commit,
-        acquisition
+         \x20         publish-report: ${{{{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}}}\n"
     ))
 }
 
@@ -370,12 +376,19 @@ fn install_next_steps(root: &Path) -> String {
     )
 }
 
-/// `hauksbee-ci hook install`: wire the pre-commit gate into the repo that
-/// contains `cwd`. Detects which hook mechanism the repo uses: a
-/// `.pre-commit-config.yaml` gets the framework entry, anything else gets a
-/// plain `.git/hooks/pre-commit`. Idempotent both ways; a plain hook written
-/// by a DIFFERENT hauksbee-ci build is refreshed in place (that is what the
-/// hook's own stale-build warning tells the user to do).
+/// `hauksbee-ci hook install`: wire the pre-commit gate into `cwd`'s repo.
+///
+/// Detects which hook mechanism the repo uses: a `.pre-commit-config.yaml` gets
+/// the framework entry, anything else gets a plain `.git/hooks/pre-commit`.
+/// Idempotent both ways; a plain hook written by a DIFFERENT hauksbee-ci build
+/// is refreshed in place (that is what the hook's own stale-build warning tells
+/// the user to do).
+///
+/// # Errors
+///
+/// When `cwd` is not inside a git repository, a hook or config file cannot be
+/// read, written or moved aside, or an existing hauksbee-ci block cannot be
+/// replaced safely.
 pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
     let Some(root) = find_repo_root(cwd) else {
         bail!(
@@ -386,48 +399,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
     };
     let config = root.join(".pre-commit-config.yaml");
     if config.exists() {
-        let text =
-            fs::read_to_string(&config).with_context(|| format!("reading {}", config.display()))?;
-        if text.contains("hauksbee") {
-            return Ok(format!(
-                "already installed: {} already references hauksbee; nothing changed",
-                config.display()
-            ));
-        }
-        // Insert the entry at the END of the top-level `repos:` list, so it
-        // stays inside the list no matter what follows the list in the file and
-        // runs AFTER the hooks that were already there. Appending is what a
-        // human editing the file would do, and it keeps the fast formatters and
-        // linters first: they finish in milliseconds, and there is no point
-        // solving a circuit for a commit `black` is about to reject anyway.
-        let entry = pre_commit_entry();
-        let (new_text, did) = if let Some(pos) = text.lines().position(|l| l.trim_end() == "repos:")
-        {
-            let lines: Vec<&str> = text.lines().collect();
-            let end = repos_list_end(&lines, pos);
-            let mut lines = lines;
-            lines.insert(end, entry.trim_end());
-            let mut joined = lines.join("\n");
-            joined.push('\n');
-            (
-                joined,
-                "appended the hauksbee-ci entry to `repos:` (after your existing hooks)",
-            )
-        } else {
-            let mut t = text.clone();
-            if !t.ends_with('\n') {
-                t.push('\n');
-            }
-            t.push_str("repos:\n");
-            t.push_str(&entry);
-            (t, "added a `repos:` section with the hauksbee-ci entry")
-        };
-        fs::write(&config, new_text).with_context(|| format!("writing {}", config.display()))?;
-        return Ok(format!(
-            "{did} in {}; run `pre-commit install` to activate it\n{}",
-            config.display(),
-            install_next_steps(&root)
-        ));
+        return install_framework_entry(&root, &config);
     }
 
     // No pre-commit framework: plain git hook.
@@ -500,6 +472,52 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
         "installed {}\n{}",
         hook.display(),
         install_next_steps(&root)
+    ))
+}
+
+/// [`hook_install`] for a repo on the pre-commit framework: add the hauksbee-ci
+/// entry to its `config` unless one is already there.
+fn install_framework_entry(root: &Path, config: &Path) -> anyhow::Result<String> {
+    let text =
+        fs::read_to_string(config).with_context(|| format!("reading {}", config.display()))?;
+    if text.contains("hauksbee") {
+        return Ok(format!(
+            "already installed: {} already references hauksbee; nothing changed",
+            config.display()
+        ));
+    }
+    // Insert the entry at the END of the top-level `repos:` list, so it
+    // stays inside the list no matter what follows the list in the file and
+    // runs AFTER the hooks that were already there. Appending is what a
+    // human editing the file would do, and it keeps the fast formatters and
+    // linters first: they finish in milliseconds, and there is no point
+    // solving a circuit for a commit `black` is about to reject anyway.
+    let entry = pre_commit_entry();
+    // Both arms build text over several statements; closures would bury them.
+    #[allow(clippy::option_if_let_else)]
+    let (new_text, did) = if let Some(pos) = text.lines().position(|l| l.trim_end() == "repos:") {
+        let mut lines: Vec<&str> = text.lines().collect();
+        lines.insert(repos_list_end(&lines, pos), entry.trim_end());
+        let mut joined = lines.join("\n");
+        joined.push('\n');
+        (
+            joined,
+            "appended the hauksbee-ci entry to `repos:` (after your existing hooks)",
+        )
+    } else {
+        let mut t = text.clone();
+        if !t.ends_with('\n') {
+            t.push('\n');
+        }
+        t.push_str("repos:\n");
+        t.push_str(&entry);
+        (t, "added a `repos:` section with the hauksbee-ci entry")
+    };
+    fs::write(config, new_text).with_context(|| format!("writing {}", config.display()))?;
+    Ok(format!(
+        "{did} in {}; run `pre-commit install` to activate it\n{}",
+        config.display(),
+        install_next_steps(root)
     ))
 }
 
@@ -590,11 +608,18 @@ fn strip_hook_block(text: &str) -> Option<String> {
     Some(join_kept(&kept))
 }
 
-/// `hauksbee-ci hook uninstall`: undo whichever wiring [`hook_install`] did in
-/// this repo. Removes the hauksbee-ci block from the plain
-/// `.git/hooks/pre-commit` (deleting the file when the block was all there
-/// was), or removes the hauksbee entry from `.pre-commit-config.yaml`.
-/// Refuses to touch a hook hauksbee-ci did not write.
+/// `hauksbee-ci hook uninstall`: undo whichever wiring [`hook_install`] did.
+///
+/// Removes the hauksbee-ci block from the plain `.git/hooks/pre-commit`
+/// (deleting the file when the block was all there was), or removes the
+/// hauksbee entry from `.pre-commit-config.yaml`. Refuses to touch a hook
+/// hauksbee-ci did not write.
+///
+/// # Errors
+///
+/// When `cwd` is not inside a git repository, the hook is not one hauksbee-ci
+/// wrote (or its block is incomplete), or a hook or config file cannot be
+/// read, written or removed.
 pub fn hook_uninstall(cwd: &Path) -> anyhow::Result<String> {
     let Some(root) = find_repo_root(cwd) else {
         bail!(
@@ -715,6 +740,12 @@ fn write_executable(path: &Path, text: &str) -> anyhow::Result<()> {
 /// than dropping a workflow into whatever directory the user happened to be in.
 /// Idempotent: an identical existing file is a no-op; a different one is
 /// refused rather than clobbered.
+///
+/// # Errors
+///
+/// When `cwd` is not inside a git repository, the build cannot emit the
+/// workflow ([`try_github_workflow_yaml`]), a different file already exists at
+/// `path`, or it cannot be written.
 pub fn github_action_write(cwd: &Path, path: &Path) -> anyhow::Result<String> {
     let Some(root) = find_repo_root(cwd) else {
         bail!(
@@ -724,11 +755,8 @@ pub fn github_action_write(cwd: &Path, path: &Path) -> anyhow::Result<String> {
             cwd.display()
         );
     };
-    let path = &if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
+    // `join` keeps an absolute path as it is.
+    let path = &root.join(path);
     let yaml = try_github_workflow_yaml()?;
     if let Ok(existing) = fs::read_to_string(path) {
         if existing == yaml {
@@ -758,6 +786,7 @@ pub fn github_action_write(cwd: &Path, path: &Path) -> anyhow::Result<String> {
 /// The one next-step line a GREEN run ends with: point at whichever repo
 /// wiring is missing, and stay silent when both the hook and the workflow
 /// are already in place (or when there is no repo to wire).
+#[must_use]
 pub fn green_next_step(cwd: &Path) -> Option<String> {
     let root = find_repo_root(cwd)?;
     let hook = hook_wired(&root);

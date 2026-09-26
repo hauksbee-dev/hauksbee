@@ -4,7 +4,7 @@
 //! An MCU samples certain pins at the reset latch window to choose its boot
 //! mode. If a strapping pin is not at the level the part needs during that
 //! window, the chip can boot wrong (the textbook case: Olimex ESP32-EVB rev D,
-//! where the Ethernet PHY's free-running 50 MHz REF_CLK sits on GPIO0 - a
+//! where the Ethernet PHY's free-running 50 MHz `REF_CLK` sits on GPIO0 - a
 //! strapping pin that must be a stable HIGH - so the ESP32 randomly enters
 //! download mode; ESP-IDF Ethernet API documents this exact failure, and Olimex
 //! fixed it in rev E by gating PHY power until the oscillator stabilises).
@@ -50,12 +50,14 @@ use hauksbee_extract::assembly::AssemblyState;
 
 /// Run the strap-pin lint over an extracted board, resolving each component
 /// against `lib` to find MCUs that carry a strap table.
+#[must_use]
 pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     strap_lint_with_drives(board, lib, &BTreeMap::new())
 }
 
 /// [`strap_lint`] with solved (or spec-forced) net spans, which a pull
 /// divider is judged at alongside each rail's declared corners.
+#[must_use]
 pub fn strap_lint_with_drives(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -139,10 +141,12 @@ fn strap_site(
     Ok((pad, net))
 }
 
-/// One line per fitted part with a strap table saying how far the strap lint
-/// examined each strap. The lint only emits rows for faults, so without this
-/// a strap that was checked and found correct, a strap whose level is not
-/// judged, and a strap that could not be located all read as the same silence.
+/// One line per fitted part with a strap table.
+///
+/// It says how far the strap lint examined each strap. The lint only emits rows
+/// for faults, so without this a strap that was checked and found correct, a
+/// strap whose level is not judged, and a strap that could not be located all
+/// read as the same silence.
 #[must_use]
 pub fn strap_coverage(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<String> {
     let mut lines = Vec::new();
@@ -301,7 +305,7 @@ pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
 /// Is this component a *powered oscillator* (a free-running clock source), as
 /// opposed to a bare crystal (a passive resonator that does not drive on its
 /// own)? An oscillator is a packaged part with its own VDD; we key on the
-/// reference / value / lib_id, and require it to NOT be a plain 2-terminal
+/// reference / value / `lib_id`, and require it to NOT be a plain 2-terminal
 /// crystal. DNP oscillators are not assembled, so they do not drive.
 fn is_clock_oscillator(c: &Component) -> bool {
     if !AssemblyState::of(c).is_present() {
@@ -486,7 +490,7 @@ fn judge_divider(
             p.reference, p.value
         ));
     }
-    let (Some([il_k, il_v]), Some([ih_k, ih_v])) = (strap.vil, strap.vih) else {
+    let (Some([lo_k, lo_v]), Some([hi_k, hi_v])) = (strap.vil, strap.vih) else {
         return Err(format!(
             "the '{}' card carries no sourced VIL/VIH for {}",
             model.id, strap.role
@@ -517,15 +521,17 @@ fn judge_divider(
             level.insert(*id, corners[k % corners.len()]);
             k /= corners.len();
         }
-        let (vil, vih) = (il_k * level[&vdd] + il_v, ih_k * level[&vdd] + ih_v);
+        let (vil, vih) = (
+            lo_k.mul_add(level[&vdd], lo_v),
+            hi_k.mul_add(level[&vdd], hi_v),
+        );
         (il, ih) = (widen(il, vil), widen(ih, vih));
         for skew in [-1.0, 1.0] {
             // A 0 Ohm part is a short: a micro-ohm pins the net to its far side.
             let (mut g, mut i) = (0.0, 0.0);
             for p in pulls {
-                let r = (p.ohms.unwrap_or_default()
-                    * (1.0 + skew * p.tol * if p.up { -1.0 } else { 1.0 }))
-                .max(1e-6);
+                let sign = if p.up { -1.0 } else { 1.0 };
+                let r = (p.ohms.unwrap_or_default() * (skew * p.tol).mul_add(sign, 1.0)).max(1e-6);
                 g += 1.0 / r;
                 i += level.get(&p.far).copied().unwrap_or(0.0) / r;
             }
@@ -609,7 +615,7 @@ fn is_unconnected_net(name: &str) -> bool {
 
 /// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
 /// component, nothing that could define a level. Such a strap net is floating
-/// just as surely as a KiCad `unconnected-*` net, even if it carries a real name.
+/// just as surely as a `KiCad` `unconnected-*` net, even if it carries a real name.
 /// A net with ANY other member (a pull resistor, a header, a jumper, another
 /// driver) is NOT isolated, so a jumper-selectable BOOT0 (a resistor to a 3-pin
 /// header, as on dev boards) never trips this, only a genuinely dangling pin.
@@ -710,7 +716,11 @@ vih = [0.0, 2.0]
         }
     }
 
+    // (name, board, expected (severity, message fragments) findings)
+    type Case<'a> = (&'a str, ExtractedBoard, &'a [(Severity, &'a [&'a str])]);
+
     #[test]
+    #[allow(clippy::too_many_lines)] // one flat table of strap cases reads best in one place
     fn strap_cases() {
         let none = BTreeMap::new();
         let with_unrelated_osc = |rail| {
@@ -728,8 +738,6 @@ vih = [0.0, 2.0]
                 part("J1", "BOOT_SEL", &[("1", 2), ("2", 4), ("3", 1)]),
             ],
         );
-        // (name, board, expected (severity, message fragments) findings)
-        type Case<'a> = (&'a str, ExtractedBoard, &'a [(Severity, &'a [&'a str])]);
         let cases: Vec<Case> = vec![
             // The Olimex fault: a 50 MHz oscillator through a 10R onto GPIO0.
             (

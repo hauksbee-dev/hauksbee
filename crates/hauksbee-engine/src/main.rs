@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 
 /// CI for hardware: hand it a PCB and it tells you what blows up before you fab.
 ///
-/// Point `hauksbee` at any board file (KiCad, Eagle, IPC-D-356, or gerbers) and
+/// Point `hauksbee` at any board file (`KiCad`, Eagle, IPC-D-356, or gerbers) and
 /// it extracts the circuit, binds device models, runs the static checks, and can
 /// co-simulate the firmware on an emulated MCU. Start with `run --report`.
 /// The `--version` string: crate version plus the git hash this binary was
@@ -27,10 +27,8 @@ use clap::{Parser, Subcommand};
 /// one-time `OnceLock` init is the cheapest way to a static composed string.
 fn version_string() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    V.get_or_init(|| match option_env!("GIT_HASH") {
-        Some(hash) => format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_string(),
-    })
+    let v = env!("CARGO_PKG_VERSION");
+    V.get_or_init(|| option_env!("GIT_HASH").map_or_else(|| v.into(), |h| format!("{v} (git {h})")))
 }
 
 #[derive(Parser)]
@@ -62,6 +60,7 @@ struct Cli {
 #[derive(Subcommand)]
 // clap parses one Command per process; boxing variants only complicates the derive.
 #[allow(clippy::large_enum_variant)]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 enum Command {
     /// Extract + bind a board, then check it or bring it to life.
     ///
@@ -323,6 +322,7 @@ struct ModelsArgs {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 enum ModelsCommand {
     /// Validate a model / sensor spec TOML file; exit 2 on any finding.
     Lint(ModelsLintArgs),
@@ -335,7 +335,7 @@ enum ModelsCommand {
     /// Show, per board component, which model entry won and from which layer.
     Resolve(ModelsResolveArgs),
     /// Draft a device model from a PDF datasheet. Asks first: this sends the
-    /// datasheet's text to an LLM backend.
+    /// datasheet, and whatever the agent reads, to an LLM backend.
     Extract(ModelsExtractArgs),
     /// Scaffold a model entry for one board component, pre-seeded only from
     /// the board's own identity (reference and value). It never invents
@@ -497,6 +497,7 @@ struct ModelsCoverageArgs {
 }
 
 #[derive(Parser)]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct ModelsExtractArgs {
     /// The datasheet PDF to read.
     #[arg(long)]
@@ -539,6 +540,10 @@ struct ModelsExtractArgs {
     /// the environment at call time and is never stored.
     #[arg(long, value_name = "NAME")]
     api_key_env: Option<String>,
+    /// Replace an existing model of the same name. Without it the command
+    /// refuses before sending anything, since that file may hold your fixes.
+    #[arg(long)]
+    force: bool,
 }
 
 /// CLI spelling of the extraction backend. Separate from
@@ -568,6 +573,7 @@ impl From<ExtractBackendArg> for hauksbee_models::datasheet::Backend {
 }
 
 #[derive(Parser)]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct ModelsListArgs {
     /// Also list the embedded MCU SoC descriptors (the `backend:part` specs a
     /// board's `renode:<part>` / `qemu:<part>` backend string resolves to when
@@ -595,6 +601,7 @@ struct ModelsRemoveArgs {
 }
 
 #[derive(Parser)]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct ModelsResolveArgs {
     /// Board file to resolve (.kicad_pcb, .kicad_sch, .brd, .d356, gerbers…).
     board: PathBuf,
@@ -763,6 +770,8 @@ fn parse_seconds(s: &str) -> Result<f64, String> {
         .multiple(false)
 ))]
 #[command(after_help = run_after_help())]
+#[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct RunArgs {
     /// Board input: KiCad (.kicad_pcb / .kicad_sch / .net), Eagle (.brd),
     /// Altium (.PcbDoc), IPC-D-356 (.d356), a gerber folder or zip, or
@@ -1190,6 +1199,8 @@ struct ToCodeArgs {
 }
 
 #[derive(Parser)]
+#[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct FromCodeArgs {
     /// Board-as-Code file (or directory) to recompile.
     #[arg(value_name = "CODE")]
@@ -1309,6 +1320,7 @@ struct ServeArgs {
         .args(["op", "tran", "ac", "dc"])
         .multiple(false)
 ))]
+#[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
 struct SimArgs {
     /// SPICE deck to simulate (`.cir`).
     #[arg(value_name = "DECK", required_unless_present = "example")]
@@ -1368,6 +1380,7 @@ struct DoctorArgs {
 }
 
 #[derive(Parser)]
+#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct CheckCodeArgs {
     /// Board-as-Code file (or directory) to check.
     #[arg(value_name = "CODE")]
@@ -1512,6 +1525,7 @@ fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Err
     );
 }
 
+#[allow(clippy::too_many_lines, reason = "one flat dispatch over subcommands")]
 fn main() -> anyhow::Result<()> {
     // Before anything can spawn a co-sim emulator: make sure a SIGTERM/SIGINT
     // to this process (e.g. killing a long-lived `hauksbee serve`) reaps every
@@ -1568,7 +1582,8 @@ fn main() -> anyhow::Result<()> {
         // the shared JSON/text error envelope below.
         Command::Run(mut args) => {
             let schematic = args.schematic.take();
-            hauksbee_engine::commands::run::run_with_schematic(run_config(args), quiet, schematic)
+            let cfg = run_config(args);
+            hauksbee_engine::commands::run::run_with_schematic(cfg, quiet, schematic.as_deref())
         }
         Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
         Command::ToCode(args) => {
@@ -1693,6 +1708,7 @@ fn main() -> anyhow::Result<()> {
                 args.effort,
                 args.api_base,
                 args.api_key_env,
+                args.force,
             ),
             ModelsCommand::Backend(cmd) => match cmd {
                 ModelsBackendCommand::Show(args) => {
@@ -1747,7 +1763,7 @@ fn board_extension(p: &std::path::Path) -> bool {
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     matches!(
         ext.as_str(),
@@ -1767,7 +1783,7 @@ fn looks_like_board_input(p: &std::path::Path) -> bool {
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     if ext == "board" || ext == "zip" {
         return true;

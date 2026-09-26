@@ -60,7 +60,7 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
 fn is_active_ic_refdes(reference: &str) -> bool {
     let r = reference.to_ascii_uppercase();
     // Strip to the leading alphabetic prefix.
-    let prefix: String = r.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let prefix: String = r.chars().take_while(char::is_ascii_alphabetic).collect();
     prefix == "U" || prefix == "IC" || prefix == "MCU"
 }
 
@@ -84,7 +84,7 @@ fn value_opens_with_mcu_family(s: &str) -> bool {
 }
 
 /// True when this component identifies as a strap-bearing family (BOOT0 / ESP32
-/// strapping). Checks the value and MPN by prefix and the KiCad symbol library
+/// strapping). Checks the value and MPN by prefix and the `KiCad` symbol library
 /// by substring (`MCU_ST_STM32WL`, `RF_Module:ESP32-WROOM`).
 fn is_strap_bearing_family(comp: &Component) -> bool {
     let up = comp.value.trim().to_ascii_uppercase();
@@ -106,7 +106,7 @@ fn is_strap_bearing_family(comp: &Component) -> bool {
 
 /// Heuristic: does this component look like an MCU? Conservative by design,
 /// it must be an active-IC designator AND carry an MCU signature in its value,
-/// a property string, or KiCad's `MCU_*` symbol library id.
+/// a property string, or `KiCad`'s `MCU_*` symbol library id.
 pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
     if !AssemblyState::of(comp).is_present() {
         return false; // not assembled (or identity refused) -> electrically absent
@@ -170,6 +170,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
 /// treated as examined, but `strap_lint` examines zero pins if the strap pad is
 /// absent on the extracted footprint or unrouted. That is outside this check's
 /// "no strap table" scope and left to the strap lint's own visibility caveats.
+#[must_use]
 pub fn mcu_coverage_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {
@@ -305,7 +306,7 @@ mod tests {
     }
 
     /// End-to-end against the real model DB: an unmodelled strap-bearing MCU
-    /// (STM32WL55) yields exactly one UncheckedMcu note naming it; a DB-authored
+    /// (STM32WL55) yields exactly one `UncheckedMcu` note naming it; a DB-authored
     /// strap-bearing MCU with a populated strap table (STM32F103C8, straps WERE
     /// examined) and a passive yield none. This is the guard that stops "Looks
     /// healthy" from being printed over an MCU whose straps were never examined.

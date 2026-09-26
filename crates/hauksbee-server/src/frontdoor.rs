@@ -106,6 +106,7 @@ struct DesignState {
 }
 
 /// Complete browser analysis contract: the React landing page's own routes.
+///
 /// `/api/analyze` takes the raw board bytes, `/api/analyze-with-firmware` the
 /// multipart bundle (board plus every companion), and `/api/sim` a raw SPICE
 /// deck. All three sit behind one upload guard, so they share the body limit,
@@ -120,10 +121,12 @@ pub fn api_routes_with_design(analyze: DesignAnalyzer, sim: DeckSimulator) -> Ro
     )
 }
 
-/// The web checks route (`POST /api/check`, multipart: the design bundle plus
-/// a `spec` part). The spec is the TOML body the browser's builder composed,
-/// everything except the file paths, which the engine injects from the
-/// uploaded parts. Merged into the unified router next to the analysis routes.
+/// The web checks route: `POST /api/check`.
+///
+/// It takes a multipart body: the design bundle plus a `spec` part. The spec is the
+/// TOML body the browser's builder composed, everything except the file paths, which
+/// the engine injects from the uploaded parts. Merged into the unified router next to
+/// the analysis routes.
 pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
     with_upload_guard(
         Router::new().route("/api/check", post(check_handler)),
@@ -136,7 +139,9 @@ struct DesignLiveState {
     launch: DesignLiveLauncher,
 }
 
-/// The live-launch API: `POST /api/live/launch` (the same multipart bundle
+/// The live-launch API: `POST /api/live/launch` and `GET /api/live/status`.
+///
+/// `POST /api/live/launch` (the same multipart bundle
 /// `/api/analyze-with-firmware` takes) boots a live sim session for the upload
 /// and swaps it into the hub behind `/ws`; `GET /api/live/status` reports
 /// whether (and which) a session is running so the UI can confirm before
@@ -186,10 +191,10 @@ async fn live_launch_design_handler(
 fn live_status(hub: &crate::LiveHub) -> JsonResponse {
     json_body(
         StatusCode::OK,
-        match hub.active_board() {
-            Some(name) => serde_json::json!({ "active": true, "board_name": name }),
-            None => serde_json::json!({ "active": false }),
-        },
+        &hub.active_board().map_or_else(
+            || serde_json::json!({ "active": false }),
+            |name| serde_json::json!({ "active": true, "board_name": name }),
+        ),
     )
 }
 
@@ -205,7 +210,7 @@ fn installed_live(hub: &crate::LiveHub, live: LiveLaunch) -> JsonResponse {
     );
     json_body(
         StatusCode::OK,
-        serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
+        &serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
     )
 }
 
@@ -214,9 +219,11 @@ struct DepsState {
     install: DepInstaller,
 }
 
-/// The dependency panel's backend: `GET /api/deps` (status via the engine's own
-/// discovery) and `POST /api/deps/install/{id}` (run an install, streaming its
-/// progress as Server-Sent Events). Merged into the unified router next to the
+/// The dependency panel's backend: `GET /api/deps` and `POST /api/deps/install/{id}`.
+///
+/// `GET /api/deps` reports status via the engine's own discovery, and
+/// `POST /api/deps/install/{id}` runs an install, streaming its progress as
+/// Server-Sent Events. Merged into the unified router next to the
 /// analysis routes. The install route executes an installer, so it carries the
 /// same `reject_cross_site` guard as every other mutating endpoint: a hostile
 /// page in another tab must not be able to trigger a download.
@@ -247,9 +254,7 @@ fn sse_event(kind: &str, text: &str) -> String {
     if lines.peek().is_none() {
         s.push_str("data:\n");
     }
-    for line in lines {
-        s.push_str(&format!("data: {line}\n"));
-    }
+    s.extend(lines.map(|line| format!("data: {line}\n")));
     s.push('\n');
     s
 }
@@ -286,7 +291,8 @@ async fn deps_install_handler(
 /// has been checked.
 const MAX_DATASHEET_BYTES: usize = 32 * 1024 * 1024;
 
-/// The datasheet-extraction API:
+/// The datasheet-extraction API and the extraction Settings page's backend.
+///
 /// `GET /api/models/extract/ready` (can an extraction run on this machine, and
 /// what does it cost), `POST /api/models/extract` (multipart `datasheet` +
 /// `part` + `kind` + `reference`; streams progress as SSE and ends with the
@@ -336,7 +342,10 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
 /// convention): the settings form treats any non-2xx as "the save failed",
 /// and `msg` is already the config validator's own readable sentence.
 fn settings_error(msg: &str) -> JsonResponse {
-    json_body(StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg }))
+    json_body(
+        StatusCode::BAD_REQUEST,
+        &serde_json::json!({ "error": msg }),
+    )
 }
 
 /// GET `/api/settings/extract`: the whole settings payload (config, resolved
@@ -465,7 +474,7 @@ async fn model_draft_handler(
     match run_blocking("the model draft task", move || (draft)(&request)).await {
         Ok(toml) => json_body(
             StatusCode::OK,
-            serde_json::json!({ "ok": true, "toml": toml, "read_only": true }),
+            &serde_json::json!({ "ok": true, "toml": toml, "read_only": true }),
         ),
         Err(response) => response,
     }
@@ -638,7 +647,7 @@ async fn datasheet_check_handler(
     match tokio::task::spawn_blocking(move || (check)(&toml)).await {
         Ok(Ok(summary)) => json_body(
             StatusCode::OK,
-            serde_json::json!({ "ok": true, "summary": summary }),
+            &serde_json::json!({ "ok": true, "summary": summary }),
         ),
         // 200 with ok:false, not a 4xx. A model in progress is not a failed
         // request, and an editor that logs a console error on every
@@ -725,7 +734,7 @@ fn sse_body(body: axum::body::Body) -> Response {
 }
 
 /// A `200 OK` carrying an already-serialized JSON document.
-fn json_ok(json: String) -> JsonResponse {
+const fn json_ok(json: String) -> JsonResponse {
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -746,7 +755,7 @@ fn board_filename(headers: &HeaderMap) -> &str {
 /// A JSON body response with the standard content-type header. Every error is
 /// built through `serde_json` so backslashes / control chars in a message can
 /// never produce invalid JSON (B9).
-fn json_body(status: StatusCode, value: serde_json::Value) -> JsonResponse {
+fn json_body(status: StatusCode, value: &serde_json::Value) -> JsonResponse {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -757,7 +766,7 @@ fn json_body(status: StatusCode, value: serde_json::Value) -> JsonResponse {
 fn json_error(msg: &str) -> JsonResponse {
     json_body(
         StatusCode::OK,
-        serde_json::json!({ "ok": false, "error": msg }),
+        &serde_json::json!({ "ok": false, "error": msg }),
     )
 }
 
@@ -863,7 +872,7 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
             Err(e) => return Err(format!("malformed multipart upload: {e}")),
         };
         let name = field.name().unwrap_or("").to_string();
-        let filename = field.file_name().map(std::string::ToString::to_string);
+        let filename = field.file_name().map(ToString::to_string);
         let data = match field.bytes().await {
             Ok(b) => b,
             Err(e) => return Err(format!("failed to read upload part: {e}")),
@@ -1002,9 +1011,8 @@ async fn analyze_design_handler(
         Err(message) => return json_error(message),
     };
     let analyze = state.analyze.clone();
-    let json = match tokio::task::spawn_blocking(move || (analyze)(upload)).await {
-        Ok(json) => json,
-        Err(_) => return json_error("the analysis task panicked; see the server log"),
+    let Ok(json) = tokio::task::spawn_blocking(move || (analyze)(upload)).await else {
+        return json_error("the analysis task panicked; see the server log");
     };
     json_ok(json)
 }

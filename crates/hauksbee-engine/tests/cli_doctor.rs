@@ -16,7 +16,7 @@
 use crate::support::run;
 
 /// Every backend the doctor is expected to report, exactly once.
-const KNOWN_BACKENDS: &[&str] = &["avr", "qemu-xtensa", "qemu-riscv32", "renode"];
+const KNOWN_BACKENDS: &[&str] = &["avr", "qemu-xtensa", "qemu-riscv32", "renode", "extract"];
 
 /// Statuses the machine-readable table may carry (single lowercase tokens).
 const KNOWN_STATUSES: &[&str] = &["ok", "absent", "builtin", "disabled"];

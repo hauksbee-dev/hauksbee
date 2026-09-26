@@ -46,7 +46,7 @@ impl PinDriver {
             SourceKind::Dc(0.0),
         ));
         let resistor = circuit.add(Device::resistor(format!("Rdrv_{tag}"), drv, net, ro));
-        PinDriver {
+        Self {
             vsource,
             net,
             enabled: true,

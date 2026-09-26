@@ -1,5 +1,5 @@
 //! End to end: a host tool opens a device path and talks to firmware running on
-//! an emulated ATmega328P bound to a real board, through `--serial-attach`'s
+//! an emulated `ATmega328P` bound to a real board, through `--serial-attach`'s
 //! session loop.
 //!
 //! This is the whole feature under test at once (transport + session pump +
@@ -17,7 +17,7 @@
 //! because the AVR core is not `Send`.
 //!
 //! The firmware is hand-assembled inline (no AVR toolchain needed, the same
-//! pattern as hauksbee-mcu's avr_uart_flow.rs): it enables UART0, transmits one
+//! pattern as hauksbee-mcu's `avr_uart_flow.rs)`: it enables UART0, transmits one
 //! banner byte, then echoes every byte it receives. Every reply asserted here is
 //! produced by that firmware executing on the bound board; nothing is faked.
 
@@ -28,6 +28,7 @@ use hauksbee_engine::commands::hostserial::{run_session, SerialSessionConfig};
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc};
 
@@ -66,12 +67,16 @@ const UART_ECHO: &[u8] = &[
 ];
 
 fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
-    let mut bytes = vec![data.len() as u8, (addr >> 8) as u8, addr as u8, record_type];
+    let len = u8::try_from(data.len()).expect("ihex record fits u8");
+    let [addr_hi, addr_lo] = addr.to_be_bytes();
+    let mut bytes = vec![len, addr_hi, addr_lo, record_type];
     bytes.extend_from_slice(data);
     let checksum = (!bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b))).wrapping_add(1);
     bytes.push(checksum);
-    let hexstr: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
-    format!(":{hexstr}")
+    bytes.iter().fold(String::from(":"), |mut hex, b| {
+        write!(hex, "{b:02X}").unwrap();
+        hex
+    })
 }
 
 /// Write the echo firmware as an Intel HEX file under a per-test name.
@@ -81,7 +86,7 @@ fn echo_firmware(name: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     let mut text = String::new();
     for (i, chunk) in UART_ECHO.chunks(16).enumerate() {
-        text.push_str(&ihex_record(0x00, (i * 16) as u16, chunk));
+        text.push_str(&ihex_record(0x00, u16::try_from(i * 16).unwrap(), chunk));
         text.push('\n');
     }
     text.push_str(":00000001FF\n");
@@ -147,7 +152,7 @@ fn write_all_to_board(peer: &mut std::fs::File, bytes: &[u8]) {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
             Ok(n) => sent += n,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(1))
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => panic!("host write failed: {e}"),
         }
@@ -164,7 +169,7 @@ fn read_from_board(peer: &mut std::fs::File, n: usize) -> Vec<u8> {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
             Ok(k) => got.extend_from_slice(&buf[..k]),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(1))
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => panic!("host read failed: {e}"),
         }
@@ -184,7 +189,7 @@ fn read_through_byte(peer: &mut std::fs::File, wanted: u8) -> Vec<u8> {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
             Ok(k) => got.extend_from_slice(&buf[..k]),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(1))
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => panic!("host read failed: {e}"),
         }
@@ -215,11 +220,11 @@ fn host_record_longer_than_the_rx_fifo_round_trips() {
     let (tx, rx) = mpsc::channel::<String>();
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::channel::<()>();
-    let record: Vec<u8> = (0u16..256).map(|b| b as u8).collect();
+    let record: Vec<u8> = (0..=u8::MAX).collect();
     let want = record.clone();
 
-    let hold = Arc::new(());
-    let held = Some(Arc::downgrade(&hold));
+    let guard = Arc::new(());
+    let held = Some(Arc::downgrade(&guard));
     let peer = std::thread::spawn(move || {
         let path = await_line(&rx, "host serial: pty on ");
         let mut peer = open_peer(&path);
@@ -231,7 +236,7 @@ fn host_record_longer_than_the_rx_fifo_round_trips() {
             .send((banner, echoed))
             .expect("report the host's complete read");
         // The exchange is done: the session may end.
-        drop(hold);
+        drop(guard);
         // Keep the slave open until the session has flushed and accounted for
         // its final byte. Closing here used to race Linux's post-write PTY
         // liveness probe: the host had already read the byte, but the endpoint
@@ -304,8 +309,8 @@ fn late_peer_still_receives_the_boot_banner() {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::channel::<()>();
 
-    let hold = Arc::new(());
-    let held = Some(Arc::downgrade(&hold));
+    let guard = Arc::new(());
+    let held = Some(Arc::downgrade(&guard));
     let peer = std::thread::spawn(move || {
         let path = await_line(&rx, "host serial: pty on ");
         // Long enough that the firmware has booted and sent its banner into a
@@ -319,7 +324,7 @@ fn late_peer_still_receives_the_boot_banner() {
             .send((banner, echoed))
             .expect("report the late peer's reads");
         // The exchange is done: the session may end.
-        drop(hold);
+        drop(guard);
         release_rx
             .recv_timeout(PATIENCE)
             .expect("session finalization releases the late peer");
@@ -364,8 +369,8 @@ fn peer_disconnect_mid_run_leaves_the_cosim_running() {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::channel::<()>();
 
-    let hold = Arc::new(());
-    let held = Some(Arc::downgrade(&hold));
+    let guard = Arc::new(());
+    let held = Some(Arc::downgrade(&guard));
     let peer = std::thread::spawn(move || {
         let path = await_line(&rx, "host serial: pty on ");
         let mut first = open_peer(&path);
@@ -383,7 +388,7 @@ fn peer_disconnect_mid_run_leaves_the_cosim_running() {
             .send((first_echo, second_stream))
             .expect("report both peers' reads");
         // The exchange is done: the session may end.
-        drop(hold);
+        drop(guard);
         // The second peer is the live peer at session teardown. Keep it open
         // until the endpoint has flushed and credited the final echo.
         release_rx

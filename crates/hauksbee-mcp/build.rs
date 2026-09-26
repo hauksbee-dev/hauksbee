@@ -7,9 +7,10 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT");
     if let Ok(hash) = std::env::var("HAUKSBEE_SOURCE_COMMIT") {
-        if !is_commit(&hash) {
-            panic!("HAUKSBEE_SOURCE_COMMIT must be one lowercase 40-character hexadecimal commit");
-        }
+        assert!(
+            is_commit(&hash),
+            "HAUKSBEE_SOURCE_COMMIT must be one lowercase 40-character hexadecimal commit"
+        );
         println!("cargo:rustc-env=GIT_HASH={hash}");
         return;
     }
@@ -95,6 +96,11 @@ fn main() {
             }
         }
     }
+    watch_git_state(&source_root, &watch);
+}
+
+/// Rerun when the checked-out commit changes (branch switch or new commit).
+fn watch_git_state(source_root: &Path, watch: &impl Fn(&Path)) {
     let dot_git = source_root.join(".git");
     if dot_git.is_file() {
         println!("cargo:rerun-if-changed={}", dot_git.display());

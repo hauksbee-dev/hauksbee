@@ -1,6 +1,8 @@
-//! The MCP tool surface: definitions (name, agent-facing description, JSON
-//! Schema) and implementations for `analyze_board`, `run_checks`,
-//! `list_capabilities`, `model_coverage`, `board_to_code`, and `run_script`. Everything routes
+//! The MCP tool surface: tool definitions and their implementations.
+//!
+//! Definitions carry the name, agent-facing description and JSON Schema; the
+//! implementations cover `analyze_board`, `run_checks`, `list_capabilities`,
+//! `model_coverage`, `board_to_code`, and `run_script`. Everything routes
 //! through the engine's own library front door (`analyze_json`,
 //! `hauksbee_ci::run`, the doctor's backend resolvers), never a re-implemented
 //! sniff or probe, so what the MCP server reports can never drift from what
@@ -11,7 +13,9 @@
 
 use serde_json::{json, Value};
 
-/// One tool call's outcome. `is_error` maps to the MCP `isError` flag: true
+/// One tool call's outcome.
+///
+/// `is_error` maps to the MCP `isError` flag: true
 /// only for genuine input/execution errors (unreadable file, bad TOML, a
 /// crashed script). An honest refusal is NOT an error: it is a structured
 /// result the agent must read, so it travels with `is_error == false`.
@@ -21,7 +25,7 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    fn ok(value: Value) -> Self {
+    const fn ok(value: Value) -> Self {
         Self {
             value,
             is_error: false,
@@ -44,9 +48,12 @@ impl ToolResult {
 /// script sandbox, so an agent can match on it without per-tool special cases.
 pub const INVALID_FOR_ANALYSIS: &str = "invalid_for_analysis";
 
-/// The `tools/list` payload: every tool with its input schema. Descriptions
-/// are written for an agent caller: they state the contract (what comes back,
-/// what a refusal looks like) rather than marketing the feature.
+/// The `tools/list` payload: every tool with its input schema.
+///
+/// Descriptions are written for an agent caller: they state the contract (what
+/// comes back, what a refusal looks like) rather than marketing the feature.
+#[must_use]
+#[allow(clippy::too_many_lines, reason = "one json! schema literal")]
 pub fn definitions() -> Value {
     json!([
         {
@@ -153,6 +160,7 @@ pub fn definitions() -> Value {
 
 /// Dispatch one tool call by name. Unknown names are an error result (MCP
 /// wants tool-level failures inside the result, not a protocol error).
+#[must_use]
 pub fn call(name: &str, args: &Value) -> ToolResult {
     match name {
         "analyze_board" => ToolResult::from_body(analyze_board(args)),
@@ -169,6 +177,7 @@ pub fn call(name: &str, args: &Value) -> ToolResult {
 
 /// Dispatch for the script sandbox: the same tools, minus `run_script` itself
 /// (a script spawning nested sandboxes gains nothing and could recurse).
+#[must_use]
 pub fn call_from_script(name: &str, args: &Value) -> ToolResult {
     match name {
         "run_script" => ToolResult::err("run_script is not callable from inside a script"),
@@ -322,10 +331,7 @@ fn analyze_board(args: &Value) -> Result<Value, String> {
             .unwrap_or("the board file could not be read as any supported format");
         return Err(format!("input error: {msg}"));
     }
-    match fw.and_then(|_| firmware_refusal(&report)) {
-        Some(refusal) => Ok(refusal),
-        None => Ok(report),
-    }
+    Ok(fw.and_then(|_| firmware_refusal(&report)).unwrap_or(report))
 }
 
 /// Decide whether a firmware-carrying analysis is answerable. Two unanswerable
@@ -417,7 +423,7 @@ fn run_checks(args: &Value) -> Result<Value, String> {
         let refusal = result.refusal().expect("exit 3 has a structured refusal");
         return Ok(json!({
             "status": INVALID_FOR_ANALYSIS,
-            "reason": refusal.missing_prerequisite.clone(),
+            "reason": refusal.missing_prerequisite,
             "refusal": refusal,
             "result": value,
         }));
@@ -463,7 +469,7 @@ fn list_capabilities() -> Value {
 /// `absent` (feature compiled in, tool not found), `disabled` (compiled out).
 fn backend_probes() -> Vec<Value> {
     /// One row of the capability table; `available` follows from the status.
-    fn probe(name: &str, status: &str, detail: String, summary: &str) -> Value {
+    fn probe(name: &str, status: &str, detail: &str, summary: &str) -> Value {
         json!({
             "name": name, "status": status,
             "available": matches!(status, "builtin" | "ok"),
@@ -480,10 +486,10 @@ fn backend_probes() -> Vec<Value> {
         summary: &str,
     ) -> Value {
         match found {
-            Ok(p) => probe(name, "ok", p.display().to_string(), summary),
+            Ok(p) => probe(name, "ok", &p.display().to_string(), summary),
             Err(e) => {
                 let first = e.to_string().lines().next().unwrap_or("").to_string();
-                probe(name, "absent", first, summary)
+                probe(name, "absent", &first, summary)
             }
         }
     }
@@ -495,14 +501,14 @@ fn backend_probes() -> Vec<Value> {
     out.push(probe(
         "avr",
         "builtin",
-        hauksbee_mcu::simavr_build_detail(),
+        &hauksbee_mcu::simavr_build_detail(),
         AVR,
     ));
     #[cfg(not(feature = "avr"))]
     out.push(probe(
         "avr",
         "disabled",
-        "compiled out; rebuild with the avr feature (GPL-3.0 libsimavr)".into(),
+        "compiled out; rebuild with the avr feature (GPL-3.0 libsimavr)",
         AVR,
     ));
 
@@ -528,7 +534,7 @@ fn backend_probes() -> Vec<Value> {
         out.push(probe(
             name,
             "disabled",
-            "built without the `qemu` feature".into(),
+            "built without the `qemu` feature",
             summary,
         ));
     }
@@ -543,7 +549,7 @@ fn backend_probes() -> Vec<Value> {
     out.push(probe(
         "renode",
         "disabled",
-        "built without the `renode` feature".into(),
+        "built without the `renode` feature",
         RENODE,
     ));
 

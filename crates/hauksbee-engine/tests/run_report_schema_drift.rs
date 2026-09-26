@@ -7,7 +7,7 @@
 //! `hauksbee-ci/tests/schema_drift.rs` for the CI-spec input schema.
 //!
 //! Regenerate after changing `JsonReport` (or anything it contains) with:
-//!     UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift
+//!     `UPDATE_RUN_SCHEMA=1` cargo test -p hauksbee-engine --test `run_report_schema_drift`
 
 use hauksbee_engine::result::{JsonReport, RUN_REPORT_SCHEMA_VERSION};
 use schemars::generate::SchemaSettings;
@@ -71,12 +71,12 @@ fn generated_schema() -> String {
         }
     }
     let text = serde_json::to_string_pretty(obj).expect("schema serializes");
-    let mut text = canonical_schema_newlines(text);
+    let mut text = canonical_schema_newlines(&text);
     text.push('\n');
     text
 }
 
-fn canonical_schema_newlines(text: String) -> String {
+fn canonical_schema_newlines(text: &str) -> String {
     // Git for Windows can materialize the checked-in JSON with physical CRLF
     // line endings, and rustdoc can preserve CRLF from Rust source as the
     // encoded characters `\r\n` inside derived descriptions. Normalize both
@@ -95,7 +95,7 @@ fn schema_file_matches_report_type() {
     }
     let on_disk = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("missing {}: {e}; regenerate with: {REGEN}", path.display()));
-    let on_disk = canonical_schema_newlines(on_disk);
+    let on_disk = canonical_schema_newlines(&on_disk);
     assert_eq!(
         on_disk, expected,
         "schemas/hauksbee-run-report.schema.json drifted from JsonReport; regenerate with: {REGEN}"
@@ -108,7 +108,7 @@ fn emitted_document_carries_schema_version_and_rollup() {
     // the four rollup keys the schema promises.
     let report = JsonReport::new(
         "board",
-        hauksbee_engine::result::BindSummary::from_report(&Default::default()),
+        hauksbee_engine::result::BindSummary::from_report(&hauksbee_engine::BindReport::default()),
     );
     let v: serde_json::Value = serde_json::from_str(&report.to_json()).expect("one JSON document");
     assert_eq!(v["schema_version"], RUN_REPORT_SCHEMA_VERSION);

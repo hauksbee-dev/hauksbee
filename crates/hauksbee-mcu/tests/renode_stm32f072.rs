@@ -107,20 +107,18 @@ fn f072_shipped_descriptor_loads_with_the_verified_offsets() {
     // The ADC map: eight external channels, fed in millivolts because the
     // model's SetDefaultValue takes millivolts.
     assert_eq!(c.adc_channels.len(), 8);
-    for (i, ch) in c.adc_channels.iter().enumerate() {
-        assert_eq!(ch.channel, i as u8);
+    for (i, ch) in (0u8..).zip(&c.adc_channels) {
+        assert_eq!(ch.channel, i);
         assert_eq!(ch.max_count, 4095);
         assert!((ch.full_scale_volts - 3.3).abs() < 1e-9);
-        match &ch.inject {
-            hauksbee_mcu::renode::AdcInject::MonitorCommand(cmd) => {
-                assert!(
-                    cmd.contains("{millivolts}"),
-                    "channel {i} must be fed in millivolts, not raw counts: {cmd}"
-                );
-                assert!(cmd.ends_with(&format!(" {i}")), "channel {i} feed: {cmd}");
-            }
-            other => panic!("channel {i} must use a Monitor feed, got {other:?}"),
-        }
+        let hauksbee_mcu::renode::AdcInject::MonitorCommand(cmd) = &ch.inject else {
+            panic!("channel {i} must use a Monitor feed, got {:?}", ch.inject)
+        };
+        assert!(
+            cmd.contains("{millivolts}"),
+            "channel {i} must be fed in millivolts, not raw counts: {cmd}"
+        );
+        assert!(cmd.ends_with(&format!(" {i}")), "channel {i} feed: {cmd}");
     }
 
     // Unverified buses stay EMPTY. Naming a controller whose model never
@@ -137,6 +135,7 @@ fn f072_shipped_descriptor_loads_with_the_verified_offsets() {
 /// `HAUKSBEE_MCU_DIR` write here cannot collide with a parallel resolve of a
 /// different part.
 #[test]
+#[allow(clippy::match_wildcard_for_single_variants)] // the Qemu variant is feature-gated
 fn f072_descriptor_resolves_as_a_builtin() {
     let resolved = hauksbee_mcu::SocConfig::resolve("renode:stm32f072");
     match resolved.expect("the shipped F072 must resolve") {

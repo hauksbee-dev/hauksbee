@@ -12,10 +12,10 @@
 use hauksbee_extract::{Component, ExtractedBoard};
 
 /// A pin at `number` wired to `net`.
-pub(crate) use crate::test_support::pin;
+pub use crate::test_support::pin;
 
 /// A component at `reference`/`value` whose pads are `(pad number, net id)`.
-pub(crate) fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Component {
+pub fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Component {
     Component {
         reference: reference.into(),
         value: value.into(),
@@ -25,6 +25,6 @@ pub(crate) fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Compon
 }
 
 /// A board named `"t"` built from `(net id, net name)` pairs plus components.
-pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
+pub fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
     crate::test_support::board("t", nets, components)
 }

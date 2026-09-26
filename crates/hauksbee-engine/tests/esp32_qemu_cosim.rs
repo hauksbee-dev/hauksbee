@@ -32,7 +32,7 @@ fn qemu_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn board_text() -> String {
@@ -45,10 +45,10 @@ fn flash_image() -> Option<PathBuf> {
     crate::support::testdata("firmware/esp32_blinky/flash.bin")
 }
 
-/// Run the co-sim once against `board_text`/`fw`, returning (uart_text,
-/// max_r1_current_ma, led_high_count, gpio4_transitions). Shared by the ESP32
+/// Run the co-sim once against `board_text`/`fw`, returning (`uart_text`,
+/// `max_r1_current_ma`, `led_high_count`, `gpio4_transitions`). Shared by the ESP32
 /// and ESP32-C3 proofs below: the C3 firmware mirrors the ESP32 demo (same
-/// GPIO2/LED_A/GPIO4 net names), so the analog/GPIO stepping loop is identical.
+/// `GPIO2/LED_A/GPIO4` net names), so the analog/GPIO stepping loop is identical.
 fn run_cosim_against(
     board_text: &str,
     fw: &std::path::Path,
@@ -63,8 +63,7 @@ fn run_cosim_against(
     engine.scheduler_mut().chunk_s = 5e-3;
 
     let frame_dt = 5e-3_f64;
-    let total = 1.5_f64;
-    let n = (total / frame_dt).round() as usize;
+    let n = 300; // 1.5 s of 5 ms frames
 
     let mut uart: Vec<u8> = Vec::new();
     let mut max_r1_current_ma = 0.0_f64;
@@ -189,7 +188,7 @@ fn esp32_cosim_is_deterministic_across_runs() {
     assert!(t2.contains("hello from esp32"));
     // Toggle counts land in the same ballpark (a couple of chunks of variance is
     // tolerable; the blink rate is fixed by virtual time).
-    let diff = (n1 as i64 - n2 as i64).abs();
+    let diff = (i64::from(n1) - i64::from(n2)).abs();
     eprintln!("determinism: run1 toggles={n1}, run2 toggles={n2}, diff={diff}");
     assert!(
         diff <= 4,

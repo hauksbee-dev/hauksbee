@@ -1,5 +1,6 @@
-//! The `--usb-c` report: the USB-C CC-attach classifier (the RPi-4
-//! shared-CC-pulldown re-derivation) and its compliance verdict, rendered in the
+//! The `--usb-c` report: the USB-C CC-attach classifier and its compliance verdict.
+//!
+//! The classifier is the RPi-4 shared-CC-pulldown re-derivation, rendered in the
 //! requested output mode. Only meaningful on a board carrying a USB-C receptacle
 //! with CC nets; otherwise it reports "no receptacle" cleanly. Under `--strict` a
 //! serious finding exits non-zero. CLI glue over the engine's `usb_c_report`.
@@ -11,8 +12,8 @@ use crate::result::JsonInputEvidence;
 use super::OutputMode;
 
 pub(crate) fn scoped_blockers(board: &ExtractedBoard, blockers: &[String]) -> Vec<String> {
-    match crate::checks::usb_c::receptacle_cc_net_names(board) {
-        Some(cc_nets) => blockers
+    crate::checks::usb_c::receptacle_cc_net_names(board).map_or_else(Vec::new, |cc_nets| {
+        blockers
             .iter()
             .filter(|reference| {
                 board.components.iter().any(|component| {
@@ -25,9 +26,8 @@ pub(crate) fn scoped_blockers(board: &ExtractedBoard, blockers: &[String]) -> Ve
                 })
             })
             .cloned()
-            .collect(),
-        None => Vec::new(),
-    }
+            .collect()
+    })
 }
 
 /// Print the USB-C CC compliance report in `mode`, then (under `strict`) exit
@@ -60,7 +60,7 @@ pub(crate) fn emit_quiet(
     // a serious CC fault stays verdict "fail"-shaped (and exits 2 under
     // --strict) even when bind blockers also exist; the INCONCLUSIVE sentence
     // still prints beside it.
-    let serious = report.as_ref().is_some_and(|report| report.is_serious());
+    let serious = matches!(&report, Some(r) if r.is_serious());
     let cc_nets = crate::checks::usb_c::receptacle_cc_net_names(board)
         .map(|nets| nets.into_iter().collect::<Vec<_>>())
         .unwrap_or_default();

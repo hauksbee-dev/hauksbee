@@ -26,7 +26,7 @@
 //! topology cannot be read cleanly produces no finding rather than a fabricated
 //! one.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_models::value::parse_value;
@@ -251,22 +251,22 @@ pub enum AbstentionReason {
 }
 
 impl AbstentionReason {
-    fn describe(self) -> &'static str {
+    const fn describe(self) -> &'static str {
         match self {
-            AbstentionReason::NoDirectionalNames => {
+            Self::NoDirectionalNames => {
                 concat!(
                     "the connectivity is reversible, so it is equally consistent with a buck ",
                     "and a boost, and neither rail name says which is the input"
                 )
             }
-            AbstentionReason::BothNamedInput => {
+            Self::BothNamedInput => {
                 concat!(
                     "the connectivity is reversible, and BOTH rail names claim to be the ",
                     "input, so the names contradict each other rather than settling the ",
                     "direction"
                 )
             }
-            AbstentionReason::BothNamedOutput => {
+            Self::BothNamedOutput => {
                 concat!(
                     "the connectivity is reversible, and BOTH rail names claim to be the ",
                     "output, so the names contradict each other rather than settling the ",
@@ -299,6 +299,7 @@ pub struct ConverterAbstention {
 
 impl ConverterAbstention {
     /// The canonical user-facing sentence, naming the part and the unlock.
+    #[must_use]
     pub fn message(&self) -> String {
         format!(
             "converter: the switching stage around {} (switch node '{}', rails '{}' and '{}') \
@@ -321,6 +322,7 @@ impl ConverterAbstention {
 /// distinguish "no converter here" from "a converter nobody could orient", which
 /// is the exact dishonesty the abstentions exist to remove, so no such variant is
 /// offered for a caller to reach for.
+#[must_use]
 pub fn detect_converters_with_abstentions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -365,10 +367,9 @@ pub fn detect_converters_with_abstentions(
                 continue;
             }
             // FETs whose power nets include this candidate switch node.
-            let switch_fets: Vec<(&Component, &Vec<i64>)> = fets
+            let switch_fets: Vec<&(&Component, Vec<i64>)> = fets
                 .iter()
                 .filter(|(_, nets)| nets.contains(&cand_sw))
-                .map(|(c, n)| (*c, n))
                 .collect();
             if switch_fets.is_empty() {
                 continue;
@@ -380,41 +381,33 @@ pub fn detect_converters_with_abstentions(
             // The input rail of a buck is the FET power net (across the high-side
             // switch) that is NOT the switch node and NOT ground. Gather all such
             // candidate rails from the switch FETs.
-            let mut rail_votes: HashMap<i64, usize> = HashMap::new();
-            for (_, nets) in &switch_fets {
-                for &n in *nets {
-                    if n != cand_sw && !ground_ids.contains(&n) && n != other_rail {
-                        *rail_votes.entry(n).or_default() += 1;
-                    }
+            let mut rail_votes: BTreeMap<i64, usize> = BTreeMap::new();
+            for &n in switch_fets.iter().flat_map(|(_, nets)| nets) {
+                if n != cand_sw && !ground_ids.contains(&n) && n != other_rail {
+                    *rail_votes.entry(n).or_default() += 1;
                 }
             }
             // Pick the rail that (a) the FETs vote for and (b) carries a bulk cap
             // to ground - that disambiguates the input rail from any gate-drive
             // bootstrap net or sense net also hanging off the FET. Scan the
-            // candidates in a deterministic order (by net id): iterating the
-            // HashMap directly made the first-cap winner depend on iteration
+            // candidates in a deterministic order (by net id, which the BTreeMap
+            // gives): a hash order made the first-cap winner depend on iteration
             // order when more than one rail carried a bulk cap.
-            let mut rail_list: Vec<(i64, usize)> =
-                rail_votes.iter().map(|(&k, &v)| (k, v)).collect();
-            rail_list.sort_by_key(|&(id, _)| id);
-            let mut input_rail_id = None;
-            for &(rail, _) in &rail_list {
-                if !bulk_caps_on_rail(board, rail, &ground_ids).is_empty() {
-                    input_rail_id = Some(rail);
-                    break;
-                }
-            }
-            // If no FET-side rail carries a bulk cap, fall back to the most-voted
-            // rail (still a valid topology; the ripple check will simply have no
-            // cap to test, the ampacity check still works on the switch node).
-            // Break vote ties by lowest net id so the choice is deterministic.
-            let input_rail_id = input_rail_id.or_else(|| {
-                rail_list
-                    .iter()
-                    .max_by_key(|&&(id, v)| (v, std::cmp::Reverse(id)))
-                    .map(|&(id, _)| id)
-            });
-            let Some(input_rail_id) = input_rail_id else {
+            let Some(input_rail_id) = rail_votes
+                .keys()
+                .copied()
+                .find(|&rail| !bulk_caps_on_rail(board, rail, &ground_ids).is_empty())
+                // If no FET-side rail carries a bulk cap, fall back to the most-voted
+                // rail (still a valid topology; the ripple check will simply have no
+                // cap to test, the ampacity check still works on the switch node).
+                // Break vote ties by lowest net id so the choice is deterministic.
+                .or_else(|| {
+                    rail_votes
+                        .iter()
+                        .max_by_key(|&(&id, &v)| (v, std::cmp::Reverse(id)))
+                        .map(|(&id, _)| id)
+                })
+            else {
                 continue;
             };
 
@@ -443,11 +436,6 @@ pub fn detect_converters_with_abstentions(
                 Topology::Buck => (input_rail_id, other_rail),
                 Topology::Boost => (other_rail, input_rail_id),
             };
-            // Resolve the bulk caps from the final input/output rails directly,
-            // so the mapping is correct regardless of buck/boost orientation.
-            let input_bulk_caps = bulk_caps_on_rail(board, input_rail, &ground_ids);
-            let output_bulk_caps = bulk_caps_on_rail(board, output_rail, &ground_ids);
-
             used_switch_nodes.insert(cand_sw);
             stages.push(ConverterStage {
                 topology,
@@ -456,8 +444,10 @@ pub fn detect_converters_with_abstentions(
                 output_rail: (output_rail, name_of(output_rail)),
                 inductor_ref: ind.reference.clone(),
                 inductor_h: Some(*h),
-                input_bulk_caps,
-                output_bulk_caps,
+                // Resolve the bulk caps from the final input/output rails directly,
+                // so the mapping is correct regardless of buck/boost orientation.
+                input_bulk_caps: bulk_caps_on_rail(board, input_rail, &ground_ids),
+                output_bulk_caps: bulk_caps_on_rail(board, output_rail, &ground_ids),
                 switch_fets: switch_fets
                     .iter()
                     .map(|(c, _)| c.reference.clone())
@@ -535,12 +525,8 @@ fn classify_topology_or_reason(
         rail_direction(fet_side_name),
         rail_direction(inductor_far_name),
     ) {
-        (Some(Input), Some(Output)) | (Some(Input), None) | (None, Some(Output)) => {
-            Ok(Topology::Buck)
-        }
-        (Some(Output), Some(Input)) | (Some(Output), None) | (None, Some(Input)) => {
-            Ok(Topology::Boost)
-        }
+        (Some(Input) | None, Some(Output)) | (Some(Input), None) => Ok(Topology::Buck),
+        (Some(Output) | None, Some(Input)) | (Some(Output), None) => Ok(Topology::Boost),
         (Some(Input), Some(Input)) => Err(AbstentionReason::BothNamedInput),
         (Some(Output), Some(Output)) => Err(AbstentionReason::BothNamedOutput),
         (None, None) => Err(AbstentionReason::NoDirectionalNames),

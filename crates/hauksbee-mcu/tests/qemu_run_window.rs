@@ -23,6 +23,9 @@
 use hauksbee_mcu::Mcu;
 
 #[test]
+// Clock rates are far below 2^53; the cycle counts are rounded positive products.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
 fn boot_floor_lifts_once_firmware_raises_magic() {
     let _guard = crate::support::qemu_lock();
     let Some(mut mcu) = crate::support::esp32_blinky_or_skip() else {

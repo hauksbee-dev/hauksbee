@@ -39,6 +39,7 @@
 //! same context. Per-state pin overrides retune the open-drain / drive legs.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use evalexpr::{ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
@@ -97,6 +98,8 @@ pub trait CustomBehavior: Send {
     );
 
     /// A short state label for diagnostics / frames (default empty).
+    // Implementors may return a label borrowed from `self`; only this default is static.
+    #[allow(clippy::unnecessary_literal_bound)]
     fn state(&self) -> &str {
         ""
     }
@@ -105,9 +108,10 @@ pub trait CustomBehavior: Send {
 /// Builds a fresh custom device instance for one matching component.
 type CustomFactory = Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>;
 
-/// Registry of custom-behaviour factories, keyed by an exact match string
-/// tested against a component's resolved model id, value, or MPN. A user (or a
-/// downstream crate) registers a factory before binding; the binder consults the
+/// Registry of custom-behaviour factories.
+///
+/// Keyed by an exact match string tested against a component's resolved model
+/// id, value, or MPN. A user (or a downstream crate) registers a factory before binding; the binder consults the
 /// registry for every component and, on a hit, instantiates the custom device
 /// instead of (or alongside) the declarative one.
 #[derive(Default)]
@@ -117,8 +121,9 @@ pub struct CustomRegistry {
 
 impl CustomRegistry {
     /// An empty registry.
+    #[must_use]
     pub fn new() -> Self {
-        CustomRegistry::default()
+        Self::default()
     }
 
     /// Register a factory under a match `key` (matched against model id / value /
@@ -135,6 +140,7 @@ impl CustomRegistry {
 
     /// Build a custom device for `keys` (any of the component's id/value/MPN), or
     /// `None` if nothing is registered for it.
+    #[must_use]
     pub fn build_for(&self, keys: &[&str]) -> Option<Box<dyn CustomBehavior>> {
         for (k, factory) in &self.factories {
             if keys.iter().any(|key| key.to_ascii_lowercase() == *k) {
@@ -145,6 +151,7 @@ impl CustomRegistry {
     }
 
     /// True when no factories are registered (the common case).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.factories.is_empty()
     }
@@ -184,7 +191,7 @@ struct OpenDrainLeg {
 }
 
 /// A per-state push-pull drive leg (Vsource behind a resistor whose value is
-/// swapped to OFF_OHMS when the state is inactive).
+/// swapped to `OFF_OHMS` when the state is inactive).
 #[derive(Debug, Clone)]
 struct DriveLeg {
     pin_role: String,
@@ -239,7 +246,7 @@ struct ConverterLeg {
     feedback_node: Option<NodeId>,
     /// Optional enable input.  A low level disables both converter legs.
     enable_node: Option<NodeId>,
-    /// Input draw (controllable Isource from in_node to ground).
+    /// Input draw (controllable Isource from `in_node` to ground).
     in_isource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
     /// bind time (or the literal). Recomputable if a board resistor is retuned.
@@ -312,7 +319,7 @@ enum LawStamp {
         source: DeviceId,
         /// For a Voltage law, its series output resistor and that resistor's
         /// on-resistance (ohms). Deactivating an `only_in_state` voltage law
-        /// must tri-state this resistor (OFF_OHMS) to RELEASE the pin,
+        /// must tri-state this resistor (`OFF_OHMS`) to RELEASE the pin,
         /// zeroing the Vsource alone would clamp the pin to 0 V through the
         /// stiff series R (a near-short). A Current law releases correctly by
         /// zeroing its Isource, so it carries `None` here.
@@ -413,7 +420,7 @@ fn compile_law_implicit(
         if !runtime_owned {
             if let Some(v) = params.get_f64(token) {
                 // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
-                out.push_str(&format!("({v:?})"));
+                let _ = write!(out, "({v:?})");
                 continue;
             }
         }
@@ -423,7 +430,7 @@ fn compile_law_implicit(
                     deps.push(hauksbee_ir::BDep::Volt(node));
                     deps.len() - 1
                 });
-                out.push_str(&format!("__d{k}"));
+                let _ = write!(out, "__d{k}");
                 continue;
             }
             // A voltage the binder did not connect: the runtime form treats it
@@ -554,9 +561,9 @@ impl BehavioralDevice {
         params: &Params,
         role_nodes: &BTreeMap<String, NodeId>,
         mut custom: Box<dyn CustomBehavior>,
-    ) -> BehavioralDevice {
+    ) -> Self {
         custom.stamp(circuit, reference, params, role_nodes);
-        BehavioralDevice {
+        Self {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
@@ -580,8 +587,8 @@ impl BehavioralDevice {
         params: &Params,
         role_nodes: &BTreeMap<String, NodeId>,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
-    ) -> Option<BehavioralDevice> {
-        let mut dev = BehavioralDevice {
+    ) -> Option<Self> {
+        let mut dev = Self {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
@@ -617,19 +624,14 @@ impl BehavioralDevice {
             };
             // Internal pull to a rail.
             if let Some(ohms) = pin.pull_ohms {
-                let rail = if let Some(v) = pin.pull_to_volts {
-                    // Literal-voltage rail: stamp a hidden stiff source node.
-                    Some(hidden_dc_node(
-                        circuit,
-                        reference,
-                        &format!("{role}_rail"),
-                        v,
-                    ))
-                } else if let Some(rail_role) = &pin.pull_to {
-                    role_nodes.get(rail_role).copied()
-                } else {
-                    None
-                };
+                // A literal-voltage rail stamps a hidden stiff source node.
+                let rail = pin
+                    .pull_to_volts
+                    .map(|v| hidden_dc_node(circuit, reference, &format!("{role}_rail"), v))
+                    .or_else(|| {
+                        let rail_role = pin.pull_to.as_ref()?;
+                        role_nodes.get(rail_role).copied()
+                    });
                 if let Some(rail_node) = rail {
                     circuit.add(Device::resistor(
                         format!("Rbeh_{reference}_{role}_pull"),
@@ -674,7 +676,7 @@ impl BehavioralDevice {
         role_nodes: &BTreeMap<String, NodeId>,
     ) {
         if let Some(fsm) = &model.fsm {
-            self.fsm_states = fsm.states.clone();
+            self.fsm_states.clone_from(&fsm.states);
             // Compile each transition guard once. A guard that fails to parse is
             // reported here (not silently, not re-parsed every chunk) and stored
             // as `None`, so it simply never fires.
@@ -807,7 +809,7 @@ impl BehavioralDevice {
             let profile = LoadProfile {
                 id: format!("model:{reference}:{}", load.name),
                 description: format!("model-owned current profile for {reference}"),
-                match_rule: Default::default(),
+                match_rule: hauksbee_models::profile::ProfileMatch::default(),
                 segments: load.segments.clone(),
             };
             let initial_i = profile.current_at(-1.0, load.seed);
@@ -1013,14 +1015,14 @@ impl BehavioralDevice {
         }
         self.fsm_states
             .get(self.state_idx)
-            .map(String::as_str)
-            .unwrap_or("")
+            .map_or("", String::as_str)
     }
 
     /// The node the converter's output source drives, or None (no converter).
     /// The binder consults this to suppress the ideal auto-rail on a
     /// converter-driven supply net: two stiff sources on one net, and the
     /// ideal one wins.
+    #[must_use]
     pub fn converter_out_node(&self) -> Option<NodeId> {
         self.converter.as_ref().map(|c| c.out_node)
     }
@@ -1037,11 +1039,13 @@ impl BehavioralDevice {
     }
 
     /// The effective input-current limit of the converter (A), or None.
+    #[must_use]
     pub fn converter_iin_limit(&self) -> Option<f64> {
         self.converter.as_ref().and_then(|c| c.iin_limit_a)
     }
 
     /// Last reflected input current the converter drew (A), or None.
+    #[must_use]
     pub fn converter_iin(&self) -> Option<f64> {
         self.converter.as_ref().map(|c| c.last_iin_a)
     }
@@ -1065,14 +1069,16 @@ impl BehavioralDevice {
                 eval_number(&leg.program, &ctx)
             }
             LawStamp::Runtime { source, .. } => match circuit.devices.get(source.0 as usize) {
-                Some(Device::Isource {
-                    kind: SourceKind::Dc(v),
-                    ..
-                })
-                | Some(Device::Vsource {
-                    kind: SourceKind::Dc(v),
-                    ..
-                }) => Some(*v),
+                Some(
+                    Device::Isource {
+                        kind: SourceKind::Dc(v),
+                        ..
+                    }
+                    | Device::Vsource {
+                        kind: SourceKind::Dc(v),
+                        ..
+                    },
+                ) => Some(*v),
                 _ => None,
             },
         }
@@ -1170,7 +1176,7 @@ impl BehavioralDevice {
     /// Configure an input-power budget (W) at input voltage `vin` (V). When set,
     /// each chunk raises an overpower fault if the converter's reflected input
     /// draw exceeds the budget.
-    pub fn set_input_budget(&mut self, vin: f64, budget_w: f64) {
+    pub const fn set_input_budget(&mut self, vin: f64, budget_w: f64) {
         self.input_budget = Some((vin, budget_w));
     }
 
@@ -1255,16 +1261,13 @@ impl BehavioralDevice {
     }
 
     /// Retune open-drain and drive legs from the active state's pin overrides.
-    fn apply_state_pins(&mut self, circuit: &mut Circuit) {
+    fn apply_state_pins(&self, circuit: &mut Circuit) {
         let active = self.state().to_string();
         let overrides = self.state_pins.get(&active).cloned().unwrap_or_default();
 
         // Open drains: assert (on_ohms) when the active state lists od_assert.
         for od in &self.open_drains {
-            let assert = overrides
-                .get(&od.pin_role)
-                .map(|b| b.od_assert)
-                .unwrap_or(false);
+            let assert = overrides.get(&od.pin_role).is_some_and(|b| b.od_assert);
             let ohms = if assert { od.on_ohms } else { OFF_OHMS };
             set_resistor_ohms(circuit, od.resistor, ohms);
         }
@@ -1330,11 +1333,13 @@ impl BehavioralDevice {
         let target = fb.map(|now| {
             c.settle_prev
                 .and_then(|prev| secant(now, prev))
-                .unwrap_or(relax(now))
+                .unwrap_or_else(|| relax(now))
         });
         c.settle_prev = fb.map(|(_, vfb)| (cmd, vfb));
         self.update_converter(circuit, node_v, target);
-        let c = self.converter.as_mut().expect("checked above");
+        let Some(c) = self.converter.as_mut() else {
+            return 0.0;
+        };
         // Only a point IN regulation is held: one pinned at a ceiling or limit
         // must stay free to rise when that limit lifts.
         let regulating = fb.is_some_and(|(vref, vfb)| (vfb - vref).abs() <= 1e-3 * vref.abs());
@@ -1345,7 +1350,7 @@ impl BehavioralDevice {
 
     /// Return the converter's loop state to its stamp-time cold start (the
     /// caller restores the circuit's sources), undoing a failed settle.
-    pub fn reset_converter(&mut self) {
+    pub const fn reset_converter(&mut self) {
         if let Some(c) = self.converter.as_mut() {
             c.last_cmd_vout = if c.cfg.feedback.is_some() {
                 0.0
@@ -1373,8 +1378,7 @@ impl BehavioralDevice {
         if let Some(enable) = &c.cfg.enable {
             let enabled = c
                 .enable_node
-                .map(|node| node_v(node) >= enable.high_threshold_v)
-                .unwrap_or(false);
+                .is_some_and(|node| node_v(node) >= enable.high_threshold_v);
             if !enabled {
                 c.last_cmd_vout = 0.0;
                 c.shut_down(circuit);
@@ -1425,10 +1429,12 @@ impl BehavioralDevice {
             // prevents that is not modelled.
             match (settled_cmd, c.settled) {
                 (Some(v), _) => v,
-                (None, Some((v, i))) => v + (iout - i) * c.out_r_ohms,
+                (None, Some((v, i))) => (iout - i).mul_add(c.out_r_ohms, v),
                 (None, None) => {
                     let fb_v = node_v(feedback_node);
-                    c.last_cmd_vout + feedback.relaxation_gain * (feedback.vref_v - fb_v)
+                    feedback
+                        .relaxation_gain
+                        .mul_add(feedback.vref_v - fb_v, c.last_cmd_vout)
                 }
             }
         } else {
@@ -1472,7 +1478,7 @@ impl BehavioralDevice {
                 // output would deliver full power while the input drew the
                 // previous under-limit current, energy from nowhere, and the
                 // limit never actually enforced.
-                iin = (v_cmd * v_cmd * (iout / vout)) / (eff * vin);
+                iin = (v_cmd.powi(2) * (iout / vout)) / (eff * vin);
             }
         }
         v_cmd = v_cmd.clamp(0.0, command_ceiling);
@@ -1598,10 +1604,10 @@ pub fn program_iin_limit(
         }
         Some(first)
     }?;
-    let prog = match sp.prog_ref.as_deref() {
-        Some(reference) => board_resistor(reference),
-        None => sp.prog_ohms,
-    }?;
+    let prog = sp
+        .prog_ref
+        .as_deref()
+        .map_or(sp.prog_ohms, board_resistor)?;
     if !rsense.is_finite() || rsense <= 0.0 || !prog.is_finite() || prog <= 0.0 {
         return None;
     }
@@ -1616,11 +1622,10 @@ pub fn program_iin_limit(
 // ── small circuit-mutation helpers (mirror power_supply/drivers) ────────────
 
 fn set_source_dc(circuit: &mut Circuit, id: DeviceId, v: f64) {
-    match circuit.devices.get_mut(id.0 as usize) {
-        Some(Device::Vsource { kind, .. }) | Some(Device::Isource { kind, .. }) => {
-            *kind = SourceKind::Dc(v);
-        }
-        _ => {}
+    if let Some(Device::Vsource { kind, .. } | Device::Isource { kind, .. }) =
+        circuit.devices.get_mut(id.0 as usize)
+    {
+        *kind = SourceKind::Dc(v);
     }
 }
 
@@ -1631,6 +1636,8 @@ fn set_resistor_ohms(circuit: &mut Circuit, id: DeviceId, ohms: f64) {
 }
 
 /// Evaluate a parsed expression to a number against a context.
+// Script integers are read as numbers; rounding beyond 2^53 is the intended view.
+#[allow(clippy::cast_precision_loss)]
 fn eval_number(program: &EvalNode, ctx: &HashMapContext) -> Option<f64> {
     program.eval_with_context(ctx).ok().and_then(|v| match v {
         Value::Float(f) => Some(f),
@@ -1658,11 +1665,11 @@ mod tests {
     use hauksbee_models::Segment;
 
     fn roles() -> BTreeMap<String, NodeId> {
-        let mut r = BTreeMap::new();
-        r.insert("io".to_string(), NodeId(1));
-        r.insert("vbus".to_string(), NodeId(2));
-        r.insert("gnd".to_string(), NodeId::GROUND);
-        r
+        BTreeMap::from([
+            ("io".to_string(), NodeId(1)),
+            ("vbus".to_string(), NodeId(2)),
+            ("gnd".to_string(), NodeId::GROUND),
+        ])
     }
 
     fn params() -> Params {
@@ -1735,7 +1742,7 @@ mod tests {
                 _ => None,
             })
             .expect("stamped series resistor");
-        assert_eq!(resistance, 1e9);
+        assert!((resistance - 1e9).abs() < 1e-3, "{resistance}");
     }
 
     #[test]

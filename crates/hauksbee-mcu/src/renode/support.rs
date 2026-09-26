@@ -70,11 +70,13 @@ pub struct SupportBundle {
 }
 
 /// Look up a bundle by its descriptor name.
+#[must_use]
 pub fn lookup(name: &str) -> Option<&'static SupportBundle> {
     BUNDLES.iter().copied().find(|b| b.name == name)
 }
 
 /// Every bundle name this build knows, for error messages and validation.
+#[must_use]
 pub fn known_names() -> Vec<&'static str> {
     BUNDLES.iter().map(|b| b.name).collect()
 }
@@ -90,10 +92,15 @@ impl SupportBundle {
     /// embedded in the binary, so the descriptor loader's clock cross-check
     /// (`soc::check_clock_declarations`) can read them without touching the
     /// filesystem, and RP2040 is held to the same rule as every inline part.
+    #[must_use]
     pub fn repl_sources(&self) -> Vec<String> {
         self.files
             .iter()
-            .filter(|f| f.name.ends_with(".repl"))
+            .filter(|f| {
+                Path::new(f.name)
+                    .extension()
+                    .is_some_and(|ext| ext == "repl")
+            })
             .filter_map(|f| String::from_utf8(f.bytes.to_vec()).ok())
             .collect()
     }
@@ -105,6 +112,10 @@ impl SupportBundle {
     /// and a counter so two machines inside one process (the co-sim test suite
     /// runs several) get their own copy rather than one racing the other's
     /// cleanup.
+    ///
+    /// # Errors
+    ///
+    /// When the directory or any of its files cannot be written.
     pub fn unpack(&self) -> Result<PathBuf> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -131,6 +142,7 @@ impl SupportBundle {
     ///
     /// `path add` comes first so the bundle's own `.repl` can name its data
     /// files relatively.
+    #[must_use]
     pub fn prelude_commands(&self, dir: &Path) -> Vec<String> {
         let mut cmds = Vec::with_capacity(self.sources.len() + 1);
         cmds.push(format!("path add @{}", dir.display()));
@@ -244,7 +256,7 @@ mod tests {
                 );
             }
             for name in &carried {
-                if name.ends_with(".cs") {
+                if Path::new(name).extension().is_some_and(|ext| ext == "cs") {
                     assert!(
                         bundle.sources.contains(name),
                         "{}: {name} is carried but never included, so its \

@@ -1,19 +1,30 @@
-//! `--ac`: small-signal AC sweep on the bound circuit. Prints a Bode
-//! (magnitude dB + phase) table for the requested net(s), and, with `--ac-loop`,
-//! gain crossover and phase margin. Refuses (exit 3) to present a meaningless
-//! all-sentinel or no-signal-path sweep as valid data.
+//! `--ac`: small-signal AC sweep on the bound circuit.
+//!
+//! Prints a Bode (magnitude dB + phase) table for the requested net(s), and,
+//! with `--ac-loop`, gain crossover and phase margin. Refuses (exit 3) to
+//! present a meaningless all-sentinel or no-signal-path sweep as valid data.
 
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 use crate::result::{
     ac_is_all_sentinel, coverage_open_active_refs, no_signal_path_reason, AcJson, AcNetJson,
     BindSummary, CheckCoverage, JsonReport, Refusal, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
-/// One net's Bode rows: (net, [(freq_hz, mag_db, phase_deg)]).
+/// One net's Bode rows: (net, [(`freq_hz`, `mag_db`, `phase_deg`)]).
 type NetBode = (String, Vec<(f64, f64, f64)>);
 
-#[allow(clippy::too_many_arguments)]
+/// What an AC refusal renders against: board, evidence, inputs, `--json` and `--quiet`.
+type AcContext<'a> = (
+    &'a crate::BoundBoard,
+    &'a crate::evidence::BoardEvidence,
+    &'a [crate::result::JsonInputEvidence],
+    bool,
+    bool,
+);
+
+#[allow(clippy::too_many_arguments, reason = "one per --ac flag")]
+#[allow(clippy::too_many_lines, reason = "validate, sweep, refuse, emit")]
 pub(crate) fn emit_quiet(
     bound: &crate::BoundBoard,
     evidence: &crate::evidence::BoardEvidence,
@@ -29,11 +40,12 @@ pub(crate) fn emit_quiet(
 
     let spec = AcSpec::parse(ac_arg).map_err(|e| anyhow::anyhow!("--ac: {e}"))?;
     let circuit = &bound.circuit;
+    let ctx = (bound, evidence, inputs, json, quiet);
 
     // Default to every non-ground node if no --ac-node given.
     let nodes: Vec<String> = if ac_nodes.is_empty() {
-        (1..circuit.node_count())
-            .map(|i| circuit.node_name(hauksbee_ir::NodeId(i as u32)).to_string())
+        (1..u32::try_from(circuit.node_count())?)
+            .map(|i| circuit.node_name(hauksbee_ir::NodeId(i)).to_string())
             .collect()
     } else {
         ac_nodes.to_vec()
@@ -51,7 +63,6 @@ pub(crate) fn emit_quiet(
             .iter()
             .all(|n| !bound.net_names.iter().any(|k| k == n))
     {
-        let summary = BindSummary::from_report(&bound.report);
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         let refusal = Refusal::new(
@@ -60,19 +71,7 @@ pub(crate) fn emit_quiet(
             vec!["board extraction and component binding completed"],
             "run --list-nets, replace the missing --ac-node names, then rerun the same sweep",
         );
-        if json {
-            let mut jr = JsonReport::new(&bound.name, summary)
-                .with_inputs(inputs)
-                .with_evidence(evidence);
-            jr.ac = Some(AcJson {
-                validity: Validity::refused(refusal.clone()),
-                nets: Vec::new(),
-                no_signal_path_nets: Vec::new(),
-                not_found_nets: nodes.clone(),
-                coverage: None,
-            });
-            println!("{}", jr.to_json());
-        } else {
+        refuse_ac(ctx, &refusal, &[], &nodes, || {
             eprintln!("error: AC result not valid: {reason}");
             for n in &nodes {
                 let near = crate::reports::cosim::nearest_nets(n, &bound.net_names, 5);
@@ -81,13 +80,7 @@ pub(crate) fn emit_quiet(
                 }
             }
             eprintln!("  run --list-nets to see every net name, then re-run.");
-            eprintln!("{}", refusal.render_text());
-            print!(
-                "{}",
-                super::render_evidence_appendix(evidence, quiet, false)
-            );
-        }
-        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
+        });
     }
 
     let solver_options = SolverOptions::default();
@@ -143,23 +136,11 @@ pub(crate) fn emit_quiet(
             vec!["deck/board parsing and circuit assembly completed"],
             "run --list-nets, replace the missing --ac-node names, then rerun the same sweep",
         );
-        if json {
-            let mut jr = JsonReport::new(&bound.name, summary)
-                .with_inputs(inputs)
-                .with_evidence(evidence);
-            jr.ac = Some(AcJson {
-                validity: Validity::refused(refusal.clone()),
-                nets: Vec::new(),
-                no_signal_path_nets: Vec::new(),
-                // The requested nets are ALL missing here, surface them in the
-                // structured field too, not just the prose reason, so a machine
-                // consumer reading `not_found_nets` sees them (matching the
-                // partial-sweep path below and this report's never-silent promise).
-                not_found_nets: nodes.clone(),
-                coverage: None,
-            });
-            println!("{}", jr.to_json());
-        } else {
+        // The requested nets are ALL missing here, surface them in the
+        // structured field too, not just the prose reason, so a machine
+        // consumer reading `not_found_nets` sees them (matching the
+        // partial-sweep path below and this report's never-silent promise).
+        refuse_ac(ctx, &refusal, &[], &nodes, || {
             eprintln!("error: AC result not valid: {reason}");
             // Did-you-mean per missing node, then the discoverability pointer,
             // matching the net-not-found pattern the co-sim / spec surfaces use.
@@ -173,13 +154,7 @@ pub(crate) fn emit_quiet(
                 "  (none of the requested --ac-node nets exist in this circuit; \
                  run `--list-nets` to see every net name, then re-run.)"
             );
-            eprintln!("{}", refusal.render_text());
-            print!(
-                "{}",
-                super::render_evidence_appendix(evidence, quiet, false)
-            );
-        }
-        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
+        });
     }
 
     let all_sentinel = !nonempty.is_empty() && nonempty.iter().all(|(_, b)| ac_is_all_sentinel(b));
@@ -188,8 +163,7 @@ pub(crate) fn emit_quiet(
         // Name a representative net for the reason (the first reported one).
         let net = nonempty
             .first()
-            .map(|(n, _)| n.as_str())
-            .unwrap_or("the requested node");
+            .map_or("the requested node", |(n, _)| n.as_str());
         let reason = no_signal_path_reason(net, &summary);
         let refusal = Refusal::new(
             format!("an AC transfer response at {net}"),
@@ -197,32 +171,14 @@ pub(crate) fn emit_quiet(
             vec!["deck/board parsing and circuit assembly completed"],
             "bind the unresolved driving ICs with --models-dir, then rerun the same sweep",
         );
-        if json {
-            let mut jr = JsonReport::new(&bound.name, summary)
-                .with_inputs(inputs)
-                .with_evidence(evidence);
-            jr.ac = Some(AcJson {
-                validity: Validity::refused(refusal.clone()),
-                nets: Vec::new(),
-                no_signal_path_nets: Vec::new(),
-                not_found_nets: Vec::new(),
-                coverage: None,
-            });
-            println!("{}", jr.to_json());
-        } else {
+        refuse_ac(ctx, &refusal, &[], &[], || {
             eprintln!("WARNING: AC result not valid: {reason}");
             eprintln!(
                 "  (every reported net is at the {:.0} dB floor: no path to drive it. \
                  Bind the driving ICs with --models-dir, then re-run.)",
                 crate::result::AC_FLOOR_DB
             );
-            eprintln!("{}", refusal.render_text());
-            print!(
-                "{}",
-                super::render_evidence_appendix(evidence, quiet, false)
-            );
-        }
-        crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
+        });
     }
 
     // Loop-net validity guard (degeneracy), applied to BOTH --json and text
@@ -245,33 +201,16 @@ pub(crate) fn emit_quiet(
                 vec!["the ordinary AC sweep completed before the loop-specific guard"],
                 "choose an existing driven feedback net (use --list-nets), bind its driving ICs if open, then rerun --ac-loop",
             );
-            if json {
-                // Structured refusal on the JSON surface too, a consumer reading
-                // stdout (not the exit code) must see valid:false, not empty output.
-                let mut jr = JsonReport::new(&bound.name, summary)
-                    .with_inputs(inputs)
-                    .with_evidence(evidence);
-                jr.ac = Some(AcJson {
-                    validity: Validity::refused(refusal.clone()),
-                    nets: vec![],
-                    no_signal_path_nets: vec![loop_net.to_string()],
-                    not_found_nets: Vec::new(),
-                    coverage: None,
-                });
-                println!("{}", jr.to_json());
-            } else {
+            // Structured refusal on the JSON surface too, a consumer reading
+            // stdout (not the exit code) must see valid:false, not empty output.
+            let loop_nets = [loop_net.to_string()];
+            refuse_ac(ctx, &refusal, &loop_nets, &[], || {
                 eprintln!("WARNING: --ac-loop result not valid: {reason}");
                 eprintln!(
                     "  (no feedback path to measure at '{loop_net}'. Bind the driving \
                      ICs with --models-dir, then re-run.)"
                 );
-                eprintln!("{}", refusal.render_text());
-                print!(
-                    "{}",
-                    super::render_evidence_appendix(evidence, quiet, false)
-                );
-            }
-            crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
+            });
         }
     }
 
@@ -348,6 +287,7 @@ pub(crate) fn emit_quiet(
         let coverage = if no_path.is_empty() {
             None
         } else {
+            #[allow(clippy::cast_precision_loss, reason = "net counts never reach 2^52")]
             let frac = if requested == 0 {
                 1.0
             } else {
@@ -468,6 +408,39 @@ pub(crate) fn emit_quiet(
     Ok(())
 }
 
+/// Emit an AC refusal as structured JSON, or as the text lead plus refusal and evidence
+/// appendix, then exit with the invalid-for-analysis code.
+fn refuse_ac(
+    (bound, evidence, inputs, json, quiet): AcContext,
+    refusal: &Refusal,
+    no_signal_path_nets: &[String],
+    not_found_nets: &[String],
+    text_lead: impl FnOnce(),
+) -> ! {
+    if json {
+        let summary = BindSummary::from_report(&bound.report);
+        let mut jr = JsonReport::new(&bound.name, summary)
+            .with_inputs(inputs)
+            .with_evidence(evidence);
+        jr.ac = Some(AcJson {
+            validity: Validity::refused(refusal.clone()),
+            nets: Vec::new(),
+            no_signal_path_nets: no_signal_path_nets.to_vec(),
+            not_found_nets: not_found_nets.to_vec(),
+            coverage: None,
+        });
+        println!("{}", jr.to_json());
+    } else {
+        text_lead();
+        eprintln!("{}", refusal.render_text());
+        print!(
+            "{}",
+            super::render_evidence_appendix(evidence, quiet, false)
+        );
+    }
+    crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, refusal)
+}
+
 /// Build the `--ac-csv` body from the per-net bode data. Returns the CSV text and
 /// the list of nets omitted because they have no signal path.
 ///
@@ -490,7 +463,7 @@ fn ac_csv_body(per_net: &[NetBode]) -> (String, Vec<String>) {
         // stays fixed (mirrors sim.rs::csv_escape).
         let net_cell = crate::commands::sim::csv_escape(net);
         for (f, db, ph) in bode {
-            out.push_str(&format!("{net_cell},{f},{db},{ph}\n"));
+            let _ = writeln!(out, "{net_cell},{f},{db},{ph}");
         }
     }
     (out, no_path)

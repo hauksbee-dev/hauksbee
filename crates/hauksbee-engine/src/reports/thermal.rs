@@ -1,7 +1,9 @@
-//! `--thermal`: a short headless co-sim, then the steady-state junction
-//! temperature per dissipating device (Tj = Tambient + P * theta_JA). Text or
-//! JSON (there is no plain variant). An empty table because the power ICs are
-//! open/unresolved is flagged invalid (exit 3), not a false "runs cool" pass,
+//! `--thermal`: steady-state junction temperatures after a short headless co-sim.
+//!
+//! Reports the junction temperature per dissipating device
+//! (Tj = Tambient + P * `theta_JA`). Text or JSON (there is no plain variant).
+//! An empty table because the power ICs are open/unresolved is flagged invalid
+//! (exit 3), not a false "runs cool" pass,
 //! and a PARTIAL-coverage table (rows exist while an active power IC on the
 //! live circuit is open/unresolved) escalates to exit 3 BY DEFAULT;
 //! `--no-strict-thermal` opts out of the escalation but never of the caveat.
@@ -18,7 +20,9 @@ use hauksbee_ir::evidence::Scope;
 /// table). Exits with the invalid-for-analysis code when the table is invalid,
 /// or (under `strict`, the default; `--no-strict-thermal` opts out) when
 /// coverage is only partial.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "one per clap flag")]
+#[allow(clippy::fn_params_excessive_bools, reason = "independent CLI switches")]
+#[allow(clippy::too_many_lines, reason = "linear run: solve, render, gate")]
 pub(crate) fn emit_quiet(
     engine: &mut HauksbeeEngine,
     evidence: &crate::evidence::BoardEvidence,
@@ -103,8 +107,7 @@ pub(crate) fn emit_quiet(
         jr.thermal = Some(ThermalJson {
             validity: strict_partial_refusal
                 .clone()
-                .map(Validity::refused)
-                .unwrap_or_else(|| validity.clone()),
+                .map_or_else(|| validity.clone(), Validity::refused),
             ambient_c: ambient,
             devices: rows
                 .iter()
@@ -181,6 +184,7 @@ pub(crate) fn emit_quiet(
 /// Run a short headless co-sim and collect the steady-state junction-temperature
 /// estimate per dissipating device. Returns `(reference, peak_Tj_C, over_limit)`
 /// rows, sorted hottest-first.
+#[allow(clippy::while_float, reason = "f64 time sum fixes the frame count")]
 fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f64, bool)> {
     use hauksbee_frontdoor_api::engine::Engine;
     use std::collections::HashMap;

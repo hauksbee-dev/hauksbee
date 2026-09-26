@@ -27,8 +27,11 @@ The four authoring routes:
   the web report, from
   `hauksbee models extract`, or from the standalone `model-extract` binary.
   Every one of the three states what leaves your machine and asks before it
-  sends anything. The result is a draft to check, carries provenance
-  `datasheet-extracted`. Electrical model cards land in
+  sends anything. The result is a draft to check. It carries tier
+  `datasheet-derived` (the machine-draft rung in
+  [SOURCE_LADDER.md](SOURCE_LADDER.md); the web card labels it
+  `datasheet-extracted`) and a `[[models.source.references]]` entry pinning the
+  PDF's sha256. Electrical model cards land in
   `~/.hauksbee/models/` and load as user-dir entries; register-map sensor
   drafts use `<part>.sensor.toml` and must be reviewed and attached explicitly.
 - **Hand-written behavioural** TOML: a `[models.behavioral]` entry you
@@ -90,6 +93,22 @@ hauksbee models extract \
 It prints what will leave your machine and waits for a yes. In a script, where
 there is nobody to ask, it refuses rather than assuming: pass `--yes` (or `-y`)
 when you mean it.
+
+If `<part>.toml` (or `<part>.sensor.toml`) already exists in the output
+directory it refuses before sending anything, since that file may hold your
+corrections: move it, pick another `--out-dir`, or pass `--force` to replace
+it. A saved `[[models]]` draft is stamped by the tool, not the model:
+`tier = "datasheet-derived"` and a reference naming the PDF file and its
+sha256 (no URL: the tool only knows the local file; add one when you review).
+A `[sensor]` spec has no source table and is saved as validated.
+A `value_re` that is just the literal part name is rewritten to a
+case- and separator-insensitive rule (`^PART[-_ ]?002DD$` style) that also
+admits the ordering codes the draft lists under `[models.variant].orderable`,
+and nothing with other digits. A value rule that lists the value outright (a
+finite, anchored set of spellings) resolves with confidence `exact`; a family
+pattern resolves `family`. `hauksbee doctor` shows the resolved extraction
+backend on an `extract` row, from the same resolution as
+`hauksbee models backend show`, without calling a model.
 
 ### Choosing a backend
 
@@ -158,19 +177,50 @@ support determine availability. A successful read/write check alone does not
 prove the classifier was active. Keep the default until that is verified for
 your CLI-compatible wrapper. Codex CLI versions supporting `--approve-for-me`
 can opt into automatic approval review with `permission_mode = "approve-for-me"`
-in `[codex]`. Hauksbee emits that flag instead of `--sandbox`: the CLI selects
-workspace-write itself and rejects the two flags together. Do not append it to
-`extra_args` alongside a sandbox mode. This differs from deprecated `--full-auto`;
-check `codex exec --help` for support. Neither automatic reviewer is a promise
-that all filesystem reads are confined to the scratch directory.
+in `[codex]`. Hauksbee emits that flag (with the read-confining permission
+profile below) instead of `--sandbox`: the CLI rejects the two flags together.
+Do not append `--sandbox` to `extra_args` either: an explicit `--sandbox`
+overrides the profile and reopens every read. This differs from deprecated
+`--full-auto`; check `codex exec --help` for support. An automatic reviewer can
+still approve a command outside the sandbox, so `approve-for-me` is weaker than
+the default.
 
 Codex fast mode: `extra_args = ["-c", "service_tier=\"priority\""]` in `[codex]`.
 Codex runs with `--ephemeral --ignore-user-config --ignore-rules` and with apps,
-browser/computer use, plugins, skills, memories, hooks, goals and subagents
-disabled, so `~/.codex/config.toml` (MCP servers, trusted projects) does not
-apply; sign-in still does. Setting `codex.profile` / `HAUKSBEE_CODEX_PROFILE`
+browser/computer use, plugins, skill search, memories, hooks, goals, subagents
+and the shell snapshot disabled, so `~/.codex/config.toml` (MCP servers,
+trusted projects) does not apply; sign-in still does. Skills need one more
+switch: codex lists every skill under `$CODEX_HOME/skills` in the model's
+context whatever the feature flags say (a real run opened
+`~/.codex/skills/<name>/SKILL.md`), so hauksbee also passes
+`-c skills.include_instructions=false` (checked offline with
+`codex debug prompt-input`). Setting `codex.profile` / `HAUKSBEE_CODEX_PROFILE`
 drops `--ignore-user-config`: your codex config and that profile then apply
-(the backend summary says so); the other flags stay.
+(the backend summary says so); the other flags, and the read confinement, stay.
+
+**What an extraction agent can read.** `--sandbox workspace-write` confines
+codex's writes but not its reads: a run under it searched the home directory,
+another project and `/tmp`, and ran a different `hauksbee` it found on PATH. So
+in the `workspace-write` (default) and `approve-for-me` modes hauksbee selects a
+codex permission profile instead (`-c default_permissions="hauksbee"` plus the
+profile as a `-c permissions=...` override): shell commands may read codex's
+`:minimal` OS/runtime paths, `/opt/homebrew` and `/usr/local` (so `pdftotext`
+and `pdftoppm` work), the checker executable, and the scratch workspace (which
+they may also write), and are refused everything else, including your home
+directory, `~/.codex`, `/tmp` and `$TMPDIR`. Verified against codex-cli 0.156.1
+with `codex sandbox -P hauksbee` (Seatbelt on macOS). The codex process itself
+still reads its own sign-in from `CODEX_HOME`; no credentials are copied. Claude
+Code gets `--restricted` (file tools confined to the workspace), no web tools,
+and a strict Bash sandbox via `--settings` (`failIfUnavailable`, no unsandboxed
+retry, reads denied under `~/`, `/tmp` and the temp root except the workspace
+and checker); unlike codex's profile, the rest of the system (`/etc`,
+`/Applications`) stays readable to it. agy, and codex in `read-only` or
+`danger-full-access` mode, are not read-confined: they can read anything your
+account can, and what they read can reach the vendor. Every agent CLI starts in
+the scratch workspace with a PATH from which every directory holding a
+`hauksbee` executable is removed, and the prompt names the product's own
+executable by absolute path (`'<hauksbee>' models lint model.toml`) as the
+only checker; the standalone `model-extract` binary names none.
 
 `HAUKSBEE_EXTRACT_CONFIG` naming a file that does not exist is an error for
 extraction, `show` and `check`; `set`, `use`, `setup` and Settings create it.
@@ -246,6 +296,12 @@ run the same lint again, then check the board binding:
 hauksbee models lint U3-model.toml
 hauksbee models resolve path/to/board.kicad_pcb --models-dir .
 ```
+
+Lint also refuses a pin map missing a role the binder reads for the kind (a
+set-point `vreg` without `in`/`out`, including one that carries only
+`[models.behavioral.pins]`, since no converter owns its output), so a card
+that would bind OPEN at run time fails lint, and `resolve` prints that reason
+and shows the part UNRESOLVED instead of bound.
 
 For a shareable pack, use `--pack-dir` instead. It writes `pack.toml` and
 `models/<id>.toml`, refuses to overwrite either, and leaves the license as an
@@ -514,9 +570,9 @@ from, so an extracted model stays auditable.
 
 0. **A scratch workspace** is built first with a copy of the datasheet. The
    agent backends (claude-code, agy, codex) each run with their own
-   non-interactive edit-permission / workspace-write controls, not a
-   universal network sandbox. The API path sends its request to the
-   configured provider.
+   non-interactive edit-permission controls; codex and claude-code reads are
+   confined as described under "What an extraction agent can read". The API
+   path sends its request to the configured provider.
 1. **PDF to text** through `pdftotext` (if present), plus selected page images
    through `pdftoppm` at 200 DPI. At most seven pages are rendered: page one
    and the pages most relevant to pinout, ratings, and electrical tables. The
@@ -537,14 +593,15 @@ from, so an extracted model stays auditable.
      and the retry contract. The run is isolated from your own Claude Code
      setup (`--restricted --strict-mcp-config`): your CLAUDE.md, memory,
      custom agents, hooks, plugins, skills and MCP servers never reach the
-     extraction. It gets only the Bash, Read, Edit, Write, WebFetch and
-     WebSearch tools: no subagents, and no background tasks, which would keep
-     `claude -p` running after the answer is written. A `--settings` file
-     added by a wrapper command still applies.
+     extraction. It gets only the Bash, Read, Edit and Write tools: no web
+     access, no subagents, and no background tasks, which would keep
+     `claude -p` running after the answer is written. Its Bash tool runs in
+     Claude Code's sandbox (hauksbee's `--settings`); a `--settings` file
+     added by a wrapper command still applies too.
    - **agy** (`--backend agy`): headless `agy --print`, the same contract
      again.
-   - **codex** (`--backend codex`): `codex exec --sandbox workspace-write
-     --skip-git-repo-check --cd <pdf_dir>`. A short pointer to `prompt.md` is
+   - **codex** (`--backend codex`): `codex exec` with the read-confining
+     permission profile, `--skip-git-repo-check --cd <workspace>`. A short pointer to `prompt.md` is
      written to stdin before EOF; the final agent message (clean TOML) comes back
      while session logging goes to stderr. A hard timeout (10 min) kills a
      stuck run.

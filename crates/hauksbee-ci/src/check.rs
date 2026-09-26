@@ -27,7 +27,7 @@
 //! actually matching a component, MCU/emulator resolution, and every behavioral
 //! assertion.
 
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 use serde::Serialize;
 
@@ -68,7 +68,7 @@ impl Diagnostic {
     /// A diagnostic with no location and no fix; the callers that can derive
     /// either set it with struct-update syntax.
     fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Diagnostic {
+        Self {
             line: None,
             col: None,
             code,
@@ -81,16 +81,17 @@ impl Diagnostic {
     /// text when it appears there.
     fn at(self, text: &str, ident: &str) -> Self {
         let (line, col) = locate(text, ident).map_or((None, None), |(l, c)| (Some(l), Some(c)));
-        Diagnostic { line, col, ..self }
+        Self { line, col, ..self }
     }
 
     /// Render for the terminal: `file:line:col: [code] message (fix)`.
+    #[must_use]
     pub fn render_human(&self, file: &Path) -> String {
         let mut loc = file.display().to_string();
         if let Some(l) = self.line {
-            loc.push_str(&format!(":{l}"));
+            let _ = write!(loc, ":{l}");
             if let Some(c) = self.col {
-                loc.push_str(&format!(":{c}"));
+                let _ = write!(loc, ":{c}");
             }
         }
         let fix = self
@@ -130,6 +131,7 @@ pub struct CheckOptions {
 ///    (`unknown-ref`) against that exact assembled input,
 /// 5. unless `no_board`: resolve the `firmware` path and check it exists and is
 ///    readable (`firmware-missing`), on the same code path `run` uses.
+#[must_use]
 pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -207,7 +209,7 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
 /// Resolve the spec's `firmware` and confirm an image is actually there.
 ///
 /// Same two steps `run` takes, in the same order, so the two verdicts cannot
-/// disagree: resolve a PlatformIO project / build tree / zip down to the compiled
+/// disagree: resolve a `PlatformIO` project / build tree / zip down to the compiled
 /// image (a bare `.elf`/`.hex` passes through), then check that image exists and
 /// opens. Without this, `check` printed "OK" on a spec whose `firmware` pointed
 /// nowhere, and `run` then exited 2 on the very same file: the editor-facing
@@ -304,7 +306,7 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
         }
         SpecError::Io(m) => diags.push(Diagnostic::new("io", m.clone())),
         SpecError::Toml { message, .. } => {
-            diags.push(Diagnostic::new("toml-parse", message.clone()))
+            diags.push(Diagnostic::new("toml-parse", message.clone()));
         }
         SpecError::Invalid(m) => {
             // The did-you-mean lives in ONE place on a diagnostic: `fix`. It
@@ -396,10 +398,7 @@ fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
         return (msg.to_string(), None);
     };
     // Every construction site ends the clause with a question mark.
-    let end = msg[start..]
-        .find('?')
-        .map(|i| start + i + 1)
-        .unwrap_or(msg.len());
+    let end = msg[start..].find('?').map_or(msg.len(), |i| start + i + 1);
     let clause = msg[start..end].to_string();
     let mut lead = start;
     let mut trail = end;
@@ -417,7 +416,7 @@ fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
     (cleaned.trim().to_string(), Some(clause))
 }
 
-/// For an `unknown field \`x\`, expected ...` message: suggest the nearest
+/// For serde's "unknown field ..., expected ..." message: suggest the nearest
 /// expected field name, when one is within typo distance.
 fn unknown_field_fix(msg: &str) -> Option<String> {
     // Message shape: unknown field `typo`, expected one of `a`, `b`, ...
@@ -465,9 +464,10 @@ fn locate(text: &str, ident: &str) -> Option<(u32, u32)> {
 fn line_col(text: &str, byte: usize) -> (u32, u32) {
     let byte = byte.min(text.len());
     let before = &text[..byte];
-    let line = before.bytes().filter(|&b| b == b'\n').count() as u32 + 1;
-    let col = (byte - before.rfind('\n').map(|i| i + 1).unwrap_or(0)) as u32 + 1;
-    (line, col)
+    let line = before.bytes().filter(|&b| b == b'\n').count() + 1;
+    let col = byte - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+    let sat = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    (sat(line), sat(col))
 }
 
 #[cfg(test)]

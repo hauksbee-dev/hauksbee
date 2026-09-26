@@ -16,6 +16,7 @@
 // Test code below is exempt: an unwrap in a test is an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -67,7 +68,7 @@ fn err_json(msg: &str) -> String {
 /// server-side from the uploads; the rest would let a raw fragment read
 /// (`bom`, `placement`, `variant`, `models_dir`, `asbuilt`, an hwtrace `trace`
 /// and the data files it references, a sensor's `spec_file`) or overwrite (a
-/// vcd_sink's `vcd_path` reaches `File::create`)
+/// `vcd_sink`'s `vcd_path` reaches `File::create`)
 /// paths outside the staging dir, because the CI resolver accepts absolute
 /// paths and `..` traversal.
 const PATH_KEYS: [&str; 11] = [
@@ -124,7 +125,7 @@ fn toml_path_key(value: &toml::Value) -> Option<&'static str> {
     }
 }
 
-/// Hard ceiling on one web-triggered check run. The builder caps duration_ms
+/// Hard ceiling on one web-triggered check run. The builder caps `duration_ms`
 /// client-side, but the web UI also lets a user edit the spec TOML directly, so
 /// nothing client-side is trustworthy. A pathological spec (huge fuzz count, a
 /// hung external emulator) must not pin the request forever, and the
@@ -179,7 +180,7 @@ static ACTIVE_WEB_CHECKS: AtomicUsize = AtomicUsize::new(0);
 struct WebCheckSlot;
 
 impl WebCheckSlot {
-    fn acquire() -> Option<WebCheckSlot> {
+    fn acquire() -> Option<Self> {
         // Optimistically claim a slot, then roll back if that put us over the
         // cap. The transient over-count is bounded by the number of racing
         // callers and is undone immediately, so no run ever proceeds above the
@@ -189,7 +190,7 @@ impl WebCheckSlot {
             ACTIVE_WEB_CHECKS.fetch_sub(1, Ordering::AcqRel);
             None
         } else {
-            Some(WebCheckSlot)
+            Some(Self)
         }
     }
 }
@@ -202,6 +203,7 @@ impl Drop for WebCheckSlot {
 
 /// Read a TOML scalar as f64, accepting both float (`2000.0`) and integer
 /// (`2000`) literals, since a hand-written spec uses either for a numeric field.
+#[allow(clippy::cast_precision_loss, reason = "an integer literal read as f64")]
 fn as_number(v: &toml::Value) -> Option<f64> {
     v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
 }
@@ -214,9 +216,8 @@ fn as_number(v: &toml::Value) -> Option<f64> {
 /// not invent a worse one. The path-key checks in `forbidden_path_key` are a
 /// separate gate and still apply regardless.
 fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
-    let value = match toml::from_str::<toml::Value>(spec_fragment) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
+    let Ok(value) = toml::from_str::<toml::Value>(spec_fragment) else {
+        return Ok(());
     };
     let Some(table) = value.as_table() else {
         return Ok(());
@@ -283,7 +284,7 @@ fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
     if let Some(len) = table
         .get("tolerance")
         .and_then(toml::Value::as_array)
-        .map(|a| a.len())
+        .map(Vec::len)
     {
         if len > MAX_WEB_TOLERANCE_RULES {
             return Err(format!(
@@ -297,7 +298,7 @@ fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
     if let Some(len) = table
         .get("assert")
         .and_then(toml::Value::as_array)
-        .map(|a| a.len())
+        .map(Vec::len)
     {
         if len > MAX_WEB_ASSERTS {
             return Err(format!(
@@ -319,7 +320,7 @@ const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 ///
 /// A bare `child.kill()` is SIGKILL, which the child cannot
 /// catch, so the QEMU / Renode emulators it spawned (each in its OWN process
-/// group, deliberately, see hauksbee_mcu::children) are orphaned and keep
+/// group, deliberately, see `hauksbee_mcu::children`) are orphaned and keep
 /// free-running at full CPU forever. Verified live: SIGKILL of a mid-co-sim
 /// `hauksbee-ci run` leaves `qemu-system-xtensa` running; SIGTERM reaps it.
 /// hauksbee-ci installs `hauksbee_mcu::children::install_signal_reaper`, so a
@@ -328,6 +329,7 @@ const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 /// starvation that ends with the whole `hauksbee serve` box unresponsive or
 /// the server killed, so: TERM first, grace period, then the KILL fallback for
 /// a child too wedged to run its handler.
+#[allow(clippy::cast_possible_wrap, reason = "OS pids fit in pid_t")]
 fn stop_child(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
@@ -355,6 +357,7 @@ fn stop_child(child: &mut std::process::Child) {
 /// Stage the uploaded files, inject the path keys, run `hauksbee-ci --json`,
 /// and relay its JSON. Every failure mode returns `{"ok":false,"error":...}`
 /// so the browser always has something readable.
+#[must_use]
 pub fn run_web_check(
     board_name: &str,
     board_bytes: &[u8],
@@ -365,6 +368,7 @@ pub fn run_web_check(
 }
 
 /// Schematic-aware counterpart used by the shipped browser checks route.
+#[must_use]
 pub fn run_web_check_with_schematic(
     board_name: &str,
     board_bytes: &[u8],
@@ -398,6 +402,9 @@ pub fn run_web_check_with_schematic(
 /// Complete browser Checks path. The uploaded companions are staged inside the
 /// same confined working directory and injected into the portable spec using
 /// the canonical CLI keys.
+#[must_use]
+#[allow(clippy::needless_pass_by_value, reason = "the DesignCheckRunner type")]
+#[allow(clippy::too_many_lines, reason = "stage every upload, then run once")]
 pub fn run_web_check_design(
     upload: hauksbee_frontdoor_api::frontdoor::DesignUpload,
     spec_fragment: &str,
@@ -406,13 +413,10 @@ pub fn run_web_check_design(
     // pile another emulator-spawning child onto a loaded box. `_slot` lives to
     // the end of the function, and its `Drop` releases the slot on every exit
     // path below (each early return, the normal return, or a panic).
-    let _slot = match WebCheckSlot::acquire() {
-        Some(s) => s,
-        None => {
-            return err_json(
-                "server busy: too many checks are running right now, try again in a moment",
-            )
-        }
+    let Some(_slot) = WebCheckSlot::acquire() else {
+        return err_json(
+            "server busy: too many checks are running right now, try again in a moment",
+        );
     };
 
     // The client composes everything EXCEPT the file paths; a fragment that
@@ -454,14 +458,14 @@ pub fn run_web_check_design(
         if let Err(e) = std::fs::write(dir.join(&fw_file), &firmware.bytes) {
             return err_json(&format!("could not stage the firmware: {e}"));
         }
-        spec.push_str(&format!("firmware = \"{fw_file}\"\n"));
+        let _ = writeln!(spec, "firmware = \"{fw_file}\"");
     }
     if let Some(schematic) = &upload.schematic {
         let schematic_file = sanitize_name(&schematic.name, "board.sch");
         if let Err(e) = std::fs::write(dir.join(&schematic_file), &schematic.bytes) {
             return err_json(&format!("could not stage the schematic: {e}"));
         }
-        spec.push_str(&format!("schematic = \"{schematic_file}\"\n"));
+        let _ = writeln!(spec, "schematic = \"{schematic_file}\"");
     }
     for (key, fallback, file) in [
         ("bom", "bom.csv", upload.bom.as_ref()),
@@ -474,7 +478,7 @@ pub fn run_web_check_design(
             if let Err(error) = std::fs::write(dir.join(&leaf), &file.bytes) {
                 return err_json(&format!("could not stage {key}: {error}"));
             }
-            spec.push_str(&format!("{key} = \"{leaf}\"\n"));
+            let _ = writeln!(spec, "{key} = \"{leaf}\"");
         }
     }
     if !upload.models.is_empty() {
@@ -583,8 +587,8 @@ pub fn run_web_check_design(
         return json_line.to_string();
     }
     let stderr = String::from_utf8_lossy(&out_stderr);
-    let tail: Vec<&str> = stderr.lines().rev().take(12).collect();
-    let tail: Vec<&str> = tail.into_iter().rev().collect();
+    let mut tail: Vec<&str> = stderr.lines().rev().take(12).collect();
+    tail.reverse();
     err_json(&format!(
         "hauksbee-ci produced no result (exit {:?}). {}",
         status.code(),
@@ -595,6 +599,7 @@ pub fn run_web_check_design(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::PoisonError;
 
     /// Serializes the tests that touch the global `ACTIVE_WEB_CHECKS` counter
     /// (every `run_web_check` call acquires a slot, and the concurrency test
@@ -604,7 +609,7 @@ mod tests {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+        SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     const BOOT_GATE: &str = include_str!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
@@ -813,7 +818,7 @@ kind = "no_faults"
 
     /// A timed-out child must get SIGTERM (so its signal
     /// reaper can kill the emulators it spawned), not a blind SIGKILL. A child
-    /// that exits on TERM must NOT be SIGKILLed; verified by its exit status
+    /// that exits on TERM must NOT be `SIGKILLed`; verified by its exit status
     /// carrying the clean trap exit, not a signal death.
     #[cfg(unix)]
     #[test]
@@ -846,7 +851,7 @@ kind = "no_faults"
         let _ = std::fs::remove_file(&flag);
     }
 
-    /// The fallback: a child that ignores SIGTERM is still SIGKILLed after the
+    /// The fallback: a child that ignores SIGTERM is still `SIGKILLed` after the
     /// grace period, so a wedged run cannot outlive its request forever.
     #[cfg(unix)]
     #[test]
@@ -928,7 +933,7 @@ kind = "no_faults"
     /// Regression: the runner must DRAIN the child's pipes while it runs. A
     /// stub "hauksbee-ci" floods both stdout and stderr with well over the
     /// 64 KiB pipe capacity before (stdout) and after (stderr) the JSON line;
-    /// with the old read-after-exit pattern the child blocked in write(), the
+    /// with the old read-after-exit pattern the child blocked in `write()`, the
     /// poll loop saw no exit, and a healthy run was reported as a timeout.
     /// Two-sided: the run returns the child's real JSON (not the timeout
     /// error), and it does so promptly.
@@ -942,6 +947,7 @@ kind = "no_faults"
         // the one script form std::process spawns directly.
         #[cfg(unix)]
         let stub = {
+            use std::os::unix::fs::PermissionsExt;
             let stub = dir.path().join("hauksbee-ci");
             std::fs::write(
                 &stub,
@@ -951,7 +957,6 @@ kind = "no_faults"
                  echo '{\"ok\":true,\"passed\":true,\"results\":[{\"kind\":\"no_faults\"}]}'\n",
             )
             .expect("write stub");
-            use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
             stub
         };

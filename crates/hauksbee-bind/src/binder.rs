@@ -6,7 +6,7 @@
 //!   - passives (R/C/L) -> analog IR devices from the parsed `Value`;
 //!   - diode / BJT / MOSFET -> analog IR devices with SPICE params;
 //!   - vreg -> a behavioral ideal source on its output net;
-//!   - analog_switch -> `VSwitch`; opamp/comparator -> behavioral IR devices;
+//!   - `analog_switch` -> `VSwitch`; opamp/comparator -> behavioral IR devices;
 //!   - digital ICs (74HC595, ...) -> event-driven [`DigitalComponent`]s whose
 //!     outputs are Thevenin [`PinDriver`]s stamped into the circuit;
 //!   - mcu -> an [`McuBinding`] (instantiated lazily by the scheduler) with a
@@ -69,12 +69,12 @@ pub struct McuBinding {
     /// ADC channel -> net node, so the scheduler can inject node voltages.
     pub adc_nets: HashMap<u8, NodeId>,
     /// ADC channel -> its OWN GPIO `(port,bit)`, for analog-capable pins that also
-    /// carry a digital port pin (e.g. ATmega328P A0..A5 = PC0..PC5). ADC-ONLY
+    /// carry a digital port pin (e.g. `ATmega328P` A0..A5 = PC0..PC5). ADC-ONLY
     /// channels (A6/A7) have NO entry. The scheduler uses this to decide whether a
     /// channel was promoted to output by checking THIS channel's own driver,
     /// never merely whether some other pin's driver shares the net.
     pub adc_pin: HashMap<u8, (char, u8)>,
-    /// Whether this is a module wrapper (Arduino_Nano) using header pad names.
+    /// Whether this is a module wrapper (`Arduino_Nano`) using header pad names.
     pub module: bool,
     /// Absolute-maximum supply voltage (V) from the model's ratings
     /// (`max_voltage_v`), when the model carries one. The scheduler turns this
@@ -84,15 +84,16 @@ pub struct McuBinding {
     pub max_supply_v: Option<f64>,
 }
 
-/// One MCP4728 quad DAC discovered on the board. Carries the assigned 7-bit
-/// I2C address, the board reference/value config (VREF, gain), and the four
-/// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
-/// realizes each binding as a spec-driven
+/// One MCP4728 quad DAC discovered on the board.
+///
+/// Carries the assigned 7-bit I2C address, the board reference/value config
+/// (VREF, gain), and the four VOUT-channel [`PinDriver`]s already stamped into
+/// the circuit. The scheduler realizes each binding as a spec-driven
 /// `RegisterMapSensor` (in `hauksbee_cosim::peripherals`) instance of
 /// `testdata/sensor-specs/mcp4728.toml` on a shared bus, binding these drivers to
-/// the spec's per-channel outputs; the slave then drives the VOUT nets itself
-/// at each transaction end (the ctx-bearing `on_stop`), so the analog
-/// solve sees the DAC output voltages.
+/// the spec's per-channel outputs; the slave then drives the VOUT nets itself at
+/// each transaction end (the ctx-bearing `on_stop`), so the analog solve sees the
+/// DAC output voltages.
 pub struct DacBinding {
     pub reference: String,
     pub address: u8,
@@ -139,10 +140,10 @@ pub struct BoundBoard {
     pub circuit: Circuit,
     /// Net name -> circuit node.
     pub net_nodes: HashMap<String, NodeId>,
-    /// All net names in *net-declaration order* (for board_info / frame counts).
+    /// All net names in *net-declaration order* (for `board_info` / frame counts).
     ///
     /// WARNING: this is NOT a `NodeId` reverse map. It is pushed once per real
-    /// net (skipping KiCad's no-net id 0), so it has no entry for the ground
+    /// net (skipping `KiCad`'s no-net id 0), so it has no entry for the ground
     /// node that occupies `NodeId(0)` in the circuit. Indexing it by `NodeId.0`
     /// is therefore OFF BY ONE and relabels every node as its successor, which
     /// is exactly what produced a spurious "comparator +IN -> SCL" mis-wiring
@@ -156,9 +157,9 @@ pub struct BoundBoard {
     /// no simulable processor for a reason the user can undo (`--fit`), which
     /// is what the firmware gates report instead of running vacuously.
     pub dnp_mcus: Vec<(String, String)>,
-    /// reference -> resolved model kind string (for board_info coloring).
+    /// reference -> resolved model kind string (for `board_info` coloring).
     pub component_kinds: HashMap<String, String>,
-    /// Named controllable input sources: reference -> DeviceId of a Vsource /
+    /// Named controllable input sources: reference -> `DeviceId` of a Vsource /
     /// Isource the UI can override (sliders).
     pub input_sources: HashMap<String, hauksbee_ir::DeviceId>,
     /// Configurable power supplies, one per detected supply net.
@@ -194,11 +195,13 @@ impl BoundBoard {
     /// Lives here so any caller holding a `BoundBoard` can surface it, not only
     /// the CI runner: an abstention visible on one surface and silent on the
     /// others is still a silent abstention on those others.
+    #[must_use]
     pub fn power_coverage_gaps(&self) -> Vec<String> {
         crate::stress::aggregate_power_coverage_gaps(&self.device_meta)
     }
 
     /// Look up a net node by name.
+    #[must_use]
     pub fn node(&self, net: &str) -> Option<NodeId> {
         self.net_nodes.get(net).copied()
     }
@@ -240,7 +243,7 @@ impl BoundBoard {
         self.supplies.retain(|s| s.net != node);
         // A bare ideal rail source stamped straight onto the net.
         let leg_name = format!("Vsupply_{net}");
-        for dev in self.circuit.devices.iter_mut() {
+        for dev in &mut self.circuit.devices {
             if let Device::Vsource { name, p, .. } = dev {
                 if *p == node && (*name == leg_name || name.starts_with("Vrail")) {
                     let (nm, a) = (name.clone(), *p);
@@ -273,6 +276,7 @@ pub enum FitRemedy {
 /// without being tested. Callers pair this with
 /// [`EXIT_INVALID_FOR_ANALYSIS`](crate::EXIT_INVALID_FOR_ANALYSIS)
 /// (or their spec-error equivalent) so a vacuous green is impossible.
+#[must_use]
 pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) -> String {
     if dnp_mcus.is_empty() {
         return "cannot run firmware: this board bound zero processors, and none were \
@@ -309,14 +313,18 @@ pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) ->
 }
 
 /// Bind an extracted board against a model library (no custom behaviours).
+#[must_use]
 pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
     bind_board_with(board, lib, &crate::behavioral::CustomRegistry::new())
 }
 
-/// Bind an extracted board, consulting `custom` for escape-hatch Rust
-/// behaviours. A component whose resolved model id / value / MPN matches a
-/// registered factory is realised by that [`CustomBehavior`](crate::behavioral::CustomBehavior)
-/// instead of the declarative layer.
+/// Bind an extracted board, consulting `custom` for escape-hatch Rust behaviours.
+///
+/// A component whose resolved model id / value / MPN matches a registered factory is realised
+/// by that [`CustomBehavior`](crate::behavioral::CustomBehavior) instead of the declarative
+/// layer.
+#[must_use]
+#[allow(clippy::too_many_lines)] // the ordered bind passes share many locals
 pub fn bind_board_with(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -406,18 +414,13 @@ pub fn bind_board_with(
                 ) {
                     dnp_mcus.push((comp.reference.clone(), comp.value.clone()));
                 }
-                report.push(BindRow {
-                    reference: comp.reference.clone(),
-                    value: comp.value.clone(),
-                    model_id: None,
-                    confidence: Confidence::Exact,
-                    source: None,
-                    outcome: BindOutcome::Skipped {
-                        reason: absence.describe().to_string(),
-                    },
-                    warning: None,
-                    guesses: Vec::new(),
-                });
+                let reason = absence.describe().to_string();
+                report.push(BindRow::without_model(
+                    comp.reference.clone(),
+                    comp.value.clone(),
+                    Confidence::Exact,
+                    BindOutcome::Skipped { reason },
+                ));
                 continue;
             }
             AssemblyState::IdentityUnknown(refusal) => {
@@ -426,20 +429,18 @@ pub fn bind_board_with(
                 // would turn an unresolved identity choice into precise
                 // simulation. Left open, and said out loud.
                 let reason = format!("{}; left open", refusal.reason());
+                let warning = format!(
+                    "cannot bind '{}' ({}): {reason}",
+                    comp.reference, comp.value
+                );
                 report.push(BindRow {
-                    reference: comp.reference.clone(),
-                    value: comp.value.clone(),
-                    model_id: None,
-                    confidence: Confidence::Unresolved,
-                    source: None,
-                    outcome: BindOutcome::Unresolved {
-                        reason: reason.clone(),
-                    },
-                    warning: Some(format!(
-                        "cannot bind '{}' ({}): {reason}",
-                        comp.reference, comp.value
-                    )),
-                    guesses: Vec::new(),
+                    warning: Some(warning),
+                    ..BindRow::without_model(
+                        comp.reference.clone(),
+                        comp.value.clone(),
+                        Confidence::Unresolved,
+                        BindOutcome::Unresolved { reason },
+                    )
                 });
                 continue;
             }
@@ -487,8 +488,8 @@ pub fn bind_board_with(
         }
         // A port's numeric part number parses as a value, so it lands here too;
         // nothing is plugged into it in the specified scenario, so it drives nothing.
-        let port = is_port_class(&ref_prefix(&comp.reference));
-        if matches!(outcome, BindOutcome::Unresolved { .. }) && !port {
+        let is_port = is_port_class(&ref_prefix(&comp.reference));
+        if matches!(outcome, BindOutcome::Unresolved { .. }) && !is_port {
             let can_drive = |kind: &str| {
                 let k = kind.to_ascii_lowercase();
                 !(k.starts_with("input") || k.starts_with("power_in") || k.contains("no_connect"))
@@ -541,8 +542,8 @@ pub fn bind_board_with(
     // would hand out addresses in the wrong order for non-uniform-width
     // designators.
     dacs.sort_by_key(|d| crate::bind_report::natural_ref_key(&d.reference));
-    for (i, d) in dacs.iter_mut().enumerate() {
-        d.address = 0x60 + i as u8;
+    for (d, address) in dacs.iter_mut().zip(0x60u8..) {
+        d.address = address;
     }
 
     // ── Pass 3a: stamp behavioural devices (power ICs) ──────────────────────
@@ -593,16 +594,12 @@ pub fn bind_board_with(
             PowerSupply::Ideal { volts: *volts },
         );
         supplies.push(leg);
-        report.push(BindRow {
-            reference: format!("RAIL:{name}"),
-            value: format!("{volts:.2}V"),
-            model_id: None,
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::PowerRail { volts: *volts },
-            warning: None,
-            guesses: Vec::new(),
-        });
+        report.push(BindRow::without_model(
+            format!("RAIL:{name}"),
+            format!("{volts:.2}V"),
+            Confidence::Exact,
+            BindOutcome::PowerRail { volts: *volts },
+        ));
     }
 
     // A board whose only processor was skipped for DNP still analyses fine as
@@ -615,7 +612,7 @@ pub fn bind_board_with(
             .map(|(r, _)| r.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        for row in report.rows.iter_mut() {
+        for row in &mut report.rows {
             if dnp_mcus.iter().any(|(r, _)| r == &row.reference) {
                 row.warning = Some(format!(
                     "{} is marked DNP in the board file, so it is not simulated, and it is the \
@@ -737,7 +734,7 @@ fn bind_behavioral(
         // only when the pin is genuinely DRIVEN (mb2.0's GPIO), not merely left
         // floating at 0 V (mb2.5+ NC).
         let empty_pins = std::collections::BTreeMap::new();
-        let model_pins = model.as_ref().map(|m| &m.pins).unwrap_or(&empty_pins);
+        let model_pins = model.as_ref().map_or(&empty_pins, |m| &m.pins);
         let role_nets =
             role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
         let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
@@ -818,6 +815,7 @@ fn resolve_from_ref_params(
 /// circuit and matches each monitorable device to its originating component
 /// (by reference == device name) and that component's resolved ratings +
 /// footprint. Vreg sources and the configurable supplies are matched too.
+#[allow(clippy::too_many_lines)] // one pass per meta source, in order
 fn gather_device_meta(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -972,9 +970,9 @@ fn gather_device_meta(
         }
     }
     for d in dacs {
-        for (ch, drv) in d.vout_drivers.iter().enumerate() {
+        for (letter, drv) in (b'a'..).zip(&d.vout_drivers) {
             if let Some(drv) = drv {
-                let pin = format!("vout_{}", char::from(b'a' + ch as u8));
+                let pin = format!("vout_{}", char::from(letter));
                 push_pin(&mut metas, &d.reference, pin, drv.vsource);
             }
         }
@@ -990,6 +988,7 @@ fn gather_device_meta(
 /// a caller cannot reach a model without having answered the three-state
 /// assembled-component question. DNP-absent and identity-unknown parts have no
 /// witness and therefore no model.
+#[must_use]
 pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models::Resolution {
     library_resolution(lib, part.component())
 }
@@ -1043,6 +1042,7 @@ pub struct ModelRoleCs {
 }
 
 /// See [`ModelRoleCs`].
+#[must_use]
 pub fn model_role_cs(
     board: &ExtractedBoard,
     reference: &str,
@@ -1062,7 +1062,7 @@ pub fn model_role_cs(
     let model = resolution.model?;
     let cs_net = model_cs_net(board, part, &model);
     Some(ModelRoleCs {
-        model_id: model.id.clone(),
+        model_id: model.id,
         from_builtin_db,
         cs_net,
     })
@@ -1102,6 +1102,12 @@ fn model_cs_net(
 /// WOULD resolve to. None of them may stamp a device from the answer.
 /// Everything that models an assembled part goes through [`resolve`] and its
 /// [`FittedComponent`] witness.
+///
+/// # Panics
+///
+/// Never in practice: the engine-fallback provenance is built from static,
+/// known-valid values and only `expect`s that they stay valid.
+#[must_use]
 pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
@@ -1109,7 +1115,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
         non_empty(&comp.footprint),
     );
     q.reference = Some(comp.reference.clone());
-    q.properties = comp.properties.clone();
+    q.properties.clone_from(&comp.properties);
     let pads = comp.pins.iter().map(|pin| pin.number.trim().to_string());
     q.pads = pads.filter(|number| !number.is_empty()).collect();
     // A refused identity is not a model match even here: the record cannot say
@@ -1192,7 +1198,7 @@ fn ref_prefix(reference: &str) -> String {
 }
 
 /// Which passive ('R', 'C' or 'L') a designator's first letter claims. A word
-/// rather than a designator ("COIL", "LOAD") yields to a KiCad footprint family:
+/// rather than a designator ("COIL", "LOAD") yields to a `KiCad` footprint family:
 /// a relay winding on `Resistor_SMD:R_0805` is 167 ohms, not a 167 F capacitor.
 fn passive_letter(comp: &Component) -> Option<char> {
     let prefix = ref_prefix(&comp.reference);
@@ -1216,6 +1222,7 @@ fn is_port_class(prefix: &str) -> bool {
 /// Synthesize a model entry for a component the library could not resolve,
 /// using only the reference-designator class and a parseable value. Returns
 /// `None` when no confident fallback applies.
+#[allow(clippy::too_many_lines)] // an ordered heuristic ladder; order is the logic
 fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     use std::collections::BTreeMap;
     let prefix = ref_prefix(&comp.reference);
@@ -1243,8 +1250,9 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         params.set_str("auto_bind", "family_router");
         params.set_str("auto_bind_family", family);
         let derived = derive_mcu_pin_roles(comp);
-        params.set_int("auto_bind_pin_names", derived.named_pin_count as i64);
-        params.set_int("auto_bind_derived_pins", derived.roles.len() as i64);
+        let int = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+        params.set_int("auto_bind_pin_names", int(derived.named_pin_count));
+        params.set_int("auto_bind_derived_pins", int(derived.roles.len()));
         params.set_str("auto_bind_pin_summary", pin_role_summary(&derived.roles));
         return Some(make_entry(
             &format!(
@@ -1265,7 +1273,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             "connector_fallback",
             ComponentKind::Ignore,
             "connector / mechanical (engine fallback by reference class)",
-            Default::default(),
+            hauksbee_models::Params::default(),
             std::collections::BTreeMap::new(),
         ));
     }
@@ -1286,7 +1294,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             "crystal_fallback",
             ComponentKind::Ignore,
             "crystal / resonator (engine fallback; high-impedance, clock from MCU model)",
-            Default::default(),
+            hauksbee_models::Params::default(),
             BTreeMap::new(),
         ));
     }
@@ -1320,10 +1328,9 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             })
         });
     // Voltage/current ratings (e.g. a zener's 5.1V) are not passive magnitudes.
-    let val_is_passive_magnitude = parse_value(&comp.value)
-        .map(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
-        .unwrap_or(false);
-    let ref_is_passive = matches!(prefix.chars().next(), Some('R') | Some('C') | Some('L'));
+    let val_is_passive_magnitude =
+        parse_value(&comp.value).is_some_and(|p| !matches!(p.unit.as_deref(), Some("V" | "A")));
+    let ref_is_passive = matches!(prefix.chars().next(), Some('R' | 'C' | 'L'));
     if diode_prefix || fp_is_diode {
         let v = comp.value.trim();
         let val_is_generic = ["", "D", "diode", "1N4148", "1N4148W", "1N4148WS"]
@@ -1371,9 +1378,8 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     // "CTEB_2.2UF_35V_10%_...): the first underscore-separated token that
     // parses as a value wins.
     let kind_pins: Option<(ComponentKind, [(&str, &str); 2])> = match passive_letter(comp) {
-        Some('R') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
         Some('C') => Some((ComponentKind::Passive, [("1", "pos"), ("2", "neg")])),
-        Some('L') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
+        Some('R' | 'L') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
         _ => None,
     };
     if let Some((kind, pinmap)) = kind_pins {
@@ -1702,7 +1708,7 @@ fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
         if !matches!(port, 'A'..='I') {
             return None;
         }
-        let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = chars.take_while(char::is_ascii_digit).collect();
         if digits.is_empty() || digits.len() > 2 {
             return None;
         }
@@ -1711,7 +1717,7 @@ fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
         }
     }
     if let Some(rest) = token.strip_prefix("GPIO") {
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if !digits.is_empty() && digits.parse::<u8>().ok()? < 64 {
             return Some(format!("gpio{digits}"));
         }
@@ -1775,10 +1781,13 @@ fn make_entry(
     entry
 }
 
-/// The snake_case discriminant string for a [`ComponentKind`] (matches the
+/// The `snake_case` discriminant string for a [`ComponentKind`] (matches the
 /// TOML `#[serde(rename_all = "snake_case")]` encoding).
-fn kind_str(kind: ComponentKind) -> &'static str {
-    use ComponentKind::*;
+const fn kind_str(kind: ComponentKind) -> &'static str {
+    use ComponentKind::{
+        Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Connector, Dac, Digital, Diode, Ignore, Mcu,
+        Nmos, Opamp, Passive, Pmos, ShiftRegister, Timer, Vreg,
+    };
     match kind {
         Passive => "passive",
         Diode => "diode",
@@ -1801,7 +1810,7 @@ fn kind_str(kind: ComponentKind) -> &'static str {
     }
 }
 
-/// The ATmega328P DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
+/// The `ATmega328P` DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
 fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
     [
         ("1", "pc6_reset"),
@@ -1905,8 +1914,7 @@ fn unresolved_outcome(
         .properties
         .iter()
         .find(|(k, _)| k.to_ascii_lowercase().contains("mpn"))
-        .map(|(_, v)| v.as_str())
-        .unwrap_or("");
+        .map_or("", |(_, v)| v.as_str());
     let abstention = lib.unmodelled().note_for(&comp.value, mpn);
     let reason = match (value_unresolved, abstention) {
         // The extractor's own explanation for a valueless part wins: it says the
@@ -1927,6 +1935,7 @@ fn unresolved_outcome(
 
 /// Bind a single resolved component. Mutates the circuit and the digital/mcu
 /// collections; returns its outcome and any warning.
+#[allow(clippy::too_many_lines)] // the per-kind dispatch table
 fn bind_component(
     comp: &Component,
     model: &ModelEntry,
@@ -1941,7 +1950,10 @@ fn bind_component(
     board: (&[Component], &HashMap<String, f64>),
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
-    use ComponentKind::*;
+    use ComponentKind::{
+        Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Connector, Dac, Digital, Diode, Ignore, Mcu,
+        Nmos, Opamp, Passive, Pmos, ShiftRegister, Timer, Vreg,
+    };
     let (components, power_nets) = board;
 
     // A source-bound identity is not executable behavior. Older identity cards
@@ -2205,6 +2217,7 @@ fn bound_digital_outcome(
 /// number was recognised. A register-map spec's own `[sensor.pins]` fills the
 /// roles the card's `[models.pins]` leaves out, and its address-select table
 /// picks the address from the board's straps.
+#[allow(clippy::too_many_lines)] // one refusal per unwired bus/power role
 fn bind_model_peripheral(
     comp: &Component,
     model: &ModelEntry,
@@ -2353,9 +2366,7 @@ fn bind_model_peripheral(
                 } else {
                     "resolved high"
                 };
-                let actual = strap_level(role)
-                    .map(|_| opposite.to_string())
-                    .unwrap_or_else(|error| error);
+                let actual = strap_level(role).map_or_else(|error| error, |_| opposite.to_string());
                 Err(refuse(
                     format!(
                         "register-map bus personality requires role '{role}' {level}, but it is {actual}"
@@ -2583,7 +2594,7 @@ fn role_node_map_pins(
 /// BJT, MOSFET), on everything else a lettered pad is not an electrode name.
 /// A purely numeric pad is a pad number, never an electrode.
 fn role_from_electrode_pad(kind: ComponentKind, pad: &str) -> Option<String> {
-    use ComponentKind::*;
+    use ComponentKind::{BjtNpn, BjtPnp, Diode, Nmos, Pmos};
     if !matches!(kind, Diode | BjtNpn | BjtPnp | Nmos | Pmos) {
         return None;
     }
@@ -2725,6 +2736,7 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
 
 // ── Per-kind binders ────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_lines)] // array split, series path, then per-class stamping
 fn bind_passive(
     comp: &Component,
     model: &ModelEntry,
@@ -2864,7 +2876,12 @@ fn bind_passive(
             .filter(|v| v.is_finite() && *v > 0.0)
         {
             let mid = circuit.node(&format!("__{}_dcr", comp.reference));
-            circuit.add(Device::inductor(comp.reference.clone(), a, mid, p.si));
+            circuit.add(Device::inductor(
+                comp.reference.clone(),
+                a,
+                mid,
+                rkm_henries(&p),
+            ));
             circuit.add(Device::resistor(
                 format!("{}_dcr", comp.reference),
                 mid,
@@ -2873,7 +2890,11 @@ fn bind_passive(
             ));
             return (
                 BindOutcome::Analog {
-                    device: format!("L {} + DCR {}", fmt_eng(p.si, "H"), fmt_eng(dcr, "Ω")),
+                    device: format!(
+                        "L {} + DCR {}",
+                        fmt_eng(rkm_henries(&p), "H"),
+                        fmt_eng(dcr, "Ω")
+                    ),
                 },
                 entry_warning(comp, model),
             );
@@ -2997,6 +3018,19 @@ fn logical_passive_pins(comp: &Component) -> Result<Vec<LogicalPassivePin>, Stri
 /// and is far below anything a board's behaviour can distinguish from a short.
 const ZERO_OHM_JUMPER_OHMS: f64 = 1e-3;
 
+/// Henries for an inductor's parsed value. An RKM code with `R` as the decimal
+/// point ("2R2", "4R7") is microhenries on an inductor, the EIA inductor marking
+/// convention; read raw it would be 2.2 H. Ohm-marked ferrite beads ("600R")
+/// never reach here: the model library classes them as beads first.
+fn rkm_henries(p: &hauksbee_models::value::ParsedValue) -> f64 {
+    let rkm = p.suffix.as_deref() == Some("R") && p.unit.is_none();
+    if rkm {
+        p.si * 1e-6
+    } else {
+        p.si
+    }
+}
+
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
 /// `b`, deciding the kind from the reference-designator prefix and the parsed
 /// unit. Shared by the single-element path and the array path so both stay in
@@ -3014,7 +3048,7 @@ fn passive_device(
     if letter == Some('C') || unit.eq_ignore_ascii_case("F") {
         (Device::capacitor(name, a, b, p.si), None)
     } else if letter == Some('L') || unit.eq_ignore_ascii_case("H") {
-        (Device::inductor(name, a, b, p.si), None)
+        (Device::inductor(name, a, b, rkm_henries(p)), None)
     } else if p.si <= 0.0 {
         // A literal 0 (or negative) resistance is a fitted jumper link, not a
         // mathematical short. Binding it at the raw 1e-6 floor leaves ten
@@ -3378,7 +3412,7 @@ fn bind_mosfet(
     let m = MosfetModel {
         level: MosLevel::Level1,
         polarity,
-        vto: p.get_f64("vto").map(|v| fold * v).unwrap_or(def.vto),
+        vto: p.get_f64("vto").map_or(def.vto, |v| fold * v),
         kp: p.get_f64("kp").unwrap_or(def.kp),
         lambda: p.get_f64("lambda").unwrap_or(def.lambda),
         gamma: p.get_f64("gamma").unwrap_or(def.gamma),
@@ -3502,7 +3536,7 @@ fn vreg_stability_warning(
         let nodes: Vec<_> = pins.iter().filter_map(|pin| node_of(pin.net)).collect();
         let fitted = AssemblyState::of(cap).is_present() && passive_letter(cap) == Some('C');
         let spans =
-            matches!(nodes.as_slice(), [a, b] if [*a, *b] == [out, gnd] || [*a, *b] == [gnd, out]);
+            matches!(*nodes.as_slice(), [a, b] if (a, b) == (out, gnd) || (a, b) == (gnd, out));
         let farads = parse_value(cap.value.trim()).map(|v| v.si)?;
         (fitted && spans && farads.is_finite() && farads > 0.0).then_some(farads)
     };
@@ -3556,6 +3590,7 @@ fn vreg_stability_warning(
     ))
 }
 
+#[allow(clippy::too_many_lines)] // converter, shunt, adjustable, fixed, then caveats
 fn bind_vreg(
     comp: &Component,
     model: &ModelEntry,
@@ -3643,7 +3678,7 @@ fn bind_vreg(
             } if parameter == "vout" => Some(low.abs().max(high.abs())),
             _ => None,
         })
-        .unwrap_or(vout.abs());
+        .unwrap_or_else(|| vout.abs());
     let dropout_v = model.params.get_f64("dropout_v");
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
@@ -3777,9 +3812,10 @@ fn bind_adj_vreg(
     };
     // OUT on ADJ shorts an LM317's reference, but FB on OUT is a grounded part's
     // unity setting (Vout = Vref); FB on GND leaves that part nothing to hold.
-    let tied = match grounded {
-        true => gnd == input || gnd == out || gnd == adj,
-        false => out == adj,
+    let tied = if grounded {
+        gnd == input || gnd == out || gnd == adj
+    } else {
+        out == adj
     };
     if tied || out == input || input == adj {
         return open_warning(comp, "vreg input, output, ADJ and any GND must be distinct");
@@ -3787,9 +3823,10 @@ fn bind_adj_vreg(
     // A grounded part's `Vref` ends on a private node the VCVS drives. The VCVS
     // is no helper: it reads no branch, and left in place when `source` is
     // swapped out it keeps that node defined.
-    let (low, ret) = match grounded {
-        true => (circuit.node(&format!("{}_vreg_drive", comp.reference)), gnd),
-        false => (adj, adj),
+    let (low, ret) = if grounded {
+        (circuit.node(&format!("{}_vreg_drive", comp.reference)), gnd)
+    } else {
+        (adj, adj)
     };
     let source = circuit.add(Device::vsource(
         format!("Vref_{}", comp.reference),
@@ -3879,9 +3916,9 @@ fn bind_shunt_ref(
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
     let r = &comp.reference;
-    let p = |k: &str, d: f64| model.params.get_f64(k).unwrap_or(d);
+    let p = |key: &str, default: f64| model.params.get_f64(key).unwrap_or(default);
     let anode = roles.get("gnd").copied().unwrap_or(NodeId::GROUND);
-    let wired = |n: Option<&NodeId>| n.copied().filter(|&n| n != anode);
+    let wired = |pin: Option<&NodeId>| pin.copied().filter(|&node| node != anode);
     let (Some(cathode), Some(refpin)) = (
         wired(roles.get("out")),
         wired(pick(roles, &["fb", "adj", "ref"])),
@@ -3948,8 +3985,9 @@ fn bind_shunt_ref(
                 let hit = model.pins.iter().find(|(_, r)| want.contains(&r.as_str()));
                 hit.map_or("(unmapped)", |(p, _)| p.as_str()).to_string()
             };
-            let (k, f, a) = (pad(&["out"]), pad(&["fb", "adj", "ref"]), pad(&["gnd"]));
-            format!("{w}; pads taken as CATHODE {k} / REF {f} / ANODE {a}")
+            let (cathode, anode) = (pad(&["out"]), pad(&["gnd"]));
+            let reference = pad(&["fb", "adj", "ref"]);
+            format!("{w}; pads taken as CATHODE {cathode} / REF {reference} / ANODE {anode}")
         }),
     )
 }
@@ -3988,10 +4026,11 @@ fn supply_rails(
         let Some(headroom) = model.params.get_f64(swing) else {
             return Ok(Rail::fixed(model.params.get_f64(fixed).unwrap_or(dflt)));
         };
-        match pick(roles, pins).copied().filter(|n| sign > 0.0 || !n.is_ground()) {
-            Some(pin) => Ok(Rail { pin, offset: sign * headroom }),
-            None => Err(open_warning(comp, "op-amp supply pin is not on a net, so the card's datasheet output swing has no rail to sit on")),
-        }
+        pick(roles, pins)
+            .copied()
+            .filter(|n| sign > 0.0 || !n.is_ground())
+            .map(|pin| Rail { pin, offset: sign * headroom })
+            .ok_or_else(|| open_warning(comp, "op-amp supply pin is not on a net, so the card's datasheet output swing has no rail to sit on"))
     };
     Ok((
         rail("swing_lo", "rail_lo", 0.0, 1.0, &["vss", "vee", "v_minus"])?,
@@ -4074,19 +4113,20 @@ fn timer_cmp(a: &str, b: &str, vcc: &str, gain: f64) -> String {
 /// both comparators and the RESET gate folded into ONE Behavioral control node
 /// `ctl`, and one hysteretic [`Device::VSwitch`] that is at once the SR LATCH
 /// (its own hysteresis IS the latch memory -- there is no latch device) and the
-/// discharge transistor. A second VSwitch on the same control plus a pull-up exposes the latch state as
+/// discharge transistor. A second `VSwitch` on the same control plus a pull-up exposes the latch state as
 /// a node `qb`, which both closes the latch's own feedback (see `ctl_expr`) and
 /// drives the output stage: a Behavioral source behind a series R, so VOL/VOH
 /// move under load.
 ///
 /// The two legs are named `_disch` and `_q`, never `_s0`/`_s1`:
-/// `SpdtPairs::analyze` pairs VSwitch legs by that suffix and applies
+/// `SpdtPairs::analyze` pairs `VSwitch` legs by that suffix and applies
 /// break-before-make to them, and these two must be free to close together.
 ///
 /// What this owes: the interval is solved, not printed, so the paired ngspice
 /// deck (`hauksbee-solve/tests/decks/ne555_astable.*`) is what pins the latch
 /// band and the comparator gain; a wiring the part cannot work from REFUSES
 /// with a named reason rather than reporting a fabricated frequency.
+#[allow(clippy::too_many_lines)] // one stamp of the documented 555 macro-model
 fn bind_timer_555(
     comp: &Component,
     model: &ModelEntry,
@@ -4170,10 +4210,10 @@ fn bind_timer_555(
         timer_cmp("__d0", "__d1", "__d2", gain),
         timer_cmp("__d4", "__d5", "__d2", gain),
     );
-    let ctl = circuit.node(&format!("{r}_555_ctl"));
+    let ctl_node = circuit.node(&format!("{r}_555_ctl"));
     circuit.add(Device::Behavioral {
         name: format!("Bctl_{r}"),
-        p: ctl,
+        p: ctl_node,
         n: gnd,
         output: hauksbee_ir::BOutput::Voltage,
         expr: hauksbee_ir::CompiledExpr::compile(&ctl_expr).expect("555 control expression"),
@@ -4187,7 +4227,7 @@ fn bind_timer_555(
         name: format!("{r}_555{name}"),
         a,
         b: gnd,
-        ctrl_p: ctl,
+        ctrl_p: ctl_node,
         ctrl_n: gnd,
         von,
         voff,
@@ -4410,6 +4450,7 @@ fn stamp_spdt(
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per switch topology, in precedence order
 fn bind_analog_switch(
     comp: &Component,
     model: &ModelEntry,
@@ -4462,18 +4503,16 @@ fn bind_analog_switch(
                 "shared-select DPDT has a dynamic OE_N input; the current switch primitive has one control and cannot combine select with output-enable, so both lanes are left open rather than modeled as always enabled",
             );
         }
-        let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
-            Some(value) => (value, None),
-            None => (
-                DEFAULT_VCC,
-                Some(format!(
-                    "{} ({}): shared-select DPDT VCC net '{}' has no resolved rail voltage; modeling select thresholds against an assumed {DEFAULT_VCC} V rail",
-                    comp.reference,
-                    comp.value,
-                    circuit.node_name(vcc),
-                )),
-            ),
-        };
+        let rail = power_nets.get(circuit.node_name(vcc)).copied();
+        let vcc_warning = rail.is_none().then(|| {
+            format!(
+                "{} ({}): shared-select DPDT VCC net '{}' has no resolved rail voltage; modeling select thresholds against an assumed {DEFAULT_VCC} V rail",
+                comp.reference,
+                comp.value,
+                circuit.node_name(vcc),
+            )
+        });
+        let vcc_v = rail.unwrap_or(DEFAULT_VCC);
         for (lane, com, s0, s1) in [(1, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
             let name = format!("{}_l{lane}", comp.reference);
             stamp_spdt(
@@ -4519,21 +4558,19 @@ fn bind_analog_switch(
         // reintroduces the very "com<->s0 permanently open" bug the threshold
         // math above fixes. Fall back to DEFAULT_VCC but SAY SO, matching the
         // passive-array convention warning.
-        let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
-            Some(v) => (v, None),
-            None => (
-                DEFAULT_VCC,
-                Some(format!(
-                    "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
-                     modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
-                     on a lower-voltage board the common<->s0 throw may read as open, \
-                     so verify the switch's actual supply",
-                    comp.reference,
-                    comp.value,
-                    circuit.node_name(vcc),
-                )),
-            ),
-        };
+        let rail = power_nets.get(circuit.node_name(vcc)).copied();
+        let vcc_warning = rail.is_none().then(|| {
+            format!(
+                "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
+                 modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
+                 on a lower-voltage board the common<->s0 throw may read as open, \
+                 so verify the switch's actual supply",
+                comp.reference,
+                comp.value,
+                circuit.node_name(vcc),
+            )
+        });
+        let vcc_v = rail.unwrap_or(DEFAULT_VCC);
         let params = [ron, roff, vth];
         stamp_spdt(
             circuit,
@@ -4596,7 +4633,7 @@ fn bind_analog_switch(
                     comp.reference,
                     partial
                         .iter()
-                        .map(|n| n.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))
@@ -4708,6 +4745,8 @@ fn bind_analog_switch(
 /// [`PinDriver`] on each connected VOUT channel net (ROUT ~1 Ω per the
 /// datasheet) and push a [`DacBinding`] the scheduler turns into an I2C slave.
 /// The address is assigned later by reference order; we leave a placeholder.
+// `gain` is a rounded model param (1 or 2); `as` saturates anything out of range.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn bind_mcp4728_dac(
     comp: &Component,
     model: &ModelEntry,
@@ -4889,7 +4928,7 @@ fn bind_digital(
 /// `g<n>b`. A latch is a pair of gates (gQ, gQb) where `gQ.y == gQb.<one input>`
 /// and `gQb.y == gQ.<one input>` (the cross-couple). For the latch:
 ///   - `reset` = the gate whose NON-cross-couple input net name contains "RESET"
-///     (RESET_SR), that gate's output is Qb (internal);
+///     (`RESET_SR`), that gate's output is Qb (internal);
 ///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
 ///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
 ///
@@ -4942,12 +4981,10 @@ fn bind_nor_latches(
             let in_i = other_in(&gates[i], gates[j].y);
             let in_j = other_in(&gates[j], gates[i].y);
             let net_name = |n: Option<NodeId>| n.map(|n| circuit.node_name(n).to_string());
-            let i_is_reset = net_name(in_i)
-                .map(|s| s.to_ascii_uppercase().contains("RESET"))
-                .unwrap_or(false);
-            let j_is_reset = net_name(in_j)
-                .map(|s| s.to_ascii_uppercase().contains("RESET"))
-                .unwrap_or(false);
+            let i_is_reset =
+                net_name(in_i).is_some_and(|s| s.to_ascii_uppercase().contains("RESET"));
+            let j_is_reset =
+                net_name(in_j).is_some_and(|s| s.to_ascii_uppercase().contains("RESET"));
             // The reset gate's output is Qb; the OTHER gate is Q.
             let (q_gate, set_in) = if j_is_reset && !i_is_reset {
                 (i, in_i)
@@ -4958,7 +4995,7 @@ fn bind_nor_latches(
                 continue;
             };
             let reset_in = if q_gate == i { in_j } else { in_i };
-            let (Some(set_n), Some(reset_n)) = (set_in, reset_in) else {
+            let (Some(set_node), Some(reset_node)) = (set_in, reset_in) else {
                 continue;
             };
             let q_net = gates[q_gate].y;
@@ -4975,16 +5012,14 @@ fn bind_nor_latches(
                 levels.ro,
             );
             let mut lroles: HashMap<String, NodeId> = HashMap::new();
-            lroles.insert("set".to_string(), set_n);
-            lroles.insert("reset".to_string(), reset_n);
+            lroles.insert("set".to_string(), set_node);
+            lroles.insert("reset".to_string(), reset_node);
             lroles.insert("q".to_string(), q_net);
-            let mut ldrivers = HashMap::new();
-            ldrivers.insert("q".to_string(), drv);
             digital.push(DigitalComponent::new_nor_latch(
                 format!("{}_L{}", comp.reference, gates[q_gate].idx),
                 levels,
                 lroles,
-                ldrivers,
+                HashMap::from([("q".to_string(), drv)]),
             ));
             used.insert(i);
             used.insert(j);
@@ -5026,8 +5061,7 @@ fn bind_mcu(
     let effective_pins: std::collections::BTreeMap<String, String> = {
         let mut merged = derived_when_empty
             .as_ref()
-            .map(|d| d.roles.clone())
-            .unwrap_or_else(|| derive_mcu_pin_roles(comp).roles);
+            .map_or_else(|| derive_mcu_pin_roles(comp).roles, |d| d.roles.clone());
         for (pad, role) in &model.pins {
             merged.insert(pad.clone(), role.clone());
         }
@@ -5168,6 +5202,8 @@ fn assembled_crystal_bridges(
     })
 }
 
+// The pin counts were written by the family router as small non-negative integers.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn log_mcu_auto_decision(
     comp: &Component,
     model: &ModelEntry,
@@ -5287,11 +5323,6 @@ fn device_label(d: &Device) -> String {
 /// the mantissa in [1, 1000) and prints a sensible number of significant digits.
 /// `unit` is the bare unit symbol ("F", "H", "Ω").
 pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
-    if value == 0.0 || !value.is_finite() {
-        return format!("0 {unit}");
-    }
-    let neg = value < 0.0;
-    let v = value.abs();
     // Prefix table from pico to mega; covers caps (pF..mF), inductors (nH..H),
     // resistors (mΩ..MΩ). Each entry is (10^exponent, prefix).
     const PREFIXES: &[(f64, &str)] = &[
@@ -5303,6 +5334,11 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
         (1e-9, "n"),
         (1e-12, "p"),
     ];
+    if value == 0.0 || !value.is_finite() {
+        return format!("0 {unit}");
+    }
+    let neg = value < 0.0;
+    let v = value.abs();
     // Pick the largest prefix whose scale leaves a mantissa >= 1 (so 390 pF uses
     // "p", 1.5 kΩ uses "k"). Fall back to the smallest prefix for tiny values.
     let idx = PREFIXES
@@ -5312,7 +5348,7 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     let (mut scale, mut prefix) = PREFIXES[idx];
     let mut mantissa = v / scale;
     // 3 significant figures: more decimals for small mantissas, fewer for large.
-    let decimals = |m: f64| {
+    let decimals = |m: f64| -> u8 {
         if m >= 100.0 {
             0
         } else if m >= 10.0 {
@@ -5326,15 +5362,15 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     // promised [1,1000) range and inconsistent with the sibling format_engineering
     // (tolerance.rs), which has this exact guard. Promote to the next-larger prefix
     // so it reads "1 MΩ" instead. Only when a larger prefix exists (idx > 0).
-    let round_to = |m: f64, d: i32| {
-        let p = 10f64.powi(d);
+    let round_to = |m: f64, d: u8| {
+        let p = 10f64.powi(i32::from(d));
         (m * p).round() / p
     };
     if idx > 0 && round_to(mantissa, decimals(mantissa)) >= 1000.0 {
         (scale, prefix) = PREFIXES[idx - 1];
         mantissa = v / scale;
     }
-    let s = format!("{mantissa:.*}", decimals(mantissa) as usize);
+    let s = format!("{mantissa:.*}", usize::from(decimals(mantissa)));
     // Trim trailing fractional zeros for a clean read ("4.70" -> "4.7"), but
     // only when a decimal point is present, so "390" is never stripped to "39".
     let s = if s.contains('.') {
@@ -5346,7 +5382,8 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     format!("{sign}{s} {prefix}{unit}")
 }
 
-/// Map an ATmega328P / Arduino-Nano role string to a `(port, bit)` GPIO id.
+/// Map an `ATmega328P` / Arduino-Nano role string to a `(port, bit)` GPIO id.
+#[must_use]
 pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
@@ -5380,7 +5417,7 @@ pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     // two-bank numeric-port convention below. These names double as the
     // strap-table roles, which match pin roles by exact string.
     if let Some(rest) = r.strip_prefix("gpio") {
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if let Ok(n) = digits.parse::<u8>() {
             if n < 32 {
                 return Some(('0', n));
@@ -5397,16 +5434,13 @@ pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     if !matches!(port, 'A'..='I' | '0' | '1') {
         return None;
     }
-    let digits: String = rest[1..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = rest[1..].chars().take_while(char::is_ascii_digit).collect();
     let bit = digits.parse::<u8>().ok()?;
     (bit < 32).then_some((port, bit))
 }
 
-/// Arduino digital pin number -> ATmega328P (port, bit).
-fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
+/// Arduino digital pin number -> `ATmega328P` (port, bit).
+const fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
     match num {
         0..=7 => Some(('D', num)),
         8..=13 => Some(('B', num - 8)),
@@ -5416,11 +5450,13 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 
 /// Map a dual-purpose analog-pin role to its GPIO `(port, bit)`, so `bind_mcu`
 /// can stamp the tri-stated driver half of the dual ADC+GPIO bind (dynamic
-/// promotion). On the ATmega328P the analog pins
-/// A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are ADC-only
-/// with no port pin and return `None`, so they stay pure ADC probes. Handles
-/// both the Nano module role ("a2", "a3_...") and the bare role carrying an
-/// adc index ("pc2_adc2").
+/// promotion).
+///
+/// On the `ATmega328P` the analog pins A0..A5 are port C bits 0..5 (PC0..PC5);
+/// A6/A7 (Nano modules) are ADC-only with no port pin and return `None`, so
+/// they stay pure ADC probes. Handles both the Nano module role ("a2",
+/// "a3_...") and the bare role carrying an adc index ("`pc2_adc2`").
+#[must_use]
 pub fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     // As in `gpio_of_role`, the bare `a<n>` table is the NANO's. A module whose
@@ -5454,7 +5490,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
     // Bare "pc0_adc0" .. "pc5_adc5".
     if let Some(idx) = r.find("adc") {
         let after = &r[idx + 3..];
-        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
         return digits.parse().ok();
     }
     None
@@ -5468,7 +5504,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// `circuit.node(name)` calls agree on which net is node 0.
 ///
 /// Deliberately NARROWER than [`is_ground`]: AGND / DGND / PGND / ISOGND /
-/// CHASSIS_GND are real, distinct nets whose whole point is that they are NOT
+/// `CHASSIS_GND` are real, distinct nets whose whole point is that they are NOT
 /// the same copper as GND until something (a ferrite bead, a 0 Ω link, a star
 /// point) joins them. Folding them all onto node 0 before binding turned every
 /// such bridge into an inert self-loop and erased the board's ground topology,
@@ -5476,7 +5512,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// Rail-default and rating heuristics keep the broad [`is_ground`]; only the
 /// pass-1 node assignment uses this.
 ///
-/// `VSS` IS canonical ground: it is the IC-pin spelling of "the" ground (KiCad's
+/// `VSS` IS canonical ground: it is the IC-pin spelling of "the" ground (`KiCad`'s
 /// `power:VSS`), not a split-ground island like the *GND families. A CMOS/logic
 /// board whose sole ground net is labelled `VSS` must still fuse onto node 0, or
 /// the reference node floats and the whole MNA solve is singular / offset. `VEE`
@@ -5490,6 +5526,7 @@ fn is_canonical_ground(name: &str) -> bool {
 }
 
 /// True for ground-family net names.
+#[must_use]
 pub fn is_ground(name: &str) -> bool {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     matches!(
@@ -5499,6 +5536,7 @@ pub fn is_ground(name: &str) -> bool {
 }
 
 /// If `name` is a recognised supply rail, return its nominal voltage.
+#[must_use]
 pub fn power_rail_voltage(name: &str) -> Option<f64> {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     match n.as_str() {
@@ -5543,51 +5581,38 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative and
             // never fall into the positive "contains 5V" branch through an
             // incidental VCC/VBUS token elsewhere in the name.
-            if let Some(v) = negative_rail_fallback(&n) {
-                Some(v)
-            // A numeric positive rail carries its own magnitude ("+15V",
-            // "+24V", "+9V", "+15V0", "+15V_ANALOG"). This MUST run before the
-            // loose "contains 5V" branch: "+15V" contains the substring "5V"
-            // and starts with '+', so without this it was silently classified
-            // as a 5 V rail, a +15V op-amp supply solved at 5 V.
-            } else if let Some(v) = positive_rail_fallback(&n) {
-                Some(v)
-            // A supply-token-prefixed rail carries its magnitude in an embedded
-            // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
-            // "VBUS_25V"). This precise extraction MUST run before the loose
-            // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
-            // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
-            // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
-            // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
-            } else if let Some(v) = embedded_rail_magnitude(&n) {
-                Some(v)
-            // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
-            // parse a numeric token from but that still carry a "5V"/"3V3"
-            // substring next to a supply token (e.g. "VCC_5VOLTS").
-            } else if n.contains("5V")
-                && (n.starts_with('+')
-                    || n.contains("VCC")
-                    || n.contains("VBUS")
-                    || n.contains("VDD"))
-            {
-                Some(5.0)
-            // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
-            // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
-            // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
-            // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
-            // Genuine rails still resolve: exact names hit the match arm above,
-            // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
-            // forms (+3V3_ANALOG) via positive_rail_fallback.
-            } else if (n.contains("3V3") || n.contains("3.3V"))
-                && (n.starts_with('+')
-                    || n.contains("VCC")
-                    || n.contains("VBUS")
-                    || n.contains("VDD"))
-            {
-                Some(3.3)
-            } else {
-                None
-            }
+            let supply_token =
+                n.starts_with('+') || n.contains("VCC") || n.contains("VBUS") || n.contains("VDD");
+            negative_rail_fallback(&n)
+                .or_else(|| positive_rail_fallback(&n))
+                // A supply-token-prefixed rail carries its magnitude in an embedded
+                // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
+                // "VBUS_25V"). This precise extraction MUST run before the loose
+                // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
+                // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
+                // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
+                // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
+                .or_else(|| embedded_rail_magnitude(&n))
+                // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
+                // parse a numeric token from but that still carry a "5V"/"3V3"
+                // substring next to a supply token (e.g. "VCC_5VOLTS").
+                //
+                // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
+                // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
+                // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
+                // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
+                // Genuine rails still resolve: exact names hit the match arm above,
+                // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
+                // forms (+3V3_ANALOG) via positive_rail_fallback.
+                .or_else(|| {
+                    if supply_token && n.contains("5V") {
+                        Some(5.0)
+                    } else if supply_token && (n.contains("3V3") || n.contains("3.3V")) {
+                        Some(3.3)
+                    } else {
+                        None
+                    }
+                })
         }
     }
 }
@@ -5608,7 +5633,11 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
 /// structural test (how many parts hang off the net) so a three-pin enable
 /// called `VCC_EN` does not read as a dead rail. Ground is excluded: `VSS` and
 /// friends are 0 V because that is what they are.
+#[must_use]
 pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
+    const SUPPLY_TOKENS: [&str; 12] = [
+        "VDD", "VCC", "VEE", "VBAT", "VBUS", "VSYS", "VIN", "AVDD", "AVCC", "DVDD", "VREG", "VAUX",
+    ];
     if is_ground(name) || power_rail_voltage(name).is_some() {
         return false;
     }
@@ -5620,9 +5649,6 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
     }
     // The last path segment: a hierarchical sheet name must not decide this.
     let leaf = n.rsplit('/').next().unwrap_or(&n);
-    const SUPPLY_TOKENS: [&str; 12] = [
-        "VDD", "VCC", "VEE", "VBAT", "VBUS", "VSYS", "VIN", "AVDD", "AVCC", "DVDD", "VREG", "VAUX",
-    ];
     SUPPLY_TOKENS.iter().any(|t| leaf.contains(t))
 }
 
@@ -5631,7 +5657,7 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
 /// the canonical 5 V nor 3.3 V and whose name does not START with the digit (so
 /// [`positive_rail_fallback`] skips it). Gated on a supply token so an arbitrary
 /// signal net that merely contains a "1V2"-like substring is not misread as a
-/// rail. Accepts both KiCad digit-V-digit ("1V8") and dotted ("1.8V") forms.
+/// rail. Accepts both `KiCad` digit-V-digit ("1V8") and dotted ("1.8V") forms.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn embedded_rail_magnitude(n: &str) -> Option<f64> {
     const SUPPLY_TOKENS: [&str; 11] = [
@@ -5712,11 +5738,11 @@ fn name_is_rail_monitor_tap(n: &str) -> bool {
     false
 }
 
-/// "+15V", "+24V_RAIL", "+15V0", "+9V", or a bare "15V" -> the positive rail
+/// "+15V", "+`24V_RAIL`", "+15V0", "+9V", or a bare "15V" -> the positive rail
 /// voltage. The mirror of [`negative_rail_fallback`]: an OPTIONAL leading '+',
-/// then a numeric magnitude in plain ("15V") or KiCad digit-V-digit ("5V0",
+/// then a numeric magnitude in plain ("15V") or `KiCad` digit-V-digit ("5V0",
 /// "3V3") form. A name that does not start with a digit after the optional '+'
-/// (e.g. "VDD_5V", "VCC") returns None and is left to the token heuristic.
+/// (e.g. "`VDD_5V`", "VCC") returns None and is left to the token heuristic.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn positive_rail_fallback(n: &str) -> Option<f64> {
     rail_magnitude(n.strip_prefix('+').unwrap_or(n))
@@ -5736,7 +5762,7 @@ fn rail_magnitude(rest: &str) -> Option<f64> {
     }
     let frac: String = after[1..]
         .chars()
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect();
     // A voltage-PREFIXED net whose suffix is a monitor/feedback/sense token
     // ("12V_FB", "5V_MON", "3V3_SENSE") is a divided TAP of the rail, not the rail
@@ -5766,10 +5792,12 @@ fn rail_magnitude(rest: &str) -> Option<f64> {
 /// suffixes (ANALOG, USB, CORE, RAIL, DIG, IO, …) are NOT taps and still resolve.
 /// `tail` is the remainder after the voltage token (e.g. "_FB", "_MON", "_USB").
 fn is_rail_monitor_suffix(tail: &str) -> bool {
+    const RAIL_DOMAIN_EXCEPTIONS: [&str; 2] = ["SENSOR", "FBUS"];
+    const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
     let first: String = tail
         .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric())
+        .take_while(char::is_ascii_alphanumeric)
         .collect();
     // Match on the ROOT, not an exact token: the same intent is spelled in
     // longer forms, "DIVIDER" (DIV), "SENSED"/"SENSING" (SENSE), "MEASURE"
@@ -5782,17 +5810,15 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
     // yet "5V_SENSOR"/"3V3_FBUS" are genuine supply rails, not divided taps,
     // classifying them as taps drops their SupplyLeg and floats the whole domain
     // at 0 V. Those specific rail-domain words are excepted before the root test.
-    const RAIL_DOMAIN_EXCEPTIONS: [&str; 2] = ["SENSOR", "FBUS"];
     if RAIL_DOMAIN_EXCEPTIONS.contains(&first.as_str()) {
         return false;
     }
-    const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
     TAP_ROOTS.iter().any(|r| first.starts_with(r))
 }
 
-/// "-5V", "-12V_RAIL", "-5V0", "-3V3_ANALOG" -> the negative rail voltage.
+/// "-5V", "-`12V_RAIL`", "-5V0", "-`3V3_ANALOG`" -> the negative rail voltage.
 /// The mirror of [`positive_rail_fallback`]: a leading '-', then a numeric
-/// magnitude in plain ("12V") or KiCad digit-V-digit ("3V3", "5V0") form.
+/// magnitude in plain ("12V") or `KiCad` digit-V-digit ("3V3", "5V0") form.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn negative_rail_fallback(n: &str) -> Option<f64> {
     // Strip exactly one sign; do not accept -+5V by calling the positive wrapper.
@@ -5801,7 +5827,7 @@ fn negative_rail_fallback(n: &str) -> Option<f64> {
 
 /// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
 /// pinfunction names a voltage is a supply rail at that voltage, no matter what
-/// the NET is named. KiCad netlists from boards that use a non-canonical rail
+/// the NET is named. `KiCad` netlists from boards that use a non-canonical rail
 /// label (e.g. `+5P`, `VBUS_SW`, `SYS_3V3`) still tag the *source pin* of a
 /// regulator/MCU/connector as `power_out`, so this catches rails that pure
 /// name-matching ([`power_rail_voltage`]) misses. Returns the rail voltage if
@@ -5927,9 +5953,10 @@ pub enum IdentityFinding {
 
 impl IdentityFinding {
     /// The one line a report prints for this finding.
+    #[must_use]
     pub fn line(&self) -> String {
         match self {
-            IdentityFinding::ValueDisagrees {
+            Self::ValueDisagrees {
                 reference,
                 layout,
                 artifact,
@@ -5938,17 +5965,17 @@ impl IdentityFinding {
                 "{reference} is {layout:?} on the layout and {artifact:?} in {source}; the part \
                  number from {source} is what bound, so check which revision is current"
             ),
-            IdentityFinding::NotOnBoard { references, source } => format!(
+            Self::NotOnBoard { references, source } => format!(
                 "{source} names {} parts the board does not have: {}",
                 references.len(),
                 references.join(", ")
             ),
-            IdentityFinding::NotInArtifact { references, source } => format!(
+            Self::NotInArtifact { references, source } => format!(
                 "{} parts on the board are not in {source}: {}",
                 references.len(),
                 references.join(", ")
             ),
-            IdentityFinding::QuantityDisagrees {
+            Self::QuantityDisagrees {
                 references,
                 stated,
                 enumerated,
@@ -5958,7 +5985,7 @@ impl IdentityFinding {
                  designators ({}); the list is what bound",
                 references.join(", ")
             ),
-            IdentityFinding::PopulateDisagrees {
+            Self::PopulateDisagrees {
                 reference,
                 layout_says_dnp,
                 artifact_says_populate,
@@ -6002,7 +6029,8 @@ pub struct FitAdvice {
 }
 
 impl FitAdvice {
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.fit.is_empty() && self.no_fit.is_empty()
     }
 }
@@ -6025,6 +6053,7 @@ impl IdentityReport {
     /// The lines a report prints. Empty when the artifact agreed with the layout
     /// about everything and added nothing, so a run whose BOM says nothing new
     /// never mentions the subject.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut out = self.evidence.clone();
         for a in &self.identified {
@@ -6088,7 +6117,7 @@ fn model_words(model: &ModelEntry) -> String {
     }
 }
 
-fn confidence_word(c: Confidence) -> &'static str {
+const fn confidence_word(c: Confidence) -> &'static str {
     match c {
         Confidence::Exact => "exact",
         Confidence::Family => "family",
@@ -6134,18 +6163,19 @@ pub enum IdentityRefusal {
 
 impl IdentityRefusal {
     /// Always [`crate::EXIT_INVALID_FOR_ANALYSIS`].
-    pub fn exit_code(&self) -> i32 {
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
         crate::EXIT_INVALID_FOR_ANALYSIS
     }
 }
 
-/// Below this share of an artifact's designators matching the board, the two are
-/// not the same board. A BOM may legitimately carry mechanical parts and panel
+/// Below `1/N` of an artifact's designators matching the board (N is this
+/// divisor, so half), the two are not the same board. A BOM may legitimately carry mechanical parts and panel
 /// extras, but those cannot outnumber the actual board population. Treating ten
 /// matching rows among a hundred as sufficient made a same-prefix board family
 /// look compatible even though ninety per cent of the asserted identities were
 /// for another design.
-const WRONG_BOARD_MATCH_RATIO: f64 = 0.5;
+const WRONG_BOARD_MATCH_DIVISOR: usize = 2;
 
 /// Apply identity from a BOM or a placement file to a board, before binding.
 ///
@@ -6185,6 +6215,13 @@ const WRONG_BOARD_MATCH_RATIO: f64 = 0.5;
 /// artifact's populate column arrives as [`IdentityReport::advice`] for the
 /// caller to feed back in. A distributor order code is never used for identity at
 /// all; [`hauksbee_extract::bom`] drops those before they get here.
+///
+/// # Errors
+///
+/// Returns [`IdentityRefusal::Contradiction`] when a hint names a part the
+/// layout identifies differently, and [`IdentityRefusal::WrongBoard`] when most
+/// of the hinted references are not on this board.
+#[allow(clippy::too_many_lines)] // the documented reconciliation rules, in order
 pub fn apply_identity(
     board: &mut ExtractedBoard,
     hints: &[hauksbee_extract::bom::IdentityHint],
@@ -6209,7 +6246,7 @@ pub fn apply_identity(
     named.sort();
     named.dedup();
     let matched = named.iter().filter(|r| on_board.contains(*r)).count();
-    if (matched as f64) < named.len() as f64 * WRONG_BOARD_MATCH_RATIO {
+    if matched * WRONG_BOARD_MATCH_DIVISOR < named.len() {
         return Err(IdentityRefusal::WrongBoard {
             artifact: source,
             total: named.len(),
@@ -6260,7 +6297,7 @@ pub fn apply_identity(
                 comp.properties
                     .push((IDENTITY_SOURCE_PROPERTY.to_string(), hint.source.clone()));
                 if substituted {
-                    comp.value = mpn.clone();
+                    comp.value.clone_from(mpn);
                 }
                 report.identified.push(IdentityAttribution {
                     reference: hint.reference.clone(),
@@ -6279,7 +6316,7 @@ pub fn apply_identity(
         if let Some(value) = &hint.value {
             let comp = &mut board.components[idx];
             if comp.value.trim().is_empty() {
-                comp.value = value.clone();
+                comp.value.clone_from(value);
                 comp.properties
                     .push((VALUE_PROPERTY.to_string(), value.clone()));
                 report.values_filled.push(FilledValue {
@@ -6347,14 +6384,20 @@ pub fn apply_identity(
     Ok(report)
 }
 
-/// [`apply_identity`] for a whole BOM, plus the one reconciliation a BOM carries
-/// that a bare hint list cannot express: a row whose stated quantity disagrees
+/// [`apply_identity`] for a whole BOM, plus quantity reconciliation.
+///
+/// The one reconciliation a BOM carries that a bare hint list cannot express is a row whose stated quantity disagrees
 /// with the number of designators the same row enumerates.
 ///
 /// This is the entry point a caller with a BOM wants. Call it BEFORE
 /// `ExtractedBoard::apply_dnp_policy`, so that the policy sees the board this
 /// function may have added values to, and feed [`FitAdvice`] into that call if the
 /// BOM's populate column is to be honoured.
+///
+/// # Errors
+///
+/// Returns the [`IdentityRefusal`] from [`apply_identity`] when the BOM
+/// contradicts the layout or belongs to a different board.
 pub fn apply_bom_identity(
     board: &mut ExtractedBoard,
     bom: &hauksbee_extract::bom::Bom,
@@ -6373,9 +6416,16 @@ pub fn apply_bom_identity(
 }
 
 /// [`apply_identity`] for a placement file, which additionally reconciles where
-/// the parts sit. A placement file whose positions disagree with the layout's is
-/// from another revision, and that is refused for the same reason a contradicting
-/// BOM is.
+/// the parts sit.
+///
+/// A placement file whose positions disagree with the layout's is from another
+/// revision, and that is refused for the same reason a contradicting BOM is.
+///
+/// # Errors
+///
+/// Returns [`IdentityRefusal::Contradiction`] when the placement file puts
+/// parts at other positions, sides or rotations than the layout, and otherwise
+/// any refusal [`apply_identity`] raises for its identity hints.
 pub fn apply_placement_identity(
     board: &mut ExtractedBoard,
     file: &hauksbee_extract::placement::PlacementFile,
@@ -6415,7 +6465,7 @@ pub fn apply_placement_identity(
 ///
 /// A non-empty value that does not parse as a magnitude is a name: `ATmega328P-AU`,
 /// `BSS138`, `LM4040BIM3-2.0`. A parseable magnitude (`10k`, `100nF`) is a
-/// parameter. An empty value, KiCad's `~`, and the marker an Altium read leaves
+/// parameter. An empty value, `KiCad`'s `~`, and the marker an Altium read leaves
 /// behind are all nothing.
 fn layout_names_a_part(comp: &Component) -> bool {
     let v = comp.value.trim();
@@ -6439,7 +6489,7 @@ fn layout_names_a_part(comp: &Component) -> bool {
 fn names_same_part(a: &str, b: &str, manufacturer: Option<&str>) -> bool {
     fn norm(s: &str) -> String {
         s.chars()
-            .filter(|c| c.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .collect::<String>()
             .to_ascii_uppercase()
     }
@@ -6508,7 +6558,7 @@ mod part_name_tests {
 /// layout's value carries no electrical parameter, the part number ALSO stands in
 /// for the value.
 ///
-/// The substitution is not a shortcut. A model's match rules are ANDed, and nearly
+/// The substitution is not a shortcut. A model's match rules are `ANDed`, and nearly
 /// every entry in the library declares a `value_re` written against part numbers
 /// (`^MCP4728`, `^BSS138[A-Z0-9-]*$`). So a part number presented only as a part
 /// number matches nothing: the query still carries the layout's own value, and the
@@ -6634,6 +6684,7 @@ fn designator_dimension(reference: &str) -> Option<&'static str> {
 /// library has no entry for: `10k` against `100nF` is ohms against farads whether
 /// or not either resolves. And a designator prefix is itself a class claim, which
 /// catches the case the brief exists for: a `Q5` the BOM calls `10k`.
+#[allow(clippy::too_many_lines)] // one early return per contradiction detector
 fn contradiction_between(
     comp: &Component,
     hint: &hauksbee_extract::bom::IdentityHint,
@@ -6774,7 +6825,7 @@ fn contradiction_between(
                  {artifact_value:?} ({a})",
                 reference
                     .chars()
-                    .take_while(|c| c.is_ascii_alphabetic())
+                    .take_while(char::is_ascii_alphabetic)
                     .collect::<String>()
             ));
         }
@@ -6800,7 +6851,7 @@ fn contradiction_between(
                      {artifact_value:?}, which is {scale}",
                     reference
                         .chars()
-                        .take_while(|c| c.is_ascii_alphabetic())
+                        .take_while(char::is_ascii_alphabetic)
                         .collect::<String>()
                 ));
             }
@@ -6845,7 +6896,7 @@ fn contradiction_between(
 
 fn normalise_identity_text(text: &str) -> String {
     text.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_ascii_uppercase()
 }
@@ -6863,7 +6914,7 @@ fn explicit_manufacturer(comp: &Component) -> Option<&str> {
 
 /// Number of electrical pads explicitly described by a package name.
 ///
-/// KiCad's `QFN-56-1EP` spelling means 56 perimeter pads plus one exposed
+/// `KiCad`'s `QFN-56-1EP` spelling means 56 perimeter pads plus one exposed
 /// electrical pad. Paste-aperture subdivisions are not part of that count.
 fn package_electrical_pad_count(package: &str) -> Option<usize> {
     let upper = package.to_ascii_uppercase();
@@ -6880,7 +6931,7 @@ fn package_electrical_pad_count(package: &str) -> Option<usize> {
         let digits: String = suffix
             .chars()
             .skip_while(|c| !c.is_ascii_digit())
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .collect();
         if let Ok(pads) = digits.parse::<usize>() {
             let after_count = &suffix[digit_start + digits.len()..];
@@ -7034,7 +7085,7 @@ mod tests {
         let mut ambiguous = comp("R1", "1k");
         ambiguous.lib_id = "Device:R".into();
         ambiguous.footprint = "R_0603".into();
-        ambiguous.properties.push(marker.clone());
+        ambiguous.properties.push(marker);
         assert!(AssemblyState::of(&ambiguous).fitted().is_none());
         assert!(library_resolution(&lib, &ambiguous).model.is_none());
 
@@ -7235,7 +7286,7 @@ style = "i2c_pointer"
     fn digital_output_driver_honours_model_ro() {
         let mut model = resolve_value(&ModelLibrary::builtin(), "74HC595", "");
         let custom_ro = 123.0;
-        assert_ne!(custom_ro, DEFAULT_RO);
+        assert!((custom_ro - DEFAULT_RO).abs() > 1e-9);
         model.params.set_f64("ro", custom_ro);
         let mut circuit = Circuit::new();
         let roles = roles(&mut circuit, &["srclk", "rclk", "ser", "qa", "qb"]);
@@ -7243,7 +7294,7 @@ style = "i2c_pointer"
         bind_digital(&comp("U1", ""), &model, &mut circuit, &roles, &mut digital)
             .expect("the builtin 595 spec compiles");
         assert_eq!(digital.len(), 1);
-        assert_eq!(digital[0].drivers["qa"].ron, custom_ro);
+        assert!((digital[0].drivers["qa"].ron - custom_ro).abs() < 1e-12);
     }
 
     /// A digital part whose [models.logic] fails to compile must surface the
@@ -7301,14 +7352,9 @@ style = "i2c_pointer"
 
         let mut report = BindReport::default();
         report.push(BindRow {
-            reference: "U1".into(),
-            value: "SENSOR".into(),
             model_id: Some(model.id),
-            confidence: Confidence::Exact,
-            source: None,
-            outcome,
             warning: Some("identity only; remains OPEN".into()),
-            guesses: Vec::new(),
+            ..BindRow::without_model("U1".into(), "SENSOR".into(), Confidence::Exact, outcome)
         });
         let summary = crate::bind_report::BindSummary::from_report(&report);
         assert_eq!(summary.critical_parts_bound, "0/1");
@@ -7404,12 +7450,12 @@ style = "i2c_pointer"
                 ("out".into(), circuit.node(out)),
                 ("gnd".into(), circuit.node(gnd)),
             ]);
-            let res = card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
-            let model = res.as_ref().map_or_else(
+            let resolved = card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
+            let model = resolved.as_ref().map_or_else(
                 || simple_vreg(Some(vout)),
                 |r| r.model.clone().expect("card resolves"),
             );
-            let source = res.as_ref().and_then(|r| r.provenance.as_ref());
+            let source = resolved.as_ref().and_then(|r| r.provenance.as_ref());
             let (outcome, warning, regs) = bind_u9(&model, source, &mut circuit, &roles);
             let marked = |w: &str| w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains(token);
             let caveat = warning.as_deref().map(marked);
@@ -7419,7 +7465,7 @@ style = "i2c_pointer"
                 "{case}"
             );
             assert!(
-                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && *v == vout),
+                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && (*v - vout).abs() < 1e-12),
                 "{case}"
             );
             let [reg] = regs.as_slice() else {
@@ -7428,7 +7474,8 @@ style = "i2c_pointer"
             assert_eq!((reg.reference.as_str(), reg.input), ("U9", roles["in"]));
             assert_eq!((reg.source.0, reg.dropout_v), (0, dropout_v));
             assert!((reg.min_in_v - min_in_v).abs() < 1e-12, "{case}: {reg:?}");
-            assert_eq!(reg.max_in_v, max_in_v, "{case}");
+            // Card ratings pass through untouched (including the unrated `inf`).
+            assert_eq!(reg.max_in_v.to_bits(), max_in_v.to_bits(), "{case}");
         }
     }
 
@@ -7464,11 +7511,11 @@ style = "i2c_pointer"
             .expect("cards load");
         let resolve = |v: &str| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None));
         let [scalar, row] = ["ZZ_SCALAR", "ZZ_ROW"].map(|value| {
-            let (res, mut circuit) = (resolve(value), Circuit::new());
+            let (resolved, mut circuit) = (resolve(value), Circuit::new());
             let roles = roles(&mut circuit, &["in", "out", "gnd"]);
-            let model = res.model.expect("the synthetic card resolves");
+            let model = resolved.model.expect("the synthetic card resolves");
             let (outcome, warning, regs) =
-                bind_u9(&model, res.provenance.as_ref(), &mut circuit, &roles);
+                bind_u9(&model, resolved.provenance.as_ref(), &mut circuit, &roles);
             let limits = format!("{:.9?} {:.9}", regs[0].dropout_v, regs[0].min_in_v);
             let bound = format!("{outcome:?} {warning:?} {:?}", circuit.devices);
             (bound, limits)
@@ -7476,13 +7523,13 @@ style = "i2c_pointer"
         assert_eq!(scalar, row);
         assert_eq!(row.1, "Some(0.250000000) 3.650000000");
 
-        let (res, component) = (resolve("ZZ_TIE"), comp("U9", "ZZ_TIE"));
+        let (resolved, component) = (resolve("ZZ_TIE"), comp("U9", "ZZ_TIE"));
         let marker = Assumption::PARTIAL_MODEL_MARKER;
-        let bare = with_tie_warning(&component, &res, None).unwrap_or_default();
+        let bare = with_tie_warning(&component, &resolved, None).unwrap_or_default();
         let tie = "U9 (ZZ_TIE): matched library entries zz_tie_a, zz_tie_b equally well; bound 'zz_tie_a'";
         assert!(bare.starts_with(&format!("{marker}{tie}")), "{bare}");
         let other = Some(format!("{marker}U9 (ZZ_TIE): enable off"));
-        let combined = with_tie_warning(&component, &res, other);
+        let combined = with_tie_warning(&component, &resolved, other);
         assert_eq!(combined, Some(format!("{bare}; also enable off")));
     }
 
@@ -7577,7 +7624,7 @@ style = "i2c_pointer"
     }
 
     /// The s0 / NC throw conducts when the control is LOW, so a partially
-    /// wired com + s0 + ctrl switch stamps a VSwitch with inverted sense.
+    /// wired com + s0 + ctrl switch stamps a `VSwitch` with inverted sense.
     #[test]
     fn spst_fallback_s0_throw_conducts_on_control_low() {
         let model = analog_switch_entry("NC SPST: com + s0 + ctrl");
@@ -7730,6 +7777,49 @@ style = "i2c_pointer"
         );
     }
 
+    /// A bead's impedance-at-100-MHz marking on an L designator is ohms, never
+    /// henries; ordinary inductor values on the same designator still bind as L.
+    #[test]
+    fn ferrite_bead_ratings_on_inductor_designators_never_become_henries() {
+        let lib = ModelLibrary::builtin();
+        for (value, henries) in [
+            ("600R/2A/UPZ2012E-601-2R0TF", None),
+            ("120Ω@100MHz", None),
+            ("120R @ 100MHz", None),
+            ("600R", None),
+            ("4.7uH", Some(4.7e-6)),
+            ("10u", Some(10e-6)),
+            ("2R2", Some(2.2e-6)),
+        ] {
+            let mut circuit = Circuit::new();
+            let (a, b) = (circuit.node("A"), circuit.node("B"));
+            let node_of = |n: Option<i64>| [None, Some(a), Some(b)][n.unwrap_or(0) as usize];
+            let mut l = comp("L1", value);
+            l.footprint = "Inductor_SMD:L_0805_2012Metric".into();
+            l.pins = vec![pin("1", 1), pin("2", 2)];
+            let model = library_resolution(&lib, &l).model.expect(value);
+            let (outcome, _) = bind_passive(&l, &model, &mut circuit, &node_of);
+            let got = circuit.devices.iter().find_map(|d| match d {
+                Device::Inductor { henries, .. } => Some(*henries),
+                _ => None,
+            });
+            let ok = henries.map_or(got.is_none(), |h| {
+                got.is_some_and(|g| (g - h).abs() < h * 1e-9)
+            });
+            assert!(ok, "{value}: {got:?} H, {outcome:?}, model {}", model.id);
+        }
+        // Ohm-marked resistors and jumpers stay resistors, not beads.
+        for value in ["0R", "100R"] {
+            let mut r = comp("R1", value);
+            r.footprint = "Resistor_SMD:R_0603_1608Metric".into();
+            let id = library_resolution(&lib, &r).model.map(|m| m.id);
+            assert!(
+                !id.as_deref().is_some_and(|i| i.starts_with("ferrite")),
+                "{value}: {id:?}"
+            );
+        }
+    }
+
     /// A library-resolved crystal is Skipped and never stamped (a bare
     /// "32.768" used to become a 32.768 ohm resistor); a packaged oscillator
     /// additionally carries a warning naming its unmodelled supply and clock.
@@ -7867,8 +7957,8 @@ style = "i2c_pointer"
     #[test]
     fn role_sources_have_global_priority_not_per_pad_priority() {
         let mut c = comp("D1", "D");
-        let map = [("1".into(), "anode".into())].into_iter().collect();
-        let node_of = |net: Option<i64>| net.map(|id| NodeId(id as u32));
+        let map = std::iter::once(("1".into(), "anode".into())).collect();
+        let node_of = |net: Option<i64>| net.map(|id| NodeId(u32::try_from(id).unwrap()));
         let mut named = pin("2", 2);
         named.function = "A".into();
         for (pins, kind, expected) in [
@@ -8038,7 +8128,7 @@ style = "i2c_pointer"
             "dual",
             ComponentKind::Diode,
             "dual",
-            Default::default(),
+            hauksbee_models::Params::default(),
             pins.into(),
         );
         for (third, refused) in [(1, false), (2, true)] {
@@ -8108,7 +8198,7 @@ style = "i2c_pointer"
             .collect();
         let node_of = move |n: Option<i64>| match n {
             Some(0) => Some(NodeId::GROUND),
-            Some(i @ 1..=6) => Some(nodes[i as usize - 1]),
+            Some(i @ 1..=6) => Some(nodes[usize::try_from(i).unwrap() - 1]),
             _ => None,
         };
         let before = circuit.devices.len();
@@ -8142,7 +8232,7 @@ style = "i2c_pointer"
         ];
         let node_of = move |n: Option<i64>| match n {
             Some(0) => Some(NodeId::GROUND),
-            Some(i @ 1..=3) => Some(nodes[i as usize - 1]),
+            Some(i @ 1..=3) => Some(nodes[usize::try_from(i).unwrap() - 1]),
             _ => None,
         };
         let model = resolve_value(lib, value, "");

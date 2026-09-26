@@ -68,8 +68,9 @@ CI stays green without codex).
 
 ## Backends
 
-- **codex** (default): `codex exec --sandbox workspace-write
-  --skip-git-repo-check --cd <pdf_dir>`. Hard 10-minute timeout per run.
+- **codex** (default): `codex exec` with a read-confining permission profile
+  (see "What an extraction agent can read" in `docs/models/MODELS.md`),
+  `--skip-git-repo-check --cd <scratch workspace>`. Hard 10-minute timeout per run.
 - **API**: set `HAUKSBEE_LLM_API_KEY`, optionally `HAUKSBEE_LLM_MODEL` and
   `HAUKSBEE_LLM_BASE_URL` (defaults to `https://api.openai.com/v1`).
 - **Claude Code**: pass `--backend claude-code` when invoking the extractor;
