@@ -3,3 +3,9 @@
 # default arity threshold fires constantly on correct code. Everything else
 # stays at clippy's defaults.
 too-many-arguments-threshold = 12
+# Board, vendor and tool names the docs cite as prose, not code ("..": keep
+# clippy's default list too).
+doc-valid-idents = [
+  "KiCad", "SparkFun", "ZSWatch", "PicoDVI", "LumenPnP", "EasyEDA", "PCBWay", "ClockworkPi",
+  "PolyKybd", "ODrive", "PowerPCB", "DevKit", "LibreSolar", "CubeSat", "BeagleBone", "..",
+]

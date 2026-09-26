@@ -168,9 +168,9 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
                     .at(&text, &spec.board.display().to_string()),
             ),
             Ok(board) => {
-                let extra: Vec<&Path> = opts.models_dir.as_deref().into_iter().collect();
-                let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
-                match crate::runner::prepare_assembly_inputs(&spec, board, &lib) {
+                let lib = crate::runner::spec_model_library(&spec, opts.models_dir.as_deref());
+                match lib.and_then(|lib| crate::runner::prepare_assembly_inputs(&spec, board, &lib))
+                {
                     Err(error) => push_spec_error(&mut diags, &text, &error),
                     Ok(prepared) => {
                         let known: Vec<String> =

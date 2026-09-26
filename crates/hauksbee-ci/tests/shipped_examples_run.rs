@@ -137,7 +137,7 @@ fn no_example_asserts_a_rail_its_own_ideal_source_holds() {
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
     {
         let text = std::fs::read_to_string(&spec).expect("read spec");
-        let value: toml::Value = match text.parse() {
+        let value: toml::Value = match toml::from_str(&text) {
             Ok(v) => v,
             Err(e) => panic!("{} is not valid TOML: {e}", spec.display()),
         };

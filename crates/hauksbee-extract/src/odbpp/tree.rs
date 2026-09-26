@@ -28,11 +28,11 @@ use crate::ExtractError;
 
 /// The marker that identifies an ODB++ job root: the matrix file, which every
 /// job has exactly one of and which no other format ships.
-pub(crate) const MATRIX_PATH: &str = "matrix/matrix";
+pub const MATRIX_PATH: &str = "matrix/matrix";
 
 /// A whole ODB++ job in memory: lower-cased `/`-separated path relative to the
 /// job root → file content.
-pub(crate) struct OdbTree {
+pub struct OdbTree {
     files: BTreeMap<String, Vec<u8>>,
     /// Paths whose `.Z` / `.gz` payload would not inflate, so their content is
     /// the raw compressed bytes and will not parse. Reported, never hidden.
@@ -45,8 +45,8 @@ pub(crate) struct OdbTree {
 }
 
 impl OdbTree {
-    fn new() -> Self {
-        OdbTree {
+    const fn new() -> Self {
+        Self {
             files: BTreeMap::new(),
             undecompressed: Vec::new(),
             budget: MAX_INFLATED_BYTES,
@@ -56,7 +56,7 @@ impl OdbTree {
     /// The error for a job that exceeds the inflation ceiling. Names the limit,
     /// so a legitimately enormous job reads as a limit to raise rather than as a
     /// corrupt file.
-    fn too_large(&self) -> ExtractError {
+    fn too_large() -> ExtractError {
         ExtractError::Odb(format!(
             "this ODB++ job expands to more than {} MiB, which is past the limit \
              hauksbee will hold in memory for one job. That is far larger than any \
@@ -70,41 +70,37 @@ impl OdbTree {
     /// Insert one member, inflating and un-suffixing a `.Z`/`.gz` payload.
     fn insert(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), ExtractError> {
         let key = path.replace('\\', "/").to_ascii_lowercase();
-        let (key, compressed) = match key.strip_suffix(".z").or_else(|| key.strip_suffix(".gz")) {
-            Some(stem) => (stem.to_string(), true),
-            None => (key, false),
-        };
+        let stem = key.strip_suffix(".z").or_else(|| key.strip_suffix(".gz"));
+        let (compressed, stem) = (stem.is_some(), stem.map(str::to_string));
+        let key = stem.unwrap_or(key);
         if !compressed {
             // Plain members still count: an uncompressed 2 GiB `features` inside
             // a tar is the same problem without the compression ratio.
             let len = bytes.len() as u64;
             if len > self.budget {
-                return Err(self.too_large());
+                return Err(Self::too_large());
             }
             self.budget -= len;
             self.files.insert(key, bytes);
             return Ok(());
         }
-        match gunzip_within(&bytes, &mut self.budget) {
-            Some(plain) => {
-                self.files.insert(key, plain);
-            }
-            None => {
-                // Either not gzip at all, or past the ceiling. The two are told
-                // apart by the magic, so a bomb is not mislabelled as an exotic
-                // compression the reader merely does not know.
-                if is_gzip(&bytes) {
-                    return Err(self.too_large());
-                }
-                let len = bytes.len() as u64;
-                if len > self.budget {
-                    return Err(self.too_large());
-                }
-                self.budget -= len;
-                self.undecompressed.push(key.clone());
-                self.files.insert(key, bytes);
-            }
+        if let Some(plain) = gunzip_within(&bytes, &mut self.budget) {
+            self.files.insert(key, plain);
+            return Ok(());
         }
+        // Either not gzip at all, or past the ceiling. The two are told
+        // apart by the magic, so a bomb is not mislabelled as an exotic
+        // compression the reader merely does not know.
+        if is_gzip(&bytes) {
+            return Err(Self::too_large());
+        }
+        let len = bytes.len() as u64;
+        if len > self.budget {
+            return Err(Self::too_large());
+        }
+        self.budget -= len;
+        self.undecompressed.push(key.clone());
+        self.files.insert(key, bytes);
         Ok(())
     }
 
@@ -182,7 +178,7 @@ impl OdbTree {
     /// Build from an unpacked job directory. `dir` may be the job root itself
     /// or any ancestor of it (a downloads folder holding one job).
     pub(crate) fn from_dir(dir: &Path) -> Result<Self, ExtractError> {
-        let mut tree = OdbTree::new();
+        let mut tree = Self::new();
         let mut files = Vec::new();
         collect(dir, &mut files);
         for path in files {
@@ -205,7 +201,7 @@ impl OdbTree {
     pub(crate) fn from_zip(bytes: &[u8]) -> Result<Self, ExtractError> {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
             .map_err(|e| ExtractError::Odb(format!("read ODB++ zip: {e}")))?;
-        let mut tree = OdbTree::new();
+        let mut tree = Self::new();
         for i in 0..zip.len() {
             let mut f = zip
                 .by_index(i)
@@ -232,7 +228,7 @@ impl OdbTree {
         let plain = match gunzip_within(bytes, &mut budget) {
             Some(p) => p,
             None if is_gzip(bytes) && bytes.len() as u64 <= MAX_INFLATED_BYTES => {
-                return Err(OdbTree::new().too_large())
+                return Err(Self::too_large())
             }
             None => {
                 return Err(ExtractError::Odb(
@@ -246,7 +242,7 @@ impl OdbTree {
     /// Build from an uncompressed tar.
     pub(crate) fn from_tar(bytes: &[u8]) -> Result<Self, ExtractError> {
         let mut ar = tar::Archive::new(std::io::Cursor::new(bytes));
-        let mut tree = OdbTree::new();
+        let mut tree = Self::new();
         let entries = ar
             .entries()
             .map_err(|e| ExtractError::Odb(format!("read ODB++ tar: {e}")))?;
@@ -299,18 +295,18 @@ fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-pub(crate) fn is_zip(bytes: &[u8]) -> bool {
+pub fn is_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
 }
 
-pub(crate) fn is_gzip(bytes: &[u8]) -> bool {
+pub fn is_gzip(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x1f, 0x8b])
 }
 
 /// A bare (uncompressed) tar: the `ustar` magic sits at offset 257 of the first
 /// 512-byte header block. Checking the magic rather than the extension keeps a
 /// mis-named archive readable and keeps a random binary out.
-pub(crate) fn looks_like_tar(bytes: &[u8]) -> bool {
+pub fn looks_like_tar(bytes: &[u8]) -> bool {
     bytes.len() >= 265 && (&bytes[257..262] == b"ustar")
 }
 
@@ -327,7 +323,7 @@ pub(crate) fn looks_like_tar(bytes: &[u8]) -> bool {
 /// professional job with tens of megabytes of `features` far inside it. Hitting
 /// the ceiling is an error naming the limit, not a truncated read: a job silently
 /// missing its last layers is the half-board this crate refuses to produce.
-pub(crate) const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Inflate a gzip member, or `None` if it is not gzip / is corrupt / would
 /// exceed `budget` (which is decremented by what was produced).
@@ -351,7 +347,7 @@ fn gunzip_within(bytes: &[u8], budget: &mut u64) -> Option<Vec<u8>> {
 /// `matrix/matrix` member? Reads only what it must — a zip's central directory
 /// for the zip form, and at most [`SNIFF_BYTES`] of inflated tar for the tgz
 /// form, so detection never inflates a 200 MB fab archive.
-pub(crate) fn archive_has_matrix(bytes: &[u8]) -> bool {
+pub fn archive_has_matrix(bytes: &[u8]) -> bool {
     if is_zip(bytes) {
         let Ok(zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
             return false;
@@ -406,8 +402,8 @@ fn tar_names(bytes: &[u8]) -> Vec<String> {
         let name = String::from_utf8_lossy(&block[..name_end]).into_owned();
         // The size field is 11 octal digits (offset 124), NUL/space terminated.
         let size_field = String::from_utf8_lossy(&block[124..136]);
-        let size = u64::from_str_radix(size_field.trim().trim_end_matches('\0').trim(), 8)
-            .unwrap_or(0) as usize;
+        let size =
+            usize::from_str_radix(size_field.trim().trim_end_matches('\0').trim(), 8).unwrap_or(0);
         if !name.is_empty() {
             out.push(name);
         }

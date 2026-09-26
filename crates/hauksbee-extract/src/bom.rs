@@ -38,8 +38,9 @@ use serde::{Deserialize, Serialize};
 /// on a file that is not a BOM at all.
 const MAX_BANNER_LINES: usize = 40;
 
-/// The exit code a refused BOM produces: "invalid for analysis", the same code
-/// a diverged co-simulation produces. A BOM hauksbee cannot map is not a failed
+/// The exit code a refused BOM produces: "invalid for analysis".
+///
+/// It is the same code a diverged co-simulation produces. A BOM hauksbee cannot map is not a failed
 /// assertion (exit 1) and not a usage error (exit 2): it is an input that cannot
 /// be analysed truthfully, which is exactly what 3 means. The definition lives
 /// in `hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS`; `hauksbee-engine`'s
@@ -49,8 +50,9 @@ pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
-/// Why a BOM could not be used. Every variant is already a whole human
-/// sentence naming the file, what is wrong, and what to do about it, because a
+/// Why a BOM could not be used.
+///
+/// Every variant is already a whole human sentence naming the file, what is wrong, and what to do about it, because a
 /// refusal whose message does not say what to do next is a dead end.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum BomError {
@@ -170,7 +172,8 @@ impl BomError {
     /// The process exit code this refusal maps to. Always
     /// [`EXIT_INVALID_FOR_ANALYSIS`]: every variant here means the input cannot
     /// be analysed, not that an assertion failed.
-    pub fn exit_code(&self) -> i32 {
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
         EXIT_INVALID_FOR_ANALYSIS
     }
 }
@@ -193,7 +196,7 @@ pub enum BomDialect {
     /// cell. 35 files.
     KicadGrouped,
     /// KiCad's ungrouped / `Component, Description, Part, References, Value,
-    /// Footprint, Quantity Per PCB` shape, including the KiBom and the
+    /// Footprint, Quantity Per PCB` shape, including the `KiBom` and the
     /// `bom2grouped_csv` variants. Reference designators here are often
     /// SPACE-separated rather than comma-separated. 27 files.
     KicadUngrouped,
@@ -233,52 +236,48 @@ pub enum BomDialect {
 impl BomDialect {
     /// The short machine name recorded in provenance, and the name a report
     /// prints. Stable: it goes in JSON.
-    pub fn kind(self) -> &'static str {
+    #[must_use]
+    pub const fn kind(self) -> &'static str {
         match self {
-            BomDialect::KicadGrouped => "kicad_grouped_bom",
-            BomDialect::KicadUngrouped => "kicad_ungrouped_bom",
-            BomDialect::Altium => "altium_bom",
-            BomDialect::EaglePartlist => "eagle_partlist",
-            BomDialect::EagleGroupedPartlist => "eagle_grouped_partlist",
-            BomDialect::Lcsc => "lcsc_bom",
-            BomDialect::Jlcpcb => "jlcpcb_bom",
-            BomDialect::DigiKey => "digikey_bom",
-            BomDialect::Spreadsheet => "spreadsheet_bom",
+            Self::KicadGrouped => "kicad_grouped_bom",
+            Self::KicadUngrouped => "kicad_ungrouped_bom",
+            Self::Altium => "altium_bom",
+            Self::EaglePartlist => "eagle_partlist",
+            Self::EagleGroupedPartlist => "eagle_grouped_partlist",
+            Self::Lcsc => "lcsc_bom",
+            Self::Jlcpcb => "jlcpcb_bom",
+            Self::DigiKey => "digikey_bom",
+            Self::Spreadsheet => "spreadsheet_bom",
         }
     }
 
     /// The human name, for a report line a person reads.
-    pub fn describe(self) -> &'static str {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
         match self {
-            BomDialect::KicadGrouped => "KiCad grouped BOM",
-            BomDialect::KicadUngrouped => "KiCad ungrouped BOM",
-            BomDialect::Altium => "Altium BOM",
-            BomDialect::EaglePartlist => "Eagle partlist",
-            BomDialect::EagleGroupedPartlist => "Eagle grouped partlist",
-            BomDialect::Lcsc => "LCSC assembly BOM",
-            BomDialect::Jlcpcb => "JLCPCB assembly BOM",
-            BomDialect::DigiKey => "Digi-Key BOM export",
-            BomDialect::Spreadsheet => "spreadsheet BOM",
+            Self::KicadGrouped => "KiCad grouped BOM",
+            Self::KicadUngrouped => "KiCad ungrouped BOM",
+            Self::Altium => "Altium BOM",
+            Self::EaglePartlist => "Eagle partlist",
+            Self::EagleGroupedPartlist => "Eagle grouped partlist",
+            Self::Lcsc => "LCSC assembly BOM",
+            Self::Jlcpcb => "JLCPCB assembly BOM",
+            Self::DigiKey => "Digi-Key BOM export",
+            Self::Spreadsheet => "spreadsheet BOM",
         }
     }
 
     /// True when this dialect's `Comment` column is definitionally the value
     /// column. In Altium, LCSC and JLCPCB exports it is; in a spreadsheet
     /// somebody wrote, `Comment` is a comment.
-    fn comment_is_value(self) -> bool {
-        matches!(
-            self,
-            BomDialect::Altium | BomDialect::Lcsc | BomDialect::Jlcpcb
-        )
+    const fn comment_is_value(self) -> bool {
+        matches!(self, Self::Altium | Self::Lcsc | Self::Jlcpcb)
     }
 
     /// True for the two fixed-width Eagle shapes, which are sliced by header
     /// column offsets rather than split on a delimiter.
-    fn is_fixed_width(self) -> bool {
-        matches!(
-            self,
-            BomDialect::EaglePartlist | BomDialect::EagleGroupedPartlist
-        )
+    const fn is_fixed_width(self) -> bool {
+        matches!(self, Self::EaglePartlist | Self::EagleGroupedPartlist)
     }
 }
 
@@ -319,21 +318,23 @@ pub enum ColumnRole {
 
 impl ColumnRole {
     /// The name used in `--bom-column <role>=<column>` and in JSON.
-    pub fn flag_name(self) -> &'static str {
+    #[must_use]
+    pub const fn flag_name(self) -> &'static str {
         match self {
-            ColumnRole::Reference => "reference",
-            ColumnRole::Value => "value",
-            ColumnRole::Mpn => "mpn",
-            ColumnRole::Manufacturer => "manufacturer",
-            ColumnRole::Quantity => "quantity",
-            ColumnRole::Footprint => "footprint",
-            ColumnRole::Populate => "populate",
-            ColumnRole::DistributorPart => "distributor_part",
+            Self::Reference => "reference",
+            Self::Value => "value",
+            Self::Mpn => "mpn",
+            Self::Manufacturer => "manufacturer",
+            Self::Quantity => "quantity",
+            Self::Footprint => "footprint",
+            Self::Populate => "populate",
+            Self::DistributorPart => "distributor_part",
         }
     }
 
     /// Parse the role name a caller typed. `None` for anything unrecognised,
     /// so the caller can list the accepted names.
+    #[must_use]
     pub fn from_flag_name(s: &str) -> Option<Self> {
         Some(
             match s
@@ -342,30 +343,31 @@ impl ColumnRole {
                 .replace(['-', ' '], "_")
                 .as_str()
             {
-                "reference" | "refdes" | "designator" => ColumnRole::Reference,
-                "value" => ColumnRole::Value,
-                "mpn" => ColumnRole::Mpn,
-                "manufacturer" => ColumnRole::Manufacturer,
-                "quantity" | "qty" => ColumnRole::Quantity,
-                "footprint" => ColumnRole::Footprint,
-                "populate" | "dnp" => ColumnRole::Populate,
-                "distributor_part" => ColumnRole::DistributorPart,
+                "reference" | "refdes" | "designator" => Self::Reference,
+                "value" => Self::Value,
+                "mpn" => Self::Mpn,
+                "manufacturer" => Self::Manufacturer,
+                "quantity" | "qty" => Self::Quantity,
+                "footprint" => Self::Footprint,
+                "populate" | "dnp" => Self::Populate,
+                "distributor_part" => Self::DistributorPart,
                 _ => return None,
             },
         )
     }
 
     /// Every role name, for an error message that has to list them.
-    pub fn all() -> &'static [ColumnRole] {
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
         &[
-            ColumnRole::Reference,
-            ColumnRole::Value,
-            ColumnRole::Mpn,
-            ColumnRole::Manufacturer,
-            ColumnRole::Quantity,
-            ColumnRole::Footprint,
-            ColumnRole::Populate,
-            ColumnRole::DistributorPart,
+            Self::Reference,
+            Self::Value,
+            Self::Mpn,
+            Self::Manufacturer,
+            Self::Quantity,
+            Self::Footprint,
+            Self::Populate,
+            Self::DistributorPart,
         ]
     }
 }
@@ -396,15 +398,17 @@ pub enum MappingConfidence {
 
 impl MappingConfidence {
     /// True when a non-interactive run may act on this assignment unasked.
-    pub fn usable_unattended(self) -> bool {
-        matches!(self, MappingConfidence::Certain | MappingConfidence::Likely)
+    #[must_use]
+    pub const fn usable_unattended(self) -> bool {
+        matches!(self, Self::Certain | Self::Likely)
     }
 
-    pub fn describe(self) -> &'static str {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
         match self {
-            MappingConfidence::Certain => "certain",
-            MappingConfidence::Likely => "likely",
-            MappingConfidence::Guess => "guess",
+            Self::Certain => "certain",
+            Self::Likely => "likely",
+            Self::Guess => "guess",
         }
     }
 }
@@ -462,6 +466,7 @@ impl ColumnMap {
     /// The lines a report prints so the mapping actually used is never
     /// invisible. Recording the mapping is half the contract: a run that
     /// proceeds on a detected mapping must say which one it used.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for a in &self.used {
@@ -501,6 +506,7 @@ pub struct ColumnOverrides {
 }
 
 impl ColumnOverrides {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -515,6 +521,9 @@ impl ColumnOverrides {
 
     /// Parse a `role=column` pair as typed on a command line. The error is the
     /// message to show, already naming the accepted role names.
+    ///
+    /// # Errors
+    /// The message to show when `s` has no `=` or names an unknown role.
     pub fn parse_pair(s: &str) -> Result<(ColumnRole, String), String> {
         let (role, header) = s.split_once('=').ok_or_else(|| {
             format!(
@@ -541,7 +550,8 @@ impl ColumnOverrides {
         Ok((parsed, header.trim().to_string()))
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.pairs.is_empty()
     }
 
@@ -601,6 +611,7 @@ impl BomProvenance {
     ///
     /// Half the contract of proceeding on a detected mapping is saying which
     /// mapping was used, so this is not optional output.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let sha = if self.sha256.is_empty() {
             String::new()
@@ -658,6 +669,10 @@ impl Bom {
     /// Read a BOM from a path. The dialect is detected from the content, never
     /// the extension: the tab-separated exports that claim to be `.csv` are
     /// common enough that trusting the extension is a bug.
+    ///
+    /// # Errors
+    /// [`BomError::Io`] when the file cannot be read, or the refusal
+    /// [`Self::from_bytes`] gives for content that is not a usable BOM.
     pub fn read(path: &Path) -> Result<Self, BomError> {
         let name = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|e| BomError::Io {
@@ -668,6 +683,9 @@ impl Bom {
     }
 
     /// Read a BOM from a path with caller-confirmed column mappings.
+    ///
+    /// # Errors
+    /// As [`Self::read`].
     pub fn read_with(path: &Path, overrides: &ColumnOverrides) -> Result<Self, BomError> {
         let name = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|e| BomError::Io {
@@ -679,6 +697,10 @@ impl Bom {
 
     /// Read a BOM from bytes, hashing them for provenance. `name` is what error
     /// messages call the file.
+    ///
+    /// # Errors
+    /// A [`BomError`] naming why the content is not a usable BOM: empty, no
+    /// confident reference column, an unknown override column, and so on.
     pub fn from_bytes(
         bytes: &[u8],
         name: &str,
@@ -691,6 +713,9 @@ impl Bom {
 
     /// Read a BOM from text already in memory, with no hash. Used by tests and
     /// by callers that synthesized the table.
+    ///
+    /// # Errors
+    /// As [`Self::from_bytes`].
     pub fn from_text(
         text: &str,
         name: &str,
@@ -701,11 +726,13 @@ impl Bom {
 
     /// Does this file look like a BOM at all? Cheap enough to run over every
     /// file beside a board, so a caller can find the BOM without being told.
+    #[must_use]
     pub fn detects(bytes: &[u8]) -> bool {
         matches!(Self::probe(bytes, ""), BomDetection::Ready(_))
     }
 
     /// Probe a possible BOM without discarding a recognized file's diagnostic.
+    #[must_use]
     pub fn probe(bytes: &[u8], name: &str) -> BomDetection {
         match Self::from_bytes(bytes, name, &ColumnOverrides::new()) {
             Ok(bom) => BomDetection::Ready(bom),
@@ -715,6 +742,7 @@ impl Bom {
     }
 
     /// Every reference designator the BOM mentions, sorted and deduplicated.
+    #[must_use]
     pub fn references(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .rows
@@ -727,6 +755,7 @@ impl Bom {
     }
 
     /// The row covering one reference designator, if any.
+    #[must_use]
     pub fn row_for(&self, reference: &str) -> Option<&BomRow> {
         self.rows
             .iter()
@@ -743,6 +772,7 @@ impl Bom {
     /// number of placements on the board is not a separate case: it is a
     /// reference designator missing from one side or the other, which
     /// [`crate::bom`]'s reconciliation already reports by name.
+    #[must_use]
     pub fn quantity_disagreements(&self) -> Vec<(&BomRow, usize, usize)> {
         self.rows
             .iter()
@@ -756,6 +786,7 @@ impl Bom {
 
     /// Identity hints for the binder, one per reference designator the BOM
     /// names. See [`IdentityHint`].
+    #[must_use]
     pub fn identity_hints(&self) -> Vec<IdentityHint> {
         let mut out = Vec::new();
         for row in &self.rows {
@@ -768,7 +799,7 @@ impl Bom {
                     footprint: row.footprint.clone(),
                     populate: row.populate,
                     source: self.provenance.path.clone(),
-                    source_kind: self.provenance.kind.to_string(),
+                    source_kind: self.provenance.kind.clone(),
                 });
             }
         }
@@ -864,82 +895,10 @@ impl Bom {
             });
         }
 
-        let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
-        for (reference, line) in &duplicate_candidates {
-            if let Some(first_line) = first_lines.insert(reference, *line) {
-                return Err(BomError::DuplicateReference {
-                    name: name.to_string(),
-                    reference: reference.clone(),
-                    first_line,
-                    second_line: *line,
-                });
-            }
-        }
+        refuse_duplicates(name, &duplicate_candidates)?;
+        let (contributed, ignored) = accounting(&rows, &map, skipped_placeholders);
 
-        let with_mpn = rows.iter().filter(|r| r.mpn.is_some()).count();
-        let parts: usize = rows.iter().map(|r| r.references.len()).sum();
-        let mut contributed = vec![Contribution {
-            what: "part identity".to_string(),
-            detail: format!(
-                "{parts} reference designators over {} {}, {with_mpn} of {} carrying a \
-                 manufacturer part number",
-                rows.len(),
-                plural(rows.len(), "row", "rows"),
-                plural(rows.len(), "it", "them"),
-            ),
-        }];
-        let stated = rows.iter().filter(|r| r.populate.is_some()).count();
-        if stated > 0 {
-            contributed.push(Contribution {
-                what: "populate flags".to_string(),
-                detail: format!(
-                    "{stated} {} whether the part is fitted",
-                    plural(stated, "row states", "rows state")
-                ),
-            });
-        }
-
-        let mut ignored: Vec<IgnoredInput> = map
-            .ignored_headers
-            .iter()
-            .map(|h| IgnoredInput {
-                what: format!("column {h:?}"),
-                why: "no analysis reads it".to_string(),
-            })
-            .collect();
-        for a in &map.left_unmapped {
-            ignored.push(IgnoredInput {
-                what: format!("column {:?}", a.header),
-                why: format!(
-                    "it is only a guess at the {} column; confirm it with \
-                     `--bom-column {}={}`",
-                    a.role.flag_name(),
-                    a.role.flag_name(),
-                    a.header
-                ),
-            });
-        }
-        if rows.iter().any(|r| r.distributor_part.is_some()) {
-            ignored.push(IgnoredInput {
-                what: "distributor order codes".to_string(),
-                why: "a distributor code is not a manufacturer part number, so matching a \
-                      model against one would bind the wrong device"
-                    .to_string(),
-            });
-        }
-        skipped_placeholders.sort();
-        skipped_placeholders.dedup();
-        if !skipped_placeholders.is_empty() {
-            ignored.push(IgnoredInput {
-                what: format!("{} unannotated designators", skipped_placeholders.len()),
-                why: format!(
-                    "{} name no specific part, so they cannot be matched to the board",
-                    skipped_placeholders.join(", ")
-                ),
-            });
-        }
-
-        Ok(Bom {
+        Ok(Self {
             dialect,
             rows,
             provenance: BomProvenance {
@@ -953,6 +912,93 @@ impl Bom {
             },
         })
     }
+}
+
+/// Refuse a designator that two rows both claim, naming both lines.
+fn refuse_duplicates(name: &str, candidates: &[(String, usize)]) -> Result<(), BomError> {
+    let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
+    for (reference, line) in candidates {
+        if let Some(first_line) = first_lines.insert(reference, *line) {
+            return Err(BomError::DuplicateReference {
+                name: name.to_string(),
+                reference: reference.clone(),
+                first_line,
+                second_line: *line,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// What a parsed BOM contributed to the analysis and what it left unread.
+fn accounting(
+    rows: &[BomRow],
+    map: &ColumnMap,
+    mut skipped_placeholders: Vec<String>,
+) -> (Vec<Contribution>, Vec<IgnoredInput>) {
+    let with_mpn = rows.iter().filter(|r| r.mpn.is_some()).count();
+    let parts: usize = rows.iter().map(|r| r.references.len()).sum();
+    let mut contributed = vec![Contribution {
+        what: "part identity".to_string(),
+        detail: format!(
+            "{parts} reference designators over {} {}, {with_mpn} of {} carrying a \
+             manufacturer part number",
+            rows.len(),
+            plural(rows.len(), "row", "rows"),
+            plural(rows.len(), "it", "them"),
+        ),
+    }];
+    let stated = rows.iter().filter(|r| r.populate.is_some()).count();
+    if stated > 0 {
+        contributed.push(Contribution {
+            what: "populate flags".to_string(),
+            detail: format!(
+                "{stated} {} whether the part is fitted",
+                plural(stated, "row states", "rows state")
+            ),
+        });
+    }
+
+    let mut ignored: Vec<IgnoredInput> = map
+        .ignored_headers
+        .iter()
+        .map(|h| IgnoredInput {
+            what: format!("column {h:?}"),
+            why: "no analysis reads it".to_string(),
+        })
+        .collect();
+    for a in &map.left_unmapped {
+        ignored.push(IgnoredInput {
+            what: format!("column {:?}", a.header),
+            why: format!(
+                "it is only a guess at the {} column; confirm it with \
+                 `--bom-column {}={}`",
+                a.role.flag_name(),
+                a.role.flag_name(),
+                a.header
+            ),
+        });
+    }
+    if rows.iter().any(|r| r.distributor_part.is_some()) {
+        ignored.push(IgnoredInput {
+            what: "distributor order codes".to_string(),
+            why: "a distributor code is not a manufacturer part number, so matching a \
+                  model against one would bind the wrong device"
+                .to_string(),
+        });
+    }
+    skipped_placeholders.sort();
+    skipped_placeholders.dedup();
+    if !skipped_placeholders.is_empty() {
+        ignored.push(IgnoredInput {
+            what: format!("{} unannotated designators", skipped_placeholders.len()),
+            why: format!(
+                "{} name no specific part, so they cannot be matched to the board",
+                skipped_placeholders.join(", ")
+            ),
+        });
+    }
+    (contributed, ignored)
 }
 
 /// One artifact's claim about what one reference designator is.
@@ -1035,20 +1081,22 @@ pub(crate) struct Table {
 /// Shared with the placement reader, which needs all three for the same reasons.
 pub(crate) fn decode(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    let text = match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        // Spreadsheet exports commonly use Windows-1252. Its 0x80..0x9f range
-        // is punctuation and currency symbols, not the Latin-1 control range,
-        // so a byte-for-codepoint fallback corrupts ordinary descriptions and
-        // part numbers.
-        Err(_) => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
-    };
+    // Spreadsheet exports commonly use Windows-1252. Its 0x80..0x9f range
+    // is punctuation and currency symbols, not the Latin-1 control range,
+    // so a byte-for-codepoint fallback corrupts ordinary descriptions and
+    // part numbers.
+    let text = std::str::from_utf8(bytes).map_or_else(
+        |_| encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
+        str::to_string,
+    );
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// Hex SHA-256, for provenance. Hand-rolled because this crate has no hash
 /// dependency and one 40-line function is a smaller commitment than a new
 /// entry in the workspace's dependency audit.
+// FIPS 180-4 constants are quoted as published; eight words need no buffer reuse.
+#[allow(clippy::unreadable_literal, clippy::format_collect)]
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -1189,8 +1237,7 @@ pub(crate) fn sniff_delimiter(line: &str) -> char {
             Some((_, bn)) if bn >= n => best,
             _ => Some((d, n)),
         })
-        .map(|(d, _)| d)
-        .unwrap_or(',')
+        .map_or(',', |(d, _)| d)
 }
 
 /// Normalise a header for matching: drop the byte-order mark, the quotes, the
@@ -1536,8 +1583,10 @@ fn classify_headers(keys: &[String]) -> Option<BomDialect> {
 /// anywhere else, and `Part` / `Device` are the Eagle partlist's own reference
 /// and footprint columns while `Part` is only a guess in a spreadsheet.
 fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, MappingConfidence)> {
-    use ColumnRole::*;
-    use MappingConfidence::*;
+    use ColumnRole::{
+        DistributorPart, Footprint, Manufacturer, Mpn, Populate, Quantity, Reference, Value,
+    };
+    use MappingConfidence::{Certain, Guess, Likely};
     let eagle = dialect.is_some_and(BomDialect::is_fixed_width);
     let comment_is_value = dialect.is_some_and(BomDialect::comment_is_value);
 
@@ -1560,17 +1609,19 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         | "bottom_designator"
         | "topdesignator"
         | "bottomdesignator"
-        | "component_reference" => push(Reference, Likely),
-        "parts" => push(Reference, Likely),
+        | "component_reference"
+        | "parts" => push(Reference, Likely),
         "part" => push(Reference, if eagle { Certain } else { Guess }),
-        "customer_reference" | "component_number_on_pcb" => push(Reference, Guess),
-        "component" | "item" | "row" => push(Reference, Guess),
+        "customer_reference" | "component_number_on_pcb" | "component" | "item" | "row" => {
+            push(Reference, Guess);
+        }
 
         // ── value ──
         "value" => push(Value, Certain),
-        "val" | "kicad_value" => push(Value, Likely),
+        "val" | "kicad_value" | "description_value" | "value_description" => {
+            push(Value, Likely);
+        }
         "comment" => push(Value, if comment_is_value { Likely } else { Guess }),
-        "description_value" | "value_description" => push(Value, Likely),
         "description" => push(Value, Guess),
 
         // ── manufacturer part number ──
@@ -1582,7 +1633,7 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         | "manufacturer_part_no"
         | "manufacturer_part" => push(Mpn, Certain),
         "partnumber" | "part_number" | "mfg_pn" | "mfr_pn" | "manufacturer_pn" | "part_no" => {
-            push(Mpn, Likely)
+            push(Mpn, Likely);
         }
 
         // ── manufacturer ──
@@ -1592,7 +1643,7 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         // ── quantity ──
         "quantity" | "qty" => push(Quantity, Certain),
         "quantity_per_pcb" | "quantity_1" | "quantity_per_side" | "qty_per_pcb" => {
-            push(Quantity, Likely)
+            push(Quantity, Likely);
         }
 
         // ── footprint ──
@@ -1639,6 +1690,7 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
 /// refuses with [`EXIT_INVALID_FOR_ANALYSIS`] naming the ambiguous column and
 /// how to resolve it. An interactive caller reads [`ColumnMap::left_unmapped`]
 /// and the refusal's own text to build the question it asks.
+#[allow(clippy::too_many_lines, reason = "one ordered mapping pass")]
 fn map_columns(
     table: &Table,
     dialect: BomDialect,
@@ -1813,22 +1865,22 @@ fn map_columns(
     // Reference is the join key: without a confident one nothing in the file
     // can be attached to a part, so this is a refusal rather than a note.
     if map.index_of(ColumnRole::Reference).is_none() {
-        return match map
+        let guess = map
             .left_unmapped
             .iter()
-            .find(|a| a.role == ColumnRole::Reference)
-        {
-            Some(guess) => Err(BomError::UnconfidentReferenceColumn {
-                name: name.to_string(),
-                candidate: guess.header.clone(),
-                headers: headers_list(),
-            }),
-            None => Err(BomError::NotABom {
+            .find(|a| a.role == ColumnRole::Reference);
+        return Err(guess.map_or_else(
+            || BomError::NotABom {
                 name: name.to_string(),
                 looked: MAX_BANNER_LINES,
                 example: "Designator".to_string(),
-            }),
-        };
+            },
+            |guess| BomError::UnconfidentReferenceColumn {
+                name: name.to_string(),
+                candidate: guess.header.clone(),
+                headers: headers_list(),
+            },
+        ));
     }
 
     let claimed: Vec<usize> = map
@@ -1849,13 +1901,7 @@ fn map_columns(
 
 fn columns_equivalent(table: &Table, left: usize, right: usize) -> bool {
     table.rows.iter().all(|row| {
-        let cell = |index| {
-            row.cells
-                .get(index)
-                .map(String::as_str)
-                .unwrap_or("")
-                .trim()
-        };
+        let cell = |index| row.cells.get(index).map_or("", String::as_str).trim();
         cell(left) == cell(right)
     })
 }
@@ -1910,10 +1956,7 @@ fn has_designator_shape(token: &str) -> bool {
     if token.len() > 12 {
         return false;
     }
-    let letters = token
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .count();
+    let letters = token.chars().take_while(char::is_ascii_alphabetic).count();
     if letters == 0 || letters > 4 {
         return false;
     }
@@ -1988,7 +2031,7 @@ pub(crate) fn split_references(cell: &str) -> (Vec<String>, Vec<String>) {
 }
 
 /// Singular or plural form, so a report never says "1 rows".
-fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
+const fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
     if n == 1 {
         one
     } else {
@@ -1998,7 +2041,7 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
 
 /// A quantity cell, which is sometimes `1`, sometimes `1 pc`, sometimes blank.
 fn parse_quantity(s: &str) -> Option<usize> {
-    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
 

@@ -8,7 +8,7 @@
 #
 # It also closes the loop on the datasheet. The entry says `is` was fitted so
 # that VBE lands on Figure 3's curve at IC = 50 mA. Running this deck through
-# ngspice gives V(base) = 0.70009 V with the collector at 7.0 V, which is
+# ngspice gives V(base) = 0.69997 V with the collector at 7.0 V, which is
 # exactly 50 mA through the 100 ohm collector resistor from a 12 V rail. So the
 # claim in the comment is now a number an independent simulator agrees with,
 # rather than an assertion about a fit nobody re-ran.

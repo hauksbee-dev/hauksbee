@@ -285,8 +285,12 @@ pub struct Spec {
     #[serde(default)]
     pub placement: Option<PathBuf>,
     /// Optional highest-priority model-library directory, resolved relative to
-    /// the spec. The browser stages selected model TOMLs here so Checks binds
-    /// against the same model context as report analysis and Live Sim.
+    /// the spec file. `hauksbee-ci run` and `check` load it above the builtin
+    /// db, packs and user model dirs; a missing directory is an error. A CLI
+    /// `--models-dir` replaces it for that run (the operator's setting wins,
+    /// as `$HAUKSBEE_MCU_DIR` does over `[mcu] descriptor_dir`). The browser
+    /// stages selected model TOMLs here so Checks binds against the same model
+    /// context as report analysis and Live Sim.
     #[serde(default)]
     pub models_dir: Option<PathBuf>,
     /// Optional assembly-variant TOML (`name`, `fit`, `no_fit`). Its exact
@@ -424,6 +428,10 @@ pub struct Spec {
     /// part of the TOML; filled in by [`Spec::load`].
     #[serde(skip)]
     pub base_dir: PathBuf,
+    /// Record every asserted net's per-frame series for `--waveforms`. Not
+    /// part of the TOML; set by the caller.
+    #[serde(skip)]
+    pub record_waveforms: bool,
 }
 
 /// The spec's `mcu` key: a bare string (`mcu = "atmega328p"`) is the legacy

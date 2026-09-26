@@ -335,7 +335,7 @@ enum ModelsCommand {
     /// Show, per board component, which model entry won and from which layer.
     Resolve(ModelsResolveArgs),
     /// Draft a device model from a PDF datasheet. Asks first: this sends the
-    /// datasheet's text to an LLM backend.
+    /// datasheet, and whatever the agent reads, to an LLM backend.
     Extract(ModelsExtractArgs),
     /// Scaffold a model entry for one board component, pre-seeded only from
     /// the board's own identity (reference and value). It never invents

@@ -3849,6 +3849,9 @@ impl Scheduler {
         // left the toggle count identical). The first chunk has nothing to carry
         // and keeps its power-on solve; `FromZero` states its own start.
         let mut opts = opts;
+        // A march that keeps failing Newton hands the chunk to the ladder
+        // instead of grinding (see `SolverOptions::max_failed_steps`).
+        opts.max_failed_steps = Some(64);
         if seed.is_some() && opts.dc_init == DcInit::Solve {
             opts.dc_init = DcInit::Continue;
         } else if self.latching && self.last_switch_latch.is_none() && opts.dc_init == DcInit::Solve

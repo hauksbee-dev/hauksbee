@@ -4,7 +4,7 @@ use hauksbee_extract::ExtractedBoard;
 use std::path::PathBuf;
 
 /// `testdata/pic_programmer.d356` is KiCad's own IPC-D-356 export of the
-/// pic_programmer demo. Every multi-member net must be internally consistent
+/// `pic_programmer` demo. Every multi-member net must be internally consistent
 /// and the export must carry the board's real net count.
 #[test]
 fn ipc356_export_reads_with_full_connectivity() {

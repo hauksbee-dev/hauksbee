@@ -91,7 +91,7 @@ tokio = { version = "1.52.3", features = [
 ] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 rust-embed = { version = "8", optional = true }
-toml = "0.8"
+toml = "1"
 # Watch mode (`hauksbee watch`): cross-platform filesystem notifications. Default
 # features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
 # on Linux/Windows); the recommended-watcher + watch-a-dir-and-filter pattern

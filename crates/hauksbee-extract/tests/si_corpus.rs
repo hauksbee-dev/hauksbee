@@ -1,6 +1,6 @@
 //! Corpus-gated calibration guard for the four signal-integrity checks
-//! (`--si`). The binding discipline (docs/evidence/FAMOUS_SWEEP.md,
-//! docs/evidence/KNOWN_FAULTS_VALIDATION.md): **zero true findings on the known-good
+//! (`--si`). The binding discipline (`docs/evidence/FAMOUS_SWEEP.md`,
+//! `docs/evidence/KNOWN_FAULTS_VALIDATION.md)`: **zero true findings on the known-good
 //! corpus, or the check does not fire.** These boards are shipped, working,
 //! reviewed designs, so any high/medium/low SI finding on them is a hauksbee
 //! false positive that must be chased to the file and killed before the check is
@@ -89,9 +89,9 @@ fn run_si(path: &PathBuf) -> Option<hauksbee_extract::SiReport> {
 /// THE GATE: no SI check fires (high/medium/low) on any known-good corpus board.
 /// The zero-false-positive gate over the whole known-good corpus.
 ///
-/// Currently reports 11 findings, all antenna_keepout on Olimex ESP32-EVB
+/// Currently reports 11 findings, all `antenna_keepout` on Olimex ESP32-EVB
 /// revisions, all ground copper in the WROOM band. See the doc comment on
-/// olimex_wroom_antenna_keepout_is_clear for the geometry; until that question
+/// `olimex_wroom_antenna_keepout_is_clear` for the geometry; until that question
 /// is settled this cannot distinguish a false alarm from a true finding, and
 /// silencing it by whitelisting the boards would hide whichever it turns out
 /// to be.
@@ -138,9 +138,10 @@ fn si_checks_are_silent_on_the_entire_known_good_corpus() {
 #[test]
 fn rp2040_abm8_272_load_is_info_within_tolerance() {
     let Some(path) = corpus_board(RP2040_MINIMAL_R2) else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("RP2040 minimal missing under required corpus");
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "RP2040 minimal missing under required corpus"
+        );
         return;
     };
     let report = run_si(&path).expect("RP2040 minimal must extract");
@@ -164,7 +165,7 @@ fn rp2040_abm8_272_load_is_info_within_tolerance() {
 }
 
 /// The ZSWatch mainboard's busiest I2C bus (the 8-device Extension bus, 1.8 kohm
-/// pull) computes t_r ~ 122 ns, far under the standard-mode 1000 ns: clean. This
+/// pull) computes `t_r` ~ 122 ns, far under the standard-mode 1000 ns: clean. This
 /// is the corpus's closest-to-the-limit I2C bus, so it is the discriminating
 /// no-fire (a regression that mis-scaled the RC, or counted the connector as a
 /// device, would push it over and this would go red as a finding).
@@ -172,9 +173,10 @@ fn rp2040_abm8_272_load_is_info_within_tolerance() {
 fn zswatch_busy_i2c_bus_rise_time_is_clean() {
     let Some(path) = corpus_board(&["famous/zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb"])
     else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("ZSWatch mainboard missing under required corpus");
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "ZSWatch mainboard missing under required corpus"
+        );
         return;
     };
     let report = run_si(&path).expect("ZSWatch mainboard must extract");
@@ -221,9 +223,10 @@ fn olimex_wroom_antenna_keepout_is_clear() {
     let Some(path) =
         corpus_board(&["famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb"])
     else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("Olimex ESP32-EVB REV-L missing under required corpus");
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "Olimex ESP32-EVB REV-L missing under required corpus"
+        );
         return;
     };
     let report = run_si(&path).expect("Olimex ESP32-EVB REV-L must extract");
@@ -293,9 +296,10 @@ fn rp2040_no_stackup_impedance_is_info_only() {
 #[test]
 fn watchy_usb_impedance_computed_but_info_uncontrolled() {
     let Some(path) = corpus_board(&["famous/watchy/Watchy.kicad_pcb"]) else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("Watchy missing under required corpus");
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "Watchy missing under required corpus"
+        );
         return;
     };
     let report = run_si(&path).expect("Watchy must extract");

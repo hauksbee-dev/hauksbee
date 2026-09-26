@@ -639,7 +639,7 @@ fn stale_overlap(a: &Assertion, out: &RunOutcome) -> Option<((f64, f64), (f64, f
 /// (the scoped scenario start is not reachable here); this only ever bites a run
 /// that actually diverged, which must be INVALID regardless, so the conservatism
 /// is in the honest direction.
-fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
+pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
         "voltage" | "pulse_width" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),

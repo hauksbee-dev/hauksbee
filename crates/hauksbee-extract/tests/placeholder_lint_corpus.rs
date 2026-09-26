@@ -120,20 +120,33 @@ fn message_names(message: &str, reference: &str) -> bool {
 /// (`board-corpus/famous/<id>`) and fetch (`board-corpus/<id>`) layouts - and
 /// hybrids - without caring which level the boards sit at.
 fn boards_root() -> Option<PathBuf> {
-    match hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) {
-        Some(p) => Some(p),
-        None => {
-            if hauksbee_testkit::require_assets() {
-                panic!("HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing");
-            }
-            eprintln!("board-corpus absent; skipping placeholder-lint corpus gate");
-            None
-        }
+    let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"));
+    if dir.is_none() {
+        assert!(
+            !hauksbee_testkit::require_assets(),
+            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing"
+        );
+        eprintln!("board-corpus absent; skipping placeholder-lint corpus gate");
     }
+    dir
 }
 
 fn exclusion_reason(path: &Path, root: &Path) -> Option<String> {
     hauksbee_testkit::not_known_good(path, root)
+}
+
+/// Every extraction path the lint runs on. `.kicad_sch` goes through the
+/// schematic extractor; the rest through format auto-detection. Parse
+/// defensively: a file the extractor cannot read is a coverage gap for a
+/// different test, not a placeholder-lint false positive.
+fn load(p: &Path) -> Option<ExtractedBoard> {
+    match p.extension().and_then(|x| x.to_str()).unwrap_or("") {
+        "kicad_sch" => ExtractedBoard::from_kicad_schematic_path(p).ok(),
+        "kicad_pcb" | "net" | "brd" => {
+            ExtractedBoard::from_auto(&std::fs::read_to_string(p).ok()?).ok()
+        }
+        _ => None,
+    }
 }
 
 #[test]
@@ -193,35 +206,14 @@ fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
                 // BOMs" gate on files that were never a BOM says nothing either
                 // way. They stay in the geometric gates, where being a demo does
                 // not change what the copper does.
-                if p.file_name().and_then(|s| s.to_str()) == Some("kicad_demos")
-                    || p.file_name().and_then(|s| s.to_str()) == Some("kicad-demos-src")
-                {
+                let name = p.file_name().and_then(|s| s.to_str());
+                if matches!(name, Some("kicad_demos" | "kicad-demos-src")) {
                     continue;
                 }
                 stack.push(p);
                 continue;
             }
-            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
-            // Every extraction path the lint runs on. `.kicad_sch` goes through
-            // the schematic extractor; the rest through format auto-detection.
-            // Parse defensively: a file the extractor cannot read is a coverage
-            // gap for a different test, not a placeholder-lint false positive.
-            let board = match ext {
-                "kicad_sch" => match ExtractedBoard::from_kicad_schematic_path(&p) {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                },
-                "kicad_pcb" | "net" | "brd" => {
-                    let Ok(text) = std::fs::read_to_string(&p) else {
-                        continue;
-                    };
-                    match ExtractedBoard::from_auto(&text) {
-                        Ok(b) => b,
-                        Err(_) => continue,
-                    }
-                }
-                _ => continue,
-            };
+            let Some(board) = load(&p) else { continue };
             exercised += 1;
             for f in board.net_lint().of_check(LintCheck::PlaceholderValue) {
                 if !matches!(f.severity, Severity::Medium | Severity::High) {

@@ -648,7 +648,7 @@ mod relative_path_tests {
     #[test]
     fn windows_separators_are_escaped_for_toml() {
         let encoded = toml_path(r"..\hardware\blinky.kicad_pcb".to_string());
-        let parsed: toml::Value = format!("board = {encoded}").parse().unwrap();
+        let parsed: toml::Value = toml::from_str(&format!("board = {encoded}")).unwrap();
         assert_eq!(
             parsed["board"].as_str(),
             Some(r"..\hardware\blinky.kicad_pcb")

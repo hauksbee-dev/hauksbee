@@ -751,18 +751,46 @@ impl Drop for DescriptorDirGuard {
 /// [`SpecError::Invalid`] when the spec's `models_dir` is not a readable
 /// directory, plus every error [`run_spec_with_lib`] returns.
 pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOutcome>, SpecError> {
-    let models_dir = spec.models_dir_path();
-    if let Some(path) = &models_dir {
-        if !path.is_dir() {
-            return Err(SpecError::Invalid(format!(
-                "models_dir '{}' is not a readable directory",
-                path.display()
-            )));
-        }
+    run_spec_with_lib(spec, only_seed, &spec_model_library(spec, None)?)
+}
+
+/// The layered model library a spec binds against.
+///
+/// The layers are builtin → packs → user dirs → the spec's `models_dir`
+/// (resolved against the spec file), or `cli_dir` in its place when given,
+/// since an operator's flag outranks the file (the `$HAUKSBEE_MCU_DIR` over
+/// `[mcu] descriptor_dir` rule).
+///
+/// # Errors
+///
+/// [`SpecError::Invalid`] for a missing directory or a card that fails to
+/// load: never an empty layer.
+pub fn spec_model_library(
+    spec: &Spec,
+    cli_dir: Option<&std::path::Path>,
+) -> Result<ModelLibrary, SpecError> {
+    let mut lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    let (dir, origin) = cli_dir.map_or_else(
+        || (spec.models_dir_path(), "the spec's models_dir"),
+        |dir| (Some(dir.to_path_buf()), "--models-dir"),
+    );
+    let Some(dir) = dir else { return Ok(lib) };
+    if !dir.is_dir() {
+        return Err(SpecError::Invalid(format!(
+            "{origin} '{}' is not a readable directory",
+            dir.display()
+        )));
     }
-    let extra: Vec<&std::path::Path> = models_dir.as_deref().into_iter().collect();
-    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
-    run_spec_with_lib(spec, only_seed, &lib)
+    let errors: Vec<String> = lib
+        .load_models_dir(&dir)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    if errors.is_empty() {
+        Ok(lib)
+    } else {
+        Err(SpecError::Invalid(errors.join("\n")))
+    }
 }
 
 /// [`run_spec_seeded`] against an explicit, already-built model library (how
@@ -1982,6 +2010,9 @@ fn run_one(
             .filter(|a| a.kind == "pulse_width" || (a.kind == "toggle" && a.min_toggles.is_none()))
             .filter_map(|a| a.net.clone()),
     );
+    if spec.record_waveforms {
+        series_nets.extend(spec.asserts.iter().filter_map(|a| a.net.clone()));
+    }
     let mut net_series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
 
     // The transient is where the minutes go, so it is the phase worth reporting

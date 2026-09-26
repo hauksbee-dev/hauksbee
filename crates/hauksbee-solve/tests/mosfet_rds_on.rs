@@ -15,7 +15,7 @@
 
 use crate::shared::{add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, MosLevel, MosfetModel, NodeId, Polarity};
-use hauksbee_solve::{run_op, Probe, SolverOptions};
+use hauksbee_solve::{run_op, run_tran, Probe, SolverOptions, StepControl};
 
 /// A power-NMOS model whose channel is a small fraction of `rd + rs` at high
 /// Vgs, so the on-state drop is set by the series resistance. Moderate KP so
@@ -150,5 +150,47 @@ fn symmetric_rd_rs_is_swap_invariant() {
     assert!(
         diff < 1e-6,
         "symmetric FET must be drain/source-swap invariant: {v_normal} vs {v_swapped}"
+    );
+}
+
+/// The gate charge lives behind rs (on the internal source), so the history the
+/// transient stores for it must be read there too. Read at the external pin,
+/// every step re-integrated a charge error of `Cgs*I*rs` into a spurious gate
+/// current (a 300 MHz self-sustaining ring on the Olimex EVB's load switch).
+/// A conducting FET at steady state draws no gate current: V(g) holds.
+#[test]
+fn gate_charge_history_reads_internal_source() {
+    let mut c = Circuit::new();
+    let (nvdd, nd, ng, nvg) = (c.node("vdd"), c.node("d"), c.node("g"), c.node("vg"));
+    add_vdc(&mut c, "VDD", nvdd, NodeId::GROUND, 5.0);
+    add_resistor(&mut c, "RL", nvdd, nd, 10.0);
+    add_vdc(&mut c, "VG", nvg, NodeId::GROUND, 5.0);
+    add_resistor(&mut c, "RG", nvg, ng, 10e3);
+    let model = MosfetModel {
+        cgs_ov: 1e-9,
+        cgd_ov: 1e-10,
+        ..power_nmos(0.25, 0.25)
+    };
+    c.add(Device::Mosfet {
+        name: "M1".into(),
+        d: nd,
+        g: ng,
+        s: NodeId::GROUND,
+        b: None,
+        model,
+    });
+    let opts = SolverOptions {
+        step: StepControl::Fixed { dt: 1e-9 },
+        ..SolverOptions::default()
+    };
+    let out = run_tran(&c, &opts, 2e-7, &[Probe::NodeVoltage("g".into())]).expect("tran runs");
+    let worst = out
+        .column("V(g)")
+        .unwrap()
+        .iter()
+        .fold(0.0f64, |m, v| m.max((v - 5.0).abs()));
+    assert!(
+        worst < 1e-6,
+        "steady conducting FET must hold its gate; V(g) moved {worst:e} V"
     );
 }

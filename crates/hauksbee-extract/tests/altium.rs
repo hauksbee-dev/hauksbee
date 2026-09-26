@@ -18,6 +18,7 @@ use std::io::{Cursor, Write};
 const MM_PER_UNIT: f64 = 2.54e-6;
 
 /// Altium coordinate (i32 internal units) from millimetres.
+#[allow(clippy::cast_possible_truncation, reason = "test coordinates fit i32")]
 fn unit(mm: f64) -> i32 {
     (mm / MM_PER_UNIT).round() as i32
 }
@@ -27,14 +28,14 @@ fn unit(mm: f64) -> i32 {
 fn props(s: &str) -> Vec<u8> {
     let mut body = s.as_bytes().to_vec();
     body.push(0); // trailing NUL, counted in the length
-    let mut out = (body.len() as u32).to_le_bytes().to_vec();
+    let mut out = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
     out.extend_from_slice(&body);
     out
 }
 
 /// A sub-record: u32 length then the payload.
 fn subrecord(payload: &[u8]) -> Vec<u8> {
-    let mut out = (payload.len() as u32).to_le_bytes().to_vec();
+    let mut out = u32::try_from(payload.len()).unwrap().to_le_bytes().to_vec();
     out.extend_from_slice(payload);
     out
 }
@@ -52,7 +53,7 @@ fn pad_record(
 ) -> Vec<u8> {
     let mut rec = vec![0x02u8];
     // Sub-record 1: a Pascal string (1-byte len + bytes) holding the designator.
-    let mut s1 = vec![name.len() as u8];
+    let mut s1 = vec![u8::try_from(name.len()).unwrap()];
     s1.extend_from_slice(name.as_bytes());
     rec.extend(subrecord(&s1));
     // Sub-records 2,3,4: empty.
@@ -109,11 +110,11 @@ fn text_record(component: u16, text: &str, is_comment: bool, is_designator: bool
     // Sub-record 1: 252 bytes, the length real exports use.
     let mut p = vec![0u8; 252];
     p[7..9].copy_from_slice(&component.to_le_bytes());
-    p[40] = is_comment as u8;
-    p[41] = is_designator as u8;
+    p[40] = u8::from(is_comment);
+    p[41] = u8::from(is_designator);
     rec.extend(subrecord(&p));
     // Sub-record 2: the text as a Pascal string.
-    let mut t = vec![text.len() as u8];
+    let mut t = vec![u8::try_from(text.len()).unwrap()];
     t.extend_from_slice(text.as_bytes());
     rec.extend(subrecord(&t));
     rec
@@ -174,7 +175,7 @@ fn two_net_board(comps: Vec<u8>, pads: Vec<u8>) -> ExtractedBoard {
 }
 
 /// Two resistors, R1 and R2, sharing a net N1 across their inner pads and each
-/// with an outer pad on its own net (N0_VCC, N2_GND). Plus a track on N1.
+/// with an outer pad on its own net (`N0_VCC`, `N2_GND`). Plus a track on N1.
 fn two_resistor_board() -> Vec<u8> {
     // Nets6: index 0 = VCC, 1 = MID, 2 = GND.
     let mut nets = Vec::new();
@@ -917,12 +918,12 @@ fn shaped_pad_record(
     component: u16,
     x_mm: f64,
     y_mm: f64,
-    size_x_mm: f64,
-    size_y_mm: f64,
+    width_mm: f64,
+    height_mm: f64,
     shape: u8,
 ) -> Vec<u8> {
     let mut rec = vec![0x02u8];
-    let mut s1 = vec![name.len() as u8];
+    let mut s1 = vec![u8::try_from(name.len()).unwrap()];
     s1.extend_from_slice(name.as_bytes());
     rec.extend(subrecord(&s1));
     rec.extend(subrecord(&[]));
@@ -934,8 +935,8 @@ fn shaped_pad_record(
     g[7..9].copy_from_slice(&component.to_le_bytes());
     g[13..17].copy_from_slice(&unit(x_mm).to_le_bytes());
     g[17..21].copy_from_slice(&unit(y_mm).to_le_bytes());
-    g[21..25].copy_from_slice(&unit(size_x_mm).to_le_bytes());
-    g[25..29].copy_from_slice(&unit(size_y_mm).to_le_bytes());
+    g[21..25].copy_from_slice(&unit(width_mm).to_le_bytes());
+    g[25..29].copy_from_slice(&unit(height_mm).to_le_bytes());
     g[49] = shape;
     rec.extend(subrecord(&g));
     rec.extend(subrecord(&[]));

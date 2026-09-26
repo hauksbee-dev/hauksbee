@@ -1298,7 +1298,8 @@ pub fn extract(
         .effort(effort)
         .backend(backend)
         .api_base(api_base)
-        .api_key_env(api_key_env);
+        .api_key_env(api_key_env)
+        .checker(std::env::current_exe().ok());
 
     // Resolve (and therefore any bad config file) before consent, not after:
     // the user is told exactly what is about to read their datasheet, and a
@@ -3069,9 +3070,8 @@ mcu_label = "test part"
     fn scaffold_toml_quotes_keep_regex_backslashes_and_quotes_valid() {
         for value in ["LM358(A)+", "vendor\\\"part", "line\npart"] {
             let encoded = toml_quote(value);
-            let parsed: toml::Value = format!("value = {encoded}")
-                .parse()
-                .expect("quoted string is TOML");
+            let parsed: toml::Value =
+                toml::from_str(&format!("value = {encoded}")).expect("quoted string is TOML");
             assert_eq!(parsed["value"].as_str(), Some(value));
         }
     }

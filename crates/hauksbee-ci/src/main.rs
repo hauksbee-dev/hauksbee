@@ -197,6 +197,7 @@ struct RunArgs {
     /// the same layer order as `hauksbee run --models-dir`. Lets a spec's
     /// board bind custom parts checked into the hardware repo, including
     /// `[[models]] kind = "mcu"` routing entries for user `SoC` descriptors.
+    /// Replaces the spec's `models_dir` key for this run.
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
 
@@ -206,6 +207,12 @@ struct RunArgs {
     /// own name, above every model directory.
     #[arg(long, value_name = "FILE")]
     spice_models: Vec<PathBuf>,
+
+    /// Write the sampled time series of every net an assertion names, per
+    /// seed, as `time_s,<net>` CSV under DIR/<spec-stem>/ (whole run plus each
+    /// assertion's window, with an index.json). Opt-in; the report is unchanged.
+    #[arg(long, value_name = "DIR")]
+    waveforms: Option<PathBuf>,
 
     /// Write a canonical, immutable JSON reproduction manifest. It hashes the
     /// specs and every resolved board/firmware/overlay/model/trace input,
@@ -234,6 +241,7 @@ struct CheckArgs {
     /// and user model dirs. Uses the same authority as `run --models-dir`, so
     /// BOM/placement identity reconciliation cannot disagree between check and
     /// run merely because a repository carries custom parts.
+    /// Replaces the spec's `models_dir` key for this run.
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
 
@@ -359,6 +367,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
             seed: args.seed,
             models_dir: args.models_dir.clone(),
             spice_models: args.spice_models.clone(),
+            waveforms: args.waveforms.clone(),
         };
         match run(&cfg) {
             Ok(result) => {
@@ -625,7 +634,7 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         .enumerate()
         .filter(|_| args.example.is_none())
     {
-        spec_inputs(&mut inputs, index, spec_path)?;
+        spec_inputs(&mut inputs, index, spec_path, args.models_dir.is_none())?;
     }
     if let Some(path) = &args.models_dir {
         inputs.push(ManifestInput::new("models_dir", path));
@@ -643,6 +652,7 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         ("quiet".into(), serde_json::json!(args.quiet)),
         ("seed".into(), serde_json::json!(args.seed)),
         ("spice_models".into(), serde_json::json!(args.spice_models)),
+        ("waveforms".into(), serde_json::json!(args.waveforms)),
         (
             "specs".into(),
             if args.example.is_some() {
@@ -686,10 +696,12 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
 
 /// The manifest inputs one spec (the `index`th) reads: the spec, its board and
 /// sidecars, every optional file it names, and its sensor and trace data.
+/// `spec_models_dir` is false when `--models-dir` replaces the spec's own.
 fn spec_inputs(
     inputs: &mut Vec<hauksbee_engine::run_manifest::ManifestInput>,
     index: usize,
     spec_path: &std::path::Path,
+    spec_models_dir: bool,
 ) -> anyhow::Result<()> {
     use hauksbee_engine::run_manifest::{board_sidecar_inputs, ManifestInput};
 
@@ -709,6 +721,9 @@ fn spec_inputs(
     }
     if let Some(path) = spec.variant_path() {
         inputs.push(ManifestInput::new(format!("variant[{index}]"), path));
+    }
+    if let Some(path) = spec.models_dir_path().filter(|_| spec_models_dir) {
+        inputs.push(ManifestInput::new(format!("models_dir[{index}]"), path));
     }
     if let Some(path) = spec.firmware_path() {
         inputs.push(ManifestInput::new(

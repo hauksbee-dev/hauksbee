@@ -38,6 +38,7 @@ pub mod runner;
 pub mod scenarios;
 pub mod spec;
 pub mod tolerance;
+pub mod waveforms;
 
 pub use error::SpecError;
 pub use init::init;
@@ -76,12 +77,16 @@ pub struct RunConfig {
     pub seed: Option<u32>,
     /// Extra model directory, layered above the builtin db, installed packs,
     /// and the user model dirs; the same `--models-dir` layer `hauksbee run`
-    /// has, so a custom `[[models]]` routing entry binds in CI too.
+    /// has, so a custom `[[models]]` routing entry binds in CI too. Replaces
+    /// the spec's `models_dir` key when set.
     pub models_dir: Option<PathBuf>,
     /// Vendor SPICE model files whose `.model` / `.subckt` cards claim parts by
     /// card name, above every model directory; the same `--spice-models` flag
     /// `hauksbee run` has, so a board binds the same way in CI.
     pub spice_models: Vec<PathBuf>,
+    /// Write each seed's asserted-net series under this directory
+    /// (see [`waveforms`]). `None` records nothing extra.
+    pub waveforms: Option<PathBuf>,
 }
 
 /// Apply the board's waiver file to the evaluated assertion results.
@@ -216,26 +221,20 @@ fn union_across(
 #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
-    let spec = Spec::load(&cfg.spec)?;
-    let mut lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
-    if let Some(dir) = &cfg.models_dir {
-        let errors = lib.load_models_dir(dir);
-        if !errors.is_empty() {
-            return Err(SpecError::Invalid(
-                errors
-                    .into_iter()
-                    .map(|error| error.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
-        }
-    }
+    let mut spec = Spec::load(&cfg.spec)?;
+    spec.record_waveforms = cfg.waveforms.is_some();
+    let mut lib = runner::spec_model_library(&spec, cfg.models_dir.as_deref())?;
     for path in &cfg.spice_models {
         lib.load_spice_models(path)
             .map_err(|e| SpecError::Invalid(format!("{e:#}")))?;
     }
     let outcomes = runner::run_spec_with_lib(&spec, cfg.seed, &lib)?;
     let mut results = assertions::evaluate(&spec, &outcomes);
+    if let Some(dir) = &cfg.waveforms {
+        waveforms::export(dir, &cfg.spec, &spec, &outcomes).map_err(|e| {
+            SpecError::Invalid(format!("writing waveforms to {}: {e}", dir.display()))
+        })?;
+    }
 
     // Timing coverage is a validity contract, not an advisory note. One
     // unrepresentable request or one pulse the tick path demonstrably missed

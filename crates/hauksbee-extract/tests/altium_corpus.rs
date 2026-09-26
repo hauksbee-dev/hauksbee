@@ -194,7 +194,7 @@ fn partition_agreement(a: &ExtractedBoard, k: &ExtractedBoard) -> (f64, usize) {
     let pk = pin_to_net(k);
     let shared: Vec<&PinKey> = pa.keys().filter(|key| pk.contains_key(*key)).collect();
     let n = shared.len();
-    let (mut agree, mut total) = (0u64, 0u64);
+    let (mut agree, mut total) = (0u32, 0u32);
     for i in 0..n {
         for j in (i + 1)..n {
             let same_a = pa[shared[i]] == pa[shared[j]];
@@ -206,7 +206,7 @@ fn partition_agreement(a: &ExtractedBoard, k: &ExtractedBoard) -> (f64, usize) {
         }
     }
     let pct = if total > 0 {
-        100.0 * agree as f64 / total as f64
+        100.0 * f64::from(agree) / f64::from(total)
     } else {
         100.0
     };

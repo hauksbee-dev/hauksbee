@@ -170,16 +170,13 @@ fn corpus_boards_have_no_true_shorts() {
         let Ok(text) = std::fs::read_to_string(board) else {
             continue;
         };
-        let report = match ExtractedBoard::drc(&text) {
-            Ok(r) => r,
-            Err(_) => {
-                // A handful of corpus boards are malformed at the s-expression
-                // level (e.g. RoyalBlue54L-Feather has a `)`-jammed token and
-                // an unbalanced paren) and forge-sexpr rejects them upstream of
-                // the DRC. That is a parser/data issue, not a short, so skip it.
-                skipped += 1;
-                continue;
-            }
+        let Ok(report) = ExtractedBoard::drc(&text) else {
+            // A handful of corpus boards are malformed at the s-expression
+            // level (e.g. RoyalBlue54L-Feather has a `)`-jammed token and
+            // an unbalanced paren) and forge-sexpr rejects them upstream of
+            // the DRC. That is a parser/data issue, not a short, so skip it.
+            skipped += 1;
+            continue;
         };
         scanned += 1;
         total_clearance += report.clearance_violations().count();
@@ -212,12 +209,7 @@ fn corpus_boards_have_no_true_shorts() {
             offenders.push(format!(
                 "{file}: {} short(s) [{}]",
                 unexcused.len(),
-                unexcused
-                    .iter()
-                    .take(3)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                unexcused[..unexcused.len().min(3)].join(", ")
             ));
         }
     }

@@ -42,7 +42,7 @@ tempfile = { workspace = true }
 # conflicting `board`/`firmware` key with a clear message) and the staged
 # absolute paths are serialized as real TOML strings, never string-formatted,
 # so a path with a quote or backslash cannot corrupt the spec.
-toml = "0.8"
+toml = "1"
 # The run_script sandbox: an embedded QuickJS (bundled C, MIT licensed, no
 # system dependency). Chosen over a hand-rolled interpreter or a JS engine
 # service: the whole point is one self-contained binary an agent can launch.

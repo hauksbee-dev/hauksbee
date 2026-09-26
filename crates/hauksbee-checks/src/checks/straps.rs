@@ -77,22 +77,9 @@ pub fn strap_lint_with_drives(
         if model.straps.is_empty() {
             continue;
         }
-        // Map each strap role to the pad that carries it, then to the net.
         for strap in &model.straps {
-            // Find the pad whose role matches this strap.
-            let Some(pad_num) = model
-                .pins
-                .iter()
-                .find(|(_, role)| role.as_str() == strap.role)
-                .map(|(pad, _)| pad.clone())
-            else {
-                continue;
-            };
-            let Some(pin) = comp.pins.iter().find(|p| p.number == pad_num) else {
-                continue; // strap pad not present on this footprint instance
-            };
-            let Some(net_id) = pin.net else {
-                continue; // strap pad unrouted on a PCB-only input
+            let Ok((pad_num, net_id)) = strap_site(comp, model, strap) else {
+                continue; // `strap_coverage` names the unplaced strap
             };
             let Some(net) = board.net(net_id) else {
                 continue;
@@ -130,6 +117,74 @@ pub fn strap_lint_with_drives(
         }
     }
     report
+}
+
+/// Map a strap role to the pad that carries it, then to that pad's net, or say
+/// why the strap has no net to examine.
+fn strap_site(
+    comp: &Component,
+    model: &ModelEntry,
+    strap: &StrapPin,
+) -> Result<(String, i64), &'static str> {
+    let pad = model
+        .pins
+        .iter()
+        .find(|(_, role)| role.as_str() == strap.role)
+        .map(|(pad, _)| pad.clone())
+        .ok_or("the model maps no pad to it")?;
+    let pin = comp
+        .pins
+        .iter()
+        .find(|p| p.number == pad)
+        .ok_or("its pad is not on this footprint")?;
+    let net = pin.net.ok_or("its pad is unrouted")?;
+    Ok((pad, net))
+}
+
+/// One line per fitted part with a strap table.
+///
+/// It says how far the strap lint examined each strap. The lint only emits rows
+/// for faults, so without this a strap that was checked and found correct, a
+/// strap whose level is not judged, and a strap that could not be located all
+/// read as the same silence.
+#[must_use]
+pub fn strap_coverage(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<String> {
+    let mut lines = Vec::new();
+    for comp in &board.components {
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let res = resolve(lib, part);
+        let Some(model) = res.model.as_ref().filter(|m| !m.straps.is_empty()) else {
+            continue;
+        };
+        let each: Vec<String> = model
+            .straps
+            .iter()
+            .map(|strap| {
+                let (pad, net_id) = match strap_site(comp, model, strap) {
+                    Ok(site) => site,
+                    Err(why) => return format!("{} NOT checked ({why})", strap.role),
+                };
+                let name = board.net(net_id).map_or("?", |n| n.name.as_str());
+                let depth = if is_unconnected_net(name) || net_is_isolated_to(board, net_id, comp) {
+                    "unconnected, float check only"
+                } else if strap.boot_select && strap.level != StrapLevel::Defined {
+                    "clock source and pull bias checked"
+                } else {
+                    "clock source checked, bias level not judged (not a boot-select strap)"
+                };
+                format!("{} (pad {pad}, net '{name}'): {depth}", strap.role)
+            })
+            .collect();
+        lines.push(format!(
+            "strap pins on {} ({}): {}",
+            comp.reference,
+            model.id,
+            each.join("; ")
+        ));
+    }
+    lines
 }
 
 /// Inspect the members of one strap net and emit a finding if it cannot hold the
@@ -867,5 +922,48 @@ vih = [0.0, 2.0]
             &solved,
             &[(Medium, &["2.36-3.15 V", "4 rail corner(s)"])],
         );
+    }
+
+    /// A clean strap check says what it examined, and a strap it could not
+    /// locate says so, instead of both reading as silence (an ESP32-S3 module
+    /// with GPIO0 pulled up, GPIO46 on a signal net, and no GPIO45 pad).
+    #[test]
+    fn strap_coverage_names_checked_unjudged_and_unplaced_straps() {
+        let mut module = part(
+            "U3",
+            "ESP32-S3-WROOM-1-N8R8",
+            &[("2", 2), ("27", 3), ("16", 6)],
+        );
+        module.footprint = "RF_Module:ESP32-S3-WROOM-1".into();
+        let parts = vec![
+            module,
+            pull("R1", "10k", 2),
+            part("U4", "74HC04", &[("1", 6)]),
+        ];
+        let b = strap_board("+3V3", "/BOOT", parts);
+        let lib = library();
+        assert_eq!(
+            strap_lint(&b, &lib).of_check(LintCheck::StrapPin).count(),
+            0
+        );
+        let lines = strap_coverage(&b, &lib);
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        for needle in [
+            "strap pins on U3 (esp32s3_wroom)",
+            "gpio0 (pad 27, net '/BOOT'): clock source and pull bias checked",
+            "gpio46 (pad 16, net '/OSC_EN'): clock source checked, bias level not judged",
+            "gpio45 NOT checked (its pad is not on this footprint)",
+        ] {
+            assert!(lines[0].contains(needle), "{needle}: {}", lines[0]);
+        }
+        // An unrecognised package keeps no strap table: no coverage line, and
+        // the unchecked-MCU note says the straps were not checked.
+        let bare = strap_board("+3V3", "/BOOT", vec![part("U3", "ESP32-S3", &[("2", 2)])]);
+        assert!(strap_coverage(&bare, &lib).is_empty());
+        let note = super::super::mcu_coverage::mcu_coverage_lint(&bare, &lib);
+        assert!(note
+            .findings
+            .iter()
+            .any(|f| f.message.contains("were NOT checked")));
     }
 }

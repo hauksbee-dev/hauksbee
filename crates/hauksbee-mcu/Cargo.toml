@@ -42,7 +42,7 @@ serde = { workspace = true }
 # parsed into RenodeConfig/QemuConfig through one validated path. `toml` is the
 # file format; `thiserror` gives the loader the same named-error style
 # sensor_spec.rs uses (unknown backend, zero-width port, duplicate controller…).
-toml = "0.8"
+toml = "1"
 thiserror = { workspace = true }
 # ELF -> merged-flash-image conversion for the QEMU backend (see the `qemu`
 # feature note above). default-features = false drops the CLI and serialport

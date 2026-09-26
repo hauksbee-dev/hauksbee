@@ -7,8 +7,9 @@
 //! that fires on healthy boards trains the user to ignore it.
 
 use crate::shared::add_vdc;
-use hauksbee_ir::{Circuit, Device, NodeId};
-use hauksbee_solve::{blame, dc_operating_point, SolverOptions, Workspace};
+use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId};
+use hauksbee_solve::{blame, dc_operating_point, run_tran, Probe, SolverOptions, Workspace};
+use hauksbee_testkit::circuits::{diode, vpulse};
 
 fn r(name: &str, a: NodeId, b: NodeId, ohms: f64) -> Device {
     Device::resistor(name.to_string(), a, b, ohms)
@@ -100,4 +101,32 @@ fn a_microohm_link_is_named_as_the_element_to_look_at() {
         .expect("a stiff link is always worth naming on a failed solve");
     assert!(clause.contains("R1"), "{clause}");
     assert!(clause.contains("net 'VCC'"), "{clause}");
+}
+
+/// A march that keeps failing Newton stops at `max_failed_steps` with a stated
+/// refusal naming a net, instead of cutting dt toward dt_min for minutes (the
+/// MNT Reform chunk that ground through 600+ cuts). Unbudgeted, the same
+/// diode turn-on is solved by cutting the step.
+#[test]
+fn a_march_over_its_failed_step_budget_refuses_and_names_a_net() {
+    let mut c = Circuit::new();
+    let (vin, a) = (c.node("VIN"), c.node("A"));
+    vpulse(&mut c, "V1", vin, (0.0, 5.0), 1e-6, (1e-9, 1e-9), 1e-6);
+    c.add(r("R1", vin, a, 100.0));
+    diode(&mut c, "D1", a, NodeId::GROUND, DiodeModel::default());
+    let opts = SolverOptions {
+        max_newton: 3,
+        ..SolverOptions::default()
+    };
+    let probes = [Probe::NodeVoltage("A".into())];
+    run_tran(&c, &opts, 3e-6, &probes).expect("step cuts alone solve the turn-on");
+    let budgeted = SolverOptions {
+        max_failed_steps: Some(1),
+        ..opts
+    };
+    let msg = run_tran(&c, &budgeted, 3e-6, &probes)
+        .expect_err("two failed solves exceed a budget of one")
+        .to_string();
+    assert!(msg.contains("march budget"), "{msg}");
+    assert!(msg.contains("net '"), "the refusal must name a net: {msg}");
 }

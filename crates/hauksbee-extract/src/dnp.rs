@@ -18,6 +18,7 @@
 //! parts were fitted and which were left open, so the choice is never silent.
 
 use crate::{Component, ExtractedBoard};
+use std::fmt::Write as _;
 
 /// Resistance at or below which a two-terminal part counts as a link rather
 /// than a component: fitting it merges the nets on either side instead of
@@ -42,30 +43,32 @@ pub enum DnpPolicy {
 impl DnpPolicy {
     /// The one-line description a report prints so the default is never a
     /// surprise.
-    pub fn describe(self) -> &'static str {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
         match self {
-            DnpPolicy::FitExceptLinks => {
+            Self::FitExceptLinks => {
                 "DNP parts are simulated as fitted (they are usually placed eventually), \
                  except near-zero-ohm links, which stay open because fitting one merges \
                  the nets it bridges"
             }
-            DnpPolicy::FitAll => "every DNP part is simulated as fitted, including links",
-            DnpPolicy::Honour => {
-                "DNP parts are left out of the simulation, matching the board file"
-            }
+            Self::FitAll => "every DNP part is simulated as fitted, including links",
+            Self::Honour => "DNP parts are left out of the simulation, matching the board file",
         }
     }
 }
 
 /// Property key under which [`ExtractedBoard::apply_dnp_policy`] records WHY a
-/// left-open part is absent, so downstream classification
+/// left-open part is absent.
+///
+/// It exists so downstream classification
 /// ([`crate::assembly::AssemblyState::of`]) can hand the reason back without a
 /// side channel. The value is [`DnpReason::policy_tag`].
 pub const DNP_REASON_KEY: &str = "hauksbee.dnp_reason";
 
 /// Property key marking a component that was DNP in the source layout and is
-/// present only because the default fit policy assumed it will be placed
-/// eventually. Presence-class lints (a pull-up "exists") read this so a
+/// present only because the default fit policy assumed it will be placed.
+///
+/// Presence-class lints (a pull-up "exists") read this so a
 /// simulation convenience cannot silently satisfy an as-assembled claim: the
 /// board that ships does NOT carry the part. A part the user explicitly named
 /// as fitted carries no mark; that is a human decision about this build.
@@ -73,6 +76,7 @@ pub const DNP_FITTED_KEY: &str = "hauksbee.dnp_fitted_by_policy";
 
 /// True when this component was DNP in the source and is present only by the
 /// default fit policy (see [`DNP_FITTED_KEY`]).
+#[must_use]
 pub fn fitted_from_dnp_policy(c: &crate::Component) -> bool {
     c.properties.iter().any(|(key, _)| key == DNP_FITTED_KEY)
 }
@@ -94,38 +98,41 @@ pub enum DnpReason {
 }
 
 impl DnpReason {
-    pub fn describe(&self) -> &'static str {
+    #[must_use]
+    pub const fn describe(&self) -> &'static str {
         match self {
-            DnpReason::Policy => "DNP, fitted by default",
-            DnpReason::NamedFit => "DNP, fitted because you asked for it",
-            DnpReason::NamedOpen => "DNP, left open because you asked for it",
-            DnpReason::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
-            DnpReason::HonouredPolicy => "DNP, left open",
+            Self::Policy => "DNP, fitted by default",
+            Self::NamedFit => "DNP, fitted because you asked for it",
+            Self::NamedOpen => "DNP, left open because you asked for it",
+            Self::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
+            Self::HonouredPolicy => "DNP, left open",
         }
     }
 
     /// The stable tag stored under [`DNP_REASON_KEY`]. Round-trips through
     /// [`DnpReason::from_policy_tag`].
-    pub fn policy_tag(&self) -> &'static str {
+    #[must_use]
+    pub const fn policy_tag(&self) -> &'static str {
         match self {
-            DnpReason::Policy => "policy",
-            DnpReason::NamedFit => "named-fit",
-            DnpReason::NamedOpen => "named-open",
-            DnpReason::ZeroOhmLink => "zero-ohm-link",
-            DnpReason::HonouredPolicy => "honoured-policy",
+            Self::Policy => "policy",
+            Self::NamedFit => "named-fit",
+            Self::NamedOpen => "named-open",
+            Self::ZeroOhmLink => "zero-ohm-link",
+            Self::HonouredPolicy => "honoured-policy",
         }
     }
 
     /// Parse a [`DNP_REASON_KEY`] tag back into the reason. `None` for an
     /// unknown tag: a stale or foreign value must degrade to "the board file
     /// says DNP", never invent a decision.
-    pub fn from_policy_tag(tag: &str) -> Option<DnpReason> {
+    #[must_use]
+    pub fn from_policy_tag(tag: &str) -> Option<Self> {
         match tag {
-            "policy" => Some(DnpReason::Policy),
-            "named-fit" => Some(DnpReason::NamedFit),
-            "named-open" => Some(DnpReason::NamedOpen),
-            "zero-ohm-link" => Some(DnpReason::ZeroOhmLink),
-            "honoured-policy" => Some(DnpReason::HonouredPolicy),
+            "policy" => Some(Self::Policy),
+            "named-fit" => Some(Self::NamedFit),
+            "named-open" => Some(Self::NamedOpen),
+            "zero-ohm-link" => Some(Self::ZeroOhmLink),
+            "honoured-policy" => Some(Self::HonouredPolicy),
             _ => None,
         }
     }
@@ -149,12 +156,14 @@ pub struct DnpDecision {
 
 impl DnpDecision {
     /// True when the board had no DNP parts at all, so there is nothing to say.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.fitted.is_empty() && self.left_open.is_empty()
     }
 
     /// The lines a human-facing report prints. Empty when the board has no DNP
     /// parts, so a board without any never mentions the subject.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         if self.is_empty() {
             return Vec::new();
@@ -197,7 +206,7 @@ fn has_link_token(lower: &str) -> bool {
 /// electrical value BY DESIGN (the value field is empty or a bare mnemonic),
 /// so value-centric checks (the placeholder-value lint) must exempt it rather
 /// than demand a value be "set". Covers the KiCad conventions
-/// ("Jumper:SolderJumper_2_...", "NetTie-2_SMD_..."), vendor libraries that
+/// ("`Jumper:SolderJumper_2`_...", "NetTie-2_SMD_..."), vendor libraries that
 /// spell the word out ("OLIMEX_Jumpers-FP:SJ_1_SMALLER"), and the Eagle
 /// solder-jumper package family whose name is just "SJ" (the Arduino Uno's
 /// RESET-EN is library "jumper", package "SJ", value "").
@@ -268,6 +277,7 @@ pub(crate) fn is_eagle_copper_link_fields(value: &str, library: &str, package: &
     arduino_sj || sparkfun_closed_trace
 }
 
+#[must_use]
 pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
     is_jumper_or_net_tie_fields(&comp.value, &comp.lib_id, &comp.footprint)
 }
@@ -275,6 +285,7 @@ pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
 /// A two-terminal part whose value is a near-zero resistance, or a footprint
 /// that only exists to bridge copper. Fitting one merges the nets it sits
 /// between, so under the default policy it stays open.
+#[must_use]
 pub fn is_zero_ohm_link(comp: &Component) -> bool {
     if comp.pins.len() > 2 {
         return false;
@@ -333,6 +344,10 @@ impl ExtractedBoard {
     /// `fit` and `no_fit` name individual references and always win over the
     /// policy. An unknown reference in either list is an error: a typo must
     /// fail loudly rather than quietly change nothing.
+    ///
+    /// # Errors
+    /// [`crate::ExtractError::UnknownReference`] when `fit` or `no_fit` names a
+    /// reference not on the board, or names one reference in both lists.
     pub fn apply_dnp_policy(
         &mut self,
         policy: DnpPolicy,
@@ -343,7 +358,7 @@ impl ExtractedBoard {
             .iter()
             .chain(no_fit.iter())
             .filter(|r| !self.components.iter().any(|c| &c.reference == *r))
-            .map(|r| r.as_str())
+            .map(std::string::String::as_str)
             .collect();
         if !unknown.is_empty() {
             // Did-you-mean, matching the net-facing flags (--probe/--ac-node):
@@ -357,7 +372,7 @@ impl ExtractedBoard {
             for u in &unknown {
                 let near = nearest_references(u, &known, 3);
                 if !near.is_empty() {
-                    msg.push_str(&format!(" '{u}': did you mean {}?", near.join(", ")));
+                    let _ = write!(msg, " '{u}': did you mean {}?", near.join(", "));
                 }
             }
             msg.push_str(" Check the reference designators against the board.");
