@@ -89,3 +89,10 @@ pub use sim::{default_probes, run_ac, run_dc, run_op, run_tran, Probe, SimOutput
 pub use sparse::{SparseMatrix, Symbolic};
 pub use system::Layout;
 pub use transient::{StepSample, Transient, TransientDiagnostics, Waveforms};
+
+/// The node at dense index `i`. Dense node indices enumerate a circuit's
+/// `u32` node ids, so they always fit.
+#[allow(clippy::cast_possible_truncation)] // i < node_count, which is u32-bounded
+pub(crate) const fn node_id(i: usize) -> hauksbee_ir::NodeId {
+    hauksbee_ir::NodeId(i as u32)
+}

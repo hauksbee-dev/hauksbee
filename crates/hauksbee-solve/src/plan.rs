@@ -87,7 +87,29 @@ struct SlotTable {
     pos: Vec<u32>,
 }
 
+/// The distinct unknown indices of `idx`, in first-seen order.
+#[allow(clippy::cast_possible_truncation)] // unknown indices are u32-bounded
+pub fn distinct_u32(idx: impl IntoIterator<Item = usize>) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for i in idx {
+        if !out.contains(&(i as u32)) {
+            out.push(i as u32);
+        }
+    }
+    out
+}
+
+/// A device's non-ground terminal unknowns, then a series-R BJT's or MOSFET's
+/// intrinsic unknowns (the voltages its model evaluates live there), deduped.
+pub fn device_unknowns(layout: &Layout, dev: &Device, id: DeviceId) -> Vec<u32> {
+    let bjt = layout.bjt_internal(id).into_iter().flatten().flatten();
+    let mos = layout.mos_internal(id).into_iter().flatten().flatten();
+    let terminals = dev.nodes().into_iter().filter_map(|n| layout.node(n));
+    distinct_u32(terminals.chain(bjt.chain(mos).copied()))
+}
+
 impl SlotTable {
+    #[allow(clippy::cast_possible_truncation)] // slot positions index a u32-bounded row
     fn build(unknowns: Vec<u32>, matrix: &SparseMatrix) -> Self {
         let n = unknowns.len();
         let mut pos = vec![u32::MAX; n * n];
@@ -158,7 +180,13 @@ impl StampPlan {
     /// Compile the constant backbone and the tier-2 schedule of `circuit`
     /// against a frozen `matrix` pattern. The matrix must already have every
     /// slot reserved (see `reserve_pattern`).
+    ///
+    /// # Panics
+    ///
+    /// If `layout` does not belong to `circuit`: a branch-owning device (or a
+    /// controlling source) without its branch unknown.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one arm per device kind
     pub fn compile(circuit: &Circuit, layout: &Layout, matrix: &SparseMatrix) -> Self {
         let mut cond_ops = Vec::new();
         let mut reactive_ops = Vec::new();
@@ -170,24 +198,15 @@ impl StampPlan {
                          a: hauksbee_ir::NodeId,
                          b: hauksbee_ir::NodeId,
                          mult: f64| {
-            let ai = layout.node(a);
-            let bi = layout.node(b);
-            if let Some(ai) = ai {
-                if let Some(s) = matrix.slot(ai, ai) {
-                    ops.push((s.0, s.1, mult));
-                }
-            }
-            if let Some(bi) = bi {
-                if let Some(s) = matrix.slot(bi, bi) {
-                    ops.push((s.0, s.1, mult));
-                }
-            }
-            if let (Some(ai), Some(bi)) = (ai, bi) {
-                if let Some(s) = matrix.slot(ai, bi) {
-                    ops.push((s.0, s.1, -mult));
-                }
-                if let Some(s) = matrix.slot(bi, ai) {
-                    ops.push((s.0, s.1, -mult));
+            let (ai, bi) = (layout.node(a), layout.node(b));
+            for (r, c, v) in [
+                (ai, ai, mult),
+                (bi, bi, mult),
+                (ai, bi, -mult),
+                (bi, ai, -mult),
+            ] {
+                if let Some(s) = r.zip(c).and_then(|(r, c)| matrix.slot(r, c)) {
+                    ops.push((s.0, s.1, v));
                 }
             }
         };
@@ -202,31 +221,8 @@ impl StampPlan {
         // intrinsic nodes); the relocated core and the
         // ohmic couplings stamp there, and a table miss would fall back to
         // the slow row search every iteration.
-        let node_table = |dev: &Device, id: hauksbee_ir::DeviceId| {
-            let mut unknowns: Vec<u32> = Vec::new();
-            for n in dev.nodes() {
-                if let Some(i) = layout.node(n) {
-                    if !unknowns.contains(&(i as u32)) {
-                        unknowns.push(i as u32);
-                    }
-                }
-            }
-            if let Some(ints) = layout.bjt_internal(id) {
-                for i in ints.iter().flatten() {
-                    if !unknowns.contains(&(*i as u32)) {
-                        unknowns.push(*i as u32);
-                    }
-                }
-            }
-            if let Some(ints) = layout.mos_internal(id) {
-                for i in ints.iter().flatten() {
-                    if !unknowns.contains(&(*i as u32)) {
-                        unknowns.push(*i as u32);
-                    }
-                }
-            }
-            SlotTable::build(unknowns, matrix)
-        };
+        let node_table =
+            |dev: &Device, id: DeviceId| SlotTable::build(device_unknowns(layout, dev, id), matrix);
 
         for (id, dev) in circuit.iter() {
             match dev {
@@ -420,26 +416,13 @@ impl StampPlan {
                 // fallback would keep a miss correct, but the table is the
                 // point of the plan).
                 Device::Behavioral { .. } => {
-                    let mut unknowns: Vec<u32> = Vec::new();
-                    for n in dev.nodes() {
-                        if let Some(i) = layout.node(n) {
-                            if !unknowns.contains(&(i as u32)) {
-                                unknowns.push(i as u32);
-                            }
-                        }
-                    }
-                    if let Some(br) = layout.branch(id) {
-                        unknowns.push(br as u32);
-                    }
-                    for ctrl in dev.controlling_sources() {
-                        let cbr = layout
-                            .branch(ctrl)
+                    let terminals = dev.nodes().into_iter().filter_map(|n| layout.node(n));
+                    let ctrl = dev.controlling_sources().into_iter().map(|c| {
+                        layout
+                            .branch(c)
                             .expect("behavioral control source owns a branch")
-                            as u32;
-                        if !unknowns.contains(&cbr) {
-                            unknowns.push(cbr);
-                        }
-                    }
+                    });
+                    let unknowns = distinct_u32(terminals.chain(layout.branch(id)).chain(ctrl));
                     restamp.push(Restamp::Slotted {
                         id,
                         table: SlotTable::build(unknowns, matrix),
@@ -578,6 +561,7 @@ mod tests {
     /// Every device kind: the planned assembly reproduces the interpreted one
     /// entry-for-entry (matrix and RHS) at a non-trivial transient iterate.
     #[test]
+    #[allow(clippy::cast_precision_loss)] // small unknown indices seed the iterate
     fn planned_assembly_matches_interpreted_on_mixed_board() {
         let mut c = Circuit::new();
         let vin = c.node("vin");
@@ -708,7 +692,11 @@ mod tests {
         stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
         for i in 0..size {
             assert_eq!(m.row(i), m_ref.row(i), "dc fallback row {i}");
-            assert_eq!(rhs[i], rhs_ref[i], "dc fallback rhs {i}");
+            assert_eq!(
+                rhs[i].to_bits(),
+                rhs_ref[i].to_bits(),
+                "dc fallback rhs {i}"
+            );
         }
     }
 }

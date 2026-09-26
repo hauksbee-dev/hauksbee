@@ -115,6 +115,7 @@ impl BypassState {
     /// Build the caches for `circuit` against `layout`. Only Diode/BJT/MOSFET
     /// get an entry (the module-doc exclusion list); everything else keeps
     /// the plain interpreted stamp.
+    #[allow(clippy::cast_possible_truncation)] // unknown and cache indices are u32-bounded
     pub(crate) fn build(circuit: &Circuit, layout: &Layout) -> Self {
         let mut caches = Vec::new();
         let mut index = vec![u32::MAX; circuit.devices.len()];
@@ -126,34 +127,8 @@ impl BypassState {
             if !bypassable {
                 continue;
             }
-            let mut read_idx: Vec<u32> = Vec::new();
-            for n in dev.nodes() {
-                if let Some(i) = layout.node(n) {
-                    if !read_idx.contains(&(i as u32)) {
-                        read_idx.push(i as u32);
-                    }
-                }
-            }
-            // A series-R BJT's intrinsic unknowns: the junction voltages the
-            // model actually evaluates live there, so their movement counts
-            // as terminal movement.
-            if let Some(ints) = layout.bjt_internal(id) {
-                for i in ints.iter().flatten() {
-                    if !read_idx.contains(&(*i as u32)) {
-                        read_idx.push(*i as u32);
-                    }
-                }
-            }
-            // A series-R MOSFET's intrinsic drain/source unknowns: the channel,
-            // body-diode and gate-charge voltages the model evaluates live
-            // there, so their movement counts as terminal movement too.
-            if let Some(ints) = layout.mos_internal(id) {
-                for i in ints.iter().flatten() {
-                    if !read_idx.contains(&(*i as u32)) {
-                        read_idx.push(*i as u32);
-                    }
-                }
-            }
+            // Intrinsic unknowns included: their movement counts as terminal movement too.
+            let read_idx = crate::plan::device_unknowns(layout, dev, id);
             index[id.0 as usize] = caches.len() as u32;
             let n_reads = read_idx.len();
             caches.push(DevCache {
@@ -207,6 +182,7 @@ struct RecordingSink<'a> {
     rhs_rec: &'a mut Vec<(u32, f64)>,
 }
 
+#[allow(clippy::cast_possible_truncation)] // slots and rows index the u32-bounded unknowns
 impl StampSink for RecordingSink<'_> {
     #[inline]
     fn g(&mut self, row: usize, col: usize, v: f64) {
@@ -450,6 +426,7 @@ mod tests {
     /// only its readers; a new generation re-evaluates everything; a NaN
     /// iterate never replays.
     #[test]
+    #[allow(clippy::cast_precision_loss)] // small unknown indices seed the iterate
     fn bypass_replays_exactly_and_invalidates_correctly() {
         let mut rig = Rig::new(|i| ((i as f64) * 0.61).sin().mul_add(2.0, 0.4));
         for (i, v) in rig.state.x1.iter_mut().enumerate() {

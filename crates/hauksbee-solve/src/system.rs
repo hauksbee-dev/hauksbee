@@ -97,6 +97,12 @@ pub struct Layout {
 
 impl Layout {
     /// Build the layout for a circuit.
+    ///
+    /// # Panics
+    ///
+    /// If a coupling references a device that is not an inductor of this
+    /// circuit (a sub-circuit extraction that dropped a winding).
+    #[allow(clippy::too_many_lines)] // node, internal and branch numbering in one pass
     pub fn new(circuit: &Circuit) -> Self {
         let named_nodes = circuit.node_count().saturating_sub(1);
         let max_node = circuit.max_node() as usize;
@@ -107,9 +113,7 @@ impl Layout {
             // then append only the actually referenced out-of-band ids. This
             // keeps dense circuits bit-identical while a cut node such as
             // NodeId(800_000) costs one row, not 800_000 rows.
-            let mut node_of: Vec<NodeId> = (1..circuit.node_count())
-                .map(|i| NodeId(i as u32))
-                .collect();
+            let mut node_of: Vec<NodeId> = (1..circuit.node_count()).map(crate::node_id).collect();
             let mut extra: Vec<NodeId> = circuit
                 .devices
                 .iter()
@@ -314,7 +318,7 @@ impl Layout {
             return None;
         }
         match &self.node_map {
-            NodeMap::Dense => Some(NodeId((unknown + 1) as u32)),
+            NodeMap::Dense => Some(crate::node_id(unknown + 1)),
             NodeMap::Sparse { node_of, .. } => node_of.get(unknown).copied(),
         }
     }

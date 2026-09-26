@@ -57,6 +57,7 @@
 //! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
@@ -157,6 +158,13 @@ fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
     opts
 }
 
+/// Run a sound decomposition group by group on the capture/replay grid.
+///
+/// # Errors
+///
+/// Refuses an unsound decomposition, exogenous boundaries and adaptive step
+/// control; otherwise propagates a group's solve failure after escalation.
+#[allow(clippy::too_many_lines)] // the ordered group schedule, one arm per executor
 pub fn run_staged(
     circuit: &Circuit,
     decomp: &Decomposition,
@@ -188,15 +196,11 @@ pub fn run_staged(
             names.join(", ")
         )));
     }
-    let dt = match opts.step {
-        StepControl::Fixed { dt } => dt,
-        StepControl::Adaptive { .. } => {
-            return Err(SolveError::refused(
-                "staged execution requires fixed step control: the capture grid is the step \
-                 grid, and an adaptive run has no grid whose error the certificate could state",
-            ))
-        }
-    };
+    let dt = super::fixed_dt(
+        opts,
+        "staged execution requires fixed step control: the capture grid is the step \
+         grid, and an adaptive run has no grid whose error the certificate could state",
+    )?;
 
     // Sub-circuits are solved with the reference monolithic engine: Off is
     // bit-identical to the classic solver, so each group's answer carries no
@@ -391,40 +395,37 @@ pub fn run_staged(
                         &mut refusals,
                     )?
                 };
-                match exec {
-                    Some(exec) => {
-                        // Certificate: one record per boundary, and every one
-                        // joins the supply-integrity refusal (balanced, held,
-                        // and signal alike: all are pinned or re-grouped nodes
-                        // whose loading questions beyond the record's claim
-                        // must be refused; pinning removed the sag they ask
-                        // about).
-                        for o in &exec.outcomes {
-                            let gnode = NodeId(l2g[&o.node.0]);
-                            certificate_stiff.push(boundary_tear_record(o, gnode));
-                            certificate_refused_nodes.push(gnode);
-                            stiff_outcomes.push((
-                                g,
-                                StiffOutcome {
-                                    node: gnode,
-                                    ..o.clone()
-                                },
-                            ));
-                        }
-                        stiff_run = Some(exec.waveforms);
-                        torn_groups.push(g);
+                if let Some(exec) = exec {
+                    // Certificate: one record per boundary, and every one
+                    // joins the supply-integrity refusal (balanced, held,
+                    // and signal alike: all are pinned or re-grouped nodes
+                    // whose loading questions beyond the record's claim
+                    // must be refused; pinning removed the sag they ask
+                    // about).
+                    for o in &exec.outcomes {
+                        let gnode = NodeId(l2g[&o.node.0]);
+                        certificate_stiff.push(boundary_tear_record(o, gnode));
+                        certificate_refused_nodes.push(gnode);
+                        stiff_outcomes.push((
+                            g,
+                            StiffOutcome {
+                                node: gnode,
+                                ..o.clone()
+                            },
+                        ));
                     }
-                    None => {
-                        // The refusal summary rides into any later fused-path
-                        // error: three flagship runs could not see WHY the
-                        // mega group fell through, because the fused DC error
-                        // masked the stiff refusal that caused it.
-                        stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
-                        stiff_outcomes.extend(refusals.into_iter().map(|o| {
-                            let gnode = NodeId(l2g[&o.node.0]);
-                            (g, StiffOutcome { node: gnode, ..o })
-                        }));
-                    }
+                    stiff_run = Some(exec.waveforms);
+                    torn_groups.push(g);
+                } else {
+                    // The refusal summary rides into any later fused-path
+                    // error: three flagship runs could not see WHY the
+                    // mega group fell through, because the fused DC error
+                    // masked the stiff refusal that caused it.
+                    stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
+                    stiff_outcomes.extend(refusals.into_iter().map(|o| {
+                        let gnode = NodeId(l2g[&o.node.0]);
+                        (g, StiffOutcome { node: gnode, ..o })
+                    }));
                 }
             }
 
@@ -504,7 +505,7 @@ pub fn run_staged(
             owner = consumers[0];
         }
         let (wf, g2l) = &runs[&owner];
-        let Some(&ln) = g2l.get(&(node as u32)) else {
+        let Some(&ln) = g2l.get(&crate::node_id(node).0) else {
             continue;
         };
         waveforms.node_voltages[node] = resample(wf, ln as usize, &grid);
@@ -570,7 +571,7 @@ fn solve_group(
 ) -> SolveResult<(Waveforms, bool, bool)> {
     if !imposed.is_empty() {
         let part = Partition::analyze_imposing_tears(sub, imposed);
-        if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
+        if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, &part) {
             let torn = Waveforms::collect_nodes(sub.node_count(), |sink| {
                 engine.run_streaming(sub, tstop, sink)
             });
@@ -638,9 +639,10 @@ fn solve_group(
                 match Transient::new(ramp_opts).run(&ramped_sub, tstop) {
                     Ok(wf) => return Ok((wf, false, true)),
                     Err(e2) => {
-                        errors.push_str(&format!(
+                        let _ = write!(
+                            errors,
                             "; power-ramp retry (window {ramp_window:.3e}s) also failed: {e2}"
-                        ));
+                        );
                     }
                 }
             }
@@ -763,7 +765,7 @@ fn remap_tear(
     Some(RailTear {
         rail,
         feed,
-        shunt: DeviceId(shunt_pos as u32),
+        shunt: DeviceId(u32::try_from(shunt_pos).ok()?),
         r_shunt: c.shunt_ohms,
         extra_loads: Vec::new(),
     })
@@ -809,7 +811,9 @@ pub struct GroupDcProbe {
 }
 
 /// Diagnostic: enumerate the solve groups exactly as [`run_staged`] would and
-/// try ONLY each group's DC operating point. Exists because a failing group
+/// try ONLY each group's DC operating point.
+///
+/// Exists because a failing group
 /// deep inside a half-hour staged run is unidentifiable at acceptable cost
 /// without it (the flagship burned two runs learning that). Groups larger
 /// than `size_cap` are enumerated but not solved (the flagship's mega group
@@ -1099,7 +1103,7 @@ mod tests {
             assert!(
                 (sv - mv).abs() <= 1e-9,
                 "node {}: {sv:.12} vs {mv:.12}",
-                c.node_name(NodeId(node as u32))
+                c.node_name(crate::node_id(node))
             );
         }
         let vmid = staged.waveforms.final_node(&c, "MID").unwrap();

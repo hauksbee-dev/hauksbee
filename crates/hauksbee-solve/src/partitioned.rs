@@ -354,7 +354,7 @@ impl PartitionedTransient {
             return None;
         }
 
-        Self::build_from_partition(circuit, opts, part)
+        Self::build_from_partition(circuit, opts, &part)
     }
 
     /// Build from a partition whose tears an EXTERNAL decision layer chose
@@ -368,7 +368,7 @@ impl PartitionedTransient {
     pub fn try_build_from_partition(
         circuit: &Circuit,
         opts: &SolverOptions,
-        part: Partition,
+        part: &Partition,
     ) -> Option<Self> {
         if !matches!(opts.step, StepControl::Fixed { .. }) {
             return None;
@@ -388,7 +388,7 @@ impl PartitionedTransient {
     fn build_from_partition(
         circuit: &Circuit,
         opts: &SolverOptions,
-        part: Partition,
+        part: &Partition,
     ) -> Option<Self> {
         // Rail nodes: islands touching them are kept as nonlinear sub-blocks so
         // their rail-boundary current is readable for the scalar balance.
@@ -571,6 +571,7 @@ impl PartitionedTransient {
 
         let mut t = 0.0;
         let eps = dt * 1e-9;
+        #[allow(clippy::while_float)] // t advances by a positive step and lands exactly on tstop
         while t < tstop - eps {
             let h = dt.min(tstop - t);
             let tnext = t + h;
@@ -582,7 +583,7 @@ impl PartitionedTransient {
             // replays a full-dt advance over a shorter interval.
             // `ensure_cache` is a no-op while `h == dt`, so every interior
             // step keeps the amortized one-mat-vec fast path untouched.
-            if h != dt {
+            if h.to_bits() != dt.to_bits() {
                 for li in &mut self.linear {
                     li.ensure_cache(h);
                 }
@@ -915,7 +916,7 @@ impl PartitionedTransient {
         }
         // Fill exchange buffer with node voltages (ground stays 0).
         for ni in 1..=self.n_nodes {
-            self.vbuf[ni] = node_v(&ws, NodeId(ni as u32));
+            self.vbuf[ni] = node_v(&ws, crate::node_id(ni));
         }
         seed_linear_states(
             &self.linear,
@@ -1381,6 +1382,7 @@ fn collect_free_nodes(isl: &Island, li: &LinearIsland) -> Vec<NodeId> {
 
 impl NonlinearIsland {
     /// Extract a nonlinear island into a sub-circuit with pinned-source boundaries.
+    #[allow(clippy::cast_possible_truncation)] // local device indices are u32-bounded
     fn build(circuit: &Circuit, isl: &Island) -> Option<Self> {
         let mut sub = SubCircuit::new(circuit);
         for &id in &isl.devices {
@@ -1438,7 +1440,7 @@ impl NonlinearIsland {
         // scatter is a flat copy with no layout lookups or boundary scans.
         let owned = (1..l2g.len())
             .filter(|&ln| !boundary.iter().any(|(bn, _)| *bn == l2g[ln]))
-            .filter_map(|ln| ws.layout.node(NodeId(ln as u32)).map(|i| (l2g[ln], i)))
+            .filter_map(|ln| ws.layout.node(crate::node_id(ln)).map(|i| (l2g[ln], i)))
             .collect();
         Some(Self {
             state: ReactiveState::new(sub.devices.len()),
@@ -1476,7 +1478,7 @@ impl NonlinearIsland {
                 *xi = 0.0;
             }
             for (ln, gn) in self.l2g.iter().enumerate().skip(1) {
-                if let Some(i) = self.ws.layout.node(NodeId(ln as u32)) {
+                if let Some(i) = self.ws.layout.node(crate::node_id(ln)) {
                     self.ws.x[i] = vbuf[gn.0 as usize];
                 }
             }
@@ -1677,7 +1679,7 @@ mod tests {
             ],
             vec![v1],
         );
-        let _ = PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), part);
+        let _ = PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), &part);
     }
 
     /// An odd-inversion comparator ring split at its sense couplings can never
@@ -1698,7 +1700,7 @@ mod tests {
             vec![vsrc],
         );
         let mut engine =
-            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), part).unwrap();
+            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), &part).unwrap();
         assert!(engine.coupled);
         assert!(engine.run_streaming(&c, 10e-6, |_| {}).is_err());
     }
@@ -1773,7 +1775,7 @@ mod tests {
         );
         let (dt, tstop) = (5e-8, 10e-6);
         let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part).unwrap();
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, &part).unwrap();
         assert!(engine.coupled);
         let last = run_last(&mut engine, &c, tstop);
         // The streamed x carries node k's voltage at index k-1.
@@ -1817,7 +1819,7 @@ mod tests {
         );
         let (dt, tstop) = (5e-8, 20e-6);
         let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part).unwrap();
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, &part).unwrap();
         let last = run_last(&mut engine, &c, tstop);
         let (a_mono, b_mono, m_mono) = (
             mono_final(&c, &opts, tstop, "a"),
@@ -1884,7 +1886,7 @@ mod tests {
         );
         let (dt, tstop, tau) = (1e-5, 1e-3, 1e-3);
         let mut engine =
-            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(dt), part).unwrap();
+            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(dt), &part).unwrap();
         assert!(!engine.linear.is_empty() && engine.coupled);
         let mut worst = (0.0f64, 0.0f64);
         engine
