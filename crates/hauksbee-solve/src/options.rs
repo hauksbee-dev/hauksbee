@@ -531,6 +531,14 @@ pub struct SolverOptions {
     /// that strategy is granted.
     #[serde(default = "default_residual_accept_tol")]
     pub residual_accept_tol: f64,
+    /// Failed Newton solves (step cuts) one transient march may take before it
+    /// refuses with the stalled net named; `None` leaves only the step budget.
+    /// The co-sim scheduler sets it, since its fallback ladder answers a march
+    /// that cannot converge: across the cosim, ci and engine suites no march
+    /// that succeeded needed more than 3, while one MNT Reform chunk ground
+    /// through 600+ cuts for 195 s before failing anyway.
+    #[serde(default)]
+    pub max_failed_steps: Option<u32>,
 }
 
 fn default_residual_accept_tol() -> f64 {
@@ -568,6 +576,7 @@ impl Default for SolverOptions {
             ladder: RobustnessLadder::none(),
             event_retry: EventRetryTuning::default(),
             residual_accept_tol: 1e-9,
+            max_failed_steps: None,
         }
     }
 }

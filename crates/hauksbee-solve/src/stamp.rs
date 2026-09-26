@@ -1635,24 +1635,33 @@ pub(crate) fn mos_charges_at(
 /// solution vector `x`, at the PHYSICAL terminals (no drain/source symmetry
 /// swap: the swap is a channel-evaluation device; the charges live on the
 /// real gate/bulk junctions). Bulk defaults to source when absent, exactly
-/// as the stamp resolves it.
+/// as the stamp resolves it. Drain and source are read at the stamp's
+/// EFFECTIVE unknowns (internal behind rd/rs when `series_r` is on): the
+/// history must hold the charge the companion integrates. Read at the
+/// external pins instead, the Olimex EVB's FET3 (rs = 30 mOhm, 480 pF Cgs)
+/// stored a charge off by `Cgs*I*rs` every step, which the trapezoid turned
+/// into a ~10 mA gate current growing as `2/dt` and a self-sustaining
+/// 300 MHz ring with its gate capacitor's ESL.
 pub(crate) fn mos_junction_voltages(
     layout: &Layout,
     x: &[f64],
-    d: NodeId,
-    g: NodeId,
-    s: NodeId,
+    id: DeviceId,
+    [d, g, s]: [NodeId; 3],
     b: Option<NodeId>,
     model: &MosfetModel,
+    series_r: bool,
 ) -> (f64, f64, f64, f64) {
     let v = |n: NodeId| layout.node(n).map(|i| x[i]).unwrap_or(0.0);
+    let ints = layout.mos_internal(id).filter(|_| series_r);
+    let at = |k: usize, n: NodeId| ints.and_then(|i| i[k]).map_or_else(|| v(n), |i| x[i]);
+    let (vd, vs) = (at(0, d), at(1, s));
     let sign = model.polarity.sign();
-    let bulk = b.unwrap_or(s);
+    let vb = v(b.unwrap_or(s));
     (
-        sign * (v(g) - v(s)),
-        sign * (v(g) - v(d)),
-        sign * (v(bulk) - v(d)),
-        sign * (v(bulk) - v(s)),
+        sign * (v(g) - vs),
+        sign * (v(g) - vd),
+        sign * (vb - vd),
+        sign * (vb - vs),
     )
 }
 
