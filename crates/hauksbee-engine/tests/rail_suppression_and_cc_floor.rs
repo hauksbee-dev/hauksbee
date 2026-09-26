@@ -8,8 +8,9 @@
 
 use crate::power_supply::load_board;
 use hauksbee_engine::binder::{bind_board, BoundBoard};
-use hauksbee_engine::power_supply::PowerSupply;
+use hauksbee_engine::power_supply::{PowerSupply, UsbSpec};
 use hauksbee_engine::scheduler::Scheduler;
+use hauksbee_engine::DynamicLoad;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::ModelLibrary;
@@ -132,6 +133,37 @@ fn a_draw_under_the_limit_does_not_fold() {
         assert!(
             (v - v_want).abs() < 1e-3 && (i - i_want).abs() < 0.02,
             "R={r_load}, back-drive {back:?}: {v:.5} V, {i:.4} A, want {v_want} V, {i_want} A"
+        );
+    }
+}
+
+/// A profile load past a 0.5 A USB port's rating browns the rail out ONTO
+/// 0 V, never below: nothing on this board can drive it negative, and a real
+/// load draws nothing at 0 V. An ideal 0.6 A sink once pulled its whole
+/// demand through the port's 0.5 ohm droop, the excess out of the source's
+/// clamp, and read -0.3 V. Two-sided: a draw the port can supply sags by
+/// exactly its droop. Rows: (profile amps, band the rail's low must sit in).
+#[test]
+fn a_profile_load_over_a_port_limit_floors_the_rail_at_zero() {
+    for (amps, band) in [(0.6, (-1e-3, 1.0)), (0.4, (4.79759, 4.79761))] {
+        let mut bound = bound_load_board("1k");
+        let net = bound.node("+5V").expect("rail node");
+        let profile = toml::from_str(&format!("id = \"o\"\n[[segment]]\nlevel_a = {amps}"));
+        let load = DynamicLoad::new(&mut bound.circuit, "o", net, profile.unwrap(), 0.0, 0);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let spec = UsbSpec::V5_0_5A;
+        assert!(sched.set_power_supply("+5V", PowerSupply::Usb { spec }));
+        sched.attach_peripheral(Box::new(load));
+        let low = (0..50)
+            .map(|_| {
+                sched.step(1e-4);
+                sched.net_voltage("+5V").unwrap_or(f64::NAN)
+            })
+            .fold(f64::INFINITY, f64::min);
+        let i = sched.supply_states()["+5V"].1;
+        assert!(
+            sched.analog_valid() && low >= band.0 && low <= band.1,
+            "{amps} A on 5V/0.5A: rail low {low:.6} V (supply {i:.4} A), want {band:?}"
         );
     }
 }

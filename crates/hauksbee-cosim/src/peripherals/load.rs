@@ -2,7 +2,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! This is the transient consumer of the `hauksbee-models` load profiles. It
-//! owns an `Isource` stamped from the part's supply node to ground and, each
+//! owns an `Isource` drawing from the part's supply node to ground and, each
 //! chunk, sets the source value to the profile's current at the current sim
 //! time (offset by the configured start). The existing `Isource` machinery
 //! carries this through *both* solver paths: the monolithic engine evaluates the
@@ -11,19 +11,25 @@
 //! same dI/dt the chip imposes reaches the rail, and decoupling / supply
 //! impedance is exercised honestly.
 //!
-//! The sink draws *out of* the supply node (positive load current), so it is
-//! stamped `p = net`, `n = GROUND`: an `Isource` pushes current `p -> n`
-//! internally, i.e. it pulls current out of `net` into ground, which is a load.
+//! The `Isource` sits on a private node behind a 0 V sense source, and a
+//! behavioral sink `p = net`, `n = GROUND` draws its current out of `net`,
+//! folded to zero as the rail falls to 0 V (see [`DynamicLoad::new`]).
 
 use std::collections::HashMap;
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
+use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId};
+use hauksbee_ir::{PwlPoint, SourceKind};
 use hauksbee_models::LoadProfile;
 
 use super::{Peripheral, TickCtx};
 
 /// Profile corners one chunk may carry as a PWL drive (the GPIO replay's budget).
 const MAX_CORNERS: usize = 10_000;
+
+/// Rail voltage (V) from which the load draws its full profile current; it
+/// folds to zero at 0 V. Well under any logic supply's brown-out, so a
+/// powered rail is never touched.
+const COMPLIANCE_V: f64 = 0.25;
 
 /// A dynamic load presenting a [`LoadProfile`] current draw on one supply node.
 pub struct DynamicLoad {
@@ -43,6 +49,9 @@ pub struct DynamicLoad {
 impl DynamicLoad {
     /// Stamp a dynamic load drawing `profile` out of `net`, beginning at
     /// `start_s` seconds, with profile jitter `seed`.
+    ///
+    /// # Panics
+    /// Never: the compliance fold is a fixed, valid expression.
     pub fn new(
         circuit: &mut Circuit,
         id: &str,
@@ -51,16 +60,29 @@ impl DynamicLoad {
         start_s: f64,
         seed: u64,
     ) -> Self {
-        // Isource current flows p -> n internally; with p = net, n = GROUND it
-        // pulls current out of the net (a sink / load). Seed it at the profile's
-        // pre-start level so the DC operating point is consistent.
+        // The profile Isource (seeded at the pre-start level so the DC
+        // operating point is consistent) runs through a private 0 V sense
+        // source, and the net's draw is its current times a smoothstep fold
+        // of the net's voltage: exactly the profile from COMPLIANCE_V up, zero
+        // at 0 V and below, C1 between. A real load draws nothing unpowered;
+        // an ideal sink bigger than a limited supply instead pulled the rail
+        // below ground through the supply's own output resistance.
         let i0 = profile.current_at(-1.0, seed);
-        let sink = circuit.add(Device::isource(
-            format!("Iload_{id}"),
-            net,
-            NodeId::GROUND,
-            SourceKind::Dc(i0),
-        ));
+        let (at, gnd) = (circuit.node(&format!("__load_{id}")), NodeId::GROUND);
+        let (name, dc) = (format!("Iload_{id}"), SourceKind::Dc(i0));
+        let sink = circuit.add(Device::isource(name, at, gnd, dc));
+        let (name, dc) = (format!("Vload_{id}_sense"), SourceKind::Dc(0.0));
+        let sense = circuit.add(Device::vsource(name, gnd, at, dc));
+        let x = format!("min(max(__d1/{COMPLIANCE_V:?},0.0),1.0)");
+        let fold = CompiledExpr::compile(&format!("__d0*{x}^2*(3.0-2.0*{x})"));
+        circuit.add(Device::Behavioral {
+            name: format!("Bload_{id}"),
+            p: net,
+            n: gnd,
+            output: BOutput::Current,
+            expr: fold.expect("load fold compiles"),
+            deps: vec![BDep::Branch(sense), BDep::Volt(net)],
+        });
         Self {
             id: id.to_string(),
             sink,
@@ -162,9 +184,10 @@ mod tests {
             "expected ~240 mA TX burst, got {}",
             load.last_i
         );
-        // The stamped Isource carries it.
-        if let Device::Isource { kind, p, n, .. } = &c.devices[load.sink.0 as usize] {
-            assert_eq!(*p, rail);
+        // The stamped Isource carries it; the fold draws it off the rail.
+        let on_rail = |d: &Device| matches!(d, Device::Behavioral { p, .. } if *p == rail);
+        assert!(c.devices.iter().any(on_rail));
+        if let Device::Isource { kind, n, .. } = &c.devices[load.sink.0 as usize] {
             assert_eq!(*n, NodeId::GROUND);
             assert!((kind.eval(0.0) - 0.240).abs() < 1e-3);
         } else {
