@@ -42,6 +42,7 @@ impl Waveforms {
     }
 
     /// Last value of a named node.
+    #[must_use]
     pub fn final_node(&self, circuit: &Circuit, name: &str) -> Option<f64> {
         self.node(circuit, name).and_then(|w| w.last().copied())
     }
@@ -120,6 +121,7 @@ pub struct Transient {
 
 impl Transient {
     /// New engine with the given options.
+    #[must_use]
     pub fn new(opts: SolverOptions) -> Self {
         Self {
             opts,

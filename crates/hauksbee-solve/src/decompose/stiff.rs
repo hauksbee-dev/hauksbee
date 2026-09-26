@@ -132,6 +132,7 @@ pub struct StiffCandidate {
 /// runs and would wrongly refuse every two-way split (`2^alpha < outer_iters`).
 /// The `alpha` exponent is still read from [`RailPolicy`] so the fill model
 /// stays a single source of truth across the two passes.
+#[must_use]
 pub fn detect_stiff_candidates(
     circuit: &Circuit,
     graph: &ConductionGraph,

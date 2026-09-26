@@ -120,6 +120,7 @@ impl AcSpec {
     }
 
     /// The list of frequencies (Hz) this sweep visits.
+    #[must_use]
     pub fn frequencies(&self) -> Vec<f64> {
         match self.sweep {
             Sweep::Linear => {
@@ -178,6 +179,7 @@ pub struct AcPoint {
 
 impl AcPoint {
     /// The phasor at a named node, if present.
+    #[must_use]
     pub fn node(&self, circuit: &Circuit, name: &str) -> Option<Complex64> {
         for id in 0..circuit.node_count() {
             if circuit.node_name(NodeId(id as u32)) == name {
@@ -197,6 +199,7 @@ pub struct AcResponse {
 impl AcResponse {
     /// Magnitude (dB) and phase (degrees) at a named node across the sweep.
     /// Returns `(freq, mag_db, phase_deg)` triples. Magnitude is `20*log10|V|`.
+    #[must_use]
     pub fn bode(&self, circuit: &Circuit, node: &str) -> Vec<(f64, f64, f64)> {
         let mut out = Vec::with_capacity(self.points.len());
         for p in &self.points {
@@ -218,6 +221,7 @@ pub struct AcAnalysis {
 
 impl AcAnalysis {
     /// New analysis with the solver options used for the DC operating point.
+    #[must_use]
     pub fn new(opts: SolverOptions) -> Self {
         Self { opts }
     }
@@ -750,6 +754,7 @@ fn stamp_ac(
 /// suffix). When false, [`AcAnalysis::run`] drives EVERY independent source with
 /// unit AC (a superposition, not a single-input transfer function) so the
 /// caller should warn that the sweep has no chosen injection point.
+#[must_use]
 pub fn has_dedicated_ac_source(circuit: &Circuit) -> bool {
     circuit.iter().any(|(_, dev)| match dev {
         Device::Vsource { name, .. } | Device::Isource { name, .. } => is_dedicated_ac_source(name),

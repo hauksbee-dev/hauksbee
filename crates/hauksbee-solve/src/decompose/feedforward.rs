@@ -79,6 +79,7 @@ impl StageDag {
     /// `graph` must have been computed from `circuit` (the circuit is needed
     /// only to look up which island conducts a sensed node; the graph already
     /// carries that in `node_island`).
+    #[must_use]
     pub fn build(_circuit: &Circuit, graph: &ConductionGraph) -> Self {
         let n = graph.islands.len();
 

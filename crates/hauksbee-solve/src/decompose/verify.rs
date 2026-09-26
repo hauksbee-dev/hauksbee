@@ -125,6 +125,7 @@ pub enum RefusedAnalysis {
 
 impl RefusedAnalysis {
     /// The plain-language reason surfaced with every refusal.
+    #[must_use]
     pub fn reason(&self) -> &'static str {
         match self {
             Self::SupplyIntegrityOnTornRail => {
@@ -167,6 +168,7 @@ pub struct TearCertificate {
 
 impl TearCertificate {
     /// Whether the certificate licenses running the decomposition at all.
+    #[must_use]
     pub fn sound(&self) -> bool {
         self.uncertified_boundaries.is_empty()
     }
@@ -184,6 +186,7 @@ impl TearCertificate {
     }
 
     /// One line per record, for reports and diagnostics.
+    #[must_use]
     pub fn summary(&self, circuit: &Circuit) -> String {
         use std::fmt::Write;
         let mut out = String::new();
@@ -256,6 +259,7 @@ pub struct Decomposition {
 
 impl Decomposition {
     /// Run the four analysis passes and assemble the certificate.
+    #[must_use]
     pub fn analyze(circuit: &Circuit, motive: TearMotive) -> Self {
         Self::analyze_with(
             circuit,
@@ -266,6 +270,7 @@ impl Decomposition {
     }
 
     /// [`Decomposition::analyze`] with explicit policies.
+    #[must_use]
     pub fn analyze_with(
         circuit: &Circuit,
         motive: TearMotive,
@@ -284,6 +289,7 @@ impl Decomposition {
     /// analysis-only bind). The certificate records the trust explicitly in
     /// `exogenous_boundaries`, and any executor must actually drive every
     /// node recorded there or refuse to run.
+    #[must_use]
     pub fn analyze_with_boundaries(
         circuit: &Circuit,
         motive: TearMotive,

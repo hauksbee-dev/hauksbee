@@ -350,6 +350,7 @@ impl Workspace {
 
 impl Workspace {
     /// Build the workspace and analyze the (fixed) sparsity pattern.
+    #[must_use]
     pub fn new(circuit: &Circuit) -> Self {
         let layout = Layout::new(circuit);
         let mut matrix = SparseMatrix::new(layout.size);

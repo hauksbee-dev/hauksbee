@@ -815,6 +815,7 @@ pub struct GroupDcProbe {
 /// than `size_cap` are enumerated but not solved (the flagship's mega group
 /// is the known DC-collapse case and takes minutes to fail; probing it tells
 /// nothing new).
+#[must_use]
 pub fn probe_groups_dc(
     circuit: &Circuit,
     decomp: &Decomposition,

@@ -151,6 +151,7 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
 
 /// Serialize a [`SimOutput`] as an ngspice ASCII rawfile titled `title` (the
 /// deck's first line). Deterministic: same input, same bytes.
+#[must_use]
 pub fn write_ascii_rawfile(out: &SimOutput, plot: RawPlot, title: &str) -> String {
     let table = build_table(out, plot);
     let flags = if table.complex { "complex" } else { "real" };

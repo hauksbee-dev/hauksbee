@@ -382,12 +382,14 @@ pub struct RobustnessLadder {
 impl RobustnessLadder {
     /// The empty ladder: the plain solver with no escalation granted. This is
     /// the default.
+    #[must_use]
     pub const fn none() -> Self {
         Self { steps: [None; 8] }
     }
 
     /// The full ladder in canonical order: every escalation the solver has.
     /// This is the substrate the flagship spike paths run on.
+    #[must_use]
     pub fn full() -> Self {
         let mut l = Self::none();
         for s in Strategy::ALL {
@@ -397,6 +399,8 @@ impl RobustnessLadder {
     }
 
     /// Grant a strategy (idempotent; appended in call order).
+    #[must_use]
+    #[must_use]
     pub fn with(mut self, s: Strategy) -> Self {
         if self.has(s) {
             return self;
@@ -411,6 +415,7 @@ impl RobustnessLadder {
     }
 
     /// Is this strategy granted?
+    #[must_use]
     pub fn has(&self, s: Strategy) -> bool {
         self.steps.contains(&Some(s))
     }
@@ -418,6 +423,8 @@ impl RobustnessLadder {
     /// Revoke a strategy, preserving the order of the rest. The per-island
     /// selection (`orchestrate::staged::select_group_ladder`) only ever TRIMS
     /// with this: the caller's ladder is the ceiling, never escalated past.
+    #[must_use]
+    #[must_use]
     pub fn without(mut self, s: Strategy) -> Self {
         let mut out = [None; 8];
         let mut k = 0;
@@ -583,6 +590,7 @@ impl Default for SolverOptions {
 
 impl SolverOptions {
     /// Convenience: fixed-step trapezoidal with the given `dt`.
+    #[must_use]
     pub fn fixed(dt: f64) -> Self {
         Self {
             step: StepControl::Fixed { dt },
@@ -591,6 +599,7 @@ impl SolverOptions {
     }
 
     /// Convenience: adaptive run seeded with `dt_initial`.
+    #[must_use]
     pub fn adaptive(dt_initial: f64, dt_max: f64) -> Self {
         Self {
             step: StepControl::Adaptive {
@@ -603,6 +612,7 @@ impl SolverOptions {
     }
 
     /// The effective temperature to evaluate models at (TNOM if temp is off).
+    #[must_use]
     pub fn model_temp(&self) -> f64 {
         if self.effects.temperature {
             self.temperature_c

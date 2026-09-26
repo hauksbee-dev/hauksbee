@@ -29,6 +29,7 @@ pub enum Probe {
 
 impl Probe {
     /// The canonical column label, e.g. `V(out)`, `V(a,b)`, `I(V1)`.
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
             Self::NodeVoltage(a) => format!("V({a})"),
@@ -93,6 +94,7 @@ pub struct SimOutput {
 
 impl SimOutput {
     /// The full series for column `label`, if present.
+    #[must_use]
     pub fn column(&self, label: &str) -> Option<Vec<f64>> {
         let j = self.columns.iter().position(|c| c == label)?;
         Some(self.rows.iter().map(|r| r[j]).collect())
@@ -127,6 +129,7 @@ fn residual(max_abs: f64, label: String) -> SolveResult<Residual> {
 }
 
 /// Every non-ground node voltage, in node order: the default probe set.
+#[must_use]
 pub fn default_probes(circuit: &Circuit) -> Vec<Probe> {
     (1..circuit.node_count())
         .map(|i| Probe::NodeVoltage(circuit.node_name(NodeId(i as u32)).to_string()))

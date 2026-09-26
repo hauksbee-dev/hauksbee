@@ -290,6 +290,7 @@ impl Layout {
 
     /// Unknown index of a non-ground node. Ground returns `None`.
     #[inline]
+    #[must_use]
     pub fn node(&self, node: hauksbee_ir::NodeId) -> Option<usize> {
         if node.is_ground() {
             None
@@ -307,6 +308,7 @@ impl Layout {
     /// External node id represented by a node-block unknown. Device-private
     /// internal unknowns and branch-current unknowns return `None`.
     #[inline]
+    #[must_use]
     pub fn node_id(&self, unknown: usize) -> Option<NodeId> {
         if unknown >= self.external_nodes {
             return None;
@@ -319,6 +321,7 @@ impl Layout {
 
     /// Branch-current unknown index for a device, if it owns one.
     #[inline]
+    #[must_use]
     pub fn branch(&self, id: DeviceId) -> Option<usize> {
         self.branch_of[id.0 as usize]
     }
@@ -328,6 +331,7 @@ impl Layout {
     /// K-free circuit (one `is_empty` branch, no allocation, no float math,
     /// the fast path the bit-identity bar demands), and for non-inductors.
     #[inline]
+    #[must_use]
     pub fn mutual_partners(&self, id: DeviceId) -> &[(DeviceId, f64)] {
         if self.couplings.is_empty() {
             return &[];
@@ -339,6 +343,7 @@ impl Layout {
     /// `[c_int, b_int, e_int]`. `None` when the device allocated none (the
     /// common case: default models, or not a BJT).
     #[inline]
+    #[must_use]
     pub fn bjt_internal(&self, id: DeviceId) -> Option<&[Option<usize>; 3]> {
         if self.bjt_internal_of.is_empty() {
             return None;
@@ -358,6 +363,7 @@ impl Layout {
     #[inline]
     /// The intrinsic anode of a diode whose model sets a series resistance.
     /// `None` when it sets none and the junction sits on the external anode.
+    #[must_use]
     pub fn diode_internal(&self, id: DeviceId) -> Option<usize> {
         if self.diode_internal_of.is_empty() {
             return None;
@@ -365,6 +371,7 @@ impl Layout {
         self.diode_internal_of[id.0 as usize]
     }
 
+    #[must_use]
     pub fn mos_internal(&self, id: DeviceId) -> Option<&[Option<usize>; 2]> {
         if self.mos_internal_of.is_empty() {
             return None;

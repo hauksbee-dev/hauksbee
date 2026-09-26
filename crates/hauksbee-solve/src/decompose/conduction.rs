@@ -77,6 +77,7 @@ impl ConductionGraph {
     /// no source-pinning, no linearity verdicts. Those are policy; this is
     /// topology. The tear passes need the raw conduction components first and
     /// apply rail/source reasoning on top.
+    #[must_use]
     pub fn analyze(circuit: &Circuit) -> Self {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1);
@@ -159,6 +160,7 @@ impl ConductionGraph {
     }
 
     /// The island a device was assigned to, if any.
+    #[must_use]
     pub fn island_of_device(&self, id: DeviceId) -> Option<usize> {
         self.islands.iter().position(|isl| isl.contains(&id))
     }
@@ -167,6 +169,7 @@ impl ConductionGraph {
     /// node it senses is conducted by another (or by none). These are the
     /// candidate free-tear boundaries the feedforward pass will prove or
     /// refuse one-directionality for.
+    #[must_use]
     pub fn cross_island_sense_edges(&self) -> Vec<SenseEdge> {
         self.sense_edges
             .iter()

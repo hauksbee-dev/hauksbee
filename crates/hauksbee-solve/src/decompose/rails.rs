@@ -143,6 +143,7 @@ pub struct BalanceTearCandidate {
 
 impl BalanceTearCandidate {
     /// Convenience: was this candidate accepted?
+    #[must_use]
     pub fn torn(&self) -> bool {
         matches!(self.decision, TearDecision::Tear { .. })
     }
@@ -153,6 +154,7 @@ impl BalanceTearCandidate {
 /// `graph` must be the [`ConductionGraph`] of the same circuit. Pinned-ness
 /// (ideal-source-driven, propagated through stacked sources) is recomputed
 /// here the same way the proven partitioner computes it.
+#[must_use]
 pub fn detect_balance_tears(
     circuit: &Circuit,
     graph: &ConductionGraph,

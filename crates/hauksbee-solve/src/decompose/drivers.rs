@@ -81,6 +81,7 @@ pub struct DriverAssignment {
 /// modify `dag`; the staged executor applies them when it builds sub-circuits,
 /// and every tear whose upstream is an absorbed driver is dropped from the
 /// replay set (its tolerance never enters the certificate).
+#[must_use]
 pub fn driver_assignments(
     circuit: &Circuit,
     graph: &ConductionGraph,

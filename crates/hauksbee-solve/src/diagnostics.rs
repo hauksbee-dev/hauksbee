@@ -20,6 +20,7 @@ pub(crate) fn note(s: Strategy) {
 }
 
 /// Strategies that fired on this thread since the last drain, draining them.
+#[must_use]
 pub fn take_strategy_activations() -> Vec<Strategy> {
     let bits = ACTIVATED.with(|c| c.replace(0));
     Strategy::ALL

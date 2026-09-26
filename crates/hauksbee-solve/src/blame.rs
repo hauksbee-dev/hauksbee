@@ -45,6 +45,7 @@ const MAX_NAMED: usize = 3;
 /// Node-block unknown `k` is netlist node `k + 1` (ground is never an unknown),
 /// except for device-private internal unknowns appended past the netlist nodes,
 /// which have no `NodeId` and are named by index.
+#[must_use]
 pub fn name_node_unknown(circuit: &Circuit, unknown: usize) -> String {
     let layout = Layout::new(circuit);
     name_node_unknown_with_layout(circuit, &layout, unknown)
@@ -59,6 +60,7 @@ fn name_node_unknown_with_layout(circuit: &Circuit, layout: &Layout, unknown: us
 }
 
 /// Names of the devices connected to a netlist node, in circuit order.
+#[must_use]
 pub fn devices_on_node(circuit: &Circuit, node: NodeId) -> Vec<String> {
     circuit
         .devices
@@ -86,6 +88,7 @@ pub struct StiffLink {
 /// are milli-siemens, and the resulting condition number is what stops Newton.
 /// Returns an empty vec on any board with fewer than three resistors (no
 /// meaningful median to compare against) or when nothing stands out.
+#[must_use]
 pub fn stiff_links(circuit: &Circuit) -> Vec<StiffLink> {
     let mut ohms: Vec<f64> = circuit
         .devices
@@ -150,6 +153,7 @@ impl SourceConflict {
     /// The source whose commanded voltage the settled node voltage matches, if
     /// exactly one does. This is the honest way to say "which won": not by
     /// guessing at pivot order, but by reading the answer the solve produced.
+    #[must_use]
     pub fn winner(&self, settled_volts: f64) -> Option<&NodeSource> {
         // A generous window: the point is to identify WHICH source the node
         // followed, not to grade the solve's accuracy.
@@ -170,6 +174,7 @@ impl SourceConflict {
 
     /// One loud line naming every contender and, when the settled voltage is
     /// known, which one the net actually followed.
+    #[must_use]
     pub fn describe(&self, settled_volts: Option<f64>) -> String {
         let contenders = self
             .sources
@@ -217,6 +222,7 @@ impl SourceConflict {
 }
 
 /// Every ideal ground-referenced voltage source pinning `node`.
+#[must_use]
 pub fn sources_on_node(circuit: &Circuit, node: NodeId) -> Vec<NodeSource> {
     if node.is_ground() {
         return Vec::new();
@@ -252,6 +258,7 @@ pub fn sources_on_node(circuit: &Circuit, node: NodeId) -> Vec<NodeSource> {
 /// refusal that until now named nothing. As an honesty fault it is how a
 /// requested override loses: forcing a net to 20 V next to a 3.3 V rail leaves
 /// the net reading 3.300 V, and without this nobody says so.
+#[must_use]
 pub fn source_conflicts(circuit: &Circuit) -> Vec<SourceConflict> {
     let mut out: Vec<SourceConflict> = Vec::new();
     for k in 1..circuit.node_count() {

@@ -32,6 +32,7 @@ pub struct ComplexSystem {
 
 impl ComplexSystem {
     /// A fresh `n x n` system of zeros.
+    #[must_use]
     pub fn new(n: usize) -> Self {
         Self {
             n,
@@ -41,6 +42,7 @@ impl ComplexSystem {
     }
 
     /// Dimension.
+    #[must_use]
     pub fn dim(&self) -> usize {
         self.n
     }
@@ -86,6 +88,7 @@ impl ComplexSystem {
     /// Solve `A x = b` in place, returning the solution vector, or `None` if the
     /// matrix is singular. Uses LU with partial pivoting; the assembled matrix is
     /// consumed (factorized in place).
+    #[must_use]
     pub fn solve(mut self) -> Option<Vec<Complex64>> {
         let n = self.n;
         if n == 0 {

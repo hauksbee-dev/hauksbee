@@ -158,6 +158,7 @@ impl StampPlan {
     /// Compile the constant backbone and the tier-2 schedule of `circuit`
     /// against a frozen `matrix` pattern. The matrix must already have every
     /// slot reserved (see `reserve_pattern`).
+    #[must_use]
     pub fn compile(circuit: &Circuit, layout: &Layout, matrix: &SparseMatrix) -> Self {
         let mut cond_ops = Vec::new();
         let mut reactive_ops = Vec::new();
@@ -498,6 +499,7 @@ impl StampPlan {
     }
 
     /// Number of constant conductance writes (diagnostics).
+    #[must_use]
     pub fn cond_op_count(&self) -> usize {
         self.cond_ops.len()
     }

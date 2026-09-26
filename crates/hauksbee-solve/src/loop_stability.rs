@@ -103,6 +103,7 @@ impl<'a> LoopStability<'a> {
     }
 
     /// Compute the stability margins from the Bode data.
+    #[must_use]
     pub fn margins(&self) -> StabilityMargins {
         margins_from_bode(&self.bode)
     }
@@ -113,6 +114,7 @@ impl<'a> LoopStability<'a> {
 /// Phase is unwrapped before searching, so a sweep that winds past -180 deg is
 /// handled. The interpolation is linear in `log10(f)` for the crossover
 /// frequency and linear in the measured quantity between bracket points.
+#[must_use]
 pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
     let dc_gain_db = bode.first().map(|p| p.1).unwrap_or(f64::NAN);
     if bode.len() < 2 {
@@ -216,6 +218,7 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
 
 /// Convenience: phase margin (deg) for a Bode table, or `None` if the gain never
 /// crosses unity in band.
+#[must_use]
 pub fn phase_margin(bode: &[(f64, f64, f64)]) -> Option<f64> {
     margins_from_bode(bode).phase_margin_deg
 }

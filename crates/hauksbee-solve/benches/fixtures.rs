@@ -32,6 +32,7 @@ use hauksbee_testkit::circuits::{bjt, cap_ic, res, vdc};
 ///
 /// `r_ohms` / `c_farads` per stage set the stage time constant (`R*C`); the
 /// defaults below give `1 us`.
+#[must_use]
 pub fn build_rc_ladder(n: usize) -> Circuit {
     let r_ohms = 1e3;
     let c_farads = 1e-9;
@@ -74,6 +75,7 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 ///
 /// Returns the circuit plus the list of membrane node names, so a caller can
 /// probe the per-block outputs.
+#[must_use]
 pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
     let mut c = Circuit::new();
     let p5 = c.node("+5V");

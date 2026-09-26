@@ -217,32 +217,38 @@ enum Slot {
 
 impl LinearIsland {
     /// Number of linear states (caps + inductors).
+    #[must_use]
     pub fn n_states(&self) -> usize {
         self.states.len()
     }
 
     /// Number of free (solvable) nodes owned by this island.
+    #[must_use]
     pub fn n_free(&self) -> usize {
         self.n_free
     }
 
     /// Input nodes, in `u` order.
+    #[must_use]
     pub fn inputs(&self) -> &[NodeId] {
         &self.inputs
     }
 
     /// Current sources whose values the caller must append to the input
     /// vector, in order, after the voltage inputs.
+    #[must_use]
     pub fn isources(&self) -> &[(DeviceId, NodeId, NodeId)] {
         &self.isources
     }
 
     /// Total input vector length: voltage inputs then current inputs.
+    #[must_use]
     pub fn n_inputs_total(&self) -> usize {
         self.inputs.len() + self.isources.len()
     }
 
     /// The island-local index for a node, if it is a free node here.
+    #[must_use]
     pub fn local_of(&self, n: NodeId) -> Option<usize> {
         self.node_local.get(n.0 as usize).copied().flatten()
     }
@@ -266,12 +272,8 @@ impl LinearIsland {
     /// (`stamp::resistor_value`) or the fast path silently disagrees with the
     /// reference engine on every thermal sweep. Callers with temperature
     /// effects off pass TNOM (27), which makes the derating a no-op.
-    pub fn compile(
-        circuit: &Circuit,
-        island: &Island,
-        gmin: f64,
-        temp_c: f64,
-    ) -> Option<Self> {
+    #[must_use]
+    pub fn compile(circuit: &Circuit, island: &Island, gmin: f64, temp_c: f64) -> Option<Self> {
         if !island.linear {
             return None;
         }

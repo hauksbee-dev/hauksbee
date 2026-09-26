@@ -29,6 +29,7 @@ pub struct SparseMatrix {
 
 impl SparseMatrix {
     /// An `n x n` matrix of structural zeros.
+    #[must_use]
     pub fn new(n: usize) -> Self {
         Self {
             n,
@@ -37,6 +38,7 @@ impl SparseMatrix {
     }
 
     /// Dimension.
+    #[must_use]
     pub fn dim(&self) -> usize {
         self.n
     }
@@ -66,6 +68,7 @@ impl SparseMatrix {
     ///
     /// Only valid after the pattern is fully reserved (see `reserve_pattern`);
     /// the returned position indexes into `rows[row]`.
+    #[must_use]
     pub fn slot(&self, row: usize, col: usize) -> Option<(usize, usize)> {
         self.rows[row]
             .binary_search_by_key(&col, |&(c, _)| c)
@@ -91,6 +94,7 @@ impl SparseMatrix {
 
     /// The assembled `(col, value)` entries of one row. Used to evaluate the KCL
     /// residual `g·x - rhs` at a candidate operating point without a full solve.
+    #[must_use]
     pub fn row(&self, i: usize) -> &[(usize, f64)] {
         &self.rows[i]
     }
@@ -123,6 +127,7 @@ impl SparseMatrix {
     }
 
     /// Compute the fill-reducing column ordering. Reuse the result every step.
+    #[must_use]
     pub fn factorize_symbolic(&self) -> Symbolic {
         Symbolic::analyze(self)
     }
@@ -247,6 +252,7 @@ impl Symbolic {
     }
 
     /// Whether the dynamic-pivot fallback is currently enabled.
+    #[must_use]
     pub fn allow_dynamic(&self) -> bool {
         self.allow_dynamic
     }
