@@ -52,7 +52,7 @@ pub fn repeatable_role(role: &str) -> bool {
 /// A per-unit signal role on several pads (a lone electrode letter such as `"B"`
 /// aliases a numbered pad): merged units, which the binder wires once.
 fn merged_unit_roles(entry: &ModelEntry) -> Vec<String> {
-    use ComponentKind::*;
+    use ComponentKind::{BjtNpn, BjtPnp, Comparator, Digital, Opamp, ShiftRegister};
     let logic = &entry.logic;
     let units = match entry.kind {
         BjtNpn | BjtPnp => "collector_q1, base_q1, emitter_q1, collector_q2, ...",
@@ -168,13 +168,16 @@ fn printed(entry: &ModelEntry, key: &str, v: f64) -> bool {
     );
     let scale =
         |r: &Characteristic| sb(&r.unit, unit).or_else(|| sb(&r.unit, &r.unit).xor(Some(1.0)));
-    let hit = |r, x: f64| scale(r).is_some_and(|s| (x.abs() * s - v.abs()).abs() <= 1e-9 * v.abs());
+    let hit =
+        |r, x: f64| scale(r).is_some_and(|s| x.abs().mul_add(s, -v.abs()).abs() <= 1e-9 * v.abs());
     let mut rows = entry.source.iter().flat_map(|s| &s.characteristic);
     rows.any(|r| [r.min, r.typ, r.max].iter().flatten().any(|x| hit(r, *x)))
 }
 
 fn kind_rules(entry: &ModelEntry) -> KindRules {
-    use ComponentKind::*;
+    use ComponentKind::{
+        AnalogSwitch, BjtNpn, BjtPnp, Comparator, Diode, Nmos, Opamp, Pmos, Timer, Vreg,
+    };
     match entry.kind {
         Diode => KindRules {
             required: &["is", "n", "rs"],
@@ -227,9 +230,10 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
         // FB bias is usually tiny or unpublished, so `iq_a` is what it needs.
         Vreg if entry.behavioral.converter.is_none() && entry.params.get_f64("vref").is_some() => {
             KindRules {
-                required: match has_role(entry, "gnd") {
-                    true => &["vref", "dropout_v", "iq_a"],
-                    false => &["vref", "dropout_v", "iadj_a"],
+                required: if has_role(entry, "gnd") {
+                    &["vref", "dropout_v", "iq_a"]
+                } else {
+                    &["vref", "dropout_v", "iadj_a"]
                 },
                 ranges: &[
                     ("dropout_v", 0.0, 10.0),
@@ -1633,7 +1637,7 @@ mod tests {
         // A behavioral pin without a converter still binds through `bind_vreg`.
         let mut sink = vreg(&[]);
         pins(&mut sink, &[("1", "in"), ("2", "gate"), ("3", "gnd")]);
-        sink.behavioral.pins.insert("gate".into(), Default::default());
+        sink.behavioral.pins.insert("gate".into(), BehavioralPin::default());
         rejects(&sink, "declares no 'out' pin");
 
         rejects(

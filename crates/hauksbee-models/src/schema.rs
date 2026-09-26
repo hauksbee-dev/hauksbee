@@ -394,9 +394,10 @@ impl Characteristic {
             let negative = values.iter().all(|v| *v < 0.0);
             let magnitude_order = negative && values.iter().map(|v| v.abs()).is_sorted();
             if !(values.is_sorted() || magnitude_order) {
-                let offsets = match negative || values.iter().all(|v| *v > 0.0) {
-                    true => "; a threshold printed as an offset from another spec is a signed offset (negative below it), ascending, with that spec named in conditions",
-                    false => "",
+                let offsets = if negative || values.iter().all(|v| *v > 0.0) {
+                    "; a threshold printed as an offset from another spec is a signed offset (negative below it), ascending, with that spec named in conditions"
+                } else {
+                    ""
                 };
                 out.push(format!("requires min <= typ <= max by signed value (a row printed negative may keep its magnitude order); keep each printed sign in its printed column{offsets}"));
             }
@@ -627,7 +628,7 @@ pub struct CurrentProgram {
     /// Behavior when the published equation asks for more than the sourced
     /// normal-operating endpoint. The safe default is to abstain. Saturation
     /// must be explicit and cited by the model author.
-    #[serde(default, skip_serializing_if = "AboveDomainBehavior::is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub above_domain: AboveDomainBehavior,
 
     /// Manufacturer programming equation, flattened into the TOML block so a
@@ -660,10 +661,8 @@ pub enum AboveDomainBehavior {
     Saturate,
 }
 
-impl AboveDomainBehavior {
-    fn is_default(&self) -> bool {
-        *self == Self::Abstain
-    }
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// Supported current-programming equations.

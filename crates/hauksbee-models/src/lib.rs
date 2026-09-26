@@ -1153,7 +1153,7 @@ mod tests {
             kind,
             raw: String::new(),
             ports: Vec::new(),
-            params: Default::default(),
+            params: BTreeMap::default(),
             model_type: model_type.map(String::from),
         }
     }

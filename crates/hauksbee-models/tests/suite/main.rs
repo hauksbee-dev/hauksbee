@@ -102,7 +102,7 @@ fn param(m: &ModelEntry, k: &str) -> f64 {
 /// Shockley forward voltage at `i` with series resistance, from the entry's own
 /// `n`/`is`/`rs` and the thermal voltage `vt` the caller's datasheet assumes.
 fn vf_at(m: &ModelEntry, i: f64, vt: f64) -> f64 {
-    param(m, "n") * vt * (i / param(m, "is")).ln() + i * param(m, "rs")
+    (param(m, "n") * vt).mul_add((i / param(m, "is")).ln(), i * param(m, "rs"))
 }
 
 /// Assert each listed pad carries its role (other pads are not checked).

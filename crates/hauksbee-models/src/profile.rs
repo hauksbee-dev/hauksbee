@@ -183,7 +183,7 @@ fn ramped(from: f64, to: f64, rise: f64, local: f64) -> f64 {
     if rise <= 0.0 || local >= rise {
         return to;
     }
-    from + (to - from) * (local / rise)
+    (to - from).mul_add(local / rise, from)
 }
 
 /// One period of a burst train evaluated at phase `phase` in `[0, period)`:
@@ -207,12 +207,12 @@ fn jitter(seed: u64, index: usize, amp: f64) -> f64 {
         return 0.0;
     }
     let mut x = seed
-        .wrapping_mul(0x9E3779B97F4A7C15)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(index as u64);
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^= x >> 31;
-    let u = (x as f64 / u64::MAX as f64) * 2.0 - 1.0;
+    let u = (x as f64 / u64::MAX as f64).mul_add(2.0, -1.0);
     u * amp
 }
 

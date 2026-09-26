@@ -667,7 +667,7 @@ fn diode_law(entry: &ModelEntry) -> Option<[f64; 3]> {
 
 /// VF of `[is, n, rs]` at `i` amperes and the solver's nominal 27 °C.
 fn diode_vf([is, n, rs]: [f64; 3], i: f64) -> f64 {
-    n * hauksbee_ir::thermal_voltage_c(27.0) * (i / is).ln_1p() + i * rs
+    (n * hauksbee_ir::thermal_voltage_c(27.0)).mul_add((i / is).ln_1p(), i * rs)
 }
 
 fn worst_miss(law: [f64; 3], points: &[(f64, f64)]) -> (f64, f64, f64) {
@@ -764,7 +764,7 @@ pub(crate) fn needless_abstention(
     required: &[&str],
     may_abstain: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    use ComponentKind::*;
+    use ComponentKind::{BjtNpn, BjtPnp, Comparator, Diode, Nmos, Opamp, Pmos};
     let rows = cited_rows(entry);
     let fits = entry.kind == Diode && vf_points(rows).and_then(|p| diode_fit(&p)).is_some();
     // Each need is `|`-separated alternatives `SYMBOLS@bias:unit`, the bias a
