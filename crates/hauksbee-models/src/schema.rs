@@ -1346,6 +1346,8 @@ impl ParamValue {
     pub const fn as_f64(&self) -> Option<f64> {
         match self {
             Self::Float(v) => Some(*v),
+            // A TOML integer is a count or a small constant; past 2^53 it rounds, as f64 must.
+            #[allow(clippy::cast_precision_loss)]
             Self::Int(v) => Some(*v as f64),
             _ => None,
         }

@@ -837,10 +837,10 @@ impl SensorSpec {
                 seen_addrs.insert(key),
                 "duplicate register addr 0x{:02x}{}",
                 r.addr,
-                if key != r.addr {
-                    format!(" (post-mask 0x{key:02x})")
-                } else {
+                if key == r.addr {
                     String::new()
+                } else {
+                    format!(" (post-mask 0x{key:02x})")
                 }
             );
             match (r.encoding, &r.r#const, &r.expr) {

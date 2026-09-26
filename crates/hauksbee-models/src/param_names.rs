@@ -393,7 +393,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
         };
         if v == 0.0
             || unit.contains('/')
-            || crate::units::si_unit(unit).is_none_or(|(s, _)| s != 1.0)
+            || crate::units::si_unit(unit).is_none_or(|(s, _)| s.to_bits() != 1.0_f64.to_bits())
         {
             continue;
         }

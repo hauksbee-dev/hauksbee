@@ -260,7 +260,7 @@ fn tidy(field: &mut Option<String>) {
         .filter(|v| !v.is_empty());
 }
 
-fn check_choice(what: &str, value: &Option<String>, allowed: &[&str]) -> Result<()> {
+fn check_choice(what: &str, value: Option<&String>, allowed: &[&str]) -> Result<()> {
     match value {
         Some(v) if !allowed.contains(&v.as_str()) => {
             bail!("{what} must be one of {}, not '{v}'", allowed.join(", "))
@@ -269,7 +269,7 @@ fn check_choice(what: &str, value: &Option<String>, allowed: &[&str]) -> Result<
     }
 }
 
-fn check_model(what: &str, value: &Option<String>) -> Result<()> {
+fn check_model(what: &str, value: Option<&String>) -> Result<()> {
     match value {
         Some(v) if v.chars().any(char::is_whitespace) || v.starts_with('-') => {
             bail!("{what} does not look like a model name: '{v}'")
@@ -337,15 +337,15 @@ impl ExtractConfig {
                     "{name}.command must be an executable name or path without control characters"
                 );
             }
-            check_model(&format!("{name}.model"), &s.model)?;
-            check_choice(&format!("{name}.effort"), &s.effort, a.efforts)?;
+            check_model(&format!("{name}.model"), s.model.as_ref())?;
+            check_choice(&format!("{name}.effort"), s.effort.as_ref(), a.efforts)?;
             check_choice(
                 &format!("{name}.permission_mode"),
-                &s.permission_mode,
+                s.permission_mode.as_ref(),
                 a.permission_modes,
             )?;
         }
-        check_model("api.model", &self.api.model)?;
+        check_model("api.model", self.api.model.as_ref())?;
         if let Some(url) = self
             .api
             .base_url
@@ -460,7 +460,7 @@ impl ExtractConfig {
                 "backend" => {
                     self.backend = opt.filter(|v| v != "auto").map(|v| v.parse()).transpose()?;
                 }
-                "retries" => self.retries = number("retries")?.map(|n| n as usize),
+                "retries" => self.retries = number("retries")?.and_then(|n| n.try_into().ok()),
                 "timeout_secs" => self.timeout_secs = number("timeout_secs")?,
                 _ => return Err(unknown()),
             }
@@ -1015,14 +1015,18 @@ impl Resolved {
             || format!("{} at {}", self.model(), self.api.base_url),
             |effort| format!("{}, {effort} effort", self.model()),
         );
-        let mut routing = self
+        let routing = self
             .custom_command(self.backend)
             .map(|_| format!("; {}", self.sends_data_to(self.backend)))
             .unwrap_or_default();
-        if let (Some(p), Backend::Codex) = (&self.codex.profile, self.backend) {
-            routing += &format!("; profile {p}: your codex config applies");
-        }
-        format!("{} ({detail}{routing})", self.backend.label())
+        let codex_profile = self
+            .codex
+            .profile
+            .as_ref()
+            .filter(|_| self.backend == Backend::Codex);
+        let profile = codex_profile.map(|p| format!("; profile {p}: your codex config applies"));
+        let profile = profile.unwrap_or_default();
+        format!("{} ({detail}{routing}{profile})", self.backend.label())
     }
 }
 

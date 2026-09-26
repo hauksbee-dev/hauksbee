@@ -539,6 +539,8 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
 /// dielectric), or both, and `None` when unparsed garbage remains. The
 /// caller must then reject the string: silently dropping the tail is exactly
 /// how "`0402_47k`" once read as 402 Ω.
+// The three outcomes are distinct: no unit (`Some(None)`), a unit, and garbage (`None`).
+#[allow(clippy::option_option)]
 fn parse_tail(t: &str) -> Option<Option<String>> {
     if t.is_empty() {
         return Some(None);

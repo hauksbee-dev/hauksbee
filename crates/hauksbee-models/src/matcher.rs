@@ -56,12 +56,12 @@ impl CompiledEntry {
     /// Rules are AND-ed: every populated rule must match.
     #[must_use]
     pub fn matches(&self, q: &ComponentQuery) -> bool {
-        fn field(v: &Option<String>) -> &str {
-            v.as_deref().unwrap_or("")
+        fn field(v: Option<&String>) -> &str {
+            v.map_or("", String::as_str)
         }
         // lib_id: a trailing ':' makes it a library prefix, else an exact id.
         let lib_ok = self.entry.r#match.lib_id.as_deref().is_none_or(|lid| {
-            let query_lid = field(&q.lib_id);
+            let query_lid = field(q.lib_id.as_ref());
             if lid.ends_with(':') {
                 query_lid.starts_with(lid)
             } else {
@@ -69,7 +69,7 @@ impl CompiledEntry {
             }
         });
         // European comma-decimal is normalised before the value regex runs.
-        let value = normalise_value_str(field(&q.value));
+        let value = normalise_value_str(field(q.value.as_ref()));
         let re_ok = |re: &Option<Regex>, text: &str| re.as_ref().is_none_or(|re| re.is_match(text));
         // Named source properties: every authored rule is required, and a
         // missing property is not evidence, so it cannot match.
@@ -81,8 +81,8 @@ impl CompiledEntry {
         });
         lib_ok
             && re_ok(&self.value_re, &value)
-            && re_ok(&self.footprint_re, field(&q.footprint))
-            && re_ok(&self.mpn_re, field(&q.mpn))
+            && re_ok(&self.footprint_re, field(q.footprint.as_ref()))
+            && re_ok(&self.mpn_re, field(q.mpn.as_ref()))
             && properties_ok
     }
 
@@ -112,7 +112,7 @@ impl CompiledEntry {
         lib + 30 * u32::from(rules.value_re.is_some())
             + 40 * u32::from(rules.mpn_re.is_some())
             + 5 * u32::from(footprint)
-            + 50 * rules.properties.len() as u32
+            + u32::try_from(rules.properties.len()).map_or(u32::MAX, |n| n.saturating_mul(50))
     }
 
     /// Confidence points for a value rule that lists the matched value

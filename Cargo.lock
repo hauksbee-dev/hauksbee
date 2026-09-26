@@ -1431,7 +1431,6 @@ dependencies = [
  "forge-sexpr",
  "hauksbee-ir",
  "hauksbee-testkit",
- "once_cell",
  "regex",
  "regex-syntax",
  "serde",

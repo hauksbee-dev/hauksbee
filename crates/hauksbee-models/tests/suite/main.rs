@@ -146,8 +146,8 @@ fn has_supply_range(
             entry,
             OperatingEnvelope::SupplyRange { pin: p, min_v, max_v, abs_max_v, basis, .. }
                 if p == pin
-                    && *min_v == min
-                    && *max_v == max
+                    && min_v.to_bits() == min.to_bits()
+                    && max_v.to_bits() == max.to_bits()
                     && abs_max.is_none_or(|a| *abs_max_v == Some(a))
                     && basis.contains(cites)
         )

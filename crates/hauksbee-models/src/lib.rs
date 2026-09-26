@@ -62,7 +62,6 @@ pub mod variants;
 
 use std::path::{Path, PathBuf};
 
-use once_cell::sync::Lazy;
 use regex::Error as RegexError;
 use thiserror::Error;
 
@@ -419,7 +418,8 @@ impl ModelLibrary {
     /// Lazily-initialised shared built-in library.
     #[must_use]
     pub fn builtin_shared() -> &'static Self {
-        static LIB: Lazy<ModelLibrary> = Lazy::new(ModelLibrary::builtin);
+        static LIB: std::sync::LazyLock<ModelLibrary> =
+            std::sync::LazyLock::new(ModelLibrary::builtin);
         &LIB
     }
 
@@ -707,7 +707,7 @@ impl ModelLibrary {
         use std::cmp::Reverse;
         // Layer 40: SPICE cards, match by card name against value and MPN.
         if let Some(card) = self.find_spice_match(q) {
-            return self.resolution_from_spice(card, q.clone());
+            return Self::resolution_from_spice(card, q.clone());
         }
 
         // Layers 0..30: one scan, best (layer priority, specificity,
@@ -891,7 +891,7 @@ impl ModelLibrary {
         })
     }
 
-    fn resolution_from_spice(&self, card: &SpiceCard, query: ComponentQuery) -> Resolution {
+    fn resolution_from_spice(card: &SpiceCard, query: ComponentQuery) -> Resolution {
         // A `.subckt` is a multi-terminal macro, not a single-device kind, and
         // an unrecognized `.model` type must not be silently claimed as a
         // passive with Exact confidence (that shadows the real part). Both
@@ -1006,10 +1006,11 @@ const fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
         SourceLayer::Builtin => ModelSourceTier::CuratedLibrary,
         SourceLayer::Pack => ModelSourceTier::CuratedPack,
         SourceLayer::UserDir => ModelSourceTier::DatasheetDerived,
-        SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => ModelSourceTier::UserModel,
-        // A loose card is user supplied. Vendor provenance is established
+        // A loose SPICE card is user supplied. Vendor provenance is established
         // only by a licensed vendor pack manifest.
-        SourceLayer::Spice => ModelSourceTier::UserModel,
+        SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag | SourceLayer::Spice => {
+            ModelSourceTier::UserModel
+        }
     }
 }
 
@@ -1066,7 +1067,7 @@ impl ResolutionReport {
         for r in &self.resolutions {
             n[r.confidence as usize] += 1;
         }
-        (n[0], n[1], n[2], n[3])
+        n.into()
     }
 
     /// All unresolved queries.
@@ -1153,7 +1154,7 @@ mod tests {
             kind,
             raw: String::new(),
             ports: Vec::new(),
-            params: BTreeMap::default(),
+            params: std::collections::BTreeMap::new(),
             model_type: model_type.map(String::from),
         }
     }

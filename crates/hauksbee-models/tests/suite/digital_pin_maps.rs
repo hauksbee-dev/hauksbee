@@ -192,7 +192,7 @@ fn bma423_accelerometer_pin_map() {
 fn bma423_carries_the_ratiometric_levels_and_the_four_volt_ceiling() {
     let m = expect_model("BMA423");
     let vddio = 3.3_f64;
-    for (key, factor) in [("vih", 0.7), ("vil", 0.3), ("voh", 0.8), ("vol", 0.2)] {
+    for (key, factor) in [("vih", 0.7_f64), ("vil", 0.3), ("voh", 0.8), ("vol", 0.2)] {
         let got = m.params.get_f64(key).unwrap_or_else(|| panic!("{key} set"));
         assert!(
             factor.mul_add(-vddio, got).abs() < 5e-3,

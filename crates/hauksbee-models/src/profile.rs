@@ -202,6 +202,8 @@ fn ramp_hold(from: f64, level: f64, idle: f64, rise: f64, duration: f64, phase: 
 
 /// Deterministic jitter in `[-amp, amp]` from `(seed, index)` (splitmix64).
 /// Zero amplitude yields exactly zero so default profiles are jitter-free.
+// Mapping 64 hash bits onto [-1, 1] drops the low bits by design.
+#[allow(clippy::cast_precision_loss)]
 fn jitter(seed: u64, index: usize, amp: f64) -> f64 {
     if amp == 0.0 {
         return 0.0;
@@ -259,20 +261,16 @@ mod tests {
         assert!((baseline - 0.040).abs() < 1e-6, "baseline {baseline}");
 
         // Find the max over the first full period.
-        let mut peak = 0.0f64;
-        let t0 = 0.001;
-        let mut t = t0;
-        while t < t0 + 0.100 {
-            peak = peak.max(p.current_at(t, 0));
-            t += 0.0002;
-        }
+        let peak = (0..=500)
+            .map(|k| p.current_at(f64::from(k).mul_add(0.0002, 0.001), 0))
+            .fold(0.0, f64::max);
         assert!(
             (peak - 0.240).abs() < 1e-6,
             "burst peak {peak} should hit 240 mA"
         );
 
         // Late in the period (after the 10 ms burst) it idles at 40 mA.
-        let idle = p.current_at(t0 + 0.050, 0);
+        let idle = p.current_at(0.051, 0);
         assert!((idle - 0.040).abs() < 1e-6, "between-burst idle {idle}");
     }
 
@@ -342,7 +340,10 @@ mod tests {
             segments: vec![seg],
         };
         // Same seed => identical waveform; different seed => may differ.
-        assert_eq!(p.current_at(0.05, 7), p.current_at(0.05, 7));
+        assert_eq!(
+            p.current_at(0.05, 7).to_bits(),
+            p.current_at(0.05, 7).to_bits()
+        );
         let s0 = (0..200)
             .map(|k| p.current_at(f64::from(k) * 0.0005, 0))
             .sum::<f64>();

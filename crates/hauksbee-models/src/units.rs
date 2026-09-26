@@ -178,7 +178,7 @@ fn converted_from(text: &str) -> Option<(&str, f64)> {
     }
     .trim_end_matches([',', ';', '.', ')']);
     si_unit(unit)
-        .filter(|(scale, _)| *scale != 1.0)
+        .filter(|(scale, _)| scale.to_bits() != 1.0_f64.to_bits())
         .map(|(scale, _)| (unit, scale))
 }
 
@@ -191,7 +191,7 @@ pub fn conversion_problem(
     unit: &str,
     columns: &[(&str, Option<f64>)],
 ) -> Option<String> {
-    si_unit(unit).filter(|(scale, _)| *scale == 1.0)?;
+    si_unit(unit).filter(|(scale, _)| scale.to_bits() == 1.0_f64.to_bits())?;
     let (from, scale) = texts.iter().find_map(|t| converted_from(t))?;
     let (column, v) = columns.iter().find_map(|&(column, v)| {
         let wrong = |v: &f64| *v != 0.0 && !(1e-4..=1e4).contains(&(v.abs() / scale));

@@ -505,12 +505,12 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 let mut any = false;
                 for role in raw.split(',').map(str::trim).filter(|r| !r.is_empty()) {
                     any = true;
-                    if !seen.insert(role.to_ascii_lowercase()) {
-                        p.push(format!("params.must_not_float_roles repeats role '{role}'"));
-                    } else {
+                    if seen.insert(role.to_ascii_lowercase()) {
                         p.require(has_role_ci(entry, role), || {
                             format!("params.must_not_float_roles entry '{role}' is not a role in [models.pins]")
                         });
+                    } else {
+                        p.push(format!("params.must_not_float_roles repeats role '{role}'"));
                     }
                 }
                 p.require(any, || "params.must_not_float_roles names no roles".into());
@@ -1637,7 +1637,7 @@ mod tests {
         // A behavioral pin without a converter still binds through `bind_vreg`.
         let mut sink = vreg(&[]);
         pins(&mut sink, &[("1", "in"), ("2", "gate"), ("3", "gnd")]);
-        sink.behavioral.pins.insert("gate".into(), BehavioralPin::default());
+        sink.behavioral.pins.insert("gate".into(), crate::behavioral::BehavioralPin::default());
         rejects(&sink, "declares no 'out' pin");
 
         rejects(
@@ -1737,13 +1737,13 @@ mod tests {
         rejects(&e, "missing");
     }
 
-    fn i2c_eeprom() -> Option<PeripheralSpec> {
-        Some(PeripheralSpec::I2cEeprom {
+    const fn i2c_eeprom() -> PeripheralSpec {
+        PeripheralSpec::I2cEeprom {
             address: 0x50,
             size_bytes: 128,
             page_size: 8,
             word_address_bytes: 1,
-        })
+        }
     }
 
     #[test]
@@ -1753,7 +1753,7 @@ mod tests {
             &mut e,
             &[("1", "scl"), ("2", "gnd"), ("3", "sda"), ("4", "vcc")],
         );
-        e.peripheral = i2c_eeprom();
+        e.peripheral = Some(i2c_eeprom());
         e.peripheral_power = Some(PeripheralPower {
             supply_role: "vcc".into(),
             return_role: "gnd".into(),
@@ -1767,7 +1767,7 @@ mod tests {
 
         e.peripheral = None;
         rejects(&e, "requires a [models.peripheral]");
-        e.peripheral = i2c_eeprom();
+        e.peripheral = Some(i2c_eeprom());
 
         e.peripheral_power.as_mut().unwrap().supply_role = "missing".into();
         rejects(&e, "not a role");

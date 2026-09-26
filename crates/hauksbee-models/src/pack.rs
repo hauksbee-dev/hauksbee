@@ -192,7 +192,7 @@ fn parse_version(field: &'static str, v: &str) -> Result<(u64, u64, u64), PackEr
         }
         nums[i] = p.parse().map_err(|_| bad())?;
     }
-    Ok((nums[0], nums[1], nums[2]))
+    Ok(nums.into())
 }
 
 fn valid_pack_name(name: &str) -> bool {
