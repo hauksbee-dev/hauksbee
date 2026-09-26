@@ -84,9 +84,11 @@ async fn ws_protocol_roundtrip() {
     // Send Play (client frames must be masked).
     write_ws_text(&mut stream, r#"{"type":"Play"}"#).await;
 
-    // We must receive SimFrames; within ~2s the LED net should be present.
+    // Bound by wall clock, not frame count: under load the pacer shrinks the
+    // simulated time per frame, so a fixed frame budget can end mid-message.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut saw_frame = false;
-    for _ in 0..120 {
+    while std::time::Instant::now() < deadline {
         let payload = read_ws_text(&mut stream, &mut residue).await;
         if let Ok(ServerMessage::SimFrame(f)) = serde_json::from_str(&payload) {
             assert!(f.net_voltages.contains_key("D13_LED"));
@@ -99,7 +101,7 @@ async fn ws_protocol_roundtrip() {
     // Serial command: 'i' returns the ident string via frame uart payloads.
     write_ws_text(&mut stream, r#"{"type":"Serial","mcu":"U1","data":[105]}"#).await;
     let mut uart_text = String::new();
-    for _ in 0..240 {
+    while std::time::Instant::now() < deadline {
         let payload = read_ws_text(&mut stream, &mut residue).await;
         if let Ok(ServerMessage::SimFrame(f)) = serde_json::from_str(&payload) {
             for bytes in f.uart.values() {
