@@ -1,0 +1,29 @@
+# Off P-FET stages with floating drains, behind a rail switch 0.1 V over
+# threshold, vs ngspice.
+#
+# Two properties at once. Convergence: the deck used to be refused ("DC
+# homotopy failed"), because the old channel form gave an off device's drain
+# a conductance that collapsed a millionfold within microvolts of its source,
+# and Newton limit-cycled on the seven floating drains through every homotopy
+# rung. It now converges on plain Newton. Accuracy: the rail switch carries
+# exactly the Level 1 current at 0.1 V of overdrive, so the switched rail
+# lands where ngspice puts it.
+#
+# The floating drains themselves are not probed: nothing but leakage sets
+# them and the two simulators leak by different conventions (see the deck).
+#
+# Measured: V(out) 1.2e-6, V(gd0) 1.1e-6, all of it hauksbee's 1e-12 S node
+# gmin on the 50k gate divider: it holds the switch gate 60 nV low, which the
+# square law 0.1 V over threshold amplifies by 2/vov = 20 in the current. The
+# bars are ~10x that: any channel that moves the switch current by 1e-5 at
+# this bias fails.
+analysis = "op"
+description = "floating-drain off PMOS stages behind a near-threshold rail switch"
+
+[[probe]]
+expr = "V(out)"
+reltol = 1.0e-05
+
+[[probe]]
+expr = "V(gd0)"
+reltol = 1.0e-05

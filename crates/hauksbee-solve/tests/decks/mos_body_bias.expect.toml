@@ -2,13 +2,14 @@
 # ngspice level 1 uses the identical vto + gamma*(sqrt(phi-vbs)-sqrt(phi))
 # expression, so the curves coincide except at the threshold knee, where
 # hauksbee's smooth subthreshold tail (ngspice level 1 has zero current
-# below vth) drops v(d) by ~60 mV early: the documented Level-1 deviation.
-# Measured worst 1.09e-2 at the shifted threshold (sweep = 1.75 V, exactly
-# the GAMMA/PHI prediction); the bar is ~3x that.
+# below vth) drops v(d) by ~5 mV early: the documented Level-1 deviation.
+# Measured worst 1.09e-3 at the shifted threshold (sweep = 1.75 V, exactly
+# the GAMMA/PHI prediction); the bar is ~3x that. The former softplus
+# overdrive channel measured 6.6e-3 here, a 33 mV droop.
 analysis = "dc"
 description = "reverse body bias shifts the threshold via GAMMA/PHI"
 full_scale = 5.0
 
 [[probe]]
 expr = "V(d)"
-reltol = 3.0e-02
+reltol = 3.0e-03

@@ -981,11 +981,7 @@ fn stamp_mosfet_ac(
     }
     let vgs = vg - vs;
     let vds = vd - vs;
-    let vt = hauksbee_ir::thermal_voltage_c(if opts.effects.temperature {
-        opts.model_temp()
-    } else {
-        27.0
-    });
+    let vt = hauksbee_ir::thermal_voltage_c(opts.model_temp());
     // Body-effect threshold at the OP, mirroring the transient stamp; gamma-
     // free models take the plain-vto path bit-identically.
     let bulk = b.unwrap_or(s);
@@ -997,7 +993,7 @@ fn stamp_mosfet_ac(
     };
     let nsub = model.n_sub.max(1.0);
 
-    // Small-signal channel tangent: the SAME shared C1 blend the transient
+    // Small-signal channel tangent: the SAME shared C1 channel the transient
     // stamp linearizes (`crate::stamp::mos_channel`), evaluated at the OP,
     // one function, so the DC and AC tangents cannot disagree at threshold.
     let lambda = if opts.effects.early_effect {

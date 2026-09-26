@@ -1498,27 +1498,34 @@ pub fn mos_body_vth(model: &MosfetModel, vbs: f64) -> (f64, f64) {
 /// voltages (`vov = vgs - vth`, `vds >= 0`), shared by the transient stamp and
 /// the AC tangent so the two linearizations CANNOT drift apart.
 ///
-/// The subthreshold blend is the `softplus` overdrive (the gate-charge region
-/// switch's discipline, applied to the channel itself):
+/// Shichman-Hodges in forward/reverse (source-end minus drain-end) form:
 ///
-///   `vov_eff` = 2·n·Vt · softplus(vov / (2·n·Vt))
+///   `id = beta/2 · [f(vov)² - f(vov - vds)²] · (1 + lambda·vds)`
 ///
-/// fed into the plain Shichman-Hodges triode/saturation expressions. Above
-/// threshold `vov_eff -> vov` (the square law, exponentially fast); below,
-/// `vov_eff -> 2·n·Vt·e^(vov/(2·n·Vt))`, so the saturation current tends to
-/// `2·beta·(n·Vt)²·e^(vov/(n·Vt))`, an exponential subthreshold tail with
-/// slope n·Vt. Blending the OVERDRIVE rather than switching between an
-/// exponential branch and a square-law branch is what buys that continuity:
-/// the two-branch form matches neither value nor slope at `vgs == vth` (the
-/// exponential branch carries `beta·(n·Vt)²·e` where the square law carries
-/// 0), so a gate sweep sees `id` drop by the full `i0` and `gm` collapse to 0
-/// crossing threshold, a Newton limit-cycle trap and a lie against the
-/// model's promised smooth subthreshold tail. The blended
-/// overdrive is C-infinity in `vgs`, so `id` and `gm` are continuous
-/// everywhere by construction (`gm` picks up the `sigmoid` chain factor
-/// `d vov_eff / d vgs`). Channel-length modulation multiplies every region
-/// including the tail; the (1 + lambda·vds) factor would otherwise jump at
-/// the region switch.
+/// with the overdrive join `f(x) = x` for `x >= w` and `f(x) = w·e^(x/w - 1)`
+/// below, `w = 2·n·Vt`: the only C1 junction of the square law with an
+/// exponential whose current slope is n·Vt. With the source end at least `w`
+/// past threshold this IS Level 1: triode `beta·(vov·vds - vds²/2)` while the
+/// drain end is too, saturation `beta/2·vov²` once the drain-end term has
+/// decayed (it e-folds per n·Vt beyond pinch-off). So a switch 0.07 V over
+/// threshold in saturation carries ngspice's current exactly, where the
+/// former softplus overdrive carried 1.36x at 0.09 V and 1.73x at 2·n·Vt.
+/// Anywhere else the join exceeds `max(x, 0)` by at most `0.162·w²` in `f²`
+/// (its worst point, a fifth of the way up), so
+/// `|id - id_level1| <= 0.081·beta·w²·(1 + lambda·vds)`, an excess that lives
+/// within a few n·Vt of threshold at either channel end.
+///
+/// Below threshold the same expression is the physical subthreshold channel,
+/// `i_s·e^(vov/(n·Vt))·(1 - e^(-vds/(n·Vt)))`, saturating within a few n·Vt of
+/// drain bias. A regional form with saturation voltage `f(vov)` shrinks the
+/// cutoff triode window to microvolts instead, so an off device's drain
+/// conductance collapses a millionfold within microvolts of its source: a
+/// floating drain (an off P-FET stage whose drain nothing else loads) then
+/// limit-cycles Newton through every homotopy rung. Both ends share `f`, so
+/// `id == 0` at `vds == 0` with the same `gds` from either side of the
+/// drain/source swap, and `id`, `gm` and `gds` are continuous everywhere
+/// (their slopes jump only where a channel end crosses the join).
+/// Channel-length modulation multiplies every region including the tail.
 #[inline]
 pub fn mos_channel(
     beta: f64,
@@ -1528,26 +1535,17 @@ pub fn mos_channel(
     lambda: f64,
     gmin: f64,
 ) -> (f64, f64, f64) {
-    let two_nvt = 2.0 * nvt;
-    let u = vov / two_nvt;
-    let vov_eff = two_nvt * softplus(u);
-    let dvov = sigmoid(u); // d vov_eff / d vgs, the C1 chain factor
+    let w = 2.0 * nvt;
+    let join = |x: f64| {
+        let e = (x / w - 1.0).min(0.0).exp(); // f'(x), 1 above the join
+        (if x >= w { x } else { w * e }, e)
+    };
+    let ((ff, dff), (fr, dfr)) = (join(vov), join(vov - vds));
     let clm = lambda.mul_add(vds, 1.0);
-    if vds < vov_eff {
-        // Triode (vov_eff > 0 always, so vds -> 0 lands here: id -> 0, no
-        // phantom subthreshold current across a zero-bias channel).
-        let id = beta * (vov_eff * vds - 0.5 * vds * vds) * clm;
-        let gm = beta * vds * clm * dvov;
-        let gds = beta * (vov_eff - vds).mul_add(clm, (vov_eff * vds - 0.5 * vds * vds) * lambda);
-        (id, gm.max(gmin), gds.max(gmin))
-    } else {
-        // Saturation; the subthreshold exponential is this branch's
-        // small-vov_eff limit, not a separate region.
-        let id = 0.5 * beta * vov_eff * vov_eff * clm;
-        let gm = beta * vov_eff * clm * dvov;
-        let gds = 0.5 * beta * vov_eff * vov_eff * lambda;
-        (id, gm.max(gmin), gds.max(gmin))
-    }
+    let i0 = 0.5 * beta * (ff - fr) * (ff + fr);
+    let gm = beta * ff.mul_add(dff, -fr * dfr) * clm;
+    let gds = (beta * fr * dfr).mul_add(clm, i0 * lambda);
+    (i0 * clm, gm.max(gmin), gds.max(gmin))
 }
 
 /// THE CHARGE-MODEL CHOICE: the gate
@@ -1643,17 +1641,14 @@ pub fn mos_charges_at(
     let delta = 2.0 * model.n_sub.max(1.0) * vt;
     let q_gs = mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs).0;
     let q_gd = mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd).0;
-    let q_bd = if model.cbd > 0.0 {
-        depletion_charge(model.cbd, model.pb, model.mj, DIODE_FC, vbd).0
-    } else {
-        0.0
+    let q_bulk = |cbx: f64, v: f64| {
+        if cbx > 0.0 {
+            depletion_charge(cbx, model.pb, model.mj, DIODE_FC, v).0
+        } else {
+            0.0
+        }
     };
-    let q_bs = if model.cbs > 0.0 {
-        depletion_charge(model.cbs, model.pb, model.mj, DIODE_FC, vbs).0
-    } else {
-        0.0
-    };
-    (q_gs, q_gd, q_bd, q_bs)
+    (q_gs, q_gd, q_bulk(model.cbd, vbd), q_bulk(model.cbs, vbs))
 }
 
 /// FOLDED junction voltages `(vgs, vgd, vbd, vbs)` of a MOSFET at the
@@ -2232,7 +2227,7 @@ fn stamp_mosfet<S: StampSink>(
     };
 
     let nsub = model.n_sub.max(1.0);
-    // Channel evaluation via the shared C1-continuous blend (see
+    // Channel evaluation via the shared C1 Level 1 channel (see
     // [`mos_channel`]); the AC tangent calls the SAME function at the OP.
     let lambda = if ctx.opts.effects.early_effect {
         model.lambda
@@ -3403,11 +3398,11 @@ mod tests {
         );
     }
 
-    /// The blended MOS channel gives id and gm with no jump across threshold,
-    /// gm == d id/d vgs by finite difference, for signal- and power-scale
-    /// beta, with and without CLM, in saturation and triode.
+    /// The MOS channel gives id and gm with no jump across threshold, and
+    /// gm == d id/d vgs and gds == d id/d vds by finite difference, for
+    /// signal- and power-scale beta, with and without CLM, in saturation and
+    /// triode.
     #[test]
-    #[allow(clippy::while_float)] // sweeps vov across a float grid
     fn mos_channel_id_and_gm_continuous_across_vth() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
         for &(beta, nsub, lambda, vds) in &[
@@ -3421,9 +3416,8 @@ mod tests {
             let clm = lambda.mul_add(vds, 1.0);
             let h = 1e-4;
             let mut prev = f(-0.3);
-            let mut k = 1;
-            while -0.3 + f64::from(k) * h <= 0.3 {
-                let vov = -0.3 + f64::from(k) * h;
+            for k in 1..=6000 {
+                let vov = f64::from(k).mul_add(h, -0.3);
                 let cur = f(vov);
                 assert!(
                     (cur.0 - prev.0).abs() <= (prev.1.max(cur.1) * h).mul_add(1.5, 1e-18),
@@ -3434,7 +3428,6 @@ mod tests {
                     "gm jump at vov={vov} (beta={beta})"
                 );
                 prev = cur;
-                k += 1;
             }
             let (below, at0, above) = (f(-1e-9), f(0.0), f(1e-9));
             assert!((above.0 - below.0).abs() <= 1e-6 * at0.0.abs().max(1e-30));
@@ -3447,26 +3440,46 @@ mod tests {
                     (fd - gm).abs() <= 1e-4 * gm.abs().max(1e-15),
                     "gm != d id/d vgs at vov={v}: fd={fd:e} gm={gm:e}"
                 );
+                let g = |x: f64| mos_channel(beta, nvt, v, x, lambda, 0.0);
+                let (fdd, gds) = ((g(vds + d).0 - g(vds - d).0) / (2.0 * d), g(vds).2);
+                assert!(
+                    (fdd - gds).abs() <= 1e-4 * gds.abs().max(1e-6 * beta),
+                    "gds != d id/d vds at vov={v}: fd={fdd:e} gds={gds:e}"
+                );
             }
         }
     }
 
-    /// Exponential tail with slope n·Vt below threshold, square law above,
-    /// zero current across a zero-bias channel.
+    /// Level 1 exactly in triode with both channel ends 2·n·Vt past threshold
+    /// and in saturation well beyond pinch-off, an n·Vt subthreshold slope
+    /// with the `1 - e^(-vds/(n·Vt))` drain dependence, zero current across a
+    /// zero-bias channel, and never more than the documented
+    /// `0.081·beta·(2·n·Vt)²` from Level 1 anywhere.
     #[test]
     fn mos_channel_regions_physically_sane() {
         let nvt = hauksbee_ir::thermal_voltage_c(27.0);
-        let beta = 2e-5;
-        let f = |vov: f64, vds: f64| mos_channel(beta, nvt, vov, vds, 0.0, 0.0);
-        let ratio = f(-0.2 + nvt, 2.0).0 / f(-0.2, 2.0).0;
-        assert!(
-            (ratio - std::f64::consts::E).abs() < 0.05 * std::f64::consts::E,
-            "subthreshold ratio {ratio}"
-        );
-        let sq = 0.5 * beta * 0.5 * 0.5;
-        assert!(((f(0.5, 2.0).0 - sq) / sq).abs() < 1e-3);
-        assert!(f(-0.1, 0.0).0 == 0.0);
-        assert!(f(0.5, 0.0).0 == 0.0);
+        let (beta, w) = (2e-5, 2.0 * nvt);
+        let f = |vov: f64, vds: f64| mos_channel(beta, nvt, vov, vds, 0.0, 0.0).0;
+        let level1 = |vov: f64, vds: f64| {
+            let (a, b) = (vov.max(0.0), (vov - vds).max(0.0));
+            0.5 * beta * (a - b) * (a + b)
+        };
+        let slope = f(nvt - 0.2, 2.0) / f(-0.2, 2.0) - std::f64::consts::E;
+        let tail = f(-0.2, nvt) / f(-0.2, 2.0) + (-1.0f64).exp_m1();
+        assert!(slope.abs().max(tail.abs()) < 1e-9, "{slope:e} {tail:e}");
+        for (vov, vds) in [(0.5, 2.0), (w, 2.0), (0.5, 0.1), (3.0, 1.0)] {
+            let err = f(vov, vds) / level1(vov, vds) - 1.0;
+            assert!(err.abs() <= 1e-12, "{err:e} at {vov},{vds}");
+        }
+        for i in -30..=50 {
+            for j in 0..=50 {
+                let (vov, vds) = (f64::from(i) * 0.01, f64::from(j) * 0.02);
+                let dev = (f(vov, vds) - level1(vov, vds)).abs();
+                assert!(dev <= 0.081 * beta * w * w, "{dev:e} at {vov},{vds}");
+            }
+        }
+        assert!(f(-0.1, 0.0) == 0.0);
+        assert!(f(0.5, 0.0) == 0.0);
     }
 
     /// Forward-difference partials match analytic derivatives (exact on the

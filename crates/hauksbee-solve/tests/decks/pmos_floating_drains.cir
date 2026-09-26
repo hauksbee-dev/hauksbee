@@ -1,0 +1,46 @@
+PMOS stages with floating drains behind a near-threshold rail switch
+* A P-FET rail switch, its gate held at half the 2.4 V supply by a 100k
+* divider (0.1 V of overdrive), feeds a switched rail loaded by 10k and by
+* seven driver stages. Each stage halves the rail onto the gate of a P-FET
+* whose source and bulk sit on the rail and whose drain connects to nothing,
+* so every stage FET is off (0.76 V short of threshold) with a floating drain.
+*
+* Only leakage sets a floating drain's voltage, and the two simulators leak
+* differently (ngspice ties it to the bulk through the drain junction's gmin;
+* hauksbee has the node gmin to ground against the off channel's subthreshold
+* tail), so those nodes are not probed. Everything probed is a Level 1
+* answer both must agree on.
+*
+* Until the channel took its forward/reverse form (stamp.rs `mos_channel`),
+* an off channel's drain conductance collapsed a millionfold within
+* microvolts of its source, Newton limit-cycled on the floating drains
+* through every homotopy rung, and this deck was refused outright.
+VS vs 0 DC 2.4
+MSW out gsw vs vs PSW
+R1 vs gsw 100k
+R2 gsw 0 100k
+RO out 0 10k
+RB0 out gd0 100
+RA0 gd0 0 100
+MD0 nc0 gd0 out out PSW
+RB1 out gd1 100
+RA1 gd1 0 100
+MD1 nc1 gd1 out out PSW
+RB2 out gd2 100
+RA2 gd2 0 100
+MD2 nc2 gd2 out out PSW
+RB3 out gd3 100
+RA3 gd3 0 100
+MD3 nc3 gd3 out out PSW
+RB4 out gd4 100
+RA4 gd4 0 100
+MD4 nc4 gd4 out out PSW
+RB5 out gd5 100
+RA5 gd5 0 100
+MD5 nc5 gd5 out out PSW
+RB6 out gd6 100
+RA6 gd6 0 100
+MD6 nc6 gd6 out out PSW
+.model PSW PMOS level=1 vto=-1.1 kp=4.5 lambda=0.04 rd=0.08 rs=0.02
+.op
+.end
