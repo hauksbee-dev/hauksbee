@@ -257,6 +257,11 @@ struct ConverterLeg {
     last_iout_a: f64,
     /// Last reflected input current commanded (A).
     last_iin_a: f64,
+    /// The previous DC-settle iterate `(command, V(fb))`, for the secant step.
+    settle_prev: Option<(f64, f64)>,
+    /// The regulated `(command, output current)` a feedback converter settled
+    /// at before t=0, when it settled enabled (see [`BehavioralDevice::settle_converter`]).
+    settled: Option<(f64, f64)>,
 }
 
 impl ConverterLeg {
@@ -892,6 +897,8 @@ impl BehavioralDevice {
                         last_cmd_vout: initial_vout,
                         last_iout_a: 0.0,
                         last_iin_a: 0.0,
+                        settle_prev: None,
+                        settled: None,
                     });
                 }
             }
@@ -1020,6 +1027,17 @@ impl BehavioralDevice {
         self.converter.as_ref().map(|c| c.out_node)
     }
 
+    /// The converter's output source and how its dissipation is estimated.
+    #[must_use]
+    pub fn converter_heat(&self) -> Option<(DeviceId, crate::stress::RegulatorHeat)> {
+        let c = self.converter.as_ref()?;
+        let heat = crate::stress::RegulatorHeat::Converter {
+            input: c.in_node,
+            in_source: c.in_isource,
+        };
+        Some((c.out_vsource, heat))
+    }
+
     /// The effective input-current limit of the converter (A), or None.
     #[must_use]
     pub fn converter_iin_limit(&self) -> Option<f64> {
@@ -1106,7 +1124,7 @@ impl BehavioralDevice {
 
         // 4. Converter regulation + limits.
         if self.converter.is_some() {
-            self.update_converter(circuit, node_v);
+            self.update_converter(circuit, node_v, None);
         }
 
         // 5. Expression laws. Evaluate against a context rebuilt AFTER the FSM
@@ -1290,11 +1308,72 @@ impl BehavioralDevice {
         }
     }
 
+    /// Settle the converter at a DC operating point: one converter update (no
+    /// FSM, profile or law advances), whose feedback command is a secant step
+    /// on `V(fb) = vref` once two iterates exist, since the per-chunk
+    /// relaxation alone needs hundreds of solves. Returns how far the command
+    /// moved (0 without a converter).
+    pub fn settle_converter(
+        &mut self,
+        circuit: &mut Circuit,
+        node_v: &dyn Fn(NodeId) -> f64,
+    ) -> f64 {
+        let Some(c) = self.converter.as_mut() else {
+            return 0.0;
+        };
+        let cmd = c.last_cmd_vout;
+        let fb = c.cfg.feedback.as_ref().zip(c.feedback_node);
+        let fb = fb.map(|(f, n)| (f.vref_v, node_v(n)));
+        let secant = |(vref, vfb): (f64, f64), (cmd0, fb0): (f64, f64)| {
+            let slope = (vfb - fb0) / (cmd - cmd0);
+            (slope.is_finite() && slope > 1e-6).then(|| cmd + (vref - vfb) / slope)
+        };
+        let gain = c.cfg.feedback.as_ref().map_or(0.0, |f| f.relaxation_gain);
+        let relax = |(vref, vfb): (f64, f64)| cmd + gain * (vref - vfb);
+        let target = fb.map(|now| {
+            c.settle_prev
+                .and_then(|prev| secant(now, prev))
+                .unwrap_or_else(|| relax(now))
+        });
+        c.settle_prev = fb.map(|(_, vfb)| (cmd, vfb));
+        self.update_converter(circuit, node_v, target);
+        let Some(c) = self.converter.as_mut() else {
+            return 0.0;
+        };
+        // Only a point IN regulation is held: one pinned at a ceiling or limit
+        // must stay free to rise when that limit lifts.
+        let regulating = fb.is_some_and(|(vref, vfb)| (vfb - vref).abs() <= 1e-3 * vref.abs());
+        let on = regulating && c.last_cmd_vout > 0.0;
+        c.settled = on.then_some((c.last_cmd_vout, c.last_iout_a));
+        (c.last_cmd_vout - cmd).abs()
+    }
+
+    /// Return the converter's loop state to its stamp-time cold start (the
+    /// caller restores the circuit's sources), undoing a failed settle.
+    pub const fn reset_converter(&mut self) {
+        if let Some(c) = self.converter.as_mut() {
+            c.last_cmd_vout = if c.cfg.feedback.is_some() {
+                0.0
+            } else {
+                c.cfg.vout_setpoint
+            };
+            (c.last_iout_a, c.last_iin_a) = (0.0, 0.0);
+            (c.settle_prev, c.settled) = (None, None);
+        }
+    }
+
     /// Converter regulation: hold `vout_setpoint`, fold the output back under an
     /// output-current limit, and throttle so the reflected input draw never
     /// exceeds the (programmable) input-current limit. Mirrors
     /// `power_supply::cc_regulate`, anchored to the previous command.
-    fn update_converter(&mut self, circuit: &mut Circuit, node_v: &dyn Fn(NodeId) -> f64) {
+    /// `settled_cmd`, when given, is the feedback command outright (the DC
+    /// settle's iterate).
+    fn update_converter(
+        &mut self,
+        circuit: &mut Circuit,
+        node_v: &dyn Fn(NodeId) -> f64,
+        settled_cmd: Option<f64>,
+    ) {
         let c = self.converter.as_mut().unwrap();
         if let Some(enable) = &c.cfg.enable {
             let enabled = c
@@ -1342,9 +1421,22 @@ impl BehavioralDevice {
                 c.shut_down(circuit);
                 return;
             };
-            feedback
-                .relaxation_gain
-                .mul_add(feedback.vref_v - node_v(feedback_node), c.last_cmd_vout)
+            // A converter settled in regulation holds that point, adding back
+            // only its own output resistance's change in drop. Relaxing on
+            // the chunk-end V(fb) instead closes an integrator around the
+            // board's output LC, which rings and diverges on a light load (a
+            // 3.3 V rail swung +/-5 V); the real loop's compensation that
+            // prevents that is not modelled.
+            match (settled_cmd, c.settled) {
+                (Some(v), _) => v,
+                (None, Some((v, i))) => (iout - i).mul_add(c.out_r_ohms, v),
+                (None, None) => {
+                    let fb_v = node_v(feedback_node);
+                    feedback
+                        .relaxation_gain
+                        .mul_add(feedback.vref_v - fb_v, c.last_cmd_vout)
+                }
+            }
         } else {
             c.cfg.vout_setpoint
         };
@@ -1352,7 +1444,9 @@ impl BehavioralDevice {
         // A buck cannot command an averaged switch-node voltage above VIN.
         // `vout_setpoint` remains an explicit hard ceiling for every topology.
         let command_ceiling = match c.cfg.topology {
-            hauksbee_models::behavioral::Topology::Buck => c.cfg.vout_setpoint.min(vin),
+            hauksbee_models::behavioral::Topology::Buck => {
+                c.cfg.vout_setpoint.min(vin * c.cfg.max_duty.unwrap_or(1.0))
+            }
             _ => c.cfg.vout_setpoint,
         }
         .max(0.0);
@@ -1388,6 +1482,14 @@ impl BehavioralDevice {
             }
         }
         v_cmd = v_cmd.clamp(0.0, command_ceiling);
+        // A buck's averaged input current is its duty times the output current,
+        // `(v_cmd/vin)*iout/eff`, never more. Reflecting the stale output
+        // voltage instead diverges as 1/vin when the input sags under a
+        // current-limited source: the draw folds the source, which raises the
+        // draw, until the input collapses.
+        if c.cfg.topology == hauksbee_models::behavioral::Topology::Buck {
+            iin = iin.min(v_cmd * iout / (eff * vin));
+        }
 
         c.last_cmd_vout = v_cmd;
         c.last_iout_a = iout;

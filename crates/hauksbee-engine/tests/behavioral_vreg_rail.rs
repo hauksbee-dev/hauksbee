@@ -239,3 +239,109 @@ fn converter_vreg_regulates_and_draws_real_input_current() {
         "the converter must reflect a real input current (~73 mA), got {iin} A"
     );
 }
+
+/// A generic buck card; `extra` lands in its converter block, `fb` adds a
+/// feedback pin "5" regulating to 0.6 V.
+fn lib_with_card(tag: &str, setpoint: f64, extra: &str, fb: bool) -> ModelLibrary {
+    let dir = hauksbee_testkit::fresh_scratch_dir("behavioral_vreg_rail", tag);
+    let (fb_pin, fb_block) = if fb {
+        (
+            "\"5\" = \"fb\"",
+            "[models.behavioral.converter.feedback]\npin = \"fb\"\nvref_v = 0.6",
+        )
+    } else {
+        ("", "")
+    };
+    let card = format!(
+        "[[models]]\nid = \"test_buck_{tag}\"\nkind = \"vreg\"\ndescription = \"test buck\"\n\
+         [models.match]\nvalue_re = \"(?i)^TESTBUCK$\"\n[models.params]\nvout = {setpoint}\n\
+         [models.pins]\n\"1\" = \"sw\"\n\"3\" = \"in\"\n\"4\" = \"gnd\"\n{fb_pin}\n\
+         [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"sw\"\nin_pin = \"in\"\n\
+         vout_setpoint = {setpoint}\niout_limit_a = 2.0\nefficiency = 0.9\nout_r_ohms = 0.01\n\
+         {extra}\n{fb_block}\n"
+    );
+    std::fs::write(dir.join("testbuck.toml"), card).unwrap();
+    ModelLibrary::builtin_with_user_dirs(&[dir.as_path()])
+}
+
+/// U1 from `input` through L1/C1 onto +OUT (net 2), loaded by `load`; with
+/// `fb`, R2/R3 divide +OUT to 0.6 V at 3.3 V.
+fn lc_buck_board(input: &str, load: &str, fb: bool) -> ExtractedBoard {
+    let two =
+        |r: &str, v: &str, fp: &str, a: i64, b: i64| comp(r, v, fp, vec![pin("1", a), pin("2", b)]);
+    let res = "Resistor_SMD:R_0402_1005Metric";
+    let mut u1 = vec![pin("1", 4), pin("3", 1), pin("4", 3)];
+    let mut components = vec![
+        two("L1", "10uH", "Inductor_SMD:L_1210_3225Metric", 4, 2),
+        two("C1", "22uF", "Capacitor_SMD:C_1206_3216Metric", 2, 3),
+        two("R1", load, res, 2, 3),
+    ];
+    if fb {
+        u1.push(pin("5", 5));
+        components.push(two("R2", "45k", res, 2, 5));
+        components.push(two("R3", "10k", res, 5, 3));
+    }
+    components.push(comp("U1", "TESTBUCK", "Package_TO_SOT_SMD:SOT-23-6", u1));
+    let names = [(1, input), (2, "+OUT"), (3, "GND"), (4, "SW"), (5, "FB")];
+    ExtractedBoard {
+        name: "lc_buck_test".to_string(),
+        nets: names
+            .iter()
+            .map(|&(id, n)| crate::support::net(id, n.to_string()))
+            .collect(),
+        components,
+    }
+}
+
+fn run_lc_buck(board: &ExtractedBoard, lib: &ModelLibrary, chunks: usize) -> (Scheduler, Vec<f64>) {
+    let bound = bind_board_with(board, lib, &CustomRegistry::new());
+    let mut sched =
+        Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler builds");
+    let trace = (0..chunks)
+        .map(|_| {
+            sched.step(1e-4);
+            sched.net_voltage("+OUT").expect("+OUT is live")
+        })
+        .collect();
+    assert!(
+        sched.analog_valid(),
+        "failed windows: {:?}",
+        sched.failed_windows()
+    );
+    (sched, trace)
+}
+
+/// A feedback buck starts in regulation (settled like a DC operating point)
+/// and holds there: the old per-chunk relaxation rang against the output LC
+/// and could swing the rail through zero.
+#[test]
+fn feedback_buck_starts_in_regulation_and_holds_against_its_output_lc() {
+    let lib = lib_with_card("fb", 3.3, "", true);
+    let (_, trace) = run_lc_buck(&lc_buck_board("+5V", "33R", true), &lib, 30);
+    let want = 0.6 * (1.0 + 45.0 / 10.0);
+    assert!(
+        trace.iter().all(|v| (v - want).abs() < 0.05 * want),
+        "{want} V wanted, got {trace:?}"
+    );
+    assert!(
+        (trace[0] - want).abs() < 0.01 * want,
+        "first chunk {} V",
+        trace[0]
+    );
+}
+
+/// A buck cannot exceed its maximum duty: a 12 V setpoint on a 9 V input
+/// sits near 0.9 * 9 V, not a pass-through 9 V. The converter dissipates, so
+/// its junction reads above ambient.
+#[test]
+fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
+    let lib = lib_with_card("dmax", 12.0, "max_duty = 0.9", false);
+    let (sched, trace) = run_lc_buck(&lc_buck_board("+9V", "100R", false), &lib, 20);
+    let vout = *trace.last().unwrap();
+    assert!((vout - 8.1).abs() < 0.1, "D_max 0.9 of 9 V, got {vout} V");
+    let tj = sched.temp_states().get("U1").copied();
+    assert!(
+        tj.is_some_and(|t| t > sched.ambient_c()),
+        "converter Tj {tj:?}"
+    );
+}
