@@ -40,16 +40,21 @@ fn subrecord(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Build a PADS6 record (record-type marker 0x02 + six sub-records). Only the
-/// geometry sub-record (#5) carries data the parser reads; the rest are minimal.
-fn pad_record(
+/// Build a PADS6 record (record-type marker 0x02 + six sub-records) with
+/// independent sizes and an explicit shape code (1 = round, 2 = rect,
+/// 3 = octagon). Only the geometry sub-record (#5) carries data the parser
+/// reads; the rest are minimal.
+#[allow(clippy::too_many_arguments)]
+fn shaped_pad_record(
     name: &str,
     layer: u8,
     net: u16,
     component: u16,
     x_mm: f64,
     y_mm: f64,
-    size_mm: f64,
+    width_mm: f64,
+    height_mm: f64,
+    shape: u8,
 ) -> Vec<u8> {
     let mut rec = vec![0x02u8];
     // Sub-record 1: a Pascal string (1-byte len + bytes) holding the designator.
@@ -68,13 +73,26 @@ fn pad_record(
     g[7..9].copy_from_slice(&component.to_le_bytes());
     g[13..17].copy_from_slice(&unit(x_mm).to_le_bytes());
     g[17..21].copy_from_slice(&unit(y_mm).to_le_bytes());
-    g[21..25].copy_from_slice(&unit(size_mm).to_le_bytes()); // top size x
-    g[25..29].copy_from_slice(&unit(size_mm).to_le_bytes()); // top size y
-    g[49] = 1; // top shape = round
+    g[21..25].copy_from_slice(&unit(width_mm).to_le_bytes()); // top size x
+    g[25..29].copy_from_slice(&unit(height_mm).to_le_bytes()); // top size y
+    g[49] = shape;
     rec.extend(subrecord(&g));
     // Sub-record 6: empty (no per-layer stack).
     rec.extend(subrecord(&[]));
     rec
+}
+
+/// A round PADS6 record of diameter `size_mm`.
+fn pad_record(
+    name: &str,
+    layer: u8,
+    net: u16,
+    component: u16,
+    x_mm: f64,
+    y_mm: f64,
+    size_mm: f64,
+) -> Vec<u8> {
+    shaped_pad_record(name, layer, net, component, x_mm, y_mm, size_mm, size_mm, 1)
 }
 
 /// Build a TRACKS6 record (marker 0x04 + one sub-record).
@@ -170,6 +188,23 @@ fn two_net_bytes(comps: Vec<u8>, pads: Vec<u8>) -> Vec<u8> {
     ])
 }
 
+/// `two_net_bytes` plus one more stream (`Texts6`, `Tracks6`, ...).
+fn two_net_bytes_with(comps: Vec<u8>, pads: Vec<u8>, section: &str, body: Vec<u8>) -> Vec<u8> {
+    build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+        (section, body),
+    ])
+}
+
+/// Net A running along y = 0 and net B running along x = 5, crossing at (5, 0).
+fn crossing_tracks() -> Vec<u8> {
+    let mut tracks = track_record(1, 0, 0xFFFF, 0.0, 0.0, 10.0, 0.0, 0.25);
+    tracks.extend(track_record(1, 1, 0xFFFF, 5.0, -5.0, 5.0, 5.0, 0.25));
+    tracks
+}
+
 fn two_net_board(comps: Vec<u8>, pads: Vec<u8>) -> ExtractedBoard {
     ExtractedBoard::from_altium_pcb(&two_net_bytes(comps, pads)).expect("extract")
 }
@@ -261,12 +296,7 @@ fn comment_text_is_the_value_designator_text_is_not() {
     let mut texts = Vec::new();
     texts.extend(text_record(0, "R1", false, true)); // the designator label
     texts.extend(text_record(0, "10k", true, false)); // the comment/value
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-        ("Texts6", texts),
-    ]);
+    let bytes = two_net_bytes_with(comps, pads, "Texts6", texts);
     let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
     assert_eq!(board.component("R1").unwrap().value, "10k");
 }
@@ -283,12 +313,7 @@ fn missing_value_is_unresolved_never_the_refdes() {
         // Only a designator text exists, carrying the refdes string; the old
         // flag mixup read exactly this record as the comment.
         texts.extend(text_record(0, refdes, false, true));
-        let bytes = build_pcbdoc(&[
-            ("Nets6", two_net_stream()),
-            ("Components6", comps),
-            ("Pads6", pads),
-            ("Texts6", texts),
-        ]);
+        let bytes = two_net_bytes_with(comps, pads, "Texts6", texts);
         let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
         let c = board.component(refdes).expect(refdes);
         assert_eq!(
@@ -651,11 +676,7 @@ fn channel_qualified_components_are_distinct_owners_for_drc() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 1.0));
     pads.extend(pad_record("1", 1, 1, 1, 0.0, 0.0, 1.0));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
+    let bytes = two_net_bytes(comps, pads);
     let report = ExtractedBoard::altium_drc(&bytes).expect("DRC runs");
     assert_eq!(
         report.short_count(),
@@ -710,15 +731,8 @@ fn auto_detects_altium_binary() {
 fn drc_detects_a_deliberate_short() {
     // Build a board where two different-net tracks overlap: N0 and N1 both run
     // through the same point on F.Cu.
-    let mut nets = Vec::new();
-    nets.extend(props("|NAME=A"));
-    nets.extend(props("|NAME=B"));
-    let mut tracks = Vec::new();
-    // Net A: a horizontal track.
-    tracks.extend(track_record(1, 0, 0xFFFF, 0.0, 0.0, 10.0, 0.0, 0.25));
-    // Net B: a vertical track crossing it at (5,0) -> overlap == short.
-    tracks.extend(track_record(1, 1, 0xFFFF, 5.0, -5.0, 5.0, 5.0, 0.25));
-    let bytes = build_pcbdoc(&[("Nets6", nets), ("Tracks6", tracks)]);
+    // Net A horizontal, net B vertical crossing it at (5,0) -> overlap == short.
+    let bytes = build_pcbdoc(&[("Nets6", two_net_stream()), ("Tracks6", crossing_tracks())]);
 
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert!(
@@ -752,12 +766,11 @@ fn drc_clean_when_nets_match() {
 
 #[test]
 fn drc_reports_overlapping_different_net_pads_in_an_ordinary_component() {
-    let nets = two_net_stream();
     let comps = props("|LAYER=TOP|X=0mil|Y=0mil|PATTERN=QFN|SOURCEDESIGNATOR=U1");
     let mut pads = Vec::new();
     pads.extend(pad_record("1", 1, 0, 0, 5.0, 5.0, 1.0));
     pads.extend(pad_record("2", 1, 1, 0, 5.9, 5.0, 1.0));
-    let bytes = build_pcbdoc(&[("Nets6", nets), ("Components6", comps), ("Pads6", pads)]);
+    let bytes = two_net_bytes(comps, pads);
 
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert!(
@@ -772,20 +785,11 @@ fn drc_reports_overlapping_different_net_pads_in_an_ordinary_component() {
 
 #[test]
 fn drc_shared_component_does_not_exempt_remote_track_short() {
-    let nets = two_net_stream();
     let comps = props("|LAYER=TOP|X=0mil|Y=0mil|PATTERN=R0402|SOURCEDESIGNATOR=R1");
     let mut pads = Vec::new();
     pads.extend(pad_record("1", 1, 0, 0, 20.0, 20.0, 0.5));
     pads.extend(pad_record("2", 1, 1, 0, 22.0, 20.0, 0.5));
-    let mut tracks = Vec::new();
-    tracks.extend(track_record(1, 0, 0xFFFF, 0.0, 0.0, 10.0, 0.0, 0.25));
-    tracks.extend(track_record(1, 1, 0xFFFF, 5.0, -5.0, 5.0, 5.0, 0.25));
-    let bytes = build_pcbdoc(&[
-        ("Nets6", nets),
-        ("Components6", comps),
-        ("Pads6", pads),
-        ("Tracks6", tracks),
-    ]);
+    let bytes = two_net_bytes_with(comps, pads, "Tracks6", crossing_tracks());
 
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert_eq!(
@@ -798,22 +802,13 @@ fn drc_shared_component_does_not_exempt_remote_track_short() {
 #[test]
 fn drc_native_net_tie_component_types_are_local() {
     for component_type in ["Net Tie", "Net Tie (In BOM)"] {
-        let nets = two_net_stream();
         let comps = props(&format!(
             "|LAYER=TOP|X=0mil|Y=0mil|PATTERN=HOUSE_BRIDGE|SOURCEDESIGNATOR=NT1|COMPONENTTYPE={component_type}"
         ));
         let mut pads = Vec::new();
         pads.extend(pad_record("1", 1, 0, 0, 20.0, 20.0, 1.0));
         pads.extend(pad_record("2", 1, 1, 0, 20.9, 20.0, 1.0));
-        let mut tracks = Vec::new();
-        tracks.extend(track_record(1, 0, 0xFFFF, 0.0, 0.0, 10.0, 0.0, 0.25));
-        tracks.extend(track_record(1, 1, 0xFFFF, 5.0, -5.0, 5.0, 5.0, 0.25));
-        let bytes = build_pcbdoc(&[
-            ("Nets6", nets),
-            ("Components6", comps),
-            ("Pads6", pads),
-            ("Tracks6", tracks),
-        ]);
+        let bytes = two_net_bytes_with(comps, pads, "Tracks6", crossing_tracks());
 
         let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
         assert_eq!(
@@ -826,20 +821,13 @@ fn drc_native_net_tie_component_types_are_local() {
 
 #[test]
 fn drc_net_tie_does_not_hide_ordinary_tracks_crossing_over_its_pads() {
-    let nets = two_net_stream();
     let comps = props("|LAYER=TOP|PATTERN=HOUSE_BRIDGE|SOURCEDESIGNATOR=NT1|COMPONENTTYPE=Net Tie");
     let mut pads = Vec::new();
     pads.extend(pad_record("1", 1, 0, 0, 5.0, 5.0, 1.0));
     pads.extend(pad_record("2", 1, 1, 0, 5.9, 5.0, 1.0));
-    let mut tracks = Vec::new();
-    tracks.extend(track_record(1, 0, 0xFFFF, 0.0, 5.0, 10.0, 5.0, 0.2));
+    let mut tracks = track_record(1, 0, 0xFFFF, 0.0, 5.0, 10.0, 5.0, 0.2);
     tracks.extend(track_record(1, 1, 0xFFFF, 5.45, 0.0, 5.45, 10.0, 0.2));
-    let bytes = build_pcbdoc(&[
-        ("Nets6", nets),
-        ("Components6", comps),
-        ("Pads6", pads),
-        ("Tracks6", tracks),
-    ]);
+    let bytes = two_net_bytes_with(comps, pads, "Tracks6", tracks);
 
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert!(
@@ -854,12 +842,11 @@ fn drc_net_tie_does_not_hide_ordinary_tracks_crossing_over_its_pads() {
 
 #[test]
 fn drc_altium_pattern_name_without_native_type_does_not_exempt() {
-    let nets = two_net_stream();
     let comps = props("|LAYER=TOP|X=0mil|Y=0mil|PATTERN=NET_TIE|SOURCEDESIGNATOR=NT1");
     let mut pads = Vec::new();
     pads.extend(pad_record("1", 1, 0, 0, 20.0, 20.0, 1.0));
     pads.extend(pad_record("2", 1, 1, 0, 20.9, 20.0, 1.0));
-    let bytes = build_pcbdoc(&[("Nets6", nets), ("Components6", comps), ("Pads6", pads)]);
+    let bytes = two_net_bytes(comps, pads);
 
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert_eq!(
@@ -871,7 +858,6 @@ fn drc_altium_pattern_name_without_native_type_does_not_exempt() {
 
 #[test]
 fn drc_repeated_channel_designators_keep_net_tie_ownership_separate() {
-    let nets = two_net_stream();
     let mut comps = Vec::new();
     comps.extend(props(
         "|LAYER=TOP|PATTERN=HOUSE_BRIDGE|SOURCEDESIGNATOR=NT1|SOURCEHIERARCHICALPATH=ROOT\\CH1|COMPONENTTYPE=Net Tie",
@@ -886,7 +872,7 @@ fn drc_repeated_channel_designators_keep_net_tie_ownership_separate() {
     // CH2 repeats raw refdes NT1 but is ordinary: this contact must fire.
     pads.extend(pad_record("1", 1, 0, 1, 30.0, 30.0, 1.0));
     pads.extend(pad_record("2", 1, 1, 1, 30.9, 30.0, 1.0));
-    let bytes = build_pcbdoc(&[("Nets6", nets), ("Components6", comps), ("Pads6", pads)]);
+    let bytes = two_net_bytes(comps, pads);
 
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert_eq!(
@@ -908,39 +894,13 @@ fn drc_repeated_channel_designators_keep_net_tie_ownership_separate() {
 // importer uses), not the bounding rectangle.
 // ---------------------------------------------------------------------------
 
-/// A PADS6 record like `pad_record`, but with independent sizes and an
-/// explicit shape code (1 = round, 2 = rect, 3 = octagon).
-#[allow(clippy::too_many_arguments)]
-fn shaped_pad_record(
-    name: &str,
-    layer: u8,
-    net: u16,
-    component: u16,
-    x_mm: f64,
-    y_mm: f64,
-    width_mm: f64,
-    height_mm: f64,
-    shape: u8,
-) -> Vec<u8> {
-    let mut rec = vec![0x02u8];
-    let mut s1 = vec![u8::try_from(name.len()).unwrap()];
-    s1.extend_from_slice(name.as_bytes());
-    rec.extend(subrecord(&s1));
-    rec.extend(subrecord(&[]));
-    rec.extend(subrecord(&[]));
-    rec.extend(subrecord(&[]));
-    let mut g = vec![0u8; 110];
-    g[0] = layer;
-    g[3..5].copy_from_slice(&net.to_le_bytes());
-    g[7..9].copy_from_slice(&component.to_le_bytes());
-    g[13..17].copy_from_slice(&unit(x_mm).to_le_bytes());
-    g[17..21].copy_from_slice(&unit(y_mm).to_le_bytes());
-    g[21..25].copy_from_slice(&unit(width_mm).to_le_bytes());
-    g[25..29].copy_from_slice(&unit(height_mm).to_le_bytes());
-    g[49] = shape;
-    rec.extend(subrecord(&g));
-    rec.extend(subrecord(&[]));
-    rec
+/// A 2 x 2 mm octagon pad of U1 at the origin on net A and a 0.1 mm net-B
+/// track from (x1, y1) to (x2, y2).
+fn octagon_and_track(x1: f64, y1: f64, x2: f64, y2: f64) -> Vec<u8> {
+    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
+    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
+    let tracks = track_record(1, 1, 0xFFFF, x1, y1, x2, y2, 0.1);
+    two_net_bytes_with(comps, pads, "Tracks6", tracks)
 }
 
 #[test]
@@ -949,15 +909,7 @@ fn copper_past_an_octagon_cut_corner_is_not_a_short() {
     // 0.5 mm, so the cut edge is the line x + y = 1.5. A track starting at
     // (1, 1), exactly the bounding-rect corner the old model stamped,
     // clears the true cut edge by ~0.30 mm, over the 0.2 mm rule.
-    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
-    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
-    let tracks = track_record(1, 1, 0xFFFF, 1.0, 1.0, 2.0, 2.0, 0.1);
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-        ("Tracks6", tracks),
-    ]);
+    let bytes = octagon_and_track(1.0, 1.0, 2.0, 2.0);
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert!(
         report.findings.is_empty(),
@@ -974,15 +926,7 @@ fn copper_past_an_octagon_cut_corner_is_not_a_short() {
 fn track_through_the_octagon_flat_is_still_a_short() {
     // Control: through the octagon body, so the exact-outline fix cannot pass
     // by under-sizing the pad.
-    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
-    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
-    let tracks = track_record(1, 1, 0xFFFF, -2.0, 0.0, 2.0, 0.0, 0.1);
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-        ("Tracks6", tracks),
-    ]);
+    let bytes = octagon_and_track(-2.0, 0.0, 2.0, 0.0);
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert_eq!(report.short_count(), 1, "octagon body copper still shorts");
 }
@@ -995,15 +939,7 @@ fn octagon_chamfer_constant_is_pinned_by_the_measured_gap() {
     // 0.5 / sqrt(2) - 0.05 = 0.3036 mm off the copper. A bounding rectangle
     // would read gap 0 (touching short); a regular octagon (cut 0.586 mm,
     // edge x + y = 1.414) would read ~0.364 mm.
-    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
-    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
-    let tracks = track_record(1, 1, 0xFFFF, 1.0, 1.0, 2.0, 2.0, 0.1);
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-        ("Tracks6", tracks),
-    ]);
+    let bytes = octagon_and_track(1.0, 1.0, 2.0, 2.0);
     let report = hauksbee_extract::drc::altium_drc::run(&bytes, Some(0.5)).expect("drc runs");
     assert_eq!(report.short_count(), 0, "not touching under any reading");
     let f = report

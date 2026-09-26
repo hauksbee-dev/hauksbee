@@ -4,14 +4,44 @@
 use super::*;
 use crate::ExtractedBoard;
 
+/// Full `kicad_pcb` text around a board `body`.
+fn pcb_text(body: &str) -> String {
+    format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})")
+}
+
 fn pcb(body: &str) -> ExtractedBoard {
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
-    ExtractedBoard::from_kicad_pcb(&text).unwrap()
+    ExtractedBoard::from_kicad_pcb(&pcb_text(body)).unwrap()
 }
 
 fn root_of(body: &str) -> forge_sexpr::Document {
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
-    forge_sexpr::parse(&text).unwrap()
+    forge_sexpr::parse(&pcb_text(body)).unwrap()
+}
+
+/// Run a geometry-reading `check` over full `kicad_pcb` text, so the SAME text
+/// drives both extraction and geometry parsing.
+fn run_text(text: &str, check: impl FnOnce(&ExtractedBoard, &List, &mut SiReport)) -> SiReport {
+    let b = ExtractedBoard::from_kicad_pcb(text).unwrap();
+    let doc = forge_sexpr::parse(text).unwrap();
+    let mut r = SiReport::default();
+    check(&b, doc.root().unwrap(), &mut r);
+    r
+}
+
+/// Run the board-only check `check` over `b`.
+fn run_board(b: &ExtractedBoard, check: fn(&ExtractedBoard, &mut SiReport)) -> SiReport {
+    let mut r = SiReport::default();
+    check(b, &mut r);
+    r
+}
+
+/// The I2C rise-time check with no routing geometry.
+fn i2c_unrouted(b: &ExtractedBoard, r: &mut SiReport) {
+    check_i2c_rise_time(b, None, r);
+}
+
+/// The I2C rise-time check counting routed trace capacitance.
+fn i2c_routed(b: &ExtractedBoard, root: &List, r: &mut SiReport) {
+    check_i2c_rise_time(b, Some(root), r);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,8 +187,7 @@ fn crystal_known_cl_within_tolerance_is_info_not_finding() {
     // ABM8-272 specs 18 pF; two 33 pF caps -> 16.5 + 4 = 20.5 pF, deviation 2.5
     // pF < 8 pF tolerance: ok, info only.
     let b = xtal_board("ABM8-272-T3", "33p", "33p");
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
+    let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 0, "within tolerance must not fire");
     assert!(r
         .of_check(SiCheck::CrystalLoadCap)
@@ -170,8 +199,7 @@ fn crystal_known_cl_far_off_fires() {
     // ABM8-272 specs 18 pF; two 4.7 pF caps -> 2.35 + 4 = 6.35 pF, deviation
     // 11.65 pF > 8 pF: fires (under-capacitanced -> runs fast / may not start).
     let b = xtal_board("ABM8-272-T3", "4p7", "4p7");
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
+    let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 1, "far-off CL must fire");
     assert_eq!(
         r.of_check(SiCheck::CrystalLoadCap).next().unwrap().check,
@@ -183,8 +211,7 @@ fn crystal_known_cl_far_off_fires() {
 fn crystal_unknown_cl_is_info_only() {
     // value is just the frequency, CL not derivable: never a finding.
     let b = xtal_board("12MHz", "18p", "18p");
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
+    let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 0, "unknown CL must never fire");
     let f = r.of_check(SiCheck::CrystalLoadCap).next().unwrap();
     assert_eq!(f.severity, SiSeverity::Info);
@@ -202,8 +229,7 @@ fn crystal_missing_both_caps_fires() {
           (pad "2" smd rect (at -1 1) (net 3 "GND"))
           (pad "3" smd rect (at 1 0) (net 2 "XOUT"))
           (pad "4" smd rect (at 1 1) (net 3 "GND")))"#);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
+    let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 1, "no load caps must fire");
     assert_eq!(
         r.findings_only().next().unwrap().severity,
@@ -226,8 +252,7 @@ fn rtc_with_integrated_caps_no_cap_is_silent() {
           (property "Reference" "U5") (property "Value" "PCF8523T")
           (pad "1" smd rect (at 0 0) (net 1 "OSCI"))
           (pad "2" smd rect (at 0 1) (net 2 "OSCO")))"#);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
+    let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 0, "RTC integrates caps; must be silent");
 }
 
@@ -239,8 +264,7 @@ fn dnp_crystal_is_skipped() {
           (property "Reference" "Y1") (property "Value" "16MHz")
           (pad "1" smd rect (at -1 0) (net 1 "XIN"))
           (pad "3" smd rect (at 1 0) (net 2 "XOUT")))"#);
-    let mut r = SiReport::default();
-    check_crystal_load_cap(&b, &mut r);
+    let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.findings.len(), 0, "DNP crystal must be entirely skipped");
 }
 
@@ -248,15 +272,22 @@ fn dnp_crystal_is_skipped() {
 // I2C rise-time check.
 // ---------------------------------------------------------------------------
 
-/// An I2C net with a pull-up resistor to +3V3 and `devices` sensor pins.
-fn i2c_board(net: &str, pull_val: &str, devices: usize) -> ExtractedBoard {
-    let mut body = format!(
-        r#"(net 1 "{net}") (net 2 "+3V3")
-        (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-          (property "Reference" "R1") (property "Value" "{pull_val}")
+/// An I2C net with one pull-up resistor to +3V3 per `pulls` value (R1 at x 5,
+/// R2 at x 7, ...) and `devices` sensor pins.
+fn i2c_body(net: &str, pulls: &[&str], devices: usize) -> String {
+    let mut body = format!(r#"(net 1 "{net}") (net 2 "+3V3")"#);
+    for (i, pull_val) in pulls.iter().enumerate() {
+        let _ = write!(
+            body,
+            r#"
+        (footprint "Resistor_SMD:R_0402" (at {} 5) (layer "F.Cu")
+          (property "Reference" "R{}") (property "Value" "{pull_val}")
           (pad "1" smd rect (at 0 0) (net 1 "{net}"))
-          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#
-    );
+          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
+            5 + 2 * i,
+            i + 1
+        );
+    }
     for i in 0..devices {
         let _ = write!(
             body,
@@ -267,15 +298,19 @@ fn i2c_board(net: &str, pull_val: &str, devices: usize) -> ExtractedBoard {
             i + 1
         );
     }
-    pcb(&body)
+    body
+}
+
+/// An I2C net with a pull-up resistor to +3V3 and `devices` sensor pins.
+fn i2c_board(net: &str, pull_val: &str, devices: usize) -> ExtractedBoard {
+    pcb(&i2c_body(net, &[pull_val], devices))
 }
 
 #[test]
 fn i2c_strong_pull_low_device_count_is_ok() {
     // 2.2k pull, 3 devices (~30 pF): t_r ~ 56 ns. Far under 1000 ns: info.
     let b = i2c_board("SDA", "2.2k", 3);
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, None, &mut r);
+    let r = run_board(&b, i2c_unrouted);
     assert_eq!(r.finding_count(), 0, "strong pull / few devices must be ok");
     assert!(r
         .of_check(SiCheck::I2cRiseTime)
@@ -287,8 +322,7 @@ fn i2c_weak_pull_heavy_bus_fires() {
     // 10k pull, 20 devices (~200 pF): t_r ~ 0.8473*10000*200e-3 = 1695 ns,
     // over standard-mode 1000 ns: fires.
     let b = i2c_board("SDA", "10k", 20);
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, None, &mut r);
+    let r = run_board(&b, i2c_unrouted);
     assert_eq!(r.finding_count(), 1, "weak pull on a heavy bus must fire");
 }
 
@@ -303,8 +337,7 @@ fn i2c_no_pullup_is_not_our_finding() {
         (footprint "Package_SO:SOIC-8" (at 12 8) (layer "F.Cu")
           (property "Reference" "U2") (property "Value" "S")
           (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#);
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, None, &mut r);
+    let r = run_board(&b, i2c_unrouted);
     assert_eq!(
         r.findings.len(),
         0,
@@ -320,30 +353,8 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
     // 1000 ns standard-mode limit -> silent. Taking the SMALLEST single
     // resistor (10k) computes ~1271 ns and fires a false-positive finding on a
     // bus that is actually in spec. min-of-parallel-resistors over-reports t_r.
-    let mut body = String::from(
-        r#"(net 1 "SDA") (net 2 "+3V3")
-        (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-          (property "Reference" "R1") (property "Value" "10k")
-          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
-        (footprint "Resistor_SMD:R_0402" (at 7 5) (layer "F.Cu")
-          (property "Reference" "R2") (property "Value" "10k")
-          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
-    );
-    for i in 0..15 {
-        let _ = write!(
-            body,
-            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
-              (property "Reference" "U{}") (property "Value" "SENSOR")
-              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
-            10 + i,
-            i + 1
-        );
-    }
-    let b = pcb(&body);
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, None, &mut r);
+    let b = pcb(&i2c_body("SDA", &["10k", "10k"], 15));
+    let r = run_board(&b, i2c_unrouted);
     assert_eq!(
         r.finding_count(),
         0,
@@ -355,28 +366,12 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
 /// single routed track `track_mm` long, so the SAME text drives both extraction
 /// and geometry parsing.
 fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
-    let mut body = String::from(
-        r#"(net 1 "SDA") (net 2 "+3V3")
-        (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
-          (property "Reference" "R1") (property "Value" "10k")
-          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
-    );
-    for i in 0..devices {
-        let _ = write!(
-            body,
-            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
-              (property "Reference" "U{}") (property "Value" "SENSOR")
-              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
-            10 + i,
-            i + 1
-        );
-    }
+    let mut body = i2c_body("SDA", &["10k"], devices);
     let _ = write!(
         body,
         r#"(segment (start 0 0) (end {track_mm} 0) (width 0.2) (layer "F.Cu") (net 1))"#
     );
-    format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})")
+    pcb_text(&body)
 }
 
 #[test]
@@ -389,10 +384,7 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     // lenient bound, which is what firing requires. Passing None for the trace
     // length silently rates this in-spec.
     let text = i2c_routed_text(10, 800.0);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let r = run_text(&text, i2c_routed);
     assert_eq!(
         r.finding_count(),
         1,
@@ -426,10 +418,7 @@ fn i2c_short_routing_leaves_the_same_bus_silent() {
     // high end of the range: in spec. Counting trace copper must not turn every
     // marginal bus into a finding.
     let text = i2c_routed_text(10, 10.0);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let r = run_text(&text, i2c_routed);
     assert_eq!(
         r.finding_count(),
         0,
@@ -463,10 +452,7 @@ fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
           (pts (xy -5 -5) (xy 70 -5) (xy 70 20) (xy -5 20))))
     "#;
     let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") (net 3 \"GND\") {body})");
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let r = run_text(&text, i2c_routed);
     let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
     assert!(
         f.message.contains("computed from the board stackup"),
@@ -506,11 +492,7 @@ fn wroom_text(intruder_body: &str) -> String {
 }
 
 fn run_keepout(text: &str) -> SiReport {
-    let b = ExtractedBoard::from_kicad_pcb(text).unwrap();
-    let doc = forge_sexpr::parse(text).unwrap();
-    let mut r = SiReport::default();
-    check_antenna_keepout(&b, doc.root().unwrap(), &mut r);
-    r
+    run_text(text, check_antenna_keepout)
 }
 
 #[test]
@@ -563,25 +545,19 @@ fn antenna_unknown_module_no_keepout() {
 // USB diff-pair check.
 // ---------------------------------------------------------------------------
 
-fn usb_board(
-    plus_len: f64,
-    minus_len: f64,
-    plus_w: f64,
-    minus_w: f64,
-) -> (ExtractedBoard, forge_sexpr::Document) {
+/// The USB diff-pair check over a pair routed `plus_len` / `minus_len` long.
+fn usb_report(plus_len: f64, minus_len: f64, plus_w: f64, minus_w: f64) -> SiReport {
     let body = format!(
         r#"(net 1 "USB_DP") (net 2 "USB_DM")
         (segment (start 0 0) (end {plus_len} 0) (width {plus_w}) (layer "F.Cu") (net 1))
         (segment (start 0 1) (end {minus_len} 1) (width {minus_w}) (layer "F.Cu") (net 2))"#
     );
-    (pcb(&body), root_of(&body))
+    run_text(&pcb_text(&body), check_usb_diff_pair)
 }
 
 #[test]
 fn usb_matched_pair_is_info() {
-    let (b, doc) = usb_board(20.0, 20.3, 0.2, 0.2);
-    let mut r = SiReport::default();
-    check_usb_diff_pair(&b, doc.root().unwrap(), &mut r);
+    let r = usb_report(20.0, 20.3, 0.2, 0.2);
     assert_eq!(r.finding_count(), 0, "0.3 mm skew is within FS budget");
     let f = r.of_check(SiCheck::UsbDiffPair).next().unwrap();
     assert_eq!(f.severity, SiSeverity::Info);
@@ -591,9 +567,7 @@ fn usb_matched_pair_is_info() {
 #[test]
 fn usb_gross_skew_fires() {
     // 20 mm vs 40 mm: 20 mm skew, over even the lenient 15 mm FS budget.
-    let (b, doc) = usb_board(20.0, 40.0, 0.2, 0.2);
-    let mut r = SiReport::default();
-    check_usb_diff_pair(&b, doc.root().unwrap(), &mut r);
+    let r = usb_report(20.0, 40.0, 0.2, 0.2);
     assert_eq!(r.finding_count(), 1, "gross skew must fire");
 }
 
@@ -731,10 +705,7 @@ fn controlled_impedance_in_band_usb_is_info() {
     // W=0.3, edge-to-edge gap 0.2, diel 0.2, Er 4.3 -> Zdiff ~ 87.4 ohm, within
     // 90 ohm +-15%: an info note, never a finding.
     let text = impedance_usb_text(0.3, 0.2, 0.2, 4.3);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let r = run_text(&text, super::impedance::check_controlled_impedance);
     assert_eq!(r.finding_count(), 0, "in-band USB diff must not fire");
     let f = r
         .of_check(SiCheck::ControlledImpedance)
@@ -754,10 +725,7 @@ fn controlled_impedance_out_of_band_usb_fires() {
     // above 90 ohm: a real finding (the link is impedance-wrong) against a real
     // file stackup. W=0.1, gap 0.5, diel 0.5 -> Zdiff well over 90+15%.
     let text = impedance_usb_text(0.1, 0.5, 0.5, 4.3);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let r = run_text(&text, super::impedance::check_controlled_impedance);
     assert_eq!(
         r.finding_count(),
         1,
@@ -782,10 +750,7 @@ fn controlled_impedance_no_stackup_is_info_never_finding() {
         (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM")
         (segment (start 0 0) (end 20 0) (width 0.1) (layer "F.Cu") (net 1))
         (segment (start 0 0.6) (end 20 0.6) (width 0.1) (layer "F.Cu") (net 2)))"#;
-    let b = ExtractedBoard::from_kicad_pcb(text).unwrap();
-    let doc = forge_sexpr::parse(text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let r = run_text(text, super::impedance::check_controlled_impedance);
     assert_eq!(r.finding_count(), 0, "no stackup -> never a finding");
     let f = r
         .of_check(SiCheck::ControlledImpedance)
@@ -885,10 +850,7 @@ fn a_pair_over_a_solid_reference_plane_reports_its_zdiff_silently() {
     // run: the microstrip formula's H is the height to copper that is really
     // there, so the estimate stands and the check says nothing about the plane.
     let text = impedance_usb_over_plane(&rect_fill(-5.0, 25.0));
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let r = run_text(&text, super::impedance::check_controlled_impedance);
     assert_eq!(
         r.finding_count(),
         0,
@@ -920,10 +882,7 @@ fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
     // nothing like the closed form's, so the check must abstain and say where.
     let void = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
     let text = impedance_usb_over_plane(&void);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let r = run_text(&text, super::impedance::check_controlled_impedance);
     let f = r
         .of_check(SiCheck::ControlledImpedance)
         .next()
@@ -987,10 +946,7 @@ fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
     let vias = r#"(via (at 10 0) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 1))
         (via (at 10 0.5) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 2))"#;
     let text = impedance_usb_over_plane_with(holed_fill, vias);
-    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-    let doc = forge_sexpr::parse(&text).unwrap();
-    let mut r = SiReport::default();
-    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let r = run_text(&text, super::impedance::check_controlled_impedance);
     let f = r
         .of_check(SiCheck::ControlledImpedance)
         .next()

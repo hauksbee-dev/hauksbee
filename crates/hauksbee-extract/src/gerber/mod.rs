@@ -1900,74 +1900,52 @@ mod error_message_tests {
 mod span_tests {
     use super::*;
 
-    /// The token table for a job whose two films declare that they are layers
-    /// 1 and 4 of a four-layer board, so the inner two are missing.
-    fn gapped_l1_l4() -> HashMap<String, usize> {
-        let copper: Vec<(LayerRole, PathBuf)> = vec![
-            (
-                LayerRole::Copper {
-                    index: 0,
-                    name: "F".into(),
-                },
-                PathBuf::from("brd-F_Cu.gbr"),
-            ),
-            (
-                LayerRole::Copper {
-                    index: 1,
-                    name: "B".into(),
-                },
-                PathBuf::from("brd-B_Cu.gbr"),
-            ),
-        ];
+    /// The token table for copper films `(layer name, file name)` listed in
+    /// stack order, given the films' declared physical layer numbers and the
+    /// declared layer count.
+    fn tokens(
+        films: &[(&str, &str)],
+        physical: &HashMap<u32, usize>,
+        implied_layers: usize,
+    ) -> HashMap<String, usize> {
+        let copper: Vec<(LayerRole, PathBuf)> = films
+            .iter()
+            .enumerate()
+            .map(|(index, (name, file))| {
+                let name = (*name).into();
+                (LayerRole::Copper { index, name }, PathBuf::from(file))
+            })
+            .collect();
         let ordered: Vec<(LayerRole, usize)> = copper
             .iter()
             .enumerate()
             .map(|(i, (r, _))| (r.clone(), i))
             .collect();
+        copper_layer_tokens(&ordered, &copper, physical, implied_layers)
+    }
+
+    /// The token table for a job whose two films declare that they are layers
+    /// 1 and 4 of a four-layer board, so the inner two are missing.
+    fn gapped_l1_l4() -> HashMap<String, usize> {
         let physical: HashMap<u32, usize> = [(1u32, 0usize), (4u32, 1usize)].into_iter().collect();
-        copper_layer_tokens(&ordered, &copper, &physical, 4)
+        tokens(
+            &[("F", "brd-F_Cu.gbr"), ("B", "brd-B_Cu.gbr")],
+            &physical,
+            4,
+        )
     }
 
     /// The token table a four-layer KiCad job produces.
     fn kicad4() -> HashMap<String, usize> {
-        let copper: Vec<(LayerRole, PathBuf)> = vec![
-            (
-                LayerRole::Copper {
-                    index: 0,
-                    name: "F".into(),
-                },
-                PathBuf::from("brd-F_Cu.gbr"),
-            ),
-            (
-                LayerRole::Copper {
-                    index: 1,
-                    name: "In1".into(),
-                },
-                PathBuf::from("brd-In1_Cu.gbr"),
-            ),
-            (
-                LayerRole::Copper {
-                    index: 2,
-                    name: "In2".into(),
-                },
-                PathBuf::from("brd-In2_Cu.gbr"),
-            ),
-            (
-                LayerRole::Copper {
-                    index: 3,
-                    name: "B".into(),
-                },
-                PathBuf::from("brd-B_Cu.gbr"),
-            ),
+        let films = [
+            ("F", "brd-F_Cu.gbr"),
+            ("In1", "brd-In1_Cu.gbr"),
+            ("In2", "brd-In2_Cu.gbr"),
+            ("B", "brd-B_Cu.gbr"),
         ];
-        let ordered: Vec<(LayerRole, usize)> = copper
-            .iter()
-            .enumerate()
-            .map(|(i, (r, _))| (r.clone(), i))
-            .collect();
         // No film declares its own layer number, so the stack positions are all
         // there is, which is exact on a complete four-film job.
-        copper_layer_tokens(&ordered, &copper, &HashMap::new(), 0)
+        tokens(&films, &HashMap::new(), 0)
     }
 
     #[test]
@@ -1992,26 +1970,16 @@ mod span_tests {
         assert_eq!(t.get("in1_cu"), Some(&1));
         assert_eq!(t.get("in2_cu"), Some(&2));
         assert_eq!(t.get("b_cu"), Some(&3));
-        assert_eq!(
-            span_from_filename("brd-f_cu-in1_cu.drl", &t, 4),
-            NameSpan::Placed(0, 1)
-        );
-        assert_eq!(
-            span_from_filename("brd-in1_cu-in2_cu.drl", &t, 4),
-            NameSpan::Placed(1, 2)
-        );
-        assert_eq!(
-            span_from_filename("brd-f_cu-b_cu.drl", &t, 4),
-            NameSpan::Placed(0, 3)
-        );
-        assert_eq!(
-            span_from_filename("brd-pth-l1-l2.drl", &t, 4),
-            NameSpan::Placed(0, 1)
-        );
-        assert_eq!(
-            span_from_filename("brd-pth-l2-l3.drl", &t, 4),
-            NameSpan::Placed(1, 2)
-        );
+        for (name, from, to) in [
+            ("brd-f_cu-in1_cu.drl", 0, 1),
+            ("brd-in1_cu-in2_cu.drl", 1, 2),
+            ("brd-f_cu-b_cu.drl", 0, 3),
+            ("brd-pth-l1-l2.drl", 0, 1),
+            ("brd-pth-l2-l3.drl", 1, 2),
+        ] {
+            let span = span_from_filename(name, &t, 4);
+            assert_eq!(span, NameSpan::Placed(from, to), "{name}");
+        }
     }
 
     #[test]
@@ -2102,35 +2070,12 @@ mod span_tests {
         // film, and a drill named `-F_Cu-In1_Cu.drl` then placed its span on
         // the wrong pair. Two claims mean the token identifies nothing, and
         // there is no way from here to tell which film was meant.
-        let copper: Vec<(LayerRole, PathBuf)> = vec![
-            (
-                LayerRole::Copper {
-                    index: 0,
-                    name: "F".into(),
-                },
-                PathBuf::from("board-F_Cu.gbr"),
-            ),
-            (
-                LayerRole::Copper {
-                    index: 1,
-                    name: "In1".into(),
-                },
-                PathBuf::from("board-In1_Cu.gbr"),
-            ),
-            (
-                LayerRole::Copper {
-                    index: 2,
-                    name: "In2".into(),
-                },
-                PathBuf::from("proj_f_cu_rev.g2l"),
-            ),
+        let films = [
+            ("F", "board-F_Cu.gbr"),
+            ("In1", "board-In1_Cu.gbr"),
+            ("In2", "proj_f_cu_rev.g2l"),
         ];
-        let ordered: Vec<(LayerRole, usize)> = copper
-            .iter()
-            .enumerate()
-            .map(|(i, (r, _))| (r.clone(), i))
-            .collect();
-        let t = copper_layer_tokens(&ordered, &copper, &HashMap::new(), 3);
+        let t = tokens(&films, &HashMap::new(), 3);
         assert_eq!(t.get("f_cu"), None, "an ambiguous token names nothing");
         assert_eq!(
             t.get("in1_cu"),
