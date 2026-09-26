@@ -305,11 +305,11 @@ pub fn row_column(name: &str) -> &'static str {
 }
 
 /// The factor from a row's printed `unit` to the base unit of param `name`
-/// (its glossary or suffix unit), or none for a unitless param.
+/// (its glossary or suffix unit), or none for a unitless param (`-` or empty).
 fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
     let want = param_unit(name).filter(|u| *u != "-");
     let scale = match want {
-        _ if unit.trim() == want.unwrap_or("") => Some(1.0),
+        _ if unit.trim().trim_matches('-') == want.unwrap_or("") => Some(1.0),
         Some(want) => crate::units::scale_between(unit, want),
         None => None,
     };
@@ -509,13 +509,29 @@ fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
 
 /// A diode is/n/rs on too few VF points ([`underfit`]), on max rows only, or
 /// over 10% off a cited VF row; or a bf outside every hFE row.
+/// Gain groups: a card its id or orderable codes pin to one (a row whose
+/// parameter words end a code, `hFE group B` for `…B`) answers to that group's
+/// rows; one pinning none, over hFE rows printed per group, must split.
 fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
     if matches!(entry.kind, ComponentKind::BjtNpn | ComponentKind::BjtPnp) {
         let bf = entry.params.get_f64("bf")?;
         let hfe: Vec<_> = rows.iter().filter(|r| symbol(r, "HFE")).collect();
+        let codes = entry.variant.iter().flat_map(|v| &v.orderable);
+        let codes: Vec<String> = codes.chain([&entry.id]).map(|c| c.to_uppercase()).collect();
+        let pins = |r: &&Characteristic| {
+            let mut words = r.parameter.split(|c: char| !c.is_alphanumeric());
+            words.any(|w| !w.is_empty() && codes.iter().any(|c| c.ends_with(&w.to_uppercase())))
+        };
+        let own: Vec<_> = hfe.iter().copied().filter(pins).collect();
+        let conditions: std::collections::BTreeSet<_> = hfe.iter().map(|r| &r.conditions).collect();
+        if own.is_empty() && entry.variant.is_none() && conditions.len() < hfe.len() {
+            return Some(format!("hFE is printed per gain group and '{}' pins none: emit one [[models]] per group as orderable variants (orderable_re = its suffix), each bf its group's printed hFE row", entry.id));
+        }
+        let whose = ["its gain group's hFE row", "every hFE row"][usize::from(own.is_empty())];
+        let hfe = if own.is_empty() { hfe } else { own };
         let off = |r: &&Characteristic| !(r.min.unwrap_or(bf)..=r.max.unwrap_or(bf)).contains(&bf);
         let off = !hfe.is_empty() && hfe.iter().all(off);
-        return off.then(|| format!("bf = {bf} is outside the printed min..max of every hFE row"));
+        return off.then(|| format!("bf = {bf} is outside the printed min..max of {whose}"));
     }
     let law = diode_law(entry).filter(|_| entry.kind == ComponentKind::Diode)?;
     let points = vf_points(rows)?;
@@ -1210,22 +1226,36 @@ mod tests {
             "{fit:?}"
         );
         assert!(source_warnings(&off)[0].ends_with("over 10% off"));
-        let hfe = source(row(
-            "hFE DC current gain",
-            "min = 110\nmax = 220".into(),
-            "c".into(),
-        ));
-        let bjt = |bf: f64| {
-            source_warnings(&entry(
-                "bjt_npn",
-                &format!("is = 1e-14\nbf = {bf}\nnf = 1.0"),
-                &hfe,
-            ))
+        let hfe = |(g, a, b): (&str, u32, u32)| {
+            row(
+                &format!("hFE {g}"),
+                format!("min = {a}\nmax = {b}"),
+                "IC = 2 mA".into(),
+            )
         };
-        assert!(
-            bjt(300.0)[0].contains("bf = 300 is outside the printed min..max")
-                && bjt(200.0).is_empty()
-        );
+        let one = source(hfe(("DC current gain", 110, 220)));
+        #[rustfmt::skip]
+        let groups = source([("group A", 110, 220), ("group B", 200, 450), ("group C", 420, 800)].map(hfe).concat());
+        #[rustfmt::skip]
+        let cases = [
+            // (case, id, a variant member, rows, bf) -> the warning, or none
+            ("one row, inside", "t", false, &one, 200.0, ""),
+            ("one row, outside", "t", false, &one, 300.0, "bf = 300 is outside the printed min..max of every hFE row"),
+            ("group B, inside its row", "xyz847b", true, &groups, 300.0, ""),
+            ("group B, in group A's row only", "xyz847b", true, &groups, 150.0, "bf = 150 is outside the printed min..max of its gain group's hFE row"),
+            ("a member no row names, outside every group", "xyz847q", true, &groups, 900.0, "of every hFE row"),
+            ("no group pinned over per-group rows", "xyz847", false, &groups, 300.0, "hFE is printed per gain group and 'xyz847' pins none"),
+        ];
+        for (case, id, member, rows, bf, want) in cases {
+            let mut e = entry("bjt_npn", &format!("is = 1e-14\nbf = {bf}\nnf = 1.0"), rows);
+            (e.id, e.variant) = (id.into(), member.then(Default::default));
+            let found = source_warnings(&e);
+            assert!(
+                found.len() == usize::from(!want.is_empty())
+                    && found.iter().all(|w| w.contains(want)),
+                "{case}: {found:?}"
+            );
+        }
     }
 
     /// A source block of `+`-joined rows, each `parameter ; columns ; unit ; conditions`.

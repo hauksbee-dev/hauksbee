@@ -5,11 +5,12 @@
 //! point, so a part name that pins no variant is never silently simulated as
 //! whichever sibling sorts first.
 
-use hauksbee_ir::evidence::Assumption;
+use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::{schema::ModelEntry, ComponentQuery};
+use crate::schema::{Characteristic, ModelEntry, ParamValue};
+use crate::ComponentQuery;
 
 /// Reserved component property holding an `[[override]] select` member id.
 pub const SELECT_PROPERTY: &str = "hauksbee_select";
@@ -74,6 +75,8 @@ pub struct Selection {
     pub determined: Option<String>,
     pub via: Via,
     pub same_pinout: bool,
+    /// The stand-in's rows [`envelope`] widened, `param min .. typ .. max` each.
+    pub widened: Vec<String>,
 }
 
 impl Selection {
@@ -85,10 +88,8 @@ impl Selection {
     /// first survivor as a flagged stand-in, else none (the part stays open).
     #[must_use]
     pub fn bound(&self) -> Option<&str> {
-        let stand_in = self.survivors().find(|_| self.same_pinout);
-        self.determined
-            .as_deref()
-            .or_else(|| stand_in.map(|m| &*m.id))
+        let stand_in = self.survivors().find(|_| self.same_pinout).map(|m| &*m.id);
+        self.determined.as_deref().or(stand_in)
     }
 
     /// The spec line that settles the set for `reference`.
@@ -138,10 +139,7 @@ impl Selection {
 pub fn package_family(package: &str) -> Option<&'static str> {
     let upper = package.to_ascii_uppercase();
     let squashed = upper.replace(|c: char| !c.is_ascii_alphanumeric(), "");
-    let families = ["TSSOP", "SSOP", "SOIC", "TQFP", "LQFP"];
-    let mut families = families
-        .into_iter()
-        .chain(["QFN", "DFN", "BGA", "DIP", "SOT"]);
+    let mut families = "TSSOP SSOP SOIC TQFP LQFP QFN DFN BGA DIP SOT".split(' ');
     families.find(|f| squashed.contains(f))
 }
 
@@ -207,7 +205,53 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         determined,
         via,
         same_pinout,
+        widened: Vec::new(),
     }
+}
+
+/// Widen the stand-in's printed rows to the family envelope of the members `of`.
+///
+/// Each row `model` shares with every member (a gain group's hFE, say) takes, in
+/// its base unit, the lowest min and highest max for worst-case use and the
+/// median typ as the nominal a plain run reads; `src` takes the widened
+/// intervals. Returns each widened row as `param min .. typ .. max`.
+pub fn envelope(model: &mut ModelEntry, src: &mut ModelSource, of: &[&ModelEntry]) -> Vec<String> {
+    let mut widened: Vec<Characteristic> = Vec::new();
+    for (key, value) in &mut model.params.0 {
+        let base = |m: &&ModelEntry| match m.params.0.get(key) {
+            Some(ParamValue::Row(row)) => crate::param_names::row_characteristic(key, row),
+            _ => None,
+        };
+        let Some(rows) = of.iter().map(base).collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let mut row = rows[0].clone();
+        row.basis = format!("family envelope of {} variants", rows.len());
+        let sorted = |column: fn(&Characteristic) -> Option<f64>| {
+            let mut v: Vec<f64> = rows.iter().map(column).collect::<Option<_>>()?;
+            v.sort_by(f64::total_cmp);
+            Some(v)
+        };
+        row.min = sorted(|r| r.min).map(|v| v[0]);
+        row.typ = sorted(|r| r.typ).map(|v| v[(v.len() - 1) / 2]);
+        row.max = sorted(|r| r.max).map(|v| v[v.len() - 1]);
+        if row.min.or(row.typ).or(row.max).is_some() {
+            *value = ParamValue::Row(Box::new(row.clone()));
+            widened.push(row);
+        }
+    }
+    let ours = |p: &String| widened.iter().any(|w| w.parameter == *p);
+    let old = |u: &&ModelUncertainty| matches!(u, ModelUncertainty::Interval { parameter, .. } if ours(parameter));
+    let kept = src.uncertainty().iter().filter(|u| !old(u)).cloned();
+    let all = kept.chain(widened.iter().filter_map(Characteristic::interval));
+    let (tier, layer, validation) = (src.tier(), src.layer(), src.validation());
+    if let Ok(rebuilt) = ModelSource::new(tier, layer, src.origin(), validation, all.collect()) {
+        *src = rebuilt;
+    }
+    let show = |v: Option<f64>| v.map_or_else(|| "?".to_string(), |v| v.to_string());
+    let text = |w: &Characteristic| [w.min, w.typ, w.max].map(show).join(" .. ");
+    let line = |w: &Characteristic| format!("{} {}", w.parameter, text(w));
+    widened.iter().map(line).collect()
 }
 
 /// Variant-set findings over the entries of one file; the rules are the messages below.
@@ -317,6 +361,51 @@ mod tests {
             assert!(res.tied.is_empty(), "{case}: siblings are not a tie");
             let said = format!("{} {}", s.listing(), s.open_reason("U3"));
             assert!(said.contains(text), "{case}: {text} in {said}");
+        }
+    }
+
+    /// Gain groups as variants: a board naming its group binds that group's hFE
+    /// row; one naming none binds the family envelope and records the hedge; a
+    /// single-group card resolves as before.
+    #[test]
+    fn a_gain_group_binds_its_hfe_row_or_the_hedged_family_envelope() {
+        let group = |(g, [min, typ, max]): (char, [u32; 3])| {
+            format!(
+                "[[models]]\nid = \"xyz847{g}\"\nkind = \"bjt_npn\"\nvariant_of = \"XYZ847\"\n\
+                 [models.match]\nvalue_re = \"(?i)^XYZ847\"\n[models.params]\nis = 1e-14\nnf = 1.0\n\
+                 bf = {{ parameter = \"hFE group {g}\", min = {min}, typ = {typ}, max = {max}, unit = \"\", conditions = \"IC = 2 mA\", basis = \"p. 2\" }}\n\
+                 [models.pins]\n\"1\" = \"base\"\n\"2\" = \"emitter\"\n\"3\" = \"collector\"\n\
+                 [models.source]\ntier = \"datasheet-derived\"\n\
+                 [models.variant]\norderable_re = \"{g}$\"\norderable = [\"XYZ847{g}\"]\nbasis = \"p. 1\"\n"
+            )
+        };
+        #[rustfmt::skip]
+        let family = [('a', [110, 180, 220]), ('b', [200, 290, 450]), ('c', [420, 520, 800])].map(group).concat();
+        let single = group(('b', [200, 290, 450])).replace("variant_of = \"XYZ847\"\n", "");
+        let single = &single[..single.find("[models.variant]").unwrap()];
+        let hedged = ["family envelope", "gain-group suffix"];
+        #[rustfmt::skip]
+        let cases = [
+            // (case, card, value) -> bound, bf read, bf interval and basis, hedge the assumption records
+            ("the value names group B", &*family, "XYZ847B", "xyz847b", 290.0, (200.0, 450.0, "p. 2"), ""),
+            ("no group named", &family, "XYZ847", "xyz847a", 290.0, (110.0, 800.0, "family envelope of 3 variants"), "bf 110 .. 290 .. 800"),
+            ("a single-group card", single, "XYZ847", "xyz847b", 290.0, (200.0, 450.0, "p. 2"), ""),
+        ];
+        for (case, card, value, bound, bf, (low, high, basis), hedge) in cases {
+            let q = ComponentQuery::new(None, value.to_string(), None);
+            let res = load(card).unwrap().resolve(&q);
+            let (model, source) = (res.model.expect(case), res.provenance.expect(case));
+            let is_bf = |u: &&ModelUncertainty| matches!(u, ModelUncertainty::Interval { parameter, .. } if parameter == "bf");
+            let got: Vec<_> = source.uncertainty().iter().filter(is_bf).collect();
+            let want = ModelUncertainty::interval("bf", low, high, "-", basis).unwrap();
+            let got = (&*model.id, model.params.get_f64("bf"), got);
+            assert_eq!(got, (bound, Some(bf), vec![&want]), "{case}");
+            let s = res.selection.filter(|s| s.determined.is_none());
+            let (ids, rows) = s.map_or_else(Default::default, |s| (s.ids(), s.widened.join(", ")));
+            let a = Assumption::undetermined_variant("Q1", "Q1", bound, &ids, &rows);
+            let said = format!("{} {}", a.statement(), a.replacement());
+            let told = hedge.is_empty() || hedged.iter().all(|w| said.contains(w));
+            assert!(rows == hedge && told, "{case}: {said}");
         }
     }
 

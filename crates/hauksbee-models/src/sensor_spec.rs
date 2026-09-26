@@ -264,14 +264,11 @@ pub struct RegisterSpec {
 
 impl RegisterSpec {
     /// Effective number of bytes a read of this register returns.
+    #[must_use]
     pub fn read_len(&self) -> usize {
-        if let Some(b) = self.bytes {
-            return b;
-        }
-        if let Some(c) = &self.r#const {
-            return c.len();
-        }
-        self.encoding.map_or(1, Encoding::natural_width).max(1)
+        self.bytes
+            .or_else(|| self.r#const.as_ref().map(Vec::len))
+            .unwrap_or_else(|| self.encoding.map_or(1, Encoding::natural_width).max(1))
     }
 }
 
@@ -322,12 +319,7 @@ impl BitFieldSpec {
     pub const fn extract(&self, value: u32) -> u32 {
         let [high, low] = self.bits;
         let width = high - low + 1;
-        let mask = if width >= 32 {
-            u32::MAX
-        } else {
-            (1u32 << width) - 1
-        };
-        (value >> low) & mask
+        (value >> low) & (u32::MAX >> 32u8.saturating_sub(width))
     }
 }
 

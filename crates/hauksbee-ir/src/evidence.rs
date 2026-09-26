@@ -924,11 +924,6 @@ impl Assumption {
             replacement,
             expires,
         };
-        // Every constructor's output must satisfy the rules `validate` states,
-        // and a debug build is where a producer that hands over an empty datum
-        // finds out. Left as a debug assert rather than a `Result` because
-        // ninety call sites returning `Result` for a bug in their own arguments
-        // buys nothing a test does not.
         built.checked()
     }
 
@@ -1104,19 +1099,8 @@ impl Assumption {
         count: usize,
         ordinal: Option<usize>,
     ) -> Self {
-        let component_subject = if reference.trim().is_empty() {
-            AssumptionId::UNNAMED_SUBJECT.to_string()
-        } else {
-            reference.trim().to_string()
-        };
-        Self::open_part_group_for_components(
-            reference,
-            value,
-            reason,
-            count,
-            ordinal,
-            &[component_subject],
-        )
+        // No component ids: the scope falls back to the part's own subject.
+        Self::open_part_group_for_components(reference, value, reason, count, ordinal, &[])
     }
 
     /// [`Self::open_part_group`] with the exact component occurrences covered
@@ -1320,18 +1304,27 @@ impl Assumption {
     }
 
     /// An orderable-variant set the board could not narrow to one member, all
-    /// sharing one pinout: `bound` stands in for every member for simulation only.
+    /// sharing one pinout: `bound` stands in for every member for simulation only,
+    /// with the printed rows `widened` (`bf 110 .. 290 .. 800`) to the family envelope.
     #[must_use]
-    pub fn undetermined_variant(subject: &str, reference: &str, bound: &str, ids: &str) -> Self {
+    pub fn undetermined_variant(
+        subject: &str,
+        reference: &str,
+        bound: &str,
+        ids: &str,
+        widened: &str,
+    ) -> Self {
+        let hedge = format!(", hedged across them: each row they print (a gain group's hFE, say) takes the family envelope, lowest min .. median typ as the nominal .. highest max ({widened})");
+        let hedge = if widened.is_empty() { "" } else { &hedge };
         Self::build(
             AssumptionKind::SubstituteModel,
             AssumptionSource::Binder,
             subject.trim(),
             part_scope(subject),
-            format!("{reference} is simulated as variant {bound}, one of {ids}."),
+            format!("{reference} is simulated as variant {bound}, one of {ids}{hedge}."),
             format!("Nothing on the board says which of the variants the card lists ({ids}) is fitted; they share a pinout, so {bound} stands in."),
             format!("Every result touching {reference} describes {bound}; wherever the variants differ in values or output form, it may describe the wrong part."),
-            format!("add `[[override]] ref=\"{reference}\" select=\"{bound}\"` to the spec, or put the orderable code in the BOM; `hauksbee-ci` simulates every variant and passes only if all pass"),
+            format!("add `[[override]] ref=\"{reference}\" select=\"{bound}\"` to the spec, or put the orderable code (with any gain-group suffix) in the part number or BOM; `hauksbee-ci` simulates every variant and passes only if all pass"),
             None,
         )
     }
@@ -1483,11 +1476,6 @@ impl Assumption {
             || (raw.clone(), check.clone()),
             |r| (format!("{raw}/{r}"), format!("{check} {r}")),
         );
-        let subject = if raw.is_empty() && rule.is_none() {
-            String::new()
-        } else {
-            subject
-        };
         Self::build(
             AssumptionKind::NotChecked,
             source,
@@ -1663,12 +1651,7 @@ impl Assumption {
         let id_subject = if [check, kind, subject].iter().all(|s| s.trim().is_empty()) {
             String::new()
         } else {
-            format!(
-                "{}/{}/{}",
-                fragment(check),
-                fragment(kind),
-                fragment(subject)
-            )
+            [check, kind, subject].map(fragment).join("/")
         };
         let check = or_else(check, "an unnamed check");
         let kind = or_else(kind, "an unnamed rule");
@@ -1807,27 +1790,13 @@ impl Assumption {
         }
         // An id whose subject is empty names nothing, so an acknowledgment file
         // could not name it and a diff could not track it.
-        let subject = self
-            .id
-            .as_str()
-            .split_once(':')
-            .map(|(_, s)| s)
-            .unwrap_or_default();
+        let (id_slug, subject) = self.id.as_str().split_once(':').unwrap_or_default();
         if subject.trim().is_empty() {
             return Err(format!("{}: the id names no subject", self.id));
         }
-        let id_slug = self
-            .id
-            .as_str()
-            .split_once(':')
-            .map(|(k, _)| k)
-            .unwrap_or_default();
-        if id_slug != self.kind.slug() {
-            return Err(format!(
-                "{}: the id's kind slug is not `{}`",
-                self.id,
-                self.kind.slug()
-            ));
+        let slug = self.kind.slug();
+        if id_slug != slug {
+            return Err(format!("{}: the id's kind slug is not `{slug}`", self.id));
         }
         if let Scope::Check { check, .. } = &self.scope {
             if check.trim().is_empty() {

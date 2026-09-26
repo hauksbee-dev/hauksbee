@@ -749,35 +749,39 @@ impl ModelLibrary {
             let mut siblings: Vec<&LayeredEntry> = matched().filter(|o| sibling(o)).collect();
             siblings.sort_by(|a, b| a.compiled.entry.id.cmp(&b.compiled.entry.id));
             let entries: Vec<&ModelEntry> = siblings.iter().map(|o| &o.compiled.entry).collect();
-            let selection = family.map(|family| variants::select(family, &entries, q));
+            let mut selection = family.map(|family| variants::select(family, &entries, q));
             let bound = selection.as_ref().map(variants::Selection::bound);
             let named = |b| {
                 siblings
                     .into_iter()
                     .find(|o| Some(&*o.compiled.entry.id) == b)
             };
-            let chosen = bound.map_or(Some(le), named);
-            let Some(le) = chosen else {
+            let Some(le) = bound.map_or(Some(le), named) else {
                 let open = Resolution::unresolved(q.clone());
                 return Resolution { selection, ..open };
             };
+            let (mut model, mut provenance) = (le.compiled.entry.clone(), le.provenance.clone());
+            // A stand-in for an undetermined set runs on the envelope of the members left.
+            if let Some(s) = selection.as_mut().filter(|s| s.determined.is_none()) {
+                let left = |e: &&ModelEntry| s.survivors().any(|m| m.id == e.id);
+                let left: Vec<&ModelEntry> = entries.iter().copied().filter(left).collect();
+                s.widened = variants::envelope(&mut model, &mut provenance, &left);
+            }
             let tie = |other: &&LayeredEntry| {
                 rank(other) == top && other.compiled.entry.id != *id && !sibling(other)
             };
             let ids = matched().filter(tie).map(|o| o.compiled.entry.id.clone());
+            let ids: std::collections::BTreeSet<String> = ids.collect();
             return Resolution {
                 selection,
-                tied: ids
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-                model: Some(le.compiled.entry.clone()),
+                tied: ids.into_iter().collect(),
+                model: Some(model),
                 confidence: score_to_confidence(rank(le).2 + le.compiled.outright_bonus()),
                 query: q.clone(),
                 source: Some(le.layer.coarse_name().to_string()),
                 layer: Some(le.layer),
                 origin: Some(le.origin.clone()),
-                provenance: Some(le.provenance.clone()),
+                provenance: Some(provenance),
                 references: le.references.clone(),
             };
         }
@@ -1113,30 +1117,15 @@ impl ResolutionReport {
 impl std::fmt::Display for ResolutionReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (exact, family, guessed, unresolved) = self.counts();
+        let n = self.resolutions.len();
         writeln!(
             f,
-            "┌──────────────────────────────────────────────────────────────┐"
-        )?;
-        writeln!(
-            f,
-            "│ Resolution report: {} components",
-            self.resolutions.len()
-        )?;
-        writeln!(
-            f,
-            "│  exact={exact}  family={family}  guessed={guessed}  unresolved={unresolved}"
-        )?;
-        writeln!(
-            f,
-            "├──────────┬──────────────────────────┬────────────┬────────────┤"
-        )?;
-        writeln!(
-            f,
-            "│ Ref      │ Value                    │ Model ID   │ Confidence │"
-        )?;
-        writeln!(
-            f,
-            "├──────────┼──────────────────────────┼────────────┼────────────┤"
+            "┌──────────────────────────────────────────────────────────────┐\n\
+             │ Resolution report: {n} components\n\
+             │  exact={exact}  family={family}  guessed={guessed}  unresolved={unresolved}\n\
+             ├──────────┬──────────────────────────┬────────────┬────────────┤\n\
+             │ Ref      │ Value                    │ Model ID   │ Confidence │\n\
+             ├──────────┼──────────────────────────┼────────────┼────────────┤"
         )?;
         for res in &self.resolutions {
             let ref_s = res.query.reference.as_deref().unwrap_or("?");

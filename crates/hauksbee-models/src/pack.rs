@@ -181,22 +181,21 @@ struct RawManifest {
 
 /// Parse `x.y.z` (digits only) into a comparable triple.
 fn parse_version(field: &'static str, v: &str) -> Result<(u64, u64, u64), PackError> {
-    let bad = || PackError::InvalidVersion {
-        field,
-        value: v.to_string(),
-    };
-    let parts: Vec<&str> = v.split('.').collect();
-    if parts.len() != 3 {
-        return Err(bad());
+    let nums: Option<Vec<u64>> = v
+        .split('.')
+        .map(|p| {
+            p.parse()
+                .ok()
+                .filter(|_| p.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .collect();
+    match nums.as_deref() {
+        Some(&[a, b, c]) => Ok((a, b, c)),
+        _ => Err(PackError::InvalidVersion {
+            field,
+            value: v.to_string(),
+        }),
     }
-    let mut nums = [0u64; 3];
-    for (i, p) in parts.iter().enumerate() {
-        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(bad());
-        }
-        nums[i] = p.parse().map_err(|_| bad())?;
-    }
-    Ok(nums.into())
 }
 
 fn valid_pack_name(name: &str) -> bool {
@@ -319,18 +318,16 @@ impl Pack {
 
         // models/*.toml: at least one, and every one passes entry validation.
         let models_dir = dir.join("models");
-        let mut model_files: Vec<PathBuf> = Vec::new();
-        if models_dir.is_dir() {
-            for e in std::fs::read_dir(&models_dir)
+        let mut model_files: Vec<PathBuf> = if models_dir.is_dir() {
+            std::fs::read_dir(&models_dir)
                 .map_err(io_err(format!("listing '{}'", models_dir.display())))?
                 .flatten()
-            {
-                let p = e.path();
-                if p.extension().and_then(|x| x.to_str()) == Some("toml") {
-                    model_files.push(p);
-                }
-            }
-        }
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if model_files.is_empty() {
             return Err(PackError::NoModels(dir.to_path_buf()));
         }
@@ -521,9 +518,7 @@ impl PackStore {
             .position(|r| r.name == name)
             .ok_or_else(|| PackError::NotInstalled(name.to_string()))?;
         let record = file.packs.remove(idx);
-        let dir = self
-            .root
-            .join(format!("{}@{}", record.name, record.version));
+        let dir = self.pack_dir(&record);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)
                 .map_err(io_err(format!("removing '{}'", dir.display())))?;

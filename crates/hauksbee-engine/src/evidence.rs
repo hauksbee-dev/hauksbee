@@ -341,8 +341,9 @@ impl BoardEvidence {
         for (&index, s) in &report.selections {
             let (row, subject) = (&report.rows[index], &row_subjects[index]);
             if let (None, Some(bound)) = (&s.determined, &row.model_id) {
-                let ids = s.ids();
-                let a = Assumption::undetermined_variant(subject, &row.reference, bound, &ids);
+                let (ids, rows) = (s.ids(), s.widened.join(", "));
+                let a =
+                    Assumption::undetermined_variant(subject, &row.reference, bound, &ids, &rows);
                 assumptions.push(a);
             }
         }

@@ -1434,10 +1434,11 @@ model the variant the request implies. Never merge variants, and widen
 `value_re` only to that variant's ordering-table codes, never to a family root
 its siblings share. Variants are the exception, only where the datasheet itself
 prints distinct orderable variants: when the name you were given does not pin
-one and they differ in pinout or output form, emit one complete [[models]] per
+one and they differ in pinout, output form or hFE gain group, emit one complete [[models]] per
 variant, each with the shared family `value_re`, `variant_of = "<family>"` and
 `[models.variant]` (`orderable_re`, `orderable` = its ordering-table codes,
-`package`, `basis`; no default).
+`package`, `basis`; no default). A BJT's bf is the hFE row (min/typ/max) of the
+gain group it models, as a row param; name the group in its `parameter`.
 
 The `kind` FIELD inside your entry must come from this closed list (the
 schema accepts nothing else): {legal_kinds}.
@@ -3537,7 +3538,7 @@ mod tests {
     fn prompt_forbids_bound_placeholders_saturation_is_and_schottky_tt() {
         let bjt = build_prompt("NPN_FIXTURE", "bjt_npn", "x");
         assert!(bjt.contains("never a placeholder at a bound"));
-        assert!(bjt.contains("never from VBE(sat)"));
+        assert!(bjt.contains("never from VBE(sat)") && bjt.contains("or hFE gain group, emit one"));
         assert!(bjt.contains("takes no tt: its trr is capacitive recovery"));
         assert!(bjt.contains("is, bf, nf (no VBE(on) row or curve: an `unknown` record each)"));
         let switch = build_prompt("SWITCH_FIXTURE", "analog_switch", "x");

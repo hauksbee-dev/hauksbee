@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::datasheet::Backend;
@@ -190,13 +190,13 @@ pub struct ExtractConfig {
     /// How long one agent-CLI run may take before it is killed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
-    #[serde(rename = "claude-code", skip_serializing_if = "AgentConfig::is_empty")]
+    #[serde(rename = "claude-code", skip_serializing_if = "is_default")]
     pub claude_code: AgentConfig,
-    #[serde(skip_serializing_if = "AgentConfig::is_empty")]
+    #[serde(skip_serializing_if = "is_default")]
     pub agy: AgentConfig,
-    #[serde(skip_serializing_if = "AgentConfig::is_empty")]
+    #[serde(skip_serializing_if = "is_default")]
     pub codex: AgentConfig,
-    #[serde(skip_serializing_if = "ApiConfig::is_empty")]
+    #[serde(skip_serializing_if = "is_default")]
     pub api: ApiConfig,
 }
 
@@ -237,17 +237,8 @@ pub struct ApiConfig {
     pub api_key_env: Option<String>,
 }
 
-impl AgentConfig {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-}
-impl ApiConfig {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 /// Trim, and turn a blank into "not set": a web form posts the fields the
@@ -261,21 +252,17 @@ fn tidy(field: &mut Option<String>) {
 }
 
 fn check_choice(what: &str, value: Option<&String>, allowed: &[&str]) -> Result<()> {
-    match value {
-        Some(v) if !allowed.contains(&v.as_str()) => {
-            bail!("{what} must be one of {}, not '{v}'", allowed.join(", "))
-        }
-        _ => Ok(()),
+    if let Some(v) = value.filter(|v| !allowed.contains(&v.as_str())) {
+        bail!("{what} must be one of {}, not '{v}'", allowed.join(", "));
     }
+    Ok(())
 }
 
 fn check_model(what: &str, value: Option<&String>) -> Result<()> {
-    match value {
-        Some(v) if v.chars().any(char::is_whitespace) || v.starts_with('-') => {
-            bail!("{what} does not look like a model name: '{v}'")
-        }
-        _ => Ok(()),
+    if let Some(v) = value.filter(|v| v.chars().any(char::is_whitespace) || v.starts_with('-')) {
+        bail!("{what} does not look like a model name: '{v}'");
     }
+    Ok(())
 }
 
 /// The one backend -> per-agent slot mapping, for config sections and resolved settings.
@@ -346,14 +333,14 @@ impl ExtractConfig {
         }
         for a in AGENTS {
             let (name, s) = (a.backend.name(), self.agent(a.backend).expect("agent"));
-            if s.command
+            let control = s
+                .command
                 .as_deref()
-                .is_some_and(|c| c.chars().any(char::is_control))
-            {
-                bail!(
-                    "{name}.command must be an executable name or path without control characters"
-                );
-            }
+                .is_some_and(|c| c.chars().any(char::is_control));
+            ensure!(
+                !control,
+                "{name}.command must be an executable name or path without control characters"
+            );
             check_model(&format!("{name}.model"), s.model.as_ref())?;
             check_choice(&format!("{name}.effort"), s.effort.as_ref(), a.efforts)?;
             check_choice(
@@ -653,17 +640,11 @@ impl ExtractConfig {
                     DEFAULT_API_BASE,
                 ),
                 model: pick("HAUKSBEE_LLM_MODEL", &self.api.model, DEFAULT_API_MODEL),
-                api_key_env: env("HAUKSBEE_API_KEY_ENV")
-                    .or_else(|| self.api.api_key_env.clone())
-                    .unwrap_or_else(|| {
-                        let found = env(LLM_API_KEY_ENV).is_some();
-                        (if found {
-                            LLM_API_KEY_ENV
-                        } else {
-                            DEFAULT_API_KEY_ENV
-                        })
-                        .to_string()
-                    }),
+                api_key_env: pick(
+                    "HAUKSBEE_API_KEY_ENV",
+                    &self.api.api_key_env,
+                    env(LLM_API_KEY_ENV).map_or(DEFAULT_API_KEY_ENV, |_| LLM_API_KEY_ENV),
+                ),
             },
             env_overrides: KNOWN_ENV_VARS
                 .iter()

@@ -151,16 +151,11 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
 #[must_use]
 pub fn parse_frequency_hz(s: &str) -> Option<f64> {
     let cleaned = normalise_frequency_comma(&normalise_unicode(s.trim()));
-    let p = parse_inner(&cleaned)?;
-    if p.unit.as_deref() != Some("Hz") {
-        return None;
-    }
+    let p = parse_inner(&cleaned).filter(|p| p.unit.as_deref() == Some("Hz"))?;
     // Undo the milli reading of a lowercase 'm' and make it mega. See the note
     // above: 1e9 is (1 / 1e-3) * 1e6.
-    if p.suffix.as_deref() == Some("m") {
-        return Some(p.si * 1e9);
-    }
-    Some(p.si)
+    let milli = p.suffix.as_deref() == Some("m");
+    Some(if milli { p.si * 1e9 } else { p.si })
 }
 
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
@@ -170,23 +165,14 @@ pub fn parse_frequency_hz(s: &str) -> Option<f64> {
 /// the part numbers that would otherwise read as ~1.4 nF.
 fn is_jedec_semiconductor(v: &str) -> bool {
     let b = v.as_bytes();
-    if b.len() < 4 {
-        return false;
-    }
-    if !b[0].is_ascii_digit() || b[0] == b'0' {
+    if b.len() < 4 || !matches!(b[0], b'1'..=b'9') || !matches!(b[1], b'N' | b'n') {
         return false;
     }
     let upper_n = b[1] == b'N';
-    if !(upper_n || b[1] == b'n') {
-        return false;
-    }
     // The serial is a digit run optionally followed by a suffix letter (1N4148W,
     // 1N914B, 1N34A), allow the trailing letters, require the rest all-digit.
     let serial = &b[2..];
-    let ndigits = serial.iter().take_while(|c| c.is_ascii_digit()).count();
-    if !serial[ndigits..].iter().all(u8::is_ascii_alphabetic) {
-        return false;
-    }
+    let ndigits = digit_run(serial);
     // An UPPERCASE 'N' is the JEDEC spelling (1N34, 1N60, 1N21, 2N3904), so a
     // 2+-digit serial there is a part number and must return None (a bare
     // `parse_inner` would read it as the RKM nano form ~1.x nF and defeat the
@@ -196,7 +182,12 @@ fn is_jedec_semiconductor(v: &str) -> bool {
     // still needs 3+ serial digits before it is treated as a part number rather
     // than a 1–2-digit value.
     let min_serial = if upper_n { 2 } else { 3 };
-    ndigits >= min_serial
+    serial[ndigits..].iter().all(u8::is_ascii_alphabetic) && ndigits >= min_serial
+}
+
+/// Length of the leading ASCII-digit run of `b`.
+fn digit_run(b: &[u8]) -> usize {
+    b.iter().take_while(|c| c.is_ascii_digit()).count()
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
@@ -228,22 +219,13 @@ fn strip_size_code(s: &str) -> Option<&str> {
 fn normalise_comma_decimal(s: &str) -> String {
     let comma_count = s.bytes().filter(|&b| b == b',').count();
     // Multiple commas are thousands grouping if each is followed by 3 digits.
-    if comma_count > 1 {
-        if is_thousands_grouped(s) {
-            return s.replace(',', "");
-        }
-        return s.to_string();
+    if comma_count > 1 && is_thousands_grouped(s) {
+        return s.replace(',', "");
     }
-    if comma_count == 1 {
-        let idx = s.find(',').unwrap();
-        let before_comma = &s[..idx];
-        let after_comma = &s[idx + 1..];
-        let prev_digit = before_comma
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_ascii_digit());
+    if let Some((before_comma, after_comma)) = s.split_once(',').filter(|_| comma_count == 1) {
+        let prev_digit = before_comma.ends_with(|c: char| c.is_ascii_digit());
         // Length of the digit run immediately after the comma.
-        let run = after_comma.chars().take_while(char::is_ascii_digit).count();
+        let run = digit_run(after_comma.as_bytes());
         if prev_digit && run >= 1 {
             // A single comma is a thousands separator for a grouped integer: a
             // nonzero integer part with no leading zero and a 3-digit group. The
@@ -280,16 +262,9 @@ fn normalise_comma_decimal(s: &str) -> String {
 /// MULTIPLE commas keep the thousands reading ("1,000,000Hz" is 1 MHz), because
 /// that spelling has no decimal-separator interpretation at all.
 fn normalise_frequency_comma(s: &str) -> String {
-    if s.bytes().filter(|&b| b == b',').count() == 1 {
-        let i = s.find(',').unwrap();
-        let before_digit = s[..i]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_ascii_digit());
-        let after_digit = s[i + 1..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit());
+    if let Some((before, after)) = s.split_once(',').filter(|(_, a)| !a.contains(',')) {
+        let before_digit = before.ends_with(|c: char| c.is_ascii_digit());
+        let after_digit = after.starts_with(|c: char| c.is_ascii_digit());
         if before_digit && after_digit {
             return s.replacen(',', ".", 1);
         }
@@ -353,11 +328,8 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     let rewritten;
     let s = {
         let b = s.as_bytes();
-        let mut k = 0;
-        if k < b.len() && (b[k] == b'+' || b[k] == b'-') {
-            k += 1;
-        }
-        if k + 1 < b.len() && (b[k] == b'R' || b[k] == b'r') && b[k + 1].is_ascii_digit() {
+        let k = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+        if k + 1 < b.len() && matches!(b[k], b'R' | b'r') && b[k + 1].is_ascii_digit() {
             rewritten = format!("{}0{}", &s[..k], &s[k..]);
             rewritten.as_str()
         } else {
@@ -365,43 +337,25 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         }
     };
     let bytes = s.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
 
     // --- consume leading digits (and optional leading decimal) ---------------
-    let mut i = 0;
     // Allow leading sign
-    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
-        i += 1;
-    }
-    let start = i;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
+    let start = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let mut i = start + digit_run(&bytes[start..]);
     // Optional decimal with digits after
-    if i < bytes.len() && bytes[i] == b'.' {
-        i += 1;
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
+    if bytes.get(i) == Some(&b'.') {
+        i += 1 + digit_run(&bytes[i + 1..]);
     }
     // Optional scientific-notation exponent ("4.7e3", "1e-6"): e/E, optional
     // sign, one or more digits. Only consumed after a real mantissa (i > start)
     // and only when digits actually follow the 'e', otherwise a lone 'e' is
     // left for the tail (no unit token begins with 'E', so it fails loudly
     // rather than silently eating a bad char). f64::parse handles the exponent.
-    if i > start && i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
-        let mut j = i + 1;
-        if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
-            j += 1;
-        }
-        let exp_digits_start = j;
-        while j < bytes.len() && bytes[j].is_ascii_digit() {
-            j += 1;
-        }
-        if j > exp_digits_start {
-            i = j;
+    if i > start && matches!(bytes.get(i), Some(b'e' | b'E')) {
+        let exp_digits_start = i + 1 + usize::from(matches!(bytes.get(i + 1), Some(b'+' | b'-')));
+        let exp_digits = digit_run(&bytes[exp_digits_start..]);
+        if exp_digits > 0 {
+            i = exp_digits_start + exp_digits;
         }
     }
     if i == start {
@@ -416,45 +370,35 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     // so " kOhm" left the multiplier unread and emitted the value 10^n too small).
     // But do NOT skip a space that precedes another DIGIT ("10 5"): that is not a
     // single value and must stay rejected, never silently fused into "10.5".
-    let rest = {
-        let trimmed = rest.trim_start();
-        if trimmed.as_bytes().first().is_some_and(u8::is_ascii_digit) {
-            rest
-        } else {
-            trimmed
-        }
+    let trimmed = rest.trim_start();
+    let rest = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+        rest
+    } else {
+        trimmed
     };
 
     // --- try to parse suffix (and optional interleaved decimal part) ---------
     let (multiplier, suffix_str, after_suffix) = parse_suffix(rest);
 
     // Check for "4k7" style: suffix followed by digits (the fractional part)
-    let (mantissa_str, unit) = if after_suffix
-        .as_bytes()
-        .first()
-        .is_some_and(u8::is_ascii_digit)
-    {
-        let digits = after_suffix.bytes().take_while(u8::is_ascii_digit).count();
+    let digits = digit_run(after_suffix.as_bytes());
+    let (mantissa_str, unit) = if digits > 0 {
         let (frac_digits, after_frac) = after_suffix.split_at(digits);
         // Rebuild as "4.7"
         let combined = format!("{before}.{frac_digits}");
-        let mut unit = parse_tail(after_frac)?;
-        if unit.is_none() {
-            // An RKM decimal-point letter that is ITSELF a unit, H in "4H7",
-            // F in "4F7", leaves nothing after the fraction, so parse_tail
-            // returns no unit and the H/F was silently dropped. The value then
-            // read as unitless and downstream (parse_ohms) accepted a henry /
-            // farad part as a resistance. Recover the unit from the suffix letter.
-            unit = match suffix_str {
-                Some("H") => Some("H".to_string()),
-                Some("F") => Some("F".to_string()),
-                _ => None,
-            };
-        }
+        // An RKM decimal-point letter that is ITSELF a unit, H in "4H7",
+        // F in "4F7", leaves nothing after the fraction, so parse_tail
+        // returns no unit and the H/F was silently dropped. The value then
+        // read as unitless and downstream (parse_ohms) accepted a henry /
+        // farad part as a resistance. Recover the unit from the suffix letter.
+        let unit = parse_tail(after_frac)?.or_else(|| {
+            suffix_str
+                .filter(|s| matches!(*s, "H" | "F"))
+                .map(String::from)
+        });
         (combined, unit)
     } else {
-        let unit = parse_tail(after_suffix)?;
-        (before.to_string(), unit)
+        (before.to_string(), parse_tail(after_suffix)?)
     };
 
     // Resolve the EIA tolerance-letter / unit collision: after a
@@ -497,13 +441,9 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     // NOT 10.2 F / 10.50 F. If a 'V' immediately follows the digit run, 'F' was the
     // Farad UNIT and the tail is a rating, fall through so parse_tail handles it,
     // matching the prefixed "10uF2V7" path (which never reaches this branch).
-    let f_is_rkm_decimal = bytes[0] == b'F' && next_is_digit && {
-        let mut j = 1;
-        while j < bytes.len() && bytes[j].is_ascii_digit() {
-            j += 1;
-        }
-        !matches!(bytes.get(j), Some(b'V' | b'v'))
-    };
+    let f_is_rkm_decimal = bytes[0] == b'F'
+        && next_is_digit
+        && !matches!(bytes.get(1 + digit_run(&bytes[1..])), Some(b'V' | b'v'));
     match bytes[0] {
         b'H' | b'h' if next_is_digit => return (1.0, Some("H"), &s[1..]),
         b'F' if f_is_rkm_decimal => return (1.0, Some("F"), &s[1..]),
@@ -542,20 +482,14 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
 // The three outcomes are distinct: no unit (`Some(None)`), a unit, and garbage (`None`).
 #[allow(clippy::option_option)]
 fn parse_tail(t: &str) -> Option<Option<String>> {
-    if t.is_empty() {
+    let Some(first) = t.chars().next() else {
         return Some(None);
-    }
-    let first = t.chars().next().unwrap();
+    };
     if first.is_whitespace() {
         // Space-separated tail: a whole unit word keeps its unit ("10k Ohm");
         // anything else is an annotation we ignore ("47k 1%", "22u X7R").
-        let tt = t.trim_start();
-        if let Some((unit, rest)) = unit_token(tt) {
-            if tail_is_annotation(rest) {
-                return Some(Some(unit));
-            }
-        }
-        return Some(None);
+        let unit = unit_token(t.trim_start()).filter(|(_, rest)| tail_is_annotation(rest));
+        return Some(unit.map(|(unit, _)| unit));
     }
     if is_annotation_start(first) {
         return Some(None); // "/25V", ",25V", "@100MHz" rating-style tails
@@ -576,10 +510,7 @@ fn parse_tail(t: &str) -> Option<Option<String>> {
     // Directly attached: must be a unit, optionally followed by an annotation
     // ("uF/25V") or a rating that starts with a digit ("F50V").
     let (unit, rest) = unit_token(t)?;
-    if tail_is_annotation(rest) {
-        return Some(Some(unit));
-    }
-    None
+    tail_is_annotation(rest).then_some(Some(unit))
 }
 
 /// Extract a leading unit token. Returns the unit and the remainder after it.
@@ -595,12 +526,10 @@ fn unit_token(s: &str) -> Option<(String, &str)> {
         ("Ω", 4)
     } else if upper.starts_with("OHM") || upper.starts_with("OH") {
         ("Ω", if upper.starts_with("OHM") { 3 } else { 2 })
-    } else if upper.starts_with('O') {
-        // Common ASCII substitution in Altium comments: `330O +/-1%`.
+    } else if upper.starts_with(['O', 'R']) {
+        // O is a common ASCII substitution in Altium comments: `330O +/-1%`.
         // `parse_tail` accepts this token only when everything after the O is
         // empty or an annotation, so words such as `330OUTPUT` still refuse.
-        ("Ω", 1)
-    } else if upper.starts_with('R') {
         ("Ω", 1)
     } else if upper.starts_with('F') {
         ("F", 1)
@@ -632,11 +561,7 @@ const fn is_annotation_start(c: char) -> bool {
 /// denotes a length, not milli-ohms plus tolerance. The first SI multiplier
 /// is already consumed; `F` is handled by [`fixup_tolerance_unit`].
 fn strip_eia_tolerance_letter(t: &str) -> Option<&str> {
-    let mut chars = t.chars();
-    match chars.next() {
-        Some('G' | 'J' | 'K' | 'M') => Some(chars.as_str()),
-        _ => None,
-    }
+    t.strip_prefix(['G', 'J', 'K', 'M'])
 }
 
 #[cfg(test)]
@@ -760,6 +685,8 @@ mod tests {
             r.is_none_or(|v| (v.si - 10.5).abs() > 1e-9),
             "'10 5' must not fuse into 10.5"
         );
+        // Several commas that are not all 3-digit groups are left untouched.
+        assert_eq!(normalise_comma_decimal("1,5,20"), "1,5,20");
     }
 
     #[test]
