@@ -196,7 +196,7 @@ fn decode(enc: Encoding, bytes: &[u8]) -> (f64, u32) {
 /// Extract a `[high, low]`-inclusive bit range from a decoded integer (the
 /// same semantics as `BitFieldSpec::extract`, for the channel-select field
 /// which has no name).
-fn extract_bits(bits: [u8; 2], value: u32) -> u32 {
+const fn extract_bits(bits: [u8; 2], value: u32) -> u32 {
     let [high, low] = bits;
     let width = high - low + 1;
     let mask = if width >= 32 {
@@ -522,7 +522,7 @@ impl RegisterMapSensor {
     }
 
     /// Which bus the spec declares.
-    pub fn bus(&self) -> Bus {
+    pub const fn bus(&self) -> Bus {
         self.bus
     }
 
@@ -567,7 +567,7 @@ impl RegisterMapSensor {
 
     /// Override the spec's I2C address for this instance (a board carries
     /// several MCP4728s at 0x60/0x61/0x62 from one spec).
-    pub fn set_i2c_address(&mut self, addr: u8) {
+    pub const fn set_i2c_address(&mut self, addr: u8) {
         self.i2c_address = addr;
     }
 
@@ -621,7 +621,7 @@ impl RegisterMapSensor {
 
     /// Write bytes accepted but not decoded (undeclared command families,
     /// payload past a register's width, payload for a non-writable register).
-    pub fn ignored_write_bytes(&self) -> u64 {
+    pub const fn ignored_write_bytes(&self) -> u64 {
         self.ignored_write_bytes
     }
 
@@ -760,7 +760,7 @@ impl RegisterMapSensor {
     /// Masking is idempotent, so applying this to an already-masked address (as
     /// the SPI `transfer` path does before calling `register_bytes`) is a no-op:
     /// `(mosi & m) & m == mosi & m`.
-    fn normalize_addr(&self, addr: u8) -> u8 {
+    const fn normalize_addr(&self, addr: u8) -> u8 {
         if self.spi_reg_protocol {
             addr & self.addr_mask
         } else {

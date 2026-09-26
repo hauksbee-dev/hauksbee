@@ -188,7 +188,7 @@ pub enum CsProvenance {
 impl CsProvenance {
     /// Lower-case tag for JSON coverage: `"spec"` | `"model-roles"` |
     /// `"bitbang-pins"`.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::SpecDeclared => "spec",
             Self::ModelRoles => "model-roles",
@@ -198,7 +198,7 @@ impl CsProvenance {
 
     /// The clause a report appends after the `exact` tier, naming who supplied
     /// the CS net.
-    pub fn describe(self) -> &'static str {
+    pub const fn describe(self) -> &'static str {
         match self {
             Self::SpecDeclared => "CS net declared by the spec",
             Self::ModelRoles => "CS net resolved from the bound model's pin roles",
@@ -233,7 +233,7 @@ pub enum SpiFramingMode {
 
 impl SpiFramingMode {
     /// Lower-case tag for JSON coverage: `"exact"` | `"backend"` | `"heuristic"`.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Exact(_) => "exact",
             Self::Backend => "backend",
@@ -244,7 +244,7 @@ impl SpiFramingMode {
     /// Where the CS net came from, on the exact tier only. `None` on the backend
     /// tier (the emulator framed it, no net was resolved) and on the heuristic
     /// tier (there was no net to resolve).
-    pub fn cs_provenance(self) -> Option<CsProvenance> {
+    pub const fn cs_provenance(self) -> Option<CsProvenance> {
         match self {
             Self::Exact(p) => Some(p),
             Self::Backend | Self::Heuristic => None,
@@ -338,12 +338,12 @@ impl SpiBus {
     /// The declared SPI clock mode (0..=3) of this bus's slave, cached from
     /// [`SpiSlave::spi_mode`] at construction. Consumed by the bit-banged SPI
     /// responder to time its sample/shift edges.
-    pub fn spi_mode(&self) -> u8 {
+    pub const fn spi_mode(&self) -> u8 {
         self.spi_mode
     }
 
     /// The MCU pin driving this slave's chip-select, if resolved.
-    pub fn cs_pin(&self) -> Option<(char, u8)> {
+    pub const fn cs_pin(&self) -> Option<(char, u8)> {
         self.cs_pin
     }
 
@@ -356,7 +356,7 @@ impl SpiBus {
     /// forgot to set it reported `exact (CS net declared by the spec)` for a bus
     /// no spec had declared a net for. Making the caller say both means a new
     /// route onto the exact tier cannot silently inherit someone else's story.
-    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>, provenance: CsProvenance) {
+    pub const fn set_cs_pin(&mut self, pin: Option<(char, u8)>, provenance: CsProvenance) {
         self.cs_provenance = provenance;
         // A resolved CS pin means selection is driven by the CS edge, so start
         // DESELECTED until the firmware asserts it. A bus with no CS pin stays
@@ -368,12 +368,12 @@ impl SpiBus {
     /// Whether this bus's chip-select is currently asserted. The scheduler's
     /// shared `on_spi` handler routes a byte to the selected bus when more than
     /// one SPI slave is on the controller.
-    pub fn is_selected(&self) -> bool {
+    pub const fn is_selected(&self) -> bool {
         self.selected
     }
 
     /// Which framing tier this bus is actually running on, for coverage.
-    pub fn framing_mode(&self) -> SpiFramingMode {
+    pub const fn framing_mode(&self) -> SpiFramingMode {
         if self.backend_deselect_seen {
             SpiFramingMode::Backend
         } else if self.cs_pin.is_some() {
@@ -388,7 +388,7 @@ impl SpiBus {
     /// the chunk-boundary deselect heuristic to it, since doing so would truncate a
     /// transaction that legitimately spans a chunk boundary (failure mode
     /// b: the debug warning below must stop firing on these buses).
-    pub fn frames_itself(&self) -> bool {
+    pub const fn frames_itself(&self) -> bool {
         self.cs_pin.is_some() || self.backend_deselect_seen
     }
 
@@ -409,7 +409,7 @@ impl SpiBus {
         self.powered = powered;
     }
 
-    pub fn powered(&self) -> bool {
+    pub const fn powered(&self) -> bool {
         self.powered
     }
 
@@ -735,13 +735,13 @@ impl SpiNorFlash {
         &self.mem
     }
 
-    fn begin_address(&mut self, state: NorCmd) {
+    const fn begin_address(&mut self, state: NorCmd) {
         self.state = state;
         self.addr = 0;
         self.addr_bytes = 0;
     }
 
-    fn address_byte(&mut self, byte: u8) -> bool {
+    const fn address_byte(&mut self, byte: u8) -> bool {
         self.addr = ((self.addr << 8) | byte as usize) % self.mem.len();
         self.addr_bytes += 1;
         self.addr_bytes == 3
@@ -945,7 +945,7 @@ pub struct Mcp3008 {
 }
 
 impl Mcp3008 {
-    pub fn new(vref: f64) -> Self {
+    pub const fn new(vref: f64) -> Self {
         Self {
             vref: vref.max(1e-6),
             channels: [0.0; 8],
@@ -956,7 +956,7 @@ impl Mcp3008 {
     }
 
     /// Set a channel's input voltage (clamped to 0..vref).
-    pub fn set_channel(&mut self, ch: usize, volts: f64) {
+    pub const fn set_channel(&mut self, ch: usize, volts: f64) {
         if ch < 8 {
             self.channels[ch] = volts.clamp(0.0, self.vref);
         }

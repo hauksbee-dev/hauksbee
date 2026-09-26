@@ -219,7 +219,7 @@ impl I2cBus {
         self.powered = powered;
     }
 
-    pub fn powered(&self) -> bool {
+    pub const fn powered(&self) -> bool {
         self.powered
     }
 
@@ -492,7 +492,7 @@ impl Lm75 {
     /// Default LM75 address with all address pins low is 0x48.
     pub const DEFAULT_ADDR: u8 = 0x48;
 
-    pub fn new(address: u8, temp_c: f64) -> Self {
+    pub const fn new(address: u8, temp_c: f64) -> Self {
         Self {
             addr: address,
             pointer: 0,
@@ -508,11 +508,11 @@ impl Lm75 {
 
     /// Set the temperature the sensor reports (used by the sweep test and the
     /// live websocket control).
-    pub fn set_temp_c(&mut self, t: f64) {
+    pub const fn set_temp_c(&mut self, t: f64) {
         self.temp_c = t;
     }
 
-    pub fn temp_c(&self) -> f64 {
+    pub const fn temp_c(&self) -> f64 {
         self.temp_c
     }
 

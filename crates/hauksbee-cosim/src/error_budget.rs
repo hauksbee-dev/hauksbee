@@ -11,7 +11,7 @@ use hauksbee_ir::evidence::{
     ErrorBudget, EvidenceError, IntegrationMethod, IntegrationTolerance, TimeWindow, WindowMethod,
 };
 
-fn integration_method(method: hauksbee_solve::Integration) -> IntegrationMethod {
+const fn integration_method(method: hauksbee_solve::Integration) -> IntegrationMethod {
     match method {
         hauksbee_solve::Integration::Trapezoidal => IntegrationMethod::Trapezoidal,
         hauksbee_solve::Integration::Gear2 => IntegrationMethod::Gear2,

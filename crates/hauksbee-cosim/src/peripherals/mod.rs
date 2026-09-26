@@ -64,13 +64,13 @@ pub struct BusActivity {
 }
 
 impl BusActivity {
-    pub fn merge(&mut self, other: Self) {
+    pub const fn merge(&mut self, other: Self) {
         self.read_units = self.read_units.saturating_add(other.read_units);
         self.write_units = self.write_units.saturating_add(other.write_units);
         self.other_units = self.other_units.saturating_add(other.other_units);
     }
 
-    pub fn is_idle(self) -> bool {
+    pub const fn is_idle(self) -> bool {
         self.read_units == 0 && self.write_units == 0 && self.other_units == 0
     }
 }

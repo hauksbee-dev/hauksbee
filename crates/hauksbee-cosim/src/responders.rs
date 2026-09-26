@@ -65,14 +65,14 @@ pub struct InputDrive {
 }
 
 impl InputDrive {
-    pub fn drive(pin: (char, u8), high: bool) -> Self {
+    pub const fn drive(pin: (char, u8), high: bool) -> Self {
         Self {
             pin,
             level: Some(high),
         }
     }
 
-    pub fn release(pin: (char, u8)) -> Self {
+    pub const fn release(pin: (char, u8)) -> Self {
         Self { pin, level: None }
     }
 }
@@ -366,7 +366,7 @@ pub(crate) struct ParallelMemoryWrite {
 }
 
 impl ParallelMemoryWrite {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         signal: ParallelSignal,
         edge: Edge,
         gates: Vec<(ParallelSignal, Level)>,
@@ -879,7 +879,7 @@ impl BitBangSpiResponder {
     /// CPHA=0 the sample edge is leading, so the clock rests at `!CPOL` (away
     /// from idle); for CPHA=1 it is trailing, resting at `CPOL`. That collapses
     /// to `CPOL == CPHA` (mode 0 → HIGH, the classic "MOSI stable while high").
-    fn sample_hold_level(&self) -> bool {
+    const fn sample_hold_level(&self) -> bool {
         self.cpol == self.cpha
     }
 
@@ -890,7 +890,7 @@ impl BitBangSpiResponder {
 
     /// True once a waveform or preview-contract violation disabled this
     /// responder for the rest of the run.
-    pub fn faulted(&self) -> bool {
+    pub const fn faulted(&self) -> bool {
         self.faulted
     }
 
@@ -1057,7 +1057,7 @@ impl InputResponder for BitBangSpiResponder {
 }
 
 /// `"high"` / `"low"` for a clock level, used in the mode-mismatch diagnostics.
-fn level_name(high: bool) -> &'static str {
+const fn level_name(high: bool) -> &'static str {
     if high {
         "high"
     } else {

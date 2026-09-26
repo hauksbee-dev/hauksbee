@@ -157,7 +157,7 @@ pub enum ChunkFallbackMethod {
 
 impl ChunkFallbackMethod {
     /// Stable machine-readable name (serialized into the co-sim JSON).
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::ReducedStep => "reduced-step",
             Self::BackwardEuler => "backward-euler",
@@ -169,7 +169,7 @@ impl ChunkFallbackMethod {
     /// Qualitative numerical-fidelity context for this rung: it names the
     /// rung's algorithmic trade-off and points at the measured number, which
     /// lives on `FallbackWindow::error_estimate_v`.
-    pub fn fidelity_note(&self) -> &'static str {
+    pub const fn fidelity_note(&self) -> &'static str {
         match self {
             Self::ReducedStep => {
                 "primary integration at a smaller maximum step; \
@@ -735,7 +735,7 @@ impl ScopedMcuSubstitution {
     }
 
     /// The presentation event paired with this exact occurrence.
-    pub fn event(&self) -> &McuSubstitution {
+    pub const fn event(&self) -> &McuSubstitution {
         &self.event
     }
 
@@ -745,7 +745,7 @@ impl ScopedMcuSubstitution {
     }
 
     /// The substitution assumption constructed from the paired event/subject.
-    pub fn assumption(&self) -> &Assumption {
+    pub const fn assumption(&self) -> &Assumption {
         &self.assumption
     }
 }
@@ -2819,7 +2819,7 @@ impl Scheduler {
     /// Mutable access to the circuit so a caller can stamp a control's devices
     /// before attaching it. Call [`Scheduler::attach_peripheral`] afterwards,
     /// which relayouts the MNA system to pick up any new nodes/devices.
-    pub fn circuit_mut(&mut self) -> &mut Circuit {
+    pub const fn circuit_mut(&mut self) -> &mut Circuit {
         &mut self.circuit
     }
 
@@ -2894,7 +2894,7 @@ impl Scheduler {
     }
 
     /// Number of live MCU cores.
-    pub fn mcu_count(&self) -> usize {
+    pub const fn mcu_count(&self) -> usize {
         self.mcus.len()
     }
 
@@ -4589,14 +4589,14 @@ impl Scheduler {
     }
 
     /// Current sim time (s).
-    pub fn sim_time(&self) -> f64 {
+    pub const fn sim_time(&self) -> f64 {
         self.sim_time
     }
 
     /// Number of chunks this run whose analog transient solve failed to converge.
     /// Zero on a clean run. A non-zero count means at least one window held stale
     /// voltages and cannot vouch for analog-derived findings there.
-    pub fn failed_chunk_count(&self) -> u64 {
+    pub const fn failed_chunk_count(&self) -> u64 {
         self.failed_chunks
     }
 
@@ -4638,7 +4638,7 @@ impl Scheduler {
     /// toward neither `failed_chunk_count` nor the strict abort), but their
     /// numbers were produced by a second-class method whose known numerical
     /// trade-off is recorded per window (`fallback_windows`).
-    pub fn fallback_chunk_count(&self) -> u64 {
+    pub const fn fallback_chunk_count(&self) -> u64 {
         self.fallback_chunks
     }
 
@@ -4690,14 +4690,14 @@ impl Scheduler {
     /// refused to advance (`run_micros` errored), so the digital side of that
     /// chunk never ran. Either way the co-sim cannot vouch for that window.
     /// Drives `analog_valid` in coverage and the co-sim JSON.
-    pub fn analog_valid(&self) -> bool {
+    pub const fn analog_valid(&self) -> bool {
         self.failed_chunks == 0
     }
 
     /// True once the analog solve failed [`STRICT_CONSECUTIVE_FAILED_ABORT`]
     /// chunks in a row at any point this run. A strict headless run (`--strict`)
     /// or hauksbee-ci must abort (exit 3) rather than complete a fake-quiet run.
-    pub fn analog_abort_tripped(&self) -> bool {
+    pub const fn analog_abort_tripped(&self) -> bool {
         self.max_consecutive_failed_chunks >= STRICT_CONSECUTIVE_FAILED_ABORT
     }
 
@@ -5018,12 +5018,12 @@ impl Scheduler {
     /// Per-device peak |current| (A) over the last completed frame's sub-chunks,
     /// keyed by reference designator. Captures intra-frame surges the final-chunk
     /// snapshot misses.
-    pub fn frame_peak_current(&self) -> &HashMap<String, f64> {
+    pub const fn frame_peak_current(&self) -> &HashMap<String, f64> {
         &self.frame_peak_current
     }
 
     /// Per-net (min_v, max_v) over the last completed frame's sub-chunks.
-    pub fn frame_v_extremes(&self) -> &HashMap<String, (f64, f64)> {
+    pub const fn frame_v_extremes(&self) -> &HashMap<String, (f64, f64)> {
         &self.frame_v_extremes
     }
 
@@ -5740,7 +5740,7 @@ impl Scheduler {
     /// Micro-ticks replayed through the generalized digital path in the last
     /// chunk (one per distinct edge-group cycle). A diagnostic that a bit-banged
     /// burst produced N ordered micro-ticks rather than one collapsed level.
-    pub fn last_replay_microticks(&self) -> usize {
+    pub const fn last_replay_microticks(&self) -> usize {
         self.last_replay_microticks
     }
 
@@ -5792,7 +5792,7 @@ impl Scheduler {
     }
 
     /// Enable or disable destructive faulting (mutate the circuit on fault).
-    pub fn set_destructive_faults(&mut self, on: bool) {
+    pub const fn set_destructive_faults(&mut self, on: bool) {
         self.stress.destructive = on;
     }
 
@@ -5839,12 +5839,12 @@ impl Scheduler {
 
     /// Set the ambient temperature (C) the thermal monitor's steady-state
     /// junction estimate sits on top of.
-    pub fn set_ambient_c(&mut self, ambient_c: f64) {
+    pub const fn set_ambient_c(&mut self, ambient_c: f64) {
         self.stress.ambient_c = ambient_c;
     }
 
     /// The configured ambient temperature (C).
-    pub fn ambient_c(&self) -> f64 {
+    pub const fn ambient_c(&self) -> f64 {
         self.stress.ambient_c
     }
 
@@ -6571,7 +6571,7 @@ fn build_generic_replay_chips(
 }
 
 /// A responder's pin update in the MCU backend's drive vocabulary.
-fn pin_drive(update: crate::responders::InputDrive) -> hauksbee_mcu::PinDrive {
+const fn pin_drive(update: crate::responders::InputDrive) -> hauksbee_mcu::PinDrive {
     let pin = PinId::new(update.pin.0, update.pin.1);
     match update.level {
         Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),

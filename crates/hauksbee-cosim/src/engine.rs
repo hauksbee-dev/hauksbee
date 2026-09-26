@@ -112,12 +112,12 @@ impl HauksbeeEngine {
     }
 
     /// The bind report for this engine's board.
-    pub fn report(&self) -> &BindReport {
+    pub const fn report(&self) -> &BindReport {
         &self.report_store
     }
 
     /// Direct access to the scheduler (headless stats, tests).
-    pub fn scheduler(&self) -> &Scheduler {
+    pub const fn scheduler(&self) -> &Scheduler {
         &self.sched
     }
     /// Arm the LIVE-session behaviour: once the strict-abort streak trips,
@@ -127,11 +127,11 @@ impl HauksbeeEngine {
     /// so and take Reset. Only the serving surfaces call this: headless,
     /// CI and report co-sims keep the complete march, because their
     /// failed-window record over the WHOLE requested span is the product.
-    pub fn arm_live_abort(&mut self) {
+    pub const fn arm_live_abort(&mut self) {
         self.sched.stop_when_dead = true;
     }
 
-    pub fn scheduler_mut(&mut self) -> &mut Scheduler {
+    pub const fn scheduler_mut(&mut self) -> &mut Scheduler {
         &mut self.sched
     }
 
@@ -159,7 +159,7 @@ impl HauksbeeEngine {
     }
 
     /// Current sim time (s).
-    pub fn sim_time(&self) -> f64 {
+    pub const fn sim_time(&self) -> f64 {
         self.sched.sim_time()
     }
 
@@ -603,7 +603,7 @@ impl Engine for HauksbeeEngine {
 }
 
 /// Map a wire [`PowerSupplyConfig`] onto the engine's behavioral [`PowerSupply`].
-pub fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
+pub const fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
     match c {
         PowerSupplyConfig::Ideal { volts } => PowerSupply::Ideal { volts },
         PowerSupplyConfig::Bench {
@@ -656,7 +656,7 @@ pub fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
 }
 
 /// Map the engine's [`PowerSupply`] back to a wire [`PowerSupplyConfig`].
-pub fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
+pub const fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
     match s {
         PowerSupply::Ideal { volts } => PowerSupplyConfig::Ideal { volts: *volts },
         PowerSupply::Bench {
