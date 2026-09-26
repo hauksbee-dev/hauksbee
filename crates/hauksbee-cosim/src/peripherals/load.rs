@@ -17,10 +17,13 @@
 
 use std::collections::HashMap;
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 use hauksbee_models::LoadProfile;
 
 use super::{Peripheral, TickCtx};
+
+/// Profile corners one chunk may carry as a PWL drive (the GPIO replay's budget).
+const MAX_CORNERS: usize = 10_000;
 
 /// A dynamic load presenting a [`LoadProfile`] current draw on one supply node.
 pub struct DynamicLoad {
@@ -73,6 +76,12 @@ impl DynamicLoad {
     fn current_at(&self, t: f64) -> f64 {
         self.profile.current_at(t - self.start_s, self.seed)
     }
+
+    fn set_kind(&self, circuit: &mut Circuit, value: SourceKind) {
+        if let Some(Device::Isource { kind, .. }) = circuit.devices.get_mut(self.sink.0 as usize) {
+            *kind = value;
+        }
+    }
 }
 
 impl Peripheral for DynamicLoad {
@@ -84,17 +93,32 @@ impl Peripheral for DynamicLoad {
     }
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
-        // Drive the sink to the profile current at the END of this chunk, the
-        // same zero-order-hold convention the partitioned solver uses for its
-        // current-input columns, so monolithic and partitioned agree.
+        // Drive the sink along the profile's own waveform through this chunk
+        // (chunk-local time, as the march evaluates it), so every edge keeps
+        // its rise time; the solver lands a step on each corner. Holding the
+        // chunk-end sample instead turned a 25 ns edge into a step, which on a
+        // rail with capacitor ESL is an L*di/dt impulse of kilovolts that the
+        // trapezoidal rule then rings on. A train far finer than the chunk
+        // keeps the zero-order hold.
+        let a = ctx.t - self.start_s;
         let i = self.current_at(ctx.t + ctx.dt);
+        let kind = match self.profile.pwl_over(a, a + ctx.dt, self.seed, MAX_CORNERS) {
+            Some(pts) if pts.iter().any(|p| p.1 != i) => {
+                self.peak_i = pts.iter().fold(self.peak_i, |m, p| m.max(p.1));
+                SourceKind::Pwl(pts.into_iter().map(|(t, v)| PwlPoint { t, v }).collect())
+            }
+            _ => SourceKind::Dc(i),
+        };
         self.last_i = i;
         self.peak_i = self.peak_i.max(i);
-        if let Some(Device::Isource { kind, .. }) =
-            ctx.circuit.devices.get_mut(self.sink.0 as usize)
-        {
-            *kind = SourceKind::Dc(i);
-        }
+        self.set_kind(ctx.circuit, kind);
+    }
+
+    fn post_solve(&mut self, ctx: &mut TickCtx) {
+        // Settle at the chunk-end level so everything between solves (the DC
+        // seed, the stress monitor, a fallback rung's constant-forcing check)
+        // sees the level the load rests at.
+        self.set_kind(ctx.circuit, SourceKind::Dc(self.last_i));
     }
 
     fn set_value(&mut self, value: f64) {

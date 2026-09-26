@@ -344,6 +344,9 @@ fn regulation_reason<'a>(a: &Assertion, out: &'a RunOutcome) -> Option<&'a str> 
         .map(|t| t.reason.as_str())
 }
 
+/// Silicon's melting point (C): no junction estimate above it is physical.
+const TJ_IMPOSSIBLE_C: f64 = 1414.0;
+
 /// Why this member cannot be judged AT ALL, if it cannot: its evaluation window
 /// overlapped a chunk the solver failed on, so the samples are held-stale; or an
 /// unsupported regulator's setpoint reaches what it judges. Worded once, here.
@@ -357,6 +360,23 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Opti
             fe * 1e3,
             ws * 1e3,
             we * 1e3,
+        ));
+    }
+    // A junction estimate past silicon's melting point is no state a part can
+    // occupy, so the power behind it is not physical: it decides nothing.
+    let melted = |kind: &str, tj: f64| kind == "overtemperature" && tj > TJ_IMPOSSIBLE_C;
+    let tj = match a.kind.as_str() {
+        "max_temp" => peak_for_ref(&out.peak_temp_c, a.reference.as_deref().unwrap_or_default()),
+        "no_faults" if out.faults.iter().all(|f| melted(&f.kind, f.value)) => {
+            out.faults.first().map(|f| (f.component.clone(), f.value))
+        }
+        _ => None,
+    };
+    if let Some((key, tj)) = tj.filter(|(_, tj)| melted("overtemperature", *tj)) {
+        return Some(format!(
+            "the junction estimate for {key} reached {tj:.0} C, past silicon's \
+             {TJ_IMPOSSIBLE_C:.0} C melting point; no part holds that temperature, so the \
+             power behind it is not a physical result."
         ));
     }
     // An absent open driver cannot make a failure real; a pass stands on the stated
@@ -2485,6 +2505,22 @@ mod tests {
         let mut warm = RunOutcome::default();
         warm.peak_temp_c.insert("U2".to_string(), 61.0);
         assert!(check_max_temp(&bare, &warm).0);
+    }
+
+    /// A junction past silicon's melting point is no measurement: the member
+    /// is INVALID, not a thermal FAIL, while a hot but possible part is judged.
+    #[test]
+    fn an_impossible_junction_temperature_is_refused_not_judged() {
+        let a = assertion("kind = \"max_temp\"\nref = \"Q1\"\ncelsius = 150.0\n");
+        let mut out = RunOutcome::default();
+        out.peak_temp_c.insert("Q1".to_string(), 5.2e6);
+        let reason = member_invalid_reason(&a, &out, 1.0).expect("refused");
+        assert!(
+            reason.contains("Q1") && reason.contains("melting"),
+            "{reason}"
+        );
+        out.peak_temp_c.insert("Q1".to_string(), 240.0);
+        assert!(member_invalid_reason(&a, &out, 1.0).is_none());
     }
 
     #[test]

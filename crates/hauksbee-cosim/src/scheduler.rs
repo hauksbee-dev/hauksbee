@@ -31,7 +31,10 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_mcu::AvrMcu;
 use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_models::{Bus, PeripheralSpec};
-use hauksbee_solve::{DcInit, Layout, SolverOptions, Transient, TransientDiagnostics};
+use hauksbee_solve::{
+    dc_operating_point_seeded, DcInit, Layout, SolverOptions, Transient, TransientDiagnostics,
+    Workspace,
+};
 
 use crate::peripherals::{
     CsProvenance, Eeprom24c, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus,
@@ -46,7 +49,7 @@ use hauksbee_bind::bind_report::SimpleRegulator;
 use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
 use hauksbee_bind::digital::{DigitalComponent, PinEdge};
 use hauksbee_bind::power_supply::{PowerSupply, SupplyLeg};
-use hauksbee_bind::stress::{FaultEvent, StressMonitor};
+use hauksbee_bind::stress::{FaultEvent, RegulatorHeat, StressMonitor};
 
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
@@ -1296,6 +1299,17 @@ impl Scheduler {
         let (replay_chips, replay_pin_nets) =
             build_generic_replay_chips(&digital, &chain_chips, &live);
 
+        let mut stress = StressMonitor::new(device_meta);
+        stress.set_supply_watches(supply_watches);
+        for r in &report.regulators {
+            stress.watch_regulator_heat(r.source, RegulatorHeat::Linear { input: r.input });
+        }
+        for (source, heat) in behavioral
+            .iter()
+            .filter_map(BehavioralDevice::converter_heat)
+        {
+            stress.watch_regulator_heat(source, heat);
+        }
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
@@ -1322,11 +1336,7 @@ impl Scheduler {
             layout,
             supplies,
             behavioral,
-            stress: {
-                let mut stress = StressMonitor::new(device_meta);
-                stress.set_supply_watches(supply_watches);
-                stress
-            },
+            stress,
             faults_pending: Vec::new(),
             chunk_s: DEFAULT_CHUNK_S,
             stop_when_dead: false,
@@ -3123,6 +3133,7 @@ impl Scheduler {
     }
 
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
+        self.settle_converters();
         // Before any MCU advances: firmware must never run unflagged on a rail
         // whose regulation is unsupported.
         self.establish_regulation();
@@ -3454,6 +3465,47 @@ impl Scheduler {
                 }
             }
         }
+    }
+
+    /// Before the first chunk, settle every behavioural converter at the
+    /// initial operating point. Supplies stand at their t=0 values, so the
+    /// board has been powered forever: a feedback converter whose numerical
+    /// loop started at 0 V would invent a cold start (and an inrush) that the
+    /// stimulus never asked for. A ramped or absent input settles to 0 V and
+    /// keeps the cold start. The settled point becomes the t=0 state the
+    /// first chunk's behavioural update reads (not the solver's DC seed). A
+    /// loop that neither settles nor solves keeps the cold start it had.
+    fn settle_converters(&mut self) {
+        let has_converter = self
+            .behavioral
+            .iter()
+            .any(|d| d.converter_out_node().is_some());
+        if self.sim_time > 0.0 || self.last_dc_seed.is_some() || !has_converter {
+            return;
+        }
+        let cold = self.circuit.clone();
+        self.circuit.temp_c = self.opts.temperature_c;
+        let mut ws = Workspace::new(&self.circuit);
+        for _ in 0..40 {
+            let seed = ws.x.clone();
+            if dc_operating_point_seeded(&mut ws, &self.circuit, &self.opts, Some(&seed)).is_err() {
+                break;
+            }
+            let (x, layout) = (&ws.x, &ws.layout);
+            let node_v = |n: NodeId| layout.node(n).map_or(0.0, |i| x[i]);
+            let circuit = &mut self.circuit;
+            let settle = |d: &mut BehavioralDevice| d.settle_converter(circuit, &node_v);
+            if self.behavioral.iter_mut().map(settle).fold(0.0, f64::max) < 1e-6 {
+                for (node, v) in self.node_volts.iter_mut().enumerate().skip(1) {
+                    *v = layout.node(NodeId(node as u32)).map_or(0.0, |i| x[i]);
+                }
+                return;
+            }
+        }
+        self.circuit = cold;
+        self.behavioral
+            .iter_mut()
+            .for_each(BehavioralDevice::reset_converter);
     }
 
     /// Re-decide regulator support when supplies, inputs or shorts changed. Works

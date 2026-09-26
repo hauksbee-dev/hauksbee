@@ -12,7 +12,8 @@
 //! ## Waveform model
 //!
 //! A profile is an ordered list of [`Segment`]s. Each segment ramps (over
-//! `rise_s`) from the previous level to its `level_a`, then holds for
+//! `rise_s`) from the previous level (zero before the first segment: the
+//! profile draws nothing until it starts) to its `level_a`, then holds for
 //! `duration_s`. A segment with `period_s > 0` is a *burst train*: it fires for
 //! `rise_s + duration_s`, idles at `idle_a` for the rest of the period, and
 //! repeats, with optional deterministic `jitter_s` on the period. The last
@@ -109,17 +110,16 @@ impl LoadProfile {
     /// `idle_a`. The final non-periodic segment with `duration_s <= 0` holds its
     /// level to the end of the window.
     pub fn current_at(&self, t: f64, seed: u64) -> f64 {
-        if self.segments.is_empty() {
+        // Before the start the part's activity has not begun: it draws nothing,
+        // so the DC operating point is the pre-stimulus board. The first segment
+        // then ramps in from zero over its own `rise_s`, like every later one.
+        if self.segments.is_empty() || t <= 0.0 {
             return 0.0;
-        }
-        if t <= 0.0 {
-            // Before the start, sit at the first level (DC seed value).
-            return self.segments[0].level_a;
         }
 
         let baseline = self.baseline_a();
         let mut cursor = 0.0f64; // start time of the current segment
-        let mut prev_level = self.segments[0].level_a;
+        let mut prev_level = 0.0;
 
         for (i, seg) in self.segments.iter().enumerate() {
             let idle = seg.idle_a.unwrap_or(baseline);
@@ -170,6 +170,83 @@ impl LoadProfile {
         prev_level
     }
 }
+
+impl LoadProfile {
+    /// The waveform over profile time `[a, b]` as piecewise-linear `(t - a, amps)`
+    /// points: exact at every ramp corner, with a zero-rise step spread over at
+    /// most 1 ns. A solver chunk driven by this sees the profile's own di/dt;
+    /// holding one sample for the whole chunk turns every edge into a step,
+    /// which drives an impulse through any series inductance on the rail.
+    /// Corners within [`PWL_SNAP_S`] of each other or of the window's ends
+    /// are one instant: a corner that lands on a chunk boundary up to rounding
+    /// steps between chunks, as a held sample would, instead of leaving the
+    /// solver an attosecond segment no step can resolve. `None` when the window
+    /// holds more than `max_corners` corners.
+    #[must_use]
+    pub fn pwl_over(
+        &self,
+        a: f64,
+        b: f64,
+        seed: u64,
+        max_corners: usize,
+    ) -> Option<Vec<(f64, f64)>> {
+        let mut corners = vec![0.0];
+        let mut cursor = 0.0f64;
+        for (i, seg) in self.segments.iter().enumerate() {
+            let (rise, dur) = (seg.rise_s.max(0.0), seg.duration_s.max(0.0));
+            if seg.period_s > 0.0 {
+                let period = (seg.period_s + jitter(seed, i, seg.jitter_s)).max(1e-9);
+                let first = ((a - cursor) / period).floor().max(0.0);
+                let last = ((b - cursor) / period).ceil();
+                if last - first > max_corners as f64 {
+                    return None;
+                }
+                let mut k = first;
+                while k <= last {
+                    let base = cursor + k * period;
+                    corners.extend([base, base + rise, base + rise + dur]);
+                    k += 1.0;
+                }
+                break;
+            }
+            corners.extend([cursor, cursor + rise, cursor + rise + dur]);
+            cursor += rise + dur;
+        }
+        let snap = PWL_SNAP_S.min((b - a) / 4.0);
+        // A corner snapped onto the start has already happened, so the chunk
+        // opens after it; one snapped onto the end is the next chunk's.
+        let open = if corners.iter().any(|c| *c >= a && *c <= a + snap) {
+            a + snap
+        } else {
+            a
+        };
+        let close = if corners.iter().any(|c| *c >= b - snap && *c <= b) {
+            b - snap
+        } else {
+            b
+        };
+        corners.retain(|c| *c > a + snap && *c < b - snap);
+        corners.sort_by(f64::total_cmp);
+        corners.dedup_by(|later, kept| *later - *kept < snap);
+        if corners.len() > max_corners {
+            return None;
+        }
+        let bounds = [a].into_iter().chain(corners.iter().copied()).chain([b]);
+        let gap = bounds.clone().zip(bounds.skip(1)).map(|(x, y)| y - x);
+        let edge = gap.fold(1e-9_f64, f64::min) / 4.0;
+        let mut pts = vec![(0.0, self.current_at(open, seed))];
+        for t in corners.iter().flat_map(|c| [c - edge, c + edge]) {
+            if t - a > pts.last().map_or(0.0, |p| p.0) {
+                pts.push((t - a, self.current_at(t, seed)));
+            }
+        }
+        pts.push((b - a, self.current_at(close, seed)));
+        Some(pts)
+    }
+}
+
+/// Profile corners closer than this (s) are one instant; see [`LoadProfile::pwl_over`].
+const PWL_SNAP_S: f64 = 1e-12;
 
 /// Linear ramp from `from` to `to` over `rise` seconds, then hold `to`.
 fn ramped(from: f64, to: f64, rise: f64, local: f64) -> f64 {
@@ -251,8 +328,12 @@ mod tests {
         // current should be at the 240 mA TX level; between bursts at 40 mA.
         // Segment 0 (baseline) has span = rise(1ms)+dur(0) = 1ms, so the burst
         // train starts ~1 ms in. Peak hold lands around t = 1ms + 0.5ms + a bit.
-        let baseline = p.current_at(0.0005, 0);
-        assert!((baseline - 0.040).abs() < 1e-6, "baseline {baseline}");
+        let ramp = p.current_at(0.0005, 0);
+        assert!(
+            (ramp - 0.020).abs() < 1e-6,
+            "baseline ramps in from zero: {ramp}"
+        );
+        assert_eq!(p.current_at(0.0, 0), 0.0, "nothing drawn before the start");
 
         // Find the max over the first full period.
         let mut peak = 0.0f64;
@@ -346,5 +427,58 @@ mod tests {
             .map(|k| p.current_at(k as f64 * 0.0005, 1))
             .sum::<f64>();
         assert!((s0 - s1).abs() > 0.0, "jitter should make seeds differ");
+    }
+
+    /// A profile draws nothing before it starts and ramps in over its own rise;
+    /// a chunk spanning an edge carries that edge's corners, not one sample.
+    #[test]
+    fn a_chunk_carries_the_profile_edges_as_a_pwl() {
+        let seg = |level_a, rise_s, duration_s, period_s| Segment {
+            level_a,
+            rise_s,
+            duration_s,
+            period_s,
+            idle_a: Some(0.0),
+            jitter_s: 0.0,
+        };
+        let p = LoadProfile {
+            id: "burst".into(),
+            description: String::new(),
+            match_rule: ProfileMatch::default(),
+            segments: vec![seg(2.0, 25e-9, 10e-6, 80e-6)],
+        };
+        assert_eq!(p.current_at(0.0, 0), 0.0);
+        assert!(
+            (p.current_at(12.5e-9, 0) - 1.0).abs() < 1e-9,
+            "half-way up the 25 ns rise"
+        );
+        // A burst ending on a chunk boundary up to rounding steps between
+        // chunks: no sub-picosecond segment, and the chunk opens at idle.
+        let end = 3.0 * 80e-6 + 25e-9 + 10e-6;
+        for a in [end - 1e-18, end, end + 1e-18] {
+            let pts = p.pwl_over(a, a + 1e-4, 0, 100).expect("few corners");
+            assert_eq!(pts[0].1, 0.0, "{a}: {pts:?}");
+            let gaps_ok = pts.windows(2).all(|w| w[1].0 - w[0].0 > 1e-13);
+            assert!(gaps_ok, "{a}: {pts:?}");
+            let before = p.pwl_over(a - 1e-4, a, 0, 100).expect("few corners");
+            assert_eq!(before.last().map(|q| q.1), Some(2.0), "{a}: {before:?}");
+        }
+        let pts = p.pwl_over(0.0, 20e-6, 0, 100).expect("few corners");
+        // Exact but for the opening point, taken 1 ps after the rise begins.
+        assert!(
+            pts.iter()
+                .all(|&(t, i)| (i - p.current_at(t, 0)).abs() < 1e-4),
+            "{pts:?}"
+        );
+        assert!(
+            pts.iter().any(|&(t, i)| t < 25e-9 && i > 1.5 && i < 2.0),
+            "rise kept: {pts:?}"
+        );
+        assert!(pts.windows(2).all(|w| w[0].0 < w[1].0), "{pts:?}");
+        assert_eq!(pts.last().map(|q| q.1), Some(0.0), "idle after the burst");
+        assert!(
+            p.pwl_over(0.0, 1.0, 0, 100).is_none(),
+            "12 500 periods exceed the budget"
+        );
     }
 }

@@ -716,7 +716,11 @@ A `[models.behavioral]` block is a bag of optional facts:
 
 3. **Averaged converter**: `[models.behavioral.converter]`:
    - `topology` (`buck`/`boost`/`buck_boost`), `out_pin`, `in_pin`,
-     `vout_setpoint`, `efficiency`, optional `iout_limit_a`.
+     `vout_setpoint`, `efficiency`, optional `iout_limit_a`, and for a buck
+     optional `max_duty` (the datasheet maximum duty cycle; the averaged
+     switch node never exceeds `max_duty * vin`, so a low input drops out
+     below it rather than passing through; a minimum off-time converts as
+     `1 - t_off_min * f_sw`). Without it the ceiling is `vin`.
    - `[models.behavioral.converter.iin_program]`: a programmable
      input-current limit set by a sense resistor and a programming
      resistor, both read off the board by reference designator
