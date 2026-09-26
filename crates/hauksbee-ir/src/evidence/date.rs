@@ -33,10 +33,9 @@ impl RunDate {
     pub fn from_system_clock() -> Self {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or_else(
-                |_| Self::unknown(),
-                |d| Self::from_epoch_days((d.as_secs() / 86_400) as i64),
-            )
+            .ok()
+            .and_then(|d| i64::try_from(d.as_secs() / 86_400).ok())
+            .map_or_else(Self::unknown, Self::from_epoch_days)
     }
 
     /// Construct from days since the Unix epoch. Pre-floor readings become

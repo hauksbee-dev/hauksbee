@@ -75,15 +75,26 @@ impl NodeId {
     }
 }
 
+/// A node or device index as the `u32` its id wraps.
+///
+/// # Panics
+///
+/// Past `u32::MAX` nodes or devices, where a wrapped id would alias another.
+fn id_u32(i: usize) -> u32 {
+    u32::try_from(i).expect("a circuit holds at most u32::MAX nodes and devices")
+}
+
 /// Stable handle to a device within a [`Circuit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DeviceId(pub u32);
 
-/// An op-amp output saturation level, `V(pin) + offset` volts: `pin` is the
-/// part's supply pad when the card gives a datasheet output-swing HEADROOM from
-/// it (so a sagging, ramping or split supply is honoured), and ground for a
-/// plain fixed level ([`Rail::fixed`]). A supply pad is a SENSE terminal, read
-/// at the current iterate: explicit, no Jacobian column, exact on convergence.
+/// An op-amp output saturation level, `V(pin) + offset` volts.
+///
+/// `pin` is the part's supply pad when the card gives a datasheet output-swing
+/// HEADROOM from it (so a sagging, ramping or split supply is honoured), and
+/// ground for a plain fixed level ([`Rail::fixed`]). A supply pad is a SENSE
+/// terminal, read at the current iterate: explicit, no Jacobian column, exact
+/// on convergence.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rail {
     pub pin: NodeId,
@@ -178,9 +189,9 @@ impl Circuit {
             .iter()
             .position(|n| n.eq_ignore_ascii_case(name))
         {
-            return NodeId(i as u32);
+            return NodeId(id_u32(i));
         }
-        let id = self.node_names.len() as u32;
+        let id = id_u32(self.node_names.len());
         self.node_names.push(name.to_string());
         NodeId(id)
     }
@@ -211,7 +222,7 @@ impl Circuit {
         self.node_names
             .iter()
             .position(|n| n.eq_ignore_ascii_case(name))
-            .map(|i| NodeId(i as u32))
+            .map(|i| NodeId(id_u32(i)))
     }
 
     /// All node names (including ground at index 0), for diagnostics such as
@@ -222,7 +233,7 @@ impl Circuit {
 
     /// Append a device and return its id.
     pub fn add(&mut self, device: Device) -> DeviceId {
-        let id = DeviceId(self.devices.len() as u32);
+        let id = DeviceId(id_u32(self.devices.len()));
         self.devices.push(device);
         id
     }
@@ -232,7 +243,7 @@ impl Circuit {
         self.devices
             .iter()
             .enumerate()
-            .map(|(i, d)| (DeviceId(i as u32), d))
+            .map(|(i, d)| (DeviceId(id_u32(i)), d))
     }
 
     /// Highest non-ground node id referenced by any device, used to size the
@@ -244,7 +255,7 @@ impl Circuit {
             .map(|n| n.0)
             .max()
             .unwrap_or(0)
-            .max(self.node_names.len().saturating_sub(1) as u32)
+            .max(id_u32(self.node_names.len().saturating_sub(1)))
     }
 }
 
@@ -557,18 +568,14 @@ impl Device {
             | Self::Capacitor { a, b, .. }
             | Self::Inductor { a, b, .. }
             | Self::Diode { a, k: b, .. } => vec![*a, *b],
+            // The control of an F/H is a DEVICE reference, not a node: the
+            // only wires these touch are their output port.
             Self::Vsource { p, n, .. }
             | Self::Isource { p, n, .. }
             | Self::Cccs { p, n, .. }
             | Self::Ccvs { p, n, .. } => vec![*p, *n],
             Self::Bjt { c, b, e, .. } => vec![*c, *b, *e],
-            Self::Mosfet { d, g, s, b, .. } => {
-                let mut v = vec![*d, *g, *s];
-                if let Some(b) = b {
-                    v.push(*b);
-                }
-                v
-            }
+            Self::Mosfet { d, g, s, b, .. } => [*d, *g, *s].into_iter().chain(*b).collect(),
             Self::VSwitch {
                 a,
                 b,
@@ -586,20 +593,14 @@ impl Device {
                 ..
             } => {
                 let mut nodes = vec![*out, *inp, *inn];
-                if let Some(reference) = reference {
-                    nodes.push(*reference);
-                }
+                nodes.extend(*reference);
                 nodes.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
                 nodes
             }
-            Self::Comparator { out, inp, inn, .. } => {
-                vec![*out, *inp, *inn]
-            }
+            Self::Comparator { out, inp, inn, .. } => vec![*out, *inp, *inn],
             Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
                 vec![*p, *n, *cp, *cn]
             }
-            // The control of an F/H is a DEVICE reference, not a node: the
-            // only wires these touch are their output port.
             // Output port plus every V(node) dependency: like the E/G control
             // pair, a sensed node IS a node reference this device carries, so
             // it participates in node walks (partitioner union, max_node).
@@ -658,11 +659,8 @@ impl Device {
                 *e = f(*e);
             }
             Self::Mosfet { d, g, s, b, .. } => {
-                *d = f(*d);
-                *g = f(*g);
-                *s = f(*s);
-                if let Some(b) = b {
-                    *b = f(*b);
+                for x in [d, g, s].into_iter().chain(b.as_mut()) {
+                    *x = f(*x);
                 }
             }
             Self::VSwitch {
@@ -672,10 +670,9 @@ impl Device {
                 ctrl_n,
                 ..
             } => {
-                *a = f(*a);
-                *b = f(*b);
-                *ctrl_p = f(*ctrl_p);
-                *ctrl_n = f(*ctrl_n);
+                for x in [a, b, ctrl_p, ctrl_n] {
+                    *x = f(*x);
+                }
             }
             Self::OpAmp {
                 out,
@@ -686,11 +683,8 @@ impl Device {
                 rail_hi,
                 ..
             } => {
-                *out = f(*out);
-                *inp = f(*inp);
-                *inn = f(*inn);
-                if let Some(reference) = reference {
-                    *reference = f(*reference);
+                for x in [out, inp, inn].into_iter().chain(reference.as_mut()) {
+                    *x = f(*x);
                 }
                 // A fixed rail's ground sentinel is not a terminal, so it is
                 // NOT remapped: sub-circuit extraction would otherwise move it
@@ -707,10 +701,9 @@ impl Device {
                 *inn = f(*inn);
             }
             Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
-                *p = f(*p);
-                *n = f(*n);
-                *cp = f(*cp);
-                *cn = f(*cn);
+                for x in [p, n, cp, cn] {
+                    *x = f(*x);
+                }
             }
             // NOTE: `ctrl_src` is a DeviceId, not a node, node remapping does
             // not touch it. A pass that extracts devices into a sub-circuit
@@ -804,6 +797,11 @@ impl Device {
     /// own slot. Panics on a slot the device does not have: a mis-addressed
     /// retarget is the silent-corruption bug class this API exists to prevent,
     /// so it fails loudly.
+    ///
+    /// # Panics
+    ///
+    /// When `slot` is not one of the device's control slots, including any slot
+    /// on a device that has no controlling source.
     pub fn retarget_controlling_source_slot(&mut self, slot: usize, new_id: DeviceId) {
         // Exhaustive for the same reason as `controlling_sources`.
         match self {
@@ -864,6 +862,18 @@ impl Device {
     #[must_use]
     pub fn conduction_nodes(&self) -> Vec<NodeId> {
         match self {
+            // Controlled sources drive current through their output port only:
+            // the VCVS branch current enters the p/n KCL rows, the VCCS
+            // transconductance current likewise. The control pair appears
+            // exclusively as matrix COLUMNS of other rows; this is the
+            // canonical sense-vs-conduction split the W1 classifier was built
+            // for, and the solve-side cross-check test holds the stamp to it.
+            // F/H drive current through their output port; the control is not
+            // a terminal at all (see `controlling_sources`).
+            // A B-source drives current through its output port only. Every
+            // V(node) dep is read-only (Jacobian COLUMNS of the p/n or branch
+            // rows); the maximal-coupling device is still, per terminal, the
+            // same conduct-vs-sense split as a VCVS.
             Self::Vsource { p, n, .. }
             | Self::Isource { p, n, .. }
             | Self::Vcvs { p, n, .. }
@@ -887,13 +897,12 @@ impl Device {
                     v.push(*g);
                 }
                 if model.has_body_diode() {
-                    if let Some(b) = b {
-                        v.push(*b);
-                    }
+                    v.extend(*b);
                 }
                 v
             }
-            // The switch channel conducts; the control pair only steers it.
+            // Two-terminal parts conduct end to end; a switch's channel
+            // conducts while its control pair only steers it.
             Self::Resistor { a, b, .. }
             | Self::Capacitor { a, b, .. }
             | Self::Inductor { a, b, .. }
@@ -904,18 +913,6 @@ impl Device {
             // opamp reference only offsets the target voltage (its own row gets
             // nothing; it appears as a column of the out row).
             Self::OpAmp { out, .. } | Self::Comparator { out, .. } => vec![*out],
-            // Controlled sources drive current through their output port only:
-            // the VCVS branch current enters the p/n KCL rows, the VCCS
-            // transconductance current likewise. The control pair appears
-            // exclusively as matrix COLUMNS of other rows; this is the
-            // canonical sense-vs-conduction split the W1 classifier was built
-            // for, and the solve-side cross-check test holds the stamp to it.
-            // F/H drive current through their output port; the control is not
-            // a terminal at all (see `controlling_sources`).
-            // A B-source drives current through its output port only. Every
-            // V(node) dep is read-only (Jacobian COLUMNS of the p/n or branch
-            // rows); the maximal-coupling device is still, per terminal, the
-            // same conduct-vs-sense split as a VCVS.
             // A coupling has NO terminals: current flows through the WINDINGS,
             // whose own a/b declarations above carry the conduction claim. The
             // stamp cross-check holds this to account trivially (the coupling
@@ -946,10 +943,8 @@ impl Device {
                 if !model.has_gate_charge() {
                     v.push(*g);
                 }
-                if let Some(b) = b {
-                    if !model.has_body_diode() {
-                        v.push(*b);
-                    }
+                if !model.has_body_diode() {
+                    v.extend(*b);
                 }
                 v
             }
@@ -963,9 +958,7 @@ impl Device {
                 ..
             } => {
                 let mut v = vec![*inp, *inn];
-                if let Some(reference) = reference {
-                    v.push(*reference);
-                }
+                v.extend(*reference);
                 v.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
                 v
             }
@@ -973,16 +966,6 @@ impl Device {
             // The control pair steers the gain term but its own KCL rows
             // receive nothing (ideal infinite input impedance).
             Self::Vcvs { cp, cn, .. } | Self::Vccs { cp, cn, .. } => vec![*cp, *cn],
-            // DELIBERATELY EMPTY, and a vocabulary gap made explicit: what an
-            // F/H senses is another device's BRANCH CURRENT, which this
-            // node-voltage sense list cannot express. Declaring the control
-            // source's nodes here would be a lie; the stamp never reads their
-            // voltages (it reads the control branch-current COLUMN), and the
-            // zero-row cross-check would pass vacuously while the tearing
-            // passes drew the wrong conclusion (a node-voltage sense is a free
-            // tear candidate; a branch-current sense never is). The coupling
-            // is declared through [`Device::controlling_sources`] instead, and
-            // the partitioner/conduction graph consume that directly.
             // Every V(node) dep is a declared SENSE edge; the tear layers
             // must see that this device reads across island boundaries.
             // Deduped, and EXCLUDING the output terminals: a
@@ -1004,6 +987,16 @@ impl Device {
                 v.dedup();
                 v
             }
+            // DELIBERATELY EMPTY, and a vocabulary gap made explicit: what an
+            // F/H senses is another device's BRANCH CURRENT, which this
+            // node-voltage sense list cannot express. Declaring the control
+            // source's nodes here would be a lie; the stamp never reads their
+            // voltages (it reads the control branch-current COLUMN), and the
+            // zero-row cross-check would pass vacuously while the tearing
+            // passes drew the wrong conclusion (a node-voltage sense is a free
+            // tear candidate; a branch-current sense never is). The coupling
+            // is declared through [`Device::controlling_sources`] instead, and
+            // the partitioner/conduction graph consume that directly.
             // No node-voltage reads either: what a coupling "senses" is both
             // windings' BRANCH CURRENTS, which this node vocabulary cannot
             // express (the F/H precedent, same reasoning verbatim), declared
@@ -1030,6 +1023,13 @@ impl Device {
     /// to the stamp/sense cross-check, serde round-trip, and node-walk coverage
     /// tests. Parameter values are arbitrary but physically sane (the tests
     /// probe structure, not accuracy).
+    ///
+    /// # Panics
+    ///
+    /// When a `Device` variant has no example here (the `EnumCount` assert), or
+    /// if the canonical behavioral expression stops compiling.
+    // One flat table, one entry per variant; splitting it would only scatter it.
+    #[allow(clippy::too_many_lines)]
     pub fn examples(n: [NodeId; 4]) -> Vec<Self> {
         let out = vec![
             Self::resistor("Rex", n[0], n[1], 1e3),

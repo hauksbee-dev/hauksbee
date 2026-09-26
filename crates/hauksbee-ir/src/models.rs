@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 mod nonfinite_f64 {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    // serde's `serialize_with` contract fixes the `&T` parameter.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
         if v.is_finite() {
             s.serialize_f64(*v)

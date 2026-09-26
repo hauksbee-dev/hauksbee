@@ -29,6 +29,7 @@ use hauksbee_ir::evidence::{
 };
 
 use crate::support::today;
+use std::fmt::Write as _;
 
 fn pack_source() -> ModelSource {
     ModelSource::new(
@@ -68,14 +69,16 @@ fn rests_on_block(map: &EvidenceMap, registry: &[Assumption]) -> String {
         // the id alone still names the gap, which is the point of the id being
         // deterministic.
         match registry.iter().find(|a| a.id() == id) {
-            Some(a) => out.push_str(&format!(
-                "  - [{}] {} {} Fix: {}\n",
+            Some(a) => writeln!(
+                out,
+                "  - [{}] {} {} Fix: {}",
                 a.id(),
                 a.statement(),
                 a.consequence(),
                 a.replacement()
-            )),
-            None => out.push_str(&format!("  - [{id}]\n")),
+            )
+            .unwrap(),
+            None => writeln!(out, "  - [{id}]").unwrap(),
         }
     }
     out

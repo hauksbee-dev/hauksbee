@@ -1,4 +1,5 @@
 use super::*;
+use strum::IntoEnumIterator;
 
 /// 2026-08-01, a fixed run date so no test depends on the wall clock.
 fn today() -> RunDate {
@@ -363,7 +364,6 @@ fn an_absurd_expiry_is_refused_rather_than_overflowing() {
 /// waiting for someone to remember.
 #[test]
 fn every_kind_has_a_constructor() {
-    use strum::IntoEnumIterator;
     let built: Vec<AssumptionKind> = all_kinds().iter().map(|a| a.kind).collect();
     for kind in AssumptionKind::iter() {
         assert!(
@@ -418,6 +418,8 @@ fn status_rule_covers_every_kind() {
 }
 
 #[test]
+// One table of every nameless constructor; the cases share one assertion shape.
+#[allow(clippy::too_many_lines)]
 fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
     // Two footprints with blank designators are two gaps. Giving them one id
     // would be worse than giving them an ugly one, because the evidence map
@@ -524,24 +526,24 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
     // one entry, and the dedupe then eats one. That is the failure this whole
     // scheme exists to prevent, so the coverage is exhaustive rather than
     // representative.
-    let nameless: Vec<(Assumption, Assumption)> = vec![
-        (
+    let nameless: Vec<[Assumption; 2]> = vec![
+        [
             Assumption::open_part("", "10k", "no model matched"),
             Assumption::open_part("", "47k", "no model matched"),
-        ),
-        (
+        ],
+        [
             Assumption::substitute_model(AssumptionSource::Binder, "", "a", "b"),
             Assumption::substitute_model(AssumptionSource::Binder, "", "c", "d"),
-        ),
-        (
+        ],
+        [
             Assumption::inferred_pin_role("", "", "output"),
             Assumption::inferred_pin_role("", "", "input"),
-        ),
-        (
+        ],
+        [
             Assumption::default_parameter("", "", "3.3 V"),
             Assumption::default_parameter("", "", "5 V"),
-        ),
-        (
+        ],
+        [
             Assumption::fitted_by_default(
                 AssumptionSource::Reader,
                 Subject::same(""),
@@ -552,8 +554,8 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
                 Subject::new("", "the second archive"),
                 Scope::Board,
             ),
-        ),
-        (
+        ],
+        [
             Assumption::not_checked(AssumptionSource::Reader, "", None, "no copper", "add one"),
             Assumption::not_checked(
                 AssumptionSource::Reader,
@@ -562,8 +564,8 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
                 "no firmware",
                 "supply one",
             ),
-        ),
-        (
+        ],
+        [
             Assumption::not_exercised(
                 AssumptionSource::Scheduler,
                 Subject::same(""),
@@ -578,8 +580,8 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
                 "c",
                 "d",
             ),
-        ),
-        (
+        ],
+        [
             Assumption::reduced_fidelity(
                 AssumptionSource::Solver,
                 Subject::same(""),
@@ -594,12 +596,12 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
                 "c",
                 "d",
             ),
-        ),
-        (
+        ],
+        [
             Assumption::held_by_ideal_source(""),
             Assumption::held_by_ideal_source("   "),
-        ),
-        (
+        ],
+        [
             Assumption::parser_limitation(
                 AssumptionSource::Reader,
                 Subject::same(""),
@@ -614,13 +616,13 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
                 "c",
                 "d",
             ),
-        ),
-        (
+        ],
+        [
             Assumption::waived("", "", "", "why", "2027-06-01", today()).unwrap(),
             Assumption::waived("", "", "", "another why", "2027-06-01", today()).unwrap(),
-        ),
+        ],
     ];
-    for (first, second) in nameless {
+    for [first, second] in nameless {
         let subject = first.id().as_str().split_once(':').unwrap().1;
         assert!(
             subject.starts_with("unnamed~"),
@@ -725,7 +727,6 @@ fn the_wire_vocabulary_is_spelled_in_exactly_one_place() {
         );
         assert_eq!(status.to_string(), status.as_str());
     }
-    use strum::IntoEnumIterator;
     for kind in AssumptionKind::iter() {
         assert_eq!(
             serde_json::to_value(kind).unwrap(),
@@ -1156,13 +1157,6 @@ fn the_published_schema_does_not_permit_a_null_the_writers_never_write() {
 /// test, and this one says exactly what it has to assert.
 #[test]
 fn an_unresolved_part_undermines_its_own_net_and_only_its_own_net() {
-    // The fixture board, as the binder will eventually report it: net ->
-    // the parts incident on it. X is the regulator feeding 3V3 and did not
-    // resolve; the parts on VBUS are all bound.
-    let incidence: &[(&str, &[&str])] =
-        &[("3V3", &["X", "C1", "U5"]), ("VBUS", &["J1", "C9", "D2"])];
-    let registry = vec![Assumption::open_part("X", "XC6206", "no model matched")];
-
     // Stand-in for the phase-4 traversal: an assumption is on-path when its
     // scope names a part incident on the assertion's subject nets.
     fn on_path_for(
@@ -1208,6 +1202,13 @@ fn an_unresolved_part_undermines_its_own_net_and_only_its_own_net() {
             .cloned()
             .collect()
     }
+
+    // The fixture board, as the binder will eventually report it: net ->
+    // the parts incident on it. X is the regulator feeding 3V3 and did not
+    // resolve; the parts on VBUS are all bound.
+    let incidence: &[(&str, &[&str])] =
+        &[("3V3", &["X", "C1", "U5"]), ("VBUS", &["J1", "C9", "D2"])];
+    let registry = vec![Assumption::open_part("X", "XC6206", "no model matched")];
 
     let a = EvidenceMap::new(
         "3V3 stays above 3.1 V",

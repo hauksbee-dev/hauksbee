@@ -20,6 +20,7 @@
 //! is the whole point of the step.
 
 use hauksbee_ir::SpiceLoader;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -301,7 +302,7 @@ struct Region {
 fn supported_region() -> Region {
     let all = claims();
     let mut s = String::new();
-    s.push_str(&format!("{REGEN_HINT}\n\n"));
+    writeln!(s, "{REGEN_HINT}\n").unwrap();
     for cat in Cat::all() {
         let rows: Vec<&Claim> = all
             .iter()
@@ -310,10 +311,10 @@ fn supported_region() -> Region {
         if rows.is_empty() {
             continue;
         }
-        s.push_str(&format!("### {}\n\n", cat.heading()));
+        writeln!(s, "### {}\n", cat.heading()).unwrap();
         s.push_str("| Card | What it does |\n|------|--------------|\n");
         for c in rows {
-            s.push_str(&format!("| {} | {} |\n", c.syntax, c.summary));
+            writeln!(s, "| {} | {} |", c.syntax, c.summary).unwrap();
         }
         s.push('\n');
     }
@@ -328,7 +329,7 @@ fn supported_region() -> Region {
 fn refused_region() -> Region {
     let all = claims();
     let mut s = String::new();
-    s.push_str(&format!("{REGEN_HINT}\n\n"));
+    writeln!(s, "{REGEN_HINT}\n").unwrap();
     s.push_str(
         "| Card / form | Why it refuses | Error fragment (substring of the exact message) |\n",
     );
@@ -337,10 +338,7 @@ fn refused_region() -> Region {
     );
     for c in &all {
         if let Expect::Refuse(fragment) = c.expect {
-            s.push_str(&format!(
-                "| {} | {} | `{}` |\n",
-                c.syntax, c.summary, fragment
-            ));
+            writeln!(s, "| {} | {} | `{fragment}` |", c.syntax, c.summary).unwrap();
         }
     }
     Region {

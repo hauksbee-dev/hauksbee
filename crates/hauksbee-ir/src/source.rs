@@ -7,8 +7,9 @@
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 
-/// A source's small-signal AC stimulus, captured from its `AC <mag> [phase]`
-/// spec (SPICE `.AC` drive). This is *not* a time-domain waveform: it is the
+/// A source's small-signal AC stimulus, from its `AC <mag> [phase]` spec.
+///
+/// This is the SPICE `.AC` drive, *not* a time-domain waveform: it is the
 /// complex amplitude the linearized AC analysis injects at the swept frequency,
 /// held constant across the sweep. Phase is in degrees, matching the SPICE
 /// source-card convention.
@@ -104,7 +105,8 @@ impl SourceKind {
                     } else {
                         (-theta * td).exp()
                     };
-                    offset + amplitude * damp * (TAU * freq * td + phase.to_radians()).sin()
+                    (amplitude * damp)
+                        .mul_add((TAU * freq).mul_add(td, phase.to_radians()).sin(), *offset)
                 }
             }
             Self::Pulse {
@@ -184,7 +186,7 @@ fn pulse(
         if rise == 0.0 {
             v2
         } else {
-            v1 + (v2 - v1) * (local / rise)
+            (v2 - v1).mul_add(local / rise, v1)
         }
     } else if local < rise + width {
         v2
@@ -192,7 +194,7 @@ fn pulse(
         if fall == 0.0 {
             v1
         } else {
-            v2 + (v1 - v2) * ((local - rise - width) / fall)
+            (v1 - v2).mul_add((local - rise - width) / fall, v2)
         }
     } else {
         v1
@@ -219,7 +221,7 @@ fn pwl(points: &[PwlPoint], t: f64) -> f64 {
                 return b.v;
             }
             let frac = (t - a.t) / span;
-            return a.v + (b.v - a.v) * frac;
+            return (b.v - a.v).mul_add(frac, a.v);
         }
     }
     last.v
@@ -236,10 +238,10 @@ mod tests {
         let src = SourceKind::Dc(2.0).ramped(1e-6);
 
         // At and before t=0 the ramp factor is 0.
-        assert_eq!(src.eval(0.0), 0.0);
-        assert_eq!(src.eval(-1.0), 0.0);
+        assert!(src.eval(0.0).abs() < 1e-12);
+        assert!(src.eval(-1.0).abs() < 1e-12);
         // dc_value uses eval(0.0): a power-on source rests at zero.
-        assert_eq!(src.dc_value(), 0.0);
+        assert!(src.dc_value().abs() < 1e-12);
 
         // Linear through the window: half-way is half amplitude.
         assert!((src.eval(0.5e-6) - 1.0).abs() < 1e-12);
@@ -264,7 +266,7 @@ mod tests {
         };
         let ramped = sin.clone().ramped(1e-3);
         // inner(0) = 1, ramp(0) = 0 => product 0 (no shift, just scaled).
-        assert_eq!(ramped.eval(0.0), 0.0);
+        assert!(ramped.eval(0.0).abs() < 1e-12);
         // At full ramp the product equals the bare inner value.
         let t = 2e-3;
         assert!((ramped.eval(t) - sin.eval(t)).abs() < 1e-12);

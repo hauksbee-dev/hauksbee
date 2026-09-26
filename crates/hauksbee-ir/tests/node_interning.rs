@@ -6,10 +6,10 @@ use hauksbee_ir::Circuit;
 
 #[test]
 fn node_interning_is_case_insensitive() {
-    let mut c = Circuit::new();
-    let a = c.node("OUT");
-    let b = c.node("Out");
-    let d = c.node("out");
+    let mut ckt = Circuit::new();
+    let a = ckt.node("OUT");
+    let b = ckt.node("Out");
+    let d = ckt.node("out");
     assert_eq!(
         a, b,
         "case variants of one net must intern to the same node"
@@ -20,13 +20,13 @@ fn node_interning_is_case_insensitive() {
     );
 
     // node() and find_node() must agree.
-    assert_eq!(c.find_node("out"), Some(a));
-    assert_eq!(c.find_node("OUT"), Some(a));
+    assert_eq!(ckt.find_node("out"), Some(a));
+    assert_eq!(ckt.find_node("OUT"), Some(a));
 
     // First-seen casing is preserved for display.
-    assert_eq!(c.node_name(a), "OUT");
+    assert_eq!(ckt.node_name(a), "OUT");
 
     // Genuinely different names stay distinct.
-    let e = c.node("IN");
+    let e = ckt.node("IN");
     assert_ne!(a, e);
 }
