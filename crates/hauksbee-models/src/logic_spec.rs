@@ -166,7 +166,7 @@ pub struct AsyncLoadSpec {
     pub data: Vec<String>,
 }
 
-/// A level-sensitive clock enable (the 74HC165 CLK_INH shape): clock edges
+/// A level-sensitive clock enable (the 74HC165 `CLK_INH` shape): clock edges
 /// only take effect while the enable is active.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnableSpec {
@@ -1545,7 +1545,7 @@ outputs = ["q", "qb"]
 "#;
 
     /// A 28C256-shaped parallel EEPROM: 32K x 8, bidirectional bus expressed
-    /// as tri-stated outputs sampled by data_in, CE-gated WE-rising write.
+    /// as tri-stated outputs sampled by `data_in`, CE-gated WE-rising write.
     const EEPROM_28C256: &str = r#"
 inputs  = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
            "a10", "a11", "a12", "a13", "a14", "ce_n", "oe_n", "we_n"]

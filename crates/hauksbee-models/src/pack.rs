@@ -580,7 +580,7 @@ mod tests {
         std::fs::write(dir.join("models").join("m.toml"), model).unwrap();
     }
 
-    /// Pack::load runs the behavioural gate, so a `nan` setpoint never installs.
+    /// `Pack::load` runs the behavioural gate, so a `nan` setpoint never installs.
     #[test]
     fn pack_load_rejects_nonfinite_behavioral_converter() {
         let base = std::env::temp_dir().join(format!("hb_pack_test_{}", std::process::id()));

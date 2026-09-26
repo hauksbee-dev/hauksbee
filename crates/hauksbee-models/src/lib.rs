@@ -1,6 +1,6 @@
 //! `hauksbee-models`, PCB component model library.
 //!
-//! Given a component identified by lib_id, value, footprint, or part-number,
+//! Given a component identified by `lib_id`, value, footprint, or part-number,
 //! this crate resolves a simulation model definition. Physics arrives by
 //! several authoring routes (built-in DB, installed model packs, LLM
 //! datasheet extraction, hand-written behavioural models, user SPICE) that
@@ -248,9 +248,9 @@ impl std::fmt::Display for SourceLayer {
 /// How confident the library is in a resolved model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
-    /// An exact, unambiguous match (e.g. exact lib_id + value + MPN).
+    /// An exact, unambiguous match (e.g. exact `lib_id` + value + MPN).
     Exact,
-    /// Matched by family rules (e.g. value regex catches the whole BC84x family).
+    /// Matched by family rules (e.g. value regex catches the whole `BC84x` family).
     Family,
     /// Heuristic / partial match (e.g. only footprint matched).
     Guessed,
@@ -1503,7 +1503,7 @@ mod tests {
         );
     }
 
-    /// Resolution against the pic_programmer board's BOM.
+    /// Resolution against the `pic_programmer` board's BOM.
     #[test]
     fn pic_programmer_bom() {
         let l = lib();

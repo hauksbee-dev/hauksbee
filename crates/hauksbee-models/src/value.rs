@@ -200,7 +200,7 @@ fn is_jedec_semiconductor(v: &str) -> bool {
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
-/// "0402_47k"). `"0402".parse::<f64>()` is 402, silently accepting one binds
+/// "`0402_47k`"). `"0402".parse::<f64>()` is 402, silently accepting one binds
 /// a 47 kΩ part at 402 Ω.
 const FOOTPRINT_SIZE_CODES: [&str; 9] = [
     "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
@@ -538,7 +538,7 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
 /// unit token, an ignorable annotation (voltage rating, tolerance,
 /// dielectric), or both, and `None` when unparsed garbage remains. The
 /// caller must then reject the string: silently dropping the tail is exactly
-/// how "0402_47k" once read as 402 Ω.
+/// how "`0402_47k`" once read as 402 Ω.
 fn parse_tail(t: &str) -> Option<Option<String>> {
     if t.is_empty() {
         return Some(None);

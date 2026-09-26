@@ -257,7 +257,7 @@ fn ltc4020_exposes_its_two_resistor_protection_limit_to_simulation() {
     assert!((programmed_limit(100_000.0, 0.01) - 5.0).abs() < 1e-12);
 }
 
-/// The ST SR2 Smart Reset (DocID026047 Rev 2): one entry covers the six
+/// The ST SR2 Smart Reset (`DocID026047` Rev 2): one entry covers the six
 /// ordering options Table 7 lists, because they differ only in the tSRC delay
 /// and the tREC option, neither of which this model carries. What it does carry
 /// is the UDFN6 pin map and the fixed-volt input thresholds, and both are

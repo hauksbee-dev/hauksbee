@@ -425,7 +425,7 @@ pub enum LawKind {
 /// builtins are available, no variables the runtime did not bind, no I/O.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Law {
-    /// Diagnostic name (e.g. "balancer_leak").
+    /// Diagnostic name (e.g. "`balancer_leak`").
     pub name: String,
 
     pub kind: LawKind,

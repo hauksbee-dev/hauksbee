@@ -2,7 +2,7 @@
 //! TXB0101 level translators were real modelling gaps. The other seven were
 //! match-rule misses on parts with no device physics to miss: three panel
 //! mouse-bites whose footprint spells the name with a hyphen, two fuses on a
-//! copper-only board with no lib_id for the `Device:Fuse` rule to see, and two
+//! copper-only board with no `lib_id` for the `Device:Fuse` rule to see, and two
 //! chip antennas whose generic value cannot say whether the part is a DC open
 //! or a DC short. Each case pins the classification that clears (or honestly
 //! declines to clear) it.

@@ -4,8 +4,8 @@
 //! Each assertion checks:
 //!  - the part resolves (model is Some),
 //!  - it resolves to the expected model id,
-//!  - it has the expected ComponentKind,
-//!  - the key ratings (max_voltage_v, max_current_a where applicable) are
+//!  - it has the expected `ComponentKind`,
+//!  - the key ratings (`max_voltage_v`, `max_current_a` where applicable) are
 //!    present and within a sane range derived from the datasheet.
 //!
 //! The generic power-FET fallback is also checked: an unknown FET value in a
@@ -30,7 +30,7 @@ type Row = (
 // ── 6b/6c: Specific datasheet-sourced FETs, AFE, gate drivers, CSAs ───────────
 
 /// Every value spelling resolves to its entry, with its kind, and each checked
-/// rating (max_voltage_v, max_current_a, max_junction_temp_c) is present and
+/// rating (`max_voltage_v`, `max_current_a`, `max_junction_temp_c`) is present and
 /// inside the bound its datasheet figure (in the row comment) implies.
 #[test]
 fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {

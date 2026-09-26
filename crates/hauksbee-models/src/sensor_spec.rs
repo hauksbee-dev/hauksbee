@@ -250,7 +250,7 @@ pub struct RegisterSpec {
     #[serde(default)]
     pub expr: Option<String>,
 
-    /// Constant bytes for an identity / config register (WHO_AM_I etc).
+    /// Constant bytes for an identity / config register (`WHO_AM_I` etc).
     #[serde(default)]
     pub r#const: Option<Vec<u8>>,
 
@@ -406,11 +406,11 @@ const fn default_channel_select() -> ChannelSelectSpec {
 /// MCP4728 Sequential Write, mask 0xF8) must be listed before a broader one it
 /// overlaps (Multi/Single, mask 0xC0). A first byte matching no command makes
 /// the whole transaction accepted-and-ignored; the honest analogue of a real
-/// part ACKing a command family the model does not implement; the interpreter
+/// part ACK-ing a command family the model does not implement; the interpreter
 /// counts these so a test can assert nothing was silently dropped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteCommandSpec {
-    /// Diagnostic name ("fast_write").
+    /// Diagnostic name ("`fast_write`").
     pub name: String,
     /// The command matches when `first_byte & match_mask == match_value`.
     pub match_mask: u8,
@@ -444,7 +444,7 @@ pub struct WriteCommandSpec {
 /// (`on_stop(ctx)`) the law is evaluated and pushed onto the net.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputSpec {
-    /// Stable name ("vout_a") the engine binds a driver to.
+    /// Stable name ("`vout_a`") the engine binds a driver to.
     pub name: String,
     /// Which channel's state the expression sees. Default 0.
     #[serde(default)]
@@ -476,7 +476,7 @@ pub struct ReadFrameSpec {
 pub struct ProtocolSpec {
     pub style: ProtocolStyle,
     /// SPI only: is the read bit a 1 in the high bit of the command byte?
-    /// (true for most ST / InvenSense parts). Default true.
+    /// (true for most ST / `InvenSense` parts). Default true.
     #[serde(default = "default_true")]
     pub rw_read_is_high: bool,
     /// SPI only: mask applied to the command byte to recover the register addr.

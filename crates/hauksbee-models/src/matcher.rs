@@ -53,7 +53,7 @@ impl CompiledEntry {
 
     /// Whether this entry's match rules fire for the given query fields.
     ///
-    /// Rules are ANDed: every populated rule must match.
+    /// Rules are AND-ed: every populated rule must match.
     #[must_use]
     pub fn matches(&self, q: &ComponentQuery) -> bool {
         fn field(v: &Option<String>) -> &str {
@@ -90,7 +90,7 @@ impl CompiledEntry {
     ///
     /// Scoring rationale:
     /// - MPN match is the most specific (part number uniquely identifies a device).
-    /// - Exact lib_id match is more specific than a prefix.
+    /// - Exact `lib_id` match is more specific than a prefix.
     /// - Value regex is fairly specific.
     /// - Footprint regex is a catch-all fallback.
     #[must_use]
@@ -337,7 +337,7 @@ fn normalise_property_key(s: &str) -> String {
 /// All fields are optional; the library matches against whatever is present.
 #[derive(Debug, Clone, Default)]
 pub struct ComponentQuery {
-    /// KiCad lib_id, e.g. `"Device:R"` or `"Device:Q_NPN_BCE"`.
+    /// KiCad `lib_id`, e.g. `"Device:R"` or `"Device:Q_NPN_BCE"`.
     pub lib_id: Option<String>,
     /// Component value field, e.g. `"10k"`, `"BC847"`, `"100nF"`.
     pub value: Option<String>,

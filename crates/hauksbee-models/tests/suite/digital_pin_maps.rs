@@ -169,7 +169,7 @@ fn hc165_shift_register_pin_map() {
 /// description (LGA-12). The two supply domains are the thing a template
 /// corrupts here: VDDIO on 3 with GNDIO on 8, VDD on 7 with GND on 9, and the
 /// two grounds are NOT interchangeable pads. SDX/SCX carry the bus vocabulary
-/// (`sda`/`scl`) rather than the datasheet spelling, per tests/pin_roles.rs.
+/// (`sda`/`scl`) rather than the datasheet spelling, per `tests/pin_roles.rs`.
 #[test]
 fn bma423_accelerometer_pin_map() {
     assert_sequential_pin_map(

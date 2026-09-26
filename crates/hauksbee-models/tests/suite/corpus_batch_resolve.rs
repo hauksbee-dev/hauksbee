@@ -9,7 +9,7 @@
 //! move a parameter away from its citation.
 //!
 //! One rule in particular is worth a test of its own and gets one below.
-//! `mpn_re` is ANDed with every other rule, and a component with no MPN property
+//! `mpn_re` is AND-ed with every other rule, and a component with no MPN property
 //! is compared against it as the empty string, so adding an `mpn_re` beside a
 //! `value_re` cannot widen an entry: it makes the entry bind NOTHING on any
 //! layout-only board. Every entry in this batch was first written with both, and

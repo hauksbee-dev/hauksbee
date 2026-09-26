@@ -85,7 +85,7 @@ fn expect_model(value: &str) -> ModelEntry {
 /// Resolve exactly the way a layout-only board does. `mpn` is set to the value
 /// string as well as `value`, because that is what `binder.rs` does for a
 /// component with no MPN property, which is every component on a `.kicad_pcb`,
-/// a `.brd` or a gerber set. Match rules are ANDed, so leaving `mpn` empty would
+/// a `.brd` or a gerber set. Match rules are AND-ed, so leaving `mpn` empty would
 /// make every entry carrying an `mpn_re` resolve to nothing, testing a query
 /// shape no board produces.
 fn resolve_part(value: &str) -> Option<ModelEntry> {

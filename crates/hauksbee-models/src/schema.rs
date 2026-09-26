@@ -847,7 +847,7 @@ pub struct StrapPin {
     pub level: StrapLevel,
     /// True only for a *boot-select* strap whose wrong static level is
     /// unrecoverable: it latches which boot source / mode the part enters, and
-    /// firmware cannot undo it (BOOT0, GPIO0/GPIO9 boot pin, QSPI_SS/BOOTSEL).
+    /// firmware cannot undo it (BOOT0, GPIO0/GPIO9 boot pin, `QSPI_SS/BOOTSEL`).
     /// The wrong-bias lint arm fires only on these. Cosmetic or flash-voltage
     /// straps that a board may legitimately repurpose as ordinary GPIO with a
     /// pull (ESP32 GPIO15 boot-log, GPIO2, GPIO12/GPIO45 flash-voltage) leave
@@ -986,7 +986,7 @@ pub struct Ratings {
     pub theta_jc_c_per_w: Option<f64>,
 
     /// FLOOR, not a ceiling: the least current (A) the datasheet guarantees regulation
-    /// at (TL431 IKmin, an LDO minimum load); below it the run discloses, not answers.
+    /// at (TL431 `IKmin`, an LDO minimum load); below it the run discloses, not answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_current_a: Option<f64>,
 
@@ -1199,12 +1199,12 @@ impl PassiveClass {
 
 /// Rules that determine whether a model entry matches a component.
 ///
-/// All populated rules are ANDed: the entry matches only when every
+/// All populated rules are AND-ed: the entry matches only when every
 /// non-`None` rule fires. At least one rule must be populated.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MatchRules {
-    /// Exact KiCad lib_id string (e.g. `"Device:R"`) or prefix ending with
-    /// `":"` (e.g. `"Device:"` matches any lib_id in the Device library).
+    /// Exact KiCad `lib_id` string (e.g. `"Device:R"`) or prefix ending with
+    /// `":"` (e.g. `"Device:"` matches any `lib_id` in the Device library).
     #[serde(default)]
     pub lib_id: Option<String>,
 
