@@ -1440,15 +1440,14 @@ variant, each with the shared family `value_re`, `variant_of = "<family>"` and
 `package`, `basis`; no default). A BJT's bf is the hFE row (min/typ/max) of the
 gain group it models, as a row param; name the group in its `parameter`.
 
-The `kind` FIELD inside your entry must come from this closed list (the
-schema accepts nothing else): {legal_kinds}.
-When the "Component kind" line above is empty, choosing the kind is merely
-the first field you fill in while writing the complete entry. If the part's
-natural category is not on the list (a battery charger, a level shifter, an
-addressable LED driver), do not invent a kind: use the closest legal kind
-for the part's primary electrical behavior (a charger's power path fits
-vreg; a level shifter fits digital) and say in `description` what real
-behavior the chosen kind does not model.
+The `kind` FIELD inside your entry must come from this closed list (the schema
+accepts nothing else): {legal_kinds}. When the "Component kind" line above is
+empty, choosing the kind is merely the first field you fill in while writing the
+complete entry. If the part's natural category is not on the list (a battery
+charger, a level shifter, an addressable LED driver), do not invent a kind: use
+the closest legal kind for the part's primary electrical behavior (a charger's
+power path fits vreg; a level shifter fits digital) and say in `description`
+what real behavior the chosen kind does not model.
 
 FORMAT EXAMPLES ONLY:
 These are NOT the part being extracted. Each is from a different part class.
@@ -1518,17 +1517,19 @@ For kind="{entry_kind}", the required params are:
 {digital_hint}
 [models.ratings]: these are the ONLY valid keys (any other key fails
 validation). Read them from the Absolute Maximum Ratings / Limiting Values and
-Thermal Characteristics tables, or the table a line names. Include every key
-the datasheet states for the selected package; omit a key it does not state (do
-NOT invent it). Ratings are magnitudes: for a limit printed negative (PNP,
-negative rail) write |value| and keep the printed sign in the source comment.
-A stated limit with no key here goes in a characteristic record (rule 0), never
-under an invented key. A rating printed for several conditions the part number
-does not settle (board copper or mounting, package, ambient) is read from the
-least favourable one, as a checker must not trust a better board than the user's:
-the lowest current and power, the highest thermal resistance, and
-max_current_a, max_power_w and theta_ja_c_per_w all from that same condition;
-the other rows go in characteristic records:
+Thermal Characteristics tables, or the table a line names. Include every key the
+datasheet states for the selected package; omit a key it does not state (do NOT
+invent it). Ratings are magnitudes: for a limit printed negative (PNP, negative
+rail) write |value| and keep the printed sign in the source comment.
+max_junction_temp_c is the junction temperature limit, never a thermal-shutdown
+or protection threshold; where the absolute maximum says internally limited, it
+is the top of the operating junction range. A stated limit with no key here goes
+in a characteristic record (rule 0), never under an invented key. A rating
+printed for several conditions the part number does not settle (board copper or
+mounting, package, ambient) is read from the least favourable one, as a checker
+must not trust a better board than the user's: the lowest current and power, the
+highest thermal resistance, and max_current_a, max_power_w and theta_ja_c_per_w
+all from that same condition; the other rows go in characteristic records:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -1538,13 +1539,14 @@ each explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
 VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
 supply, `inputs` that channel's two inputs, and `headroom_v` the test supply
 minus the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+), read
-from the 25 °C row when a full-temperature-range row is also printed, and `basis`
-names that row. Pins, supplies and inputs are roles from [models.pins], never pad
-numbers. Every entry requires `basis` naming the exact table and row. Add
-`abs_max_v` only when the absolute-maximum table publishes it. There is no
-envelope without a table row to cite: omitting this section is correct when the
-datasheet lacks the necessary tables. Never infer a bound from a typical value,
-application schematic, or family convention.
+from the 25 °C row when a full-temperature-range row is also printed, and
+`basis` names that row; the upper end is its guaranteed (min/max) cell, the
+narrower range, never typ (typ alone: omit the entry). Pins, supplies and inputs
+are roles from [models.pins], never pad numbers. Every entry requires `basis`
+naming the exact table and row. Add `abs_max_v` only when the absolute-maximum
+table publishes it. There is no envelope without a table row to cite: omitting
+this section is correct when the datasheet lacks the necessary tables. Never
+infer a bound from a typical value, application schematic, or family convention.
 
 WHERE TO LOOK AND HOW TO READ IT:
 - Supply bounds belong in Recommended Operating Conditions.
@@ -3574,12 +3576,13 @@ mod tests {
         assert!(!bjt.contains("[models.behavioral.converter]"));
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
         assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
+        assert!(vreg.contains("junction temperature limit, never a thermal-shutdown"));
+        assert!(vreg.contains("absolute maximum says internally limited, it"));
         assert!(bjt.contains("   - bf: 1 to 2000\n"));
-        assert!(
-            bjt.contains("(.MODEL/.SUBCKT) is copied verbatim") && bjt.contains("derives tf, cjc")
-        );
+        assert!(bjt.contains("(.MODEL/.SUBCKT) is copied verbatim"));
+        assert!(bjt.contains("derives tf, cjc"));
         assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
-        assert!(bjt.contains("max_current_a, max_power_w and theta_ja_c_per_w all from that same"));
+        assert!(bjt.contains("and max_current_a, max_power_w and theta_ja_c_per_w"));
         assert!(vreg.contains("at the rated output current when several loads are printed"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
         assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));
@@ -3589,11 +3592,10 @@ mod tests {
         assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
         assert!(comparator.contains("from the 25 °C row when a full-temperature-range row"));
+        assert!(comparator.contains("narrower range, never typ (typ alone: omit the entry)"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
-        assert!(
-            bjt.contains("letters alone, key by lead letters A/K, G/S/D")
-                && bjt.contains("one missing")
-        );
+        assert!(bjt.contains("letters alone, key by lead letters A/K, G/S/D"));
+        assert!(bjt.contains("one missing"));
         assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
         assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));
         assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));
