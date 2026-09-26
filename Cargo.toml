@@ -55,6 +55,8 @@ all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
+# Duplicate versions come from transitive dependencies and need upstream bumps.
+multiple_crate_versions = "allow"
 
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)
