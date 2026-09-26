@@ -421,10 +421,13 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
         job.pdf_name,
         job.pdf.len() / 1024
     ));
-    progress(
-        "The datasheet is copied into a scratch sandbox and its first pages rendered; codex \
-         and Claude Code shell reads are confined to it, agy's are not.",
-    );
+    let confined = match &picked {
+        Backend::Ready(r) => r.confinement(r.backend).unwrap_or("the API gets text only"),
+        _ => "a mock reply, nothing runs",
+    };
+    progress(&format!(
+        "The datasheet is copied into a scratch sandbox and its first pages rendered; {confined}."
+    ));
     progress(
         "Sent. The model reads the pages, checks each value against the page it came from, and \
          writes the draft; the estimate comes from your recent runs.",
@@ -446,7 +449,8 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     std::thread::spawn(move || {
         let outcome = datasheet::run(args).map(|_| None).or_else(|e| {
             let kept = e.downcast_ref::<TimedOut>().filter(|t| t.2.is_some());
-            kept.map(|t| Some(t.to_string())).ok_or(format!("{e:#}"))
+            kept.map(|t| Some(t.to_string()))
+                .ok_or_else(|| format!("{e:#}"))
         });
         let _ = tx.send(outcome);
     });

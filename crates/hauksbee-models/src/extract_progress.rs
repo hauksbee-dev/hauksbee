@@ -55,6 +55,7 @@ pub fn pages(count: usize) {
 }
 
 /// The current phase and the estimated whole-run seconds.
+#[must_use]
 pub fn snapshot() -> (String, u64) {
     let s = state();
     (s.phase.clone(), s.estimate)
@@ -96,6 +97,12 @@ fn history() -> Vec<(u64, u64)> {
         .collect()
 }
 
+// Second counts and page counts sit far below 2^52, and a median run is never negative.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn median_scaled(history: &[(u64, u64)], pages: u64) -> u64 {
     let mut runs: Vec<f64> = (history.iter().copied())
         .map(|(secs, was)| match (pages, was) {
@@ -118,16 +125,27 @@ pub fn record(took: Duration) {
     let mut runs = history();
     runs.push((took.as_secs(), state().pages));
     let keep = runs[runs.len().saturating_sub(KEEP)..].iter();
-    let text: String = keep.map(|(s, p)| format!("{s} {p}\n")).collect();
+    let text = keep
+        .map(|(s, p)| format!("{s} {p}\n"))
+        .collect::<Vec<_>>()
+        .concat();
     let _ = path.parent().map(std::fs::create_dir_all);
     let _ = std::fs::write(path, text);
 }
 
 /// Run a CLI extraction with its phase, elapsed time and typical duration on
-/// stderr, and remember how long it took if it succeeded. On a terminal that is
-/// one line redrawn in place (no cursor or mode changes, so Ctrl-C leaves the
-/// terminal as it was); anywhere else a plain line every 30 s, never a control
-/// code. The line is erased before `run` returns, success or error.
+/// stderr, and remember how long it took if it succeeded.
+///
+/// On a terminal that is one line redrawn in place (no cursor or mode changes,
+/// so Ctrl-C leaves the terminal as it was); anywhere else a plain line every
+/// 30 s, never a control code. The line is erased before `run` returns, success
+/// or error.
+///
+/// # Errors
+///
+/// Returns `run`'s own error unchanged; the spinner adds none.
+// The ticker holds its lock across a redraw so `stop` cannot land mid-line.
+#[allow(clippy::significant_drop_tightening)]
 pub fn with_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     let (started, tty) = (Instant::now(), std::io::stderr().is_terminal());
     let stop = Arc::new((Mutex::new(false), Condvar::new()));
@@ -146,7 +164,8 @@ pub fn with_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
             if tty {
                 // Short of an 80-column terminal: a wrapped line cannot be erased.
                 let line = format!("{secs} {phase} · {typical} typical");
-                let (mut s, line): (_, String) = (state(), line.chars().take(76).collect());
+                let line: String = line.chars().take(76).collect();
+                let mut s = state();
                 eprint!("\r\x1b[2K{frame} {line}");
                 s.drawn = true;
             } else {

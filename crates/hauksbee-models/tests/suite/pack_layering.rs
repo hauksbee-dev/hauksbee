@@ -41,7 +41,7 @@ fn make_pack(dir: &Path, name: &str, model_toml: &str) {
     std::fs::write(dir.join("models/m.toml"), model_toml).unwrap();
 }
 
-/// A query the builtin db resolves by value (BC847, value_re score 30) and
+/// A query the builtin db resolves by value (BC847, `value_re` score 30) and
 /// the test entries resolve by footprint only (score 5).
 fn query() -> ComponentQuery {
     ComponentQuery {

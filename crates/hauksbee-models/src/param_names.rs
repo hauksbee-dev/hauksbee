@@ -164,6 +164,7 @@ const ADC_TO: usize = 18; // everything before `supply_cpd_pf`
 /// A kind with an empty slice carries no numeric physics at all (a connector
 /// models pin continuity; `Ignore` models nothing), so every param on it is
 /// unread by construction and the lint says so.
+#[must_use]
 pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
     match kind {
         ComponentKind::Passive => &["ohms", "series_ohms", "value_override", "esr", "esl"],
@@ -273,6 +274,7 @@ fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
 }
 
 /// The unit `name` is documented in: its glossary entry, else its suffix.
+#[must_use]
 pub fn param_unit(name: &str) -> Option<&'static str> {
     glossary()
         .find(|[n, ..]| *n == name)
@@ -281,10 +283,13 @@ pub fn param_unit(name: &str) -> Option<&'static str> {
 }
 
 /// The column table: the printed column (`min`, `typ` or `max`) a row param
-/// reads. A param that IS a guaranteed limit reads its worst case: an input
-/// threshold or output level (VIH/VOH min, VIL/VOL max), a headroom or dropout
-/// (max), and any name carrying a `min` or `max` word. Everything else reads
-/// its nominal, the typ.
+/// reads.
+///
+/// A param that IS a guaranteed limit reads its worst case: an input threshold
+/// or output level (VIH/VOH min, VIL/VOL max), a headroom or dropout (max), and
+/// any name carrying a `min` or `max` word. Everything else reads its nominal,
+/// the typ.
+#[must_use]
 pub fn row_column(name: &str) -> &'static str {
     const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi"];
     const MAX: &[&str] = &["vil", "vol", "out_lo", "rail_lo", "vol_v", "voh_drop_v"];
@@ -309,7 +314,7 @@ fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
         None => None,
     };
     scale.ok_or_else(|| {
-        let want = want.map_or("no unit".to_string(), |u| format!("{u}, by its name"));
+        let want = want.map_or_else(|| "no unit".to_string(), |u| format!("{u}, by its name"));
         format!(
             "unit '{unit}' does not fit '{name}', which is read in {want}: keep a rail-relative \
              or other such row as a characteristic in its printed unit, never drop it"
@@ -320,10 +325,15 @@ fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
 /// The value the simulator reads from `row` as param `name`: the column
 /// [`row_column`] picks, converted from the printed unit to the one its name
 /// reads (`_ua` is micro-amperes).
+///
+/// # Errors
+///
+/// Fails when the row's printed unit cannot convert to the unit `name` reads, or
+/// when the row prints neither the column `name` reads nor its fallback.
 pub fn row_value(name: &str, row: &Characteristic) -> Result<f64, String> {
     let suffix = crate::units::suffix_unit(name).map_or(1.0, |(scale, _)| scale);
     let scale = row_scale(name, &row.unit)? / suffix;
-    let midpoint = row.min.zip(row.max).map(|(a, b)| (a + b) / 2.0);
+    let midpoint = row.min.zip(row.max).map(|(a, b)| f64::midpoint(a, b));
     // A limit falls back to the typ; a nominal to the midpoint, never one bound.
     let (column, else_) = match row_column(name) {
         "min" => (row.min.or(row.typ), "the typ"),
@@ -355,6 +365,7 @@ pub(crate) fn row_characteristic(name: &str, row: &Characteristic) -> Option<Cha
 }
 
 /// `name = meaning (unit)` for each glossary param `kind` reads, for the prompt.
+#[must_use]
 pub fn param_meanings(kind: ComponentKind) -> String {
     let names = known_param_names(kind);
     let lines: Vec<String> = glossary()
@@ -373,12 +384,16 @@ fn form_ignored(entry: &ModelEntry) -> &'static [&'static str] {
     }
 }
 
-/// Warnings that tie `[models.params]` to the card's own characteristic rows,
-/// matched by value: a param equal to a row printed in another base unit than
-/// the param's documented one (a current stored as a conductance), and a
-/// nominal equal to the min or max of a row that prints no typ (unless another
-/// row prints it as a typ). The unit check only looks below 1e-3, where a copied
-/// current or capacitance lives and a round volt or ohm value cannot collide.
+/// Warnings that tie `[models.params]` to the card's own characteristic rows.
+///
+/// Rows are matched by value: a param equal to a row printed in another base
+/// unit than the param's documented one (a current stored as a conductance),
+/// and a nominal equal to the min or max of a row that prints no typ (unless
+/// another row prints it as a typ).
+///
+/// The unit check only looks below 1e-3, where a copied current or capacitance
+/// lives and a round volt or ohm value cannot collide.
+#[must_use]
 pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     let rows = cited_rows(entry);
     let (mut out, mut derived) = (Vec::new(), derivations(entry));
@@ -388,7 +403,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
         };
         if v == 0.0
             || unit.contains('/')
-            || crate::units::si_unit(unit).is_none_or(|(s, _)| s != 1.0)
+            || crate::units::si_unit(unit).is_none_or(|(s, _)| s.to_bits() != 1.0_f64.to_bits())
         {
             continue;
         }
@@ -558,7 +573,7 @@ pub(crate) fn quantity(text: &str, sym: &str, unit: &str) -> Option<f64> {
     let re =
         regex::Regex::new(&format!(r"\b{sym}\s*=\s*([-+]?\d*\.?\d+)\s*([a-zA-ZµμΩ]*)")).ok()?;
     let c = re.captures(text)?;
-    let scale = crate::units::scale_between(&c[2], unit).or(c[2].is_empty().then_some(1.0));
+    let scale = crate::units::scale_between(&c[2], unit).or_else(|| c[2].is_empty().then_some(1.0));
     Some(c[1].parse::<f64>().ok()?.abs() * scale?)
 }
 
@@ -583,7 +598,7 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
             .filter_map(|r| {
                 let (col, x) = match (r.typ, r.min, r.max) {
                     (Some(t), ..) => ("typ", t),
-                    (_, Some(a), Some(b)) => ("midpoint", (a + b) / 2.0),
+                    (_, Some(a), Some(b)) => ("midpoint", f64::midpoint(a, b)),
                     (_, Some(a), _) => ("min", a),
                     (_, _, b) => ("max", b?),
                 };
@@ -598,9 +613,10 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
     let zero_bias = |name, syms, bias, (vj, m): (f64, f64)| {
         let at = |(c, how, r): (f64, String, &Characteristic)| {
             let v = quantity(&r.conditions, bias, "V");
-            let at = v.map_or("no bias printed, read as zero bias".into(), |v| {
-                format!("taken from {v} V reverse bias by C·(1 + V/{vj})^{m}")
-            });
+            let at = v.map_or_else(
+                || "no bias printed, read as zero bias".into(),
+                |v| format!("taken from {v} V reverse bias by C·(1 + V/{vj})^{m}"),
+            );
             let c0 = c * (1.0 + v.unwrap_or(0.0) / vj).powf(m);
             (v.unwrap_or(f64::INFINITY), c0, format!("{how}, {at}"))
         };
@@ -661,7 +677,7 @@ fn diode_law(entry: &ModelEntry) -> Option<[f64; 3]> {
 
 /// VF of `[is, n, rs]` at `i` amperes and the solver's nominal 27 °C.
 fn diode_vf([is, n, rs]: [f64; 3], i: f64) -> f64 {
-    n * hauksbee_ir::thermal_voltage_c(27.0) * (i / is).ln_1p() + i * rs
+    (n * hauksbee_ir::thermal_voltage_c(27.0)).mul_add((i / is).ln_1p(), i * rs)
 }
 
 fn worst_miss(law: [f64; 3], points: &[(f64, f64)]) -> (f64, f64, f64) {
@@ -732,9 +748,10 @@ pub(crate) fn diode_refit_params(entry: &ModelEntry) -> Vec<Derived> {
     let (Some(fit), Some(points)) = (diode_refit(entry), vf_points(cited_rows(entry))) else {
         return Vec::new();
     };
-    let off = diode_law(entry).map_or("absent".into(), |law| {
-        format!("{:.0}% off", 100.0 * worst_miss(law, &points).0)
-    });
+    let off = diode_law(entry).map_or_else(
+        || "absent".into(),
+        |law| format!("{:.0}% off", 100.0 * worst_miss(law, &points).0),
+    );
     let count = points.len();
     let how =
         format!("fitted: is/n/rs to the cited VF rows ({count} points), the card's law was {off}");
@@ -757,7 +774,7 @@ pub(crate) fn needless_abstention(
     required: &[&str],
     may_abstain: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    use ComponentKind::*;
+    use ComponentKind::{BjtNpn, BjtPnp, Comparator, Diode, Nmos, Opamp, Pmos};
     let rows = cited_rows(entry);
     let fits = entry.kind == Diode && vf_points(rows).and_then(|p| diode_fit(&p)).is_some();
     // Each need is `|`-separated alternatives `SYMBOLS@bias:unit`, the bias a
@@ -821,19 +838,19 @@ impl UnknownParam {
     /// The warning line, phrased as a suspicion rather than a verdict: the lint
     /// cannot tell a typo from an extension, and saying "unused" would be a
     /// claim about the future.
+    #[must_use]
     pub fn message(&self) -> String {
-        match &self.suggestion {
-            Some(s) => format!(
-                "param '{}' is not read for this kind or output form; did you mean '{}'? \
-                 (unread params are silently ignored, so the default applies)",
-                self.name, s
-            ),
-            None => format!(
-                "param '{}' is not read for this kind or output form, so it is silently ignored; \
-                 remove it or check the spelling",
-                self.name
-            ),
-        }
+        let name = &self.name;
+        let Some(s) = &self.suggestion else {
+            return format!(
+                "param '{name}' is not read for this kind or output form, so it is silently \
+                 ignored; remove it or check the spelling"
+            );
+        };
+        format!(
+            "param '{name}' is not read for this kind or output form; did you mean '{s}'? \
+             (unread params are silently ignored, so the default applies)"
+        )
     }
 }
 
@@ -841,6 +858,7 @@ impl UnknownParam {
 ///
 /// Empty for a clean entry. See the module docs for the three ways a name
 /// counts as known.
+#[must_use]
 pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
     let vocab = known_param_names(entry.kind);
     let referenced = behavioral_identifiers(entry);

@@ -1,6 +1,6 @@
 //! `hauksbee-models`, PCB component model library.
 //!
-//! Given a component identified by lib_id, value, footprint, or part-number,
+//! Given a component identified by `lib_id`, value, footprint, or part-number,
 //! this crate resolves a simulation model definition. Physics arrives by
 //! several authoring routes (built-in DB, installed model packs, LLM
 //! datasheet extraction, hand-written behavioural models, user SPICE) that
@@ -62,7 +62,6 @@ pub mod variants;
 
 use std::path::{Path, PathBuf};
 
-use once_cell::sync::Lazy;
 use regex::Error as RegexError;
 use thiserror::Error;
 
@@ -174,8 +173,9 @@ fn holds_toml(dir: &Path) -> bool {
 
 // ── Source layers ─────────────────────────────────────────────────────────────
 
-/// The explicit resolution priority layer an entry was loaded from. A
-/// higher-priority layer beats a lower one *regardless of specificity*;
+/// The explicit resolution priority layer an entry was loaded from.
+///
+/// A higher-priority layer beats a lower one *regardless of specificity*;
 /// specificity only breaks ties within a layer, so user-over-builtin holds by
 /// construction rather than by an entry happening to score more specifically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -201,36 +201,37 @@ pub enum SourceLayer {
 impl SourceLayer {
     /// Layer priority integer: builtin=0, pack=10, user dir=20,
     /// user config dir=25, `--models-dir`=30, user SPICE=40.
-    pub fn priority(self) -> u32 {
+    #[must_use]
+    pub const fn priority(self) -> u32 {
         match self {
-            SourceLayer::Builtin => 0,
-            SourceLayer::Pack => 10,
-            SourceLayer::UserDir => 20,
-            SourceLayer::UserConfigDir => 25,
-            SourceLayer::ModelsDirFlag => 30,
-            SourceLayer::Spice => 40,
+            Self::Builtin => 0,
+            Self::Pack => 10,
+            Self::UserDir => 20,
+            Self::UserConfigDir => 25,
+            Self::ModelsDirFlag => 30,
+            Self::Spice => 40,
         }
     }
 
     /// Short name for reports.
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            SourceLayer::Builtin => "builtin",
-            SourceLayer::Pack => "pack",
-            SourceLayer::UserDir => "user-dir",
-            SourceLayer::UserConfigDir => "user-config-dir",
-            SourceLayer::ModelsDirFlag => "models-dir",
-            SourceLayer::Spice => "spice",
+            Self::Builtin => "builtin",
+            Self::Pack => "pack",
+            Self::UserDir => "user-dir",
+            Self::UserConfigDir => "user-config-dir",
+            Self::ModelsDirFlag => "models-dir",
+            Self::Spice => "spice",
         }
     }
 
     /// The coarse source string [`Resolution::source`] keeps for existing
     /// consumers: every user layer collapses to the historical `"user"`.
-    pub fn coarse_name(self) -> &'static str {
+    #[must_use]
+    pub const fn coarse_name(self) -> &'static str {
         match self {
-            SourceLayer::UserDir | SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => {
-                "user"
-            }
+            Self::UserDir | Self::UserConfigDir | Self::ModelsDirFlag => "user",
             other => other.name(),
         }
     }
@@ -247,9 +248,9 @@ impl std::fmt::Display for SourceLayer {
 /// How confident the library is in a resolved model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
-    /// An exact, unambiguous match (e.g. exact lib_id + value + MPN).
+    /// An exact, unambiguous match (e.g. exact `lib_id` + value + MPN).
     Exact,
-    /// Matched by family rules (e.g. value regex catches the whole BC84x family).
+    /// Matched by family rules (e.g. value regex catches the whole `BC84x` family).
     Family,
     /// Heuristic / partial match (e.g. only footprint matched).
     Guessed,
@@ -260,10 +261,10 @@ pub enum Confidence {
 impl std::fmt::Display for Confidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Confidence::Exact => "exact",
-            Confidence::Family => "family",
-            Confidence::Guessed => "guessed",
-            Confidence::Unresolved => "unresolved",
+            Self::Exact => "exact",
+            Self::Family => "family",
+            Self::Guessed => "guessed",
+            Self::Unresolved => "unresolved",
         })
     }
 }
@@ -301,8 +302,9 @@ pub struct Resolution {
 }
 
 impl Resolution {
-    pub fn unresolved(query: ComponentQuery) -> Self {
-        Resolution {
+    #[must_use]
+    pub const fn unresolved(query: ComponentQuery) -> Self {
+        Self {
             model: None,
             confidence: Confidence::Unresolved,
             query,
@@ -327,7 +329,7 @@ impl std::fmt::Display for Resolution {
                 "{} ({}) => {} '{}' [{}]",
                 ref_str, val_str, m.id, m.description, self.confidence
             ),
-            None => write!(f, "{} ({}) => UNRESOLVED", ref_str, val_str),
+            None => write!(f, "{ref_str} ({val_str}) => UNRESOLVED"),
         }
     }
 }
@@ -367,8 +369,9 @@ use matcher::CompiledEntry;
 
 impl ModelLibrary {
     /// Create an empty library with no entries.
-    pub fn empty() -> Self {
-        ModelLibrary {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
             entries: Vec::new(),
             spice: Vec::new(),
             pin_rules: PinRuleTable::empty(),
@@ -378,9 +381,13 @@ impl ModelLibrary {
 
     /// Create a library loaded with all built-in database entries.
     ///
-    /// Panics if the embedded TOML is malformed (compile-time guarantee).
+    /// # Panics
+    ///
+    /// Panics when a built-in model database, `pin_rules.toml` or `unmodelled.toml`
+    /// fails to load, which the test suite rules out before release.
+    #[must_use]
     pub fn builtin() -> Self {
-        let mut lib = ModelLibrary::empty();
+        let mut lib = Self::empty();
         for (name, toml_src) in BUILTIN_TOML_FILES {
             lib.load_toml_str(toml_src, name, SourceLayer::Builtin)
                 .unwrap_or_else(|e| panic!("built-in database '{name}' failed to load: {e}"));
@@ -397,7 +404,8 @@ impl ModelLibrary {
     /// The pin-role inference table (built-in rules plus any user
     /// `pin_rules.toml`). Consulted by the binder when a pad lacks an explicit
     /// pin-function role.
-    pub fn pin_rules(&self) -> &PinRuleTable {
+    #[must_use]
+    pub const fn pin_rules(&self) -> &PinRuleTable {
         &self.pin_rules
     }
 
@@ -406,13 +414,16 @@ impl ModelLibrary {
     /// Consulted by the binder ONLY when nothing resolved, and only to replace the
     /// disclosure's two generic sentences with specific ones. It cannot make a part
     /// bind; see `unmodelled.rs` for why that containment is the point.
-    pub fn unmodelled(&self) -> &UnmodelledTable {
+    #[must_use]
+    pub const fn unmodelled(&self) -> &UnmodelledTable {
         &self.unmodelled
     }
 
     /// Lazily-initialised shared built-in library.
-    pub fn builtin_shared() -> &'static ModelLibrary {
-        static LIB: Lazy<ModelLibrary> = Lazy::new(ModelLibrary::builtin);
+    #[must_use]
+    pub fn builtin_shared() -> &'static Self {
+        static LIB: std::sync::LazyLock<ModelLibrary> =
+            std::sync::LazyLock::new(ModelLibrary::builtin);
         &LIB
     }
 
@@ -427,8 +438,8 @@ impl ModelLibrary {
     /// A custom behavioural part dropped into one of these loads without
     /// recompiling. Directory and pack load errors are warned to stderr, not
     /// fatal, so a single malformed user file never breaks the whole library.
-    pub fn builtin_with_user_dirs(extra_dirs: &[&Path]) -> ModelLibrary {
-        let mut lib = ModelLibrary::builtin();
+    pub fn builtin_with_user_dirs(extra_dirs: &[&Path]) -> Self {
+        let mut lib = Self::builtin();
         if let Some(store) = PackStore::default_location() {
             for w in lib.load_packs(&store) {
                 eprintln!("[models] packs: {w}");
@@ -564,6 +575,11 @@ impl ModelLibrary {
     ///
     /// Every `.toml` file in `dir` is parsed and validated. Files that fail
     /// are reported but do not prevent other files from loading.
+    ///
+    /// # Errors
+    ///
+    /// Returns every per-file [`ModelError`] from [`Self::load_user_dir`] when any
+    /// file failed; the entries that did load are dropped with `self`.
     pub fn with_user_dir(mut self, dir: &Path) -> Result<Self, Vec<ModelError>> {
         match self.load_user_dir(dir) {
             errs if errs.is_empty() => Ok(self),
@@ -623,27 +639,30 @@ impl ModelLibrary {
             // and a models file that merely MENTIONS the token in prose would
             // otherwise be routed here and silently lose every model in it.
             let table = if name == "pin_rules" || src.contains("[[pin_rules]]") {
-                Some(self.pin_rules.load_toml_str(&src, true))
+                self.pin_rules.load_toml_str(&src, true)
             } else if name == "unmodelled"
                 || (src.contains("[[unmodelled]]") && !src.contains("[[models]]"))
             {
-                Some(self.unmodelled.load_toml_str(&src, true))
+                self.unmodelled.load_toml_str(&src, true)
             } else {
-                None
+                let source_name = path.display().to_string();
+                errors.extend(self.load_toml_str(&src, &source_name, layer).err());
+                continue;
             };
-            let result = match table {
-                Some(r) => r.map(drop).map_err(|message| ModelError::PinRules {
-                    file: name,
-                    message,
-                }),
-                None => self.load_toml_str(&src, &path.display().to_string(), layer),
+            let rules_error = |message| ModelError::PinRules {
+                file: name,
+                message,
             };
-            errors.extend(result.err());
+            errors.extend(table.err().map(rules_error));
         }
         errors
     }
 
     /// Add all `.model` and `.subckt` cards from a SPICE file.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be read.
     pub fn add_spice_file(&mut self, path: &Path) -> anyhow::Result<usize> {
         let cards = spice_input::parse_spice_file(path)?;
         let n = cards.len();
@@ -663,6 +682,11 @@ impl ModelLibrary {
     /// needs. A file with no `.model` or `.subckt` card in it is one of them:
     /// the user named the file expecting the parts in it to bind, and loading
     /// zero cards quietly leaves those parts unresolved with nothing said.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be read, or when it holds no `.model` or `.subckt`
+    /// card; both messages say what to point `--spice-models` at.
     pub fn load_spice_models(&mut self, path: &Path) -> anyhow::Result<usize> {
         let added = self.add_spice_file(path).map_err(|e| {
             anyhow::anyhow!(
@@ -698,16 +722,16 @@ impl ModelLibrary {
     /// are layer 40, the highest, and match by exact card name, so they are
     /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
+        use std::cmp::Reverse;
         // Layer 40: SPICE cards, match by card name against value and MPN.
         if let Some(card) = self.find_spice_match(q) {
-            return self.resolution_from_spice(card, q.clone());
+            return Self::resolution_from_spice(card, q.clone());
         }
 
         // Layers 0..30: one scan, best (layer priority, specificity,
         // regex constrainedness, smallest id) wins. The last two keys make
         // ties deterministic and independent of load order; the entries only
         // the id separates are reported as `tied`.
-        use std::cmp::Reverse;
         let rank = |le: &LayeredEntry| {
             let score = le.compiled.specificity_score(q);
             let (tier, layer) = (le.provenance.tier().priority(), le.layer.priority());
@@ -726,12 +750,13 @@ impl ModelLibrary {
             siblings.sort_by(|a, b| a.compiled.entry.id.cmp(&b.compiled.entry.id));
             let entries: Vec<&ModelEntry> = siblings.iter().map(|o| &o.compiled.entry).collect();
             let selection = family.map(|family| variants::select(family, &entries, q));
-            let chosen = match selection.as_ref().map(variants::Selection::bound) {
-                None => Some(le),
-                Some(bound) => siblings
+            let bound = selection.as_ref().map(variants::Selection::bound);
+            let named = |b| {
+                siblings
                     .into_iter()
-                    .find(|o| Some(o.compiled.entry.id.as_str()) == bound),
+                    .find(|o| Some(&*o.compiled.entry.id) == b)
             };
+            let chosen = bound.map_or(Some(le), named);
             let Some(le) = chosen else {
                 let open = Resolution::unresolved(q.clone());
                 return Resolution { selection, ..open };
@@ -761,6 +786,7 @@ impl ModelLibrary {
     }
 
     /// Resolve a batch of queries and return a resolution report table.
+    #[must_use]
     pub fn report(&self, queries: &[ComponentQuery]) -> ResolutionReport {
         let resolutions: Vec<Resolution> = queries.iter().map(|q| self.resolve(q)).collect();
         ResolutionReport { resolutions }
@@ -798,7 +824,7 @@ impl ModelLibrary {
             let id = entry.id.clone();
             let invalid = |messages: String| ModelError::ValidationFailed {
                 id: id.clone(),
-                messages: format!("{}: {messages}", source_name),
+                messages: format!("{source_name}: {messages}"),
             };
             // An all-None `[match]` block (an omitted section, or a typo'd key
             // serde silently drops) matches EVERY component at specificity 0;
@@ -883,7 +909,7 @@ impl ModelLibrary {
         })
     }
 
-    fn resolution_from_spice(&self, card: &SpiceCard, query: ComponentQuery) -> Resolution {
+    fn resolution_from_spice(card: &SpiceCard, query: ComponentQuery) -> Resolution {
         // A `.subckt` is a multi-terminal macro, not a single-device kind, and
         // an unrecognized `.model` type must not be silently claimed as a
         // passive with Exact confidence (that shadows the real part). Both
@@ -939,9 +965,21 @@ impl ModelLibrary {
 }
 
 /// Provenance for a model with an optional `[models.source]` or
-/// `[sensor.source]`. A pack-manifest `pack_tier` is authoritative: an entry in
-/// a datasheet-derived pack cannot promote itself to a vendor tier. Omitted
+/// `[sensor.source]`.
+///
+/// A pack-manifest `pack_tier` is authoritative: an entry in a
+/// datasheet-derived pack cannot promote itself to a vendor tier. Omitted
 /// fields take the defaults, and an omitted uncertainty is an explicit UNKNOWN.
+///
+/// # Errors
+///
+/// Fails when the resulting [`ModelSource`] is malformed, for example an
+/// uncertainty record the source rules reject; the error is its message.
+///
+/// # Panics
+///
+/// Never in practice: the fallback UNKNOWN uncertainty is built from a fixed,
+/// valid reason.
 pub fn model_source(
     declared: Option<&schema::ModelSourceSpec>,
     pack_tier: Option<ModelSourceTier>,
@@ -972,7 +1010,7 @@ pub fn model_source(
     }
     ModelSource::new(
         pack_tier
-            .or(declared.map(|s| s.tier))
+            .or_else(|| declared.map(|s| s.tier))
             .unwrap_or(default_tier),
         layer,
         origin,
@@ -982,7 +1020,7 @@ pub fn model_source(
     .map_err(|error| error.to_string())
 }
 
-fn model_layer(layer: SourceLayer) -> ModelLayer {
+const fn model_layer(layer: SourceLayer) -> ModelLayer {
     match layer {
         SourceLayer::Builtin => ModelLayer::Builtin,
         SourceLayer::Pack => ModelLayer::Pack,
@@ -993,19 +1031,20 @@ fn model_layer(layer: SourceLayer) -> ModelLayer {
     }
 }
 
-fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
+const fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
     match layer {
         SourceLayer::Builtin => ModelSourceTier::CuratedLibrary,
         SourceLayer::Pack => ModelSourceTier::CuratedPack,
         SourceLayer::UserDir => ModelSourceTier::DatasheetDerived,
-        SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => ModelSourceTier::UserModel,
-        // A loose card is user supplied. Vendor provenance is established
+        // A loose SPICE card is user supplied. Vendor provenance is established
         // only by a licensed vendor pack manifest.
-        SourceLayer::Spice => ModelSourceTier::UserModel,
+        SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag | SourceLayer::Spice => {
+            ModelSourceTier::UserModel
+        }
     }
 }
 
-fn default_validation(layer: SourceLayer) -> ModelValidation {
+const fn default_validation(layer: SourceLayer) -> ModelValidation {
     match layer {
         SourceLayer::Builtin | SourceLayer::Pack | SourceLayer::UserDir => {
             ModelValidation::PhysicalBoundsOnly
@@ -1017,7 +1056,7 @@ fn default_validation(layer: SourceLayer) -> ModelValidation {
 }
 
 /// Convert a specificity score to a confidence level.
-fn score_to_confidence(score: u32) -> Confidence {
+const fn score_to_confidence(score: u32) -> Confidence {
     match score {
         50.. => Confidence::Exact,
         20.. => Confidence::Family,
@@ -1052,15 +1091,17 @@ pub struct ResolutionReport {
 impl ResolutionReport {
     /// Count resolutions by confidence level: `(exact, family, guessed,
     /// unresolved)`.
+    #[must_use]
     pub fn counts(&self) -> (usize, usize, usize, usize) {
         let mut n = [0usize; 4];
         for r in &self.resolutions {
             n[r.confidence as usize] += 1;
         }
-        (n[0], n[1], n[2], n[3])
+        n.into()
     }
 
     /// All unresolved queries.
+    #[must_use]
     pub fn unresolved(&self) -> Vec<&Resolution> {
         self.resolutions
             .iter()
@@ -1143,7 +1184,7 @@ mod tests {
             kind,
             raw: String::new(),
             ports: Vec::new(),
-            params: Default::default(),
+            params: std::collections::BTreeMap::new(),
             model_type: model_type.map(String::from),
         }
     }
@@ -1291,7 +1332,7 @@ mod tests {
     fn spice_cards_override_builtin_but_subckts_and_unknown_types_do_not_masquerade() {
         let mut l = lib();
         let mut bc847 = card("BC847", spice_input::SpiceCardKind::Model, Some("NPN"));
-        bc847.params = [("IS".to_string(), 2e-14_f64)].into_iter().collect();
+        bc847.params = std::iter::once(("IS".to_string(), 2e-14_f64)).collect();
         l.add_spice_card(bc847);
         let res = by_value(&l, "BC847");
         assert_eq!(res.source.as_deref(), Some("spice"));
@@ -1493,7 +1534,7 @@ mod tests {
         );
     }
 
-    /// Resolution against the pic_programmer board's BOM.
+    /// Resolution against the `pic_programmer` board's BOM.
     #[test]
     fn pic_programmer_bom() {
         let l = lib();

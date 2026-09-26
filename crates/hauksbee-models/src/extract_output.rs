@@ -1,7 +1,9 @@
-//! What an extraction leaves on disk: the draft stamped with its provenance
-//! (the `datasheet-derived` tier and the PDF's sha256) and a normalised,
-//! separator-insensitive match rule, published atomically without clobbering a
-//! model already there, which may hold a user's hand corrections.
+//! What an extraction leaves on disk.
+//!
+//! That is the draft stamped with its provenance (the `datasheet-derived` tier
+//! and the PDF's sha256) and a normalised, separator-insensitive match rule,
+//! published atomically without clobbering a model already there, which may
+//! hold a user's hand corrections.
 
 use std::io::Write;
 use std::path::Path;
@@ -12,10 +14,18 @@ use sha2::{Digest, Sha256};
 use toml_edit::{value, ArrayOfTables, Item, Table, Value};
 
 /// Write `text` to `path` through a synced temp file in the same directory, so
-/// a library scan never sees half a file. An existing file is replaced only
-/// when `overwrite`; otherwise the persist fails with `AlreadyExists`.
+/// a library scan never sees half a file.
+///
+/// An existing file is replaced only when `overwrite`; otherwise the persist
+/// fails with `AlreadyExists`.
+///
+/// # Errors
+///
+/// Fails when the temp file cannot be created, written or synced beside `path`,
+/// or when the persist fails, including `AlreadyExists` without `overwrite`.
 pub fn publish(path: &Path, text: &str, overwrite: bool) -> std::io::Result<()> {
-    let mut draft = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+    let mut draft =
+        tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
     draft.write_all(text.as_bytes())?;
     draft.as_file().sync_all()?;
     let persisted = if overwrite {
@@ -26,9 +36,12 @@ pub fn publish(path: &Path, text: &str, overwrite: bool) -> std::io::Result<()> 
     persisted.map(drop).map_err(|e| e.error)
 }
 
-/// The exact, finite set of strings an anchored pattern matches (compiled
-/// case-insensitive, as the matcher compiles it), or `None` when it admits a
-/// class wider than a case fold or separator set, a repeat, or no anchors.
+/// The exact, finite set of strings an anchored pattern matches.
+///
+/// The pattern is compiled case-insensitive, as the matcher compiles it. `None`
+/// when it admits a class wider than a case fold or separator set, a repeat, or
+/// no anchors.
+#[must_use]
 pub fn literal_set(pattern: &str) -> Option<Vec<String>> {
     let hir = regex_syntax::parse(&format!("(?i){pattern}")).ok()?;
     let props = hir.properties();
@@ -50,23 +63,32 @@ fn fold(name: &str) -> String {
 /// The match rule for a part and its ordering codes: case- and
 /// separator-insensitive (`[-_ ]?` where a separator is printed), anchored, and
 /// nothing else, so a sibling with other digits never matches.
+#[must_use]
 pub fn part_rule(part: &str, codes: &[&str]) -> String {
     let arm = |name: &&str| {
         let tokens = name.split(['-', '_', ' ']).filter(|t| !t.is_empty());
         let escaped: Vec<_> = tokens.map(|t| regex::escape(&t.to_uppercase())).collect();
         escaped.join("[-_ ]?")
     };
-    let mut arms: Vec<String> = [part].iter().chain(codes).map(arm).collect();
+    let mut arms: Vec<String> = std::iter::once(&part).chain(codes).map(arm).collect();
     arms.retain(|a| !a.is_empty());
     format!("(?i)^(?:{})$", arms.join("|"))
 }
 
-/// Stamp a validated `[[models]]` draft with what the tool knows for certain:
-/// the machine-draft tier, a reference pinning the exact PDF bytes, and, where
-/// the match rule is the literal part name, the normalised rule over the part
-/// and the ordering codes the draft lists. (A `[sensor]` spec has no source.)
+/// Stamp a validated `[[models]]` draft with what the tool knows for certain.
+///
+/// That is the machine-draft tier, a reference pinning the exact PDF bytes,
+/// and, where the match rule is the literal part name, the normalised rule over
+/// the part and the ordering codes the draft lists. (A `[sensor]` spec has no
+/// source.)
+///
+/// # Errors
+///
+/// Fails when the PDF cannot be read or `raw` is not valid TOML.
 pub fn finalise(raw: &str, part: &str, pdf: &Path) -> anyhow::Result<String> {
     let sha = Sha256::digest(std::fs::read(pdf)?);
+    // 32 bytes once per extraction: a string per byte costs nothing here.
+    #[allow(clippy::format_collect)]
     let sha: String = sha.iter().map(|b| format!("{b:02x}")).collect();
     let title = pdf.file_name().unwrap_or_default().to_string_lossy();
     let mut doc: toml_edit::DocumentMut = raw.parse()?;

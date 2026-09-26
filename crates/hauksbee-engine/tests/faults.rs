@@ -292,7 +292,7 @@ fn overloaded_nmos_overcurrent_faults() {
         "reported current {:.3} A is the solved channel current",
         f.value
     );
-    assert_eq!(f.limit, 1.0);
+    assert_eq!(f.limit.to_bits(), 1.0_f64.to_bits());
 
     // The conducting channel dissipates Vds·Id ≈ 4 W, so the power-gated
     // thermal path must be live too: the monitor publishes a junction

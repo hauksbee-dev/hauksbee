@@ -40,7 +40,7 @@ fn one_volt_across(name: &str, ohms: f64) -> (Circuit, DeviceId) {
 fn hand_checked_half_watt_sot23_reaches_150c() {
     // theta_JA from the package class, independent of the monitor.
     let theta = theta_ja_from_footprint("Package_TO_SOT_SMD:SOT-23", ComponentKind::BjtNpn);
-    assert_eq!(theta, 250.0, "SOT-23 theta_JA");
+    assert_eq!(theta.to_bits(), 250.0_f64.to_bits(), "SOT-23 theta_JA");
     assert!((junction_temp_c(25.0, 0.5, theta) - 150.0).abs() < 1e-9);
 
     // Now the same number through the monitor. A 1 V source across a 2 Ohm

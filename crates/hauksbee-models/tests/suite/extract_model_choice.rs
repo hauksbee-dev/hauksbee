@@ -119,7 +119,7 @@ fn an_empty_setting_is_not_a_choice() {
 
     let a = args()
         .backend(Some(Backend::Codex))
-        .model(Some("".into()))
+        .model(Some(String::new()))
         .effort(Some(" ".into()));
     let r = resolve_with(&cfg, &FakeHost::new(&[], &[]), &a);
     assert_eq!(
@@ -173,5 +173,5 @@ fn a_saved_file_is_read_back_into_the_same_resolution() {
     let r = resolve_with(&loaded.config, &FakeHost::new(&[], &[]), &args());
     assert_eq!(r.backend, Backend::ClaudeCode);
     assert_eq!((r.model(), r.effort()), ("claude-sonnet-5", Some("high")));
-    assert_eq!(r.summary(), "Claude Code (claude-sonnet-5, high effort)");
+    assert!(r.summary().contains("-sonnet-5, high effort; file tools"));
 }

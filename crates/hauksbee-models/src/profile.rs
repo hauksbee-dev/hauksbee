@@ -64,7 +64,7 @@ pub struct LoadProfile {
 }
 
 /// Match rule for auto-binding a profile to a part.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProfileMatch {
     #[serde(default)]
     pub value_re: Option<String>,
@@ -83,20 +83,28 @@ const EMBEDDED_PROFILES: &str = include_str!("../db/load_profiles.toml");
 
 impl LoadProfile {
     /// All built-in profiles parsed from the embedded TOML.
-    pub fn builtin() -> Vec<LoadProfile> {
+    ///
+    /// # Panics
+    ///
+    /// Panics when the embedded `load_profiles.toml` fails to parse, which the test
+    /// suite rules out before release.
+    #[must_use]
+    pub fn builtin() -> Vec<Self> {
         let file: ProfileFile = toml::from_str(EMBEDDED_PROFILES)
             .unwrap_or_else(|e| panic!("built-in load_profiles.toml failed to parse: {e}"));
         file.profiles
     }
 
     /// Look up a built-in profile by id.
-    pub fn by_id(id: &str) -> Option<LoadProfile> {
+    #[must_use]
+    pub fn by_id(id: &str) -> Option<Self> {
         Self::builtin().into_iter().find(|p| p.id == id)
     }
 
     /// The profile's baseline current (the first segment's level, or 0).
+    #[must_use]
     pub fn baseline_a(&self) -> f64 {
-        self.segments.first().map(|s| s.level_a).unwrap_or(0.0)
+        self.segments.first().map_or(0.0, |s| s.level_a)
     }
 
     /// The current (A) this profile draws at time `t` (seconds), under fuzz
@@ -109,6 +117,7 @@ impl LoadProfile {
     /// (ramping then holding `level_a`), and in the remainder it sits at
     /// `idle_a`. The final non-periodic segment with `duration_s <= 0` holds its
     /// level to the end of the window.
+    #[must_use]
     pub fn current_at(&self, t: f64, seed: u64) -> f64 {
         // Before the start the part's activity has not begun: it draws nothing,
         // so the DC operating point is the pre-stimulus board. The first segment
@@ -258,7 +267,7 @@ fn ramped(from: f64, to: f64, rise: f64, local: f64) -> f64 {
     if rise <= 0.0 || local >= rise {
         return to;
     }
-    from + (to - from) * (local / rise)
+    (to - from).mul_add(local / rise, from)
 }
 
 /// One period of a burst train evaluated at phase `phase` in `[0, period)`:
@@ -277,17 +286,19 @@ fn ramp_hold(from: f64, level: f64, idle: f64, rise: f64, duration: f64, phase: 
 
 /// Deterministic jitter in `[-amp, amp]` from `(seed, index)` (splitmix64).
 /// Zero amplitude yields exactly zero so default profiles are jitter-free.
+// Mapping 64 hash bits onto [-1, 1] drops the low bits by design.
+#[allow(clippy::cast_precision_loss)]
 fn jitter(seed: u64, index: usize, amp: f64) -> f64 {
     if amp == 0.0 {
         return 0.0;
     }
     let mut x = seed
-        .wrapping_mul(0x9E3779B97F4A7C15)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(index as u64);
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^= x >> 31;
-    let u = (x as f64 / u64::MAX as f64) * 2.0 - 1.0;
+    let u = (x as f64 / u64::MAX as f64).mul_add(2.0, -1.0);
     u * amp
 }
 
@@ -335,23 +346,23 @@ mod tests {
             (ramp - 0.020).abs() < 1e-6,
             "baseline ramps in from zero: {ramp}"
         );
-        assert_eq!(p.current_at(0.0, 0), 0.0, "nothing drawn before the start");
+        assert_eq!(
+            p.current_at(0.0, 0).to_bits(),
+            0,
+            "nothing drawn before the start"
+        );
 
         // Find the max over the first full period.
-        let mut peak = 0.0f64;
-        let t0 = 0.001;
-        let mut t = t0;
-        while t < t0 + 0.100 {
-            peak = peak.max(p.current_at(t, 0));
-            t += 0.0002;
-        }
+        let peak = (0..=500)
+            .map(|k| p.current_at(f64::from(k).mul_add(0.0002, 0.001), 0))
+            .fold(0.0, f64::max);
         assert!(
             (peak - 0.240).abs() < 1e-6,
             "burst peak {peak} should hit 240 mA"
         );
 
         // Late in the period (after the 10 ms burst) it idles at 40 mA.
-        let idle = p.current_at(t0 + 0.050, 0);
+        let idle = p.current_at(0.051, 0);
         assert!((idle - 0.040).abs() < 1e-6, "between-burst idle {idle}");
     }
 
@@ -421,12 +432,15 @@ mod tests {
             segments: vec![seg],
         };
         // Same seed => identical waveform; different seed => may differ.
-        assert_eq!(p.current_at(0.05, 7), p.current_at(0.05, 7));
+        assert_eq!(
+            p.current_at(0.05, 7).to_bits(),
+            p.current_at(0.05, 7).to_bits()
+        );
         let s0 = (0..200)
-            .map(|k| p.current_at(k as f64 * 0.0005, 0))
+            .map(|k| p.current_at(f64::from(k) * 0.0005, 0))
             .sum::<f64>();
         let s1 = (0..200)
-            .map(|k| p.current_at(k as f64 * 0.0005, 1))
+            .map(|k| p.current_at(f64::from(k) * 0.0005, 1))
             .sum::<f64>();
         assert!((s0 - s1).abs() > 0.0, "jitter should make seeds differ");
     }
@@ -449,17 +463,17 @@ mod tests {
             match_rule: ProfileMatch::default(),
             segments: vec![seg(2.0, 25e-9, 10e-6, 80e-6)],
         };
-        assert_eq!(p.current_at(0.0, 0), 0.0);
+        assert_eq!(p.current_at(0.0, 0).to_bits(), 0);
         assert!(
             (p.current_at(12.5e-9, 0) - 1.0).abs() < 1e-9,
             "half-way up the 25 ns rise"
         );
         // A burst ending on a chunk boundary up to rounding steps between
         // chunks: no sub-picosecond segment, and the chunk opens at idle.
-        let end = 3.0 * 80e-6 + 25e-9 + 10e-6;
+        let end = 3.0_f64.mul_add(80e-6, 25e-9) + 10e-6;
         for a in [end - 1e-18, end, end + 1e-18] {
             let pts = p.pwl_over(a, a + 1e-4, 0, 100).expect("few corners");
-            assert_eq!(pts[0].1, 0.0, "{a}: {pts:?}");
+            assert_eq!(pts[0].1.to_bits(), 0, "{a}: {pts:?}");
             let gaps_ok = pts.windows(2).all(|w| w[1].0 - w[0].0 > 1e-13);
             assert!(gaps_ok, "{a}: {pts:?}");
             let before = p.pwl_over(a - 1e-4, a, 0, 100).expect("few corners");

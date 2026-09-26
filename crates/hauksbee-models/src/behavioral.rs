@@ -83,6 +83,7 @@ pub struct Behavioral {
 
 impl Behavioral {
     /// True when the block carries nothing the runtime would stamp.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pins.is_empty()
             && self.fsm.is_none()
@@ -141,7 +142,7 @@ pub struct BehavioralPin {
     pub enable_active_high: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -269,13 +270,14 @@ pub enum Topology {
     BuckBoost,
 }
 
-/// An averaged (cycle-averaged) switching-converter block. The runtime realises
-/// it as an averaged current-mode regulation loop: a PI controller crossing
-/// over at [`Converter::loop_crossover_hz`] commands the current delivered
-/// into the output pin, bounded by the output- and input-current limits and,
-/// for a buck, by a switch node of at most `max_duty * vin`. Power is
-/// conserved through `efficiency`, so the input current the runtime draws on
-/// the input pin is `Vsw*Iout / (efficiency*Vin)`.
+/// An averaged (cycle-averaged) switching-converter block.
+///
+/// The runtime realises it as an averaged current-mode regulation loop: a PI
+/// controller crossing over at [`Converter::loop_crossover_hz`] commands the
+/// current delivered into the output pin, bounded by the output- and
+/// input-current limits and, for a buck, by a switch node of at most
+/// `max_duty * vin`. Power is conserved through `efficiency`, so the input
+/// current the runtime draws on the input pin is `Vsw*Iout / (efficiency*Vin)`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Converter {
     pub topology: Topology,
@@ -446,11 +448,13 @@ pub enum LawKind {
 
 /// An expression-defined law: a current or voltage computed each chunk from an
 /// `evalexpr` expression over the device's pin voltages, active state, and
-/// params. Sandboxed: only arithmetic, comparison, and `if`/`min`/`max`/`abs`
-/// builtins are available, no variables the runtime did not bind, no I/O.
+/// params.
+///
+/// Sandboxed: only arithmetic, comparison, and `if`/`min`/`max`/`abs` builtins
+/// are available, no variables the runtime did not bind, no I/O.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Law {
-    /// Diagnostic name (e.g. "balancer_leak").
+    /// Diagnostic name (e.g. "`balancer_leak`").
     pub name: String,
 
     pub kind: LawKind,
@@ -481,10 +485,28 @@ pub struct Law {
 
 // ── Validation ──────────────────────────────────────────────────────────────
 
-/// Validate a behavioural block for internal consistency. Returns a list of
-/// human-readable problems (empty = valid). Cheap structural checks only; the
-/// expression syntax is checked separately by the engine when it compiles the
-/// laws against a real pin set.
+/// Record a series-path or profiled-load name that is not an identifier, or
+/// that an earlier one of the same list already took.
+fn unique_identifier<'a>(
+    p: &mut Problems,
+    seen: &mut BTreeSet<&'a str>,
+    what: &str,
+    name: &'a str,
+) {
+    if !is_identifier(name) {
+        p.push(format!(
+            "{what}: name '{name}' must be a non-empty expression identifier"
+        ));
+    } else if !seen.insert(name) {
+        p.push(format!("{what}: duplicate name '{name}'"));
+    }
+}
+
+/// Validate a behavioural block for internal consistency.
+///
+/// Returns a list of human-readable problems (empty = valid). Cheap structural
+/// checks only; the expression syntax is checked separately by the engine when
+/// it compiles the laws against a real pin set.
 ///
 /// Every float here is stamped verbatim into the solve (pull / open-drain /
 /// drive targets as DC sources, resistances unfloored, dwells as
@@ -492,6 +514,9 @@ pub struct Law {
 /// each gate refuses NaN and the infinities as well as the wrong sign: a `nan`
 /// that "validated OK" poisons the whole MNA solve or panics a `clamp`, and a
 /// negative limit silently folds a regulated rail to 0 V for the whole run.
+#[must_use]
+// One flat walk, one rule per line, in the order the block's sections are declared.
+#[allow(clippy::too_many_lines)]
 pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut p = Problems::default();
 
@@ -533,26 +558,20 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             if let Err(e) = units::check_dimensions(&tr.guard, None) {
                 p.push(format!("fsm transition {i}: guard {e}"));
             }
-            for (name, dwell) in [
-                ("min_dwell_s", tr.min_dwell_s),
-                ("guard_dwell_s", tr.guard_dwell_s),
-            ] {
-                p.nonneg(format!("fsm transition {i}: {name}"), dwell);
-            }
+            p.nonneg(format!("fsm transition {i}: min_dwell_s"), tr.min_dwell_s);
+            p.nonneg(
+                format!("fsm transition {i}: guard_dwell_s"),
+                tr.guard_dwell_s,
+            );
         }
         for (st, pins) in &fsm.state_pins {
             p.require(states.contains(st.as_str()), || {
                 format!("fsm state_pins: unknown state '{st}'")
             });
             for (role, ov) in pins {
-                p.finite(
-                    format!("fsm state_pins '{st}.{role}': drive_volts"),
-                    ov.drive_volts,
-                );
-                p.positive(
-                    format!("fsm state_pins '{st}.{role}': drive_ohms"),
-                    ov.drive_ohms,
-                );
+                let at = format!("fsm state_pins '{st}.{role}'");
+                p.finite(format!("{at}: drive_volts"), ov.drive_volts);
+                p.positive(format!("{at}: drive_ohms"), ov.drive_ohms);
             }
         }
     }
@@ -560,14 +579,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut path_names = BTreeSet::new();
     for (i, path) in b.series_paths.iter().enumerate() {
         let what = format!("series_path {i}");
-        if !is_identifier(&path.name) {
-            p.push(format!(
-                "{what}: name '{}' must be a non-empty expression identifier",
-                path.name
-            ));
-        } else if !path_names.insert(path.name.as_str()) {
-            p.push(format!("{what}: duplicate name '{}'", path.name));
-        }
+        unique_identifier(&mut p, &mut path_names, &what, &path.name);
         p.require(
             !path.a.trim().is_empty() && !path.b.trim().is_empty() && path.a != path.b,
             || format!("{what}: a and b must be distinct non-empty pin roles"),
@@ -590,14 +602,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut load_names = BTreeSet::new();
     for (i, load) in b.profiled_loads.iter().enumerate() {
         let what = format!("profiled_load {i}");
-        if !is_identifier(&load.name) {
-            p.push(format!(
-                "{what}: name '{}' must be a non-empty expression identifier",
-                load.name
-            ));
-        } else if !load_names.insert(load.name.as_str()) {
-            p.push(format!("{what}: duplicate name '{}'", load.name));
-        }
+        unique_identifier(&mut p, &mut load_names, &what, &load.name);
         p.non_empty(format!("{what}: supply_pin"), &load.supply_pin);
         let bad_return = load
             .return_pin
@@ -654,29 +659,20 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         p.require(c.max_duty.is_none() || c.topology == Topology::Buck, || {
             "converter: max_duty is only modelled for a buck".to_string()
         });
-        for (name, lim) in [
-            ("iout_limit_a", c.iout_limit_a),
-            ("iin_limit_a", c.iin_limit_a),
-            ("switching_hz", c.switching_hz),
-            ("crossover_hz", c.crossover_hz),
-        ] {
-            p.positive(format!("converter: {name}"), lim);
-        }
-        let (fc, fsw) = (
-            c.loop_crossover_hz().0,
-            c.switching_hz.unwrap_or(f64::INFINITY),
-        );
+        p.positive("converter: iout_limit_a", c.iout_limit_a);
+        p.positive("converter: iin_limit_a", c.iin_limit_a);
+        p.positive("converter: switching_hz", c.switching_hz);
+        p.positive("converter: crossover_hz", c.crossover_hz);
+        let fc = c.loop_crossover_hz().0;
+        let fsw = c.switching_hz.unwrap_or(f64::INFINITY);
         p.require(fc < fsw / 2.0, || {
             format!("converter: crossover_hz {fc} must be below switching_hz/2")
         });
         if let Some(sp) = &c.iin_program {
-            p.require(
-                sp.rsense_ohms.is_some() == sp.rsense_refs.is_empty(),
-                || {
-                    "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs"
-                        .into()
-                },
-            );
+            let one_rsense = sp.rsense_ohms.is_some() == sp.rsense_refs.is_empty();
+            p.require(one_rsense, || {
+                "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs".into()
+            });
             p.require(sp.prog_ohms.is_some() != sp.prog_ref.is_some(), || {
                 "converter.iin_program: specify exactly one of prog_ohms or prog_ref".into()
             });
@@ -691,13 +687,12 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // The literal resistances are floored by the engine (`rsense.max(1e-6)`),
             // so a sign typo balloons the limit to ~50 kA; the reference constants
             // are divisors, so a zero/inf collapses it to 0 A. Both silently.
-            for (name, v) in [("rsense_ohms", sp.rsense_ohms), ("prog_ohms", sp.prog_ohms)] {
-                p.positive(format!("converter.iin_program: {name}"), v);
-            }
             for (name, v) in [
-                ("prog_ref_ohms", sp.prog_ref_ohms),
-                ("vprog_ref", sp.vprog_ref),
-                ("v_sense_full", sp.v_sense_full),
+                ("rsense_ohms", sp.rsense_ohms),
+                ("prog_ohms", sp.prog_ohms),
+                ("prog_ref_ohms", Some(sp.prog_ref_ohms)),
+                ("vprog_ref", Some(sp.vprog_ref)),
+                ("v_sense_full", Some(sp.v_sense_full)),
             ] {
                 p.positive(format!("converter.iin_program: {name}"), v);
             }

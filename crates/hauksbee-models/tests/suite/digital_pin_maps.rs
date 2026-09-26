@@ -169,7 +169,7 @@ fn hc165_shift_register_pin_map() {
 /// description (LGA-12). The two supply domains are the thing a template
 /// corrupts here: VDDIO on 3 with GNDIO on 8, VDD on 7 with GND on 9, and the
 /// two grounds are NOT interchangeable pads. SDX/SCX carry the bus vocabulary
-/// (`sda`/`scl`) rather than the datasheet spelling, per tests/pin_roles.rs.
+/// (`sda`/`scl`) rather than the datasheet spelling, per `tests/pin_roles.rs`.
 #[test]
 fn bma423_accelerometer_pin_map() {
     assert_sequential_pin_map(
@@ -192,10 +192,10 @@ fn bma423_accelerometer_pin_map() {
 fn bma423_carries_the_ratiometric_levels_and_the_four_volt_ceiling() {
     let m = expect_model("BMA423");
     let vddio = 3.3_f64;
-    for (key, factor) in [("vih", 0.7), ("vil", 0.3), ("voh", 0.8), ("vol", 0.2)] {
+    for (key, factor) in [("vih", 0.7_f64), ("vil", 0.3), ("voh", 0.8), ("vol", 0.2)] {
         let got = m.params.get_f64(key).unwrap_or_else(|| panic!("{key} set"));
         assert!(
-            (got - factor * vddio).abs() < 5e-3,
+            factor.mul_add(-vddio, got).abs() < 5e-3,
             "{key} must be {factor} x VDDIO at 3.3 V ({:.3} V), got {got}",
             factor * vddio,
         );

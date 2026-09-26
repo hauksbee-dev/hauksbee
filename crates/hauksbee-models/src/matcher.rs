@@ -27,6 +27,11 @@ impl CompiledEntry {
     ///
     /// Returns an error if any regex pattern is invalid. The `id` from the
     /// entry is included in error messages.
+    ///
+    /// # Errors
+    ///
+    /// The [`regex::Error`] of the first `value_re`, `footprint_re`, `mpn_re` or
+    /// property pattern that does not compile.
     pub fn compile(entry: ModelEntry) -> Result<Self, regex::Error> {
         // Every pattern is case-INSENSITIVE, footprints included: a rule
         // `footprint_re = "sot-23"` must match `Package_TO_SOT_SMD:SOT-23`. A
@@ -42,7 +47,7 @@ impl CompiledEntry {
             .iter()
             .map(|(key, pattern)| ci(pattern).map(|re| (normalise_property_key(key), re)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(CompiledEntry {
+        Ok(Self {
             entry,
             value_re,
             footprint_re,
@@ -53,14 +58,15 @@ impl CompiledEntry {
 
     /// Whether this entry's match rules fire for the given query fields.
     ///
-    /// Rules are ANDed: every populated rule must match.
+    /// Rules are AND-ed: every populated rule must match.
+    #[must_use]
     pub fn matches(&self, q: &ComponentQuery) -> bool {
-        fn field(v: &Option<String>) -> &str {
-            v.as_deref().unwrap_or("")
+        fn field(v: Option<&String>) -> &str {
+            v.map_or("", String::as_str)
         }
         // lib_id: a trailing ':' makes it a library prefix, else an exact id.
         let lib_ok = self.entry.r#match.lib_id.as_deref().is_none_or(|lid| {
-            let query_lid = field(&q.lib_id);
+            let query_lid = field(q.lib_id.as_ref());
             if lid.ends_with(':') {
                 query_lid.starts_with(lid)
             } else {
@@ -68,7 +74,7 @@ impl CompiledEntry {
             }
         });
         // European comma-decimal is normalised before the value regex runs.
-        let value = normalise_value_str(field(&q.value));
+        let value = normalise_value_str(field(q.value.as_ref()));
         let re_ok = |re: &Option<Regex>, text: &str| re.as_ref().is_none_or(|re| re.is_match(text));
         // Named source properties: every authored rule is required, and a
         // missing property is not evidence, so it cannot match.
@@ -80,8 +86,8 @@ impl CompiledEntry {
         });
         lib_ok
             && re_ok(&self.value_re, &value)
-            && re_ok(&self.footprint_re, field(&q.footprint))
-            && re_ok(&self.mpn_re, field(&q.mpn))
+            && re_ok(&self.footprint_re, field(q.footprint.as_ref()))
+            && re_ok(&self.mpn_re, field(q.mpn.as_ref()))
             && properties_ok
     }
 
@@ -89,9 +95,10 @@ impl CompiledEntry {
     ///
     /// Scoring rationale:
     /// - MPN match is the most specific (part number uniquely identifies a device).
-    /// - Exact lib_id match is more specific than a prefix.
+    /// - Exact `lib_id` match is more specific than a prefix.
     /// - Value regex is fairly specific.
     /// - Footprint regex is a catch-all fallback.
+    #[must_use]
     pub fn specificity_score(&self, q: &ComponentQuery) -> u32 {
         let rules = &self.entry.r#match;
         let lib = match &rules.lib_id {
@@ -110,7 +117,7 @@ impl CompiledEntry {
         lib + 30 * u32::from(rules.value_re.is_some())
             + 40 * u32::from(rules.mpn_re.is_some())
             + 5 * u32::from(footprint)
-            + 50 * rules.properties.len() as u32
+            + u32::try_from(rules.properties.len()).map_or(u32::MAX, |n| n.saturating_mul(50))
     }
 
     /// Confidence points for a value rule that lists the matched value
@@ -130,6 +137,7 @@ impl CompiledEntry {
     /// same value. This score ranks the patterns themselves: an exact literal
     /// outranks a character-class/alternation family pattern, so the override
     /// wins deterministically instead of by load order.
+    #[must_use]
     pub fn regex_specificity(&self) -> u32 {
         let rules = &self.entry.r#match;
         [&rules.value_re, &rules.mpn_re, &rules.footprint_re]
@@ -196,17 +204,13 @@ fn branch_constrainedness(branch: &str) -> u32 {
         match cs[i] {
             '\\' => {
                 i += 1;
-                match cs.get(i) {
-                    Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => {
-                        score += 1;
-                        last_atom = 1;
-                    }
-                    Some(_) => {
-                        score += 2;
-                        last_atom = 2;
-                    }
-                    None => {}
-                }
+                // A class escape is one unit, any other escaped char two.
+                last_atom = match cs.get(i) {
+                    Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => 1,
+                    Some(_) => 2,
+                    None => 0,
+                };
+                score += last_atom;
             }
             '[' => {
                 score += 1;
@@ -276,7 +280,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                     // and falling to the id order. A single-branch group (`(AB)`) is
                     // NOT an alternation and is not docked, so `(AB)` == `AB`.
                     let is_alt = split_top_level_alternation(&body).len() > 1;
-                    let group_add = body_score.saturating_sub(if is_alt { 1 } else { 0 });
+                    let group_add = body_score.saturating_sub(u32::from(is_alt));
                     score += group_add;
                     // Make the group's WHOLE contribution the retractable atom, so a
                     // following `*`/`?` cancels the entire group (plus the usual dock
@@ -305,9 +309,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                 score = score.saturating_sub(last_atom + 1);
                 last_atom = 0;
             }
-            ')' | '.' | '+' => {
-                last_atom = 0;
-            }
+            ')' | '.' | '+' => last_atom = 0,
             _ => {
                 score += 2;
                 last_atom = 2;
@@ -334,7 +336,7 @@ fn normalise_property_key(s: &str) -> String {
 /// All fields are optional; the library matches against whatever is present.
 #[derive(Debug, Clone, Default)]
 pub struct ComponentQuery {
-    /// KiCad lib_id, e.g. `"Device:R"` or `"Device:Q_NPN_BCE"`.
+    /// KiCad `lib_id`, e.g. `"Device:R"` or `"Device:Q_NPN_BCE"`.
     pub lib_id: Option<String>,
     /// Component value field, e.g. `"10k"`, `"BC847"`, `"100nF"`.
     pub value: Option<String>,
@@ -358,7 +360,7 @@ impl ComponentQuery {
         value: impl Into<Option<String>>,
         footprint: impl Into<Option<String>>,
     ) -> Self {
-        ComponentQuery {
+        Self {
             lib_id: lib_id.into(),
             value: value.into(),
             footprint: footprint.into(),

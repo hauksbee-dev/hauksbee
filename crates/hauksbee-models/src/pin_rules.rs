@@ -92,14 +92,21 @@ pub struct InferredRole {
 
 impl PinRuleTable {
     /// An empty table (no rules).
-    pub fn empty() -> Self {
-        PinRuleTable { rules: Vec::new() }
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { rules: Vec::new() }
     }
 
     /// Parse and append rules from one `pin_rules.toml` source string.
     ///
     /// `prepend` puts the new rules *ahead* of the existing ones (so a later,
     /// user-supplied file overrides the built-ins). Returns the rule ids loaded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, loading nothing, when `src` is not valid TOML or a rule has no match
+    /// condition, maps no pad to a role, or carries a `footprint_re` that does not
+    /// compile.
     pub fn load_toml_str(&mut self, src: &str, prepend: bool) -> Result<Vec<String>, String> {
         let file: PinRuleFile =
             toml::from_str(src).map_err(|e| format!("pin_rules: TOML parse error: {e}"))?;
@@ -140,12 +147,14 @@ impl PinRuleTable {
     }
 
     /// Number of loaded rules.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.rules.len()
     }
 
     /// Whether the table has no rules.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
 
@@ -154,6 +163,7 @@ impl PinRuleTable {
     /// `footprint` and `kind` describe the component; `pad_count` is its number
     /// of pads; `pad_number` is the pad we want a role for. The first rule whose
     /// conditions all hold *and* that maps this pad number wins.
+    #[must_use]
     pub fn role_for_pad(
         &self,
         footprint: &str,

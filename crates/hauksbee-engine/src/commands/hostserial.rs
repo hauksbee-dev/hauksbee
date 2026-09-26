@@ -794,7 +794,7 @@ mod tests {
         // the endpoint as continuously attached must therefore leave one
         // continuous clock, rather than allowing a detached free-run window.
         engage_session_clock_once(&mut inbox, 99.0, 12.0, 1);
-        assert_eq!(inbox.sim_ceiling(12.0), before_handoff);
+        assert_eq!(inbox.sim_ceiling(12.0).to_bits(), before_handoff.to_bits());
         assert!(
             session_clock_requires_wait(false, &inbox),
             "once any peer has attached, --serial-no-pace remains on its fixed compressed wall mapping even through an unobserved handoff"
@@ -867,7 +867,7 @@ mod tests {
         let mut last_activity_wall = 2.0;
         sync_peer_state(false, &mut was_attached, &mut last_activity_wall, 10.0);
         assert!(!was_attached);
-        assert_eq!(last_activity_wall, 10.0);
+        assert_eq!(last_activity_wall.to_bits(), 10.0_f64.to_bits());
     }
 
     /// The determinism invariant itself: the same wall-clock arrival schedule
@@ -938,7 +938,7 @@ mod tests {
     #[test]
     fn unengaged_inbox_is_free_running_passthrough() {
         let mut inbox = PacedInbox::new(1.0);
-        assert_eq!(inbox.sim_ceiling(0.0), f64::INFINITY);
+        assert_eq!(inbox.sim_ceiling(0.0).to_bits(), f64::INFINITY.to_bits());
         inbox.push(42.0, 3.0, b"x".to_vec());
         assert_eq!(inbox.take_due(42.0), b"x");
     }
