@@ -441,7 +441,7 @@ impl Engine for HauksbeeEngine {
         self.refuse_taken_peripheral_id(&spec.id)?;
         let net = self.board_net(&spec.net)?;
         let to = match spec.to.as_deref() {
-            None | Some("") | Some("GND") | Some("gnd") | Some("0") => NodeId::GROUND,
+            None | Some("" | "GND" | "gnd" | "0") => NodeId::GROUND,
             Some(name) => self.board_net(name)?,
         };
         match spec.kind.as_str() {

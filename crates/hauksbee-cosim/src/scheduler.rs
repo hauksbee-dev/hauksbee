@@ -1138,9 +1138,9 @@ impl NetStat {
     #[must_use]
     pub fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
         Self {
-            toggles,
             min_v,
             max_v,
+            toggles,
             ..Default::default()
         }
     }
@@ -2321,8 +2321,7 @@ impl Scheduler {
                 .net_nodes
                 .iter()
                 .find(|(_, id)| id.0 as usize == node)
-                .map(|(n, _)| n.clone())
-                .unwrap_or_else(|| format!("node #{node}"));
+                .map_or_else(|| format!("node #{node}"), |(n, _)| n.clone());
             let window = if t0.is_finite() || t1.is_finite() {
                 format!(" over [{t0:.6}, {t1:.6}) s")
             } else {
@@ -2399,8 +2398,7 @@ impl Scheduler {
                 };
                 let net = node_names
                     .get(&node.0)
-                    .map(|s| (*s).clone())
-                    .unwrap_or_else(|| format!("node {}", node.0));
+                    .map_or_else(|| format!("node {}", node.0), |s| (*s).clone());
                 // Best-effort part naming: the devices on the net, excluding
                 // MCU pin legs (the same exclusion the digital-in evidence
                 // index applies), deduped by name and capped for readability.
@@ -3353,7 +3351,7 @@ impl Scheduler {
         {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-            for d in self.digital.iter_mut() {
+            for d in &mut self.digital {
                 d.update_supply(&mut self.circuit, chunk, &node_v);
             }
         }
@@ -3511,9 +3509,10 @@ impl Scheduler {
             |r: &SimpleRegulator| self.regulation.iter().any(|t| t.refs[0] == r.reference);
         let barred: Vec<bool> = self.regulators.iter().map(tainted).collect();
         let (regs, ok) = (&mut self.regulators, &mut self.reg_supported);
-        let unsupported = match regs.is_empty() {
-            true => Vec::new(),
-            false => regulation::evaluate(&self.circuit, regs, ok, &barred, &self.opts),
+        let unsupported = if regs.is_empty() {
+            Vec::new()
+        } else {
+            regulation::evaluate(&self.circuit, regs, ok, &barred, &self.opts)
         };
         for (i, verdict) in unsupported {
             self.taint_regulator(i, &verdict, None);
@@ -3542,7 +3541,7 @@ impl Scheduler {
         rails.extend(
             self.behavioral
                 .iter()
-                .filter_map(|d| d.converter_out_node()),
+                .filter_map(hauksbee_bind::BehavioralDevice::converter_out_node),
         );
         loop {
             let tainted = |n: NodeId| {
@@ -4009,7 +4008,7 @@ impl Scheduler {
         let reduced = self.reduced_step_opts(chunk);
         // Rungs below the forced one are skipped (test hook; 0 in production,
         // so every rung runs).
-        let min_rung = self.debug_force_fallback_rung.map(|m| m as u8).unwrap_or(0);
+        let min_rung = self.debug_force_fallback_rung.map_or(0, |m| m as u8);
         // Backward Euler at the bounded step: L-stable, so the trapezoidal
         // ringing that kills a stiff chunk is damped; costs the integration
         // order, which the record discloses.
@@ -4446,7 +4445,13 @@ impl Scheduler {
                     } else {
                         recovered
                     };
-                    if !recovered.is_empty() {
+                    if recovered.is_empty() {
+                        // Nothing usable captured: hold previous voltages, and
+                        // cold-start the next chunk.
+                        self.node_volts.resize(self.circuit.node_count(), 0.0);
+                        self.last_dc_seed = None;
+                        false
+                    } else {
                         // If the DC operating point at t=0 was still captured
                         // (the streaming sink fires once before the march loop),
                         // use it: a converged DC bias is a far better state to
@@ -4458,12 +4463,6 @@ impl Scheduler {
                         // recorded as a failed chunk below: a recovered bias is
                         // not a solved window.
                         self.adopt_chunk_state(recovered);
-                        false
-                    } else {
-                        // Nothing usable captured: hold previous voltages, and
-                        // cold-start the next chunk.
-                        self.node_volts.resize(self.circuit.node_count(), 0.0);
-                        self.last_dc_seed = None;
                         false
                     }
                 }
@@ -4732,8 +4731,10 @@ impl Scheduler {
                 let at = (1..self.circuit.node_count())
                     .map(|node| NodeId(node as u32))
                     .find(|node| self.layout.node(*node) == Some(unknown))
-                    .map(|node| self.circuit.node_name(node).to_string())
-                    .unwrap_or_else(|| format!("unknown #{unknown}"));
+                    .map_or_else(
+                        || format!("unknown #{unknown}"),
+                        |node| self.circuit.node_name(node).to_string(),
+                    );
                 budget = budget.with_residual(hauksbee_ir::evidence::Residual::new(max_abs, at)?);
             }
         }
@@ -4840,7 +4841,7 @@ impl Scheduler {
                 "scheduler/forced-voltages",
                 "post-solve forced node voltages",
             ),
-            Scope::Nets(NetScope::new(nets.clone(), None)?),
+            Scope::Nets(NetScope::new(nets, None)?),
             &format!(
                 "the reported voltages on {list} were written by a forced override after \
                  the solve, not converged in place, and the run's residual is withheld \
@@ -5100,7 +5101,7 @@ impl Scheduler {
     /// Override a named input source (any Vsource/Isource by device name).
     pub fn set_input(&mut self, source: &str, value: f64) {
         self.reg_dirty = true;
-        for dev in self.circuit.devices.iter_mut() {
+        for dev in &mut self.circuit.devices {
             match dev {
                 Device::Vsource { name, kind, .. } | Device::Isource { name, kind, .. }
                     if name == source =>
@@ -5209,8 +5210,7 @@ impl Scheduler {
     /// The name of the net on `node`, or `"node N"` for an unnamed one.
     fn net_name_of(&self, node: u32) -> String {
         self.net_name_for(NodeId(node))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("node {node}"))
+            .map_or_else(|| format!("node {node}"), str::to_string)
     }
 
     /// Friction 1.16 detector: scan the chunk's drained cycle-stamped edge log
@@ -5587,23 +5587,21 @@ impl Scheduler {
         // overlay semantics as the chains. No-op unless `replay_chips` is
         // populated (empty on the current corpus). Its own return is the
         // authoritative micro-tick count for those parts.
-        let generic_ticks = if !self.replay_chips.is_empty() {
-            if let Some(pin_nets) = self.replay_pin_nets.get(mi).cloned() {
-                let high_v = self.mcus[mi].logic_high_v;
-                let base = self.node_volts.clone();
-                hauksbee_bind::digital::replay_components_on_edges(
-                    &mut self.digital,
-                    &self.replay_chips,
-                    &pin_nets,
-                    edge_log,
-                    &base,
-                    high_v,
-                    0.0,
-                    &mut self.circuit,
-                )
-            } else {
-                0
-            }
+        let generic_ticks = if self.replay_chips.is_empty() {
+            0
+        } else if let Some(pin_nets) = self.replay_pin_nets.get(mi).cloned() {
+            let high_v = self.mcus[mi].logic_high_v;
+            let base = self.node_volts.clone();
+            hauksbee_bind::digital::replay_components_on_edges(
+                &mut self.digital,
+                &self.replay_chips,
+                &pin_nets,
+                edge_log,
+                &base,
+                high_v,
+                0.0,
+                &mut self.circuit,
+            )
         } else {
             0
         };
@@ -6048,11 +6046,8 @@ fn branch_current_of(layout: &Layout, branch_x: &[f64], id: DeviceId) -> Option<
 fn set_isource_dc(circuit: &mut Circuit, id: DeviceId, amps: f64) {
     match circuit.devices.get_mut(id.0 as usize) {
         Some(Device::Isource { kind, .. }) => *kind = SourceKind::Dc(amps),
-        Some(other) => panic!(
-            "model peripheral supply leg {:?} changed type: {other:?}",
-            id
-        ),
-        None => panic!("model peripheral supply leg {:?} disappeared", id),
+        Some(other) => panic!("model peripheral supply leg {id:?} changed type: {other:?}"),
+        None => panic!("model peripheral supply leg {id:?} disappeared"),
     }
 }
 
@@ -6367,7 +6362,7 @@ fn detect_substitution(binding: &McuBinding) -> Option<McuSubstitution> {
 /// compare equal up to a prefix.
 fn normalise_part(s: &str) -> String {
     s.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .map(|c| c.to_ascii_uppercase())
         .collect()
 }
@@ -7577,12 +7572,7 @@ missing = ["measurement_registers"]
         let mut b = binding("U1", "renode:stm32f4", HashMap::new());
         b.requested_part = "STM32F411RET6".into();
         let substitution = detect_substitution(&b).expect("F411 uses the F407 stand-in");
-        let public_event = McuSubstitution {
-            reference: substitution.reference,
-            backend: substitution.backend,
-            requested_part: substitution.requested_part,
-            modelled_core: substitution.modelled_core,
-        };
+        let public_event = substitution;
         assert_eq!(public_event.reference, "U1");
     }
 
@@ -8395,7 +8385,7 @@ data_out = ["io0"]
             sched.node_volts[idx] = v;
             sched.update_stats();
         }
-        sched.stats.get(net).map(|s| s.toggles).unwrap_or(0)
+        sched.stats.get(net).map_or(0, |s| s.toggles)
     }
 
     /// The logic-level band scales with the LOWEST logic rail on the board: a

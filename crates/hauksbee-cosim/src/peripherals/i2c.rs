@@ -578,10 +578,7 @@ impl I2cSlave for Lm75 {
     }
 
     fn on_write(&mut self, data: u8) {
-        if !self.got_pointer {
-            self.pointer = data & 0x03;
-            self.got_pointer = true;
-        } else {
+        if self.got_pointer {
             // Writing register data (Conf/Thyst/Tos). Accumulate.
             self.write_acc.push(data);
             match self.pointer {
@@ -594,6 +591,9 @@ impl I2cSlave for Lm75 {
                 }
                 _ => {}
             }
+        } else {
+            self.pointer = data & 0x03;
+            self.got_pointer = true;
         }
     }
 

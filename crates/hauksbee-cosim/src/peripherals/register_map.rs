@@ -561,8 +561,7 @@ impl RegisterMapSensor {
             self.registers
                 .get(a)
                 .and_then(|r| r.spec.encoding)
-                .map(|e| e == Encoding::Q71Be)
-                .unwrap_or(false)
+                .is_some_and(|e| e == Encoding::Q71Be)
         })?;
         let reg = self.registers.get(&addr)?;
         let program = reg.program.as_ref()?;
@@ -797,8 +796,7 @@ impl RegisterMapSensor {
         // expressions (write→read coupling).
         self.registers
             .get(&key)
-            .map(|r| r.bytes(&self.vars(None)))
-            .unwrap_or_else(|| vec![0xFF])
+            .map_or_else(|| vec![0xFF], |r| r.bytes(&self.vars(None)))
     }
 
     /// (Re)load the read buffer for the current I2C pointer.
@@ -869,38 +867,34 @@ impl I2cSlave for RegisterMapSensor {
                         .write_cmds
                         .iter()
                         .position(|c| data & c.spec.match_mask == c.spec.match_value);
-                    match matched {
-                        Some(idx) => {
-                            let c = &self.write_cmds[idx].spec;
-                            if c.prefix {
-                                // Prefix byte: consumed here, possibly seeding
-                                // the channel cursor; not part of any group.
-                                if c.channel.source == ChannelSource::PrefixBits {
-                                    let bits = c.channel.bits.expect("validated");
-                                    self.chan_cursor = (extract_bits(bits, u32::from(data))
-                                        as usize)
-                                        % self.channels;
-                                }
-                            } else {
-                                self.cmd_acc.push(data);
+                    if let Some(idx) = matched {
+                        let c = &self.write_cmds[idx].spec;
+                        if c.prefix {
+                            // Prefix byte: consumed here, possibly seeding
+                            // the channel cursor; not part of any group.
+                            if c.channel.source == ChannelSource::PrefixBits {
+                                let bits = c.channel.bits.expect("validated");
+                                self.chan_cursor =
+                                    (extract_bits(bits, u32::from(data)) as usize) % self.channels;
                             }
-                            self.cmd_phase = CmdPhase::Active(idx);
-                            // A group that completes on this very byte
-                            // (group_bytes == 1) must drain NOW: the Active arm
-                            // only runs on the NEXT write, and a repeated START
-                            // or STOP clears cmd_acc, so a single-byte command
-                            // was silently dropped with no state change. drain
-                            // is a no-op until a full group is buffered, so
-                            // prefix bytes and multi-byte commands are untouched.
-                            self.drain_command_groups(idx);
+                        } else {
+                            self.cmd_acc.push(data);
                         }
-                        None => {
-                            // A command family the spec does not declare:
-                            // accept-and-ignore (a real part ACKs it), counted
-                            // so the omission is observable.
-                            self.cmd_phase = CmdPhase::Ignored;
-                            self.ignored_write_bytes += 1;
-                        }
+                        self.cmd_phase = CmdPhase::Active(idx);
+                        // A group that completes on this very byte
+                        // (group_bytes == 1) must drain NOW: the Active arm
+                        // only runs on the NEXT write, and a repeated START
+                        // or STOP clears cmd_acc, so a single-byte command
+                        // was silently dropped with no state change. drain
+                        // is a no-op until a full group is buffered, so
+                        // prefix bytes and multi-byte commands are untouched.
+                        self.drain_command_groups(idx);
+                    } else {
+                        // A command family the spec does not declare:
+                        // accept-and-ignore (a real part ACKs it), counted
+                        // so the omission is observable.
+                        self.cmd_phase = CmdPhase::Ignored;
+                        self.ignored_write_bytes += 1;
                     }
                 }
                 CmdPhase::Active(idx) => {
@@ -1102,8 +1096,9 @@ impl SpiSlave for RegisterMapSensor {
                 .addr_order
                 .iter()
                 .position(|&a| a == self.spi_addr)
-                .map(|idx| self.addr_order[(idx + 1) % self.addr_order.len().max(1)])
-                .unwrap_or(self.spi_addr);
+                .map_or(self.spi_addr, |idx| {
+                    self.addr_order[(idx + 1) % self.addr_order.len().max(1)]
+                });
             return Some(self.register_bytes(addr).first().copied().unwrap_or(0xFF));
         }
         Some(self.read_buf[self.spi_pos])

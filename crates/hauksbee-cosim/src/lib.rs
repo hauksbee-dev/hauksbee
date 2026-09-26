@@ -41,7 +41,8 @@ pub(crate) trait MutexExt<T> {
 
 impl<T> MutexExt<T> for std::sync::Mutex<T> {
     fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
-        self.lock().unwrap_or_else(|e| e.into_inner())
+        self.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

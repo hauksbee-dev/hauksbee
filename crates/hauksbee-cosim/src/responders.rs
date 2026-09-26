@@ -1206,19 +1206,18 @@ impl SoftI2cResponder {
     /// Fetch the next read byte from the addressed slave and put its MSB on
     /// the wire (entry into `ReadBits`, always at a falling edge).
     fn begin_read_byte(&mut self, out: &mut Vec<InputDrive>) {
-        let byte = match self.dispatch(I2cEvent::Read { addr: self.addr }) {
-            Some(b) => b,
-            None => {
-                // Structurally impossible while `active` (the address matched
-                // at Start); if a slave vanished mid-transaction, say so and
-                // present the open-bus level rather than inventing data.
-                eprintln!(
-                    "ERROR: soft I2C: slave 0x{:02x} answered Start but not Read; \
-                     presenting 0xFF (open bus)",
-                    self.addr
-                );
-                0xFF
-            }
+        let byte = if let Some(b) = self.dispatch(I2cEvent::Read { addr: self.addr }) {
+            b
+        } else {
+            // Structurally impossible while `active` (the address matched
+            // at Start); if a slave vanished mid-transaction, say so and
+            // present the open-bus level rather than inventing data.
+            eprintln!(
+                "ERROR: soft I2C: slave 0x{:02x} answered Start but not Read; \
+                 presenting 0xFF (open bus)",
+                self.addr
+            );
+            0xFF
         };
         self.phase = I2cPhase::ReadBits { nbits: 0, byte };
         self.drive_sda(byte & 0x80 != 0, out);
@@ -2174,16 +2173,16 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             let mut got = 0u8;
             for i in (0..8).rev() {
                 let bit = (mosi >> i) & 1 != 0;
-                if !self.cpha {
-                    self.edge(PINS.mosi, bit);
+                if self.cpha {
                     self.edge(PINS.sclk, !self.cpol);
-                    got = (got << 1) | u8::from(self.miso);
+                    self.edge(PINS.mosi, bit);
                     self.edge(PINS.sclk, self.cpol);
+                    got = (got << 1) | u8::from(self.miso);
                 } else {
-                    self.edge(PINS.sclk, !self.cpol);
                     self.edge(PINS.mosi, bit);
-                    self.edge(PINS.sclk, self.cpol);
+                    self.edge(PINS.sclk, !self.cpol);
                     got = (got << 1) | u8::from(self.miso);
+                    self.edge(PINS.sclk, self.cpol);
                 }
             }
             got

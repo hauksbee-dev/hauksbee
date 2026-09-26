@@ -114,9 +114,10 @@ pub fn evaluate(
         .flat_map(|(_, dev)| dev.controlling_sources());
     let orphaned = readers.any(|id| regs.iter().any(|r| r.source == id));
     loop {
-        let solved = match orphaned {
-            true => Err("a controlled source reads a regulator's branch current".to_string()),
-            false => run_op(&probe, opts, &probes).map_err(|e| e.to_string()),
+        let solved = if orphaned {
+            Err("a controlled source reads a regulator's branch current".to_string())
+        } else {
+            run_op(&probe, opts, &probes).map_err(|e| e.to_string())
         };
         let (mut unsupported, mut granted) = (Vec::new(), false);
         for (i, reg) in regs.iter().enumerate() {
