@@ -400,7 +400,6 @@ impl RobustnessLadder {
 
     /// Grant a strategy (idempotent; appended in call order).
     #[must_use]
-    #[must_use]
     pub fn with(mut self, s: Strategy) -> Self {
         if self.has(s) {
             return self;
@@ -423,7 +422,6 @@ impl RobustnessLadder {
     /// Revoke a strategy, preserving the order of the rest. The per-island
     /// selection (`orchestrate::staged::select_group_ladder`) only ever TRIMS
     /// with this: the caller's ladder is the ceiling, never escalated past.
-    #[must_use]
     #[must_use]
     pub fn without(mut self, s: Strategy) -> Self {
         let mut out = [None; 8];
