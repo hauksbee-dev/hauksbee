@@ -93,7 +93,7 @@ pub struct InferredRole {
 impl PinRuleTable {
     /// An empty table (no rules).
     pub fn empty() -> Self {
-        PinRuleTable { rules: Vec::new() }
+        Self { rules: Vec::new() }
     }
 
     /// Parse and append rules from one `pin_rules.toml` source string.

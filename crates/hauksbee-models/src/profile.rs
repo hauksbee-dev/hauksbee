@@ -82,14 +82,14 @@ const EMBEDDED_PROFILES: &str = include_str!("../db/load_profiles.toml");
 
 impl LoadProfile {
     /// All built-in profiles parsed from the embedded TOML.
-    pub fn builtin() -> Vec<LoadProfile> {
+    pub fn builtin() -> Vec<Self> {
         let file: ProfileFile = toml::from_str(EMBEDDED_PROFILES)
             .unwrap_or_else(|e| panic!("built-in load_profiles.toml failed to parse: {e}"));
         file.profiles
     }
 
     /// Look up a built-in profile by id.
-    pub fn by_id(id: &str) -> Option<LoadProfile> {
+    pub fn by_id(id: &str) -> Option<Self> {
         Self::builtin().into_iter().find(|p| p.id == id)
     }
 

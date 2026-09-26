@@ -212,14 +212,10 @@ impl Encoding {
     /// The natural byte width of this encoding (the default for `bytes`).
     pub fn natural_width(self) -> usize {
         match self {
-            Encoding::U8 => 1,
-            Encoding::U16Be
-            | Encoding::U16Le
-            | Encoding::I16Be
-            | Encoding::I16Le
-            | Encoding::Q71Be => 2,
-            Encoding::U20BeXlsb => 3,
-            Encoding::Raw => 0,
+            Self::U8 => 1,
+            Self::U16Be | Self::U16Le | Self::I16Be | Self::I16Le | Self::Q71Be => 2,
+            Self::U20BeXlsb => 3,
+            Self::Raw => 0,
         }
     }
 }
@@ -722,7 +718,7 @@ fn check_refs(
 impl SensorSpec {
     /// Parse a `[sensor]` spec from TOML and validate it.
     pub fn from_toml(src: &str) -> Result<Self, SensorSpecError> {
-        let spec: SensorSpec = toml::from_str(src)?;
+        let spec: Self = toml::from_str(src)?;
         spec.validate()?;
         Ok(spec)
     }

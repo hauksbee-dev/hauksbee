@@ -633,7 +633,7 @@ pub struct KeyInfo {
 
 impl KeyInfo {
     fn new(key: impl Into<String>, help: impl Into<String>, default: impl Into<String>) -> Self {
-        KeyInfo {
+        Self {
             key: key.into(),
             help: help.into(),
             default: default.into(),
@@ -885,10 +885,10 @@ pub enum BackendSource {
 impl BackendSource {
     pub fn describe(self) -> String {
         match self {
-            BackendSource::Flag => "chosen with --backend".to_string(),
-            BackendSource::Env(name) => format!("from ${name}"),
-            BackendSource::Config => "from the config file".to_string(),
-            BackendSource::Auto => "auto-detected (nothing configured)".to_string(),
+            Self::Flag => "chosen with --backend".to_string(),
+            Self::Env(name) => format!("from ${name}"),
+            Self::Config => "from the config file".to_string(),
+            Self::Auto => "auto-detected (nothing configured)".to_string(),
         }
     }
 }

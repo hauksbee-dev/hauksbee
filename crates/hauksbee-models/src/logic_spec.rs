@@ -113,8 +113,8 @@ impl Level {
     /// Is a sampled logic level "active" for this polarity?
     pub fn is_active(self, level: bool) -> bool {
         match self {
-            Level::Low => !level,
-            Level::High => level,
+            Self::Low => !level,
+            Self::High => level,
         }
     }
 }
@@ -417,10 +417,10 @@ pub enum LogicExpr {
     Name(String),
     /// `register[bit]`.
     Bit(String, u32),
-    Not(Box<LogicExpr>),
-    And(Box<LogicExpr>, Box<LogicExpr>),
-    Xor(Box<LogicExpr>, Box<LogicExpr>),
-    Or(Box<LogicExpr>, Box<LogicExpr>),
+    Not(Box<Self>),
+    And(Box<Self>, Box<Self>),
+    Xor(Box<Self>, Box<Self>),
+    Or(Box<Self>, Box<Self>),
 }
 
 impl LogicExpr {
@@ -428,11 +428,11 @@ impl LogicExpr {
     /// references separately.
     pub fn collect_refs<'a>(&'a self, names: &mut Vec<&'a str>, bits: &mut Vec<(&'a str, u32)>) {
         match self {
-            LogicExpr::Const(_) => {}
-            LogicExpr::Name(n) => names.push(n),
-            LogicExpr::Bit(n, i) => bits.push((n, *i)),
-            LogicExpr::Not(a) => a.collect_refs(names, bits),
-            LogicExpr::And(a, b) | LogicExpr::Xor(a, b) | LogicExpr::Or(a, b) => {
+            Self::Const(_) => {}
+            Self::Name(n) => names.push(n),
+            Self::Bit(n, i) => bits.push((n, *i)),
+            Self::Not(a) => a.collect_refs(names, bits),
+            Self::And(a, b) | Self::Xor(a, b) | Self::Or(a, b) => {
                 a.collect_refs(names, bits);
                 b.collect_refs(names, bits);
             }

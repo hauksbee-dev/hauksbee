@@ -42,7 +42,7 @@ impl CompiledEntry {
             .iter()
             .map(|(key, pattern)| ci(pattern).map(|re| (normalise_property_key(key), re)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(CompiledEntry {
+        Ok(Self {
             entry,
             value_re,
             footprint_re,
@@ -358,7 +358,7 @@ impl ComponentQuery {
         value: impl Into<Option<String>>,
         footprint: impl Into<Option<String>>,
     ) -> Self {
-        ComponentQuery {
+        Self {
             lib_id: lib_id.into(),
             value: value.into(),
             footprint: footprint.into(),

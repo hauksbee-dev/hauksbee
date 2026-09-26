@@ -138,9 +138,9 @@ pub enum Provenance {
 impl std::fmt::Display for Provenance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Provenance::HandWritten => write!(f, "hand-written"),
-            Provenance::DatasheetExtracted => write!(f, "datasheet-extracted"),
-            Provenance::Vendor => write!(f, "vendor"),
+            Self::HandWritten => write!(f, "hand-written"),
+            Self::DatasheetExtracted => write!(f, "datasheet-extracted"),
+            Self::Vendor => write!(f, "vendor"),
         }
     }
 }
@@ -206,7 +206,7 @@ impl PackManifest {
     /// Parse and validate a `pack.toml` source string. `hauksbee_version` is
     /// the running build's version (pass [`HAUKSBEE_VERSION`]), checked
     /// against `min_hauksbee_version`.
-    pub fn from_toml(src: &str, hauksbee_version: &str) -> Result<PackManifest, PackError> {
+    pub fn from_toml(src: &str, hauksbee_version: &str) -> Result<Self, PackError> {
         let raw: RawManifestFile =
             toml::from_str(src).map_err(|e| PackError::ManifestParse(e.to_string()))?;
         let raw = raw
@@ -251,7 +251,7 @@ impl PackManifest {
         if provenance == Provenance::Vendor && license.trim().is_empty() {
             return Err(PackError::InvalidLicense);
         }
-        Ok(PackManifest {
+        Ok(Self {
             name,
             version,
             license,
@@ -287,7 +287,7 @@ pub struct Pack {
 impl Pack {
     /// Load and fully validate a pack directory. Everything `models add`
     /// checks happens here, so the library loader and the installer agree.
-    pub fn load(dir: &Path) -> Result<Pack, PackError> {
+    pub fn load(dir: &Path) -> Result<Self, PackError> {
         if !dir.is_dir() {
             return Err(PackError::NotADirectory(dir.to_path_buf()));
         }
@@ -379,7 +379,7 @@ impl Pack {
             }
         }
 
-        Ok(Pack {
+        Ok(Self {
             manifest,
             dir: dir.to_path_buf(),
             model_files,
@@ -419,17 +419,17 @@ pub struct PackStore {
 impl PackStore {
     /// The store under an explicit home directory (tests pass a temp dir; the
     /// CLI passes `$HOME`). Nothing is created until the first install.
-    pub fn in_home(home: &Path) -> PackStore {
+    pub fn in_home(home: &Path) -> Self {
         let base = home.join(".hauksbee");
-        PackStore {
+        Self {
             root: base.join("packs"),
             record: base.join("packs.toml"),
         }
     }
 
     /// The store for the current user (`$HOME`), or `None` when HOME is unset.
-    pub fn default_location() -> Option<PackStore> {
-        std::env::var_os("HOME").map(|h| PackStore::in_home(Path::new(&h)))
+    pub fn default_location() -> Option<Self> {
+        std::env::var_os("HOME").map(|h| Self::in_home(Path::new(&h)))
     }
 
     /// Where installed packs live.

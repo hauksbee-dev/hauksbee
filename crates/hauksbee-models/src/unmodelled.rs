@@ -106,7 +106,7 @@ pub struct UnmodelledNote {
 impl UnmodelledTable {
     /// An empty table.
     pub fn empty() -> Self {
-        UnmodelledTable { parts: Vec::new() }
+        Self { parts: Vec::new() }
     }
 
     /// Parse and append abstentions from one TOML source string.

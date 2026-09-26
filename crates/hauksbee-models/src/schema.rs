@@ -903,9 +903,9 @@ pub enum StrapLevel {
 impl StrapLevel {
     pub fn as_str(self) -> &'static str {
         match self {
-            StrapLevel::High => "high",
-            StrapLevel::Low => "low",
-            StrapLevel::Defined => "a defined level",
+            Self::High => "high",
+            Self::Low => "low",
+            Self::Defined => "a defined level",
         }
     }
 }
@@ -1082,7 +1082,7 @@ impl Ratings {
   vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics";
 
     pub fn is_empty(&self) -> bool {
-        *self == Ratings::default()
+        *self == Self::default()
     }
 }
 
@@ -1176,7 +1176,7 @@ impl PassiveClass {
     /// no call site re-derives the answer from the variant list and drifts when
     /// a variant is added.
     pub fn is_resistor(self) -> bool {
-        matches!(self, PassiveClass::Resistor)
+        matches!(self, Self::Resistor)
     }
 }
 
@@ -1325,8 +1325,8 @@ impl ParamValue {
     /// depends on its key.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            ParamValue::Float(v) => Some(*v),
-            ParamValue::Int(v) => Some(*v as f64),
+            Self::Float(v) => Some(*v),
+            Self::Int(v) => Some(*v as f64),
             _ => None,
         }
     }
@@ -1334,7 +1334,7 @@ impl ParamValue {
     /// Return as `&str` for string values.
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            ParamValue::String(s) => Some(s.as_str()),
+            Self::String(s) => Some(s.as_str()),
             _ => None,
         }
     }
@@ -1343,7 +1343,7 @@ impl ParamValue {
     /// caller can distinguish `flag = false` from an omitted/non-bool `flag`.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
-            ParamValue::Bool(b) => Some(*b),
+            Self::Bool(b) => Some(*b),
             _ => None,
         }
     }

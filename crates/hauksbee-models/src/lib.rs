@@ -203,24 +203,24 @@ impl SourceLayer {
     /// user config dir=25, `--models-dir`=30, user SPICE=40.
     pub fn priority(self) -> u32 {
         match self {
-            SourceLayer::Builtin => 0,
-            SourceLayer::Pack => 10,
-            SourceLayer::UserDir => 20,
-            SourceLayer::UserConfigDir => 25,
-            SourceLayer::ModelsDirFlag => 30,
-            SourceLayer::Spice => 40,
+            Self::Builtin => 0,
+            Self::Pack => 10,
+            Self::UserDir => 20,
+            Self::UserConfigDir => 25,
+            Self::ModelsDirFlag => 30,
+            Self::Spice => 40,
         }
     }
 
     /// Short name for reports.
     pub fn name(self) -> &'static str {
         match self {
-            SourceLayer::Builtin => "builtin",
-            SourceLayer::Pack => "pack",
-            SourceLayer::UserDir => "user-dir",
-            SourceLayer::UserConfigDir => "user-config-dir",
-            SourceLayer::ModelsDirFlag => "models-dir",
-            SourceLayer::Spice => "spice",
+            Self::Builtin => "builtin",
+            Self::Pack => "pack",
+            Self::UserDir => "user-dir",
+            Self::UserConfigDir => "user-config-dir",
+            Self::ModelsDirFlag => "models-dir",
+            Self::Spice => "spice",
         }
     }
 
@@ -228,9 +228,7 @@ impl SourceLayer {
     /// consumers: every user layer collapses to the historical `"user"`.
     pub fn coarse_name(self) -> &'static str {
         match self {
-            SourceLayer::UserDir | SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => {
-                "user"
-            }
+            Self::UserDir | Self::UserConfigDir | Self::ModelsDirFlag => "user",
             other => other.name(),
         }
     }
@@ -260,10 +258,10 @@ pub enum Confidence {
 impl std::fmt::Display for Confidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Confidence::Exact => "exact",
-            Confidence::Family => "family",
-            Confidence::Guessed => "guessed",
-            Confidence::Unresolved => "unresolved",
+            Self::Exact => "exact",
+            Self::Family => "family",
+            Self::Guessed => "guessed",
+            Self::Unresolved => "unresolved",
         })
     }
 }
@@ -302,7 +300,7 @@ pub struct Resolution {
 
 impl Resolution {
     pub fn unresolved(query: ComponentQuery) -> Self {
-        Resolution {
+        Self {
             model: None,
             confidence: Confidence::Unresolved,
             query,
@@ -368,7 +366,7 @@ use matcher::CompiledEntry;
 impl ModelLibrary {
     /// Create an empty library with no entries.
     pub fn empty() -> Self {
-        ModelLibrary {
+        Self {
             entries: Vec::new(),
             spice: Vec::new(),
             pin_rules: PinRuleTable::empty(),
@@ -380,7 +378,7 @@ impl ModelLibrary {
     ///
     /// Panics if the embedded TOML is malformed (compile-time guarantee).
     pub fn builtin() -> Self {
-        let mut lib = ModelLibrary::empty();
+        let mut lib = Self::empty();
         for (name, toml_src) in BUILTIN_TOML_FILES {
             lib.load_toml_str(toml_src, name, SourceLayer::Builtin)
                 .unwrap_or_else(|e| panic!("built-in database '{name}' failed to load: {e}"));
@@ -411,7 +409,7 @@ impl ModelLibrary {
     }
 
     /// Lazily-initialised shared built-in library.
-    pub fn builtin_shared() -> &'static ModelLibrary {
+    pub fn builtin_shared() -> &'static Self {
         static LIB: Lazy<ModelLibrary> = Lazy::new(ModelLibrary::builtin);
         &LIB
     }
@@ -427,8 +425,8 @@ impl ModelLibrary {
     /// A custom behavioural part dropped into one of these loads without
     /// recompiling. Directory and pack load errors are warned to stderr, not
     /// fatal, so a single malformed user file never breaks the whole library.
-    pub fn builtin_with_user_dirs(extra_dirs: &[&Path]) -> ModelLibrary {
-        let mut lib = ModelLibrary::builtin();
+    pub fn builtin_with_user_dirs(extra_dirs: &[&Path]) -> Self {
+        let mut lib = Self::builtin();
         if let Some(store) = PackStore::default_location() {
             for w in lib.load_packs(&store) {
                 eprintln!("[models] packs: {w}");
