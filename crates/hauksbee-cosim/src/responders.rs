@@ -47,7 +47,7 @@ use hauksbee_models::logic_spec::{Edge, Level};
 /// An MCU GPIO as `(port letter, bit)`.
 pub type GpioPin = (char, u8);
 
-/// A 74HC595 chain's MCU pins (SRCLK, RCLK, SRCLR_n, OE_n, head SER) and chip count.
+/// A 74HC595 chain's MCU pins (SRCLK, RCLK, `SRCLR_n`, `OE_n`, head SER) and chip count.
 pub type Hc595ChainPins = (
     GpioPin,
     GpioPin,
@@ -1130,7 +1130,7 @@ enum I2cPhase {
 ///   no-answer, not a wrong answer: the firmware sees a dead bus (perpetual
 ///   NACK), and this doc plus the fixture show the supported pattern (drive
 ///   SDA push-pull; switch it to input for the ACK bit and read bytes).
-/// * **An address no attached slave models is NACKed** (SDA left high), with
+/// * **An address no attached slave models is NACK-ed** (SDA left high), with
 ///   a once-per-address warning, never a fake ACK.
 ///
 /// SDA is bidirectional: the responder tracks the MASTER's driven level from
@@ -1154,7 +1154,7 @@ pub struct SoftI2cResponder {
     /// Every modeled address this transaction has touched since the last
     /// STOP. A repeated START re-addresses without a STOP, so this ADDS; the
     /// physical STOP then names each member to the bus, not just the
-    /// last-addressed slave, and even when the FINAL leg was a NACKed
+    /// last-addressed slave, and even when the FINAL leg was a NACK-ed
     /// unmodeled address (`active` false).
     touched: Vec<u8>,
     /// The SDA level this responder is currently driving into the MCU input,
@@ -2221,8 +2221,8 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         }
     }
 
-    /// Full read transactions against the byte-level RegisterMapSensor answer
-    /// WHO_AM_I and a burst data read bit-exactly in modes 0, 1 and 3.
+    /// Full read transactions against the byte-level `RegisterMapSensor` answer
+    /// `WHO_AM_I` and a burst data read bit-exactly in modes 0, 1 and 3.
     #[test]
     fn bitbang_spi_reads_registers_in_every_declared_mode() {
         for mode in [0, 1, 3] {

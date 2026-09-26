@@ -214,7 +214,7 @@ const fn extract_bits(bits: [u8; 2], value: u32) -> u32 {
 /// A compiled write command: the spec plus its parsed update expressions.
 struct CompiledCommand {
     spec: WriteCommandSpec,
-    /// state name -> parsed update expression, iterated in BTreeMap order (the
+    /// state name -> parsed update expression, iterated in `BTreeMap` order (the
     /// order cannot matter: all RHS evaluate against the pre-update snapshot).
     programs: Vec<(String, EvalNode)>,
 }
@@ -265,7 +265,7 @@ pub struct RegisterMapSensor {
     // ── Write side ──
     /// addr -> pointer-framed writable register.
     write_regs: HashMap<u8, WriteRegisterSpec>,
-    /// Stored write variables (each write_register's `store` and its extracted
+    /// Stored write variables (each `write_register`'s `store` and its extracted
     /// fields), seeded from the register defaults. Shares the expression
     /// namespace with `inputs`.
     stores: HashMap<String, f64>,
@@ -552,7 +552,7 @@ impl RegisterMapSensor {
     /// temperature the firmware would decode from the register bytes, recovered
     /// from the register's `expr` (with its `scale`/`offset`) rather than by
     /// unpacking the count. Returns `None` when the sensor models no such
-    /// register, so a non-temperature RegisterMapSensor stays inert on that path.
+    /// register, so a non-temperature `RegisterMapSensor` stays inert on that path.
     ///
     /// When several `q7.1_be` registers exist, the lowest address wins (the
     /// canonical LM75 temperature register is 0x00), scanned in stable order.
@@ -1424,11 +1424,11 @@ addr_mask = 0x7f
         let adc_p = (i32::from(d[0]) << 12) | (i32::from(d[1]) << 4) | (i32::from(d[2]) >> 4);
         let adc_t = (i32::from(d[3]) << 12) | (i32::from(d[4]) << 4) | (i32::from(d[5]) >> 4);
         let adc_h = (i32::from(d[6]) << 8) | i32::from(d[7]);
-        assert_eq!((adc_p, adc_t, adc_h), (415148, 519888, 30000));
+        assert_eq!((adc_p, adc_t, adc_h), (415_148, 519_888, 30000));
 
         let (t_fine, t) = bme280_compensate_t(adc_t, t1, t2, t3);
-        assert_eq!((t_fine, t), (128422, 2508));
-        assert_eq!(bme280_compensate_p(adc_p, t_fine, p), 100656);
+        assert_eq!((t_fine, t), (128_422, 2508));
+        assert_eq!(bme280_compensate_p(adc_p, t_fine, p), 100_656);
         let h_q = bme280_compensate_h(adc_h, t_fine, h);
         assert_eq!(h_q, 55759);
         let rh = f64::from(h_q) / 1024.0;
@@ -1698,7 +1698,7 @@ style = "i2c_pointer"
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x00), 0x7FFF);
     }
 
-    /// TI SBOS448 §8.5.1: R_SHUNT = 0.1 Ω, Cal = 0x1000; at 2 A / 12 V the
+    /// TI SBOS448 §8.5.1: `R_SHUNT` = 0.1 Ω, Cal = 0x1000; at 2 A / 12 V the
     /// shunt reads 20000, bus 0x5DC2, current 20000 and power 12000, and
     /// current/power stay zero until calibration is written.
     #[test]

@@ -115,7 +115,7 @@ pub trait Peripheral: Send {
     /// Stable identifier for live control / state readout (e.g. "BTN1").
     fn id(&self) -> &str;
 
-    /// Human-facing kind string ("pushbutton", "i2c_lm75", "vcd_sink", ...).
+    /// Human-facing kind string (`"pushbutton"`, `"i2c_lm75"`, `"vcd_sink"`, ...).
     fn kind(&self) -> &'static str;
 
     /// Called before the analog solve. Controls push their commanded level onto

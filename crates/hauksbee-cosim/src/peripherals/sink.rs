@@ -51,7 +51,7 @@ struct LoggedNet {
     initialized: bool,
 }
 
-/// A recorded value change: (time_ps, code, level).
+/// A recorded value change: (`time_ps`, code, level).
 struct Change {
     t_ps: u64,
     code: String,

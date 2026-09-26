@@ -64,7 +64,7 @@ pub struct Pushbutton {
     pressed: bool,
     bounce_s: f64,
     /// Set when a press level change is requested; consumed on the next
-    /// pre_solve to start the bounce window at the correct sim time.
+    /// `pre_solve` to start the bounce window at the correct sim time.
     pending: Option<bool>,
     /// Sim time the current transition began, while bouncing.
     transition_start: Option<f64>,
@@ -478,9 +478,9 @@ impl StimulusKind {
 
 /// Deterministic uniform in [-1, 1] from a counter (splitmix64).
 fn noise_sample(seed: u64, counter: u64) -> f64 {
-    let mut x = seed ^ counter.wrapping_mul(0x9E3779B97F4A7C15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    let mut x = seed ^ counter.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^= x >> 31;
     // Map to [-1, 1).
     (x as f64 / u64::MAX as f64) * 2.0 - 1.0
@@ -575,7 +575,7 @@ mod tests {
     use super::*;
 
     /// Round-7 #7: a Stimulus waveform must be sampled at the chunk END (t+dt),
-    /// the same zero-order-hold instant DynamicLoad and VcdSink use, sampling
+    /// the same zero-order-hold instant `DynamicLoad` and `VcdSink` use, sampling
     /// at the chunk start put it a full chunk out of phase with every other
     /// analog source on the timeline.
     #[test]

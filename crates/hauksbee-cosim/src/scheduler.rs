@@ -613,7 +613,7 @@ pub struct Scheduler {
     /// crossed the abort threshold mid-run.
     max_consecutive_failed_chunks: u32,
     /// The solver's message from the most recent failed chunk (e.g. "Newton
-    /// failed at t=... even at dt_min=...", device-named when a behavioural
+    /// failed at t=... even at `dt_min`=...", device-named when a behavioural
     /// fault caused it). Kept so the failure surfaces with its cause instead
     /// of being discarded; also printed once at the start of each failed
     /// streak, which is the breadcrumb a bisection needs.
@@ -660,7 +660,7 @@ pub struct Scheduler {
     ///
     /// `frame_peak_current`: reference designator -> peak |current| (A) over the
     /// frame's chunks (resistors + diodes, matching the stress monitor's device
-    /// current). `frame_v_extremes`: net name -> (min_v, max_v) over the frame.
+    /// current). `frame_v_extremes`: net name -> (`min_v`, `max_v`) over the frame.
     frame_peak_current: HashMap<String, f64>,
     frame_v_extremes: HashMap<String, (f64, f64)>,
     /// Net node -> references of TICK-evaluated sequential parts whose
@@ -1545,7 +1545,7 @@ impl Scheduler {
         /// Embedded from THIS crate's assets/ mirror because `cargo package`
         /// ships only files under the crate directory; the AUTHORITATIVE copy
         /// is the server crate's bundled assets/sensor-specs/mcp4728.toml,
-        /// guarded by tests/packaged_asset_sync.rs and refreshed by
+        /// guarded by `tests/packaged_asset_sync.rs` and refreshed by
         /// scripts/sync-crate-assets.sh.
         const MCP4728_SPEC: &str = include_str!("../assets/sensor-specs/mcp4728.toml");
 
@@ -2877,13 +2877,13 @@ impl Scheduler {
         &self.spi_buses
     }
 
-    /// Apply a live peripheral command (websocket SetInput onto a peripheral).
+    /// Apply a live peripheral command (websocket `SetInput` onto a peripheral).
     /// Returns true if a peripheral with that id existed.
     pub fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
         self.peripherals.set_value(id, value)
     }
 
-    /// (id, kind) of every attached peripheral and bus, for board_info.
+    /// (id, kind) of every attached peripheral and bus, for `board_info`.
     #[must_use]
     pub fn peripheral_infos(&self) -> Vec<(String, String)> {
         use crate::peripherals::Peripheral as _;
@@ -3105,7 +3105,7 @@ impl Scheduler {
 
     /// True when EVERY live MCU core can observe pin drive direction
     /// ([`Mcu::drive_direction_observable`]): the in-process AVR core (DDR
-    /// hooks), and any Renode core whose SoC descriptor carries a verified
+    /// hooks), and any Renode core whose system-on-chip descriptor carries a verified
     /// direction-register map for each polled port. Conservative AND across
     /// cores: one direction-blind MCU makes the whole run's configured-output
     /// picture untrustworthy, so a boot-state check must then hedge ("undriven
@@ -5083,7 +5083,7 @@ impl Scheduler {
         &self.frame_peak_current
     }
 
-    /// Per-net (min_v, max_v) over the last completed frame's sub-chunks.
+    /// Per-net (`min_v`, `max_v`) over the last completed frame's sub-chunks.
     #[must_use]
     pub const fn frame_v_extremes(&self) -> &HashMap<String, (f64, f64)> {
         &self.frame_v_extremes
@@ -5669,7 +5669,7 @@ impl Scheduler {
     /// device beyond the driver's own Thevenin pair (a pin wired to nothing
     /// analog pays nothing). Pins failing any test keep the cheap DC path.
     ///
-    /// Coarse-stamped backends (cycle_exact == false) still get the drive:
+    /// Coarse-stamped backends (`cycle_exact` == false) still get the drive:
     /// their per-poll ordering is preserved even though intra-poll spacing is
     /// approximate, and an approximately-timed pulse train integrates far
     /// closer to the truth than a collapsed level. The per-pin point cap
@@ -5816,7 +5816,7 @@ impl Scheduler {
     }
 
     /// Per edge-driven 74HC595 chain, the MCU GPIO `(port, bit)` bound to its
-    /// SRCLK, RCLK, optional SRCLR_n, optional OE_n, and head SER, plus the chip
+    /// SRCLK, RCLK, optional `SRCLR_n`, optional `OE_n`, and head SER, plus the chip
     /// count. Empty when no chain is clocked by the MCU (the once-per-chunk
     /// path handles it). Exposed for diagnostics and co-sim tests of the chain
     /// wiring.
@@ -5861,7 +5861,7 @@ impl Scheduler {
             .collect()
     }
 
-    /// Drain the faults raised since the last call (for SimFrame).
+    /// Drain the faults raised since the last call (for `SimFrame`).
     pub fn drain_faults(&mut self) -> Vec<FaultEvent> {
         std::mem::take(&mut self.faults_pending)
     }
@@ -5884,7 +5884,7 @@ impl Scheduler {
         false
     }
 
-    /// Live supply readout per net: (kind label, last rail current A, SoC).
+    /// Live supply readout per net: (kind label, last rail current A, state of charge).
     #[must_use]
     pub fn supply_states(&self) -> HashMap<String, (String, f64, f64)> {
         self.supplies
@@ -6239,9 +6239,9 @@ pub fn backend_is_external(backend: &str) -> bool {
 ///
 /// The part token is passed STRAIGHT to simavr, which owns the list of cores it
 /// has and returns a null MCU for anything else (`AvrMcu::new` turns that into a
-/// named error). Silently substituting an ATmega328P for an unrecognised token
+/// named error). Silently substituting an `ATmega328P` for an unrecognised token
 /// would be the wrong-ISA failure the QEMU and Renode paths above refuse by
-/// name: an ATmega1284P board has ports A-D, 16 KB of SRAM and two USARTs, and
+/// name: an `ATmega1284P` board has ports A-D, 16 KB of SRAM and two USARTs, and
 /// running its firmware on a 2 KB three-port core produces a plausible-looking
 /// trace of a chip that is not on the board. A board asking for a core simavr
 /// does not have fails loudly and says which cores it does have.
@@ -6474,7 +6474,7 @@ pub enum LevelProvenance {
 /// companion of [`Scheduler::drive_direction_observable`], for callers (like
 /// `hauksbee-ci init`) that reason about a board before any co-sim runs:
 ///   - `simavr:*`, true, the in-process core reads DDR;
-///   - `renode:<part>`, true iff the part's SoC descriptor resolves and every
+///   - `renode:<part>`, true iff the part's `SoC` descriptor resolves and every
 ///     GPIO port carries a direction-register map (`dir = {...}`, verified
 ///     per-part; see `db/mcu/*.soc.toml`);
 ///   - anything else (QEMU, unknown futures), false, fail-safe.
@@ -7231,7 +7231,7 @@ missing = ["measurement_registers"]
         sched.responder_registries.push(None);
     }
 
-    /// A PLAIN_INPUT_BOARD scheduler with one mock MCU whose GPIO drivers sit
+    /// A `PLAIN_INPUT_BOARD` scheduler with one mock MCU whose GPIO drivers sit
     /// on fresh per-pin nets. Returns the core's shared handles.
     fn sched_with_core(core: MockCore, pins: &[(char, u8)]) -> (Scheduler, MockCore) {
         let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
@@ -7248,7 +7248,7 @@ missing = ["measurement_registers"]
         (sched, handles)
     }
 
-    /// A PLAIN_INPUT_BOARD scheduler whose single live MCU is a bus-blind core
+    /// A `PLAIN_INPUT_BOARD` scheduler whose single live MCU is a bus-blind core
     /// with ADC channel 0 bound to `adc_net`.
     fn sched_with_bus_blind_core(adc_net: &str) -> Scheduler {
         let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
@@ -7606,7 +7606,7 @@ missing = ["measurement_registers"]
     }
 
     /// A part simavr has is built as itself; one it lacks fails loudly with
-    /// the available cores named, never silently substituted by an ATmega328P.
+    /// the available cores named, never silently substituted by an `ATmega328P`.
     #[cfg(feature = "avr")]
     #[test]
     fn the_avr_backend_builds_the_part_the_board_asked_for_or_refuses() {
@@ -8354,7 +8354,7 @@ data_out = ["io0"]
     }
 
     /// `pin_driving_node` must return the lowest (port, bit) on a shared net
-    /// regardless of HashMap iteration order.
+    /// regardless of `HashMap` iteration order.
     #[test]
     fn pin_driving_node_is_deterministic_when_multiple_pins_share_a_net() {
         let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
@@ -9381,7 +9381,7 @@ data_out = ["io0"]
 /// `renode:<part>` instantiation consults the SoC-descriptor override dirs:
 /// override beats builtin, an invalid override fails loudly, aliases fall back
 /// to their canonical descriptors, and an unknown part names the dirs searched.
-/// One test fn: it mutates HAUKSBEE_MCU_DIR.
+/// One test fn: it mutates `HAUKSBEE_MCU_DIR`.
 #[cfg(all(test, feature = "renode"))]
 mod soc_wiring_tests {
     use super::resolve_renode_config;
