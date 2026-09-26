@@ -344,17 +344,35 @@ fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
 }
 
 /// An input-current-limited converter settles where its limited input power
-/// meets the load, `V = sqrt(lim * eff * Vin * R)`: 2.67 V here. Newton used
-/// to limit-cycle between the regulating and the clamped branch.
+/// meets the load, `V = sqrt(lim * eff * Vin * R)` (0.22 V for 5 mA from 5 V
+/// into 2.2R), drawing its limit and out of regulation, or regulates where that
+/// is above 3.3 V. Newton used to limit-cycle between the regulating and the
+/// clamped branch; a milliamp limit then failed its DC solve, reading 0 V.
 #[test]
 fn input_limited_converter_finds_its_operating_point() {
-    let lib = lib_with_card("iin", 3.3, "iin_limit_a = 0.02", false);
-    let (_, trace) = run_lc_buck(&lc_buck_board("+12V", "33R", "22uF", false), &lib, 5);
-    let want = (0.02 * 0.9 * 12.0 * 33.0_f64).sqrt();
-    assert!(
-        trace.iter().all(|v| (v - want).abs() < 0.01 * want),
-        "{trace:?}"
-    );
+    for (vin, load, ohms, cout, lim, fb) in [
+        (12.0_f64, "33R", 33.0, "22uF", 0.02, false),
+        (5.0, "2.2R", 2.2, "4700uF", 0.005, true),
+        (5.0, "33R", 33.0, "10uF", 0.005, false),
+        (24.0, "2.2R", 2.2, "100uF", 0.005, false),
+        (12.0, "1Meg", 1e6, "10uF", 0.005, true),
+    ] {
+        let lib = lib_with_card(
+            &format!("iin{vin}{load}"),
+            3.3,
+            &format!("iin_limit_a = {lim}"),
+            fb,
+        );
+        let (sched, trace) =
+            run_lc_buck(&lc_buck_board(&format!("+{vin}V"), load, cout, fb), &lib, 5);
+        let want = (lim * 0.9 * vin * ohms).sqrt().min(3.3);
+        let iin = sched.behavioral_states()[0].2.unwrap();
+        let limited = (iin - lim).abs() < 0.02 * lim && trace[4] < 0.95 * 3.3;
+        assert!(
+            trace.iter().all(|v| (v - want).abs() < 0.01 * want) && (limited || want >= 3.3),
+            "{vin} V into {load}: want {want} V, iin {iin} A, got {trace:?}"
+        );
+    }
 }
 
 /// The 3.3 V feedback buck from +12V with `cout` on +OUT, stepped by 1.5 A at

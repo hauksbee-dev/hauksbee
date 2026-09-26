@@ -235,13 +235,18 @@ const DC_FARADS: f64 = 22e-6;
 /// would, with the output capacitor open, kick a millifarad loop from one clamp
 /// to the other each Newton iteration. A clamped loop's DC point moves by the
 /// clamp's rounding, so an output at or below `DC_FARADS` keeps its real gain.
+/// The factor also keeps the clamp's linear span, `cap/(g*dc)`, at least a
+/// fifth of `V(ref)`: an input-limited `cap` of milliamps left a sub-millivolt
+/// span that Newton stepped straight across, from clamp to clamp.
+///
+/// The input-power cap `P/V` continues below 1 mV along its tangent, not flat:
+/// a flat floor sent a Newton iterate at 0 V to `P/1 mV` and cycled from there.
 ///
 /// The draw reads `V(sw)` held to `[0, hi]`, where the solved switch node
 /// always sits: a Newton iterate with the input near 0 V and the switch node
 /// not yet would otherwise divide into a kiloamp draw and throw the input rail.
 fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [String; 4] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
-    let dc = format!("if(time>0.0,1.0,{:?})", (DC_FARADS / farads).min(1.0));
     let (g, wz, wl) = (wc * farads, wc / 4.0, wc * 1e-5);
     let dmax = c.max_duty.unwrap_or(1.0);
     let armed = format!("min(max(__d3*{:?},0.0),1.0)", 1.0 / full_lim.min(0.01));
@@ -251,10 +256,15 @@ fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [S
     };
     let iout_max = c.iout_limit_a.unwrap_or(1e3);
     let cap = if c.iin_limit_a.is_some() || c.iin_program.is_some() {
-        format!("min({iout_max:?},max(__d3,0.0)*{eff:?}*max(__d4,0.0)/max(__d0,1e-3))")
+        let m = "max(__d0,1e-3)";
+        format!("min({iout_max:?},max(__d3,0.0)*{eff:?}*max(__d4,0.0)*(2.0*{m}-__d0)/({m}*{m}))")
     } else {
         format!("{armed}*{iout_max:?}")
     };
+    let dc = format!(
+        "if(time>0.0,1.0,min({:?},({cap})/({g:?}*max(0.2*__d6,1e-6))))",
+        (DC_FARADS / farads).min(1.0)
+    );
     let (ask, wid) = (format!("__d1+{dc}*__d2"), format!("0.02*({cap})"));
     let cmd = format!("0.5*(math::hypot({ask}+{cap},{wid})-math::hypot({ask}-({cap}),{wid}))");
     let top = format!("(({hi})-__d0)/{r:?}");
