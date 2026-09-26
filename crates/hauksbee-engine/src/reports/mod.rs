@@ -657,6 +657,10 @@ mod tests {
         .unwrap();
         let error = super::KicadClearanceInput::load(&board_path, &board)
             .expect_err("a malformed sibling must stop the run");
+        let clearance_bits = |input: &super::KicadClearanceInput| {
+            let rules = input.rules.as_ref().unwrap();
+            rules.effective_clearance("A", "B").to_bits()
+        };
         assert!(error
             .to_string()
             .contains("failed to parse custom rules file"));
@@ -667,14 +671,7 @@ mod tests {
         )
         .unwrap();
         let relaxed = super::KicadClearanceInput::load(&board_path, &board).unwrap();
-        assert_eq!(
-            relaxed
-                .rules
-                .as_ref()
-                .unwrap()
-                .effective_clearance("A", "B"),
-            0.127
-        );
+        assert_eq!(clearance_bits(&relaxed), 0.127_f64.to_bits());
         assert_eq!(
             relaxed.provenance(&board_path, "(kicad_pcb)", 0.127).source,
             crate::result::ClearanceRuleSource::CustomRulesFile
@@ -686,14 +683,7 @@ mod tests {
         )
         .unwrap();
         let tightened = super::KicadClearanceInput::load(&board_path, &board).unwrap();
-        assert_eq!(
-            tightened
-                .rules
-                .as_ref()
-                .unwrap()
-                .effective_clearance("A", "B"),
-            0.25
-        );
+        assert_eq!(clearance_bits(&tightened), 0.25_f64.to_bits());
 
         std::fs::write(
             board_path.with_extension("kicad_dru"),
@@ -701,14 +691,7 @@ mod tests {
         )
         .unwrap();
         let inactive = super::KicadClearanceInput::load(&board_path, &board).unwrap();
-        assert_eq!(
-            inactive
-                .rules
-                .as_ref()
-                .unwrap()
-                .effective_clearance("A", "B"),
-            0.2
-        );
+        assert_eq!(clearance_bits(&inactive), 0.2_f64.to_bits());
         let provenance = inactive.provenance(&board_path, "(kicad_pcb)", 0.2);
         assert_eq!(
             provenance.source,

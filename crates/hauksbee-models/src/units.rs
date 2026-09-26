@@ -77,7 +77,7 @@ fn name_dim(name: &str) -> Dim {
 
 /// The unit a param name's suffix declares: the multiplier to the base unit, and
 /// that base unit (`supply_static_ua` is 1e-6 A).
-pub(crate) fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
+pub fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
     const SUFFIXES: &[(&str, f64, &str)] = &[
         ("_v", 1.0, "V"),
         ("_volts", 1.0, "V"),
@@ -101,15 +101,16 @@ pub(crate) fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
 /// `mA` is (1e-3, "A"), `µV/°C` (1e-6, "V"), `V/µs` (1e6, "V"), `Ω` (1, "ohm"):
 /// the multiplier to base units, and the numerator's base unit. A `PP`/`rms`
 /// suffix (`µVPP`) is read through; an unknown denominator (`°C`, `√Hz`) is 1.
-pub(crate) fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
-    let (num, den) = unit.trim().split_once('/').unwrap_or((unit.trim(), ""));
+pub fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
+    let unit = unit.trim();
+    let (num, den) = unit.split_once('/').unwrap_or((unit, ""));
     let (scale, base) = prefixed_unit(num).or_else(|| product_unit(num))?;
     Some((scale / prefixed_unit(den).map_or(1.0, |(s, _)| s), base))
 }
 
 /// A unit naming a supply or an expression on one (`VDD`, `VCC+0.3`), not a
 /// physical quantity: its number would read as a ratio or offset of an unstated rail.
-pub(crate) fn rail_relative_unit(unit: &str) -> bool {
+pub fn rail_relative_unit(unit: &str) -> bool {
     let after_v = unit.trim().strip_prefix('V').unwrap_or_default();
     let rail = after_v.starts_with(|c: char| c.is_ascii_uppercase() || c == '-');
     si_unit(unit).is_none() && !matches!(after_v, "AC" | "DC") && (rail || unit.contains('+'))
@@ -129,7 +130,7 @@ fn product_unit(num: &str) -> Option<(f64, &'static str)> {
 /// The factor taking a number in `unit` to `want` (`mV` to `V` is 1e-3, `V/µs`
 /// to `V/s` is 1e6), or `None` unless both name the same quantity over the same
 /// denominator: `mV/°C` or `dB` is refused, never read as volts.
-pub(crate) fn scale_between(unit: &str, want: &str) -> Option<f64> {
+pub fn scale_between(unit: &str, want: &str) -> Option<f64> {
     let den = |u: &str| Option::map(u.split_once('/'), |(_, d)| prefixed_unit(d).map(|p| p.1));
     let ((a, top), (b, want_top)) = (si_unit(unit)?, si_unit(want)?);
     (top == want_top && den(unit) == den(want)).then_some(a / b)
@@ -177,7 +178,7 @@ fn converted_from(text: &str) -> Option<(&str, f64)> {
     }
     .trim_end_matches([',', ';', '.', ')']);
     si_unit(unit)
-        .filter(|(scale, _)| *scale != 1.0)
+        .filter(|(scale, _)| scale.to_bits() != 1.0_f64.to_bits())
         .map(|(scale, _)| (unit, scale))
 }
 
@@ -185,12 +186,12 @@ fn converted_from(text: &str) -> Option<(&str, f64)> {
 /// prefixed unit, but whose number was not converted (or was converted twice).
 /// A printed datasheet number lies within 1e-4..1e4 of its own unit, so a
 /// column that reads back outside that window in the source unit is wrong.
-pub(crate) fn conversion_problem(
+pub fn conversion_problem(
     texts: &[&str],
     unit: &str,
     columns: &[(&str, Option<f64>)],
 ) -> Option<String> {
-    si_unit(unit).filter(|(scale, _)| *scale == 1.0)?;
+    si_unit(unit).filter(|(scale, _)| scale.to_bits() == 1.0_f64.to_bits())?;
     let (from, scale) = texts.iter().find_map(|t| converted_from(t))?;
     let (column, v) = columns.iter().find_map(|&(column, v)| {
         let wrong = |v: &f64| *v != 0.0 && !(1e-4..=1e4).contains(&(v.abs() / scale));
@@ -230,16 +231,13 @@ fn unit_name(e: Exponents) -> String {
 }
 
 /// The unit a behavioral law's result must carry.
-pub(crate) const CURRENT: (Exponents, &str) = (AMP, "current law");
-pub(crate) const VOLTAGE: (Exponents, &str) = (VOLT, "voltage law");
+pub const CURRENT: (Exponents, &str) = (AMP, "current law");
+pub const VOLTAGE: (Exponents, &str) = (VOLT, "voltage law");
 
 /// Check `expr` for internal dimensional consistency and, when `expected` is
 /// given, that its result has that dimension. `Err` names the first mismatch;
 /// anything the checker cannot judge is `Ok`.
-pub(crate) fn check_dimensions(
-    expr: &str,
-    expected: Option<(Exponents, &str)>,
-) -> Result<(), String> {
+pub fn check_dimensions(expr: &str, expected: Option<(Exponents, &str)>) -> Result<(), String> {
     let Some(tokens) = tokenize(expr) else {
         return Ok(());
     };

@@ -1,8 +1,10 @@
-//! Physical-range validation for model parameters. Used by the extraction
-//! pipeline to reject LLM-generated model entries whose parameters are missing or
-//! out of physical bounds before they are saved to the user database, so a
-//! hallucinated part value cannot silently enter the model library. [`validate`]
-//! collects every violation at once rather than stopping at the first.
+//! Physical-range validation for model parameters.
+//!
+//! Used by the extraction pipeline to reject LLM-generated model entries whose
+//! parameters are missing or out of physical bounds before they are saved to
+//! the user database, so a hallucinated part value cannot silently enter the
+//! model library. [`validate`] collects every violation at once rather than
+//! stopping at the first.
 
 use std::collections::HashSet;
 
@@ -39,7 +41,13 @@ fn has_role_ci(entry: &ModelEntry, role: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(role))
 }
 
+/// The message every role rule shares: `what` '`role`' is not a role in `[models.pins]`.
+fn not_a_role(what: impl std::fmt::Display, role: &str) -> String {
+    format!("{what} '{role}' is not a role in [models.pins]")
+}
+
 /// A role several pads may share as one net inside: supply, ground, NC, exposed pad.
+#[must_use]
 pub fn repeatable_role(role: &str) -> bool {
     let role = role.to_ascii_lowercase();
     let base = role.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
@@ -51,7 +59,7 @@ pub fn repeatable_role(role: &str) -> bool {
 /// A per-unit signal role on several pads (a lone electrode letter such as `"B"`
 /// aliases a numbered pad): merged units, which the binder wires once.
 fn merged_unit_roles(entry: &ModelEntry) -> Vec<String> {
-    use ComponentKind::*;
+    use ComponentKind::{BjtNpn, BjtPnp, Comparator, Digital, Opamp, ShiftRegister};
     let logic = &entry.logic;
     let units = match entry.kind {
         BjtNpn | BjtPnp => "collector_q1, base_q1, emitter_q1, collector_q2, ...",
@@ -75,6 +83,7 @@ fn merged_unit_roles(entry: &ModelEntry) -> Vec<String> {
 }
 
 /// True when the generic digital binder has executable logic for this card.
+#[must_use]
 pub fn digital_has_behavior(entry: &ModelEntry) -> bool {
     entry.kind != ComponentKind::Digital
         || !entry.logic.is_empty()
@@ -164,14 +173,20 @@ fn printed(entry: &ModelEntry, key: &str, v: f64) -> bool {
         crate::param_names::param_unit(key).unwrap_or(""),
         crate::units::scale_between,
     );
-    let scale = |r: &Characteristic| sb(&r.unit, unit).or(sb(&r.unit, &r.unit).xor(Some(1.0)));
-    let hit = |r, x: f64| scale(r).is_some_and(|s| (x.abs() * s - v.abs()).abs() <= 1e-9 * v.abs());
+    let scale =
+        |r: &Characteristic| sb(&r.unit, unit).or_else(|| sb(&r.unit, &r.unit).xor(Some(1.0)));
+    let hit =
+        |r, x: f64| scale(r).is_some_and(|s| x.abs().mul_add(s, -v.abs()).abs() <= 1e-9 * v.abs());
     let mut rows = entry.source.iter().flat_map(|s| &s.characteristic);
     rows.any(|r| [r.min, r.typ, r.max].iter().flatten().any(|x| hit(r, *x)))
 }
 
+// One table: each kind's required params and physical ranges, one arm per kind.
+#[allow(clippy::too_many_lines)]
 fn kind_rules(entry: &ModelEntry) -> KindRules {
-    use ComponentKind::*;
+    use ComponentKind::{
+        AnalogSwitch, BjtNpn, BjtPnp, Comparator, Diode, Nmos, Opamp, Pmos, Timer, Vreg,
+    };
     match entry.kind {
         Diode => KindRules {
             required: &["is", "n", "rs"],
@@ -224,9 +239,10 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
         // FB bias is usually tiny or unpublished, so `iq_a` is what it needs.
         Vreg if entry.behavioral.converter.is_none() && entry.params.get_f64("vref").is_some() => {
             KindRules {
-                required: match has_role(entry, "gnd") {
-                    true => &["vref", "dropout_v", "iq_a"],
-                    false => &["vref", "dropout_v", "iadj_a"],
+                required: if has_role(entry, "gnd") {
+                    &["vref", "dropout_v", "iq_a"]
+                } else {
+                    &["vref", "dropout_v", "iadj_a"]
                 },
                 ranges: &[
                     ("dropout_v", 0.0, 10.0),
@@ -322,6 +338,12 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
 
 /// Validate a [`ModelEntry`], checking that required params are present and
 /// within physical bounds. Returns `Ok(())` on success, or a list of violations.
+///
+/// # Errors
+///
+/// Returns every [`ValidationError`] found, not just the first.
+// The entry validator: one flat walk, one rule per line, in the order the card's tables appear.
+#[allow(clippy::too_many_lines)]
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut p = Problems::default();
     let params = &entry.params;
@@ -343,16 +365,14 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             } => {
                 supplies.extend([*min_v, *max_v, abs_max_v.unwrap_or(0.0)]);
                 p.require(has_role_ci(entry, pin), || {
-                    format!("operating envelope pin '{pin}' is not a role in [models.pins]")
+                    not_a_role("operating envelope pin", pin)
                 });
-                p.require(
-                    min_v.is_finite() && max_v.is_finite() && min_v < max_v,
-                    || {
-                        format!(
+                let ordered = min_v.is_finite() && max_v.is_finite() && min_v < max_v;
+                p.require(ordered, || {
+                    format!(
                         "operating envelope requires finite min_v < max_v, got {min_v} and {max_v}"
                     )
-                    },
-                );
+                });
                 p.require(
                     !abs_max_v.is_some_and(|v| !v.is_finite() || v < *max_v),
                     || format!("operating envelope abs_max_v must be finite and at least max_v {max_v}"),
@@ -361,9 +381,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             OperatingEnvelope::RailOrder { lower, upper, .. } => {
                 for (field, role) in [("lower", lower), ("upper", upper)] {
                     p.require(has_role_ci(entry, role), || {
-                        format!(
-                            "operating envelope {field} role '{role}' is not a role in [models.pins]"
-                        )
+                        not_a_role(format!("operating envelope {field} role"), role)
                     });
                 }
                 p.require(!lower.eq_ignore_ascii_case(upper), || {
@@ -498,12 +516,12 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 let mut any = false;
                 for role in raw.split(',').map(str::trim).filter(|r| !r.is_empty()) {
                     any = true;
-                    if !seen.insert(role.to_ascii_lowercase()) {
-                        p.push(format!("params.must_not_float_roles repeats role '{role}'"));
-                    } else {
+                    if seen.insert(role.to_ascii_lowercase()) {
                         p.require(has_role_ci(entry, role), || {
                             format!("params.must_not_float_roles entry '{role}' is not a role in [models.pins]")
                         });
+                    } else {
+                        p.push(format!("params.must_not_float_roles repeats role '{role}'"));
                     }
                 }
                 p.require(any, || "params.must_not_float_roles names no roles".into());
@@ -694,6 +712,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+// One arm per peripheral kind, each a flat list of its rules.
+#[allow(clippy::too_many_lines)]
 fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Problems) {
     match peripheral {
         PeripheralSpec::I2cEeprom {
@@ -817,9 +837,7 @@ fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Pro
             };
             for (name, role) in roles {
                 p.require(!role.trim().is_empty() && has_role(entry, role), || {
-                    format!(
-                        "peripheral register-map {name} '{role}' is not a role in [models.pins]"
-                    )
+                    not_a_role(format!("peripheral register-map {name}"), role)
                 });
             }
             for (level, role) in required_high_roles
@@ -873,10 +891,7 @@ fn check_current_program(
 ) {
     let role_ok = |role: &str| !role.trim().is_empty() && has_role_ci(entry, role.trim());
     p.require(role_ok(&program.pin), || {
-        format!(
-            "current_program.pin '{}' is not a role in [models.pins]",
-            program.pin
-        )
+        not_a_role("current_program.pin", &program.pin)
     });
 
     let regulated = program.semantics == CurrentProgramSemantics::RegulatedCurrent;
@@ -890,9 +905,7 @@ fn check_current_program(
         let mut seen = HashSet::new();
         for role in roles {
             if !role_ok(role) {
-                p.push(format!(
-                    "current_program.{field} entry '{role}' is not a role in [models.pins]"
-                ));
+                p.push(not_a_role(format!("current_program.{field} entry"), role));
             } else if !seen.insert(role.trim().to_ascii_lowercase()) {
                 p.push(format!("current_program.{field} repeats role '{role}'"));
             }
@@ -956,9 +969,7 @@ fn check_current_program(
             let mut seen = HashSet::new();
             for role in sense_roles {
                 p.require(role_ok(role), || {
-                    format!(
-                        "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
-                    )
+                    not_a_role("current_program.sense_roles entry", role)
                 });
                 p.require(seen.insert(role.trim().to_ascii_lowercase()), || {
                     format!("current_program.sense_roles repeats role '{role}'")
@@ -1101,8 +1112,11 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
 
 /// Why a card's pin map leaves it OPEN at bind time: one line per role the
 /// binder's path for its kind reads (`bind_vreg`, `bind_adj_vreg`, the device
-/// binders) that the map does not declare. `models resolve` reports the same
-/// lines, so a card that lints clean is not left open for its pin map.
+/// binders) that the map does not declare.
+///
+/// `models resolve` reports the same lines, so a card that lints clean is not
+/// left open for its pin map.
+#[must_use]
 pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     // A behavioral part (converter/FSM/DAC power IC) references its pins from
     // the [models.behavioral] block by arbitrary datasheet names, NOT through
@@ -1217,9 +1231,9 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
     let declared = entry.variant.as_ref().and_then(|v| v.package.as_deref());
     let named: Vec<&Pinout> = pinouts
         .iter()
-        .filter(|o| match declared {
-            Some(package) => plain(&o.package) == plain(package),
-            None => pinouts.len() == 1 || description.contains(&plain(&o.package)),
+        .filter(|o| match (declared, plain(&o.package)) {
+            (Some(package), own) => own == plain(package),
+            (None, own) => pinouts.len() == 1 || description.contains(&own),
         })
         .collect();
     // A description naming "SOT-23-5" also contains "SOT-23": the longer is meant.
@@ -1285,6 +1299,7 @@ pub const KIND_NAMES: &[&str] = &[
 
 /// Every bound [`validate`] holds `kind`'s params to, across the variants a param
 /// selects, so the extraction prompt quotes the checker, not a drifting copy.
+#[must_use]
 pub fn param_bounds(kind: ComponentKind) -> Vec<String> {
     let num = |v: f64| match v.abs() {
         a if a == 0.0 || (1e-3..1e5).contains(&a) => v.to_string(),
@@ -1313,10 +1328,12 @@ pub fn param_bounds(kind: ComponentKind) -> Vec<String> {
     lines
 }
 
-/// A did-you-mean for a kind name the schema rejected. Common industry
-/// synonyms map directly (an author typing `ldo` should be told `vreg`, not
-/// left to guess which of seventeen names we meant); anything else falls back
-/// to nearest-edit-distance over [`KIND_NAMES`].
+/// A did-you-mean for a kind name the schema rejected.
+///
+/// Common industry synonyms map directly (an author typing `ldo` should be told
+/// `vreg`, not left to guess which of seventeen names we meant); anything else
+/// falls back to nearest-edit-distance over [`KIND_NAMES`].
+#[must_use]
 pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
     let lower = unknown.trim().to_ascii_lowercase();
     let alias = match lower.as_str() {
@@ -1349,22 +1366,24 @@ pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
     })
 }
 
-/// If a TOML deserialization error is an unknown [`ComponentKind`] variant,
-/// the note to append: the did-you-mean, or the full vocabulary. Detected
-/// from the error text (serde owns the wording); the `bjt_npn` probe keeps it
-/// from firing on some other enum's unknown-variant error.
+/// If a TOML deserialization error is an unknown [`ComponentKind`] variant, the
+/// note to append: the did-you-mean, or the full vocabulary.
+///
+/// Detected from the error text (serde owns the wording); the `bjt_npn` probe
+/// keeps it from firing on some other enum's unknown-variant error.
+#[must_use]
 pub fn kind_error_note(err_text: &str) -> Option<String> {
     if !err_text.contains("unknown variant") || !err_text.contains("bjt_npn") {
         return None;
     }
     let unknown = err_text.split('`').nth(1)?;
-    Some(match kind_suggestion(unknown) {
-        Some(s) => format!("unknown kind '{unknown}': did you mean '{s}'?"),
-        None => format!(
+    let Some(s) = kind_suggestion(unknown) else {
+        return Some(format!(
             "unknown kind '{unknown}'; valid kinds: {}",
             KIND_NAMES.join(", ")
-        ),
-    })
+        ));
+    };
+    Some(format!("unknown kind '{unknown}': did you mean '{s}'?"))
 }
 
 const SOURCE_KEYS: &str = "tier validation references uncertainty characteristic pinout";
@@ -1373,9 +1392,11 @@ const RECORD_KINDS: &str = " ([[...source.uncertainty]] status = \"interval\" bo
     printed row's min/typ/max columns as printed)";
 
 /// Every missing and unknown key of every `[models.source]` / `[sensor.source]`
-/// record, read from the raw TOML so one lint run names them all (a parse stops
-/// at the first, and an uncertainty record drops an unknown key silently, so a
-/// `typ` written there would otherwise vanish).
+/// record.
+///
+/// Read from the raw TOML so one lint run names them all: a parse stops at the
+/// first, and an uncertainty record drops an unknown key silently, so a `typ`
+/// written there would otherwise vanish.
 pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
     let models = root.get("models").and_then(toml::Value::as_array);
     let sources = models.into_iter().flatten().enumerate();
@@ -1504,13 +1525,13 @@ mod tests {
     /// Refused: a merged unit role, a swapped Schmitt pair, a rail at a supply.
     #[test]
     fn merged_units_swapped_levels_and_supply_rails_are_refused() {
+        fn roles(s: &str) -> Vec<(&str, &str)> {
+            s.split(' ').filter_map(|r| r.split_once(':')).collect()
+        }
         let mut e = entry(
             ComponentKind::Opamp,
             &[("gain", 1e5), ("swing_lo", 0.02), ("swing_hi", 1.5)],
         );
-        fn roles(s: &str) -> Vec<(&str, &str)> {
-            s.split(' ').filter_map(|r| r.split_once(':')).collect()
-        }
         let dual = "4:vee 8:vcc 1:out_a 2:in_minus_a 3:in_plus_a 5:in_plus_b 6:in_minus_b 7:out_b";
         pins(&mut e, &roles(dual));
         accepts(&e);
@@ -1626,7 +1647,7 @@ mod tests {
         // A behavioral pin without a converter still binds through `bind_vreg`.
         let mut sink = vreg(&[]);
         pins(&mut sink, &[("1", "in"), ("2", "gate"), ("3", "gnd")]);
-        sink.behavioral.pins.insert("gate".into(), Default::default());
+        sink.behavioral.pins.insert("gate".into(), crate::behavioral::BehavioralPin::default());
         rejects(&sink, "declares no 'out' pin");
 
         rejects(
@@ -1726,13 +1747,13 @@ mod tests {
         rejects(&e, "missing");
     }
 
-    fn i2c_eeprom() -> Option<PeripheralSpec> {
-        Some(PeripheralSpec::I2cEeprom {
+    const fn i2c_eeprom() -> PeripheralSpec {
+        PeripheralSpec::I2cEeprom {
             address: 0x50,
             size_bytes: 128,
             page_size: 8,
             word_address_bytes: 1,
-        })
+        }
     }
 
     #[test]
@@ -1742,7 +1763,7 @@ mod tests {
             &mut e,
             &[("1", "scl"), ("2", "gnd"), ("3", "sda"), ("4", "vcc")],
         );
-        e.peripheral = i2c_eeprom();
+        e.peripheral = Some(i2c_eeprom());
         e.peripheral_power = Some(PeripheralPower {
             supply_role: "vcc".into(),
             return_role: "gnd".into(),
@@ -1756,7 +1777,7 @@ mod tests {
 
         e.peripheral = None;
         rejects(&e, "requires a [models.peripheral]");
-        e.peripheral = i2c_eeprom();
+        e.peripheral = Some(i2c_eeprom());
 
         e.peripheral_power.as_mut().unwrap().supply_role = "missing".into();
         rejects(&e, "not a role");

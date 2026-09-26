@@ -66,8 +66,8 @@ fn every_builtin_passive_entry_declares_its_class() {
 /// The classes the extract-side resistor test depends on, pinned at the source.
 #[test]
 fn generic_passives_resolve_to_the_right_class() {
-    let lib = ModelLibrary::builtin_shared();
     use PassiveClass::{Capacitor, Crystal, FerriteBead, Fuse, Inductor, NetTie, Resistor};
+    let lib = ModelLibrary::builtin_shared();
     for (lib_id, value, footprint, expected) in [
         ("Device:R", "10k", "", Some(Resistor)),
         ("Device:C", "100nF", "", Some(Capacitor)),

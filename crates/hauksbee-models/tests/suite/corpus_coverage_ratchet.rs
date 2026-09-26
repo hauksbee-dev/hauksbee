@@ -295,7 +295,8 @@ fn the_corpus_wide_rate_holds_its_floor() {
     }
 
     assert!(total > 0, "no components read from {} boards", boards.len());
-    let pct = 100.0 * bound as f64 / total as f64;
+    let count = |n: usize| f64::from(u32::try_from(n).expect("component count fits u32"));
+    let pct = 100.0 * count(bound) / count(total);
     assert!(
         pct >= CORPUS_WIDE_FLOOR_PCT,
         "corpus-wide bind rate {pct:.1}% ({bound} of {total} across {} boards) \

@@ -1286,7 +1286,7 @@ mod rate_honesty_tests {
     async fn achieved_rate_reports_what_the_loop_delivered() {
         let msgs = play_for(TestEngine::new(5.0, false), 2.0).await;
         let slow = frames(&msgs).last().expect("at least one frame");
-        assert_eq!(slow.requested_factor, 1.0);
+        assert_eq!(slow.requested_factor.to_bits(), 1.0_f64.to_bits());
         assert!(slow.rate_limited);
         assert!(
             (0.03..=0.30).contains(&slow.realtime_factor),

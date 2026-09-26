@@ -24,7 +24,7 @@ impl fmt::Display for ParsedValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.si)?;
         if let Some(u) = &self.unit {
-            write!(f, " {}", u)?;
+            write!(f, " {u}")?;
         }
         Ok(())
     }
@@ -51,6 +51,7 @@ impl fmt::Display for ParsedValue {
 /// assert_eq!(parse_value("10MEG").unwrap().si, 10_000_000.0);
 /// assert_eq!(parse_value("22uH").unwrap().si, 22e-6);
 /// ```
+#[must_use]
 pub fn parse_value(s: &str) -> Option<ParsedValue> {
     let s = s.trim();
     if s.is_empty() {
@@ -99,9 +100,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // current token be mis-picked as the magnitude ("2A_22u" → 2 F instead of 22 uF).
     // Filter both so V and A are treated identically everywhere.
     parse_inner(v).filter(|p| {
-        p.si.is_finite()
-            && p.si >= 0.0
-            && !matches!(p.unit.as_deref(), Some("V") | Some("A") | Some("Hz"))
+        p.si.is_finite() && p.si >= 0.0 && !matches!(p.unit.as_deref(), Some("V" | "A" | "Hz"))
     })
 }
 
@@ -149,6 +148,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
 /// assert_eq!(parse_frequency_hz("600@100MHz"), None);
 /// assert_eq!(parse_frequency_hz("10k"), None);
 /// ```
+#[must_use]
 pub fn parse_frequency_hz(s: &str) -> Option<f64> {
     let cleaned = normalise_frequency_comma(&normalise_unicode(s.trim()));
     let p = parse_inner(&cleaned)?;
@@ -200,7 +200,7 @@ fn is_jedec_semiconductor(v: &str) -> bool {
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
-/// "0402_47k"). `"0402".parse::<f64>()` is 402, silently accepting one binds
+/// "`0402_47k`"). `"0402".parse::<f64>()` is 402, silently accepting one binds
 /// a 47 kΩ part at 402 Ω.
 const FOOTPRINT_SIZE_CODES: [&str; 9] = [
     "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
@@ -241,13 +241,9 @@ fn normalise_comma_decimal(s: &str) -> String {
         let prev_digit = before_comma
             .chars()
             .next_back()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false);
+            .is_some_and(|c| c.is_ascii_digit());
         // Length of the digit run immediately after the comma.
-        let run = after_comma
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .count();
+        let run = after_comma.chars().take_while(char::is_ascii_digit).count();
         if prev_digit && run >= 1 {
             // A single comma is a thousands separator for a grouped integer: a
             // nonzero integer part with no leading zero and a 3-digit group. The
@@ -261,9 +257,9 @@ fn normalise_comma_decimal(s: &str) -> String {
             let int_grouped = before_comma.bytes().all(|b| b.is_ascii_digit())
                 && before_comma.as_bytes().first() != Some(&b'0');
             if run == 3 && int_grouped {
-                return format!("{}{}", before_comma, after_comma);
+                return format!("{before_comma}{after_comma}");
             }
-            return format!("{}.{}", before_comma, after_comma);
+            return format!("{before_comma}.{after_comma}");
         }
     }
     s.to_string()
@@ -322,7 +318,7 @@ fn fixup_tolerance_unit(unit: Option<String>, suffix: Option<&str>) -> Option<St
         // 'R' already means ohms; the trailing F is tolerance → ohmic value.
         Some("R") => Some("Ω".to_string()),
         // Resistance-scale multipliers: F is a tolerance code, not a unit.
-        Some("k") | Some("M") | Some("G") | Some("T") | Some("MEG") | Some("GIG") => None,
+        Some("k" | "M" | "G" | "T" | "MEG" | "GIG") => None,
         // No multiplier, or a capacitance-scale prefix (p/n/u/m): genuine Farad.
         _ => unit,
     }
@@ -441,7 +437,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let digits = after_suffix.bytes().take_while(u8::is_ascii_digit).count();
         let (frac_digits, after_frac) = after_suffix.split_at(digits);
         // Rebuild as "4.7"
-        let combined = format!("{}.{}", before, frac_digits);
+        let combined = format!("{before}.{frac_digits}");
         let mut unit = parse_tail(after_frac)?;
         if unit.is_none() {
             // An RKM decimal-point letter that is ITSELF a unit, H in "4H7",
@@ -469,7 +465,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     let mantissa: f64 = mantissa_str.parse().ok()?;
     Some(ParsedValue {
         si: mantissa * multiplier,
-        suffix: suffix_str.map(|s| s.to_string()),
+        suffix: suffix_str.map(ToString::to_string),
         unit,
     })
 }
@@ -506,7 +502,7 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
         while j < bytes.len() && bytes[j].is_ascii_digit() {
             j += 1;
         }
-        !matches!(bytes.get(j), Some(b'V') | Some(b'v'))
+        !matches!(bytes.get(j), Some(b'V' | b'v'))
     };
     match bytes[0] {
         b'H' | b'h' if next_is_digit => return (1.0, Some("H"), &s[1..]),
@@ -542,7 +538,9 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
 /// unit token, an ignorable annotation (voltage rating, tolerance,
 /// dielectric), or both, and `None` when unparsed garbage remains. The
 /// caller must then reject the string: silently dropping the tail is exactly
-/// how "0402_47k" once read as 402 Ω.
+/// how "`0402_47k`" once read as 402 Ω.
+// The three outcomes are distinct: no unit (`Some(None)`), a unit, and garbage (`None`).
+#[allow(clippy::option_option)]
 fn parse_tail(t: &str) -> Option<Option<String>> {
     if t.is_empty() {
         return Some(None);
@@ -620,15 +618,13 @@ fn unit_token(s: &str) -> Option<(String, &str)> {
 
 /// True when `rest` is empty or begins an ignorable trailing annotation.
 fn tail_is_annotation(rest: &str) -> bool {
-    match rest.chars().next() {
-        None => true,
-        Some(c) => c.is_whitespace() || c.is_ascii_digit() || is_annotation_start(c),
-    }
+    let annotation = |c: char| c.is_whitespace() || c.is_ascii_digit() || is_annotation_start(c);
+    rest.chars().next().is_none_or(annotation)
 }
 
 /// Characters that begin a tolerated trailing annotation (voltage rating,
 /// tolerance, dielectric): the magnitude before them is already complete.
-fn is_annotation_start(c: char) -> bool {
+const fn is_annotation_start(c: char) -> bool {
     matches!(c, '/' | ',' | ';' | '%' | '(' | '@' | '±' | '+')
 }
 

@@ -210,16 +210,13 @@ pub enum Encoding {
 
 impl Encoding {
     /// The natural byte width of this encoding (the default for `bytes`).
-    pub fn natural_width(self) -> usize {
+    #[must_use]
+    pub const fn natural_width(self) -> usize {
         match self {
-            Encoding::U8 => 1,
-            Encoding::U16Be
-            | Encoding::U16Le
-            | Encoding::I16Be
-            | Encoding::I16Le
-            | Encoding::Q71Be => 2,
-            Encoding::U20BeXlsb => 3,
-            Encoding::Raw => 0,
+            Self::U8 => 1,
+            Self::U16Be | Self::U16Le | Self::I16Be | Self::I16Le | Self::Q71Be => 2,
+            Self::U20BeXlsb => 3,
+            Self::Raw => 0,
         }
     }
 }
@@ -253,7 +250,7 @@ pub struct RegisterSpec {
     #[serde(default)]
     pub expr: Option<String>,
 
-    /// Constant bytes for an identity / config register (WHO_AM_I etc).
+    /// Constant bytes for an identity / config register (`WHO_AM_I` etc).
     #[serde(default)]
     pub r#const: Option<Vec<u8>>,
 
@@ -274,7 +271,7 @@ impl RegisterSpec {
         if let Some(c) = &self.r#const {
             return c.len();
         }
-        self.encoding.map(|e| e.natural_width()).unwrap_or(1).max(1)
+        self.encoding.map_or(1, Encoding::natural_width).max(1)
     }
 }
 
@@ -321,7 +318,8 @@ pub struct BitFieldSpec {
 
 impl BitFieldSpec {
     /// Extract this field from a decoded integer.
-    pub fn extract(&self, value: u32) -> u32 {
+    #[must_use]
+    pub const fn extract(&self, value: u32) -> u32 {
         let [high, low] = self.bits;
         let width = high - low + 1;
         let mask = if width >= 32 {
@@ -334,10 +332,11 @@ impl BitFieldSpec {
 }
 
 /// One pointer-framed writable register (`i2c_pointer` write style): the
-/// firmware writes the register pointer, then the payload bytes. When the
-/// payload reaches the encoding's width it is decoded and stored under `store`
-/// (a float variable read expressions may reference), and each declared field
-/// is extracted and stored under its own name.
+/// firmware writes the register pointer, then the payload bytes.
+///
+/// When the payload reaches the encoding's width it is decoded and stored under
+/// `store` (a float variable read expressions may reference), and each declared
+/// field is extracted and stored under its own name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteRegisterSpec {
     /// Register address (the I2C pointer value).
@@ -392,15 +391,16 @@ pub struct ChannelSelectSpec {
     pub bits: Option<[u8; 2]>,
 }
 
-fn default_channel_select() -> ChannelSelectSpec {
+const fn default_channel_select() -> ChannelSelectSpec {
     ChannelSelectSpec {
         source: ChannelSource::Auto,
         bits: None,
     }
 }
 
-/// One command family of a command-framed write protocol (the MCP4728 shape):
-/// the first write byte selects the command by mask/value, then the remaining
+/// One command family of a command-framed write protocol (the MCP4728 shape).
+///
+/// The first write byte selects the command by mask/value, then the remaining
 /// bytes decode as fixed-size big-endian groups whose bit fields update the
 /// per-channel state.
 ///
@@ -408,11 +408,11 @@ fn default_channel_select() -> ChannelSelectSpec {
 /// MCP4728 Sequential Write, mask 0xF8) must be listed before a broader one it
 /// overlaps (Multi/Single, mask 0xC0). A first byte matching no command makes
 /// the whole transaction accepted-and-ignored; the honest analogue of a real
-/// part ACKing a command family the model does not implement; the interpreter
+/// part ACK-ing a command family the model does not implement; the interpreter
 /// counts these so a test can assert nothing was silently dropped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteCommandSpec {
-    /// Diagnostic name ("fast_write").
+    /// Diagnostic name ("`fast_write`").
     pub name: String,
     /// The command matches when `first_byte & match_mask == match_value`.
     pub match_mask: u8,
@@ -441,12 +441,14 @@ pub struct WriteCommandSpec {
 }
 
 /// A driven analog output: an evalexpr law over the device's variables (one
-/// channel's state + inputs + stores) producing a voltage. The engine binds a
-/// net driver to the output by name/channel; at each transaction end
-/// (`on_stop(ctx)`) the law is evaluated and pushed onto the net.
+/// channel's state + inputs + stores) producing a voltage.
+///
+/// The engine binds a net driver to the output by name/channel; at each
+/// transaction end (`on_stop(ctx)`) the law is evaluated and pushed onto the
+/// net.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputSpec {
-    /// Stable name ("vout_a") the engine binds a driver to.
+    /// Stable name ("`vout_a`") the engine binds a driver to.
     pub name: String,
     /// Which channel's state the expression sees. Default 0.
     #[serde(default)]
@@ -458,10 +460,12 @@ pub struct OutputSpec {
 
 /// A streamed read frame for command-framed devices that answer a master read
 /// with a fixed byte sequence instead of a pointered register (the MCP4728's
-/// 24-byte status/EEPROM frame). Each entry is an evalexpr producing one byte
-/// (rounded, clamped to 0..=255). With `per_channel = true` the byte list is
-/// emitted once per channel (channel 0 first), and each channel's exprs see
-/// that channel's state; reads wrap at the frame end.
+/// 24-byte status/EEPROM frame).
+///
+/// Each entry is an evalexpr producing one byte (rounded, clamped to 0..=255).
+/// With `per_channel = true` the byte list is emitted once per channel (channel
+/// 0 first), and each channel's exprs see that channel's state; reads wrap at
+/// the frame end.
 ///
 /// Mutually exclusive with `[[sensor.register]]`: a device either answers
 /// pointered reads or streams a frame, both at once has no defined wire
@@ -478,7 +482,7 @@ pub struct ReadFrameSpec {
 pub struct ProtocolSpec {
     pub style: ProtocolStyle,
     /// SPI only: is the read bit a 1 in the high bit of the command byte?
-    /// (true for most ST / InvenSense parts). Default true.
+    /// (true for most ST / `InvenSense` parts). Default true.
     #[serde(default = "default_true")]
     pub rw_read_is_high: bool,
     /// SPI only: mask applied to the command byte to recover the register addr.
@@ -522,14 +526,14 @@ pub struct AddressChoice {
     pub assumed: Option<String>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_addr_mask() -> u8 {
+const fn default_addr_mask() -> u8 {
     0x7f
 }
 
-fn default_channels() -> usize {
+const fn default_channels() -> usize {
     1
 }
 
@@ -597,6 +601,7 @@ impl Sensor {
     /// `RegisterMapSensor::from_spec` key construction call this, so there is one
     /// definition of the key mapping. The engine's live-transaction
     /// `normalize_addr` is the runtime analog and must stay consistent with it.
+    #[must_use]
     pub fn register_key(&self, addr: u8) -> u8 {
         if self.bus == Bus::Spi && self.protocol.style == ProtocolStyle::SpiReg {
             addr & self.protocol.addr_mask
@@ -606,7 +611,8 @@ impl Sensor {
     }
 
     /// The bus roles `[sensor.pins]` must name for this bus.
-    pub fn bus_roles(&self) -> &'static [&'static str] {
+    #[must_use]
+    pub const fn bus_roles(&self) -> &'static [&'static str] {
         match self.bus {
             Bus::I2c => &["scl", "sda"],
             Bus::Spi => &["cs", "sck", "mosi", "miso"],
@@ -643,17 +649,14 @@ impl Sensor {
                 Err(why) => return Some(assume(why)),
             };
         }
-        Some(
-            match self.address_selects.iter().find(|row| row.straps == levels) {
-                Some(row) => AddressChoice {
-                    address: row.address,
-                    assumed: None,
-                },
-                None => assume(format!(
-                    "the board's strap levels {levels:?} match no [[sensor.address_select]] row"
-                )),
-            },
-        )
+        let Some(row) = self.address_selects.iter().find(|row| row.straps == levels) else {
+            let why = "match no [[sensor.address_select]] row";
+            return Some(assume(format!("the board's strap levels {levels:?} {why}")));
+        };
+        Some(AddressChoice {
+            address: row.address,
+            assumed: None,
+        })
     }
 }
 
@@ -721,19 +724,29 @@ fn check_refs(
 
 impl SensorSpec {
     /// Parse a `[sensor]` spec from TOML and validate it.
+    ///
+    /// # Errors
+    ///
+    /// A [`SensorSpecError`] when `src` is not a valid `[sensor]` spec in TOML, or
+    /// when the parsed spec fails [`Self::validate`].
     pub fn from_toml(src: &str) -> Result<Self, SensorSpecError> {
-        let spec: SensorSpec = toml::from_str(src)?;
+        let spec: Self = toml::from_str(src)?;
         spec.validate()?;
         Ok(spec)
     }
 
     /// Serialise back to TOML (used by the round-trip validation).
+    ///
+    /// # Errors
+    ///
+    /// A [`SensorSpecError`] when the TOML serialiser rejects the spec.
     pub fn to_toml(&self) -> Result<String, SensorSpecError> {
         Ok(toml::to_string(self)?)
     }
 
     /// Convenience accessor.
-    pub fn sensor(&self) -> &Sensor {
+    #[must_use]
+    pub const fn sensor(&self) -> &Sensor {
         &self.sensor
     }
 
@@ -741,6 +754,12 @@ impl SensorSpec {
     /// expr/const exclusivity, protocol/bus agreement, byte widths, and the
     /// write side (framing coherence, bit ranges, namespace uniqueness,
     /// expression references).
+    ///
+    /// # Errors
+    ///
+    /// A [`SensorSpecError`] naming the first rule above that the spec breaks.
+    // One flat walk, one rule per line, in the order the spec's fields are declared.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
         check!(!s.name.trim().is_empty(), "sensor.name must not be empty");
@@ -839,10 +858,10 @@ impl SensorSpec {
                 seen_addrs.insert(key),
                 "duplicate register addr 0x{:02x}{}",
                 r.addr,
-                if key != r.addr {
-                    format!(" (post-mask 0x{key:02x})")
-                } else {
+                if key == r.addr {
                     String::new()
+                } else {
+                    format!(" (post-mask 0x{key:02x})")
                 }
             );
             match (r.encoding, &r.r#const, &r.expr) {
@@ -957,6 +976,8 @@ impl SensorSpec {
 
     /// The write side: framing coherence, bit ranges, namespace uniqueness,
     /// expression references.
+    // One flat walk over the write side, one rule per line, in declaration order.
+    #[allow(clippy::too_many_lines)]
     fn validate_write_side(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
         let has_write_side = !s.write_registers.is_empty()

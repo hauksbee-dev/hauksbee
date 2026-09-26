@@ -6,7 +6,7 @@
 //! by vendor, because the failure modes are what generalise:
 //!
 //!   1. A part number the library had, under a spelling no CAD tool writes
-//!      (Eagle's "ATMEGA1284M" for the 44-pad ATmega1284P).
+//!      (Eagle's "ATMEGA1284M" for the 44-pad `ATmega1284P`).
 //!   2. A module, where the whole board hangs off one carrier (the Pro Micro on
 //!      a split keyboard) and the header pin numbers are not the chip's.
 //!   3. A part number that ENCODES the parameter, where matching the family
@@ -39,7 +39,7 @@ fn expect_id(value: &str, id: &str) -> ModelEntry {
 
 /// Eagle's Atmel library names the 44-pad MLF part "ATMEGA1284M", with the
 /// package as a trailing letter, and that is the literal string in the value
-/// field of every board laid out with it. The library had no ATmega1284 entry at
+/// field of every board laid out with it. The library had no `ATmega1284` entry at
 /// all, so a datalogger built around one reported its own processor as an open
 /// circuit.
 ///
@@ -128,7 +128,7 @@ fn the_eagle_mlf44_spelling_of_the_atmega1284p_binds_to_its_own_pinout() {
 /// the difference between a board that simulates and a board with no processor.
 ///
 /// The roles are the assertion, not just the presence. The binder's `module`
-/// d-number table is the Arduino NANO's ATmega328P mapping, and the silkscreened
+/// d-number table is the Arduino NANO's `ATmega328P` mapping, and the silkscreened
 /// numbers do not agree between the two boards: D5 is PC6 on a Pro Micro and PD5
 /// on a Nano, D8 is PB4 here and PB0 there. So this entry names the PORT PIN on
 /// every header position, and a regression that replaced these with `d<n>` names
@@ -471,6 +471,8 @@ fn the_74lvc1g66_has_one_pinout_and_pad_three_is_ground() {
 /// here are the ones whose mis-assignment would be electrically destructive
 /// rather than merely wrong: supplies, grounds, and driven outputs.
 #[test]
+// Five parts in sequence, each with its datasheet pinout notes beside its asserts.
+#[allow(clippy::too_many_lines)]
 fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     // FT231X: the QFN-20 and SSOP-20 have DIFFERENT pin orders, so only the Q
     // may borrow this map. VCCIO (pad 20) is the rail every logic level is
@@ -1215,8 +1217,8 @@ fn each_abstention_names_its_unlocking_input_and_binds_nothing() {
 /// Does this role set give `bind_analog_switch`'s single-throw path two terminals it
 /// can actually PICK?
 ///
-/// `a` comes from com / in_out_a / in_out_1a / s0 and `b` from s0 / in_out_b /
-/// in_out_1b / com, and the path requires `a != b`. So `com` pairs with `s0` and with
+/// `a` comes from com / `in_out_a` / `in_out_1a` / s0 and `b` from s0 / `in_out_b` /
+/// `in_out_1b` / com, and the path requires `a != b`. So `com` pairs with `s0` and with
 /// nothing else: an entry naming `com` and `s1` but no `s0` resolves BOTH ends to
 /// `com`, gets `a == b`, and drops through to the pick-two-arbitrary-non-power-nodes
 /// fallback, stamping a switch between whatever the board happened to wire. An

@@ -278,14 +278,17 @@ default_roles!(
 );
 
 impl ModelCoverage {
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.implements.is_empty() && self.missing.is_empty()
     }
 }
 
-/// Where a model entry's numbers come from, on the source accuracy ladder:
-/// the tier, whether the entry has been validated, and any declared numeric
-/// uncertainty. Feeds the evidence spine's `ModelSource` records.
+/// Where a model entry's numbers come from, on the source accuracy ladder: the
+/// tier, whether the entry has been validated, and any declared numeric
+/// uncertainty.
+///
+/// Feeds the evidence spine's `ModelSource` records.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelSourceSpec {
@@ -319,8 +322,10 @@ pub struct Pinout {
 
 /// One published characteristic row carrying only the min/typ/max columns the
 /// row prints, so a one-sided limit or a typical-only value keeps its number
-/// without becoming a two-sided interval. As a `[models.params]` value it is
-/// that param's row, and `parameter` defaults to the key.
+/// without becoming a two-sided interval.
+///
+/// As a `[models.params]` value it is that param's row, and `parameter`
+/// defaults to the key.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Characteristic {
@@ -380,6 +385,7 @@ impl Characteristic {
     /// ordered min <= typ <= max by signed value; a row printed as negative
     /// values may instead keep the datasheet's magnitude order (PNP and
     /// negative-rail tables print |min| <= |max|), never a mix of the two.
+    #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let columns = [self.min, self.typ, self.max];
         let values: Vec<f64> = columns.iter().flatten().copied().collect();
@@ -392,9 +398,10 @@ impl Characteristic {
             let negative = values.iter().all(|v| *v < 0.0);
             let magnitude_order = negative && values.iter().map(|v| v.abs()).is_sorted();
             if !(values.is_sorted() || magnitude_order) {
-                let offsets = match negative || values.iter().all(|v| *v > 0.0) {
-                    true => "; a threshold printed as an offset from another spec is a signed offset (negative below it), ascending, with that spec named in conditions",
-                    false => "",
+                let offsets = if negative || values.iter().all(|v| *v > 0.0) {
+                    "; a threshold printed as an offset from another spec is a signed offset (negative below it), ascending, with that spec named in conditions"
+                } else {
+                    ""
                 };
                 out.push(format!("requires min <= typ <= max by signed value (a row printed negative may keep its magnitude order); keep each printed sign in its printed column{offsets}"));
             }
@@ -420,6 +427,7 @@ impl Characteristic {
     /// A drafted row writing a supply-relative limit as a number: under a rail
     /// unit (`VDD`), or as the bare offset its own text quotes (`VDD + 0.5 V`
     /// stored as 0.5). Extraction only: a curated card may keep a checked ratio.
+    #[must_use]
     pub fn supply_relative_problem(&self) -> Option<String> {
         static OFFSET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
             regex::Regex::new(r"\bV([A-Z][A-Z0-9]*)\s*([-+−])\s*(\d+(?:\.\d+)?)")
@@ -462,6 +470,10 @@ pub struct ModelSourceReference {
 impl ModelSourceSpec {
     /// Every citation and every uncertainty and characteristic record must be
     /// well formed; all problems at once, `; `-joined (see [`Self::problems`]).
+    ///
+    /// # Errors
+    ///
+    /// Fails with every problem [`Self::problems`] finds, `; `-joined.
     pub fn validate(&self) -> Result<(), String> {
         let problems = self.problems();
         if problems.is_empty() {
@@ -475,6 +487,7 @@ impl ModelSourceSpec {
     /// reports them all. An interval whose basis cites columns must cite both a
     /// min and a max: a typ never becomes a bound, and an absent column is
     /// never an invented 0.
+    #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         for (index, reference) in self.references.iter().enumerate() {
@@ -528,6 +541,7 @@ impl ModelSourceSpec {
     }
 
     /// Whether any uncertainty record covers model-form error (`parameter = "model"`).
+    #[must_use]
     pub fn declares_model_error(&self) -> bool {
         self.uncertainty.iter().any(|u| {
             matches!(u, ModelUncertainty::Interval { parameter, .. }
@@ -537,6 +551,7 @@ impl ModelSourceSpec {
 }
 
 /// The lint warning for a datasheet-derived source with no model-error record.
+#[must_use]
 pub fn model_error_warning(source: Option<&ModelSourceSpec>) -> Option<&'static str> {
     let source = source.filter(|s| s.tier == ModelSourceTier::DatasheetDerived)?;
     let warning = "model-error record missing (extraction inserts the unknown record)";
@@ -546,6 +561,12 @@ pub fn model_error_warning(source: Option<&ModelSourceSpec>) -> Option<&'static 
 impl ModelSourceReference {
     /// A citation must be fetchable over TLS, name what it cites, and carry a
     /// well-formed digest when it carries one.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the url is not `https://` (and the citation is not a local file
+    /// with a digest), the title or locator is blank, or the digest is not 64 hex
+    /// characters.
     pub fn validate(&self) -> Result<(), String> {
         let local = self.url.is_empty() && self.sha256.is_some();
         if !local && !self.url.starts_with("https://") {
@@ -563,7 +584,7 @@ impl ModelSourceReference {
     }
 }
 
-fn unvalidated() -> ModelValidation {
+const fn unvalidated() -> ModelValidation {
     ModelValidation::Unvalidated
 }
 
@@ -621,7 +642,7 @@ pub struct CurrentProgram {
     /// Behavior when the published equation asks for more than the sourced
     /// normal-operating endpoint. The safe default is to abstain. Saturation
     /// must be explicit and cited by the model author.
-    #[serde(default, skip_serializing_if = "AboveDomainBehavior::is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub above_domain: AboveDomainBehavior,
 
     /// Manufacturer programming equation, flattened into the TOML block so a
@@ -654,10 +675,8 @@ pub enum AboveDomainBehavior {
     Saturate,
 }
 
-impl AboveDomainBehavior {
-    fn is_default(&self) -> bool {
-        *self == Self::Abstain
-    }
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// Supported current-programming equations.
@@ -739,6 +758,7 @@ impl CurrentProgram {
     /// Evaluate the published resistor equation without applying the part's
     /// normal-operating ceiling. Returns `None` for a non-positive/non-finite
     /// resistance or if malformed data would produce a non-physical result.
+    #[must_use]
     pub fn equation_current_a(&self, resistance_ohms: f64) -> Option<f64> {
         if !positive_finite(resistance_ohms) {
             return None;
@@ -779,6 +799,7 @@ impl CurrentProgram {
     /// For one-resistor equations `sense_resistance_ohms` is intentionally
     /// ignored; for the sense-scaled form both positive finite resistances are
     /// required.
+    #[must_use]
     pub fn equation_current_with_sense_a(
         &self,
         program_resistance_ohms: f64,
@@ -807,11 +828,13 @@ impl CurrentProgram {
     /// Evaluate the board's nominal programmed current, applying only the
     /// explicit normal-operating ceiling from this block—not a device rating.
     /// Datasheet/resistor tolerances are not implied by a point equation.
+    #[must_use]
     pub fn operating_current_a(&self, resistance_ohms: f64) -> Option<f64> {
         self.apply_operating_domain(self.equation_current_a(resistance_ohms)?)
     }
 
     /// Sense-aware counterpart to [`Self::operating_current_a`].
+    #[must_use]
     pub fn operating_current_with_sense_a(
         &self,
         program_resistance_ohms: f64,
@@ -837,7 +860,7 @@ pub struct StrapPin {
     pub level: StrapLevel,
     /// True only for a *boot-select* strap whose wrong static level is
     /// unrecoverable: it latches which boot source / mode the part enters, and
-    /// firmware cannot undo it (BOOT0, GPIO0/GPIO9 boot pin, QSPI_SS/BOOTSEL).
+    /// firmware cannot undo it (BOOT0, GPIO0/GPIO9 boot pin, `QSPI_SS/BOOTSEL`).
     /// The wrong-bias lint arm fires only on these. Cosmetic or flash-voltage
     /// straps that a board may legitimately repurpose as ordinary GPIO with a
     /// pull (ESP32 GPIO15 boot-log, GPIO2, GPIO12/GPIO45 flash-voltage) leave
@@ -901,11 +924,12 @@ pub enum StrapLevel {
 }
 
 impl StrapLevel {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            StrapLevel::High => "high",
-            StrapLevel::Low => "low",
-            StrapLevel::Defined => "a defined level",
+            Self::High => "high",
+            Self::Low => "low",
+            Self::Defined => "a defined level",
         }
     }
 }
@@ -975,7 +999,7 @@ pub struct Ratings {
     pub theta_jc_c_per_w: Option<f64>,
 
     /// FLOOR, not a ceiling: the least current (A) the datasheet guarantees regulation
-    /// at (TL431 IKmin, an LDO minimum load); below it the run discloses, not answers.
+    /// at (TL431 `IKmin`, an LDO minimum load); below it the run discloses, not answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_current_a: Option<f64>,
 
@@ -1046,6 +1070,7 @@ pub enum OperatingEnvelope {
 }
 
 impl OperatingEnvelope {
+    #[must_use]
     pub fn basis(&self) -> &str {
         match self {
             Self::SupplyRange { basis, .. }
@@ -1054,7 +1079,8 @@ impl OperatingEnvelope {
         }
     }
 
-    pub fn severity(&self) -> EnvelopeSeverity {
+    #[must_use]
+    pub const fn severity(&self) -> EnvelopeSeverity {
         match self {
             Self::SupplyRange { severity, .. }
             | Self::RailOrder { severity, .. }
@@ -1081,8 +1107,9 @@ impl Ratings {
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
   vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics";
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
-        *self == Ratings::default()
+        *self == Self::default()
     }
 }
 
@@ -1175,8 +1202,9 @@ impl PassiveClass {
     /// asks "can this be a pull-up / pull-down / series termination?" uses, so
     /// no call site re-derives the answer from the variant list and drifts when
     /// a variant is added.
-    pub fn is_resistor(self) -> bool {
-        matches!(self, PassiveClass::Resistor)
+    #[must_use]
+    pub const fn is_resistor(self) -> bool {
+        matches!(self, Self::Resistor)
     }
 }
 
@@ -1184,12 +1212,12 @@ impl PassiveClass {
 
 /// Rules that determine whether a model entry matches a component.
 ///
-/// All populated rules are ANDed: the entry matches only when every
+/// All populated rules are AND-ed: the entry matches only when every
 /// non-`None` rule fires. At least one rule must be populated.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MatchRules {
-    /// Exact KiCad lib_id string (e.g. `"Device:R"`) or prefix ending with
-    /// `":"` (e.g. `"Device:"` matches any lib_id in the Device library).
+    /// Exact KiCad `lib_id` string (e.g. `"Device:R"`) or prefix ending with
+    /// `":"` (e.g. `"Device:"` matches any `lib_id` in the Device library).
     #[serde(default)]
     pub lib_id: Option<String>,
 
@@ -1218,6 +1246,7 @@ pub struct MatchRules {
 
 impl MatchRules {
     /// True when at least one rule field is populated.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.lib_id.is_none()
             && self.value_re.is_none()
@@ -1240,6 +1269,7 @@ pub struct Params(pub BTreeMap<String, ParamValue>);
 impl Params {
     /// Retrieve a floating-point param by name: a number, or the column of a
     /// printed row that [`crate::param_names::row_value`] picks for `key`.
+    #[must_use]
     pub fn get_f64(&self, key: &str) -> Option<f64> {
         match self.0.get(key)? {
             ParamValue::Row(row) => crate::param_names::row_value(key, row).ok(),
@@ -1256,12 +1286,14 @@ impl Params {
     }
 
     /// Retrieve a string param by name.
+    #[must_use]
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.0.get(key)?.as_str()
     }
 
     /// Retrieve a boolean param by name. `None` when the key is absent or its
     /// value is not a bool, so `flag = false` is distinguishable from omitted.
+    #[must_use]
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.0.get(key)?.as_bool()
     }
@@ -1292,6 +1324,7 @@ impl Params {
     }
 
     /// True when no params are present.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -1323,27 +1356,32 @@ param_from!(f64 => Float, i64 => Int, bool => Bool, String => String);
 impl ParamValue {
     /// Return as `f64`, converting integers; `None` for a row, whose value
     /// depends on its key.
-    pub fn as_f64(&self) -> Option<f64> {
+    #[must_use]
+    pub const fn as_f64(&self) -> Option<f64> {
         match self {
-            ParamValue::Float(v) => Some(*v),
-            ParamValue::Int(v) => Some(*v as f64),
+            Self::Float(v) => Some(*v),
+            // A TOML integer is a count or a small constant; past 2^53 it rounds, as f64 must.
+            #[allow(clippy::cast_precision_loss)]
+            Self::Int(v) => Some(*v as f64),
             _ => None,
         }
     }
 
     /// Return as `&str` for string values.
-    pub fn as_str(&self) -> Option<&str> {
+    #[must_use]
+    pub const fn as_str(&self) -> Option<&str> {
         match self {
-            ParamValue::String(s) => Some(s.as_str()),
+            Self::String(s) => Some(s.as_str()),
             _ => None,
         }
     }
 
     /// Return as `bool` for boolean values. `None` for non-bool params, so a
     /// caller can distinguish `flag = false` from an omitted/non-bool `flag`.
-    pub fn as_bool(&self) -> Option<bool> {
+    #[must_use]
+    pub const fn as_bool(&self) -> Option<bool> {
         match self {
-            ParamValue::Bool(b) => Some(*b),
+            Self::Bool(b) => Some(*b),
             _ => None,
         }
     }
@@ -1429,7 +1467,7 @@ mod tests {
                     );
                 }
                 (needle, Err(e)) if !needle.is_empty() => {
-                    assert!(e.contains(needle), "{columns}: {e}")
+                    assert!(e.contains(needle), "{columns}: {e}");
                 }
                 (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
             }

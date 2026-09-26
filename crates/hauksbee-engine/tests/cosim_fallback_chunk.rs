@@ -369,7 +369,7 @@ fn broken_estimator_is_caught_by_the_bracket_check() {
     let est = windows[0]
         .error_estimate_v
         .expect("the broken hook still records an estimate (that is the point)");
-    assert_eq!(est, 0.0, "the tamper hook zeroes the estimate");
+    assert_eq!(est.to_bits(), 0.0_f64.to_bits(), "tamper hook zeroes it");
     let reported = sched.net_voltage("vc").expect("vc net exists");
     let analytic = rlc_analytic_vc(CHUNK);
     assert!(

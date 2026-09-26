@@ -105,14 +105,20 @@ pub struct UnmodelledNote {
 
 impl UnmodelledTable {
     /// An empty table.
-    pub fn empty() -> Self {
-        UnmodelledTable { parts: Vec::new() }
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { parts: Vec::new() }
     }
 
     /// Parse and append abstentions from one TOML source string.
     ///
     /// `prepend` puts the new entries *ahead* of the existing ones, so a later
     /// user-supplied file overrides the built-ins. Returns the ids loaded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, loading nothing, when `src` is not valid TOML or an entry has a blank
+    /// `value_re`, `because` or `unlocked_by`, or a pattern that does not compile.
     pub fn load_toml_str(&mut self, src: &str, prepend: bool) -> Result<Vec<String>, String> {
         let file: UnmodelledFile =
             toml::from_str(src).map_err(|e| format!("unmodelled: TOML parse error: {e}"))?;
@@ -163,12 +169,14 @@ impl UnmodelledTable {
     }
 
     /// Number of loaded abstentions.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.parts.len()
     }
 
     /// Whether the table is empty.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.parts.is_empty()
     }
 
@@ -176,6 +184,7 @@ impl UnmodelledTable {
     ///
     /// `value` and `mpn` are both consulted because a board may carry the part
     /// number in either; the first entry matching either wins.
+    #[must_use]
     pub fn note_for(&self, value: &str, mpn: &str) -> Option<&UnmodelledNote> {
         self.parts
             .iter()

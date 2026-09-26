@@ -109,9 +109,9 @@ fn each_missing_field_is_named() {
 /// Each single manifest mutation fails with its own named `PackError`.
 #[test]
 fn each_bad_manifest_mutation_is_named() {
-    let edit = |from: &str, to: &str| GOOD_MANIFEST.replace(from, to);
     // (what was broken, the edited manifest, the error it must raise)
     type Case = (&'static str, String, fn(&PackError) -> bool);
+    let edit = |from: &str, to: &str| GOOD_MANIFEST.replace(from, to);
     let cases: [Case; 4] = [
         (
             "bad name",

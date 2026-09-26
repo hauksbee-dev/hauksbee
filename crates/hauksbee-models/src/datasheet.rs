@@ -108,10 +108,13 @@ struct SelectedPage {
 /// codex gets a named permission profile instead ([`codex_confinement`]):
 /// shell commands may read this directory, the OS/runtime paths codex calls
 /// `:minimal`, the package prefixes in [`CONFINED_READ_ROOTS`] and the checker
-/// executable, and nothing under home, `/tmp` or `$TMPDIR`. Claude Code gets the
-/// same boundary from its Bash sandbox plus `--restricted` file tools
-/// ([`claude_confinement`]). agy and codex's read-only / danger-full-access
-/// modes are NOT read-confined by hauksbee. The CLI process itself still reads
+/// executable, and nothing under home, `/tmp` or `$TMPDIR` (`read-only` mode gets
+/// the same profile with the workspace read-only). Claude Code gets
+/// `--restricted` file tools and a Bash sandbox denying home, user, volume and
+/// temp roots ([`claude_confinement`]); its shell can still read other system
+/// paths. agy gets only its own `--sandbox`, which hauksbee cannot verify; codex's
+/// `danger-full-access` mode and custom commands are NOT confined by hauksbee.
+/// The CLI process itself still reads
 /// its own sign-in, and whatever the agent reads goes to the vendor.
 ///
 /// The rest of the contract still matters: the run happens only when the user
@@ -141,13 +144,17 @@ pub struct Workspace {
 impl Workspace {
     /// An empty sandbox with no datasheet in it, for a connectivity check that
     /// runs the backend on a one-line prompt. Same isolation as a real run.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the sandbox directory cannot be created under the temp root.
     pub fn scratch() -> Result<Self> {
         let dir = workspace_tempdir(
             &std::env::temp_dir(),
             "hauksbee-extract-check-",
             "creating the check sandbox",
         )?;
-        Ok(Workspace {
+        Ok(Self {
             pdf: dir.path().join("datasheet.pdf"),
             dir,
             pages: Vec::new(),
@@ -158,6 +165,7 @@ impl Workspace {
         })
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
@@ -165,6 +173,7 @@ impl Workspace {
     /// Where codex must write its answer. Reading a file beats scraping stdout:
     /// stdout carries the agent's narration too, and a model that says "here
     /// is the TOML" twice leaves two candidate blocks to choose between.
+    #[must_use]
     pub fn answer_path(&self) -> PathBuf {
         self.dir.path().join("model.toml")
     }
@@ -186,6 +195,10 @@ fn workspace_tempdir(root: &Path, prefix: &str, context: &str) -> Result<tempfil
 ///
 /// The boundary is the whole security story of an agent running full-auto, so
 /// it is asserted rather than trusted. Exposed for `tests/extract_sandbox.rs`.
+///
+/// # Errors
+///
+/// Fails when the sandbox cannot be created or the PDF cannot be copied into it.
 pub fn sandbox_for_test(pdf: &Path) -> Result<Workspace> {
     prepare_workspace_in(pdf, &std::env::temp_dir())
 }
@@ -213,19 +226,19 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
             .join("\u{000c}");
         std::fs::write(dir.path().join("datasheet.txt"), dump).is_ok()
     });
-    let selections = page_text
-        .as_deref()
-        .map(|pages| select_relevant_pages(pages, MAX_RENDERED_PAGES))
-        .unwrap_or_else(|| {
-            (1..=MAX_RENDERED_PAGES)
-                .map(|number| SelectedPage {
-                    number,
-                    reasons: vec!["front-page fallback because the PDF text layer was unavailable"],
-                    supplemental_reasons: Vec::new(),
-                    score: 0,
-                })
-                .collect()
-        });
+    let front_pages = || {
+        (1..=MAX_RENDERED_PAGES)
+            .map(|number| SelectedPage {
+                number,
+                reasons: vec!["front-page fallback because the PDF text layer was unavailable"],
+                supplemental_reasons: Vec::new(),
+                score: 0,
+            })
+            .collect()
+    };
+    let selections = page_text.as_deref().map_or_else(front_pages, |pages| {
+        select_relevant_pages(pages, MAX_RENDERED_PAGES)
+    });
 
     // Page renders are best-effort. Without poppler the extraction still runs
     // on text alone, so a missing optional tool degrades the result rather
@@ -263,7 +276,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
                     say!(
                     "[model-extract] PDF page {page} failed to render, continuing without it: {}",
                     String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")
-                )
+                );
                 }
                 Err(_) => {}
             }
@@ -293,6 +306,13 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 }
 
 /// Run one extraction end to end, as the CLI does.
+///
+/// # Errors
+///
+/// Fails when the input is not a PDF, the kind cannot be identified, the settings
+/// cannot be resolved, the backend is unavailable or fails, the draft never
+/// validates within the retries, the run times out, or the result cannot be
+/// written.
 pub fn run(mut args: Args) -> Result<PathBuf> {
     // Magic bytes rather than extension, and BEFORE any backend is chosen: a
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
@@ -310,7 +330,7 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         );
     }
     progress::start();
-    let pdf_text = extract_pdf_text(&args.pdf)?;
+    let pdf_text = extract_pdf_text(&args.pdf);
 
     // An empty kind means "you work it out". Being made to classify a part
     // before the tool will look at it is a barrier at exactly the wrong
@@ -394,7 +414,9 @@ fn is_sensor_kind(kind: &str) -> bool {
 
 /// Build the LLM prompt that instructs the model to read a sensor datasheet and
 /// emit a `[sensor]` declarative register-map spec (the format defined in
-/// hauksbee-models::sensor_spec). The reply is validated by parsing it as a
+/// hauksbee-models::sensor_spec). The reply is validated by parsing it as a [`SensorSpec`].
+// The prompt is one template read top to bottom, as the model reads it.
+#[allow(clippy::too_many_lines)]
 fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     let bus = if kind.trim() == "spi_sensor" {
         "spi"
@@ -567,10 +589,12 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
     Ok(spec)
 }
 
-/// An agent run killed at its time limit. When the sandbox held a lint-clean
-/// draft it is still saved for review (`kept`), and this stays the run's error
-/// so the exit status says the draft is incomplete. Fields: the tool, the
-/// limit in seconds, and where the kept draft was published.
+/// An agent run killed at its time limit.
+///
+/// When the sandbox held a lint-clean draft it is still saved for review
+/// (`kept`), and this stays the run's error so the exit status says the draft
+/// is incomplete. Fields: the tool, the limit in seconds, and where the kept
+/// draft was published.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0} timed out after {1}s{tail}", tail = timeout_tail(.2.as_deref()))]
 pub struct TimedOut(pub String, pub u64, pub Option<PathBuf>);
@@ -599,7 +623,7 @@ fn timeout_tail(kept: Option<&Path>) -> String {
 /// Which LLM backend an extraction talks to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
-    /// `codex exec`, OpenAI's agent CLI.
+    /// `codex exec`, the Codex agent CLI.
     Codex,
     /// Headless `claude -p`, the same prompt contract as codex.
     ClaudeCode,
@@ -611,67 +635,63 @@ pub enum Backend {
 
 impl Backend {
     /// Every backend, in the order the surfaces list them.
-    pub const ALL: [Backend; 4] = [
-        Backend::ClaudeCode,
-        Backend::Agy,
-        Backend::Codex,
-        Backend::Api,
-    ];
+    pub const ALL: [Self; 4] = [Self::ClaudeCode, Self::Agy, Self::Codex, Self::Api];
 
     /// The stable id used on the command line, in the config file and on
     /// the wire.
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            Backend::Codex => "codex",
-            Backend::ClaudeCode => "claude-code",
-            Backend::Agy => "agy",
-            Backend::Api => "api",
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+            Self::Agy => "agy",
+            Self::Api => "api",
         }
     }
 
     /// The display name.
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            Backend::Codex => "Codex",
-            Backend::ClaudeCode => "Claude Code",
-            Backend::Agy => "Antigravity (agy)",
-            Backend::Api => "OpenAI-compatible API",
+            Self::Codex => "Codex",
+            Self::ClaudeCode => "Claude Code",
+            Self::Agy => "Antigravity (agy)",
+            Self::Api => "OpenAI-compatible API",
         }
     }
 
     /// The executable an agent backend needs on PATH; none for the API.
-    pub fn tool(self) -> Option<&'static str> {
+    #[must_use]
+    pub const fn tool(self) -> Option<&'static str> {
         match self {
-            Backend::Codex => Some("codex"),
-            Backend::ClaudeCode => Some("claude"),
-            Backend::Agy => Some("agy"),
-            Backend::Api => None,
+            Self::Codex => Some("codex"),
+            Self::ClaudeCode => Some("claude"),
+            Self::Agy => Some("agy"),
+            Self::Api => None,
         }
     }
 
     /// The one command that makes it available.
-    pub fn install_hint(self) -> &'static str {
+    #[must_use]
+    pub const fn install_hint(self) -> &'static str {
         match self {
-            Backend::Codex => "npm install -g @openai/codex   # then: codex login",
-            Backend::ClaudeCode => {
-                "npm install -g @anthropic-ai/claude-code   # then: claude login"
-            }
-            Backend::Agy => {
-                "install Antigravity from https://antigravity.google, then: agy install"
-            }
-            Backend::Api => {
+            Self::Codex => "npm install -g @openai/codex   # then: codex login",
+            Self::ClaudeCode => "npm install -g @anthropic-ai/claude-code   # then: claude login",
+            Self::Agy => "install Antigravity from https://antigravity.google, then: agy install",
+            Self::Api => {
                 "export OPENAI_API_KEY=...   # or name another variable with api.api_key_env"
             }
         }
     }
 
     /// Where the datasheet's text goes when this backend reads it.
-    pub fn sends_data_to(self) -> &'static str {
+    #[must_use]
+    pub const fn sends_data_to(self) -> &'static str {
         match self {
-            Backend::Codex => "OpenAI, via the account codex is signed in with",
-            Backend::ClaudeCode => "Anthropic, via the account claude is signed in with",
-            Backend::Agy => "Google, via the account agy is signed in with",
-            Backend::Api => "the endpoint named by api.base_url",
+            Self::Codex => "OpenAI, via the account codex is signed in with",
+            Self::ClaudeCode => "Anthropic, via the account claude is signed in with",
+            Self::Agy => "Google, via the account agy is signed in with",
+            Self::Api => "the endpoint named by api.base_url",
         }
     }
 }
@@ -680,10 +700,10 @@ impl std::str::FromStr for Backend {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
         match s.trim() {
-            "codex" => Ok(Backend::Codex),
-            "claude-code" | "claude" => Ok(Backend::ClaudeCode),
-            "agy" | "antigravity" => Ok(Backend::Agy),
-            "api" => Ok(Backend::Api),
+            "codex" => Ok(Self::Codex),
+            "claude-code" | "claude" => Ok(Self::ClaudeCode),
+            "agy" | "antigravity" => Ok(Self::Agy),
+            "api" => Ok(Self::Api),
             other => bail!("unknown backend '{other}': expected codex, claude-code, agy, or api"),
         }
     }
@@ -745,8 +765,9 @@ pub struct Args {
 impl Args {
     /// Build the arguments for one extraction, for a caller that is not the
     /// standalone binary's own `--flag` parser.
-    pub fn new(pdf: PathBuf, part: String, kind_str: String) -> Self {
-        Args {
+    #[must_use]
+    pub const fn new(pdf: PathBuf, part: String, kind_str: String) -> Self {
+        Self {
             pdf,
             part,
             kind_str,
@@ -762,6 +783,7 @@ impl Args {
         }
     }
 
+    #[must_use]
     pub fn out_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.out_dir = dir;
         self
@@ -770,44 +792,56 @@ impl Args {
     /// Pick the model the extraction agent runs on. An empty string means "not
     /// chosen", which is what a form field the user left alone posts, and must
     /// fall through to the default rather than become `--model ""`.
+    #[must_use]
     pub fn model(mut self, model: Option<String>) -> Self {
         self.model = model.filter(|m| !m.trim().is_empty());
         self
     }
 
     /// Pick the reasoning effort. Empty means "not chosen", as for `model`.
+    #[must_use]
     pub fn effort(mut self, effort: Option<String>) -> Self {
         self.effort = effort.filter(|e| !e.trim().is_empty());
         self
     }
 
     /// Pick the backend. `None` keeps the configured / auto-detected one.
-    pub fn backend(mut self, backend: Option<Backend>) -> Self {
+    #[must_use]
+    pub const fn backend(mut self, backend: Option<Backend>) -> Self {
         self.backend = backend;
         self
     }
 
+    #[must_use]
     pub fn api_base(mut self, base: Option<String>) -> Self {
         self.api_base = base.filter(|b| !b.trim().is_empty());
         self
     }
 
+    #[must_use]
     pub fn api_key_env(mut self, name: Option<String>) -> Self {
         self.api_key_env = name.filter(|n| !n.trim().is_empty());
         self
     }
 
     /// Name the checker executable; see [`Args::checker`].
+    #[must_use]
     pub fn checker(mut self, exe: Option<PathBuf>) -> Self {
         self.checker = exe;
         self
     }
 }
 
-/// Reject anything that is not a plausible environment-variable NAME. The
-/// flag takes the variable's name, never the key itself: a value with `-`,
+/// Reject anything that is not a plausible environment-variable NAME.
+///
+/// The flag takes the variable's name, never the key itself: a value with `-`,
 /// `.`, or other non-identifier characters is almost certainly a pasted key,
 /// and accepting it would put a secret on a world-readable argv.
+///
+/// # Errors
+///
+/// Fails when `name` is empty, starts with a digit, or holds any character
+/// outside `[A-Za-z0-9_]`.
 pub fn validate_api_key_env_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let ok_first = chars
@@ -832,18 +866,28 @@ pub fn validate_api_key_env_name(name: &str) -> Result<()> {
 pub const CONSENT_NOTICE: &str =
     "This sends the datasheet to an LLM backend: whichever is configured for extraction \
      (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend \
-     show` or the Settings page says which). The API gets the extracted text. An agent CLI \
-     runs a model with a shell on a scratch copy of the PDF, its text and page images, and \
-     whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude \
-     Code out of your home and temporary directories and off the web, but Antigravity, or \
-     Codex in another sandbox mode, can read anything your account can. Nothing is sent until \
-     you ask for it. The result is a draft for you to check, not a measurement: a model it \
-     writes carries tier \"datasheet-derived\" and the sha256 of the PDF it read.";
+     show` or the Settings page says which, and what confines it). The API gets the extracted \
+     text. An agent CLI runs a model with a shell on a scratch copy of the PDF, its text and \
+     page images, and whatever it reads can reach that vendor. hauksbee confines Codex to that \
+     copy plus system paths, offline (not in danger-full-access mode; in approve-for-me its \
+     reviewer may allow more). Claude Code's file tools stay in the copy; its shell cannot read \
+     home, user, volume or temp directories but can read other system files. Antigravity only \
+     gets its own sandbox, which hauksbee cannot verify, and hauksbee cannot confine a custom \
+     command: either may read anything your account can. Nothing is sent until you ask for it. \
+     The result is a draft for you to check, not a measurement: a model it writes carries \
+     tier \"datasheet-derived\" and the sha256 of the PDF it read.";
 
 /// Ask a yes/no question on the terminal, the prompt going to `out`; only `y`
-/// or `yes` is a yes. A pipe cannot answer, and guessing "yes" on its behalf
-/// would act because someone ran the wrong command, so a non-terminal stdin
-/// fails with `refusal` instead.
+/// or `yes` is a yes.
+///
+/// A pipe cannot answer, and guessing "yes" on its behalf would act because
+/// someone ran the wrong command, so a non-terminal stdin fails with `refusal`
+/// instead.
+///
+/// # Errors
+///
+/// Fails with `refusal` when stdin is not a terminal, and when writing the prompt
+/// or reading the answer fails.
 pub fn confirm(out: &mut dyn Write, question: &str, refusal: &str) -> Result<bool> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         bail!("{refusal}");
@@ -858,12 +902,23 @@ pub fn confirm(out: &mut dyn Write, question: &str, refusal: &str) -> Result<boo
     ))
 }
 
+/// Parse the process's own command line; see [`parse_args_from`].
+///
+/// # Errors
+///
+/// As [`parse_args_from`].
 pub fn parse_args() -> Result<Args> {
     parse_args_from(std::env::args().skip(1))
 }
 
 /// The flag parser, over any argument source so tests can drive it without a
 /// process spawn. `--help` still exits: it is a terminal answer, not a value.
+///
+/// # Errors
+///
+/// Fails on an unknown flag, a flag missing its value, an unknown backend, an
+/// `--api-key-env` that is not a variable name, or a missing `--pdf` or
+/// `--part`.
 pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
     let mut args = args.into_iter();
     // An empty kind means "the model works it out from the datasheet";
@@ -888,7 +943,7 @@ pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
             "--model" => out.model = Some(value("a value")?),
             "--effort" => out.effort = Some(value("a value (low, medium, high, ...)")?),
             "--backend" => {
-                out.backend = Some(value("a value (codex, claude-code, agy, or api)")?.parse()?)
+                out.backend = Some(value("a value (codex, claude-code, agy, or api)")?.parse()?);
             }
             "--api-base" => out.api_base = Some(value("a value")?),
             "--force" => out.force = true,
@@ -988,15 +1043,15 @@ fn pdftotext(path: &Path, layout: bool) -> Result<String> {
 /// The sentinel carries no path. The original location is local metadata an
 /// API request must not leak, and the API backend cannot open the file anyway,
 /// which is why `api_source_available` refuses that combination outright.
-fn extract_pdf_text(path: &Path) -> Result<String> {
+fn extract_pdf_text(path: &Path) -> String {
     if let Ok(text) = pdftotext(path, false) {
         progress::pages(text.matches('\u{000c}').count());
         if !text.trim().is_empty() {
-            return Ok(truncate_to_chars(&text, 60_000));
+            return truncate_to_chars(&text, 60_000);
         }
     }
     say!("[model-extract] pdftotext unavailable or produced no text; local agent backends will read the copied PDF directly");
-    Ok(PDF_TEXT_UNAVAILABLE.to_string())
+    PDF_TEXT_UNAVAILABLE.to_string()
 }
 
 fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
@@ -1057,12 +1112,13 @@ fn topic_score(text: &str, terms: &[&str]) -> usize {
                 .strip_prefix("table ")
                 .and_then(|text| text.split_once(". ").map(|(_, title)| title));
             let detailed_heading = heading_text.strip_prefix("detailed ");
-            terms.iter().any(|term| match term.is_ascii() {
-                false => first.is_some_and(|t| t.contains(term)),
-                true => {
+            terms.iter().any(|term| {
+                if term.is_ascii() {
                     heading_text.starts_with(term)
                         || table_heading.is_some_and(|title| title.starts_with(term))
                         || detailed_heading.is_some_and(|title| title.starts_with(term))
+                } else {
+                    first.is_some_and(|t| t.contains(term))
                 }
             })
         });
@@ -1244,8 +1300,10 @@ fn category_disclosures(pages: &[PdfPageText], selected: &[SelectedPage]) -> Vec
                     .lines()
                     .map(str::trim)
                     .find(|line| line.to_ascii_lowercase().contains("switching characteristics"))
-                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .unwrap_or_else(|| "the later matching table".to_string());
+                    .map_or_else(
+                        || "the later matching table".to_string(),
+                        |line| line.split_whitespace().collect::<Vec<_>>().join(" "),
+                    );
                 let omitted_note = if omitted.is_empty() {
                     "All matching pages are attached.".to_string()
                 } else {
@@ -1303,7 +1361,7 @@ fn format_page_numbers(numbers: &[usize]) -> String {
 fn number_word(n: usize) -> String {
     ["no", "one", "two", "three", "four", "five", "six"]
         .get(n)
-        .map_or_else(|| n.to_string(), |w| w.to_string())
+        .map_or_else(|| n.to_string(), ToString::to_string)
 }
 
 /// Where `cmd` resolves on PATH, if anywhere. Shared with the config
@@ -1332,7 +1390,7 @@ fn command_extensions(cmd: &str, windows: bool, pathext: Option<&str>) -> Vec<St
         .unwrap_or(".COM;.EXE;.BAT;.CMD")
         .split(';')
         .filter(|extension| !extension.is_empty())
-        .map(|extension| extension.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -1362,7 +1420,7 @@ fn datasheet_text_block(pdf_text: &str) -> String {
     format!("DATASHEET TEXT (truncated):\n{DATASHEET_TEXT_BEGIN}\n{text}\n{DATASHEET_TEXT_END}")
 }
 
-const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
+const SOURCE_QUANTITY_GUIDANCE: &str = r"SOURCE QUANTITIES:
 - Define each destination quantity and its units before matching a datasheet row to it.
 - Every printed row gets a record, whether or not a key exists for it; never delete a
   sourced record to pass the checker. A typical value is never a guaranteed limit.
@@ -1372,9 +1430,9 @@ const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
   own record. Where two places state different values for one quantity, record each
   with its own basis plus an `unknown` record for it naming the conflict.
 - Omit unsupported facts, or mark them explicitly unknown only where the destination
-  schema provides that representation. Never invent a field or uncertainty schema."#;
+  schema provides that representation. Never invent a field or uncertainty schema.";
 
-const PIN_ROLE_GUIDANCE: &str = r#"The listed names are canonical electrical aliases, not an exhaustive list of valid pin
+const PIN_ROLE_GUIDANCE: &str = r"The listed names are canonical electrical aliases, not an exhaustive list of valid pin
 functions. I/O direction alone is not a function. For regulators only, `in`, `out`,
 and `gnd` mean supply input, regulated output, and ground; do not use them as generic
 input/output labels. Preserve source-named switching, programming, NC, rail, and
@@ -1386,7 +1444,7 @@ pad identifier exactly, including alphanumeric and exposed-pad identifiers.
 `unknown_pad_<identifier>` (with a comment) is only for a pad whose function the
 datasheet leaves unresolved, or the identity-only abstention for an unresolved package;
 abstaining on params never makes a resolved pin table unknown: a pad the pin table names
-keeps its source-named role. Never invent a pin role."#;
+keeps its source-named role. Never invent a pin role.";
 
 /// Whether the API backend has anything to work from: it cannot open the local
 /// PDF, so a prompt carrying the no-text sentinel would reach it with nothing
@@ -1415,6 +1473,8 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     )
 }
 
+// The prompt is one template read top to bottom, as the model reads it.
+#[allow(clippy::too_many_lines)]
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     let examples = format_examples_for_kind(kind);
     let example_cards = examples
@@ -1706,12 +1766,12 @@ OUTPUT (TOML only, starting with [[models]]):
         part_re = regex::escape(&part.to_uppercase()),
         legal_kinds = crate::validation::KIND_NAMES.join(", "),
         entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
-        kind_line = match behavioral_family_base_kind(kind) {
-            Some(base) => format!(
+        kind_line = behavioral_family_base_kind(kind).map_or_else(
+            || kind.to_string(),
+            |base| format!(
                 "{base} (the {kind} family, written as a {base} entry; see its notes below)"
-            ),
-            None => kind.to_string(),
-        },
+            )
+        ),
         datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
@@ -1767,7 +1827,7 @@ const FORMAT_EXAMPLES: &[FormatExample] = &[
     FormatExample {
         part: "TLV9001",
         kind: "opamp",
-        card: r##"[[models]]
+        card: r#"[[models]]
 id = "tlv9001"
 kind = "opamp"
 description = "TLV9001 format example; models bounded DC gain and output rails, but does not model noise, slew rate, or input-bias-current variation; ABSTAIN: the cited table does not state input noise at 125 C"
@@ -1808,12 +1868,12 @@ basis = "Recommended Operating Conditions, supply voltage row"
 kind = "rail_order"
 lower = "vee"
 upper = "vcc"
-basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""##,
+basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""#,
     },
     FormatExample {
         part: "TLV3201",
         kind: "comparator",
-        card: r##"[[models]]
+        card: r#"[[models]]
 id = "tlv3201"
 kind = "comparator"
 description = "TLV3201 format example; models thresholds and nominal delay, but does not model overdrive-dependent delay dispersion or output-current curves; ABSTAIN: the cited table does not state delay at 125 C"
@@ -1854,12 +1914,12 @@ basis = "Recommended Operating Conditions, supply voltage row"
 kind = "rail_order"
 lower = "vee"
 upper = "vcc"
-basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""##,
+basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""#,
     },
     FormatExample {
         part: "PCA9306",
         kind: "digital",
-        card: r##"[[models]]
+        card: r#"[[models]]
 id = "pca9306_identity"
 kind = "digital"
 description = "PCA9306 format example; records identity, pin map, and rail constraints, but does not model the bidirectional pass-FET path; ABSTAIN: the datasheet does not state a fixed propagation delay"
@@ -1913,7 +1973,7 @@ basis = "Recommended Operating Conditions, VREF2 row, EN=VREF2"
 kind = "rail_order"
 lower = "vref1"
 upper = "vref2"
-basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""##,
+basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""#,
     },
 ];
 
@@ -1922,8 +1982,7 @@ basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""##,
 /// `[models.behavioral]` prompt section. Returns `None` for ordinary kinds.
 fn behavioral_family_base_kind(kind: &str) -> Option<&'static str> {
     match kind {
-        "charger" => Some("vreg"),
-        "pmic" => Some("vreg"),
+        "charger" | "pmic" => Some("vreg"),
         "balancer" => Some("digital"),
         _ => None,
     }
@@ -2232,7 +2291,7 @@ enum Reply<'a> {
 
 impl Reply<'_> {
     /// The TOML table the answer starts with (empty for a bare word).
-    fn table(self) -> &'static str {
+    const fn table(self) -> &'static str {
         match self {
             Reply::Model { .. } => "[[models]]",
             Reply::Sensor { .. } => "[sensor]",
@@ -2267,7 +2326,7 @@ impl Reply<'_> {
             let records = records.map(|e| e.or_insert(ArrayOfTables::new().into()));
             match records {
                 Some(Item::ArrayOfTables(a)) if !a.iter().any(is_model) => {
-                    a.push(Table::from_iter(record.clone()))
+                    a.push(record.clone().collect::<Table>());
                 }
                 _ => continue,
             }
@@ -2293,7 +2352,7 @@ impl Reply<'_> {
             for (name, v, how) in derived {
                 say!("[model-extract] {}: {how}", entry.id);
                 let text = format!("{v:e}"); // 6.3662e-10, not 0.00000000063662
-                let mut value = text.parse().unwrap_or(toml_edit::Value::from(v));
+                let mut value = text.parse().unwrap_or_else(|_| toml_edit::Value::from(v));
                 value.decor_mut().set_suffix(format!("  # {how}"));
                 params.insert(name, Item::Value(value));
             }
@@ -2541,7 +2600,8 @@ fn identify_prompt(part: &str, pdf_text: &str) -> String {
         supported_kinds()
             .iter()
             .map(|k| format!("{k}: {}\n", kind_definition(k)))
-            .collect::<String>(),
+            .collect::<Vec<_>>()
+            .concat(),
         truncate_to_chars(pdf_text, 6000)
     )
 }
@@ -2610,6 +2670,7 @@ fn kind_definition(kind: &str) -> &'static str {
 /// guidance (`timer`, `ignore`), plus the sensor specs and the behavioural
 /// families, which resolve to a base kind (charger and pmic to vreg, balancer
 /// to digital) but carry their own parameter guidance.
+#[must_use]
 pub fn supported_kinds() -> Vec<&'static str> {
     let schema = crate::validation::KIND_NAMES.iter().copied();
     let schema = schema.filter(|k| !matches!(*k, "timer" | "ignore"));
@@ -2680,14 +2741,16 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         )
     };
 
-    let check = match &ws.checker {
-        None => "No checker is provided; do not look for one.".to_string(),
-        Some(c) => format!(
-            "Check model.toml by running exactly `'{}' models lint model.toml` and fix what \
-             it reports. Never run any other `hauksbee`.",
-            c.display()
-        ),
-    };
+    let check = ws.checker.as_ref().map_or_else(
+        || "No checker is provided; do not look for one.".to_string(),
+        |c| {
+            format!(
+                "Check model.toml by running exactly `'{}' models lint model.toml` and fix \
+                 what it reports. Never run any other `hauksbee`.",
+                c.display()
+            )
+        },
+    );
     format!(
         "## Before you answer\n\n         {pages}\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
          files in your working directory: do not list, search or read anything outside it \
@@ -2717,6 +2780,11 @@ pub use crate::extract_config::{
 /// A config file that exists but cannot be read is an error here rather than
 /// a warning: silently running on defaults would send the datasheet somewhere
 /// the user did not choose.
+///
+/// # Errors
+///
+/// Fails when the extraction config cannot be located, read, parsed or
+/// validated.
 pub fn resolve_settings(args: &Args) -> Result<Resolved> {
     let loaded = extract_config::load()?;
     Ok(resolve_with(&loaded.config, &ProcessHost, args))
@@ -2733,10 +2801,10 @@ pub fn resolve_with(
     let mut resolved = config.resolve(host, args.backend);
     resolved.override_model(args.model.as_deref(), args.effort.as_deref());
     if let Some(base) = &args.api_base {
-        resolved.api.base_url = base.clone();
+        resolved.api.base_url.clone_from(base);
     }
     if let Some(name) = &args.api_key_env {
-        resolved.api.api_key_env = name.clone();
+        resolved.api.api_key_env.clone_from(name);
     }
     if config.retries.is_none() {
         resolved.retries = args.retries;
@@ -2786,29 +2854,33 @@ const CONFINED_READ_ROOTS: &[&str] = &["/opt/homebrew", "/usr/local"];
 
 /// codex `-c` overrides selecting a `hauksbee` permission profile: shell
 /// commands read codex's `:minimal` OS/runtime set, [`CONFINED_READ_ROOTS`] and
-/// the checker, write the workspace, and read nothing else (home, `/tmp` and
-/// `$TMPDIR` included). Checked against codex-cli 0.156.1 with
-/// `codex sandbox -P hauksbee`: seatbelt refuses `ls ~`, `~/.codex/skills`,
-/// `/tmp` and a `$TMPDIR` sibling while the workspace and checker work. An
+/// the checker, read (and when `write`, write) the workspace, and read nothing
+/// else (home, `/Users`, `/Volumes`, `/Library`, `/tmp` and `$TMPDIR` included).
+/// Checked against codex-cli 0.156.1 with `codex sandbox -P hauksbee`: seatbelt
+/// refuses `ls ~`, `~/.codex/skills`, `/tmp` and a `$TMPDIR` sibling while the
+/// workspace and checker work, and a `"read"` workspace refuses writes. An
 /// explicit `--sandbox` flag overrides `default_permissions`, so none is passed.
-fn codex_confinement(ws: &Workspace) -> [String; 4] {
-    let reads: String = CONFINED_READ_ROOTS
+fn codex_confinement(ws: &Workspace, write: bool) -> [String; 4] {
+    let reads = CONFINED_READ_ROOTS
         .iter()
         .map(|root| (*root).to_string())
         .chain(ws.checker.iter().map(|c| c.display().to_string()))
         .map(|path| format!("{}=\"read\",", toml::Value::String(path)))
-        .collect();
+        .collect::<Vec<_>>()
+        .concat();
+    let access = if write { "write" } else { "read" };
     let profile = format!(
         "permissions={{hauksbee={{filesystem={{\":minimal\"=\"read\",\":slash_tmp\"=\"none\",\
-         \":tmpdir\"=\"none\",{reads}\":workspace_roots\"={{\".\"=\"write\"}}}}}}}}"
+         \":tmpdir\"=\"none\",{reads}\":workspace_roots\"={{\".\"=\"{access}\"}}}}}}}}"
     );
     ["-c", "default_permissions=\"hauksbee\"", "-c", &profile].map(String::from)
 }
 
 /// `--settings` for Claude Code's Bash sandbox, strict (no unsandboxed retry,
-/// no silent start without it): reads denied under home and the temp roots
-/// except the workspace and the checker. `--restricted` already confines
-/// Read/Edit/Write to the working directory.
+/// no silent start without it): reads denied under home, every user's home,
+/// mounted volumes and the temp roots except the workspace and the checker.
+/// Other system paths (`/etc`, `/Library`, `/Applications`) stay readable.
+/// `--restricted` already confines Read/Edit/Write to the working directory.
 fn claude_confinement(ws: &Workspace) -> String {
     let temp_root = ws.path().parent().unwrap_or_else(|| ws.path());
     let allow: Vec<String> = std::iter::once(ws.path())
@@ -2818,7 +2890,8 @@ fn claude_confinement(ws: &Workspace) -> String {
     serde_json::json!({"sandbox": {
         "enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
         "filesystem": {
-            "denyRead": ["~/", "/tmp", "/private/tmp", temp_root.display().to_string()],
+            "denyRead": ["~/", "/Users", "/home", "/Volumes", "/mnt", "/media", "/tmp",
+                "/private/tmp", "/private/var/folders", temp_root.display().to_string()],
             "allowRead": allow,
         },
     }})
@@ -2841,9 +2914,9 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 /// always named rather than inherited: a CLI's own default varies by plan and
 /// config and would silently decide how good the extraction is.
 ///
-///   * codex: in `workspace-write` and `approve-for-me` modes the read-confining
-///     [`codex_confinement`] profile (plus `--approve-for-me` for the latter);
-///     any other mode is `--sandbox <mode>`, reads unconfined. Network is off
+///   * codex: in every mode but `danger-full-access` (`--sandbox`, unconfined)
+///     the read-confining [`codex_confinement`] profile, its workspace read-only
+///     in `read-only` mode, plus `--approve-for-me` in that mode. Network is off
 ///     unless a mode or approval relaxes it. `skills.include_instructions=false`
 ///     keeps `$CODEX_HOME/skills` out of the model's context (the `skill_search`
 ///     feature alone does not), `shell_snapshot` is off so the operator's shell
@@ -2862,11 +2935,20 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 ///     subagents and web access; [`claude_confinement`] sandboxes Bash reads;
 ///     background tasks, which keep `-p` alive, are off. Never
 ///     `--bare`: it skips the keychain, losing a subscription sign-in.
-///   * agy: `--mode <mode> --add-dir <sandbox>`, and the pointer as the
-///     `--print=` value because agy reads nothing from stdin. Not read-confined.
+///   * agy: `--mode <mode> --sandbox ... --add-dir <sandbox>`, and the pointer as
+///     the `--print=` value because agy reads nothing from stdin. `--sandbox` is
+///     agy's own terminal sandbox (workspace-only files, no network, per its
+///     docs); hauksbee cannot verify it or confine agy's file tools.
 ///
 /// Every CLI gets a PATH from [`scrub_path`] and the workspace as its cwd.
-fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
+/// This is the one place an agent CLI is launched (`model-extract`, the smoke
+/// test and `resource-extract` all come here), so confinement cannot drift.
+///
+/// # Errors
+///
+/// Fails for the API backend, when the executable is missing, and when the run
+/// fails or times out.
+pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
     let backend = resolved.backend;
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
@@ -2885,9 +2967,10 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
             let effort = format!("model_reasoning_effort=\"{}\"", a.effort);
             cmd.args(["--model", &a.model, "-c", &effort]);
             match a.permission_mode.as_str() {
-                "workspace-write" => cmd.args(codex_confinement(ws)),
-                "approve-for-me" => cmd.arg("--approve-for-me").args(codex_confinement(ws)),
-                mode => cmd.args(["--sandbox", mode]),
+                "danger-full-access" => cmd.args(["--sandbox", "danger-full-access"]),
+                mode => cmd
+                    .args((mode == "approve-for-me").then_some("--approve-for-me"))
+                    .args(codex_confinement(ws, mode != "read-only")),
             };
             cmd.args(["--skip-git-repo-check", "--cd"])
                 .arg(ws.path())
@@ -2929,6 +3012,7 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
         }
         Backend::Agy => {
             cmd.args(["--output-format", "text", "--mode", &a.permission_mode])
+                .arg("--sandbox")
                 .args(["--model", &a.model, "--effort", &a.effort, "--add-dir"])
                 .arg(ws.path())
                 .arg(format!("--print={pointer}"));
@@ -2950,9 +3034,20 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
 }
 
 /// Run the configured backend on a one-line prompt and return what it said.
+///
 /// The cheapest end-to-end proof that a setup works: the CLI is found, it is
 /// signed in, the model name is accepted, and an answer comes back. Costs one
 /// tiny model call; sends nothing but the prompt.
+///
+/// # Errors
+///
+/// Fails when the API request cannot be prepared or sent, the agent CLI is
+/// missing, the sandbox cannot be built, the agent run fails, or the agent does
+/// not write `model.toml`.
+///
+/// # Panics
+///
+/// Never in practice: an agent backend always resolves an agent section.
 pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result<String> {
     const PROMPT: &str =
         "This is a connectivity check. Reply with exactly the word OK and nothing else.";
@@ -3003,7 +3098,7 @@ pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result
 /// the full prompt goes in a FILE inside it (argv is world-readable on Linux
 /// via /proc/<pid>/cmdline and visible to `ps -ww` on macOS, and a 40,000
 /// character datasheet excerpt would undo the consent the user gave to send it
-/// to one vendor; it would also brush ARG_MAX), stdin carries only a pointer to
+/// to one vendor; it would also brush `ARG_MAX`), stdin carries only a pointer to
 /// that file, and the answer is expected in `model.toml`.
 ///
 /// stderr goes to `log`, a FILE: not a pipe, because nothing reads a pipe until
@@ -3022,9 +3117,7 @@ fn run_cli_agent(
 ) -> Result<String> {
     std::fs::write(ws.path().join("prompt.md"), prompt)
         .context("writing the prompt into the sandbox")?;
-    let stderr = std::fs::File::create(log)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
+    let stderr = std::fs::File::create(log).map_or_else(|_| Stdio::null(), Stdio::from);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -3117,7 +3210,7 @@ fn wait_for_cli_backend(
 /// system can echo it: not in argv (world-readable via `ps` / /proc), not in
 /// a log line, not in an error. curl gets it through `--config -` on stdin,
 /// and the request body travels as a private temp file rather than an
-/// argument (it embeds the datasheet text, and can outgrow ARG_MAX anyway).
+/// argument (it embeds the datasheet text, and can outgrow `ARG_MAX` anyway).
 struct ApiRequest {
     url: String,
     model: String,
@@ -3143,7 +3236,7 @@ impl ApiRequest {
         if which_path("curl").is_none() {
             bail!("the api backend needs `curl`, which is not in PATH; install curl");
         }
-        Ok(ApiRequest {
+        Ok(Self {
             url: format!(
                 "{}/chat/completions",
                 settings.base_url.trim_end_matches('/')
@@ -3336,7 +3429,7 @@ fn supply_relative_rows(source: Option<&crate::schema::ModelSourceSpec>) -> Resu
     problem.map_or(Ok(()), |e| Err(anyhow::anyhow!(e)))
 }
 
-/// The snake_case name a kind serialises as (the serde `rename_all`).
+/// The `snake_case` name a kind serialises as (the serde `rename_all`).
 fn kind_discriminant(kind: ComponentKind) -> String {
     serde_json::to_value(kind)
         .ok()
@@ -3345,6 +3438,7 @@ fn kind_discriminant(kind: ComponentKind) -> String {
 }
 
 /// A part name as a file stem: anything but alphanumerics, `-` and `_` becomes `_`.
+#[must_use]
 pub fn sanitise_filename(s: &str) -> String {
     s.replace(|c: char| !(c.is_alphanumeric() || "-_".contains(c)), "_")
 }
@@ -3360,8 +3454,7 @@ fn dirs_next() -> PathBuf {
     std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+        .map_or_else(std::env::temp_dir, PathBuf::from)
 }
 
 #[cfg(test)]
@@ -3371,7 +3464,7 @@ mod tests {
     static MOCK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn argv(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     fn parse(extra: &[&str]) -> Result<Args> {
@@ -3823,14 +3916,14 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
     /// says nothing at all about the 45 V BC847, so a model that answers
     /// anyway has substituted a rating from a different device.
     #[test]
-    #[ignore]
+    #[ignore = "live: needs a signed-in extraction backend"]
     fn extract_bc846_live() {
         let pdf = testdata("datasheets/BC846.pdf");
         assert!(pdf.exists(), "BC846 datasheet not found at {pdf:?}");
         if !live_backend_available() {
             return;
         }
-        let text = extract_pdf_text(&pdf).expect("PDF text extraction");
+        let text = extract_pdf_text(&pdf);
         let (_, entry) = draft(pdf, &text, "BC846", "bjt_npn");
         let bf = entry.params.get_f64("bf").expect("bf present");
         assert!(
@@ -3842,13 +3935,13 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 
     /// Live: `--kind charger` against the LTC4020 excerpt in testdata.
     #[test]
-    #[ignore]
+    #[ignore = "live: needs a signed-in extraction backend"]
     fn extract_ltc4020_charger_live() {
         let src = testdata("datasheets/LTC4020_excerpt.txt");
         if !src.exists() || !live_backend_available() {
             return;
         }
-        let text = extract_pdf_text(&src).expect("text");
+        let text = extract_pdf_text(&src);
         let (_, entry) = draft(src, &text, "LTC4020", "charger");
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
         let c = entry.behavioral.converter.expect("converter block");
@@ -3861,6 +3954,8 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         uncertainty = [{ status = \"unknown\", parameter = \"model\", reason = \"none\" }]\n";
 
     #[test]
+    // One table of reply fixtures, each beside the verdict it must get.
+    #[allow(clippy::too_many_lines)]
     fn reply_validation_verdicts() {
         let good = r#"
 [[models]]
@@ -3953,7 +4048,8 @@ uncertainty = [
         );
         // A diode law off its cited VF rows is refit by completion, then validates.
         let vf = |ma: f64| {
-            let v = 1.2 * hauksbee_ir::thermal_voltage_c(27.0) * (ma * 1e5).ln_1p() + ma * 5e-4;
+            let v =
+                (1.2 * hauksbee_ir::thermal_voltage_c(27.0)).mul_add((ma * 1e5).ln_1p(), ma * 5e-4);
             format!("[[models.source.characteristic]]\nparameter = \"VF\"\ntyp = {v}\nunit = \"V\"\nconditions = \"IF = {ma} mA\"\nbasis = \"b\"\n")
         };
         let rows = [1.0, 10.0, 100.0, 1000.0].map(vf).concat();
@@ -4120,6 +4216,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
 
     #[cfg(unix)]
     #[test]
+    // One mock run end to end: the wrapper script, its config, and every protocol it must see.
+    #[allow(clippy::too_many_lines)]
     fn custom_command_runs_the_selected_protocol_and_never_falls_back() {
         use std::os::unix::fs::PermissionsExt;
         let _guard = MOCK_ENV.lock().unwrap();
@@ -4148,7 +4246,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let sandbox: serde_json::Value = serde_json::from_str(&settings).unwrap();
         let fs = &sandbox["sandbox"]["filesystem"];
         assert_eq!(sandbox["sandbox"]["allowUnsandboxedCommands"], false);
-        assert!(fs["denyRead"].as_array().unwrap().contains(&"~/".into()));
+        assert!(settings.contains(r#""denyRead":["~/","/Users","/home","/Volumes","#));
         let allowed = [ws.path(), ws.checker.as_deref().unwrap()].map(|p| p.display().to_string());
         assert_eq!(fs["allowRead"], serde_json::json!(allowed));
         for mode in ["acceptEdits", "auto", "dontAsk", "plan"] {
@@ -4192,21 +4290,21 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         resolved.codex.model = "configured-model".into();
         resolved.codex.effort = "xhigh".into();
         resolved.codex.extra_args = vec!["--configured-extra".into()];
-        let confine = codex_confinement(&ws).to_vec();
-        let profile: toml::Table = toml::from_str(&confine[3]).expect("valid codex -c value");
-        let fs = &profile["permissions"]["hauksbee"]["filesystem"];
-        let checker = dir.path().join("hauksbee").display().to_string();
-        assert_eq!(
-            [&fs[&checker], &fs[":tmpdir"]].map(|v| v.as_str()),
-            [Some("read"), Some("none")]
-        );
-        assert_eq!(fs[":workspace_roots"]["."].as_str(), Some("write"));
-        let read_only = vec!["--sandbox".to_string(), "read-only".into()];
+        let [confine, read_only] = [true, false].map(|w| codex_confinement(&ws, w).to_vec());
+        for (args, access) in [(&confine, "write"), (&read_only, "read")] {
+            let profile: toml::Table = toml::from_str(&args[3]).expect("valid codex -c value");
+            let fs = &profile["permissions"]["hauksbee"]["filesystem"];
+            let checker = dir.path().join("hauksbee").display().to_string();
+            let got = [&fs[&checker], &fs[":tmpdir"], &fs[":workspace_roots"]["."]];
+            assert_eq!(got.map(|v| v.as_str().unwrap()), ["read", "none", access]);
+        }
         let approve = [vec!["--approve-for-me".into()], confine.clone()].concat();
+        let full = vec!["--sandbox".into(), "danger-full-access".into()];
         let modes = [
             ("read-only", read_only),
             ("workspace-write", confine),
             ("approve-for-me", approve),
+            ("danger-full-access", full),
         ];
         for (mode, permission_args) in modes {
             resolved.codex.permission_mode = mode.into();
@@ -4247,7 +4345,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         resolved.agy.command = command.to_str().unwrap().into();
         let a = &resolved.agy;
         let expected = format!(
-            "--output-format\ntext\n--mode\n{}\n--model\n{}\n--effort\n{}\n--add-dir\n{}\n--print={}",
+            "--output-format\ntext\n--mode\n{}\n--sandbox\n--model\n{}\n--effort\n{}\n--add-dir\n{}\n--print={}",
             a.permission_mode,
             a.model,
             a.effort,
@@ -4313,7 +4411,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             (extract_config::ENV_CONFIG_PATH, &cfg),
             ("HAUKSBEE_CLAUDE_COMMAND", &agent),
         ];
-        env.iter().for_each(|(k, v)| std::env::set_var(k, v));
+        for (k, v) in env {
+            std::env::set_var(k, v);
+        }
         std::env::set_var("HAUKSBEE_EXTRACT_TIMEOUT_SECS", "1");
         let [(clean, kept), (bad, dropped)] = [ex.card, "[[models]]\nid = 1\n"].map(|text| {
             std::fs::write(&draft, text).unwrap();
@@ -4325,7 +4425,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             let file = format!("{}.toml", sanitise_filename(ex.part));
             (err, std::fs::read_to_string(out.path().join(file)).ok())
         });
-        env.iter().for_each(|(k, _)| std::env::remove_var(k));
+        for (k, _) in env {
+            std::env::remove_var(k);
+        }
         std::env::remove_var("HAUKSBEE_EXTRACT_TIMEOUT_SECS");
         assert!(clean.to_string().contains("INCOMPLETE"), "{clean}");
         assert!(kept.is_some_and(|k| k.contains("datasheet-derived") && k.contains("sha256")));

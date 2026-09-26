@@ -37,6 +37,10 @@ pub enum SpiceCardKind {
 }
 
 /// Parse all `.model` and `.subckt` cards from a SPICE file.
+///
+/// # Errors
+///
+/// Fails when the file cannot be read.
 pub fn parse_spice_file(path: &Path) -> Result<Vec<SpiceCard>> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading SPICE file {}", path.display()))?;
@@ -44,6 +48,11 @@ pub fn parse_spice_file(path: &Path) -> Result<Vec<SpiceCard>> {
 }
 
 /// Parse SPICE model cards from a string.
+///
+/// # Errors
+///
+/// None today: lines that are not a well-formed card are skipped. The `Result`
+/// keeps room for stricter parsing.
 pub fn parse_spice_text(text: &str) -> Result<Vec<SpiceCard>> {
     let lines = join_continuation_lines(text);
     let mut cards = Vec::new();
@@ -105,22 +114,13 @@ fn parse_dot_model(line: &str) -> Option<SpiceCard> {
 
     // The type token may be "NPN", "D", etc., or "NPN(IS=..." with a fused paren.
     let type_raw = tokens[2];
-    let (model_type, extra_params) = if let Some(paren_pos) = type_raw.find('(') {
-        // Fused: "D(IS=2.52N ...", split at the paren
-        let typ = type_raw[..paren_pos].to_uppercase();
-        let rest_of_type = &type_raw[paren_pos..]; // includes the '('
-        (typ, Some(rest_of_type))
-    } else {
-        (type_raw.to_uppercase(), None)
-    };
+    // Fused: "D(IS=2.52N ...", split at the paren; the fused part keeps its '('.
+    let (typ, fused) = type_raw.split_at(type_raw.find('(').unwrap_or(type_raw.len()));
+    let model_type = typ.to_uppercase();
 
     // Build the param string from everything after the type token
-    let rest = if let Some(extra) = extra_params {
-        // extra already starts with '('; append remaining tokens
-        format!("{} {}", extra, tokens[3..].join(" "))
-    } else {
-        tokens[3..].join(" ")
-    };
+    let rest = format!("{fused} {}", tokens[3..].join(" "));
+    let rest = rest.trim_start();
 
     // Strip surrounding parens if present
     let param_str = rest.trim_start_matches('(').trim_end_matches(')').trim();
@@ -150,7 +150,7 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
     let ports: Vec<String> = tokens[2..]
         .iter()
         .take_while(|t| !t.to_lowercase().starts_with("params"))
-        .map(|t| t.to_string())
+        .map(ToString::to_string)
         .collect();
 
     // Collect the full subckt body (from .subckt to .ends)
@@ -164,7 +164,7 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
             // substring of the whole line. A substring match opened the wrong
             // body whenever this name was a substring of another subckt's name
             // (".subckt OP" vs ".subckt OPAMP") or appeared as a port/comment.
-            let decl_name = line.split_whitespace().nth(1).map(|t| t.to_lowercase());
+            let decl_name = line.split_whitespace().nth(1).map(str::to_lowercase);
             if decl_name.as_deref() == Some(lower_name.as_str()) {
                 in_body = true;
             }

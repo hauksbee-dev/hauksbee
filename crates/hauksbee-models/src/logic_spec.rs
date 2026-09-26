@@ -111,10 +111,11 @@ pub enum Level {
 
 impl Level {
     /// Is a sampled logic level "active" for this polarity?
-    pub fn is_active(self, level: bool) -> bool {
+    #[must_use]
+    pub const fn is_active(self, level: bool) -> bool {
         match self {
-            Level::Low => !level,
-            Level::High => level,
+            Self::Low => !level,
+            Self::High => level,
         }
     }
 }
@@ -137,18 +138,19 @@ pub enum RegisterOp {
 }
 
 /// The clock of a sequential register.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockSpec {
     pub pin: String,
     pub edge: Edge,
 }
 
-/// An asynchronous, level-sensitive reset/preset to a constant value. A
-/// register may declare several (the 74HC74 has independent CLR and PRE);
+/// An asynchronous, level-sensitive reset/preset to a constant value.
+///
+/// A register may declare several (the 74HC74 has independent CLR and PRE);
 /// when more than one is active simultaneously the FIRST declared wins; the
 /// silicon's both-asserted race (both outputs high) is not representable in a
 /// single register and is deliberately not faked.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResetSpec {
     pub pin: String,
     pub active: Level,
@@ -158,23 +160,23 @@ pub struct ResetSpec {
 
 /// An asynchronous, level-sensitive parallel load from pins (the 74HC165 PL
 /// shape). `data[i]` names the input pin captured into bit `i`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsyncLoadSpec {
     pub pin: String,
     pub active: Level,
     pub data: Vec<String>,
 }
 
-/// A level-sensitive clock enable (the 74HC165 CLK_INH shape): clock edges
+/// A level-sensitive clock enable (the 74HC165 `CLK_INH` shape): clock edges
 /// only take effect while the enable is active.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnableSpec {
     pub pin: String,
     pub active: Level,
 }
 
 /// One sequential register.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogicRegister {
     pub name: String,
     /// Width in bits, 1..=64. The 64-bit bound is a deliberate refusal, not a
@@ -211,16 +213,17 @@ pub struct LogicRegister {
 
 /// A tri-state group: while `enable` is NOT active the listed outputs go
 /// high-impedance.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TristateSpec {
     pub enable: String,
     pub active: Level,
 }
 
-/// One address/value write in a memory's command protocol. Parallel EEPROMs
-/// use ordinary bus writes to enter and leave protected modes; declaring the
-/// sequence keeps that device-specific protocol in model data rather than in
-/// the engine.
+/// One address/value write in a memory's command protocol.
+///
+/// Parallel EEPROMs use ordinary bus writes to enter and leave protected modes;
+/// declaring the sequence keeps that device-specific protocol in model data
+/// rather than in the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryCommandWrite {
     pub address: u64,
@@ -228,6 +231,7 @@ pub struct MemoryCommandWrite {
 }
 
 /// Software-data-protection command sequences for an EEPROM-like memory.
+///
 /// Writes are blocked while protection is enabled except for the exact
 /// `disable` sequence. The engine consumes command writes rather than storing
 /// them in the array, just as the physical device does.
@@ -242,13 +246,16 @@ pub struct SoftwareDataProtectionSpec {
     pub disable: Vec<MemoryCommandWrite>,
 }
 
-/// One addressable memory array (`[[models.logic.memory]]`): the data store
-/// of a parallel-bus memory part (a 28C-series EEPROM, a 62256-class SRAM, a
-/// 27C-series ROM), which is categorically wider than the 64-bit
-/// `[[models.logic.register]]` ceiling. The array is declared, not enumerated:
-/// `words` x `bits` cells, addressed by the `address` pins (LSB first), read
-/// onto the `data_out` output pins, and (when `write` is present) committed
-/// from the `data_in` pins on the write strobe's qualifying edge.
+/// One addressable memory array (`[[models.logic.memory]]`).
+///
+/// It is the data store of a parallel-bus memory part (a 28C-series EEPROM, a
+/// 62256-class SRAM, a 27C-series ROM), which is categorically wider than the
+/// 64-bit `[[models.logic.register]]` ceiling.
+///
+/// The array is declared, not enumerated: `words` x `bits` cells, addressed by
+/// the `address` pins (LSB first), read onto the `data_out` output pins, and
+/// (when `write` is present) committed from the `data_in` pins on the write
+/// strobe's qualifying edge.
 ///
 /// The data bus of a real memory is bidirectional. That is expressed by
 /// declaring the bus pins as OUTPUTS (tri-stated via `[models.logic.tristate]`
@@ -328,7 +335,7 @@ pub struct MemorySpec {
 }
 
 /// One independently-qualified parallel-memory write cycle.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryWriteCycleSpec {
     /// Input strobe whose selected edge commits the cycle.
     pub pin: String,
@@ -372,6 +379,7 @@ pub struct Logic {
 
 impl Logic {
     /// True when no logic block was declared (the serde default).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inputs.is_empty()
             && self.outputs.is_empty()
@@ -384,7 +392,7 @@ impl Logic {
 }
 
 /// The value mask of a `bits`-wide register (`bits` is 1..=64).
-fn width_mask(bits: u32) -> u64 {
+const fn width_mask(bits: u32) -> u64 {
     u64::MAX >> (64 - bits)
 }
 
@@ -417,10 +425,10 @@ pub enum LogicExpr {
     Name(String),
     /// `register[bit]`.
     Bit(String, u32),
-    Not(Box<LogicExpr>),
-    And(Box<LogicExpr>, Box<LogicExpr>),
-    Xor(Box<LogicExpr>, Box<LogicExpr>),
-    Or(Box<LogicExpr>, Box<LogicExpr>),
+    Not(Box<Self>),
+    And(Box<Self>, Box<Self>),
+    Xor(Box<Self>, Box<Self>),
+    Or(Box<Self>, Box<Self>),
 }
 
 impl LogicExpr {
@@ -428,11 +436,11 @@ impl LogicExpr {
     /// references separately.
     pub fn collect_refs<'a>(&'a self, names: &mut Vec<&'a str>, bits: &mut Vec<(&'a str, u32)>) {
         match self {
-            LogicExpr::Const(_) => {}
-            LogicExpr::Name(n) => names.push(n),
-            LogicExpr::Bit(n, i) => bits.push((n, *i)),
-            LogicExpr::Not(a) => a.collect_refs(names, bits),
-            LogicExpr::And(a, b) | LogicExpr::Xor(a, b) | LogicExpr::Or(a, b) => {
+            Self::Const(_) => {}
+            Self::Name(n) => names.push(n),
+            Self::Bit(n, i) => bits.push((n, *i)),
+            Self::Not(a) => a.collect_refs(names, bits),
+            Self::And(a, b) | Self::Xor(a, b) | Self::Or(a, b) => {
                 a.collect_refs(names, bits);
                 b.collect_refs(names, bits);
             }
@@ -575,6 +583,11 @@ impl<'a> Parser<'a> {
 }
 
 /// Parse one combinational expression. See the module docs for the grammar.
+///
+/// # Errors
+///
+/// A [`LogicExprError`] at the first character the grammar cannot accept,
+/// including trailing characters after a complete expression.
 pub fn parse_logic_expr(src: &str) -> Result<LogicExpr, LogicExprError> {
     let mut p = Parser {
         src,
@@ -593,9 +606,11 @@ pub fn parse_logic_expr(src: &str) -> Result<LogicExpr, LogicExprError> {
 // Validation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A named `[models.logic]` validation failure. Every category the evaluator
-/// depends on gets its own variant so a broken spec (hand-written or
-/// LLM-extracted) fails with a diagnosis, not a generic parse error.
+/// A named `[models.logic]` validation failure.
+///
+/// Every category the evaluator depends on gets its own variant so a broken
+/// spec (hand-written or LLM-extracted) fails with a diagnosis, not a generic
+/// parse error.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LogicSpecError {
     #[error("logic block declares no outputs (a part that drives nothing is a spec bug)")]
@@ -914,6 +929,11 @@ impl Logic {
     /// named [`LogicSpecError`]. A spec using feature-gated constructs
     /// (memory arrays) FAILS here; an engine that implements them calls
     /// [`Logic::validate_with_features`] instead.
+    ///
+    /// # Errors
+    ///
+    /// The first structural fault [`Logic::validate_with_features`] finds, and any
+    /// use of a feature-gated construct.
     pub fn validate(&self) -> Result<ValidatedLogic, LogicSpecError> {
         self.validate_with_features(&[])
     }
@@ -924,6 +944,15 @@ impl Logic {
     /// `features` is rejected loudly, never silently half-run: an engine
     /// without memory support must not bind a memory part whose bus it will
     /// never drive.
+    ///
+    /// # Errors
+    ///
+    /// The first structural fault as a named [`LogicSpecError`]: no outputs, a name
+    /// declared twice, an expression that does not parse or references an unknown
+    /// name or bit, a malformed register, memory or tristate group, or a construct
+    /// outside `features`.
+    // One ordered pass, so the fault reported is the first one; a split would scatter it.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_with_features(
         &self,
         features: &[&str],
@@ -952,8 +981,8 @@ impl Logic {
             }
         }
 
-        let inputs: HashSet<&str> = self.inputs.iter().map(|s| s.as_str()).collect();
-        let outputs: HashSet<&str> = self.outputs.iter().map(|s| s.as_str()).collect();
+        let inputs: HashSet<&str> = self.inputs.iter().map(String::as_str).collect();
+        let outputs: HashSet<&str> = self.outputs.iter().map(String::as_str).collect();
         let reg_bits: HashMap<&str, u32> = self
             .registers
             .iter()
@@ -1121,11 +1150,8 @@ impl Logic {
                 });
             }
             if let Some(page_words) = m.page_words {
-                if page_words == 0
-                    || !page_words.is_power_of_two()
-                    || page_words > m.words
-                    || m.words % page_words != 0
-                {
+                // Zero is no power of two; a page wider than the array leaves a remainder.
+                if !page_words.is_power_of_two() || m.words % page_words != 0 {
                     return Err(LogicSpecError::MemoryPageWordsInvalid {
                         name: m.name.clone(),
                         page_words,
@@ -1156,8 +1182,7 @@ impl Logic {
             }
             // Total size cap: 128 Mbit covers every 27C/28C/62xx/39SF-class
             // part by a wide margin while refusing an absurd allocation.
-            const MAX_TOTAL_BITS: u128 = 128 * 1024 * 1024;
-            if (m.words as u128) * (m.bits as u128) > MAX_TOTAL_BITS {
+            if u128::from(m.words) * u128::from(m.bits) > 128 * 1024 * 1024 {
                 return Err(LogicSpecError::MemoryTooLarge {
                     name: m.name.clone(),
                     words: m.words,
@@ -1326,20 +1351,20 @@ impl Logic {
             for n in names {
                 if let Some(&bits) = reg_bits.get(n) {
                     return Err(LogicSpecError::RegisterAsScalar {
-                        context: context.clone(),
+                        context,
                         register: n.to_string(),
                         bits,
                     });
                 }
                 if memory_names.contains(n) {
                     return Err(LogicSpecError::MemoryInComb {
-                        context: context.clone(),
+                        context,
                         name: n.to_string(),
                     });
                 }
                 if !inputs.contains(n) && !outputs.contains(n) {
                     return Err(LogicSpecError::UndeclaredName {
-                        context: context.clone(),
+                        context,
                         name: n.to_string(),
                     });
                 }
@@ -1356,7 +1381,7 @@ impl Logic {
                     Some(&bits) if i < bits => {}
                     Some(&bits) => {
                         return Err(LogicSpecError::BitIndexOutOfRange {
-                            context: context.clone(),
+                            context,
                             register: n.to_string(),
                             index: i,
                             bits,
@@ -1364,7 +1389,7 @@ impl Logic {
                     }
                     None => {
                         return Err(LogicSpecError::BitRefNotRegister {
-                            context: context.clone(),
+                            context,
                             name: n.to_string(),
                             index: i,
                         });
@@ -1423,6 +1448,12 @@ impl Logic {
 
     /// Expand one tristate group key (`"qa"` or `"qa..qh"`) into output names
     /// over the outputs-declaration order.
+    ///
+    /// # Errors
+    ///
+    /// [`LogicSpecError::TristateRangeInvalid`] when a range end is not an output or
+    /// the range runs backwards, and [`LogicSpecError::TristateUnknownOutput`] when a
+    /// single name is not an output.
     pub fn expand_tristate_group(&self, group: &str) -> Result<Vec<String>, LogicSpecError> {
         if let Some((a, b)) = group.split_once("..") {
             let ia = self.outputs.iter().position(|o| o == a);
@@ -1449,7 +1480,7 @@ impl Logic {
     fn comb_cycles(&self, comb: &[(String, LogicExpr)]) -> (Vec<String>, HashSet<String>) {
         // out -> outputs it references directly.
         let mut deps: HashMap<&str, Vec<&str>> = HashMap::new();
-        let out_set: HashSet<&str> = self.outputs.iter().map(|s| s.as_str()).collect();
+        let out_set: HashSet<&str> = self.outputs.iter().map(String::as_str).collect();
         for (out, expr) in comb {
             let mut names = Vec::new();
             let mut bits = Vec::new();
@@ -1461,7 +1492,7 @@ impl Logic {
         }
         // An output is cyclic if it can reach itself.
         let mut cyclic: HashSet<String> = HashSet::new();
-        for start in self.outputs.iter().map(|s| s.as_str()) {
+        for start in self.outputs.iter().map(String::as_str) {
             let mut stack: Vec<&str> = deps.get(start).cloned().unwrap_or_default();
             let mut visited: HashSet<&str> = HashSet::new();
             while let Some(n) = stack.pop() {
@@ -1479,9 +1510,8 @@ impl Logic {
             let mut members: Vec<&String> = cyclic.iter().collect();
             members.sort();
             warnings.push(format!(
-                "combinational cycle through {:?}: resolved by bounded fixpoint iteration in \
-                 outputs-declaration order; convergence is verified exhaustively at bind time",
-                members
+                "combinational cycle through {members:?}: resolved by bounded fixpoint iteration in \
+                 outputs-declaration order; convergence is verified exhaustively at bind time"
             ));
         }
         (warnings, cyclic)
@@ -1544,7 +1574,7 @@ outputs = ["q", "qb"]
 "#;
 
     /// A 28C256-shaped parallel EEPROM: 32K x 8, bidirectional bus expressed
-    /// as tri-stated outputs sampled by data_in, CE-gated WE-rising write.
+    /// as tri-stated outputs sampled by `data_in`, CE-gated WE-rising write.
     const EEPROM_28C256: &str = r#"
 inputs  = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
            "a10", "a11", "a12", "a13", "a14", "ce_n", "oe_n", "we_n"]

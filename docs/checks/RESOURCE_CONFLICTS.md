@@ -90,9 +90,9 @@ The hand table is the source of truth. The automated extraction is a *check
 on* the hand authoring, not a replacement. `resource-extract`
 (`crates/hauksbee-extract/src/bin/resource_extract.rs`) extends the
 `model-extract` codex pipeline: `pdftotext` the datasheet, slice the text around
-the GPIO/PWM section, prompt codex (`codex exec --sandbox workspace-write
---skip-git-repo-check --cd <pdf-dir>`, stdin closed, background poll, 10-min
-timeout) for the GPIO -> slice+channel table, parse and validate every PWM value
+the GPIO/PWM section, prompt codex (launched by `model-extract`'s own code: your
+`[codex]` settings, a scratch copy of the PDF, the read-confining permission
+profile described in `docs/models/MODELS.md`, and its timeout) for the GPIO -> slice+channel table, parse and validate every PWM value
 (slice 0..7, channel A/B), then diff against the hand table.
 
 Run **live on the RP2040 datasheet** (5.3 MB, downloaded on demand):

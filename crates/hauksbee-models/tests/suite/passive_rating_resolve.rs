@@ -48,7 +48,7 @@ fn exact_littelfuse_order_code_unlocks_the_executable_trip_envelope() {
         .series_paths
         .first()
         .expect("the protection path is executable");
-    assert_eq!(path.default_ohms, 0.040);
+    assert_eq!(path.default_ohms.to_bits(), 0.040_f64.to_bits());
     assert_eq!(path.state_ohms.get("tripped"), Some(&1.0e9));
     assert_eq!(
         model.behavioral.fsm.as_ref().unwrap().transitions[0].guard_dwell_s,

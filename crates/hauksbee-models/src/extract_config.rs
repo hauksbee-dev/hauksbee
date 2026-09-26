@@ -56,6 +56,8 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const DEFAULT_API_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
+/// The key variable that, when exported, selects the API backend and names itself.
+const LLM_API_KEY_ENV: &str = "HAUKSBEE_LLM_API_KEY";
 
 /// What one agent CLI is called, what it defaults to, and what it accepts.
 ///
@@ -131,7 +133,7 @@ pub const AGENTS: [AgentSpec; 3] = [
         env_prefix: "HAUKSBEE_CODEX",
         model: "gpt-5.6-sol",
         effort: "high",
-        // codex's `--sandbox` level: writes confined to the sandbox, no network.
+        // Every mode but danger-full-access runs under hauksbee's read-confining profile.
         permission_mode: "workspace-write",
         efforts: &["minimal", "low", "medium", "high", "xhigh"],
         permission_modes: &[
@@ -145,6 +147,7 @@ pub const AGENTS: [AgentSpec; 3] = [
 ];
 
 /// The spec for an agent backend; `None` for the API.
+#[must_use]
 pub fn agent_spec(backend: Backend) -> Option<&'static AgentSpec> {
     AGENTS.iter().find(|a| a.backend == backend)
 }
@@ -158,6 +161,7 @@ pub const DEFAULT_CODEX_MODEL: &str = AGENTS[2].model;
 pub const DEFAULT_CODEX_EFFORT: &str = AGENTS[2].effort;
 
 /// Model names worth offering in a picker, per backend.
+#[must_use]
 pub fn suggested_models(backend: Backend) -> &'static [&'static str] {
     match agent_spec(backend) {
         Some(a) => a.models,
@@ -234,11 +238,13 @@ pub struct ApiConfig {
 }
 
 impl AgentConfig {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 impl ApiConfig {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -254,7 +260,7 @@ fn tidy(field: &mut Option<String>) {
         .filter(|v| !v.is_empty());
 }
 
-fn check_choice(what: &str, value: &Option<String>, allowed: &[&str]) -> Result<()> {
+fn check_choice(what: &str, value: Option<&String>, allowed: &[&str]) -> Result<()> {
     match value {
         Some(v) if !allowed.contains(&v.as_str()) => {
             bail!("{what} must be one of {}, not '{v}'", allowed.join(", "))
@@ -263,7 +269,7 @@ fn check_choice(what: &str, value: &Option<String>, allowed: &[&str]) -> Result<
     }
 }
 
-fn check_model(what: &str, value: &Option<String>) -> Result<()> {
+fn check_model(what: &str, value: Option<&String>) -> Result<()> {
     match value {
         Some(v) if v.chars().any(char::is_whitespace) || v.starts_with('-') => {
             bail!("{what} does not look like a model name: '{v}'")
@@ -284,6 +290,7 @@ fn agent_slot<T>(backend: Backend, [claude_code, agy, codex]: [T; 3]) -> Option<
 
 impl ExtractConfig {
     /// The section for an agent backend; `None` for the API.
+    #[must_use]
     pub fn agent(&self, backend: Backend) -> Option<&AgentConfig> {
         agent_slot(backend, [&self.claude_code, &self.agy, &self.codex])
     }
@@ -295,6 +302,12 @@ impl ExtractConfig {
         )
     }
 
+    /// Trim every text setting, turning blank ones into unset, and drop blank
+    /// extra arguments.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` has an agent section.
     pub fn normalise(&mut self) {
         for a in AGENTS {
             let s = self.agent_mut(a.backend).expect("agent");
@@ -313,6 +326,17 @@ impl ExtractConfig {
     /// Refuse what cannot work, with the fix in the message. Runs on every
     /// save so a bad value is caught while the user is looking at the form,
     /// not ten minutes into an extraction.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `retries` exceeds 10, `timeout_secs` is outside 30..=7200, an agent
+    /// `command` holds a control character, a model name is malformed, an effort or
+    /// permission mode is not one the agent accepts, `api.base_url` is not http(s),
+    /// or `api.api_key_env` is not a usable variable name.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` has an agent section.
     pub fn validate(&self) -> Result<()> {
         if let Some(r) = self.retries.filter(|r| *r > 10) {
             bail!("retries must be at most 10 (each retry is a full model run), not {r}");
@@ -330,15 +354,15 @@ impl ExtractConfig {
                     "{name}.command must be an executable name or path without control characters"
                 );
             }
-            check_model(&format!("{name}.model"), &s.model)?;
-            check_choice(&format!("{name}.effort"), &s.effort, a.efforts)?;
+            check_model(&format!("{name}.model"), s.model.as_ref())?;
+            check_choice(&format!("{name}.effort"), s.effort.as_ref(), a.efforts)?;
             check_choice(
                 &format!("{name}.permission_mode"),
-                &s.permission_mode,
+                s.permission_mode.as_ref(),
                 a.permission_modes,
             )?;
         }
-        check_model("api.model", &self.api.model)?;
+        check_model("api.model", self.api.model.as_ref())?;
         if let Some(url) = self
             .api
             .base_url
@@ -357,6 +381,12 @@ impl ExtractConfig {
 
     /// Every settable key, its meaning, and its default, for `--help` and the
     /// web form's hints. Order is display order.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` names an agent backend, which has
+    /// a default tool.
+    #[must_use]
     pub fn keys() -> Vec<KeyInfo> {
         let mut keys = vec![
             KeyInfo::new(
@@ -418,6 +448,12 @@ impl ExtractConfig {
     /// Set one key. An empty value clears it (back to the default). A value
     /// that fails validation leaves the config exactly as it was, so
     /// `set a=bad b=good` writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails, leaving `self` unchanged, when `key` is not a known setting, a number
+    /// setting gets a non-number, `backend` gets an unknown name, or the result fails
+    /// [`Self::validate`].
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let mut next = self.clone();
         next.set_unchecked(key.trim(), value.trim())?;
@@ -452,7 +488,7 @@ impl ExtractConfig {
                 "backend" => {
                     self.backend = opt.filter(|v| v != "auto").map(|v| v.parse()).transpose()?;
                 }
-                "retries" => self.retries = number("retries")?.map(|n| n as usize),
+                "retries" => self.retries = number("retries")?.and_then(|n| n.try_into().ok()),
                 "timeout_secs" => self.timeout_secs = number("timeout_secs")?,
                 _ => return Err(unknown()),
             }
@@ -480,7 +516,7 @@ impl ExtractConfig {
             "permission_mode" => agent.permission_mode = opt,
             "profile" => agent.profile = opt,
             "extra_args" => {
-                agent.extra_args = value.split_whitespace().map(str::to_string).collect()
+                agent.extra_args = value.split_whitespace().map(str::to_string).collect();
             }
             _ => return Err(unknown()),
         }
@@ -488,6 +524,10 @@ impl ExtractConfig {
     }
 
     /// Parse `KEY=VALUE` and set it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `pair` has no `=`, or for any reason [`Self::set`] fails.
     pub fn set_pair(&mut self, pair: &str) -> Result<()> {
         let (key, value) = pair
             .split_once('=')
@@ -496,6 +536,7 @@ impl ExtractConfig {
     }
 
     /// The file's contents, as they would be written.
+    #[must_use]
     pub fn to_toml(&self) -> String {
         format!(
             "{FILE_HEADER}\n{}",
@@ -505,6 +546,11 @@ impl ExtractConfig {
 
     /// Apply a preset: set the backend and that backend's own section. Other
     /// sections are left alone, so switching back keeps what was there.
+    ///
+    /// # Errors
+    ///
+    /// Fails, leaving `self` unchanged, when `id` names no preset; the message lists
+    /// the preset ids.
     pub fn apply_preset(&mut self, id: &str) -> Result<&'static Preset> {
         let preset = presets().iter().find(|p| p.id == id).with_context(|| {
             format!(
@@ -517,22 +563,24 @@ impl ExtractConfig {
             )
         })?;
         self.backend = Some(preset.backend);
-        match self.agent_mut(preset.backend) {
-            Some(agent) => {
-                agent.model = Some(preset.model.to_string());
-                agent.effort = Some(preset.effort.to_string());
-            }
-            None => {
-                self.api.model = Some(preset.model.to_string());
-                self.api.base_url = Some(preset.api_base.to_string());
-                self.api.api_key_env = Some(preset.api_key_env.to_string());
-            }
+        if let Some(agent) = self.agent_mut(preset.backend) {
+            agent.model = Some(preset.model.to_string());
+            agent.effort = Some(preset.effort.to_string());
+        } else {
+            self.api.model = Some(preset.model.to_string());
+            self.api.base_url = Some(preset.api_base.to_string());
+            self.api.api_key_env = Some(preset.api_key_env.to_string());
         }
         Ok(preset)
     }
 
     /// Fold the file, the environment and the defaults into one answer.
     /// `flag_backend` is a `--backend` flag, which wins outright.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` has an agent section and a
+    /// default tool.
     pub fn resolve(&self, host: &dyn Host, flag_backend: Option<Backend>) -> Resolved {
         let env = |name: &str| host.var(name).filter(|v| !v.trim().is_empty());
         let pick = |var: &str, file: &Option<String>, default: &str| -> String {
@@ -565,25 +613,26 @@ impl ExtractConfig {
         };
 
         let [claude_code, agy, codex] = AGENTS.map(|spec| agent(&spec));
-        let (backend, backend_source) = if let Some(b) = flag_backend {
-            (b, BackendSource::Flag)
-        } else if let Some(b) = env(ENV_BACKEND).and_then(|v| v.parse::<Backend>().ok()) {
-            (b, BackendSource::Env(ENV_BACKEND))
-        } else if let Some(b) = self.backend {
-            (b, BackendSource::Config)
-        } else if env("HAUKSBEE_LLM_API_KEY").is_some() {
-            (Backend::Api, BackendSource::Env("HAUKSBEE_LLM_API_KEY"))
-        } else {
-            // Nothing installed: codex, so the error names one install command.
-            let found = [
-                (Backend::Codex, &codex),
-                (Backend::ClaudeCode, &claude_code),
-                (Backend::Agy, &agy),
-            ]
-            .into_iter()
-            .find(|(_, a)| host.find(&a.command).is_some())
-            .map(|(backend, _)| backend);
-            (found.unwrap_or(Backend::Codex), BackendSource::Auto)
+        let env_choice = env(ENV_BACKEND).and_then(|v| v.parse::<Backend>().ok());
+        let (backend, backend_source) = match (flag_backend, env_choice, self.backend) {
+            (Some(b), ..) => (b, BackendSource::Flag),
+            (None, Some(b), _) => (b, BackendSource::Env(ENV_BACKEND)),
+            (None, None, Some(b)) => (b, BackendSource::Config),
+            _ if env(LLM_API_KEY_ENV).is_some() => {
+                (Backend::Api, BackendSource::Env(LLM_API_KEY_ENV))
+            }
+            _ => {
+                // Nothing installed: codex, so the error names one install command.
+                let found = [
+                    (Backend::Codex, &codex),
+                    (Backend::ClaudeCode, &claude_code),
+                    (Backend::Agy, &agy),
+                ]
+                .into_iter()
+                .find(|(_, a)| host.find(&a.command).is_some())
+                .map(|(backend, _)| backend);
+                (found.unwrap_or(Backend::Codex), BackendSource::Auto)
+            }
         };
 
         Resolved {
@@ -607,17 +656,19 @@ impl ExtractConfig {
                 api_key_env: env("HAUKSBEE_API_KEY_ENV")
                     .or_else(|| self.api.api_key_env.clone())
                     .unwrap_or_else(|| {
-                        if env("HAUKSBEE_LLM_API_KEY").is_some() {
-                            "HAUKSBEE_LLM_API_KEY".to_string()
+                        let found = env(LLM_API_KEY_ENV).is_some();
+                        (if found {
+                            LLM_API_KEY_ENV
                         } else {
-                            DEFAULT_API_KEY_ENV.to_string()
-                        }
+                            DEFAULT_API_KEY_ENV
+                        })
+                        .to_string()
                     }),
             },
             env_overrides: KNOWN_ENV_VARS
                 .iter()
                 .filter(|v| env(v).is_some())
-                .map(|v| v.to_string())
+                .map(ToString::to_string)
                 .collect(),
         }
     }
@@ -633,7 +684,7 @@ pub struct KeyInfo {
 
 impl KeyInfo {
     fn new(key: impl Into<String>, help: impl Into<String>, default: impl Into<String>) -> Self {
-        KeyInfo {
+        Self {
             key: key.into(),
             help: help.into(),
             default: default.into(),
@@ -641,9 +692,11 @@ impl KeyInfo {
     }
 }
 
-/// The environment variables that override the file. A settings surface shows
-/// the ones that are set, because a saved choice that is silently overridden
-/// by a stale `export` is the first thing people ask about.
+/// The environment variables that override the file.
+///
+/// A settings surface shows the ones that are set, because a saved choice that
+/// is silently overridden by a stale `export` is the first thing people ask
+/// about.
 pub const KNOWN_ENV_VARS: &[&str] = &[
     ENV_BACKEND,
     "HAUKSBEE_LLM_API_KEY",
@@ -738,6 +791,7 @@ const fn api_preset(
     }
 }
 
+#[must_use]
 pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
@@ -845,6 +899,7 @@ pub struct FakeHost {
 
 impl FakeHost {
     /// A host with these environment variables and these tools installed.
+    #[must_use]
     pub fn new(vars: &[(&str, &str)], tools: &[&str]) -> Self {
         Self {
             vars: vars
@@ -883,12 +938,13 @@ pub enum BackendSource {
 }
 
 impl BackendSource {
+    #[must_use]
     pub fn describe(self) -> String {
         match self {
-            BackendSource::Flag => "chosen with --backend".to_string(),
-            BackendSource::Env(name) => format!("from ${name}"),
-            BackendSource::Config => "from the config file".to_string(),
-            BackendSource::Auto => "auto-detected (nothing configured)".to_string(),
+            Self::Flag => "chosen with --backend".to_string(),
+            Self::Env(name) => format!("from ${name}"),
+            Self::Config => "from the config file".to_string(),
+            Self::Auto => "auto-detected (nothing configured)".to_string(),
         }
     }
 }
@@ -928,6 +984,7 @@ pub struct Resolved {
 
 impl Resolved {
     /// The effective settings for an agent backend; `None` for the API.
+    #[must_use]
     pub fn agent(&self, backend: Backend) -> Option<&ResolvedAgent> {
         agent_slot(backend, [&self.claude_code, &self.agy, &self.codex])
     }
@@ -940,12 +997,14 @@ impl Resolved {
     }
 
     /// The active backend's model.
+    #[must_use]
     pub fn model(&self) -> &str {
         self.agent(self.backend)
             .map_or(&self.api.model, |a| &a.model)
     }
 
     /// The active backend's reasoning effort (the API backend has none).
+    #[must_use]
     pub fn effort(&self) -> Option<&str> {
         self.agent(self.backend).map(|a| a.effort.as_str())
     }
@@ -977,6 +1036,7 @@ impl Resolved {
     }
 
     /// The command override, if this protocol is run through a custom wrapper.
+    #[must_use]
     pub fn custom_command(&self, backend: Backend) -> Option<&str> {
         self.agent(backend)
             .map(|a| a.command.as_str())
@@ -984,6 +1044,7 @@ impl Resolved {
     }
 
     /// The same routing disclosure for consent, availability and run summaries.
+    #[must_use]
     pub fn sends_data_to(&self, backend: Backend) -> String {
         self.custom_command(backend).map_or_else(
             || backend.sends_data_to().to_string(),
@@ -992,19 +1053,42 @@ impl Resolved {
     }
 
     /// Tell every consent surface exactly what is about to read the datasheet.
+    #[must_use]
     pub fn summary(&self) -> String {
-        let detail = match self.effort() {
-            Some(effort) => format!("{}, {effort} effort", self.model()),
-            None => format!("{} at {}", self.model(), self.api.base_url),
-        };
-        let mut routing = self
+        let detail = self.effort().map_or_else(
+            || format!("{} at {}", self.model(), self.api.base_url),
+            |effort| format!("{}, {effort} effort", self.model()),
+        );
+        let routing = self
             .custom_command(self.backend)
             .map(|_| format!("; {}", self.sends_data_to(self.backend)))
             .unwrap_or_default();
-        if let (Some(p), Backend::Codex) = (&self.codex.profile, self.backend) {
-            routing += &format!("; profile {p}: your codex config applies");
-        }
-        format!("{} ({detail}{routing})", self.backend.label())
+        let codex_profile = self
+            .codex
+            .profile
+            .as_ref()
+            .filter(|_| self.backend == Backend::Codex);
+        let profile = codex_profile.map(|p| format!("; profile {p}: your codex config applies"));
+        let profile = profile.unwrap_or_default();
+        let confined = self.confinement(self.backend).map(|c| format!("; {c}"));
+        let (label, confined) = (self.backend.label(), confined.unwrap_or_default());
+        format!("{label} ({detail}{routing}{profile}{confined})")
+    }
+
+    /// What hauksbee confines when `backend` runs, as every consent surface says
+    /// it; `None` for the API, which gets extracted text and runs nothing.
+    #[must_use]
+    pub fn confinement(&self, backend: Backend) -> Option<&'static str> {
+        let mode = self.agent(backend)?.permission_mode.as_str();
+        let custom = self.custom_command(backend).is_some();
+        Some(match (custom, backend, mode) {
+            (true, ..) => "NOT confined: hauksbee cannot confine a custom command",
+            (_, Backend::Codex, "danger-full-access") => "NOT confined (danger-full-access)",
+            (_, Backend::Codex, "approve-for-me") => "confined unless its reviewer approves more",
+            (_, Backend::Codex, _) => "reads confined to the workspace and system paths",
+            (_, Backend::Agy, _) => "NOT confined by hauksbee: agy's own --sandbox is unverified",
+            _ => "file tools in workspace; shell reads system paths, not homes, volumes or temp",
+        })
     }
 }
 
@@ -1039,22 +1123,19 @@ pub fn availability(host: &dyn Host, resolved: &Resolved) -> Vec<BackendStatus> 
 impl Resolved {
     /// Inspect one effective backend without running it or checking sign-in.
     pub fn status(&self, host: &dyn Host, backend: Backend) -> BackendStatus {
-        let (available, detail) = match self.agent(backend) {
-            Some(a) => match host.find(&a.command) {
-                Some(path) => (true, path.display().to_string()),
-                None => (false, format!("executable `{}` was not found", a.command)),
-            },
-            None => {
-                let name = &self.api.api_key_env;
-                match host.var(name).filter(|v| !v.trim().is_empty()) {
-                    Some(_) => (true, format!("${name} is set")),
-                    None if is_local_url(&self.api.base_url) => (
-                        true,
-                        format!("local endpoint, no key needed (${name} unset)"),
-                    ),
-                    None => (false, format!("${name} is not set")),
-                }
-            }
+        let name = &self.api.api_key_env;
+        let key_set = host.var(name).is_some_and(|v| !v.trim().is_empty());
+        let (available, detail) = match (self.agent(backend), key_set) {
+            (Some(a), _) => host.find(&a.command).map_or_else(
+                || (false, format!("executable `{}` was not found", a.command)),
+                |path| (true, path.display().to_string()),
+            ),
+            (None, true) => (true, format!("${name} is set")),
+            (None, false) if is_local_url(&self.api.base_url) => (
+                true,
+                format!("local endpoint, no key needed (${name} unset)"),
+            ),
+            (None, false) => (false, format!("${name} is not set")),
         };
         BackendStatus {
             id: backend.name(),
@@ -1073,6 +1154,7 @@ impl Resolved {
 }
 
 /// A loopback endpoint: nothing leaves the machine and no key is expected.
+#[must_use]
 pub fn is_local_url(url: &str) -> bool {
     let rest = url
         .trim_start_matches("http://")
@@ -1087,13 +1169,26 @@ pub fn is_local_url(url: &str) -> bool {
 // ── The file on disk ──────────────────────────────────────────────────────────
 
 /// Where the file lives: `$HAUKSBEE_EXTRACT_CONFIG`, else
-/// `$XDG_CONFIG_HOME/hauksbee/extract.toml`, else `~/.config/hauksbee/extract.toml`.
+/// `$XDG_CONFIG_HOME/hauksbee/extract.toml`, else
+/// `~/.config/hauksbee/extract.toml`.
+///
 /// Windows has no `$HOME`: there it is `%APPDATA%\hauksbee\extract.toml`, else
 /// `%USERPROFILE%\.config\hauksbee\extract.toml`.
+///
+/// # Errors
+///
+/// Fails when none of those variables is set (or all are blank), so there is
+/// nowhere to keep the file.
 pub fn config_path() -> Result<PathBuf> {
     config_path_in(&ProcessHost)
 }
 
+/// [`config_path`] with the environment read through `host`.
+///
+/// # Errors
+///
+/// Fails when `host` sets none of `$HAUKSBEE_EXTRACT_CONFIG`, `$XDG_CONFIG_HOME`,
+/// `$HOME`, `%APPDATA%` or `%USERPROFILE%` to a non-blank value.
 pub fn config_path_in(host: &dyn Host) -> Result<PathBuf> {
     let set = |name: &str| {
         host.var(name)
@@ -1120,11 +1215,18 @@ pub struct Loaded {
     pub exists: bool,
 }
 
-/// Read the config file (a missing file is an empty config, not an error). A
-/// file that exists but cannot be parsed IS an error, with the path in it:
+/// Read the config file (a missing file is an empty config, not an error).
+///
+/// A file that exists but cannot be parsed IS an error, with the path in it:
 /// silently ignoring it would run an extraction on settings the user did not
-/// choose.
-/// So is a missing file that `$HAUKSBEE_EXTRACT_CONFIG` names: never silent defaults.
+/// choose. So is a missing file that `$HAUKSBEE_EXTRACT_CONFIG` names: never
+/// silent defaults.
+///
+/// # Errors
+///
+/// Fails when no config path can be found (see [`config_path`]), when the file
+/// cannot be read or parsed or holds a value [`ExtractConfig::validate`] refuses,
+/// or when `$HAUKSBEE_EXTRACT_CONFIG` names a file that does not exist.
 pub fn load() -> Result<Loaded> {
     load_in(&ProcessHost)
 }
@@ -1142,10 +1244,22 @@ fn load_in(host: &dyn Host) -> Result<Loaded> {
 }
 
 /// `load` for a command about to write the file: a missing one is created.
+///
+/// # Errors
+///
+/// Fails when no config path can be found (see [`config_path`]), or when an
+/// existing file cannot be read, parsed or validated.
 pub fn load_for_edit() -> Result<Loaded> {
     load_from(&config_path()?)
 }
 
+/// Read the config at `path`; a missing file loads as the empty config.
+///
+/// # Errors
+///
+/// Fails, naming `path`, when the file exists but cannot be read, is not valid
+/// TOML for an [`ExtractConfig`], or holds a value [`ExtractConfig::validate`]
+/// refuses.
 pub fn load_from(path: &Path) -> Result<Loaded> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -1173,6 +1287,11 @@ pub fn load_from(path: &Path) -> Result<Loaded> {
 
 /// Write the config. Validated first; written atomically (a temp file then a
 /// rename) so a crash mid-write cannot leave half a file behind.
+///
+/// # Errors
+///
+/// Fails when `config` does not validate, or when the parent directory cannot be
+/// created, the temp file cannot be written, or the rename into place fails.
 pub fn save(config: &ExtractConfig, path: &Path) -> Result<()> {
     let mut config = config.clone();
     config.normalise();
@@ -1207,7 +1326,7 @@ mod tests {
             );
         }
         assert_eq!((r.retries, r.timeout_secs), (2, 600));
-        assert_eq!(r.summary(), "Claude Code (claude-opus-5, high effort)");
+        assert!(r.summary().contains("-opus-5, high effort; file tools"));
         for a in AGENTS {
             assert_eq!(
                 r.agent(a.backend).unwrap().command,

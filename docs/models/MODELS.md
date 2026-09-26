@@ -201,22 +201,32 @@ drops `--ignore-user-config`: your codex config and that profile then apply
 **What an extraction agent can read.** `--sandbox workspace-write` confines
 codex's writes but not its reads: a run under it searched the home directory,
 another project and `/tmp`, and ran a different `hauksbee` it found on PATH. So
-in the `workspace-write` (default) and `approve-for-me` modes hauksbee selects a
-codex permission profile instead (`-c default_permissions="hauksbee"` plus the
-profile as a `-c permissions=...` override): shell commands may read codex's
-`:minimal` OS/runtime paths, `/opt/homebrew` and `/usr/local` (so `pdftotext`
-and `pdftoppm` work), the checker executable, and the scratch workspace (which
-they may also write), and are refused everything else, including your home
-directory, `~/.codex`, `/tmp` and `$TMPDIR`. Verified against codex-cli 0.156.1
-with `codex sandbox -P hauksbee` (Seatbelt on macOS). The codex process itself
-still reads its own sign-in from `CODEX_HOME`; no credentials are copied. Claude
-Code gets `--restricted` (file tools confined to the workspace), no web tools,
-and a strict Bash sandbox via `--settings` (`failIfUnavailable`, no unsandboxed
-retry, reads denied under `~/`, `/tmp` and the temp root except the workspace
+in every mode except `danger-full-access` hauksbee selects a codex permission
+profile instead (`-c default_permissions="hauksbee"` plus the profile as a
+`-c permissions=...` override): shell commands may read codex's `:minimal`
+OS/runtime paths, `/opt/homebrew` and `/usr/local` (so `pdftotext` and
+`pdftoppm` work), the checker executable, and the scratch workspace (which they
+may also write, except in `read-only` mode), and are refused everything else,
+including your home directory, `~/.codex`, `/Users`, `/Volumes`, `/Library`,
+`/tmp` and `$TMPDIR`. Verified against codex-cli 0.156.1 with
+`codex sandbox -P hauksbee` (Seatbelt on macOS). `approve-for-me` adds a
+reviewer that can approve a command outside the profile; `danger-full-access`
+is `--sandbox danger-full-access` and confines nothing. The codex process itself
+still reads its own sign-in from `CODEX_HOME`; no credentials are copied. The
+standalone `resource-extract` tool launches codex through the same code, on a
+scratch copy of the PDF. Claude Code gets `--restricted` (file tools confined
+to the workspace; it also refuses `bypassPermissions`), no web tools, and a
+strict Bash sandbox via `--settings` (`failIfUnavailable`, no unsandboxed
+retry, reads denied under `~/`, `/Users`, `/home`, `/Volumes`, `/mnt`,
+`/media`, `/tmp`, `/private/var/folders` and the temp root except the workspace
 and checker); unlike codex's profile, the rest of the system (`/etc`,
-`/Applications`) stays readable to it. agy, and codex in `read-only` or
-`danger-full-access` mode, are not read-confined: they can read anything your
-account can, and what they read can reach the vendor. Every agent CLI starts in
+`/Library`, `/Applications`) stays readable to its shell. agy gets `--sandbox`,
+agy's own terminal sandbox (by agy's documentation: workspace-only files, no
+network); hauksbee cannot verify that boundary or confine agy's own file tools,
+so treat agy as able to read anything your account can. A custom `command`
+receives the same flags, but it is your program: hauksbee cannot confine it.
+`hauksbee models backend show`, doctor and the web page state the confinement
+of the configured backend. What any agent reads can reach its vendor. Every agent CLI starts in
 the scratch workspace with a PATH from which every directory holding a
 `hauksbee` executable is removed, and the prompt names the product's own
 executable by absolute path (`'<hauksbee>' models lint model.toml`) as the
@@ -598,8 +608,9 @@ from, so an extracted model stays auditable.
      `claude -p` running after the answer is written. Its Bash tool runs in
      Claude Code's sandbox (hauksbee's `--settings`); a `--settings` file
      added by a wrapper command still applies too.
-   - **agy** (`--backend agy`): headless `agy --print`, the same contract
-     again.
+   - **agy** (`--backend agy`): headless `agy --print` with agy's own
+     `--sandbox`, the same contract again. hauksbee cannot verify or extend
+     agy's confinement.
    - **codex** (`--backend codex`): `codex exec` with the read-confining
      permission profile, `--skip-git-repo-check --cd <workspace>`. A short pointer to `prompt.md` is
      written to stdin before EOF; the final agent message (clean TOML) comes back

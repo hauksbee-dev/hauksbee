@@ -36,6 +36,10 @@ fn print_backend_line(resolved: &Resolved) {
 
 /// The extraction backend `show` resolves and whether it can run, as
 /// `(available, "<backend> (<why chosen>): <detail>")`. Nothing is called.
+///
+/// # Errors
+///
+/// Returns an error if the config file exists but cannot be read or parsed.
 pub fn extract_status() -> anyhow::Result<(bool, String)> {
     let (_, resolved) = load_and_resolve()?;
     let status = resolved.status(&ProcessHost, resolved.backend);

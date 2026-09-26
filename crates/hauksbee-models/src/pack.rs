@@ -47,9 +47,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// A pack-format or pack-store failure. Every validation category is a named
-/// variant (the `sensor_spec.rs` discipline): a bad pack fails loud and
-/// specific, at `models add` time, before anything is copied.
+/// A pack-format or pack-store failure.
+///
+/// Every validation category is a named variant (the `sensor_spec.rs`
+/// discipline): a bad pack fails loud and specific, at `models add` time,
+/// before anything is copied.
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
     /// The pack directory does not exist or is not a directory.
@@ -122,9 +124,11 @@ fn io_err(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> PackErro
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
-/// Where a pack's model data came from. Declared, not inferred: the point is
-/// that a reviewer of `models list` output can see at a glance whether numbers
-/// were typed by a human, extracted by a model, or shipped by the part vendor.
+/// Where a pack's model data came from.
+///
+/// Declared, not inferred: the point is that a reviewer of `models list` output
+/// can see at a glance whether numbers were typed by a human, extracted by a
+/// model, or shipped by the part vendor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provenance {
     #[serde(rename = "hand-written")]
@@ -138,9 +142,9 @@ pub enum Provenance {
 impl std::fmt::Display for Provenance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Provenance::HandWritten => write!(f, "hand-written"),
-            Provenance::DatasheetExtracted => write!(f, "datasheet-extracted"),
-            Provenance::Vendor => write!(f, "vendor"),
+            Self::HandWritten => write!(f, "hand-written"),
+            Self::DatasheetExtracted => write!(f, "datasheet-extracted"),
+            Self::Vendor => write!(f, "vendor"),
         }
     }
 }
@@ -192,7 +196,7 @@ fn parse_version(field: &'static str, v: &str) -> Result<(u64, u64, u64), PackEr
         }
         nums[i] = p.parse().map_err(|_| bad())?;
     }
-    Ok((nums[0], nums[1], nums[2]))
+    Ok(nums.into())
 }
 
 fn valid_pack_name(name: &str) -> bool {
@@ -206,7 +210,14 @@ impl PackManifest {
     /// Parse and validate a `pack.toml` source string. `hauksbee_version` is
     /// the running build's version (pass [`HAUKSBEE_VERSION`]), checked
     /// against `min_hauksbee_version`.
-    pub fn from_toml(src: &str, hauksbee_version: &str) -> Result<PackManifest, PackError> {
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when the source is not TOML or lacks a `[pack]` table, when
+    /// a required field such as `name`, `version` or `provenance` is missing, when
+    /// the name, a version or the provenance is malformed, or when this build is
+    /// older than `min_hauksbee_version`.
+    pub fn from_toml(src: &str, hauksbee_version: &str) -> Result<Self, PackError> {
         let raw: RawManifestFile =
             toml::from_str(src).map_err(|e| PackError::ManifestParse(e.to_string()))?;
         let raw = raw
@@ -251,7 +262,7 @@ impl PackManifest {
         if provenance == Provenance::Vendor && license.trim().is_empty() {
             return Err(PackError::InvalidLicense);
         }
-        Ok(PackManifest {
+        Ok(Self {
             name,
             version,
             license,
@@ -262,6 +273,7 @@ impl PackManifest {
     }
 
     /// The install directory name: `<name>@<version>`.
+    #[must_use]
     pub fn dir_name(&self) -> String {
         format!("{}@{}", self.name, self.version)
     }
@@ -287,7 +299,13 @@ pub struct Pack {
 impl Pack {
     /// Load and fully validate a pack directory. Everything `models add`
     /// checks happens here, so the library loader and the installer agree.
-    pub fn load(dir: &Path) -> Result<Pack, PackError> {
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when `dir` is not a directory or has no `pack.toml`, when the
+    /// manifest fails [`PackManifest::from_toml`], when a file cannot be read, or
+    /// when the model files are missing or fail entry validation.
+    pub fn load(dir: &Path) -> Result<Self, PackError> {
         if !dir.is_dir() {
             return Err(PackError::NotADirectory(dir.to_path_buf()));
         }
@@ -379,7 +397,7 @@ impl Pack {
             }
         }
 
-        Ok(Pack {
+        Ok(Self {
             manifest,
             dir: dir.to_path_buf(),
             model_files,
@@ -419,25 +437,29 @@ pub struct PackStore {
 impl PackStore {
     /// The store under an explicit home directory (tests pass a temp dir; the
     /// CLI passes `$HOME`). Nothing is created until the first install.
-    pub fn in_home(home: &Path) -> PackStore {
+    #[must_use]
+    pub fn in_home(home: &Path) -> Self {
         let base = home.join(".hauksbee");
-        PackStore {
+        Self {
             root: base.join("packs"),
             record: base.join("packs.toml"),
         }
     }
 
     /// The store for the current user (`$HOME`), or `None` when HOME is unset.
-    pub fn default_location() -> Option<PackStore> {
-        std::env::var_os("HOME").map(|h| PackStore::in_home(Path::new(&h)))
+    #[must_use]
+    pub fn default_location() -> Option<Self> {
+        std::env::var_os("HOME").map(|h| Self::in_home(Path::new(&h)))
     }
 
     /// Where installed packs live.
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// The `packs.toml` record path.
+    #[must_use]
     pub fn record_path(&self) -> &Path {
         &self.record
     }
@@ -445,6 +467,12 @@ impl PackStore {
     /// Validate the pack at `src`, copy it into the store, and record it.
     /// `source_label` is what `packs.toml` remembers as the origin (the path
     /// or URL the user typed). Fails loud before copying anything.
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when the pack fails [`Pack::load`], a pack of that name is
+    /// already installed, `packs.toml` is corrupt, or the copy or record write
+    /// fails.
     pub fn install(&self, src: &Path, source_label: &str) -> Result<PackRecord, PackError> {
         let pack = Pack::load(src)?;
         let mut file = self.read_record()?;
@@ -479,6 +507,12 @@ impl PackStore {
 
     /// Remove an installed pack by name: deletes its directory and drops it
     /// from `packs.toml`.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::NotInstalled`] when no pack of that name is recorded, and a
+    /// [`PackError`] when `packs.toml` is corrupt or the directory removal or record
+    /// write fails.
     pub fn remove(&self, name: &str) -> Result<PackRecord, PackError> {
         let mut file = self.read_record()?;
         let idx = file
@@ -499,11 +533,16 @@ impl PackStore {
     }
 
     /// The installed packs, from `packs.toml` (empty when none installed).
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when `packs.toml` exists but cannot be read or parsed.
     pub fn list(&self) -> Result<Vec<PackRecord>, PackError> {
         Ok(self.read_record()?.packs)
     }
 
     /// The install directory of a recorded pack.
+    #[must_use]
     pub fn pack_dir(&self, record: &PackRecord) -> PathBuf {
         self.root
             .join(format!("{}@{}", record.name, record.version))
@@ -574,7 +613,7 @@ mod tests {
         std::fs::write(dir.join("models").join("m.toml"), model).unwrap();
     }
 
-    /// Pack::load runs the behavioural gate, so a `nan` setpoint never installs.
+    /// `Pack::load` runs the behavioural gate, so a `nan` setpoint never installs.
     #[test]
     fn pack_load_rejects_nonfinite_behavioral_converter() {
         let base = std::env::temp_dir().join(format!("hb_pack_test_{}", std::process::id()));

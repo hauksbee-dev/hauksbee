@@ -235,7 +235,7 @@ fn probe_agy() -> DepStatus {
         manual: hauksbee_models::datasheet::Backend::Agy
             .install_hint()
             .to_string(),
-        privacy: "Using this sends the datasheet, and anything the agent reads (agy is not read-confined), to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        privacy: "Using this sends the datasheet, and anything the agent reads (hauksbee does not confine agy; only its own unverified --sandbox applies), to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
         absent_detail: "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
             .to_string(),
         present_detail: "agy CLI found; sign-in is checked only when datasheet extraction is requested."

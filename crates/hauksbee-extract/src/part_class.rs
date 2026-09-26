@@ -101,7 +101,7 @@ pub enum PartClass {
 impl PartClass {
     /// True only for a plain resistor: the kind of part that can be a pull-up,
     /// a pull-down, or a series termination.
-    pub(crate) fn is_resistor(self) -> bool {
+    pub(crate) const fn is_resistor(self) -> bool {
         matches!(self, Self::Passive(c) if c.is_resistor())
     }
 

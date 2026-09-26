@@ -9,7 +9,7 @@
 //! move a parameter away from its citation.
 //!
 //! One rule in particular is worth a test of its own and gets one below.
-//! `mpn_re` is ANDed with every other rule, and a component with no MPN property
+//! `mpn_re` is AND-ed with every other rule, and a component with no MPN property
 //! is compared against it as the empty string, so adding an `mpn_re` beside a
 //! `value_re` cannot widen an entry: it makes the entry bind NOTHING on any
 //! layout-only board. Every entry in this batch was first written with both, and
@@ -339,8 +339,8 @@ fn the_irlml6402_carries_infineons_own_level_1_card() {
     for (k, want) in [
         ("vto", -1.0),
         ("kp", 12.788),
-        ("lambda", 0.0111358),
-        ("rs", 0.0246704),
+        ("lambda", 0.011_135_8),
+        ("rs", 0.024_670_4),
     ] {
         let got = p(&m, k);
         assert!(
@@ -351,7 +351,7 @@ fn the_irlml6402_carries_infineons_own_level_1_card() {
 }
 
 /// Thermal voltage for the Shockley forward-voltage checks below.
-const VT: f64 = 0.025852;
+const VT: f64 = 0.025_852;
 
 #[test]
 fn the_new_diodes_sit_on_their_published_forward_points() {
