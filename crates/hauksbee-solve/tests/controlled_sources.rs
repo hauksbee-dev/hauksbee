@@ -29,14 +29,11 @@
 
 use crate::shared::{
     add_capacitor, add_driver_leg, add_load_leg, add_partition_rc_legs, add_sensed_driver_leg,
-    add_vdc,
+    add_vdc, assert_auto_settles_like_off, dc_solved, trap_fixed_off,
 };
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_solve::decompose::ConductionGraph;
-use hauksbee_solve::{
-    dc_operating_point, Integration, LinearIsland, Partition, Partitioning, SolverOptions,
-    StepControl, Transient, Workspace,
-};
+use hauksbee_solve::{LinearIsland, Partition, Transient};
 use hauksbee_testkit::circuits::res;
 
 fn voltage_controlled(out: NodeId, ctrl: NodeId, vcvs: bool) -> Device {
@@ -198,40 +195,10 @@ fn auto_partitioning_never_drops_controlled_source() {
         add_partition_rc_legs(&mut c);
         c
     };
-    let c = build(1e-3);
-    let opts_off = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: 1e-6 },
-        partitioning: Partitioning::Off,
-        ..SolverOptions::default()
-    };
-    let opts_auto = SolverOptions {
-        partitioning: Partitioning::Auto,
-        ..opts_off
-    };
-    let tstop = 1e-3; // 10 tau: settled.
-    let off = Transient::new(opts_off).run(&c, tstop).unwrap();
-    let auto = Transient::new(opts_auto).run(&c, tstop).unwrap();
-    let w_off = off.node(&c, "out").unwrap();
-    let w_auto = auto.node(&c, "out").unwrap();
-
     // (a) The device visibly acts: steady state -gm*R*v_ctrl = -2 V. A dropped
-    // stamp would leave out at exactly 0 V forever.
-    let last_auto = *w_auto.last().unwrap();
-    assert!(
-        (last_auto + 2.0).abs() < 0.02,
-        "VCCS steady state must be about -2 V, got {last_auto} \
-         (0 V would mean the device was silently dropped)"
-    );
-    // (b) Auto agrees with the bit-exact monolith over the whole waveform.
-    let mut max_abs = 0.0f64;
-    for (x, y) in w_off.iter().zip(w_auto) {
-        max_abs = max_abs.max((x - y).abs());
-    }
-    assert!(
-        max_abs < 5e-3,
-        "Auto vs Off diverged on the VCCS waveform: {max_abs:.3e}"
-    );
+    // stamp would leave out at exactly 0 V forever. (b) Auto agrees with the
+    // bit-exact monolith over the whole waveform.
+    assert_auto_settles_like_off(&build(1e-3), -2.0, "VCCS");
 }
 
 // --- touchpoint 3: stamp correctness against analytic answers ----------------
@@ -246,9 +213,7 @@ fn vccs_dc_matches_analytic() {
     let out = c.node("out");
     crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     c.add(voltage_controlled(out, vin, false));
-    let mut ws = Workspace::new(&c);
-    let opts = SolverOptions::default();
-    dc_operating_point(&mut ws, &c, &opts).unwrap();
+    let ws = dc_solved(&c);
     let v_out = ws.x[ws.layout.node(out).unwrap()];
     assert!(
         (v_out + 2.0).abs() < 1e-6,
@@ -278,9 +243,7 @@ fn vcvs_dc_matches_analytic() {
         gain: 4.0,
     });
     crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
-    let mut ws = Workspace::new(&c);
-    let opts = SolverOptions::default();
-    dc_operating_point(&mut ws, &c, &opts).unwrap();
+    let ws = dc_solved(&c);
     let v_a = ws.x[ws.layout.node(a).unwrap()];
     let v_out = ws.x[ws.layout.node(out).unwrap()];
     // Tolerances sit above the solver's gmin regularization (1e-12 S shunts
@@ -326,13 +289,7 @@ fn vcvs_control_port_is_high_impedance() {
     });
     // heavy load: a control-port leak would be conspicuous
     res(&mut c, "RL", out, NodeId::GROUND, 10.0);
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: 1e-6 },
-        partitioning: Partitioning::Off,
-        ..SolverOptions::default()
-    };
-    let wf = Transient::new(opts).run(&c, 5e-3).unwrap();
+    let wf = Transient::new(trap_fixed_off(1e-6)).run(&c, 5e-3).unwrap();
     let w_ctrl = wf.node(&c, "ctrl").unwrap();
     let w_out = wf.node(&c, "out").unwrap();
     let tau = 1e-3;
@@ -480,44 +437,13 @@ fn auto_partitioning_never_drops_current_controlled_sources() {
         c.add(current_controlled(out, vs, cccs));
         // Extra independent RC legs so the partition heuristics engage.
         add_partition_rc_legs(&mut c);
-        let opts_off = SolverOptions {
-            integration: Integration::Trapezoidal,
-            step: StepControl::Fixed { dt: 1e-6 },
-            partitioning: Partitioning::Off,
-            ..SolverOptions::default()
-        };
-        let opts_auto = SolverOptions {
-            partitioning: Partitioning::Auto,
-            ..opts_off
-        };
-        let tstop = 1e-3; // >= 10 tau of every RC here: settled.
-        let off = Transient::new(opts_off).run(&c, tstop).unwrap();
-        let auto = Transient::new(opts_auto).run(&c, tstop).unwrap();
-        let w_off = off.node(&c, "out").unwrap();
-        let w_auto = auto.node(&c, "out").unwrap();
-
         // Settled control current: v_ctrl -> 2 V * (1k/(1k+1k)) = 1 V across
         // Rs' path... precisely: DC path V1 -> Rd -> Vs -> Rs, i = 2V/2k = 1 mA.
         // (a) CCCS: out receives -gain*i through RL=1k -> -2 V.
         //     CCVS: out is PINNED to transres*i = +2 V.
-        let want = if cccs { -2.0 } else { 2.0 };
-        let last_auto = *w_auto.last().unwrap();
-        assert!(
-            (last_auto - want).abs() < 0.02,
-            "{} steady state must be about {want} V, got {last_auto} \
-             (0 V would mean the device was silently dropped)",
-            if cccs { "CCCS" } else { "CCVS" },
-        );
         // (b) Auto agrees with the bit-exact monolith over the whole waveform.
-        let mut max_abs = 0.0f64;
-        for (x, y) in w_off.iter().zip(w_auto) {
-            max_abs = max_abs.max((x - y).abs());
-        }
-        assert!(
-            max_abs < 5e-3,
-            "Auto vs Off diverged on the {} waveform: {max_abs:.3e}",
-            if cccs { "CCCS" } else { "CCVS" },
-        );
+        let want = if cccs { -2.0 } else { 2.0 };
+        assert_auto_settles_like_off(&c, want, if cccs { "CCCS" } else { "CCVS" });
     }
 }
 
@@ -545,9 +471,7 @@ fn cccs_dc_matches_analytic() {
         gain: 3.0,
     });
     crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
-    let mut ws = Workspace::new(&c);
-    let opts = SolverOptions::default();
-    dc_operating_point(&mut ws, &c, &opts).unwrap();
+    let ws = dc_solved(&c);
     let i_ctrl = ws.x[ws.layout.branch(vs).unwrap()];
     let v_m = ws.x[ws.layout.node(m).unwrap()];
     let v_out = ws.x[ws.layout.node(out).unwrap()];
@@ -580,9 +504,7 @@ fn ccvs_dc_matches_analytic() {
     let vs = add_vdc(&mut c, "Vs", m, NodeId::GROUND, 0.0);
     let h1 = c.add(current_controlled(out, vs, false));
     crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
-    let mut ws = Workspace::new(&c);
-    let opts = SolverOptions::default();
-    dc_operating_point(&mut ws, &c, &opts).unwrap();
+    let ws = dc_solved(&c);
     let i_ctrl = ws.x[ws.layout.branch(vs).unwrap()];
     let v_out = ws.x[ws.layout.node(out).unwrap()];
     let i_h = ws.x[ws.layout.branch(h1).unwrap()];
@@ -623,9 +545,7 @@ RL2 d 0 1k
 .end
 ";
     let c = hauksbee_ir::SpiceLoader::load(net).unwrap();
-    let mut ws = Workspace::new(&c);
-    let opts = SolverOptions::default();
-    dc_operating_point(&mut ws, &c, &opts).unwrap();
+    let ws = dc_solved(&c);
     let node = |name: &str| {
         let mut cc = c.clone();
         let id = cc.node(name);

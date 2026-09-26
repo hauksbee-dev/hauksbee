@@ -32,12 +32,7 @@ fn partitioning_off_is_deterministic_reference() {
         c
     };
     let c = build();
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: 1e-6 },
-        partitioning: Partitioning::Off,
-        ..SolverOptions::default()
-    };
+    let opts = crate::shared::trap_fixed_off(1e-6);
     let a = Transient::new(opts).run(&c, 5e-4).unwrap();
     let b = Transient::new(opts).run(&c, 5e-4).unwrap();
     // Determinism: two Off runs are bit-identical.
@@ -53,10 +48,7 @@ fn partitioning_off_is_deterministic_reference() {
     };
     let auto = Transient::new(opts_auto).run(&c, 5e-4).unwrap();
     let wauto = auto.node(&c, "out").unwrap();
-    let mut max_abs = 0.0f64;
-    for (x, y) in wa.iter().zip(wauto) {
-        max_abs = max_abs.max((x - y).abs());
-    }
+    let max_abs = crate::shared::max_abs_diff(wa, wauto);
     assert!(max_abs < 5e-3, "Auto vs Off diverged: {max_abs:.3e}");
 }
 

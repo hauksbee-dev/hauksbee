@@ -397,10 +397,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
         hi - lo
     );
     // (b) Auto agrees with the monolithic reference over the whole waveform.
-    let mut max_abs = 0.0f64;
-    for (x, y) in w_off.iter().zip(w_auto) {
-        max_abs = max_abs.max((x - y).abs());
-    }
+    let max_abs = crate::shared::max_abs_diff(w_off, w_auto);
     assert!(
         max_abs < 5e-3,
         "Auto vs Off diverged on the island's internal-source waveform: {max_abs:.3e}"

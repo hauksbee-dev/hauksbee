@@ -18,8 +18,8 @@
 use crate::shared::{add_capacitor, add_vdc};
 use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
 use hauksbee_solve::{
-    DcInit, DeviceEffects, EventRetryTuning, Integration, NewtonBypass, Partitioning,
-    RobustnessLadder, SolverOptions, StepControl, Strategy, Transient, Waveforms,
+    DcInit, DeviceEffects, EventRetryTuning, NewtonBypass, Partitioning, RobustnessLadder,
+    SolverOptions, StepControl, Strategy, Transient, Waveforms,
 };
 use hauksbee_testkit::circuits::{comparator, diode, idc, vswitch};
 
@@ -109,11 +109,8 @@ fn mirror_array_gate(blocks: usize, tstop: f64) -> (f64, f64) {
         }
     }
     let mk = |bypass| SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: 1e-6 },
-        partitioning: Partitioning::Off,
         newton_bypass: bypass,
-        ..SolverOptions::default()
+        ..crate::shared::trap_fixed_off(1e-6)
     };
     let opts = mk(NewtonBypass::Off);
     let wf_off = run(&c, mk(NewtonBypass::Off), tstop);

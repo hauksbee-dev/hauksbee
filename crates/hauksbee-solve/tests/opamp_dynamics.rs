@@ -257,12 +257,7 @@ fn partitioned_opamp_output_matches_monolith() {
         c
     };
     let c = build();
-    let opts_off = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: tau / 20.0 },
-        partitioning: Partitioning::Off,
-        ..SolverOptions::default()
-    };
+    let opts_off = crate::shared::trap_fixed_off(tau / 20.0);
     let opts_auto = SolverOptions {
         partitioning: Partitioning::Auto,
         ..opts_off
@@ -282,10 +277,7 @@ fn partitioned_opamp_output_matches_monolith() {
          (near 0 V would mean the reactive seed/advance was skipped)"
     );
     // (b) Auto agrees with the monolith across the whole waveform.
-    let mut max_abs = 0.0f64;
-    for (x, y) in w_off.iter().zip(w_auto) {
-        max_abs = max_abs.max((x - y).abs());
-    }
+    let max_abs = crate::shared::max_abs_diff(w_off, w_auto);
     assert!(
         max_abs < 5e-3,
         "partitioned vs monolithic op-amp waveform diverged: {max_abs:.3e}"

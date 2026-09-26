@@ -5,7 +5,10 @@
 #![allow(dead_code)]
 
 use hauksbee_ir::{Circuit, DeviceId, NodeId};
-use hauksbee_solve::Waveforms;
+use hauksbee_solve::{
+    dc_operating_point, Integration, Partitioning, SolverOptions, StepControl, Transient,
+    Waveforms, Workspace,
+};
 use hauksbee_testkit::circuits;
 
 /// `V1(in, v) -> R1(r) -> out -> C1(farads, IC=0) -> gnd`: the RC step fixture.
@@ -99,6 +102,58 @@ pub fn add_partition_rc_legs(c: &mut Circuit) {
             Some(0.0),
         );
     }
+}
+
+/// Fixed-step trapezoidal transient options with partitioning `Off`: the
+/// bit-exact monolith the parity gates compare against.
+pub fn trap_fixed_off(dt: f64) -> SolverOptions {
+    SolverOptions {
+        integration: Integration::Trapezoidal,
+        step: StepControl::Fixed { dt },
+        partitioning: Partitioning::Off,
+        ..SolverOptions::default()
+    }
+}
+
+/// A workspace holding `c`'s DC operating point under default options.
+pub fn dc_solved(c: &Circuit) -> Workspace {
+    let mut ws = Workspace::new(c);
+    dc_operating_point(&mut ws, c, &SolverOptions::default()).unwrap();
+    ws
+}
+
+/// The never-silently-dropped gate: over a 1 ms transient (>= 10 tau of every
+/// RC the leg fixtures build, so settled) at a fixed 1 us step, node `out`
+/// under `Partitioning::Auto` must settle within 0.02 V of `want` (a dropped
+/// device leaves it at 0 V) and track the bit-exact `Off` monolith within 5 mV.
+pub fn assert_auto_settles_like_off(c: &Circuit, want: f64, label: &str) {
+    let opts_off = trap_fixed_off(1e-6);
+    let opts_auto = SolverOptions {
+        partitioning: Partitioning::Auto,
+        ..opts_off
+    };
+    let off = Transient::new(opts_off).run(c, 1e-3).unwrap();
+    let auto = Transient::new(opts_auto).run(c, 1e-3).unwrap();
+    let w_off = off.node(c, "out").unwrap();
+    let w_auto = auto.node(c, "out").unwrap();
+    let last_auto = *w_auto.last().unwrap();
+    assert!(
+        (last_auto - want).abs() < 0.02,
+        "{label} steady state must be about {want:.4} V, got {last_auto} \
+         (0 V would mean the device was silently dropped)"
+    );
+    let max_abs = max_abs_diff(w_off, w_auto);
+    assert!(
+        max_abs < 5e-3,
+        "Auto vs Off diverged on the {label} waveform: {max_abs:.3e}"
+    );
+}
+
+/// Largest sample-for-sample absolute difference between two series.
+pub fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b)
+        .fold(0.0f64, |m, (x, y)| m.max((x - y).abs()))
 }
 
 /// Compare two waveform sets sample-for-sample over every node. Returns

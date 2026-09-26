@@ -23,14 +23,13 @@
 
 use crate::shared::{
     add_driver_leg, add_load_leg, add_partition_rc_legs, add_resistor, add_sensed_driver_leg,
-    add_vdc,
+    add_vdc, assert_auto_settles_like_off, dc_solved, max_abs_diff, trap_fixed_off,
 };
 use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId, SpiceLoader};
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
-    dc_operating_point, run_tran, AcAnalysis, AcSpec, AssemblyMode, Integration, LinearIsland,
-    Partition, Partitioning, Probe, SolveError, SolverOptions, StepControl, Sweep, Transient,
-    Workspace,
+    dc_operating_point, run_tran, AcAnalysis, AcSpec, AssemblyMode, LinearIsland, Partition, Probe,
+    SolveError, SolverOptions, StepControl, Sweep, Transient, Workspace,
 };
 use hauksbee_testkit::circuits::cap;
 
@@ -181,8 +180,7 @@ fn behavioral_voltage_dc_matches_analytic() {
                RL out 0 1k\n\
                .end\n";
     let c = SpiceLoader::load(net).unwrap();
-    let mut ws = Workspace::new(&c);
-    dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
+    let ws = dc_solved(&c);
     let node = |name: &str| ws.x[ws.layout.node(c.find_node(name).unwrap()).unwrap()];
     let v_a = node("a");
     let v_out = node("out");
@@ -219,8 +217,7 @@ fn behavioral_current_dc_matches_analytic() {
                RL out 0 1k\n\
                .end\n";
     let c = SpiceLoader::load(net).unwrap();
-    let mut ws = Workspace::new(&c);
-    dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
+    let ws = dc_solved(&c);
     let node = |name: &str| ws.x[ws.layout.node(c.find_node(name).unwrap()).unwrap()];
     // i(Vs) = 1 V / 1 k = 1 mA; f = 1m*tanh(1) + 2 mA; v_out = -1k * f.
     let want = -1e-3f64.mul_add(1.0f64.tanh(), 2e-3) * 1e3;
@@ -244,8 +241,7 @@ fn behavioral_self_reference_converges() {
                B1 out 0 I={0.001*(exp(v(out)/0.2)-1)}\n\
                .end\n";
     let c = SpiceLoader::load(net).unwrap();
-    let mut ws = Workspace::new(&c);
-    dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
+    let ws = dc_solved(&c);
     let v = ws.x[ws.layout.node(c.find_node("out").unwrap()).unwrap()];
     let lhs = (1.0 - v) / 1e3;
     let rhs = 1e-3 * (v / 0.2).exp_m1();
@@ -281,21 +277,6 @@ fn auto_partitioning_never_drops_behavioral() {
         }
         // Extra independent RC legs so the partition heuristics engage.
         add_partition_rc_legs(&mut c);
-        let opts_off = SolverOptions {
-            integration: Integration::Trapezoidal,
-            step: StepControl::Fixed { dt: 1e-6 },
-            partitioning: Partitioning::Off,
-            ..SolverOptions::default()
-        };
-        let opts_auto = SolverOptions {
-            partitioning: Partitioning::Auto,
-            ..opts_off
-        };
-        let tstop = 1e-3; // 10 tau: settled.
-        let off = Transient::new(opts_off).run(&c, tstop).unwrap();
-        let auto = Transient::new(opts_auto).run(&c, tstop).unwrap();
-        let w_off = off.node(&c, "out").unwrap();
-        let w_auto = auto.node(&c, "out").unwrap();
         // Settled: V-dep case ctrl -> 2 V, f = 1m*tanh(2), v_out = -1k*f.
         //          I-dep case i(Vs) = 2V/2k = 1 mA, f = 2 mA, v_out = -2 V.
         let want = if idep {
@@ -303,20 +284,7 @@ fn auto_partitioning_never_drops_behavioral() {
         } else {
             -(1e-3 * 2.0f64.tanh()) * 1e3
         };
-        let last_auto = *w_auto.last().unwrap();
-        assert!(
-            (last_auto - want).abs() < 0.02,
-            "steady state must be about {want:.4} V, got {last_auto} \
-             (0 V would mean the device was silently dropped; idep={idep})"
-        );
-        let mut max_abs = 0.0f64;
-        for (x, y) in w_off.iter().zip(w_auto) {
-            max_abs = max_abs.max((x - y).abs());
-        }
-        assert!(
-            max_abs < 5e-3,
-            "Auto vs Off diverged on the B waveform (idep={idep}): {max_abs:.3e}"
-        );
+        assert_auto_settles_like_off(&c, want, if idep { "B (idep)" } else { "B (vdep)" });
     }
 }
 
@@ -451,19 +419,8 @@ fn time_dependent_behavioral_matches_sin_source() {
                .tran 10u 2m\n\
                .end\n";
     let c = SpiceLoader::load(net).unwrap();
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: 1e-6 },
-        partitioning: Partitioning::Off,
-        ..SolverOptions::default()
-    };
-    let wf = Transient::new(opts).run(&c, 2e-3).unwrap();
-    let w_ref = wf.node(&c, "r").unwrap();
-    let w_b = wf.node(&c, "out").unwrap();
-    let mut worst = 0.0f64;
-    for (x, y) in w_ref.iter().zip(w_b) {
-        worst = worst.max((x - y).abs());
-    }
+    let wf = Transient::new(trap_fixed_off(1e-6)).run(&c, 2e-3).unwrap();
+    let worst = max_abs_diff(wf.node(&c, "r").unwrap(), wf.node(&c, "out").unwrap());
     assert!(
         worst < 1e-9,
         "time-dependent B must track the SIN source exactly: worst {worst:.3e}"
@@ -485,24 +442,14 @@ fn planned_assembly_matches_interpreted_on_behavioral_deck() {
                RL out 0 1k\n\
                .end\n";
     let c = SpiceLoader::load(net).unwrap();
-    let base = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt: 1e-6 },
-        partitioning: Partitioning::Off,
-        ..SolverOptions::default()
-    };
+    let base = trap_fixed_off(1e-6);
     let planned = SolverOptions {
         assembly: AssemblyMode::Planned,
         ..base
     };
     let w0 = Transient::new(base).run(&c, 2e-3).unwrap();
     let w1 = Transient::new(planned).run(&c, 2e-3).unwrap();
-    let a0 = w0.node(&c, "out").unwrap();
-    let a1 = w1.node(&c, "out").unwrap();
-    let mut worst = 0.0f64;
-    for (x, y) in a0.iter().zip(a1) {
-        worst = worst.max((x - y).abs());
-    }
+    let worst = max_abs_diff(w0.node(&c, "out").unwrap(), w1.node(&c, "out").unwrap());
     assert!(
         worst < 1e-6,
         "planned assembly diverged from interpreted on a B deck: {worst:.3e}"
