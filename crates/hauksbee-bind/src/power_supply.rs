@@ -23,8 +23,9 @@
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 
-/// Series output resistance used for the "ideal" and current-source-limited
-/// supplies, small enough to be electrically negligible (a few mΩ) but
+/// Series output resistance used for the "ideal" and current-source-limited supplies.
+///
+/// Small enough to be electrically negligible (a few mΩ) but
 /// non-zero so the `Vsource` branch current is well defined and so the rail
 /// never becomes a hard short in MNA.
 pub const STIFF_R_OHMS: f64 = 1e-3;
@@ -682,7 +683,7 @@ mod tests {
             let mut min_rail = f64::INFINITY;
             for _ in 0..200 {
                 v_cmd = s.update(i_load, v_cmd, 0.0, 1e-3);
-                min_rail = min_rail.min(v_cmd - i_load * rs);
+                min_rail = min_rail.min(i_load.mul_add(-rs, v_cmd));
             }
             assert!(
                 min_rail >= -1e-9,
@@ -690,10 +691,10 @@ mod tests {
                  (i_load={i_load}, min rail={min_rail})"
             );
             assert!(
-                (v_cmd - i_load * rs).abs() < 1e-9,
+                i_load.mul_add(-rs, v_cmd).abs() < 1e-9,
                 "an unsatisfiable current-sink overload floors at rail = 0 \
                  (i_load={i_load}, settled rail={})",
-                v_cmd - i_load * rs
+                i_load.mul_add(-rs, v_cmd)
             );
         }
 
@@ -707,7 +708,7 @@ mod tests {
         for _ in 0..10 {
             v_cmd = s.update(0.505, v_cmd, 0.0, 1e-3);
         }
-        let rail = v_cmd - 0.505 * rs;
+        let rail = 0.505f64.mul_add(-rs, v_cmd);
         assert!(
             rail > 4.0,
             "1% over the limit must sag gently, not collapse: rail={rail}"

@@ -103,6 +103,12 @@ struct WaiverFile {
 
 impl WaiverSet {
     /// Load a waiver file using the run's captured, credibility-checked date.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaiverError::Io`] when the file cannot be read,
+    /// [`WaiverError::Toml`] when it does not parse, and [`WaiverError::Invalid`]
+    /// when a waiver entry fails validation.
     pub fn load_at(path: &Path, today: RunDate) -> Result<Self, WaiverError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| WaiverError::Io(format!("reading {}: {e}", path.display())))?;
@@ -121,12 +127,21 @@ impl WaiverSet {
     }
 
     /// Load a waiver file, dating it against the system clock.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`Self::load_at`].
     pub fn load(path: &Path) -> Result<Self, WaiverError> {
         Self::load_at(path, RunDate::from_system_clock())
     }
 
     /// Look for the default waiver file beside `board`. Absent is not an error:
     /// most boards have no waivers, and that is the healthy state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Self::load`] error when a default waiver file exists but
+    /// cannot be loaded.
     pub fn discover(board: &Path) -> Result<Self, WaiverError> {
         let candidate = board
             .parent()

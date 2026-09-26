@@ -541,8 +541,9 @@ fn din_axial_rating(f: &str) -> Option<f64> {
         .map(|(_, w)| *w)
 }
 
-/// Strip a multi-unit stamping suffix from a device name, yielding the package
-/// reference. Multi-unit packages stamp one IR device per unit with a suffix
+/// Strip a multi-unit stamping suffix from a device name, yielding the package reference.
+///
+/// Multi-unit packages stamp one IR device per unit with a suffix
 /// on the reference designator: `_q<N>` (dual BJTs, opamp/comparator channels),
 /// `_s<N>` (analog-switch banks), `_e<N>` (passive-array elements). "`Q1_q2`"
 /// and "`Q1_q1`" are two dice in the one physical package "Q1".
@@ -791,7 +792,7 @@ impl StressMonitor {
                 continue;
             };
             let (r, theta, limit) = (&m.reference, m.theta_ja_c_per_w(), m.tj_max_c());
-            let decisive = 2.0 * peak - self.ambient_c >= limit;
+            let decisive = 2.0f64.mul_add(peak, -self.ambient_c) >= limit;
             let key = format!("{r}-theta-ja");
             let text = format!("{r}'s junction temperature (peak {peak:.1} C)");
             let how = format!(
@@ -1429,7 +1430,7 @@ fn operating_point(
                     let phi = model.phi.max(1e-6);
                     let vbs = sign * node_v(*bulk) - vs;
                     let arg = (phi - vbs).max(0.0);
-                    vth = model.vto + model.gamma * (arg.sqrt() - phi.sqrt());
+                    vth = model.gamma.mul_add(arg.sqrt() - phi.sqrt(), model.vto);
                 }
             }
 
@@ -1452,7 +1453,7 @@ fn operating_point(
             // gates it on a sim option the monitor cannot see); lambda is 0
             // for most models, and when it isn't, including it errs toward
             // the slightly *higher* current, conservative for a limit check.
-            let clm = 1.0 + model.lambda * vds_f;
+            let clm = model.lambda.mul_add(vds_f, 1.0);
             let ids = if vds_f < vov_eff {
                 // Triode.
                 model.beta() * (vov_eff * vds_f - 0.5 * vds_f * vds_f) * clm
@@ -1628,7 +1629,7 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     // Vt). Pairing a temp-corrected Vt with the nominal `is` understated the
     // forward current of a hot junction; the monitor's over-current/over-power
     // checks saw a cooler device than the solve actually settled at.
-    let i = model.is_at(temp_c) * (exp_arg.exp() - 1.0);
+    let i = model.is_at(temp_c) * exp_arg.exp_m1();
     i.clamp(-1e3, 1e3)
 }
 
@@ -2205,13 +2206,13 @@ mod monitor_temp_tests {
         // And the reported current must equal the temp-corrected Shockley value,
         // not the nominal-Is one.
         let vt_hot = hauksbee_ir::thermal_voltage_c(125.0) * model.n;
-        let expected = model.is_at(125.0) * ((vd / vt_hot).exp() - 1.0);
+        let expected = model.is_at(125.0) * (vd / vt_hot).exp_m1();
         assert!(
             (i_hot - expected).abs() <= expected.abs() * 1e-9,
             "diode_current must use is_at(T): got {i_hot:e}, expected {expected:e}"
         );
         // A nominal-Is result would be materially smaller, guard the gap.
-        let nominal = model.is * ((vd / vt_hot).exp() - 1.0);
+        let nominal = model.is * (vd / vt_hot).exp_m1();
         assert!(
             i_hot > nominal * 1.5,
             "temp-corrected current must exceed the nominal-Is current it replaced"

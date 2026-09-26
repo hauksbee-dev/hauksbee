@@ -55,6 +55,12 @@ pub struct SchematicTies {
 /// legacy `.sch` sits beside plenty of boards and is not an Eagle file; guessing
 /// from the extension alone and then failing the run would break every such
 /// project for no gain.
+///
+/// # Errors
+///
+/// Fails when an explicit `--schematic` is given for a non-Eagle board, does
+/// not share the board's file stem, cannot be read, is not an Eagle 6+ XML
+/// schematic, or describes a different design.
 pub fn resolve(
     board_path: &Path,
     board: &hauksbee_extract::ExtractedBoard,
@@ -156,6 +162,12 @@ pub fn resolve(
 ///
 /// Unlike sibling discovery, a supplied upload is explicit input: malformed,
 /// mismatched, or non-Eagle data fails closed.
+///
+/// # Errors
+///
+/// Fails when a schematic is supplied for a non-Eagle board, its name does
+/// not share the board's basename, it is not an Eagle 6+ XML schematic, or it
+/// describes a different design.
 pub fn resolve_uploaded(
     board_name: &str,
     board: &hauksbee_extract::ExtractedBoard,

@@ -367,6 +367,10 @@ pub struct AsBuiltReport {
 impl AsBuiltOverlay {
     /// Parse an overlay from TOML text. `origin` labels errors (a path, or a
     /// symbolic name for embedded overlays).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AsBuiltError::Parse`] when `src` is not a valid overlay TOML document.
     pub fn parse(src: &str, origin: &str) -> Result<Self, AsBuiltError> {
         let doc: AsBuiltDoc = toml::from_str(src).map_err(|e| AsBuiltError::Parse {
             origin: origin.to_string(),
@@ -380,6 +384,11 @@ impl AsBuiltOverlay {
     }
 
     /// Load an overlay from a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AsBuiltError::Io`] when the file cannot be read, or
+    /// [`AsBuiltError::Parse`] when its contents are not a valid overlay.
     pub fn load(path: &Path) -> Result<Self, AsBuiltError> {
         let origin = path.display().to_string();
         let src = std::fs::read_to_string(path).map_err(|e| AsBuiltError::Io {
@@ -405,6 +414,12 @@ impl AsBuiltOverlay {
     /// → jumper. Fail-loud: the first entry that does not describe this board
     /// (unknown ref/net, match-count drift, key/variant mismatch) aborts with
     /// a line-numbered error and the board must be considered poisoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first entry that does not describe this board: an unknown
+    /// reference or net, a match count that drifted, a key/variant mismatch, or a
+    /// node space too full to allocate floating nodes for cuts and lifts.
     pub fn apply(&self, bound: &mut BoundBoard) -> Result<AsBuiltReport, AsBuiltError> {
         let mut report = AsBuiltReport::default();
         for rep in &self.doc.replaces {

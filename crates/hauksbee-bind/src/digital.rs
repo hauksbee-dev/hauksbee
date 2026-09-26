@@ -239,8 +239,9 @@ pub fn replay_components_on_edges(
     microticks
 }
 
-/// VCC supply-current draw of one digital package: a controllable `Isource`
-/// stamped from the part's VCC pin net to its GND pin net, refreshed once per
+/// VCC supply-current draw of one digital package.
+///
+/// A controllable `Isource` stamped from the part's VCC pin net to its GND pin net, refreshed once per
 /// scheduler chunk by [`DigitalComponent::update_supply`].
 ///
 /// The Thevenin output [`PinDriver`]s are referenced to GROUND, not to the
@@ -381,6 +382,11 @@ impl DigitalComponent {
     /// logic block that fails to compile is a hard error: the caller decides
     /// whether to skip the part loudly (its nets then float); it is never
     /// silently downgraded to a passthrough.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LogicCompileError`] when the model's logic block (or the
+    /// synthesized passthrough) fails to compile.
     pub fn new(
         reference: String,
         model: &ModelEntry,
@@ -409,6 +415,11 @@ impl DigitalComponent {
     /// the `q` output [`PinDriver`]. Uses the supplied logic levels (the 74HC02
     /// model entry's). State initialises to the cleared idle (Q HIGH) via the
     /// spec's `init`.
+    ///
+    /// # Panics
+    ///
+    /// Only if the built-in NOR latch spec fails to parse or compile, which
+    /// the unit tests rule out.
     #[must_use]
     pub fn new_nor_latch(
         reference: String,
@@ -621,8 +632,9 @@ impl DigitalComponent {
     }
 }
 
-/// Recover the SEPARATE physical 74HC595 daisy chains on a board. Chip A
-/// precedes chip B in a chain when A's `qh_serial` node == B's `ser` node; a
+/// Recover the SEPARATE physical 74HC595 daisy chains on a board.
+///
+/// Chip A precedes chip B in a chain when A's `qh_serial` node == B's `ser` node; a
 /// chain's head is the chip whose `ser` is not produced by any chip in the set
 /// (it is driven by the MCU's serial-data net instead). Returns one
 /// head-to-tail index list PER physical chain, so two chains fed by different
@@ -947,8 +959,9 @@ impl Hc595Chain {
     }
 }
 
-/// Recover the SEPARATE physical 74HC165 serial-out chains on a board, returned
-/// HEAD-FIRST per chain. The HEAD is the chip whose `qh` serial output is read
+/// Recover the SEPARATE physical 74HC165 serial-out chains on a board.
+///
+/// Chains are returned HEAD-FIRST. The HEAD is the chip whose `qh` serial output is read
 /// by the MCU (it is not consumed by another 165's `ser` input); each subsequent
 /// chip is the one feeding the previous chip's `ser` from its own `qh`. So
 /// walking a chain head→tail follows the serial bitstream backward from QH/MISO
@@ -1778,15 +1791,19 @@ mod tests {
 
         // The first drive is level establishment, not a transition.
         let i_static = step(&mut gate, &mut circuit, false);
-        assert!((i_static - static_ua * 1e-6).abs() < 1e-15, "{i_static}");
+        assert!(
+            static_ua.mul_add(-1e-6, i_static).abs() < 1e-15,
+            "{i_static}"
+        );
         // A rises -> Y falls: one transition.
         let i_one = step(&mut gate, &mut circuit, true);
-        let want_one = static_ua * 1e-6 + cpd_pf * 1e-12 * VCC / DT;
+        let charge = cpd_pf * 1e-12 * VCC;
+        let want_one = static_ua.mul_add(1e-6, charge / DT);
         assert!(
             (i_one - want_one).abs() < 1e-15,
             "got {i_one}, want {want_one}"
         );
-        assert!(((i_one - i_static) * DT - cpd_pf * 1e-12 * VCC).abs() < 1e-20);
+        assert!((i_one - i_static).mul_add(DT, -charge).abs() < 1e-20);
         // A falls -> Y rises: same charge; then no change: back to static.
         assert!((step(&mut gate, &mut circuit, false) - want_one).abs() < 1e-15);
         assert!((step(&mut gate, &mut circuit, false) - i_static).abs() < 1e-15);

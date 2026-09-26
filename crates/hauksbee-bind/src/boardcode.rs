@@ -18,6 +18,11 @@ use forge_model::Pcb;
 use hauksbee_extract::ExtractedBoard;
 
 /// Decompile a parsed-or-raw `.kicad_pcb` text into editable Board-as-Code.
+///
+/// # Errors
+///
+/// Fails when the text is not a parseable `.kicad_pcb`, or when a component
+/// is DNP or identity-refused and so cannot be expressed as Board-as-Code.
 pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
     let extracted = ExtractedBoard::from_kicad_pcb(kicad_pcb_text)?;
     ensure_boardcode_serializable(&extracted)?;
@@ -40,6 +45,11 @@ pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
 /// the pad *number*, which the binder's pin-role rule table maps back to a role
 ///. For a netlist with a generic diode the standard `1->K, 2->A`
 /// numbering binds the part directly, with a guess-warning naming the rule.
+///
+/// # Errors
+///
+/// Fails when no extractor recognises the text, or when a component cannot
+/// be expressed as Board-as-Code (see [`program_from_extracted`]).
 pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
     let head: String = board_text.chars().take(512).collect();
     if head.contains("(kicad_pcb") {
@@ -60,6 +70,11 @@ pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
 /// program is flat and every pad-net is explicit and editable. Pad geometry the
 /// extractor does not carry is filled with sane SMD defaults (connectivity, not
 /// geometry, is what matters for the simulate loop).
+///
+/// # Errors
+///
+/// Fails when a component is DNP or identity-refused: the DSL can only
+/// express a fitted part, so either state would be silently lost.
 pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program> {
     ensure_boardcode_serializable(board)?;
     let mut id_to_name = std::collections::HashMap::new();
@@ -163,6 +178,10 @@ fn ensure_boardcode_serializable(board: &ExtractedBoard) -> anyhow::Result<()> {
 ///
 /// Parses the DSL, interprets it into a [`Pcb`], and emits `KiCad` s-expression
 /// text. Errors carry the offending line number from the DSL parser.
+///
+/// # Errors
+///
+/// Fails when the Board-as-Code text does not parse; the error names the line.
 pub fn code_to_board_text(code: &str) -> anyhow::Result<String> {
     let prog = Program::parse(code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
     let pcb = prog.build();
@@ -171,6 +190,11 @@ pub fn code_to_board_text(code: &str) -> anyhow::Result<String> {
 
 /// Load Board-as-Code from a path that is either a `.board` file or a directory
 /// containing exactly one `.board` file.
+///
+/// # Errors
+///
+/// Fails when the path cannot be read, or when a directory holds no `.board`
+/// file or more than one.
 pub fn load_code(path: &Path) -> anyhow::Result<String> {
     if path.is_dir() {
         let mut found = None;

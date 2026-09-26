@@ -1111,6 +1111,11 @@ fn model_cs_net(
 /// WOULD resolve to. None of them may stamp a device from the answer.
 /// Everything that models an assembled part goes through [`resolve`] and its
 /// [`FittedComponent`] witness.
+///
+/// # Panics
+///
+/// Never in practice: the engine-fallback provenance is built from static,
+/// known-valid values and only `expect`s that they stay valid.
 #[must_use]
 pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
@@ -6186,6 +6191,12 @@ const WRONG_BOARD_MATCH_RATIO: f64 = 0.5;
 /// artifact's populate column arrives as [`IdentityReport::advice`] for the
 /// caller to feed back in. A distributor order code is never used for identity at
 /// all; [`hauksbee_extract::bom`] drops those before they get here.
+///
+/// # Errors
+///
+/// Returns [`IdentityRefusal::Contradiction`] when a hint names a part the
+/// layout identifies differently, and [`IdentityRefusal::WrongBoard`] when most
+/// of the hinted references are not on this board.
 pub fn apply_identity(
     board: &mut ExtractedBoard,
     hints: &[hauksbee_extract::bom::IdentityHint],
@@ -6348,14 +6359,20 @@ pub fn apply_identity(
     Ok(report)
 }
 
-/// [`apply_identity`] for a whole BOM, plus the one reconciliation a BOM carries
-/// that a bare hint list cannot express: a row whose stated quantity disagrees
+/// [`apply_identity`] for a whole BOM, plus quantity reconciliation.
+///
+/// The one reconciliation a BOM carries that a bare hint list cannot express is a row whose stated quantity disagrees
 /// with the number of designators the same row enumerates.
 ///
 /// This is the entry point a caller with a BOM wants. Call it BEFORE
 /// `ExtractedBoard::apply_dnp_policy`, so that the policy sees the board this
 /// function may have added values to, and feed [`FitAdvice`] into that call if the
 /// BOM's populate column is to be honoured.
+///
+/// # Errors
+///
+/// Returns the [`IdentityRefusal`] from [`apply_identity`] when the BOM
+/// contradicts the layout or belongs to a different board.
 pub fn apply_bom_identity(
     board: &mut ExtractedBoard,
     bom: &hauksbee_extract::bom::Bom,
@@ -6378,6 +6395,12 @@ pub fn apply_bom_identity(
 ///
 /// A placement file whose positions disagree with the layout's is from another
 /// revision, and that is refused for the same reason a contradicting BOM is.
+///
+/// # Errors
+///
+/// Returns [`IdentityRefusal::Contradiction`] when the placement file puts
+/// parts at other positions, sides or rotations than the layout, and otherwise
+/// any refusal [`apply_identity`] raises for its identity hints.
 pub fn apply_placement_identity(
     board: &mut ExtractedBoard,
     file: &hauksbee_extract::placement::PlacementFile,

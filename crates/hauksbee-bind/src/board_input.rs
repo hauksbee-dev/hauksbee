@@ -1,5 +1,6 @@
-//! The unified board-input normalizer: every surface that accepts "a board"
-//! (the web front door, `hauksbee run`, `hauksbee models resolve`, and
+//! The unified board-input normalizer.
+//!
+//! Every surface that accepts "a board" (the web front door, `hauksbee run`, `hauksbee models resolve`, and
 //! `hauksbee-ci`) routes through this one module, so the set of accepted
 //! formats can never drift between surfaces again.
 //!
@@ -191,8 +192,9 @@ fn board_not_found_message(path: &str) -> String {
     format!("no board file at '{path}'. Check the path, or try a bundled example:\n  {suggestion}")
 }
 
-/// Why a board input could not be normalized. Variants keep the semantic
-/// content; `Display` renders the CLI-facing message and [`web_message`]
+/// Why a board input could not be normalized.
+///
+/// Variants keep the semantic content; `Display` renders the CLI-facing message and [`web_message`]
 /// renders the web front door's wording, so one normalizer still speaks to
 /// each surface in the wording that surface needs.
 ///
@@ -312,6 +314,12 @@ pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String>
 /// it was ever parsed. Deliberately NO file-stem name fallback here: a
 /// titleless board keeps its empty name so the web report's `board_name` does
 /// not change under the normalizer.
+///
+/// # Errors
+///
+/// Returns a [`BoardInputError`] when the bytes are a binary Eagle board, a
+/// zip that cannot be routed, Board-as-Code that does not compile, or content
+/// no reader recognises or can parse.
 pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, BoardInputError> {
     refuse_eagle_binary(file_name, contents)?;
 
@@ -436,6 +444,12 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
 ///   name, `board.name` becomes the file stem so every downstream identifier
 ///   (JSON `board` field, report headers) is usable instead of blank. This
 ///   fallback lives HERE only; [`from_bytes`] must not invent a name.
+///
+/// # Errors
+///
+/// Returns [`BoardInputError::NotFound`] or [`BoardInputError::Io`] when the
+/// path cannot be read, and the same format errors as [`from_bytes`] plus
+/// gerber-directory and `.kicad_sch` hierarchy failures.
 pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let file_name = path
         .file_name()

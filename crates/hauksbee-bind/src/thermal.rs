@@ -178,7 +178,7 @@ pub fn default_tj_max(footprint: &str) -> f64 {
 /// Steady-state junction temperature (C): `Tj = Tambient + P * theta_JA`.
 #[must_use]
 pub fn junction_temp_c(ambient_c: f64, power_w: f64, theta_ja: f64) -> f64 {
-    ambient_c + power_w.max(0.0) * theta_ja
+    power_w.max(0.0).mul_add(theta_ja, ambient_c)
 }
 
 #[cfg(test)]

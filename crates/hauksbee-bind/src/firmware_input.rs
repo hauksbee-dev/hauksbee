@@ -90,6 +90,12 @@ fn pio_bin() -> String {
 /// inside, or, if the archive is a `PlatformIO` project with no built image,
 /// to a `pio run` build of it. Errors are user-facing strings (they land in
 /// the co-sim card verbatim).
+///
+/// # Errors
+///
+/// Returns a user-facing message when the zip cannot be read or exceeds the
+/// extraction limits, or holds neither a built image nor a buildable
+/// `PlatformIO` project, or the `pio run` build fails.
 pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<ResolvedFirmware, String> {
     resolve_firmware_bytes_limited(fw_name, fw_bytes, &ZIP_LIMITS)
 }
@@ -206,6 +212,12 @@ fn resolve_firmware_bytes_limited(
 /// Resolve a CLI `--firmware` path that is a directory or a zip. Returns
 /// `Ok(None)` for a plain file that is not a zip; the caller keeps its
 /// existing path untouched.
+///
+/// # Errors
+///
+/// Fails when a directory has neither a `platformio.ini` nor a built image,
+/// when the `PlatformIO` build fails, or when a zip cannot be read, resolved to
+/// firmware, or staged to a temporary file.
 pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwareFile>> {
     if path.is_dir() {
         // A live project directory: build it (pio run is incremental), or fall

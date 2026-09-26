@@ -850,6 +850,11 @@ impl LogicComponent {
     /// lowers and compiles every expression, builds the evaluation plan, and
     /// exhaustively verifies fixpoint convergence for every combinational
     /// cycle. All failures are named.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LogicCompileError`] when the block fails validation, an
+    /// expression does not compile, or a combinational cycle does not converge.
     pub fn compile(spec_id: &str, logic: &Logic) -> Result<Self, LogicCompileError> {
         let validated = logic.validate_with_features(&[Logic::FEATURE_MEMORY])?;
 

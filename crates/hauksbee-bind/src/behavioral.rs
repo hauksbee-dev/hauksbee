@@ -106,9 +106,10 @@ pub trait CustomBehavior: Send {
 /// Builds a fresh custom device instance for one matching component.
 type CustomFactory = Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>;
 
-/// Registry of custom-behaviour factories, keyed by an exact match string
-/// tested against a component's resolved model id, value, or MPN. A user (or a
-/// downstream crate) registers a factory before binding; the binder consults the
+/// Registry of custom-behaviour factories.
+///
+/// Keyed by an exact match string tested against a component's resolved model
+/// id, value, or MPN. A user (or a downstream crate) registers a factory before binding; the binder consults the
 /// registry for every component and, on a hit, instantiates the custom device
 /// instead of (or alongside) the declarative one.
 #[derive(Default)]
@@ -1339,7 +1340,9 @@ impl BehavioralDevice {
                 c.shut_down(circuit);
                 return;
             };
-            c.last_cmd_vout + feedback.relaxation_gain * (feedback.vref_v - node_v(feedback_node))
+            feedback
+                .relaxation_gain
+                .mul_add(feedback.vref_v - node_v(feedback_node), c.last_cmd_vout)
         } else {
             c.cfg.vout_setpoint
         };
@@ -1379,7 +1382,7 @@ impl BehavioralDevice {
                 // output would deliver full power while the input drew the
                 // previous under-limit current, energy from nowhere, and the
                 // limit never actually enforced.
-                iin = (v_cmd * v_cmd * (iout / vout)) / (eff * vin);
+                iin = (v_cmd.powi(2) * (iout / vout)) / (eff * vin);
             }
         }
         v_cmd = v_cmd.clamp(0.0, command_ceiling);
