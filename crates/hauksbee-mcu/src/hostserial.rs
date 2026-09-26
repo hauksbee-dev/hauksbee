@@ -108,21 +108,24 @@ pub enum PeerEvent {
 }
 
 /// Bytes of firmware output the endpoint holds while no peer is attached, or
-/// while an attached peer is not reading. 64 KiB is the pty's own kernel buffer
-/// size on Darwin, so this doubles the practical headroom without letting a
-/// forgotten session grow without bound.
+/// while an attached peer is not reading.
+///
+/// 64 KiB is the pty's own kernel buffer size on Darwin, so this doubles the
+/// practical headroom without letting a forgotten session grow without bound.
 pub const BACKLOG_CAP: usize = 64 * 1024;
 
-/// Ceiling on bytes drained from the peer in one [`HostSerial::read_from_peer`]
-/// call. A peer that pipes a megabyte in one `write` must not stall the co-sim
-/// loop for the whole transfer; the remainder is read on the next frames, which
-/// is also what the emulated UART's baud rate would force anyway.
 /// How many drain-then-poll rounds the liveness probe tolerates before
 /// concluding that a peer which keeps the queue full is simply attached.
 /// The probe is pty-based, so only the Unix build reads this.
 #[cfg(unix)]
 const PEER_PROBE_DRAIN_ROUNDS: usize = 16;
 
+/// Ceiling on bytes drained from the peer in one [`HostSerial::read_from_peer`]
+/// call.
+///
+/// A peer that pipes a megabyte in one `write` must not stall the co-sim
+/// loop for the whole transfer; the remainder is read on the next frames, which
+/// is also what the emulated UART's baud rate would force anyway.
 const READ_BUDGET: usize = 64 * 1024;
 
 /// Byte counters for a session, for the "was my tool actually talking to it"
@@ -183,6 +186,11 @@ pub struct HostSerial {
 impl HostSerial {
     /// Create an endpoint and start listening. The returned object is already
     /// live: a host tool can attach before the first [`Self::poll_peer`].
+    ///
+    /// # Errors
+    ///
+    /// When the pseudo-terminal or loopback listener cannot be created, or
+    /// (non-unix) when the pty transport is requested.
     pub fn open(transport: HostSerialTransport) -> Result<Self> {
         match transport {
             HostSerialTransport::Pty => Self::open_pty(),
@@ -192,6 +200,7 @@ impl HostSerial {
 
     #[cfg(unix)]
     fn open_pty() -> Result<Self> {
+        static PTSNAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         // SAFETY: plain libc pty setup; every fd is checked before use and the
         // master is owned by the returned struct (closed in Drop).
         unsafe {
@@ -215,8 +224,7 @@ impl HostSerial {
             // concurrently can swap slave paths and each attach to the
             // other's pty. `ptsname_r` is not portably available; a lock held
             // across the call AND the copy out of the buffer is the portable
-            // fix.
-            static PTSNAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            // fix (`PTSNAME_LOCK`).
             let slave = {
                 let _guard = PTSNAME_LOCK
                     .lock()
@@ -248,9 +256,6 @@ impl HostSerial {
             // `raw_via_slave`) close that inheritance path atomically.
             libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
 
-            // Arm the hung-up state so "no peer" is distinguishable from
-            // "attached and silent" (see the module doc's table), and take the
-            // opportunity to raw the discipline for the first peer.
             // Arm the hung-up state (see the module doc's table) by opening the
             // slave and closing it again. Nothing may `tcsetattr` the MASTER
             // afterwards: on Darwin that both clears the armed hangup and
@@ -401,7 +406,7 @@ impl HostSerial {
                         )
                     };
                     if n > 0 {
-                        out.extend_from_slice(&buf[..n as usize]);
+                        out.extend_from_slice(&buf[..n.cast_unsigned()]);
                         if out.len() >= READ_BUDGET {
                             break;
                         }
@@ -415,7 +420,7 @@ impl HostSerial {
                     }
                     let err = std::io::Error::last_os_error();
                     match err.raw_os_error() {
-                        Some(libc::EINTR) => continue,
+                        Some(libc::EINTR) => {}
                         Some(libc::EIO) => {
                             self.mark_detached();
                             break;
@@ -441,7 +446,7 @@ impl HostSerial {
                                 }
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                             Err(_) => {
                                 drop_peer = true;
                                 break;
@@ -516,7 +521,7 @@ impl HostSerial {
                         libc::write(*master, front.as_ptr().cast::<libc::c_void>(), front.len())
                     };
                     if n > 0 {
-                        n as usize
+                        n.cast_unsigned()
                     } else {
                         if n == 0 {
                             break;
@@ -793,6 +798,15 @@ fn raw_via_slave(slave: &std::ffi::CStr) {
 mod tests {
     use super::*;
 
+    /// Hold spawns still while a test arranges and observes pty hangups; see
+    /// `children::SPAWN_PTY_EXCLUSION`.
+    #[cfg(unix)]
+    fn quiesce_spawns() -> std::sync::MutexGuard<'static, ()> {
+        crate::children::SPAWN_PTY_EXCLUSION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Poll until the endpoint reports a peer attach, sleeping `poll_ms`
     /// between probes, for up to 200 probes. `false` means it never arrived.
     ///
@@ -900,14 +914,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_checked_command_is_consumed_before_peer_close() {
-        // Hold spawns still while this test arranges and observes pty
-        // hangups; see children::SPAWN_PTY_EXCLUSION.
-        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
 
+        let _quiesce = quiesce_spawns();
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let mut peer = std::fs::OpenOptions::new()
             .read(true)
@@ -979,13 +989,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_reopen_before_poll_preserves_bytes_as_one_continuous_observation() {
-        // Hold spawns still while this test arranges and observes pty
-        // hangups; see children::SPAWN_PTY_EXCLUSION.
-        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::os::fd::AsRawFd;
 
+        let _quiesce = quiesce_spawns();
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let mut first = open_pty_peer(&ep, "first peer");
         await_attach(&mut ep, 1);
@@ -1023,11 +1029,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_output_after_peer_close_stays_backlogged_for_the_next_peer() {
-        // Hold spawns still while this test arranges and observes pty
-        // hangups; see children::SPAWN_PTY_EXCLUSION.
-        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _quiesce = quiesce_spawns();
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let first = open_pty_peer(&ep, "first peer");
         await_attach(&mut ep, 1);
@@ -1053,11 +1055,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_peer_close_after_probe_cannot_deliver_output_to_the_guard() {
-        // Hold spawns still while this test arranges and observes pty
-        // hangups; see children::SPAWN_PTY_EXCLUSION.
-        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _quiesce = quiesce_spawns();
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let mut peer = open_pty_peer(&ep, "peer");
         await_attach(&mut ep, 1);

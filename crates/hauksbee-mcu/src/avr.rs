@@ -19,7 +19,7 @@ use std::ffi::CString;
 use std::os::raw::c_void;
 use std::path::Path;
 use std::ptr;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 // ---------------------------------------------------------------------------
 // simavr IOCTL helpers (re-implemented from C macros)
@@ -59,20 +59,26 @@ const ADC_GETIRQ: u32 = avr_ioctl_def(b'a', b'd', b'c', b'0');
 const TWI_GETIRQ: u32 = avr_ioctl_def(b't', b'w', b'i', 0);
 const SPI_GETIRQ: u32 = avr_ioctl_def(b's', b'p', b'i', 0);
 
+/// A bindgen C enum value (`u32`) as the `int` simavr's API takes.
+#[allow(clippy::cast_possible_wrap)] // simavr's IRQ and CPU-state enums are small
+const fn c_enum(value: u32) -> i32 {
+    value as i32
+}
+
 /// UART IRQ indices, bindgen-sourced from the linked simavr's `avr_uart.h`
 /// for the same version-skew reason as `IOPORT_IRQ_REG_PORT` below.
-const UART_IRQ_INPUT: i32 = ffi::UART_IRQ_INPUT as i32;
-const UART_IRQ_OUTPUT: i32 = ffi::UART_IRQ_OUTPUT as i32;
+const UART_IRQ_INPUT: i32 = c_enum(ffi::UART_IRQ_INPUT);
+const UART_IRQ_OUTPUT: i32 = c_enum(ffi::UART_IRQ_OUTPUT);
 /// Raised by simavr (value 1) whenever its 64-byte RX input fifo has room
 /// again: on RXEN enable, and whenever the firmware drains the fifo empty.
 /// This is the emulator's own "clear to send" signal; the pending-byte queue
 /// drains against it instead of guessing at fifo capacity.
-const UART_IRQ_OUT_XON: i32 = ffi::UART_IRQ_OUT_XON as i32;
+const UART_IRQ_OUT_XON: i32 = c_enum(ffi::UART_IRQ_OUT_XON);
 /// Raised by simavr with value 1 the instant its RX input fifo becomes full
 /// (edge-filtered). Any `UART_IRQ_INPUT` raise after that is silently
 /// DISCARDED by simavr, which is exactly how host records longer than 64
 /// bytes used to vanish; the queue stops draining on it.
-const UART_IRQ_OUT_XOFF: i32 = ffi::UART_IRQ_OUT_XOFF as i32;
+const UART_IRQ_OUT_XOFF: i32 = c_enum(ffi::UART_IRQ_OUT_XOFF);
 
 /// Upper bound on host bytes queued toward the UART while the firmware is not
 /// accepting them. Generous by design: the largest realistic burst is a whole
@@ -92,13 +98,13 @@ const SPI_IRQ_OUTPUT: i32 = 1; // MOSI (from MCU to peripheral)
 /// sourced from whatever simavr the build linked (via bindgen) rather than
 /// hardcoded, a hardcoded 11 subscribed to the wrong IRQ on an older simavr,
 /// making GPIO output read as "never driven" (GREEN on one host, RED on another).
-const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
+const IOPORT_IRQ_REG_PORT: i32 = c_enum(ffi::IOPORT_IRQ_REG_PORT);
 
 /// Index for the DDR (data-direction) register; bindgen-sourced for the same
 /// version-skew reason as `IOPORT_IRQ_REG_PORT`. Subscribed so a
 /// `pinMode(OUTPUT)` (a DDR write) is recorded as "ever configured output",
 /// observation only, see `make_ddr_hook`.
-const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
+const IOPORT_IRQ_DIRECTION_ALL: i32 = c_enum(ffi::IOPORT_IRQ_DIRECTION_ALL);
 
 /// Drive an external digital level onto one input pin, PERSISTENTLY.
 ///
@@ -303,6 +309,7 @@ struct PortState {
 }
 
 /// State shared between the Rust owner and C IRQ callbacks.
+#[allow(clippy::struct_excessive_bools)] // independent bus, flow-control and hook flags
 struct SharedState {
     /// Raw AVR pointer, needed to call `avr_raise_irq` from inside callbacks.
     avr_ptr: *mut ffi::avr_t,
@@ -435,6 +442,7 @@ unsafe impl Send for SharedState {}
 /// QEMU backend guards the same liveness hazard with `BOOT_WINDOW_CAP_S`.)
 const unsafe extern "C" fn noop_sleep(_avr: *mut ffi::avr_t, _how_long: ffi::avr_cycle_count_t) {}
 
+#[allow(clippy::cast_possible_truncation)] // simavr carries this IRQ's byte value in a u32
 unsafe extern "C" fn uart_output_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
     if let Ok(mut s) = unsafe { hook_state(param) }.lock() {
         if let Some(cb) = &mut s.callbacks.on_uart {
@@ -447,6 +455,7 @@ unsafe extern "C" fn uart_output_hook(_irq: *mut ffi::avr_irq_t, value: u32, par
 ///
 /// C function pointers cannot close over the port letter, so the hook is
 /// instantiated once per letter as a const generic.
+#[allow(clippy::cast_possible_truncation)] // simavr carries this IRQ's byte value in a u32
 unsafe extern "C" fn port_hook<const P: char>(
     _irq: *mut ffi::avr_irq_t,
     value: u32,
@@ -504,6 +513,7 @@ unsafe extern "C" fn port_hook<const P: char>(
 /// latch open-drain pins or clamp bus nets. The boot-state panel uses it to
 /// distinguish a `pinMode(OUTPUT)` pin held LOW from a pin the firmware never
 /// configured (genuinely floating).
+#[allow(clippy::cast_possible_truncation)] // simavr carries this IRQ's byte value in a u32
 unsafe extern "C" fn ddr_hook<const P: char>(
     _irq: *mut ffi::avr_irq_t,
     value: u32,
@@ -563,6 +573,7 @@ fn port_hooks(port: char) -> Option<(IrqHook, IrqHook)> {
 }
 
 /// Answer the TWI master with a `cond` message for `addr` carrying `data`.
+#[allow(clippy::cast_possible_truncation)] // TWI condition flags are one byte
 unsafe fn raise_twi(avr: *mut ffi::avr_t, cond: u32, addr: u8, data: u8) {
     unsafe {
         let msg = ffi::avr_twi_irq_msg(cond as u8, addr, data);
@@ -656,6 +667,7 @@ unsafe extern "C" fn twi_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut
 }
 
 /// SPI hook: fires on each byte clocked out of the MCU's SPI peripheral.
+#[allow(clippy::cast_possible_truncation)] // simavr carries this IRQ's byte value in a u32
 unsafe extern "C" fn spi_output_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
     let Ok(mut s) = unsafe { hook_state(param) }.lock() else {
         return;
@@ -758,7 +770,15 @@ impl AvrMcu {
     /// `"atmega2560"`, etc.  `frequency` is the clock in Hz.
     ///
     /// Call [`Mcu::load_firmware`] before executing.
+    ///
+    /// # Errors
+    ///
+    /// When `mcu_name` holds a NUL byte or names an MCU simavr does not know,
+    /// or `frequency` does not fit simavr's 32-bit clock field.
     pub fn new(mcu_name: &str, frequency: u64) -> Result<Self> {
+        let Ok(frequency_field) = u32::try_from(frequency) else {
+            bail!("simavr's clock field is 32-bit; {frequency} Hz does not fit");
+        };
         let mcu_cstr = CString::new(mcu_name)?;
 
         let avr = unsafe { ffi::avr_make_mcu_by_name(mcu_cstr.as_ptr()) };
@@ -768,7 +788,7 @@ impl AvrMcu {
 
         unsafe {
             ffi::avr_init(avr);
-            (*avr).frequency = frequency as u32;
+            (*avr).frequency = frequency_field;
             // Route simavr's own logging through hauksbee's debug channel. By
             // default simavr writes AVR_LOG lines straight to fd 2, including
             // `avr_sadly_crashed`'s crash dump, which leaks into user-facing CI
@@ -861,12 +881,17 @@ impl AvrMcu {
     }
 
     /// Convenience constructor for an `ATmega328P` at 16 MHz (Arduino Nano/Uno).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
     pub fn atmega328p_16mhz() -> Result<Self> {
         Self::new("atmega328p", 16_000_000)
     }
 
     /// Set the supply/reference rails in volts (defaults are 5V). The ADC
     /// full scale follows AVcc/ARef, so a 3.3V board must set these.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating volts-to-mV
     pub fn set_rails(&mut self, vcc: f64, avcc: f64, aref: f64) {
         unsafe {
             (*self.avr).vcc = (vcc * 1000.0).round() as u32;
@@ -946,9 +971,7 @@ impl AvrMcu {
     /// The shared hook state, poison-tolerant: a panic inside a C hook must
     /// not turn every later query into a second panic.
     fn shared(&self) -> MutexGuard<'_, SharedState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Hook the standard `ATmega328P` ports (callers working with other MCUs
@@ -1037,7 +1060,7 @@ impl AvrMcu {
     /// "the outside world holds this pin", so it must survive the firmware's
     /// PORT/DDR writes the same way, and the two writers share one external
     /// state (last writer owns the line).
-    fn set_pin_raw(&mut self, port: char, bit: u8, high: bool) {
+    fn set_pin_raw(&self, port: char, bit: u8, high: bool) {
         let avr = self.avr;
         let mut s = self.shared();
         unsafe { drive_ioport_input(avr, &mut s.ext_drive, PinId { port, bit }, high) };
@@ -1055,7 +1078,7 @@ impl AvrMcu {
     /// would otherwise print thousands of identical lines, but a co-sim run
     /// whose firmware is silently rebooting is not a healthy run and must not
     /// read as one.
-    fn note_watchdog_reset(&mut self) {
+    fn note_watchdog_reset(&self) {
         let mut s = self.shared();
         if s.watchdog_resets == 0 {
             eprintln!(
@@ -1126,6 +1149,7 @@ impl Mcu for AvrMcu {
         s.twi_active = false;
         s.twi_read = false;
         s.twi_acked = false;
+        drop(s);
         // `ext_drive` is deliberately KEPT: it mirrors simavr's persistent
         // external-pull state (the outside world still holds those lines),
         // which `avr_reset` also leaves in place.
@@ -1152,7 +1176,7 @@ impl Mcu for AvrMcu {
 
         while self.raw_cycle() < self.run_target {
             let status = unsafe { ffi::avr_run(self.avr) };
-            if status == ffi::cpu_Done as i32 || status == ffi::cpu_Crashed as i32 {
+            if status == c_enum(ffi::cpu_Done) || status == c_enum(ffi::cpu_Crashed) {
                 // Terminal core: stop immediately instead of spinning toward a
                 // target a finished/crashed CPU can never reach. The terminal
                 // state stays readable via `state().done` / `state().crashed`.
@@ -1233,6 +1257,7 @@ impl Mcu for AvrMcu {
         true
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating volts-to-mV
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
         let millivolts = (volts * 1000.0).round() as u32;
         unsafe { raise_irq(self.avr, ADC_GETIRQ, i32::from(channel), millivolts) };
@@ -1343,13 +1368,13 @@ impl Mcu for AvrMcu {
             McuState {
                 pc,
                 cycles,
-                sleeping: cpu == ffi::cpu_Sleeping as i32,
+                sleeping: cpu == c_enum(ffi::cpu_Sleeping),
                 // Terminal states, surfaced so a crashed/finished core is
                 // distinguishable from a healthy chunk (run_cycles breaks its
                 // step loop on these but still returns Ok; the state snapshot
                 // is where callers see WHY the core stopped making progress).
-                done: cpu == ffi::cpu_Done as i32,
-                crashed: cpu == ffi::cpu_Crashed as i32,
+                done: cpu == c_enum(ffi::cpu_Done),
+                crashed: cpu == c_enum(ffi::cpu_Crashed),
             }
         }
     }
@@ -1418,6 +1443,7 @@ mod cycle_budget_tests {
             0,
             "release removes external ownership so DDR/PORT/pull state resolves the input"
         );
+        drop(state);
     }
 
     #[test]
@@ -1438,10 +1464,7 @@ mod cycle_budget_tests {
             .unwrap()
             .port_state
             .entry('D')
-            .or_insert(super::PortState {
-                current: 0,
-                output_dir: 0,
-            })
+            .or_default()
             .current = 0;
 
         unsafe { port_hook::<'D'>(std::ptr::null_mut(), 0b0000_0110, mcu.callback_ptr) };
@@ -1475,15 +1498,7 @@ mod cycle_budget_tests {
             captured.lock().unwrap().extend_from_slice(changes);
             Vec::new()
         }));
-        mcu.state
-            .lock()
-            .unwrap()
-            .port_state
-            .entry('D')
-            .or_insert(super::PortState {
-                current: 0,
-                output_dir: 0,
-            });
+        mcu.state.lock().unwrap().port_state.entry('D').or_default();
 
         unsafe { ddr_hook::<'D'>(std::ptr::null_mut(), 1 << 2, mcu.callback_ptr) };
         unsafe { ddr_hook::<'D'>(std::ptr::null_mut(), 0, mcu.callback_ptr) };

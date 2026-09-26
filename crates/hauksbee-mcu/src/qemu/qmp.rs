@@ -477,6 +477,7 @@ mod tests {
     /// drain, not the command path). The write end is returned so a test can
     /// feed more, and must be kept alive or the reader sees EOF.
     fn qmp_with_pending(events: &str) -> (Qmp, std::net::TcpStream) {
+        use std::io::Write as _;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let client = TcpStream::connect(addr).unwrap();
@@ -484,7 +485,6 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
         let (server, _) = listener.accept().unwrap();
-        use std::io::Write as _;
         (&server).write_all(events.as_bytes()).unwrap();
         let qmp = Qmp {
             stream: client,

@@ -153,18 +153,35 @@ pub trait Mcu {
     // ---- Firmware loading ----
 
     /// Load firmware from a `.hex` (Intel HEX) or `.elf` file.
+    ///
+    /// # Errors
+    ///
+    /// When the file is missing, unreadable, malformed, or does not fit the
+    /// target.
     fn load_firmware(&mut self, path: &Path) -> Result<()>;
 
     // ---- Execution ----
 
     /// Run exactly `n` cycles (or as close as the underlying simulator allows).
     /// Returns the number of cycles actually executed.
+    ///
+    /// # Errors
+    ///
+    /// When the backend cannot advance, e.g. its emulator process died.
     fn run_cycles(&mut self, n: u64) -> Result<u64>;
 
     /// Run for approximately `us` microseconds.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::run_cycles`].
     fn run_micros(&mut self, us: u64) -> Result<()>;
 
     /// Run for approximately `ms` milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::run_micros`].
     fn run_millis(&mut self, ms: u64) -> Result<()> {
         self.run_micros(ms * 1000)
     }
@@ -185,6 +202,11 @@ pub trait Mcu {
     /// The default ERRORS rather than silently doing nothing, so a backend
     /// that cannot reboot its core is reported loudly by the caller instead of
     /// pretending the firmware restarted.
+    ///
+    /// # Errors
+    ///
+    /// Always, by default; a backend that can reboot errors only when the
+    /// reset itself fails.
     fn reset(&mut self) -> Result<()> {
         bail!("this MCU backend cannot hard-reset its core; firmware state persists")
     }

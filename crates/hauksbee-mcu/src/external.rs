@@ -56,8 +56,9 @@ impl EmulatorProcess {
             .and_then(|p| std::fs::File::create(p).ok())
             .map_or_else(Stdio::null, Stdio::from);
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(sink);
+        let program = cmd.get_program().to_owned();
         let (child, guard) = spawn_emulator(cmd)
-            .with_context(|| format!("spawning owned {label} from {:?}", cmd.get_program()))?;
+            .with_context(|| format!("spawning owned {label} from {}", program.display()))?;
         Ok(Self {
             label,
             child,
@@ -492,6 +493,9 @@ impl PollState {
     }
 
     /// Credit `seconds` of virtual time to the cycle counter.
+    // Clock rates and chunk lengths are far below 2^53; rounding to whole cycles is the intent.
+    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub(crate) fn credit(&mut self, seconds: f64, frequency_hz: u64) {
         self.cycles += (seconds * frequency_hz as f64).round() as u64;
     }
@@ -516,6 +520,7 @@ impl PollState {
 /// that one method itself; everything else is shared either way.
 macro_rules! poll_state_mcu_methods {
     ($core:ident) => {
+        #[allow(clippy::cast_precision_loss)] // a chunk's microseconds are far below 2^53
         fn run_micros(&mut self, us: u64) -> Result<()> {
             self.run_seconds(us as f64 / 1_000_000.0)
         }
@@ -634,6 +639,7 @@ impl I2cTxn {
 /// every backend (and the engine's SPI ADC path uses the same law) so a given
 /// voltage quantizes to the same code everywhere. A non-positive full scale
 /// reads as stuck at zero, never NaN-poisoned.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped to 0..=max_count+1
 pub fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
     if full_scale_volts.is_nan() || full_scale_volts <= 0.0 {
         return 0;
@@ -694,8 +700,6 @@ mod tests {
 
     #[test]
     fn uart_drain_refuses_eof_and_non_timeout_errors() {
-        assert!(drain_uart_bytes(&mut std::io::Cursor::new(Vec::<u8>::new()), "test").is_err());
-
         struct Broken;
         impl Read for Broken {
             fn read(&mut self, _bytes: &mut [u8]) -> std::io::Result<usize> {
@@ -705,6 +709,7 @@ mod tests {
                 ))
             }
         }
+        assert!(drain_uart_bytes(&mut std::io::Cursor::new(Vec::<u8>::new()), "test").is_err());
         assert!(drain_uart_bytes(&mut Broken, "test").is_err());
     }
 

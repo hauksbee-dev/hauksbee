@@ -72,6 +72,11 @@ impl QemuArch {
 }
 
 /// Locate an Espressif QEMU binary for `arch`, or describe how to install it.
+///
+/// # Errors
+///
+/// When the override variable names a missing file, or no Espressif-fork
+/// binary is found; the message says how to install one.
 pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     if let Some(p) = env_override(arch.env_override())? {
         return Ok(p);
@@ -210,6 +215,10 @@ impl QemuProcess {
     /// "hello" without it). The lockstep uses QMP stop/cont over the
     /// free-running virtual clock instead; `_icount_shift` is retained in the
     /// signature for forward compatibility but not passed to QEMU.
+    ///
+    /// # Errors
+    ///
+    /// When no Espressif QEMU binary is found or the process cannot be spawned.
     pub fn spawn(
         arch: QemuArch,
         machine: &str,
@@ -260,6 +269,10 @@ impl QemuProcess {
     /// Refuse an operation once the emulator child has exited, retaining the
     /// exit status and QEMU's captured stderr; safe to call on every later
     /// chunk, so a terminal QEMU failure never degrades into bare QMP errors.
+    ///
+    /// # Errors
+    ///
+    /// When QEMU has exited, naming `operation`, the exit status and stderr.
     pub fn ensure_running(&mut self, operation: &str) -> Result<()> {
         self.inner.ensure_running(operation)
     }

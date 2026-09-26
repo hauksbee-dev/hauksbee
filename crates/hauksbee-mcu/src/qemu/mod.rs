@@ -363,15 +363,12 @@ fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str)
             }
             // A `.elf` that does not actually parse as an ELF (None) is skipped;
             // a real I/O error is propagated.
-            match crate::elf::read_e_machine(&p)? {
-                Some(found) => {
-                    if found == expected {
-                        // Any matching sibling → the image is arch-consistent.
-                        return Ok(());
-                    }
-                    sibling_elfs.push(p);
+            if let Some(found) = crate::elf::read_e_machine(&p)? {
+                if found == expected {
+                    // Any matching sibling → the image is arch-consistent.
+                    return Ok(());
                 }
-                None => continue,
+                sibling_elfs.push(p);
             }
         }
     }
@@ -497,6 +494,7 @@ const fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: 
 }
 
 /// Espressif-QEMU-backed [`Mcu`].
+#[allow(clippy::struct_excessive_bools)] // independent handshake and one-shot warning latches
 pub struct QemuBackend {
     config: QemuConfig,
     // Drop order: control channels and uart close before the process is killed.
@@ -578,6 +576,13 @@ impl QemuBackend {
     ///   merged image is built from it in-process (see `flashimage`) with
     ///   the default bootloader + partition table, exactly what
     ///   `esptool merge_bin` would have produced on the build machine.
+    ///
+    /// # Errors
+    ///
+    /// When the image is missing, fails the arch or bootloader check, cannot be
+    /// converted from ELF, or QEMU dies or does not answer on its QMP or UART
+    /// socket. A gdbstub that cannot attach is not an error.
+    #[allow(clippy::too_many_lines)] // one linear spawn-and-handshake sequence
     pub fn new(config: QemuConfig, flash_image: &Path) -> Result<Self> {
         if !flash_image.exists() {
             bail!(
@@ -754,6 +759,10 @@ impl QemuBackend {
     }
 
     /// Convenience constructor for the classic ESP32.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
     pub fn esp32(flash_image: &Path) -> Result<Self> {
         Self::new(QemuConfig::esp32(), flash_image)
     }
@@ -992,6 +1001,7 @@ impl QemuBackend {
     /// Start/Write/Read/Stop [`I2cEvent`]s the simavr TWI decode and the
     /// Renode bridge produce (the state machine mirrors the Renode bridge's
     /// `I2cBridgeState::ensure_mode`).
+    #[allow(clippy::cast_possible_truncation)] // the 7-bit address sits in the word's low byte
     fn service_i2c_cell(&mut self) -> Result<()> {
         let Some((seq, op, len)) = self.pending_request(
             "I2C",
@@ -1146,6 +1156,10 @@ impl QemuBackend {
     /// it to play the firmware's half of the RAM-mailbox contract (no
     /// mailbox-v2-aware firmware image ships in the repo yet, and this machine
     /// carries no Xtensa cross-toolchain to build one).
+    ///
+    /// # Errors
+    ///
+    /// When neither QMP nor the gdbstub can read the word.
     pub fn debug_read_u32(&mut self, addr: u32) -> Result<u32> {
         self.read_guest_u32(addr)
     }
@@ -1165,11 +1179,19 @@ impl QemuBackend {
     }
 
     /// Write a guest physical word (gdbstub `M` packet). See [`Self::debug_read_u32`].
+    ///
+    /// # Errors
+    ///
+    /// When no gdbstub is attached or the write is refused.
     pub fn debug_write_u32(&mut self, addr: u32, val: u32) -> Result<()> {
         self.write_guest_u32(addr, val)
     }
 
     /// Write guest physical bytes (gdbstub `M` packet). See [`Self::debug_read_u32`].
+    ///
+    /// # Errors
+    ///
+    /// When no gdbstub is attached or the write is refused.
     pub fn debug_write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
         self.write_guest_bytes(addr, bytes)
     }
@@ -1260,6 +1282,7 @@ impl Mcu for QemuBackend {
         Ok(())
     }
 
+    #[allow(clippy::cast_precision_loss)] // cycle counts and clock rates are far below 2^53
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let seconds = n as f64 / self.config.frequency_hz as f64;
         // Return what was CREDITED, not what was requested: with the

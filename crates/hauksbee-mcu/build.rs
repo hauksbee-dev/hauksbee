@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -6,10 +7,11 @@ use sha2::{Digest, Sha256};
 fn sha256(path: &Path) -> String {
     let bytes =
         std::fs::read(path).unwrap_or_else(|e| panic!("could not hash {}: {e}", path.display()));
-    Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    let mut hex = String::new();
+    for byte in Sha256::digest(&bytes) {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }
 
 /// Every `.h` under `root`, recursively, sorted.
@@ -43,6 +45,57 @@ fn read_marker(path: &Path) -> String {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
     text.trim().to_string()
+}
+
+/// Check that the headers and archive under the simavr prefix are the bytes
+/// recorded for `expected_commit`, and embed that commit into the crate.
+fn attest_simavr_provenance(expected_commit: &str, include_dir: &str, lib_dir: &str) {
+    assert!(
+        expected_commit.len() == 40 && expected_commit.bytes().all(|b| b.is_ascii_hexdigit()),
+        "SIMAVR_COMMIT must be one 40-character hexadecimal Git commit"
+    );
+    let include_root = canonical("SIMAVR_INCLUDE_DIR", include_dir);
+    let lib_root = canonical("SIMAVR_LIB_DIR", lib_dir);
+    let prefix = include_root.parent().unwrap_or_else(|| Path::new("/"));
+    assert!(
+        prefix == lib_root.parent().unwrap_or_else(|| Path::new("/")),
+        "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must share one prefix when SIMAVR_COMMIT attests the linked source (got {} and {})",
+        include_root.display(),
+        lib_root.display()
+    );
+    let marker = prefix.join(".hauksbee-simavr-commit");
+    println!("cargo:rerun-if-changed={}", marker.display());
+    let installed_commit = read_marker(&marker);
+    assert!(
+        installed_commit == expected_commit,
+        "simavr provenance mismatch: build requested {expected_commit}, but {} records {installed_commit}",
+        marker.display()
+    );
+    let payload_record = prefix.join(".hauksbee-simavr-payload.sha256");
+    println!("cargo:rerun-if-changed={}", payload_record.display());
+    let archive = lib_root.join("libsimavr.a");
+    println!("cargo:rerun-if-changed={}", archive.display());
+    let mut payload_lines: Vec<String> = installed_simavr_headers(&include_root.join("simavr"))
+        .iter()
+        .map(|header| {
+            println!("cargo:rerun-if-changed={}", header.display());
+            let relative = header.strip_prefix(prefix).unwrap_or_else(|_| {
+                panic!(
+                    "simavr header escaped {}: {}",
+                    prefix.display(),
+                    header.display()
+                )
+            });
+            format!("{}  {}", sha256(header), relative.display())
+        })
+        .collect();
+    payload_lines.push(format!("{}  lib/libsimavr.a", sha256(&archive)));
+    assert!(
+        read_marker(&payload_record) == payload_lines.join("\n"),
+        "simavr payload digest mismatch under {}: installed headers/archive are not the bytes recorded after the pinned build",
+        prefix.display()
+    );
+    println!("cargo:rustc-env=HAUKSBEE_SIMAVR_COMMIT={expected_commit}");
 }
 
 fn main() {
@@ -81,49 +134,7 @@ fn main() {
     // crate, so a path-stable target cache cannot silently retain an object
     // linked against different GPL corresponding source.
     if let Ok(expected_commit) = env::var("SIMAVR_COMMIT") {
-        assert!(
-            expected_commit.len() == 40 && expected_commit.bytes().all(|b| b.is_ascii_hexdigit()),
-            "SIMAVR_COMMIT must be one 40-character hexadecimal Git commit"
-        );
-        let include_root = canonical("SIMAVR_INCLUDE_DIR", &include_dir);
-        let lib_root = canonical("SIMAVR_LIB_DIR", &lib_dir);
-        let prefix = include_root.parent().unwrap_or_else(|| Path::new("/"));
-        assert!(prefix == lib_root.parent().unwrap_or_else(|| Path::new("/")), 
-            "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must share one prefix when SIMAVR_COMMIT attests the linked source (got {} and {})",
-            include_root.display(),
-            lib_root.display()
-        );
-        let marker = prefix.join(".hauksbee-simavr-commit");
-        println!("cargo:rerun-if-changed={}", marker.display());
-        let installed_commit = read_marker(&marker);
-        assert!(installed_commit == expected_commit,
-            "simavr provenance mismatch: build requested {expected_commit}, but {} records {installed_commit}",
-            marker.display()
-        );
-        let payload_record = prefix.join(".hauksbee-simavr-payload.sha256");
-        println!("cargo:rerun-if-changed={}", payload_record.display());
-        let archive = lib_root.join("libsimavr.a");
-        println!("cargo:rerun-if-changed={}", archive.display());
-        let mut payload_lines: Vec<String> = installed_simavr_headers(&include_root.join("simavr"))
-            .iter()
-            .map(|header| {
-                println!("cargo:rerun-if-changed={}", header.display());
-                let relative = header.strip_prefix(prefix).unwrap_or_else(|_| {
-                    panic!(
-                        "simavr header escaped {}: {}",
-                        prefix.display(),
-                        header.display()
-                    )
-                });
-                format!("{}  {}", sha256(header), relative.display())
-            })
-            .collect();
-        payload_lines.push(format!("{}  lib/libsimavr.a", sha256(&archive)));
-        assert!(read_marker(&payload_record) == payload_lines.join("\n"),
-            "simavr payload digest mismatch under {}: installed headers/archive are not the bytes recorded after the pinned build",
-            prefix.display()
-        );
-        println!("cargo:rustc-env=HAUKSBEE_SIMAVR_COMMIT={expected_commit}");
+        attest_simavr_provenance(&expected_commit, &include_dir, &lib_dir);
     }
 
     // Preflight: the `avr` feature links a SYSTEM libsimavr (static) and runs
@@ -140,7 +151,8 @@ fn main() {
     .filter(|(_, path)| !Path::new(path).exists())
     .map(|(what, path)| format!("{what} (looked for {path})"))
     .collect();
-    assert!(missing.is_empty(),
+    assert!(
+        missing.is_empty(),
         "\n\
          hauksbee-mcu: the `avr` co-sim feature needs a system libsimavr, but \
          couldn't find {missing}.\n\
