@@ -650,11 +650,13 @@ pub struct StressMonitor {
 pub enum RegulatorHeat {
     /// A linear pass element: `(V(input) - V(out)) * I_out`.
     Linear { input: NodeId },
-    /// An averaged converter: the input power its reflected-draw source
-    /// `in_source` takes from `input`, minus the output power. The draw already
-    /// carries the card's efficiency, so this is `Pout * (1/eff - 1)`: every
-    /// conversion loss, the inductor's included, charged to the package.
-    Converter { input: NodeId, in_source: DeviceId },
+    /// An averaged converter: the input power its in-circuit draw, a behavioural
+    /// current source, takes from its `p` node, minus the (signed) output
+    /// power. The draw carries the card's efficiency both ways, so this is
+    /// `|Pout| * (1/eff - 1)` forward and `|Pout| * (1 - eff)` under reverse
+    /// flow: every conversion loss, the inductor's included, charged to the
+    /// package and never negative.
+    Converter { draw: DeviceId },
 }
 
 impl RegulatorHeat {
@@ -668,18 +670,14 @@ impl RegulatorHeat {
         let Some(Device::Vsource { p, .. }) = circuit.devices.get(source.0 as usize) else {
             return 0.0;
         };
-        let i_out = branch_current(source).unwrap_or(0.0).abs();
-        let i_in = match self {
-            Self::Linear { .. } => i_out,
-            Self::Converter { in_source, .. } => match circuit.devices.get(in_source.0 as usize) {
-                Some(Device::Isource {
-                    kind: hauksbee_ir::SourceKind::Dc(i),
-                    ..
-                }) => *i,
-                _ => 0.0,
-            },
+        let i_out = -branch_current(source).unwrap_or(0.0);
+        let (input, i_in, i_out) = match self {
+            Self::Linear { input } => (input, i_out.abs(), i_out.abs()),
+            Self::Converter { draw } => {
+                let (input, i_in) = crate::behavioral::behavioral_draw(circuit, draw, node_v);
+                (input, i_in, i_out)
+            }
         };
-        let (Self::Linear { input } | Self::Converter { input, .. }) = self;
         node_v(input).mul_add(i_in, -node_v(*p) * i_out).max(0.0)
     }
 }
@@ -2411,14 +2409,15 @@ mod monitor_temp_tests {
 
     /// A regulator's monitored device is its ideal output source, so its heat
     /// comes from the input it draws: (Vin - Vout) * Iout for a linear pass
-    /// element, reflected input power minus output power for a converter.
+    /// element, its in-circuit input draw minus output power for a converter.
     #[test]
     fn regulator_dissipation_is_estimated_from_its_input() {
-        use hauksbee_ir::SourceKind::Dc;
+        use hauksbee_ir::{BOutput::Current, SourceKind::Dc};
         let mut circuit = Circuit::new();
         let (vin, out) = (circuit.node("VIN"), circuit.node("OUT"));
         let src = circuit.add(Device::vsource("Vreg_U1", out, NodeId::GROUND, Dc(3.3)));
-        let draw = circuit.add(Device::isource("Ibeh_U1_in", vin, NodeId::GROUND, Dc(0.08)));
+        let draw = Device::behavioral("Bbeh_U1_in", (vin, NodeId::GROUND), Current, "0.08", &[]);
+        let draw = circuit.add(draw.unwrap());
         let node_v = |n| {
             if n == vin {
                 5.0
@@ -2436,13 +2435,7 @@ mod monitor_temp_tests {
         for (heat, want) in [
             (None, 0.0),
             (Some(RegulatorHeat::Linear { input: vin }), 0.17),
-            (
-                Some(RegulatorHeat::Converter {
-                    input: vin,
-                    in_source: draw,
-                }),
-                0.07,
-            ),
+            (Some(RegulatorHeat::Converter { draw }), 0.07),
         ] {
             let mut monitor = StressMonitor::new(vec![meta.clone()]);
             if let Some(heat) = heat {

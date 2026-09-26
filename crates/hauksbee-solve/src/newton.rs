@@ -2723,7 +2723,7 @@ mod tests {
     use crate::test_fixtures::{
         cap, cap_ic, comparator, diode, divider, res, sw, vdc, vpulse, vswitch, GND,
     };
-    use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, NodeId};
+    use hauksbee_ir::{BOutput, Circuit, Device, DeviceId, DiodeModel, NodeId};
 
     fn node_v(ws: &Workspace, n: NodeId) -> f64 {
         ws.layout.node(n).map(|i| ws.x[i]).unwrap()
@@ -3102,17 +3102,8 @@ mod tests {
         let mut c = Circuit::new();
         let v = c.node("v");
         res(&mut c, "R", v, GND, 50.0);
-        c.add(Device::Behavioral {
-            name: "BV".into(),
-            p: v,
-            n: GND,
-            output: BOutput::Current,
-            expr: CompiledExpr::compile(
-                "1e-3 + 0.02*(__d0 - 0.9997)*math::tanh((__d0 - 0.9997)/1e-4) - 0.02*__d0",
-            )
-            .unwrap(),
-            deps: vec![BDep::Volt(v)],
-        });
+        let law = "1e-3 + 0.02*(__d0 - 0.9997)*math::tanh((__d0 - 0.9997)/1e-4) - 0.02*__d0";
+        c.add(Device::behavioral("BV", (v, GND), BOutput::Current, law, &[v]).unwrap());
         (c, v)
     }
 

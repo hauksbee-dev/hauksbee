@@ -536,6 +536,28 @@ impl Device {
         }
     }
 
+    /// A behavioural source over node voltages: `__d{k}` in `expr` reads
+    /// `V(volts[k])`.
+    ///
+    /// # Errors
+    /// When `expr` does not compile (see [`CompiledExpr::compile`]).
+    pub fn behavioral(
+        name: impl Into<String>,
+        (p, n): (NodeId, NodeId),
+        output: BOutput,
+        expr: &str,
+        volts: &[NodeId],
+    ) -> Result<Self, String> {
+        Ok(Self::Behavioral {
+            name: name.into(),
+            p,
+            n,
+            output,
+            expr: CompiledExpr::compile(expr)?,
+            deps: volts.iter().copied().map(BDep::Volt).collect(),
+        })
+    }
+
     /// Reference designator (`R1`, `Q3`, ...).
     #[must_use]
     pub fn name(&self) -> &str {

@@ -21,10 +21,11 @@
 //!   controlling state asserts it.
 //! - a **converter** is a controllable `Vsource` behind a small series resistor
 //!   on the output pin (the [`SupplyLeg`](crate::power_supply) trick, so the
-//!   scheduler can read the delivered current), PLUS a controllable `Isource`
-//!   on the input pin that draws the reflected input current
-//!   `Vout*Iout/(eff*Vin)`. Regulation, output-current foldback and the
-//!   programmable input-current limit are recomputed each chunk.
+//!   scheduler can read the delivered current), driven by an in-circuit
+//!   regulation loop, PLUS a behavioural current on the input pin that draws
+//!   the switch-node power `V(sw)*Iout` back from the input, divided by `eff`
+//!   forward and multiplied by it in reverse, so power is conserved inside the
+//!   solve. Arming and the programmable input-current limit update each chunk.
 //! - a **law** whose expression is a pure function of pin voltages and params
 //!   (a current law with no `only_in_state` gate) is stamped as a
 //!   solver-implicit `Device::Behavioral`: Newton evaluates it at every
@@ -216,14 +217,34 @@ fn out_farads(circuit: &Circuit, node: NodeId) -> f64 {
     circuit.iter().filter_map(farads).sum()
 }
 
-/// The converter loop's delivered-current, PI-state and `g*e` expressions over
-/// deps `[out, pi, g*e, lim, vin, sense, ref]` (see `stamp_converter`), for
-/// `farads_per_ratio = C_out / k`. "No limit" is 1 kA or 10 kV, not 1e9: a
-/// rounded clamp's `hypot` difference near 1e9 would lose a probe's digits.
-fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String; 3] {
+/// The largest `C_out / k` whose full loop gain a DC solve takes (the largest
+/// output measured to converge at every crossover from 10 kHz to 200 kHz).
+const DC_FARADS: f64 = 22e-6;
+
+/// The converter loop's delivered-current (`i - V(i)`, onto its hidden node),
+/// PI-state, `g*e` and input-draw expressions over deps
+/// `[out, pi, g*e, lim, vin, sense, ref, sw, i]` (see `stamp_converter`), for
+/// `farads = C_out / k` and an input-current limit `full_lim` (1 if
+/// none). "No limit" is 1 kA or 10 kV, not 1e9: a rounded clamp's `hypot`
+/// difference near 1e9 would lose a probe's digits.
+///
+/// A DC solve (the only one at `time = 0`, SPICE's convention: every transient
+/// step is at `t > 0`) scales the command's `g*e` and the leak `wl` by one
+/// factor, down to the gain a `DC_FARADS` output would have. The operating
+/// point, `e = wl*x/(wz*g)`, is unchanged, but a gain that scales with `C_out`
+/// would, with the output capacitor open, kick a millifarad loop from one clamp
+/// to the other each Newton iteration. A clamped loop's DC point moves by the
+/// clamp's rounding, so an output at or below `DC_FARADS` keeps its real gain.
+///
+/// The draw reads `V(sw)` held to `[0, hi]`, where the solved switch node
+/// always sits: a Newton iterate with the input near 0 V and the switch node
+/// not yet would otherwise divide into a kiloamp draw and throw the input rail.
+fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [String; 4] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
-    let (g, wz, wl) = (wc * farads_per_ratio, wc / 4.0, wc * 1e-5);
-    let (dmax, armed) = (c.max_duty.unwrap_or(1.0), "min(max(__d3*100.0,0.0),1.0)");
+    let dc = format!("if(time>0.0,1.0,{:?})", (DC_FARADS / farads).min(1.0));
+    let (g, wz, wl) = (wc * farads, wc / 4.0, wc * 1e-5);
+    let dmax = c.max_duty.unwrap_or(1.0);
+    let armed = format!("min(max(__d3*{:?},0.0),1.0)", 1.0 / full_lim.min(0.01));
     let hi = match c.topology {
         Topology::Buck => format!("(1.0-{:?}*{armed})*max(__d4,0.0)", 1.0 - dmax),
         _ => "1e4".into(),
@@ -234,14 +255,17 @@ fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String
     } else {
         format!("{armed}*{iout_max:?}")
     };
-    let (ask, wid) = ("__d1+__d2", format!("0.02*({cap})"));
+    let (ask, wid) = (format!("__d1+{dc}*__d2"), format!("0.02*({cap})"));
     let cmd = format!("0.5*(math::hypot({ask}+{cap},{wid})-math::hypot({ask}-({cap}),{wid}))");
     let top = format!("(({hi})-__d0)/{r:?}");
     let band = format!("max({:?}*__d4*{armed},1e-6)", 4e-3 / r);
     let dip = format!("max(1.0-math::abs({cmd}-{top})/{band},0.0)");
-    let i = format!("max(min({cmd},{top})-0.25*{band}*{dip}*{dip},-__d0/{r:?})");
-    let pi = format!("1e-6*({wz:?}*({i}-__d1)-{wl:?}*__d1)");
-    [i, pi, format!("{g:?}*(__d6-__d5)-__d2")]
+    let i = format!("max(min({cmd},{top})-0.25*{band}*{dip}*{dip},-__d0/{r:?})-__d8");
+    let pi = format!("1e-6*({wz:?}*(__d8-__d1)-{dc}*{wl:?}*__d1)");
+    let (fwd, loss) = (f64::midpoint(1.0 / eff, eff), (1.0 / eff - eff) / 2.0);
+    let pw = format!("max(min(__d7,{hi}),0.0)*__d8");
+    let draw = format!("({fwd:?}*{pw}+{loss:?}*(math::hypot({pw},1e-4)-1e-4))/max(__d4,1e-3)");
+    [i, pi, format!("{g:?}*(__d6-__d5)-__d2"), draw]
 }
 
 /// The fraction of the regulated voltage a resistive divider presents at a
@@ -326,30 +350,21 @@ struct ConverterLeg {
     /// The 0 V ammeter the loop's averaged switch node drives through, the
     /// monitoring seam stress and dissipation read.
     out_vsource: DeviceId,
-    /// Hidden averaged switch node (the ammeter's `p`), before `out_r`.
-    out_drv_node: NodeId,
-    /// Output-source series resistance (ohms), so the delivered current can be
-    /// read as the voltage drop across it. This works under BOTH solver paths;
-    /// reading the Vsource branch unknown does not, because the partitioned
-    /// solver's global x carries node voltages only, not branch currents.
-    out_r_ohms: f64,
-    /// Card efficiency, floored only as a divide guard.
-    eff: f64,
     out_node: NodeId,
-    in_node: NodeId,
     /// Optional enable input.  A low level disables both converter legs.
     enable_node: Option<NodeId>,
     /// False when a feedback pin the card needs is unconnected: never delivers.
     sensed: bool,
-    /// Input draw (controllable Isource from `in_node` to ground).
-    in_isource: DeviceId,
+    /// The in-circuit input draw, a behavioural current from the input pin to
+    /// ground that returns reverse power to the input.
+    in_draw: DeviceId,
     /// Source holding the loop's input-current limit (A) on a hidden node the
     /// in-circuit current command reads; -1 V disarms the converter.
     limit_vsource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
     /// bind time (or the literal). Recomputable if a board resistor is retuned.
     iin_limit_a: Option<f64>,
-    /// Last reflected input current commanded (A).
+    /// Input current (A) the draw took at the last update.
     last_iin_a: f64,
 }
 
@@ -589,7 +604,7 @@ pub struct BehavioralDevice {
 
     /// Optional input-power budget (W) and the input voltage it is referenced
     /// to (V): when set, an overpower fault is raised if the converter's
-    /// reflected input draw exceeds the budget. This covers reported charger
+    /// input draw exceeds the budget. This covers reported charger
     /// overdraw faults without baking a particular board's measured wattage
     /// into the device model.
     input_budget: Option<(f64, f64)>,
@@ -615,9 +630,7 @@ impl BehavioralDevice {
             *n = map(*n);
         }
         if let Some(c) = self.converter.as_mut() {
-            c.out_drv_node = map(c.out_drv_node);
             c.out_node = map(c.out_node);
-            c.in_node = map(c.in_node);
             c.enable_node = c.enable_node.map(&map);
         }
         for path in &mut self.series_paths {
@@ -917,10 +930,12 @@ impl BehavioralDevice {
     ///   switch sinks as it sources, so a light load's operating point sits
     ///   inside the linear range, not on a no-sink kink. `cap =
     ///   min(iout_limit, lim*eff*V(in)/V(out))` under an
-    ///   input-current limit, else `iout_limit` gated by `clamp(100*lim, 0, 1)`
-    ///   (so is a buck's `max_duty`): a 1e9 "no limit" or a step gate would
-    ///   kick Newton on arming, or on a damped step landing on the switch,
-    ///   while a ramp full from `lim = 0.01` survives DC source stepping;
+    ///   input-current limit, else `iout_limit` gated by
+    ///   `clamp(lim/min(full_lim, 0.01), 0, 1)` (so is a buck's `max_duty`): a
+    ///   1e9 "no limit" or a step gate would kick Newton on arming, or on a
+    ///   damped step landing on the switch, while a ramp full from `lim = 0.01`
+    ///   survives DC source stepping, and a milliamp limit still arms fully at
+    ///   its full value;
     /// * the delivered current `i`, `i_cmd` held where the averaged switch
     ///   node `V(out) + out_r*i` stays within `[0, max_duty*V(in)]` for a buck
     ///   (`[0, V(in)]` while disarmed: the high-side body diode), so the
@@ -948,6 +963,14 @@ impl BehavioralDevice {
     /// regulated node is the far side of its one output inductor. `lim` is a
     /// hidden source holding the input-current limit (1 if none), -1 while
     /// disarmed, so no finite-difference probe of it straddles the switch.
+    ///
+    /// The input pin draws `V(sw)*i/(eff*V(in))` forward and returns
+    /// `eff*V(sw)*|i|/V(in)` in reverse (one smooth `hypot` form, losses always
+    /// positive), inside the solve: a reverse current, such as an output
+    /// capacitor discharging back through a synchronous switch, lands on the
+    /// input instead of vanishing, and the draw has no one-chunk lag. `i` is
+    /// solved onto a hidden node like `g*e`, which the output, the PI state and
+    /// the draw read, so each probe evaluates the clamp once, not three times.
     /// Skipped when a programmable limit has no board evidence to read, or
     /// when either power pin is unconnected.
     fn stamp_converter(
@@ -978,27 +1001,26 @@ impl BehavioralDevice {
             Some((vref, Some(&n))) => (n, vref, divider_ratio(circuit, n)),
             _ => (reg, c.vout_setpoint, 1.0),
         };
-        let [drive, pi, ge] = loop_exprs(c, out_farads(circuit, reg).max(1e-6) / k, r, eff);
-        let [drv, src, pi_node, err] = ["out", "sw", "pi", "err"]
+        let farads = out_farads(circuit, reg).max(1e-6) / k;
+        let [drive, pi, ge, draw] = loop_exprs(c, farads, r, eff, iin_limit_a.unwrap_or(1.0));
+        let [drv, src, pi_node, err, i_node] = ["out", "sw", "pi", "err", "i"]
             .map(|t| circuit.node(&format!("__beh_{reference}_conv_{t}")));
         let (lim, limit_vsource) = hidden_dc_node(circuit, reference, "conv_lim", -1.0);
         // The reference as a source, so DC source stepping ramps it with the
         // supplies: a soft start, which is how Newton finds a clamped loop.
         let ref_node = hidden_dc_node(circuit, reference, "conv_ref", vref).0;
-        let deps: Vec<_> = [out, pi_node, err, lim, vin, sense, ref_node]
-            .map(BDep::Volt)
-            .into();
-        for (name, n, expr) in [("sw", src, drive), ("pi", pi_node, pi), ("err", err, ge)] {
-            let expr = CompiledExpr::compile(&expr).expect("converter loop expression compiles");
-            circuit.add(Device::Behavioral {
-                name: format!("Bbeh_{reference}_conv_{name}"),
-                p: NodeId::GROUND,
-                n,
-                output: BOutput::Current,
-                expr,
-                deps: deps.clone(),
-            });
-        }
+        let deps = [out, pi_node, err, lim, vin, sense, ref_node, drv, i_node];
+        let mut add = |t: &str, p, n, expr: &str| {
+            let name = format!("Bbeh_{reference}_conv_{t}");
+            let dev = Device::behavioral(name, (p, n), BOutput::Current, expr, &deps);
+            circuit.add(dev.expect("converter loop expression compiles"))
+        };
+        let g = NodeId::GROUND;
+        add("i", g, i_node, &drive);
+        add("pi", g, pi_node, &pi);
+        add("err", g, err, &ge);
+        add("sw", g, src, "__d8");
+        let in_draw = add("in", vin, g, &draw);
         let cpi = format!("Cbeh_{reference}_conv_pi");
         circuit.add(Device::capacitor(cpi, pi_node, NodeId::GROUND, 1e-6));
         let out_vsource = circuit.add(Device::vsource(
@@ -1013,27 +1035,16 @@ impl BehavioralDevice {
             out,
             r,
         ));
-        // Reflected input draw: an Isource pulling from the input to GND.
-        let in_isource = circuit.add(Device::isource(
-            format!("Ibeh_{reference}_conv_in"),
-            vin,
-            NodeId::GROUND,
-            SourceKind::Dc(0.0),
-        ));
         self.converter = Some(ConverterLeg {
             cfg: c.clone(),
             out_vsource,
-            out_drv_node: drv,
-            out_r_ohms: r,
-            eff,
             out_node: out,
-            in_node: vin,
             enable_node: c
                 .enable
                 .as_ref()
                 .and_then(|en| role_nodes.get(&en.pin).copied()),
             sensed: !matches!(fb, Some((_, None))),
-            in_isource,
+            in_draw,
             limit_vsource,
             iin_limit_a,
             last_iin_a: 0.0,
@@ -1166,10 +1177,7 @@ impl BehavioralDevice {
     #[must_use]
     pub fn converter_heat(&self) -> Option<(DeviceId, crate::stress::RegulatorHeat)> {
         let c = self.converter.as_ref()?;
-        let heat = crate::stress::RegulatorHeat::Converter {
-            input: c.in_node,
-            in_source: c.in_isource,
-        };
+        let heat = crate::stress::RegulatorHeat::Converter { draw: c.in_draw };
         Some((c.out_vsource, heat))
     }
 
@@ -1179,7 +1187,7 @@ impl BehavioralDevice {
         self.converter.as_ref().and_then(|c| c.iin_limit_a)
     }
 
-    /// Last reflected input current the converter drew (A), or None.
+    /// Input current the converter drew at the last update (A), or None.
     #[must_use]
     pub fn converter_iin(&self) -> Option<f64> {
         self.converter.as_ref().map(|c| c.last_iin_a)
@@ -1305,8 +1313,8 @@ impl BehavioralDevice {
     }
 
     /// Configure an input-power budget (W) at input voltage `vin` (V). When set,
-    /// each chunk raises an overpower fault if the converter's reflected input
-    /// draw exceeds the budget.
+    /// each chunk raises an overpower fault if the converter's input draw
+    /// exceeds the budget.
     pub const fn set_input_budget(&mut self, vin: f64, budget_w: f64) {
         self.input_budget = Some((vin, budget_w));
     }
@@ -1442,10 +1450,9 @@ impl BehavioralDevice {
     /// The converter's per-chunk bookkeeping (the loop itself is in-circuit,
     /// see [`Self::stamp_converter`]): arm it with its input-current limit, or
     /// disarm it while the enable input is low, a needed feedback pin or
-    /// programming evidence is missing; and reflect the delivered power onto
-    /// the input as `V(sw) * I_out / (eff * V(in))`. `V(sw)` never exceeds
-    /// `max_duty * V(in)` for a buck, so a sagging input cannot run the draw
-    /// away. Also the DC settle's iteration; returns how far the draw or the
+    /// programming evidence is missing; and record the input current the
+    /// in-circuit draw took (none once disarmed: the gated draw is zero from
+    /// the next solve on). Also the DC settle's iteration; returns how far the
     /// arming moved.
     pub fn update_converter(
         &mut self,
@@ -1462,29 +1469,20 @@ impl BehavioralDevice {
         let evidenced = c.cfg.iin_program.is_none() || c.iin_limit_a.is_some();
         let on = c.sensed && evidenced && c.cfg.enable.as_ref().is_none_or(high);
         let limit = if on { c.iin_limit_a } else { Some(-1.0) }.unwrap_or(1.0);
-        // Delivered current from the drop across `out_r`, a node-voltage read
-        // that holds on the partitioned path, whose x carries no branch currents.
-        let sw = node_v(c.out_drv_node);
-        let iout = ((sw - node_v(c.out_node)) / c.out_r_ohms).max(0.0);
-        let iin = if on {
-            sw.max(0.0) * iout / (c.eff * node_v(c.in_node).max(1e-6))
-        } else {
-            0.0
-        };
         let lim = match circuit.devices.get(c.limit_vsource.0 as usize) {
             Some(Device::Vsource { p, .. }) => node_v(*p),
             _ => limit,
         };
-        let moved = (iin - c.last_iin_a).abs().max((limit - lim).abs());
-        c.last_iin_a = iin;
+        let iin = behavioral_draw(circuit, c.in_draw, node_v).1;
+        c.last_iin_a = if on { iin } else { 0.0 };
         set_source_dc(circuit, c.limit_vsource, limit);
-        set_source_dc(circuit, c.in_isource, iin);
-        moved
+        (limit - lim).abs()
     }
 
     /// Re-evaluate the converter's input-current limit from the board (called if
     /// a programming resistor changes). Missing required evidence disables the
-    /// converter sources on their next update. Returns the new limit.
+    /// converter sources on their next update. Returns the new limit. The
+    /// in-circuit arming gate keeps its bind-time scale (see `loop_exprs`).
     pub fn recompute_iin_limit(
         &mut self,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
@@ -1605,6 +1603,24 @@ fn set_source_dc(circuit: &mut Circuit, id: DeviceId, v: f64) {
     {
         *kind = SourceKind::Dc(v);
     }
+}
+
+/// The `p` node of a node-voltage-driven behavioural current source and the
+/// current it draws from it at voltages `v` (ground and 0 when `id` is not one).
+pub(crate) fn behavioral_draw(
+    c: &Circuit,
+    id: DeviceId,
+    v: &dyn Fn(NodeId) -> f64,
+) -> (NodeId, f64) {
+    let Some(Device::Behavioral { p, expr, deps, .. }) = c.devices.get(id.0 as usize) else {
+        return (NodeId::GROUND, 0.0);
+    };
+    let volt = |d: &BDep| match *d {
+        BDep::Volt(n) => v(n),
+        BDep::Branch(_) => 0.0,
+    };
+    let volts: Vec<f64> = deps.iter().map(volt).collect();
+    (*p, expr.eval(&volts, 0.0).unwrap_or(0.0))
 }
 
 fn set_resistor_ohms(circuit: &mut Circuit, id: DeviceId, ohms: f64) {

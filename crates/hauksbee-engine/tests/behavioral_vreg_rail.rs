@@ -17,6 +17,7 @@
 //! input current is real.
 
 use hauksbee_engine::binder::{bind_board_with, BoundBoard};
+use hauksbee_engine::power_supply::PowerSupply;
 use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_engine::{BoardEvidence, CustomRegistry, DynamicLoad};
@@ -38,33 +39,35 @@ fn comp(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Compon
     )
 }
 
+/// A two-pin part from pin "1" on net `a` to pin "2" on net `b`.
+fn two(reference: &str, value: &str, footprint: &str, a: i64, b: i64) -> Component {
+    comp(reference, value, footprint, vec![pin("1", a), pin("2", b)])
+}
+
+const RES: &str = "Resistor_SMD:R_0402_1005Metric";
+const CAP: &str = "Capacitor_SMD:C_1206_3216Metric";
+
+/// A test board of `(id, name)` nets and `components`.
+fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
+    let nets = nets
+        .iter()
+        .map(|&(id, n)| crate::support::net(id, n.to_string()));
+    ExtractedBoard {
+        name: "buck_test".to_string(),
+        nets: nets.collect(),
+        components,
+    }
+}
+
 /// +5V (net 1) feeds a behavioural buck U1 whose regulated 3.3 V output is the
 /// canonical supply-named net +3.3V (net 2), loaded by R1 = 33R to GND (net 3).
 /// The +3.3V name is the point: it is exactly the shape the ideal auto-rail
 /// used to claim.
 fn buck_board() -> ExtractedBoard {
-    ExtractedBoard {
-        name: "buck_rail_test".to_string(),
-        nets: vec![
-            crate::support::net(1, "+5V".to_string()),
-            crate::support::net(2, "+3.3V".to_string()),
-            crate::support::net(3, "GND".to_string()),
-        ],
-        components: vec![
-            comp(
-                "U1",
-                "TESTBUCK33",
-                "Package_TO_SOT_SMD:SOT-23-6",
-                vec![pin("1", 2), pin("3", 1), pin("4", 3)],
-            ),
-            comp(
-                "R1",
-                "33R",
-                "Resistor_SMD:R_0402_1005Metric",
-                vec![pin("1", 2), pin("2", 3)],
-            ),
-        ],
-    }
+    let u1 = vec![pin("1", 2), pin("3", 1), pin("4", 3)];
+    let u1 = comp("U1", "TESTBUCK33", "Package_TO_SOT_SMD:SOT-23-6", u1);
+    let nets = [(1, "+5V"), (2, "+3.3V"), (3, "GND")];
+    board(&nets, vec![u1, two("R1", "33R", RES, 2, 3)])
 }
 
 /// A model library with one converter-carrying vreg, the output pin mapped as
@@ -148,18 +151,14 @@ fn converter_vreg_binds_covered_and_suppresses_the_auto_rail() {
             );
         }
     }
+    let nets: Vec<_> = bound.supplies.iter().map(|l| l.net_name.as_str()).collect();
     assert!(
-        bound.supplies.iter().all(|l| l.net_name != "+3.3V"),
-        "no supply leg on the converter-driven net, got {:?}",
-        bound
-            .supplies
-            .iter()
-            .map(|l| l.net_name.clone())
-            .collect::<Vec<_>>()
+        !nets.contains(&"+3.3V"),
+        "no supply leg on the converter-driven net, got {nets:?}"
     );
     // The INPUT rail keeps its supply leg: only the converter's output is his.
     assert!(
-        bound.supplies.iter().any(|l| l.net_name == "+5V"),
+        nets.contains(&"+5V"),
         "the input rail still gets its ideal supply leg"
     );
     // The converter itself was stamped (its output source exists).
@@ -266,33 +265,23 @@ fn lib_with_card(tag: &str, setpoint: f64, extra: &str, fb: bool) -> ModelLibrar
     ModelLibrary::builtin_with_user_dirs(&[dir.as_path()])
 }
 
-/// U1 from `input` through L1/C1 onto +OUT (net 2), loaded by `load`; with
-/// `fb`, R2/R3 divide +OUT to 0.6 V at 3.3 V.
-fn lc_buck_board(input: &str, load: &str, fb: bool) -> ExtractedBoard {
-    let two =
-        |r: &str, v: &str, fp: &str, a: i64, b: i64| comp(r, v, fp, vec![pin("1", a), pin("2", b)]);
-    let res = "Resistor_SMD:R_0402_1005Metric";
+/// U1 from `input` through L1 onto +OUT (net 2), with C1 = `cout` and loaded
+/// by `load`; with `fb`, R2/R3 divide +OUT to 0.6 V at 3.3 V.
+fn lc_buck_board(input: &str, load: &str, cout: &str, fb: bool) -> ExtractedBoard {
     let mut u1 = vec![pin("1", 4), pin("3", 1), pin("4", 3)];
     let mut components = vec![
         two("L1", "10uH", "Inductor_SMD:L_1210_3225Metric", 4, 2),
-        two("C1", "22uF", "Capacitor_SMD:C_1206_3216Metric", 2, 3),
-        two("R1", load, res, 2, 3),
+        two("C1", cout, CAP, 2, 3),
+        two("R1", load, RES, 2, 3),
     ];
     if fb {
         u1.push(pin("5", 5));
-        components.push(two("R2", "45k", res, 2, 5));
-        components.push(two("R3", "10k", res, 5, 3));
+        components.push(two("R2", "45k", RES, 2, 5));
+        components.push(two("R3", "10k", RES, 5, 3));
     }
     components.push(comp("U1", "TESTBUCK", "Package_TO_SOT_SMD:SOT-23-6", u1));
     let names = [(1, input), (2, "+OUT"), (3, "GND"), (4, "SW"), (5, "FB")];
-    ExtractedBoard {
-        name: "lc_buck_test".to_string(),
-        nets: names
-            .iter()
-            .map(|&(id, n)| crate::support::net(id, n.to_string()))
-            .collect(),
-        components,
-    }
+    board(&names, components)
 }
 
 fn run_lc_buck(board: &ExtractedBoard, lib: &ModelLibrary, chunks: usize) -> (Scheduler, Vec<f64>) {
@@ -318,18 +307,23 @@ fn run_lc_buck(board: &ExtractedBoard, lib: &ModelLibrary, chunks: usize) -> (Sc
 /// and could swing the rail through zero. Unloaded but for its divider it
 /// does too: a no-sink clamp put that operating point on a kink the loop
 /// gain's finite-difference probe straddled, so the DC solve never converged.
+/// Nor does a large output capacitor stop it: the loop gain scales with
+/// `C_out`, and at full gain a DC solve's step kicked past the current limit
+/// and bang-banged between its clamps.
 #[test]
 fn feedback_buck_starts_in_regulation_and_holds_against_its_output_lc() {
     let lib = lib_with_card("fb", 3.3, "", true);
     for load in ["33R", "1Meg"] {
-        let (_, trace) = run_lc_buck(&lc_buck_board("+5V", load, true), &lib, 30);
-        let want = 0.6 * (1.0 + 45.0 / 10.0);
-        assert!(
-            trace.iter().all(|v| (v - want).abs() < 0.05 * want),
-            "{want} V wanted, got {trace:?}"
-        );
-        let first = trace[0];
-        assert!((first - want).abs() < 0.01 * want, "first chunk {first} V");
+        for cout in ["22uF", "4700uF"] {
+            let (_, trace) = run_lc_buck(&lc_buck_board("+5V", load, cout, true), &lib, 30);
+            let want = 0.6 * (1.0 + 45.0 / 10.0);
+            assert!(
+                trace.iter().all(|v| (v - want).abs() < 0.05 * want),
+                "{want} V wanted, got {trace:?}"
+            );
+            let first = trace[0];
+            assert!((first - want).abs() < 0.01 * want, "first chunk {first} V");
+        }
     }
 }
 
@@ -339,7 +333,7 @@ fn feedback_buck_starts_in_regulation_and_holds_against_its_output_lc() {
 #[test]
 fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
     let lib = lib_with_card("dmax", 12.0, "max_duty = 0.9", false);
-    let (sched, trace) = run_lc_buck(&lc_buck_board("+9V", "100R", false), &lib, 20);
+    let (sched, trace) = run_lc_buck(&lc_buck_board("+9V", "100R", "22uF", false), &lib, 20);
     let vout = *trace.last().unwrap();
     assert!((vout - 8.1).abs() < 0.1, "D_max 0.9 of 9 V, got {vout} V");
     let tj = sched.temp_states().get("U1").copied();
@@ -355,7 +349,7 @@ fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
 #[test]
 fn input_limited_converter_finds_its_operating_point() {
     let lib = lib_with_card("iin", 3.3, "iin_limit_a = 0.02", false);
-    let (_, trace) = run_lc_buck(&lc_buck_board("+12V", "33R", false), &lib, 5);
+    let (_, trace) = run_lc_buck(&lc_buck_board("+12V", "33R", "22uF", false), &lib, 5);
     let want = (0.02 * 0.9 * 12.0 * 33.0_f64).sqrt();
     assert!(
         trace.iter().all(|v| (v - want).abs() < 0.01 * want),
@@ -367,8 +361,7 @@ fn input_limited_converter_finds_its_operating_point() {
 /// 1 ms: the rail's lowest 1 us sample over the next 300 us, where it ends,
 /// and the bound board's evidence.
 fn load_step(extra: &str, cout: &str) -> (f64, f64, BoardEvidence) {
-    let mut board = lc_buck_board("+12V", "33R", true);
-    board.components[1].value = cout.into();
+    let board = lc_buck_board("+12V", "33R", cout, true);
     let lib = lib_with_card(&format!("step{cout}{}", extra.len()), 3.3, extra, true);
     let mut bound = bind_board_with(&board, &lib, &CustomRegistry::new());
     let today = RunDate::from_epoch_days(20_666);
@@ -422,4 +415,47 @@ fn unstated_crossover_is_a_disclosed_default_parameter() {
 fn undersized_output_cap_still_dips_out_of_band() {
     let (low, _, _) = load_step("crossover_hz = 30e3", "2.2uF");
     assert!(3.3 - low > 0.33, "2.2 uF dipped only to {low} V");
+}
+
+/// A buck fed through a diode (its input cannot sink) into 10 uF + 10 R, with
+/// 10 R on its output. When the source steps to 0 V the output decays with
+/// the input and never below a diode drop, alike at any frame length. The
+/// input draw used to be forward-only and a chunk late, so reverse current
+/// through the switch vanished to ground and the output LC rang volts
+/// negative, by an amount that depended on the frame.
+#[test]
+fn reverse_current_returns_to_a_diode_fed_input() {
+    let lib = lib_with_card("rev", 3.3, "", true);
+    let mut board = lc_buck_board("VIN", "10R", "22uF", true);
+    board.nets.push(crate::support::net(6, "+12V".into()));
+    let diode = vec![pin("A", 6), pin("K", 1)];
+    board.components.extend([
+        comp("D1", "D", "Diode_SMD:D_SOD-323", diode),
+        two("C2", "10uF", CAP, 1, 3),
+        two("R4", "10R", RES, 1, 3),
+    ]);
+    // Frames of 2.5, 5 and 10 us, sampled every 10 us.
+    let traces = [4_u32, 2, 1].map(|per| {
+        let bound = bind_board_with(&board, &lib, &CustomRegistry::new());
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).unwrap();
+        sched.step(1e-4);
+        assert!(sched.set_power_supply("+12V", PowerSupply::Ideal { volts: 0.0 }));
+        let trace: Vec<f64> = (1..=30 * per)
+            .filter_map(|n| {
+                sched.step(1e-5 / f64::from(per));
+                (n % per == 0).then(|| sched.net_voltage("+OUT").unwrap())
+            })
+            .collect();
+        assert!(sched.analog_valid(), "{:?}", sched.failed_windows());
+        trace
+    });
+    for trace in &traces {
+        assert!(
+            trace.iter().all(|&v| v > -0.7) && trace[29] < 1.0,
+            "{trace:?}"
+        );
+        let apart = trace.iter().zip(&traces[2]).map(|(a, b)| (a - b).abs());
+        let apart = apart.fold(0.0, f64::max);
+        assert!(apart < 0.05, "{apart} V apart: {trace:?}");
+    }
 }

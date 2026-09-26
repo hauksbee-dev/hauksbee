@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
-    BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, Rail,
+    BOutput, BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, Rail,
     SourceKind,
 };
 use hauksbee_models::sensor_spec::StrapTie;
@@ -4164,16 +4164,15 @@ fn bind_timer_555(
         timer_cmp("__d4", "__d5", "__d2", gain),
     );
     let ctl_node = circuit.node(&format!("{r}_555_ctl"));
-    circuit.add(Device::Behavioral {
-        name: format!("Bctl_{r}"),
-        p: ctl_node,
-        n: gnd,
-        output: hauksbee_ir::BOutput::Voltage,
-        expr: hauksbee_ir::CompiledExpr::compile(&ctl_expr).expect("555 control expression"),
-        deps: [thres, ctrl, vcc, reset, tref, trig, qb]
-            .map(hauksbee_ir::BDep::Volt)
-            .to_vec(),
-    });
+    let deps = [thres, ctrl, vcc, reset, tref, trig, qb];
+    let control = Device::behavioral(
+        format!("Bctl_{r}"),
+        (ctl_node, gnd),
+        BOutput::Voltage,
+        &ctl_expr,
+        &deps,
+    );
+    circuit.add(control.expect("555 control expression"));
     let (von, voff) = (p("latch_von", 0.75), p("latch_voff", 0.25));
     let pullup = p("sense_ohms", 10_000.0);
     let leg_of = |name: &str, a: NodeId, ron: f64| Device::VSwitch {
@@ -4199,21 +4198,21 @@ fn bind_timer_555(
     if let Some(out) = out {
         let (vol, drop) = (p("vol_v", 0.1), p("voh_drop_v", 1.4));
         let outi = circuit.node(&format!("{r}_555_outi"));
-        circuit.add(Device::Behavioral {
-            name: format!("Bout_{r}"),
-            p: outi,
-            n: gnd,
-            output: hauksbee_ir::BOutput::Voltage,
-            // Gain 20, not the comparators' 1200: the latch node this reads
-            // already swings rail to rail in ONE step, and a 1200 cliff on top
-            // of that is what Newton could not cross. 20 still saturates.
-            expr: hauksbee_ir::CompiledExpr::compile(&format!(
-                "{vol} + (__d1-{drop}-{vol})*{}",
-                timer_cmp("__d0", "0.5*__d1", "__d1", 20.0)
-            ))
-            .expect("555 output expression"),
-            deps: vec![hauksbee_ir::BDep::Volt(qb), hauksbee_ir::BDep::Volt(vcc)],
-        });
+        // Gain 20, not the comparators' 1200: the latch node this reads
+        // already swings rail to rail in ONE step, and a 1200 cliff on top
+        // of that is what Newton could not cross. 20 still saturates.
+        let expr = format!(
+            "{vol} + (__d1-{drop}-{vol})*{}",
+            timer_cmp("__d0", "0.5*__d1", "__d1", 20.0)
+        );
+        let buf = Device::behavioral(
+            format!("Bout_{r}"),
+            (outi, gnd),
+            BOutput::Voltage,
+            &expr,
+            &[qb, vcc],
+        );
+        circuit.add(buf.expect("555 output expression"));
         circuit.add(Device::resistor(
             format!("Rout_{r}"),
             outi,
@@ -4272,14 +4271,14 @@ fn bind_open_collector(
         p("ron_ohms", 32.5),
         p("leak_s", 2e-11),
     );
-    circuit.add(Device::Behavioral {
-        name: format!("Boc_{name}"),
-        p: out,
-        n: gnd,
-        output: hauksbee_ir::BOutput::Current,
-        expr: hauksbee_ir::CompiledExpr::compile(&expr).expect("open-collector sink expression"),
-        deps: vec![hauksbee_ir::BDep::Volt(gate), hauksbee_ir::BDep::Volt(out)],
-    });
+    let sink = Device::behavioral(
+        format!("Boc_{name}"),
+        (out, gnd),
+        BOutput::Current,
+        &expr,
+        &[gate, out],
+    );
+    circuit.add(sink.expect("open-collector sink expression"));
 }
 
 fn bind_comparator(

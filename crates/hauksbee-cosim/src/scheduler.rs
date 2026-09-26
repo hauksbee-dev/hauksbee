@@ -3547,14 +3547,14 @@ impl Scheduler {
     }
 
     /// Before the first chunk, arm every behavioural converter at the initial
-    /// operating point and settle its reflected input draw (the regulation
-    /// loop itself is in-circuit, so each DC solve closes it). Supplies stand
+    /// operating point and settle its arming (the regulation loop and its
+    /// input draw are in-circuit, so each DC solve closes them). Supplies stand
     /// at their t=0 values, so the board has been powered forever: a converter
     /// left unarmed until its first update would invent a cold start (and an
     /// inrush) that the stimulus never asked for. A ramped or absent input
     /// settles to 0 V and keeps the cold start. The settled point becomes the
     /// t=0 state the first chunk's behavioural update reads (not the solver's
-    /// DC seed). A draw that never settles keeps the cold start it had.
+    /// DC seed). An arming that never settles keeps the cold start it had.
     fn settle_converters(&mut self) {
         let has_converter = self
             .behavioral

@@ -25,7 +25,7 @@ use crate::shared::{
     add_driver_leg, add_load_leg, add_partition_rc_legs, add_resistor, add_sensed_driver_leg,
     add_vdc,
 };
-use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, NodeId, SpiceLoader};
+use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId, SpiceLoader};
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
     dc_operating_point, run_tran, AcAnalysis, AcSpec, AssemblyMode, Integration, LinearIsland,
@@ -36,24 +36,23 @@ use hauksbee_testkit::circuits::cap;
 
 /// A B-source with one V(ctrl) dep, either output flavor.
 fn behavioral_vdep(out: NodeId, ctrl: NodeId, voltage_out: bool) -> Device {
-    if voltage_out {
-        Device::Behavioral {
-            name: "B1".into(),
-            p: out,
-            n: NodeId::GROUND,
-            output: BOutput::Voltage,
-            expr: CompiledExpr::compile("2.0*math::tanh(__d0)").unwrap(),
-            deps: vec![BDep::Volt(ctrl)],
-        }
+    let (output, expr) = if voltage_out {
+        (BOutput::Voltage, "2.0*math::tanh(__d0)")
     } else {
-        Device::Behavioral {
-            name: "B1".into(),
-            p: out,
-            n: NodeId::GROUND,
-            output: BOutput::Current,
-            expr: CompiledExpr::compile("1e-3*math::tanh(__d0)").unwrap(),
-            deps: vec![BDep::Volt(ctrl)],
-        }
+        (BOutput::Current, "1e-3*math::tanh(__d0)")
+    };
+    Device::behavioral("B1", (out, NodeId::GROUND), output, expr, &[ctrl]).unwrap()
+}
+
+/// A current B-source of `2*I(vs)` into `out`.
+fn behavioral_idep(out: NodeId, vs: DeviceId) -> Device {
+    Device::Behavioral {
+        name: "B1".into(),
+        p: out,
+        n: NodeId::GROUND,
+        output: BOutput::Current,
+        expr: CompiledExpr::compile("2.0*__d0").unwrap(),
+        deps: vec![BDep::Branch(vs)],
     }
 }
 
@@ -136,14 +135,7 @@ fn behavioral_idep_demotes_ammeter_and_fuses() {
     let mut c = Circuit::new();
     let vs = add_sensed_driver_leg(&mut c);
     let out = add_load_leg(&mut c);
-    c.add(Device::Behavioral {
-        name: "B1".into(),
-        p: out,
-        n: NodeId::GROUND,
-        output: BOutput::Current,
-        expr: CompiledExpr::compile("2.0*__d0").unwrap(),
-        deps: vec![BDep::Branch(vs)],
-    });
+    c.add(behavioral_idep(out, vs));
     let p = Partition::analyze(&c);
     assert_eq!(
         p.islands.len(),
@@ -281,14 +273,7 @@ fn auto_partitioning_never_drops_behavioral() {
         if idep {
             let vs = add_sensed_driver_leg(&mut c);
             out = add_load_leg(&mut c);
-            c.add(Device::Behavioral {
-                name: "B1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                output: BOutput::Current,
-                expr: CompiledExpr::compile("2.0*__d0").unwrap(),
-                deps: vec![BDep::Branch(vs)],
-            });
+            c.add(behavioral_idep(out, vs));
         } else {
             let ctrl = add_driver_leg(&mut c);
             out = add_load_leg(&mut c);
@@ -418,14 +403,14 @@ fn ac_linearizes_at_the_operating_point() {
     add_vdc(&mut c, "V1", vin, NodeId::GROUND, 0.0);
     add_resistor(&mut c, "R1", vin, a, 1e3);
     cap(&mut c, "C1", a, NodeId::GROUND, 1e-6);
-    c.add(Device::Behavioral {
-        name: "B1".into(),
-        p: out,
-        n: NodeId::GROUND,
-        output: BOutput::Voltage,
-        expr: CompiledExpr::compile("10.0*__d0").unwrap(),
-        deps: vec![BDep::Volt(a)],
-    });
+    let amp = Device::behavioral(
+        "B1",
+        (out, NodeId::GROUND),
+        BOutput::Voltage,
+        "10.0*__d0",
+        &[a],
+    );
+    c.add(amp.unwrap());
     add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     let ac = AcAnalysis::new(SolverOptions::default());
     let resp = ac
