@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, HashSet};
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
 use hauksbee_models::ModelLibrary;
 
-use super::converter::{detect_converters_with_abstentions, ConverterStage, Topology};
+use super::converter::{detect_converters_with_abstentions, BulkCap, ConverterStage, Topology};
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
@@ -251,6 +251,7 @@ fn stage_ripple_finding(
         [] => return None,
         [cap] => cap,
         caps => {
+            let refs: Vec<String> = caps.iter().map(|cap| cap.reference.clone()).collect();
             return Some(SiFinding {
                 check: SiCheck::InputCapRipple,
                 severity: SiSeverity::Info,
@@ -259,15 +260,20 @@ fn stage_ripple_finding(
                     stage.input_rail.1,
                     stage.output_rail.1,
                     caps.len(),
-                    caps.iter()
-                        .map(|cap| cap.reference.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
+                    refs.join(", "),
                 ),
-                refs: caps.iter().map(|cap| cap.reference.clone()).collect(),
+                refs,
                 nets: vec![stage.input_rail.1.clone()],
             });
         }
+    };
+    // An abstention note on this one input cap and the input rail.
+    let input_cap_note = |message: String| SiFinding {
+        check: SiCheck::InputCapRipple,
+        severity: SiSeverity::Info,
+        message,
+        refs: vec![cap.reference.clone()],
+        nets: vec![stage.input_rail.1.clone()],
     };
     let rating = input_cap_ripple_rating(board, lib, &cap.reference);
     let i_out = attribute_i_out(board, lib, stage);
@@ -288,20 +294,14 @@ fn stage_ripple_finding(
                 ),
                 (Some(_), Some(_)) => unreachable!("complete evidence handled above"),
             };
-            return Some(SiFinding {
-                check: SiCheck::InputCapRipple,
-                severity: SiSeverity::Info,
-                message: format!(
-                    "input-cap ripple: buck stage on '{}' (switch node '{}', inductor {}) has input bulk cap {} ({}), but {why} - not flagged.",
-                    stage.input_rail.1,
-                    stage.switch_node.1,
-                    stage.inductor_ref,
-                    cap.reference,
-                    cap.value,
-                ),
-                refs: vec![cap.reference.clone()],
-                nets: vec![stage.input_rail.1.clone()],
-            });
+            return Some(input_cap_note(format!(
+                "input-cap ripple: buck stage on '{}' (switch node '{}', inductor {}) has input bulk cap {} ({}), but {why} - not flagged.",
+                stage.input_rail.1,
+                stage.switch_node.1,
+                stage.inductor_ref,
+                cap.reference,
+                cap.value,
+            )));
         }
     };
 
@@ -311,17 +311,11 @@ fn stage_ripple_finding(
     // unusable rating: note it and move on, never divide by it. `!(x > 0.0)`
     // also rejects NaN.
     if !(rating_a > 0.0) {
-        return Some(SiFinding {
-            check: SiCheck::InputCapRipple,
-            severity: SiSeverity::Info,
-            message: format!(
-                "input-cap ripple: buck stage on '{}' has input bulk cap {} ({}) whose \
-                 ripple rating is {:.2} A_rms, not a usable positive value - not flagged.",
-                stage.input_rail.1, cap.reference, cap.value, rating_a,
-            ),
-            refs: vec![cap.reference.clone()],
-            nets: vec![stage.input_rail.1.clone()],
-        });
+        return Some(input_cap_note(format!(
+            "input-cap ripple: buck stage on '{}' has input bulk cap {} ({}) whose \
+             ripple rating is {:.2} A_rms, not a usable positive value - not flagged.",
+            stage.input_rail.1, cap.reference, cap.value, rating_a,
+        )));
     }
 
     let Some(duty) = nominal_buck_duty(&stage.input_rail.1, &stage.output_rail.1) else {
@@ -343,14 +337,31 @@ fn stage_ripple_finding(
         });
     };
 
+    Some(ripple_verdict(
+        stage,
+        cap,
+        rating_a,
+        (i_out_a, &i_cite),
+        duty,
+    ))
+}
+
+/// Judge one buck input cap once its rating, attributed `I_out` (with its
+/// citation) and nominal duty are all known: overstressed, or within rating.
+fn ripple_verdict(
+    stage: &ConverterStage,
+    cap: &BulkCap,
+    rating_a: f64,
+    (i_out_a, i_cite): (f64, &str),
+    duty: f64,
+) -> SiFinding {
     let i_rms = buck_input_cap_ripple_rms(i_out_a, duty);
     let ratio = i_rms / rating_a;
 
-    if i_rms > rating_a {
-        Some(SiFinding {
-            check: SiCheck::InputCapRipple,
-            severity: SiSeverity::Medium,
-            message: format!(
+    let (severity, message, nets) = if i_rms > rating_a {
+        (
+            SiSeverity::Medium,
+            format!(
                 "input bulk cap {} ({}) on buck '{} -> {}' carries ~{:.2} A_rms ripple \
                  (I_out {:.1} A, D={:.3} from named nominal rail voltages) but is rated {:.2} A_rms{}: ~{:.2}x \
                  overstress, which shortens cap life (I^2*ESR self-heating). I_out from: {}",
@@ -366,14 +377,12 @@ fn stage_ripple_finding(
                 ratio,
                 i_cite,
             ),
-            refs: vec![cap.reference.clone()],
-            nets: vec![stage.input_rail.1.clone()],
-        })
+            vec![stage.input_rail.1.clone()],
+        )
     } else {
-        Some(SiFinding {
-            check: SiCheck::InputCapRipple,
-            severity: SiSeverity::Info,
-            message: format!(
+        (
+            SiSeverity::Info,
+            format!(
                 "input bulk cap {} on '{} -> {}': ~{:.2} A_rms ripple at D={:.3} from named nominal rail voltages vs {:.2} A_rms rating ({:.2}x) - ok.",
                 cap.reference,
                 stage.input_rail.1,
@@ -383,9 +392,15 @@ fn stage_ripple_finding(
                 rating_a,
                 ratio
             ),
-            refs: vec![cap.reference.clone()],
-            nets: vec![stage.input_rail.1.clone(), stage.output_rail.1.clone()],
-        })
+            vec![stage.input_rail.1.clone(), stage.output_rail.1.clone()],
+        )
+    };
+    SiFinding {
+        check: SiCheck::InputCapRipple,
+        severity,
+        message,
+        refs: vec![cap.reference.clone()],
+        nets,
     }
 }
 

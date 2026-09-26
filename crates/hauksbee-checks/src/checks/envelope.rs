@@ -274,8 +274,10 @@ fn compatible_supply_rail(
     candidates.into_iter().next()
 }
 
-fn unknown_abstention(net_name: &str, battery_without_chemistry: bool) -> String {
-    if battery_without_chemistry {
+/// The low-severity abstention for a rail whose range is not known, cited on
+/// the part (`reference`) whose envelope needed it.
+fn unknown_abstention(net_name: &str, knowledge: &RailKnowledge, reference: &str) -> LintFinding {
+    let message = if matches!(knowledge, RailKnowledge::BatteryWithoutChemistry) {
         format!(
             "operating envelope on net '{net_name}' abstained: the topology identifies a battery net but no charger card declares its chemistry; add battery_chemistry and the sourced charge-voltage range to the charger model"
         )
@@ -283,6 +285,13 @@ fn unknown_abstention(net_name: &str, battery_without_chemistry: bool) -> String
         format!(
             "operating envelope on net '{net_name}' abstained: declare the level with a net_drive, or bind the regulator that defines this net"
         )
+    };
+    LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: Severity::Low,
+        message,
+        refs: vec![reference.to_string()],
+        nets: vec![net_name.to_string()],
     }
 }
 
@@ -306,6 +315,8 @@ pub fn envelope_lint_with_drives(
     envelope_lint_with_tolerance(board, lib, &points.collect(), 0.0, 0.0)
 }
 
+// One match over envelope kinds sharing the resolver and per-net abstention bookkeeping.
+#[allow(clippy::too_many_lines)]
 fn envelope_lint_with_tolerance(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -338,16 +349,9 @@ fn envelope_lint_with_tolerance(
                         RailKnowledge::Known(range) => range,
                         knowledge => {
                             if abstained_nets.insert(net_id) {
-                                report.findings.push(LintFinding {
-                                    check: LintCheck::OperatingEnvelope,
-                                    severity: Severity::Low,
-                                    message: unknown_abstention(
-                                        &net.name,
-                                        matches!(knowledge, RailKnowledge::BatteryWithoutChemistry),
-                                    ),
-                                    refs: vec![comp.reference.clone()],
-                                    nets: vec![net.name.clone()],
-                                });
+                                let finding =
+                                    unknown_abstention(&net.name, &knowledge, &comp.reference);
+                                report.findings.push(finding);
                             }
                             continue;
                         }
@@ -406,19 +410,9 @@ fn envelope_lint_with_tolerance(
                             RailKnowledge::Known(range) => known.push(range),
                             knowledge => {
                                 if abstained_nets.insert(net_id) {
-                                    report.findings.push(LintFinding {
-                                        check: LintCheck::OperatingEnvelope,
-                                        severity: Severity::Low,
-                                        message: unknown_abstention(
-                                            net_name,
-                                            matches!(
-                                                knowledge,
-                                                RailKnowledge::BatteryWithoutChemistry
-                                            ),
-                                        ),
-                                        refs: vec![comp.reference.clone()],
-                                        nets: vec![net_name.clone()],
-                                    });
+                                    let finding =
+                                        unknown_abstention(net_name, &knowledge, &comp.reference);
+                                    report.findings.push(finding);
                                 }
                             }
                         }
