@@ -11,6 +11,7 @@
 //! product refuses to emit for boards. Use [`corpus_or_skip`] and friends, and
 //! set `HAUKSBEE_REQUIRE_CORPUS=1` (as CI does) to turn absence into failure.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub mod circuits;
@@ -28,14 +29,17 @@ pub fn repo_root(manifest_dir: &str) -> PathBuf {
 }
 
 /// True when a missing asset should fail the run instead of skipping it.
+#[must_use]
 pub fn require_assets() -> bool {
     std::env::var_os("HAUKSBEE_REQUIRE_CORPUS").is_some()
 }
 
-/// A scratch path under the OS temp dir, unique to this test binary's
-/// process: `<tmp>/hauksbee_<prefix>_<tag>_<pid>`. Not created; callers that
+/// A scratch path under the OS temp dir, unique to this test binary's process.
+///
+/// The path is `<tmp>/hauksbee_<prefix>_<tag>_<pid>`. Not created; callers that
 /// need it to exist use [`fresh_scratch_dir`] or create it themselves (e.g.
 /// when a helper like `extract_fresh` owns the create/remove lifecycle).
+#[must_use]
 pub fn scratch_path(prefix: &str, tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("hauksbee_{prefix}_{tag}_{}", std::process::id()))
 }
@@ -43,6 +47,11 @@ pub fn scratch_path(prefix: &str, tag: &str) -> PathBuf {
 /// [`scratch_path`], freshly created. Any leftover contents from an earlier
 /// run under the same pid (vanishingly rare, but happens under pid reuse)
 /// are removed first.
+///
+/// # Panics
+///
+/// Panics if the scratch directory cannot be created.
+#[must_use]
 pub fn fresh_scratch_dir(prefix: &str, tag: &str) -> PathBuf {
     let dir = scratch_path(prefix, tag);
     let _ = std::fs::remove_dir_all(&dir);
@@ -97,6 +106,7 @@ fn main_worktree(root: &Path) -> Option<PathBuf> {
 /// two is the checkout, so no corpus was found, every corpus test skipped, and
 /// the skip read as a pass. An agent's whole body of corpus evidence turned out
 /// never to have run.
+#[must_use]
 pub fn corpus_search_dirs(manifest_dir: &str) -> Vec<PathBuf> {
     let root = repo_root(manifest_dir);
     let mut out: Vec<PathBuf> = Vec::new();
@@ -125,6 +135,11 @@ pub fn corpus_search_dirs(manifest_dir: &str) -> Vec<PathBuf> {
 /// `HAUKSBEE_CORPUS_DIR` wins; otherwise the nearest `board-corpus/` at or above
 /// the checkout, which is where `scripts/fetch-corpus.sh` puts it by default.
 /// See [`corpus_search_dirs`] for the search order and why it is a walk.
+///
+/// # Panics
+///
+/// Panics if `HAUKSBEE_CORPUS_DIR` is set to a path that is not a directory.
+#[must_use]
 pub fn corpus_dir(manifest_dir: &str) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("HAUKSBEE_CORPUS_DIR") {
         let p = PathBuf::from(dir);
@@ -157,6 +172,7 @@ pub fn corpus_dir(manifest_dir: &str) -> Option<PathBuf> {
 /// silently matches nothing is worse than no gate, because it reports as
 /// evidence. Resolving both layouts fixes it for both users without forcing
 /// either to move their corpus.
+#[must_use]
 pub fn corpus_board(manifest_dir: &str, rel: &str) -> Option<PathBuf> {
     let root = corpus_dir(manifest_dir)?;
     let direct = root.join(rel);
@@ -181,6 +197,7 @@ pub fn corpus_board(manifest_dir: &str, rel: &str) -> Option<PathBuf> {
 /// `<corpus>/famous` in the hand-built layout, `<corpus>` itself in the fetch
 /// layout. A sweep that joined `famous` unconditionally walked nothing under
 /// the fetch layout and reported the empty walk as a pass.
+#[must_use]
 pub fn corpus_boards_root(manifest_dir: &str) -> Option<PathBuf> {
     let root = corpus_dir(manifest_dir)?;
     let famous = root.join("famous");
@@ -196,16 +213,16 @@ pub fn corpus_boards_root(manifest_dir: &str) -> Option<PathBuf> {
 /// relative path that also does not exist, so absence and wrong-layout looked
 /// identical and both read as "skip". `what` names the suite so the note says
 /// which one idled.
+#[must_use]
 pub fn corpus_boards_root_or_skip(manifest_dir: &str, what: &str) -> Option<PathBuf> {
-    match corpus_boards_root(manifest_dir) {
-        Some(p) => Some(p),
-        None => missing(
+    corpus_boards_root(manifest_dir).or_else(|| {
+        missing(
             what,
             "the board corpus root (either <corpus>/famous/ or <corpus>/)",
             "board corpus",
             &fetch_remedy(manifest_dir),
-        ),
-    }
+        )
+    })
 }
 
 /// Every file under `root` (recursive) whose extension is one of `exts`, in
@@ -217,6 +234,7 @@ pub fn corpus_boards_root_or_skip(manifest_dir: &str, what: &str) -> Option<Path
 /// must skip whole subtrees (e.g. `.git`, or a corpus.toml exclusion) still
 /// writes its own walk; this is for the common case of "every match, full
 /// depth".
+#[must_use]
 pub fn walk_files_with_ext(root: &Path, exts: &[&str]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -238,8 +256,9 @@ pub fn walk_files_with_ext(root: &Path, exts: &[&str]) -> Vec<PathBuf> {
     out
 }
 
-/// `KiCad` board text for a minimal Arduino Nano + 10k pull resistor fixture:
-/// net 1 GND, net 2 +5V, net 3 BUS (A1 pad 4 = GND, pad 27 = +5V, pad 21 =
+/// `KiCad` board text for a minimal Arduino Nano + 10k pull resistor fixture.
+///
+/// Net 1 GND, net 2 +5V, net 3 BUS (A1 pad 4 = GND, pad 27 = +5V, pad 21 =
 /// BUS; R1 across BUS/GND). Shared by the AVR and host-serial co-sim tests
 /// that only need "an Arduino Nano on a net", not a specific board's real
 /// layout.
@@ -279,7 +298,7 @@ fn fetch_remedy(manifest_dir: &str) -> String {
     if std::env::var_os("HAUKSBEE_CORPUS_DIR").is_none() {
         s.push_str(". Looked in:");
         for d in corpus_search_dirs(manifest_dir) {
-            s.push_str(&format!("\n           {}", d.display()));
+            let _ = write!(s, "\n           {}", d.display());
         }
     }
     s
@@ -293,6 +312,7 @@ fn fetch_remedy(manifest_dir: &str) -> String {
 /// `rp2040_minimal_kicad/RPI-RP2040-MINIMAL_R3-S1_public`, and neither name
 /// resolves in the other tree. Listing both keeps the gate live on either,
 /// where naming only one silently skips for half the world.
+#[must_use]
 pub fn corpus_board_any(manifest_dir: &str, rels: &[&str]) -> Option<PathBuf> {
     rels.iter().find_map(|rel| corpus_board(manifest_dir, rel))
 }
@@ -301,11 +321,10 @@ pub fn corpus_board_any(manifest_dir: &str, rels: &[&str]) -> Option<PathBuf> {
 ///
 /// Under `HAUKSBEE_REQUIRE_CORPUS=1` this panics instead, so a CI run cannot
 /// pass by skipping. `what` names the test so the note says which one idled.
+#[must_use]
 pub fn corpus_or_skip(manifest_dir: &str, rel: &str, what: &str) -> Option<PathBuf> {
-    match corpus_board(manifest_dir, rel) {
-        Some(p) => Some(p),
-        None => missing(what, rel, "board corpus", &fetch_remedy(manifest_dir)),
-    }
+    corpus_board(manifest_dir, rel)
+        .or_else(|| missing(what, rel, "board corpus", &fetch_remedy(manifest_dir)))
 }
 
 /// A private asset that is not redistributable, keyed off an env var so a
@@ -314,6 +333,7 @@ pub fn corpus_or_skip(manifest_dir: &str, rel: &str, what: &str) -> Option<PathB
 /// `env_var` names the override; `rel` is the path under it. Absent, this
 /// behaves like [`corpus_or_skip`]: a loud note, or a panic under
 /// `HAUKSBEE_REQUIRE_CORPUS=1`.
+#[must_use]
 pub fn private_asset(env_var: &str, rel: &str, what: &str) -> Option<PathBuf> {
     let base = std::env::var_os(env_var)?;
     let p = PathBuf::from(base).join(rel);
@@ -328,12 +348,14 @@ pub fn private_asset(env_var: &str, rel: &str, what: &str) -> Option<PathBuf> {
     )
 }
 
-/// A corpus asset that is deliberately absent from `corpus.toml`: not ours to
-/// redistribute, with no fetchable, pinnable upstream (the manifest's
+/// A corpus asset that is deliberately absent from `corpus.toml`.
+///
+/// It is not ours to redistribute, with no fetchable, pinnable upstream (the manifest's
 /// "Local-only boards" section). `HAUKSBEE_REQUIRE_CORPUS=1` promises that
 /// everything the manifest can supply is present; it cannot conjure these, so
 /// absence is always a loud skip, never a panic. In a maintainer's corpus that
 /// carries the asset, the test runs as normal.
+#[must_use]
 pub fn local_only_asset(manifest_dir: &str, rel: &str, what: &str) -> Option<PathBuf> {
     let root = corpus_dir(manifest_dir)?;
     let p = root.join(rel);
@@ -364,6 +386,7 @@ pub const NOT_KNOWN_GOOD_MARKER: &str = ".hauksbee-not-known-good";
 /// The marker is looked for at the board's own directory and above it up to the
 /// corpus root, because a board's design files sit at whatever depth its upstream
 /// chose and the marker is written once per entry.
+#[must_use]
 pub fn not_known_good(board: &Path, corpus_root: &Path) -> Option<String> {
     let mut dir = if board.is_dir() {
         Some(board)
@@ -423,6 +446,10 @@ pub fn excluded(gate: &str, board: &str, why: &str) {
 /// product exists to refuse. This is not the same guard as [`corpus_or_skip`],
 /// which catches an absent corpus; this catches a *present* corpus whose layout
 /// or contents mean no board was ever opened.
+///
+/// # Panics
+///
+/// Panics if `n` is zero: a gate that scanned no boards has proved nothing.
 pub fn scanned(gate: &str, n: usize) {
     eprintln!("SCANNED  {gate}: {n} board(s)");
     assert!(
@@ -441,6 +468,7 @@ pub fn scanned(gate: &str, n: usize) {
 /// against [`today_days`] so a stale exception goes red instead of
 /// suppressing forever. A dev-dependency for this would be heavier than the
 /// dozen lines, and this is the only date arithmetic any of these suites need.
+#[must_use]
 pub fn until_days(until: &str) -> Option<i64> {
     let mut it = until.split('-');
     let y: i64 = it.next()?.parse().ok()?;
@@ -460,11 +488,13 @@ pub fn until_days(until: &str) -> Option<i64> {
 
 /// Today, in days since the epoch. Callers capture this once per run so a
 /// long sweep cannot have an exception lapse partway through it.
+#[must_use]
 pub fn today_days() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() as i64).div_euclid(86_400))
-        .unwrap_or(0)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .map_or(0, |secs| secs.div_euclid(86_400))
 }
 
 fn missing(what: &str, rel: &str, source: &str, remedy: &str) -> Option<PathBuf> {

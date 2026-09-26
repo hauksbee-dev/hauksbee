@@ -108,6 +108,7 @@ pub fn bjt(
     })
 }
 
+#[must_use]
 pub fn pnp() -> BjtModel {
     BjtModel {
         polarity: Polarity::P,
@@ -172,6 +173,7 @@ pub fn vswitch(
 
 /// 1 V through two 1 kΩ resistors to ground: the midpoint solves to 0.5 V.
 /// Returns `(circuit, top, mid)`.
+#[must_use]
 pub fn divider() -> (Circuit, NodeId, NodeId) {
     let mut c = Circuit::new();
     let top = c.node("top");
@@ -209,6 +211,7 @@ pub fn pnp_blocks(
 
 /// The shunt-fed PNP array: +5V -> `r_shunt` -> `ANALOG_VDD` -> `n` blocks.
 /// Returns `(circuit, rail, feed, shunt device, blocks)`.
+#[must_use]
 pub fn shunt_array(
     n: usize,
     r_shunt: f64,
