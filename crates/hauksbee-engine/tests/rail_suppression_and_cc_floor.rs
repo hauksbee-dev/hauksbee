@@ -74,8 +74,8 @@ fn a_suppressed_rail_with_no_supply_reads_about_zero() {
 fn a_one_percent_over_limit_draw_settles_at_the_limit_with_a_positive_rail() {
     // 5 V, 0.5 A limit. A load of 9.90099 Ω draws 0.505 A unlimited, exactly 1%
     // over. The fold must land the current ON the limit and leave the rail near
-    // 4.95 V, not collapse it: an input-limit fold that scales the FRESH setpoint
-    // instead of anchoring to the previous command bang-bangs here forever.
+    // 4.95 V, not collapse it: a fold that scales the FRESH setpoint once per
+    // chunk, instead of solving the limit with the rail, bang-bangs here forever.
     let limit = 0.5_f64;
     let r_load = 5.0 / (1.01 * limit);
     let mut sched = bench_board(&format!("{r_load:.6}"), (5.0, limit), |_, _| {});
@@ -118,13 +118,8 @@ fn a_draw_under_the_limit_does_not_fold() {
     {
         let mut sched = bench_board(r_load, (5.0, 0.5), |c, net| {
             if let Some(volts) = back {
-                let node = c.node("back");
-                c.add(Device::vsource(
-                    "Vback",
-                    node,
-                    NodeId::GROUND,
-                    SourceKind::Dc(volts),
-                ));
+                let (node, dc) = (c.node("back"), SourceKind::Dc(volts));
+                c.add(Device::vsource("Vback", node, NodeId::GROUND, dc));
                 c.add(Device::resistor("Rback", node, net, 0.1));
             }
         });
@@ -216,17 +211,11 @@ fn bench_bulk_trace(r_load: &str, sink_a: (f64, f64), per_sample: u32) -> Vec<f6
         })
         .collect();
     let rescued = sched.failed_chunk_count() > 0 || !sched.fallback_windows().is_empty();
-    assert!(
-        sched.analog_valid() && !rescued,
-        "every chunk solves first time"
-    );
+    assert!(sched.analog_valid() && !rescued, "a chunk needed rescue");
     // Generous for a debug build: the bound catches a frame that opens on a
     // volt step and grinds the timestep down, not a slow machine.
     let took = start.elapsed();
-    assert!(
-        took.as_secs() < 30,
-        "3 ms of {frame:e} s frames took {took:?}"
-    );
+    assert!(took.as_secs() < 30, "{frame:e} s frames took {took:?}");
     trace
 }
 

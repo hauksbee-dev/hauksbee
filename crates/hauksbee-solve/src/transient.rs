@@ -321,10 +321,10 @@ impl Transient {
         // it (a free-running 555 astable) has no operating point to find, so
         // every chunk would walk the whole homotopy ladder to a failure
         // (measured: 95% of the wall time of a 2 ms run). Only a caller that
-        // carries a latch gets this; every other board solves as before.
-        let carried = opts.dc_init == DcInit::Continue
-            && self.switch_latch_seed.is_some()
-            && dc_seed.is_some_and(|s| s.len() == ws.x.len());
+        // carries a latch gets this; every other continuation still solves.
+        let continuing =
+            opts.dc_init == DcInit::Continue && dc_seed.is_some_and(|s| s.len() == ws.x.len());
+        let carried = continuing && self.switch_latch_seed.is_some();
         // Known softness (review note): the staged-DC regularizers arm on
         // ws.used_staged_dc(), which only a DC solve can set, so a power-on
         // march runs the bare per-step path. A stiff board that needed the
@@ -390,8 +390,13 @@ impl Transient {
             }
         } else if !carried {
             // The DC solve manages its own staged regularizers internally and
-            // leaves the workspace flag at 0.
-            dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed)?;
+            // leaves the workspace flag at 0. A continuation discards the point,
+            // so one it cannot reach (a limited rail collapsed at DC under bulk
+            // that holds it up) does not stop the march; each step must converge.
+            let dc = dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed);
+            if !continuing {
+                dc?;
+            }
         }
 
         // Only when the DC point itself needed the staged fallback (the standard
@@ -462,12 +467,9 @@ impl Transient {
         // board's steady state: overwrite the operating point just solved with
         // the carried unknowns, BEFORE the reactive history is seeded from
         // them. The DC solve above still ran, so the staged regularizers stay
-        // armed exactly as they were and a board with no reachable operating
-        // point still fails where it always did.
-        if opts.dc_init == DcInit::Continue {
-            if let Some(seed) = dc_seed.filter(|s| s.len() == ws.x.len()) {
-                ws.x.copy_from_slice(seed);
-            }
+        // armed exactly as they were.
+        if let Some(seed) = dc_seed.filter(|_| continuing) {
+            ws.x.copy_from_slice(seed);
         }
         seed_reactive_state(&mut state, circuit, &ws, opts);
 
@@ -1424,8 +1426,8 @@ mod breakpoint_cap_tests {
 #[cfg(test)]
 mod branch_output_tests {
     use super::Transient;
-    use crate::SolverOptions;
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+    use crate::{DcInit, SolverOptions};
+    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 
     /// The reported branch current of a Vsource/Inductor must be read from that
     /// device's OWN branch unknown, not a running offset over the
@@ -1476,6 +1478,25 @@ mod branch_output_tests {
         assert!(
             (i_final.abs() - 1e-3).abs() < 5e-5,
             "I(L1) must be ~1 mA (read from its own branch), got {i_final:e}"
+        );
+    }
+
+    /// A continuation opens from its seed, so a DC point it cannot reach does
+    /// not stop it: 1 mA * (1 + V^2) into 1 uF has no DC root (it only ever
+    /// charges), yet 10 us from a 0 V seed is well posed, V = tan(t / 1 ms).
+    #[test]
+    fn a_continuation_marches_past_an_unreachable_dc_point() {
+        let deck = "unreachable dc\nC1 n 0 1u\nB1 0 n I={1e-3*(1+V(n)^2)}\n.end\n";
+        let c = SpiceLoader::load(deck).expect("deck loads");
+        let opts = SolverOptions {
+            dc_init: DcInit::Continue,
+            ..SolverOptions::default()
+        };
+        let mut v = f64::NAN;
+        let run = Transient::new(opts).run_streaming_seeded(&c, 1e-5, Some(&[0.0]), |s| v = s.x[0]);
+        assert!(
+            run.is_ok() && (v - 0.01f64.tan()).abs() < 1e-6,
+            "{run:?}: V(10 us) = {v}"
         );
     }
 }

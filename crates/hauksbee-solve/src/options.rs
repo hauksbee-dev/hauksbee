@@ -146,8 +146,10 @@ pub enum DcInit {
     /// becomes `x(0)` and therefore the reactive history. A co-sim chunk is a
     /// window of ONE march, so its capacitors must open where the last window
     /// left them; a DC point opens them at the board's steady state instead,
-    /// which silently deletes every time constant longer than a chunk. Falls
-    /// back to the DC point when no seed of the right width is supplied.
+    /// which silently deletes every time constant longer than a chunk. Since
+    /// the point is discarded, one the solve cannot reach does not fail the
+    /// run (the march's own steps still must converge). Falls back to the DC
+    /// point, and its failure, when no seed of the right width is supplied.
     Continue,
 }
 

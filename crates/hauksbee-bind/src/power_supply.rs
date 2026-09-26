@@ -300,13 +300,7 @@ impl PowerSupply {
     /// supplies without protection (or unprotected batteries).
     #[must_use]
     pub const fn protection_tripped(&self) -> bool {
-        match self {
-            Self::Battery {
-                protection: Some(p),
-                ..
-            } => p.tripped,
-            _ => false,
-        }
+        matches!(self, Self::Battery { protection: Some(p), .. } if p.tripped)
     }
 
     /// Whether this supply's protection has tripped at *any* point so far
@@ -314,13 +308,7 @@ impl PowerSupply {
     /// trip-then-rearm inside one frame is not aliased away.
     #[must_use]
     pub const fn protection_ever_tripped(&self) -> bool {
-        match self {
-            Self::Battery {
-                protection: Some(p),
-                ..
-            } => p.ever_tripped,
-            _ => false,
-        }
+        matches!(self, Self::Battery { protection: Some(p), .. } if p.ever_tripped)
     }
 
     /// Compute the `Vsource` target voltage for the *next* chunk, given the
