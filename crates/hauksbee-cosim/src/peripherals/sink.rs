@@ -9,6 +9,7 @@
 //! firmware drives can be logged without touching them.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -158,11 +159,7 @@ impl VcdSink {
         s.push_str("$scope module hauksbee $end\n");
         for n in &self.nets {
             // 1-bit wire per net.
-            s.push_str(&format!(
-                "$var wire 1 {} {} $end\n",
-                n.code,
-                sanitize(&n.name)
-            ));
+            let _ = writeln!(s, "$var wire 1 {} {} $end", n.code, sanitize(&n.name));
         }
         s.push_str("$upscope $end\n");
         s.push_str("$enddefinitions $end\n");
@@ -171,10 +168,10 @@ impl VcdSink {
         let mut last_t = u64::MAX;
         for c in &self.changes {
             if c.t_ps != last_t {
-                s.push_str(&format!("#{}\n", c.t_ps));
+                let _ = writeln!(s, "#{}", c.t_ps);
                 last_t = c.t_ps;
             }
-            s.push_str(&format!("{}{}\n", if c.level { '1' } else { '0' }, c.code));
+            let _ = writeln!(s, "{}{}", if c.level { '1' } else { '0' }, c.code);
         }
         s
     }
@@ -242,6 +239,7 @@ impl Peripheral for VcdSink {
         "vcd_sink"
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // sim time is non-negative and far below 2^64 ps
     fn post_solve(&mut self, ctx: &mut TickCtx) {
         // Sample at the end of this chunk.
         let t_ps = ((ctx.t + ctx.dt) * 1e12).round() as u64;
@@ -269,6 +267,7 @@ impl Peripheral for VcdSink {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("nets".into(), self.nets.len() as f64);
@@ -322,9 +321,14 @@ mod tests {
         let mut sink = VcdSink::new("VCD", vec![("PWR".into(), n)], None);
         let levels = [5.0, 0.0, 5.0, 0.0]; // HIGH at t=0, then 3 edges
         let mut volts = vec![0.0; c.node_count()];
-        for (step, &v) in levels.iter().enumerate() {
+        for (step, &v) in (0u32..).zip(&levels) {
             volts[n.0 as usize] = v;
-            sink.post_solve(&mut TickCtx::new(&mut c, &volts, step as f64 * 1e-4, 1e-4));
+            sink.post_solve(&mut TickCtx::new(
+                &mut c,
+                &volts,
+                f64::from(step) * 1e-4,
+                1e-4,
+            ));
         }
         assert_eq!(
             sink.transitions_for("PWR"),

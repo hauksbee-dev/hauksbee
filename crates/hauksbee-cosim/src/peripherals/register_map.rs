@@ -87,12 +87,16 @@ impl CompiledRegister {
                 inputs.keys().collect::<Vec<_>>()
             )
         });
-        let scaled = value * self.spec.scale.unwrap_or(1.0) + self.spec.offset.unwrap_or(0.0);
+        let scaled = value.mul_add(
+            self.spec.scale.unwrap_or(1.0),
+            self.spec.offset.unwrap_or(0.0),
+        );
         encode(enc, scaled)
     }
 }
 
 /// Build an evalexpr context from the current input values and evaluate.
+#[allow(clippy::cast_precision_loss)] // an integer expr result is read as f64, like the float path
 fn eval_number(program: &EvalNode, inputs: &HashMap<String, f64>) -> Option<f64> {
     let mut ctx = HashMapContext::new();
     for (k, v) in inputs {
@@ -110,6 +114,7 @@ fn eval_number(program: &EvalNode, inputs: &HashMap<String, f64>) -> Option<f64>
 /// round to nearest and saturate to the type's range; `Q71Be` reproduces the
 /// LM75 datasheet packing exactly (0.125 °C/LSB, 11-bit count left-justified by
 /// 5 into a 16-bit big-endian word).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rounded and clamped first
 fn encode(enc: Encoding, value: f64) -> Vec<u8> {
     match enc {
         Encoding::U8 => {
@@ -136,15 +141,8 @@ fn encode(enc: Encoding, value: f64) -> Vec<u8> {
                 .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
             v.to_le_bytes().to_vec()
         }
-        Encoding::Q71Be => {
-            // Exactly the LM75/LM75A packing the hand-coded model uses:
-            //   counts = round(T / 0.125)   (11-bit signed temperature count)
-            //   raw    = (counts << 5) & 0xFFFF   (left-justified into 16 bits)
-            //   bytes  = [raw >> 8, raw & 0xFF]   (big-endian, MSB first)
-            let counts = (value / 0.125).round() as i32;
-            let raw = ((counts << 5) & 0xFFFF) as u16;
-            vec![(raw >> 8) as u8, (raw & 0xFF) as u8]
-        }
+        // Exactly the LM75/LM75A packing the hand-coded model uses.
+        Encoding::Q71Be => super::i2c::temp_to_be(value),
         Encoding::U20BeXlsb => {
             // Bosch BME280/BMP280 20-bit press/temp packing (datasheet §5.4.6):
             //   count = round(value), saturated to the 20-bit unsigned range
@@ -243,6 +241,7 @@ enum CmdPhase {
 /// The generic interpreter. Owns the spec, a register lookup, the live input
 /// values, and the small per-transaction state machine for whichever bus the
 /// spec declares.
+#[allow(clippy::struct_excessive_bools)] // independent protocol flags, not a state enum
 pub struct RegisterMapSensor {
     name: String,
     bus: Bus,
@@ -377,6 +376,12 @@ impl RegisterMapSensor {
     /// [`Self::from_toml`]. Public callers get the fallible, validating
     /// constructor; a malformed community model pack must be an error, not a
     /// process abort.
+    // One linear build of the interpreter; the POR default is masked to its register width.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     pub(crate) fn from_spec(spec: SensorSpec) -> Self {
         let mut s = spec.sensor;
 
@@ -397,16 +402,16 @@ impl RegisterMapSensor {
         for r in register_specs {
             let program = r.expr.as_deref().and_then(|e| build_operator_tree(e).ok());
             let key = s.register_key(r.addr);
-            if registers.contains_key(&key) {
-                panic!(
-                    "RegisterMapSensor::from_spec: register addr 0x{:02x} collides with an \
-                     existing register at key 0x{:02x} (post-mask). Inserting it would silently \
-                     overwrite the other register. This indicates an unvalidated spec that \
-                     bypassed dedup checking. Always construct via RegisterMapSensor::from_toml \
-                     (which runs SensorSpec::validate).",
-                    r.addr, key,
-                );
-            }
+            assert!(
+                !registers.contains_key(&key),
+                "RegisterMapSensor::from_spec: register addr 0x{:02x} collides with an \
+                 existing register at key 0x{:02x} (post-mask). Inserting it would silently \
+                 overwrite the other register. This indicates an unvalidated spec that \
+                 bypassed dedup checking. Always construct via RegisterMapSensor::from_toml \
+                 (which runs SensorSpec::validate).",
+                r.addr,
+                key,
+            );
             addr_order.push(key);
             registers.insert(key, CompiledRegister { spec: r, program });
         }
@@ -572,7 +577,10 @@ impl RegisterMapSensor {
         let reg = self.registers.get(&addr)?;
         let program = reg.program.as_ref()?;
         let value = eval_number(program, &self.inputs)?;
-        Some(value * reg.spec.scale.unwrap_or(1.0) + reg.spec.offset.unwrap_or(0.0))
+        Some(value.mul_add(
+            reg.spec.scale.unwrap_or(1.0),
+            reg.spec.offset.unwrap_or(0.0),
+        ))
     }
 
     // ── Write side ─────────────────────────────────────────────────
@@ -759,7 +767,7 @@ impl RegisterMapSensor {
                 let v = eval_number(p, &vars).unwrap_or_else(|| {
                     panic!("RegisterMapSensor: read_frame byte {i} failed to evaluate (spec bug)")
                 });
-                out.push(v.round().clamp(0.0, 255.0) as u8);
+                out.extend(encode(Encoding::U8, v));
             }
         }
         out
@@ -838,6 +846,7 @@ impl I2cSlave for RegisterMapSensor {
         self.i2c_address
     }
 
+    #[allow(clippy::cast_possible_truncation)] // physical temperatures in m°C fit i32 (as saturates)
     fn temperature_mc(&self) -> Option<i32> {
         self.modeled_temperature_c()
             .map(|c| (c * 1000.0).round() as i32)
@@ -985,6 +994,7 @@ impl I2cSlave for RegisterMapSensor {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("pointer".into(), f64::from(self.pointer));
@@ -1137,7 +1147,7 @@ pub(crate) mod tests {
 
     const LM75_SPEC: &str = include_str!("../../../hauksbee-server/assets/sensor-specs/lm75.toml");
 
-    pub(crate) const SPI_IMU_SPEC: &str = r#"
+    pub const SPI_IMU_SPEC: &str = r#"
 [sensor]
 name = "MINIMU"
 bus = "spi"
@@ -1240,8 +1250,8 @@ addr_mask = 0x7f
                 Lm75::new(0x48, t).temperature_mc()
             );
             assert_eq!(
-                I2cSlave::temperature_mc(&decl),
-                Some((t * 1000.0).round() as i32)
+                I2cSlave::temperature_mc(&decl).map(f64::from),
+                Some((t * 1000.0).round())
             );
             let mut decl = i2c_bus(decl);
             assert_eq!(
@@ -1399,23 +1409,23 @@ addr_mask = 0x7f
 
         let cal1 = i2c_read_burst(&mut bus, addr, 0x88, 26);
         let cal2 = i2c_read_burst(&mut bus, addr, 0xE1, 7);
-        let le16 = |b: &[u8], i: usize| i32::from(i16::from_le_bytes([b[i], b[i + 1]]));
-        let leu16 = |b: &[u8], i: usize| i32::from(u16::from_le_bytes([b[i], b[i + 1]]));
-        let (t1, t2, t3) = (leu16(&cal1, 0), le16(&cal1, 2), le16(&cal1, 4));
+        let i16_at = |b: &[u8], i: usize| i32::from(i16::from_le_bytes([b[i], b[i + 1]]));
+        let u16_at = |b: &[u8], i: usize| i32::from(u16::from_le_bytes([b[i], b[i + 1]]));
+        let (t1, t2, t3) = (u16_at(&cal1, 0), i16_at(&cal1, 2), i16_at(&cal1, 4));
         let p = [
-            leu16(&cal1, 6),
-            le16(&cal1, 8),
-            le16(&cal1, 10),
-            le16(&cal1, 12),
-            le16(&cal1, 14),
-            le16(&cal1, 16),
-            le16(&cal1, 18),
-            le16(&cal1, 20),
-            le16(&cal1, 22),
+            u16_at(&cal1, 6),
+            i16_at(&cal1, 8),
+            i16_at(&cal1, 10),
+            i16_at(&cal1, 12),
+            i16_at(&cal1, 14),
+            i16_at(&cal1, 16),
+            i16_at(&cal1, 18),
+            i16_at(&cal1, 20),
+            i16_at(&cal1, 22),
         ];
         let h = [
             i32::from(cal1[25]),
-            le16(&cal2, 0),
+            i16_at(&cal2, 0),
             i32::from(cal2[2]),
             (i32::from(cal2[3].cast_signed()) << 4) | i32::from(cal2[4] & 0x0F),
             (i32::from(cal2[5].cast_signed()) << 4) | i32::from(cal2[4] >> 4),
@@ -1530,7 +1540,7 @@ style = "i2c_pointer"
 
     /// A command-framed 2-channel DAC: match, greedy 2-byte groups, auto
     /// channel increment with START reset, field extraction and output laws.
-    pub(crate) const MINI_DAC_SPEC: &str = r#"
+    pub const MINI_DAC_SPEC: &str = r#"
 [sensor]
 name = "MINIDAC"
 bus = "i2c"
@@ -1662,7 +1672,11 @@ style = "i2c_pointer"
         i2c_write(&mut bus, 0x60, &[0x08, 0x00]);
 
         let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
-        assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
+        assert_eq!(
+            src_volts(&circuit).to_bits(),
+            0.0f64.to_bits(),
+            "not driven before flush"
+        );
         let volts = vec![0.0; 4];
         bus.flush_stops(&mut TickCtx::new(&mut circuit, &volts, 0.0, 1e-3));
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
@@ -1746,6 +1760,7 @@ style = "i2c_pointer"
         bus
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // codes are 12-bit
     fn dac_code(bus: &I2cBus, addr: u8, channel: usize) -> u16 {
         bus.slave::<RegisterMapSensor>(addr)
             .unwrap()
@@ -1785,7 +1800,10 @@ style = "i2c_pointer"
             i2c_write(&mut bus, 0x60, &fast_write_pair(code));
             assert_eq!(dac_code(&bus, 0x60, 0), code);
             assert!(
-                (dac_vout(&bus, 0x60, 0) - f64::from(code) * 0.001).abs() < 1e-9,
+                f64::from(code)
+                    .mul_add(-0.001, dac_vout(&bus, 0x60, 0))
+                    .abs()
+                    < 1e-9,
                 "code {code}"
             );
         }

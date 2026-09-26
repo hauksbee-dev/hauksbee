@@ -89,33 +89,18 @@ impl Pushbutton {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)] // the chatter phase is a small whole number
     fn resistance_now(&self, t: f64) -> f64 {
-        match self.transition_start {
-            None => {
-                if self.pressed {
-                    self.ron
-                } else {
-                    self.roff
-                }
-            }
-            Some(start) => {
-                let elapsed = t - start;
-                if elapsed >= self.bounce_s {
-                    if self.target_pressed {
-                        self.ron
-                    } else {
-                        self.roff
-                    }
-                } else {
-                    // ~5 chatter cycles across the bounce window.
-                    let phase = (elapsed / self.bounce_s * 10.0).floor() as i64;
-                    if phase % 2 == 0 {
-                        self.ron
-                    } else {
-                        self.roff
-                    }
-                }
-            }
+        let closed = match self.transition_start {
+            None => self.pressed,
+            Some(start) if t - start >= self.bounce_s => self.target_pressed,
+            // ~5 chatter cycles across the bounce window.
+            Some(start) => ((t - start) / self.bounce_s * 10.0).floor() as i64 % 2 == 0,
+        };
+        if closed {
+            self.ron
+        } else {
+            self.roff
         }
     }
 }
@@ -375,6 +360,7 @@ impl Peripheral for Encoder {
         self.drive_phase(ctx.circuit);
     }
 
+    #[allow(clippy::cast_possible_truncation)] // detent targets are small whole numbers; as saturates
     fn set_value(&mut self, value: f64) {
         // value is the target absolute position in detents. Step toward it one
         // quadrature edge per detent so A/B form a valid quadrature sequence.
@@ -390,6 +376,7 @@ impl Peripheral for Encoder {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)] // detent positions are small whole numbers
     fn state(&self) -> HashMap<String, f64> {
         let (a, b) = GRAY[self.phase as usize];
         let mut m = HashMap::new();
@@ -481,13 +468,14 @@ impl StimulusKind {
 }
 
 /// Deterministic uniform in [-1, 1] from a counter (splitmix64).
+#[allow(clippy::cast_precision_loss)] // rounding 64 random bits to f64 is the intent
 fn noise_sample(seed: u64, counter: u64) -> f64 {
     let mut x = seed ^ counter.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^= x >> 31;
     // Map to [-1, 1).
-    (x as f64 / u64::MAX as f64) * 2.0 - 1.0
+    (x as f64 / u64::MAX as f64).mul_add(2.0, -1.0)
 }
 
 impl Peripheral for Stimulus {

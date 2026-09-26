@@ -158,6 +158,7 @@ impl I2cBus {
     /// Dispatch one I2C event to the matching slave. Returns the reply byte for
     /// a Read event (`None` otherwise). This is the body of the `on_i2c`
     /// closure the engine installs.
+    #[allow(clippy::needless_pass_by_value)] // public API: callers in other crates pass owned events
     pub fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
         if !self.powered {
             if matches!(ev, I2cEvent::Start { .. } | I2cEvent::Stop { .. }) {
@@ -294,6 +295,7 @@ impl Peripheral for I2cBus {
         "i2c_bus"
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("slaves".into(), self.slaves.len() as f64);
@@ -461,6 +463,7 @@ impl I2cSlave for Eeprom24c {
         std::mem::take(&mut self.activity)
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("size".into(), self.mem.len() as f64);
@@ -543,20 +546,9 @@ impl Lm75 {
         self.temp_c
     }
 
-    /// Encode a Celsius temperature into the LM75A 11-bit register value
-    /// (0.125 °C/LSB, left-justified, big-endian), returning (msb, lsb).
-    fn temp_bytes(&self) -> (u8, u8) {
-        let counts = (self.temp_c / 0.125).round() as i32; // 11-bit signed
-        let raw = ((counts << 5) & 0xFFFF) as u16; // left-justify into 16 bits
-        ((raw >> 8) as u8, (raw & 0xFF) as u8)
-    }
-
     fn reg_bytes(&self) -> Vec<u8> {
         match self.pointer {
-            0x00 => {
-                let (m, l) = self.temp_bytes();
-                vec![m, l]
-            }
+            0x00 => temp_to_be(self.temp_c),
             0x01 => vec![self.conf],
             0x02 => temp_to_be(self.thyst_c),
             0x03 => temp_to_be(self.tos_c),
@@ -565,9 +557,12 @@ impl Lm75 {
     }
 }
 
-fn temp_to_be(t: f64) -> Vec<u8> {
-    let counts = (t / 0.125).round() as i32;
-    let raw = ((counts << 5) & 0xFFFF) as u16;
+/// Encode a Celsius temperature into the LM75A 11-bit register value
+/// (0.125 °C/LSB, left-justified, big-endian), returning `[msb, lsb]`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // masked to 16 bits
+pub(crate) fn temp_to_be(t: f64) -> Vec<u8> {
+    let counts = (t / 0.125).round() as i32; // 11-bit signed
+    let raw = ((counts << 5) & 0xFFFF) as u16; // left-justify into 16 bits
     vec![(raw >> 8) as u8, (raw & 0xFF) as u8]
 }
 
@@ -576,6 +571,7 @@ impl I2cSlave for Lm75 {
         self.addr
     }
 
+    #[allow(clippy::cast_possible_truncation)] // physical temperatures in m°C fit i32 (as saturates)
     fn temperature_mc(&self) -> Option<i32> {
         Some((self.temp_c * 1000.0).round() as i32)
     }
@@ -608,6 +604,7 @@ impl I2cSlave for Lm75 {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)] // a register image is at most a few bytes
     fn on_read(&mut self) -> u8 {
         let bytes = self.reg_bytes();
         let b = bytes.get(self.read_byte as usize).copied().unwrap_or(0);
@@ -659,8 +656,8 @@ mod tests {
     #[test]
     fn lm75_negative_temperature() {
         let s = Lm75::new(0x48, -10.0);
-        let (m, l) = s.temp_bytes();
-        let t = be_to_temp(m, l);
+        let b = temp_to_be(s.temp_c);
+        let t = be_to_temp(b[0], b[1]);
         assert!((t + 10.0).abs() < 0.13, "decoded {t} not ~-10");
     }
 
@@ -689,7 +686,7 @@ mod tests {
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x7f], 0xa5);
         assert_eq!(ee.contents()[0x78], 0x5a, "8-byte page wraps at 0x7f");
-        assert_eq!(ee.state()["word_address_bytes"], 1.0);
+        assert_eq!(ee.state()["word_address_bytes"].to_bits(), 1.0f64.to_bits());
     }
 
     #[test]

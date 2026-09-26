@@ -635,15 +635,14 @@ impl SpiSlave for Spi25Eeprom {
                 if self.addr_bytes < 2 {
                     self.addr = (self.addr << 8) | u16::from(mosi);
                     self.addr_bytes += 1;
-                    0xFF
                 } else {
                     if self.wel {
                         let i = self.addr as usize % self.mem.len();
                         self.mem[i] = mosi;
                     }
                     self.addr = self.addr.wrapping_add(1);
-                    0xFF
                 }
+                0xFF
             }
         }
     }
@@ -660,6 +659,7 @@ impl SpiSlave for Spi25Eeprom {
         self.state != SpiCmd::Idle
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("size".into(), self.mem.len() as f64);
@@ -815,7 +815,6 @@ impl SpiSlave for SpiNorFlash {
                         self.activity.write_units = self.activity.write_units.saturating_add(1);
                     }
                     0xb9 => self.powered_down = true,
-                    0xab => {}
                     _ => {}
                 }
                 0xff
@@ -924,6 +923,7 @@ impl SpiSlave for SpiNorFlash {
         self.spi_mode
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         HashMap::from([
             ("size".into(), self.mem.len() as f64),
@@ -992,6 +992,7 @@ impl Mcp3008 {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // frac is clamped to [0, 1], so the code fits u16
     fn counts(&self, ch: usize) -> u16 {
         // MCP3008 datasheet (DS21295) transfer function: code = 1024 * Vin/Vref,
         // i.e. LSB = Vref/2^n = Vref/1024, with the code saturating at 2^n-1 =
