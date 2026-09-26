@@ -45,6 +45,7 @@ const HALF_PERIOD_MS: f64 = 100.0;
 const EDGES: usize = 11;
 
 #[test]
+#[allow(clippy::cast_precision_loss)] // cycle stamps and clock rates stay far below 2^53
 fn esp32_credited_time_tracks_the_guests_delays() {
     let _guard = crate::support::qemu_lock();
     let Some(mut mcu) = crate::support::esp32_blinky_or_skip() else {

@@ -100,6 +100,7 @@ fn build_adc_copy_elf() -> Vec<u8> {
     let e_entry: u32 = LOAD_ADDR + 0x08 + 1;
     let phoff: u32 = 52;
     let payload_off: u32 = 52 + 32;
+    let payload_len = u32::try_from(payload.len()).expect("tiny payload");
     let mut elf: Vec<u8> = Vec::new();
     elf.extend_from_slice(&[0x7F, b'E', b'L', b'F', 1, 1, 1, 0]); // ELF32, LE
     elf.extend_from_slice(&[0; 8]); // EI_PAD
@@ -122,8 +123,8 @@ fn build_adc_copy_elf() -> Vec<u8> {
     elf.extend_from_slice(&payload_off.to_le_bytes()); // p_offset
     elf.extend_from_slice(&LOAD_ADDR.to_le_bytes()); // p_vaddr
     elf.extend_from_slice(&LOAD_ADDR.to_le_bytes()); // p_paddr
-    elf.extend_from_slice(&(payload.len() as u32).to_le_bytes()); // p_filesz
-    elf.extend_from_slice(&(payload.len() as u32).to_le_bytes()); // p_memsz
+    elf.extend_from_slice(&payload_len.to_le_bytes()); // p_filesz
+    elf.extend_from_slice(&payload_len.to_le_bytes()); // p_memsz
     elf.extend_from_slice(&5u32.to_le_bytes()); // p_flags = R+X
     elf.extend_from_slice(&4u32.to_le_bytes()); // p_align
     assert_eq!(elf.len(), 84);
@@ -150,6 +151,7 @@ fn word_of(levels: &HashMap<(char, u8), bool>, port: char) -> u32 {
 }
 
 /// Expected count for `volts` against the map below (3.3 V, 12-bit).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped to 0..=4095
 fn expected_count(volts: f64) -> u32 {
     ((volts / 3.3).clamp(0.0, 1.0) * 4095.0).round() as u32
 }

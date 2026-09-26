@@ -78,7 +78,7 @@ fn unmodified_esp_idf_gpio_reaches_the_backend_without_a_mailbox() {
         mcu.run_micros(20_000).expect("advance patched QEMU");
     }
 
-    let got = edges.lock().unwrap();
+    let got = edges.lock().unwrap().clone();
     assert!(
         got.iter()
             .any(|(pin, high)| pin.port == '0' && pin.bit == 2 && *high),

@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex};
 
 /// Poll interval. 100x finer than the firmware's silicon half-period; see the
 /// aliasing rules in the module docs before changing it.
-const CHUNK_US: u64 = 1_000;
+const CHUNK_US: u32 = 1_000;
 
 /// The `SysTick` firmwares' real-silicon half-period, from `tick.c`'s
 /// `HALF_PERIOD_MS`.
@@ -67,7 +67,7 @@ const EDGES: u32 = 5;
 /// Chunk budget. 1.8x the correct number of chunks, so a sim as slow as 0.55x
 /// still produces a measured ratio to report rather than a bare timeout, while
 /// a sim stuck forever gives up in bounded time.
-const MAX_CHUNKS: u64 = 900;
+const MAX_CHUNKS: u32 = 900;
 
 /// Accepted deviation from the part's real rate.
 const TOLERANCE: f64 = 0.05;
@@ -94,8 +94,8 @@ fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId, half_period_ms: f64) -> Op
 
     // Chunk index of every edge seen, so the whole edge train is available in
     // the failure message rather than only the deadline.
-    let edges: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
-    let chunk = Arc::new(Mutex::new(0u64));
+    let edges: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let chunk = Arc::new(Mutex::new(0u32));
     let sink = edges.clone();
     let now = chunk.clone();
     mcu.on_pin_change(Box::new(move |p, _high, _cycle| {
@@ -105,7 +105,7 @@ fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId, half_period_ms: f64) -> Op
     }));
 
     for i in 1..=MAX_CHUNKS {
-        mcu.run_micros(CHUNK_US).ok()?;
+        mcu.run_micros(CHUNK_US.into()).ok()?;
         *chunk.lock().unwrap() = i;
         if edges.lock().unwrap().len() >= EDGES as usize {
             break;
@@ -122,7 +122,7 @@ fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId, half_period_ms: f64) -> Op
         );
         return Some(0.0);
     }
-    let sim_ms = seen[EDGES as usize - 1] as f64 * CHUNK_US as f64 / 1000.0;
+    let sim_ms = f64::from(seen[EDGES as usize - 1]) * f64::from(CHUNK_US) / 1000.0;
     let silicon_ms = f64::from(EDGES) * half_period_ms;
     println!("clock_truth: edges at chunks {seen:?}; {EDGES}th edge at {sim_ms} ms sim, {silicon_ms} ms on silicon");
     Some(silicon_ms / sim_ms)

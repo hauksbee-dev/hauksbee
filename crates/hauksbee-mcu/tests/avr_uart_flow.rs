@@ -104,7 +104,7 @@ fn record_longer_than_rx_fifo_is_delivered_completely() {
 
     // One 256-byte record at a single instant, exactly what a host page write
     // delivers through the websocket.
-    let record: Vec<u8> = (0u16..256).map(|b| b as u8).collect();
+    let record: Vec<u8> = (0..=u8::MAX).collect();
     mcu.uart_write(&record);
 
     // 256 bytes at 115200 baud is ~22 ms in and ~22 ms back out; give it
@@ -112,7 +112,8 @@ fn record_longer_than_rx_fifo_is_delivered_completely() {
     // exercises the refill path (fifo drains, XON, queue refills) many times.
     run_ms_chunked(&mut mcu, 200);
 
-    let got = out.lock().unwrap();
+    assert_eq!(mcu.uart_rx_overflow(), 0, "nothing may be dropped");
+    let got = out.lock().unwrap().clone();
     assert_eq!(
         &got[1..],
         record.as_slice(),
@@ -121,7 +122,6 @@ fn record_longer_than_rx_fifo_is_delivered_completely() {
         got.len() - 1,
         record.len()
     );
-    assert_eq!(mcu.uart_rx_overflow(), 0, "nothing may be dropped");
 }
 
 /// Bytes sent before the firmware has enabled its receiver must be held, not

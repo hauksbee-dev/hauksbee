@@ -80,9 +80,8 @@ fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
         I2cEvent::Read { addr } => {
             log.lock().unwrap().push(format!("read {addr:#04X}"));
             let mut n = counter.lock().unwrap();
-            let byte = if (*n).is_multiple_of(2) { 0xAB } else { 0xCD };
-            *n += 1;
-            Some(byte)
+            *n += 1; // the 1st, 3rd, ... read serves 0xAB
+            Some(if n.is_multiple_of(2) { 0xCD } else { 0xAB })
         }
         I2cEvent::Write { addr, data } => {
             log.lock()

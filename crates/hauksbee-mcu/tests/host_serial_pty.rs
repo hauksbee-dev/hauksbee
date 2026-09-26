@@ -54,6 +54,18 @@ fn wait_for_event(ep: &mut HostSerial, want: PeerEvent) -> bool {
     false
 }
 
+/// Like [`wait_for_event`] for an attach, but WITHOUT reading first, so bytes
+/// the peer already wrote are still pending when the attach pass runs.
+fn poll_for_attach(ep: &mut HostSerial) -> bool {
+    for _ in 0..400 {
+        if ep.poll_peer().contains(&PeerEvent::Attached) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
 /// Read from the endpoint until `n` bytes have arrived or the budget runs out.
 fn drain_from_peer(ep: &mut HostSerial, n: usize) -> Vec<u8> {
     let mut got = Vec::new();
@@ -296,7 +308,7 @@ fn dropping_the_endpoint_hangs_up_the_peer() {
         match peer.read(&mut buf) {
             Ok(0) => break,
             Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
-            Ok(_) => continue,
+            Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 assert!(
                     std::time::Instant::now() < deadline,
@@ -325,15 +337,7 @@ fn a_byte_written_right_after_open_survives_the_attach_pass() {
     write_all_from_peer(&mut peer, &[0x05]);
     std::thread::sleep(std::time::Duration::from_millis(20));
 
-    let mut saw_attach = false;
-    for _ in 0..400 {
-        if ep.poll_peer().contains(&PeerEvent::Attached) {
-            saw_attach = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(saw_attach, "the open must be reported");
+    assert!(poll_for_attach(&mut ep), "the open must be reported");
     let got = drain_from_peer(&mut ep, 1);
     assert_eq!(
         got,
@@ -356,14 +360,6 @@ fn a_reattaching_tool_is_served_immediately() {
     let mut second = attach(&ep);
     write_all_from_peer(&mut second, b"B");
     std::thread::sleep(std::time::Duration::from_millis(20));
-    let mut saw_attach = false;
-    for _ in 0..400 {
-        if ep.poll_peer().contains(&PeerEvent::Attached) {
-            saw_attach = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(saw_attach, "the reattach must be reported");
+    assert!(poll_for_attach(&mut ep), "the reattach must be reported");
     assert_eq!(drain_from_peer(&mut ep, 1), b"B");
 }

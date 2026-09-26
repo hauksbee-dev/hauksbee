@@ -45,7 +45,8 @@ fn scanner_mcu() -> (AvrMcu, Arc<Mutex<Vec<u8>>>) {
     let fw = scan_firmware();
     assert!(
         fw.exists(),
-        "build the fixture first: make -C testdata/firmware/twi_scan ({fw:?})"
+        "build the fixture first: make -C testdata/firmware/twi_scan ({})",
+        fw.display()
     );
     let mut mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
     mcu.load_firmware(&fw).expect("load scan.hex");

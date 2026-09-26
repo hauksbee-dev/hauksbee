@@ -47,10 +47,11 @@ pub fn capture_uart(mcu: &mut impl hauksbee_mcu::Mcu) -> std::sync::Arc<std::syn
 #[cfg(feature = "avr")]
 pub fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
     use std::fmt::Write as _;
-    let mut sum = data.len() as u8;
-    sum = sum
-        .wrapping_add((addr >> 8) as u8)
-        .wrapping_add(addr as u8)
+    let len = u8::try_from(data.len()).expect("an Intel-HEX record holds at most 255 bytes");
+    let [addr_hi, addr_lo] = addr.to_be_bytes();
+    let mut sum = len
+        .wrapping_add(addr_hi)
+        .wrapping_add(addr_lo)
         .wrapping_add(record_type);
     let mut line = format!(":{:02X}{:04X}{:02X}", data.len(), addr, record_type);
     for &b in data {
@@ -90,8 +91,8 @@ fn hex_dir(tag: &str) -> PathBuf {
 pub fn write_program_hex(tag: &str, name: &str, program: &[u8]) -> PathBuf {
     let path = hex_dir(tag).join(name);
     let mut text = String::new();
-    for (i, chunk) in program.chunks(16).enumerate() {
-        text.push_str(&ihex_record(0x00, (i * 16) as u16, chunk));
+    for (addr, chunk) in (0u16..).step_by(16).zip(program.chunks(16)) {
+        text.push_str(&ihex_record(0x00, addr, chunk));
         text.push('\n');
     }
     text.push_str(":00000001FF\n"); // EOF record
