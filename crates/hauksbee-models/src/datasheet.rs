@@ -108,10 +108,13 @@ struct SelectedPage {
 /// codex gets a named permission profile instead ([`codex_confinement`]):
 /// shell commands may read this directory, the OS/runtime paths codex calls
 /// `:minimal`, the package prefixes in [`CONFINED_READ_ROOTS`] and the checker
-/// executable, and nothing under home, `/tmp` or `$TMPDIR`. Claude Code gets the
-/// same boundary from its Bash sandbox plus `--restricted` file tools
-/// ([`claude_confinement`]). agy and codex's read-only / danger-full-access
-/// modes are NOT read-confined by hauksbee. The CLI process itself still reads
+/// executable, and nothing under home, `/tmp` or `$TMPDIR` (`read-only` mode gets
+/// the same profile with the workspace read-only). Claude Code gets
+/// `--restricted` file tools and a Bash sandbox denying home, user, volume and
+/// temp roots ([`claude_confinement`]); its shell can still read other system
+/// paths. agy gets only its own `--sandbox`, which hauksbee cannot verify; codex's
+/// `danger-full-access` mode and custom commands are NOT confined by hauksbee.
+/// The CLI process itself still reads
 /// its own sign-in, and whatever the agent reads goes to the vendor.
 ///
 /// The rest of the contract still matters: the run happens only when the user
@@ -863,13 +866,16 @@ pub fn validate_api_key_env_name(name: &str) -> Result<()> {
 pub const CONSENT_NOTICE: &str =
     "This sends the datasheet to an LLM backend: whichever is configured for extraction \
      (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend \
-     show` or the Settings page says which). The API gets the extracted text. An agent CLI \
-     runs a model with a shell on a scratch copy of the PDF, its text and page images, and \
-     whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude \
-     Code out of your home and temporary directories and off the web, but Antigravity, or \
-     Codex in another sandbox mode, can read anything your account can. Nothing is sent until \
-     you ask for it. The result is a draft for you to check, not a measurement: a model it \
-     writes carries tier \"datasheet-derived\" and the sha256 of the PDF it read.";
+     show` or the Settings page says which, and what confines it). The API gets the extracted \
+     text. An agent CLI runs a model with a shell on a scratch copy of the PDF, its text and \
+     page images, and whatever it reads can reach that vendor. hauksbee confines Codex to that \
+     copy plus system paths, offline (not in danger-full-access mode; in approve-for-me its \
+     reviewer may allow more). Claude Code's file tools stay in the copy; its shell cannot read \
+     home, user, volume or temp directories but can read other system files. Antigravity only \
+     gets its own sandbox, which hauksbee cannot verify, and hauksbee cannot confine a custom \
+     command: either may read anything your account can. Nothing is sent until you ask for it. \
+     The result is a draft for you to check, not a measurement: a model it writes carries \
+     tier \"datasheet-derived\" and the sha256 of the PDF it read.";
 
 /// Ask a yes/no question on the terminal, the prompt going to `out`; only `y`
 /// or `yes` is a yes.
@@ -2848,12 +2854,13 @@ const CONFINED_READ_ROOTS: &[&str] = &["/opt/homebrew", "/usr/local"];
 
 /// codex `-c` overrides selecting a `hauksbee` permission profile: shell
 /// commands read codex's `:minimal` OS/runtime set, [`CONFINED_READ_ROOTS`] and
-/// the checker, write the workspace, and read nothing else (home, `/tmp` and
-/// `$TMPDIR` included). Checked against codex-cli 0.156.1 with
-/// `codex sandbox -P hauksbee`: seatbelt refuses `ls ~`, `~/.codex/skills`,
-/// `/tmp` and a `$TMPDIR` sibling while the workspace and checker work. An
+/// the checker, read (and when `write`, write) the workspace, and read nothing
+/// else (home, `/Users`, `/Volumes`, `/Library`, `/tmp` and `$TMPDIR` included).
+/// Checked against codex-cli 0.156.1 with `codex sandbox -P hauksbee`: seatbelt
+/// refuses `ls ~`, `~/.codex/skills`, `/tmp` and a `$TMPDIR` sibling while the
+/// workspace and checker work, and a `"read"` workspace refuses writes. An
 /// explicit `--sandbox` flag overrides `default_permissions`, so none is passed.
-fn codex_confinement(ws: &Workspace) -> [String; 4] {
+fn codex_confinement(ws: &Workspace, write: bool) -> [String; 4] {
     let reads = CONFINED_READ_ROOTS
         .iter()
         .map(|root| (*root).to_string())
@@ -2861,17 +2868,19 @@ fn codex_confinement(ws: &Workspace) -> [String; 4] {
         .map(|path| format!("{}=\"read\",", toml::Value::String(path)))
         .collect::<Vec<_>>()
         .concat();
+    let access = if write { "write" } else { "read" };
     let profile = format!(
         "permissions={{hauksbee={{filesystem={{\":minimal\"=\"read\",\":slash_tmp\"=\"none\",\
-         \":tmpdir\"=\"none\",{reads}\":workspace_roots\"={{\".\"=\"write\"}}}}}}}}"
+         \":tmpdir\"=\"none\",{reads}\":workspace_roots\"={{\".\"=\"{access}\"}}}}}}}}"
     );
     ["-c", "default_permissions=\"hauksbee\"", "-c", &profile].map(String::from)
 }
 
 /// `--settings` for Claude Code's Bash sandbox, strict (no unsandboxed retry,
-/// no silent start without it): reads denied under home and the temp roots
-/// except the workspace and the checker. `--restricted` already confines
-/// Read/Edit/Write to the working directory.
+/// no silent start without it): reads denied under home, every user's home,
+/// mounted volumes and the temp roots except the workspace and the checker.
+/// Other system paths (`/etc`, `/Library`, `/Applications`) stay readable.
+/// `--restricted` already confines Read/Edit/Write to the working directory.
 fn claude_confinement(ws: &Workspace) -> String {
     let temp_root = ws.path().parent().unwrap_or_else(|| ws.path());
     let allow: Vec<String> = std::iter::once(ws.path())
@@ -2881,7 +2890,8 @@ fn claude_confinement(ws: &Workspace) -> String {
     serde_json::json!({"sandbox": {
         "enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
         "filesystem": {
-            "denyRead": ["~/", "/tmp", "/private/tmp", temp_root.display().to_string()],
+            "denyRead": ["~/", "/Users", "/home", "/Volumes", "/mnt", "/media", "/tmp",
+                "/private/tmp", "/private/var/folders", temp_root.display().to_string()],
             "allowRead": allow,
         },
     }})
@@ -2904,9 +2914,9 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 /// always named rather than inherited: a CLI's own default varies by plan and
 /// config and would silently decide how good the extraction is.
 ///
-///   * codex: in `workspace-write` and `approve-for-me` modes the read-confining
-///     [`codex_confinement`] profile (plus `--approve-for-me` for the latter);
-///     any other mode is `--sandbox <mode>`, reads unconfined. Network is off
+///   * codex: in every mode but `danger-full-access` (`--sandbox`, unconfined)
+///     the read-confining [`codex_confinement`] profile, its workspace read-only
+///     in `read-only` mode, plus `--approve-for-me` in that mode. Network is off
 ///     unless a mode or approval relaxes it. `skills.include_instructions=false`
 ///     keeps `$CODEX_HOME/skills` out of the model's context (the `skill_search`
 ///     feature alone does not), `shell_snapshot` is off so the operator's shell
@@ -2925,11 +2935,20 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 ///     subagents and web access; [`claude_confinement`] sandboxes Bash reads;
 ///     background tasks, which keep `-p` alive, are off. Never
 ///     `--bare`: it skips the keychain, losing a subscription sign-in.
-///   * agy: `--mode <mode> --add-dir <sandbox>`, and the pointer as the
-///     `--print=` value because agy reads nothing from stdin. Not read-confined.
+///   * agy: `--mode <mode> --sandbox ... --add-dir <sandbox>`, and the pointer as
+///     the `--print=` value because agy reads nothing from stdin. `--sandbox` is
+///     agy's own terminal sandbox (workspace-only files, no network, per its
+///     docs); hauksbee cannot verify it or confine agy's file tools.
 ///
 /// Every CLI gets a PATH from [`scrub_path`] and the workspace as its cwd.
-fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
+/// This is the one place an agent CLI is launched (`model-extract`, the smoke
+/// test and `resource-extract` all come here), so confinement cannot drift.
+///
+/// # Errors
+///
+/// Fails for the API backend, when the executable is missing, and when the run
+/// fails or times out.
+pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
     let backend = resolved.backend;
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
@@ -2948,9 +2967,10 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
             let effort = format!("model_reasoning_effort=\"{}\"", a.effort);
             cmd.args(["--model", &a.model, "-c", &effort]);
             match a.permission_mode.as_str() {
-                "workspace-write" => cmd.args(codex_confinement(ws)),
-                "approve-for-me" => cmd.arg("--approve-for-me").args(codex_confinement(ws)),
-                mode => cmd.args(["--sandbox", mode]),
+                "danger-full-access" => cmd.args(["--sandbox", "danger-full-access"]),
+                mode => cmd
+                    .args((mode == "approve-for-me").then_some("--approve-for-me"))
+                    .args(codex_confinement(ws, mode != "read-only")),
             };
             cmd.args(["--skip-git-repo-check", "--cd"])
                 .arg(ws.path())
@@ -2992,6 +3012,7 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
         }
         Backend::Agy => {
             cmd.args(["--output-format", "text", "--mode", &a.permission_mode])
+                .arg("--sandbox")
                 .args(["--model", &a.model, "--effort", &a.effort, "--add-dir"])
                 .arg(ws.path())
                 .arg(format!("--print={pointer}"));
@@ -4225,7 +4246,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let sandbox: serde_json::Value = serde_json::from_str(&settings).unwrap();
         let fs = &sandbox["sandbox"]["filesystem"];
         assert_eq!(sandbox["sandbox"]["allowUnsandboxedCommands"], false);
-        assert!(fs["denyRead"].as_array().unwrap().contains(&"~/".into()));
+        assert!(settings.contains(r#""denyRead":["~/","/Users","/home","/Volumes","#));
         let allowed = [ws.path(), ws.checker.as_deref().unwrap()].map(|p| p.display().to_string());
         assert_eq!(fs["allowRead"], serde_json::json!(allowed));
         for mode in ["acceptEdits", "auto", "dontAsk", "plan"] {
@@ -4269,21 +4290,21 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         resolved.codex.model = "configured-model".into();
         resolved.codex.effort = "xhigh".into();
         resolved.codex.extra_args = vec!["--configured-extra".into()];
-        let confine = codex_confinement(&ws).to_vec();
-        let profile: toml::Table = toml::from_str(&confine[3]).expect("valid codex -c value");
-        let fs = &profile["permissions"]["hauksbee"]["filesystem"];
-        let checker = dir.path().join("hauksbee").display().to_string();
-        assert_eq!(
-            [&fs[&checker], &fs[":tmpdir"]].map(|v| v.as_str()),
-            [Some("read"), Some("none")]
-        );
-        assert_eq!(fs[":workspace_roots"]["."].as_str(), Some("write"));
-        let read_only = vec!["--sandbox".to_string(), "read-only".into()];
+        let [confine, read_only] = [true, false].map(|w| codex_confinement(&ws, w).to_vec());
+        for (args, access) in [(&confine, "write"), (&read_only, "read")] {
+            let profile: toml::Table = toml::from_str(&args[3]).expect("valid codex -c value");
+            let fs = &profile["permissions"]["hauksbee"]["filesystem"];
+            let checker = dir.path().join("hauksbee").display().to_string();
+            let got = [&fs[&checker], &fs[":tmpdir"], &fs[":workspace_roots"]["."]];
+            assert_eq!(got.map(|v| v.as_str().unwrap()), ["read", "none", access]);
+        }
         let approve = [vec!["--approve-for-me".into()], confine.clone()].concat();
+        let full = vec!["--sandbox".into(), "danger-full-access".into()];
         let modes = [
             ("read-only", read_only),
             ("workspace-write", confine),
             ("approve-for-me", approve),
+            ("danger-full-access", full),
         ];
         for (mode, permission_args) in modes {
             resolved.codex.permission_mode = mode.into();
@@ -4324,7 +4345,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         resolved.agy.command = command.to_str().unwrap().into();
         let a = &resolved.agy;
         let expected = format!(
-            "--output-format\ntext\n--mode\n{}\n--model\n{}\n--effort\n{}\n--add-dir\n{}\n--print={}",
+            "--output-format\ntext\n--mode\n{}\n--sandbox\n--model\n{}\n--effort\n{}\n--add-dir\n{}\n--print={}",
             a.permission_mode,
             a.model,
             a.effort,

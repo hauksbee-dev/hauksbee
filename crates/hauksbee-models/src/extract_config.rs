@@ -133,7 +133,7 @@ pub const AGENTS: [AgentSpec; 3] = [
         env_prefix: "HAUKSBEE_CODEX",
         model: "gpt-5.6-sol",
         effort: "high",
-        // codex's `--sandbox` level: writes confined to the sandbox, no network.
+        // Every mode but danger-full-access runs under hauksbee's read-confining profile.
         permission_mode: "workspace-write",
         efforts: &["minimal", "low", "medium", "high", "xhigh"],
         permission_modes: &[
@@ -1070,7 +1070,25 @@ impl Resolved {
             .filter(|_| self.backend == Backend::Codex);
         let profile = codex_profile.map(|p| format!("; profile {p}: your codex config applies"));
         let profile = profile.unwrap_or_default();
-        format!("{} ({detail}{routing}{profile})", self.backend.label())
+        let confined = self.confinement(self.backend).map(|c| format!("; {c}"));
+        let (label, confined) = (self.backend.label(), confined.unwrap_or_default());
+        format!("{label} ({detail}{routing}{profile}{confined})")
+    }
+
+    /// What hauksbee confines when `backend` runs, as every consent surface says
+    /// it; `None` for the API, which gets extracted text and runs nothing.
+    #[must_use]
+    pub fn confinement(&self, backend: Backend) -> Option<&'static str> {
+        let mode = self.agent(backend)?.permission_mode.as_str();
+        let custom = self.custom_command(backend).is_some();
+        Some(match (custom, backend, mode) {
+            (true, ..) => "NOT confined: hauksbee cannot confine a custom command",
+            (_, Backend::Codex, "danger-full-access") => "NOT confined (danger-full-access)",
+            (_, Backend::Codex, "approve-for-me") => "confined unless its reviewer approves more",
+            (_, Backend::Codex, _) => "reads confined to the workspace and system paths",
+            (_, Backend::Agy, _) => "NOT confined by hauksbee: agy's own --sandbox is unverified",
+            _ => "file tools in workspace; shell reads system paths, not homes, volumes or temp",
+        })
     }
 }
 
@@ -1308,7 +1326,7 @@ mod tests {
             );
         }
         assert_eq!((r.retries, r.timeout_secs), (2, 600));
-        assert_eq!(r.summary(), "Claude Code (claude-opus-5, high effort)");
+        assert!(r.summary().contains("-opus-5, high effort; file tools"));
         for a in AGENTS {
             assert_eq!(
                 r.agent(a.backend).unwrap().command,

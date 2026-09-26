@@ -15,17 +15,13 @@
 //!
 //! Backend dispatch mirrors `model-extract` (the working pattern):
 //!   - `HAUKSBEE_EXTRACT_MOCK_REPLY=<file>` : offline canned reply (CI / fixture).
-//!   - else `codex exec --sandbox workspace-write --skip-git-repo-check --cd <dir>`
-//!     with stdin closed and a 10-minute poll-and-kill timeout.
+//!   - else codex, launched by `model-extract`'s own confined launcher
+//!     (`hauksbee_models::datasheet::run_agent_once`) on a scratch copy of the PDF.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
-
-const CODEX_TIMEOUT: Duration = Duration::from_secs(600);
+use std::process::Command;
 
 fn main() {
     if let Err(e) = run() {
@@ -74,7 +70,7 @@ fn run() -> Result<(), String> {
         args.pdf.display()
     );
 
-    let pdf_text = extract_pdf_text(&args.pdf)?;
+    let pdf_text = extract_pdf_text(&args.pdf);
     let prompt = build_prompt(&args.part, &pdf_text);
     let raw = call_backend(&prompt, &args.pdf)?;
     let extracted = parse_pad_pwm_table(&raw)?;
@@ -95,23 +91,19 @@ fn run() -> Result<(), String> {
 
 // -- PDF text -----------------------------------------------------------------
 
-fn extract_pdf_text(path: &Path) -> Result<String, String> {
-    if which("pdftotext") {
-        let out = Command::new("pdftotext")
-            .arg(path)
-            .arg("-")
-            .output()
-            .map_err(|e| format!("pdftotext: {e}"))?;
+fn extract_pdf_text(path: &Path) -> String {
+    if let Ok(out) = Command::new("pdftotext").arg(path).arg("-").output() {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout).into_owned();
             if !text.trim().is_empty() {
                 // The PWM pad table lives in the GPIO function section; keep a
                 // generous window but cap so the prompt stays in budget.
-                return Ok(focus_on_pwm(&text));
+                return focus_on_pwm(&text);
             }
         }
     }
-    Ok(format!("<pdf_path>{}</pdf_path>", path.display()))
+    // The agent works on a copy named datasheet.pdf in its scratch workspace.
+    "<pdf_path>datasheet.pdf</pdf_path>".to_string()
 }
 
 /// Slice the datasheet text around the PWM / GPIO-function pages so the model
@@ -220,73 +212,24 @@ fn call_backend(prompt: &str, pdf: &Path) -> Result<String, String> {
             std::fs::read_to_string(&path).map_err(|e| format!("mock reply {path}: {e}"))?;
         return Ok(extract_toml_block(&reply));
     }
-    if which("codex") {
-        call_codex(prompt, pdf)
-    } else {
-        Err("no backend: install codex in PATH or set HAUKSBEE_EXTRACT_MOCK_REPLY=<file>".into())
-    }
+    call_codex(prompt, pdf)
 }
 
+/// codex through `model-extract`'s own launcher (`datasheet::run_agent_once`):
+/// your `[codex]` settings, a scratch workspace holding a copy of the PDF, the
+/// prompt in a file and the same read-confining permission profile, so this
+/// path cannot drift from the main one. No fallback to another backend.
 fn call_codex(prompt: &str, pdf: &Path) -> Result<String, String> {
-    let workdir = pdf.parent().map_or_else(
-        || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        Path::to_path_buf,
-    );
-    let mut child = Command::new("codex")
-        .args([
-            "exec",
-            "--sandbox",
-            "workspace-write",
-            "--skip-git-repo-check",
-            "--cd",
-        ])
-        .arg(&workdir)
-        .arg(prompt)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn codex: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(b""); // close stdin or codex blocks on EOF
-    }
-    let deadline = Instant::now() + CODEX_TIMEOUT;
-    while child
-        .try_wait()
-        .map_err(|e| format!("poll codex: {e}"))?
-        .is_none()
-    {
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!(
-                "codex timed out after {}s",
-                CODEX_TIMEOUT.as_secs()
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("collect codex: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!(
-            "codex failed: {}",
-            err.lines().rev().take(4).collect::<Vec<_>>().join(" | ")
-        ));
-    }
-    Ok(extract_toml_block(&String::from_utf8_lossy(&out.stdout)))
-}
-
-fn which(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    use hauksbee_models::{datasheet, extract_config};
+    let config = extract_config::load().map_err(|e| format!("{e:#}"))?.config;
+    let codex = Some(datasheet::Backend::Codex);
+    let resolved = config.resolve(&extract_config::ProcessHost, codex);
+    let ws = datasheet::Workspace::scratch().map_err(|e| format!("{e:#}"))?;
+    std::fs::copy(pdf, &ws.pdf).map_err(|e| format!("copying {}: {e}", pdf.display()))?;
+    let stdout = datasheet::run_agent_once(&resolved, prompt, &ws).map_err(|e| format!("{e:#}"))?;
+    let answer = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
+    let text = [answer, stdout].into_iter().find(|t| !t.trim().is_empty());
+    Ok(extract_toml_block(&text.unwrap_or_default()))
 }
 
 fn extract_toml_block(s: &str) -> String {
@@ -480,6 +423,43 @@ id = "rp2040_extracted"
         assert_eq!(table["GP28"], "6A");
     }
 
+    /// codex goes through the shared confined launcher: a fake `codex` echoes its
+    /// argv, which must carry hauksbee's permission profile and never `--sandbox`.
+    #[cfg(unix)]
+    #[test]
+    fn codex_runs_through_the_shared_confined_launcher() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = hauksbee_testkit::fresh_scratch_dir("resource_extract", "codex");
+        let (codex, cfg, pdf) = (dir.join("codex"), dir.join("c.toml"), dir.join("a.pdf"));
+        std::fs::write(&codex, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(&cfg, "").unwrap();
+        std::fs::write(&pdf, "%PDF-1.4\n").unwrap();
+        std::env::set_var("HAUKSBEE_EXTRACT_CONFIG", &cfg);
+        std::env::set_var("HAUKSBEE_CODEX_COMMAND", &codex);
+        let argv = call_codex("secret prompt", &pdf).unwrap();
+        let argv: Vec<&str> = argv.lines().collect();
+        let at = |f: &str| argv.iter().position(|a| *a == f);
+        let perms = at("default_permissions=\"hauksbee\"").unwrap();
+        assert_eq!([argv[0], argv[perms - 1]], ["exec", "-c"]);
+        assert!(argv[perms + 2].contains("\"write\""));
+        let flags = [
+            "--ignore-user-config",
+            "--ephemeral",
+            "skills.include_instructions=false",
+        ];
+        assert!(flags.iter().all(|f| at(f).is_some()), "{argv:?}");
+        assert!(at("--sandbox").is_none() && !argv.iter().any(|a| a.contains("secret")));
+        let cd = Path::new(argv[at("--cd").unwrap() + 1])
+            .file_name()
+            .unwrap();
+        assert!(
+            cd.to_string_lossy().starts_with("hauksbee-extract-check-"),
+            "{argv:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn repo(rel: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
     }
@@ -528,11 +508,12 @@ id = "rp2040_extracted"
             );
             return;
         }
-        if !which("codex") && std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY").is_err() {
+        let no_codex = Command::new("codex").arg("--version").output().is_err();
+        if no_codex && std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY").is_err() {
             eprintln!("no codex backend; skipping live test");
             return;
         }
-        let text = extract_pdf_text(&pdf).expect("pdf text");
+        let text = extract_pdf_text(&pdf);
         let prompt = build_prompt("rp2040", &text);
         let raw = call_backend(&prompt, &pdf).expect("codex backend");
         let machine = parse_pad_pwm_table(&raw).expect("live reply parses");
