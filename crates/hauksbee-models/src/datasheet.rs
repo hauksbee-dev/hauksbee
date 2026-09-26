@@ -141,6 +141,10 @@ pub struct Workspace {
 impl Workspace {
     /// An empty sandbox with no datasheet in it, for a connectivity check that
     /// runs the backend on a one-line prompt. Same isolation as a real run.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the sandbox directory cannot be created under the temp root.
     pub fn scratch() -> Result<Self> {
         let dir = workspace_tempdir(
             &std::env::temp_dir(),
@@ -188,6 +192,10 @@ fn workspace_tempdir(root: &Path, prefix: &str, context: &str) -> Result<tempfil
 ///
 /// The boundary is the whole security story of an agent running full-auto, so
 /// it is asserted rather than trusted. Exposed for `tests/extract_sandbox.rs`.
+///
+/// # Errors
+///
+/// Fails when the sandbox cannot be created or the PDF cannot be copied into it.
 pub fn sandbox_for_test(pdf: &Path) -> Result<Workspace> {
     prepare_workspace_in(pdf, &std::env::temp_dir())
 }
@@ -295,6 +303,13 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 }
 
 /// Run one extraction end to end, as the CLI does.
+///
+/// # Errors
+///
+/// Fails when the input is not a PDF, the kind cannot be identified, the settings
+/// cannot be resolved, the backend is unavailable or fails, the draft never
+/// validates within the retries, the run times out, or the result cannot be
+/// written.
 pub fn run(mut args: Args) -> Result<PathBuf> {
     // Magic bytes rather than extension, and BEFORE any backend is chosen: a
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
@@ -396,7 +411,9 @@ fn is_sensor_kind(kind: &str) -> bool {
 
 /// Build the LLM prompt that instructs the model to read a sensor datasheet and
 /// emit a `[sensor]` declarative register-map spec (the format defined in
-/// hauksbee-models::sensor_spec). The reply is validated by parsing it as a
+/// hauksbee-models::sensor_spec). The reply is validated by parsing it as a [`SensorSpec`].
+// The prompt is one template read top to bottom, as the model reads it.
+#[allow(clippy::too_many_lines)]
 fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     let bus = if kind.trim() == "spi_sensor" {
         "spi"
@@ -569,10 +586,12 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
     Ok(spec)
 }
 
-/// An agent run killed at its time limit. When the sandbox held a lint-clean
-/// draft it is still saved for review (`kept`), and this stays the run's error
-/// so the exit status says the draft is incomplete. Fields: the tool, the
-/// limit in seconds, and where the kept draft was published.
+/// An agent run killed at its time limit.
+///
+/// When the sandbox held a lint-clean draft it is still saved for review
+/// (`kept`), and this stays the run's error so the exit status says the draft
+/// is incomplete. Fields: the tool, the limit in seconds, and where the kept
+/// draft was published.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0} timed out after {1}s{tail}", tail = timeout_tail(.2.as_deref()))]
 pub struct TimedOut(pub String, pub u64, pub Option<PathBuf>);
@@ -810,10 +829,16 @@ impl Args {
     }
 }
 
-/// Reject anything that is not a plausible environment-variable NAME. The
-/// flag takes the variable's name, never the key itself: a value with `-`,
+/// Reject anything that is not a plausible environment-variable NAME.
+///
+/// The flag takes the variable's name, never the key itself: a value with `-`,
 /// `.`, or other non-identifier characters is almost certainly a pasted key,
 /// and accepting it would put a secret on a world-readable argv.
+///
+/// # Errors
+///
+/// Fails when `name` is empty, starts with a digit, or holds any character
+/// outside `[A-Za-z0-9_]`.
 pub fn validate_api_key_env_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let ok_first = chars
@@ -847,9 +872,16 @@ pub const CONSENT_NOTICE: &str =
      writes carries tier \"datasheet-derived\" and the sha256 of the PDF it read.";
 
 /// Ask a yes/no question on the terminal, the prompt going to `out`; only `y`
-/// or `yes` is a yes. A pipe cannot answer, and guessing "yes" on its behalf
-/// would act because someone ran the wrong command, so a non-terminal stdin
-/// fails with `refusal` instead.
+/// or `yes` is a yes.
+///
+/// A pipe cannot answer, and guessing "yes" on its behalf would act because
+/// someone ran the wrong command, so a non-terminal stdin fails with `refusal`
+/// instead.
+///
+/// # Errors
+///
+/// Fails with `refusal` when stdin is not a terminal, and when writing the prompt
+/// or reading the answer fails.
 pub fn confirm(out: &mut dyn Write, question: &str, refusal: &str) -> Result<bool> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         bail!("{refusal}");
@@ -864,12 +896,23 @@ pub fn confirm(out: &mut dyn Write, question: &str, refusal: &str) -> Result<boo
     ))
 }
 
+/// Parse the process's own command line; see [`parse_args_from`].
+///
+/// # Errors
+///
+/// As [`parse_args_from`].
 pub fn parse_args() -> Result<Args> {
     parse_args_from(std::env::args().skip(1))
 }
 
 /// The flag parser, over any argument source so tests can drive it without a
 /// process spawn. `--help` still exits: it is a terminal answer, not a value.
+///
+/// # Errors
+///
+/// Fails on an unknown flag, a flag missing its value, an unknown backend, an
+/// `--api-key-env` that is not a variable name, or a missing `--pdf` or
+/// `--part`.
 pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
     let mut args = args.into_iter();
     // An empty kind means "the model works it out from the datasheet";
@@ -1424,6 +1467,8 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     )
 }
 
+// The prompt is one template read top to bottom, as the model reads it.
+#[allow(clippy::too_many_lines)]
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     let examples = format_examples_for_kind(kind);
     let example_cards = examples
@@ -2729,6 +2774,11 @@ pub use crate::extract_config::{
 /// A config file that exists but cannot be read is an error here rather than
 /// a warning: silently running on defaults would send the datasheet somewhere
 /// the user did not choose.
+///
+/// # Errors
+///
+/// Fails when the extraction config cannot be located, read, parsed or
+/// validated.
 pub fn resolve_settings(args: &Args) -> Result<Resolved> {
     let loaded = extract_config::load()?;
     Ok(resolve_with(&loaded.config, &ProcessHost, args))
@@ -2963,9 +3013,20 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
 }
 
 /// Run the configured backend on a one-line prompt and return what it said.
+///
 /// The cheapest end-to-end proof that a setup works: the CLI is found, it is
 /// signed in, the model name is accepted, and an answer comes back. Costs one
 /// tiny model call; sends nothing but the prompt.
+///
+/// # Errors
+///
+/// Fails when the API request cannot be prepared or sent, the agent CLI is
+/// missing, the sandbox cannot be built, the agent run fails, or the agent does
+/// not write `model.toml`.
+///
+/// # Panics
+///
+/// Never in practice: an agent backend always resolves an agent section.
 pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result<String> {
     const PROMPT: &str =
         "This is a connectivity check. Reply with exactly the word OK and nothing else.";
@@ -3872,6 +3933,8 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         uncertainty = [{ status = \"unknown\", parameter = \"model\", reason = \"none\" }]\n";
 
     #[test]
+    // One table of reply fixtures, each beside the verdict it must get.
+    #[allow(clippy::too_many_lines)]
     fn reply_validation_verdicts() {
         let good = r#"
 [[models]]
@@ -4132,6 +4195,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
 
     #[cfg(unix)]
     #[test]
+    // One mock run end to end: the wrapper script, its config, and every protocol it must see.
+    #[allow(clippy::too_many_lines)]
     fn custom_command_runs_the_selected_protocol_and_never_falls_back() {
         use std::os::unix::fs::PermissionsExt;
         let _guard = MOCK_ENV.lock().unwrap();
