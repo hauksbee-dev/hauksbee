@@ -230,11 +230,11 @@ impl BindReport {
             )
             .into_iter()
             .map(|(model, mut refs)| {
+                const SHOWN: usize = 5;
                 // Aggregated per MODEL, not per part: a motor driver board with
                 // eight identical unmodeled FETs is one hole with eight instances,
                 // and eight near-identical notes is how this channel gets ignored.
                 refs.sort();
-                const SHOWN: usize = 5;
                 let listed = refs
                     .iter()
                     .take(SHOWN)

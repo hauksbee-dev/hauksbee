@@ -44,7 +44,7 @@
 //! mutations, no transient, no DC, preserving the prep-stays-solve-free
 //! invariant `tarski_prep` established.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -248,7 +248,7 @@ pub enum Terminal {
 
 impl Terminal {
     /// The mutable node this role names on `dev`, when the variant has it.
-    const fn node_mut<'d>(&self, dev: &'d mut Device) -> Option<&'d mut NodeId> {
+    const fn node_mut(self, dev: &mut Device) -> Option<&mut NodeId> {
         match (self, dev) {
             (Self::Base, Device::Bjt { b, .. }) => Some(b),
             (Self::Collector, Device::Bjt { c, .. }) => Some(c),
@@ -870,16 +870,16 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 /// Mirrors `hauksbee-ci/src/error.rs::near_matches` (that crate depends on
 /// this one, so the helper cannot be imported without inverting the edge).
 fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
-    let mut scored: BTreeMap<(usize, &str), ()> = BTreeMap::new();
+    let mut scored: BTreeSet<(usize, &str)> = BTreeSet::new();
     for k in known {
         let d = levenshtein(target, k);
         // Only offer plausible neighbours: within half the target's length.
         if d <= target.len().div_ceil(2).max(2) {
-            scored.insert((d, k.as_str()), ());
+            scored.insert((d, k.as_str()));
         }
     }
     scored
-        .keys()
+        .iter()
         .take(limit)
         .map(|(_, k)| k.to_string())
         .collect()
@@ -1048,6 +1048,7 @@ mod tests {
     #[test]
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {
         use crate::binder::{BoundBoard, DacBinding, McuBinding};
+        use crate::digital::{DigitalComponent, LogicLevels};
         use crate::drivers::PinDriver;
         use hauksbee_ir::{DeviceId, NodeId};
         use std::collections::HashMap;
@@ -1094,7 +1095,6 @@ mod tests {
         // sit on the net being merged away: after the jumper its cached role
         // NodeId and driver net must follow to BUS or it samples/drives the
         // orphaned floating node.
-        use crate::digital::{DigitalComponent, LogicLevels};
         let mut dig_roles = HashMap::new();
         dig_roles.insert("a0".to_string(), n);
         let mut dig_drivers = HashMap::new();

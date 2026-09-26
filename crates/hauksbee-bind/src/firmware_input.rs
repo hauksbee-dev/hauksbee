@@ -65,17 +65,17 @@ const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 /// a hostile header can lie.
 struct ZipLimits {
     /// Maximum number of entries in the archive.
-    max_entries: usize,
+    entries: usize,
     /// Maximum uncompressed bytes for any single entry.
-    max_entry_bytes: u64,
+    entry_bytes: u64,
     /// Maximum uncompressed bytes across the whole archive.
-    max_total_bytes: u64,
+    total_bytes: u64,
 }
 
 const ZIP_LIMITS: ZipLimits = ZipLimits {
-    max_entries: 10_000,
-    max_entry_bytes: 256 * 1024 * 1024,
-    max_total_bytes: 512 * 1024 * 1024,
+    entries: 10_000,
+    entry_bytes: 256 * 1024 * 1024,
+    total_bytes: 512 * 1024 * 1024,
 };
 
 /// The `pio` binary to invoke. `HAUKSBEE_PIO` overrides the PATH lookup (used
@@ -115,13 +115,13 @@ fn resolve_firmware_bytes_limited(
 
     let mut archive = zip::ZipArchive::new(Cursor::new(fw_bytes))
         .map_err(|e| format!("could not open '{fw_name}' as a zip archive: {e}"))?;
-    if archive.len() > limits.max_entries {
+    if archive.len() > limits.entries {
         return Err(format!(
             "'{fw_name}' contains {} entries, over the {} allowed for an uploaded \
              archive (zip-bomb guard). Upload the compiled image, or a leaner \
              project snapshot.",
             archive.len(),
-            limits.max_entries
+            limits.entries
         ));
     }
 
@@ -130,28 +130,28 @@ fn resolve_firmware_bytes_limited(
         let mut file = archive
             .by_index(best.index)
             .map_err(|e| format!("could not read '{}' from the archive: {e}", best.entry_name))?;
-        if file.size() > limits.max_entry_bytes {
+        if file.size() > limits.entry_bytes {
             return Err(format!(
                 "'{}' inside the archive declares {} uncompressed bytes, over the \
                  {} MiB per-file limit for uploaded archives (zip-bomb guard)",
                 best.entry_name,
                 file.size(),
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         // Read through a hard cap, not to the declared size: a lying header
         // must still trip the quota instead of exhausting memory.
         let mut bytes = Vec::new();
         (&mut file)
-            .take(limits.max_entry_bytes + 1)
+            .take(limits.entry_bytes + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| format!("could not read '{}' from the archive: {e}", best.entry_name))?;
-        if bytes.len() as u64 > limits.max_entry_bytes {
+        if bytes.len() as u64 > limits.entry_bytes {
             return Err(format!(
                 "'{}' inside the archive inflates past the {} MiB per-file limit \
                  for uploaded archives (zip-bomb guard)",
                 best.entry_name,
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         let name = Path::new(&best.entry_name)
@@ -382,13 +382,13 @@ fn extract_zip_to_temp<R: Read + std::io::Seek>(
         let Some(rel) = entry.enclosed_name() else {
             continue; // absolute or ..-escaping path: refuse silently, never write it
         };
-        if entry.size() > limits.max_entry_bytes {
+        if entry.size() > limits.entry_bytes {
             return Err(format!(
                 "'{}' in '{fw_name}' declares {} uncompressed bytes, over the {} MiB \
                  per-file limit for uploaded archives (zip-bomb guard)",
                 entry.name(),
                 entry.size(),
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         let out = dir.path().join(rel);
@@ -403,22 +403,22 @@ fn extract_zip_to_temp<R: Read + std::io::Seek>(
             .map_err(|e| format!("extract of '{}' failed: {e}", out.display()))?;
         // Copy through a hard cap, one byte past the per-file limit, so an
         // entry whose header lies about its size still trips the quota.
-        let copied = std::io::copy(&mut (&mut entry).take(limits.max_entry_bytes + 1), &mut f)
+        let copied = std::io::copy(&mut (&mut entry).take(limits.entry_bytes + 1), &mut f)
             .map_err(|e| format!("extract of '{}' failed: {e}", out.display()))?;
-        if copied > limits.max_entry_bytes {
+        if copied > limits.entry_bytes {
             return Err(format!(
                 "'{}' in '{fw_name}' inflates past the {} MiB per-file limit for \
                  uploaded archives (zip-bomb guard)",
                 entry.name(),
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         total += copied;
-        if total > limits.max_total_bytes {
+        if total > limits.total_bytes {
             return Err(format!(
                 "'{fw_name}' inflates past the {} MiB total limit for uploaded \
                  archives (zip-bomb guard)",
-                limits.max_total_bytes / (1024 * 1024)
+                limits.total_bytes / (1024 * 1024)
             ));
         }
     }
@@ -748,9 +748,9 @@ mod tests {
     fn zip_with_too_many_entries_is_refused() {
         let z = zip_of(&[("a.txt", b"x"), ("b.txt", b"y"), ("c.txt", b"z")]);
         let limits = ZipLimits {
-            max_entries: 2,
-            max_entry_bytes: 1024,
-            max_total_bytes: 4096,
+            entries: 2,
+            entry_bytes: 1024,
+            total_bytes: 4096,
         };
         let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
         assert!(err.contains("entries"), "names the quota: {err}");
@@ -762,9 +762,9 @@ mod tests {
         let big = vec![0u8; 1024];
         let z = zip_of(&[("build/app.elf", big.as_slice())]);
         let limits = ZipLimits {
-            max_entries: 10,
-            max_entry_bytes: 512,
-            max_total_bytes: 1 << 20,
+            entries: 10,
+            entry_bytes: 512,
+            total_bytes: 1 << 20,
         };
         let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
         assert!(err.contains("per-file limit"), "names the quota: {err}");
@@ -778,9 +778,9 @@ mod tests {
             ("p/src/big.bin", big.as_slice()),
         ]);
         let limits = ZipLimits {
-            max_entries: 10,
-            max_entry_bytes: 128,
-            max_total_bytes: 1 << 20,
+            entries: 10,
+            entry_bytes: 128,
+            total_bytes: 1 << 20,
         };
         let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
         assert!(err.contains("per-file limit"), "names the quota: {err}");
@@ -796,9 +796,9 @@ mod tests {
             ("p/src/c.bin", chunk.as_slice()),
         ]);
         let limits = ZipLimits {
-            max_entries: 10,
-            max_entry_bytes: 400,
-            max_total_bytes: 700,
+            entries: 10,
+            entry_bytes: 400,
+            total_bytes: 700,
         };
         let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
         assert!(err.contains("total limit"), "names the quota: {err}");
@@ -867,7 +867,7 @@ mod tests {
     /// PATH and the atmelavr toolchain installed (first run downloads it).
     /// Run with: cargo test -p hauksbee-engine --lib `firmware_input` -- --ignored
     #[test]
-    #[ignore]
+    #[ignore = "needs pio on PATH and the atmelavr toolchain"]
     fn real_pio_project_builds_and_resolves() {
         let dir = std::env::temp_dir().join(format!("hauksbee-pio-e2e-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();

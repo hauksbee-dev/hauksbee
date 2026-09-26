@@ -494,8 +494,8 @@ pub fn bind_board_with(
         }
         // A port's numeric part number parses as a value, so it lands here too;
         // nothing is plugged into it in the specified scenario, so it drives nothing.
-        let port = is_port_class(&ref_prefix(&comp.reference));
-        if matches!(outcome, BindOutcome::Unresolved { .. }) && !port {
+        let is_port = is_port_class(&ref_prefix(&comp.reference));
+        if matches!(outcome, BindOutcome::Unresolved { .. }) && !is_port {
             let can_drive = |kind: &str| {
                 let k = kind.to_ascii_lowercase();
                 !(k.starts_with("input") || k.starts_with("power_in") || k.contains("no_connect"))
@@ -3518,7 +3518,7 @@ fn vreg_stability_warning(
         let nodes: Vec<_> = pins.iter().filter_map(|pin| node_of(pin.net)).collect();
         let fitted = AssemblyState::of(cap).is_present() && passive_letter(cap) == Some('C');
         let spans =
-            matches!(nodes.as_slice(), [a, b] if [*a, *b] == [out, gnd] || [*a, *b] == [gnd, out]);
+            matches!(*nodes.as_slice(), [a, b] if (a, b) == (out, gnd) || (a, b) == (gnd, out));
         let farads = parse_value(cap.value.trim()).map(|v| v.si)?;
         (fitted && spans && farads.is_finite() && farads > 0.0).then_some(farads)
     };
@@ -3897,9 +3897,9 @@ fn bind_shunt_ref(
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
     let r = &comp.reference;
-    let p = |k: &str, d: f64| model.params.get_f64(k).unwrap_or(d);
+    let p = |key: &str, default: f64| model.params.get_f64(key).unwrap_or(default);
     let anode = roles.get("gnd").copied().unwrap_or(NodeId::GROUND);
-    let wired = |n: Option<&NodeId>| n.copied().filter(|&n| n != anode);
+    let wired = |pin: Option<&NodeId>| pin.copied().filter(|&node| node != anode);
     let (Some(cathode), Some(refpin)) = (
         wired(roles.get("out")),
         wired(pick(roles, &["fb", "adj", "ref"])),
@@ -3966,8 +3966,9 @@ fn bind_shunt_ref(
                 let hit = model.pins.iter().find(|(_, r)| want.contains(&r.as_str()));
                 hit.map_or("(unmapped)", |(p, _)| p.as_str()).to_string()
             };
-            let (k, f, a) = (pad(&["out"]), pad(&["fb", "adj", "ref"]), pad(&["gnd"]));
-            format!("{w}; pads taken as CATHODE {k} / REF {f} / ANODE {a}")
+            let (cathode, anode) = (pad(&["out"]), pad(&["gnd"]));
+            let reference = pad(&["fb", "adj", "ref"]);
+            format!("{w}; pads taken as CATHODE {cathode} / REF {reference} / ANODE {anode}")
         }),
     )
 }
@@ -4189,10 +4190,10 @@ fn bind_timer_555(
         timer_cmp("__d0", "__d1", "__d2", gain),
         timer_cmp("__d4", "__d5", "__d2", gain),
     );
-    let ctl = circuit.node(&format!("{r}_555_ctl"));
+    let ctl_node = circuit.node(&format!("{r}_555_ctl"));
     circuit.add(Device::Behavioral {
         name: format!("Bctl_{r}"),
-        p: ctl,
+        p: ctl_node,
         n: gnd,
         output: hauksbee_ir::BOutput::Voltage,
         expr: hauksbee_ir::CompiledExpr::compile(&ctl_expr).expect("555 control expression"),
@@ -4206,7 +4207,7 @@ fn bind_timer_555(
         name: format!("{r}_555{name}"),
         a,
         b: gnd,
-        ctrl_p: ctl,
+        ctrl_p: ctl_node,
         ctrl_n: gnd,
         von,
         voff,
@@ -4971,7 +4972,7 @@ fn bind_nor_latches(
                 continue;
             };
             let reset_in = if q_gate == i { in_j } else { in_i };
-            let (Some(set_n), Some(reset_n)) = (set_in, reset_in) else {
+            let (Some(set_node), Some(reset_node)) = (set_in, reset_in) else {
                 continue;
             };
             let q_net = gates[q_gate].y;
@@ -4988,8 +4989,8 @@ fn bind_nor_latches(
                 levels.ro,
             );
             let mut lroles: HashMap<String, NodeId> = HashMap::new();
-            lroles.insert("set".to_string(), set_n);
-            lroles.insert("reset".to_string(), reset_n);
+            lroles.insert("set".to_string(), set_node);
+            lroles.insert("reset".to_string(), reset_node);
             lroles.insert("q".to_string(), q_net);
             let mut ldrivers = HashMap::new();
             ldrivers.insert("q".to_string(), drv);
@@ -5299,11 +5300,6 @@ fn device_label(d: &Device) -> String {
 /// the mantissa in [1, 1000) and prints a sensible number of significant digits.
 /// `unit` is the bare unit symbol ("F", "H", "Ω").
 pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
-    if value == 0.0 || !value.is_finite() {
-        return format!("0 {unit}");
-    }
-    let neg = value < 0.0;
-    let v = value.abs();
     // Prefix table from pico to mega; covers caps (pF..mF), inductors (nH..H),
     // resistors (mΩ..MΩ). Each entry is (10^exponent, prefix).
     const PREFIXES: &[(f64, &str)] = &[
@@ -5315,6 +5311,11 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
         (1e-9, "n"),
         (1e-12, "p"),
     ];
+    if value == 0.0 || !value.is_finite() {
+        return format!("0 {unit}");
+    }
+    let neg = value < 0.0;
+    let v = value.abs();
     // Pick the largest prefix whose scale leaves a mantissa >= 1 (so 390 pF uses
     // "p", 1.5 kΩ uses "k"). Fall back to the smallest prefix for tiny values.
     let idx = PREFIXES
@@ -5611,6 +5612,9 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
 /// friends are 0 V because that is what they are.
 #[must_use]
 pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
+    const SUPPLY_TOKENS: [&str; 12] = [
+        "VDD", "VCC", "VEE", "VBAT", "VBUS", "VSYS", "VIN", "AVDD", "AVCC", "DVDD", "VREG", "VAUX",
+    ];
     if is_ground(name) || power_rail_voltage(name).is_some() {
         return false;
     }
@@ -5622,9 +5626,6 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
     }
     // The last path segment: a hierarchical sheet name must not decide this.
     let leaf = n.rsplit('/').next().unwrap_or(&n);
-    const SUPPLY_TOKENS: [&str; 12] = [
-        "VDD", "VCC", "VEE", "VBAT", "VBUS", "VSYS", "VIN", "AVDD", "AVCC", "DVDD", "VREG", "VAUX",
-    ];
     SUPPLY_TOKENS.iter().any(|t| leaf.contains(t))
 }
 
@@ -5768,6 +5769,8 @@ fn rail_magnitude(rest: &str) -> Option<f64> {
 /// suffixes (ANALOG, USB, CORE, RAIL, DIG, IO, …) are NOT taps and still resolve.
 /// `tail` is the remainder after the voltage token (e.g. "_FB", "_MON", "_USB").
 fn is_rail_monitor_suffix(tail: &str) -> bool {
+    const RAIL_DOMAIN_EXCEPTIONS: [&str; 2] = ["SENSOR", "FBUS"];
+    const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
     let first: String = tail
         .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
         .chars()
@@ -5784,11 +5787,9 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
     // yet "5V_SENSOR"/"3V3_FBUS" are genuine supply rails, not divided taps,
     // classifying them as taps drops their SupplyLeg and floats the whole domain
     // at 0 V. Those specific rail-domain words are excepted before the root test.
-    const RAIL_DOMAIN_EXCEPTIONS: [&str; 2] = ["SENSOR", "FBUS"];
     if RAIL_DOMAIN_EXCEPTIONS.contains(&first.as_str()) {
         return false;
     }
-    const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
     TAP_ROOTS.iter().any(|r| first.starts_with(r))
 }
 
@@ -7429,12 +7430,12 @@ style = "i2c_pointer"
                 ("out".into(), circuit.node(out)),
                 ("gnd".into(), circuit.node(gnd)),
             ]);
-            let res = card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
-            let model = res.as_ref().map_or_else(
+            let resolved = card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
+            let model = resolved.as_ref().map_or_else(
                 || simple_vreg(Some(vout)),
                 |r| r.model.clone().expect("card resolves"),
             );
-            let source = res.as_ref().and_then(|r| r.provenance.as_ref());
+            let source = resolved.as_ref().and_then(|r| r.provenance.as_ref());
             let (outcome, warning, regs) = bind_u9(&model, source, &mut circuit, &roles);
             let marked = |w: &str| w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains(token);
             let caveat = warning.as_deref().map(marked);
@@ -7444,7 +7445,7 @@ style = "i2c_pointer"
                 "{case}"
             );
             assert!(
-                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && *v == vout),
+                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && (*v - vout).abs() < 1e-12),
                 "{case}"
             );
             let [reg] = regs.as_slice() else {
@@ -7489,11 +7490,11 @@ style = "i2c_pointer"
             .expect("cards load");
         let resolve = |v: &str| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None));
         let [scalar, row] = ["ZZ_SCALAR", "ZZ_ROW"].map(|value| {
-            let (res, mut circuit) = (resolve(value), Circuit::new());
+            let (resolved, mut circuit) = (resolve(value), Circuit::new());
             let roles = roles(&mut circuit, &["in", "out", "gnd"]);
-            let model = res.model.expect("the synthetic card resolves");
+            let model = resolved.model.expect("the synthetic card resolves");
             let (outcome, warning, regs) =
-                bind_u9(&model, res.provenance.as_ref(), &mut circuit, &roles);
+                bind_u9(&model, resolved.provenance.as_ref(), &mut circuit, &roles);
             let limits = format!("{:.9?} {:.9}", regs[0].dropout_v, regs[0].min_in_v);
             let bound = format!("{outcome:?} {warning:?} {:?}", circuit.devices);
             (bound, limits)
@@ -7501,13 +7502,13 @@ style = "i2c_pointer"
         assert_eq!(scalar, row);
         assert_eq!(row.1, "Some(0.250000000) 3.650000000");
 
-        let (res, component) = (resolve("ZZ_TIE"), comp("U9", "ZZ_TIE"));
+        let (resolved, component) = (resolve("ZZ_TIE"), comp("U9", "ZZ_TIE"));
         let marker = Assumption::PARTIAL_MODEL_MARKER;
-        let bare = with_tie_warning(&component, &res, None).unwrap_or_default();
+        let bare = with_tie_warning(&component, &resolved, None).unwrap_or_default();
         let tie = "U9 (ZZ_TIE): matched library entries zz_tie_a, zz_tie_b equally well; bound 'zz_tie_a'";
         assert!(bare.starts_with(&format!("{marker}{tie}")), "{bare}");
         let other = Some(format!("{marker}U9 (ZZ_TIE): enable off"));
-        let combined = with_tie_warning(&component, &res, other);
+        let combined = with_tie_warning(&component, &resolved, other);
         assert_eq!(combined, Some(format!("{bare}; also enable off")));
     }
 

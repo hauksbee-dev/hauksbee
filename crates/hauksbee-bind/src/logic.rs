@@ -1651,11 +1651,12 @@ impl LogicComponent {
             let address = m.address.iter().enumerate().fold(0usize, |a, (bit, &pin)| {
                 a | (usize::from(self.input_levels[pin]) << bit)
             });
-            let mut storage = m
+            let word = m
                 .storage
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let word = storage.read(address, m.mask).unwrap_or(0);
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .read(address, m.mask)
+                .unwrap_or(0);
             for (bit, &out) in m.data_out.iter().enumerate() {
                 self.output_levels[out] = word & (1u64 << bit) != 0;
             }

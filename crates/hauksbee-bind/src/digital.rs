@@ -165,10 +165,10 @@ pub fn pin_edges_by_pin(edges: &[PinEdge]) -> HashMap<(char, u8), Vec<(u64, bool
 /// Returns the number of micro-ticks executed (distinct cycle groups that
 /// touched a watched pin) so a caller can assert N edges produced N ordered
 /// micro-ticks rather than one collapsed level.
-pub fn replay_components_on_edges(
+pub fn replay_components_on_edges<S: std::hash::BuildHasher>(
     components: &mut [DigitalComponent],
     which: &[usize],
-    pin_nets: &HashMap<(char, u8), NodeId>,
+    pin_nets: &HashMap<(char, u8), NodeId, S>,
     edges: &[PinEdge],
     base_volts: &[f64],
     high_v: f64,
@@ -740,6 +740,8 @@ pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
 ///
 /// This carries the same per-chip 8-bit shift/latch logic as `tick_595`, but
 /// driven by ordered edges instead of one node-voltage sample per chunk.
+// The bools are five independent sampled wire levels, not an encoded state.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Hc595Chain {
     /// Chip indices into the scheduler's `digital` vec, in daisy-chain order
@@ -1214,9 +1216,9 @@ mod tests {
     /// PB5, RCLK on PD6, `SRCLR_n` on PC3, SER on PB3.
     fn build_chain(circuit: &mut Circuit, n: usize) -> (Vec<DigitalComponent>, Hc595Chain) {
         let model = model("74HC595");
-        let n_srclk = circuit.node("SRCLK");
-        let n_rclk = circuit.node("RCLK");
-        let n_srclr = circuit.node("SRCLR_N");
+        let shift_clk = circuit.node("SRCLK");
+        let latch_clk = circuit.node("RCLK");
+        let clear_n = circuit.node("SRCLR_N");
         let n_ser_head = circuit.node("SER0");
 
         let mut chips: Vec<DigitalComponent> = Vec::new();
@@ -1224,9 +1226,9 @@ mod tests {
         for k in 0..n {
             let qh = circuit.node(&format!("QHS{k}"));
             let mut r = roles(&[
-                ("srclk", n_srclk),
-                ("rclk", n_rclk),
-                ("srclr_n", n_srclr),
+                ("srclk", shift_clk),
+                ("rclk", latch_clk),
+                ("srclr_n", clear_n),
                 ("ser", prev_qh.unwrap_or(n_ser_head)),
                 ("qh_serial", qh),
             ]);
@@ -1240,9 +1242,9 @@ mod tests {
             prev_qh = Some(qh);
         }
         let gpio_node: HashMap<i64, (char, u8)> = HashMap::from([
-            (i64::from(n_srclk.0), ('B', 5)),
-            (i64::from(n_rclk.0), ('D', 6)),
-            (i64::from(n_srclr.0), ('C', 3)),
+            (i64::from(shift_clk.0), ('B', 5)),
+            (i64::from(latch_clk.0), ('D', 6)),
+            (i64::from(clear_n.0), ('C', 3)),
             (i64::from(n_ser_head.0), ('B', 3)),
         ]);
         let order = order_595_chain(&chips);
@@ -1269,16 +1271,20 @@ mod tests {
         circuit: &mut Circuit,
     ) -> (Vec<DigitalComponent>, HashMap<(char, u8), NodeId>) {
         let n_ser = circuit.node("SS_SER");
-        let n_srclk = circuit.node("SS_SRCLK");
-        let n_rclk = circuit.node("SS_RCLK");
+        let shift_clk = circuit.node("SS_SRCLK");
+        let latch_clk = circuit.node("SS_RCLK");
         let comp = DigitalComponent::new(
             "U0".into(),
             &model("74HC595"),
-            roles(&[("ser", n_ser), ("srclk", n_srclk), ("rclk", n_rclk)]),
+            roles(&[("ser", n_ser), ("srclk", shift_clk), ("rclk", latch_clk)]),
             HashMap::new(),
         )
         .expect("builtin 595 logic compiles");
-        let pin_nets = HashMap::from([(('B', 3), n_ser), (('B', 5), n_srclk), (('D', 6), n_rclk)]);
+        let pin_nets = HashMap::from([
+            (('B', 3), n_ser),
+            (('B', 5), shift_clk),
+            (('D', 6), latch_clk),
+        ]);
         (vec![comp], pin_nets)
     }
 
@@ -1320,8 +1326,8 @@ mod tests {
         let model = model("74HC595");
         let mut circuit = Circuit::new();
         let n_ser0 = circuit.node("SER0");
-        let n_srclk = circuit.node("SRCLK");
-        let n_rclk = circuit.node("RCLK");
+        let shift_clk = circuit.node("SRCLK");
+        let latch_clk = circuit.node("RCLK");
         let n_tap = circuit.node("QHS0");
         let n_tap1 = circuit.node("U1_TAP");
         let mk = |ser, tap, name: &str| {
@@ -1330,8 +1336,8 @@ mod tests {
                 &model,
                 roles(&[
                     ("ser", ser),
-                    ("srclk", n_srclk),
-                    ("rclk", n_rclk),
+                    ("srclk", shift_clk),
+                    ("rclk", latch_clk),
                     ("qh_serial", tap),
                 ]),
                 HashMap::new(),
@@ -1339,7 +1345,11 @@ mod tests {
             .expect("builtin 595 logic compiles")
         };
         let mut comps = vec![mk(n_ser0, n_tap, "U0"), mk(n_tap, n_tap1, "U1")];
-        let pin_nets = HashMap::from([(('B', 3), n_ser0), (('B', 5), n_srclk), (('D', 6), n_rclk)]);
+        let pin_nets = HashMap::from([
+            (('B', 3), n_ser0),
+            (('B', 5), shift_clk),
+            (('D', 6), latch_clk),
+        ]);
 
         let (first, second) = (0x9Du8, 0x3Cu8);
         let mut log = Vec::new();
@@ -1730,6 +1740,8 @@ mod tests {
     /// transition from its VCC net, and nothing at all from a dead rail.
     #[test]
     fn toggling_gate_draws_expected_supply_charge() {
+        const VCC: f64 = 5.0;
+        const DT: f64 = 100e-6;
         let model = model("74HC00");
         let static_ua = model
             .params
@@ -1772,8 +1784,6 @@ mod tests {
             }
         };
 
-        const VCC: f64 = 5.0;
-        const DT: f64 = 100e-6;
         let make_v = |a_high: bool| {
             move |n: NodeId| -> f64 {
                 if n == n_vcc || n == n_b || (n == n_a && a_high) {

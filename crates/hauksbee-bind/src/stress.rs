@@ -323,8 +323,8 @@ pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
     by_package
         .into_iter()
         .map(|(pkg, mut refs)| {
-            refs.sort_unstable();
             const SHOWN: usize = 5;
+            refs.sort_unstable();
             let listed = refs
                 .iter()
                 .take(SHOWN)

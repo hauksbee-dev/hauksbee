@@ -98,6 +98,8 @@ pub trait CustomBehavior: Send {
     );
 
     /// A short state label for diagnostics / frames (default empty).
+    // Implementors may return a label borrowed from `self`; only this default is static.
+    #[allow(clippy::unnecessary_literal_bound)]
     fn state(&self) -> &str {
         ""
     }
@@ -1241,7 +1243,7 @@ impl BehavioralDevice {
     }
 
     /// Retune open-drain and drive legs from the active state's pin overrides.
-    fn apply_state_pins(&mut self, circuit: &mut Circuit) {
+    fn apply_state_pins(&self, circuit: &mut Circuit) {
         let active = self.state().to_string();
         let overrides = self.state_pins.get(&active).cloned().unwrap_or_default();
 
