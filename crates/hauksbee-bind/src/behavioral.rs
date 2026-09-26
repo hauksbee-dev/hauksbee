@@ -216,28 +216,32 @@ fn out_farads(circuit: &Circuit, node: NodeId) -> f64 {
     circuit.iter().filter_map(farads).sum()
 }
 
-/// The converter loop's delivered-current and PI-state expressions over deps
-/// `[out, pi, sense, lim, vin, ref]` (see `stamp_converter`), for
-/// `farads_per_ratio = C_out / k`.
-fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String; 2] {
+/// The converter loop's delivered-current, PI-state and `g*e` expressions over
+/// deps `[out, pi, g*e, lim, vin, sense, ref]` (see `stamp_converter`), for
+/// `farads_per_ratio = C_out / k`. "No limit" is 1 kA or 10 kV, not 1e9: a
+/// rounded clamp's `hypot` difference near 1e9 would lose a probe's digits.
+fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String; 3] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
     let (g, wz, wl) = (wc * farads_per_ratio, wc / 4.0, wc * 1e-5);
     let (dmax, armed) = (c.max_duty.unwrap_or(1.0), "min(max(__d3*100.0,0.0),1.0)");
     let hi = match c.topology {
         Topology::Buck => format!("(1.0-{:?}*{armed})*max(__d4,0.0)", 1.0 - dmax),
-        _ => "1e9".into(),
+        _ => "1e4".into(),
     };
-    let iout_max = c.iout_limit_a.unwrap_or(1e9);
-    let err = format!("{g:?}*(__d5-__d2)");
+    let iout_max = c.iout_limit_a.unwrap_or(1e3);
     let cap = if c.iin_limit_a.is_some() || c.iin_program.is_some() {
         format!("min({iout_max:?},max(__d3,0.0)*{eff:?}*max(__d4,0.0)/max(__d0,1e-3))")
     } else {
         format!("{armed}*{iout_max:?}")
     };
-    let cmd = format!("max(min(__d1+{err},{cap}),-{cap})");
-    let i = format!("min(max({cmd},-__d0/{r:?}),({hi}-__d0)/{r:?})");
+    let (ask, wid) = ("__d1+__d2", format!("0.02*({cap})"));
+    let cmd = format!("0.5*(math::hypot({ask}+{cap},{wid})-math::hypot({ask}-({cap}),{wid}))");
+    let top = format!("(({hi})-__d0)/{r:?}");
+    let band = format!("max({:?}*__d4*{armed},1e-6)", 4e-3 / r);
+    let dip = format!("max(1.0-math::abs({cmd}-{top})/{band},0.0)");
+    let i = format!("max(min({cmd},{top})-0.25*{band}*{dip}*{dip},-__d0/{r:?})");
     let pi = format!("1e-6*({wz:?}*({i}-__d1)-{wl:?}*__d1)");
-    [i, pi]
+    [i, pi, format!("{g:?}*(__d6-__d5)-__d2")]
 }
 
 /// The fraction of the regulated voltage a resistive divider presents at a
@@ -340,7 +344,7 @@ struct ConverterLeg {
     /// Input draw (controllable Isource from `in_node` to ground).
     in_isource: DeviceId,
     /// Source holding the loop's input-current limit (A) on a hidden node the
-    /// in-circuit current command reads; 0 V disables the converter.
+    /// in-circuit current command reads; -1 V disarms the converter.
     limit_vsource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
     /// bind time (or the literal). Recomputable if a board resistor is retuned.
@@ -906,11 +910,13 @@ impl BehavioralDevice {
     /// The averaged converter as an in-circuit current-mode regulation loop,
     /// so Newton, not a per-chunk relaxation, closes it:
     ///
-    /// * `i_cmd = clamp(x + g*(ref - V(sense)), -cap, cap)`: a synchronous
+    /// * `i_cmd = clamp(x + g*(ref - V(sense)), -cap, cap)`, its corners
+    ///   rounded over `cap/50` (exact well inside): a kink within one
+    ///   finite-difference probe hands Newton a straddled partial it cannot
+    ///   converge on, as a load step through the limit does. A synchronous
     ///   switch sinks as it sources, so a light load's operating point sits
-    ///   inside the linear range, not on a no-sink kink within one
-    ///   finite-difference probe, whose straddled partial Newton cannot
-    ///   converge on. `cap = min(iout_limit, lim*eff*V(in)/V(out))` under an
+    ///   inside the linear range, not on a no-sink kink. `cap =
+    ///   min(iout_limit, lim*eff*V(in)/V(out))` under an
     ///   input-current limit, else `iout_limit` gated by `clamp(100*lim, 0, 1)`
     ///   (so is a buck's `max_duty`): a 1e9 "no limit" or a step gate would
     ///   kick Newton on arming, or on a damped step landing on the switch,
@@ -919,6 +925,11 @@ impl BehavioralDevice {
     ///   node `V(out) + out_r*i` stays within `[0, max_duty*V(in)]` for a buck
     ///   (`[0, V(in)]` while disarmed: the high-side body diode), so the
     ///   output inductor slews at `(V(in) - V(out))/L` instead of stepping.
+    ///   Armed, the ceiling is a smooth minimum over 0.4% of `V(in)`, exact
+    ///   outside it (a sagging input's probes straddle a hard one), which only
+    ///   ever lowers `i`: the integrator absorbs that while regulating, and no
+    ///   limit is exceeded. Disarmed it stays hard: in early source steps the
+    ///   smoothing would swamp milliamp currents and stall Newton.
     ///   `i` is injected as a current through `out_r` into the output pin: as
     ///   a millivolt drop between volt-scale nodes, Newton's voltage tolerance
     ///   could not resolve it;
@@ -930,7 +941,10 @@ impl BehavioralDevice {
     /// `g = 2 pi f_c C_out / k` crosses the loop over at `f_c` against the
     /// output capacitance `C_out` on the regulated node, `k` being the
     /// feedback divider's ratio; `wz = wc/4` damps it critically, so a step
-    /// `dI` dips the output about `0.74 dI / (2 pi f_c C_out)`. A buck's
+    /// `dI` dips the output about `0.74 dI / (2 pi f_c C_out)`. `g*e` is a
+    /// linear source's node, so the loop's finite-difference probe moves it
+    /// by a part in 1e3 of itself, not by `g` times a part in 1e3 of
+    /// `V(sense)`: amps, against a large `C_out`, that straddle the cap. A buck's
     /// regulated node is the far side of its one output inductor. `lim` is a
     /// hidden source holding the input-current limit (1 if none), -1 while
     /// disarmed, so no finite-difference probe of it straddles the switch.
@@ -964,17 +978,17 @@ impl BehavioralDevice {
             Some((vref, Some(&n))) => (n, vref, divider_ratio(circuit, n)),
             _ => (reg, c.vout_setpoint, 1.0),
         };
-        let [drive, pi] = loop_exprs(c, out_farads(circuit, reg).max(1e-6) / k, r, eff);
-        let [drv, src, pi_node] =
-            ["out", "sw", "pi"].map(|t| circuit.node(&format!("__beh_{reference}_conv_{t}")));
+        let [drive, pi, ge] = loop_exprs(c, out_farads(circuit, reg).max(1e-6) / k, r, eff);
+        let [drv, src, pi_node, err] = ["out", "sw", "pi", "err"]
+            .map(|t| circuit.node(&format!("__beh_{reference}_conv_{t}")));
         let (lim, limit_vsource) = hidden_dc_node(circuit, reference, "conv_lim", -1.0);
         // The reference as a source, so DC source stepping ramps it with the
         // supplies: a soft start, which is how Newton finds a clamped loop.
         let ref_node = hidden_dc_node(circuit, reference, "conv_ref", vref).0;
-        let deps: Vec<_> = [out, pi_node, sense, lim, vin, ref_node]
+        let deps: Vec<_> = [out, pi_node, err, lim, vin, sense, ref_node]
             .map(BDep::Volt)
             .into();
-        for (name, n, expr) in [("sw", src, drive), ("pi", pi_node, pi)] {
+        for (name, n, expr) in [("sw", src, drive), ("pi", pi_node, pi), ("err", err, ge)] {
             let expr = CompiledExpr::compile(&expr).expect("converter loop expression compiles");
             circuit.add(Device::Behavioral {
                 name: format!("Bbeh_{reference}_conv_{name}"),
@@ -1431,7 +1445,8 @@ impl BehavioralDevice {
     /// programming evidence is missing; and reflect the delivered power onto
     /// the input as `V(sw) * I_out / (eff * V(in))`. `V(sw)` never exceeds
     /// `max_duty * V(in)` for a buck, so a sagging input cannot run the draw
-    /// away. Also the DC settle's iteration; returns how far the draw moved.
+    /// away. Also the DC settle's iteration; returns how far the draw or the
+    /// arming moved.
     pub fn update_converter(
         &mut self,
         circuit: &mut Circuit,
@@ -1446,11 +1461,7 @@ impl BehavioralDevice {
         };
         let evidenced = c.cfg.iin_program.is_none() || c.iin_limit_a.is_some();
         let on = c.sensed && evidenced && c.cfg.enable.as_ref().is_none_or(high);
-        let limit = if on {
-            c.iin_limit_a.unwrap_or(1.0)
-        } else {
-            -1.0
-        };
+        let limit = if on { c.iin_limit_a } else { Some(-1.0) }.unwrap_or(1.0);
         // Delivered current from the drop across `out_r`, a node-voltage read
         // that holds on the partitioned path, whose x carries no branch currents.
         let sw = node_v(c.out_drv_node);
@@ -1460,7 +1471,11 @@ impl BehavioralDevice {
         } else {
             0.0
         };
-        let moved = (iin - c.last_iin_a).abs();
+        let lim = match circuit.devices.get(c.limit_vsource.0 as usize) {
+            Some(Device::Vsource { p, .. }) => node_v(*p),
+            _ => limit,
+        };
+        let moved = (iin - c.last_iin_a).abs().max((limit - lim).abs());
         c.last_iin_a = iin;
         set_source_dc(circuit, c.limit_vsource, limit);
         set_source_dc(circuit, c.in_isource, iin);

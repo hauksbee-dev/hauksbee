@@ -328,11 +328,8 @@ fn feedback_buck_starts_in_regulation_and_holds_against_its_output_lc() {
             trace.iter().all(|v| (v - want).abs() < 0.05 * want),
             "{want} V wanted, got {trace:?}"
         );
-        assert!(
-            (trace[0] - want).abs() < 0.01 * want,
-            "first chunk {} V",
-            trace[0]
-        );
+        let first = trace[0];
+        assert!((first - want).abs() < 0.01 * want, "first chunk {first} V");
     }
 }
 
