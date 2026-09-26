@@ -287,10 +287,10 @@ impl ResponderRegistry {
                 continue;
             }
             self.resolved.insert(pin, next);
-            out.push(match next {
-                Some(level) => InputDrive::drive(pin, level),
-                None => InputDrive::release(pin),
-            });
+            out.push(next.map_or_else(
+                || InputDrive::release(pin),
+                |level| InputDrive::drive(pin, level),
+            ));
         }
         out
     }
@@ -505,6 +505,7 @@ impl ParallelMemoryResponder {
             })
     }
 
+    #[allow(clippy::cast_precision_loss)] // cycle gaps and clock rates are far below 2^52
     fn process_edges(
         &mut self,
         edges: &[((char, u8), bool)],
@@ -575,6 +576,7 @@ impl ParallelMemoryResponder {
         let Some(address) = self.address(volts) else {
             return self.release_data_bus();
         };
+        drop(volts_guard);
         let word = cycle
             .and_then(|cycle| self.port.read_at(address, cycle, self.frequency_hz))
             .or_else(|| self.port.read(address));
@@ -821,6 +823,7 @@ pub struct BitBangSpiPins {
 ///
 /// [`SpiSlave::miso_preview`]: crate::peripherals::spi::SpiSlave::miso_preview
 /// [`SpiBus::spi_mode`]: crate::peripherals::spi::SpiBus::spi_mode
+#[allow(clippy::struct_excessive_bools)] // independent line levels and mode bits, not a state enum
 pub struct BitBangSpiResponder {
     bus: Arc<Mutex<SpiBus>>,
     pins: BitBangSpiPins,
@@ -846,6 +849,8 @@ pub struct BitBangSpiResponder {
     /// The NEXT byte's preview, fetched at the byte boundary and promoted to
     /// `presented` on the following shift edge (the slave shifts a fresh bit 7
     /// out on the shift edge after the last sample of the previous byte).
+    #[allow(clippy::option_option)]
+    // outer None: nothing fetched; Some(None): slave gave no preview
     pending: Option<Option<u8>>,
     /// Set on the first waveform/contract violation: the responder stops
     /// answering entirely (the firmware sees a dead MISO line, loudly broken)
@@ -928,6 +933,7 @@ impl InputResponder for BitBangSpiResponder {
         vec![self.pins.sclk, self.pins.mosi, self.pins.cs_n]
     }
 
+    #[allow(clippy::too_many_lines)] // one flat per-edge SPI state machine; splitting scatters the mode rules
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         if pin == self.pins.mosi {
             // The master must hold MOSI stable through the slave's sample window;
@@ -1144,6 +1150,7 @@ enum I2cPhase {
 /// falling edge (data changes while the clock is low, per the spec) and are
 /// re-asserted at the following rising edge, so a firmware that flips SDA to
 /// input only just before reading still sees the bit.
+#[allow(clippy::struct_excessive_bools)] // independent bus-line and protocol flags, not a state enum
 pub struct SoftI2cResponder {
     bus: Arc<Mutex<I2cBus>>,
     scl_pin: (char, u8),
@@ -1191,7 +1198,7 @@ impl SoftI2cResponder {
         }
     }
 
-    fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
+    fn dispatch(&self, ev: I2cEvent) -> Option<u8> {
         self.bus.lock_or_recover().dispatch(ev)
     }
 
@@ -1314,6 +1321,7 @@ impl InputResponder for SoftI2cResponder {
         vec![self.scl_pin, self.sda_pin]
     }
 
+    #[allow(clippy::too_many_lines)] // one flat per-edge I2C state machine; splitting scatters the protocol
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         let mut out = Vec::new();
 
@@ -1487,7 +1495,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn probe(pin: (char, u8), answer: Vec<InputDrive>) -> Box<Probe> {
+    fn probe(pin: (char, u8), answer: Vec<InputDrive>) -> Box<dyn InputResponder> {
         Box::new(Probe {
             pins: vec![pin],
             answer,
@@ -1609,12 +1617,7 @@ pub(crate) mod tests {
         })
     }
 
-    pub(crate) fn one_bit_spec(
-        write: &str,
-        write_gates: &str,
-        read_gates: &str,
-        inputs: &str,
-    ) -> String {
+    pub fn one_bit_spec(write: &str, write_gates: &str, read_gates: &str, inputs: &str) -> String {
         format!(
             r#"
 inputs = [{inputs}]
@@ -2003,12 +2006,12 @@ data_out = ["io0"]
             data.iter().copied().map(mcu).collect(),
             data.clone(),
         );
-        let driven: Vec<_> = std::iter::once(address)
+        let directions: Vec<_> = std::iter::once(address)
             .chain(data.iter().copied())
             .chain([CE, OE, WE])
             .map(|pin| (pin, true, false))
             .collect();
-        responder.on_directions_at(&driven, 0);
+        responder.on_directions_at(&directions, 0);
 
         responder.on_edge_at(CE, false, 10);
         responder.on_edge_at(OE, false, 10);
@@ -2480,7 +2483,11 @@ style = "i2c_pointer"
         m.stop();
 
         let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
-        assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
+        assert_eq!(
+            src_volts(&circuit).to_bits(),
+            0.0f64.to_bits(),
+            "not driven before flush"
+        );
         let volts = vec![0.0; 4];
         bus.lock()
             .unwrap()

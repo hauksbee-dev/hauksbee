@@ -392,7 +392,7 @@ impl Engine for HauksbeeEngine {
             net_v_extremes: self.sched.frame_v_extremes().clone(),
             component_states,
             uart: result.uart,
-            net_currents: Default::default(),
+            net_currents: HashMap::default(),
             faults,
             supply_states,
         }
@@ -433,7 +433,7 @@ impl Engine for HauksbeeEngine {
     }
 
     fn set_power_supply(&mut self, net: &str, supply: PowerSupplyConfig) {
-        self.sched.set_power_supply(net, config_to_supply(supply));
+        self.sched.set_power_supply(net, config_to_supply(&supply));
     }
 
     fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
@@ -619,8 +619,8 @@ impl Engine for HauksbeeEngine {
 
 /// Map a wire [`PowerSupplyConfig`] onto the engine's behavioral [`PowerSupply`].
 #[must_use]
-pub const fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
-    match c {
+pub const fn config_to_supply(c: &PowerSupplyConfig) -> PowerSupply {
+    match *c {
         PowerSupplyConfig::Ideal { volts } => PowerSupply::Ideal { volts },
         PowerSupplyConfig::Bench {
             volts,

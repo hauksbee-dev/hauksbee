@@ -134,7 +134,7 @@ pub fn evaluate(
             let verdict = solved.as_ref().map(|out| signs[i] * out.rows[0][i]);
             if verdict.is_ok_and(|v| headroom_ok(reg, v)) {
                 (supported[i], granted) = (true, true);
-                for id in [reg.source].iter().chain(&reg.helpers) {
+                for id in std::iter::once(&reg.source).chain(&reg.helpers) {
                     let id = id.0 as usize;
                     probe.devices[id] = circuit.devices[id].clone();
                 }
@@ -158,7 +158,7 @@ pub fn reason(
     revoked_at_s: Option<f64>,
 ) -> String {
     let (p, n, vout) = terminals(circuit, reg);
-    let (r, i, max) = (&reg.reference, circuit.node_name(reg.input), reg.max_in_v);
+    let (part, input, max) = (&reg.reference, circuit.node_name(reg.input), reg.max_in_v);
     let out = circuit.node_name(if p.is_ground() { n } else { p });
     let side = if vout < 0.0 { "below" } else { "above" };
     let seen = revoked_at_s.map_or_else(
@@ -181,16 +181,18 @@ pub fn reason(
             ),
         ),
     };
-    let need = match reg.dropout_v {
-        None => format!("{limit}; the model has no dropout figure"),
-        Some(d) => format!(
-            "{:.3} V {limit} + {d:.3} V declared dropout",
-            reg.min_in_v - d
-        ),
-    };
+    let need = reg.dropout_v.map_or_else(
+        || format!("{limit}; the model has no dropout figure"),
+        |d| {
+            format!(
+                "{:.3} V {limit} + {d:.3} V declared dropout",
+                reg.min_in_v - d
+            )
+        },
+    );
     let lone = |why: String| {
         format!(
-            "input {i} has no independent DC support ({why}); declare the supply that feeds {i}"
+            "input {input} has no independent DC support ({why}); declare the supply that feeds {input}"
         )
     };
     let clause = match verdict {
@@ -198,17 +200,17 @@ pub fn reason(
         Ok(x) if x.abs() < 1e-3 && revoked_at_s.is_none() => lone(format!("{x:.3} V {seen}")),
         Ok(x) if *x > max => {
             format!(
-                "input {i} is {x:.3} V {side} its return, {seen}, exceeding the {max:.3} V rating"
+                "input {input} is {x:.3} V {side} its return, {seen}, exceeding the {max:.3} V rating"
             )
         }
         Ok(x) => format!(
-            "input {i} is {x:.3} V {side} its return, {seen}, below the {:.3} V this model needs \
+            "input {input} is {x:.3} V {side} its return, {seen}, below the {:.3} V this model needs \
              ({need}, not a guaranteed bound)",
             reg.min_in_v
         ),
     };
     format!(
-        "{r} regulation of {out} is unsupported: {clause}. {held}, \
+        "{part} regulation of {out} is unsupported: {clause}. {held}, \
          not a simulated result; below-dropout, startup and recovery behaviour \
          are not modelled. Results on {out} and everything it powers are invalid for this run, \
          and stay invalid if the input recovers; start a fresh run."
@@ -304,10 +306,12 @@ pub const OPEN_DRIVER: &str = "has no model, so it is absent from the simulated 
 #[must_use]
 pub fn open_driver_reason(r: &str, v: &str, from: &str, nets: &[String]) -> String {
     let more = nets.len().saturating_sub(6);
-    let mut list = nets[..nets.len() - more].join(", ");
-    if more > 0 {
-        list.push_str(&format!(" and {more} more"));
-    }
+    let shown = nets[..nets.len() - more].join(", ");
+    let list = if more > 0 {
+        format!("{shown} and {more} more")
+    } else {
+        shown
+    };
     format!(
         "{r} ({v}) {OPEN_DRIVER}, yet it is powered from {from} and can drive {list}. Any \
          voltage printed for those nets is the board without {r}, not a simulated result: a \
