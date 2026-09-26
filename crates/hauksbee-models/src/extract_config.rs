@@ -52,7 +52,7 @@ pub const ENV_CONFIG_PATH: &str = "HAUKSBEE_EXTRACT_CONFIG";
 pub const ENV_BACKEND: &str = "HAUKSBEE_EXTRACT_BACKEND";
 
 pub const DEFAULT_RETRIES: usize = 2;
-pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const DEFAULT_API_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -382,7 +382,7 @@ impl ExtractConfig {
                 "auto",
             ),
             KeyInfo::new("retries", "validation retries per extraction", "2"),
-            KeyInfo::new("timeout_secs", "seconds one agent run may take", "600"),
+            KeyInfo::new("timeout_secs", "seconds one agent run may take", "900"),
         ];
         for a in AGENTS {
             for (field, help, default) in [
@@ -1306,7 +1306,7 @@ mod tests {
                 (model, effort, permission)
             );
         }
-        assert_eq!((r.retries, r.timeout_secs), (2, 600));
+        assert_eq!((r.retries, r.timeout_secs), (2, 900));
         assert!(r.summary().contains("-opus-5, high effort; file tools"));
         for a in AGENTS {
             assert_eq!(
