@@ -391,6 +391,7 @@ impl ModelPeripheralPowerLeg {
 }
 
 /// The scheduler driving one bound board.
+#[allow(clippy::struct_excessive_bools)] // independent run flags and debug hooks, not a state machine
 pub struct Scheduler {
     pub circuit: Circuit,
     /// The bound circuit as it stood at construction, BEFORE any destructive
@@ -538,7 +539,7 @@ pub struct Scheduler {
     /// SPIKE net HIGH for a sim-time fraction proportional to its decomposed spike
     /// count, so the firmware's per-sample RESET_SR-gated latch reads accumulate a
     /// count that tracks the decomposed RATE (not just a binary "spiked at all").
-    forced_node_volts: HashMap<usize, (f64, f64, f64, f64)>,
+    forced_node_volts: HashMap<NodeId, (f64, f64, f64, f64)>,
     /// Per-run count of chunks whose analog transient solve failed to converge.
     /// A failed chunk holds/recovers stale voltages (see `solve_chunk`'s `Err`
     /// arm), so its operating point is not a real solve: it is excluded from the
@@ -778,10 +779,10 @@ impl UnexercisedBus {
     /// The one-line warning every surface emits for this device.
     #[must_use]
     pub fn message(&self) -> String {
-        let on = match &self.controller {
-            Some(c) => format!(" (bound to controller '{c}')"),
-            None => String::new(),
-        };
+        let on = self
+            .controller
+            .as_ref()
+            .map_or_else(String::new, |c| format!(" (bound to controller '{c}')"));
         format!(
             "co-sim: {} device '{}'{on} is on the board but this MCU platform \
              models no {} controller; the firmware's bus traffic can never \
@@ -1199,6 +1200,7 @@ impl Scheduler {
     /// Returns an error if firmware is given and an MCU's active-low reset role is
     /// wired directly to ground, or if an MCU core cannot be instantiated or loaded
     /// with the firmware.
+    #[allow(clippy::too_many_lines)] // constructor wiring every subsystem in dependency order
     pub fn new(
         bound: BoundBoard,
         firmware: Option<&std::path::Path>,
@@ -1537,15 +1539,15 @@ impl Scheduler {
             }
         }
         let mut evidence: HashMap<u32, Vec<u32>> = HashMap::new();
-        for (i, d) in self.circuit.devices.iter().enumerate() {
-            if pin_legs.contains(&(i as u32)) {
+        for (i, d) in (0u32..).zip(&self.circuit.devices) {
+            if pin_legs.contains(&i) {
                 continue;
             }
             for n in d.nodes() {
                 if n == NodeId::GROUND {
                     continue;
                 }
-                evidence.entry(n.0).or_default().push(i as u32);
+                evidence.entry(n.0).or_default().push(i);
             }
         }
         self.digital_in_evidence = evidence;
@@ -1603,7 +1605,7 @@ impl Scheduler {
     ) {
         for peripheral in peripherals {
             let reference = peripheral.reference;
-            let power = peripheral.power;
+            let power = peripheral.power.as_ref();
             let cs_net = peripheral.cs_net;
             match peripheral.spec {
                 PeripheralSpec::I2cEeprom {
@@ -1674,7 +1676,7 @@ impl Scheduler {
     fn attach_powered_i2c(
         &mut self,
         reference: &str,
-        power: Option<hauksbee_bind::binder::BoundPeripheralPower>,
+        power: Option<&hauksbee_bind::binder::BoundPeripheralPower>,
         bus: I2cBus,
     ) {
         let bus = Arc::new(Mutex::new(bus));
@@ -1693,7 +1695,7 @@ impl Scheduler {
     fn attach_powered_spi(
         &mut self,
         reference: &str,
-        power: Option<hauksbee_bind::binder::BoundPeripheralPower>,
+        power: Option<&hauksbee_bind::binder::BoundPeripheralPower>,
         bus: SpiBus,
         cs_net: Option<NodeId>,
         controller: Option<&str>,
@@ -1721,7 +1723,7 @@ impl Scheduler {
     fn attach_model_peripheral_power(
         &mut self,
         reference: &str,
-        power: hauksbee_bind::binder::BoundPeripheralPower,
+        power: &hauksbee_bind::binder::BoundPeripheralPower,
         bus: ModelPeripheralBus,
     ) {
         let isource = self.circuit.add(Device::Isource {
@@ -1945,6 +1947,8 @@ impl Scheduler {
     /// clocks). Returns `None` — leaving the part on the ordinary once-per-chunk
     /// tick path — whenever provenance cannot be established, which is the
     /// conservative answer in every ambiguous case below.
+    #[allow(clippy::too_many_lines)] // one conservative classification pass
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // gpio keys are widened u32 ids
     fn bind_parallel_memory(
         &self,
         component: usize,
@@ -2037,8 +2041,8 @@ impl Scheduler {
             }
         }
         let mut pull_candidates: HashMap<NodeId, Vec<(DeviceId, bool)>> = HashMap::new();
-        for (index, device) in self.circuit.devices.iter().enumerate() {
-            if permitted_driver_resistors.contains(&DeviceId(index as u32)) {
+        for (index, device) in (0u32..).zip(&self.circuit.devices) {
+            if permitted_driver_resistors.contains(&DeviceId(index)) {
                 continue;
             }
             let Device::Resistor { a, b, ohms, .. } = device else {
@@ -2064,7 +2068,7 @@ impl Scheduler {
                 pull_candidates
                     .entry(node)
                     .or_default()
-                    .push((DeviceId(index as u32), level));
+                    .push((DeviceId(index), level));
             }
         }
         let mut passive_pull_devices = std::collections::HashSet::new();
@@ -2075,13 +2079,10 @@ impl Scheduler {
                 pulled_levels.insert(node, *level);
             }
         }
-        let externally_coupled_nodes: std::collections::HashSet<NodeId> = self
-            .circuit
-            .devices
-            .iter()
-            .enumerate()
+        let externally_coupled_nodes: std::collections::HashSet<NodeId> = (0u32..)
+            .zip(&self.circuit.devices)
             .filter(|(index, _)| {
-                let id = DeviceId(*index as u32);
+                let id = DeviceId(*index);
                 !permitted_driver_resistors.contains(&id) && !passive_pull_devices.contains(&id)
             })
             .flat_map(|(_, device)| device.nodes())
@@ -2102,15 +2103,13 @@ impl Scheduler {
             }
             for (chain_i, chain) in chains.iter().enumerate() {
                 for (chip_i, &digital_i) in chain.order.iter().enumerate() {
-                    for (bit, role) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
-                        .iter()
-                        .enumerate()
+                    for (bit, role) in (0u8..).zip(["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"])
                     {
-                        if self.digital[digital_i].roles.get(*role) == Some(&node) {
+                        if self.digital[digital_i].roles.get(role) == Some(&node) {
                             return Some(ParallelSignal::Hc595 {
                                 chain: chain_i,
                                 chip: chip_i,
-                                bit: bit as u8,
+                                bit,
                             });
                         }
                     }
@@ -2327,10 +2326,7 @@ impl Scheduler {
             out.push(c.describe(settled));
         }
         for (&node, &(hi, lo, t0, t1)) in &self.forced_node_volts {
-            let stamped = hauksbee_solve::blame::sources_on_node(
-                &self.circuit,
-                hauksbee_ir::NodeId(node as u32),
-            );
+            let stamped = hauksbee_solve::blame::sources_on_node(&self.circuit, node);
             if stamped.is_empty() {
                 continue;
             }
@@ -2342,8 +2338,8 @@ impl Scheduler {
             let net = self
                 .net_nodes
                 .iter()
-                .find(|(_, id)| id.0 as usize == node)
-                .map_or_else(|| format!("node #{node}"), |(n, _)| n.clone());
+                .find(|(_, id)| **id == node)
+                .map_or_else(|| format!("node #{}", node.0), |(n, _)| n.clone());
             let window = if t0.is_finite() || t1.is_finite() {
                 format!(" over [{t0:.6}, {t1:.6}) s")
             } else {
@@ -2627,7 +2623,7 @@ impl Scheduler {
         let all: Vec<Arc<Mutex<SpiBus>>> = self.spi_buses.clone();
         for m in &mut self.mcus {
             let buses = all.clone();
-            m.core.on_spi(Box::new(move |ev| dispatch_spi(&buses, ev)));
+            m.core.on_spi(Box::new(move |ev| dispatch_spi(&buses, &ev)));
         }
     }
 
@@ -2681,7 +2677,7 @@ impl Scheduler {
     /// like-named pin select/deselect this bus and corrupt the decoded
     /// transaction. The hook goes on the single owning MCU only.
     fn register_cs_frame(
-        &mut self,
+        &self,
         bus: &Arc<Mutex<SpiBus>>,
         cs_pin: Option<(char, u8)>,
         cs_net: Option<NodeId>,
@@ -2939,8 +2935,8 @@ impl Scheduler {
     /// Peripheral state map, keyed by id, for component-state frames.
     #[must_use]
     pub fn peripheral_states(&self) -> HashMap<String, HashMap<String, f64>> {
-        let mut m = self.peripherals.states();
         use crate::peripherals::Peripheral as _;
+        let mut m = self.peripherals.states();
         for bus in &self.i2c_buses {
             let b = bus.lock_or_recover();
             m.insert(b.id().to_string(), b.state());
@@ -3013,6 +3009,7 @@ impl Scheduler {
     /// the previous chunk boundary, so an edge lands up to one chunk late and
     /// the datasheet propagation delay is not applied.
     #[must_use]
+    #[allow(clippy::cast_precision_loss)] // clock frequencies are far below 2^52 Hz
     pub fn timing_coverage(&self) -> Vec<TimingCoverage> {
         let logic = self.chunk_sampled_logic();
         let logic_row = (!logic.is_empty()).then(|| TimingCoverage {
@@ -3084,6 +3081,7 @@ impl Scheduler {
     /// Returns an error if a requested bound is not positive and finite, or if it
     /// is below the one-cycle resolution of a cycle-exact core, or below what a poll
     /// backend's integer-microsecond slice can resolve.
+    #[allow(clippy::cast_precision_loss)] // clock frequencies are far below 2^52 Hz
     pub fn configure_timing(&mut self, req: TimingRequirement) -> anyhow::Result<()> {
         let limits = [
             ("minimum pulse", req.min_pulse_s),
@@ -3160,6 +3158,8 @@ impl Scheduler {
     /// Advance the co-sim by `dt` seconds in fixed chunks. After a failed reset,
     /// returns the unchanged clock without a sample; consult `reset_failure`.
     /// Retained diagnostics still describe the old run, not a new observation.
+    #[allow(clippy::cast_precision_loss)] // the chunk count is a small whole number
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // ceil of a positive ratio
     pub fn step(&mut self, dt: f64) -> StepResult {
         let mut uart: HashMap<String, Vec<u8>> = HashMap::new();
         if self.reset_failure.is_some() {
@@ -3171,10 +3171,7 @@ impl Scheduler {
         // `chunk_s` is a maximum cadence, not a rounded target: strict timing
         // negotiation may have chosen it as the largest acceptable poll error.
         // Ceiling guarantees the actual `dt / chunks` slice never exceeds it.
-        let mut chunks = (dt / self.chunk_s).ceil() as u64;
-        if chunks == 0 {
-            chunks = 1;
-        }
+        let chunks = ((dt / self.chunk_s).ceil() as u64).max(1);
         let chunk = dt / chunks as f64;
 
         // Reset the per-frame extreme accumulators; run_chunk folds each chunk's
@@ -3202,6 +3199,8 @@ impl Scheduler {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one chunk's ordered MCU and analog phases
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // micros is floored, >= 0
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
         // Before any MCU advances: firmware must never run unflagged on a rail
         // whose regulation is unsupported.
@@ -3217,7 +3216,7 @@ impl Scheduler {
         // clock ahead of sim time. Instead the core advances 0 µs on a sub-µs
         // chunk and rolls forward once the banked fraction accrues a full
         // microsecond, keeping `micros_carry` in [0, 1).
-        let exact = chunk * 1e6 + self.micros_carry;
+        let exact = chunk.mul_add(1e6, self.micros_carry);
         let micros_f = exact.floor();
         self.micros_carry = exact - micros_f;
         let micros = micros_f as u64;
@@ -3705,9 +3704,8 @@ impl Scheduler {
                                     *ohms < WEAK_DIGITAL_DRIVE_OHMS
                                 }
                                 // A capacitor cannot decide a DC level.
-                                Some(Device::Capacitor { .. }) => false,
+                                Some(Device::Capacitor { .. }) | None => false,
                                 Some(_) => true,
-                                None => false,
                             })
                     });
                 if !driven {
@@ -3771,7 +3769,7 @@ impl Scheduler {
     // (which the Windows release leg compiles with warnings as errors) would
     // otherwise see it unused.
     #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    fn deselect_heuristic_spi_buses(&mut self, chunk: f64) {
+    fn deselect_heuristic_spi_buses(&self, chunk: f64) {
         for bus in &self.spi_buses {
             let mut guard = bus.lock_or_recover();
             if guard.frames_itself() {
@@ -4155,6 +4153,7 @@ impl Scheduler {
     /// answer, so any failure returns `None`. Diagnostics keep the worst
     /// sub-march residual; accepted-step thermal energy accumulates additively
     /// into the one shared accumulator.
+    #[allow(clippy::cast_precision_loss)] // the subdivision count is small
     fn march_chunk_subdivided(
         &self,
         chunk: f64,
@@ -4265,7 +4264,13 @@ impl Scheduler {
         seed: Option<&[f64]>,
         x_end: &[f64],
     ) -> Option<f64> {
+        // Worst-case Richardson factors at error ratio r = 2 (see above).
+        const REFINED_FACTOR: f64 = 2.0;
+        const COARSE_FACTOR: f64 = 1.0;
+        const REFINED_TOL_SCALE: f64 = 0.25;
+        const COARSE_TOL_SCALE: f64 = 4.0;
         // Deliberately-broken-estimator test hook: prove the two-sided test
+
         // catches an estimator that stops measuring. Never set in production.
         if self.debug_zero_fallback_error_estimate {
             return Some(0.0);
@@ -4288,11 +4293,6 @@ impl Scheduler {
         // The companion's thermal integral is scratch either way: the adopted
         // rung's energy deposit is the real one.
         let mut scratch = ChunkThermalAccum::default();
-        // Worst-case Richardson factors at error ratio r = 2 (see above).
-        const REFINED_FACTOR: f64 = 2.0;
-        const COARSE_FACTOR: f64 = 1.0;
-        const REFINED_TOL_SCALE: f64 = 0.25;
-        const COARSE_TOL_SCALE: f64 = 4.0;
         let refined = Self::companion_opts(opts, REFINED_TOL_SCALE);
         let companion = if self.debug_skip_refined_companion {
             None
@@ -4338,8 +4338,8 @@ impl Scheduler {
         // march's at the run tolerances (x1) plus the companion's at its
         // scaled tolerances (x tol_scale; the 4x-coarser leg admits up to 4x
         // the slack into `diff`, so it must widen the floor accordingly).
-        let floor = (1.0 + tol_scale) * (self.opts.reltol * v_max + self.opts.vntol);
-        Some(2.0 * richardson * diff + floor)
+        let floor = (1.0 + tol_scale) * self.opts.reltol.mul_add(v_max, self.opts.vntol);
+        Some((2.0 * richardson).mul_add(diff, floor))
     }
 
     /// A node-voltage magnitude no physical board reaches. A converged solve
@@ -4465,8 +4465,8 @@ impl Scheduler {
                     // Every rung failed. Keep the solver's own refusal message:
                     // it carries the blame clause naming the net that refused to
                     // settle and the offending element(s). Throwing it away is
-                    // what left a 259-part board diagnosable only by bisection
-                    //. Said once per failed streak rather than per chunk.
+                    // what left a 259-part board diagnosable only by bisection.
+                    // Said once per failed streak rather than per chunk.
                     if self.consecutive_failed_chunks == 0 {
                         eprintln!(
                             "WARNING: analog solve failed at t={:.6e}s: {err}",
@@ -4488,7 +4488,6 @@ impl Scheduler {
                         // cold-start the next chunk.
                         self.node_volts.resize(self.circuit.node_count(), 0.0);
                         self.last_dc_seed = None;
-                        false
                     } else {
                         // If the DC operating point at t=0 was still captured
                         // (the streaming sink fires once before the march loop),
@@ -4501,8 +4500,8 @@ impl Scheduler {
                         // recorded as a failed chunk below: a recovered bias is
                         // not a solved window.
                         self.adopt_chunk_state(recovered);
-                        false
                     }
+                    false
                 }
             }
         };
@@ -4527,7 +4526,7 @@ impl Scheduler {
             let t = self.sim_time;
             for (&node, &(hi, lo, t0, t1)) in &self.forced_node_volts {
                 let v = if t >= t0 && t < t1 { hi } else { lo };
-                if let Some(slot) = self.node_volts.get_mut(node) {
+                if let Some(slot) = self.node_volts.get_mut(node.0 as usize) {
                     *slot = v;
                 }
             }
@@ -4655,7 +4654,7 @@ impl Scheduler {
         match self.net_nodes.get(net) {
             Some(&node) => {
                 self.forced_node_volts
-                    .insert(node.0 as usize, (high_volts, low_volts, t_start, t_end));
+                    .insert(node, (high_volts, low_volts, t_start, t_end));
                 // Reflect immediately so a same-chunk latch sample sees it too.
                 let t = self.sim_time;
                 let v = if t >= t_start && t < t_end {
@@ -4772,8 +4771,9 @@ impl Scheduler {
         // solve and must not be presented as qualification of those values.
         if self.forced_node_volts.is_empty() {
             if let Some((max_abs, unknown)) = self.worst_residual {
-                let at = (1..self.circuit.node_count())
-                    .map(|node| NodeId(node as u32))
+                let at = (1u32..)
+                    .map(NodeId)
+                    .take(self.circuit.node_count().saturating_sub(1))
                     .find(|node| self.layout.node(*node) == Some(unknown))
                     .map_or_else(
                         || format!("unknown #{unknown}"),
@@ -4817,7 +4817,7 @@ impl Scheduler {
         let mut names: Vec<String> = self
             .forced_node_volts
             .keys()
-            .map(|&node| self.circuit.node_name(NodeId(node as u32)).to_string())
+            .map(|&node| self.circuit.node_name(node).to_string())
             .collect();
         names.sort();
         names
@@ -4852,10 +4852,10 @@ impl Scheduler {
             let subject = Subject::new(&key, &text);
             let taint = self.regulation.iter().find(|t| t.refs[0] == reg.reference);
             let never = (!supported).then_some("its input headroom was never evaluated");
-            let (taint_nets, because) = match taint {
-                Some(t) => (t.nets.clone(), Some(t.reason.as_str())),
-                None => (vec![rail], never),
-            };
+            let (taint_nets, because) = taint.map_or_else(
+                || (vec![rail], never),
+                |t| (t.nets.clone(), Some(t.reason.as_str())),
+            );
             let scope = Scope::Nets(NetScope::new(taint_nets, None)?);
             out.push(match because {
                 Some(because) => Assumption::not_exercised(
@@ -4957,7 +4957,7 @@ impl Scheduler {
         self.max_consecutive_failed_chunks = 0;
         self.last_solve_error = None;
         for st in self.stats.values_mut() {
-            *st = Default::default();
+            *st = NetStat::default();
         }
         self.firmware_edge_toggles.clear();
         self.frame_peak_current.clear();
@@ -5102,8 +5102,8 @@ impl Scheduler {
                     let vt = hauksbee_ir::thermal_voltage_c(self.circuit.temp_c) * model.n;
                     let i = if vt > 0.0 {
                         (model.is_at(self.circuit.temp_c)
-                            * (((v(*a) - v(*k)) / vt).clamp(-100.0, 200.0).exp() - 1.0))
-                            .abs()
+                            * ((v(*a) - v(*k)) / vt).clamp(-100.0, 200.0).exp_m1())
+                        .abs()
                     } else {
                         0.0
                     };
@@ -5280,6 +5280,7 @@ impl Scheduler {
     /// normalised over the chunk's cycle span and scaled by the chunk
     /// duration; coarse (but still contained, hence still correct to warn) on
     /// poll backends whose stamps are not cycle-exact.
+    #[allow(clippy::cast_precision_loss)] // cycle counts within one chunk are far below 2^52
     fn detect_short_pulses(&mut self, chunk: f64) {
         if self.tick_sequential_nets.is_empty() {
             return;
@@ -5732,7 +5733,7 @@ impl Scheduler {
     /// callers invalidate the result instead of silently trusting the DC
     /// fallback.
     // min/max keeps a NaN edge time bounded; clamp would propagate the NaN.
-    #[allow(clippy::manual_clamp)]
+    #[allow(clippy::manual_clamp, clippy::cast_precision_loss)] // cycle counts within one chunk are far below 2^52
     fn apply_pwl_drives(&mut self, chunk: f64) -> Vec<(usize, f64)> {
         use hauksbee_ir::{PwlPoint, SourceKind};
         // Two PWL corners per transition plus the anchors; 10k transitions
@@ -6116,7 +6117,7 @@ fn set_isource_dc(circuit: &mut Circuit, id: DeviceId, amps: f64) {
 /// McuShared→SpiBus lock order.
 fn dispatch_spi(
     buses: &[std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>],
-    ev: hauksbee_mcu::SpiEvent,
+    ev: &hauksbee_mcu::SpiEvent,
 ) -> u8 {
     let apply = |bus: &std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>| -> u8 {
         let mut g = bus.lock_or_recover();
@@ -7033,6 +7034,7 @@ missing = ["measurement_registers"]
     /// the scheduler has to handle. Every field is a knob; the default is a
     /// faithful, silent, 16 MHz core that records nothing.
     #[derive(Default)]
+    #[allow(clippy::struct_excessive_bools)] // independent test knobs, not a state machine
     struct MockCore {
         digital_ins: Arc<Mutex<Vec<(GpioPin, bool)>>>,
         micros: Arc<Mutex<Vec<u64>>>,
@@ -7523,21 +7525,20 @@ missing = ["measurement_registers"]
         // observes it and applies standby.
         sched.step(2.0 * DEFAULT_CHUNK_S);
         let idle = sched.peripheral_states()["U1"].clone();
-        assert_eq!(idle["powered"], 1.0);
+        assert_eq!(idle["powered"].to_bits(), 1.0_f64.to_bits());
         assert!((idle["supply_v"] - 3.3).abs() < 1e-6, "{idle:?}");
         assert!((idle["supply_current_a"] - 6e-6).abs() < 1e-12, "{idle:?}");
 
-        {
-            let mut bus = sched.i2c_buses()[0].lock_or_recover();
-            bus.dispatch(hauksbee_mcu::I2cEvent::Start {
-                addr: 0x50,
-                read: true,
-            });
-            assert_eq!(
-                bus.dispatch(hauksbee_mcu::I2cEvent::Read { addr: 0x50 }),
-                Some(0xff)
-            );
-        }
+        let mut bus = sched.i2c_buses()[0].lock_or_recover();
+        bus.dispatch(hauksbee_mcu::I2cEvent::Start {
+            addr: 0x50,
+            read: true,
+        });
+        assert_eq!(
+            bus.dispatch(hauksbee_mcu::I2cEvent::Read { addr: 0x50 }),
+            Some(0xff)
+        );
+        drop(bus);
         sched.step(DEFAULT_CHUNK_S);
         let read = sched.peripheral_states()["U1"].clone();
         assert!((read["supply_current_a"] - 1e-3).abs() < 1e-12, "{read:?}");
@@ -7547,8 +7548,8 @@ missing = ["measurement_registers"]
         sched.node_volts[vcc] = 1.0;
         sched.gate_model_peripherals_from_rails();
         let off = sched.peripheral_states()["U1"].clone();
-        assert_eq!(off["powered"], 0.0);
-        assert_eq!(off["supply_current_a"], 0.0);
+        assert_eq!(off["powered"].to_bits(), 0);
+        assert_eq!(off["supply_current_a"].to_bits(), 0);
         let mut bus = sched.i2c_buses()[0].lock_or_recover();
         assert_eq!(
             bus.dispatch(hauksbee_mcu::I2cEvent::Start {
@@ -7561,6 +7562,7 @@ missing = ["measurement_registers"]
             bus.dispatch(hauksbee_mcu::I2cEvent::Read { addr: 0x50 }),
             None
         );
+        drop(bus);
     }
 
     #[test]
@@ -7992,7 +7994,7 @@ missing = ["measurement_registers"]
             roles.insert(role.to_string(), node);
             if let Some(index) = gpio_roles.iter().position(|candidate| *candidate == role) {
                 gpio_drivers.insert(
-                    ('B', index as u8),
+                    ('B', u8::try_from(index).unwrap()),
                     hauksbee_bind::drivers::PinDriver::stamp(
                         &mut circuit,
                         node,
@@ -8103,6 +8105,7 @@ data_out = ["io0"]
             vec![hauksbee_mcu::PinDrive::drive(PinId::new('B', 1), false)],
             "a sub-chunk pulse must synchronously write and return the new memory bit"
         );
+        drop(slot);
     }
 
     #[test]
@@ -8348,7 +8351,7 @@ data_out = ["io0"]
 
         sched.step(5.0 * DEFAULT_CHUNK_S);
 
-        let calls = digital_ins.lock_or_recover();
+        let calls = digital_ins.lock_or_recover().clone();
         let for_pin = |pin: (char, u8)| -> Vec<bool> {
             calls
                 .iter()
@@ -8617,11 +8620,12 @@ data_out = ["io0"]
         cb(E::Stop { addr });
         drop(slot);
 
-        let b1 = bus1.lock_or_recover();
-        let b2 = bus2.lock_or_recover();
-        assert_eq!(b1.slave::<Eeprom24c>(0x50).unwrap().contents()[0], 0xAB);
         assert_eq!(read_back, Some(0xAB));
-        assert!(b2
+        let b1 = bus1.lock_or_recover();
+        assert_eq!(b1.slave::<Eeprom24c>(0x50).unwrap().contents()[0], 0xAB);
+        drop(b1);
+        assert!(bus2
+            .lock_or_recover()
             .slave::<Eeprom24c>(0x48)
             .unwrap()
             .contents()
@@ -8712,20 +8716,14 @@ data_out = ["io0"]
     #[test]
     fn fractional_and_sub_microsecond_chunks_track_true_elapsed_time() {
         let delivered = delivered_micros(1.3e-6, 10);
-        assert!(
-            (delivered as f64 - 13.0).abs() <= 1.0,
-            "{delivered} us vs 13.0 true"
-        );
+        assert!(delivered.abs_diff(13) <= 1, "{delivered} us vs 13.0 true");
         assert!(
             delivered >= 12,
             "per-chunk rounding undercounts: {delivered}"
         );
 
         let delivered = delivered_micros(0.5e-6, 20);
-        assert!(
-            (delivered as f64 - 10.0).abs() <= 1.0,
-            "{delivered} us vs 10.0 true"
-        );
+        assert!(delivered.abs_diff(10) <= 1, "{delivered} us vs 10.0 true");
         assert!(delivered <= 11, "min-1 clamp races ahead: {delivered}");
     }
 
@@ -8737,8 +8735,8 @@ data_out = ["io0"]
         sched.run_chunk(1e-4, &mut HashMap::new());
 
         let budget = sched.error_budget().expect("valid scheduler budget");
-        assert_eq!(budget.tolerance().reltol(), 2.5e-4);
-        assert_eq!(budget.tolerance().vntol(), 7.5e-7);
+        assert_eq!(budget.tolerance().reltol().to_bits(), 2.5e-4_f64.to_bits());
+        assert_eq!(budget.tolerance().vntol().to_bits(), 7.5e-7_f64.to_bits());
         let residual = budget
             .residual()
             .expect("a converged chunk measures its residual");
@@ -8767,7 +8765,7 @@ data_out = ["io0"]
         assert!(sched.analog_abort_tripped());
 
         sched.reset_run_state().unwrap();
-        assert_eq!(sched.sim_time, 0.0);
+        assert_eq!(sched.sim_time.to_bits(), 0);
         assert_eq!(sched.failed_chunk_count(), 0);
         assert!(sched.failed_windows().is_empty());
         assert!(sched.analog_valid());
@@ -8886,6 +8884,7 @@ data_out = ["io0"]
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one scripted reset scenario reads best as a single sequence
     fn reset_refusals_preserve_history_and_block_partial_cores() {
         for (unsupported, fails) in [(true, 2), (false, 1), (false, 2)] {
             let first = MockCore {
@@ -8946,7 +8945,7 @@ data_out = ["io0"]
             if !unsupported {
                 let calls = h1.micros.lock().unwrap().len();
                 for _ in 0..2 {
-                    assert_eq!(sched.step(0.1).sim_time, old_time);
+                    assert_eq!(sched.step(0.1).sim_time.to_bits(), old_time.to_bits());
                 }
                 assert_eq!(h1.micros.lock().unwrap().len(), calls);
             }
@@ -8984,7 +8983,7 @@ data_out = ["io0"]
                 sched.responder_registries.pop();
                 sched.reset_run_state().unwrap();
                 assert!(sched.reset_failure().is_none());
-                assert_eq!(sched.sim_time, 0.0);
+                assert_eq!(sched.sim_time.to_bits(), 0);
                 assert!(sched.failed_windows.is_empty());
                 assert!(sched.step(0.001).sim_time > 0.0);
             }
@@ -9023,6 +9022,7 @@ data_out = ["io0"]
         assert!(m.digital_in_levels.is_empty());
         let sh = m.shared.lock().unwrap();
         assert!(sh.pin_edges.is_empty() && sh.pin_edge_log.is_empty() && sh.uart_out.is_empty());
+        drop(sh);
     }
 
     // ── Drive-direction observability ────────────────────────────────────────
@@ -9320,7 +9320,7 @@ data_out = ["io0"]
                 max_edge_error_s: Some(100e-9),
             })
             .expect("a 16 MHz push backend resolves both budgets without chunking");
-        assert_eq!(exact.chunk_s, DEFAULT_CHUNK_S);
+        assert_eq!(exact.chunk_s.to_bits(), DEFAULT_CHUNK_S.to_bits());
 
         let mut coarse = coarse_scheduler();
         coarse
@@ -9365,7 +9365,8 @@ data_out = ["io0"]
             .expect_err("a 0.5 us poll slice cannot be represented by run_micros(u64)");
         assert!(err.to_string().contains("1.000 us"), "{err}");
         assert_eq!(
-            coarse.chunk_s, DEFAULT_CHUNK_S,
+            coarse.chunk_s.to_bits(),
+            DEFAULT_CHUNK_S.to_bits(),
             "refusal must not half-apply policy"
         );
     }
