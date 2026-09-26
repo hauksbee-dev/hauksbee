@@ -215,19 +215,19 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
             .join("\u{000c}");
         std::fs::write(dir.path().join("datasheet.txt"), dump).is_ok()
     });
-    let selections = page_text
-        .as_deref()
-        .map(|pages| select_relevant_pages(pages, MAX_RENDERED_PAGES))
-        .unwrap_or_else(|| {
-            (1..=MAX_RENDERED_PAGES)
-                .map(|number| SelectedPage {
-                    number,
-                    reasons: vec!["front-page fallback because the PDF text layer was unavailable"],
-                    supplemental_reasons: Vec::new(),
-                    score: 0,
-                })
-                .collect()
-        });
+    let front_pages = || {
+        (1..=MAX_RENDERED_PAGES)
+            .map(|number| SelectedPage {
+                number,
+                reasons: vec!["front-page fallback because the PDF text layer was unavailable"],
+                supplemental_reasons: Vec::new(),
+                score: 0,
+            })
+            .collect()
+    };
+    let selections = page_text.as_deref().map_or_else(front_pages, |pages| {
+        select_relevant_pages(pages, MAX_RENDERED_PAGES)
+    });
 
     // Page renders are best-effort. Without poppler the extraction still runs
     // on text alone, so a missing optional tool degrades the result rather
@@ -312,7 +312,7 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         );
     }
     progress::start();
-    let pdf_text = extract_pdf_text(&args.pdf)?;
+    let pdf_text = extract_pdf_text(&args.pdf);
 
     // An empty kind means "you work it out". Being made to classify a part
     // before the tool will look at it is a barrier at exactly the wrong
@@ -601,7 +601,7 @@ fn timeout_tail(kept: Option<&Path>) -> String {
 /// Which LLM backend an extraction talks to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
-    /// `codex exec`, the agent CLI from OpenAI.
+    /// `codex exec`, the Codex agent CLI.
     Codex,
     /// Headless `claude -p`, the same prompt contract as codex.
     ClaudeCode,
@@ -994,15 +994,15 @@ fn pdftotext(path: &Path, layout: bool) -> Result<String> {
 /// The sentinel carries no path. The original location is local metadata an
 /// API request must not leak, and the API backend cannot open the file anyway,
 /// which is why `api_source_available` refuses that combination outright.
-fn extract_pdf_text(path: &Path) -> Result<String> {
+fn extract_pdf_text(path: &Path) -> String {
     if let Ok(text) = pdftotext(path, false) {
         progress::pages(text.matches('\u{000c}').count());
         if !text.trim().is_empty() {
-            return Ok(truncate_to_chars(&text, 60_000));
+            return truncate_to_chars(&text, 60_000);
         }
     }
     say!("[model-extract] pdftotext unavailable or produced no text; local agent backends will read the copied PDF directly");
-    Ok(PDF_TEXT_UNAVAILABLE.to_string())
+    PDF_TEXT_UNAVAILABLE.to_string()
 }
 
 fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
@@ -1063,12 +1063,13 @@ fn topic_score(text: &str, terms: &[&str]) -> usize {
                 .strip_prefix("table ")
                 .and_then(|text| text.split_once(". ").map(|(_, title)| title));
             let detailed_heading = heading_text.strip_prefix("detailed ");
-            terms.iter().any(|term| match term.is_ascii() {
-                false => first.is_some_and(|t| t.contains(term)),
-                true => {
+            terms.iter().any(|term| {
+                if term.is_ascii() {
                     heading_text.starts_with(term)
                         || table_heading.is_some_and(|title| title.starts_with(term))
                         || detailed_heading.is_some_and(|title| title.starts_with(term))
+                } else {
+                    first.is_some_and(|t| t.contains(term))
                 }
             })
         });
@@ -1714,12 +1715,12 @@ OUTPUT (TOML only, starting with [[models]]):
         part_re = regex::escape(&part.to_uppercase()),
         legal_kinds = crate::validation::KIND_NAMES.join(", "),
         entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
-        kind_line = match behavioral_family_base_kind(kind) {
-            Some(base) => format!(
+        kind_line = behavioral_family_base_kind(kind).map_or_else(
+            || kind.to_string(),
+            |base| format!(
                 "{base} (the {kind} family, written as a {base} entry; see its notes below)"
-            ),
-            None => kind.to_string(),
-        },
+            )
+        ),
         datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
@@ -1930,8 +1931,7 @@ basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""#,
 /// `[models.behavioral]` prompt section. Returns `None` for ordinary kinds.
 fn behavioral_family_base_kind(kind: &str) -> Option<&'static str> {
     match kind {
-        "charger" => Some("vreg"),
-        "pmic" => Some("vreg"),
+        "charger" | "pmic" => Some("vreg"),
         "balancer" => Some("digital"),
         _ => None,
     }
@@ -2275,7 +2275,7 @@ impl Reply<'_> {
             let records = records.map(|e| e.or_insert(ArrayOfTables::new().into()));
             match records {
                 Some(Item::ArrayOfTables(a)) if !a.iter().any(is_model) => {
-                    a.push(Table::from_iter(record.clone()));
+                    a.push(record.clone().collect::<Table>());
                 }
                 _ => continue,
             }
@@ -2301,7 +2301,7 @@ impl Reply<'_> {
             for (name, v, how) in derived {
                 say!("[model-extract] {}: {how}", entry.id);
                 let text = format!("{v:e}"); // 6.3662e-10, not 0.00000000063662
-                let mut value = text.parse().unwrap_or(toml_edit::Value::from(v));
+                let mut value = text.parse().unwrap_or_else(|_| toml_edit::Value::from(v));
                 value.decor_mut().set_suffix(format!("  # {how}"));
                 params.insert(name, Item::Value(value));
             }
@@ -2549,7 +2549,8 @@ fn identify_prompt(part: &str, pdf_text: &str) -> String {
         supported_kinds()
             .iter()
             .map(|k| format!("{k}: {}\n", kind_definition(k)))
-            .collect::<String>(),
+            .collect::<Vec<_>>()
+            .concat(),
         truncate_to_chars(pdf_text, 6000)
     )
 }
@@ -2689,14 +2690,16 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         )
     };
 
-    let check = match &ws.checker {
-        None => "No checker is provided; do not look for one.".to_string(),
-        Some(c) => format!(
-            "Check model.toml by running exactly `'{}' models lint model.toml` and fix what \
-             it reports. Never run any other `hauksbee`.",
-            c.display()
-        ),
-    };
+    let check = ws.checker.as_ref().map_or_else(
+        || "No checker is provided; do not look for one.".to_string(),
+        |c| {
+            format!(
+                "Check model.toml by running exactly `'{}' models lint model.toml` and fix \
+                 what it reports. Never run any other `hauksbee`.",
+                c.display()
+            )
+        },
+    );
     format!(
         "## Before you answer\n\n         {pages}\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
          files in your working directory: do not list, search or read anything outside it \
@@ -2742,10 +2745,10 @@ pub fn resolve_with(
     let mut resolved = config.resolve(host, args.backend);
     resolved.override_model(args.model.as_deref(), args.effort.as_deref());
     if let Some(base) = &args.api_base {
-        resolved.api.base_url = base.clone();
+        resolved.api.base_url.clone_from(base);
     }
     if let Some(name) = &args.api_key_env {
-        resolved.api.api_key_env = name.clone();
+        resolved.api.api_key_env.clone_from(name);
     }
     if config.retries.is_none() {
         resolved.retries = args.retries;
@@ -2801,12 +2804,13 @@ const CONFINED_READ_ROOTS: &[&str] = &["/opt/homebrew", "/usr/local"];
 /// `/tmp` and a `$TMPDIR` sibling while the workspace and checker work. An
 /// explicit `--sandbox` flag overrides `default_permissions`, so none is passed.
 fn codex_confinement(ws: &Workspace) -> [String; 4] {
-    let reads: String = CONFINED_READ_ROOTS
+    let reads = CONFINED_READ_ROOTS
         .iter()
         .map(|root| (*root).to_string())
         .chain(ws.checker.iter().map(|c| c.display().to_string()))
         .map(|path| format!("{}=\"read\",", toml::Value::String(path)))
-        .collect();
+        .collect::<Vec<_>>()
+        .concat();
     let profile = format!(
         "permissions={{hauksbee={{filesystem={{\":minimal\"=\"read\",\":slash_tmp\"=\"none\",\
          \":tmpdir\"=\"none\",{reads}\":workspace_roots\"={{\".\"=\"write\"}}}}}}}}"
@@ -3830,14 +3834,14 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
     /// says nothing at all about the 45 V BC847, so a model that answers
     /// anyway has substituted a rating from a different device.
     #[test]
-    #[ignore]
+    #[ignore = "live: needs a signed-in extraction backend"]
     fn extract_bc846_live() {
         let pdf = testdata("datasheets/BC846.pdf");
         assert!(pdf.exists(), "BC846 datasheet not found at {pdf:?}");
         if !live_backend_available() {
             return;
         }
-        let text = extract_pdf_text(&pdf).expect("PDF text extraction");
+        let text = extract_pdf_text(&pdf);
         let (_, entry) = draft(pdf, &text, "BC846", "bjt_npn");
         let bf = entry.params.get_f64("bf").expect("bf present");
         assert!(
@@ -3849,13 +3853,13 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 
     /// Live: `--kind charger` against the LTC4020 excerpt in testdata.
     #[test]
-    #[ignore]
+    #[ignore = "live: needs a signed-in extraction backend"]
     fn extract_ltc4020_charger_live() {
         let src = testdata("datasheets/LTC4020_excerpt.txt");
         if !src.exists() || !live_backend_available() {
             return;
         }
-        let text = extract_pdf_text(&src).expect("text");
+        let text = extract_pdf_text(&src);
         let (_, entry) = draft(src, &text, "LTC4020", "charger");
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
         let c = entry.behavioral.converter.expect("converter block");
@@ -4321,7 +4325,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             (extract_config::ENV_CONFIG_PATH, &cfg),
             ("HAUKSBEE_CLAUDE_COMMAND", &agent),
         ];
-        env.iter().for_each(|(k, v)| std::env::set_var(k, v));
+        for (k, v) in env {
+            std::env::set_var(k, v);
+        }
         std::env::set_var("HAUKSBEE_EXTRACT_TIMEOUT_SECS", "1");
         let [(clean, kept), (bad, dropped)] = [ex.card, "[[models]]\nid = 1\n"].map(|text| {
             std::fs::write(&draft, text).unwrap();
@@ -4333,7 +4339,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             let file = format!("{}.toml", sanitise_filename(ex.part));
             (err, std::fs::read_to_string(out.path().join(file)).ok())
         });
-        env.iter().for_each(|(k, _)| std::env::remove_var(k));
+        for (k, _) in env {
+            std::env::remove_var(k);
+        }
         std::env::remove_var("HAUKSBEE_EXTRACT_TIMEOUT_SECS");
         assert!(clean.to_string().contains("INCOMPLETE"), "{clean}");
         assert!(kept.is_some_and(|k| k.contains("datasheet-derived") && k.contains("sha256")));

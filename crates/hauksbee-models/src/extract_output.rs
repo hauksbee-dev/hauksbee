@@ -15,7 +15,8 @@ use toml_edit::{value, ArrayOfTables, Item, Table, Value};
 /// a library scan never sees half a file. An existing file is replaced only
 /// when `overwrite`; otherwise the persist fails with `AlreadyExists`.
 pub fn publish(path: &Path, text: &str, overwrite: bool) -> std::io::Result<()> {
-    let mut draft = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+    let mut draft =
+        tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
     draft.write_all(text.as_bytes())?;
     draft.as_file().sync_all()?;
     let persisted = if overwrite {
@@ -58,7 +59,7 @@ pub fn part_rule(part: &str, codes: &[&str]) -> String {
         let escaped: Vec<_> = tokens.map(|t| regex::escape(&t.to_uppercase())).collect();
         escaped.join("[-_ ]?")
     };
-    let mut arms: Vec<String> = [part].iter().chain(codes).map(arm).collect();
+    let mut arms: Vec<String> = std::iter::once(&part).chain(codes).map(arm).collect();
     arms.retain(|a| !a.is_empty());
     format!("(?i)^(?:{})$", arms.join("|"))
 }
@@ -69,7 +70,11 @@ pub fn part_rule(part: &str, codes: &[&str]) -> String {
 /// and the ordering codes the draft lists. (A `[sensor]` spec has no source.)
 pub fn finalise(raw: &str, part: &str, pdf: &Path) -> anyhow::Result<String> {
     let sha = Sha256::digest(std::fs::read(pdf)?);
-    let sha: String = sha.iter().map(|b| format!("{b:02x}")).collect();
+    let sha = sha
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .concat();
     let title = pdf.file_name().unwrap_or_default().to_string_lossy();
     let mut doc: toml_edit::DocumentMut = raw.parse()?;
     let tables = doc.get_mut("models").and_then(Item::as_array_of_tables_mut);
