@@ -223,10 +223,10 @@ async fn design_router_threads_every_supplemental_input_and_repeated_models() {
 #[tokio::test]
 async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
     let check: frontdoor::DesignCheckRunner = Arc::new(|upload, spec| {
-        let (schematic_name, schematic_len) =
-            upload.schematic.map_or(("none".to_string(), 0), |file| {
-                (file.name, file.bytes.len())
-            });
+        let (schematic_name, schematic_len) = upload.schematic.map_or_else(
+            || ("none".to_string(), 0),
+            |file| (file.name, file.bytes.len()),
+        );
         format!(
             "{{\"ok\":true,\"board_name\":\"{}\",\"board_len\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len},\"spec_len\":{}}}",
             upload.board.name,

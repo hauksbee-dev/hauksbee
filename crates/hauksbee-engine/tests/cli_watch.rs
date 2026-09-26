@@ -74,7 +74,7 @@ fn watch_reruns_on_change() {
 
     // A genuine content change. Rewriting the exact same bytes is not a change
     // and native event backends are permitted to coalesce it away.
-    let mut changed = bytes.clone();
+    let mut changed = bytes;
     changed.extend_from_slice(b"\n# watch integration test\n");
     std::fs::write(&board, changed).unwrap();
     let saw_run2 = wait_for_short(&buf, "run #2", 30_000);

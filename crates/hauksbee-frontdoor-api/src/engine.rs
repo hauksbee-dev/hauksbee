@@ -18,6 +18,11 @@ pub trait Engine: Send + 'static {
     /// Advance simulation by `dt` seconds and produce a frame.
     fn step(&mut self, dt: f64) -> SimFrame;
     /// Rewind only after every loaded core has successfully reset.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the failure if any loaded core cannot be reset; the
+    /// run is then not rewound.
     fn reset(&mut self) -> Result<(), String>;
     fn set_controls(&mut self, controls: SolverControls);
     fn controls(&self) -> SolverControls;
@@ -33,10 +38,20 @@ pub trait Engine: Send + 'static {
         false
     }
     /// Attach a control to the running circuit. Default is an explicit refusal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the engine does not support live peripherals (the
+    /// default) or cannot attach this `spec` to the running circuit.
     fn attach_peripheral(&mut self, _spec: LivePeripheralSpec) -> Result<(), String> {
         Err("this engine does not support attaching live peripherals".into())
     }
     /// Attach a source-bound declarative bus device to the live simulation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the engine does not support live register-map devices
+    /// (the default) or cannot attach this `spec` to the running simulation.
     fn attach_register_map(&mut self, _spec: LiveRegisterMapSpec) -> Result<(), String> {
         Err("this engine does not support attaching live register-map devices".into())
     }

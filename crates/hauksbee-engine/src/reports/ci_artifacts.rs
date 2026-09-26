@@ -1,7 +1,9 @@
-//! CI-native artifacts for `hauksbee run`: `--junit <path>` (JUnit XML) and
-//! `--sarif <path>` (SARIF 2.1.0), both computed from the SAME selected run
-//! surface, so a pipeline consumes findings and terminal refusals as test
-//! results / code-scanning alerts without parsing the human report.
+//! CI-native artifacts for `hauksbee run`: `JUnit` XML and SARIF 2.1.0.
+//!
+//! `--junit <path>` (`JUnit` XML) and `--sarif <path>` (SARIF 2.1.0) are both
+//! computed from the SAME selected run surface, so a pipeline consumes findings
+//! and terminal refusals as test results / code-scanning alerts without parsing
+//! the human report.
 //! GitHub annotations for gate-grade findings ride the `--strict` gate
 //! (see [`super::strict_gate_exit`]'s caller in `reports::mod`).
 
@@ -16,6 +18,7 @@ use crate::result::{JsonFinding, Refusal};
 /// Platforms without a stable file-id API fail closed when both paths already
 /// exist, because artifact validation must never guess that an input is safe to
 /// overwrite.
+#[must_use]
 pub fn paths_alias(left: &Path, right: &Path) -> bool {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let canonicalish = |path: &Path| {
@@ -109,9 +112,16 @@ fn write_current(
     Ok(())
 }
 
-/// Start one artifact transaction. The fail-closed placeholder is written
-/// before board/firmware parsing, so an early return, panic, signal or legacy
-/// exit can never leave a previous run's green file at the requested path.
+/// Start one artifact transaction.
+///
+/// The fail-closed placeholder is written before board/firmware parsing, so an
+/// early return, panic, signal or legacy exit can never leave a previous run's
+/// green file at the requested path.
+///
+/// # Errors
+///
+/// Returns an error if the fail-closed placeholder cannot be written to a
+/// requested `--junit` or `--sarif` path.
 pub fn begin_run(
     board_path: &Path,
     junit: Option<&Path>,
@@ -160,9 +170,10 @@ pub fn set_current_findings(findings: Vec<JsonFinding>) {
     });
 }
 
-/// Replace the synthetic pre-resolution name used for an embedded example with
-/// the materialized board path. The transaction must start before example
-/// lookup, but successful artifacts should still identify the real input.
+/// Replace the synthetic pre-resolution name for an embedded example with the real path.
+///
+/// The transaction must start before example lookup, but successful artifacts
+/// should still identify the materialized board path.
 pub fn set_current_board_path(board_path: &Path) {
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
@@ -188,6 +199,12 @@ fn take_current() -> Option<CurrentRunArtifacts> {
     CURRENT_RUN.with(|slot| slot.borrow_mut().take())
 }
 
+/// Commit the current run's artifacts as a successful outcome.
+///
+/// # Errors
+///
+/// Returns an error if a requested `--junit` or `--sarif` file cannot be
+/// written; a fail-closed refusal is then written in its place where possible.
 pub fn finish_success() -> anyhow::Result<()> {
     if let Some(state) = take_current() {
         if let Err(error) = write_current(&state, None, 0, TerminalOutcomeKind::AnalysisRefusal) {
@@ -243,7 +260,7 @@ pub fn exit_with_refusal(code: i32, refusal: &Refusal) -> ! {
 pub fn exit_with_findings(code: i32, annotation_items: &[String]) -> ! {
     let mut retained_refusal = None;
     if let Some(state) = take_current() {
-        retained_refusal = state.refusal.clone();
+        retained_refusal.clone_from(&state.refusal);
         if let Err(error) = write_current(&state, None, code, TerminalOutcomeKind::AnalysisRefusal)
         {
             eprintln!("error: could not finalize requested CI artifact: {error}");
@@ -256,18 +273,21 @@ pub fn exit_with_findings(code: i32, annotation_items: &[String]) -> ! {
     std::process::exit(code)
 }
 
-/// Convert non-clean evidence statuses into the same finding vocabulary CI
-/// writers already consume. Undermined RUN-LEVEL evidence is gate-grade;
-/// qualified evidence remains visible without becoming green-by-omission.
+/// Convert non-clean evidence statuses into the finding vocabulary CI writers consume.
+///
+/// Undermined RUN-LEVEL evidence is gate-grade; qualified evidence remains
+/// visible without becoming green-by-omission.
+#[must_use]
 pub fn evidence_findings(maps: &[hauksbee_ir::evidence::EvidenceMap]) -> Vec<JsonFinding> {
     evidence_findings_with_gate(maps, |_| true)
 }
 
-/// As [`evidence_findings`], with the same run-level split the JSON verdict
-/// makes: an undermined map whose assertion `gates` says is NOT run-level
-/// (it backs an individual finding) is demoted to a warning badge instead of
-/// a gate-grade failure, so JUnit/SARIF can never fail a run whose JSON
-/// verdict says pass, or vice versa.
+/// As [`evidence_findings`], with the same run-level split the JSON verdict makes.
+///
+/// An undermined map whose assertion `gates` says is NOT run-level (it backs an
+/// individual finding) is demoted to a warning badge instead of a gate-grade
+/// failure, so JUnit/SARIF can never fail a run whose JSON verdict says pass, or
+/// vice versa.
 pub fn evidence_findings_with_gate(
     maps: &[hauksbee_ir::evidence::EvidenceMap],
     gates: impl Fn(&hauksbee_ir::evidence::EvidenceMap) -> bool,
@@ -318,13 +338,15 @@ pub fn github_blocker_annotation(blockers: &[String]) {
     );
 }
 
-/// GitHub error annotation for a whole-run refusal (the exit-3 documents the
-/// JUnit `<error>` and the SARIF `hauksbee/invalid-for-analysis` result carry),
-/// so the annotation surface cannot stay silent on a run the other two
-/// artifacts show red. It fires on the refusal, not on the exit code, so a run
-/// that refused AND raised faults annotates both this and the `--strict` gate
-/// while exiting 2: the faults outrank the refusal for the exit code without
-/// making the refusal untrue. No-op outside GitHub Actions.
+/// GitHub error annotation for a whole-run refusal.
+///
+/// The refusal is the exit-3 document the `JUnit` `<error>` and the SARIF
+/// `hauksbee/invalid-for-analysis` result carry, so the annotation surface cannot
+/// stay silent on a run the other two artifacts show red. It fires on the
+/// refusal, not on the exit code, so a run that refused AND raised faults
+/// annotates both this and the `--strict` gate while exiting 2: the faults
+/// outrank the refusal for the exit code without making the refusal untrue. No-op
+/// outside GitHub Actions.
 pub fn github_refusal_annotation(refusal: &Refusal) {
     if std::env::var_os("GITHUB_ACTIONS").is_none() {
         return;
@@ -344,11 +366,12 @@ pub fn github_refusal_annotation(refusal: &Refusal) {
 
 /// GitHub annotations for evidence that is not entitled to a clean result.
 pub fn github_evidence_annotations(maps: &[hauksbee_ir::evidence::EvidenceMap]) {
-    github_evidence_annotations_with_gate(maps, |_| true)
+    github_evidence_annotations_with_gate(maps, |_| true);
 }
 
-/// As [`github_evidence_annotations`], with the run-level split: an
-/// undermined finding-backed map annotates as a warning, not an `::error`,
+/// As [`github_evidence_annotations`], with the run-level split.
+///
+/// An undermined finding-backed map annotates as a warning, not an `::error`,
 /// so the annotation level can never contradict the JUnit/SARIF entry or the
 /// JSON verdict built from the same maps.
 pub fn github_evidence_annotations_with_gate(
@@ -373,15 +396,17 @@ pub fn github_evidence_annotations_with_gate(
     }
 }
 
-/// The one SARIF schema URL this writer targets, pinned so a consumer (GitHub
-/// code scanning validates against it) never sees a drifting reference. A unit
-/// test asserts the emitted document carries exactly this URL.
+/// The one SARIF schema URL this writer targets.
+///
+/// Pinned so a consumer (GitHub code scanning validates against it) never sees
+/// a drifting reference. A unit test asserts the emitted document carries
+/// exactly this URL.
 pub const SARIF_SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json";
 /// SARIF version matching [`SARIF_SCHEMA_URL`].
 pub const SARIF_VERSION: &str = "2.1.0";
 
-/// Whether a finding fails the JUnit testcase / escalates the SARIF level: the
+/// Whether a finding fails the `JUnit` testcase / escalates the SARIF level: the
 /// finding's own [`JsonFinding::gates`] answer
 /// from the predicate its surface's gate asks.
 ///
@@ -413,16 +438,20 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// Render the findings as one JUnit XML document: one `<testsuite>` per check
-/// family, one `<testcase>` per finding (gating findings carry a `<failure>`),
-/// and a synthetic passing "no findings" case for a clean check so an empty
-/// suite is distinguishable from a suite that never ran.
+/// Render the findings as one `JUnit` XML document.
+///
+/// One `<testsuite>` per check family, one `<testcase>` per finding (gating
+/// findings carry a `<failure>`), and a synthetic passing "no findings" case for
+/// a clean check so an empty suite is distinguishable from a suite that never
+/// ran.
+#[must_use]
 pub fn junit_xml(board_name: &str, findings: &[JsonFinding]) -> String {
     junit_xml_with_refusal(board_name, findings, None)
 }
 
-/// JUnit with an optional exit-3 testcase. A refusal is `<error>`, never
+/// `JUnit` with an optional exit-3 testcase. A refusal is `<error>`, never
 /// `<failure>`: the analysis did not reach a hardware verdict.
+#[must_use]
 pub fn junit_xml_with_refusal(
     board_name: &str,
     findings: &[JsonFinding],
@@ -536,16 +565,19 @@ fn junit_xml_for_checks(
     s
 }
 
-/// Render the findings as one SARIF 2.1.0 document. Rules are deduplicated by
-/// `check/kind`; each finding becomes a result whose level maps gating ->
-/// error, non-gating -> warning, located at the board file (hauksbee findings
-/// are electrical, not line-addressed).
+/// Render the findings as one SARIF 2.1.0 document.
+///
+/// Rules are deduplicated by `check/kind`; each finding becomes a result whose
+/// level maps gating -> error, non-gating -> warning, located at the board file
+/// (hauksbee findings are electrical, not line-addressed).
+#[must_use]
 pub fn sarif_json(board_path: &Path, findings: &[JsonFinding]) -> String {
     sarif_json_with_refusal(board_path, findings, None)
 }
 
 /// SARIF with a structured exit-3 result. The properties retain the complete
 /// refusal object so code-scanning consumers need not parse prose.
+#[must_use]
 pub fn sarif_json_with_refusal(
     board_path: &Path,
     findings: &[JsonFinding],
@@ -638,9 +670,11 @@ fn sarif_json_with_terminal_outcome(
     serde_json::to_string_pretty(&doc).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
 }
 
-/// GitHub Actions workflow annotations for gate-grade findings, printed only
-/// under `GITHUB_ACTIONS` and only when `--strict` is gating (the same items
-/// the `FAILED under --strict` line names). One `::error` per finding.
+/// GitHub Actions workflow annotations for gate-grade findings.
+///
+/// Printed only under `GITHUB_ACTIONS` and only when `--strict` is gating (the
+/// same items the `FAILED under --strict` line names). One `::error` per
+/// finding.
 ///
 /// stderr, like every other annotation here: a workflow command is not report
 /// content, and on stdout it appended non-JSON lines after the `--json`

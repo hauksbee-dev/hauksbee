@@ -31,10 +31,10 @@ fn one_volt_across(name: &str, ohms: f64) -> (Circuit, DeviceId) {
     (circuit, id)
 }
 
-/// The canonical hand-check: 0.5 W in a SOT-23 (theta_JA = 250 C/W) at 25 C
-/// ambient reaches Tj = 25 + 0.5*250 = 150 C. We drive the StressMonitor
+/// The canonical hand-check: 0.5 W in a SOT-23 (`theta_JA` = 250 C/W) at 25 C
+/// ambient reaches Tj = 25 + 0.5*250 = 150 C. We drive the `StressMonitor`
 /// directly through a power resistor whose dissipation we control exactly, with
-/// the resistor's footprint forced to a SOT-23-class theta_JA so the arithmetic
+/// the resistor's footprint forced to a SOT-23-class `theta_JA` so the arithmetic
 /// is unambiguous.
 #[test]
 fn hand_checked_half_watt_sot23_reaches_150c() {
@@ -104,7 +104,7 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
 
 /// Build the single-package PWM fixture: a 1 Ω load "Q1" whose node-1 voltage
 /// the test drives directly (1 V on ⇒ exactly `peak` = 1 W), with an explicit
-/// theta_JA and Tj limit so the arithmetic is hand-checkable.
+/// `theta_JA` and Tj limit so the arithmetic is hand-checkable.
 fn pwm_fixture(tj_limit_c: f64) -> (Circuit, StressMonitor) {
     let mut circuit = Circuit::new();
     let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
@@ -178,12 +178,12 @@ fn firmware_pwm_thermal_integrates_accepted_steps_not_endpoints() {
     const CHUNK_S: f64 = 1.0e-3;
     const DUTY: f64 = 0.75;
     const TJ_LIMIT_C: f64 = 90.0;
-    let expected_tj = 25.0 + DUTY * 1.0 * 100.0; // 100 C
+    let expected_tj = (DUTY * 1.0).mul_add(100.0, 25.0); // 100 C
 
     let (mut circuit, mut monitor) = pwm_fixture(TJ_LIMIT_C);
     let mut overtemperature = Vec::new();
     for chunk in 0..8 {
-        let t = (chunk + 1) as f64 * CHUNK_S;
+        let t = f64::from(chunk + 1) * CHUNK_S;
         overtemperature.extend(
             drive_pwm_chunk(&mut circuit, &mut monitor, DUTY, CHUNK_S, false, t)
                 .into_iter()
@@ -222,12 +222,12 @@ fn firmware_pwm_duty_that_keeps_the_part_cool_stays_silent() {
     const CHUNK_S: f64 = 1.0e-3;
     const DUTY: f64 = 0.10;
     const TJ_LIMIT_C: f64 = 90.0;
-    let expected_tj = 25.0 + DUTY * 1.0 * 100.0; // 35 C
+    let expected_tj = (DUTY * 1.0).mul_add(100.0, 25.0); // 35 C
 
     let (mut circuit, mut monitor) = pwm_fixture(TJ_LIMIT_C);
     let mut all = Vec::new();
     for chunk in 0..8 {
-        let t = (chunk + 1) as f64 * CHUNK_S;
+        let t = f64::from(chunk + 1) * CHUNK_S;
         all.extend(drive_pwm_chunk(
             &mut circuit,
             &mut monitor,
@@ -294,7 +294,7 @@ fn overpower_judges_time_weighted_power_not_the_endpoint() {
         m.accumulate_step(&c, &on_v, &no_branch, 0.9e-3);
         m.accumulate_step(&c, &off_v, &no_branch, 0.1e-3);
         overpower.extend(
-            m.evaluate(&mut c, &off_v, &no_branch, k as f64 * 1e-3)
+            m.evaluate(&mut c, &off_v, &no_branch, f64::from(k) * 1e-3)
                 .into_iter()
                 .filter(|f| f.kind == FaultKind::Overpower),
         );
@@ -317,7 +317,7 @@ fn overpower_judges_time_weighted_power_not_the_endpoint() {
     for k in 0..8 {
         m.accumulate_step(&c, &off_v, &no_branch, 0.5e-3);
         m.accumulate_step(&c, &on_v, &no_branch, 0.5e-3);
-        all.extend(m.evaluate(&mut c, &on_v, &no_branch, k as f64 * 1e-3));
+        all.extend(m.evaluate(&mut c, &on_v, &no_branch, f64::from(k) * 1e-3));
     }
     assert!(
         all.iter().all(|f| f.kind != FaultKind::Overpower),
@@ -507,7 +507,7 @@ fn healthy_board_no_overtemp() {
 /// Build a two-unit "dual" package: 1 V across two 2 Ω unit devices named
 /// `Q1_q1` / `Q1_q2` (0.5 W each when both load resistors are `load_ohms`;
 /// pass a huge second resistance to idle unit 2). Metas mirror a dual BJT:
-/// per-unit `max_power_w`, shared explicit theta_JA and Tj limit.
+/// per-unit `max_power_w`, shared explicit `theta_JA` and Tj limit.
 fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
     let (mut circuit, q1) = one_volt_across("Q1_q1", 2.0); // 0.5 W
     let q2 = circuit.add(resistor(
@@ -574,7 +574,7 @@ fn dual_package_pools_sibling_dissipation_for_tj() {
     // Both junctions genuinely sit over-limit, and CI fault matching names
     // units: each sibling raises its own (identical) fault.
     let mut comps: Vec<&str> = overtemp.iter().map(|f| f.component.as_str()).collect();
-    comps.sort();
+    comps.sort_unstable();
     assert_eq!(comps, vec!["Q1_q1", "Q1_q2"]);
 
     // Per-unit rows both report the shared package temperature.
@@ -660,7 +660,7 @@ fn drive_dual_pwm_chunk(
 fn dual_package_pwm_pools_integrated_not_sampled_dissipation() {
     const CHUNK_S: f64 = 1.0e-3;
     const DUTY: f64 = 0.8;
-    let expected_tj = 25.0 + DUTY * 1.0 * 250.0; // 225 C
+    let expected_tj = (DUTY * 1.0).mul_add(250.0, 25.0); // 225 C
 
     let (mut circuit, metas) = dual_package(2.0);
     let mut mon = StressMonitor::new(metas);
@@ -668,7 +668,7 @@ fn dual_package_pwm_pools_integrated_not_sampled_dissipation() {
 
     let mut overtemp = Vec::new();
     for chunk in 0..8 {
-        let t = (chunk + 1) as f64 * CHUNK_S;
+        let t = f64::from(chunk + 1) * CHUNK_S;
         overtemp.extend(
             drive_dual_pwm_chunk(&mut circuit, &mut mon, DUTY, CHUNK_S, false, t)
                 .into_iter()
@@ -677,7 +677,7 @@ fn dual_package_pwm_pools_integrated_not_sampled_dissipation() {
     }
 
     let mut comps: Vec<&str> = overtemp.iter().map(|f| f.component.as_str()).collect();
-    comps.sort();
+    comps.sort_unstable();
     assert_eq!(
         comps,
         vec!["Q1_q1", "Q1_q2"],
@@ -703,7 +703,7 @@ fn dual_package_pwm_pools_integrated_not_sampled_dissipation() {
 fn dual_package_pwm_cool_duty_does_not_false_fire() {
     const CHUNK_S: f64 = 1.0e-3;
     const DUTY: f64 = 0.2;
-    let expected_tj = 25.0 + DUTY * 1.0 * 250.0; // 75 C
+    let expected_tj = (DUTY * 1.0).mul_add(250.0, 25.0); // 75 C
 
     let (mut circuit, metas) = dual_package(2.0);
     let mut mon = StressMonitor::new(metas);
@@ -711,7 +711,7 @@ fn dual_package_pwm_cool_duty_does_not_false_fire() {
 
     let mut all = Vec::new();
     for chunk in 0..8 {
-        let t = (chunk + 1) as f64 * CHUNK_S;
+        let t = f64::from(chunk + 1) * CHUNK_S;
         all.extend(drive_dual_pwm_chunk(
             &mut circuit,
             &mut mon,

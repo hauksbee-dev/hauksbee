@@ -41,6 +41,7 @@ pub(crate) fn open_browser(url: &str) {
 /// creates the receipt first and passes its path together with its parent PID;
 /// an ordinary terminal invocation never writes a file.
 fn write_app_url_receipt(bound: std::net::SocketAddr) {
+    use std::io::Write;
     if std::env::var_os("HAUKSBEE_EXIT_WITH_PARENT").is_none() {
         return;
     }
@@ -54,7 +55,6 @@ fn write_app_url_receipt(bound: std::net::SocketAddr) {
     else {
         return;
     };
-    use std::io::Write;
     let _ = writeln!(file, "http://{bound}");
 }
 
@@ -126,13 +126,18 @@ fn exit_when_parent_dies() {
 
 /// `hauksbee serve [--port N] [--open|--no-open]`: the local web front door
 /// (drop-a-board report).
+///
+/// # Errors
+///
+/// Returns an error if the Tokio runtime cannot be created, if no listening port can
+/// be bound, or if the server stops with an error.
 pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
     use std::sync::Arc;
     sweep_stale_temp_files();
     exit_when_parent_dies();
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        let addr = format!("127.0.0.1:{}", port);
+        let addr = format!("127.0.0.1:{port}");
 
         // Inject the engine's analysis as the server's analyzer callback, so the
         // server crate needs no dependency on the engine/extract crates. The

@@ -4,7 +4,7 @@
 //! the raw resistance floor left near-short conductances that wrecked the
 //! analog solve's conditioning, non-convergence with nothing naming the
 //! cause, an hour of manual bisection. The binder now stamps a 0-ohm value as
-//! the same STIFF_R_OHMS link resistance the supply legs use, and says so on
+//! the same `STIFF_R_OHMS` link resistance the supply legs use, and says so on
 //! the part's bind row.
 
 use hauksbee_engine::binder::bind_board;

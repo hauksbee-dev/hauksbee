@@ -1,6 +1,7 @@
-//! Resolve where the built web app (`frontend/dist`) lives at runtime, so both
-//! `hauksbee serve` and `hauksbee run --serve` can hand the static files to the
-//! server no matter how the binary got onto the machine.
+//! Resolve where the built web app (`frontend/dist`) lives at runtime.
+//!
+//! Both `hauksbee serve` and `hauksbee run --serve` can then hand the static
+//! files to the server no matter how the binary got onto the machine.
 //!
 //! The compile-time path `CARGO_MANIFEST_DIR/../../frontend/dist` only exists on
 //! the build machine's checkout. A user who installs a release binary (or moves
@@ -31,6 +32,7 @@ fn checkout_dist() -> PathBuf {
 
 /// Locate the directory of built web assets to serve, or `None` if there is
 /// none to serve (the serve handlers then print their build-the-frontend hint).
+#[must_use]
 pub fn resolve_web_dist() -> Option<PathBuf> {
     let mut embedded_only = false;
     // (a) Explicit override always wins, if it points at a real directory.
@@ -114,7 +116,7 @@ mod embedded {
     /// not unique build identities: a local rebuild or corrected private
     /// artifact can legitimately keep the same semver while changing JS.
     fn embedded_digest() -> Option<String> {
-        let mut paths: Vec<_> = WebAssets::iter().map(|p| p.into_owned()).collect();
+        let mut paths: Vec<_> = WebAssets::iter().map(String::from).collect();
         paths.sort();
         let mut hash = Sha256::new();
         for path in paths {
@@ -125,7 +127,7 @@ mod embedded {
             hash.update([0]);
         }
         let digest = hash.finalize();
-        Some(digest[..12].iter().map(|b| format!("{b:02x}")).collect())
+        Some(crate::run_manifest::bytes_to_hex(&digest[..12]))
     }
 
     /// Extract the embedded web app to a versioned cache dir and return it.
@@ -172,12 +174,11 @@ mod embedded {
 
         // Rename into place. If another process won the race and created `dir`
         // first, reuse theirs and drop our temp copy.
-        match std::fs::rename(&tmp, &dir) {
-            Ok(()) => Some(dir),
-            Err(_) => {
-                let _ = std::fs::remove_dir_all(&tmp);
-                dir_non_empty(&dir).then_some(dir)
-            }
+        if std::fs::rename(&tmp, &dir).is_ok() {
+            Some(dir)
+        } else {
+            let _ = std::fs::remove_dir_all(&tmp);
+            dir_non_empty(&dir).then_some(dir)
         }
     }
 }

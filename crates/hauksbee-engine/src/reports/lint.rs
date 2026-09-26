@@ -1,8 +1,10 @@
-//! The `--lint` report (connectivity, strap-pin, resource-conflict and
-//! device-decode checks) and the `--resources` subset (the MCU-internal
-//! resource-conflict checks). It renders through the netlint renderers, surfaces
-//! any pin-role guesses the binder inferred rather than silently guessing, and
-//! under `--strict` exits non-zero on a high/medium finding. CLI glue over the
+//! The `--lint` report and its `--resources` subset.
+//!
+//! `--lint` covers the connectivity, strap-pin, resource-conflict and
+//! device-decode checks; `--resources` is the MCU-internal resource-conflict
+//! subset. It renders through the netlint renderers, surfaces any pin-role
+//! guesses the binder inferred rather than silently guessing, and under
+//! `--strict` exits non-zero on a high/medium finding. CLI glue over the
 //! engine's lint checks.
 
 use crate::binder::bind_board;
@@ -72,22 +74,19 @@ pub(crate) fn emit_quiet(
             );
         }
         OutputMode::Plain | OutputMode::Text => {
-            match mode {
-                OutputMode::Plain => {
-                    let mut plain = crate::plain_netlint(&report);
-                    plain.unmodelled_critical = blockers.clone();
-                    print!("{}", plain.render());
+            if mode == OutputMode::Plain {
+                let mut plain = crate::plain_netlint(&report);
+                plain.unmodelled_critical.clone_from(&blockers);
+                print!("{}", plain.render());
+            } else {
+                // The INCONCLUSIVE verdict LEADS: "net-lint: no findings."
+                // over an unmodelled FET/IC reads as a clean bill, so the
+                // refusal has to be the first line, with the factual body
+                // underneath it, not an afterthought below one.
+                if !blockers.is_empty() {
+                    println!("{}", crate::result::inconclusive_verdict(&blockers));
                 }
-                _ => {
-                    // The INCONCLUSIVE verdict LEADS: "net-lint: no findings."
-                    // over an unmodelled FET/IC reads as a clean bill, so the
-                    // refusal has to be the first line, with the factual body
-                    // underneath it, not an afterthought below one.
-                    if !blockers.is_empty() {
-                        println!("{}", crate::result::inconclusive_verdict(&blockers));
-                    }
-                    print!("{}", hauksbee_extract::render_netlint(&report));
-                }
+                print!("{}", hauksbee_extract::render_netlint(&report));
             }
             if !straps.is_empty() {
                 println!("\nstrap-pin coverage:\n  {}", straps.join("\n  "));
@@ -193,9 +192,9 @@ fn lint_json(
     if !blockers.is_empty() {
         jr.push_coverage_note(crate::result::inconclusive_verdict(blockers));
     }
-    straps
-        .iter()
-        .for_each(|line| jr.push_coverage_note(line.as_str()));
+    for line in straps {
+        jr.push_coverage_note(line.as_str());
+    }
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
         message: format!("pin-role guess {r}: {g}"),
@@ -250,7 +249,7 @@ pub(crate) fn emit_resources_quiet(
             // say so: "no connectivity problems found" claimed a clean bill for
             // checks this command never ran.
             plain.verdict_noun = Some("MCU resource conflicts".to_string());
-            plain.unmodelled_critical = blockers.clone();
+            plain.unmodelled_critical.clone_from(&blockers);
             print!("{}", plain.render());
         }
         OutputMode::Text => {

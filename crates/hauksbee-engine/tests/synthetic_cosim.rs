@@ -76,7 +76,7 @@ fn synthetic_cosim_runs() {
     // Deterministic chunked stepping: 1 ms frames for 1.2 s.
     let frame_dt = 1e-3_f64;
     let total = 1.2_f64;
-    let n = (total / frame_dt).round() as usize;
+    let n = 1200; // total / frame_dt
 
     let mut led_high_samples: Vec<f64> = Vec::new();
     let mut uart: Vec<u8> = Vec::new();
@@ -115,7 +115,7 @@ fn synthetic_cosim_runs() {
     // transitions" assumed a 100 ms *full period*; the firmware actually uses
     // a 100 ms half-period, so we assert against the firmware's real rate.)
     // We allow generous slack for emulator timing and chunk granularity.
-    let toggles_per_sec = led_transitions as f64 / 2.0 / total; // cycles/sec
+    let toggles_per_sec = f64::from(led_transitions) / 2.0 / total; // cycles/sec
     assert!(
         (3.0..=7.0).contains(&toggles_per_sec),
         "LED ~{toggles_per_sec:.1} toggles/sec (want ~5; {led_transitions} edges in 1.2s)"
@@ -148,7 +148,7 @@ fn synthetic_cosim_runs() {
     let text = String::from_utf8_lossy(&uart);
     let mv = last_millivolts(&text)
         .unwrap_or_else(|| panic!("no 'NNNNmV' reading in UART output:\n{text}"));
-    let volts = mv as f64 / 1000.0;
+    let volts = f64::from(mv) / 1000.0;
     // The 10k/10k divider from +5V is 2.5 V; allow 10%.
     assert!(
         (volts - 2.5).abs() <= 0.25,

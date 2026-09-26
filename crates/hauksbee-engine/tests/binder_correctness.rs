@@ -259,28 +259,22 @@ fn split_grounds_stay_distinct_nodes() {
     assert_ne!(agnd, dgnd, "AGND and DGND are distinct nets");
 
     // The star-point bridge is a real 2-node resistor, not a self-loop.
-    let (a, b2) = bound
+    let ends = bound
         .circuit
         .devices
         .iter()
         .find_map(|d| match d {
-            Device::Resistor { name, a, b, .. } if name == "R1" => Some((*a, *b)),
+            Device::Resistor { name, a, b, .. } if name == "R1" => Some([*a, *b]),
             _ => None,
         })
         .expect("bridge resistor stamped");
     assert_ne!(
-        a, b2,
+        ends[0], ends[1],
         "bridge must span two distinct nodes (was a self-loop)"
     );
     assert_eq!(
-        [a, b2]
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>(),
-        [agnd, dgnd]
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(ends),
+        std::collections::BTreeSet::from([agnd, dgnd]),
         "bridge connects AGND to DGND"
     );
 }
@@ -353,7 +347,7 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
 }
 
 /// R5: an analog-switch VCC net that does not resolve to a known rail voltage
-/// (a non-canonical name like "VDD_MUX") must NOT silently assume 5 V, that
+/// (a non-canonical name like `"VDD_MUX"`) must NOT silently assume 5 V, that
 /// reintroduces the "s0 permanently open on a low-voltage board" bug the
 /// rail-referenced thresholds fixed. It still falls back to 5 V, but says so in
 /// the bind report.
@@ -644,7 +638,7 @@ fn reference_ambiguous_merge_without_source_uid_is_left_open() {
     );
 }
 
-/// A non-empty Altium UNIQUEID, retained by extraction as source_unique_id,
+/// A non-empty Altium UNIQUEID, retained by extraction as `source_unique_id`,
 /// is authoritative component identity. Repeated physical pad records for that
 /// identity still normalize to one scalar component rather than an array.
 #[test]
@@ -818,7 +812,7 @@ fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
 
 /// Bug (binder-r3 #2): negative supply rails ("-5V", "-12V") were never
 /// recognised by `power_rail_voltage` (the substring fallback required a
-/// leading '+'), so the net got no SupplyLeg and silently floated at 0 V.
+/// leading '+'), so the net got no `SupplyLeg` and silently floated at 0 V.
 /// A negative rail must get a supply at the NEGATIVE voltage, and must not
 /// be conflated with ground.
 #[test]
@@ -863,7 +857,7 @@ fn negative_rails_get_supply_legs_at_negative_voltage() {
             .row(&format!("RAIL:{name}"))
             .unwrap_or_else(|| panic!("RAIL:{name} row expected"));
         assert!(
-            matches!(row.outcome, BindOutcome::PowerRail { volts } if volts == v),
+            matches!(row.outcome, BindOutcome::PowerRail { volts } if (volts - v).abs() < 1e-12),
             "{name}: expected PowerRail at {v} V, got {:?}",
             row.outcome
         );
@@ -902,7 +896,7 @@ fn diode_with_electrode_letter_pads_binds_with_correct_polarity() {
 }
 
 /// Eagle "P$1"/"P$2" ordinal pads reach the model's numeric pad map after
-/// normalisation ("P$1" -> "1" = cathode in the KiCad Device:D convention).
+/// normalisation ("P$1" -> "1" = cathode in the `KiCad` Device:D convention).
 #[test]
 fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
     let d = comp(
@@ -931,7 +925,7 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
     assert_eq!(bound.node("CATHODE_NET"), Some(k), "P$1 is the cathode");
 }
 
-/// Bug #12: a dual op-amp (LM358) defines out_a/in_plus_a/in_minus_a AND the
+/// Bug #12: a dual op-amp (LM358) defines `out_a/in_plus_a/in_minus_a` AND the
 /// _b channel, but the binder only looked up channel A, one device stamped,
 /// channel B's output net left floating with no warning. Both channels must
 /// stamp, keyed with the multi-unit `_q<N>` suffix the CI aggregation matches.
@@ -1051,8 +1045,8 @@ fn dual_comparator_stamps_one_device_per_channel() {
     assert!(outs.contains(&("Boc_U2_q2".to_string(), bound.node("OUT_B").unwrap())));
 }
 
-/// A single-channel op-amp-class part (LMV7219, unsuffixed out/in_plus/
-/// in_minus roles) keeps its pre-fix shape exactly: ONE device under the bare
+/// A single-channel op-amp-class part (LMV7219, unsuffixed `out/in_plus`/
+/// `in_minus` roles) keeps its pre-fix shape exactly: ONE device under the bare
 /// reference, no `_q` suffix.
 #[test]
 fn single_channel_comparator_keeps_the_bare_reference() {
@@ -1085,7 +1079,7 @@ fn single_channel_comparator_keeps_the_bare_reference() {
 }
 
 /// Bug #13: the CD74HC4066 quad bilateral switch has FOUR independent gates
-/// (in_out_<n>a/<n>b + ctrl_<n>); the old single-SPST fall-through bound gate
+/// (`in_out`_<n>a/<n>b + ctrl_<n>); the old single-SPST fall-through bound gate
 /// 1 only and silently dropped gates 2..4. All four must stamp, `_s<n>`-keyed,
 /// each switching its own pair under its own control net.
 #[test]

@@ -1,5 +1,6 @@
-//! `hauksbee models backend`: view and change the persistent datasheet
-//! extraction settings kept in `~/.config/hauksbee/extract.toml`. The
+//! `hauksbee models backend`: view and change the persistent extraction settings.
+//!
+//! The settings are kept in `~/.config/hauksbee/extract.toml`. The
 //! contract for every field lives in
 //! `crates/hauksbee-models/src/extract_config.rs`; this module is a thin CLI
 //! skin over it, plus one interactive wizard (`setup`).
@@ -44,6 +45,11 @@ pub fn extract_status() -> anyhow::Result<(bool, String)> {
 }
 
 /// `hauksbee models backend show [--json]`
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read or parsed, or if the JSON
+/// output cannot be serialised.
 pub fn show(json: bool) -> anyhow::Result<()> {
     let (loaded, resolved) = load_and_resolve()?;
     let backends = extract_config::availability(&ProcessHost, &resolved);
@@ -126,6 +132,10 @@ fn preset_summary(preset: &Preset, resolved: &Resolved) -> String {
 }
 
 /// `hauksbee models backend presets`
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read or parsed.
 pub fn presets() -> anyhow::Result<()> {
     let (_, resolved) = load_and_resolve()?;
     for p in extract_config::presets() {
@@ -145,6 +155,11 @@ pub fn presets() -> anyhow::Result<()> {
 }
 
 /// `hauksbee models backend keys`
+///
+/// # Errors
+///
+/// Never returns an error in practice; the `Result` keeps the subcommand signatures
+/// uniform.
 pub fn keys() -> anyhow::Result<()> {
     println!("Settings for `models backend set KEY=VALUE` / `unset KEY`:");
     println!();
@@ -180,6 +195,11 @@ fn classify_use_target(target: &str) -> Option<UseTarget> {
 }
 
 /// `hauksbee models backend use <PRESET-OR-BACKEND>`
+///
+/// # Errors
+///
+/// Returns an error if `target` is neither a preset id nor a backend name, if the
+/// config file cannot be read or parsed, or if the updated config cannot be saved.
 pub fn use_target(target: &str) -> anyhow::Result<()> {
     let mut loaded = extract_config::load_for_edit()?;
     match classify_use_target(target) {
@@ -210,6 +230,11 @@ pub fn use_target(target: &str) -> anyhow::Result<()> {
 
 /// `hauksbee models backend set KEY=VALUE...` (and `unset KEY`, which calls
 /// this with `"KEY="`). Stops at the first bad pair and writes nothing.
+///
+/// # Errors
+///
+/// Returns an error if a pair names an unknown key or has an invalid value, if the
+/// config file cannot be read or parsed, or if the updated config cannot be saved.
 pub fn set(pairs: &[String]) -> anyhow::Result<()> {
     let mut loaded = extract_config::load_for_edit()?;
     for pair in pairs {
@@ -229,6 +254,11 @@ pub fn set(pairs: &[String]) -> anyhow::Result<()> {
 // ── reset ────────────────────────────────────────────────────────────────────
 
 /// `hauksbee models backend reset [--yes]`
+///
+/// # Errors
+///
+/// Returns an error if the config path cannot be determined, if confirmation is
+/// needed but stdin is not a terminal, or if the config file cannot be deleted.
 pub fn reset(yes: bool) -> anyhow::Result<()> {
     let path = extract_config::config_path()?;
     if !path.exists() {
@@ -257,6 +287,10 @@ pub fn reset(yes: bool) -> anyhow::Result<()> {
 // ── path ─────────────────────────────────────────────────────────────────────
 
 /// `hauksbee models backend path`
+///
+/// # Errors
+///
+/// Returns an error if the config path cannot be determined (no home directory).
 pub fn path() -> anyhow::Result<()> {
     println!("{}", extract_config::config_path()?.display());
     Ok(())
@@ -278,15 +312,20 @@ fn check_status(
     // Only native Codex uses its login probe; wrappers own authentication.
     if resolved.backend == Backend::Codex && resolved.custom_command(resolved.backend).is_none() {
         let statuses = crate::deps::probe_extractors();
-        (status.available, status.detail) = match statuses.iter().find(|s| s.id == "codex") {
-            Some(s) => (s.present, s.detail.clone().unwrap_or_default()),
-            None => (false, "codex status unavailable".to_string()),
-        };
+        (status.available, status.detail) = statuses.iter().find(|s| s.id == "codex").map_or_else(
+            || (false, "codex status unavailable".to_string()),
+            |s| (s.present, s.detail.clone().unwrap_or_default()),
+        );
     }
     status
 }
 
 /// `hauksbee models backend check [--send]`
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read or parsed, if the resolved
+/// backend is not ready, or (with `send`) if the connectivity check fails.
 pub fn check(send: bool) -> anyhow::Result<()> {
     let (_, resolved) = load_and_resolve()?;
     print_backend_line(&resolved);
@@ -353,6 +392,11 @@ fn prompt_line(label: &str) -> anyhow::Result<String> {
 
 /// `hauksbee models backend setup`: an interactive wizard. Every prompt shows
 /// its default in brackets; pressing enter keeps it.
+///
+/// # Errors
+///
+/// Returns an error if stdin is not a terminal or cannot be read, if the config file
+/// cannot be read, parsed or saved, or if a chosen preset or entered value is invalid.
 pub fn setup() -> anyhow::Result<()> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         anyhow::bail!(

@@ -38,11 +38,11 @@ pub enum PlainLevel {
 
 impl PlainLevel {
     /// A short word for the bullet marker in the rendered output.
-    fn tag(self) -> &'static str {
+    const fn tag(self) -> &'static str {
         match self {
-            PlainLevel::Serious => "SERIOUS",
-            PlainLevel::Warning => "WARNING",
-            PlainLevel::Note => "note",
+            Self::Serious => "SERIOUS",
+            Self::Warning => "WARNING",
+            Self::Note => "note",
         }
     }
 }
@@ -65,12 +65,13 @@ pub struct PlainFinding {
     pub loc_mm: Option<[f64; 2]>,
 }
 
-/// An actionable "heads up" note: worth knowing, not a failure. Carries the same
-/// what / why / what-to-do shape a finding does, so the web / TUI / CLI can all
-/// give a novice the translation instead of a bare jargon line. `why` / `fix`
-/// may be empty for a
-/// note that is already a complete self-contained sentence (e.g. a co-sim
-/// caveat); renderers omit those lines when empty.
+/// An actionable "heads up" note: worth knowing, not a failure.
+///
+/// Carries the same what / why / what-to-do shape a finding does, so the web /
+/// TUI / CLI can all give a novice the translation instead of a bare jargon
+/// line. `why` / `fix` may be empty for a note that is already a complete
+/// self-contained sentence (e.g. a co-sim caveat); renderers omit those lines
+/// when empty.
 #[derive(Debug, Clone, Default)]
 pub struct HeadsUp {
     /// "What it is"; the observation, in everyday language.
@@ -85,7 +86,7 @@ impl HeadsUp {
     /// A self-contained note with no separate why/what-to-do (already one
     /// complete sentence).
     pub fn note(what: impl Into<String>) -> Self {
-        HeadsUp {
+        Self {
             what: what.into(),
             why: String::new(),
             fix: String::new(),
@@ -98,7 +99,7 @@ impl HeadsUp {
         why: impl Into<String>,
         fix: impl Into<String>,
     ) -> Self {
-        HeadsUp {
+        Self {
             what: what.into(),
             why: why.into(),
             fix: fix.into(),
@@ -142,8 +143,8 @@ pub struct PlainReport {
     pub unvalidated: Option<String>,
 }
 
-/// De-escape KiCad's label escapes so a plain sentence names the net the way
-/// the schematic does. KiCad writes a literal `/` inside a label as `{slash}`
+/// De-escape `KiCad`'s label escapes so a plain sentence names the net the way
+/// the schematic does. `KiCad` writes a literal `/` inside a label as `{slash}`
 /// (`/` is its sheet-path separator), and that token travels all the way
 /// through extraction into the finding text: the reader saw
 /// `Net-(U4-LNA_IN{slash}RF)` where the schematic says `Net-(U4-LNA_IN/RF)`.
@@ -159,7 +160,7 @@ fn readable(s: String) -> String {
 
 impl PlainReport {
     fn new(subject: &str) -> Self {
-        PlainReport {
+        Self {
             subject: subject.to_string(),
             verdict_noun: None,
             findings: Vec::new(),
@@ -209,6 +210,7 @@ impl PlainReport {
     }
 
     /// Number of findings that are "serious" (the M in "N issues, M serious").
+    #[must_use]
     pub fn serious_count(&self) -> usize {
         self.findings
             .iter()
@@ -224,6 +226,7 @@ impl PlainReport {
     }
 
     /// The one-line overall verdict.
+    #[must_use]
     pub fn verdict(&self) -> String {
         let n = self.findings.len();
         if let Some(reason) = &self.unvalidated {
@@ -251,13 +254,13 @@ impl PlainReport {
         }
         // The two noun phrases the verdict slots in. `verdict_noun` supplies both
         // verbatim; otherwise they are built from the heading-cased `subject`.
-        let (healthy_noun, failure_noun) = match &self.verdict_noun {
-            Some(noun) => (noun.clone(), noun.clone()),
-            None => {
+        let (healthy_noun, failure_noun) = self.verdict_noun.as_ref().map_or_else(
+            || {
                 let lower = self.subject.to_lowercase();
                 (format!("{lower} problems"), format!("{lower} failures"))
-            }
-        };
+            },
+            |noun| (noun.clone(), noun.clone()),
+        );
         if n == 0 {
             // A clean check over unmodelled current-carrying / active parts is
             // vacuous, not healthy. Refuse the clean bill and name what unlocks
@@ -270,7 +273,7 @@ impl PlainReport {
                 if !self.heads_up.is_empty() {
                     let hn = self.heads_up.len();
                     let things = if hn == 1 { "thing" } else { "things" };
-                    v.push_str(&format!(" Plus {hn} {things} worth a look (see below)."));
+                    let _ = write!(v, " Plus {hn} {things} worth a look (see below).");
                 }
                 return v;
             }
@@ -296,6 +299,7 @@ impl PlainReport {
 
     /// Render the full plain-language block: verdict line, then each finding as
     /// what / why / fix, ordered by severity.
+    #[must_use]
     pub fn render(&self) -> String {
         let mut s = String::new();
         let _ = writeln!(s, "{}", self.verdict());
@@ -461,6 +465,7 @@ impl OrderTriage {
 /// - explicit abstentions (`UncheckedMcu`, USB-C `Info`, or a nominal USB-C
 ///   result undermined by a model gap on its own CC nets) go to inspect;
 /// - only an unqualified USB-C `Ok` is emitted as a positive result.
+#[allow(clippy::too_many_lines, reason = "one pass per report family")]
 pub(crate) fn order_triage_with_rule_source(
     drc: &crate::result::DrcStructured,
     clearance_rule_source: &crate::result::ClearanceRuleProvenance,
@@ -602,7 +607,7 @@ pub(crate) fn order_triage_with_rule_source(
 
 // ── Severity bridges ─────────────────────────────────────────────────────────
 
-fn from_lint_sev(s: Severity) -> PlainLevel {
+const fn from_lint_sev(s: Severity) -> PlainLevel {
     match s {
         Severity::High => PlainLevel::Serious,
         Severity::Medium => PlainLevel::Warning,
@@ -610,7 +615,7 @@ fn from_lint_sev(s: Severity) -> PlainLevel {
     }
 }
 
-fn from_si_sev(s: SiSeverity) -> PlainLevel {
+const fn from_si_sev(s: SiSeverity) -> PlainLevel {
     match s {
         SiSeverity::High => PlainLevel::Serious,
         SiSeverity::Medium => PlainLevel::Warning,
@@ -631,7 +636,7 @@ fn join_refs(refs: &[String]) -> String {
     }
 }
 
-/// Expand KiCad's copper-layer codes to plain language on first sight. A novice
+/// Expand `KiCad`'s copper-layer codes to plain language on first sight. A novice
 /// has no idea `F.Cu` / `B.Cu` mean the front / back copper
 /// layer, so spell it out while keeping the code in parentheses for the expert.
 fn friendly_layer(layer: &str) -> String {
@@ -646,7 +651,7 @@ fn friendly_layer(layer: &str) -> String {
 
 /// A net name as a plain sentence names it: an unnamed net has to be described,
 /// not quoted as an empty string.
-fn net_label(name: &str) -> &str {
+const fn net_label(name: &str) -> &str {
     if name.is_empty() {
         "an unnamed net"
     } else {
@@ -655,6 +660,7 @@ fn net_label(name: &str) -> &str {
 }
 
 /// Translate the geometric DRC report (copper shorts and near-shorts).
+#[must_use]
 pub fn plain_drc(report: &DrcReport) -> PlainReport {
     // This context has no filesystem/project provenance. Conservative is the
     // only honest default: callers that did read a project attach that fact to
@@ -672,11 +678,14 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
 /// Saying "below" when the gap merely equals the rule is the dishonest wording
 /// the honesty change removed; this renderer keeps `--plain` and the web report
 /// in step with that.
+#[must_use]
 pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     let provenance = crate::result::ClearanceRuleProvenance::defaulted(st.clearance_rule_mm, false);
     plain_drc_structured_with_rule_source(st, &provenance)
 }
 
+#[must_use]
+#[allow(clippy::too_many_lines, reason = "shorts, then clearance groups")]
 pub fn plain_drc_structured_with_rule_source(
     st: &crate::result::DrcStructured,
     provenance: &crate::result::ClearanceRuleProvenance,
@@ -686,7 +695,7 @@ pub fn plain_drc_structured_with_rule_source(
     // any finding; folding it into the grammatical subject would turn
     // "copper spacing (DRC)" into a different check name.
     let mut out = PlainReport::new("Copper spacing (DRC)");
-    out.unvalidated = st.version_warning.clone();
+    out.unvalidated.clone_from(&st.version_warning);
 
     // Nothing to check is not the same as nothing wrong.
     //
@@ -903,11 +912,13 @@ fn push_at_limit_findings(
 /// the complete what/why/what-to-do gloss; the remaining clearance groups
 /// collapse to one aggregated line per (rule, layer). The `--json` surface is
 /// untouched (always complete), and `verbose` restores every instance here.
+#[must_use]
 pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) -> String {
     let provenance = crate::result::ClearanceRuleProvenance::defaulted(st.clearance_rule_mm, false);
     render_drc_condensed_with_rule_source(st, &provenance, verbose)
 }
 
+#[must_use]
 pub fn render_drc_condensed_with_rule_source(
     st: &crate::result::DrcStructured,
     provenance: &crate::result::ClearanceRuleProvenance,
@@ -916,13 +927,16 @@ pub fn render_drc_condensed_with_rule_source(
     render_drc_condensed_with_rule_source_and_unlock(st, provenance, verbose, true)
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "whole-um grouping key")]
+#[allow(clippy::cast_sign_loss, reason = "clearance rules are positive")]
+#[allow(clippy::cast_precision_loss, reason = "um keys are far below 2^52")]
 pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     st: &crate::result::DrcStructured,
     provenance: &crate::result::ClearanceRuleProvenance,
     verbose: bool,
     include_unlock: bool,
 ) -> String {
-    use std::fmt::Write as _;
+    use std::collections::BTreeMap;
     /// How many clearance findings keep the full three-line gloss.
     const FULL: usize = 3;
 
@@ -990,7 +1004,6 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     // they mean different things.
     let shown_v = FULL.min(st.violations.len());
     let shown_l = FULL.saturating_sub(st.violations.len());
-    use std::collections::BTreeMap;
     // (layer, rule in um) -> (group count, location count, tightest gap)
     let mut rest_below: BTreeMap<(String, u64), (usize, usize, f64)> = BTreeMap::new();
     for g in &st.violations[shown_v..] {
@@ -1039,15 +1052,19 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
 
 // ── Net lint + straps + MCU resource conflicts ────────────────────────────────
 
-/// Translate a [`NetLintReport`]. This covers the connectivity lint checks
-/// (`--lint` core), the boot strap-pin lint, and the MCU resource-conflict check
-/// (`--resources`), since they all report through this one report shape.
+/// Translate a [`NetLintReport`].
+///
+/// This covers the connectivity lint checks (`--lint` core), the boot strap-pin
+/// lint, and the MCU resource-conflict check (`--resources`), since they all
+/// report through this one report shape.
+#[must_use]
+#[allow(clippy::too_many_lines, reason = "one arm per lint check")]
 pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
     let mut out = PlainReport::new("connectivity");
     for f in &report.findings {
         let level = from_lint_sev(f.severity);
         let parts = join_refs(&f.refs);
-        let net = f.nets.first().map(|s| s.as_str()).unwrap_or("the net");
+        let net = f.nets.first().map_or("the net", |s| s.as_str());
         let (what, why, fix) = match f.check {
             // The DNP variant of either pull-up check: the resistor exists in
             // the layout but is do-not-populate, so the assembled board still
@@ -1178,6 +1195,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
 
 /// Translate a [`SiReport`]. Info notes are dropped (they are observations, not
 /// problems); only real findings are translated.
+#[must_use]
 pub fn plain_si(report: &SiReport) -> PlainReport {
     let mut out = PlainReport::new("signal-integrity");
     for f in report.findings_only() {
@@ -1335,8 +1353,7 @@ fn short_msg(msg: &str) -> String {
     let truncated: String = first.chars().take(160).collect();
     let cut = truncated
         .rsplit_once(' ')
-        .map(|(h, _)| h)
-        .unwrap_or(&truncated);
+        .map_or(truncated.as_str(), |(h, _)| h);
     format!("{}…", cut.trim_end())
 }
 
@@ -1344,6 +1361,7 @@ fn short_msg(msg: &str) -> String {
 
 /// Translate the stress-monitor fault events (over-current, over-voltage, etc.)
 /// raised while co-simulating against datasheet ratings.
+#[must_use]
 pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
     let mut out = PlainReport::new("electrical stress");
     for f in faults {
@@ -1744,12 +1762,12 @@ mod tests {
         }
     }
 
-    fn clearance_report(violations: usize, shorts: usize) -> crate::result::DrcStructured {
+    fn clearance_report(violations: usize, shorts: u32) -> crate::result::DrcStructured {
         crate::result::DrcStructured {
             clearance_rule_mm: 0.2,
             primitive_count: 20,
             shorts: (0..shorts)
-                .map(|index| structured_short(&format!("SHORT_{index}"), "serious", index as f64))
+                .map(|i| structured_short(&format!("SHORT_{i}"), "serious", f64::from(i)))
                 .collect(),
             violations: (0..violations)
                 .map(|_| crate::result::DrcGroup {

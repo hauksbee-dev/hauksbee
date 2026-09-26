@@ -1,10 +1,13 @@
-//! `--ampacity`: IPC-2221 capacity-only report. No current is fabricated here,
-//! without a per-net current spec this tells the user the bottleneck capacity and
-//! explicitly asks for a current before pass/fail. JSON remains unsupported;
-//! plain mode keeps the same auditable rows under a short prose explanation.
+//! `--ampacity`: IPC-2221 capacity-only report.
+//!
+//! No current is fabricated here, without a per-net current spec this tells the
+//! user the bottleneck capacity and explicitly asks for a current before
+//! pass/fail. JSON remains unsupported; plain mode keeps the same auditable rows
+//! under a short prose explanation.
 
 /// Print the trace-capacity report and return. `altium_present` boards carry no
 /// routed-copper geometry through this path yet, so they report an empty table.
+#[allow(clippy::fn_params_excessive_bools, reason = "independent CLI switches")]
 pub(crate) fn emit_quiet(
     text: &str,
     altium_present: bool,

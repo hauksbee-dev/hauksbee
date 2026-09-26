@@ -1,7 +1,9 @@
-//! The `--drc` report: geometric copper-short and clearance detection over the
-//! extracted board, rendered in the requested output mode. It also carries the
-//! shared `kicad-cli` oracle cross-check and, under `--strict`, exits non-zero
-//! on a true short. Pure CLI glue over the extractor's DRC and the binder.
+//! The `--drc` report: geometric copper-short and clearance detection.
+//!
+//! Runs over the extracted board and renders in the requested output mode. It
+//! also carries the shared `kicad-cli` oracle cross-check and, under `--strict`,
+//! exits non-zero on a true short. Pure CLI glue over the extractor's DRC and
+//! the binder.
 
 use std::path::Path;
 
@@ -14,6 +16,8 @@ use super::{KicadClearanceInput, OutputMode, StaticInputs};
 /// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
 /// `Ok(())` on the non-gating paths; a strict short calls `std::process::exit(2)`.
 /// `quiet` suppresses the text surface.
+#[allow(clippy::fn_params_excessive_bools, reason = "independent CLI switches")]
+#[allow(clippy::too_many_lines, reason = "linear pass: detect, render, gate")]
 pub(crate) fn emit_with_schematic_quiet(
     input: &StaticInputs,
     mode: OutputMode,
@@ -60,7 +64,7 @@ pub(crate) fn emit_with_schematic_quiet(
         qualification.as_ref(),
         text.contains("<eagle") && schematic_ties.is_none(),
     )
-    .with_clearance_rule_provenance(provenance.clone());
+    .with_clearance_rule_provenance(&provenance);
     // Run the independent oracle before rendering so agreement on an exact net
     // pair can sit on the finding line itself, where a reader is deciding
     // whether a demoted KiCad-format finding is credible.
@@ -175,7 +179,7 @@ pub(crate) fn emit_with_schematic_quiet(
     Ok(())
 }
 
-/// Parse a version string like "10.0.3" (or "KiCad 9.0.3") into a comparable
+/// Parse a version string like "10.0.3" (or "`KiCad` 9.0.3") into a comparable
 /// (major, minor, patch) tuple, ignoring any surrounding text.
 fn parse_version(s: &str) -> (u32, u32, u32) {
     let n: Vec<u32> = s
@@ -198,7 +202,7 @@ fn actual_mm(desc: &str) -> Option<f64> {
 
 /// Locate a usable `kicad-cli` (the geometric-DRC oracle): PATH first, then the
 /// standard macOS / Linux / Homebrew install locations, preferring the highest
-/// version (a KiCad-10 cli is needed to read v20260206 boards). KiCad is NOT
+/// version (a KiCad-10 cli is needed to read v20260206 boards). `KiCad` is NOT
 /// bundled with hauksbee; this finds an existing install. Returns (path, version).
 pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
     let mut candidates: Vec<String> = vec!["kicad-cli".to_string()];
@@ -250,9 +254,9 @@ pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
     best.map(|(p, v, _)| (p, v))
 }
 
-/// Cross-check hauksbee's geometric DRC against KiCad's own `kicad-cli pcb drc`,
+/// Cross-check hauksbee's geometric DRC against `KiCad`'s own `kicad-cli pcb drc`,
 /// so a copper finding is self-confirming without running a second tool by hand.
-/// Honest about the two tools' different scopes (KiCad's violation count includes
+/// Honest about the two tools' different scopes (`KiCad`'s violation count includes
 /// clearance / annular-ring / etc.), and flags the one case that matters: hauksbee
 /// reporting a short the oracle does not (a likely hauksbee false positive).
 #[derive(Default)]
@@ -335,7 +339,7 @@ fn annotate_oracle_agreement(
     }
 }
 
-/// Run KiCad's DRC oracle and attach pair-specific agreement to the existing
+/// Run `KiCad`'s DRC oracle and attach pair-specific agreement to the existing
 /// structured findings. This is shared by `--drc` and the combined `--check`
 /// surface so `--oracle` cannot mean two different things.
 pub(crate) fn oracle_cross_check_and_annotate(
@@ -353,6 +357,7 @@ pub(crate) fn oracle_cross_check_and_annotate(
     result.summary
 }
 
+#[allow(clippy::too_many_lines, reason = "one kicad-cli run, read, classify")]
 fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> OracleCrossCheck {
     let Some((cli, ver)) = find_kicad_cli() else {
         return OracleCrossCheck {
@@ -418,11 +423,11 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Ora
     let _ = std::fs::remove_file(&tmp);
     let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     let violations = v.get("violations").and_then(|x| x.as_array());
-    let nviol = violations.map_or(0, |a| a.len());
+    let nviol = violations.map_or(0, std::vec::Vec::len);
     let nunconn = v
         .get("unconnected_items")
         .and_then(|x| x.as_array())
-        .map_or(0, |a| a.len());
+        .map_or(0, std::vec::Vec::len);
     // What "a short" means in each tool: hauksbee = copper of two nets at gap <= 0
     // (touching). KiCad expresses the same fact two ways, a `shorting_items`
     // violation (its connectivity merged the nets) OR a `clearance`/`hole_clearance`

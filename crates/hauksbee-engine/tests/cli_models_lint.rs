@@ -340,6 +340,7 @@ fn prepare_refuses_overwrite_without_touching_existing_files() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines, reason = "one end-to-end CLI scenario")]
 fn coverage_and_prepare_treat_identity_only_as_a_behavior_gap() {
     let dir = tempfile::tempdir().unwrap();
     let models_dir = dir.path().join("models-dir");

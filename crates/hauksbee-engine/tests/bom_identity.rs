@@ -16,6 +16,7 @@ use hauksbee_extract::dnp::DnpPolicy;
 use hauksbee_extract::placement::PlacementFile;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::{Confidence, ModelLibrary};
+use std::fmt::Write as _;
 
 /// A minimal layout carrying the given `(reference, value)` parts.
 ///
@@ -28,12 +29,12 @@ fn board(parts: &[(&str, &str)]) -> ExtractedBoard {
     let mut text = String::from("(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n");
     text.push_str("  (net 0 \"\")\n  (net 1 \"GND\")\n  (net 2 \"+5V\")\n");
     for i in 3..40 {
-        text.push_str(&format!("  (net {i} \"N{i}\")\n"));
+        writeln!(text, "  (net {i} \"N{i}\")").unwrap();
     }
     for (i, (reference, value)) in parts.iter().enumerate() {
         let prefix: String = reference
             .chars()
-            .take_while(|c| c.is_ascii_alphabetic())
+            .take_while(char::is_ascii_alphabetic)
             .collect();
         let pads = match prefix.as_str() {
             "TP" => 1,
@@ -43,29 +44,32 @@ fn board(parts: &[(&str, &str)]) -> ExtractedBoard {
         };
         let footprint = match prefix.as_str() {
             "U" => "Package_DFN_QFN:QFN-10-1EP_3x3mm_P0.5mm",
-            "Q" => "Package_TO_SOT_SMD:SOT-23",
             "D" => "Diode_SMD:D_SOD-123",
             "C" => "Capacitor_SMD:C_0402_1005Metric",
             "R" => "Resistor_SMD:R_0402_1005Metric",
             "TP" => "TestPoint:TestPoint_Pad_D1.0mm",
             _ => "Package_TO_SOT_SMD:SOT-23",
         };
-        text.push_str(&format!(
+        write!(
+            text,
             "  (module {footprint} (layer F.Cu)\n    (at {} 100)\n\
              \x20   (fp_text reference {reference} (at 0 0) (layer F.SilkS))\n\
              \x20   (fp_text value {} (at 0 2) (layer F.Fab))\n",
             100 + i * 10,
             if value.is_empty() { "\"\"" } else { value }
-        ));
+        )
+        .unwrap();
         for pad in 1..=pads {
             let net = match pad {
                 1 => 2,
                 2 => 1,
                 p => 3 + (i * 10 + p) % 30,
             };
-            text.push_str(&format!(
-                "    (pad {pad} smd rect (at {pad} 0) (net {net} \"n\"))\n"
-            ));
+            writeln!(
+                text,
+                "    (pad {pad} smd rect (at {pad} 0) (net {net} \"n\"))"
+            )
+            .unwrap();
         }
         text.push_str("  )\n");
     }
@@ -90,8 +94,10 @@ fn outcome_of(board: &ExtractedBoard, reference: &str) -> BindOutcome {
     bind_board(board, &ModelLibrary::builtin())
         .report
         .row(reference)
-        .map(|r| r.outcome.clone())
-        .unwrap_or_else(|| panic!("{reference} has no bind row"))
+        .map_or_else(
+            || panic!("{reference} has no bind row"),
+            |r| r.outcome.clone(),
+        )
 }
 
 // ── The gain: a BOM identifies what the layout could not ────────────────────
@@ -286,10 +292,10 @@ fn ten_percent_reference_overlap_is_still_a_different_board() {
     let mut b = board(&borrowed);
     let mut text = String::from("Designator,Value\n");
     for n in 1..=10 {
-        text.push_str(&format!("R{n},10k\n"));
+        writeln!(text, "R{n},10k").unwrap();
     }
     for n in 1..=90 {
-        text.push_str(&format!("X{n},10k\n"));
+        writeln!(text, "X{n},10k").unwrap();
     }
 
     let err = apply_bom_identity(&mut b, &bom(&text), &ModelLibrary::builtin())

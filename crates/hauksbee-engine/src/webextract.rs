@@ -55,7 +55,7 @@ const HEARTBEAT: Duration = Duration::from_secs(10);
 /// its own copy, because a hardcoded frontend list rots the moment a kind is
 /// added and then quietly offers a kind the extractor rejects. Mirrors
 /// `model-extract --help`; the behavioural families (charger / pmic / balancer)
-/// and the declarative sensors (i2c_sensor / spi_sensor) are included because
+/// and the declarative sensors (`i2c_sensor` / `spi_sensor`) are included because
 /// `datasheet::run` has a real path for each.
 const KINDS: &[(&str, &str)] = &[
     ("passive", "resistor, capacitor, inductor"),
@@ -93,11 +93,11 @@ static EXTRACTING: AtomicBool = AtomicBool::new(false);
 struct ExtractSlot;
 
 impl ExtractSlot {
-    fn acquire() -> Option<ExtractSlot> {
+    fn acquire() -> Option<Self> {
         EXTRACTING
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .ok()
-            .map(|_| ExtractSlot)
+            .map(|_| Self)
     }
 }
 
@@ -112,7 +112,7 @@ pub fn hooks() -> DatasheetHooks {
     use std::sync::Arc;
     DatasheetHooks {
         ready: Arc::new(ready_json),
-        extract: Arc::new(|job, progress| extract(job, progress)),
+        extract: Arc::new(|job, progress| extract(&job, progress)),
         save: Arc::new(save),
         check: Arc::new(check),
         spice_check: Arc::new(spice_report),
@@ -297,6 +297,7 @@ fn cost_line(resolved: &Resolved) -> String {
 ///
 /// The consent notice and the kind list are served from here rather than
 /// hardcoded in the page for the same reason: one source, no drift.
+#[must_use]
 pub fn ready_json() -> String {
     let config_path = extract_config::config_path()
         .map(|p| p.display().to_string())
@@ -345,7 +346,15 @@ pub fn ready_json() -> String {
 ///
 /// Never writes to the model library: the card goes back for review and [`save`]
 /// is the only thing that keeps it.
-pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<String, String> {
+///
+/// # Errors
+///
+/// Returns a message if another extraction is already running, if the backend
+/// is blocked (with the fix), if the upload is not a PDF or names an unknown
+/// kind, if staging fails, or if the extraction fails or writes no readable
+/// draft.
+#[allow(clippy::too_many_lines, reason = "one run: guard, stage, extract")]
+pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<String, String> {
     let Some(_slot) = ExtractSlot::acquire() else {
         return Err(
             "an extraction is already running on this server; wait for it to finish".to_string(),
@@ -479,7 +488,7 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     ));
 
     let card = build_card(
-        &job,
+        job,
         &toml_text,
         path.extension().is_some_and(|e| e == "toml"),
     );
@@ -748,12 +757,6 @@ fn user_model_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".hauksbee").join("models"))
 }
 
-/// `POST /api/models/save`: keep a reviewed draft.
-///
-/// Re-validates the TOML it is handed. The card is editable in the browser, so
-/// what arrives here is not necessarily what the extractor produced, and writing
-/// an invalid model into the library would turn every later run's bind step into
-/// a puzzle.
 /// Report what hauksbee can do with a pasted SPICE deck.
 ///
 /// Someone arriving with a vendor `.lib` deserves to know what of it we handle
@@ -769,6 +772,11 @@ fn user_model_dir() -> Option<PathBuf> {
 /// per-instance parameters. Most vendor models ship as a subckt, so a
 /// second-guessing scanner would turn a supported path into a refusal. Ask the
 /// thing that would actually do the work.
+///
+/// # Errors
+///
+/// Returns a message if the text is empty, or the loader's own error (naming the
+/// offending line and directive) if the deck cannot be loaded.
 pub fn spice_report(text: &str) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("nothing to check yet".to_string());
@@ -788,18 +796,6 @@ pub fn spice_report(text: &str) -> Result<String, String> {
     }
 }
 
-/// Validate a hand-written model WITHOUT saving it.
-///
-/// The same checks `save` runs, in the same order, minus the write. Someone
-/// typing a model needs to know it is wrong while they are typing, not after
-/// they commit to keeping it, and the errors they see here have to be the ones
-/// that would actually stop the save. Re-implementing a friendlier check would
-/// mean a model that validates in the editor and is refused on save, which is
-/// worse than no editor at all.
-///
-/// Returns a one-line description of what the model IS on success, because
-/// "valid" alone does not tell an author whether they wrote the part they
-/// meant to.
 fn validate_model_db(db: &hauksbee_models::schema::DbFile) -> Result<Vec<String>, String> {
     if db.models.is_empty() {
         return Err("there is no [[models]] entry here yet".to_string());
@@ -812,7 +808,7 @@ fn validate_model_db(db: &hauksbee_models::schema::DbFile) -> Result<Vec<String>
                 entry.id,
                 errors
                     .iter()
-                    .map(std::string::ToString::to_string)
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join("; ")
             ));
@@ -890,6 +886,24 @@ fn model_coverage_note(db: &hauksbee_models::schema::DbFile) -> Option<String> {
     }
 }
 
+/// Validate a hand-written model WITHOUT saving it.
+///
+/// The same checks `save` runs, in the same order, minus the write. Someone
+/// typing a model needs to know it is wrong while they are typing, not after
+/// they commit to keeping it, and the errors they see here have to be the ones
+/// that would actually stop the save. Re-implementing a friendlier check would
+/// mean a model that validates in the editor and is refused on save, which is
+/// worse than no editor at all.
+///
+/// Returns a one-line description of what the model IS on success, because
+/// "valid" alone does not tell an author whether they wrote the part they
+/// meant to.
+///
+/// # Errors
+///
+/// Returns a message if the text is empty, is not a valid sensor spec or model
+/// TOML, or if a model entry fails schema validation, has no match rules, or
+/// carries a logic or behavioral block that does not compile.
 pub fn check(toml_text: &str) -> Result<String, String> {
     if toml_text.trim().is_empty() {
         return Err("nothing to check yet".to_string());
@@ -950,14 +964,11 @@ fn save_to_dir(
             .ok()
             .and_then(|db| model_coverage_note(&db))
     };
-    let note = match &coverage_note {
-        Some(coverage) => format!(
-            "Saved as a draft with provenance \"{PROVENANCE}\", but {coverage}. Re-analyzing the board will leave executable scope unchanged until the coverage declaration is completed.",
-        ),
-        None => format!(
+    let note = coverage_note.as_ref().map_or_else(|| format!(
             "Saved as a draft with provenance \"{PROVENANCE}\". It binds on the next analysis. Check any assumed value before you trust a result that depends on it."
-        ),
-    };
+        ), |coverage| format!(
+            "Saved as a draft with provenance \"{PROVENANCE}\", but {coverage}. Re-analyzing the board will leave executable scope unchanged until the coverage declaration is completed.",
+        ));
     serde_json::to_string(&serde_json::json!({
         "ok": true,
         "path": path.display().to_string(),
@@ -969,6 +980,18 @@ fn save_to_dir(
     .map_err(|e| format!("could not serialise the save result: {e}"))
 }
 
+/// `POST /api/models/save`: keep a reviewed draft.
+///
+/// Re-validates the TOML it is handed. The card is editable in the browser, so
+/// what arrives here is not necessarily what the extractor produced, and writing
+/// an invalid model into the library would turn every later run's bind step into
+/// a puzzle.
+///
+/// # Errors
+///
+/// Returns a message if the TOML fails the same validation as [`check`], if
+/// `HOME` is unset, or if the model directory or file cannot be created,
+/// written or published, including when a model already exists at that path.
 pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
     let sensor = is_sensor(toml_text);
     if sensor {

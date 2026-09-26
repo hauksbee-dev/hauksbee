@@ -129,7 +129,7 @@ fn bjt_model_of(m: &ModelEntry) -> BjtModel {
 /// drop, then `R = (Vcc - Vf_guess) / i_f`. We read the actual Vf and the
 /// actual current so the caller can sanity-check both.
 ///
-/// Returns (vf, i_actual).
+/// Returns (vf, `i_actual`).
 pub fn diode_vf_current(m: &ModelEntry, i_f: f64) -> (f64, f64) {
     assert_eq!(m.kind, ComponentKind::Diode, "not a diode model");
     let vf_guess = 0.7_f64;
@@ -493,14 +493,9 @@ vaf = 65.0
 fn bjt_is_rejected(m: &ModelEntry) -> bool {
     let bf = m.params.get_f64("bf").unwrap_or(1.0);
     let i_b = 2e-3 / bf;
-    let beta_bad = match bjt_beta_try(m, 10.0, 2.2e3, i_b) {
-        Err(_) => true,
-        Ok(beta) => !(80.0..=600.0).contains(&beta),
-    };
-    let vbe_bad = match bjt_vbe_try(m) {
-        Err(_) => true,
-        Ok(vbe) => !(0.55..=0.80).contains(&vbe),
-    };
+    let beta_bad =
+        !bjt_beta_try(m, 10.0, 2.2e3, i_b).is_ok_and(|beta| (80.0..=600.0).contains(&beta));
+    let vbe_bad = !bjt_vbe_try(m).is_ok_and(|vbe| (0.55..=0.80).contains(&vbe));
     beta_bad || vbe_bad
 }
 

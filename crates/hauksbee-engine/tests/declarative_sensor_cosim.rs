@@ -16,8 +16,8 @@
 //!    matches the reference encoding.
 //!
 //! 2. **`declarative_spi_who_am_i_and_data`**, pure model, no firmware.
-//!    Builds a declarative SPI sensor spec with a const WHO_AM_I register and
-//!    one i16 data register driven by an input.  Asserts WHO_AM_I reads 0x42
+//!    Builds a declarative SPI sensor spec with a const `WHO_AM_I` register and
+//!    one i16 data register driven by an input.  Asserts `WHO_AM_I` reads 0x42
 //!    and the data register reflects a swept input over the `SpiSlave`
 //!    interface.
 //!
@@ -29,7 +29,7 @@
 //!    Guarded by `#[cfg(feature = "renode")]`; skips gracefully if Renode or the
 //!    firmware are absent.
 //!
-//! ## Design contract (abbreviated from DECLARATIVE_SENSOR_DESIGN.md)
+//! ## Design contract (abbreviated from `DECLARATIVE_SENSOR_DESIGN.md`)
 //!
 //! ```
 //! RegisterMapSensor::from_toml(toml_str: &str) -> Result<RegisterMapSensor>
@@ -60,13 +60,13 @@ use hauksbee_mcu::I2cEvent;
 // TOML specs used across tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Declarative LM75A spec in the DECLARATIVE_SENSOR_DESIGN.md format.
+/// Declarative LM75A spec in the `DECLARATIVE_SENSOR_DESIGN.md` format.
 ///
 /// Register 0x00: 2-byte temperature, signed Q7.1 (0.5 °C/LSB), big-endian,
 /// left-justified into 16 bits (the classic 9-bit LM75 format: top 9 bits,
 /// bottom 7 unused).  The classic LM75 uses Q8.1 with `raw = round(T/0.5)`,
-/// stored in bits [15:7].  We represent this as encoding = "q8.1_le_lj" or
-/// equivalently "q7.1_be" depending on convention; the design doc uses
+/// stored in bits [15:7].  We represent this as encoding = `"q8.1_le_lj"` or
+/// equivalently `"q7.1_be"` depending on convention; the design doc uses
 /// `q7.1_be` (9-bit twos-complement, big-endian, left-justified to 16 bits).
 const LM75_TOML: &str = r#"
 [sensor]
@@ -100,7 +100,7 @@ const = [0x50, 0x00]
 style = "i2c_pointer"
 "#;
 
-/// Declarative SPI sensor spec with a const WHO_AM_I register and one signed
+/// Declarative SPI sensor spec with a const `WHO_AM_I` register and one signed
 /// 16-bit data register driven by an input.
 const SPI_SENSOR_TOML: &str = r#"
 [sensor]
@@ -208,7 +208,7 @@ fn declarative_lm75_equivalence() {
 // Test 2: SPI WHO_AM_I + swept data register
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Assert that a declarative SPI sensor correctly exposes a const WHO_AM_I
+/// Assert that a declarative SPI sensor correctly exposes a const `WHO_AM_I`
 /// register and a variable data register driven by an input.
 ///
 /// The `spi_reg` protocol is the standard address-then-data SPI model:
@@ -223,12 +223,12 @@ fn declarative_lm75_equivalence() {
 /// Same as test 1: `from_toml` returns Err and the `.unwrap_or_else` panics.
 #[test]
 fn declarative_spi_who_am_i_and_data() {
+    use hauksbee_engine::SpiSlave;
+
     // ── WHO_AM_I read ─────────────────────────────────────────────────────
     {
         let mut sensor = RegisterMapSensor::from_toml(SPI_SENSOR_TOML)
             .unwrap_or_else(|e| panic!("declarative SPI sensor from_toml failed: {e}"));
-
-        use hauksbee_engine::SpiSlave;
 
         // spi_reg protocol: first byte is address (0x75 = WHO_AM_I), second byte
         // is the register contents clocked back on MISO.
@@ -251,8 +251,6 @@ fn declarative_spi_who_am_i_and_data() {
                 .unwrap_or_else(|e| panic!("declarative SPI sensor from_toml failed: {e}"));
             sensor.set_input("channel_raw", raw);
 
-            use hauksbee_engine::SpiSlave;
-
             // Read register 0x3A: address byte + 2 data bytes.
             let _addr_phase = sensor.transfer(0x3A);
             let msb = sensor.transfer(0x00);
@@ -260,7 +258,7 @@ fn declarative_spi_who_am_i_and_data() {
             sensor.deselect();
 
             // Reconstruct the i16 from big-endian bytes.
-            let decoded = i16::from_be_bytes([msb, lsb]) as f64;
+            let decoded = f64::from(i16::from_be_bytes([msb, lsb]));
             let expected = raw.clamp(-32768.0, 32767.0).round();
 
             assert!(
@@ -306,21 +304,6 @@ fn declarative_lm75_i2c_thermostat_cosim() {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-
-    let fw = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_i2c_thermostat/thermostat.elf");
-    if !fw.exists() {
-        eprintln!(
-            "SKIP: STM32 I2C thermostat firmware not built \
-             (build testdata/firmware/stm32_i2c_thermostat/thermostat.elf)"
-        );
-        return;
-    }
-
     /// Minimal STM32F103 board: U1 STM32F103C8T6, PA8 (pad 29) on net "FLAG", PB6/PB7
     /// on SDA/SCL (the STM32 I2C1 pins after REMAP=0).  The LM75 slave is
     /// intercepted at the hardware I2C peripheral, not through these nets.
@@ -353,6 +336,21 @@ fn declarative_lm75_i2c_thermostat_cosim() {
 )
 "#;
 
+    if !is_available() {
+        eprintln!("SKIP: Renode not installed");
+        return;
+    }
+
+    let fw = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/firmware/stm32_i2c_thermostat/thermostat.elf");
+    if !fw.exists() {
+        eprintln!(
+            "SKIP: STM32 I2C thermostat firmware not built \
+             (build testdata/firmware/stm32_i2c_thermostat/thermostat.elf)"
+        );
+        return;
+    }
+
     // Run the STM32 I2C thermostat firmware for `ms` with a declarative LM75
     // fixed at `temp_c`.  Returns the last sampled FLAG net voltage.
     let run_at_temp = |temp_c: f64, ms: u32| -> f64 {
@@ -373,7 +371,7 @@ fn declarative_lm75_i2c_thermostat_cosim() {
         sensor.set_input("temperature_c", temp_c);
 
         let bus = Arc::new(Mutex::new(I2cBus::new("U2").with_slave(Box::new(sensor))));
-        engine.scheduler_mut().attach_i2c_bus(bus.clone());
+        engine.scheduler_mut().attach_i2c_bus(bus);
 
         let frame_dt = 5e-3_f64;
         let n = ms as usize;

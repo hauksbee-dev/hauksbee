@@ -165,7 +165,7 @@ fn stage_lint_board(dir: &Path) -> PathBuf {
 /// in its 400 mA constant-current phase, programmed by the published 1.66 kOhm
 /// application value, whose VBAT rail is a 0.05 mm hair of a trace. This is an
 /// operating-current assertion, not a device capability rating. Same recipe as
-/// tests/si_ampacity_ripple.rs.
+/// `tests/si_ampacity_ripple.rs`.
 ///
 /// The stackup is declared on purpose: ampacity only convicts on a copper weight
 /// it read off the board, so a stackup-less version of this fixture would produce

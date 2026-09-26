@@ -1,5 +1,5 @@
 //! Dynamic promotion of analog-capable MCU pins (05-cosim-fidelity §4.1,
-//! closes TARSKI_RESULTS §5.2).
+//! closes `TARSKI_RESULTS` §5.2).
 //!
 //! On the Arduino Nano the analog header A0..A5 are dual-purpose: ADC channels
 //! that are also ordinary GPIO on PC0..PC5. The Tarski board drives A2 = OE'_S
@@ -24,8 +24,8 @@ use hauksbee_models::ModelLibrary;
 /// Arduino Nano (module, header-level pin map) plus a passive load on three
 /// analog-header pins:
 ///   - pad 19 (A0) -> net "AIN"     : 10k/10k divider from +5V = 2.5 V (pure ADC)
-///   - pad 21 (A2) -> net "OE_S"    : 10k pulldown             (driven as GPIO)
-///   - pad 22 (A3) -> net "SRCLR_S" : 10k pulldown             (driven as GPIO)
+///   - pad 21 (A2) -> net `"OE_S"`    : 10k pulldown             (driven as GPIO)
+///   - pad 22 (A3) -> net `"SRCLR_S"` : 10k pulldown             (driven as GPIO)
 ///   - pad 27 (5V) -> +5V rail, pad 4 (GND) -> ground
 const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -135,7 +135,7 @@ fn module_apin_binds_adc_and_disabled_gpio_driver() {
 ///
 /// The scheduler promotes a pin on its first firmware edge by calling exactly
 /// `driver.set_enabled(circuit, true)` then `driver.set_volts(circuit, level)`
-/// (scheduler.rs, the pin_edges loop). We invoke that path directly on the bound
+/// (scheduler.rs, the `pin_edges` loop). We invoke that path directly on the bound
 /// board's A2 driver rather than booting real firmware, then let the real
 /// scheduler solve one step and read the net.
 #[test]

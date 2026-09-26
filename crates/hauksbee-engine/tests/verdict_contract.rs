@@ -93,9 +93,7 @@ fn run(args: &[&str]) -> Output {
 
 /// `run` against a board: the `run` subcommand, that board's path, then `args`.
 fn run_board(board: &Path, args: &[&str]) -> Output {
-    let mut argv = vec!["run", board.to_str().unwrap()];
-    argv.extend_from_slice(args);
-    run(&argv)
+    run(&[&["run", board.to_str().unwrap()], args].concat())
 }
 
 /// Run with `GITHUB_ACTIONS` set, the only condition under which the CLI emits
@@ -852,7 +850,7 @@ fn the_resources_subset_and_the_bare_machine_report_gate_like_their_verdicts() {
 // after the run.
 // ---------------------------------------------------------------------------
 
-/// The `<testsuites …>` root line of a JUnit document.
+/// The `<testsuites …>` root line of a `JUnit` document.
 fn junit_root(xml: &str) -> String {
     xml.lines()
         .find(|l| l.trim_start().starts_with("<testsuites"))
@@ -865,7 +863,7 @@ fn junit_all_green(xml: &str) -> bool {
     root.contains("failures=\"0\"") && root.contains("errors=\"0\"")
 }
 
-/// Every `<testcase name="…">` in a JUnit document.
+/// Every `<testcase name="…">` in a `JUnit` document.
 fn junit_testcases(xml: &str) -> Vec<String> {
     xml.split("<testcase name=\"")
         .skip(1)
@@ -1012,7 +1010,7 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
 // `gating` flag, so all three sides of that run say the same thing.
 // ---------------------------------------------------------------------------
 
-/// Every `<testcase>` in a JUnit document that carries a `<failure>`.
+/// Every `<testcase>` in a `JUnit` document that carries a `<failure>`.
 fn junit_failing_testcases(xml: &str) -> Vec<String> {
     xml.split("<testcase name=\"")
         .skip(1)

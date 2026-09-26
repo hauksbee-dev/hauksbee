@@ -32,13 +32,19 @@ pub struct McuDemoEngine {
 
 #[cfg(feature = "avr")]
 impl McuDemoEngine {
+    /// Boot an `ATmega328P` demo engine running `firmware_hex`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the firmware path is missing or invalid, if the simavr
+    /// core cannot be created, or if the firmware fails to load.
     pub fn new(
         firmware_hex: &std::path::Path,
         name: &str,
         board_url: &str,
     ) -> anyhow::Result<Self> {
-        let uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
-        let led_state: std::sync::Arc<std::sync::Mutex<bool>> = Default::default();
+        let uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = std::sync::Arc::default();
+        let led_state: std::sync::Arc<std::sync::Mutex<bool>> = std::sync::Arc::default();
         let mcu = Self::build_mcu(firmware_hex, &uart_rx, &led_state)?;
         Ok(Self {
             mcu,
@@ -87,8 +93,8 @@ impl Engine for McuDemoEngine {
             nets: vec!["D13_LED".into(), "A0".into()],
             component_kinds: [("U1".to_string(), "mcu".to_string())].into(),
             mcus: vec![("U1".into(), "simavr:atmega328p".into())],
-            power_supplies: Default::default(),
-            peripherals: Default::default(),
+            power_supplies: std::collections::HashMap::default(),
+            peripherals: Vec::default(),
             input_sources: vec![crate::protocol::InputSourceInfo {
                 id: "A0".into(),
                 kind: "voltage".into(),
@@ -102,6 +108,8 @@ impl Engine for McuDemoEngine {
     }
 
     fn step(&mut self, dt: f64) -> SimFrame {
+        #[allow(clippy::cast_possible_truncation, reason = "whole microseconds")]
+        #[allow(clippy::cast_sign_loss, reason = "dt is a positive step")]
         let micros = (dt * 1e6) as u64;
         // Measure what this step actually cost so the reported factor is the
         // delivered sim-per-wall ratio, never an asserted 1.0. The sim loop
@@ -128,19 +136,19 @@ impl Engine for McuDemoEngine {
             // The demo engine's synthetic nets hold their level for the whole
             // step, so there is no envelope to report. Empty is the honest
             // answer here, not a placeholder.
-            net_v_extremes: Default::default(),
+            net_v_extremes: std::collections::HashMap::default(),
             component_states: [(
                 "U1".to_string(),
-                [("running".to_string(), 1.0)].into_iter().collect(),
+                std::iter::once(("running".to_string(), 1.0)).collect(),
             )]
             .into(),
             uart: if uart.is_empty() {
-                Default::default()
+                std::collections::HashMap::default()
             } else {
                 [("U1".to_string(), uart)].into()
             },
-            net_currents: Default::default(),
-            faults: Default::default(),
+            net_currents: std::collections::HashMap::default(),
+            faults: Vec::default(),
             ..Default::default()
         }
     }

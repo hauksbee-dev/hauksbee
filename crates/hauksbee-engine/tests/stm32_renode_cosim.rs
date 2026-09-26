@@ -60,7 +60,7 @@ fn stm32_full_cosim_through_solved_circuit() {
     // Step 5 ms frames for ~1.0 s of virtual time (~200 chunks).
     let frame_dt = 5e-3_f64;
     let total = 1.0_f64;
-    let n = (total / frame_dt).round() as usize;
+    let n = 200; // total / frame_dt
 
     let mut uart: Vec<u8> = Vec::new();
     let mut max_r1_current_ma = 0.0_f64;

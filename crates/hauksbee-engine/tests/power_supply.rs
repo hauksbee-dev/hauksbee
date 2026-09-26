@@ -49,8 +49,7 @@ fn settle(engine: &mut HauksbeeEngine, dt: f64, n: usize) -> (f64, f64) {
         .scheduler()
         .supply_states()
         .get("+5V")
-        .map(|(_, i, _)| *i)
-        .unwrap_or(0.0);
+        .map_or(0.0, |(_, i, _)| *i);
     (last_v, cur)
 }
 
@@ -175,8 +174,7 @@ fn battery_soc_depletes_at_expected_rate() {
         .scheduler()
         .supply_states()
         .get("+5V")
-        .map(|(_, _, s)| *s)
-        .unwrap_or(1.0);
+        .map_or(1.0, |(_, _, s)| *s);
     // Charge drained ≈ i * 18 s / 3600 / 0.1 Ah. Compute the expected SoC from
     // the *actual* average current to avoid coupling to the exact load math.
     let expected_drop = i * 18.0 / 3600.0 / 0.1;

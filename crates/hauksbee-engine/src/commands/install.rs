@@ -1,5 +1,6 @@
-//! `hauksbee install esp-qemu [--yes]`: fetch Espressif's official prebuilt
-//! QEMU fork (qemu-system-xtensa + qemu-system-riscv32) into
+//! `hauksbee install esp-qemu [--yes]`: fetch Espressif's official prebuilt QEMU fork.
+//!
+//! The fork (qemu-system-xtensa + qemu-system-riscv32) goes into
 //! `~/.hauksbee-qemu-esp/`, the first location the engine's own discovery
 //! checks. Fetch, never bundle: the fork is GPL-2.0 and stays out of this
 //! Apache-2.0-licensed tree; the installer downloads from
@@ -17,6 +18,12 @@
 /// Run the `install esp-qemu` subcommand. `yes` skips the confirmation
 /// prompt (CI); without it, a non-interactive stdin refuses rather than
 /// downloading on a guess.
+///
+/// # Errors
+///
+/// Returns an error if the install directory cannot be determined, if consent is
+/// declined or cannot be asked (non-terminal stdin without `yes`), if the download,
+/// checksum or fork check fails, or if an installed binary still cannot be found.
 #[cfg(feature = "qemu")]
 pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     #[cfg(not(windows))]
@@ -44,9 +51,8 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     eprintln!(
         "This downloads Espressif's official prebuilt QEMU fork (GPL-2.0, \
          built and published by Espressif at https://github.com/espressif/qemu/releases)\n\
-         and unpacks it into {}; it is a separate program hauksbee talks to \
-         over sockets, not a part of hauksbee.",
-        root
+         and unpacks it into {root}; it is a separate program hauksbee talks to \
+         over sockets, not a part of hauksbee."
     );
     if !yes && !confirm("Proceed with download and install?")? {
         anyhow::bail!(
@@ -69,6 +75,11 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Stand-in for builds without the `qemu` feature.
+///
+/// # Errors
+///
+/// Always returns an error saying to rebuild with `--features qemu`.
 #[cfg(not(feature = "qemu"))]
 pub fn esp_qemu(_yes: bool) -> anyhow::Result<()> {
     anyhow::bail!(
@@ -78,10 +89,17 @@ pub fn esp_qemu(_yes: bool) -> anyhow::Result<()> {
     )
 }
 
-/// Run the `install renode` subcommand: the same embedded/on-disk
+/// Run the `install renode` subcommand behind the standard CLI consent prompt.
+///
+/// It is the same embedded/on-disk
 /// `install-sims.sh --renode-only` flow the web Environment page's Install
 /// button uses (`crate::deps::install_renode`), behind the standard CLI
 /// consent prompt. One implementation, two front doors.
+///
+/// # Errors
+///
+/// Returns an error if consent is declined or cannot be asked (non-terminal stdin
+/// without `yes`), or if the Renode install script fails.
 pub fn renode(yes: bool) -> anyhow::Result<()> {
     #[cfg(feature = "renode")]
     if let Ok(p) = hauksbee_mcu::renode::find_renode() {
@@ -107,7 +125,9 @@ pub fn renode(yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Co-sim pre-flight for `hauksbee run --firmware` (and anything else CLI-side
+/// Co-sim pre-flight: offer to install a missing Espressif QEMU before a run boots it.
+///
+/// Used by `hauksbee run --firmware` (and anything else CLI-side
 /// that is about to boot a `qemu:` core): when one of `backends` is a
 /// `qemu:<part>` whose emulator binary is absent, offer, on a real TTY, to
 /// install it inline, so the run can continue instead of dying with the
@@ -115,6 +135,11 @@ pub fn renode(yes: bool) -> anyhow::Result<()> {
 /// after a successful install; declining is also `Ok(())` (the co-sim then
 /// fails downstream with the existing loud error, which stays the single
 /// source of truth for the non-interactive path).
+///
+/// # Errors
+///
+/// Returns an error if the install directory cannot be determined, if the prompt
+/// cannot be answered, or if the accepted download or install fails.
 #[cfg(feature = "qemu")]
 pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
     #[cfg(not(windows))]
@@ -162,8 +187,7 @@ pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
     let install_root = "the current user's .hauksbee-qemu-esp directory".to_string();
     eprintln!(
         "hauksbee can download Espressif's official prebuilt fork (GPL-2.0) \
-         from https://github.com/espressif/qemu/releases into {} now.",
-        install_root
+         from https://github.com/espressif/qemu/releases into {install_root} now."
     );
     if !confirm("Download and install it, then continue?")? {
         eprintln!("Skipping install; the run will fail with install guidance.");
@@ -178,6 +202,11 @@ pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Stand-in for builds without the `qemu` feature: there is nothing to offer.
+///
+/// # Errors
+///
+/// Never returns an error; the `Result` matches the `qemu`-feature signature.
 #[cfg(not(feature = "qemu"))]
 pub fn offer_esp_qemu_install(_backends: &[String]) -> anyhow::Result<()> {
     Ok(())

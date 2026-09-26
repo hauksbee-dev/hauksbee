@@ -1,7 +1,7 @@
-//! Test 2: bind the stormduino board (KiCad-5 layout, ATmega328 Uno clone).
+//! Test 2: bind the stormduino board (KiCad-5 layout, `ATmega328` Uno clone).
 //!
 //! Asserts that more than 60% of non-ignored components resolve better than
-//! Unresolved, and prints the report. As a stretch goal, since the ATmega328P
+//! Unresolved, and prints the report. As a stretch goal, since the `ATmega328P`
 //! resolves and binds with a fully-connected /D13 net, we run the demo
 //! firmware and assert the D13/SCK net toggles.
 
@@ -16,7 +16,7 @@ use hauksbee_models::ModelLibrary;
 /// The stormduino board, if this machine has the corpus. It is a private
 /// board, deliberately absent from corpus.toml and from any public checkout
 /// (the manifest's local-only list), so a required fetch corpus is complete
-/// without it: absence skips, even under HAUKSBEE_REQUIRE_CORPUS=1.
+/// without it: absence skips, even under `HAUKSBEE_REQUIRE_CORPUS=1`.
 fn board_path(what: &str) -> Option<std::path::PathBuf> {
     hauksbee_testkit::local_only_asset(
         env!("CARGO_MANIFEST_DIR"),

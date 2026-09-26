@@ -1,6 +1,8 @@
-//! One module per report family. Each builds the **structured** finding type (the
-//! honesty layer in [`crate::result`]) and renders it in exactly one of the three
-//! output surfaces. The per-flag `if json / else if plain / else` triplication
+//! One module per report family.
+//!
+//! Each builds the **structured** finding type (the honesty layer in
+//! [`crate::result`]) and renders it in exactly one of the three output
+//! surfaces. The per-flag `if json / else if plain / else` triplication
 //! collapses into a single `match` on [`OutputMode`] per report, which keeps
 //! `cmd_run` a thin dispatcher: pick the mode once, call the right report's
 //! `emit`.
@@ -44,13 +46,14 @@ pub enum OutputMode {
 impl OutputMode {
     /// Resolve the surface from the two CLI flags. `--json` wins over `--plain`
     /// (a machine consumer never wants prose).
-    pub fn from_flags(json: bool, plain: bool) -> Self {
+    #[must_use]
+    pub const fn from_flags(json: bool, plain: bool) -> Self {
         if json {
-            OutputMode::Json
+            Self::Json
         } else if plain {
-            OutputMode::Plain
+            Self::Plain
         } else {
-            OutputMode::Text
+            Self::Text
         }
     }
 }
@@ -76,7 +79,7 @@ pub(crate) fn render_evidence_appendix(
     }
 }
 
-/// The one prominent note printed by `--check`/`--drc` when a KiCad layout
+/// The one prominent note printed by `--check`/`--drc` when a `KiCad` layout
 /// carries no routed copper at all: the spacing check then had only pads
 /// to compare, and a clean result must not read as "the routing is clean" on
 /// a board that has no routing yet.
@@ -85,7 +88,7 @@ pub(crate) const UNROUTED_COPPER_NOTE: &str =
      had only pads to compare, so a clean result here says nothing about routing \
      that does not exist yet.";
 
-/// True when a KiCad layout text carries no routed copper: no track segments
+/// True when a `KiCad` layout text carries no routed copper: no track segments
 /// and no zones (a filled zone is copper too, so its presence disables the
 /// caveat rather than risk crying wolf). Only meaningful for `.kicad_pcb`
 /// text; other formats return false and print nothing.
@@ -93,10 +96,11 @@ pub(crate) fn unrouted_kicad_layout(text: &str) -> bool {
     text.contains("(kicad_pcb") && !text.contains("(segment") && !text.contains("(zone")
 }
 
-/// Read project-file netclass clearances and resolve them to this board's
-/// concrete net names. KiCad 10 stores this in the sibling `.kicad_pro` rather
-/// than the `.kicad_pcb`; missing/malformed project files simply leave DRC on
-/// the board/default rules. Shared by the `--drc`, `--check` and combined-`--json`
+/// Read project-file netclass clearances and resolve them to this board's net names.
+///
+/// `KiCad` 10 stores this in the sibling `.kicad_pro` rather than the
+/// `.kicad_pcb`; missing/malformed project files simply leave DRC on the
+/// board/default rules. Shared by the `--drc`, `--check` and combined-`--json`
 /// reports.
 pub fn kicad_pro_clearance_rules(
     board_path: &Path,
@@ -135,10 +139,12 @@ pub fn kicad_pro_clearance_rules(
     )
 }
 
-/// Preserve the provenance that [`kicad_pro_clearance_rules`] alone cannot
-/// express. `rules_read=false` is always defaulted, whether the sibling is
-/// absent or present-but-unusable; the latter distinction is retained only so
-/// the human instruction does not falsely say the file was missing.
+/// Preserve the provenance that [`kicad_pro_clearance_rules`] alone cannot express.
+///
+/// `rules_read=false` is always defaulted, whether the sibling is absent or
+/// present-but-unusable; the latter distinction is retained only so the human
+/// instruction does not falsely say the file was missing.
+#[must_use]
 pub fn kicad_pro_clearance_rule_provenance(
     board_path: &Path,
     layout_text: &str,
@@ -167,6 +173,12 @@ pub struct KicadClearanceInput {
 }
 
 impl KicadClearanceInput {
+    /// Load the sibling `.kicad_pro` netclass rules and `.kicad_dru` custom rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a sibling `.kicad_dru` exists but cannot be read or
+    /// parsed. A missing or unusable `.kicad_pro` is not an error.
     pub fn load(board_path: &Path, board: &ExtractedBoard) -> anyhow::Result<Self> {
         let mut rules = kicad_pro_clearance_rules(board_path, board);
         let project_rules_read = rules.is_some();
@@ -207,6 +219,13 @@ impl KicadClearanceInput {
         })
     }
 
+    /// The clearance rule's provenance for this board's DRC.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic in practice: a custom global clearance is only ever set by
+    /// [`Self::load`] together with the parsed custom-rule coverage it `expect`s.
+    #[must_use]
     pub fn provenance(
         &self,
         board_path: &Path,
@@ -234,7 +253,8 @@ impl KicadClearanceInput {
         }
     }
 
-    pub fn custom_coverage(&self) -> Option<&crate::result::CustomRulesCoverage> {
+    #[must_use]
+    pub const fn custom_coverage(&self) -> Option<&crate::result::CustomRulesCoverage> {
         self.custom_coverage.as_ref()
     }
 }
@@ -289,7 +309,7 @@ impl StaticInputs<'_> {
     }
 }
 
-/// Run the geometric DRC: Altium's own rules, else KiCad's with the sibling
+/// Run the geometric DRC: Altium's own rules, else `KiCad`'s with the sibling
 /// project/custom-rule clearances (returned too, for provenance and coverage;
 /// `None` exactly on Altium). Shared by `--drc`, `--check` and the CI finding
 /// gatherer so they can never run different DRCs over one board.
@@ -320,7 +340,7 @@ pub(crate) fn run_drc(
 }
 
 /// Where the DRC's clearance rule came from: the tool default on Altium, else
-/// the KiCad inputs [`run_drc`] loaded.
+/// the `KiCad` inputs [`run_drc`] loaded.
 pub(crate) fn clearance_provenance(
     input: Option<&KicadClearanceInput>,
     board_path: &Path,
@@ -361,16 +381,18 @@ pub(crate) fn with_schematic_evidence(
 pub fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
     crate::result::lint_findings_json(report)
         .iter()
-        .any(|finding| finding.gates())
+        .any(crate::result::JsonFinding::gates)
 }
 
-/// Strict-mode predicate for the SI report: any real finding (high/medium/low,
-/// but not the informational computed-value notes) fails the gate. Asked of the
-/// machine findings for the same reason as [`lint_fails`].
+/// Strict-mode predicate for the SI report.
+///
+/// Any real finding (high/medium/low, but not the informational computed-value
+/// notes) fails the gate. Asked of the machine findings for the same reason as
+/// [`lint_fails`].
 pub fn si_fails(report: &hauksbee_extract::SiReport) -> bool {
     crate::result::si_findings_json(report)
         .iter()
-        .any(|finding| finding.gates())
+        .any(crate::result::JsonFinding::gates)
 }
 
 /// How many gate-grade subjects the `--strict` failure line names before it
@@ -380,6 +402,7 @@ const STRICT_LINE_SUBJECTS: usize = 8;
 
 /// One `<check> <net/ref>` label per gating lint finding (high/medium, the
 /// same predicate as [`lint_fails`]), for the `--strict` failure line.
+#[must_use]
 pub fn lint_gate_items(report: &hauksbee_extract::NetLintReport) -> Vec<String> {
     crate::result::lint_findings_json(report)
         .iter()
@@ -388,10 +411,13 @@ pub fn lint_gate_items(report: &hauksbee_extract::NetLintReport) -> Vec<String> 
         .collect()
 }
 
-/// One label per gating SI finding (every real finding gates, matching
-/// [`si_fails`]). The informational computed-value notes are filtered out: they
-/// never gate, and naming one on the failure line, or spending a GitHub
-/// annotation on it, says a note is why the run failed.
+/// One label per gating SI finding.
+///
+/// Every real finding gates, matching [`si_fails`]. The informational
+/// computed-value notes are filtered out: they never gate, and naming one on the
+/// failure line, or spending a GitHub annotation on it, says a note is why the
+/// run failed.
+#[must_use]
 pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
     crate::result::si_findings_json(report)
         .iter()
@@ -403,6 +429,7 @@ pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
 /// One label per short whose final structured severity is serious. Unlike the
 /// raw-report helper, this sees pair-specific KiCad-oracle promotion on an
 /// otherwise unvalidated board format.
+#[must_use]
 pub fn drc_structured_gate_items(drc: &crate::result::DrcStructured) -> Vec<String> {
     drc.shorts
         .iter()
@@ -413,33 +440,34 @@ pub fn drc_structured_gate_items(drc: &crate::result::DrcStructured) -> Vec<Stri
 
 /// `<check> <first net, else first ref>`; bare check id when neither exists.
 fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
-    match nets.first().or_else(|| refs.first()) {
-        Some(subject) => format!("{check} {subject}"),
-        None => check.to_string(),
-    }
+    nets.first()
+        .or_else(|| refs.first())
+        .map_or_else(|| check.to_string(), |subject| format!("{check} {subject}"))
 }
 
-/// Exit 3 for a bind-blocked run, naming the blockers on the GitHub checks tab
-/// on the way out whether or not `--junit`/`--sarif` were asked for. The current
-/// artifact transaction already contains the same blockers as gate-grade
-/// evidence and is finalized by this exit.
+/// Exit 3 for a bind-blocked run, naming the blockers on the GitHub checks tab.
+///
+/// The blockers are named on the way out whether or not `--junit`/`--sarif`
+/// were asked for. The current artifact transaction already contains the same
+/// blockers as gate-grade evidence and is finalized by this exit.
 ///
 /// Narrower than [`strict_gate_exit`], deliberately: it prints no failure line
 /// (the surfaces that exit 3 already printed their INCONCLUSIVE verdict) and it
 /// is not the chokepoint for typed whole-run refusals: those use
-/// `ci_artifacts::exit_with_refusal` so JUnit, SARIF and GitHub receive the
+/// `ci_artifacts::exit_with_refusal` so `JUnit`, SARIF and GitHub receive the
 /// refusal itself. No-op outside GitHub Actions.
 pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
     ci_artifacts::github_blocker_annotation(blockers);
     ci_artifacts::exit_with_findings(crate::result::EXIT_INVALID_FOR_ANALYSIS, &[])
 }
 
+/// Name WHY the process is about to exit 2, then exit.
+///
 /// The mandatory last word of the eight report gate sites that route through
 /// here: `--lint`, `--resources`, `--check`, bare `--json`, `--drc`, `--si`,
-/// `--usb-c`, and the co-sim fault gate in `commands::run`. Name WHY the process
-/// is about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
-/// crash, and `--plain --strict` must not print a "not a failure" verdict while
-/// failing.
+/// `--usb-c`, and the co-sim fault gate in `commands::run`. Exit 2 with no line
+/// saying why reads as a tool crash, and `--plain --strict` must not print a
+/// "not a failure" verdict while failing.
 ///
 /// Not every exit 2 in the binary comes through here, so do not read this as the
 /// exit-2 chokepoint. Three other paths exit 2 with a message of their own:
@@ -491,7 +519,7 @@ pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
     ci_artifacts::exit_with_findings(2, items);
 }
 
-/// A gate item ("drc-short GND/+5V", "crystal_load_cap XTAL1") in words a
+/// A gate item ("drc-short GND/+5V", "`crystal_load_cap` XTAL1") in words a
 /// non-engineer can read, for the `--plain` strict failure line. The id
 /// prefix maps to its check family; underscores become spaces.
 fn plain_gate_item(item: &str) -> String {
@@ -514,12 +542,14 @@ fn plain_gate_item(item: &str) -> String {
     }
 }
 
-/// Discoverability for the exit-code contract: a report command without
-/// `--strict` exits 0 even when it just printed a gate-grade finding, and the
-/// proof campaign showed people read that 0 as a clean bill in CI. When the
-/// findings WOULD have gated, say so once on stderr (stdout stays a clean
-/// report / a single JSON document). Every strict-gated report calls this at
-/// its gate site so the hint and the gate can never disagree.
+/// Discoverability for the exit-code contract.
+///
+/// A report command without `--strict` exits 0 even when it just printed a
+/// gate-grade finding, and the proof campaign showed people read that 0 as a
+/// clean bill in CI. When the findings WOULD have gated, say so once on stderr
+/// (stdout stays a clean report / a single JSON document). Every strict-gated
+/// report calls this at its gate site so the hint and the gate can never
+/// disagree.
 pub fn note_ungated_findings(strict: bool, would_gate: bool) {
     if !strict && would_gate {
         eprintln!(
@@ -725,7 +755,7 @@ mod tests {
         assert_eq!(
             findings
                 .iter()
-                .map(|finding| finding.gates())
+                .map(crate::result::JsonFinding::gates)
                 .collect::<Vec<_>>(),
             [false, true]
         );
@@ -765,7 +795,7 @@ mod tests {
         assert_eq!(
             findings
                 .iter()
-                .map(|finding| finding.gates())
+                .map(crate::result::JsonFinding::gates)
                 .collect::<Vec<_>>(),
             [false, true]
         );

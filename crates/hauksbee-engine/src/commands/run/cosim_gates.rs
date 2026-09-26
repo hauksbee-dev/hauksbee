@@ -40,14 +40,7 @@ pub(super) fn enforce_gates(
                  firmware may not match this board)."
         );
         if cfg.strict && !analog_abort {
-            if let Some(refusal) = &strict_refusal {
-                crate::reports::ci_artifacts::set_current_refusal(refusal.clone());
-            }
-            if !cfg.json {
-                if let Some(refusal) = &strict_refusal {
-                    eprintln!("{}", refusal.render_text());
-                }
-            }
+            publish_refusal(cfg.json, strict_refusal.as_ref());
             // `fail` outranks `invalid`, the same precedence the verdict
             // field applies: a run that raised real electrical faults CAN
             // be judged, so the fault gate below takes the exit (2) and
@@ -98,14 +91,7 @@ pub(super) fn enforce_gates(
                 hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
             );
         if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
-            if let Some(refusal) = &strict_refusal {
-                crate::reports::ci_artifacts::set_current_refusal(refusal.clone());
-            }
-            if !cfg.json {
-                if let Some(refusal) = &strict_refusal {
-                    eprintln!("{}", refusal.render_text());
-                }
-            }
+            publish_refusal(cfg.json, strict_refusal.as_ref());
             // NOT the zero-activity precedence: there the analog solve was
             // sound, so raised faults were a judgement the run could make.
             // Here the solve held stale voltages over the failed windows,
@@ -168,5 +154,15 @@ pub(super) fn enforce_gates(
         });
     if cfg.strict && strict_invalid {
         crate::reports::exit_invalid_for_analysis(&strict_blockers);
+    }
+}
+
+/// Record the strict refusal for the CI artifacts and, outside `--json`, print it.
+fn publish_refusal(json: bool, refusal: Option<&crate::result::Refusal>) {
+    if let Some(refusal) = refusal {
+        crate::reports::ci_artifacts::set_current_refusal(refusal.clone());
+        if !json {
+            eprintln!("{}", refusal.render_text());
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! Generic signal-diode fallback: value-"D" parts must bind to a CONDUCTING
 //! 1N4148 model, not bind OPEN.
 //!
-//! The KiCad stock "Device:D" symbol carries value "D" with no MPN, so the
+//! The `KiCad` stock "Device:D" symbol carries value "D" with no MPN, so the
 //! model db cannot resolve it. Leaving such a part OPEN silently deletes its
 //! conduction path. The binder falls back to a generic 1N4148
 //! (datasheet-grounded params), the same way it falls back to generic R/C/L
@@ -11,8 +11,9 @@ use hauksbee_engine::binder::bind_board;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
+use std::fmt::Write as _;
 
-/// Build the smallest possible KiCad netlist with one value-"D" diode wired
+/// Build the smallest possible `KiCad` netlist with one value-"D" diode wired
 /// between two named nets, and assert it binds to a conducting diode with the
 /// 1N4148 fallback parameters (not the open default, not a generic Is=1e-14).
 #[test]
@@ -97,20 +98,24 @@ fn many_generic_diodes_bind_conducting() {
     let mut nets = String::new();
     for i in 0..32 {
         let reference = format!("D_BANK{i}");
-        components.push_str(&format!(
+        write!(
+            components,
             r#"(comp (ref "{reference}")
       (value "D")
       (footprint "Diode_SMD:D_SOD-323")
       (libsource (lib "Device") (part "D") (description "Diode")))"#
-        ));
-        nets.push_str(&format!(
+        )
+        .unwrap();
+        write!(
+            nets,
             r#"(net (code "{}") (name "A{i}")
       (node (ref "{reference}") (pin "2") (pinfunction "A") (pintype "passive")))
     (net (code "{}") (name "K{i}")
       (node (ref "{reference}") (pin "1") (pinfunction "K") (pintype "passive")))"#,
             i * 2 + 1,
             i * 2 + 2
-        ));
+        )
+        .unwrap();
     }
     let netlist = format!(
         r#"(export (version "E")

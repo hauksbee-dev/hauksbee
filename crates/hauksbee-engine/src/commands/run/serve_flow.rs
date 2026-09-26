@@ -12,7 +12,7 @@ use super::{
 use crate::commands::run::preloaded_board_file;
 use hauksbee_extract::ExtractedBoard;
 
-pub(crate) fn emit_or_serve(
+pub fn emit_or_serve(
     cfg: &RunConfig,
     run_inputs: &RunInputs,
     artifacts: &RunArtifacts,
@@ -87,34 +87,32 @@ pub(crate) fn emit_or_serve(
     } else {
         text.as_bytes()
     };
-    let report_json = match &cfg.firmware {
-        Some(fw) => {
-            let fw_name = crate::commands::common::file_name(fw);
-            match std::fs::read(fw) {
-                Ok(bytes) => crate::frontdoor::analyze_with_firmware_json_with_ties(
-                    &file_name,
-                    report_bytes,
-                    &fw_name,
-                    &bytes,
-                    schematic_ties.as_ref(),
-                ),
-                // Firmware was already path-validated above; a read error here is
-                // unexpected, so fall back to the board-only report rather than fail.
-                Err(_) => crate::frontdoor::analyze_json_with_ties(
-                    &file_name,
-                    report_bytes,
-                    schematic_ties.as_ref(),
-                ),
-            }
-        }
-        // The preloaded browser report must read the same as `--drc` on the same
-        // path, so it gets the companion schematic this run already resolved.
-        None => crate::frontdoor::analyze_json_with_ties(
-            &file_name,
-            report_bytes,
-            schematic_ties.as_ref(),
-        ),
-    };
+    // Firmware was already path-validated above; a read error here is
+    // unexpected, so fall back to the board-only report rather than fail. The
+    // preloaded browser report must read the same as `--drc` on the same path,
+    // so it gets the companion schematic this run already resolved.
+    let firmware = cfg.firmware.as_ref().and_then(|fw| {
+        let fw_name = crate::commands::common::file_name(fw);
+        Some((fw_name, std::fs::read(fw).ok()?))
+    });
+    let report_json = firmware.map_or_else(
+        || {
+            crate::frontdoor::analyze_json_with_ties(
+                &file_name,
+                report_bytes,
+                schematic_ties.as_ref(),
+            )
+        },
+        |(fw_name, bytes)| {
+            crate::frontdoor::analyze_with_firmware_json_with_ties(
+                &file_name,
+                report_bytes,
+                &fw_name,
+                &bytes,
+                schematic_ties.as_ref(),
+            )
+        },
+    );
     let report_val: serde_json::Value =
         serde_json::from_str(&report_json).unwrap_or(serde_json::Value::Null);
     let startup_json = serde_json::json!({

@@ -11,7 +11,8 @@ use super::{
     RunConfig, SelectedSurface,
 };
 
-pub(crate) fn emit_selected(
+#[allow(clippy::too_many_lines, reason = "flat dispatch over report surfaces")]
+pub fn emit_selected(
     cfg: &RunConfig,
     quiet: bool,
     surface: SelectedSurface,
@@ -44,11 +45,8 @@ pub(crate) fn emit_selected(
     // --ac-node / --ac-loop without grepping the layout. One net per line on
     // stdout (pipeable); a JSON array under --json.
     if surface == SelectedSurface::Inventory {
-        let bound = match prebound.take() {
-            Some(b) => b,
-            None => bind_board(board, lib),
-        };
-        let mut nets: Vec<String> = bound.net_names.clone();
+        let bound = prebound.take().unwrap_or_else(|| bind_board(board, lib));
+        let mut nets: Vec<String> = bound.net_names;
         nets.sort();
         if cfg.json {
             println!("{}", list_nets_json(&nets));
@@ -179,10 +177,7 @@ pub(crate) fn emit_selected(
         let ac_arg = cfg.ac.as_ref().expect("AC surface has an --ac value");
         // The overlay-applied bound board when --asbuilt was given, so the AC
         // sweep runs on the reworked circuit.
-        let bound = match prebound.take() {
-            Some(b) => b,
-            None => bind_board(board, lib),
-        };
+        let bound = prebound.take().unwrap_or_else(|| bind_board(board, lib));
         let evidence = report_inputs.evidence(&bound.report)?;
         return crate::reports::ac::emit_quiet(
             &bound,

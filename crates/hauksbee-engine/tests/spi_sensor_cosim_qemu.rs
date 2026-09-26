@@ -40,7 +40,8 @@ use std::path::PathBuf;
 fn board_text() -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/esp32_spi_adc_demo.kicad_pcb");
-    std::fs::read_to_string(&p).unwrap_or_else(|_| panic!("read esp32 SPI ADC board from {p:?}"))
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|_| panic!("read esp32 SPI ADC board from {}", p.display()))
 }
 
 fn flash_image() -> Option<PathBuf> {
@@ -54,15 +55,10 @@ fn preconditions() -> Option<PathBuf> {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
         return None;
     }
-    match flash_image() {
-        Some(fw) => Some(fw),
-        None => {
-            eprintln!(
-                "SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc"
-            );
-            None
-        }
-    }
+    flash_image().or_else(|| {
+        eprintln!("SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc");
+        None
+    })
 }
 
 /// Run the co-sim for `ms` of virtual time with the MCP3008 channel-0 voltage
@@ -88,10 +84,10 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
     let mut adc = Mcp3008::new(3.3);
     adc.set_channel(0, ch0_volts);
     let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(adc))));
-    engine.scheduler_mut().attach_spi_bus(bus.clone(), None);
+    engine.scheduler_mut().attach_spi_bus(bus, None);
 
     let frame_dt = 5e-3_f64;
-    let n = (ms as f64 / 1000.0 / frame_dt).round() as usize;
+    let n = usize::try_from(ms / 5).expect("frame count fits"); // 5 ms frames
     crate::support::last_flag(&mut engine, frame_dt, n)
 }
 
@@ -171,8 +167,7 @@ fn esp32_spi_adc_flag_follows_voltage_sweep() {
     }
     assert!(
         failures.is_empty(),
-        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for QEMU): {:?}",
-        failures
+        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for QEMU): {failures:?}"
     );
 }
 
@@ -194,7 +189,7 @@ fn esp32_spi_adc_uart_announces_ready() {
     engine.scheduler_mut().chunk_s = 5e-3;
 
     let frame_dt = 5e-3_f64;
-    let n = (1.5_f64 / frame_dt).round() as usize;
+    let n = 300; // 1.5 s of 5 ms frames
     let mut uart: Vec<u8> = Vec::new();
     for _ in 0..n {
         let frame = engine.step(frame_dt);

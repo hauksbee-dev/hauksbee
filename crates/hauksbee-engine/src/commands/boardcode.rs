@@ -1,5 +1,7 @@
-//! The Board-as-Code subcommands: `to-code` decompiles any text board into the
-//! editable `.board` source, `from-code` recompiles that source back to a KiCad
+//! The Board-as-Code subcommands: `to-code`, `from-code` and `check-code`.
+//!
+//! `to-code` decompiles any text board into the
+//! editable `.board` source, `from-code` recompiles that source back to a `KiCad`
 //! PCB (with optional placement / routing), and `check-code` recompiles then runs
 //! the stress co-sim. This is the CLI glue over the `boardcode` module; the
 //! round-trip logic itself lives there.
@@ -14,9 +16,14 @@ use crate::commands::common::read_board_text;
 /// `hauksbee to-code <board-file> [--out <file.board>]`
 ///
 /// Accepts any text board the extractor understands. A `.kicad_pcb` keeps the
-/// cluster-aware geometry decompiler; a KiCad `.net` / IPC-D-356 / Eagle `.brd`
+/// cluster-aware geometry decompiler; a `KiCad` `.net` / IPC-D-356 / Eagle `.brd`
 /// / `.kicad_sch` is extracted and emitted flat (so a layout-free netlist also
 /// becomes editable Board-as-Code).
+///
+/// # Errors
+///
+/// Returns an error if the board file cannot be read, if it cannot be decompiled
+/// to Board-as-Code, or if the `out` file cannot be written.
 pub fn to_code(board: &Path, out: Option<&Path>) -> anyhow::Result<()> {
     let text = read_board_text(board)?;
     let code = decompile_any_to_code(&text)?;
@@ -30,10 +37,10 @@ pub fn to_code(board: &Path, out: Option<&Path>) -> anyhow::Result<()> {
                       # re-places and (optionally) re-routes from scratch.\n";
     let code = if code.starts_with('#') {
         // Keep an existing generated header first, then the disclosure.
-        match code.find("\n\n") {
-            Some(i) => format!("{}\n{}{}", &code[..i], disclosure, &code[i + 1..]),
-            None => format!("{disclosure}{code}"),
-        }
+        code.find("\n\n").map_or_else(
+            || format!("{disclosure}{code}"),
+            |i| format!("{}\n{}{}", &code[..i], disclosure, &code[i + 1..]),
+        )
     } else {
         format!("{disclosure}{code}")
     };
@@ -52,7 +59,7 @@ pub fn to_code(board: &Path, out: Option<&Path>) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RouteMode {
     /// No routing (placement only) - the historical default.
     None,
@@ -62,9 +69,14 @@ pub enum RouteMode {
     Grid,
 }
 
-/// Everything `from-code` can be asked to do beyond the bare recompile. Passed
-/// as a struct because the flag surface (routing engine knobs, the DSN escape
+/// Everything `from-code` can be asked to do beyond the bare recompile.
+///
+/// Passed as a struct because the flag surface (routing engine knobs, the DSN escape
 /// hatch, machine output) outgrew a positional-argument list.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent command-line flag"
+)]
 pub struct FromCodeOpts {
     /// Write the `.kicad_pcb` here (default: print to stdout).
     pub out: Option<PathBuf>,
@@ -86,6 +98,13 @@ pub struct FromCodeOpts {
 }
 
 /// `hauksbee from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid|--route-dsn <f>] [--route-strict] [--json]`
+///
+/// # Errors
+///
+/// Returns an error if `--json` is given without a routing mode, if the code file
+/// cannot be read or parsed, if routing fails or (with `--route-strict`) leaves
+/// unrouted nets or serious DRC violations, or if the DSN or output file cannot be
+/// written.
 pub fn from_code(code_path: &Path, opts: &FromCodeOpts) -> anyhow::Result<()> {
     use forge_codegen::{relayout, LayoutConfig, Program};
 
@@ -148,14 +167,14 @@ pub fn from_code(code_path: &Path, opts: &FromCodeOpts) -> anyhow::Result<()> {
         }
     }
 
-    let route_stats = if route != RouteMode::None {
+    let route_stats = if route == RouteMode::None {
+        None
+    } else {
         let stats = route_board(&mut pcb, &prog, route, opts)?;
         // On a strict failure this prints the JSON (ok:false) and exits, so a
         // board that failed the gate is never written.
         finish_routed(&stats, opts.route_strict, opts.json)?;
         Some(stats)
-    } else {
-        None
     };
 
     let board_text = pcb.emit();
@@ -181,6 +200,12 @@ pub fn from_code(code_path: &Path, opts: &FromCodeOpts) -> anyhow::Result<()> {
 /// Recompile the board from its Board-as-Code source (deterministic placement,
 /// so pads land exactly where the exported DSN put them), merge a user-supplied
 /// SES onto it, and run the SAME post-merge audit the built-in route path runs.
+///
+/// # Errors
+///
+/// Returns an error if the code or SES file cannot be read or parsed, if the SES
+/// merges no copper onto the board, if the post-merge DRC fails, if `route_strict`
+/// finds audit violations, or if the output file cannot be written.
 pub fn merge_ses(
     code_path: &Path,
     ses_path: &Path,
@@ -247,7 +272,7 @@ pub fn merge_ses(
 struct RouteAudit {
     conn: forge_codegen::Connectivity,
     drc_serious: usize,
-    /// On an unvalidated (KiCad 10+) format the short counts are unreliable
+    /// On an unvalidated (`KiCad` 10+) format the short counts are unreliable
     /// and the strict gate must not fire on them.
     drc_reliable: bool,
     endpoint_violations: usize,
@@ -309,14 +334,14 @@ fn route_board(
         RouteMode::None => anyhow::bail!("route_board called with RouteMode::None"),
     };
 
-    if !use_grid {
+    if use_grid {
+        eprintln!("routing: freerouting absent, using in-tree grid A* fallback");
+    } else {
         // Freerouting handoff (the production path).
-        let workdir = opts
-            .out
-            .as_deref()
-            .and_then(|p| p.parent())
-            .map(|d| d.join("freerouting-work"))
-            .unwrap_or_else(|| std::env::temp_dir().join("hauksbee-freerouting"));
+        let workdir = opts.out.as_deref().and_then(|p| p.parent()).map_or_else(
+            || std::env::temp_dir().join("hauksbee-freerouting"),
+            |d| d.join("freerouting-work"),
+        );
         // Announce the DSN up front: it is the hand-off artifact an operator
         // wants when this run fails or times out (route it themselves, then
         // `hauksbee merge-ses`), so it is never written silently.
@@ -344,8 +369,6 @@ fn route_board(
                 eprintln!("freerouting failed ({e}); falling back to grid A*");
             }
         }
-    } else {
-        eprintln!("routing: freerouting absent, using in-tree grid A* fallback");
     }
 
     // Grid A* fallback. Route on the program (it reads pad geometry from there)
@@ -364,7 +387,7 @@ fn route_board(
             seg += 1;
         }
     }
-    eprintln!("merged {} segments (grid A* fallback)", seg);
+    eprintln!("merged {seg} segments (grid A* fallback)");
     let audit = post_merge_audit(pcb, "grid A* fallback", true)?;
     Ok(RouteStats {
         engine: "grid".to_string(),
@@ -477,6 +500,11 @@ fn route_json(stats: &RouteStats, ok: bool, error: Option<&str>) -> String {
 }
 
 /// `hauksbee check-code <code-dir|file> [--seconds N] [--destructive] [--json]`
+///
+/// # Errors
+///
+/// Returns an error if the code cannot be loaded or recompiled, or if the stress
+/// co-simulation fails to run. An unhealthy result exits the process with status 1.
 pub fn check(
     code_path: &Path,
     seconds: f64,

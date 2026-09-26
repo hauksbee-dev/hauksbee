@@ -14,7 +14,7 @@
 //! folds in binder decisions, model matches, solver fallbacks, CI inputs, and
 //! live waivers; report producers ask it for assertion-scoped maps, and
 //! renderers only project those maps, so provenance and trust status cannot
-//! drift between terminal, JSON, web, JUnit, SARIF, and GitHub output.
+//! drift between terminal, JSON, web, `JUnit`, SARIF, and GitHub output.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -162,13 +162,10 @@ fn component_occurrence_subjects(
         .map(|row| {
             if matches!(&row.outcome, BindOutcome::PowerRail { .. }) {
                 synthetic_index += 1;
-                let encoded = row
-                    .reference
-                    .trim()
-                    .as_bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02X}"))
-                    .collect::<String>();
+                let mut encoded = String::new();
+                for byte in row.reference.trim().bytes() {
+                    let _ = write!(encoded, "{byte:02X}");
+                }
                 // Live component subjects can only carry uppercase hex after
                 // OCCURRENCE_PREFIX; this non-hex reserved branch therefore
                 // cannot collide even with an adversarial literal designator.
@@ -235,7 +232,7 @@ fn push_model_rows(
 /// one per unresolved row.
 ///
 /// A row-per-assumption loop assumed every unresolved row carries its own
-/// identity, and two real boards proved otherwise. A KiCad mainboard places four
+/// identity, and two real boards proved otherwise. A `KiCad` mainboard places four
 /// footprints with a blank designator, a blank value and one shared reason, so
 /// all four minted the same id. A gerber job whose placements are reconstructed
 /// from a fabrication report gives every reconstructed pad one name, so twenty-two
@@ -279,26 +276,23 @@ fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<As
             probe.consequence().to_string(),
             probe.replacement().to_string(),
         );
-        match groups.get_mut(&key) {
-            Some((count, _, _, _, subjects)) => {
-                *count += 1;
-                if let Some(subject) = row_subjects.get(row_index) {
-                    subjects.push(subject.clone());
-                }
+        if let Some((count, _, _, _, subjects)) = groups.get_mut(&key) {
+            *count += 1;
+            if let Some(subject) = row_subjects.get(row_index) {
+                subjects.push(subject.clone());
             }
-            None => {
-                order.push(key.clone());
-                groups.insert(
-                    key,
-                    (
-                        1,
-                        row.reference.clone(),
-                        row.value.clone(),
-                        reason.clone(),
-                        row_subjects.get(row_index).cloned().into_iter().collect(),
-                    ),
-                );
-            }
+        } else {
+            order.push(key.clone());
+            groups.insert(
+                key,
+                (
+                    1,
+                    row.reference.clone(),
+                    row.value.clone(),
+                    reason.clone(),
+                    row_subjects.get(row_index).cloned().into_iter().collect(),
+                ),
+            );
         }
     }
     // A designator carrying more than one distinct claim needs its claims told
@@ -329,6 +323,13 @@ impl BoardEvidence {
     /// Build from the actual board incidence and the bind report that produced
     /// the live circuit. Reader coverage notes enter as board-scoped
     /// reduced-fidelity assumptions, so they cannot disappear on one surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the assumptions derived from the bind report and
+    /// reader notes fail validation or collide on an id, or if a net's incidence,
+    /// model provenance or parameter rows fail structural validation.
+    #[allow(clippy::too_many_lines, reason = "one pass: assumptions, then nets")]
     pub fn from_bound(
         board: &ExtractedBoard,
         report: &BindReport,
@@ -373,8 +374,7 @@ impl BoardEvidence {
             }
             let component_subject = row_subjects
                 .get(row_index)
-                .map(String::as_str)
-                .unwrap_or_else(|| row.reference.trim());
+                .map_or_else(|| row.reference.trim(), String::as_str);
             let key = format!("model/{component_subject}");
             let subject_text = format!("{} ({})", row.reference, row.value);
             assumptions.push(Assumption::reduced_fidelity(
@@ -415,8 +415,7 @@ impl BoardEvidence {
                 .unwrap_or(rest);
             let component_subject = row_subjects
                 .get(row_index)
-                .map(String::as_str)
-                .unwrap_or_else(|| row.reference.trim());
+                .map_or_else(|| row.reference.trim(), String::as_str);
             assumptions.push(if operating_limit {
                 Assumption::operating_limit_violated(
                     component_subject,
@@ -457,8 +456,7 @@ impl BoardEvidence {
         for (row_index, row) in report.rows.iter().enumerate() {
             let component_subject = row_subjects
                 .get(row_index)
-                .map(String::as_str)
-                .unwrap_or_else(|| row.reference.trim());
+                .map_or_else(|| row.reference.trim(), String::as_str);
             for guess in &row.guesses {
                 let (pin, role) = guessed_pin_role(guess);
                 assumptions.push(Assumption::inferred_pin_role_for_component(
@@ -502,8 +500,7 @@ impl BoardEvidence {
         for (component_index, component) in board.components.iter().enumerate() {
             let component_subject = component_subjects
                 .get(component_index)
-                .map(String::as_str)
-                .unwrap_or(AssumptionId::UNNAMED_SUBJECT);
+                .map_or(AssumptionId::UNNAMED_SUBJECT, String::as_str);
             for pin in &component.pins {
                 if let Some(name) = pin.net.and_then(|id| net_names.get(&id)).copied() {
                     incidence
@@ -548,13 +545,7 @@ impl BoardEvidence {
                 if let Some(row) = rows.get(reference.as_str()) {
                     if let Some(model_id) = row.model_id.as_deref() {
                         let provenance_reference = provenance_display_reference(&row.reference);
-                        let confidence = match row.confidence {
-                            Confidence::Exact => MatchConfidence::Exact,
-                            Confidence::Family => MatchConfidence::High,
-                            Confidence::Guessed | Confidence::Unresolved => {
-                                MatchConfidence::Guessed
-                            }
-                        };
+                        let confidence = confidence(row.confidence);
                         let source = row
                             .source
                             .clone()
@@ -632,6 +623,11 @@ impl BoardEvidence {
     /// Attach the exact board bytes the reader consumed. The SHA belongs to the
     /// original upload/path, not the normalized in-memory board, so a report can
     /// be reproduced and audited without guessing which source revision ran.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the path is empty, or if a reader assumption the
+    /// artifact cites is missing from the registry.
     pub fn with_input_artifact(
         mut self,
         path: impl AsRef<Path>,
@@ -665,6 +661,11 @@ impl BoardEvidence {
     }
 
     /// Attach the exact firmware image consumed by a co-simulation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the path is empty, or if the artifact cites an
+    /// assumption absent from the registry.
     pub fn with_firmware_artifact(
         mut self,
         path: impl AsRef<Path>,
@@ -702,6 +703,11 @@ impl BoardEvidence {
     /// copper contact must be able to see which file carried the declaration
     /// and check it. `contribution` says what it actually did, including when
     /// it declared nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the path is empty, or if the artifact cites an
+    /// assumption absent from the registry.
     pub fn with_schematic_artifact(
         mut self,
         path: impl AsRef<Path>,
@@ -734,6 +740,11 @@ impl BoardEvidence {
     }
 
     /// Attach a TOML input that directly shaped the run (CI spec or waivers).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the path is empty, or if the artifact cites an
+    /// assumption absent from the registry.
     pub fn with_toml_artifact(
         mut self,
         path: impl AsRef<Path>,
@@ -759,6 +770,11 @@ impl BoardEvidence {
     /// the typed provenance from the reader's own mapping and reconciliation
     /// report; this method makes it part of the same registry and therefore of
     /// every later CI assertion map.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the artifact cites an assumption absent from the
+    /// registry.
     pub fn with_supporting_artifact(
         mut self,
         artifact: ArtifactProvenance,
@@ -770,6 +786,12 @@ impl BoardEvidence {
 
     /// Merge facts produced after binding (scheduler, solver, live waiver).
     /// Existing artifact indices remain stable and every map is rebuilt later.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if a merged assumption fails validation, if ids
+    /// still collide after disambiguation, or if re-keying a colliding id or
+    /// re-adding an existing artifact fails.
     pub fn with_assumptions(
         mut self,
         new_assumptions: impl IntoIterator<Item = Assumption>,
@@ -856,6 +878,11 @@ impl BoardEvidence {
     /// Attach only custom-rule omissions that can change a reported DRC
     /// clearance assertion. Rules for checks Hauksbee does not implement stay
     /// in the report's not-covered bucket and do not qualify unrelated results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if merging the derived custom-rule assumptions
+    /// fails, as for [`Self::with_assumptions`].
     pub fn with_custom_rules_coverage(
         self,
         coverage: Option<&crate::result::CustomRulesCoverage>,
@@ -911,6 +938,17 @@ impl BoardEvidence {
     /// Add only substitutions the scheduler actually recorded. Binder family
     /// matching is provenance, not automatically a semantic stand-in; it does
     /// not enter this assumption registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::InvalidAssumption`] if a substitution's reference
+    /// matches more than one board occurrence, or any error from
+    /// [`Self::with_assumptions`].
+    ///
+    /// # Panics
+    ///
+    /// Does not panic in practice: the only `expect` pops from a list just checked to
+    /// hold exactly one subject.
     pub fn with_substitutions(
         self,
         substitutions: &[crate::scheduler::McuSubstitution],
@@ -952,6 +990,11 @@ impl BoardEvidence {
     /// Add scheduler-owned substitutions without discarding their exact board
     /// occurrence. Unlike [`Self::with_substitutions`], this path never has to
     /// recover causal identity from a potentially duplicated display ref.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if merging the substitution assumptions fails, as
+    /// for [`Self::with_assumptions`].
     pub fn with_scoped_substitutions(
         self,
         substitutions: &[crate::scheduler::ScopedMcuSubstitution],
@@ -963,18 +1006,22 @@ impl BoardEvidence {
         )
     }
 
+    #[must_use]
     pub fn inventory(&self) -> &[ArtifactProvenance] {
         self.registry.artifacts()
     }
 
+    #[must_use]
     pub fn assumptions(&self) -> &[Assumption] {
         &self.assumptions
     }
 
+    #[must_use]
     pub fn maps(&self) -> &[EvidenceMap] {
         &self.maps
     }
 
+    #[must_use]
     pub fn is_undermined(&self) -> bool {
         self.maps
             .iter()
@@ -984,6 +1031,7 @@ impl BoardEvidence {
     /// Whether at least one published assertion carries any evidence caveat.
     /// Qualified evidence is still useful, but it must not sit under an
     /// unqualified "Looks healthy" headline.
+    #[must_use]
     pub fn has_caveats(&self) -> bool {
         self.maps
             .iter()
@@ -1003,11 +1051,16 @@ impl BoardEvidence {
     /// analysis. This is not a synthetic pass result: it states exactly which
     /// extracted nets the front door inspected and therefore carries any
     /// reader limitations that constrain that coverage claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the board has no named nets (an empty scope) or
+    /// the traversal or map fails validation against the registry.
     pub fn static_coverage_map(&self) -> Result<EvidenceMap, EvidenceError> {
         let nets: Vec<String> = self.refs_by_net.keys().cloned().collect();
         self.map_for_nets(
             format!("Static analysis covered {} extracted nets", nets.len()),
-            nets,
+            &nets,
         )
     }
 
@@ -1031,6 +1084,11 @@ impl BoardEvidence {
     /// [`Self::maps_for_findings`]), so an open part on an asserted rail
     /// undermines the assertion that consumed it. A future coverage claim for
     /// a model-consuming analysis must not reuse this builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the board has no named nets (an empty scope) or
+    /// the geometry traversal or map fails validation against the registry.
     pub fn check_coverage_map(
         &self,
         check: &str,
@@ -1042,6 +1100,11 @@ impl BoardEvidence {
 
     /// Build maps for the report's actual assertions. Nets are authoritative;
     /// a refs-only finding resolves to every net touching those refs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if any finding's net scope names a blank or unknown
+    /// net, or its traversal or map fails validation against the registry.
     pub fn maps_for_findings(
         &self,
         findings: &[crate::result::JsonFinding],
@@ -1091,7 +1154,7 @@ impl BoardEvidence {
             } else if value_claim {
                 self.value_claim_map(&finding.check, finding.message.clone(), &nets)?
             } else {
-                self.map_for_nets(finding.message.clone(), nets)?
+                self.map_for_nets(finding.message.clone(), &nets)?
             });
         }
         Ok(maps)
@@ -1101,6 +1164,11 @@ impl BoardEvidence {
     /// inspected. An empty result set returns no map: it must not pull every
     /// board component into (for example) an empty ampacity report merely
     /// because those components exist elsewhere on the board.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the net scope is empty or names a blank or
+    /// unknown net, or if the traversal or map fails validation against the registry.
     pub fn maps_for_surface_nets(
         &self,
         assertion: impl Into<String>,
@@ -1109,12 +1177,17 @@ impl BoardEvidence {
         if nets.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(vec![self.map_for_nets(assertion.into(), nets.to_vec())?])
+        Ok(vec![self.map_for_nets(assertion.into(), nets)?])
     }
 
     /// One causal assertion per real DRC result. Geometry maps deliberately
     /// traverse no component models: an open op-amp cannot invalidate the fact
     /// that two pieces of copper touch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if a short or clearance group names a blank net, or
+    /// its geometry map fails validation against the registry.
     pub fn maps_for_drc(
         &self,
         drc: &crate::result::DrcStructured,
@@ -1122,6 +1195,13 @@ impl BoardEvidence {
         self.maps_for_drc_with_ties(drc, None)
     }
 
+    /// Like [`Self::maps_for_drc`], but attaches the schematic artifact to shorts that
+    /// `qualification` shows a schematic declared as a net tie.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if a short or clearance group names a blank net, or
+    /// its geometry map or artifact list fails validation against the registry.
     pub fn maps_for_drc_with_ties(
         &self,
         drc: &crate::result::DrcStructured,
@@ -1171,6 +1251,11 @@ impl BoardEvidence {
     /// limitation stay on the causal path. Used for the extract-computed SI
     /// finding kinds, where "open" (no simulation model) is irrelevant but
     /// "possibly not fitted" is not.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the net scope is empty or names a blank or
+    /// unknown net, or if the traversal or map fails validation against the registry.
     pub fn value_claim_map(
         &self,
         check: &str,
@@ -1192,6 +1277,11 @@ impl BoardEvidence {
 
     /// A geometry claim for a named check: a no-component traversal on which
     /// check-scoped assumptions for `check` still attach.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if `nets` is empty or names a blank net, or the
+    /// traversal or map fails validation against the registry.
     pub fn geometry_map_for_check(
         &self,
         check: &str,
@@ -1242,6 +1332,12 @@ impl BoardEvidence {
     /// A numeric simulation assertion over nets and/or component references.
     /// It consumes the board and (when present) firmware artifacts and carries
     /// the producer's validated numerical budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::Empty`] if neither `nets` nor `references` resolves to
+    /// any board net, or an error if the traversal, map or artifact list fails
+    /// validation.
     pub fn simulation_map(
         &self,
         assertion: impl Into<String>,
@@ -1254,6 +1350,12 @@ impl BoardEvidence {
 
     /// [`Self::simulation_map`] for a claim a `Scope::Check { check, kind }`
     /// assumption can name as `check_scope = (check, kind)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::Empty`] if neither `nets` nor `references` resolves to
+    /// any board net, or an error if the traversal, map or artifact list fails
+    /// validation.
     pub fn check_simulation_map(
         &self,
         assertion: impl Into<String>,
@@ -1268,8 +1370,8 @@ impl BoardEvidence {
                 field: "simulation_map.nets",
             });
         }
-        let nets = scoped_nets.into_iter().collect();
-        let mut map = self.map_for_nets_with_check(assertion.into(), nets, check_scope)?;
+        let nets: Vec<String> = scoped_nets.into_iter().collect();
+        let mut map = self.map_for_nets_with_check(assertion.into(), &nets, check_scope)?;
         let artifacts = [self.board_artifact, self.firmware_artifact]
             .into_iter()
             .flatten()
@@ -1284,6 +1386,12 @@ impl BoardEvidence {
     /// Build the map the production CI runner attaches to one evaluated
     /// assertion. Check-scoped facts use the stable result label so a waiver or
     /// an unexercised peripheral cannot leak onto a sibling assertion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if the resolved scope is empty (a board with no
+    /// named nets) or names an unknown net, or if the traversal, map or artifact list
+    /// fails validation.
     pub fn ci_assertion_map(
         &self,
         assertion: impl Into<String>,
@@ -1301,7 +1409,7 @@ impl BoardEvidence {
         }
         let mut map = self.map_for_nets_with_check(
             assertion.clone(),
-            scoped_nets.into_iter().collect(),
+            &scoped_nets.into_iter().collect::<Vec<_>>(),
             Some(("ci", assertion.as_str())),
         )?;
         let artifacts = [self.board_artifact, self.firmware_artifact]
@@ -1324,6 +1432,11 @@ impl BoardEvidence {
     /// level is defined by modeled elements alone, so the opens can only
     /// matter by actively driving the net, which the surviving Qualified
     /// caveat states.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::InvalidAssumption`] if the map cites an assumption
+    /// absent from this evidence's registry, so its status cannot be recomputed.
     pub fn map_assuming_open_parts_high_impedance(
         &self,
         map: EvidenceMap,
@@ -1335,6 +1448,12 @@ impl BoardEvidence {
     /// the solver options actually used plus the run's measured windows.
     /// Forwards to [`hauksbee_cosim::error_budget::transient_error_budget`],
     /// which the scheduler shares.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if a tolerance is non-finite or non-positive, if the
+    /// result window is inverted, or if a failed or fallback window is inverted, lies
+    /// outside the result window or overlaps another.
     pub fn transient_error_budget(
         options: &hauksbee_solve::SolverOptions,
         start_s: f64,
@@ -1356,6 +1475,11 @@ impl BoardEvidence {
     /// Numerical settings behind a non-transient solver result such as an AC
     /// sweep. No time method is claimed because frequency-domain solves do not
     /// integrate a time window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`] if any of the solver's tolerances is non-finite or
+    /// not greater than zero.
     pub fn solver_error_budget(
         options: &hauksbee_solve::SolverOptions,
     ) -> Result<ErrorBudget, EvidenceError> {
@@ -1367,6 +1491,7 @@ impl BoardEvidence {
         )?))
     }
 
+    #[must_use]
     pub fn with_maps(mut self, maps: Vec<EvidenceMap>) -> Self {
         self.maps = maps;
         self
@@ -1375,7 +1500,7 @@ impl BoardEvidence {
     fn map_for_nets(
         &self,
         assertion: String,
-        nets: Vec<String>,
+        nets: &[String],
     ) -> Result<EvidenceMap, EvidenceError> {
         self.map_for_nets_with_check(assertion, nets, None)
     }
@@ -1383,10 +1508,10 @@ impl BoardEvidence {
     fn map_for_nets_with_check(
         &self,
         assertion: String,
-        nets: Vec<String>,
+        nets: &[String],
         check_scope: Option<(&str, &str)>,
     ) -> Result<EvidenceMap, EvidenceError> {
-        let scope = NetScope::new(nets.clone(), None)?;
+        let scope = NetScope::new(nets.to_owned(), None)?;
         let traversal = match check_scope {
             Some((check, key)) => {
                 self.index
@@ -1490,27 +1615,24 @@ impl BoardEvidence {
     /// retain their full per-item records; this projection groups only the
     /// prose a person reads and restricts it to assumptions/models cited by the
     /// maps the current surface selected.
+    #[allow(clippy::too_many_lines, reason = "one appendix: assumptions, models")]
     pub fn render_plain_compact(&self) -> String {
+        // (model id, tier, layer, origin, validation, accuracy)
+        type ModelKey = (String, String, String, String, String, String);
         if self.assumptions.is_empty() && self.maps.is_empty() {
             return String::new();
         }
 
         let mut out = String::from("\n== Evidence ==\n");
-        let clean = self
-            .maps
-            .iter()
-            .filter(|map| map.status() == EvidenceStatus::Clean)
-            .count();
-        let qualified = self
-            .maps
-            .iter()
-            .filter(|map| map.status() == EvidenceStatus::Qualified)
-            .count();
-        let undermined = self
-            .maps
-            .iter()
-            .filter(|map| map.status() == EvidenceStatus::Undermined)
-            .count();
+        let count = |status| {
+            self.maps
+                .iter()
+                .filter(|map| map.status() == status)
+                .count()
+        };
+        let clean = count(EvidenceStatus::Clean);
+        let qualified = count(EvidenceStatus::Qualified);
+        let undermined = count(EvidenceStatus::Undermined);
         if self.maps.is_empty() {
             out.push_str(
                 "Evidence coverage: no surface-specific result rows; unrelated board-part provenance omitted.\n",
@@ -1526,7 +1648,7 @@ impl BoardEvidence {
         let cited: BTreeSet<String> = self
             .maps
             .iter()
-            .flat_map(|map| map.assumptions())
+            .flat_map(hauksbee_ir::evidence::EvidenceMap::assumptions)
             .map(ToString::to_string)
             .collect();
         let mut assumption_groups: BTreeMap<(String, String, String, String, String), Vec<String>> =
@@ -1576,10 +1698,12 @@ impl BoardEvidence {
         // exact provenance content and exact causal subject, then report the
         // number of listed parts from that same collection (never a second
         // count that can drift).
-        // (model id, tier, layer, origin, validation, accuracy)
-        type ModelKey = (String, String, String, String, String, String);
         let mut model_groups: BTreeMap<ModelKey, BTreeMap<String, String>> = BTreeMap::new();
-        for model in self.maps.iter().flat_map(|map| map.models()) {
+        for model in self
+            .maps
+            .iter()
+            .flat_map(hauksbee_ir::evidence::EvidenceMap::models)
+        {
             let source = model.source();
             let key = (
                 model.model_id().to_string(),
@@ -1670,6 +1794,12 @@ impl BoardEvidence {
     /// inventing a second JSON vocabulary. New reports should prefer
     /// `JsonReport::with_evidence`; this bridge keeps small specialist reports
     /// on the exact same `assumptions` and `evidence` field shapes.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if serializing the assumptions or evidence maps to JSON fails, which
+    /// cannot happen: every IR evidence type has an infallible JSON representation.
+    #[must_use]
     pub fn enrich_json(&self, mut value: serde_json::Value) -> serde_json::Value {
         let serde_json::Value::Object(object) = &mut value else {
             return value;
@@ -1739,7 +1869,7 @@ fn natural_evidence_ref_key(reference: &str) -> (String, u64, String) {
         prefix.to_ascii_uppercase(),
         digits
             .chars()
-            .take_while(|character| character.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .collect::<String>()
             .parse()
             .unwrap_or(u64::MAX),
@@ -1782,7 +1912,7 @@ fn hex_digest(bytes: &[u8]) -> String {
     out
 }
 
-fn confidence(value: Confidence) -> MatchConfidence {
+const fn confidence(value: Confidence) -> MatchConfidence {
     match value {
         Confidence::Exact => MatchConfidence::Exact,
         Confidence::Family => MatchConfidence::High,
@@ -1798,8 +1928,9 @@ fn input_artifact_kind(
     match kind {
         InputKind::Schematic => (ArtifactKind::KiCadSchematic, ArtifactRole::Schematic),
         InputKind::Altium => (ArtifactKind::AltiumPcbDoc, ArtifactRole::Layout),
-        InputKind::Gerber => (ArtifactKind::GerberArchive, ArtifactRole::FabArchive),
-        InputKind::Ipc356Archive => (ArtifactKind::GerberArchive, ArtifactRole::FabArchive),
+        InputKind::Gerber | InputKind::Ipc356Archive => {
+            (ArtifactKind::GerberArchive, ArtifactRole::FabArchive)
+        }
         InputKind::Odb => (ArtifactKind::OdbPlusPlus, ArtifactRole::FabArchive),
         InputKind::Ipc2581 => (ArtifactKind::Ipc2581, ArtifactRole::FabArchive),
         InputKind::BoardCode => (ArtifactKind::BoardCode, ArtifactRole::Layout),
@@ -1907,8 +2038,7 @@ fn classify_reader_note(
             agreed: false,
             detail: note.to_string(),
         });
-        let digest = Sha256::digest(note.as_bytes());
-        let key = format!("reader-cross-check/{}", hex_digest(&digest));
+        let key = note_key("reader-cross-check", note);
         assumptions.push(Assumption::parser_limitation(
             AssumptionSource::Reader,
             Subject::new(&key, "the reader's disagreeing sources"),
@@ -1934,13 +2064,11 @@ fn classify_reader_note(
     if let Some(source) = note
         .split_once(':')
         .and_then(|(prefix, _)| match prefix.trim() {
-            "stress" => Some(AssumptionSource::Binder),
-            "models" => Some(AssumptionSource::Binder),
+            "stress" | "models" => Some(AssumptionSource::Binder),
             _ => None,
         })
     {
-        let digest = Sha256::digest(note.as_bytes());
-        let key = format!("binder-note/{}", hex_digest(&digest));
+        let key = note_key("binder-note", note);
         assumptions.push(Assumption::reduced_fidelity(
             source,
             Subject::new(&key, "the binder's model and rating coverage"),
@@ -1956,8 +2084,7 @@ fn classify_reader_note(
 
     // Unknown notes remain visible and stable; only known positive accounting is
     // promoted to provenance instead of becoming a caveat.
-    let digest = Sha256::digest(note.as_bytes());
-    let key = format!("reader-note/{}", hex_digest(&digest));
+    let key = note_key("reader-note", note);
     assumptions.push(Assumption::reduced_fidelity(
         AssumptionSource::Reader,
         Subject::new(&key, "the input reader's coverage"),
@@ -1968,12 +2095,19 @@ fn classify_reader_note(
     Ok(())
 }
 
+/// Stable assumption key for a free-text note: the prefix plus the note's SHA-256.
+fn note_key(prefix: &str, note: &str) -> String {
+    format!("{prefix}/{}", hex_digest(&Sha256::digest(note.as_bytes())))
+}
+
 fn guessed_pin_role(message: &str) -> (String, String) {
     let pin = message
         .strip_prefix("pad ")
         .and_then(|rest| rest.split_once(" role "))
-        .map(|(pin, _)| pin.trim().to_string())
-        .unwrap_or_else(|| "an unnamed pin".into());
+        .map_or_else(
+            || "an unnamed pin".into(),
+            |(pin, _)| pin.trim().to_string(),
+        );
     let role = message
         .split("role '")
         .nth(1)
@@ -2098,8 +2232,8 @@ mod tests {
         assert!(contributions.iter().all(|r| r.what != "copper_geometry"));
     }
 
-    /// PARTIAL_MODEL_MARKER warnings become assumptions (reaching every
-    /// surface); a leading OPERATING_LIMIT_MARKER keeps its stronger kind even
+    /// `PARTIAL_MODEL_MARKER` warnings become assumptions (reaching every
+    /// surface); a leading `OPERATING_LIMIT_MARKER` keeps its stronger kind even
     /// when another regulator caveat follows. Ordinary warnings stay on the bind
     /// report, and neither marker leaks into user-facing text.
     #[test]
@@ -2153,7 +2287,7 @@ mod tests {
             .assumptions()
             .iter()
             .filter(|a| a.statement().contains("modelled only in part"))
-            .map(|a| a.statement())
+            .map(hauksbee_ir::evidence::Assumption::statement)
             .collect();
         assert_eq!(lifted.len(), 2, "{lifted:?}");
         assert!(lifted.iter().any(|h| h.contains("X1")) && lifted.iter().any(|h| h.contains("U5")));
@@ -2593,7 +2727,8 @@ mod tests {
     #[test]
     fn unequal_claims_with_one_base_id_are_both_retained_in_any_merge_order() {
         let empty = || evidence(&empty_board(), &BindReport::default());
-        let (first, second) = (not_exercised("assertion-a"), not_exercised("assertion-b"));
+        let first = not_exercised("assertion-a");
+        let second = not_exercised("assertion-b");
         assert_eq!(
             first.id(),
             second.id(),
@@ -2676,7 +2811,11 @@ mod tests {
             .with_maps(vec![completed])
             .with_assumptions([second])
             .unwrap();
-        let known: BTreeSet<_> = evidence.assumptions().iter().map(|a| a.id()).collect();
+        let known: BTreeSet<_> = evidence
+            .assumptions()
+            .iter()
+            .map(hauksbee_ir::evidence::Assumption::id)
+            .collect();
         assert_eq!(known.len(), 2);
         assert_eq!(evidence.maps()[0].assumptions().len(), 1);
         assert!(known.contains(&evidence.maps()[0].assumptions()[0]));

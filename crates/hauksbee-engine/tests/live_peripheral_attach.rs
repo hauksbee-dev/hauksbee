@@ -1,5 +1,5 @@
 //! The browser's click-a-trace interaction must stamp a real peripheral into
-//! the running circuit and advertise it back on BoardInfo. This is deliberately
+//! the running circuit and advertise it back on `BoardInfo`. This is deliberately
 //! a product-wire test rather than a React-only button test.
 
 use hauksbee_engine::HauksbeeEngine;

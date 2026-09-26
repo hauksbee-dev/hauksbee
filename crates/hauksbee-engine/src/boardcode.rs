@@ -64,6 +64,7 @@ pub struct CheckReport {
 
 impl CheckReport {
     /// A one-line health verdict for scripts.
+    #[must_use]
     pub fn healthy(&self) -> bool {
         self.faults.iter().all(|f| !f.destroyed)
     }
@@ -81,7 +82,7 @@ pub struct CheckOptions {
 
 impl Default for CheckOptions {
     fn default() -> Self {
-        CheckOptions {
+        Self {
             seconds: 0.2,
             destructive: false,
             ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
@@ -168,7 +169,7 @@ mod identity_tests {
 
     /// The other side of the round-trip contract: with the two refusals above,
     /// "all three states survive" means a Present part passes through code and
-    /// back still classified Present, while DnpAbsent and IdentityUnknown can
+    /// back still classified Present, while `DnpAbsent` and `IdentityUnknown` can
     /// only leave as loud errors, never as a silently fitted part.
     #[test]
     fn a_present_part_round_trips_and_stays_present() {
@@ -195,6 +196,11 @@ mod identity_tests {
 
 /// Recompile Board-as-Code, bind it, run a headless co-sim with the stress
 /// monitor, and return a [`CheckReport`].
+///
+/// # Errors
+///
+/// Returns an error if the code does not recompile to board text, or for any
+/// reason [`check_board_text`] fails.
 pub fn check_code(code: &str, opts: &CheckOptions) -> anyhow::Result<CheckReport> {
     let board_text = code_to_board_text(code)?;
     check_board_text(&board_text, opts)
@@ -202,6 +208,11 @@ pub fn check_code(code: &str, opts: &CheckOptions) -> anyhow::Result<CheckReport
 
 /// Same as [`check_code`] but starting from `.kicad_pcb` text directly (used by
 /// the original-vs-edited comparison and tests).
+///
+/// # Errors
+///
+/// Returns an error if the text is not a parseable board, if the board has no
+/// components, or if the co-simulation engine cannot be built from it.
 pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result<CheckReport> {
     let board = ExtractedBoard::from_auto(board_text)?;
     // A zero-component board can prove nothing: every stress check passes
@@ -241,6 +252,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
     let frame_dt = 1.0 / 1000.0;
     let mut t = 0.0;
     let mut faults: Vec<FaultEvent> = Vec::new();
+    #[allow(clippy::while_float, reason = "t steps in the engine's f64 frames")]
     while t < opts.seconds {
         let frame = engine.step(frame_dt);
         for f in frame.faults {
@@ -286,6 +298,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
 }
 
 /// Render a [`CheckReport`] as a terminal table.
+#[must_use]
 pub fn render_check_report(r: &CheckReport) -> String {
     use std::fmt::Write;
     let mut s = String::new();
@@ -294,6 +307,8 @@ pub fn render_check_report(r: &CheckReport) -> String {
     // so a board with an unresolved (→ silently OPEN in sim) component read as
     // "100% resolved". Only a true 1.0 shows 100; anything short floors, so a
     // partial board can never masquerade as fully covered.
+    #[allow(clippy::cast_possible_truncation, reason = "floored into 0..100")]
+    #[allow(clippy::cast_sign_loss, reason = "non-negative; NaN reads as 0")]
     let pct = if r.resolved_fraction >= 1.0 {
         100
     } else {
