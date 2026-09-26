@@ -1062,11 +1062,8 @@ fn check_program_scale(
 /// physical pins. A typo here otherwise validates, then the runtime silently
 /// skips the path and the part that was supposed to close a rail stays open.
 fn check_behavioral_roles(entry: &ModelEntry, p: &mut Problems) {
-    let declared: HashSet<String> = entry
-        .pins
-        .values()
-        .map(|role| role.to_ascii_lowercase())
-        .collect();
+    let declared = entry.pins.values().map(|role| role.to_ascii_lowercase());
+    let declared: HashSet<String> = declared.collect();
     let mut check = |field: String, role: &str| {
         p.require(declared.contains(&role.to_ascii_lowercase()), || {
             format!("behavioral.{field} role '{role}' is not present in [models.pins]")
@@ -1240,11 +1237,8 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
     let within = |o: &Pinout, b: &Pinout| {
         b.package.len() > o.package.len() && plain(&b.package).contains(&plain(&o.package))
     };
-    let named: Vec<&Pinout> = named
-        .iter()
-        .copied()
-        .filter(|o| !named.iter().any(|b| within(o, b)))
-        .collect();
+    let outer = |o: &&Pinout| !named.iter().any(|b| within(o, b));
+    let named: Vec<&Pinout> = named.iter().copied().filter(outer).collect();
     let [own] = named[..] else {
         let all: Vec<&str> = pinouts.iter().map(|o| o.package.as_str()).collect();
         p.push(format!("[[models.source.pinout]] records {}, but neither [models.variant] package nor the description names exactly one of them: name the one package [models.pins] is for", all.join(", ")));
@@ -1356,14 +1350,9 @@ pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
         "logic" | "gate" | "flip_flop" | "latch" => Some("digital"),
         _ => None,
     };
-    alias.or_else(|| {
-        KIND_NAMES
-            .iter()
-            .map(|k| (hauksbee_ir::levenshtein(&lower, k), *k))
-            .filter(|(d, _)| *d <= 2)
-            .min_by_key(|(d, _)| *d)
-            .map(|(_, k)| k)
-    })
+    let distance = |k: &&'static str| (hauksbee_ir::levenshtein(&lower, k), *k);
+    let near = KIND_NAMES.iter().map(distance).filter(|n| n.0 <= 2);
+    alias.or_else(|| near.min_by_key(|n| n.0).map(|n| n.1))
 }
 
 /// If a TOML deserialization error is an unknown [`ComponentKind`] variant, the
@@ -1436,11 +1425,8 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                 for missing in required.iter().filter(|k| !fields.contains_key(**k)) {
                     out.push(format!("{at}: missing required key '{missing}'"));
                 }
-                let known: Vec<&str> = required
-                    .iter()
-                    .copied()
-                    .chain(optional.split_whitespace())
-                    .collect();
+                let known = required.iter().copied().chain(optional.split_whitespace());
+                let known: Vec<&str> = known.collect();
                 for extra in fields.keys().filter(|k| !known.contains(&k.as_str())) {
                     out.push(format!(
                         "{at}: unknown key '{extra}'{}",

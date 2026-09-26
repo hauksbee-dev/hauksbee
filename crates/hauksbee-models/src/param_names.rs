@@ -448,6 +448,8 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     }
     out.extend(row_slips(entry, rows));
     out.extend(law_warning(entry, rows));
+    out.extend(gain_warning(entry, rows));
+    out.extend(channel_slips(entry, rows));
     derived.retain(|d| !entry.params.0.contains_key(d.0));
     for (n, v, how) in derived {
         out.push(format!(
@@ -505,7 +507,8 @@ fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
     out
 }
 
-/// A diode is/n/rs over 10% off a cited VF row, or a bf outside every hFE row.
+/// A diode is/n/rs on too few VF points ([`underfit`]), on max rows only, or
+/// over 10% off a cited VF row; or a bf outside every hFE row.
 fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
     if matches!(entry.kind, ComponentKind::BjtNpn | ComponentKind::BjtPnp) {
         let bf = entry.params.get_f64("bf")?;
@@ -518,7 +521,77 @@ fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
     let points = vf_points(rows)?;
     let (miss, i, v) = worst_miss(law, &points);
     let at = diode_vf(law, i);
-    (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a cited VF row prints {v} V, over 10% off"))
+    let max_only = !points.is_empty() && rows.iter().all(|r| !symbol(r, "VF") || r.typ.is_none());
+    let max_only = max_only.then(|| "diode is/n/rs are a max-only fit: a max VF is a guaranteed bound, not typical behaviour; fit typ VF rows or points read off the typical IF-VF curve".into());
+    underfit(entry).or(max_only).or_else(|| (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a cited VF row prints {v} V, over 10% off")))
+}
+
+/// A diode card's is/n/rs resting on cited VF points at under two distinct
+/// currents a decade apart: three unknowns underdetermined, refused on save.
+pub(crate) fn underfit(entry: &ModelEntry) -> Option<String> {
+    let law = diode_law(entry).filter(|_| entry.kind == ComponentKind::Diode);
+    let points = vf_points(cited_rows(entry)).filter(|p| !p.is_empty() && law.is_some())?;
+    let (count, span) = (points.len(), if_span(&points));
+    (span < 10.0).then(|| format!("diode is/n/rs rest on {count} cited VF point(s) spanning {span:.1}× in IF: three unknowns need VF points at two, best three, distinct currents a decade or more apart; cite typ VF rows or points read off the typical IF-VF curve"))
+}
+
+/// The highest over the lowest current among `points` (0 when there are none).
+fn if_span(points: &[(f64, f64)]) -> f64 {
+    let currents = points.iter().map(|p| p.0);
+    currents.clone().fold(0.0, f64::max) / currents.fold(f64::INFINITY, f64::min)
+}
+
+/// A `gain` 10 dB (3.16×) or more off every printed column of every cited
+/// AOL/AVOL row, each converted to V/V by [`crate::units::gain_ratio`] (dB,
+/// V/mV, V/µV): a unit slip `pole_hz = GBW / gain` hides by moving with it.
+fn gain_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
+    let gain = entry.params.get_f64("gain").filter(|g| *g > 0.0)?;
+    let aol = rows.iter().filter(|r| AOL.split(' ').any(|s| symbol(r, s)));
+    let ratio = |r: &Characteristic, x: f64| crate::units::gain_ratio(x, &r.unit);
+    let columns = aol.flat_map(|r| [r.typ, r.min, r.max].map(|x| Some((r, x?, ratio(r, x?)?))));
+    let read: Vec<_> = columns.flatten().collect();
+    let off = read.iter().all(|c| (c.2 / gain).max(gain / c.2) >= 3.16);
+    let (r, x, v) = read.first().filter(|_| off)?;
+    Some(format!("gain = {gain} V/V but cited '{}' prints {x} {} = {v:.4e} V/V: convert AOL to V/V (dB: 10^(dB/20); V/mV: ×1e3; V/µV: ×1e6), then pole_hz = GBW / gain", r.parameter, r.unit))
+}
+
+/// Open-loop gain symbols: the rows a `gain` is read from.
+const AOL: &str = "AOL AVOL AVD AVO";
+
+/// Channels a row's own label (its parameter and basis text) names: `IN1`,
+/// `VOUT2`, `EN_1`, `CH2`, `channel B` (hex A to D, mod 9, read as 1 to 4),
+/// never those its bias conditions mention.
+fn channels(row: &Characteristic) -> Vec<u32> {
+    static CHANNEL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        let re = r"\b(?:(?i:channel|ch)\s*|(?:V?IN|V?OUT|EN|ILIM|FLT|FAULT)_?)([1-8A-D])\b";
+        regex::Regex::new(re).expect("a valid pattern")
+    });
+    let label = format!("{} {}", row.parameter, row.basis);
+    let index = |c: regex::Captures| u32::from_str_radix(&c[1], 16).ok().map(|d| d % 9);
+    CHANNEL.captures_iter(&label).filter_map(index).collect()
+}
+
+/// A channel-indexed param (`ron_1`, `ilim2_a`) whose own row param, or every
+/// cited row printing its value, is labelled for other channels only. One row
+/// labelled for its channel clears it.
+fn channel_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
+    let slip = |name: &String| {
+        let num = |w: &str| w.trim_start_matches(char::is_alphabetic).parse().ok();
+        let k: u32 = name.split('_').find_map(num)?;
+        let v = entry.params.get_f64(name).filter(|v| *v != 0.0)?;
+        let prints = |r: &&Characteristic| {
+            let scale = crate::units::si_unit(&r.unit).map_or(1.0, |s| s.0);
+            let near = |x: &f64| (x * scale - v).abs() <= 1e-6 * v.abs();
+            [r.min, r.typ, r.max].iter().flatten().any(near)
+        };
+        let own = entry.params.rows().find(|r| r.0 == name).map(|r| r.1);
+        let named = rows.iter().filter(prints).chain(own);
+        let named: Vec<_> = named.map(|r| (r, channels(r))).collect();
+        let clear = !(1..=8).contains(&k) || named.iter().any(|c| c.1.contains(&k));
+        let (r, c) = named.iter().find(|c| !c.1.is_empty()).filter(|_| !clear)?;
+        Some(format!("param '{name}' is channel {k}'s but its row '{}' ({}) is labelled for channel {}: attribute each per-channel row by the channel its own label names", r.parameter, r.basis, c[0]))
+    };
+    entry.params.0.keys().filter_map(slip).collect()
 }
 
 /// Whether a row's parameter text has the word `sym` (`HFE` in "hFE gain",
@@ -689,17 +762,20 @@ fn worst_miss(law: [f64; 3], points: &[(f64, f64)]) -> (f64, f64, f64) {
 }
 
 /// Cited `(IF, VF)` in A and V: VF rows at the IF their conditions name, at 25 °C
-/// or unstated, read typ, else max (the column a curated card fits without typ).
+/// or unstated; their typs alone where those span a decade, else each row's typ,
+/// else max (the column a curated card fits without typ).
 fn vf_points(rows: &[Characteristic]) -> Option<Vec<(f64, f64)>> {
     let current = regex::Regex::new(r"\bI_?F\s*[=≈:]?\s*(\d*\.?\d+)\s*([µμu]?A|mA)\b").ok()?;
-    let point = |row: &Characteristic| {
+    let point = |row: &Characteristic, column: Option<f64>| {
         let c = current.captures(&row.conditions).filter(|_| at_25(row))?;
         let i = c[1].parse::<f64>().ok()? * crate::units::scale_between(&c[2], "A")?;
-        let v = row.typ.or(row.max)? * crate::units::scale_between(&row.unit, "V")?;
+        let v = column? * crate::units::scale_between(&row.unit, "V")?;
         (i > 0.0).then_some((i, v))
     };
     let vf = rows.iter().filter(|r| symbol(r, "VF"));
-    Some(vf.filter_map(point).collect())
+    let typ: Vec<_> = vf.clone().filter_map(|r| point(r, r.typ)).collect();
+    let all = vf.filter_map(|r| point(r, r.typ.or(r.max))).collect();
+    Some(if if_span(&typ) >= 10.0 { typ } else { all })
 }
 
 /// Slope and intercept of `y` on `x`, by least squares.
@@ -712,8 +788,9 @@ fn line(x: &[f64], y: &[f64]) -> (f64, f64) {
 }
 
 /// `VF = n·VT·ln(IF/is) + IF·rs` is linear in `ln IF` and `IF`: `rs` is the `IF`
-/// coefficient by Frisch-Waugh (3+ points over two decades, ln 100 = 4.6, else 0),
-/// then `VF - IF·rs` gives n and is. `None` unless physical and within 10%.
+/// coefficient by Frisch-Waugh (3+ points over two decades, else 0), then
+/// `VF - IF·rs` gives n and is. `None` unless the points span a decade (as
+/// [`underfit`] asks), and the law is physical and within 10%.
 fn diode_fit(points: &[(f64, f64)]) -> Option<[f64; 3]> {
     let (i, v): (Vec<f64>, Vec<f64>) = points.iter().copied().unzip();
     let ln: Vec<f64> = i.iter().map(|x| x.ln()).collect();
@@ -724,13 +801,13 @@ fn diode_fit(points: &[(f64, f64)]) -> Option<[f64; 3]> {
     let (ri, rv) = (residual(&i), residual(&v));
     let fw =
         ri.iter().zip(&rv).map(|(a, b)| a * b).sum::<f64>() / ri.iter().map(|a| a * a).sum::<f64>();
-    let spans = points.len() >= 3 && ln.iter().any(|a| ln.iter().any(|b| a - b >= 4.6));
+    let spans = points.len() >= 3 && if_span(points) >= 100.0;
     let rs = if spans { fw.max(0.0) } else { 0.0 };
     let drop: Vec<f64> = v.iter().zip(&i).map(|(v, i)| v - i * rs).collect();
     let (a, b) = line(&ln, &drop);
     let law = [(-b / a).exp(), a / hauksbee_ir::thermal_voltage_c(27.0), rs];
     let physical = (1e-30..=1e-3).contains(&law[0]) && (0.5..=3.0).contains(&law[1]);
-    (points.len() >= 2 && physical && worst_miss(law, points).0 <= 0.1).then_some(law)
+    (if_span(points) >= 10.0 && physical && worst_miss(law, points).0 <= 0.1).then_some(law)
 }
 
 /// The fit an executable diode card must take: its law is absent or over 10% off
@@ -785,7 +862,7 @@ pub(crate) fn needless_abstention(
         (BjtNpn | BjtPnp, "is" | "nf") => Some("VBE VBEon@I_?C:A"),
         (Nmos | Pmos, "vto") => Some("VGSth VTH"),
         (Nmos | Pmos, "kp") => Some("RDSon@V_?GS:V|GFS@I_?D:A"),
-        (Opamp, "gain") => Some("AOL AVOL AVD AVO"),
+        (Opamp, "gain") => Some(AOL),
         (Opamp | Comparator, k) if k.ends_with("_lo") => Some("VOL"),
         (Opamp | Comparator, k) if k.ends_with("_hi") => Some("VOH"),
         (Comparator, "hysteresis") => Some("VHYS VHYST HYS"),
@@ -870,29 +947,19 @@ pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
             || referenced.contains(name)
     };
 
-    // `<stem>_from_ref` counts only on the behavioral path (module docs, point 3).
-    let from_ref_is_resolved = !entry.behavioral.is_empty();
-
-    entry
-        .params
-        .0
-        .keys()
-        .map(|name| {
-            let stem = if from_ref_is_resolved {
-                name.strip_suffix("_from_ref").unwrap_or(name)
-            } else {
-                name.as_str()
-            };
-            (name, stem)
-        })
-        .filter(|(_, stem)| !known(stem))
-        .map(|(name, stem)| UnknownParam {
-            name: name.clone(),
-            // Correct on the stem: `voutt_from_ref` should point at `vout`, not
-            // be compared whole against a vocabulary that has no suffixed names.
-            suggestion: nearest(stem.strip_suffix("_from_ref").unwrap_or(stem), vocab),
-        })
-        .collect()
+    // `<stem>_from_ref` counts only on the behavioral path (module docs, point 3),
+    // but a suggestion is always for the stem: `voutt_from_ref` points at `vout`.
+    let behavioral = !entry.behavioral.is_empty();
+    let unknown = entry.params.0.keys().filter(|name| {
+        let stem = name.strip_suffix("_from_ref").filter(|_| behavioral);
+        !known(stem.unwrap_or(name))
+    });
+    let suggest = |name: &str| nearest(name.strip_suffix("_from_ref").unwrap_or(name), vocab);
+    let unknown = unknown.map(|name| UnknownParam {
+        name: name.clone(),
+        suggestion: suggest(name),
+    });
+    unknown.collect()
 }
 
 /// The nearest name in `vocab` to `name`, or `None` when nothing is close.
@@ -967,32 +1034,17 @@ const EXPR_BUILTINS: &[&str] = &["if", "min", "max", "abs", "floor", "ceil", "ro
 /// be lost, which is a different defect from the one this lint reports, and
 /// warning on it here would be guessing at the author's intent.
 fn behavioral_identifiers(entry: &ModelEntry) -> std::collections::BTreeSet<String> {
-    let mut out = std::collections::BTreeSet::new();
-    let mut harvest = |src: &str| {
-        for ident in src.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
-            // An identifier cannot start with a digit; that filters the numeric
-            // literals out without parsing them.
-            if ident.is_empty() || ident.starts_with(|c: char| c.is_ascii_digit()) {
-                continue;
-            }
-            if RUNTIME_OWNED.contains(&ident)
-                || ident.starts_with("state_")
-                || EXPR_BUILTINS.contains(&ident)
-            {
-                continue;
-            }
-            out.insert(ident.to_string());
-        }
-    };
-    for law in &entry.behavioral.laws {
-        harvest(&law.expr);
-    }
-    if let Some(fsm) = &entry.behavioral.fsm {
-        for t in &fsm.transitions {
-            harvest(&t.guard);
-        }
-    }
-    out
+    let behavioral = &entry.behavioral;
+    let guards = behavioral.fsm.iter().flat_map(|f| &f.transitions);
+    let sources = behavioral.laws.iter().map(|law| &law.expr);
+    let sources = sources.chain(guards.map(|t| &t.guard));
+    let idents = sources.flat_map(|s| s.split(|c: char| !(c.is_alphanumeric() || c == '_')));
+    // An identifier cannot start with a digit; that filters the numeric literals
+    // out without parsing them.
+    let literal = |i: &str| i.is_empty() || i.starts_with(|c: char| c.is_ascii_digit());
+    let owned = |i: &str| RUNTIME_OWNED.contains(&i) || i.starts_with("state_");
+    let runtime = |i: &&str| literal(i) || owned(i) || EXPR_BUILTINS.contains(i);
+    idents.filter(|i| !runtime(i)).map(String::from).collect()
 }
 
 #[cfg(test)]
@@ -1188,6 +1240,41 @@ mod tests {
         };
         let rows: String = rows.split(" + ").map(row).collect();
         format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}")
+    }
+
+    /// Each flagged beside a legal control: a diode law on one VF point, under a
+    /// decade or max rows only (the first also refused on save); a gain off its
+    /// AOL row once dB, V/mV or V/V is converted; a channel's param on another
+    /// channel's row. Case: kind | params | rows | warning (empty: clean).
+    #[test]
+    #[rustfmt::skip]
+    fn thin_diode_fits_gain_unit_slips_and_swapped_channel_rows_are_flagged() {
+        let vf = |col: &str, ma: f64| format!("VF ; {col} = {} ; V ; IF = {ma} mA", diode_vf([1e-9, 1.8, 0.2], ma / 1e3));
+        let (law, ron) = ("is = 1e-9\nn = 1.8\nrs = 0.2", "RON IN1 to OUT1 ; typ = 90 ; mΩ ; VIN2 = 5 V");
+        let ilim = "ILIM channel A ; typ = 1.5 ; A ; - + ILIM channel B ; typ = 2 ; A ; -";
+        for case in [
+            format!("diode | {law} | {} | rest on 1 cited VF point(s) spanning 1.0×", vf("max", 1000.0)),
+            format!("diode | {law} | {} + {} | rest on 2 cited VF point(s) spanning 5.0×", vf("typ", 1.0), vf("typ", 5.0)),
+            format!("diode | {law} | {} | a max-only fit", [1.0, 10.0, 100.0].map(|i| vf("max", i)).join(" + ")),
+            format!("diode | {law} | {} + {} | ", vf("max", 1.0), [1.0, 10.0, 100.0].map(|i| vf("typ", i)).join(" + ")),
+            "opamp | gain = 1e8 | AOL ; typ = 100 ; dB ; RL = 2 kΩ | prints 100 dB = 1.0000e5 V/V".into(),
+            "opamp | gain = 1e5 | AOL ; min = 90, typ = 100 ; dB ; RL = 2 kΩ | ".into(),
+            "opamp | gain = 2e8 | AVOL ; min = 50, typ = 200 ; V/mV ; - | prints 200 V/mV = 2.0000e5 V/V".into(),
+            "opamp | gain = 6e4 | AVOL ; min = 50, typ = 200 ; V/mV ; - | ".into(),
+            "comparator | gain = 2e2 | AVD gain ; typ = 2e5 ; V/V ; - | convert AOL to V/V".into(),
+            "comparator | gain = 2e5 | AVD gain ; typ = 200 ; V/uV ; - + AOL ; typ = 2e5 ; V/V ; - | ".into(),
+            format!("analog_switch | ron_1 = 0.12 | {ron} + RON IN2 to OUT2 ; typ = 120 ; mΩ ; VIN1 = 5 V | channel 1's but its row 'RON IN2 to OUT2' (b) is labelled for channel 2:"),
+            format!("analog_switch | ron_1 = 0.09 | {ron} + RON IN2 to OUT2 ; typ = 120 ; mΩ ; VIN1 = 5 V | "),
+            format!("analog_switch | ilim_2_a = 1.5 | {ilim} | labelled for channel 1:"),
+            format!("analog_switch | ilim_2_a = 2.0 | {ilim} | "),
+            "analog_switch | ron_2_ohms = { typ = 0.1, unit = \"ohm\", conditions = \"VIN2 = 5 V\", basis = \"OUT1 row\" } | - ; typ = 1 ; V ; - | row '' (OUT1 row)".into(),
+        ] {
+            let [kind, params, rows, want] = case.split(" | ").collect::<Vec<_>>()[..] else { panic!("{case}") };
+            let e = entry(kind, params, &cited(rows));
+            let found = source_warnings(&e);
+            assert!(found.len() == usize::from(!want.is_empty()) && found.iter().all(|w| w.contains(want)), "{case}: {found:?}");
+            assert_eq!(underfit(&e).is_some(), want.starts_with("rest on"), "{case}");
+        }
     }
 
     /// An identity-only card whose own cited rows cover every param its checker

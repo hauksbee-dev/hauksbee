@@ -89,9 +89,23 @@ struct PdfPageText {
 #[derive(Debug, Clone)]
 struct SelectedPage {
     number: usize,
-    reasons: Vec<&'static str>,
-    supplemental_reasons: Vec<&'static str>,
+    reasons: Why,
+    supplemental_reasons: Why,
     score: usize,
+}
+
+/// Topic labels a page was selected for.
+type Why = Vec<&'static str>;
+
+impl SelectedPage {
+    const fn new(number: usize, reasons: Why, supplemental_reasons: Why, score: usize) -> Self {
+        Self {
+            number,
+            reasons,
+            supplemental_reasons,
+            score,
+        }
+    }
 }
 
 /// A private scratch directory holding everything one extraction may touch.
@@ -227,13 +241,9 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
         std::fs::write(dir.path().join("datasheet.txt"), dump).is_ok()
     });
     let front_pages = || {
+        let why = "front-page fallback because the PDF text layer was unavailable";
         (1..=MAX_RENDERED_PAGES)
-            .map(|number| SelectedPage {
-                number,
-                reasons: vec!["front-page fallback because the PDF text layer was unavailable"],
-                supplemental_reasons: Vec::new(),
-                score: 0,
-            })
+            .map(|n| SelectedPage::new(n, vec![why], vec![], 0))
             .collect()
     };
     let selections = page_text.as_deref().map_or_else(front_pages, |pages| {
@@ -1076,18 +1086,18 @@ fn split_pdf_pages_text(text: &str) -> Vec<PdfPageText> {
 /// Heading terms per topic; a `|`-joined CJK term is the topic word a heading
 /// contains (电路应用信息 holds 应用信息), matched by [`topic_score`]'s first-token rule.
 #[rustfmt::skip] // one topic per line; a vertical list of short terms hides the table
-const PAGE_TOPICS: &[(&str, &[&str])] = &[
-    ("recommended operating conditions", &["recommended operating conditions", "推荐工作条件|推荐操作条件|推奨動作条件"]),
-    ("absolute maximum ratings", &["absolute maximum ratings", "limiting values", "极限|最大额定值|絶対最大定格"]),
-    ("switching characteristics", &["switching characteristics", "开关特性|时序特性|スイッチング特性"]),
-    ("electrical characteristics", &["electrical characteristics", "电特性|电气特性|电气参数|電気的特性"]),
-    ("pin functions or package pinout", &["pin functions", "terminal functions", "pin configuration",
+const PAGE_TOPICS: &[(&str, usize, &[&str])] = &[
+    ("recommended operating conditions", 80_000, &["recommended operating conditions", "推荐工作条件|推荐操作条件|推奨動作条件"]),
+    ("absolute maximum ratings", 80_000, &["absolute maximum ratings", "limiting values", "极限|最大额定值|絶対最大定格"]),
+    ("switching characteristics", 70_000, &["switching characteristics", "开关特性|时序特性|スイッチング特性"]),
+    ("electrical characteristics", 60_000, &["electrical characteristics", "电特性|电气特性|电气参数|電気的特性"]),
+    ("pin functions or package pinout", 50_000, &["pin functions", "terminal functions", "pin configuration",
         "package pinout", "top view", "引脚|管脚|顶视图|ピン配置|端子説明"]),
-    ("functional description or function table", &["functional description", "function table",
+    ("functional description or function table", 55_000, &["functional description", "function table",
         "truth table", "功能描述|真值表|逻辑功能|機能説明"]),
-    ("application information or programming equations", &["application information",
+    ("application information or programming equations", 40_000, &["application information",
         "typical application", "design procedure", "programming equation", "典型应用|应用信息|应用电路|アプリケーション"]),
-    ("ordering or package information", &["ordering information", "订购信息|订货信息|封装信息|外形尺寸"]),
+    ("ordering or package information", 0, &["ordering information", "订购信息|订货信息|封装信息|外形尺寸"]),
 ];
 
 fn topic_score(text: &str, terms: &[&str]) -> usize {
@@ -1140,41 +1150,23 @@ fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPag
         return Vec::new();
     }
 
-    let mut selected = std::collections::BTreeMap::<usize, SelectedPage>::new();
-    selected.insert(
-        1,
-        SelectedPage {
-            number: 1,
-            reasons: vec!["page 1 feature and supply summary"],
-            supplemental_reasons: Vec::new(),
-            score: usize::MAX,
-        },
-    );
+    let why = "page 1 feature and supply summary";
+    let first = SelectedPage::new(1, vec![why], vec![], usize::MAX);
+    let mut selected = std::collections::BTreeMap::from([(1, first)]);
 
-    for (label, terms) in PAGE_TOPICS {
+    for (label, _, terms) in PAGE_TOPICS {
         // Repeated datasheet tables usually progress from the lowest bias to
         // the highest and most representative operating point. Prefer the
         // later page within each category, then disclose every sibling page so
         // the model can inspect another voltage or package variant if needed.
-        let best = pages
-            .iter()
-            .map(|page| (page, topic_score(&page.text, terms)))
-            .filter(|(_, score)| *score > 0)
-            .max_by_key(|(page, _score)| page.number);
-        if let Some((page, score)) = best {
+        let scored = pages.iter().map(|p| (p, topic_score(&p.text, terms)));
+        if let Some((page, score)) = scored.filter(|s| s.1 > 0).max_by_key(|s| s.0.number) {
             if let Some(chosen) = selected.get_mut(&page.number) {
                 chosen.reasons.push(label);
                 chosen.score = chosen.score.saturating_add(score);
             } else if selected.len() < limit {
-                selected.insert(
-                    page.number,
-                    SelectedPage {
-                        number: page.number,
-                        reasons: vec![label],
-                        supplemental_reasons: Vec::new(),
-                        score,
-                    },
-                );
+                let page = SelectedPage::new(page.number, vec![label], vec![], score);
+                selected.insert(page.number, page);
             }
         }
     }
@@ -1183,109 +1175,54 @@ fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPag
         let mut remaining: Vec<SelectedPage> = pages
             .iter()
             .filter(|page| !selected.contains_key(&page.number))
-            .filter_map(|page| {
-                let reasons: Vec<&'static str> = PAGE_TOPICS
-                    .iter()
-                    .filter_map(|(label, terms)| {
-                        (topic_score(&page.text, terms) > 0).then_some(*label)
-                    })
-                    .collect();
-                let lower = page.text.to_ascii_lowercase();
-                let score = reasons
-                    .iter()
-                    .map(|label| match *label {
-                        "recommended operating conditions" | "absolute maximum ratings" => 80_000,
-                        "switching characteristics" => 70_000,
-                        "electrical characteristics" => 60_000,
-                        "functional description or function table" => 55_000,
-                        "pin functions or package pinout" => 50_000,
-                        "application information or programming equations" => 40_000,
-                        _ => 0,
-                    })
-                    .max()
-                    .unwrap_or(0)
-                    + usize::from(!lower.contains("(continued)")) * 1_000
-                    + page.number;
-                (score > 0).then_some(SelectedPage {
-                    number: page.number,
-                    reasons: Vec::new(),
-                    supplemental_reasons: reasons,
-                    score,
-                })
+            .filter_map(|p| {
+                let topics = PAGE_TOPICS.iter().filter(|t| topic_score(&p.text, t.2) > 0);
+                let (reasons, weights): (Vec<_>, Vec<_>) = topics.map(|t| (t.0, t.1)).unzip();
+                let whole = !p.text.to_ascii_lowercase().contains("(continued)");
+                let score = weights.into_iter().max().unwrap_or(0) + usize::from(whole) * 1_000;
+                let score = score + p.number;
+                (score > 0).then(|| SelectedPage::new(p.number, vec![], reasons, score))
             })
             .collect();
         remaining.sort_by_key(|page| (std::cmp::Reverse(page.score), page.number));
         let mut supplemented = std::collections::HashSet::new();
         for page in remaining {
-            if page
-                .supplemental_reasons
-                .iter()
-                .all(|reason| supplemented.contains(reason))
-            {
-                continue;
+            let reasons = page.supplemental_reasons.iter();
+            // Inserts every reason: a page with none new adds nothing.
+            if reasons.fold(false, |fresh, r| supplemented.insert(*r) | fresh) {
+                selected.insert(page.number, page);
             }
-            for reason in &page.supplemental_reasons {
-                supplemented.insert(*reason);
-            }
-            selected.insert(page.number, page);
             if selected.len() == limit {
                 break;
             }
         }
     }
-
-    let mut ranked: Vec<SelectedPage> = selected.into_values().collect();
-    ranked.sort_by_key(|page| page.number);
-    ranked
+    // Keyed by page number, so already in page order.
+    selected.into_values().collect()
 }
 
 fn category_disclosures(pages: &[PdfPageText], selected: &[SelectedPage]) -> Vec<String> {
     PAGE_TOPICS
         .iter()
-        .filter_map(|(label, terms)| {
-            let matching: Vec<&PdfPageText> = pages
-                .iter()
-                .filter(|page| topic_score(&page.text, terms) > 0)
-                .collect();
+        .filter_map(|(label, _, terms)| {
+            let matching = pages.iter().filter(|p| topic_score(&p.text, terms) > 0);
+            let matching: Vec<&PdfPageText> = matching.collect();
             let preferred = matching.last()?;
             let matching_numbers: Vec<usize> = matching.iter().map(|page| page.number).collect();
-            let attached: Vec<usize> = matching_numbers
-                .iter()
-                .copied()
-                .filter(|number| selected.iter().any(|page| page.number == *number))
-                .collect();
-            let omitted: Vec<usize> = matching_numbers
-                .iter()
-                .copied()
-                .filter(|number| !attached.contains(number))
-                .collect();
-            let title = label
-                .split_whitespace()
-                .map(|word| {
-                    let mut chars = word.chars();
-                    chars
-                        .next()
-                        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                        .unwrap_or_default()
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
+            let chosen = |n: &&usize| selected.iter().any(|page| page.number == **n);
+            let (attached, omitted): (Vec<usize>, Vec<_>) = matching_numbers.iter().partition(chosen);
+            // Labels are lowercase ASCII words.
+            let capital = |w: &str| w[..1].to_ascii_uppercase() + &w[1..];
+            let title = label.split(' ').map(capital).collect::<Vec<_>>().join(" ");
 
             if *label == "switching characteristics" {
-                let headings: Vec<String> = matching
-                    .iter()
-                    .flat_map(|page| page.text.lines())
-                    .map(str::trim)
-                    .filter(|line| line.to_ascii_lowercase().contains("switching characteristics"))
-                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .collect();
-                let operating_points: std::collections::BTreeSet<String> = headings
-                    .iter()
-                    .filter_map(|heading| {
-                        let value = heading.split("VCCA =").nth(1)?;
-                        Some(value.split(" (").next().unwrap_or(value).trim().to_string())
-                    })
-                    .collect();
+                let squash = |line: &str| line.split_whitespace().collect::<Vec<_>>().join(" ");
+                let heading = |l: &&str| l.to_ascii_lowercase().contains("switching characteristics");
+                let headings = matching.iter().flat_map(|p| p.text.lines()).filter(heading);
+                let headings: Vec<String> = headings.map(squash).collect();
+                let points = headings.iter().filter_map(|h| h.split("VCCA =").nth(1));
+                let points = points.map(|v| v.split(" (").next().unwrap_or(v).trim());
+                let operating_points: std::collections::BTreeSet<_> = points.collect();
                 let package_summary = match (
                     headings.iter().any(|line| line.contains("(DRY)")),
                     headings.iter().any(|line| line.contains("(Other Packages)")),
@@ -1295,15 +1232,8 @@ fn category_disclosures(pages: &[PdfPageText], selected: &[SelectedPage]) -> Vec
                     (false, true) => ", with Other Packages variants",
                     (false, false) => "",
                 };
-                let chosen_heading = preferred
-                    .text
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| line.to_ascii_lowercase().contains("switching characteristics"))
-                    .map_or_else(
-                        || "the later matching table".to_string(),
-                        |line| line.split_whitespace().collect::<Vec<_>>().join(" "),
-                    );
+                let chosen_heading = preferred.text.lines().find(heading).map(squash);
+                let chosen_heading = chosen_heading.unwrap_or_else(|| "the later matching table".into());
                 let omitted_note = if omitted.is_empty() {
                     "All matching pages are attached.".to_string()
                 } else {
@@ -1348,13 +1278,10 @@ fn format_page_numbers(numbers: &[usize]) -> String {
         many if many.windows(2).all(|pair| pair[1] == pair[0] + 1) => {
             format!("pages {} to {}", many[0], many[many.len() - 1])
         }
-        many => format!(
-            "pages {}",
-            many.iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        many => {
+            let list = many.iter().map(usize::to_string).collect::<Vec<_>>();
+            format!("pages {}", list.join(", "))
+        }
     }
 }
 
@@ -1714,6 +1641,8 @@ IMPORTANT RULES:
    signed offset, ascending, with that spec named in conditions. Never invent a
    percentage, derive a bound from a typical value, or substitute a model clamp
    for a published guarantee. `physical-bounds-only` is the whole validation claim.
+   A per-channel row (IN1, OUT2, CH2, channel B) is attributed by the channel its
+   own label names: a param, pin or law of channel 1 takes only rows labelled 1.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. A SPICE
@@ -1723,6 +1652,9 @@ IMPORTANT RULES:
    (e.g. an IF-VF or ID-VDS curve) read across its plotted range, saying so in
    the comment with the figure, the points read and their conditions; a curve
    reading is typical only, never a min/max, a rating or an uncertainty interval.
+   A diode is/n/rs fit needs VF points at two, best three, distinct IF a decade or
+   more apart: typ rows, or points read off the typical IF-VF curve, each cited as
+   a typ VF characteristic naming the figure; one row, or max rows alone, never fix it.
    A BJT `is` comes only from a forward-active VBE(on) row or curve, lowest IC
    first; never from VBE(sat) (saturated, forced beta) or a high-current point.
    Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
@@ -2200,7 +2132,8 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "opamp" => {
             "gain, and swing_lo/swing_hi (output headroom from each supply pin, max column) or \
              rail_lo/rail_hi (swing limits at a stated test supply, VS minus the swing, never the \
-             supply or ground itself); pole_hz is GBW / gain, slew is in V/us"
+             supply or ground itself); gain is V/V (AOL in dB is 10^(dB/20), V/mV ×1e3, \
+             V/µV ×1e6); pole_hz is GBW / gain, slew is in V/us"
         }
         "comparator" => {
             "out_lo, out_hi, hysteresis (V). hysteresis is the datasheet VHYS, the FULL width \
@@ -3416,6 +3349,9 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
         bail!("reply for {part} has no model-error record (rule 0)");
     }
     supply_relative_rows(entry.source.as_ref())?;
+    if let Some(why) = crate::param_names::underfit(entry) {
+        bail!("{why}");
+    }
     if let Some([is, n, rs]) = crate::param_names::diode_refit(entry) {
         bail!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}");
     }
@@ -4062,6 +3998,8 @@ uncertainty = [
         let off = format!("[[models]]\nid = \"d\"\nkind = \"diode\"\n[models.match]\nvalue_re = \"D\"\n[models.params]\nis = 1e-14\nn = 1.0\nrs = 0.0\n{MODEL_SOURCE}{rows}");
         let error = parse_and_validate_reply(&off, "D", "diode").unwrap_err();
         assert!(format!("{error:#}").contains("over 10% off"), "{error:#}");
+        let thin = parse_and_validate_reply(&off.replace(&rows, &vf(1000.0)), "D", "diode");
+        assert!(format!("{:#}", thin.unwrap_err()).contains("rest on 1 cited VF point"));
         let fixed = Reply::Model {
             part: "D",
             kind: "diode",

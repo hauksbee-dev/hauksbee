@@ -62,17 +62,10 @@ fn name_dim(name: &str) -> Dim {
         return Dim::Unknown;
     }
     let base = suffix_unit(name).map(|(_, base)| base);
-    [
-        ("V", VOLT),
-        ("A", AMP),
-        ("ohm", OHM),
-        ("s", SECOND),
-        ("F", [-1, 1, 1]),
-    ]
-    .into_iter()
-    .chain([("Hz", [0, 0, -1]), ("W", [1, 1, 0])])
-    .find(|(unit, _)| Some(*unit) == base)
-    .map_or(Dim::Unknown, |(_, e)| Dim::Known(e))
+    let units = [("V", VOLT), ("A", AMP), ("ohm", OHM), ("s", SECOND)];
+    let more = [("F", [-1, 1, 1]), ("Hz", [0, 0, -1]), ("W", [1, 1, 0])];
+    let unit = units.into_iter().chain(more).find(|u| Some(u.0) == base);
+    unit.map_or(Dim::Unknown, |u| Dim::Known(u.1))
 }
 
 /// The unit a param name's suffix declares: the multiplier to the base unit, and
@@ -106,6 +99,17 @@ pub fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
     let (num, den) = unit.split_once('/').unwrap_or((unit, ""));
     let (scale, base) = prefixed_unit(num).or_else(|| product_unit(num))?;
     Some((scale / prefixed_unit(den).map_or(1.0, |(s, _)| s), base))
+}
+
+/// A printed voltage gain `x` in V/V: `dB` is 10^(x/20), `V/mV` ×1e3, `V/µV`
+/// or `V/uV` ×1e6, `V/V` or no unit as printed; `None` for any other unit.
+#[must_use]
+pub fn gain_ratio(x: f64, unit: &str) -> Option<f64> {
+    match unit.trim() {
+        "dB" => Some(10_f64.powf(x / 20.0)),
+        "" | "-" => Some(x),
+        unit => scale_between(unit, "V/V").map(|s| x * s),
+    }
 }
 
 /// A unit naming a supply or an expression on one (`VDD`, `VCC+0.3`), not a
@@ -221,12 +225,8 @@ fn unit_name(e: Exponents) -> String {
     if let Some((_, name)) = NAMED.iter().find(|(x, _)| *x == e) {
         return (*name).to_string();
     }
-    let parts: Vec<String> = ["V", "A", "s"]
-        .iter()
-        .zip(e)
-        .filter(|(_, p)| *p != 0)
-        .map(|(u, p)| format!("{u}^{p}"))
-        .collect();
+    let parts = ["V", "A", "s"].iter().zip(e).filter(|(_, p)| *p != 0);
+    let parts: Vec<_> = parts.map(|(u, p)| format!("{u}^{p}")).collect();
     parts.join("*")
 }
 
@@ -512,6 +512,9 @@ mod tests {
             ("kΩ", Some((1e3, "ohm"))),
             ("µVPP", Some((1e-6, "V"))),
             ("S", Some((1.0, "S"))),
+            ("V/mV", Some((1e3, "V"))),
+            ("V/µV", Some((1e6, "V"))),
+            ("V/uV", Some((1e6, "V"))),
             ("dB", None),
             ("min", None),
         ] {
