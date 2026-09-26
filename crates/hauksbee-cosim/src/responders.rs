@@ -47,7 +47,7 @@ use hauksbee_models::logic_spec::{Edge, Level};
 /// An MCU GPIO as `(port letter, bit)`.
 pub type GpioPin = (char, u8);
 
-/// A 74HC595 chain's MCU pins (SRCLK, RCLK, SRCLR_n, OE_n, head SER) and chip count.
+/// A 74HC595 chain's MCU pins (SRCLK, RCLK, `SRCLR_n`, `OE_n`, head SER) and chip count.
 pub type Hc595ChainPins = (
     GpioPin,
     GpioPin,
@@ -65,14 +65,16 @@ pub struct InputDrive {
 }
 
 impl InputDrive {
-    pub fn drive(pin: (char, u8), high: bool) -> Self {
+    #[must_use]
+    pub const fn drive(pin: (char, u8), high: bool) -> Self {
         Self {
             pin,
             level: Some(high),
         }
     }
 
-    pub fn release(pin: (char, u8)) -> Self {
+    #[must_use]
+    pub const fn release(pin: (char, u8)) -> Self {
         Self { pin, level: None }
     }
 }
@@ -160,6 +162,7 @@ pub struct ResponderRegistry {
 }
 
 impl ResponderRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -284,18 +287,20 @@ impl ResponderRegistry {
                 continue;
             }
             self.resolved.insert(pin, next);
-            out.push(match next {
-                Some(level) => InputDrive::drive(pin, level),
-                None => InputDrive::release(pin),
-            });
+            out.push(next.map_or_else(
+                || InputDrive::release(pin),
+                |level| InputDrive::drive(pin, level),
+            ));
         }
         out
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.responders.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.responders.len()
     }
@@ -366,7 +371,7 @@ pub(crate) struct ParallelMemoryWrite {
 }
 
 impl ParallelMemoryWrite {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         signal: ParallelSignal,
         edge: Edge,
         gates: Vec<(ParallelSignal, Level)>,
@@ -416,7 +421,7 @@ impl ParallelMemoryResponder {
         watched.sort_unstable();
         watched.dedup();
 
-        ParallelMemoryResponder {
+        Self {
             id,
             port,
             levels,
@@ -500,6 +505,7 @@ impl ParallelMemoryResponder {
             })
     }
 
+    #[allow(clippy::cast_precision_loss)] // cycle gaps and clock rates are far below 2^52
     fn process_edges(
         &mut self,
         edges: &[((char, u8), bool)],
@@ -570,6 +576,7 @@ impl ParallelMemoryResponder {
         let Some(address) = self.address(volts) else {
             return self.release_data_bus();
         };
+        drop(volts_guard);
         let word = cycle
             .and_then(|cycle| self.port.read_at(address, cycle, self.frequency_hz))
             .or_else(|| self.port.read(address));
@@ -680,11 +687,12 @@ impl InputResponder for ParallelMemoryResponder {
 
 /// The 74HC165 read-chain as a registry citizen: forwards PL / SCLK edges to
 /// the shared [`Hc165Chain`], which samples the latch inputs on a PL load and
-/// presents the next QH bit on MISO. Behaviour is exactly the B2 readback-fix
-/// semantics, reached through the responder registry rather than a
-/// scheduler-installed closure. The chain stays `Arc`-shared with the
-/// scheduler so `hc165_chain_pins()` / `hc165_loaded_words()` introspection
-/// keeps working.
+/// presents the next QH bit on MISO.
+///
+/// Behaviour is exactly the B2 readback-fix semantics, reached through the
+/// responder registry rather than a scheduler-installed closure. The chain
+/// stays `Arc`-shared with the scheduler so `hc165_chain_pins()` /
+/// `hc165_loaded_words()` introspection keeps working.
 pub struct Hc165Responder {
     chain: Arc<Mutex<Hc165Chain>>,
     levels: LogicLevels,
@@ -705,7 +713,7 @@ impl Hc165Responder {
             let c = chain.lock_or_recover();
             (c.pl_n, c.clk)
         };
-        Hc165Responder {
+        Self {
             chain,
             levels,
             volts,
@@ -751,6 +759,8 @@ pub struct BitBangSpiPins {
     pub cs_n: (char, u8),
 }
 
+/// Bridges bit-banged SPI GPIO edges to a byte-level [`SpiBus`] slave model.
+///
 /// Firmware bit-bangs SCLK/MOSI/CS on GPIOs; this responder clocks the bits
 /// into the EXISTING byte-level [`SpiBus`] slave model and answers MISO
 /// synchronously, so `digitalRead(MISO)` inside the firmware's own clock loop
@@ -813,6 +823,7 @@ pub struct BitBangSpiPins {
 ///
 /// [`SpiSlave::miso_preview`]: crate::peripherals::spi::SpiSlave::miso_preview
 /// [`SpiBus::spi_mode`]: crate::peripherals::spi::SpiBus::spi_mode
+#[allow(clippy::struct_excessive_bools)] // independent line levels and mode bits, not a state enum
 pub struct BitBangSpiResponder {
     bus: Arc<Mutex<SpiBus>>,
     pins: BitBangSpiPins,
@@ -838,6 +849,8 @@ pub struct BitBangSpiResponder {
     /// The NEXT byte's preview, fetched at the byte boundary and promoted to
     /// `presented` on the following shift edge (the slave shifts a fresh bit 7
     /// out on the shift edge after the last sample of the previous byte).
+    #[allow(clippy::option_option)]
+    // outer None: nothing fetched; Some(None): slave gave no preview
     pending: Option<Option<u8>>,
     /// Set on the first waveform/contract violation: the responder stops
     /// answering entirely (the firmware sees a dead MISO line, loudly broken)
@@ -856,7 +869,7 @@ impl BitBangSpiResponder {
         };
         let cpol = mode & 0b10 != 0;
         let cpha = mode & 0b01 != 0;
-        BitBangSpiResponder {
+        Self {
             bus,
             pins,
             cpol,
@@ -879,7 +892,7 @@ impl BitBangSpiResponder {
     /// CPHA=0 the sample edge is leading, so the clock rests at `!CPOL` (away
     /// from idle); for CPHA=1 it is trailing, resting at `CPOL`. That collapses
     /// to `CPOL == CPHA` (mode 0 → HIGH, the classic "MOSI stable while high").
-    fn sample_hold_level(&self) -> bool {
+    const fn sample_hold_level(&self) -> bool {
         self.cpol == self.cpha
     }
 
@@ -890,7 +903,8 @@ impl BitBangSpiResponder {
 
     /// True once a waveform or preview-contract violation disabled this
     /// responder for the rest of the run.
-    pub fn faulted(&self) -> bool {
+    #[must_use]
+    pub const fn faulted(&self) -> bool {
         self.faulted
     }
 
@@ -919,6 +933,7 @@ impl InputResponder for BitBangSpiResponder {
         vec![self.pins.sclk, self.pins.mosi, self.pins.cs_n]
     }
 
+    #[allow(clippy::too_many_lines)] // one flat per-edge SPI state machine; splitting scatters the mode rules
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         if pin == self.pins.mosi {
             // The master must hold MOSI stable through the slave's sample window;
@@ -1057,7 +1072,7 @@ impl InputResponder for BitBangSpiResponder {
 }
 
 /// `"high"` / `"low"` for a clock level, used in the mode-mismatch diagnostics.
-fn level_name(high: bool) -> &'static str {
+const fn level_name(high: bool) -> &'static str {
     if high {
         "high"
     } else {
@@ -1098,6 +1113,8 @@ enum I2cPhase {
     AwaitStop,
 }
 
+/// A small I2C protocol engine over bit-banged SCL/SDA GPIO edges.
+///
 /// Firmware bit-bangs SCL/SDA as plain GPIOs; this responder is a small I2C
 /// protocol engine over the pin edges, START/STOP detection, address
 /// decoding, ACK generation, byte clocking, routing the transaction to the
@@ -1124,7 +1141,7 @@ enum I2cPhase {
 ///   no-answer, not a wrong answer: the firmware sees a dead bus (perpetual
 ///   NACK), and this doc plus the fixture show the supported pattern (drive
 ///   SDA push-pull; switch it to input for the ACK bit and read bytes).
-/// * **An address no attached slave models is NACKed** (SDA left high), with
+/// * **An address no attached slave models is NACK-ed** (SDA left high), with
 ///   a once-per-address warning, never a fake ACK.
 ///
 /// SDA is bidirectional: the responder tracks the MASTER's driven level from
@@ -1133,6 +1150,7 @@ enum I2cPhase {
 /// falling edge (data changes while the clock is low, per the spec) and are
 /// re-asserted at the following rising edge, so a firmware that flips SDA to
 /// input only just before reading still sees the bit.
+#[allow(clippy::struct_excessive_bools)] // independent bus-line and protocol flags, not a state enum
 pub struct SoftI2cResponder {
     bus: Arc<Mutex<I2cBus>>,
     scl_pin: (char, u8),
@@ -1148,7 +1166,7 @@ pub struct SoftI2cResponder {
     /// Every modeled address this transaction has touched since the last
     /// STOP. A repeated START re-addresses without a STOP, so this ADDS; the
     /// physical STOP then names each member to the bus, not just the
-    /// last-addressed slave, and even when the FINAL leg was a NACKed
+    /// last-addressed slave, and even when the FINAL leg was a NACK-ed
     /// unmodeled address (`active` false).
     touched: Vec<u8>,
     /// The SDA level this responder is currently driving into the MCU input,
@@ -1164,7 +1182,7 @@ pub struct SoftI2cResponder {
 
 impl SoftI2cResponder {
     pub fn new(bus: Arc<Mutex<I2cBus>>, scl_pin: (char, u8), sda_pin: (char, u8)) -> Self {
-        SoftI2cResponder {
+        Self {
             bus,
             scl_pin,
             sda_pin,
@@ -1180,7 +1198,7 @@ impl SoftI2cResponder {
         }
     }
 
-    fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
+    fn dispatch(&self, ev: I2cEvent) -> Option<u8> {
         self.bus.lock_or_recover().dispatch(ev)
     }
 
@@ -1200,19 +1218,18 @@ impl SoftI2cResponder {
     /// Fetch the next read byte from the addressed slave and put its MSB on
     /// the wire (entry into `ReadBits`, always at a falling edge).
     fn begin_read_byte(&mut self, out: &mut Vec<InputDrive>) {
-        let byte = match self.dispatch(I2cEvent::Read { addr: self.addr }) {
-            Some(b) => b,
-            None => {
-                // Structurally impossible while `active` (the address matched
-                // at Start); if a slave vanished mid-transaction, say so and
-                // present the open-bus level rather than inventing data.
-                eprintln!(
-                    "ERROR: soft I2C: slave 0x{:02x} answered Start but not Read; \
-                     presenting 0xFF (open bus)",
-                    self.addr
-                );
-                0xFF
-            }
+        let byte = if let Some(b) = self.dispatch(I2cEvent::Read { addr: self.addr }) {
+            b
+        } else {
+            // Structurally impossible while `active` (the address matched
+            // at Start); if a slave vanished mid-transaction, say so and
+            // present the open-bus level rather than inventing data.
+            eprintln!(
+                "ERROR: soft I2C: slave 0x{:02x} answered Start but not Read; \
+                 presenting 0xFF (open bus)",
+                self.addr
+            );
+            0xFF
         };
         self.phase = I2cPhase::ReadBits { nbits: 0, byte };
         self.drive_sda(byte & 0x80 != 0, out);
@@ -1304,6 +1321,7 @@ impl InputResponder for SoftI2cResponder {
         vec![self.scl_pin, self.sda_pin]
     }
 
+    #[allow(clippy::too_many_lines)] // one flat per-edge I2C state machine; splitting scatters the protocol
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         let mut out = Vec::new();
 
@@ -1477,7 +1495,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn probe(pin: (char, u8), answer: Vec<InputDrive>) -> Box<Probe> {
+    fn probe(pin: (char, u8), answer: Vec<InputDrive>) -> Box<dyn InputResponder> {
         Box::new(Probe {
             pins: vec![pin],
             answer,
@@ -1599,12 +1617,7 @@ pub(crate) mod tests {
         })
     }
 
-    pub(crate) fn one_bit_spec(
-        write: &str,
-        write_gates: &str,
-        read_gates: &str,
-        inputs: &str,
-    ) -> String {
+    pub fn one_bit_spec(write: &str, write_gates: &str, read_gates: &str, inputs: &str) -> String {
         format!(
             r#"
 inputs = [{inputs}]
@@ -1993,12 +2006,12 @@ data_out = ["io0"]
             data.iter().copied().map(mcu).collect(),
             data.clone(),
         );
-        let driven: Vec<_> = std::iter::once(address)
+        let directions: Vec<_> = std::iter::once(address)
             .chain(data.iter().copied())
             .chain([CE, OE, WE])
             .map(|pin| (pin, true, false))
             .collect();
-        responder.on_directions_at(&driven, 0);
+        responder.on_directions_at(&directions, 0);
 
         responder.on_edge_at(CE, false, 10);
         responder.on_edge_at(OE, false, 10);
@@ -2168,16 +2181,16 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             let mut got = 0u8;
             for i in (0..8).rev() {
                 let bit = (mosi >> i) & 1 != 0;
-                if !self.cpha {
-                    self.edge(PINS.mosi, bit);
+                if self.cpha {
                     self.edge(PINS.sclk, !self.cpol);
-                    got = (got << 1) | u8::from(self.miso);
+                    self.edge(PINS.mosi, bit);
                     self.edge(PINS.sclk, self.cpol);
+                    got = (got << 1) | u8::from(self.miso);
                 } else {
-                    self.edge(PINS.sclk, !self.cpol);
                     self.edge(PINS.mosi, bit);
-                    self.edge(PINS.sclk, self.cpol);
+                    self.edge(PINS.sclk, !self.cpol);
                     got = (got << 1) | u8::from(self.miso);
+                    self.edge(PINS.sclk, self.cpol);
                 }
             }
             got
@@ -2216,8 +2229,8 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         }
     }
 
-    /// Full read transactions against the byte-level RegisterMapSensor answer
-    /// WHO_AM_I and a burst data read bit-exactly in modes 0, 1 and 3.
+    /// Full read transactions against the byte-level `RegisterMapSensor` answer
+    /// `WHO_AM_I` and a burst data read bit-exactly in modes 0, 1 and 3.
     #[test]
     fn bitbang_spi_reads_registers_in_every_declared_mode() {
         for mode in [0, 1, 3] {
@@ -2334,7 +2347,7 @@ style = "i2c_pointer"
 
     impl I2cMaster {
         fn new(bus: Arc<Mutex<I2cBus>>) -> Self {
-            let mut m = I2cMaster {
+            let mut m = Self {
                 resp: SoftI2cResponder::new(bus, SCL, SDA),
                 sda_in: true,
             };
@@ -2470,7 +2483,7 @@ style = "i2c_pointer"
         m.stop();
 
         let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
-        assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
+        assert_eq!(src_volts(&circuit).to_bits(), 0, "not driven before flush");
         let volts = vec![0.0; 4];
         bus.lock()
             .unwrap()

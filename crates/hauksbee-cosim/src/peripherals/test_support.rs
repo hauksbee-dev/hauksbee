@@ -10,7 +10,7 @@ use hauksbee_mcu::I2cEvent;
 use std::sync::{Arc, Mutex};
 
 /// One pointer-framed write transaction: START, `bytes`, STOP.
-pub(crate) fn i2c_write(bus: &mut I2cBus, addr: u8, bytes: &[u8]) {
+pub fn i2c_write(bus: &mut I2cBus, addr: u8, bytes: &[u8]) {
     bus.dispatch(I2cEvent::Start { addr, read: false });
     for &data in bytes {
         bus.dispatch(I2cEvent::Write { addr, data });
@@ -19,7 +19,7 @@ pub(crate) fn i2c_write(bus: &mut I2cBus, addr: u8, bytes: &[u8]) {
 }
 
 /// Pointered burst read of `n` bytes starting at register `reg`.
-pub(crate) fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> Vec<u8> {
+pub fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> Vec<u8> {
     bus.dispatch(I2cEvent::Start { addr, read: false });
     bus.dispatch(I2cEvent::Write { addr, data: reg });
     bus.dispatch(I2cEvent::Start { addr, read: true });
@@ -31,7 +31,7 @@ pub(crate) fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> V
 }
 
 /// The DC level currently programmed on a bound output driver's Vsource.
-pub(crate) fn dc_source_volts(circuit: &Circuit, vsource: DeviceId) -> f64 {
+pub fn dc_source_volts(circuit: &Circuit, vsource: DeviceId) -> f64 {
     match circuit.devices[vsource.0 as usize] {
         Device::Vsource {
             kind: SourceKind::Dc(v),
@@ -43,13 +43,13 @@ pub(crate) fn dc_source_volts(circuit: &Circuit, vsource: DeviceId) -> f64 {
 
 /// An SPI slave that answers every byte with `miso` and records each MOSI
 /// byte in `got`; it offers no `miso_preview`.
-pub(crate) struct FixedSpiSlave {
+pub struct FixedSpiSlave {
     pub miso: u8,
     pub got: Arc<Mutex<Vec<u8>>>,
 }
 
 impl FixedSpiSlave {
-    pub(crate) fn new(miso: u8) -> Self {
+    pub fn new(miso: u8) -> Self {
         Self {
             miso,
             got: Arc::default(),

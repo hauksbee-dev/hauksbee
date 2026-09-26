@@ -9,6 +9,7 @@
 //! firmware drives can be logged without touching them.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +27,7 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         // 5 V CMOS-ish midpoint with wide hysteresis; works for 3.3 V too.
-        Thresholds { vih: 2.0, vil: 0.8 }
+        Self { vih: 2.0, vil: 0.8 }
     }
 }
 
@@ -51,7 +52,7 @@ struct LoggedNet {
     initialized: bool,
 }
 
-/// A recorded value change: (time_ps, code, level).
+/// A recorded value change: (`time_ps`, code, level).
 struct Change {
     t_ps: u64,
     code: String,
@@ -95,6 +96,7 @@ pub struct VcdSink {
 impl VcdSink {
     /// Create a sink logging `nets` (name + resolved node), with default
     /// thresholds. `path` is where [`VcdSink::write`] dumps the trace.
+    #[must_use]
     pub fn new(id: &str, nets: Vec<(String, NodeId)>, path: Option<PathBuf>) -> Self {
         let logged = nets
             .into_iter()
@@ -107,7 +109,7 @@ impl VcdSink {
                 initialized: false,
             })
             .collect();
-        VcdSink {
+        Self {
             id: id.to_string(),
             nets: logged,
             thresholds: Thresholds::default(),
@@ -118,6 +120,7 @@ impl VcdSink {
     }
 
     /// Number of recorded transitions (for assertions / tests).
+    #[must_use]
     pub fn transition_count(&self) -> usize {
         // The initial value dump every net emits at t=0 is not a transition,
         // regardless of its level, exclude it by timestamp only. The old
@@ -128,6 +131,7 @@ impl VcdSink {
     }
 
     /// Transitions recorded for a named net.
+    #[must_use]
     pub fn transitions_for(&self, net: &str) -> usize {
         let Some(code) = self
             .nets
@@ -146,6 +150,7 @@ impl VcdSink {
     }
 
     /// Render the VCD document as a string (gtkwave-compatible).
+    #[must_use]
     pub fn render(&self) -> String {
         let mut s = String::new();
         s.push_str("$date hauksbee $end\n");
@@ -154,11 +159,7 @@ impl VcdSink {
         s.push_str("$scope module hauksbee $end\n");
         for n in &self.nets {
             // 1-bit wire per net.
-            s.push_str(&format!(
-                "$var wire 1 {} {} $end\n",
-                n.code,
-                sanitize(&n.name)
-            ));
+            let _ = writeln!(s, "$var wire 1 {} {} $end", n.code, sanitize(&n.name));
         }
         s.push_str("$upscope $end\n");
         s.push_str("$enddefinitions $end\n");
@@ -167,10 +168,10 @@ impl VcdSink {
         let mut last_t = u64::MAX;
         for c in &self.changes {
             if c.t_ps != last_t {
-                s.push_str(&format!("#{}\n", c.t_ps));
+                let _ = writeln!(s, "#{}", c.t_ps);
                 last_t = c.t_ps;
             }
-            s.push_str(&format!("{}{}\n", if c.level { '1' } else { '0' }, c.code));
+            let _ = writeln!(s, "{}{}", if c.level { '1' } else { '0' }, c.code);
         }
         s
     }
@@ -190,6 +191,11 @@ impl VcdSink {
     }
 
     /// Write the VCD to the configured path (no-op if none set).
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the parent directory cannot be created or the file
+    /// cannot be created or written.
     pub fn write(&self) -> std::io::Result<()> {
         if let Some(p) = &self.path {
             Self::ensure_parent(p)?;
@@ -200,6 +206,11 @@ impl VcdSink {
     }
 
     /// Write the VCD to an explicit path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the parent directory cannot be created or the file
+    /// cannot be created or written.
     pub fn write_to(&self, path: &Path) -> std::io::Result<()> {
         Self::ensure_parent(path)?;
         let mut f = std::fs::File::create(path)?;
@@ -228,6 +239,7 @@ impl Peripheral for VcdSink {
         "vcd_sink"
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // sim time is non-negative and far below 2^64 ps
     fn post_solve(&mut self, ctx: &mut TickCtx) {
         // Sample at the end of this chunk.
         let t_ps = ((ctx.t + ctx.dt) * 1e12).round() as u64;
@@ -255,6 +267,7 @@ impl Peripheral for VcdSink {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("nets".into(), self.nets.len() as f64);
@@ -282,7 +295,8 @@ mod tests {
         let mut volts = vec![0.0; c.node_count()];
         for step in 0..6 {
             volts[n.0 as usize] = if step % 2 == 0 { 0.0 } else { 5.0 };
-            sink.post_solve(&mut TickCtx::new(&mut c, &volts, step as f64 * 1e-4, 1e-4));
+            let t = f64::from(step) * 1e-4;
+            sink.post_solve(&mut TickCtx::new(&mut c, &volts, t, 1e-4));
         }
         // 6 samples alternating low/high -> 5 transitions after the initial.
         assert_eq!(sink.transitions_for("CLK"), 5, "expected 5 CLK edges");
@@ -303,9 +317,10 @@ mod tests {
         let mut sink = VcdSink::new("VCD", vec![("PWR".into(), n)], None);
         let levels = [5.0, 0.0, 5.0, 0.0]; // HIGH at t=0, then 3 edges
         let mut volts = vec![0.0; c.node_count()];
-        for (step, &v) in levels.iter().enumerate() {
+        for (step, &v) in (0u32..).zip(&levels) {
             volts[n.0 as usize] = v;
-            sink.post_solve(&mut TickCtx::new(&mut c, &volts, step as f64 * 1e-4, 1e-4));
+            let t = f64::from(step) * 1e-4;
+            sink.post_solve(&mut TickCtx::new(&mut c, &volts, t, 1e-4));
         }
         assert_eq!(
             sink.transitions_for("PWR"),

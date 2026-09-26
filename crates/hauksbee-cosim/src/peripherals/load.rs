@@ -58,7 +58,7 @@ impl DynamicLoad {
             NodeId::GROUND,
             SourceKind::Dc(i0),
         ));
-        DynamicLoad {
+        Self {
             id: id.to_string(),
             sink,
             profile,
