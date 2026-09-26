@@ -34,7 +34,7 @@ impl Waveforms {
     /// Voltage waveform of a node by name, if present.
     pub fn node(&self, circuit: &Circuit, name: &str) -> Option<&[f64]> {
         for id in 0..circuit.node_count() {
-            if circuit.node_name(NodeId(id as u32)) == name {
+            if circuit.node_name(crate::node_id(id)) == name {
                 return self.node_voltages.get(id).map(Vec::as_slice);
             }
         }
@@ -103,6 +103,7 @@ pub struct StepSample<'a> {
 }
 
 /// Numerical diagnostics measured at the final accepted transient point.
+///
 /// `None` means the selected solver path does not currently expose an equation
 /// residual; callers must preserve that absence rather than writing zero.
 #[derive(Debug, Clone, Default)]
@@ -139,12 +140,21 @@ impl Transient {
     }
 
     /// Run to `tstop`, collecting every accepted step into [`Waveforms`].
+    ///
+    /// # Errors
+    ///
+    /// A failed t=0 operating point, or a step that cannot converge (or hits a
+    /// singular system or behavioral fault) even at the minimum timestep.
     pub fn run(&self, circuit: &Circuit, tstop: f64) -> SolveResult<Waveforms> {
         self.run_with_diagnostics(circuit, tstop)
             .map(|(waveforms, _)| waveforms)
     }
 
     /// Collect waveforms and the measured final equation residual.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transient::run`].
     pub fn run_with_diagnostics(
         &self,
         circuit: &Circuit,
@@ -184,6 +194,10 @@ impl Transient {
 
     /// Run to `tstop`, invoking `sink` with each accepted step. This is what the
     /// live UI will consume; it never buffers the whole waveform.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transient::run`].
     pub fn run_streaming<F: FnMut(StepSample)>(
         &self,
         circuit: &Circuit,
@@ -194,6 +208,11 @@ impl Transient {
             .map(|_| ())
     }
 
+    /// [`Transient::run_streaming`], also returning the final-point diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transient::run`].
     pub fn run_streaming_with_diagnostics<F: FnMut(StepSample)>(
         &self,
         circuit: &Circuit,
@@ -208,6 +227,10 @@ impl Transient {
     /// the previous co-sim chunk's final unknowns). Lets a stiff nonlinear board
     /// skip the cold-start homotopy each chunk; exact (same root, fewer Newton
     /// iters), with a cold fallback when the seed does not fit or fails.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transient::run`].
     pub fn run_streaming_seeded<F: FnMut(StepSample)>(
         &self,
         circuit: &Circuit,
@@ -219,6 +242,13 @@ impl Transient {
             .map(|_| ())
     }
 
+    /// [`Transient::run_streaming_seeded`], also returning the final-point
+    /// diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// As [`Transient::run`].
+    #[allow(clippy::too_many_lines)] // the reference step loop: one accept/reject cycle per step
     pub fn run_streaming_seeded_with_diagnostics<F: FnMut(StepSample)>(
         &self,
         circuit: &Circuit,
@@ -226,6 +256,7 @@ impl Transient {
         dc_seed: Option<&[f64]>,
         mut sink: F,
     ) -> SolveResult<TransientDiagnostics> {
+        const PRED_MAX_SCALE: f64 = 2.0;
         let opts = &self.opts;
 
         // Partitioned fast path: only taken when Auto and the topology/step make
@@ -510,13 +541,13 @@ impl Transient {
         // (pred_skip_once): the accepted pair straddles the discontinuity the
         // event loop just resolved, so the linear history is a lie there.
         let predictor_armed = transient_dyn && matches!(opts.step, StepControl::Adaptive { .. });
-        const PRED_MAX_SCALE: f64 = 2.0;
         let mut pred_skip_once = false;
         // The accepted point BEFORE the current one: the predictor's second
         // history sample. Maintained only when the predictor wants it.
         let mut x_accepted_prev: Option<Vec<f64>> = None;
         let mut final_residual = None;
 
+        #[allow(clippy::while_float)] // t advances by a positive step and lands exactly on tstop
         while t < tstop - 1e-18 {
             steps_taken += 1;
             if steps_taken > max_steps {
@@ -615,8 +646,7 @@ impl Transient {
             );
 
             let mut converged = r.converged;
-            let mut used_event = false;
-            if !converged && ws.tran_event() {
+            let used_event = if !converged && ws.tran_event() {
                 // The bare per-step Newton limit-cycled (the spike-gate SPDT flip
                 // under synapse current, or the refractory reset). Retry this step
                 // through the event-freeze loop: freeze comparator+switch states
@@ -658,8 +688,10 @@ impl Transient {
                     }
                 }
                 ws.symbolic.set_allow_dynamic(had_dyn);
-                used_event = converged;
-            }
+                converged
+            } else {
+                false
+            };
 
             if !converged {
                 // Cut the step hard and retry.
@@ -893,16 +925,17 @@ fn for_each_reactive(
             }
             // Bank A = Q_be, xb[0] = Q_bc.
             Device::Bjt { c, b, e, model, .. } if crate::stamp::bjt_has_charge(model, effects) => {
-                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
-                push(0, q_be, None, opts.chgtol);
-                push(1, q_bc, None, opts.chgtol);
+                let q: [f64; 2] = bjt_q(ws, id, *c, *b, *e, model, opts).into();
+                for (bank, q) in q.into_iter().enumerate() {
+                    push(bank, q, None, opts.chgtol);
+                }
             }
             // Bank A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs.
             Device::Mosfet {
                 d, g, s, b, model, ..
             } if crate::stamp::mos_has_charge(model, effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, id, [*d, *g, *s], *b, model, opts);
-                for (bank, q) in [q_gs, q_gd, q_bd, q_bs].into_iter().enumerate() {
+                let q: [f64; 4] = mos_q(ws, id, [*d, *g, *s], *b, model, opts).into();
+                for (bank, q) in q.into_iter().enumerate() {
                     push(bank, q, None, opts.chgtol);
                 }
             }
@@ -1052,18 +1085,15 @@ fn bjt_q(
 /// than merely drifting.
 #[inline]
 fn diode_vj(ws: &Workspace, id: DeviceId, a: NodeId, k: NodeId) -> f64 {
-    let anode = match ws.layout.diode_internal(id) {
-        Some(i) => ws.x[i],
-        None => node_v(ws, a),
-    };
+    let anode = ws
+        .layout
+        .diode_internal(id)
+        .map_or_else(|| node_v(ws, a), |i| ws.x[i]);
     anode - node_v(ws, k)
 }
 
 pub fn node_v(ws: &Workspace, node: NodeId) -> f64 {
-    match ws.layout.node(node) {
-        Some(i) => ws.x[i],
-        None => 0.0,
-    }
+    ws.layout.node(node).map_or(0.0, |i| ws.x[i])
 }
 
 /// A device's branch current at the solution in `ws` (0 when it owns none).
@@ -1311,7 +1341,7 @@ fn crossing_fraction(
         let d0 = vat(x0, cp) - vat(x0, cn) - trip;
         let d1 = vat(x1, cp) - vat(x1, cn) - trip;
         if flipped || ((d0 > 0.0) != (d1 > 0.0) && (d1 - d0).abs() > 1e-15) {
-            let frac = if d0 == d1 {
+            let frac = if d0 - d1 == 0.0 {
                 0.0
             } else {
                 (d0 / (d0 - d1)).clamp(0.0, 1.0)

@@ -17,6 +17,7 @@ use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 /// Debug flags, read once: `getenv` locks libc's environment on every Newton solve.
 static NEWTON_DBG: LazyLock<bool> = LazyLock::new(|| std::env::var("HAUKSBEE_NEWTON_DBG").is_ok());
@@ -31,6 +32,7 @@ pub struct NewtonResult {
 
 /// Reusable workspace for a transient/DC run: the layout, the frozen symbolic
 /// factorization, and scratch buffers. Created once, reused every step.
+#[allow(clippy::struct_excessive_bools)] // independent per-run flags, not a state machine
 pub struct Workspace {
     pub layout: Layout,
     pub symbolic: Symbolic,
@@ -445,10 +447,10 @@ impl Workspace {
     ) -> SolveError {
         let blame = self.stall_blame(circuit);
         if let Some(fault) = &self.behavioral_fault {
-            message.push_str(&format!("; {fault}"));
+            let _ = write!(message, "; {fault}");
         }
         if let Some(blame) = &blame {
-            message.push_str(&format!(" [{blame}]"));
+            let _ = write!(message, " [{blame}]");
         }
         if let Some(fault) = &self.behavioral_fault {
             SolveError::behavioral(message, crate::error::behavioral_device(fault), phase)
@@ -484,10 +486,10 @@ const STALL_WINDOW: usize = 12;
 /// smooth-switch or switch-free circuit keeps the classic self-deciding stamp.
 fn hyst_latch<'a>(
     opts: &SolverOptions,
-    latch: &'a Option<HashMap<DeviceId, bool>>,
+    latch: Option<&'a HashMap<DeviceId, bool>>,
 ) -> Option<&'a HashMap<DeviceId, bool>> {
     if opts.effects.switch_model == crate::options::SwitchModel::Hysteretic {
-        latch.as_ref()
+        latch
     } else {
         None
     }
@@ -521,6 +523,7 @@ fn hyst_latch<'a>(
 /// Costs nothing on a circuit with no `VSwitch`, on [`SwitchModel::Smooth`], or
 /// when an outer path already owns `ws.switch_freeze`: those all fall straight
 /// through to [`newton_solve_core`] and stay bit-identical.
+#[allow(clippy::too_many_lines)] // one bounded Gauss-Seidel loop over the switch states
 pub fn newton_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -534,6 +537,11 @@ pub fn newton_solve(
     gmin: f64,
     src_scale: f64,
 ) -> NewtonResult {
+    // Bounded Gauss-Seidel over the discrete states. Two passes suffice whenever
+    // no switch flips (the common case: one solve plus one confirming
+    // re-evaluation); the cap catches a control node that a switch's own current
+    // drags back across its threshold, which cannot settle and must not spin.
+    const MAX_PASSES: usize = 16;
     ws.latch_flipped = false;
     let hysteretic = opts.effects.switch_model == crate::options::SwitchModel::Hysteretic
         && ws.switch_freeze.is_none()
@@ -571,11 +579,6 @@ pub fn newton_solve(
     let latch_entry = latch.clone();
     let x_entry = ws.x.clone();
 
-    // Bounded Gauss-Seidel over the discrete states. Two passes suffice whenever
-    // no switch flips (the common case: one solve plus one confirming
-    // re-evaluation); the cap catches a control node that a switch's own current
-    // drags back across its threshold, which cannot settle and must not spin.
-    const MAX_PASSES: usize = 16;
     let mut last = NewtonResult {
         converged: false,
         iters: 0,
@@ -742,6 +745,7 @@ pub fn newton_solve(
     last
 }
 
+#[allow(clippy::too_many_lines)] // the Newton iteration: limiting, damping and acceptance in one loop
 fn newton_solve_core(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -755,6 +759,8 @@ fn newton_solve_core(
     gmin: f64,
     src_scale: f64,
 ) -> NewtonResult {
+    const ARMIJO_C: f64 = 1e-4;
+    const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     let mut iters = 0;
     ws.last_singular = false;
     let dbg_newton = *NEWTON_DBG;
@@ -789,8 +795,6 @@ fn newton_solve_core(
         // record the activation.
         crate::diagnostics::note(Strategy::LineSearch);
     }
-    const ARMIJO_C: f64 = 1e-4;
-    const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     // Device-evaluation bypass: an explicit opt-in, and even
     // then only on the per-step transient Newton with self-deciding discrete
     // states, never DC (reactive elements open/short and the staged ladder
@@ -882,7 +886,7 @@ fn newton_solve_core(
                 branch_reg,
                 cmp_freeze: ws.cmp_freeze.as_ref(),
                 switch_freeze: ws.switch_freeze.as_ref(),
-                switch_latch: hyst_latch(opts, &ws.switch_latch),
+                switch_latch: hyst_latch(opts, ws.switch_latch.as_ref()),
                 spdt_sibling: &ws.spdt_sibling,
                 junction_eval: Some(&ws.junction_eval),
             };
@@ -1156,8 +1160,8 @@ fn newton_solve_core(
         // and would read as wildly unconverged against the pristine residual.
         // Restricting the gate to a plain cold start keeps every regularized
         // path bit-identical.
-        let pristine = gmin == opts.gmin
-            && src_scale == 1.0
+        let pristine = gmin.to_bits() == opts.gmin.to_bits()
+            && src_scale.to_bits() == 1.0f64.to_bits()
             && branch_reg == 0.0
             && ws.cmp_freeze.is_none()
             && ws.switch_freeze.is_none();
@@ -1429,7 +1433,7 @@ fn residual_argmax_at(
             branch_reg,
             cmp_freeze: ws.cmp_freeze.as_ref(),
             switch_freeze: ws.switch_freeze.as_ref(),
-            switch_latch: hyst_latch(opts, &ws.switch_latch),
+            switch_latch: hyst_latch(opts, ws.switch_latch.as_ref()),
             spdt_sibling: &ws.spdt_sibling,
             // Stateless on purpose: a trial/probe stamp must neither consult
             // nor advance the live iteration's junction evaluation schedule.
@@ -1608,6 +1612,11 @@ fn converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bo
 /// When `use_ic` is set, reactive elements that declare an initial condition
 /// are pinned to it, giving the transient "initial conditions" operating point
 /// rather than the steady-state DC bias.
+///
+/// # Errors
+///
+/// The final stage's failure (non-convergence, a singular system or a
+/// behavioral fault) once every homotopy stage has been tried.
 pub fn dc_operating_point(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1617,7 +1626,9 @@ pub fn dc_operating_point(
 }
 
 /// Solve the DC operating point for AC small-signal analysis, NEVER honoring
-/// initial conditions. SPICE `.ac` always linearizes around the ordinary DC
+/// initial conditions.
+///
+/// SPICE `.ac` always linearizes around the ordinary DC
 /// operating point and ignores `.ic`/UIC. [`dc_operating_point`] sets `use_ic`
 /// whenever any cap/inductor carries an IC, which pins those elements to their
 /// IC (a cap with `ic` is shorted, an inductor's branch current is fixed); the
@@ -1636,11 +1647,17 @@ pub fn dc_operating_point_no_ic(
 
 /// Solve the DC operating point, optionally warm-started from a `seed` (a prior
 /// operating point of the same circuit, e.g. the previous co-sim chunk's final
-/// unknowns). A good seed lets plain Newton converge in ~1 iteration, skipping
+/// unknowns).
+///
+/// A good seed lets plain Newton converge in ~1 iteration, skipping
 /// the expensive gmin/source-stepping homotopy that a cold start needs on a
 /// stiff nonlinear board. This is EXACT: Newton converges to the same unique root
 /// regardless of the starting guess; the seed only changes the iteration count,
 /// and a seed that fails falls back to the identical cold (zeroed) path below.
+///
+/// # Errors
+///
+/// As [`dc_operating_point`]: the cold path's failure after every stage.
 pub fn dc_operating_point_seeded(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1720,6 +1737,7 @@ fn seed_diode_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // the ordered homotopy stages, each a short early return
 fn dc_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1727,6 +1745,16 @@ fn dc_solve(
     use_ic: bool,
     seed: Option<&[f64]>,
 ) -> SolveResult<()> {
+    const STAGED_GMIN: f64 = 1e-7;
+    // A negligible series resistance on every Vsource/Inductor branch so the
+    // frozen sparse ordering keeps a nonzero pivot on those rows even as
+    // conducting diodes reshape the elimination: far below the 50-ohm driver
+    // output impedance and any meaningful series element, so it does not move
+    // the operating point within solver tolerance. It also arms the
+    // "converged-then-singular" acceptance and the per-node damping in
+    // newton_solve (at the true root every signal diode is reverse-biased, so
+    // the next Jacobian can be singular even though the root is well-defined).
+    const STAGED_BRANCH_REG: f64 = 1e-2;
     ws.used_staged_dc = false;
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
@@ -1844,16 +1872,6 @@ fn dc_solve(
     // default keeps the frozen-singular -> adopt-the-relaxed-point behaviour
     // bit-for-bit. Restored to off before every return so the workspace-reused
     // transient keeps frozen-only semantics.
-    const STAGED_GMIN: f64 = 1e-7;
-    // A negligible series resistance on every Vsource/Inductor branch so the
-    // frozen sparse ordering keeps a nonzero pivot on those rows even as
-    // conducting diodes reshape the elimination: far below the 50-ohm driver
-    // output impedance and any meaningful series element, so it does not move
-    // the operating point within solver tolerance. It also arms the
-    // "converged-then-singular" acceptance and the per-node damping in
-    // newton_solve (at the true root every signal diode is reverse-biased, so
-    // the next Jacobian can be singular even though the root is well-defined).
-    const STAGED_BRANCH_REG: f64 = 1e-2;
     let staged_gmin = STAGED_GMIN.max(opts.gmin);
     let dc_dyn = opts.ladder.has(Strategy::DynamicPivot);
     if dc_dyn {
@@ -1944,6 +1962,7 @@ fn gmin_ladder(
     dbg: bool,
 ) -> bool {
     let mut gmin = start;
+    #[allow(clippy::while_float)] // decade walk: gmin shrinks 10x per rung, so it terminates
     while gmin > floor {
         let r = solve(ws, gmin, 1.0);
         if !r.converged {
@@ -2249,7 +2268,7 @@ fn staged_event_solve(
         flip_budget: usize::MAX,
         max_passes: 40,
     };
-    event_solve(ws, circuit, &inner, ev) == Some(true)
+    event_solve(ws, circuit, &inner, &ev) == Some(true)
 }
 
 /// Event-driven TRANSIENT step solve: [`event_solve`] at `t+dt` with the real
@@ -2311,17 +2330,14 @@ pub fn newton_solve_event(
         flip_budget: opts.event_retry.flip_budget,
         max_passes: 60,
     };
-    match event_solve(ws, circuit, &inner, ev) {
-        Some(ok) => ok,
-        // Nothing discrete to freeze: a plain step is already smooth. Caller
-        // should not have routed here, but stay correct: one ordinary solve.
-        None => {
-            newton_solve(
-                ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
-            )
-            .converged
-        }
-    }
+    // Nothing discrete to freeze: a plain step is already smooth. Caller
+    // should not have routed here, but stay correct: one ordinary solve.
+    event_solve(ws, circuit, &inner, &ev).unwrap_or_else(|| {
+        newton_solve(
+            ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
+        )
+        .converged
+    })
 }
 
 /// What one event-driven solve freezes and integrates (see [`event_solve`]).
@@ -2370,7 +2386,7 @@ fn event_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
-    ev: EventSolve<'_>,
+    ev: &EventSolve<'_>,
 ) -> Option<bool> {
     let dbg = *STAGED_DBG;
     let spdt = SpdtPairs::analyze(circuit);
@@ -2509,9 +2525,9 @@ fn solve_diode_is_homotopy(
     let mut x = seed.to_vec();
 
     // Geometric ramp of the Is scale: 1e-4, 1e-3.5, ... up to 1.0.
-    let steps = 16usize;
+    let steps = 16u32;
     for s in 1..=steps {
-        let frac = s as f64 / steps as f64; // 0<frac<=1
+        let frac = f64::from(s) / f64::from(steps); // 0<frac<=1
         let scale = 10f64.powf(-4.0 * (1.0 - frac)); // 1e-4 .. 1.0
         for &(i, is_real) in &diodes {
             if let Device::Diode { model, .. } = &mut work.devices[i] {
@@ -2639,20 +2655,20 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
 fn ptc_settle_from_seed(circuit: &Circuit, opts: &SolverOptions, seed: &[f64]) -> Option<Vec<f64>> {
     use crate::options::{Integration, Partitioning, StepControl};
     use crate::transient::Transient;
-
-    let n_nodes = circuit.max_node() as usize;
-    let orig_size = seed.len();
-    let mut aug = circuit.clone();
     // Pseudo-cap value: large enough to dominate the smallest real conductance
     // (anchoring floating nodes) yet give a fast settle time constant with the
     // chosen step. 1 nF with a 1 us step => C/dt = 1e-3 S on every node.
     const PSEUDO_C: f64 = 1e-9;
+
+    let n_nodes = circuit.max_node() as usize;
+    let orig_size = seed.len();
+    let mut aug = circuit.clone();
     for ni in 1..=n_nodes {
         // IC = the seed's voltage for this node (node i -> unknown index i-1).
         let v0 = seed.get(ni - 1).copied().unwrap_or(0.0);
         aug.add(Device::Capacitor {
             name: format!("__ptc_c{ni}"),
-            a: NodeId(ni as u32),
+            a: crate::node_id(ni),
             b: NodeId::GROUND,
             farads: PSEUDO_C,
             ic: Some(v0),
@@ -3032,9 +3048,9 @@ mod tests {
     /// `STALL_WINDOW` where the post-damping norm never would.
     #[test]
     fn stall_norm_is_the_undamped_step_not_the_damped_one() {
+        const A: f64 = 0.5;
         let (c, _, _) = divider();
         let mut ws = Workspace::new(&c);
-        const A: f64 = 0.5;
         let (mut best_norm, mut stall, mut bailed_at) = (f64::INFINITY, 0usize, None);
         let (mut damped_best, mut damped_stall, mut damped_bailed) = (f64::INFINITY, 0usize, false);
         let mut last_damped = f64::INFINITY;

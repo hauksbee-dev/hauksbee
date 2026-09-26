@@ -57,22 +57,9 @@ impl IntegCoeffs {
     /// uniform", which is exact because the seeded history has x2 == x1.
     pub fn for_step(method: Integration, dt: f64, dt_prev: f64, first_step: bool) -> Self {
         match method {
-            Integration::BackwardEuler => Self {
-                g: 1.0 / dt,
-                a1: 1.0 / dt,
-                a2: 0.0,
-                dt,
-            },
             Integration::Trapezoidal if !first_step => Self {
                 g: 2.0 / dt,
                 a1: 2.0 / dt,
-                a2: 0.0,
-                dt,
-            },
-            Integration::Trapezoidal => Self {
-                // First step: backward Euler to start cleanly.
-                g: 1.0 / dt,
-                a1: 1.0 / dt,
                 a2: 0.0,
                 dt,
             },
@@ -109,7 +96,8 @@ impl IntegCoeffs {
                     dt,
                 }
             }
-            Integration::Gear2 => Self {
+            // Backward Euler, and the first step of the two-step methods (to start cleanly).
+            Integration::BackwardEuler | Integration::Trapezoidal | Integration::Gear2 => Self {
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
                 a2: 0.0,
@@ -295,6 +283,7 @@ impl JunctionEval {
     /// the iterate's own junction voltage; a stored value that differs means
     /// the evaluation was limited, which denies convergence this iteration
     /// (see `limited`).
+    #[allow(clippy::float_cmp)] // exact: any limiter change (NaN included) denies convergence
     fn store(&self, id: DeviceId, k: usize, v: f64, raw: f64) {
         if let Some(&s) = self.slots.get(&id) {
             self.vals.borrow_mut()[s + k] = v;
@@ -308,18 +297,12 @@ impl JunctionEval {
 impl StampCtx<'_> {
     #[inline]
     fn v(&self, node: NodeId) -> f64 {
-        match self.layout.node(node) {
-            Some(i) => self.x[i],
-            None => 0.0,
-        }
+        self.layout.node(node).map_or(0.0, |i| self.x[i])
     }
     /// Node voltage at the PREVIOUS Newton iterate (the limiting anchor).
     #[inline]
     fn v_prev(&self, node: NodeId) -> f64 {
-        match self.layout.node(node) {
-            Some(i) => self.x_prev[i],
-            None => 0.0,
-        }
+        self.layout.node(node).map_or(0.0, |i| self.x_prev[i])
     }
 }
 
@@ -531,6 +514,7 @@ fn stamp_into<S: StampSink>(ctx: &StampCtx, sink: &mut S) {
 /// two-tier assembly (`plan.rs`) can re-stamp tier-2 devices through the SAME
 /// interpreted device code with a slot-resolving sink: the physics formulas
 /// exist here once, whichever assembly drives them.
+#[allow(clippy::too_many_lines)] // one match arm per device kind
 pub fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, sink: &mut S) {
     match dev {
         Device::Resistor {
@@ -700,7 +684,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-pub fn note_behavioral_fault(name: &str, detail: String) {
+pub fn note_behavioral_fault(name: &str, detail: &str) {
     BEHAVIORAL_FAULT.with(|f| {
         let mut f = f.borrow_mut();
         if f.is_none() {
@@ -841,7 +825,7 @@ fn stamp_behavioral<S: StampSink>(
     let (f0, partials) = match behavioral_eval_partials(expr, deps, &mut vals, ctx.time, ctx.opts) {
         Ok(r) => r,
         Err(detail) => {
-            note_behavioral_fault(name, detail);
+            note_behavioral_fault(name, &detail);
             return;
         }
     };
@@ -1387,6 +1371,7 @@ pub fn bjt_charges_at(model: &BjtModel, vbe: f64, vbc: f64, t_c: f64, temp_on: b
 /// and the AC stamp share with `stamp_bjt`: internal unknowns when the
 /// `series_resistance` toggle is on AND the layout allocated them, the
 /// external nodes otherwise.
+#[allow(clippy::many_single_char_names)] // names follow SPICE junction/terminal notation (vbe/vbc, d/g/s/b)
 pub fn bjt_junction_voltages(
     layout: &Layout,
     x: &[f64],
@@ -1420,10 +1405,9 @@ pub fn bjt_effective_nodes(
     if !effects.series_resistance {
         return ext;
     }
-    match layout.bjt_internal(id) {
-        Some(ints) => [ints[0].or(ext[0]), ints[1].or(ext[1]), ints[2].or(ext[2])],
-        None => ext,
-    }
+    layout.bjt_internal(id).map_or(ext, |ints| {
+        [ints[0].or(ext[0]), ints[1].or(ext[1]), ints[2].or(ext[2])]
+    })
 }
 
 // --- MOSFET charge helpers --------------------------------
@@ -1464,6 +1448,49 @@ fn sigmoid(x: f64) -> f64 {
     } else {
         let e = x.exp();
         e / (1.0 + e)
+    }
+}
+
+/// SGP base-charge Early factor `1 - vbc/VAF - vbe/VAR`: exactly 1.0 with the
+/// effect off, and each term only for a finite Early voltage.
+pub fn bjt_early(model: &BjtModel, on: bool, vbe: f64, vbc: f64) -> f64 {
+    let mut e = 1.0;
+    if on && model.vaf.is_finite() {
+        e -= vbc / model.vaf;
+    }
+    if on && model.var.is_finite() {
+        e -= vbe / model.var;
+    }
+    e
+}
+
+/// The Early factor's contributions `(∂/∂vbc, ∂/∂vbe)` to the transport-current
+/// row, `(cf-cr)·∂q1_inv`: zero unless `free` and that Early voltage is finite.
+pub fn bjt_early_partials(model: &BjtModel, free: bool, cf: f64, cr: f64) -> (f64, f64) {
+    let d = |v: f64| {
+        if free && v.is_finite() {
+            -(cf - cr) / v
+        } else {
+            0.0
+        }
+    };
+    (d(model.vaf), d(model.var))
+}
+
+/// Body-effect threshold `(vth, dvth/dvbs)` at the folded bulk-to-source
+/// voltage `vbs`, for a model with `gamma > 0`.
+pub fn mos_body_vth(model: &MosfetModel, vbs: f64) -> (f64, f64) {
+    let phi = model.phi.max(1e-6);
+    let arg = phi - vbs;
+    if arg > 0.0 {
+        let sq = arg.sqrt();
+        // Guard the sqrt singularity at vbs -> phi: cap the derivative at
+        // the value it has 1 mV short of the pole (vth itself stays exact).
+        let dvth = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
+        (model.gamma.mul_add(sq - phi.sqrt(), model.vto), dvth)
+    } else {
+        // Forward-biased bulk clamped at phi: threshold floor, no slope.
+        (model.gamma.mul_add(0.0 - phi.sqrt(), model.vto), 0.0)
     }
 }
 
@@ -1564,6 +1591,7 @@ pub fn mos_channel(
 /// as nanosecond-scale edge skew in the ngspice cross-check tolerances of
 /// those decks.
 #[inline]
+#[allow(clippy::similar_names)] // c_ov / c_ox: overlap vs oxide capacitance
 pub fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
     let mut q = c_ov * v;
     let mut c = c_ov;
@@ -1581,6 +1609,7 @@ pub fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64
 /// Gate-drain stored charge: overlap plus the triode-side intrinsic rise
 /// (see [`mos_charge_gs`] for the model choice discussion).
 #[inline]
+#[allow(clippy::similar_names)] // c_ov / c_ox: overlap vs oxide capacitance
 pub fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
     let mut q = c_ov * v;
     let mut c = c_ov;
@@ -1600,6 +1629,7 @@ pub fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64
 /// bulk-tied-to-source switch has none, and a body-biased charge switch
 /// would couple three terminals into what must stay a two-terminal `Q(v)`);
 /// bulk charges are the depletion helper with the model's `pb`/`mj`.
+#[allow(clippy::similar_names)] // names follow SPICE junction/terminal notation (vbe/vbc, d/g/s/b)
 pub fn mos_charges_at(
     model: &MosfetModel,
     vgs: f64,
@@ -1637,6 +1667,7 @@ pub fn mos_charges_at(
 /// stored a charge off by `Cgs*I*rs` every step, which the trapezoid turned
 /// into a ~10 mA gate current growing as `2/dt` and a self-sustaining
 /// 300 MHz ring with its gate capacitor's ESL.
+#[allow(clippy::many_single_char_names)] // names follow SPICE junction/terminal notation (vbe/vbc, d/g/s/b)
 pub fn mos_junction_voltages(
     layout: &Layout,
     x: &[f64],
@@ -1715,10 +1746,9 @@ fn stamp_diode<S: StampSink>(
     // threads its junction state (see StampCtx::junction_eval), the previous
     // iterate otherwise.
     let vd_iter_prev = vx_prev(a_eff) - vx_prev(k_i);
-    let vd_last = match ctx.junction_eval {
-        Some(je) => je.anchor(id, 0, vd_iter_prev),
-        None => vd_iter_prev,
-    };
+    let vd_last = ctx
+        .junction_eval
+        .map_or(vd_iter_prev, |je| je.anchor(id, 0, vd_iter_prev));
     // Junction limiting. The forward exponential is limited by pnjlim toward
     // vcrit; the breakdown exponential is the same curve MIRRORED about
     // vd = -bv, so in the breakdown region (vd below -bv, with a 10·nvt skirt,
@@ -1801,6 +1831,7 @@ fn stamp_diode<S: StampSink>(
     stamp_current_idx(sink, a_eff, k_i, ieq_q);
 }
 
+#[allow(clippy::too_many_lines, clippy::similar_names)] // one Gummel-Poon evaluation; SPICE names
 fn stamp_bjt<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -1843,7 +1874,7 @@ fn stamp_bjt<S: StampSink>(
             }
         }
     }
-    let (ci, bi, ei) = (eff[0], eff[1], eff[2]);
+    let [ci, bi, ei] = eff;
     let vx = |i: Option<usize>| i.map_or(0.0, |i| ctx.x[i]);
     let vx_prev = |i: Option<usize>| i.map_or(0.0, |i| ctx.x_prev[i]);
 
@@ -1867,13 +1898,14 @@ fn stamp_bjt<S: StampSink>(
     // "converged" make step).
     let vbe_iter_prev = sign * (vx_prev(bi) - vx_prev(ei));
     let vbc_iter_prev = sign * (vx_prev(bi) - vx_prev(ci));
-    let (vbe_last, vbc_last) = match ctx.junction_eval {
-        Some(je) => (
-            je.anchor(id, 0, vbe_iter_prev),
-            je.anchor(id, 1, vbc_iter_prev),
-        ),
-        None => (vbe_iter_prev, vbc_iter_prev),
-    };
+    let (vbe_last, vbc_last) = ctx
+        .junction_eval
+        .map_or((vbe_iter_prev, vbc_iter_prev), |je| {
+            (
+                je.anchor(id, 0, vbe_iter_prev),
+                je.anchor(id, 1, vbc_iter_prev),
+            )
+        });
     let vbe_raw_j = vbe;
     let vbc_raw_j = vbc;
     let vbe = pnjlim(vbe, vbe_last, model.nf * vt, vcrit_be);
@@ -1906,18 +1938,7 @@ fn stamp_bjt<S: StampSink>(
     // ngspice exposes it. For the default model both `vaf` and `var` are
     // infinite, `early == 1.0`, and `1/1.0 == 1.0` exactly, so default-model
     // decks are insensitive to the whole factor.)
-    let early = if ctx.opts.effects.early_effect {
-        let mut e = 1.0;
-        if model.vaf.is_finite() {
-            e -= vbc / model.vaf;
-        }
-        if model.var.is_finite() {
-            e -= vbe / model.var;
-        }
-        e
-    } else {
-        1.0
-    };
+    let early = bjt_early(model, ctx.opts.effects.early_effect, vbe, vbc);
     let q1_inv_early = early.max(0.1); // = 1/q1, clamped far from use
 
     // High-injection (Webster) roll-off, the second half of the SGP base charge:
@@ -2010,16 +2031,7 @@ fn stamp_bjt<S: StampSink>(
         // ∂q1_inv/∂vbc = -1/vaf, ∂q1_inv/∂vbe = -1/var, each contributing
         // (cf-cr)·∂q1_inv to the transport-current row.
         let early_free = ctx.opts.effects.early_effect && early > 0.1;
-        let early_deriv = if early_free && model.vaf.is_finite() {
-            -(cf - cr) / model.vaf
-        } else {
-            0.0
-        };
-        let var_deriv = if early_free && model.var.is_finite() {
-            -(cf - cr) / model.var
-        } else {
-            0.0
-        };
+        let (early_deriv, var_deriv) = bjt_early_partials(model, early_free, cf, cr);
         // The high-injection factor's partials. qbfac = 2/(1 + s) with
         // s = sqrt(1 + 4·q2), so
         //   ∂qbfac/∂q2 = -4 / (s·(1 + s)²)
@@ -2052,8 +2064,8 @@ fn stamp_bjt<S: StampSink>(
         let knee_bc = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbc;
         // gif·q1_inv (gmin-floored like the legacy path) plus the VAR term,
         // each Early partial scaled by qbfac since the two factors multiply.
-        let gc_be = gm + var_deriv * qbfac + knee_be;
-        let gc_bc = (-gir).mul_add(q1_inv, -gmu) + early_deriv * qbfac + knee_bc;
+        let gc_be = var_deriv.mul_add(qbfac, gm) + knee_be;
+        let gc_bc = early_deriv.mul_add(qbfac, (-gir).mul_add(q1_inv, -gmu)) + knee_bc;
         // Row c: gc_be·vbe + gc_bc·vbc; row b: gpi·vbe + gmu·vbc; row e is
         // minus their sum (KCL). Each junction-voltage dependence is a
         // transconductance from the terminal pair into (b, x).
@@ -2123,6 +2135,11 @@ fn stamp_bjt<S: StampSink>(
     inject(sink, ci, sign * ieq_bc);
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::many_single_char_names
+)] // one Level-1 evaluation; SPICE names
 fn stamp_mosfet<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2201,27 +2218,18 @@ fn stamp_mosfet<S: StampSink>(
     // `gamma == 0` (every model without a body-effect term) takes the plain
     // `vto` path bit-identically and never reads the bulk voltage.
     let bulk = b.unwrap_or(s);
-    let mut vth = model.vto;
-    // d vth / d vbs, for the gmb transconductance below (0 unless body effect).
-    let mut dvth_dvbs = 0.0;
-    let mut vbs_f = 0.0;
     let body_effect = model.gamma > 0.0 && b.is_some();
-    if body_effect {
-        let vb_f = sign * ctx.v(bulk);
-        vbs_f = vb_f - vs;
-        let phi = model.phi.max(1e-6);
-        let arg = phi - vbs_f;
-        if arg > 0.0 {
-            let sq = arg.sqrt();
-            vth = model.gamma.mul_add(sq - phi.sqrt(), model.vto);
-            // Guard the sqrt singularity at vbs -> phi: cap the derivative at
-            // the value it has 1 mV short of the pole (vth itself stays exact).
-            dvth_dvbs = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
-        } else {
-            // Forward-biased bulk clamped at phi: threshold floor, no slope.
-            vth = model.gamma.mul_add(0.0 - phi.sqrt(), model.vto);
-        }
-    }
+    let vbs_f = if body_effect {
+        sign.mul_add(ctx.v(bulk), -vs)
+    } else {
+        0.0
+    };
+    // d vth / d vbs feeds the gmb transconductance below (0 unless body effect).
+    let (vth, dvth_dvbs) = if body_effect {
+        mos_body_vth(model, vbs_f)
+    } else {
+        (model.vto, 0.0)
+    };
 
     let nsub = model.n_sub.max(1.0);
     // Channel evaluation via the shared C1-continuous blend (see
@@ -2403,36 +2411,33 @@ pub fn vswitch_ramp(
     latched: Option<bool>,
     transition_frac: f64,
 ) -> (f64, f64, f64, f64) {
-    let (ramp_off, ramp_on) = match latched {
-        None => (voff, von),
-        Some(on) => {
-            // ONE-SIDED, anchored exactly on the live threshold, with the ramp
-            // lying on the side the relay is moving TOWARD. An open relay is at
-            // exactly `roff` at `von` and reaches `ron` at `von + w`; a closed one
-            // is at exactly `ron` at `voff` and reaches `roff` at `voff - w`.
-            //
-            // Anchored rather than centred because the threshold is a strict
-            // inequality in the model and in ngspice ("closed WHEN the control
-            // passes von"), so at the threshold itself the relay is still in its
-            // old state. A centred ramp put the half-conductance point there and
-            // disagreed maximally with the oracle at exactly the one control
-            // voltage the deck cares about (measured on `switch_sw_thresholds`:
-            // 0.99 relative error at VC = 2.5 V and nowhere else).
-            //
-            // It also makes the residual timing error one-signed: the switch can
-            // now only ever act LATE, by at most `w / dv_ctrl_dt`, never early.
-            // Turning on early is the failure that cost 7.1 relative on the
-            // synapse array, because it hands the load current before the circuit
-            // being modelled would have.
-            let w = (transition_frac * (von - voff).abs()).max(1e-12)
-                * if von >= voff { 1.0 } else { -1.0 };
-            if on {
-                (voff - w, voff)
-            } else {
-                (von, von + w)
-            }
+    let (ramp_off, ramp_on) = latched.map_or((voff, von), |on| {
+        // ONE-SIDED, anchored exactly on the live threshold, with the ramp
+        // lying on the side the relay is moving TOWARD. An open relay is at
+        // exactly `roff` at `von` and reaches `ron` at `von + w`; a closed one
+        // is at exactly `ron` at `voff` and reaches `roff` at `voff - w`.
+        //
+        // Anchored rather than centred because the threshold is a strict
+        // inequality in the model and in ngspice ("closed WHEN the control
+        // passes von"), so at the threshold itself the relay is still in its
+        // old state. A centred ramp put the half-conductance point there and
+        // disagreed maximally with the oracle at exactly the one control
+        // voltage the deck cares about (measured on `switch_sw_thresholds`:
+        // 0.99 relative error at VC = 2.5 V and nowhere else).
+        //
+        // It also makes the residual timing error one-signed: the switch can
+        // now only ever act LATE, by at most `w / dv_ctrl_dt`, never early.
+        // Turning on early is the failure that cost 7.1 relative on the
+        // synapse array, because it hands the load current before the circuit
+        // being modelled would have.
+        let w = (transition_frac * (von - voff).abs()).max(1e-12)
+            * if von >= voff { 1.0 } else { -1.0 };
+        if on {
+            (voff - w, voff)
+        } else {
+            (von, von + w)
         }
-    };
+    });
     let width = ramp_on - ramp_off;
     let width = if width == 0.0 { 1e-12 } else { width };
     // q = 0 at `ramp_off`, 1 at `ramp_on`; the division carries the orientation.
@@ -2468,6 +2473,7 @@ pub fn vswitch_latched(
     latch?.get(&id).copied()
 }
 
+#[allow(clippy::similar_names)] // self/sibling pairs: vmid/svmid, span/sspan
 fn stamp_vswitch<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2538,8 +2544,7 @@ fn stamp_vswitch<S: StampSink>(
         let vctrl_old = ctx.v_prev(cp) - ctx.v_prev(cn);
         let u_new = 3.0 * (vctrl_raw - vmid) / span;
         let u_old = 3.0 * (vctrl_old - vmid) / span;
-        const MAX_DU: f64 = 1.0;
-        let du = (u_new - u_old).clamp(-MAX_DU, MAX_DU);
+        let du = (u_new - u_old).clamp(-1.0, 1.0); // at most one transition width
         vmid + (u_old + du) * span / 3.0
     } else {
         vctrl_raw
@@ -2695,13 +2700,10 @@ pub fn opamp_transient_output(
     // so a follower solves exactly to ((1-α)v_prev + αAvin)/(1+αA), factor
     // (1-α)/(1+αA) in [0,1) for every dt, so a coarse dt costs edge accuracy,
     // not stability.)
-    let alpha = match pole {
-        Some(p) => {
-            let tau = 1.0 / (std::f64::consts::TAU * p);
-            1.0 - (-dt / tau).exp()
-        }
-        None => 1.0,
-    };
+    let alpha = pole.map_or(1.0, |p| {
+        let tau = 1.0 / (std::f64::consts::TAU * p);
+        1.0 - (-dt / tau).exp()
+    });
     // Lag the RAW target, then saturate; ∂v_out/∂target is α while the output
     // is free and 0 the moment a rail or the slew clip pins it.
     let lagged = (target - v_prev).mul_add(alpha, v_prev);
@@ -3131,8 +3133,8 @@ mod tests {
         assert!(m.is.mul_add(40.0f64.exp(), i_deep).abs() < 1e-6 * m.is * 40.0f64.exp());
         let m_inf = DiodeModel::default();
         let (i_rev, g_rev) = diode_eval(&m_inf, -100.0, 27.0, false);
-        assert_eq!(i_rev, -m_inf.is);
-        assert_eq!(g_rev, m_inf.is / nvt * 1e-3);
+        assert_eq!(i_rev.to_bits(), (-m_inf.is).to_bits());
+        assert_eq!(g_rev.to_bits(), (m_inf.is / nvt * 1e-3).to_bits());
     }
 
     fn one_diode(model: DiodeModel) -> Circuit {
@@ -3153,6 +3155,7 @@ mod tests {
     /// history RHS) for charge-carrying diode and BJT models, and leaves
     /// charge-free models bit-identical.
     #[test]
+    #[allow(clippy::float_cmp)] // exact: the toggle must leave or change stamps bitwise
     fn junction_caps_toggle_changes_only_charge_carrying_stamps() {
         let diode_stamp = |model: DiodeModel, junction_caps: bool| {
             let c = one_diode(model);
@@ -3272,14 +3275,14 @@ mod tests {
         let (_, m_off, _, _) = run(model, false);
         assert_eq!(layout_on.n_nodes, 2 + 3);
         assert_eq!(
-            at(&m_on, 0, 0),
-            1.0 / 100.0,
+            at(&m_on, 0, 0).to_bits(),
+            (1.0f64 / 100.0).to_bits(),
             "external base row carries only 1/rb"
         );
-        assert!(at(&m_off, 0, 0) != at(&m_on, 0, 0));
+        assert_ne!(at(&m_off, 0, 0).to_bits(), at(&m_on, 0, 0).to_bits());
         assert_eq!(
-            at(&m_off, 2, 2),
-            1.0,
+            at(&m_off, 2, 2).to_bits(),
+            1.0f64.to_bits(),
             "toggle OFF pins each internal unknown"
         );
 
@@ -3294,6 +3297,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names, clippy::float_cmp)] // q_be/q_bc junction charges; exact cap identity
     fn bjt_charge_is_integral_of_cap() {
         let m = bjt_charge_model();
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
@@ -3342,6 +3346,7 @@ mod tests {
     /// `1 - vbc/VAF - vbe/VAR` (shrinking ic); the base current is untouched;
     /// VAR = ∞ reproduces the VAF-only analytic collector current.
     #[test]
+    #[allow(clippy::similar_names)] // fb/fc residuals for the inf/fin models
     fn bjt_var_scales_transport_current() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
         let (vb, vc) = (0.65, 3.0);
@@ -3371,6 +3376,7 @@ mod tests {
     /// The vbc limiter uses the REVERSE critical voltage (nr·Vt), so with
     /// nf != nr a step below the nr-built vcrit passes unlimited.
     #[test]
+    #[allow(clippy::float_cmp)] // exact: pnjlim passes an unlimited step through untouched
     fn bjt_vbc_limiter_uses_reverse_vcrit() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
         let m = BjtModel {
@@ -3401,6 +3407,7 @@ mod tests {
     /// gm == d id/d vgs by finite difference, for signal- and power-scale
     /// beta, with and without CLM, in saturation and triode.
     #[test]
+    #[allow(clippy::while_float)] // sweeps vov across a float grid
     fn mos_channel_id_and_gm_continuous_across_vth() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
         for &(beta, nsub, lambda, vds) in &[
@@ -3458,14 +3465,15 @@ mod tests {
         );
         let sq = 0.5 * beta * 0.5 * 0.5;
         assert!(((f(0.5, 2.0).0 - sq) / sq).abs() < 1e-3);
-        assert_eq!(f(-0.1, 0.0).0, 0.0);
-        assert_eq!(f(0.5, 0.0).0, 0.0);
+        assert!(f(-0.1, 0.0).0 == 0.0);
+        assert!(f(0.5, 0.0).0 == 0.0);
     }
 
     /// Forward-difference partials match analytic derivatives (exact on the
     /// linear term, within the reltol-driven truncation on the curved one),
     /// and NaN/INF/eval faults come back as Err with `vals` restored.
     #[test]
+    #[allow(clippy::float_cmp)] // exact: the fault path restores the stored value
     fn fd_partials_match_analytic_and_report_faults() {
         let expr =
             CompiledExpr::compile("2.0*__d0 + 100.0*math::tanh(5.0*__d1) + 0.1*time").unwrap();
@@ -3512,6 +3520,7 @@ mod tests {
     /// uniform grid, exact on quadratics for any step ratio (where uniform
     /// coefficients are not), and second-order on an alternating grid.
     #[test]
+    #[allow(clippy::while_float)] // marches t to the end time on a float grid
     fn gear2_variable_step_coefficients() {
         for &dt in &[
             1e-12,

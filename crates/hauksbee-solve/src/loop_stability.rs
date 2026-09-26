@@ -74,27 +74,31 @@ impl<'a> LoopStability<'a> {
     /// signal is subtracted at the error node), so a stable single-pole loop
     /// reads ~+90 deg phase margin rather than appearing inverted. Magnitude is
     /// unchanged; only the phase carries the 180 deg of the convention.
+    ///
+    /// # Errors
+    ///
+    /// [`SolveError::invalid`] when `output_node` is not in the response, or
+    /// the response has no points.
     pub fn from_response(
         resp: &'a AcResponse,
         circuit: &Circuit,
         output_node: &str,
     ) -> SolveResult<Self> {
+        let missing = || {
+            SolveError::invalid(format!(
+                "node '{output_node}' not found in AC response (cannot measure loop gain)"
+            ))
+        };
         let mut bode = Vec::with_capacity(resp.points.len());
         for p in &resp.points {
-            let v = p.node(circuit, output_node).ok_or_else(|| {
-                SolveError::invalid(format!(
-                    "node '{output_node}' not found in AC response (cannot measure loop gain)"
-                ))
-            })?;
+            let v = p.node(circuit, output_node).ok_or_else(missing)?;
             // Loop gain T = -V_out: magnitude same, phase + 180 deg.
             let t = -v;
             let mag = t.norm();
             bode.push((p.freq, 20.0 * mag.max(1e-300).log10(), t.arg().to_degrees()));
         }
         if bode.is_empty() {
-            return Err(SolveError::invalid(format!(
-                "node '{output_node}' not found in AC response (cannot measure loop gain)"
-            )));
+            return Err(missing());
         }
         Ok(LoopStability {
             bode,
@@ -132,6 +136,7 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
     let mut prev = bode[0].2;
     let mut offset = 0.0;
     phase.push(prev);
+    #[allow(clippy::while_float)] // each pass moves ph 360 deg toward prev, so both loops end
     for p in &bode[1..] {
         let mut ph = p.2 + offset;
         while ph - prev > 180.0 {
@@ -185,7 +190,7 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
     for i in 1..bode.len() {
         let p0 = phase[i - 1] + 180.0;
         let p1 = phase[i] + 180.0;
-        if p0.signum() != p1.signum() && p0 != p1 {
+        if p0.signum() != p1.signum() && p0 - p1 != 0.0 {
             let frac = p0 / (p0 - p1);
             let f0 = bode[i - 1].0;
             let f1 = bode[i].0;
@@ -195,13 +200,9 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
             crossings.push((fp, m));
         }
     }
-    let chosen = match gain_crossover_hz {
-        Some(fc) => crossings
-            .iter()
-            .find(|&&(fp, _)| fp >= fc)
-            .or_else(|| crossings.first()),
-        None => crossings.first(),
-    };
+    let chosen = gain_crossover_hz
+        .and_then(|fc| crossings.iter().find(|&&(fp, _)| fp >= fc))
+        .or_else(|| crossings.first());
     let (phase_crossover_hz, gain_margin_db) = match chosen {
         Some(&(fp, m)) => (Some(fp), Some(-m)),
         None => (None, None),
@@ -349,13 +350,10 @@ mod tests {
         );
         // Only -180 deg crossing: -170 -> -190 across 1e4..1e5, frac = 0.5.
         let fp = m.phase_crossover_hz.unwrap();
-        let expect_fp = 10f64.powf(4.5);
-        assert!((fp - expect_fp).abs() / expect_fp < 1e-9, "fp={fp}");
+        let want_fp = 10f64.powf(4.5);
+        assert!((fp - want_fp).abs() / want_fp < 1e-9, "fp={fp}");
         let gm = m.gain_margin_db.unwrap();
-        let expect_gm = -0.5f64.mul_add(-15.0, -10.0); // 17.5 dB
-        assert!(
-            (gm - expect_gm).abs() < 1e-9,
-            "gm={gm} expected {expect_gm}"
-        );
+        let want_gm = -0.5f64.mul_add(-15.0, -10.0); // 17.5 dB
+        assert!((gm - want_gm).abs() < 1e-9, "gm={gm} expected {want_gm}");
     }
 }

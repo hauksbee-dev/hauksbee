@@ -69,6 +69,12 @@ pub struct AcSpec {
 impl AcSpec {
     /// Parse a `<fstart>:<fstop>:<points>` triple (the CLI surface). An optional
     /// trailing `:lin` selects linear spacing; default is per-decade.
+    ///
+    /// # Errors
+    ///
+    /// [`SolveError::invalid`] when the triple is malformed: wrong field count,
+    /// an unparsable number or sweep suffix, `fstart`/`fstop` not satisfying
+    /// `0 < fstart < fstop`, or zero points.
     pub fn parse(s: &str) -> SolveResult<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() < 3 || parts.len() > 4 {
@@ -121,6 +127,8 @@ impl AcSpec {
 
     /// The list of frequencies (Hz) this sweep visits.
     #[must_use]
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)] // point counts are small
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)] // steps: ceil of a positive count
     pub fn frequencies(&self) -> Vec<f64> {
         match self.sweep {
             Sweep::Linear => {
@@ -182,7 +190,7 @@ impl AcPoint {
     #[must_use]
     pub fn node(&self, circuit: &Circuit, name: &str) -> Option<Complex64> {
         for id in 0..circuit.node_count() {
-            if circuit.node_name(NodeId(id as u32)) == name {
+            if circuit.node_name(crate::node_id(id)) == name {
                 return self.node_phasor.get(id).copied();
             }
         }
@@ -231,6 +239,12 @@ impl AcAnalysis {
     /// is present, only that source is driven and other independent sources are
     /// AC-grounded. Otherwise every independent voltage / current source is
     /// driven with unit AC amplitude for backwards compatibility.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a failed DC operating point, refuses a behavioral source whose
+    /// linearization faults, and reports a singular complex system at any
+    /// frequency.
     pub fn run(&self, circuit: &Circuit, spec: &AcSpec) -> SolveResult<AcResponse> {
         // 1. DC operating point (reusing the real solver verbatim). AC linearizes
         // around the ordinary DC bias and must IGNORE initial conditions, a cap
@@ -256,7 +270,7 @@ impl AcAnalysis {
             // Map unknowns back to node phasors (ground = 0).
             let mut node_phasor = vec![Complex64::new(0.0, 0.0); n_nodes];
             for (node, phasor) in node_phasor.iter_mut().enumerate().skip(1) {
-                if let Some(idx) = ws.layout.node(NodeId(node as u32)) {
+                if let Some(idx) = ws.layout.node(crate::node_id(node)) {
                     *phasor = x[idx];
                 }
             }
@@ -353,7 +367,7 @@ impl OperatingPoint {
         let n = circuit.node_count();
         let mut node_v = vec![0.0; n];
         for (node, v) in node_v.iter_mut().enumerate().skip(1) {
-            if let Some(idx) = ws.layout.node(NodeId(node as u32)) {
+            if let Some(idx) = ws.layout.node(crate::node_id(node)) {
                 *v = ws.x[idx];
             }
         }
@@ -376,6 +390,7 @@ impl OperatingPoint {
 }
 
 /// Stamp one device's small-signal model into the complex system at `w`.
+#[allow(clippy::too_many_lines, clippy::similar_names)] // one arm per device kind
 fn stamp_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -453,10 +468,10 @@ fn stamp_ac(
             // The junction, not the terminals: with a series resistance the
             // small-signal model must linearise about the same operating point
             // the DC solve settled at, or the pole moves with `rs`.
-            let vd = match layout.diode_internal(id) {
-                Some(i) => op.x[i] - op.v(*k),
-                None => op.v(*a) - op.v(*k),
-            };
+            let vd = layout
+                .diode_internal(id)
+                .map_or_else(|| op.v(*a), |i| op.x[i])
+                - op.v(*k);
             let (idc, gd_raw) =
                 crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
             let gd = gd_raw.max(opts.gmin);
@@ -711,7 +726,7 @@ fn stamp_ac(
                 match crate::stamp::behavioral_eval_partials(expr, deps, &mut vals, 0.0, opts) {
                     Ok((_f0, partials)) => partials,
                     Err(detail) => {
-                        crate::stamp::note_behavioral_fault(name, detail);
+                        crate::stamp::note_behavioral_fault(name, &detail);
                         return;
                     }
                 };
@@ -751,7 +766,9 @@ fn stamp_ac(
 
 /// Whether the circuit carries a dedicated AC injection source (a `Vsource` /
 /// `Isource` named `VINJ`/`VLOOP`/`VAC`/`IINJ`/`ILOOP`/`IAC`, or a `_VINJ`-style
-/// suffix). When false, [`AcAnalysis::run`] drives EVERY independent source with
+/// suffix).
+///
+/// When false, [`AcAnalysis::run`] drives EVERY independent source with
 /// unit AC (a superposition, not a single-input transfer function) so the
 /// caller should warn that the sweep has no chosen injection point.
 #[must_use]
@@ -791,7 +808,9 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
 }
 
 /// BJT small-signal model at the bias: input conductances gpi (b-e), gmu (b-c),
-/// output go (c-e), and transconductance gm (ic vs vbe). This mirrors the
+/// output go (c-e), and transconductance gm (ic vs vbe).
+///
+/// This mirrors the
 /// Gummel-Poon tangents the transient stamp computes, frozen at the OP,
 /// including the ohmic-resistance additions: the ohmic rb/re/rc between external and
 /// internal nodes (with the tangents relocated onto the internal nodes,
@@ -799,6 +818,7 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
 /// plus diffusion capacitance at the bias) when the model stores charge, an
 /// AC answer without them would silently miss the poles the transient model
 /// has. Default models add exactly 0.0j on the external nodes: bit-identical.
+#[allow(clippy::similar_names)] // names follow SPICE junction notation (vbe/vbc)
 fn stamp_bjt_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -838,7 +858,7 @@ fn stamp_bjt_ac(
             }
         }
     }
-    let (ci, bi, ei) = (eff[0], eff[1], eff[2]);
+    let [ci, bi, ei] = eff;
 
     let vbe = sign * (op.vx(bi) - op.vx(ei));
     let vbc = sign * (op.vx(bi) - op.vx(ci));
@@ -849,18 +869,7 @@ fn stamp_bjt_ac(
     // SGP base-charge factor q1_inv = 1/qb = 1 - vbc/VAF - vbe/VAR (see the
     // transient stamp for the inversion this arc fixed and for the reverse
     // Early term; identity for infinite vaf AND var).
-    let early = if opts.effects.early_effect {
-        let mut e = 1.0;
-        if model.vaf.is_finite() {
-            e -= vbc / model.vaf;
-        }
-        if model.var.is_finite() {
-            e -= vbe / model.var;
-        }
-        e
-    } else {
-        1.0
-    };
+    let early = crate::stamp::bjt_early(model, opts.effects.early_effect, vbe, vbc);
     let q1_inv = early.max(0.1);
 
     // gpi/gmu UNFLOORED, exactly like the transient stamp (stamp.rs floors
@@ -883,16 +892,7 @@ fn stamp_bjt_ac(
         let cr = is * (er - 1.0);
         // q1_inv's own partials, exactly the transient exact-tangent terms.
         let early_free = opts.effects.early_effect && early > 0.1;
-        let early_deriv = if early_free && model.vaf.is_finite() {
-            -(cf - cr) / model.vaf
-        } else {
-            0.0
-        };
-        let var_deriv = if early_free && model.var.is_finite() {
-            -(cf - cr) / model.var
-        } else {
-            0.0
-        };
+        let (early_deriv, var_deriv) = crate::stamp::bjt_early_partials(model, early_free, cf, cr);
         let gc_be = gm + var_deriv;
         let gc_bc = (-gir).mul_add(q1_inv, -gmu) + early_deriv;
         stamp_transconductance(sys, ci, ei, bi, ei, gc_be);
@@ -921,6 +921,11 @@ fn stamp_bjt_ac(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::many_single_char_names
+)] // SPICE names
 fn stamp_mosfet_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -984,21 +989,12 @@ fn stamp_mosfet_ac(
     // Body-effect threshold at the OP, mirroring the transient stamp; gamma-
     // free models take the plain-vto path bit-identically.
     let bulk = b.unwrap_or(s);
-    let mut vth = model.vto;
-    let mut dvth_dvbs = 0.0;
     let body_effect = model.gamma > 0.0 && b.is_some();
-    if body_effect {
-        let vbs_f = sign.mul_add(op.v(bulk), -vs);
-        let phi = model.phi.max(1e-6);
-        let arg = phi - vbs_f;
-        if arg > 0.0 {
-            let sq = arg.sqrt();
-            vth = model.gamma.mul_add(sq - phi.sqrt(), model.vto);
-            dvth_dvbs = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
-        } else {
-            vth = model.gamma.mul_add(0.0 - phi.sqrt(), model.vto);
-        }
-    }
+    let (vth, dvth_dvbs) = if body_effect {
+        crate::stamp::mos_body_vth(model, sign.mul_add(op.v(bulk), -vs))
+    } else {
+        (model.vto, 0.0)
+    };
     let nsub = model.n_sub.max(1.0);
 
     // Small-signal channel tangent: the SAME shared C1 blend the transient
@@ -1242,8 +1238,8 @@ mod ac_spec_suffix_tests {
     #[test]
     fn engineering_suffixes_parse_like_spice() {
         let spec = AcSpec::parse("1k:10meg:20").expect("suffixes are first-class");
-        assert_eq!(spec.fstart, 1e3);
-        assert_eq!(spec.fstop, 10e6);
+        assert_eq!(spec.fstart.to_bits(), 1e3f64.to_bits());
+        assert_eq!(spec.fstop.to_bits(), 10e6f64.to_bits());
         assert_eq!(spec.points, 20);
         // Plain floats still work, and garbage still fails loudly.
         assert!(AcSpec::parse("100:1e6:10").is_ok());

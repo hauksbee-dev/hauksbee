@@ -273,6 +273,7 @@ impl LinearIsland {
     /// reference engine on every thermal sweep. Callers with temperature
     /// effects off pass TNOM (27), which makes the derating a no-op.
     #[must_use]
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)] // one reduction; matrix notation
     pub fn compile(circuit: &Circuit, island: &Island, gmin: f64, temp_c: f64) -> Option<Self> {
         if !island.linear {
             return None;
@@ -374,7 +375,7 @@ impl LinearIsland {
                 // and the only shape that survives perfect coupling. Modeling
                 // k < 1 groups in the reduction is a later optimization with
                 // its own exactness gate (the E/G precedent).
-                Device::Coupling { .. } => return None,
+                //
                 // Nonlinear / event-driven kinds cannot appear in a linear
                 // island (the `island.linear` gate above already returned
                 // `None`), but the match stays exhaustive so a future variant
@@ -382,7 +383,8 @@ impl LinearIsland {
                 // nonlinear by construction (`is_linear() == false` taints the
                 // island), so it can only reach this walk through that gate,
                 // and refusing is still the only honest answer here.
-                Device::Diode { .. }
+                Device::Coupling { .. }
+                | Device::Diode { .. }
                 | Device::Bjt { .. }
                 | Device::Mosfet { .. }
                 | Device::VSwitch { .. }
@@ -451,10 +453,8 @@ impl LinearIsland {
                 a, b, ohms, tc1, ..
             } = &circuit.devices[id.0 as usize]
             {
-                let r = match tc1 {
-                    Some(tc) => *ohms * (1.0 + tc * (temp_c - 27.0)),
-                    None => *ohms,
-                };
+                // Same fused form as `stamp::resistor_value`, so both paths agree bit-for-bit.
+                let r = tc1.map_or(*ohms, |tc| *ohms * tc.mul_add(temp_c - 27.0, 1.0));
                 // Non-positive resistance = SHORT (matching the interpreted
                 // stamp): clamp to the shared 1e-6 Ω floor and stamp a stiff
                 // conductance rather than skipping, which would silently turn
@@ -632,10 +632,11 @@ impl LinearIsland {
 
     /// Ensure the discrete update for `dt` is prepared. Small islands build a
     /// dense `[Ad|Bd]`; large islands prepare matrix-free propagator parameters.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // norm > 0.5: small exponent
     pub fn ensure_cache(&mut self, dt: f64) {
         if self.uses_matrix_free() {
             if let Some(mf) = &self.mf {
-                if mf.dt == dt {
+                if mf.dt.to_bits() == dt.to_bits() {
                     return;
                 }
             }
@@ -655,7 +656,7 @@ impl LinearIsland {
             return;
         }
         if let Some(c) = &self.cache {
-            if c.dt == dt {
+            if c.dt.to_bits() == dt.to_bits() {
                 return;
             }
         }
@@ -675,6 +676,7 @@ impl LinearIsland {
     }
 
     /// Dense advance: `x <- Ad x + Bd u` (one mat-vec). Small islands.
+    #[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
     fn step_dense(&self, x: &mut [f64], u: &[f64]) {
         let cache = self.cache.as_ref().expect("ensure_cache first");
         let n = self.states.len();
@@ -703,6 +705,8 @@ impl LinearIsland {
     /// augmenting: track `[y; 1]` with the constant row, i.e. apply the Taylor
     /// recurrence to `(A y + d)`. Concretely each substep does
     /// `y <- y + sum_{k>=1} (h^k/k!) A^{k-1}(A y + d)`.
+    #[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
+    #[allow(clippy::cast_precision_loss)] // substep and Taylor-order counts are tiny
     fn step_matrix_free(&self, x: &mut [f64], u: &[f64]) {
         let mf = self.mf.as_ref().expect("ensure_cache first");
         let n = self.states.len();
@@ -747,6 +751,7 @@ impl LinearIsland {
 
     /// Reconstruct free-node voltages from state and inputs into `out_v`
     /// (indexed by island-local free-node index).
+    #[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
     pub fn node_voltages(&self, x: &[f64], u: &[f64], out_v: &mut [f64]) {
         let n = self.states.len();
         let m = self.n_inputs_total();
@@ -850,6 +855,7 @@ impl DenseLu {
 
 /// Discretize `(A,B)` over `dt` via the augmented matrix exponential (Van Loan):
 /// `expm([[A,B],[0,0]] dt) = [[Ad, Bd],[0, I]]`.
+#[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
 fn discretize(a: &[f64], b: &[f64], n: usize, m: usize, dt: f64) -> (Vec<f64>, Vec<f64>) {
     let dim = n + m;
     let mut aug = vec![0.0f64; dim * dim];
@@ -878,6 +884,7 @@ fn discretize(a: &[f64], b: &[f64], n: usize, m: usize, dt: f64) -> (Vec<f64>, V
 /// Dense matrix exponential by scaling-and-squaring with a truncated Taylor
 /// core. Scaling drives `||A/2^s||_1 <= 0.5`, where ~18 Taylor terms are
 /// machine-exact; squaring `s` times recovers `exp(A)`.
+#[allow(clippy::cast_possible_truncation)] // norm > 0.5: log2 is a small finite exponent
 fn expm(a: &[f64], n: usize) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
@@ -908,6 +915,7 @@ fn expm(a: &[f64], n: usize) -> Vec<f64> {
 }
 
 /// Taylor series `I + A + A^2/2! + ...` for a well-scaled `A`.
+#[allow(clippy::cast_precision_loss)] // k <= terms (~18)
 fn expm_taylor(a: &[f64], n: usize, terms: usize) -> Vec<f64> {
     let mut result = identity(n);
     // `power` holds A^k; `coef` holds 1/k!.
