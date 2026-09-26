@@ -23,7 +23,7 @@ fn main() {
         let expected = format!("v{version}");
         assert!(
             tag == expected,
-            "HAUKSBEE_RELEASE_TAG must equal this package version ({expected})"
+            "HAUKSBEE_RELEASE_TAG must equal v followed by this package's CARGO_PKG_VERSION"
         );
         println!("cargo:rustc-env=GIT_TAG={tag}");
     }

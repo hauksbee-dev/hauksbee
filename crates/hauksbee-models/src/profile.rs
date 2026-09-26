@@ -186,7 +186,7 @@ impl LoadProfile {
     /// most 1 ns. A solver chunk driven by this sees the profile's own di/dt;
     /// holding one sample for the whole chunk turns every edge into a step,
     /// which drives an impulse through any series inductance on the rail.
-    /// Corners within [`PWL_SNAP_S`] of each other or of the window's ends
+    /// Corners within `PWL_SNAP_S` of each other or of the window's ends
     /// are one instant: a corner that lands on a chunk boundary up to rounding
     /// steps between chunks, as a held sample would, instead of leaving the
     /// solver an attosecond segment no step can resolve. `None` when the window

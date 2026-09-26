@@ -195,7 +195,7 @@ impl Default for CapturePolicy {
 ///
 /// # Errors
 ///
-/// [`SolveError::refused`] when `opts` uses adaptive step control.
+/// `SolveError::refused` when `opts` uses adaptive step control.
 pub fn execute_stiff_group(
     sub: &Circuit,
     candidates: &[NodeId],
@@ -863,7 +863,7 @@ pub fn execute_stiff_group_held_capped(
 ///
 /// # Errors
 ///
-/// [`SolveError::refused`] when `opts` uses adaptive step control.
+/// `SolveError::refused` when `opts` uses adaptive step control.
 #[allow(clippy::too_many_lines)] // one balance/capture composition loop
 pub fn execute_composed_group(
     sub: &Circuit,

@@ -233,7 +233,7 @@ fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
 ///
 /// # Errors
 ///
-/// Any error from loading `board` ([`runner::load_board`]).
+/// Any error from loading `board` (`runner::load_board`).
 pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError> {
     render_spec_at_with_run_hint(board, spec_dir, &format!("{}.toml", board_stem(board)))
 }

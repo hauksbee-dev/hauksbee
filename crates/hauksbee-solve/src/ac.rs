@@ -72,7 +72,7 @@ impl AcSpec {
     ///
     /// # Errors
     ///
-    /// [`SolveError::invalid`] when the triple is malformed: wrong field count,
+    /// `SolveError::invalid` when the triple is malformed: wrong field count,
     /// an unparsable number or sweep suffix, `fstart`/`fstop` not satisfying
     /// `0 < fstart < fstop`, or zero points.
     pub fn parse(s: &str) -> SolveResult<Self> {

@@ -1049,7 +1049,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("secrets.HAUKSBEE_READ_TOKEN", generated)
         self.assertNotIn("path: .hauksbee-action", generated)
         self.assertIn(
-            "uses: hauksbee-dev/hauksbee/integrations/github-action@{}", generated
+            "uses: hauksbee-dev/hauksbee/integrations/github-action@{release_commit}", generated
         )
 
         frontend_workflow = (ROOT / "frontend/src/lib/ci-workflow.ts").read_text()

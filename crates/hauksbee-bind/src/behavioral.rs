@@ -1448,7 +1448,7 @@ impl BehavioralDevice {
     }
 
     /// The converter's per-chunk bookkeeping (the loop itself is in-circuit,
-    /// see [`Self::stamp_converter`]): arm it with its input-current limit, or
+    /// see `Self::stamp_converter`): arm it with its input-current limit, or
     /// disarm it while the enable input is low, a needed feedback pin or
     /// programming evidence is missing; and record the input current the
     /// in-circuit draw took (none once disarmed: the gated draw is zero from

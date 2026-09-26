@@ -119,13 +119,13 @@ impl SelectedPage {
 /// matters. Codex's own `--sandbox workspace-write` confines WRITES but not
 /// reads: a real run under it searched the home directory, another project and
 /// `/tmp`, and read an installed codex skill. So in its workspace-write modes
-/// codex gets a named permission profile instead ([`codex_confinement`]):
+/// codex gets a named permission profile instead (`codex_confinement`):
 /// shell commands may read this directory, the OS/runtime paths codex calls
-/// `:minimal`, the package prefixes in [`CONFINED_READ_ROOTS`] and the checker
+/// `:minimal`, the package prefixes in `CONFINED_READ_ROOTS` and the checker
 /// executable, and nothing under home, `/tmp` or `$TMPDIR` (`read-only` mode gets
 /// the same profile with the workspace read-only). Claude Code gets
 /// `--restricted` file tools and a Bash sandbox denying home, user, volume and
-/// temp roots ([`claude_confinement`]); its shell can still read other system
+/// temp roots (`claude_confinement`); its shell can still read other system
 /// paths. agy gets only its own `--sandbox`, which hauksbee cannot verify; codex's
 /// `danger-full-access` mode and custom commands are NOT confined by hauksbee.
 /// The CLI process itself still reads
@@ -2851,7 +2851,7 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 /// config and would silently decide how good the extraction is.
 ///
 ///   * codex: in every mode but `danger-full-access` (`--sandbox`, unconfined)
-///     the read-confining [`codex_confinement`] profile, its workspace read-only
+///     the read-confining `codex_confinement` profile, its workspace read-only
 ///     in `read-only` mode, plus `--approve-for-me` in that mode. Network is off
 ///     unless a mode or approval relaxes it. `skills.include_instructions=false`
 ///     keeps `$CODEX_HOME/skills` out of the model's context (the `skill_search`
@@ -2868,7 +2868,7 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 ///     sandbox is gone. It reads the PDF and page renders itself. `--restricted`
 ///     drops the operator's settings, CLAUDE.md, memory, agents, hooks and
 ///     skills (a wrapper's `--settings` still applies); `--tools` drops
-///     subagents and web access; [`claude_confinement`] sandboxes Bash reads;
+///     subagents and web access; `claude_confinement` sandboxes Bash reads;
 ///     background tasks, which keep `-p` alive, are off. Never
 ///     `--bare`: it skips the keychain, losing a subscription sign-in.
 ///   * agy: `--mode <mode> --sandbox ... --add-dir <sandbox>`, and the pointer as
@@ -2876,7 +2876,7 @@ fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
 ///     agy's own terminal sandbox (workspace-only files, no network, per its
 ///     docs); hauksbee cannot verify it or confine agy's file tools.
 ///
-/// Every CLI gets a PATH from [`scrub_path`] and the workspace as its cwd.
+/// Every CLI gets a PATH from `scrub_path` and the workspace as its cwd.
 /// This is the one place an agent CLI is launched (`model-extract`, the smoke
 /// test and `resource-extract` all come here), so confinement cannot drift.
 ///

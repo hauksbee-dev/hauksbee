@@ -77,7 +77,7 @@ impl<'a> LoopStability<'a> {
     ///
     /// # Errors
     ///
-    /// [`SolveError::invalid`] when `output_node` is not in the response, or
+    /// `SolveError::invalid` when `output_node` is not in the response, or
     /// the response has no points.
     pub fn from_response(
         resp: &'a AcResponse,

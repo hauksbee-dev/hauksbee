@@ -208,7 +208,7 @@ pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
 ///
 /// Never returns an error; the `Result` matches the `qemu`-feature signature.
 #[cfg(not(feature = "qemu"))]
-pub fn offer_esp_qemu_install(_backends: &[String]) -> anyhow::Result<()> {
+pub const fn offer_esp_qemu_install(_backends: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 

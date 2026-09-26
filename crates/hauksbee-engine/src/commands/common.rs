@@ -537,8 +537,9 @@ pub fn serve(
     anyhow::bail!(NO_SERVE)
 }
 
-/// Why this binary has no web server, and the one command that builds one. An
-/// exit code alone left the reader with nowhere to go; `serve` is a default
+/// Why this binary has no web server, and the one command that builds one.
+///
+/// An exit code alone left the reader with nowhere to go; `serve` is a default
 /// feature, so the fix is almost always "drop `--no-default-features`".
 #[cfg(not(feature = "serve"))]
 pub const NO_SERVE: &str = "hauksbee was built without the serve feature: rebuild it with \

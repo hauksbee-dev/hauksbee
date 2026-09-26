@@ -927,6 +927,8 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
 /// Espressif QEMU: use the native checksum-pinned `PowerShell` installer on
 /// Windows; elsewhere shell this binary's Rust installer. Both routes run as
 /// structurally owned child trees so downloads cannot survive a timeout.
+// Without `qemu` the progress sink goes unused; the signature is shared with the qemu shape.
+#[cfg_attr(not(feature = "qemu"), allow(clippy::needless_pass_by_ref_mut))]
 pub(crate) fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     #[cfg(not(feature = "qemu"))]
     {

@@ -105,14 +105,13 @@ fn live_launch_with_firmware_refuses_without_avr() {
     let launch = hauksbee_engine::commands::common::schematic_live_launcher();
     let board = include_bytes!("../../hauksbee-ci/examples/boards/blinky.kicad_pcb");
     let firmware = include_bytes!("../../hauksbee-ci/assets/firmware/demo.hex");
-    let error = match launch(
+    let Err(error) = launch(
         "blinky.kicad_pcb",
         board,
         Some(("demo.hex", firmware)),
         None,
-    ) {
-        Ok(_) => panic!("firmware must remain fail-closed without the AVR feature"),
-        Err(error) => error,
+    ) else {
+        panic!("firmware must remain fail-closed without the AVR feature")
     };
     assert!(
         error.contains("compiled without the `avr` feature"),

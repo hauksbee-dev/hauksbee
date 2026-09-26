@@ -525,6 +525,8 @@ fn name_list(names: &[String]) -> String {
 /// What a valid descriptor will NOT do. Each of these is a legitimate choice and
 /// a common accident, so they are notes and not findings: the point is that the
 /// author sees the consequence before a co-sim run reports it as a coverage hole.
+// Const-evaluable only in the no-backend shape, where the match is empty.
+#[allow(clippy::missing_const_for_fn)]
 fn soc_advisories(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
     #[cfg(any(feature = "renode", feature = "qemu"))]
     let mut out = Vec::new();

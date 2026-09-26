@@ -43,7 +43,7 @@ impl Probe {
     ///
     /// # Errors
     ///
-    /// [`SolveError::invalid`] for an empty or malformed probe.
+    /// `SolveError::invalid` for an empty or malformed probe.
     pub fn parse(s: &str) -> SolveResult<Self> {
         let t = s.trim();
         if t.is_empty() {
