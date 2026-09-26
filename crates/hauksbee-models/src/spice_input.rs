@@ -105,22 +105,13 @@ fn parse_dot_model(line: &str) -> Option<SpiceCard> {
 
     // The type token may be "NPN", "D", etc., or "NPN(IS=..." with a fused paren.
     let type_raw = tokens[2];
-    let (model_type, extra_params) = if let Some(paren_pos) = type_raw.find('(') {
-        // Fused: "D(IS=2.52N ...", split at the paren
-        let typ = type_raw[..paren_pos].to_uppercase();
-        let rest_of_type = &type_raw[paren_pos..]; // includes the '('
-        (typ, Some(rest_of_type))
-    } else {
-        (type_raw.to_uppercase(), None)
-    };
+    // Fused: "D(IS=2.52N ...", split at the paren; the fused part keeps its '('.
+    let (typ, fused) = type_raw.split_at(type_raw.find('(').unwrap_or(type_raw.len()));
+    let model_type = typ.to_uppercase();
 
     // Build the param string from everything after the type token
-    let rest = if let Some(extra) = extra_params {
-        // extra already starts with '('; append remaining tokens
-        format!("{} {}", extra, tokens[3..].join(" "))
-    } else {
-        tokens[3..].join(" ")
-    };
+    let rest = format!("{fused} {}", tokens[3..].join(" "));
+    let rest = rest.trim_start();
 
     // Strip surrounding parens if present
     let param_str = rest.trim_start_matches('(').trim_end_matches(')').trim();

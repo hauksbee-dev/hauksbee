@@ -643,17 +643,14 @@ impl Sensor {
                 Err(why) => return Some(assume(why)),
             };
         }
-        Some(
-            match self.address_selects.iter().find(|row| row.straps == levels) {
-                Some(row) => AddressChoice {
-                    address: row.address,
-                    assumed: None,
-                },
-                None => assume(format!(
-                    "the board's strap levels {levels:?} match no [[sensor.address_select]] row"
-                )),
-            },
-        )
+        let Some(row) = self.address_selects.iter().find(|row| row.straps == levels) else {
+            let why = "match no [[sensor.address_select]] row";
+            return Some(assume(format!("the board's strap levels {levels:?} {why}")));
+        };
+        Some(AddressChoice {
+            address: row.address,
+            assumed: None,
+        })
     }
 }
 

@@ -830,18 +830,17 @@ impl UnknownParam {
     /// claim about the future.
     #[must_use]
     pub fn message(&self) -> String {
-        match &self.suggestion {
-            Some(s) => format!(
-                "param '{}' is not read for this kind or output form; did you mean '{}'? \
-                 (unread params are silently ignored, so the default applies)",
-                self.name, s
-            ),
-            None => format!(
-                "param '{}' is not read for this kind or output form, so it is silently ignored; \
-                 remove it or check the spelling",
-                self.name
-            ),
-        }
+        let name = &self.name;
+        let Some(s) = &self.suggestion else {
+            return format!(
+                "param '{name}' is not read for this kind or output form, so it is silently \
+                 ignored; remove it or check the spelling"
+            );
+        };
+        format!(
+            "param '{name}' is not read for this kind or output form; did you mean '{s}'? \
+             (unread params are silently ignored, so the default applies)"
+        )
     }
 }
 

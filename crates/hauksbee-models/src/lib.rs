@@ -630,22 +630,21 @@ impl ModelLibrary {
             // and a models file that merely MENTIONS the token in prose would
             // otherwise be routed here and silently lose every model in it.
             let table = if name == "pin_rules" || src.contains("[[pin_rules]]") {
-                Some(self.pin_rules.load_toml_str(&src, true))
+                self.pin_rules.load_toml_str(&src, true)
             } else if name == "unmodelled"
                 || (src.contains("[[unmodelled]]") && !src.contains("[[models]]"))
             {
-                Some(self.unmodelled.load_toml_str(&src, true))
+                self.unmodelled.load_toml_str(&src, true)
             } else {
-                None
+                let source_name = path.display().to_string();
+                errors.extend(self.load_toml_str(&src, &source_name, layer).err());
+                continue;
             };
-            let result = match table {
-                Some(r) => r.map(drop).map_err(|message| ModelError::PinRules {
-                    file: name,
-                    message,
-                }),
-                None => self.load_toml_str(&src, &path.display().to_string(), layer),
+            let rules_error = |message| ModelError::PinRules {
+                file: name,
+                message,
             };
-            errors.extend(result.err());
+            errors.extend(table.err().map(rules_error));
         }
         errors
     }
@@ -705,6 +704,7 @@ impl ModelLibrary {
     /// are layer 40, the highest, and match by exact card name, so they are
     /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
+        use std::cmp::Reverse;
         // Layer 40: SPICE cards, match by card name against value and MPN.
         if let Some(card) = self.find_spice_match(q) {
             return self.resolution_from_spice(card, q.clone());
@@ -714,7 +714,6 @@ impl ModelLibrary {
         // regex constrainedness, smallest id) wins. The last two keys make
         // ties deterministic and independent of load order; the entries only
         // the id separates are reported as `tied`.
-        use std::cmp::Reverse;
         let rank = |le: &LayeredEntry| {
             let score = le.compiled.specificity_score(q);
             let (tier, layer) = (le.provenance.tier().priority(), le.layer.priority());
@@ -733,12 +732,13 @@ impl ModelLibrary {
             siblings.sort_by(|a, b| a.compiled.entry.id.cmp(&b.compiled.entry.id));
             let entries: Vec<&ModelEntry> = siblings.iter().map(|o| &o.compiled.entry).collect();
             let selection = family.map(|family| variants::select(family, &entries, q));
-            let chosen = match selection.as_ref().map(variants::Selection::bound) {
-                None => Some(le),
-                Some(bound) => siblings
+            let bound = selection.as_ref().map(variants::Selection::bound);
+            let named = |b| {
+                siblings
                     .into_iter()
-                    .find(|o| Some(o.compiled.entry.id.as_str()) == bound),
+                    .find(|o| Some(&*o.compiled.entry.id) == b)
             };
+            let chosen = bound.map_or(Some(le), named);
             let Some(le) = chosen else {
                 let open = Resolution::unresolved(q.clone());
                 return Resolution { selection, ..open };

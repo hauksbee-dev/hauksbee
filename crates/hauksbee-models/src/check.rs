@@ -10,17 +10,17 @@
 use std::fmt::Display;
 
 /// Finite and strictly positive: resistances, setpoints, limits, ratings.
-pub(crate) fn positive_finite(v: f64) -> bool {
+pub fn positive_finite(v: f64) -> bool {
     v.is_finite() && v > 0.0
 }
 
 /// Finite and non-negative: currents, times, thresholds that may be zero.
-pub(crate) fn nonneg_finite(v: f64) -> bool {
+pub fn nonneg_finite(v: f64) -> bool {
     v.is_finite() && v >= 0.0
 }
 
 /// An expression identifier: `[A-Za-z_][A-Za-z0-9_]*`.
-pub(crate) fn is_identifier(s: &str) -> bool {
+pub fn is_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     chars
         .next()
@@ -32,7 +32,7 @@ pub(crate) fn is_identifier(s: &str) -> bool {
 /// `[A-Za-z0-9_]` that starts with a letter or underscore, minus the sandbox's
 /// builtin function names. Conservative on purpose: numbers and operators are
 /// ignored, only undeclared *names* are worth flagging.
-pub(crate) fn expr_identifiers(expr: &str) -> impl Iterator<Item = &str> {
+pub fn expr_identifiers(expr: &str) -> impl Iterator<Item = &str> {
     const BUILTINS: &[&str] = &["math", "min", "max", "abs", "round", "floor", "ceil", "if"];
     expr.split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .filter(|tok| {
@@ -44,7 +44,7 @@ pub(crate) fn expr_identifiers(expr: &str) -> impl Iterator<Item = &str> {
 
 /// The problems one validation walk found, in the order they were found.
 #[derive(Debug, Default)]
-pub(crate) struct Problems(pub Vec<String>);
+pub struct Problems(pub Vec<String>);
 
 impl Problems {
     pub fn push(&mut self, msg: impl Into<String>) {

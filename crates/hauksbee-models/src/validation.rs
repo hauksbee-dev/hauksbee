@@ -1221,9 +1221,9 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
     let declared = entry.variant.as_ref().and_then(|v| v.package.as_deref());
     let named: Vec<&Pinout> = pinouts
         .iter()
-        .filter(|o| match declared {
-            Some(package) => plain(&o.package) == plain(package),
-            None => pinouts.len() == 1 || description.contains(&plain(&o.package)),
+        .filter(|o| match (declared, plain(&o.package)) {
+            (Some(package), own) => own == plain(package),
+            (None, own) => pinouts.len() == 1 || description.contains(&own),
         })
         .collect();
     // A description naming "SOT-23-5" also contains "SOT-23": the longer is meant.
@@ -1365,13 +1365,13 @@ pub fn kind_error_note(err_text: &str) -> Option<String> {
         return None;
     }
     let unknown = err_text.split('`').nth(1)?;
-    Some(match kind_suggestion(unknown) {
-        Some(s) => format!("unknown kind '{unknown}': did you mean '{s}'?"),
-        None => format!(
+    let Some(s) = kind_suggestion(unknown) else {
+        return Some(format!(
             "unknown kind '{unknown}'; valid kinds: {}",
             KIND_NAMES.join(", ")
-        ),
-    })
+        ));
+    };
+    Some(format!("unknown kind '{unknown}': did you mean '{s}'?"))
 }
 
 const SOURCE_KEYS: &str = "tier validation references uncertainty characteristic pinout";
@@ -1511,13 +1511,13 @@ mod tests {
     /// Refused: a merged unit role, a swapped Schmitt pair, a rail at a supply.
     #[test]
     fn merged_units_swapped_levels_and_supply_rails_are_refused() {
+        fn roles(s: &str) -> Vec<(&str, &str)> {
+            s.split(' ').filter_map(|r| r.split_once(':')).collect()
+        }
         let mut e = entry(
             ComponentKind::Opamp,
             &[("gain", 1e5), ("swing_lo", 0.02), ("swing_hi", 1.5)],
         );
-        fn roles(s: &str) -> Vec<(&str, &str)> {
-            s.split(' ').filter_map(|r| r.split_once(':')).collect()
-        }
         let dual = "4:vee 8:vcc 1:out_a 2:in_minus_a 3:in_plus_a 5:in_plus_b 6:in_minus_b 7:out_b";
         pins(&mut e, &roles(dual));
         accepts(&e);

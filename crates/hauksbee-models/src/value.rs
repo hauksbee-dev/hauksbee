@@ -616,10 +616,8 @@ fn unit_token(s: &str) -> Option<(String, &str)> {
 
 /// True when `rest` is empty or begins an ignorable trailing annotation.
 fn tail_is_annotation(rest: &str) -> bool {
-    match rest.chars().next() {
-        None => true,
-        Some(c) => c.is_whitespace() || c.is_ascii_digit() || is_annotation_start(c),
-    }
+    let annotation = |c: char| c.is_whitespace() || c.is_ascii_digit() || is_annotation_start(c);
+    rest.chars().next().is_none_or(annotation)
 }
 
 /// Characters that begin a tolerated trailing annotation (voltage rating,

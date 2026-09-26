@@ -56,6 +56,8 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const DEFAULT_API_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
+/// The key variable that, when exported, selects the API backend and names itself.
+const LLM_API_KEY_ENV: &str = "HAUKSBEE_LLM_API_KEY";
 
 /// What one agent CLI is called, what it defaults to, and what it accepts.
 ///
@@ -524,16 +526,13 @@ impl ExtractConfig {
             )
         })?;
         self.backend = Some(preset.backend);
-        match self.agent_mut(preset.backend) {
-            Some(agent) => {
-                agent.model = Some(preset.model.to_string());
-                agent.effort = Some(preset.effort.to_string());
-            }
-            None => {
-                self.api.model = Some(preset.model.to_string());
-                self.api.base_url = Some(preset.api_base.to_string());
-                self.api.api_key_env = Some(preset.api_key_env.to_string());
-            }
+        if let Some(agent) = self.agent_mut(preset.backend) {
+            agent.model = Some(preset.model.to_string());
+            agent.effort = Some(preset.effort.to_string());
+        } else {
+            self.api.model = Some(preset.model.to_string());
+            self.api.base_url = Some(preset.api_base.to_string());
+            self.api.api_key_env = Some(preset.api_key_env.to_string());
         }
         Ok(preset)
     }
@@ -572,25 +571,26 @@ impl ExtractConfig {
         };
 
         let [claude_code, agy, codex] = AGENTS.map(|spec| agent(&spec));
-        let (backend, backend_source) = if let Some(b) = flag_backend {
-            (b, BackendSource::Flag)
-        } else if let Some(b) = env(ENV_BACKEND).and_then(|v| v.parse::<Backend>().ok()) {
-            (b, BackendSource::Env(ENV_BACKEND))
-        } else if let Some(b) = self.backend {
-            (b, BackendSource::Config)
-        } else if env("HAUKSBEE_LLM_API_KEY").is_some() {
-            (Backend::Api, BackendSource::Env("HAUKSBEE_LLM_API_KEY"))
-        } else {
-            // Nothing installed: codex, so the error names one install command.
-            let found = [
-                (Backend::Codex, &codex),
-                (Backend::ClaudeCode, &claude_code),
-                (Backend::Agy, &agy),
-            ]
-            .into_iter()
-            .find(|(_, a)| host.find(&a.command).is_some())
-            .map(|(backend, _)| backend);
-            (found.unwrap_or(Backend::Codex), BackendSource::Auto)
+        let env_choice = env(ENV_BACKEND).and_then(|v| v.parse::<Backend>().ok());
+        let (backend, backend_source) = match (flag_backend, env_choice, self.backend) {
+            (Some(b), ..) => (b, BackendSource::Flag),
+            (None, Some(b), _) => (b, BackendSource::Env(ENV_BACKEND)),
+            (None, None, Some(b)) => (b, BackendSource::Config),
+            _ if env(LLM_API_KEY_ENV).is_some() => {
+                (Backend::Api, BackendSource::Env(LLM_API_KEY_ENV))
+            }
+            _ => {
+                // Nothing installed: codex, so the error names one install command.
+                let found = [
+                    (Backend::Codex, &codex),
+                    (Backend::ClaudeCode, &claude_code),
+                    (Backend::Agy, &agy),
+                ]
+                .into_iter()
+                .find(|(_, a)| host.find(&a.command).is_some())
+                .map(|(backend, _)| backend);
+                (found.unwrap_or(Backend::Codex), BackendSource::Auto)
+            }
         };
 
         Resolved {
@@ -614,11 +614,13 @@ impl ExtractConfig {
                 api_key_env: env("HAUKSBEE_API_KEY_ENV")
                     .or_else(|| self.api.api_key_env.clone())
                     .unwrap_or_else(|| {
-                        if env("HAUKSBEE_LLM_API_KEY").is_some() {
-                            "HAUKSBEE_LLM_API_KEY".to_string()
+                        let found = env(LLM_API_KEY_ENV).is_some();
+                        (if found {
+                            LLM_API_KEY_ENV
                         } else {
-                            DEFAULT_API_KEY_ENV.to_string()
-                        }
+                            DEFAULT_API_KEY_ENV
+                        })
+                        .to_string()
                     }),
             },
             env_overrides: KNOWN_ENV_VARS
@@ -1009,10 +1011,10 @@ impl Resolved {
     /// Tell every consent surface exactly what is about to read the datasheet.
     #[must_use]
     pub fn summary(&self) -> String {
-        let detail = match self.effort() {
-            Some(effort) => format!("{}, {effort} effort", self.model()),
-            None => format!("{} at {}", self.model(), self.api.base_url),
-        };
+        let detail = self.effort().map_or_else(
+            || format!("{} at {}", self.model(), self.api.base_url),
+            |effort| format!("{}, {effort} effort", self.model()),
+        );
         let mut routing = self
             .custom_command(self.backend)
             .map(|_| format!("; {}", self.sends_data_to(self.backend)))
@@ -1055,22 +1057,19 @@ pub fn availability(host: &dyn Host, resolved: &Resolved) -> Vec<BackendStatus> 
 impl Resolved {
     /// Inspect one effective backend without running it or checking sign-in.
     pub fn status(&self, host: &dyn Host, backend: Backend) -> BackendStatus {
-        let (available, detail) = match self.agent(backend) {
-            Some(a) => match host.find(&a.command) {
-                Some(path) => (true, path.display().to_string()),
-                None => (false, format!("executable `{}` was not found", a.command)),
-            },
-            None => {
-                let name = &self.api.api_key_env;
-                match host.var(name).filter(|v| !v.trim().is_empty()) {
-                    Some(_) => (true, format!("${name} is set")),
-                    None if is_local_url(&self.api.base_url) => (
-                        true,
-                        format!("local endpoint, no key needed (${name} unset)"),
-                    ),
-                    None => (false, format!("${name} is not set")),
-                }
-            }
+        let name = &self.api.api_key_env;
+        let key_set = host.var(name).is_some_and(|v| !v.trim().is_empty());
+        let (available, detail) = match (self.agent(backend), key_set) {
+            (Some(a), _) => host.find(&a.command).map_or_else(
+                || (false, format!("executable `{}` was not found", a.command)),
+                |path| (true, path.display().to_string()),
+            ),
+            (None, true) => (true, format!("${name} is set")),
+            (None, false) if is_local_url(&self.api.base_url) => (
+                true,
+                format!("local endpoint, no key needed (${name} unset)"),
+            ),
+            (None, false) => (false, format!("${name} is not set")),
         };
         BackendStatus {
             id: backend.name(),

@@ -1158,8 +1158,7 @@ impl Logic {
             }
             // Total size cap: 128 Mbit covers every 27C/28C/62xx/39SF-class
             // part by a wide margin while refusing an absurd allocation.
-            const MAX_TOTAL_BITS: u128 = 128 * 1024 * 1024;
-            if u128::from(m.words) * u128::from(m.bits) > MAX_TOTAL_BITS {
+            if u128::from(m.words) * u128::from(m.bits) > 128 * 1024 * 1024 {
                 return Err(LogicSpecError::MemoryTooLarge {
                     name: m.name.clone(),
                     words: m.words,
