@@ -279,7 +279,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                     // and falling to the id order. A single-branch group (`(AB)`) is
                     // NOT an alternation and is not docked, so `(AB)` == `AB`.
                     let is_alt = split_top_level_alternation(&body).len() > 1;
-                    let group_add = body_score.saturating_sub(if is_alt { 1 } else { 0 });
+                    let group_add = body_score.saturating_sub(u32::from(is_alt));
                     score += group_add;
                     // Make the group's WHOLE contribution the retractable atom, so a
                     // following `*`/`?` cancels the entire group (plus the usual dock

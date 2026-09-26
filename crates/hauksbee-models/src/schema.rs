@@ -1452,7 +1452,7 @@ mod tests {
                     );
                 }
                 (needle, Err(e)) if !needle.is_empty() => {
-                    assert!(e.contains(needle), "{columns}: {e}")
+                    assert!(e.contains(needle), "{columns}: {e}");
                 }
                 (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
             }

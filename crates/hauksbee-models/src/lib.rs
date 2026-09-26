@@ -980,7 +980,7 @@ pub fn model_source(
     }
     ModelSource::new(
         pack_tier
-            .or(declared.map(|s| s.tier))
+            .or_else(|| declared.map(|s| s.tier))
             .unwrap_or(default_tier),
         layer,
         origin,
@@ -1301,7 +1301,7 @@ mod tests {
     fn spice_cards_override_builtin_but_subckts_and_unknown_types_do_not_masquerade() {
         let mut l = lib();
         let mut bc847 = card("BC847", spice_input::SpiceCardKind::Model, Some("NPN"));
-        bc847.params = [("IS".to_string(), 2e-14_f64)].into_iter().collect();
+        bc847.params = std::iter::once(("IS".to_string(), 2e-14_f64)).collect();
         l.add_spice_card(bc847);
         let res = by_value(&l, "BC847");
         assert_eq!(res.source.as_deref(), Some("spice"));

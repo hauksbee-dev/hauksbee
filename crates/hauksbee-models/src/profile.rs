@@ -344,10 +344,10 @@ mod tests {
         // Same seed => identical waveform; different seed => may differ.
         assert_eq!(p.current_at(0.05, 7), p.current_at(0.05, 7));
         let s0 = (0..200)
-            .map(|k| p.current_at(k as f64 * 0.0005, 0))
+            .map(|k| p.current_at(f64::from(k) * 0.0005, 0))
             .sum::<f64>();
         let s1 = (0..200)
-            .map(|k| p.current_at(k as f64 * 0.0005, 1))
+            .map(|k| p.current_at(f64::from(k) * 0.0005, 1))
             .sum::<f64>();
         assert!((s0 - s1).abs() > 0.0, "jitter should make seeds differ");
     }

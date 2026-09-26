@@ -312,7 +312,7 @@ fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
         None => None,
     };
     scale.ok_or_else(|| {
-        let want = want.map_or("no unit".to_string(), |u| format!("{u}, by its name"));
+        let want = want.map_or_else(|| "no unit".to_string(), |u| format!("{u}, by its name"));
         format!(
             "unit '{unit}' does not fit '{name}', which is read in {want}: keep a rail-relative \
              or other such row as a characteristic in its printed unit, never drop it"
@@ -326,7 +326,7 @@ fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
 pub fn row_value(name: &str, row: &Characteristic) -> Result<f64, String> {
     let suffix = crate::units::suffix_unit(name).map_or(1.0, |(scale, _)| scale);
     let scale = row_scale(name, &row.unit)? / suffix;
-    let midpoint = row.min.zip(row.max).map(|(a, b)| (a + b) / 2.0);
+    let midpoint = row.min.zip(row.max).map(|(a, b)| f64::midpoint(a, b));
     // A limit falls back to the typ; a nominal to the midpoint, never one bound.
     let (column, else_) = match row_column(name) {
         "min" => (row.min.or(row.typ), "the typ"),
@@ -563,7 +563,7 @@ pub(crate) fn quantity(text: &str, sym: &str, unit: &str) -> Option<f64> {
     let re =
         regex::Regex::new(&format!(r"\b{sym}\s*=\s*([-+]?\d*\.?\d+)\s*([a-zA-ZµμΩ]*)")).ok()?;
     let c = re.captures(text)?;
-    let scale = crate::units::scale_between(&c[2], unit).or(c[2].is_empty().then_some(1.0));
+    let scale = crate::units::scale_between(&c[2], unit).or_else(|| c[2].is_empty().then_some(1.0));
     Some(c[1].parse::<f64>().ok()?.abs() * scale?)
 }
 
@@ -588,7 +588,7 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
             .filter_map(|r| {
                 let (col, x) = match (r.typ, r.min, r.max) {
                     (Some(t), ..) => ("typ", t),
-                    (_, Some(a), Some(b)) => ("midpoint", (a + b) / 2.0),
+                    (_, Some(a), Some(b)) => ("midpoint", f64::midpoint(a, b)),
                     (_, Some(a), _) => ("min", a),
                     (_, _, b) => ("max", b?),
                 };
@@ -603,9 +603,10 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
     let zero_bias = |name, syms, bias, (vj, m): (f64, f64)| {
         let at = |(c, how, r): (f64, String, &Characteristic)| {
             let v = quantity(&r.conditions, bias, "V");
-            let at = v.map_or("no bias printed, read as zero bias".into(), |v| {
-                format!("taken from {v} V reverse bias by C·(1 + V/{vj})^{m}")
-            });
+            let at = v.map_or_else(
+                || "no bias printed, read as zero bias".into(),
+                |v| format!("taken from {v} V reverse bias by C·(1 + V/{vj})^{m}"),
+            );
             let c0 = c * (1.0 + v.unwrap_or(0.0) / vj).powf(m);
             (v.unwrap_or(f64::INFINITY), c0, format!("{how}, {at}"))
         };
@@ -737,9 +738,10 @@ pub(crate) fn diode_refit_params(entry: &ModelEntry) -> Vec<Derived> {
     let (Some(fit), Some(points)) = (diode_refit(entry), vf_points(cited_rows(entry))) else {
         return Vec::new();
     };
-    let off = diode_law(entry).map_or("absent".into(), |law| {
-        format!("{:.0}% off", 100.0 * worst_miss(law, &points).0)
-    });
+    let off = diode_law(entry).map_or_else(
+        || "absent".into(),
+        |law| format!("{:.0}% off", 100.0 * worst_miss(law, &points).0),
+    );
     let count = points.len();
     let how =
         format!("fitted: is/n/rs to the cited VF rows ({count} points), the card's law was {off}");

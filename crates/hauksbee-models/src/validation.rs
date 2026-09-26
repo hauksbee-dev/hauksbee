@@ -166,7 +166,8 @@ fn printed(entry: &ModelEntry, key: &str, v: f64) -> bool {
         crate::param_names::param_unit(key).unwrap_or(""),
         crate::units::scale_between,
     );
-    let scale = |r: &Characteristic| sb(&r.unit, unit).or(sb(&r.unit, &r.unit).xor(Some(1.0)));
+    let scale =
+        |r: &Characteristic| sb(&r.unit, unit).or_else(|| sb(&r.unit, &r.unit).xor(Some(1.0)));
     let hit = |r, x: f64| scale(r).is_some_and(|s| (x.abs() * s - v.abs()).abs() <= 1e-9 * v.abs());
     let mut rows = entry.source.iter().flat_map(|s| &s.characteristic);
     rows.any(|r| [r.min, r.typ, r.max].iter().flatten().any(|x| hit(r, *x)))

@@ -119,7 +119,7 @@ fn an_empty_setting_is_not_a_choice() {
 
     let a = args()
         .backend(Some(Backend::Codex))
-        .model(Some("".into()))
+        .model(Some(String::new()))
         .effort(Some(" ".into()));
     let r = resolve_with(&cfg, &FakeHost::new(&[], &[]), &a);
     assert_eq!(

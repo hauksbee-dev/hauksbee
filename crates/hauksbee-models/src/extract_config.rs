@@ -486,7 +486,7 @@ impl ExtractConfig {
             "permission_mode" => agent.permission_mode = opt,
             "profile" => agent.profile = opt,
             "extra_args" => {
-                agent.extra_args = value.split_whitespace().map(str::to_string).collect()
+                agent.extra_args = value.split_whitespace().map(str::to_string).collect();
             }
             _ => return Err(unknown()),
         }

@@ -83,7 +83,9 @@ impl Selection {
     #[must_use]
     pub fn bound(&self) -> Option<&str> {
         let stand_in = self.survivors().find(|_| self.same_pinout);
-        self.determined.as_deref().or(stand_in.map(|m| &*m.id))
+        self.determined
+            .as_deref()
+            .or_else(|| stand_in.map(|m| &*m.id))
     }
 
     /// The spec line that settles the set for `reference`.

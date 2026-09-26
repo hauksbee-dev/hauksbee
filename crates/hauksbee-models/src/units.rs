@@ -102,7 +102,8 @@ pub(crate) fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
 /// the multiplier to base units, and the numerator's base unit. A `PP`/`rms`
 /// suffix (`µVPP`) is read through; an unknown denominator (`°C`, `√Hz`) is 1.
 pub(crate) fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
-    let (num, den) = unit.trim().split_once('/').unwrap_or((unit.trim(), ""));
+    let unit = unit.trim();
+    let (num, den) = unit.split_once('/').unwrap_or((unit, ""));
     let (scale, base) = prefixed_unit(num).or_else(|| product_unit(num))?;
     Some((scale / prefixed_unit(den).map_or(1.0, |(s, _)| s), base))
 }
