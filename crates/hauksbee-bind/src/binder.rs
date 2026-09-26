@@ -2864,7 +2864,12 @@ fn bind_passive(
             .filter(|v| v.is_finite() && *v > 0.0)
         {
             let mid = circuit.node(&format!("__{}_dcr", comp.reference));
-            circuit.add(Device::inductor(comp.reference.clone(), a, mid, p.si));
+            circuit.add(Device::inductor(
+                comp.reference.clone(),
+                a,
+                mid,
+                rkm_henries(&p),
+            ));
             circuit.add(Device::resistor(
                 format!("{}_dcr", comp.reference),
                 mid,
@@ -2873,7 +2878,11 @@ fn bind_passive(
             ));
             return (
                 BindOutcome::Analog {
-                    device: format!("L {} + DCR {}", fmt_eng(p.si, "H"), fmt_eng(dcr, "Ω")),
+                    device: format!(
+                        "L {} + DCR {}",
+                        fmt_eng(rkm_henries(&p), "H"),
+                        fmt_eng(dcr, "Ω")
+                    ),
                 },
                 entry_warning(comp, model),
             );
@@ -2997,6 +3006,19 @@ fn logical_passive_pins(comp: &Component) -> Result<Vec<LogicalPassivePin>, Stri
 /// and is far below anything a board's behaviour can distinguish from a short.
 const ZERO_OHM_JUMPER_OHMS: f64 = 1e-3;
 
+/// Henries for an inductor's parsed value. An RKM code with `R` as the decimal
+/// point ("2R2", "4R7") is microhenries on an inductor, the EIA inductor marking
+/// convention; read raw it would be 2.2 H. Ohm-marked ferrite beads ("600R")
+/// never reach here: the model library classes them as beads first.
+fn rkm_henries(p: &hauksbee_models::value::ParsedValue) -> f64 {
+    let rkm = p.suffix.as_deref() == Some("R") && p.unit.is_none();
+    if rkm {
+        p.si * 1e-6
+    } else {
+        p.si
+    }
+}
+
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
 /// `b`, deciding the kind from the reference-designator prefix and the parsed
 /// unit. Shared by the single-element path and the array path so both stay in
@@ -3014,7 +3036,7 @@ fn passive_device(
     if letter == Some('C') || unit.eq_ignore_ascii_case("F") {
         (Device::capacitor(name, a, b, p.si), None)
     } else if letter == Some('L') || unit.eq_ignore_ascii_case("H") {
-        (Device::inductor(name, a, b, p.si), None)
+        (Device::inductor(name, a, b, rkm_henries(p)), None)
     } else if p.si <= 0.0 {
         // A literal 0 (or negative) resistance is a fitted jumper link, not a
         // mathematical short. Binding it at the raw 1e-6 floor leaves ten
@@ -7728,6 +7750,49 @@ style = "i2c_pointer"
         assert!(
             matches!(&stamped[0], Device::Resistor { ohms, .. } if (*ohms - 0.1).abs() < 1e-12)
         );
+    }
+
+    /// A bead's impedance-at-100-MHz marking on an L designator is ohms, never
+    /// henries; ordinary inductor values on the same designator still bind as L.
+    #[test]
+    fn ferrite_bead_ratings_on_inductor_designators_never_become_henries() {
+        let lib = ModelLibrary::builtin();
+        for (value, henries) in [
+            ("600R/2A/UPZ2012E-601-2R0TF", None),
+            ("120Ω@100MHz", None),
+            ("120R @ 100MHz", None),
+            ("600R", None),
+            ("4.7uH", Some(4.7e-6)),
+            ("10u", Some(10e-6)),
+            ("2R2", Some(2.2e-6)),
+        ] {
+            let mut circuit = Circuit::new();
+            let (a, b) = (circuit.node("A"), circuit.node("B"));
+            let node_of = |n: Option<i64>| [None, Some(a), Some(b)][n.unwrap_or(0) as usize];
+            let mut l = comp("L1", value);
+            l.footprint = "Inductor_SMD:L_0805_2012Metric".into();
+            l.pins = vec![pin("1", 1), pin("2", 2)];
+            let model = library_resolution(&lib, &l).model.expect(value);
+            let (outcome, _) = bind_passive(&l, &model, &mut circuit, &node_of);
+            let got = circuit.devices.iter().find_map(|d| match d {
+                Device::Inductor { henries, .. } => Some(*henries),
+                _ => None,
+            });
+            let ok = henries.map_or(got.is_none(), |h| {
+                got.is_some_and(|g| (g - h).abs() < h * 1e-9)
+            });
+            assert!(ok, "{value}: {got:?} H, {outcome:?}, model {}", model.id);
+        }
+        // Ohm-marked resistors and jumpers stay resistors, not beads.
+        for value in ["0R", "100R"] {
+            let mut r = comp("R1", value);
+            r.footprint = "Resistor_SMD:R_0603_1608Metric".into();
+            let id = library_resolution(&lib, &r).model.map(|m| m.id);
+            assert!(
+                !id.as_deref().is_some_and(|i| i.starts_with("ferrite")),
+                "{value}: {id:?}"
+            );
+        }
     }
 
     /// A library-resolved crystal is Skipped and never stamped (a bare

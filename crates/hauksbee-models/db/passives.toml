@@ -310,6 +310,30 @@ ohms = 0.060  # DCR max, initial
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
+id = "ferrite_bead_ohm_rated"
+kind = "passive"
+passive_class = "ferrite_bead"
+description = "Ferrite bead on an inductor footprint, named by an impedance in ohms (representative DCR)"
+
+[models.match]
+# "600R", "120Ω", "600R/2A/<mpn>", "120R @ 100MHz" on an inductor or ferrite
+# footprint: an inductor is never marked in ohms. RKM inductances ("2R2") keep
+# a digit after the R, so they do not match. The footprint gate keeps "0R" and
+# "100R" resistors and jumpers out.
+value_re = '''(?ix) ^(
+    [0-9]+ \s* (R|Ω|OHMS?) \s* @ \s* [0-9]+ \s* MHZ .*
+  | [0-9]+ \s* (R|Ω|OHMS?) ([\s/,_] .*)?
+)$'''
+footprint_re = '(^|:)(Inductor|Ferrite)|(^|:)L_'
+
+[models.params]
+ohms = 0.35   # representative only; see the note on `ferrite_bead` above
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[[models]]
 id = "ferrite_bead_generic_rated"
 kind = "passive"
 passive_class = "ferrite_bead"
