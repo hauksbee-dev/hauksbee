@@ -232,7 +232,7 @@ fn series_rlc_resonant_frequency_and_q() {
 
 /// RLC notch (band-stop): output taken across the series L+C tank to ground is a
 /// notch at f0. Built as Vin -> R -> out, with a series LC from out to ground.
-/// At f0 the LC is a short, so V_out -> 0 (deep notch).
+/// At f0 the LC is a short, so `V_out` -> 0 (deep notch).
 #[test]
 fn series_lc_notch_at_resonance() {
     let r = 1.0e3_f64;
@@ -623,7 +623,7 @@ fn spdt_bbm_loser_leg_is_open_in_ac_like_dc() {
 }
 
 /// The DC limit of an AC sweep: an inductor's branch row at f -> 0 is the
-/// transient path's short (v_a - v_b = 0), never a singular/blown stamp, and
+/// transient path's short (`v_a` - `v_b` = 0), never a singular/blown stamp, and
 /// a capacitor's admittance -> 0 stays regular through the gmin shunt.
 #[test]
 fn reactive_stamps_are_regular_at_the_dc_limit() {
@@ -651,14 +651,14 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
 }
 
 /// A voltage switch biased MID-TRANSITION is a modulator: the smooth tanh
-/// conductance has a nonzero control tangent, so with v_a != v_b an AC signal
+/// conductance has a nonzero control tangent, so with `v_a` != `v_b` an AC signal
 /// on the CONTROL node must appear at the output (the switch-as-VGA path the
 /// transient stamp captures via `gm_ctrl = vab * dgsw/dvctrl`). Regression for
 /// the AC arm stamping only the quiescent conductance and dropping the
 /// control transconductance entirely, `.ac` then reported the transfer
 /// function of a fixed resistor (output ~0 here, since the through path is
 /// AC-grounded) while transient saw the modulation. The AC answer must match
-/// the DC sensitivity d v_out / d v_ctrl (the same tangent the transient
+/// the DC sensitivity d `v_out` / d `v_ctrl` (the same tangent the transient
 /// Newton stamp linearizes) to small-signal accuracy.
 #[test]
 fn vswitch_mid_transition_control_modulation_appears_in_ac() {

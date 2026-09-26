@@ -120,16 +120,16 @@ pub struct StagedResult {
 /// principle, because a strategy that CAN fire changes results when removed.
 ///
 /// Strategies deliberately NOT trimmed, and why the structural bar fails:
-/// - TransientDyn: arming is unconditional at march start (branch series
+/// - `TransientDyn`: arming is unconditional at march start (branch series
 ///   regularizers change the stamps of every branch-bearing island), so it
 ///   always "fires" when granted.
-/// - DynamicPivot / DynamicPivotEveryStep: a permission consulted only when
+/// - `DynamicPivot` / `DynamicPivotEveryStep`: a permission consulted only when
 ///   the frozen-order LU fails. On a fully-linear island an EXACTLY singular
 ///   static matrix fails both orderings identically (rank deficiency is
 ///   order-independent), but the threshold row-pivoting can reject a
 ///   near-singular pivot under one ordering and accept it under another, so
 ///   "frozen fails => dynamic fails" is not provable and the trim is refused.
-/// - Ptc / ResidualAccept: the staged-DC rescue rungs are meaningful on any
+/// - Ptc / `ResidualAccept`: the staged-DC rescue rungs are meaningful on any
 ///   island that reaches the staged fallback, regardless of device mix.
 fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
     let mut opts = *caller;
@@ -1209,7 +1209,7 @@ mod tests {
         );
     }
 
-    /// Analysis nominates cut nodes on a chain of BJT blocks, run_staged runs
+    /// Analysis nominates cut nodes on a chain of BJT blocks, `run_staged` runs
     /// the measured relaxation, the certificate carries Stiff records, and the
     /// result matches the monolith within the certificate's numbers.
     #[test]
@@ -1279,7 +1279,7 @@ mod tests {
     }
 
     /// What each [`BoundaryKind`] may claim, keyed on the structured kind and
-    /// never the prose note: a held rail is Stiff + AssumedFeedHold +
+    /// never the prose note: a held rail is Stiff + `AssumedFeedHold` +
     /// Unmeasured even with a doctored "balanced rail" note.
     #[test]
     fn composed_records_never_overclaim_a_held_rail() {

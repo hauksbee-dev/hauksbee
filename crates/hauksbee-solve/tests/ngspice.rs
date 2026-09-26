@@ -117,7 +117,7 @@ struct AnalyticPoint {
 const MAX_HEADROOM: f64 = 50.0;
 
 /// Do not tighten below 1e-6 relative just because solvers agree to rounding noise
-/// (e.g. exact divider V(in), or 7.5e-10 error for param_divider).
+/// (e.g. exact divider V(in), or 7.5e-10 error for `param_divider`).
 const HEADROOM_FLOOR: f64 = 1e-6;
 
 /// Is this probe's tolerance tight enough to be a gate? `None` when it is (or is
@@ -227,7 +227,7 @@ fn rewrite_with_print(orig: &str, print_card: &str) -> String {
 /// expect file states one (the op-branch convention, extended to tran for
 /// probes whose off-state is an exponential tail toward zero, a switch
 /// drain settling to millivolts turns sub-mV agreement into O(1) "relative"
-/// noise without it), else 1% of `full_scale`. Returns (worst, at_time).
+/// noise without it), else 1% of `full_scale`. Returns (worst, `at_time`).
 fn worst_tran_error(
     ours_t: &[f64],
     ours_v: &[f64],

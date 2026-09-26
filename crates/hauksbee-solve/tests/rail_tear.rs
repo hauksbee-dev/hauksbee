@@ -1,9 +1,9 @@
 //! Exactness + speed test for the shunt-fed analog rail tear.
 //!
-//! The real Tarski InputSystem fuses its whole synapse array into one giant
+//! The real Tarski `InputSystem` fuses its whole synapse array into one giant
 //! nonlinear island because every current-mirror block hangs off the *same*
 //! `ANALOG_VDD` rail, and that rail is NOT an ideal source: it is fed from +5V
-//! through a 1 kΩ current-sense shunt (R_Shunt + INA186). So the rail voltage
+//! through a 1 kΩ current-sense shunt (`R_Shunt` + INA186). So the rail voltage
 //! sags with the total array current (4.82 V at the board's operating point),
 //! coupling every block to every other through that one shared node.
 //!
@@ -100,7 +100,7 @@ fn rail_tear_matches_monolithic_exactly() {
 /// dropped from every island and its current excluded from the balance. The
 /// detector must REFUSE to tear such a rail (falling back to the exact
 /// monolithic path) rather than silently diverge. The real Tarski board has 19
-/// such bypass caps on ANALOG_VDD, so this guard is load-bearing.
+/// such bypass caps on `ANALOG_VDD`, so this guard is load-bearing.
 #[test]
 fn rail_with_ground_bypass_cap_is_not_torn() {
     let (mut c, _m) = build_shunt_array(24);

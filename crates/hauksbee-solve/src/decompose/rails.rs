@@ -35,7 +35,7 @@
 //!
 //! ## Stacked feeds
 //!
-//! Real supplies cascade (source -> +5V -> 1k shunt -> ANALOG_VDD), and
+//! Real supplies cascade (source -> +5V -> 1k shunt -> `ANALOG_VDD`), and
 //! single-hop detection (feed must be source-pinned) stops one hop short of
 //! the rail that fragments the board. Discovery is therefore transitive: a
 //! discovered rail is a valid feed for the next hop, walked to a fixpoint.
@@ -76,7 +76,7 @@ pub enum TearMotive {
     /// Normal path: tear only where the cost model predicts a win.
     Profit,
     /// The monolithic solve failed (DC homotopy exhausted or transient died
-    /// at dt_min): structural guards still apply, the cost gate does not.
+    /// at `dt_min`): structural guards still apply, the cost gate does not.
     ConvergenceEscalation,
 }
 

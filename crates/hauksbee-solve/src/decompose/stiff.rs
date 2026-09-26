@@ -103,8 +103,8 @@ pub struct StiffCandidate {
     /// solving that block whole (the marginal ratio that ranked it). Strictly
     /// greater than 1.0 for every returned candidate. Note the scope: this is
     /// per-block marginal and pays no outer loop, so it is NOT directly
-    /// comparable to a balance tear's est_speedup, which is whole-island and
-    /// divided by outer_iters; a consumer ranking the two together would be
+    /// comparable to a balance tear's `est_speedup`, which is whole-island and
+    /// divided by `outer_iters`; a consumer ranking the two together would be
     /// comparing different formulas.
     pub est_speedup: f64,
 }

@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     /// Every unknown carrying only its gmin diagonal (the ghost-row shape a
-    /// high as-built NodeId manufactures) drains in linear time.
+    /// high as-built `NodeId` manufactures) drains in linear time.
     #[test]
     fn gmin_only_unknowns_are_drained_without_quadratic_symbolic_scan() {
         const N: usize = 20_000;

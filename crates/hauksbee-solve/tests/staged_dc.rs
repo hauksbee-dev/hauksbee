@@ -9,7 +9,7 @@
 //! (the rail, and the floating nodes both solvers pin near 0).
 //!
 //! The staged path's load-bearing proof on the real board is the Tarski DC
-//! probe (ANALOG_VDD: 0 V collapse -> 5.0 V); this test guards the mechanism in
+//! probe (`ANALOG_VDD`: 0 V collapse -> 5.0 V); this test guards the mechanism in
 //! isolation and that it does not regress the ordinary diode solve.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
@@ -155,7 +155,7 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
 }
 
 /// Stiff switch + diode core co-solves to a TRUE root with the control-node
-/// Jacobian. This stresses the new VSwitch tangent on a circuit that also carries
+/// Jacobian. This stresses the new `VSwitch` tangent on a circuit that also carries
 /// the staged-DC diode pathology (floating reverse-diode cap node), and confirms
 /// the switch settles on its negative-feedback knee with the rail/out KCL closed.
 /// (The full event-freeze outer loop's load-bearing proof is the real Tarski

@@ -59,9 +59,9 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 
 /// Build an `n`-block current-mirror array sharing a SHUNT-FED analog rail.
 ///
-/// +5V --[R_shunt 1k]-- ANALOG_VDD --(per block: mirror emitters + membrane R)
+/// +5V --[`R_shunt` 1k]-- `ANALOG_VDD` --(per block: mirror emitters + membrane R)
 /// Each block: ref resistor -> diode-connected Q1 mirror reference -> Q2 mirror
-/// output charges a membrane RC pulled up to ANALOG_VDD. Bias is quasi-static
+/// output charges a membrane RC pulled up to `ANALOG_VDD`. Bias is quasi-static
 /// (DC drive) so the array reaches a steady operating point, exactly like an
 /// inference window with latched weights.
 ///

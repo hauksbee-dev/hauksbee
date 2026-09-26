@@ -44,9 +44,9 @@ pub enum TearKind {
     /// The node is pinned at a settled voltage with no coupling equation:
     /// exact only within the measured stiffness tolerance. NO PRODUCER YET:
     /// route-4 provisional stiffness detection (tear at the feed voltage,
-    /// sum block boundary currents, verify I*R_feed against stiff_tol) needs
+    /// sum block boundary currents, verify I*`R_feed` against `stiff_tol`) needs
     /// a DC solve and lands with the orchestrator. Until then a
-    /// non-convergent monolith gets balance tears via ConvergenceEscalation,
+    /// non-convergent monolith gets balance tears via `ConvergenceEscalation`,
     /// which is sound and merely costs the outer loop.
     Stiff,
     /// A sense-only, proven one-directional boundary: zero-current exact,
@@ -279,7 +279,7 @@ impl Decomposition {
     /// nodes the run-time environment drives (co-simmed MCU pins, bench
     /// stimuli), which the netlist alone cannot know are driven. A sensed
     /// node in this list is certified by declaration instead of flagged as a
-    /// floating sense net (the analysis probe's finding 2: ENABLE_MEAS nets
+    /// floating sense net (the analysis probe's finding 2: `ENABLE_MEAS` nets
     /// on the flagship are firmware-driven, conducted by nothing in an
     /// analysis-only bind). The certificate records the trust explicitly in
     /// `exogenous_boundaries`, and any executor must actually drive every

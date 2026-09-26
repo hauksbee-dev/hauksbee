@@ -61,7 +61,7 @@ fn behavioral_vdep(out: NodeId, ctrl: NodeId, voltage_out: bool) -> Device {
 
 /// A V(node) dep fuses the sensed island with the output island in the
 /// partitioner (like an E/G control pair), and the fused island is TAINTED
-/// nonlinear, which is itself the LinearIsland gate: `compile` refuses any
+/// nonlinear, which is itself the `LinearIsland` gate: `compile` refuses any
 /// non-linear island before it ever walks devices.
 #[test]
 fn behavioral_vdep_fuses_islands_and_taints_nonlinear() {
@@ -271,7 +271,7 @@ fn behavioral_self_reference_converges() {
 
 /// Under `Partitioning::Auto` the transient must match the bit-exact `Off`
 /// monolith AND the analytic steady state (0 V would mean the device was
-/// silently dropped). Exercises the NonlinearIsland build with the B-source's
+/// silently dropped). Exercises the `NonlinearIsland` build with the B-source's
 /// per-slot control retargeting (the plural F/H path) and V-dep remapping.
 #[test]
 fn auto_partitioning_never_drops_behavioral() {

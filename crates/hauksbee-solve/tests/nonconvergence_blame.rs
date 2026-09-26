@@ -104,7 +104,7 @@ fn a_microohm_link_is_named_as_the_element_to_look_at() {
 }
 
 /// A march that keeps failing Newton stops at `max_failed_steps` with a stated
-/// refusal naming a net, instead of cutting dt toward dt_min for minutes (the
+/// refusal naming a net, instead of cutting dt toward `dt_min` for minutes (the
 /// MNT Reform chunk that ground through 600+ cuts). Unbudgeted, the same
 /// diode turn-on is solved by cutting the step.
 #[test]

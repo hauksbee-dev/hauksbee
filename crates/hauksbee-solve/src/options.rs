@@ -219,7 +219,7 @@ pub struct DeviceEffects {
     pub junction_caps: bool,
     /// Ohmic series resistances. Honored for BJTs (RB/RE/RC via layout-private
     /// internal nodes). The diode's RS is NOT stamped yet,
-    /// a diode model carrying a nonzero RS logs once (under HAUKSBEE_DEBUG)
+    /// a diode model carrying a nonzero RS logs once (under `HAUKSBEE_DEBUG`)
     /// instead of silently ignoring it; it can ride the same
     /// internal-node machinery in a follow-up.
     pub series_resistance: bool,

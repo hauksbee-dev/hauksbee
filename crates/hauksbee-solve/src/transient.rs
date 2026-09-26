@@ -913,7 +913,7 @@ fn for_each_reactive(
 /// its rails; `None` for any other device. Unclipped because the pole lags the
 /// raw target and only then saturates ([`crate::stamp::opamp_transient_output`]);
 /// callers wanting the DC point clamp it. Op-amps with output dynamics
-/// (pole_hz/slew) keep the drive EMF as their state; ideal ones never read it.
+/// (`pole_hz/slew`) keep the drive EMF as their state; ideal ones never read it.
 fn opamp_target(ws: &Workspace, dev: &Device) -> Option<(f64, f64, f64)> {
     let Device::OpAmp {
         inp,
@@ -1083,14 +1083,14 @@ pub(crate) fn branch_i(ws: &Workspace, id: DeviceId) -> f64 {
 /// LTE-rejected 44% of all trial solves, independently of how the step was
 /// proposed. The divided-difference second
 /// derivative `dd2` is exact-zero on linear trajectories, reduces to the SAME
-/// `x_new - 2*x1 + x2` on a uniform grid (h == h_prev), and `h^2 * dd2` is
+/// `x_new - 2*x1 + x2` on a uniform grid (h == `h_prev`), and `h^2 * dd2` is
 /// the classic uniform-grid curvature the 1/12 trapezoidal coefficient was
 /// calibrated against.
 ///
 /// `h_prev` is the previous ACCEPTED step (the spacing of x1..x2 in the
 /// reactive history); 0.0 means "no history yet" (first trial), which falls
 /// back to `h`, which is the uniform-grid estimate (the seeded history has
-/// x2 == x1, so the h_prev term vanishes).
+/// x2 == x1, so the `h_prev` term vanishes).
 fn lte_estimate(
     circuit: &Circuit,
     ws: &Workspace,

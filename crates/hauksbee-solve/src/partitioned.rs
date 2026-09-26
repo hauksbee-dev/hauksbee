@@ -83,7 +83,7 @@ struct NonlinearIsland {
     state: ReactiveState,
     /// Accepted unknowns from the previous step (sub-circuit layout).
     x_accepted: Vec<f64>,
-    /// Map: sub-circuit non-ground NodeId.0 -> global NodeId, for write-back.
+    /// Map: sub-circuit non-ground NodeId.0 -> global `NodeId`, for write-back.
     l2g: Vec<NodeId>,
     /// Boundary input nodes (global) and the sub Vsource id pinning each.
     boundary: Vec<(NodeId, DeviceId)>,
@@ -92,7 +92,7 @@ struct NonlinearIsland {
     /// that is not a boundary input. Precomputed at build so the scatter phase
     /// is a flat copy with no per-write layout lookups, and so the build-time
     /// single-writer check (see `verify_single_writer`) has an explicit owned
-    /// set to verify rather than an implicit "whatever write_back skips".
+    /// set to verify rather than an implicit "whatever `write_back` skips".
     owned: Vec<(NodeId, usize)>,
     first_step: bool,
     /// Spacing of the reactive history pair (previous COMMITTED step): the

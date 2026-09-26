@@ -178,7 +178,7 @@ fn linear_island_with_controlled_source_forces_mna() {
 /// End-to-end version of the same gate: under `Partitioning::Auto` the full
 /// transient must match the bit-exact `Off` monolith AND the analytic value a
 /// dropped device could never produce. A silently-dropped VCCS leaves `out`
-/// at 0 V; the analytic steady state is -gm*R*v_ctrl = -2 V.
+/// at 0 V; the analytic steady state is -gm*R*`v_ctrl` = -2 V.
 #[test]
 fn auto_partitioning_never_drops_controlled_source() {
     let build = |gm: f64| {
@@ -236,8 +236,8 @@ fn auto_partitioning_never_drops_controlled_source() {
 
 // --- touchpoint 3: stamp correctness against analytic answers ----------------
 
-/// VCCS DC: `out` loaded by R, current gm*v_ctrl flows p->n (out -> ground),
-/// so v_out = -gm*R*v_ctrl.
+/// VCCS DC: `out` loaded by R, current gm*`v_ctrl` flows p->n (out -> ground),
+/// so `v_out` = -gm*R*`v_ctrl`.
 #[test]
 fn vccs_dc_matches_analytic() {
     let mut c = Circuit::new();
@@ -469,7 +469,7 @@ fn linear_island_with_current_controlled_source_forces_mna() {
 /// the transient must match the bit-exact `Off` monolith AND the analytic
 /// steady state a dropped stamp could never produce (out stays 0 V if the
 /// device vanishes; the demoted ammeter forces the island through the
-/// NonlinearIsland build with ctrl_src retargeting, which is the new code
+/// `NonlinearIsland` build with `ctrl_src` retargeting, which is the new code
 /// under test).
 #[test]
 fn auto_partitioning_never_drops_current_controlled_sources() {
@@ -524,8 +524,8 @@ fn auto_partitioning_never_drops_current_controlled_sources() {
 // --- touchpoint 3: stamp correctness against analytic answers -----------------
 
 /// CCCS DC. Control loop: V1(2V) -> R1(1k) -> m -> Vs(0V ammeter) -> gnd, so
-/// i_ctrl = 2 mA (flowing p->n through the ammeter). F1 out 0 gain=3 pulls
-/// 3*i_ctrl OUT of node `out`: v_out = -3 * 2mA * 1k = -6 V. The ammeter node
+/// `i_ctrl` = 2 mA (flowing p->n through the ammeter). F1 out 0 gain=3 pulls
+/// 3*`i_ctrl` OUT of node `out`: `v_out` = -3 * 2mA * 1k = -6 V. The ammeter node
 /// must sit at EXACTLY 0 V (a control-side perturbation would mean the F
 /// leaked into rows it must not touch).
 #[test]
@@ -566,7 +566,7 @@ fn cccs_dc_matches_analytic() {
 }
 
 /// CCVS DC. Same 2 mA control current; H1 out 0 transres=2k PINS
-/// v_out = 2k * 2mA = 4 V, and its own branch sources the 4 mA the load
+/// `v_out` = 2k * 2mA = 4 V, and its own branch sources the 4 mA the load
 /// draws (Vsource sign convention: sourcing is negative). The control loop is
 /// undisturbed, H reads the ammeter's branch COLUMN, never its rows.
 #[test]

@@ -54,14 +54,14 @@ pub struct Workspace {
     /// Per-node UNDAMPED Newton step from the previous iteration, used by the
     /// staged-DC adaptive damping to detect oscillating nodes (a sign reversal)
     /// and damp only those, leaving converging nodes near-full steps. Allocated
-    /// once; only touched on the staged path (branch_reg>0).
+    /// once; only touched on the staged path (`branch_reg>0`).
     prev_step: Vec<f64>,
     /// Per-node consecutive-oscillation counter: how many iterations in a row a
     /// node's undamped step has reversed sign. Used by the staged-DC adaptive
     /// damping to damp a persistently-oscillating node PROGRESSIVELY harder (a
     /// fixed fraction can sustain a stubborn 2-cycle, the measured refractory-reset
     /// follow-on limit cycle on the synapse-mesh / BJT-mirror nodes). Allocated
-    /// once; only touched on the staged path (branch_reg>0).
+    /// once; only touched on the staged path (`branch_reg>0`).
     osc_count: Vec<u32>,
     /// True when every device is linear, so one solve per step is exact and
     /// Newton needs no second iteration to confirm convergence.
@@ -115,7 +115,7 @@ pub struct Workspace {
     /// cycle (the post-reset overshoot whose maxdV rotates across mesh nodes, which
     /// per-node damping cannot catch). Off by default so an ordinary circuit's
     /// per-step path is bit-identical (no residual evaluation). Also force-on via
-    /// Strategy::LineSearch for direct grants.
+    /// `Strategy::LineSearch` for direct grants.
     tran_line_search: bool,
     /// The device-named fault of the most recent Newton solve that aborted on
     /// a behavioral-expression error (`stamp::take_behavioral_fault`): an
@@ -189,7 +189,7 @@ pub struct Workspace {
 
 impl Workspace {
     /// Arm/disarm the per-step transient event-freeze retry. Set by the transient
-    /// driver only on a board that needed the staged DC (or via TRANSIENT_DYN);
+    /// driver only on a board that needed the staged DC (or via `TRANSIENT_DYN`);
     /// the default-false keeps ordinary circuits on the plain per-step path.
     pub fn set_tran_event(&mut self, on: bool) {
         self.tran_event = on;
@@ -261,7 +261,7 @@ impl Workspace {
     /// `use_ic = false`; a transient initial-condition solve pins reactive nodes
     /// to their `.ic` via a penalty conductance, so measuring the residual with
     /// caps OPEN (`use_ic = false`) would report the KCL of a *different* system
-    /// than the one the iterate actually satisfies, making the ResidualAccept
+    /// than the one the iterate actually satisfies, making the `ResidualAccept`
     /// backstop reject a genuine IC operating point (or judge it against the
     /// wrong system). The caller passes the `use_ic` in force for that solve.
     pub fn dc_residual_inf_norm_with(
@@ -1246,7 +1246,7 @@ fn newton_solve_core(
 /// the staged per-node damping) rewrites it. Both are path globalizations:
 /// they shorten the step the iteration walks, not the distance to the root,
 /// so measuring after either one hands the stall detector a shrunken norm
-/// (use_alpha*|dx| after the search, alpha_node*|dx| after the damping) that
+/// (`use_alpha`*|dx| after the search, `alpha_node`*|dx| after the damping) that
 /// registers phantom "progress" every backtracking iteration, resetting the
 /// stall counter on a genuine limit cycle, and misreports the
 /// "maxdV(undamped)" readout. Same doctrine as the convergence
@@ -1284,7 +1284,7 @@ fn node_step_norm(ws: &Workspace) -> (f64, usize) {
 /// same-sign step means it is converging, so take a near-full step. This
 /// kills the oscillation while letting the well-behaved majority converge
 /// fast. At the root every step is zero, so damping is inert. Active only for
-/// branch_reg>0 (`damp`), so the normal solve paths stay bit-identical.
+/// `branch_reg>0` (`damp`), so the normal solve paths stay bit-identical.
 fn damp_node_steps(ws: &mut Workspace, damp: bool) {
     if damp {
         const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
@@ -1343,7 +1343,7 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
 /// MNT Reform power stage: one KCL row carrying 1.5e4 A of stiff-wire terms
 /// read 2.74e-12 A (1.8e-16 relative) at every alpha, the merit sat just above
 /// the 1e-12 A root bar, and every Newton step was cut to the 1/64 floor until
-/// max_newton gave out. (`node_norm` only flags a poisoned trial here.)
+/// `max_newton` gave out. (`node_norm` only flags a poisoned trial here.)
 fn merit(ws: &Workspace, node_norm: f64, opts: &SolverOptions) -> f64 {
     if !node_norm.is_finite() {
         return f64::INFINITY;
@@ -2262,7 +2262,7 @@ fn staged_event_solve(
 /// comparator with adaptation feedback (its output capacitively coupled back to
 /// its own threshold node) stalls right at the crossing when pinned to a rail;
 /// left SELF-DECIDING through the smooth high-gain logistic transfer (the
-/// branch_reg>0 path, which has a real tangent) it tracks its flip
+/// `branch_reg>0` path, which has a real tangent) it tracks its flip
 /// continuously while the switch mesh stays frozen. A refractory reset is the
 /// opposite regime: the smooth comparator's ~2000 V^-1 gain couples the
 /// collapsing membrane straight back into the fast positive-feedback discharge
@@ -3027,7 +3027,7 @@ mod tests {
     /// on a scripted constant-amplitude two-cycle the norm from
     /// `node_step_norm` is the cycle amplitude every iteration while the
     /// damped step in `ws.x` shrinks, so the detector bails right after
-    /// STALL_WINDOW where the post-damping norm never would.
+    /// `STALL_WINDOW` where the post-damping norm never would.
     #[test]
     fn stall_norm_is_the_undamped_step_not_the_damped_one() {
         let (c, _, _) = divider();
@@ -3128,7 +3128,7 @@ mod tests {
         );
     }
 
-    /// On the TransientDyn path the stall detector is handed the true undamped
+    /// On the `TransientDyn` path the stall detector is handed the true undamped
     /// step, never the line-searched one: the probed norm is never below the
     /// post-line-search re-measurement, and diverges from it on a hard
     /// backtrack.

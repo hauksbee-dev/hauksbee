@@ -146,7 +146,7 @@ fn rc_ladder_bit_identical_across_thread_counts() {
 }
 
 /// S3 composition under S4: islands inherit `AssemblyMode::Planned` through
-/// `clone_remapped` (their sub-workspaces compile their own StampPlans), and
+/// `clone_remapped` (their sub-workspaces compile their own `StampPlans`), and
 /// that must be exactly as thread-count-invariant as the interpreted path.
 #[test]
 fn planned_assembly_islands_bit_identical_across_thread_counts() {

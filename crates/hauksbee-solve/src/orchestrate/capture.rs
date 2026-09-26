@@ -162,7 +162,7 @@ pub struct CapturePolicy {
     /// board, the same provenance as [`ComposedPolicy::max_balance_block`]); a
     /// block an order of magnitude larger is the fused core wearing a sense
     /// edge, and pulling it re-fuses the very island the tear exists to avoid
-    /// (measured on the flagship: pulling it ballooned every OUTPUT_I capture
+    /// (measured on the flagship: pulling it ballooned every `OUTPUT_I` capture
     /// to 3600 devices and pushed each solve onto the adaptive rescue). An
     /// oversized block is skipped, deterministically, and the growth continues
     /// past it; whether skipping cost anything is measured by the same sag the
@@ -804,7 +804,7 @@ pub fn execute_stiff_group_held_capped(
 ///
 /// This is the sibling of [`execute_stiff_group`] for a group whose stiff
 /// nominations include genuine supply RAILS (load-dependent nets on which
-/// Gauss-Seidel limit-cycles instead of contracting, the flagship's ANALOG_VDD
+/// Gauss-Seidel limit-cycles instead of contracting, the flagship's `ANALOG_VDD`
 /// and +5V) alongside ordinary SIGNAL cuts (which relax fine). The rails are
 /// handed to the exact scalar KCL balance (`analyze_imposing_tears` +
 /// `PartitionedTransient`), and the signals are relaxed on top of it.
@@ -820,7 +820,7 @@ pub fn execute_stiff_group_held_capped(
 /// naive "pin every signal, solve once, resample" measures a signal's residual
 /// as identically zero (a pinned node reads back its pin), and freeing a signal
 /// in the WHOLE rail-torn group re-fuses the large hub it belongs to (the
-/// flagship's OUTPUT_I nets fuse thousands of devices when freed). So neither a
+/// flagship's `OUTPUT_I` nets fuse thousands of devices when freed). So neither a
 /// whole-group free-solve nor a whole-group pinned-solve works.
 ///
 /// The composition instead ALTERNATES:
@@ -2112,7 +2112,7 @@ mod tests {
     }
 
     /// The HELD (feed-hold) degradation on a two-rail fixture: deterministic,
-    /// both rails HeldRail, and the assembly matches the monolith of the same
+    /// both rails `HeldRail`, and the assembly matches the monolith of the same
     /// circuit with both rails pinned at their hold value.
     #[test]
     fn held_rails_run_deterministically_and_match_the_pinned_monolith() {

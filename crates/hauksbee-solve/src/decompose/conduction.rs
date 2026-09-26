@@ -8,7 +8,7 @@
 //!
 //! A device terminal either *conducts* (its node's KCL row receives current
 //! from the device's stamp: a resistor end, a BJT collector) or it only
-//! *senses* (it steers the stamp but its own row receives nothing: a VSwitch
+//! *senses* (it steers the stamp but its own row receives nothing: a `VSwitch`
 //! control pin, a comparator input). The distinction is load-bearing for
 //! decomposition: two blocks joined only through sense terminals exchange no
 //! current, so cutting that wire and replaying its voltage as a source is
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(ConductionGraph::analyze(&c).islands.len(), 1);
     }
 
-    /// The staged and BBM stamp paths (SPDT sibling coupling, branch_reg > 0,
+    /// The staged and BBM stamp paths (SPDT sibling coupling, `branch_reg` > 0,
     /// frozen comparator/switch decisions) keep sense rows as clean as the
     /// baseline.
     #[test]

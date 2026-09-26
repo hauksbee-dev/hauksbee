@@ -278,7 +278,7 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
 /// changes h at almost every step (growth factor up to 2x), so the 2nd-order
 /// stencil was applied to unequally spaced history and silently degraded to
 /// FIRST order exactly where Gear2 is selected. The fix threads the previous
-/// accepted step into the coefficients (variable-step BDF2, r = h/h_prev; the
+/// accepted step into the coefficients (variable-step BDF2, r = `h/h_prev`; the
 /// derivation and order proof live in stamp.rs unit tests). Black-box gate:
 /// an adaptive-step Gear2 RC charge must track the analytic exponential to
 /// the controller's accuracy class across the whole waveform, not just at the

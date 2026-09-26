@@ -6,7 +6,7 @@
 //! OFF (the reference) and ON, on identical fixed-step grids so the accepted
 //! samples align one-to-one, and assert the waveforms agree within the
 //! reltol-scaled convergence tolerance. The stiff flagship-shaped fixture
-//! (the linesearch_fixture board, TransientDyn-armed, adaptive) is compared
+//! (the `linesearch_fixture` board, TransientDyn-armed, adaptive) is compared
 //! on its physics verdicts (spike count, spike times) because an adaptive
 //! grid legitimately re-times under any iterate-path change.
 //!
@@ -148,9 +148,9 @@ fn mirror_array_240_bypass_matches_reference() {
     mirror_array_gate(240, 60e-6);
 }
 
-/// The flagship-shaped stiff fixture (the linesearch_fixture board:
-/// integrate-and-fire relaxation oscillator, SPDT pair, TransientDyn armed,
-/// staged regularizers + event retry + Armijo line search, FromZero,
+/// The flagship-shaped stiff fixture (the `linesearch_fixture` board:
+/// integrate-and-fire relaxation oscillator, SPDT pair, `TransientDyn` armed,
+/// staged regularizers + event retry + Armijo line search, `FromZero`,
 /// adaptive). This board exists in `tests/linesearch_fixture.rs`, which must
 /// stay the only test in its binary; the construction is replicated verbatim
 /// here.

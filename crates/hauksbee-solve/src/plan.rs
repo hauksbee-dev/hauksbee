@@ -48,7 +48,7 @@ pub struct StampPlan {
     /// Resistor conductances plus Vsource/inductor ±1 incidence. Applied
     /// verbatim each assembly.
     cond_ops: Vec<(usize, usize, f64)>,
-    /// Node rows that take the gmin shunt (node rows only, < n_nodes).
+    /// Node rows that take the gmin shunt (node rows only, < `n_nodes`).
     gmin_diag: Vec<(usize, usize)>,
     /// Reactive companion-conductance writes: `(row, position, multiplier)`
     /// where the stamped value is `multiplier * coeffs.g`. Capacitors
@@ -673,7 +673,7 @@ mod tests {
         }
     }
 
-    /// Ineligible contexts (DC, use_ic) fall back to the interpreted assembly
+    /// Ineligible contexts (DC, `use_ic`) fall back to the interpreted assembly
     /// and match it bit-for-bit.
     #[test]
     fn planned_assembly_falls_back_on_dc_context() {

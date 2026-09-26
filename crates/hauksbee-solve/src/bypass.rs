@@ -54,9 +54,9 @@
 //!   (`take_behavioral_fault`) must see every iterate.
 //! * **Comparator**: bang-bang output with hysteresis read from the CURRENT
 //!   iterate; the discrete decision is the event the march bisects on.
-//! * **VSwitch**: the event-flip device, and under break-before-make its stamp
+//! * **`VSwitch`**: the event-flip device, and under break-before-make its stamp
 //!   reads its SIBLING leg's control nodes, inputs outside its own terminals.
-//! * **OpAmp**: a rail-clamp discontinuity decides its stamp shape, and
+//! * **`OpAmp`**: a rail-clamp discontinuity decides its stamp shape, and
 //!   evaluation is a handful of multiplies.
 //! * Linear devices (R, C, L, sources, E/F/G/H, coupling): matrix parts are
 //!   constant or backbone-compiled (plan.rs), RHS history changes per step,

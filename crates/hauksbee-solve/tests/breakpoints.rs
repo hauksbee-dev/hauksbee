@@ -16,7 +16,7 @@ use hauksbee_testkit::circuits::cap_ic;
 
 /// A 2 us PWL pulse at t = 400 us into an RC (tau = 2 us), after 400 us of
 /// dead-flat quiet during which the adaptive controller grows dt toward
-/// dt_max = 100 us. Without breakpoints the trial steps stride the pulse and
+/// `dt_max` = 100 us. Without breakpoints the trial steps stride the pulse and
 /// the capacitor never charges; with them, a step lands on every corner and
 /// the capacitor visibly responds.
 fn pulse_circuit() -> (Circuit, NodeId) {

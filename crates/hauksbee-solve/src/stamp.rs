@@ -217,7 +217,7 @@ pub struct StampCtx<'a> {
 
 /// Per-junction evaluation-voltage store for SPICE-style pnjlim anchoring
 /// (see [`StampCtx::junction_eval`]). Built once per workspace; values reset
-/// to NaN ("unseeded, fall back to the x_prev anchor") at every solve entry.
+/// to NaN ("unseeded, fall back to the `x_prev` anchor") at every solve entry.
 pub struct JunctionEval {
     /// Device id -> base slot in `vals`. A diode owns 1 slot (vd); a BJT owns
     /// 2 (vbe, vbc).
@@ -1073,7 +1073,7 @@ fn stamp_vsource<S: StampSink>(
 /// is identical to `stamp_vsource`; the control terms land in the branch ROW
 /// only (columns cp/cn), so the control pair's own rows stay untouched, that
 /// is the sense-terminal contract `Device::sense_nodes` declares. The RHS is
-/// zero (nothing time-varying, nothing to src_scale: the gain is a device
+/// zero (nothing time-varying, nothing to `src_scale`: the gain is a device
 /// property, not an independent source value). The same stamp serves DC and
 /// transient; the constraint has no memory.
 fn stamp_vcvs<S: StampSink>(
@@ -1111,7 +1111,7 @@ fn stamp_vcvs<S: StampSink>(
 /// touching the control loop's node rows (the control coupling is declared via
 /// `Device::controlling_source`, not `sense_nodes`, precisely because it is a
 /// branch-current read). RHS is zero (the transresistance is a device
-/// property, not an independent source value, no src_scale). Same stamp for
+/// property, not an independent source value, no `src_scale`). Same stamp for
 /// DC and transient: the constraint has no memory.
 fn stamp_ccvs<S: StampSink>(
     ctx: &StampCtx,
@@ -1479,7 +1479,7 @@ fn sigmoid(x: f64) -> f64 {
 /// The subthreshold blend is the `softplus` overdrive (the gate-charge region
 /// switch's discipline, applied to the channel itself):
 ///
-///   vov_eff = 2·n·Vt · softplus(vov / (2·n·Vt))
+///   `vov_eff` = 2·n·Vt · softplus(vov / (2·n·Vt))
 ///
 /// fed into the plain Shichman-Hodges triode/saturation expressions. Above
 /// threshold `vov_eff -> vov` (the square law, exponentially fast); below,
@@ -1494,7 +1494,7 @@ fn sigmoid(x: f64) -> f64 {
 /// model's promised smooth subthreshold tail. The blended
 /// overdrive is C-infinity in `vgs`, so `id` and `gm` are continuous
 /// everywhere by construction (`gm` picks up the `sigmoid` chain factor
-/// d vov_eff/d vgs). Channel-length modulation multiplies every region
+/// `d vov_eff / d vgs`). Channel-length modulation multiplies every region
 /// including the tail; the (1 + lambda·vds) factor would otherwise jump at
 /// the region switch.
 #[inline]
@@ -2648,7 +2648,7 @@ fn stamp_vswitch<S: StampSink>(
 /// Returns `None` when NEITHER mechanism is active (`pole_hz` and `slew` both
 /// absent/zero/non-finite): the caller keeps the classic instantaneous stamp
 /// bit-identically. Otherwise `Some((v_out, dscale))` where `v_out` is the
-/// EMF to drive this step and `dscale` = ∂v_out/∂target is the factor the
+/// EMF to drive this step and `dscale` = `∂v_out/∂target` is the factor the
 /// input-coupling tangent must be scaled by (`α = 1-exp(-dt/τ)` through the
 /// pole, 0 when a rail or the slew clip pins the output, which is then this
 /// step's constant, like a frozen comparator rail). Infinite `rails` skip the

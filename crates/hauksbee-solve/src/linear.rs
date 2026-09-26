@@ -57,9 +57,9 @@ pub struct LinearIsland {
     /// Current sources inside the island: extra input columns after the
     /// voltage inputs, evaluated by the caller per step (ZOH).
     isources: Vec<(DeviceId, NodeId, NodeId)>,
-    /// Continuous `A` (n_states x n_states), row-major.
+    /// Continuous `A` (`n_states` x `n_states`), row-major.
     a: Vec<f64>,
-    /// Continuous `B` (n_states x n_inputs), row-major.
+    /// Continuous `B` (`n_states` x `n_inputs`), row-major.
     b: Vec<f64>,
     /// Node id -> island-local free-node index, sized `n_nodes+1`.
     node_local: Vec<Option<usize>>,
@@ -70,8 +70,8 @@ pub struct LinearIsland {
     /// Sparse CSR of `A` (state coupling), for the matrix-free advance used on
     /// large islands where a dense `exp(A dt)` would be ruinous.
     a_sparse: Csr,
-    /// Sparse CSR of the free-node reconstruction `Sx` (n_free x n_states), used
-    /// for large islands so probing doesn't cost a dense n_free*n_states matvec.
+    /// Sparse CSR of the free-node reconstruction `Sx` (`n_free` x `n_states`), used
+    /// for large islands so probing doesn't cost a dense `n_free`*`n_states` matvec.
     sx_sparse: Rect,
     cache: Option<ExpCache>,
     /// Matrix-free propagator parameters, cached per dt (substep count + Taylor

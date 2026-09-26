@@ -1,7 +1,7 @@
 //! Power-ramp (pseudo-transient continuation) gates for the `FromZero` /
 //! `Ramped` power-on start.
 //!
-//! The motivating case (ledger e57c0f0, tarski_general_e2e.rs): on the flagship,
+//! The motivating case (ledger e57c0f0, `tarski_general_e2e.rs`): on the flagship,
 //! some solve groups have NO reachable DC operating point (self-resetting
 //! oscillator shapes), so the honest way to carry them is to power on: sources
 //! ramp from zero, the state integrates from zero, and there is no DC solve to
@@ -48,7 +48,7 @@ fn comparator_astable() -> Circuit {
 }
 
 /// Wrap every independent source in a `Ramped` envelope reaching full amplitude
-/// at `win` (the power-on retry policy: ramp_window = 200 * dt).
+/// at `win` (the power-on retry policy: `ramp_window` = 200 * dt).
 fn ramp_sources(c: &Circuit, win: f64) -> Circuit {
     let mut c = c.clone();
     for d in c.devices.iter_mut() {
@@ -186,7 +186,7 @@ fn power_on_settles_to_the_same_steady_state() {
     );
 }
 
-/// The group index that conducts a named node (mirrors run_staged's routing).
+/// The group index that conducts a named node (mirrors `run_staged`'s routing).
 fn group_of_node(d: &Decomposition, node: NodeId) -> Option<usize> {
     let isl = d
         .graph
@@ -259,9 +259,9 @@ fn run_staged_power_ramps_the_no_dc_group() {
     );
 }
 
-/// Gate: run_staged is deterministic. On a fixture with several absorbed
+/// Gate: `run_staged` is deterministic. On a fixture with several absorbed
 /// drivers, two runs on the same decomposition must produce bitwise-identical
-/// executed_groups, torn_groups, and assembled waveforms. This guards the
+/// `executed_groups`, `torn_groups`, and assembled waveforms. This guards the
 /// `absorbed`-map ordering fix (device construction order is solver-visible).
 #[test]
 fn run_staged_is_bitwise_deterministic() {

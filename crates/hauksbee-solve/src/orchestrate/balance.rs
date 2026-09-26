@@ -22,7 +22,7 @@
 //! monolithic reference stamps exactly ONE such shunt on the single shared
 //! rail node. Summing the blocks' boundary currents therefore over-draws the
 //! rail by `(n_loads - 1) * gmin * v_rail`, and without the correction the
-//! torn solution is O(n_loads * gmin) below the monolithic one: small enough
+//! torn solution is `O(n_loads * gmin)` below the monolithic one: small enough
 //! to pass a sloppy eyeball, large enough to fail the 1e-6 gate. The surplus
 //! term is added back inside [`settle_rails`] so every executor gets the
 //! correction whether or not its author has read this paragraph.
@@ -116,7 +116,7 @@ pub struct BalancePolicy {
     /// second order, so real boards converge in a handful of passes; 60 is
     /// a generous ceiling, not a tuning.
     pub max_outer: usize,
-    /// Relative size of the finite-difference probe for df/dv_rail.
+    /// Relative size of the finite-difference probe for `df/dv_rail`.
     pub probe_rel: f64,
     /// Absolute probe floor (volts), for rails sitting near zero.
     pub probe_floor: f64,

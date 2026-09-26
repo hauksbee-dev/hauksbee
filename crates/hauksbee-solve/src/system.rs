@@ -418,9 +418,9 @@ mod tests {
 /// independent charges spill into the SECONDARY banks `xb[k]`, one extra
 /// state each, in a documented per-device order:
 ///
-/// * BJT (two charges):    bank A = Q_be,  `xb[0]` = Q_bc.
-/// * MOSFET (up to four):  bank A = Q_gs,  `xb[0]` = Q_gd,
-///   `xb[1]` = Q_bd, `xb[2]` = Q_bs.
+/// * BJT (two charges):    bank A = `Q_be`,  `xb[0]` = `Q_bc`.
+/// * MOSFET (up to four):  bank A = `Q_gs`,  `xb[0]` = `Q_gd`,
+///   `xb[1]` = `Q_bd`, `xb[2]` = `Q_bs`.
 ///
 /// (A single named secondary bank exists for "the one
 /// device with two charges"; the MOSFET's four charges are why it is now an
