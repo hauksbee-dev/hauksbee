@@ -2836,28 +2836,28 @@ fn claude_confinement(ws: &Workspace) -> String {
 }
 
 /// The user's PATH behind the workspace's `.bin`, whose `hauksbee` shim runs only the
-/// checker the prompt names (or fails when there is none), so a bare `hauksbee`
+/// checker the prompt names (or `false` when there is none), so a bare `hauksbee`
 /// never reaches another install while every other tool on the user's PATH,
 /// such as a wrapper's `claude` sharing `~/.local/bin` with `hauksbee`, stays
 /// reachable. The shim is a `/bin/sh` script inside the workspace, which both
 /// confinements already let the agent read, and it execs the allowed checker.
-/// Windows would not run an extensionless shim, so there the directories
-/// holding `hauksbee.exe` are still dropped.
+/// A `hauksbee.cmd` beside it does the same for Windows cmd and `PowerShell`,
+/// which find it by PATHEXT; Git Bash runs the extensionless script.
 fn agent_path(ws: &Workspace) -> Result<std::ffi::OsString> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let (bin, shim) = (ws.path().join(".bin"), ws.path().join(".bin/hauksbee"));
-    let quote = |c: &PathBuf| c.to_string_lossy().replace('\'', r"'\''");
-    let run = ws.checker.as_ref().map_or_else(
-        || "exit 127".into(),
-        |c| format!("exec '{}' \"$@\"", quote(c)),
-    );
+    let checker = ws.checker.clone().unwrap_or_else(|| "false".into());
+    let quoted = checker.to_string_lossy().replace('\'', r"'\''");
     std::fs::create_dir_all(&bin)?;
-    std::fs::write(&shim, format!("#!/bin/sh\n{run}\n"))?;
+    std::fs::write(&shim, format!("#!/bin/sh\nexec '{quoted}' \"$@\"\n"))?;
+    std::fs::write(
+        bin.join("hauksbee.cmd"),
+        format!("@\"{}\" %*", checker.display()),
+    )?;
     #[cfg(unix)]
     std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
-    let kept =
-        std::env::split_paths(&path).filter(|d| cfg!(unix) || !d.join("hauksbee.exe").is_file());
-    Ok(std::env::join_paths(std::iter::once(bin).chain(kept))?)
+    let dirs = std::iter::once(bin).chain(std::env::split_paths(&path));
+    Ok(std::env::join_paths(dirs)?)
 }
 
 /// One sandboxed run of whichever agent CLI the settings name.
