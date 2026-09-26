@@ -1534,6 +1534,8 @@ fn set_resistor_ohms(circuit: &mut Circuit, id: DeviceId, ohms: f64) {
 }
 
 /// Evaluate a parsed expression to a number against a context.
+// Script integers are read as numbers; rounding beyond 2^53 is the intended view.
+#[allow(clippy::cast_precision_loss)]
 fn eval_number(program: &EvalNode, ctx: &HashMapContext) -> Option<f64> {
     program.eval_with_context(ctx).ok().and_then(|v| match v {
         Value::Float(f) => Some(f),

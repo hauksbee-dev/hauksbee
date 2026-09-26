@@ -548,8 +548,8 @@ pub fn bind_board_with(
     // would hand out addresses in the wrong order for non-uniform-width
     // designators.
     dacs.sort_by_key(|d| crate::bind_report::natural_ref_key(&d.reference));
-    for (i, d) in dacs.iter_mut().enumerate() {
-        d.address = 0x60 + i as u8;
+    for (d, address) in dacs.iter_mut().zip(0x60u8..) {
+        d.address = address;
     }
 
     // ── Pass 3a: stamp behavioural devices (power ICs) ──────────────────────
@@ -979,9 +979,9 @@ fn gather_device_meta(
         }
     }
     for d in dacs {
-        for (ch, drv) in d.vout_drivers.iter().enumerate() {
+        for (letter, drv) in (b'a'..).zip(&d.vout_drivers) {
             if let Some(drv) = drv {
-                let pin = format!("vout_{}", char::from(b'a' + ch as u8));
+                let pin = format!("vout_{}", char::from(letter));
                 push_pin(&mut metas, &d.reference, pin, drv.vsource);
             }
         }
@@ -1258,8 +1258,9 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         params.set_str("auto_bind", "family_router");
         params.set_str("auto_bind_family", family);
         let derived = derive_mcu_pin_roles(comp);
-        params.set_int("auto_bind_pin_names", derived.named_pin_count as i64);
-        params.set_int("auto_bind_derived_pins", derived.roles.len() as i64);
+        let int = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+        params.set_int("auto_bind_pin_names", int(derived.named_pin_count));
+        params.set_int("auto_bind_derived_pins", int(derived.roles.len()));
         params.set_str("auto_bind_pin_summary", pin_role_summary(&derived.roles));
         return Some(make_entry(
             &format!(
@@ -4724,6 +4725,8 @@ fn bind_analog_switch(
 /// [`PinDriver`] on each connected VOUT channel net (ROUT ~1 Ω per the
 /// datasheet) and push a [`DacBinding`] the scheduler turns into an I2C slave.
 /// The address is assigned later by reference order; we leave a placeholder.
+// `gain` is a rounded model param (1 or 2); `as` saturates anything out of range.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn bind_mcp4728_dac(
     comp: &Component,
     model: &ModelEntry,
@@ -5181,6 +5184,8 @@ fn assembled_crystal_bridges(
     })
 }
 
+// The pin counts were written by the family router as small non-negative integers.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn log_mcu_auto_decision(
     comp: &Component,
     model: &ModelEntry,
@@ -5325,7 +5330,7 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     let (mut scale, mut prefix) = PREFIXES[idx];
     let mut mantissa = v / scale;
     // 3 significant figures: more decimals for small mantissas, fewer for large.
-    let decimals = |m: f64| {
+    let decimals = |m: f64| -> u8 {
         if m >= 100.0 {
             0
         } else if m >= 10.0 {
@@ -5339,15 +5344,15 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     // promised [1,1000) range and inconsistent with the sibling format_engineering
     // (tolerance.rs), which has this exact guard. Promote to the next-larger prefix
     // so it reads "1 MΩ" instead. Only when a larger prefix exists (idx > 0).
-    let round_to = |m: f64, d: i32| {
-        let p = 10f64.powi(d);
+    let round_to = |m: f64, d: u8| {
+        let p = 10f64.powi(i32::from(d));
         (m * p).round() / p
     };
     if idx > 0 && round_to(mantissa, decimals(mantissa)) >= 1000.0 {
         (scale, prefix) = PREFIXES[idx - 1];
         mantissa = v / scale;
     }
-    let s = format!("{mantissa:.*}", decimals(mantissa) as usize);
+    let s = format!("{mantissa:.*}", usize::from(decimals(mantissa)));
     // Trim trailing fractional zeros for a clean read ("4.70" -> "4.7"), but
     // only when a decimal point is present, so "390" is never stripped to "39".
     let s = if s.contains('.') {
@@ -6146,13 +6151,13 @@ impl IdentityRefusal {
     }
 }
 
-/// Below this share of an artifact's designators matching the board, the two are
-/// not the same board. A BOM may legitimately carry mechanical parts and panel
+/// Below `1/N` of an artifact's designators matching the board (N is this
+/// divisor, so half), the two are not the same board. A BOM may legitimately carry mechanical parts and panel
 /// extras, but those cannot outnumber the actual board population. Treating ten
 /// matching rows among a hundred as sufficient made a same-prefix board family
 /// look compatible even though ninety per cent of the asserted identities were
 /// for another design.
-const WRONG_BOARD_MATCH_RATIO: f64 = 0.5;
+const WRONG_BOARD_MATCH_DIVISOR: usize = 2;
 
 /// Apply identity from a BOM or a placement file to a board, before binding.
 ///
@@ -6222,7 +6227,7 @@ pub fn apply_identity(
     named.sort();
     named.dedup();
     let matched = named.iter().filter(|r| on_board.contains(*r)).count();
-    if (matched as f64) < named.len() as f64 * WRONG_BOARD_MATCH_RATIO {
+    if matched * WRONG_BOARD_MATCH_DIVISOR < named.len() {
         return Err(IdentityRefusal::WrongBoard {
             artifact: source,
             total: named.len(),
@@ -7894,7 +7899,7 @@ style = "i2c_pointer"
     fn role_sources_have_global_priority_not_per_pad_priority() {
         let mut c = comp("D1", "D");
         let map = std::iter::once(("1".into(), "anode".into())).collect();
-        let node_of = |net: Option<i64>| net.map(|id| NodeId(id as u32));
+        let node_of = |net: Option<i64>| net.map(|id| NodeId(u32::try_from(id).unwrap()));
         let mut named = pin("2", 2);
         named.function = "A".into();
         for (pins, kind, expected) in [
@@ -8134,7 +8139,7 @@ style = "i2c_pointer"
             .collect();
         let node_of = move |n: Option<i64>| match n {
             Some(0) => Some(NodeId::GROUND),
-            Some(i @ 1..=6) => Some(nodes[i as usize - 1]),
+            Some(i @ 1..=6) => Some(nodes[usize::try_from(i).unwrap() - 1]),
             _ => None,
         };
         let before = circuit.devices.len();
@@ -8168,7 +8173,7 @@ style = "i2c_pointer"
         ];
         let node_of = move |n: Option<i64>| match n {
             Some(0) => Some(NodeId::GROUND),
-            Some(i @ 1..=3) => Some(nodes[i as usize - 1]),
+            Some(i @ 1..=3) => Some(nodes[usize::try_from(i).unwrap() - 1]),
             _ => None,
         };
         let model = resolve_value(lib, value, "");

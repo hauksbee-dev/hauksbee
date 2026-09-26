@@ -289,6 +289,8 @@ impl BindReport {
 
     /// Fraction of non-ignored components that resolved (0.0..=1.0).
     #[must_use]
+    // Component counts are far below 2^53, so the ratio is exact enough.
+    #[allow(clippy::cast_precision_loss)]
     pub fn resolved_fraction(&self) -> f64 {
         let n = self.non_ignored_count();
         if n == 0 {

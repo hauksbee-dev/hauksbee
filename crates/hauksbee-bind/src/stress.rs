@@ -1976,7 +1976,7 @@ mod monitor_temp_tests {
                 ..Default::default()
             };
             let (mut circuit, node, mut monitor) = resistor_monitor(1.0, ratings);
-            let raised = amps.iter().enumerate().any(|(k, i)| {
+            let raised = (0u32..).zip(amps.iter()).any(|(k, i)| {
                 monitor.deposit_chunk_energy(&[0.0], dt);
                 let v = *i;
                 monitor
@@ -1984,7 +1984,7 @@ mod monitor_temp_tests {
                         &mut circuit,
                         &|n| if n == node { v } else { 0.0 },
                         &|_| None,
-                        k as f64 * dt,
+                        f64::from(k) * dt,
                     )
                     .iter()
                     .any(|f| f.kind == FaultKind::Overcurrent)

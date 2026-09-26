@@ -77,7 +77,9 @@ use std::sync::{Arc, Mutex};
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
 };
-use hauksbee_models::logic_spec::{Edge, Level, Logic, LogicExpr, LogicSpecError, RegisterOp};
+use hauksbee_models::logic_spec::{
+    Edge, Level, Logic, LogicExpr, LogicRegister, LogicSpecError, MemorySpec, RegisterOp,
+};
 
 /// Fixpoint sweep bound for combinational cycles.
 ///
@@ -704,6 +706,12 @@ impl ParallelMemoryPort {
     }
 }
 
+// Clock rates are far below 2^53 and the ceil'd, >= 1 cycle count saturates via `as`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn seconds_to_cycles(seconds: f64, frequency_hz: u64) -> u64 {
     (seconds * frequency_hz.max(1) as f64).ceil().max(1.0) as u64
 }
@@ -845,6 +853,181 @@ fn tarjan_sccs(deps: &[Vec<usize>]) -> Vec<Vec<usize>> {
     sccs
 }
 
+/// All-ones mask for a validated 1..=64-bit wide value.
+const fn width_mask(bits: u32) -> u64 {
+    if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
+}
+
+/// Compile one validated `[[models.logic.memory]]` block against the pin tables.
+// `words`, `page_words` and protection addresses are bounded by
+// `Logic::validate` (`MAX_TOTAL_BITS`), so they fit `usize`.
+#[allow(clippy::cast_possible_truncation)]
+fn compile_memory(
+    m: &MemorySpec,
+    input_idx: &HashMap<&str, usize>,
+    output_idx: &HashMap<&str, usize>,
+) -> CompMemory {
+    let mask = width_mask(m.bits);
+    CompMemory {
+        name: m.name.clone(),
+        mask,
+        address: m.address.iter().map(|p| input_idx[p.as_str()]).collect(),
+        writes: m
+            .write
+            .iter()
+            .map(|w| CompMemoryWrite {
+                pin: input_idx[w.pin.as_str()],
+                edge: w.edge,
+                prev: false,
+                gates: m
+                    .write_gates
+                    .iter()
+                    .map(|g| (input_idx[g.pin.as_str()], g.active))
+                    .collect(),
+            })
+            .chain(m.write_cycles.iter().map(|w| {
+                CompMemoryWrite {
+                    pin: input_idx[w.pin.as_str()],
+                    edge: w.edge,
+                    prev: false,
+                    gates: w
+                        .gates
+                        .iter()
+                        .map(|g| (input_idx[g.pin.as_str()], g.active))
+                        .collect(),
+                }
+            }))
+            .collect(),
+        read_gates: m
+            .read_gates
+            .iter()
+            .map(|g| (input_idx[g.pin.as_str()], g.active))
+            .collect(),
+        data_in_names: m.data_in.clone(),
+        data_in_levels: vec![false; m.data_in.len()],
+        data_out: m.data_out.iter().map(|p| output_idx[p.as_str()]).collect(),
+        byte_load_timeout_s: m.byte_load_timeout_s,
+        program_time_s: m.program_time_s,
+        storage: Arc::new(Mutex::new(ParallelMemoryStorage {
+            cells: vec![m.init & mask; m.words as usize].into_boxed_slice(),
+            protection: m
+                .software_data_protection
+                .as_ref()
+                .map(|p| SoftwareProtectionState {
+                    enabled: p.initial,
+                    enable: p
+                        .enable
+                        .iter()
+                        .map(|w| (w.address as usize, w.value))
+                        .collect(),
+                    disable: p
+                        .disable
+                        .iter()
+                        .map(|w| (w.address as usize, w.value))
+                        .collect(),
+                    page_words: m.page_words.unwrap_or(1) as usize,
+                    command_buffer: Vec::new(),
+                    write_window: None,
+                }),
+            page_words: m.page_words.unwrap_or(1) as usize,
+            timed_page: None,
+            busy: None,
+            last_timed_write_cycle: None,
+        })),
+    }
+}
+
+/// Compile one `[[models.logic.register]]` block against the pin and register tables.
+fn compile_register(
+    r: &LogicRegister,
+    input_idx: &HashMap<&str, usize>,
+    reg_idx: &HashMap<&str, usize>,
+) -> CompReg {
+    let mask = width_mask(r.bits);
+    CompReg {
+        name: r.name.clone(),
+        bits: r.bits,
+        mask,
+        state: r.init & mask,
+        clock: r
+            .clock
+            .as_ref()
+            .map(|c| (input_idx[c.pin.as_str()], c.edge)),
+        prev_clock: false,
+        resets: r
+            .resets
+            .iter()
+            .map(|rst| (input_idx[rst.pin.as_str()], rst.active, rst.value))
+            .collect(),
+        op: r.op,
+        data_in: r.data_in.as_ref().map(|d| {
+            if let Some(&ri) = reg_idx.get(d.as_str()) {
+                DataSrc::Reg(ri)
+            } else {
+                DataSrc::Pin(input_idx[d.as_str()])
+            }
+        }),
+        load: r.load.as_ref().map(|l| {
+            (
+                input_idx[l.pin.as_str()],
+                l.active,
+                l.data.iter().map(|p| input_idx[p.as_str()]).collect(),
+            )
+        }),
+        clock_enable: r
+            .clock_enable
+            .as_ref()
+            .map(|e| (input_idx[e.pin.as_str()], e.active)),
+    }
+}
+
+/// Unwired-pin defaults (see module docs): every control input starts at the
+/// level that leaves its register, tri-state group or memory released.
+fn unwired_input_defaults(
+    inputs: usize,
+    registers: &[CompReg],
+    tristates: &[CompTristate],
+    memories: &[CompMemory],
+) -> Vec<bool> {
+    let mut input_defaults = vec![false; inputs];
+    for r in registers {
+        for &(pin, active, _) in &r.resets {
+            // Released = inactive.
+            input_defaults[pin] = active == Level::Low;
+        }
+        if let Some((pin, active, _)) = &r.load {
+            input_defaults[*pin] = *active == Level::Low;
+        }
+        if let Some((pin, active)) = r.clock_enable {
+            // Clock enabled = active.
+            input_defaults[pin] = active == Level::High;
+        }
+    }
+    for ts in tristates {
+        // Outputs driven = active.
+        input_defaults[ts.enable] = ts.active == Level::High;
+    }
+    for m in memories {
+        // Unwired memory controls fail safe: selects/enables are inactive,
+        // and the write strobe starts released so the first observed idle
+        // level cannot manufacture a write edge.
+        for &(pin, active) in &m.read_gates {
+            input_defaults[pin] = active == Level::Low;
+        }
+        for write in &m.writes {
+            for &(pin, active) in &write.gates {
+                input_defaults[pin] = active == Level::Low;
+            }
+            input_defaults[write.pin] = write.edge == Edge::Rising;
+        }
+    }
+    input_defaults
+}
+
 impl LogicComponent {
     /// Compile a validated `[models.logic]` block. Runs `Logic::validate`,
     /// lowers and compiles every expression, builds the evaluation plan, and
@@ -878,127 +1061,17 @@ impl LogicComponent {
             .collect();
 
         // ── Addressable memories ──
-        let mut memories: Vec<CompMemory> = Vec::with_capacity(validated.memories.len());
-        for m in &validated.memories {
-            let mask = if m.bits == 64 {
-                u64::MAX
-            } else {
-                (1u64 << m.bits) - 1
-            };
-            memories.push(CompMemory {
-                name: m.name.clone(),
-                mask,
-                address: m.address.iter().map(|p| input_idx[p.as_str()]).collect(),
-                writes: m
-                    .write
-                    .iter()
-                    .map(|w| CompMemoryWrite {
-                        pin: input_idx[w.pin.as_str()],
-                        edge: w.edge,
-                        prev: false,
-                        gates: m
-                            .write_gates
-                            .iter()
-                            .map(|g| (input_idx[g.pin.as_str()], g.active))
-                            .collect(),
-                    })
-                    .chain(m.write_cycles.iter().map(|w| {
-                        CompMemoryWrite {
-                            pin: input_idx[w.pin.as_str()],
-                            edge: w.edge,
-                            prev: false,
-                            gates: w
-                                .gates
-                                .iter()
-                                .map(|g| (input_idx[g.pin.as_str()], g.active))
-                                .collect(),
-                        }
-                    }))
-                    .collect(),
-                read_gates: m
-                    .read_gates
-                    .iter()
-                    .map(|g| (input_idx[g.pin.as_str()], g.active))
-                    .collect(),
-                data_in_names: m.data_in.clone(),
-                data_in_levels: vec![false; m.data_in.len()],
-                data_out: m.data_out.iter().map(|p| output_idx[p.as_str()]).collect(),
-                byte_load_timeout_s: m.byte_load_timeout_s,
-                program_time_s: m.program_time_s,
-                storage: Arc::new(Mutex::new(ParallelMemoryStorage {
-                    cells: vec![m.init & mask; m.words as usize].into_boxed_slice(),
-                    protection: m.software_data_protection.as_ref().map(|p| {
-                        SoftwareProtectionState {
-                            enabled: p.initial,
-                            enable: p
-                                .enable
-                                .iter()
-                                .map(|w| (w.address as usize, w.value))
-                                .collect(),
-                            disable: p
-                                .disable
-                                .iter()
-                                .map(|w| (w.address as usize, w.value))
-                                .collect(),
-                            page_words: m.page_words.unwrap_or(1) as usize,
-                            command_buffer: Vec::new(),
-                            write_window: None,
-                        }
-                    }),
-                    page_words: m.page_words.unwrap_or(1) as usize,
-                    timed_page: None,
-                    busy: None,
-                    last_timed_write_cycle: None,
-                })),
-            });
-        }
+        let mut memories: Vec<CompMemory> = validated
+            .memories
+            .iter()
+            .map(|m| compile_memory(m, &input_idx, &output_idx))
+            .collect();
 
         // ── Registers ──
         let registers: Vec<CompReg> = logic
             .registers
             .iter()
-            .map(|r| {
-                let mask = if r.bits == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << r.bits) - 1
-                };
-                CompReg {
-                    name: r.name.clone(),
-                    bits: r.bits,
-                    mask,
-                    state: r.init & mask,
-                    clock: r
-                        .clock
-                        .as_ref()
-                        .map(|c| (input_idx[c.pin.as_str()], c.edge)),
-                    prev_clock: false,
-                    resets: r
-                        .resets
-                        .iter()
-                        .map(|rst| (input_idx[rst.pin.as_str()], rst.active, rst.value))
-                        .collect(),
-                    op: r.op,
-                    data_in: r.data_in.as_ref().map(|d| {
-                        if let Some(&ri) = reg_idx.get(d.as_str()) {
-                            DataSrc::Reg(ri)
-                        } else {
-                            DataSrc::Pin(input_idx[d.as_str()])
-                        }
-                    }),
-                    load: r.load.as_ref().map(|l| {
-                        (
-                            input_idx[l.pin.as_str()],
-                            l.active,
-                            l.data.iter().map(|p| input_idx[p.as_str()]).collect(),
-                        )
-                    }),
-                    clock_enable: r
-                        .clock_enable
-                        .as_ref()
-                        .map(|e| (input_idx[e.pin.as_str()], e.active)),
-                }
-            })
+            .map(|r| compile_register(r, &input_idx, &reg_idx))
             .collect();
 
         // ── Comb compilation ──
@@ -1066,59 +1139,8 @@ impl LogicComponent {
         }
 
         // ── Unwired-pin defaults (see module docs) ──
-        let mut input_defaults = vec![false; input_names.len()];
-        for r in &registers {
-            for &(pin, active, _) in &r.resets {
-                // Released = inactive.
-                input_defaults[pin] = match active {
-                    Level::Low => true,
-                    Level::High => false,
-                };
-            }
-            if let Some((pin, active, _)) = &r.load {
-                input_defaults[*pin] = match active {
-                    Level::Low => true,
-                    Level::High => false,
-                };
-            }
-            if let Some((pin, active)) = r.clock_enable {
-                // Clock enabled = active.
-                input_defaults[pin] = match active {
-                    Level::Low => false,
-                    Level::High => true,
-                };
-            }
-        }
-        for ts in &tristates {
-            // Outputs driven = active.
-            input_defaults[ts.enable] = match ts.active {
-                Level::Low => false,
-                Level::High => true,
-            };
-        }
-        for m in &memories {
-            // Unwired memory controls fail safe: selects/enables are inactive,
-            // and the write strobe starts released so the first observed idle
-            // level cannot manufacture a write edge.
-            for &(pin, active) in &m.read_gates {
-                input_defaults[pin] = match active {
-                    Level::Low => true,
-                    Level::High => false,
-                };
-            }
-            for write in &m.writes {
-                for &(pin, active) in &write.gates {
-                    input_defaults[pin] = match active {
-                        Level::Low => true,
-                        Level::High => false,
-                    };
-                }
-                input_defaults[write.pin] = match write.edge {
-                    Edge::Rising => true,
-                    Edge::Falling => false,
-                };
-            }
-        }
+        let input_defaults =
+            unwired_input_defaults(input_names.len(), &registers, &tristates, &memories);
 
         for m in &mut memories {
             for write in &mut m.writes {
@@ -1162,6 +1184,8 @@ impl LogicComponent {
     /// [`COMB_FIXPOINT_BOUND`] Gauss–Seidel sweeps for EVERY assignment of
     /// its external inputs and EVERY seed state of its members. Refuses
     /// (named error) when it cannot verify.
+    // Cycle operand counts are bounded by the part's pin count, far below `u32::MAX`.
+    #[allow(clippy::cast_possible_truncation)]
     fn check_convergence(&mut self) -> Result<(), LogicCompileError> {
         // Collect the plan's SCC steps first (borrow gymnastics: we mutate ctx
         // during evaluation).

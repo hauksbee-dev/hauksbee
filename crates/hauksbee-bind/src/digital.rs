@@ -621,6 +621,8 @@ impl DigitalComponent {
     /// Compact register state for frame reporting: one entry per spec
     /// register under its declared name.
     #[must_use]
+    // Frame reports carry register values as numbers; above 2^53 is display-only.
+    #[allow(clippy::cast_precision_loss)]
     pub fn state_summary(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         if let Some(logic) = self.logic.as_ref() {
@@ -1304,7 +1306,7 @@ mod tests {
     }
 
     fn pack_out(c: &DigitalComponent) -> u8 {
-        c.register("store").expect("595 store register") as u8
+        u8::try_from(c.register("store").expect("595 store register")).unwrap()
     }
 
     fn replay(
