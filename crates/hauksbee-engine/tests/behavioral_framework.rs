@@ -21,29 +21,23 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::behavioral::Behavioral;
 use hauksbee_models::{ComponentQuery, ModelLibrary, Params};
-use hauksbee_solve::{Layout, SolverOptions, StepControl, Transient};
+use hauksbee_solve::{SolverOptions, StepControl, Transient};
 
 /// A minimal iterate-to-consistency driver over one behavioural device.
 struct Harness {
     circuit: Circuit,
     dev: BehavioralDevice,
     node_volts: Vec<f64>,
-    branch_x: Vec<f64>,
-    layout: Layout,
     t: f64,
 }
 
 impl Harness {
     fn new(circuit: Circuit, dev: BehavioralDevice) -> Self {
-        let layout = Layout::new(&circuit);
         let n_nodes = circuit.node_count();
-        let n_branch = layout.size.saturating_sub(layout.n_nodes);
         Self {
             circuit,
             dev,
             node_volts: vec![0.0; n_nodes],
-            branch_x: vec![0.0; n_branch],
-            layout,
             t: 0.0,
         }
     }
@@ -53,16 +47,8 @@ impl Harness {
     fn run(&mut self, n: usize, dt: f64) {
         for _ in 0..n {
             let volts = self.node_volts.clone();
-            let branch = self.branch_x.clone();
-            let layout = self.layout.clone();
             let node_v = |nd: NodeId| volts.get(nd.0 as usize).copied().unwrap_or(0.0);
-            let branch_current = |id: DeviceId| -> Option<f64> {
-                layout
-                    .branch(id)
-                    .and_then(|b| branch.get(b.saturating_sub(layout.n_nodes)).copied())
-            };
-            self.dev
-                .update(&mut self.circuit, &node_v, &branch_current, self.t, dt);
+            self.dev.update(&mut self.circuit, &node_v, self.t, dt);
             self.solve(dt);
             self.t += dt;
         }
@@ -84,11 +70,6 @@ impl Harness {
             self.node_volts[0] = 0.0;
             for node in 1..n_nodes {
                 self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
-            }
-            let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
-            self.branch_x.resize(n_branch, 0.0);
-            for b in 0..n_branch {
-                self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
             }
         }
     }

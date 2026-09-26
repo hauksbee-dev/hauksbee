@@ -9,7 +9,7 @@
 use std::{collections::HashSet, fmt::Write as _, time::Duration};
 
 use crate::assertions::AssertResult;
-use hauksbee_engine::result::Refusal;
+use hauksbee_engine::{reports::ci_artifacts::xml_escape, result::Refusal};
 
 type ExplainedAssumptions = HashSet<hauksbee_ir::evidence::AssumptionId>;
 
@@ -1355,14 +1355,6 @@ fn timing_coverage_note(t: &hauksbee_engine::scheduler::TimingCoverage) -> Strin
             "poll-boundary"
         },
     )
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 /// Escape the characters that are special in GitHub workflow-command data.

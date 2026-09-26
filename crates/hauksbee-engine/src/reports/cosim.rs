@@ -401,6 +401,18 @@ impl HeadlessRun {
     }
 }
 
+/// A streamed frame's fault back as the runtime event it reports.
+pub(crate) fn fault_event(f: hauksbee_frontdoor_api::protocol::FaultInfo) -> crate::FaultEvent {
+    crate::FaultEvent {
+        component: f.component,
+        kind: crate::FaultKind::from_str(&f.kind),
+        value: f.value,
+        limit: f.limit,
+        t: f.t,
+        destroyed: f.destroyed,
+    }
+}
+
 /// Step the engine headlessly for `seconds` of simulated time.
 ///
 /// Collects faults and UART output, prints the human summary unless `quiet`,
@@ -422,7 +434,7 @@ pub fn run_headless(
     probe_csv: Option<&Path>,
     chunk_us: Option<f64>,
 ) -> anyhow::Result<HeadlessRun> {
-    use crate::{FaultEvent, FaultKind};
+    use crate::FaultEvent;
     use hauksbee_frontdoor_api::engine::Engine;
     // External emulator backends (Renode/QEMU) advance over a socket: a fine 1 ms
     // chunk means thousands of round-trips and a co-sim that looks frozen for
@@ -503,16 +515,7 @@ pub fn run_headless(
         for (_, bytes) in uart_entries {
             last_uart.extend_from_slice(bytes);
         }
-        for f in frame.faults {
-            faults.push(FaultEvent {
-                component: f.component,
-                kind: FaultKind::from_str(&f.kind),
-                value: f.value,
-                limit: f.limit,
-                t: f.t,
-                destroyed: f.destroyed,
-            });
-        }
+        faults.extend(frame.faults.into_iter().map(fault_event));
         t += frame_dt;
     }
 

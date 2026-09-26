@@ -3618,11 +3618,22 @@ fn bind_vreg(
         if roles.get(&conv.in_pin).is_none_or(|n| n.is_ground()) {
             return open_warning(comp, "vreg input not connected");
         }
+        // An unstated loop bandwidth scales every load-step deviation, so it is
+        // a disclosed default (a Qualified assumption downstream), never silent.
+        let (fc, stated) = conv.loop_crossover_hz();
+        let loop_note = (!stated).then(|| {
+            format!(
+                "{} ({}): converter loop `crossover_hz` not stated; assumed {fc:.0} Hz \
+                 (f_sw/10); designs span f_sw/20..f_sw/5, so load-step deviation is \
+                 uncertain about 2x either way",
+                comp.reference, comp.value
+            )
+        });
         return (
             BindOutcome::Behavioral {
                 device: format!("vreg {:.1}V behavioral converter", conv.vout_setpoint),
             },
-            entry_warning(comp, model),
+            merge_bind_warnings(entry_warning(comp, model), loop_note),
         );
     }
     // A SHUNT reference (TL431 class) is not a pass element at all and has no

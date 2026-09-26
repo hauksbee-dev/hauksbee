@@ -83,17 +83,19 @@ max_voltage_v = 40.0
 topology = "buck"
 out_pin = "sw"
 in_pin = "in"
-# A safety ceiling only.  In feedback mode the command is derived from the
-# board's FB divider and, for buck topology, is also clamped to the solved VIN.
+# Unused in feedback mode: the board's FB divider sets the output, and a buck's
+# averaged switch node is clamped to the solved VIN.
 vout_setpoint = 40.0
 iout_limit_a = 5.0
 efficiency = 0.90
 out_r_ohms = 0.02
+# Datasheet fixed 570 kHz. The crossover is set by the board's COMP network,
+# so it stays unstated: the binder discloses its f_sw/10 default.
+switching_hz = 570e3
 
 [models.behavioral.converter.feedback]
 pin = "fb"
 vref_v = 0.800
-relaxation_gain = 4.0
 
 [models.behavioral.converter.enable]
 pin = "en"

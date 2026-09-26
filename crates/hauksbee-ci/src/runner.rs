@@ -2615,7 +2615,7 @@ fn infer_supply_net(board: &ExtractedBoard, part_ref: &str) -> Option<String> {
 
 /// Apply opt-in capacitor parasitics (ESR/ESL) to the bound circuit. Default
 /// (no `[decoupling]` block, or `parasitics = false`) leaves caps ideal. With
-/// `parasitics = true`, every bound capacitor gets package/dielectric-default
+/// `parasitics = true`, every board capacitor gets package/dielectric-default
 /// ESR/ESL inferred from its footprint and value; per-ref overrides win.
 fn apply_decoupling(spec: &Spec, board: &ExtractedBoard, bound: &mut BoundBoard) {
     use hauksbee_engine::{apply_parasitics, EsrEsl};
@@ -2636,7 +2636,8 @@ fn apply_decoupling(spec: &Spec, board: &ExtractedBoard, bound: &mut BoundBoard)
         .devices
         .iter()
         .filter_map(|d| match d {
-            Device::Capacitor { name, .. } => Some(name.clone()),
+            // Board parts only: a model-internal capacitor has no package.
+            Device::Capacitor { name, .. } if board.component(name).is_some() => Some(name.clone()),
             _ => None,
         })
         .collect();

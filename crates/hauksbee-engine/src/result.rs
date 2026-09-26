@@ -774,6 +774,18 @@ pub struct CosimFallbackWindow {
     pub error_estimate_v: Option<f64>,
 }
 
+impl From<&crate::scheduler::FallbackWindow> for CosimFallbackWindow {
+    fn from(window: &crate::scheduler::FallbackWindow) -> Self {
+        Self {
+            start_s: window.start_s,
+            end_s: window.end_s,
+            method: window.method.as_str().to_string(),
+            fidelity_note: window.method.fidelity_note().to_string(),
+            error_estimate_v: window.error_estimate_v,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct NetActivity {
     pub net: String,

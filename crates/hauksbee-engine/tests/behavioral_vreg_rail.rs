@@ -19,8 +19,9 @@
 use hauksbee_engine::binder::{bind_board_with, BoundBoard};
 use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_engine::scheduler::Scheduler;
-use hauksbee_engine::CustomRegistry;
+use hauksbee_engine::{BoardEvidence, CustomRegistry, DynamicLoad};
 use hauksbee_extract::{Component, ExtractedBoard, Pin};
+use hauksbee_ir::evidence::{Assumption, AssumptionKind, EvidenceStatus, RunDate};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
@@ -98,6 +99,7 @@ vout_setpoint = 3.3
 iout_limit_a = 2.0
 efficiency = 0.9
 out_r_ohms = 0.01
+crossover_hz = 30e3
 "#
         ),
     )
@@ -344,4 +346,65 @@ fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
         tj.is_some_and(|t| t > sched.ambient_c()),
         "converter Tj {tj:?}"
     );
+}
+
+/// The 3.3 V feedback buck from +12V with `cout` on +OUT, stepped by 1.5 A at
+/// 1 ms: the rail's lowest 1 us sample over the next 300 us, where it ends,
+/// and the bound board's evidence.
+fn load_step(extra: &str, cout: &str) -> (f64, f64, BoardEvidence) {
+    let mut board = lc_buck_board("+12V", "33R", true);
+    board.components[1].value = cout.into();
+    let lib = lib_with_card(&format!("step{cout}{}", extra.len()), 3.3, extra, true);
+    let mut bound = bind_board_with(&board, &lib, &CustomRegistry::new());
+    let today = RunDate::from_epoch_days(20_666);
+    let evidence = BoardEvidence::from_bound(&board, &bound.report, &[], today).unwrap();
+    let node = bound.circuit.node("+OUT");
+    let profile = toml::from_str("id = \"s\"\n[[segment]]\nlevel_a = 1.5\nrise_s = 25e-9").unwrap();
+    let load = DynamicLoad::new(&mut bound.circuit, "step", node, profile, 1e-3, 0);
+    let mut sched = Scheduler::new(bound, None, SolverOptions::default()).unwrap();
+    sched.attach_peripheral(Box::new(load));
+    sched.step(1e-3);
+    let mut trace = (0..300).map(|_| {
+        sched.step(1e-6);
+        sched.net_voltage("+OUT").unwrap()
+    });
+    let low = trace.by_ref().take(299).fold(f64::INFINITY, f64::min);
+    let end = trace.next().unwrap();
+    assert!(sched.analog_valid(), "{:?}", sched.failed_windows());
+    (low, end, evidence)
+}
+
+/// A regulated buck's load step dips by its loop bandwidth, about
+/// `dI / (2 pi f_c C)` (0.36 V here), and recovers within 300 us; the old
+/// stiff source rang the output LC undamped by `dI sqrt(L/C)` (1.0 V). A card
+/// stating its crossover carries no default-parameter assumption.
+#[test]
+fn load_step_dips_by_the_loop_bandwidth_and_recovers() {
+    let (low, end, evidence) = load_step("crossover_hz = 30e3", "22uF");
+    let est = 1.5 / (std::f64::consts::TAU * 30e3 * 22e-6);
+    let dip = 3.3 - low;
+    assert!((0.5..1.1).contains(&(dip / est)), "{dip} V vs {est} V");
+    assert!((end - 3.3).abs() < 0.033, "recovered to {end} V");
+    let mut assumptions = evidence.assumptions().iter();
+    assert!(assumptions.all(|a| a.kind() != AssumptionKind::DefaultParameter));
+}
+
+/// An unstated crossover still regulates (at the conventional `f_sw / 10`) but is
+/// a disclosed default parameter, which qualifies every assertion it feeds.
+#[test]
+fn unstated_crossover_is_a_disclosed_default_parameter() {
+    let (low, _, evidence) = load_step("", "22uF");
+    assert!(3.3 - low < 0.4, "dip to {low} V");
+    let named = |a: &Assumption| a.id().as_str() == "default-parameter:U1.crossover_hz";
+    assert!(evidence.assumptions().iter().any(named));
+    let rail = evidence.ci_assertion_map("dip", &["+OUT".into()], &[], None, None);
+    assert_eq!(rail.unwrap().status(), EvidenceStatus::Qualified);
+}
+
+/// The loop cannot rescue a genuinely undersized output capacitor: a tenth
+/// of the capacitance dips far outside a 10% band.
+#[test]
+fn undersized_output_cap_still_dips_out_of_band() {
+    let (low, _, _) = load_step("crossover_hz = 30e3", "2.2uF");
+    assert!(3.3 - low > 0.33, "2.2 uF dipped only to {low} V");
 }

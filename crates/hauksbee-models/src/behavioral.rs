@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::check::{is_identifier, Problems};
+use crate::check::{is_identifier, positive_finite, Problems};
 use crate::profile::Segment;
 use crate::units;
 
@@ -270,11 +270,12 @@ pub enum Topology {
 }
 
 /// An averaged (cycle-averaged) switching-converter block. The runtime realises
-/// it as a controllable source on the output pin behind a measurable series
-/// resistor (the [`SupplyLeg`](../../hauksbee-engine) pattern), regulating to
-/// `vout_setpoint` until an input- or output-current limit folds the output
-/// back. Power is conserved through `efficiency`, so the input current the
-/// runtime draws on the input pin is `Vout*Iout / (efficiency*Vin)`.
+/// it as an averaged current-mode regulation loop: a PI controller crossing
+/// over at [`Converter::loop_crossover_hz`] commands the current delivered
+/// into the output pin, bounded by the output- and input-current limits and,
+/// for a buck, by a switch node of at most `max_duty * vin`. Power is
+/// conserved through `efficiency`, so the input current the runtime draws on
+/// the input pin is `Vsw*Iout / (efficiency*Vin)`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Converter {
     pub topology: Topology,
@@ -293,8 +294,7 @@ pub struct Converter {
     /// drives its averaged output until the voltage on `pin` reaches `vref_v`.
     /// This lets an adjustable buck use the board's actual divider instead of
     /// baking one product's output voltage into a reusable IC model.  The
-    /// runtime relaxation is a DC convergence aid, not a claim about loop
-    /// bandwidth or compensation stability.
+    /// loop's speed is [`Converter::crossover_hz`], not anything here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<FeedbackControl>,
 
@@ -337,6 +337,33 @@ pub struct Converter {
     /// exactly the way the real part is programmed on the board.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iin_program: Option<SenseProgram>,
+
+    /// Datasheet switching frequency (Hz). Only sets the default loop
+    /// crossover (`switching_hz / 10`) when `crossover_hz` is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switching_hz: Option<f64>,
+
+    /// Regulation-loop crossover frequency (Hz): the runtime closes an
+    /// averaged current-mode loop at this bandwidth, so a load step `dI`
+    /// dips the output about `dI / (2 pi crossover_hz C_out)`. Absent, the
+    /// binder assumes a conventional `f_sw / 10` and discloses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crossover_hz: Option<f64>,
+}
+
+/// Switching frequency assumed when a card states neither `crossover_hz` nor
+/// `switching_hz`: a typical point-of-load part.
+pub const DEFAULT_SWITCHING_HZ: f64 = 300e3;
+
+impl Converter {
+    /// The loop crossover (Hz) and whether the card stated it: `crossover_hz`,
+    /// else a tenth of `switching_hz` (or of [`DEFAULT_SWITCHING_HZ`]).
+    #[must_use]
+    pub fn loop_crossover_hz(&self) -> (f64, bool) {
+        let fc = self.crossover_hz;
+        let fsw = self.switching_hz.unwrap_or(DEFAULT_SWITCHING_HZ);
+        (fc.unwrap_or(fsw / 10.0), fc.is_some())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -345,15 +372,6 @@ pub struct FeedbackControl {
     pub pin: String,
     /// Datasheet reference voltage at the feedback pin.
     pub vref_v: f64,
-    /// Per-chunk numerical relaxation gain in output-volts per feedback-volt.
-    /// This is intentionally explicit because it controls convergence only;
-    /// it must not be confused with physical loop gain or bandwidth.
-    #[serde(default = "default_feedback_relaxation_gain")]
-    pub relaxation_gain: f64,
-}
-
-fn default_feedback_relaxation_gain() -> f64 {
-    1.0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -622,31 +640,35 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         if let Some(fb) = &c.feedback {
             p.non_empty("converter.feedback: pin", &fb.pin);
             p.positive("converter.feedback: vref_v", fb.vref_v);
-            p.positive("converter.feedback: relaxation_gain", fb.relaxation_gain);
         }
         if let Some(en) = &c.enable {
             p.non_empty("converter.enable: pin", &en.pin);
             p.nonneg("converter.enable: high_threshold_v", en.high_threshold_v);
         }
-        if let Some(e) = c.efficiency {
-            p.require(e.is_finite() && e > 0.0 && e <= 1.0, || {
-                format!("converter: efficiency must be in (0,1], got {e}")
+        for (name, v) in [("efficiency", c.efficiency), ("max_duty", c.max_duty)] {
+            let v = v.unwrap_or(1.0);
+            p.require(positive_finite(v) && v <= 1.0, || {
+                format!("converter: {name} must be in (0,1], got {v}")
             });
         }
-        if let Some(d) = c.max_duty {
-            p.require(d.is_finite() && d > 0.0 && d <= 1.0, || {
-                format!("converter: max_duty must be in (0,1], got {d}")
-            });
-            p.require(c.topology == Topology::Buck, || {
-                "converter: max_duty is only modelled for a buck".to_string()
-            });
-        }
+        p.require(c.max_duty.is_none() || c.topology == Topology::Buck, || {
+            "converter: max_duty is only modelled for a buck".to_string()
+        });
         for (name, lim) in [
             ("iout_limit_a", c.iout_limit_a),
             ("iin_limit_a", c.iin_limit_a),
+            ("switching_hz", c.switching_hz),
+            ("crossover_hz", c.crossover_hz),
         ] {
             p.positive(format!("converter: {name}"), lim);
         }
+        let (fc, fsw) = (
+            c.loop_crossover_hz().0,
+            c.switching_hz.unwrap_or(f64::INFINITY),
+        );
+        p.require(fc < fsw / 2.0, || {
+            format!("converter: crossover_hz {fc} must be below switching_hz/2")
+        });
         if let Some(sp) = &c.iin_program {
             p.require(
                 sp.rsense_ohms.is_some() == sp.rsense_refs.is_empty(),
@@ -936,6 +958,9 @@ mod tests {
         clean(&conv("vout_setpoint = 5.0\niout_limit_a = 1.0"));
         flags(&conv("vout_setpoint = 5.0\nmax_duty = 1.2"), "max_duty");
         clean(&conv("vout_setpoint = 5.0\nmax_duty = 0.9"));
+        flags(&conv("vout_setpoint = 5\ncrossover_hz = -1"), "crossover");
+        let fast_loop = "vout_setpoint = 5\ncrossover_hz = 2e5\nswitching_hz = 3e5";
+        flags(&conv(fast_loop), "below");
         let boost = conv("vout_setpoint = 5.0\nmax_duty = 0.9")
             .converter
             .map(|c| Converter {

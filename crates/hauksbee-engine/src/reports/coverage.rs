@@ -222,17 +222,7 @@ impl CoverageInputs {
             timing_limitations: sched.timing_limitations(),
             timing_coverage: sched.timing_coverage(),
             timing_refusals: sched.timing_refusals().to_vec(),
-            fallback_windows: sched
-                .fallback_windows()
-                .iter()
-                .map(|window| crate::result::CosimFallbackWindow {
-                    start_s: window.start_s,
-                    end_s: window.end_s,
-                    method: window.method.as_str().to_string(),
-                    fidelity_note: window.method.fidelity_note().to_string(),
-                    error_estimate_v: window.error_estimate_v,
-                })
-                .collect(),
+            fallback_windows: sched.fallback_windows().iter().map(Into::into).collect(),
             short_pulses: sched.short_pulses().to_vec(),
             driver_contentions: sched.driver_contentions().to_vec(),
             drive_conflicts,
