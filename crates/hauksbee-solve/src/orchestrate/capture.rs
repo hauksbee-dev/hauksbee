@@ -623,7 +623,7 @@ pub fn execute_stiff_group_held_capped(
                 (&trains, runs.get(&rep.0))
             };
             let t_solve = std::time::Instant::now();
-            let wf = match group.solve(
+            let Ok(wf) = group.solve(
                 &cluster_blocks[&rep.0],
                 &members,
                 rep,
@@ -631,18 +631,15 @@ pub fn execute_stiff_group_held_capped(
                 Some((source, &grid)),
                 seed,
                 grown,
-            ) {
-                Ok(wf) => wf,
-                Err(_) => {
-                    refusal_report.extend(dead_capture_outcomes(
-                        candidates,
-                        rep,
-                        &rest,
-                        reltol,
-                        bootstrapped,
-                    ));
-                    return Ok(None);
-                }
+            ) else {
+                refusal_report.extend(dead_capture_outcomes(
+                    candidates,
+                    rep,
+                    &rest,
+                    reltol,
+                    bootstrapped,
+                ));
+                return Ok(None);
             };
             if dbg && round == 0 {
                 eprintln!(
@@ -1035,7 +1032,7 @@ pub fn execute_composed_group(
             break;
         }
         let mut inner_refusals = Vec::new();
-        let exec = match execute_stiff_group_held_capped(
+        let Some(exec) = execute_stiff_group_held_capped(
             sub,
             signal_cuts,
             &rail_trains,
@@ -1043,22 +1040,20 @@ pub fn execute_composed_group(
             &sub_opts,
             tstop,
             &mut inner_refusals,
-        )? {
-            Some(exec) => exec,
-            None => {
-                if debug {
-                    eprintln!("COMPOSED signal relaxation refused: {inner_refusals:?}");
-                }
-                refusal_report.extend(inner_refusals);
-                refusal_report.extend(rail_refusals(
-                    rails,
-                    rail_kind,
-                    &rail_vnom,
-                    reltol,
-                    bootstrapped,
-                ));
-                return Ok(None);
+        )?
+        else {
+            if debug {
+                eprintln!("COMPOSED signal relaxation refused: {inner_refusals:?}");
             }
+            refusal_report.extend(inner_refusals);
+            refusal_report.extend(rail_refusals(
+                rails,
+                rail_kind,
+                &rail_vnom,
+                reltol,
+                bootstrapped,
+            ));
+            return Ok(None);
         };
 
         let mut outer_move = 0.0f64;

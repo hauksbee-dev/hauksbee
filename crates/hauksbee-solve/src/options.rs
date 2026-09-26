@@ -276,16 +276,16 @@ pub struct DeviceEffects {
     pub switch_transition_frac: f64,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_spdt_bbm_k() -> f64 {
+const fn default_spdt_bbm_k() -> f64 {
     6.0
 }
-fn default_cmp_smooth_gain() -> f64 {
+const fn default_cmp_smooth_gain() -> f64 {
     2000.0
 }
-fn default_switch_transition_frac() -> f64 {
+const fn default_switch_transition_frac() -> f64 {
     0.01
 }
 
@@ -343,7 +343,7 @@ pub enum Strategy {
 
 impl Strategy {
     /// Stable bit for the activation diagnostics.
-    pub(crate) fn bit(self) -> u16 {
+    pub(crate) const fn bit(self) -> u16 {
         match self {
             Self::LineSearch => 1 << 0,
             Self::DynamicPivot => 1 << 1,
@@ -374,7 +374,7 @@ impl Strategy {
 /// per island builds on that). `Copy` because `SolverOptions` is copied through
 /// every orchestration layer, which is also how the ladder reaches nested
 /// sub-solves without any process-global state.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RobustnessLadder {
     steps: [Option<Strategy>; 8],
 }
@@ -404,7 +404,7 @@ impl RobustnessLadder {
         if self.has(s) {
             return self;
         }
-        for slot in self.steps.iter_mut() {
+        for slot in &mut self.steps {
             if slot.is_none() {
                 *slot = Some(s);
                 return self;
@@ -445,7 +445,7 @@ impl RobustnessLadder {
 /// Tuning for the event-freeze retry machinery (the discrete-state
 /// Gauss-Seidel that resolves comparator/switch flips). These were env-tuned
 /// knobs; they are solver configuration, so they live here.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventRetryTuning {
     /// Inner Newton budget per frozen solve. `None` uses
     /// `max(max_newton, 400)` (the frozen inner circuit converges linearly in
@@ -546,11 +546,11 @@ pub struct SolverOptions {
     pub max_failed_steps: Option<u32>,
 }
 
-fn default_residual_accept_tol() -> f64 {
+const fn default_residual_accept_tol() -> f64 {
     1e-9
 }
 
-fn default_granularity() -> f64 {
+const fn default_granularity() -> f64 {
     1.0
 }
 
@@ -611,7 +611,7 @@ impl SolverOptions {
 
     /// The effective temperature to evaluate models at (TNOM if temp is off).
     #[must_use]
-    pub fn model_temp(&self) -> f64 {
+    pub const fn model_temp(&self) -> f64 {
         if self.effects.temperature {
             self.temperature_c
         } else {

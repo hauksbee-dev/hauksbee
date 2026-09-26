@@ -1157,9 +1157,8 @@ struct Corners {
 fn breakpoint_table(circuit: &Circuit, tstop: f64) -> Vec<f64> {
     let mut corners = Corners::default();
     for (_, dev) in circuit.iter() {
-        let kind = match dev {
-            Device::Vsource { kind, .. } | Device::Isource { kind, .. } => kind,
-            _ => continue,
+        let (Device::Vsource { kind, .. } | Device::Isource { kind, .. }) = dev else {
+            continue;
         };
         push_source_corners(kind, tstop, &mut corners);
     }

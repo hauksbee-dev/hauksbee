@@ -308,10 +308,10 @@ impl Symbolic {
     pub fn refactor_frozen(&mut self, m: &SparseMatrix) -> bool {
         let n = self.n;
         // Refresh the cached CSC values in place (structure is fixed).
-        if self.fill_map.len() != n {
-            self.fill_map = self.csc_col_ptr[..n].to_vec();
-        } else {
+        if self.fill_map.len() == n {
             self.fill_map.copy_from_slice(&self.csc_col_ptr[..n]);
+        } else {
+            self.fill_map = self.csc_col_ptr[..n].to_vec();
         }
         for v in &mut self.csc_vals {
             *v = 0.0;
@@ -547,10 +547,7 @@ impl Symbolic {
                     if row_elim[i] {
                         continue;
                     }
-                    let v = match entry(&row[i], c) {
-                        Some(v) => v,
-                        None => continue,
-                    };
+                    let Some(v) = entry(&row[i], c) else { continue };
                     if v.abs() < thresh {
                         continue;
                     }
@@ -656,9 +653,8 @@ impl Symbolic {
             pcol_rows.dedup();
 
             for &i in &pcol_rows {
-                let aic = match entry(&row[i], pc) {
-                    Some(v) => v,
-                    None => continue,
+                let Some(aic) = entry(&row[i], pc) else {
+                    continue;
                 };
                 if aic == 0.0 {
                     continue;
@@ -836,7 +832,11 @@ fn dfs_reach(
     while let Some(&node) = stack.last() {
         let step = pivot_pos[node];
         let mut advanced = false;
-        if step != usize::MAX {
+        if step == usize::MAX {
+            stack.pop();
+            cursor.pop();
+            reach.push(node);
+        } else {
             let (ls, le) = (l.col_ptr[step], l.col_ptr[step + 1]);
             let ci = *cursor.last().unwrap();
             let mut p = ls + ci;
@@ -857,10 +857,6 @@ fn dfs_reach(
                 cursor.pop();
                 reach.push(node);
             }
-        } else {
-            stack.pop();
-            cursor.pop();
-            reach.push(node);
         }
     }
 }
@@ -1060,7 +1056,7 @@ mod tests {
             }
         }
         let b: Vec<f64> = (0..n)
-            .map(|i| 2.0 - f64::from((i > 0) as i32) - f64::from((i + 1 < n) as i32))
+            .map(|i| 2.0 - f64::from(i32::from(i > 0)) - f64::from(i32::from(i + 1 < n)))
             .collect();
         assert_close(&solve_with(&m, &b, false), &[1.0; 5], 1e-9);
     }

@@ -809,7 +809,7 @@ impl PartitionedTransient {
                             linear_phase_a(
                                 li, circuit, vbuf, tnext, first, state, prev, buf, vfree,
                             );
-                        })
+                        });
                 },
                 || {
                     nonlinear_phase_a(

@@ -45,13 +45,13 @@ impl Rng {
         self.0 = x;
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
-    fn pick(&mut self, lo: usize, hi: usize) -> usize {
+    const fn pick(&mut self, lo: usize, hi: usize) -> usize {
         lo + (self.next() as usize) % (hi - lo + 1)
     }
     fn f(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (self.next() as f64 / u64::MAX as f64) * (hi - lo)
     }
-    fn coin(&mut self) -> bool {
+    const fn coin(&mut self) -> bool {
         self.next() & 1 == 1
     }
 }

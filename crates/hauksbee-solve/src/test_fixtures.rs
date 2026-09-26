@@ -42,7 +42,7 @@ pub fn monolith(c: &Circuit, opts: &SolverOptions, tstop: f64) -> Waveforms {
     Transient::new(mono_opts).run(c, tstop).expect("monolith")
 }
 
-pub(crate) use crate::orchestrate::lerp_at;
+use crate::orchestrate::lerp_at;
 
 /// Max |sample - reference| over every node (ground excluded) at every sample
 /// time of `time`, interpolating the reference.

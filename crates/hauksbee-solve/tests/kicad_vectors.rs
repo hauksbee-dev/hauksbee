@@ -169,12 +169,9 @@ fn cross_check(file: &str, tran: &str, probe: &str, tstop: f64) -> Option<f64> {
     let net = preprocess(&path)?;
     let net = with_analysis(&net, tran, probe);
 
-    let ng = match run_ngspice(&net) {
-        Some(r) => r,
-        None => {
-            eprintln!("ngspice unavailable/failed for {file}; skipping");
-            return None;
-        }
+    let Some(ng) = run_ngspice(&net) else {
+        eprintln!("ngspice unavailable/failed for {file}; skipping");
+        return None;
     };
 
     let circuit = SpiceLoader::load(&net).unwrap_or_else(|e| panic!("{file}: loader failed: {e}"));

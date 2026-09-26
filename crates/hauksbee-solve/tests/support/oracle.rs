@@ -261,9 +261,8 @@ pub fn find_ngspice() -> Option<PathBuf> {
 
 /// The ngspice version token (e.g. `ngspice-45.2`), for the results table.
 pub fn ngspice_version(bin: &Path) -> String {
-    let out = match Command::new(bin).arg("--version").output() {
-        Ok(o) => o,
-        Err(_) => return "unknown".to_string(),
+    let Ok(out) = Command::new(bin).arg("--version").output() else {
+        return "unknown".to_string();
     };
     let text = format!(
         "{}{}",

@@ -285,18 +285,15 @@ fn perf_gate() {
 
     // 3. Load the baseline for this class, or skip loudly if none exists.
     let path = baseline_path(&class);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!(
-                "PERF GATE SKIPPED: no baseline for class '{class}' at {}.\n  Capture one \
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        eprintln!(
+            "PERF GATE SKIPPED: no baseline for class '{class}' at {}.\n  Capture one \
                  (honest-update rule 08 §4, commit it on its own with an explanation):\n  \
                  HAUKSBEE_PERF_CLASS={class} cargo test -p hauksbee-solve --release --test \
                  perf_gate perf_capture_baseline -- --ignored --nocapture",
-                path.display()
-            );
-            return;
-        }
+            path.display()
+        );
+        return;
     };
     let base: Baseline = toml::from_str(&text).expect("baseline TOML parses");
 
