@@ -44,16 +44,19 @@ pub fn scratch_path(prefix: &str, tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("hauksbee_{prefix}_{tag}_{}", std::process::id()))
 }
 
-/// [`scratch_path`], freshly created. Any leftover contents from an earlier
-/// run under the same pid (vanishingly rare, but happens under pid reuse)
-/// are removed first.
+/// [`scratch_path`] with a per-call counter, freshly created.
+///
+/// The counter keeps tests that share a tag from deleting each other's files
+/// when `cargo test` threads them in one process; pid-reuse leftovers go first.
 ///
 /// # Panics
 ///
 /// Panics if the scratch directory cannot be created.
 #[must_use]
 pub fn fresh_scratch_dir(prefix: &str, tag: &str) -> PathBuf {
-    let dir = scratch_path(prefix, tag);
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = scratch_path(prefix, &format!("{tag}_{n}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     dir
