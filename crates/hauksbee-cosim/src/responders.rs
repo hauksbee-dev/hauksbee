@@ -2483,11 +2483,7 @@ style = "i2c_pointer"
         m.stop();
 
         let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
-        assert_eq!(
-            src_volts(&circuit).to_bits(),
-            0.0f64.to_bits(),
-            "not driven before flush"
-        );
+        assert_eq!(src_volts(&circuit).to_bits(), 0, "not driven before flush");
         let volts = vec![0.0; 4];
         bus.lock()
             .unwrap()

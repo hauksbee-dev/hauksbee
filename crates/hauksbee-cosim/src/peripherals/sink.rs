@@ -295,12 +295,8 @@ mod tests {
         let mut volts = vec![0.0; c.node_count()];
         for step in 0..6 {
             volts[n.0 as usize] = if step % 2 == 0 { 0.0 } else { 5.0 };
-            sink.post_solve(&mut TickCtx::new(
-                &mut c,
-                &volts,
-                f64::from(step) * 1e-4,
-                1e-4,
-            ));
+            let t = f64::from(step) * 1e-4;
+            sink.post_solve(&mut TickCtx::new(&mut c, &volts, t, 1e-4));
         }
         // 6 samples alternating low/high -> 5 transitions after the initial.
         assert_eq!(sink.transitions_for("CLK"), 5, "expected 5 CLK edges");
@@ -323,12 +319,8 @@ mod tests {
         let mut volts = vec![0.0; c.node_count()];
         for (step, &v) in (0u32..).zip(&levels) {
             volts[n.0 as usize] = v;
-            sink.post_solve(&mut TickCtx::new(
-                &mut c,
-                &volts,
-                f64::from(step) * 1e-4,
-                1e-4,
-            ));
+            let t = f64::from(step) * 1e-4;
+            sink.post_solve(&mut TickCtx::new(&mut c, &volts, t, 1e-4));
         }
         assert_eq!(
             sink.transitions_for("PWR"),

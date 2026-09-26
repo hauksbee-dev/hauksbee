@@ -469,10 +469,7 @@ impl I2cSlave for Eeprom24c {
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("ptr".into(), self.ptr as f64);
         m.insert("page_size".into(), self.page_size as f64);
-        m.insert(
-            "word_address_bytes".into(),
-            f64::from(self.word_address_bytes),
-        );
+        m.insert("word_address_bytes".into(), self.word_address_bytes.into());
         m
     }
 

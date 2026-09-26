@@ -9,6 +9,7 @@ use hauksbee_bind::bind_report::{OpenPart, SimpleRegulator};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{run_op, Probe, SolverOptions};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 /// One unsupported regulator: the shared reason, and everything it invalidates.
 /// `refs[0]` is the regulator itself; the rest are MCUs powered from `nets`.
@@ -306,12 +307,11 @@ pub const OPEN_DRIVER: &str = "has no model, so it is absent from the simulated 
 #[must_use]
 pub fn open_driver_reason(r: &str, v: &str, from: &str, nets: &[String]) -> String {
     let more = nets.len().saturating_sub(6);
-    let shown = nets[..nets.len() - more].join(", ");
-    let list = if more > 0 {
-        format!("{shown} and {more} more")
-    } else {
-        shown
-    };
+    let mut list = nets[..nets.len() - more].join(", ");
+    if more > 0 {
+        let _ = write!(list, " and {more} more");
+    }
+
     format!(
         "{r} ({v}) {OPEN_DRIVER}, yet it is powered from {from} and can drive {list}. Any \
          voltage printed for those nets is the board without {r}, not a simulated result: a \

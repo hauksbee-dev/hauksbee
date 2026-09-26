@@ -1201,10 +1201,7 @@ mod tests {
         let lo = bus.transfer(0x00);
         let counts = (u16::from(hi & 0x03) << 8) | u16::from(lo);
         // 2.5/5.0 * 1024 = 512.
-        assert!(
-            (i32::from(counts) - 512).abs() <= 1,
-            "counts {counts} not ~512"
-        );
+        assert!(counts.abs_diff(512) <= 1, "counts {counts} not ~512");
     }
 
     #[test]

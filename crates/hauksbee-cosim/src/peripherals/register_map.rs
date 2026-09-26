@@ -87,10 +87,8 @@ impl CompiledRegister {
                 inputs.keys().collect::<Vec<_>>()
             )
         });
-        let scaled = value.mul_add(
-            self.spec.scale.unwrap_or(1.0),
-            self.spec.offset.unwrap_or(0.0),
-        );
+        let s = &self.spec;
+        let scaled = value.mul_add(s.scale.unwrap_or(1.0), s.offset.unwrap_or(0.0));
         encode(enc, scaled)
     }
 }
@@ -130,15 +128,11 @@ fn encode(enc: Encoding, value: f64) -> Vec<u8> {
             v.to_le_bytes().to_vec()
         }
         Encoding::I16Be => {
-            let v = value
-                .round()
-                .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+            let v = value.round().clamp(-32_768.0, 32_767.0) as i16;
             v.to_be_bytes().to_vec()
         }
         Encoding::I16Le => {
-            let v = value
-                .round()
-                .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+            let v = value.round().clamp(-32_768.0, 32_767.0) as i16;
             v.to_le_bytes().to_vec()
         }
         // Exactly the LM75/LM75A packing the hand-coded model uses.
@@ -376,12 +370,8 @@ impl RegisterMapSensor {
     /// [`Self::from_toml`]. Public callers get the fallible, validating
     /// constructor; a malformed community model pack must be an error, not a
     /// process abort.
-    // One linear build of the interpreter; the POR default is masked to its register width.
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::too_many_lines)] // one linear build of the interpreter
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // masked to register width
     pub(crate) fn from_spec(spec: SensorSpec) -> Self {
         let mut s = spec.sensor;
 
@@ -577,10 +567,8 @@ impl RegisterMapSensor {
         let reg = self.registers.get(&addr)?;
         let program = reg.program.as_ref()?;
         let value = eval_number(program, &self.inputs)?;
-        Some(value.mul_add(
-            reg.spec.scale.unwrap_or(1.0),
-            reg.spec.offset.unwrap_or(0.0),
-        ))
+        let s = &reg.spec;
+        Some(value.mul_add(s.scale.unwrap_or(1.0), s.offset.unwrap_or(0.0)))
     }
 
     // ── Write side ─────────────────────────────────────────────────
@@ -1672,11 +1660,7 @@ style = "i2c_pointer"
         i2c_write(&mut bus, 0x60, &[0x08, 0x00]);
 
         let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
-        assert_eq!(
-            src_volts(&circuit).to_bits(),
-            0.0f64.to_bits(),
-            "not driven before flush"
-        );
+        assert_eq!(src_volts(&circuit).to_bits(), 0, "not driven before flush");
         let volts = vec![0.0; 4];
         bus.flush_stops(&mut TickCtx::new(&mut circuit, &volts, 0.0, 1e-3));
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
@@ -1799,11 +1783,9 @@ style = "i2c_pointer"
             let mut bus = mcp4728_bus(&[0x60]);
             i2c_write(&mut bus, 0x60, &fast_write_pair(code));
             assert_eq!(dac_code(&bus, 0x60, 0), code);
+            let expected = f64::from(code) * 0.001;
             assert!(
-                f64::from(code)
-                    .mul_add(-0.001, dac_vout(&bus, 0x60, 0))
-                    .abs()
-                    < 1e-9,
+                (dac_vout(&bus, 0x60, 0) - expected).abs() < 1e-9,
                 "code {code}"
             );
         }
