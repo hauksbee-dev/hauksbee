@@ -4,8 +4,8 @@
 //! over it, so the engine can offer extraction directly. A capability reachable
 //! only by running a second executable is one most users never find.
 //!
-//! Nothing here runs on its own. Extraction sends the datasheet's text to an
-//! LLM backend, so it happens when a caller asks and not before. The caller
+//! Nothing here runs on its own. Extraction sends the datasheet (and what an
+//! agent reads) to an LLM backend, so it happens when a caller asks and not before. The caller
 //! owns telling the user that, and `hauksbee_engine::deps` carries the
 //! statement for the surfaces that need it.
 //!
@@ -101,19 +101,21 @@ struct SelectedPage {
 /// access to the whole of Downloads. It gets a scratch copy instead.
 ///
 /// Be precise about what that does and does not buy, because the difference
-/// matters. `--sandbox workspace-write` confines WRITES to the writable roots
-/// (this directory, plus `$TMPDIR` and `/tmp`, which is where this directory
-/// lives anyway) and disables network access. It does NOT confine reads: under
-/// that profile the agent can still read anything the user can, including
-/// `~/.ssh`, and could copy what it read into `model.toml`, which we then parse
-/// and save. So this bounds blast radius and side effects; it is not a
-/// confidentiality boundary against a hostile model.
+/// matters. Codex's own `--sandbox workspace-write` confines WRITES but not
+/// reads: a real run under it searched the home directory, another project and
+/// `/tmp`, and read an installed codex skill. So in its workspace-write modes
+/// codex gets a named permission profile instead ([`codex_confinement`]):
+/// shell commands may read this directory, the OS/runtime paths codex calls
+/// `:minimal`, the package prefixes in [`CONFINED_READ_ROOTS`] and the checker
+/// executable, and nothing under home, `/tmp` or `$TMPDIR`. Claude Code gets the
+/// same boundary from its Bash sandbox plus `--restricted` file tools
+/// ([`claude_confinement`]). agy and codex's read-only / danger-full-access
+/// modes are NOT read-confined by hauksbee. The CLI process itself still reads
+/// its own sign-in, and whatever the agent reads goes to the vendor.
 ///
-/// What makes that tolerable is the rest of the contract rather than the flag:
-/// the run happens only when the user asked for it, the output is a small TOML
-/// document validated against a schema before anything is saved, and the user
-/// reviews the card. A read-restricting profile would be better, and is worth
-/// revisiting if codex grows one.
+/// The rest of the contract still matters: the run happens only when the user
+/// asked for it, the output is a small TOML document validated against a
+/// schema before anything is saved, and the user reviews the card.
 ///
 /// Dropping this removes the directory, so a killed run leaves nothing behind.
 #[derive(Debug)]
@@ -130,6 +132,9 @@ pub struct Workspace {
     selected_pages: Vec<SelectedPage>,
     category_disclosures: Vec<String>,
     has_text_dump: bool,
+    /// The product's own checker executable (canonical), named in the prompt
+    /// and the only file outside the workspace the confined agent may run.
+    pub checker: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -148,6 +153,7 @@ impl Workspace {
             selected_pages: Vec::new(),
             category_disclosures: Vec::new(),
             has_text_dump: false,
+            checker: None,
         })
     }
 
@@ -281,6 +287,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
         category_disclosures,
         has_text_dump,
         dir,
+        checker: None,
     })
 }
 
@@ -687,6 +694,10 @@ pub struct Args {
     /// the named variable at call time. `None` takes `HAUKSBEE_LLM_API_KEY`
     /// when set, else `OPENAI_API_KEY`.
     pub api_key_env: Option<String>,
+    /// The product's own `hauksbee` executable, which the agent must use as
+    /// `<checker> models lint model.toml`. `None` (the standalone binary)
+    /// tells the agent there is no checker rather than letting it find one.
+    pub checker: Option<PathBuf>,
 }
 
 impl Args {
@@ -704,6 +715,7 @@ impl Args {
             backend: None,
             api_base: None,
             api_key_env: None,
+            checker: None,
         }
     }
 
@@ -741,6 +753,12 @@ impl Args {
         self.api_key_env = name.filter(|n| !n.trim().is_empty());
         self
     }
+
+    /// Name the checker executable; see [`Args::checker`].
+    pub fn checker(mut self, exe: Option<PathBuf>) -> Self {
+        self.checker = exe;
+        self
+    }
 }
 
 /// Reject anything that is not a plausible environment-variable NAME. The
@@ -769,12 +787,15 @@ pub fn validate_api_key_env_name(name: &str) -> Result<()> {
 /// A surface that offers extraction without showing `CONSENT_NOTICE` first is
 /// a bug, not a shortcut.
 pub const CONSENT_NOTICE: &str =
-    "This sends the datasheet's text to an LLM backend: whichever is configured \
-     for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible \
-     API; `hauksbee models backend show` or the Settings page says which). \
-     Nothing is sent until you ask for it. The result is a draft for you to \
-     check, not a measurement: a model it writes carries provenance \
-     \"datasheet-extracted\".";
+    "This sends the datasheet to an LLM backend: whichever is configured for extraction \
+     (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend \
+     show` or the Settings page says which). The API gets the extracted text. An agent CLI \
+     runs a model with a shell on a scratch copy of the PDF, its text and page images, and \
+     whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude \
+     Code out of your home and temporary directories and off the web, but Antigravity, or \
+     Codex in another sandbox mode, can read anything your account can. Nothing is sent until \
+     you ask for it. The result is a draft for you to check, not a measurement: a model it \
+     writes carries provenance \"datasheet-extracted\".";
 
 /// Ask a yes/no question on the terminal, the prompt going to `out`; only `y`
 /// or `yes` is a yes. A pipe cannot answer, and guessing "yes" on its behalf
@@ -2307,7 +2328,8 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
     // of the security story.
     progress::phase("rendering the datasheet pages");
-    let ws = prepare_workspace_in(&args.pdf, &std::env::temp_dir())?;
+    let mut ws = prepare_workspace_in(&args.pdf, &std::env::temp_dir())?;
+    ws.checker = args.checker.as_deref().and_then(|c| c.canonicalize().ok());
     say!(
         "[model-extract] sandbox {} with {} page render(s)",
         ws.path().display(),
@@ -2510,8 +2532,8 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
          sourced field) and a named `ABSTAIN:` in `description` or `[models.source.uncertainty]`"
     };
     let pages = if ws.pages.is_empty() {
-        "No page images were rendered. If available text or diagnostic tools cannot \
-         resolve a table's layout, abstain from the affected value explicitly."
+        "No page images were rendered. If the text cannot resolve a table's \
+         layout, abstain from the affected value explicitly."
             .to_string()
     } else {
         let inventory = ws
@@ -2555,11 +2577,21 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         )
     };
 
+    let check = match &ws.checker {
+        None => "No checker is provided; do not look for one.".to_string(),
+        Some(c) => format!(
+            "Check model.toml by running exactly `'{}' models lint model.toml` and fix what \
+             it reports. Never run any other `hauksbee`.",
+            c.display()
+        ),
+    };
     format!(
-        "## Before you answer\n\n         {pages}\n\n         Prefer the supplied authoritative schema and datasheet. If evidence is \
-         missing or ambiguous, use available diagnostic tools or a vendor source, \
-         name the missing context, and record external provenance separately. Never \
-         let an external or stale schema override the supplied contract.\n\n         1. VERIFY EACH NUMBER against its source page: units, sign, package/part \
+        "## Before you answer\n\n         {pages}\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
+         files in your working directory: do not list, search or read anything outside it \
+         (home, other projects, temporary directories, installed skills) and do not look \
+         anything up online. If evidence is missing or ambiguous, name the missing context \
+         and abstain rather than look elsewhere. Never let an external or stale schema \
+         override the supplied contract. {check}\n\n         1. VERIFY EACH NUMBER against its source page: units, sign, package/part \
             variant, test conditions, and min/typ/max column.\n         2. SANITY-CHECK WITHOUT OVERRULING THE SOURCE. A surprising but plausible \
             value (including low transistor gain) is not proof of an error. Recheck \
             the row and variant; abstain if the available evidence cannot resolve it.\n         3. DO NOT INVENT ASSUMPTIONS. For a missing required fact, {abstain}; \
@@ -2642,7 +2674,61 @@ const CODEX_DISABLED_FEATURES: &[&str] = &[
     "goals",
     "multi_agent",
     "multi_agent_v2",
+    "shell_snapshot",
 ];
+
+/// Package prefixes a confined agent may still read, so `pdftotext`/`pdftoppm`
+/// run; they hold installed software, not the user's files.
+const CONFINED_READ_ROOTS: &[&str] = &["/opt/homebrew", "/usr/local"];
+
+/// codex `-c` overrides selecting a `hauksbee` permission profile: shell
+/// commands read codex's `:minimal` OS/runtime set, [`CONFINED_READ_ROOTS`] and
+/// the checker, write the workspace, and read nothing else (home, `/tmp` and
+/// `$TMPDIR` included). Checked against codex-cli 0.156.1 with
+/// `codex sandbox -P hauksbee`: seatbelt refuses `ls ~`, `~/.codex/skills`,
+/// `/tmp` and a `$TMPDIR` sibling while the workspace and checker work. An
+/// explicit `--sandbox` flag overrides `default_permissions`, so none is passed.
+fn codex_confinement(ws: &Workspace) -> [String; 4] {
+    let reads: String = CONFINED_READ_ROOTS
+        .iter()
+        .map(|root| (*root).to_string())
+        .chain(ws.checker.iter().map(|c| c.display().to_string()))
+        .map(|path| format!("{}=\"read\",", toml::Value::String(path)))
+        .collect();
+    let profile = format!(
+        "permissions={{hauksbee={{filesystem={{\":minimal\"=\"read\",\":slash_tmp\"=\"none\",\
+         \":tmpdir\"=\"none\",{reads}\":workspace_roots\"={{\".\"=\"write\"}}}}}}}}"
+    );
+    ["-c", "default_permissions=\"hauksbee\"", "-c", &profile].map(String::from)
+}
+
+/// `--settings` for Claude Code's Bash sandbox, strict (no unsandboxed retry,
+/// no silent start without it): reads denied under home and the temp roots
+/// except the workspace and the checker. `--restricted` already confines
+/// Read/Edit/Write to the working directory.
+fn claude_confinement(ws: &Workspace) -> String {
+    let temp_root = ws.path().parent().unwrap_or_else(|| ws.path());
+    let allow: Vec<String> = std::iter::once(ws.path())
+        .chain(ws.checker.as_deref())
+        .map(|p| p.display().to_string())
+        .collect();
+    serde_json::json!({"sandbox": {
+        "enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
+        "filesystem": {
+            "denyRead": ["~/", "/tmp", "/private/tmp", temp_root.display().to_string()],
+            "allowRead": allow,
+        },
+    }})
+    .to_string()
+}
+
+/// `path` without any directory holding a `hauksbee` executable, so the only
+/// checker an agent can reach is the absolute one its prompt names.
+fn scrub_path(path: &std::ffi::OsStr) -> std::ffi::OsString {
+    let kept = std::env::split_paths(path)
+        .filter(|d| !d.join("hauksbee").is_file() && !d.join("hauksbee.exe").is_file());
+    std::env::join_paths(kept).unwrap_or_default()
+}
 
 /// One sandboxed run of whichever agent CLI the settings name.
 ///
@@ -2652,9 +2738,13 @@ const CODEX_DISABLED_FEATURES: &[&str] = &[
 /// always named rather than inherited: a CLI's own default varies by plan and
 /// config and would silently decide how good the extraction is.
 ///
-///   * codex: `exec --sandbox <mode>` or `--approve-for-me` (review from workspace-write):
-///     writes stay in the workspace, network is off unless a mode or approval relaxes
-///     it; reads are not confined (see `Workspace`). `--skip-git-repo-check` as the
+///   * codex: in `workspace-write` and `approve-for-me` modes the read-confining
+///     [`codex_confinement`] profile (plus `--approve-for-me` for the latter);
+///     any other mode is `--sandbox <mode>`, reads unconfined. Network is off
+///     unless a mode or approval relaxes it. `skills.include_instructions=false`
+///     keeps `$CODEX_HOME/skills` out of the model's context (the `skill_search`
+///     feature alone does not), `shell_snapshot` is off so the operator's shell
+///     rc files never shape the agent's shell. `--skip-git-repo-check` as the
 ///     sandbox is no repo, `--cd` to open the PDF, `--output-last-message` keeps
 ///     narration apart, pages as images. `--ephemeral` keeps no transcript,
 ///     `--ignore-user-config` drops `config.toml` (MCP servers, trusted projects;
@@ -2666,10 +2756,13 @@ const CODEX_DISABLED_FEATURES: &[&str] = &[
 ///     sandbox is gone. It reads the PDF and page renders itself. `--restricted`
 ///     drops the operator's settings, CLAUDE.md, memory, agents, hooks and
 ///     skills (a wrapper's `--settings` still applies); `--tools` drops
-///     subagents; background tasks, which keep `-p` alive, are off. Never
+///     subagents and web access; [`claude_confinement`] sandboxes Bash reads;
+///     background tasks, which keep `-p` alive, are off. Never
 ///     `--bare`: it skips the keychain, losing a subscription sign-in.
 ///   * agy: `--mode <mode> --add-dir <sandbox>`, and the pointer as the
-///     `--print=` value because agy reads nothing from stdin.
+///     `--print=` value because agy reads nothing from stdin. Not read-confined.
+///
+/// Every CLI gets a PATH from [`scrub_path`] and the workspace as its cwd.
 fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
     let backend = resolved.backend;
     let Some(a) = resolved.agent(backend) else {
@@ -2688,18 +2781,18 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
             }
             let effort = format!("model_reasoning_effort=\"{}\"", a.effort);
             cmd.args(["--model", &a.model, "-c", &effort]);
-            if a.permission_mode == "approve-for-me" {
-                cmd.arg("--approve-for-me");
-            } else {
-                cmd.args(["--sandbox", &a.permission_mode]);
-            }
+            match a.permission_mode.as_str() {
+                "workspace-write" => cmd.args(codex_confinement(ws)),
+                "approve-for-me" => cmd.arg("--approve-for-me").args(codex_confinement(ws)),
+                mode => cmd.args(["--sandbox", mode]),
+            };
             cmd.args(["--skip-git-repo-check", "--cd"])
                 .arg(ws.path())
                 .arg("--output-last-message")
                 .arg(ws.path().join("last-message.txt"))
                 .arg("--ephemeral")
                 .args(a.profile.is_none().then_some("--ignore-user-config"))
-                .arg("--ignore-rules");
+                .args(["--ignore-rules", "-c", "skills.include_instructions=false"]);
             for feature in CODEX_DISABLED_FEATURES {
                 cmd.args(["--disable", feature]);
             }
@@ -2723,7 +2816,11 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
                 "--no-session-persistence",
             ])
             .args(["--restricted", "--strict-mcp-config", "--tools"])
-            .arg("Bash,Read,Edit,Write,WebFetch,WebSearch")
+            .args([
+                "Bash,Read,Edit,Write",
+                "--settings",
+                &claude_confinement(ws),
+            ])
             .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         }
@@ -2734,6 +2831,9 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
                 .arg(format!("--print={pointer}"));
         }
         Backend::Api => unreachable!("handled above"),
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", scrub_path(&path));
     }
     cmd.args(&a.extra_args).current_dir(ws.path());
     run_cli_agent(
@@ -2847,8 +2947,8 @@ fn run_cli_agent(
 /// beside the PDF (codex also gets them attached with `--image`), so one
 /// pointer serves every CLI (agy gets it as the `--print` value instead).
 const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and follow it exactly. \
-    The supplied files and output location are in that working directory; use the file tools \
-    available to you, and report any denied required read or write instead of claiming success. \
+    The supplied files and output location are in that working directory; read nothing outside \
+    it, use the file tools available to you, and report any denied required read or write instead of claiming success. \
     Read values off the rendered page images (page-*.png) for anything that lives in a table \
     or pinout, with datasheet.pdf available in the same directory. Write your answer to model.toml.";
 
@@ -3395,10 +3495,16 @@ mod tests {
         assert!(!sensor.contains("models.source") && !sensor.contains("identity-only"));
         let footer = verification_clause(&ws, "[[models]]");
         let needles = "Prefer the supplied authoritative schema and datasheet \
-            | use available diagnostic tools or a vendor source | record external provenance separately \
+            | Use ONLY the files in your working directory | No checker is provided \
             | Never let an external or stale schema override the supplied contract \
             | abstain if the available evidence cannot resolve it";
         assert!(needles.split(" | ").all(|n| footer.contains(n)), "{footer}");
+        assert!(!footer.contains("vendor source") && !footer.contains("diagnostic tools"));
+        let mut ws = ws;
+        ws.checker = Some("/opt/x/hauksbee".into());
+        let footer = verification_clause(&ws, "[[models]]");
+        assert!(footer.contains("`'/opt/x/hauksbee' models lint model.toml`"));
+        assert!(footer.contains("Never run any other `hauksbee`"));
         assert!(!footer.contains("bipolar transistor with a gain of 5"));
         assert!(!footer.contains("`notes`"));
     }
@@ -3898,7 +4004,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let command = dir.path().join("custom wrapper");
         std::fs::write(
             &command,
-            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\nprintf '%s' \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS$CLAUDE_CODE_DISABLE_AUTO_MEMORY\" > env.txt\n",
+            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\nprintf '%s' \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS$CLAUDE_CODE_DISABLE_AUTO_MEMORY\" > env.txt\nprintf '%s' \"$PATH\" > path.txt\npwd -P > cwd.txt\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -3913,7 +4019,15 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         );
         assert_eq!(which_path(command.to_str().unwrap()), Some(command.clone()));
         require_tool(&resolved).unwrap();
-        let ws = Workspace::scratch().unwrap();
+        let mut ws = Workspace::scratch().unwrap();
+        ws.checker = Some(dir.path().join("hauksbee"));
+        let settings = claude_confinement(&ws);
+        let sandbox: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        let fs = &sandbox["sandbox"]["filesystem"];
+        assert_eq!(sandbox["sandbox"]["allowUnsandboxedCommands"], false);
+        assert!(fs["denyRead"].as_array().unwrap().contains(&"~/".into()));
+        let allowed = [ws.path(), ws.checker.as_deref().unwrap()].map(|p| p.display().to_string());
+        assert_eq!(fs["allowRead"], serde_json::json!(allowed));
         for mode in ["acceptEdits", "auto", "dontAsk", "plan"] {
             resolved.claude_code.permission_mode = mode.to_string();
             let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
@@ -3933,11 +4047,16 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                     "--restricted",
                     "--strict-mcp-config",
                     "--tools",
-                    "Bash,Read,Edit,Write,WebFetch,WebSearch"
+                    "Bash,Read,Edit,Write",
+                    "--settings",
+                    &settings
                 ]
             );
-            let env = std::fs::read_to_string(ws.path().join("env.txt")).unwrap();
-            assert_eq!(env, "11", "background tasks and auto memory are off");
+            let read = |name: &str| std::fs::read_to_string(ws.path().join(name)).unwrap();
+            assert_eq!(read("env.txt"), "11", "no background tasks or auto memory");
+            let path = std::env::var_os("PATH").unwrap();
+            assert_eq!(read("path.txt"), scrub_path(&path).to_str().unwrap());
+            assert_eq!(read("cwd.txt").trim_end(), ws.path().to_str().unwrap());
         }
         assert_eq!(
             std::fs::read_to_string(ws.path().join("claude-code-stderr.log")).unwrap(),
@@ -3950,11 +4069,23 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         resolved.codex.model = "configured-model".into();
         resolved.codex.effort = "xhigh".into();
         resolved.codex.extra_args = vec!["--configured-extra".into()];
-        for (mode, permission_args) in [
-            ("read-only", vec!["--sandbox", "read-only"]),
-            ("workspace-write", vec!["--sandbox", "workspace-write"]),
-            ("approve-for-me", vec!["--approve-for-me"]),
-        ] {
+        let confine = codex_confinement(&ws).to_vec();
+        let profile: toml::Table = toml::from_str(&confine[3]).expect("valid codex -c value");
+        let fs = &profile["permissions"]["hauksbee"]["filesystem"];
+        let checker = dir.path().join("hauksbee").display().to_string();
+        assert_eq!(
+            [&fs[&checker], &fs[":tmpdir"]].map(|v| v.as_str()),
+            [Some("read"), Some("none")]
+        );
+        assert_eq!(fs[":workspace_roots"]["."].as_str(), Some("write"));
+        let read_only = vec!["--sandbox".to_string(), "read-only".into()];
+        let approve = [vec!["--approve-for-me".into()], confine.clone()].concat();
+        let modes = [
+            ("read-only", read_only),
+            ("workspace-write", confine),
+            ("approve-for-me", approve),
+        ];
+        for (mode, permission_args) in modes {
             resolved.codex.permission_mode = mode.into();
             let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
             let mut expected = vec![
@@ -3966,7 +4097,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                 "-c".into(),
                 "model_reasoning_effort=\"xhigh\"".into(),
             ];
-            expected.extend(permission_args.into_iter().map(str::to_string));
+            expected.extend(permission_args);
             expected.extend([
                 "--skip-git-repo-check".into(),
                 "--cd".into(),
@@ -3975,7 +4106,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                 ws.path().join("last-message.txt").display().to_string(),
             ]);
             // A profile opts into the operator's codex config: no --ignore-user-config.
-            expected.extend(["--ephemeral", "--ignore-rules"].map(Into::into));
+            expected.extend(["--ephemeral", "--ignore-rules", "-c"].map(Into::into));
+            expected.push("skills.include_instructions=false".into());
             for feature in CODEX_DISABLED_FEATURES {
                 expected.extend(["--disable".into(), (*feature).into()]);
             }
@@ -3985,7 +4117,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         }
         resolved.codex.profile = None;
         let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
-        assert!(output.contains("--ephemeral\n--ignore-user-config\n--ignore-rules\n--disable"));
+        assert!(output.contains("--ephemeral\n--ignore-user-config\n--ignore-rules\n-c\n"));
+        assert!(output.contains("--disable\nskill_search\n") && output.contains("shell_snapshot"));
         assert!(output.starts_with("exec\n--model\n"), "{output}");
         resolved.backend = Backend::Agy;
         resolved.agy.command = command.to_str().unwrap().into();
@@ -4037,6 +4170,14 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             .to_string()
             .contains("custom wrapper"));
         assert!(smoke_test(&resolved, &mut |_| {}).is_err());
+    }
+
+    #[test]
+    fn scrubbed_path_drops_every_directory_holding_a_hauksbee() {
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("hauksbee"), "").unwrap();
+        let path = std::env::join_paths([other.path(), Path::new("/usr/bin")]).unwrap();
+        assert_eq!(scrub_path(&path), "/usr/bin");
     }
 
     #[test]
