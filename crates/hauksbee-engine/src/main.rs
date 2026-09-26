@@ -890,16 +890,16 @@ struct RunArgs {
     #[arg(long, group = "report_mode", help_heading = "Reports")]
     thermal: bool,
 
-    /// Ambient temperature (C) for the --thermal estimate. Default 25 C.
+    /// Ambient temperature (C) for the junction-temperature estimate and
+    /// temperature-dependent ratings. Default 25 C.
     #[arg(
         long,
-        default_value_t = 25.0,
         value_name = "C",
         value_parser = parse_ambient,
         allow_negative_numbers = true,
         help_heading = "Advanced / analyses"
     )]
-    ambient: f64,
+    ambient: Option<f64>,
 
     /// Translate the report into plain language for a non-engineer: a one-line
     /// verdict, then each finding as what it is, why it matters, and what to do.

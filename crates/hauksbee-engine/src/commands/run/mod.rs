@@ -39,7 +39,7 @@ pub struct RunConfig {
     pub resources: bool,
     pub usb_c: bool,
     pub thermal: bool,
-    pub ambient: f64,
+    pub ambient: Option<f64>,
     pub plain: bool,
     /// Full human detail: every clearance finding, bind row, and evidence item
     /// on the report surfaces that support an expanded rendering.

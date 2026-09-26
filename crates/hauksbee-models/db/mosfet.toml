@@ -156,7 +156,8 @@ cgs    = 5.8e-10   # same table/bias, Ciss typ 630 pF - Crss typ 50 pF = 580 pF 
 
 [models.ratings]
 # Source: AOS AO3400A datasheet Rev 3.1, Absolute Maximum Ratings TA=25C.
-max_current_a       = 5.7     # ID continuous at TA=25C (A)
+max_current_a       = 4.7     # ID continuous at TA=70C (A), the least favourable
+                              # tagged row below (5.7 A at TA=25C)
 max_surge_current_a = 30.0    # IDM pulsed (A)
 max_power_w         = 1.4     # PD at TA=25C (W). Rev 3.1 Note B (p.2): PD is
                               # derived from the t<=10s RthJA (90 max), so it is a
@@ -168,6 +169,23 @@ theta_ja_c_per_w    = 100.0   # RthJA steady-state typ (max 125; the t<=10s valu
 max_junction_temp_c = 150.0   # TJ max (C)
 rds_on_vgs          = 2.5     # lowest RDS(on) row: 24 mOhm typ / 48 max @ VGS=2.5V, ID=3A
 vgs_th_max          = 1.45    # VGS(th) max @ VDS=VGS, ID=250mA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 5.7
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "AO3400A Rev 3.1, Absolute Maximum Ratings, ID, TA=25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 4.7
+unit = "A"
+conditions = "TA = 70 °C"
+basis = "AO3400A Rev 3.1, Absolute Maximum Ratings, ID, TA=70°C"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -748,16 +766,35 @@ warning = "a standard-level (not logic-level) part: its 44 mOhm RDS(on) is speci
 [models.ratings]
 # Source: Infineon IRF540NPbF Rev. 2.1, Absolute Maximum Rating + Thermal
 # Resistance tables.
-max_current_a       = 33.0    # ID continuous at TC = 25 C, VGS = 10 V (23 A at TC = 100 C)
+max_current_a       = 23.0    # ID continuous at TC = 100 C, VGS = 10 V, the least
+                              # favourable tagged row below (33 A at TC = 25 C)
 max_surge_current_a = 110.0   # IDM pulsed drain current
 max_power_w         = 130.0   # PD at TC = 25 C: a CASE-referenced figure that assumes a
                               # heatsink. In still air the binding limit is the junction
                               # temperature computed from theta_ja below, not this number.
 max_voltage_v       = 100.0   # V(BR)DSS min
-theta_ja_c_per_w    = 62.0    # RthJA max (RthJC max is 1.15)
+theta_ja_c_per_w    = 62.0    # RthJA max
+theta_jc_c_per_w    = 1.15    # RthJC max: places the TC rows below at the case
 max_junction_temp_c = 175.0   # TJ max
 rds_on_vgs          = 10.0    # the only VGS the 44 mOhm RDS(on) row is specified at
 vgs_th_max          = 4.0     # VGS(th) max @ VDS = VGS, ID = 250 uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 33.0
+unit = "A"
+conditions = "TC = 25 °C, VGS = 10 V"
+basis = "IRF540NPbF Rev. 2.1, Absolute Maximum Ratings, ID @ TC = 25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 23.0
+unit = "A"
+conditions = "TC = 100 °C, VGS = 10 V"
+basis = "IRF540NPbF Rev. 2.1, Absolute Maximum Ratings, ID @ TC = 100°C"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # The corpus batch. Nine SOT-23-class switches that between them account for the
@@ -906,7 +943,8 @@ cgs    = 5.53e-11  # Ciss typ - Crss typ = 60.67 - 5.37 = 55.30 pF, same rows an
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 0.63        # ID continuous, TA=25 C (0.45 A at TA=85 C)
+max_current_a = 0.45        # ID continuous, TA=85 C, the least favourable tagged
+                            # row below (0.63 A at TA=25 C)
 max_surge_current_a = 3.0   # IDM
 max_power_w = 0.28          # FR-4, minimum recommended pad layout (Note 6)
 max_voltage_v = 20.0        # VDS (VGS is +-6 V)
@@ -914,6 +952,23 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 452.0
 rds_on_vgs = 1.8   # lowest RDS(on) row (0.5 ohm typ / 0.7 max @ VGS=1.8V)
 vgs_th_max = 1.0   # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 0.63
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "DS31783 Rev. 8-2, Maximum Ratings, ID continuous, TA = +25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 0.45
+unit = "A"
+conditions = "TA = 85 °C"
+basis = "DS31783 Rev. 8-2, Maximum Ratings, ID continuous, TA = +85°C"
 
 # ── PMV50ENEAR ────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-23, AEC-Q101. 14 instances on MNT Reform.
@@ -969,7 +1024,8 @@ cgs    = 2.34e-10  # vendor .lib `CGS 2 6 2.34e-10`; equals data sheet Ciss typ 
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 3.9         # ID at VGS=10 V, Tamb=25 C (2.5 A at Tamb=100 C)
+max_current_a = 2.5         # ID at VGS=10 V, Tamb=100 C, the least favourable
+                            # tagged row below (3.9 A at Tamb=25 C)
 max_surge_current_a = 15.5  # IDM, single pulse tp <= 10 us
 max_power_w = 0.51          # Ptot, FR4 standard footprint (1.04 W on a 6 cm^2
                             # drain pad; the standard-footprint figure is the
@@ -980,6 +1036,23 @@ theta_ja_c_per_w = 245.0    # Rth(j-a) max, standard footprint (211 typ;
                             # 120 max with a 6 cm^2 drain pad)
 rds_on_vgs = 4.5            # lowest RDS(on) row (39 mOhm typ / 60 max @ VGS=4.5V)
 vgs_th_max = 2.5            # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = 3.9
+unit = "A"
+conditions = "VGS = 10 V, Tamb = 25 °C"
+basis = "PMV50ENEA v.1, Limiting values, ID, Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = 2.5
+unit = "A"
+conditions = "VGS = 10 V, Tamb = 100 °C"
+basis = "PMV50ENEA v.1, Limiting values, ID, Tamb = 100 °C"
 
 # ── PMV50EPEAR ────────────────────────────────────────────────────────────────
 # Nexperia, P-channel trench, SOT-23, AEC-Q101. 24 instances on MNT Reform, the
@@ -1182,15 +1255,49 @@ cgs    = 5.361e-10   # vendor .spi CGSO * W = 5.36099e-06 F/m * 100e-6 m = 536.1
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 3.7         # |ID| at TA=25 C, VGS=-4.5 V (2.2 A at TA=70 C)
+max_current_a = 2.2         # |ID| at TA=70 C, VGS=-4.5 V, the least favourable
+                            # tagged row below (3.7 A at TA=25 C)
 max_surge_current_a = 22.0  # |IDM|
-max_power_w = 1.3           # PD at TA=25 C, 1 in^2 single-layer 1 oz Cu FR4,
-                            # steady state (0.8 W at 70 C, derate 0.01 W/C)
+max_power_w = 0.8           # PD at TA=70 C, 1 in^2 single-layer 1 oz Cu FR4, the
+                            # least favourable tagged row below (1.3 W at 25 C)
 max_voltage_v = 20.0        # |VDS| (VGS is +-12 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 100.0    # max (75 typ). RthJC is not on this datasheet.
 rds_on_vgs = 2.5            # lowest |VGS| RDS(on) row (80 mOhm typ @ VGS=-2.5V)
 vgs_th_max = 1.2            # |VGS(th)| max (-1.2 V)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -3.7
+unit = "A"
+conditions = "TA = 25 °C, VGS = −4.5 V"
+basis = "IRLML6402 datasheet 2014-04-28, Absolute Maximum Ratings, ID @ TA = 25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -2.2
+unit = "A"
+conditions = "TA = 70 °C, VGS = −4.5 V"
+basis = "IRLML6402 datasheet 2014-04-28, Absolute Maximum Ratings, ID @ TA = 70°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 1.3
+unit = "W"
+conditions = "TA = 25 °C"
+mounting = "1 in^2 single-layer 1 oz Cu FR4"
+basis = "IRLML6402 datasheet 2014-04-28, Absolute Maximum Ratings, PD @ TA = 25°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.8
+unit = "W"
+conditions = "TA = 70 °C"
+mounting = "1 in^2 single-layer 1 oz Cu FR4"
+basis = "IRLML6402 datasheet 2014-04-28, Absolute Maximum Ratings, PD @ TA = 70°C"
 
 # ── AO3422 ────────────────────────────────────────────────────────────────────
 # Alpha & Omega Semiconductor, N-channel, SOT-23. Hunt boards.
@@ -1241,7 +1348,8 @@ cgs    = 2.014e-10  # Ciss typ - Crss typ = 214 - 12.6 = 201.4 pF, same bias (Ci
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 2.1         # ID at TA=25 C (1.7 A at 70 C)
+max_current_a = 1.7         # ID at TA=70 C, the least favourable tagged row
+                            # below (2.1 A at TA=25 C)
 max_surge_current_a = 10.0  # IDM
 max_power_w = 1.25          # PD at TA=25 C, 1 in^2 FR-4, 2 oz Cu, still air
 max_voltage_v = 55.0        # VDS (VGS is +-12 V)
@@ -1251,6 +1359,23 @@ theta_ja_c_per_w = 150.0    # max, steady state (115 typ; 100 max at t <= 10 s).
                             # RthJC, so theta_jc is deliberately absent.
 rds_on_vgs = 2.5            # lowest RDS(on) row (157 mOhm typ / 200 max @ VGS=2.5V)
 vgs_th_max = 2.0            # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 2.1
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "AO3422 Rev 2.1, Absolute Maximum Ratings, ID, TA=25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 1.7
+unit = "A"
+conditions = "TA = 70 °C"
+basis = "AO3422 Rev 2.1, Absolute Maximum Ratings, ID, TA=70°C"
 
 # ── PMZ550UNE ─────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-883 / DFN1006-3. MNT Reform. The board value

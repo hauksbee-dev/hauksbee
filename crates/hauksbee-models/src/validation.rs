@@ -674,9 +674,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
     if let Some(source) = &entry.source {
         p.0.extend(
-            source
-                .problems()
-                .into_iter()
+            (source.problems().into_iter())
+                .chain(crate::derating::tag_problems(entry))
                 .map(|m| format!("[models.source]: {m}")),
         );
         // No semiconductor or IC row reaches a farad: a printed pF/nF number
@@ -1414,7 +1413,10 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                 };
                 let status = fields.get("status").and_then(toml::Value::as_str);
                 let (required, optional) = match (key.as_str(), status) {
-                    ("characteristic", _) => ("parameter unit conditions basis", "min typ max"),
+                    ("characteristic", _) => (
+                        "parameter unit conditions basis",
+                        "min typ max rating package mounting",
+                    ),
                     ("pinout", _) => ("package pins", ""),
                     (_, Some("interval")) => ("status parameter low high unit kind basis", ""),
                     (_, Some("unknown")) => ("status parameter reason", ""),

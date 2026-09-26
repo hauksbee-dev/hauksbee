@@ -342,6 +342,15 @@ pub struct Characteristic {
     /// The row's test conditions (bias, temperature, frequency, pulse width).
     pub conditions: String,
     pub basis: String,
+    /// The `[models.ratings]` key this row is one printed condition of; the
+    /// key's scalar is the least favourable such row (`crate::derating`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<String>,
+    /// The package, and the board or mounting, the row is printed for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mounting: Option<String>,
 }
 
 const COLUMNS: [&str; 3] = ["min", "typ", "max"];

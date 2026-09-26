@@ -187,6 +187,7 @@ fn polarized_cap_reverse_bias_faults() {
         ..Ratings::default()
     };
     let meta = DeviceMeta {
+        derating: hauksbee_models::derating::Derating::default(),
         reference: "C1".into(),
         device: cap,
         kind: ComponentKind::Passive,
@@ -252,6 +253,7 @@ fn overloaded_nmos_overcurrent_faults() {
         ..Ratings::default()
     };
     let meta = DeviceMeta {
+        derating: hauksbee_models::derating::Derating::default(),
         reference: "Q1".into(),
         device: fet,
         kind: ComponentKind::Nmos,
@@ -375,6 +377,7 @@ fn pin_overcurrent_fires_on_driver_leg_current() {
             hauksbee_ir::SourceKind::Dc(5.0),
         ));
         let meta = DeviceMeta {
+            derating: hauksbee_models::derating::Derating::default(),
             reference: "U1:PB5".into(),
             device: vd,
             kind: ComponentKind::Mcu,

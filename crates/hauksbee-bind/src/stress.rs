@@ -53,6 +53,7 @@ use std::collections::HashMap;
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use hauksbee_models::derating::{Derating, TempRef, ASSUMED_TJ_MAX_C};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 use hauksbee_solve::{mos_body_vth, mos_channel};
 
@@ -161,6 +162,9 @@ pub struct DeviceMeta {
     pub footprint: String,
     /// Datasheet ratings, if the model carried any.
     pub ratings: Ratings,
+    /// The card's current and power rows by temperature; where present they,
+    /// not the scalar ratings, set the limits.
+    pub derating: Derating,
 }
 
 impl DeviceMeta {
@@ -622,6 +626,8 @@ pub struct StressMonitor {
     /// Ambient temperature (C) the steady-state junction estimate sits on top
     /// of. Defaults to [`crate::thermal::DEFAULT_AMBIENT_C`] (25 C).
     pub ambient_c: f64,
+    /// Whether the run set `ambient_c` rather than taking the default.
+    pub ambient_given: bool,
     /// reference -> live stress fraction (0..1), for component-state frames.
     stress_by_ref: HashMap<String, f64>,
     /// reference -> live estimated junction temperature (C), for the thermal
@@ -708,6 +714,9 @@ struct RunStats {
     worst_vgs: Option<f64>,
     /// Hottest estimated junction temperature (C). `None` if it never dissipated.
     peak_tj_c: Option<f64>,
+    /// With the ambient defaulted, a current or power check that passed at it
+    /// would have failed at the part's hottest printed rating temperature.
+    hot_flip: bool,
     /// The deposits `(elapsed s, energy J)` inside the trailing [`TJ_AVG_S`]
     /// window, with their running sums: the junction heats on this average.
     heat: std::collections::VecDeque<(f64, f64)>,
@@ -783,6 +792,7 @@ impl StressMonitor {
             watch_tracks: Vec::new(),
             destructive: false,
             ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
+            ambient_given: false,
             stress_by_ref: HashMap::new(),
             temp_by_ref: HashMap::new(),
             chunk_energy_j: vec![0.0; n],
@@ -876,6 +886,37 @@ impl StressMonitor {
                 out.push(Assumption::partial_model_for_component(&format!("{r}-peak-current"), r, "",
                     &format!("{r} peaks at {pk:.3} A, above the {cont:.3} A its card rates CONTINUOUSLY, and the card carries no pulsed (IDM) rating for the peak to be judged against"),
                     "add the datasheet's pulsed drain/forward current to the card, then re-run"));
+            }
+        }
+        out
+    }
+
+    /// What a card's temperature-dependent ratings leave open in this run:
+    /// an ambient nobody set, when the part's hottest printed rating
+    /// temperature would have flipped its current or power verdict; and a
+    /// limit read past the hottest row on a card with no Tj,max.
+    #[must_use]
+    pub fn rating_disclosures(&self) -> Vec<Assumption> {
+        let (mut out, mut said) = (Vec::new(), std::collections::HashSet::new());
+        for (m, s) in self.metas.iter().zip(&self.run) {
+            let r = strip_unit_suffix(&m.reference);
+            let Some(hot) = m.derating.hottest() else {
+                continue;
+            };
+            if s.hot_flip && said.insert((r, "ambient")) {
+                let at = format!("{} C", crate::thermal::DEFAULT_AMBIENT_C);
+                out.push(Assumption::default_parameter_for_component(
+                    r,
+                    r,
+                    "ambient_c",
+                    &at,
+                ));
+            }
+            let seen = s.peak_tj_c.unwrap_or(self.ambient_c).max(self.ambient_c);
+            if m.ratings.max_junction_temp_c.is_none() && seen > hot && said.insert((r, "tj")) {
+                out.push(Assumption::partial_model_for_component(&format!("{r}-tj-max"), r, "",
+                    &format!("{r}'s current and power limits past their hottest printed row ({hot} C) fall to zero at an assumed {ASSUMED_TJ_MAX_C} C junction limit, because its card carries no max_junction_temp_c"),
+                    "add the datasheet's max_junction_temp_c to the card, then re-run"));
             }
         }
         out
@@ -1146,7 +1187,6 @@ impl StressMonitor {
             let run = &mut self.run[i];
             run.peak_a = run.peak_a.max(op.current_a);
             run.lagged_a += (op.current_a - run.lagged_a) * alpha;
-            run.lag_over_limit |= limit.is_some_and(|c| run.lagged_a > c);
             let conducting = op.current_a > limit.unwrap_or(0.0) * CONDUCTING_ID_FRACTION;
             if let Some(v) = op.vgs.filter(|_| conducting) {
                 run.worst_vgs = Some(run.worst_vgs.map_or(v, |w: f64| w.min(v)));
@@ -1198,7 +1238,7 @@ impl StressMonitor {
         // ── Pass 2: per-device checks ────────────────────────────────────────
         // Iterate by index so we can borrow tracks mutably alongside metas.
         for i in 0..self.metas.len() {
-            let meta = self.metas[i].clone();
+            let mut meta = self.metas[i].clone();
             let Some(op) = &ops[i] else {
                 // Destroyed devices stay at full stress and raise nothing more.
                 // Their junction stops dissipating, so a previously-reported
@@ -1222,7 +1262,29 @@ impl StressMonitor {
                 ..*op
             };
             let op = &op;
-            let (rated_w, theta_ja, tj_max) = self.limits[i];
+            let (mut rated_w, theta_ja, tj_max) = self.limits[i];
+            let package_w = package_power
+                .get(strip_unit_suffix(&meta.reference))
+                .copied()
+                .unwrap_or(0.0);
+            // A card printing its current or power rating at several
+            // temperatures is judged on the row for where the part sits now.
+            let (amps, watts) = derated(&meta, theta_ja, self.ambient_c, package_w);
+            meta.ratings.max_current_a = amps.or(meta.ratings.max_current_a);
+            meta.ratings.max_power_w = watts.or(meta.ratings.max_power_w);
+            rated_w = watts.or(rated_w);
+            let run = &mut self.run[i];
+            run.lag_over_limit |= meta.ratings.max_current_a.is_some_and(|c| run.lagged_a > c);
+            let hot = meta.derating.hottest();
+            if let Some(hot) = hot.filter(|h| !self.ambient_given && *h > self.ambient_c) {
+                let (hot_a, hot_w) = derated(&meta, theta_ja, hot, package_w);
+                let over = |v: f64, l: Option<f64>| {
+                    l.is_some_and(|l| v > l * (1.0 + OVER_LIMIT_NOISE_MARGIN))
+                };
+                let flips = |v, now, hot| over(v, hot) && !over(v, now);
+                run.hot_flip |= flips(op.current_a, meta.ratings.max_current_a, hot_a)
+                    || flips(op.power_w, meta.ratings.max_power_w, hot_w);
+            }
             let mut checks = build_checks(&meta, op, peak_a, rated_w);
 
             // Thermal: turn the package's pooled dissipation into a
@@ -1246,10 +1308,6 @@ impl StressMonitor {
             // Consequently each sibling raises its own Overtemperature fault
             // on the same chunk: both junctions genuinely are over-limit, and
             // CI's fault matching names units, not bare package refs.
-            let package_w = package_power
-                .get(strip_unit_suffix(&meta.reference))
-                .copied()
-                .unwrap_or(0.0);
             if package_w > 0.0 {
                 let tj = crate::thermal::junction_temp_c(self.ambient_c, package_w, theta_ja);
                 self.temp_by_ref.insert(meta.reference.clone(), tj);
@@ -1582,6 +1640,29 @@ fn operating_point(
     }
 }
 
+/// A card's current and power limits read off its printed rows at ambient
+/// `ta_c` with the package dissipating `package_w`: TA rows at the ambient, TC
+/// rows at the case (Tj less `P * theta_JC`, or Tj itself, an upper bound, when
+/// the card has no `theta_JC`), TJ rows at Tj. `None` where no row is tagged.
+fn derated(
+    meta: &DeviceMeta,
+    theta_ja: f64,
+    ta_c: f64,
+    package_w: f64,
+) -> (Option<f64>, Option<f64>) {
+    let tj = crate::thermal::junction_temp_c(ta_c, package_w, theta_ja);
+    let jc = meta.ratings.theta_jc_c_per_w;
+    let tc = jc.map_or(tj, |jc| package_w.max(0.0).mul_add(-jc, tj).max(ta_c));
+    let at = |r| match r {
+        TempRef::Ambient => ta_c,
+        TempRef::Case => tc,
+        TempRef::Junction => tj,
+    };
+    let tj_max = meta.ratings.max_junction_temp_c.unwrap_or(ASSUMED_TJ_MAX_C);
+    let d = &meta.derating;
+    (d.current.limit(at, tj_max), d.power.limit(at, tj_max))
+}
+
 /// One limit check: value vs limit, flagged surge or continuous.
 struct Check {
     kind: FaultKind,
@@ -1828,6 +1909,7 @@ mod monitor_temp_tests {
     /// reference, a kind, a footprint and some ratings.
     fn meta(reference: &str, kind: ComponentKind, footprint: &str, ratings: Ratings) -> DeviceMeta {
         DeviceMeta {
+            derating: Derating::default(),
             reference: reference.into(),
             device: DeviceId(0),
             kind,

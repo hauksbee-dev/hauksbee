@@ -820,6 +820,7 @@ fn gather_device_meta(
     struct CompInfo {
         kind: ComponentKind,
         ratings: hauksbee_models::schema::Ratings,
+        derating: hauksbee_models::derating::Derating,
         footprint: String,
     }
     let mut by_ref: HashMap<String, CompInfo> = HashMap::new();
@@ -837,6 +838,7 @@ fn gather_device_meta(
                 CompInfo {
                     kind: m.kind,
                     ratings: m.ratings.clone(),
+                    derating: hauksbee_models::derating::Derating::of(&m),
                     footprint: comp.footprint.clone(),
                 },
             );
@@ -874,6 +876,7 @@ fn gather_device_meta(
                     kind: info.kind,
                     footprint: info.footprint.clone(),
                     ratings: info.ratings.clone(),
+                    derating: info.derating.clone(),
                 });
             }
         }
@@ -908,6 +911,7 @@ fn gather_device_meta(
                             kind: ComponentKind::Vreg,
                             footprint: info.footprint.clone(),
                             ratings: info.ratings.clone(),
+                            derating: info.derating.clone(),
                         });
                     }
                 }
@@ -942,6 +946,7 @@ fn gather_device_meta(
                     kind: info.kind,
                     footprint: info.footprint.clone(),
                     ratings: info.ratings.clone(),
+                    derating: info.derating.clone(),
                 });
             }
         }

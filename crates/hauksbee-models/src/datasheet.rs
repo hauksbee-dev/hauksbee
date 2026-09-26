@@ -1525,11 +1525,11 @@ max_junction_temp_c is the junction temperature limit, never a thermal-shutdown
 or protection threshold; where the absolute maximum says internally limited, it
 is the top of the operating junction range. A stated limit with no key here goes
 in a characteristic record (rule 0), never under an invented key. A rating
-printed for several conditions the part number does not settle (board copper or
-mounting, package, ambient) is read from the least favourable one, as a checker
-must not trust a better board than the user's: the lowest current and power, the
-highest thermal resistance, and max_current_a, max_power_w and theta_ja_c_per_w
-all from that same condition; the other rows go in characteristic records:
+printed for several conditions (TA, TC or TJ, board copper or mounting, package)
+is one characteristic per printed row with `rating = "<key>"`, its temperature in
+`conditions` and any `package` or `mounting` as printed. The key holds the least
+favourable row (lowest current and power, highest thermal resistance, all three
+from one board); Hauksbee reads the row for the scenario's temperature:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -3582,7 +3582,8 @@ mod tests {
         assert!(bjt.contains("(.MODEL/.SUBCKT) is copied verbatim"));
         assert!(bjt.contains("derives tf, cjc"));
         assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
-        assert!(bjt.contains("and max_current_a, max_power_w and theta_ja_c_per_w"));
+        assert!(bjt.contains("one characteristic per printed row with `rating = \"<key>\"`"));
+        assert!(bjt.contains("The key holds the least\nfavourable row"));
         assert!(vreg.contains("at the rated output current when several loads are printed"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
         assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));

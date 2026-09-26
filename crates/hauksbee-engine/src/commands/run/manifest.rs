@@ -106,7 +106,10 @@ fn manifest_options(cfg: &RunConfig) -> std::collections::BTreeMap<String, serde
         ("ac_csv".into(), serde_json::json!(cfg.ac_csv)),
         ("ac_loop".into(), serde_json::json!(cfg.ac_loop)),
         ("ac_node".into(), serde_json::json!(cfg.ac_node)),
-        ("ambient_c".into(), serde_json::json!(cfg.ambient)),
+        (
+            "ambient_c".into(),
+            serde_json::json!(cfg.ambient.unwrap_or(crate::thermal::DEFAULT_AMBIENT_C)),
+        ),
         ("ampacity".into(), serde_json::json!(cfg.ampacity)),
         ("apply_shorts".into(), serde_json::json!(cfg.apply_shorts)),
         ("bom_columns".into(), serde_json::json!(cfg.bom_columns)),

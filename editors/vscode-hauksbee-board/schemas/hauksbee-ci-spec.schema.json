@@ -17,10 +17,13 @@
       ]
     },
     "ambient_c": {
-      "description": "Ambient temperature (C) for the steady-state junction-temperature\nestimate (`max_temp` assertions). Default 25 C.",
-      "type": "number",
+      "description": "Ambient temperature (C) for the steady-state junction-temperature\nestimate (`max_temp` assertions) and temperature-dependent ratings.\nDefault 25 C, disclosed where a part's hottest rating row would flip it.",
+      "type": [
+        "number",
+        "null"
+      ],
       "format": "double",
-      "default": 25.0
+      "default": null
     },
     "asbuilt": {
       "description": "Optional as-built overlay (.asbuilt.toml), relative to the spec file's\ndirectory: the declarative physical delta between the design files and\nthe real reworked board (cut traces, jumpers, lifted pins, fitted\nvalues), applied to the bound board before every run. Distinct from\n`[[override]]`, which swaps a component's VALUE string pre-bind: the\noverlay performs post-bind structural surgery.",

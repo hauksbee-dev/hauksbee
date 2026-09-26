@@ -26,7 +26,6 @@ use hauksbee_ir::evidence::Scope;
 pub(crate) fn emit_quiet(
     engine: &mut HauksbeeEngine,
     evidence: &crate::evidence::BoardEvidence,
-    ambient: f64,
     seconds: f64,
     json: bool,
     plain: bool,
@@ -34,7 +33,7 @@ pub(crate) fn emit_quiet(
     quiet: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
-    engine.scheduler_mut().set_ambient_c(ambient);
+    let ambient = engine.scheduler().ambient_c();
     let summary = BindSummary::from_report(engine.report());
     let board_name = engine.report().board_name.clone();
     let rows = collect_thermal(engine, seconds.max(0.05));
@@ -70,7 +69,8 @@ pub(crate) fn emit_quiet(
             kind: Some(r.into()),
         }]
     };
-    let guessed = engine.scheduler().stress.inferred_theta_ja(scope);
+    let mut guessed = engine.scheduler().stress.inferred_theta_ja(scope);
+    guessed.extend(engine.scheduler().stress.rating_disclosures());
     let evidence = evidence.clone().with_assumptions(guessed)?;
     let mut maps = Vec::new();
     for (reference, tj_c, over_limit) in &rows {

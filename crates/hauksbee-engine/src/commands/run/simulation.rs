@@ -103,6 +103,9 @@ pub fn build_live_simulation(
     )?;
     board_evidence =
         board_evidence.with_scoped_substitutions(engine.scheduler().scoped_substitutions())?;
+    if let Some(ambient) = cfg.ambient {
+        engine.scheduler_mut().set_ambient_c(ambient);
+    }
 
     // --apply-shorts: bridge every detected copper short before simulating.
     if cfg.apply_shorts {
@@ -161,7 +164,6 @@ pub fn run_selected_simulation_surface(
         crate::reports::thermal::emit_quiet(
             &mut sim.engine,
             &sim.board_evidence,
-            cfg.ambient,
             cfg.seconds,
             cfg.json,
             cfg.plain,

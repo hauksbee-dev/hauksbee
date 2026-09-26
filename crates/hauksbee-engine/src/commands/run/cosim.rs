@@ -193,7 +193,6 @@ fn assemble_evidence_and_ci_artifacts(
     sim: &mut SimulationContext,
     observations: &RunObservations,
 ) -> anyhow::Result<EvidenceArtifacts> {
-    let ci_findings = &artifacts.ci_findings;
     let board_evidence = &sim.board_evidence;
     let engine = &mut sim.engine;
     let held_high_boot_nets = &observations.activity.boot_advisory.held_high_control_nets;
@@ -225,14 +224,14 @@ fn assemble_evidence_and_ci_artifacts(
                 fix: Some("add a hardware bias that keeps the load off through reset, or confirm and document the polarity".into()),
             }));
     }
-    // A forced run declares itself, and so does a regulator whose input headroom
-    // was never established: without this the only trace of a post-solve
-    // override is a missing residual, which reads as "unmeasured". BEFORE any
-    // map is built, because a map resolves against the assumptions its board
-    // carried at construction.
+    // A forced run declares itself, as do a regulator whose input headroom was
+    // never established and a rating read at a defaulted ambient; else a
+    // post-solve override leaves only a missing residual. BEFORE any map is
+    // built: a map resolves against the assumptions its board had at birth.
     let board_evidence = &board_evidence
         .clone()
-        .with_assumptions(engine.scheduler().forced_voltage_assumptions()?)?;
+        .with_assumptions(engine.scheduler().forced_voltage_assumptions()?)?
+        .with_assumptions(engine.scheduler().stress.rating_disclosures())?;
     let mut cosim_maps = Vec::new();
     // One map per unsupported regulator, over everything its setpoint reaches:
     // the Undermined assumption beneath it makes the verdict invalid and
@@ -280,7 +279,7 @@ fn assemble_evidence_and_ci_artifacts(
     // Rewrite CI artifacts from the final co-sim evidence object before a
     // strict gate can exit. Invalid evidence is a failure in JUnit/SARIF and
     // a GitHub error annotation; qualified evidence remains visible.
-    if let Some(base) = &ci_findings {
+    if let Some(base) = &artifacts.ci_findings {
         let mut all = base.clone();
         all.extend(run_findings.clone());
         // The same run-level split as the static pass: an undermined map

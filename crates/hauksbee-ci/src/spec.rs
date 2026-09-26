@@ -354,9 +354,10 @@ pub struct Spec {
     #[serde(default)]
     pub timing: Option<TimingSpec>,
     /// Ambient temperature (C) for the steady-state junction-temperature
-    /// estimate (`max_temp` assertions). Default 25 C.
-    #[serde(default = "default_ambient_c")]
-    pub ambient_c: f64,
+    /// estimate (`max_temp` assertions) and temperature-dependent ratings.
+    /// Default 25 C, disclosed where a part's hottest rating row would flip it.
+    #[serde(default)]
+    pub ambient_c: Option<f64>,
     /// Power-supply legs to attach to named supply nets.
     #[serde(default, rename = "supply")]
     pub supplies: Vec<SupplySpec>,
@@ -540,9 +541,6 @@ const fn default_duration_ms() -> f64 {
 }
 const fn default_frame_ms() -> f64 {
     1.0
-}
-const fn default_ambient_c() -> f64 {
-    25.0
 }
 
 /// A power-supply leg attached to a supply net. Mirrors the engine's

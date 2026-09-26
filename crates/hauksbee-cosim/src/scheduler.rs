@@ -6025,6 +6025,7 @@ impl Scheduler {
     /// junction estimate sits on top of.
     pub const fn set_ambient_c(&mut self, ambient_c: f64) {
         self.stress.ambient_c = ambient_c;
+        self.stress.ambient_given = true;
     }
 
     /// The configured ambient temperature (C).
@@ -9222,6 +9223,7 @@ data_out = ["io0"]
             });
             let q = stamp_resistor(&mut circuit, "Q1".into(), a, NodeId::GROUND, 1.0);
             let meta = DeviceMeta {
+                derating: hauksbee_models::derating::Derating::default(),
                 reference: "Q1".into(),
                 device: q,
                 kind: ComponentKind::Nmos,

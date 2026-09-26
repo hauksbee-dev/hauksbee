@@ -450,6 +450,12 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     out.extend(law_warning(entry, rows).or_else(|| ron_miss(entry)));
     out.extend(gain_warning(entry, rows));
     out.extend(channel_slips(entry, rows));
+    let rating = |r: &&Characteristic| {
+        ["ID", "PD", "Ptot", "RθJA", "RthJA"]
+            .iter()
+            .any(|s| symbol(r, s))
+    };
+    out.extend(rows.iter().filter(|r| r.rating.is_none()).filter(rating).map(|r| format!("characteristic '{}' prints a rating: tag it rating = \"<key>\" (max_current_a, max_power_w, theta_ja_c_per_w) with its temperature, package or mounting, so Hauksbee reads the row for the scenario's temperature", r.parameter)));
     derived.retain(|d| !entry.params.0.contains_key(d.0));
     for (n, v, how) in derived {
         out.push(format!(

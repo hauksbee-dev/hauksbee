@@ -14,7 +14,9 @@ use hauksbee_engine::thermal::{junction_temp_c, theta_ja_from_footprint};
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_frontdoor_api::protocol::SolverControls;
+use hauksbee_ir::evidence::Assumption;
 use hauksbee_ir::{Circuit, DeviceId, NodeId};
+use hauksbee_models::derating::{Curve, Derating, TempRef};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 
 /// A 1 V source on node 1 across a resistor `name` of `ohms` to ground.
@@ -50,6 +52,7 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
     // theta_JA explicit (250) so the test does not depend on footprint parsing
     // of the synthetic device; max Tj 150 so we sit exactly at the limit.
     let meta = DeviceMeta {
+        derating: Derating::default(),
         reference: "R1".into(),
         device: rid,
         kind: ComponentKind::Passive,
@@ -109,6 +112,7 @@ fn pwm_fixture(tj_limit_c: f64) -> (Circuit, StressMonitor) {
     let mut circuit = Circuit::new();
     let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
     let meta = DeviceMeta {
+        derating: Derating::default(),
         reference: "Q1".into(),
         device: load,
         kind: ComponentKind::Nmos,
@@ -267,6 +271,7 @@ fn overpower_judges_time_weighted_power_not_the_endpoint() {
         let mut circuit = Circuit::new();
         let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
         let meta = DeviceMeta {
+            derating: Derating::default(),
             reference: "Q1".into(),
             device: load,
             kind: ComponentKind::Nmos,
@@ -361,6 +366,7 @@ fn ambient_pushes_part_over_its_limit() {
     let build = |ambient: f64| -> Vec<hauksbee_engine::stress::FaultEvent> {
         let (mut circuit, rid) = one_volt_across("R1", 2.0); // 0.5 W
         let meta = DeviceMeta {
+            derating: Derating::default(),
             reference: "R1".into(),
             device: rid,
             kind: ComponentKind::Passive,
@@ -397,6 +403,7 @@ fn ambient_pushes_part_over_its_limit() {
     // trip on the chunk it crosses.
     let (mut circuit, rid) = one_volt_across("R1", 2.0);
     let meta = DeviceMeta {
+        derating: Derating::default(),
         reference: "R1".into(),
         device: rid,
         kind: ComponentKind::Passive,
@@ -527,6 +534,7 @@ fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
         ..Default::default()
     };
     let meta = |name: &str, dev| DeviceMeta {
+        derating: Derating::default(),
         reference: name.into(),
         device: dev,
         kind: ComponentKind::BjtNpn,
@@ -732,4 +740,103 @@ fn dual_package_pwm_cool_duty_does_not_false_fire() {
         (t1 - expected_tj).abs() < 1e-9 && (t2 - expected_tj).abs() < 1e-9,
         "both unit rows report the pooled duty-cycle 75 C (got {t1:.3}, {t2:.3})"
     );
+}
+
+/// Drive `Q1` (`volts` across `ohms`) for eight chunks with the current rows
+/// `rows` (at `at`), `theta_JA` 20 C/W and the given ambient (`None`: the
+/// default, unset). Returns whether it tripped Overcurrent and the disclosures.
+fn derated_run(
+    at: TempRef,
+    rows: &[(f64, f64)],
+    ratings: &Ratings,
+    (volts, ohms): (f64, f64),
+    ambient: Option<f64>,
+) -> (bool, Vec<Assumption>) {
+    let (mut circuit, device) = one_volt_across("Q1", ohms);
+    let meta = DeviceMeta {
+        derating: Derating {
+            current: Curve(vec![(at, rows.to_vec())]),
+            ..Default::default()
+        },
+        reference: "Q1".into(),
+        device,
+        kind: ComponentKind::Passive,
+        footprint: "X".into(),
+        ratings: Ratings {
+            max_power_w: Some(1e3),
+            theta_ja_c_per_w: Some(20.0),
+            ..ratings.clone()
+        },
+    };
+    let mut mon = StressMonitor::new(vec![meta]);
+    if let Some(ambient) = ambient {
+        mon.ambient_c = ambient;
+        mon.ambient_given = true;
+    }
+    let node_v = |n: NodeId| if n.0 == 1 { volts } else { 0.0 };
+    let tripped = (0..8).fold(false, |t, _| {
+        let faults = mon.evaluate(&mut circuit, &node_v, &|_| None, 0.0);
+        t | faults.iter().any(|f| f.kind == FaultKind::Overcurrent)
+    });
+    (tripped, mon.rating_disclosures())
+}
+
+/// 5 A through a part rated 5.7 A at TA = 25 C and 4.7 A at 70 C: fine at 25,
+/// over at 70, and with the ambient left unset the 70 C row would flip the
+/// verdict, so the defaulted 25 C is disclosed. Past the hottest row the limit
+/// falls to zero at Tj,max: 2.5 A passes at 70 C but not at 110 C (limit
+/// 4.7 * 40/80 = 2.35 A with Tj,max 150).
+#[test]
+fn ambient_rows_are_read_at_the_ambient_and_fall_to_zero_past_the_hottest() {
+    let rows = [(25.0, 5.7), (70.0, 4.7)];
+    let tj150 = Ratings {
+        max_junction_temp_c: Some(150.0),
+        ..Default::default()
+    };
+    // (A, ambient, trips, discloses the defaulted 25 C)
+    let cases = [
+        (5.0, Some(25.0), false, false),
+        (5.0, Some(70.0), true, false),
+        (5.0, None, false, true),
+        (4.0, None, false, false),
+        (2.5, Some(70.0), false, false),
+        (2.5, Some(110.0), true, false),
+    ];
+    for (amps, ambient, trips, defaulted) in cases {
+        let drive = (1.0, 1.0 / amps);
+        let (tripped, said) = derated_run(TempRef::Ambient, &rows, &tj150, drive, ambient);
+        let disclosed = said
+            .iter()
+            .any(|a| a.statement().contains("ambient_c is taken as 25 C"));
+        let got = (tripped, disclosed);
+        assert_eq!(
+            got,
+            (trips, defaulted),
+            "{amps} A at {ambient:?} C: {said:?}"
+        );
+    }
+    let no_tj_max = Ratings::default();
+    let (_, said) = derated_run(TempRef::Ambient, &rows, &no_tj_max, (1.0, 0.4), Some(110.0));
+    assert!(
+        said.iter().any(|a| a.because().contains("assumed 125 C")),
+        "no Tj,max: {said:?}"
+    );
+}
+
+/// Case rows (33 A at TC = 25 C, 23 A at 100 C, Tj,max 175) with 16 A and
+/// 5 W at TA = 25 C, `theta_JA` 20: Tj = 125 C. With `theta_JC` = 1 the case
+/// sits at 120 C (limit 23 * 55/75 = 16.9 A, passes); without it the case is
+/// taken at Tj, 125 C (limit 23 * 50/75 = 15.3 A, trips).
+#[test]
+fn case_rows_are_read_at_the_case_or_at_tj_without_theta_jc() {
+    let rows = [(25.0, 33.0), (100.0, 23.0)];
+    let ratings = |jc| Ratings {
+        max_junction_temp_c: Some(175.0),
+        theta_jc_c_per_w: jc,
+        ..Default::default()
+    };
+    let drive = (0.3125, 0.3125 / 16.0);
+    let run = |jc| derated_run(TempRef::Case, &rows, &ratings(jc), drive, Some(25.0)).0;
+    assert!(!run(Some(1.0)), "16 A under 16.9 A with the case at 120 C");
+    assert!(run(None), "16 A over 15.3 A with the case taken at Tj");
 }

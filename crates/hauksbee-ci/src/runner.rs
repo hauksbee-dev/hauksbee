@@ -1532,6 +1532,7 @@ fn production_assumptions(
     // below the gate drive its RDS(on) is specified at, a current peak the card
     // carries no pulsed rating for. Never a silent clean pass.
     production_assumptions.extend(engine.scheduler().stress.run_disclosures());
+    production_assumptions.extend(engine.scheduler().stress.rating_disclosures());
     // A junction temperature on a package-guessed theta_JA qualifies the
     // max_temp claim on that part, and a no_faults pass the guess decides.
     let thermal_claims = |reference: &str, decisive: bool| {
@@ -1903,7 +1904,9 @@ fn run_one(
         .map_err(SpecError::invalid("building engine"))?;
 
     // Ambient for the steady-state junction-temperature estimate (max_temp).
-    engine.scheduler_mut().set_ambient_c(spec.ambient_c);
+    if let Some(ambient) = spec.ambient_c {
+        engine.scheduler_mut().set_ambient_c(ambient);
+    }
 
     // Attach this spec's peripherals (controls, bus slaves, sinks) and their
     // timeline events to the engine's scheduler.
@@ -2277,7 +2280,7 @@ fn run_one(
         rail_windows,
         protection_tripped,
         protection_tripped_scoped,
-        ambient_c: spec.ambient_c,
+        ambient_c: engine.scheduler().ambient_c(),
         bind: Some(hauksbee_engine::result::BindSummary::from_report(
             engine.report(),
         )),
