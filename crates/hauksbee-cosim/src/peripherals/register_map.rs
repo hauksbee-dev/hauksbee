@@ -184,11 +184,11 @@ fn decode(enc: Encoding, bytes: &[u8]) -> (f64, u32) {
         }
         Encoding::I16Be => {
             let v = i16::from_be_bytes([bytes[0], bytes[1]]);
-            (f64::from(v), u32::from(v as u16))
+            (f64::from(v), u32::from(v.cast_unsigned()))
         }
         Encoding::I16Le => {
             let v = i16::from_le_bytes([bytes[0], bytes[1]]);
-            (f64::from(v), u32::from(v as u16))
+            (f64::from(v), u32::from(v.cast_unsigned()))
         }
         other => panic!(
             "RegisterMapSensor: encoding {other:?} has no write decode; \
@@ -1361,17 +1361,18 @@ addr_mask = 0x7f
         if var1 == 0 {
             return 0;
         }
-        let mut p: u32 = ((1_048_576 - adc_p) as u32)
-            .wrapping_sub((var2 >> 12) as u32)
+        let mut p: u32 = (1_048_576 - adc_p)
+            .cast_unsigned()
+            .wrapping_sub((var2 >> 12).cast_unsigned())
             .wrapping_mul(3125);
         if p < 0x8000_0000 {
-            p = (p << 1) / (var1 as u32);
+            p = (p << 1) / var1.cast_unsigned();
         } else {
-            p = (p / (var1 as u32)) * 2;
+            p = (p / var1.cast_unsigned()) * 2;
         }
-        let w1 = p9.wrapping_mul((((p >> 3) * (p >> 3)) >> 13) as i32) >> 12;
-        let w2 = ((p >> 2) as i32).wrapping_mul(p8) >> 13;
-        ((p as i32) + ((w1 + w2 + p7) >> 4)) as u32
+        let w1 = p9.wrapping_mul((((p >> 3) * (p >> 3)) >> 13).cast_signed()) >> 12;
+        let w2 = (p >> 2).cast_signed().wrapping_mul(p8) >> 13;
+        (p.cast_signed() + ((w1 + w2 + p7) >> 4)).cast_unsigned()
     }
 
     fn bme280_compensate_h(adc_h: i32, t_fine: i32, h: [i32; 6]) -> u32 {
@@ -1384,7 +1385,7 @@ addr_mask = 0x7f
         let y4 = (y3 + 2_097_152).wrapping_mul(h2) + 8192;
         let mut v = term_a.wrapping_mul(y4 >> 14);
         v = v - ((((v >> 15).wrapping_mul(v >> 15) >> 7).wrapping_mul(h1)) >> 4);
-        (v.clamp(0, 419_430_400) >> 12) as u32
+        (v.clamp(0, 419_430_400) >> 12).cast_unsigned()
     }
 
     /// The shipped BME280 spec: chip-ID 0x60, trimming coefficients that
@@ -1416,9 +1417,9 @@ addr_mask = 0x7f
             i32::from(cal1[25]),
             le16(&cal2, 0),
             i32::from(cal2[2]),
-            (i32::from(cal2[3] as i8) << 4) | i32::from(cal2[4] & 0x0F),
-            (i32::from(cal2[5] as i8) << 4) | i32::from(cal2[4] >> 4),
-            i32::from(cal2[6] as i8),
+            (i32::from(cal2[3].cast_signed()) << 4) | i32::from(cal2[4] & 0x0F),
+            (i32::from(cal2[5].cast_signed()) << 4) | i32::from(cal2[4] >> 4),
+            i32::from(cal2[6].cast_signed()),
         ];
         assert_eq!((t1, t2, t3), (27504, 26435, -1000));
         assert_eq!(p, [36477, -10685, 3024, 2855, 140, -7, 15500, -14600, 6000]);
@@ -1497,7 +1498,7 @@ style = "i2c_pointer"
         let addr = 0x48;
         let mut bus = i2c_bus(sensor(WRITE_COUPLING_SPEC));
         assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x00) as i16,
+            i2c_read_u16(&mut bus, addr, 0x00).cast_signed(),
             16000,
             "FSR 2.048 by default"
         );
@@ -1510,7 +1511,7 @@ style = "i2c_pointer"
             assert_eq!(s.ignored_write_bytes(), 0);
         }
         assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x00) as i16,
+            i2c_read_u16(&mut bus, addr, 0x00).cast_signed(),
             8000,
             "FSR 4.096 after the write"
         );
@@ -1676,7 +1677,7 @@ style = "i2c_pointer"
         s.set_input("a1", 0.3);
         let addr = 0x48;
         let mut bus = i2c_bus(s);
-        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00) as i16, 3200);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00).cast_signed(), 3200);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x01), 0x8583);
 
         i2c_write_u16(&mut bus, addr, 0x01, 0xC383);
@@ -1697,7 +1698,7 @@ style = "i2c_pointer"
             s.set_input("a0", 0.0);
             s.set_input("a1", 0.5);
         }
-        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00) as i16, -8000);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00).cast_signed(), -8000);
         bus.slave_mut_t::<RegisterMapSensor>(addr)
             .unwrap()
             .set_input("a0", 5.0);
@@ -1715,7 +1716,7 @@ style = "i2c_pointer"
         let addr = 0x40;
         let mut bus = i2c_bus(s);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x00), 0x399F);
-        assert_eq!(i2c_read_u16(&mut bus, addr, 0x01) as i16, 20000);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x01).cast_signed(), 20000);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x02), 0x5DC2);
         assert_eq!(
             i2c_read_u16(&mut bus, addr, 0x04),

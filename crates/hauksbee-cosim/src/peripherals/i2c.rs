@@ -631,7 +631,7 @@ impl I2cSlave for Lm75 {
 }
 
 fn be_to_temp(msb: u8, lsb: u8) -> f64 {
-    let raw = (u16::from(msb) << 8 | u16::from(lsb)) as i16;
+    let raw = (u16::from(msb) << 8 | u16::from(lsb)).cast_signed();
     // Right-justify (drop the 5 unused LSBs) and scale.
     f64::from(raw >> 5) * 0.125
 }
