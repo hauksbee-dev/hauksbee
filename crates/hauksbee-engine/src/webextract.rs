@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use hauksbee_frontdoor_api::frontdoor::{DatasheetHooks, DatasheetJob};
-use hauksbee_models::datasheet;
+use hauksbee_models::datasheet::{self, TimedOut};
 use hauksbee_models::extract_config::{self, ProcessHost, Resolved};
 use hauksbee_models::extract_progress;
 
@@ -433,19 +433,20 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
 
     // On its own thread so the heartbeat below can run: `datasheet::run` is one
     // long blocking call with no callback of its own.
-    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Option<String>, String>>();
     std::thread::spawn(move || {
-        let outcome = datasheet::run(args)
-            .map(|_| ())
-            .map_err(|e| format!("{e:#}"));
+        let outcome = datasheet::run(args).map(|_| None).or_else(|e| {
+            let kept = e.downcast_ref::<TimedOut>().filter(|t| t.2.is_some());
+            kept.map(|t| Some(t.to_string())).ok_or(format!("{e:#}"))
+        });
         let _ = tx.send(outcome);
     });
     // Polled each second: a phase or estimate change goes out as a `phase: ` /
     // `estimate: <secs>` line the page reads for its progress bar.
     let (started, mut beat, mut shown) = (Instant::now(), Instant::now(), (String::new(), 0));
-    loop {
+    let incomplete = loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(Ok(())) => break,
+            Ok(Ok(warning)) => break warning,
             Ok(Err(e)) => return Err(e),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let now = extract_progress::snapshot();
@@ -469,7 +470,7 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
                 )
             }
         }
-    }
+    };
 
     extract_progress::record(started.elapsed());
     let (path, toml_text) = read_draft(&out_dir)?;
@@ -478,11 +479,15 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
         started.elapsed().as_secs()
     ));
 
-    let card = build_card(
+    let mut card = build_card(
         &job,
         &toml_text,
         path.extension().is_some_and(|e| e == "toml"),
     );
+    if let Some(warning) = incomplete {
+        card.assumptions.insert(0, warning.clone());
+        card.incomplete = Some(warning);
+    }
     serde_json::to_string(&card).map_err(|e| format!("could not serialise the model card: {e}"))
 }
 
@@ -549,6 +554,10 @@ struct ModelCard {
     /// `notes` field. Surfaced separately because these are the numbers a
     /// reviewer must go and check; buried in a 60-line TOML they get skimmed.
     assumptions: Vec<String>,
+    /// Set when the run timed out and this is its last lint-clean draft, which
+    /// may be missing sections: the distinct status a script checks (null
+    /// on a finished run).
+    incomplete: Option<String>,
 }
 
 /// Does this citation admit the number was not read off the datasheet?
@@ -718,6 +727,7 @@ fn build_card(job: &DatasheetJob, toml_text: &str, is_model_entry: bool) -> Mode
         toml: toml_text.to_string(),
         values,
         assumptions,
+        incomplete: None,
     }
 }
 
