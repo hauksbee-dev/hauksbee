@@ -1,8 +1,10 @@
-//! The headless runner: turn a [`Spec`] into a bound board, apply its supplies,
-//! net drives, rail suppressions and overrides, run the co-sim for the
-//! requested duration across one or more fuzz seeds, and collect everything the
-//! assertions need (per-net min/max/toggles after a time threshold, UART,
-//! faults, per-component peak current).
+//! The headless runner: turn a [`Spec`] into co-sim results.
+//!
+//! It binds the board, applies the spec's supplies, net drives, rail
+//! suppressions and overrides, runs the co-sim for the requested duration
+//! across one or more fuzz seeds, and collects everything the assertions need
+//! (per-net min/max/toggles after a time threshold, UART, faults, per-component
+//! peak current).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +14,8 @@ use hauksbee_engine::{bind_board, BoundBoard, CsProvenance, HauksbeeEngine, Reso
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::evidence::{
-    ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution, IgnoredInput,
+    ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionSource, Contribution,
+    ErrorBudget, IgnoredInput, NetScope, RunDate, Scope, Subject, TimeWindow,
 };
 use hauksbee_ir::{Device, NodeId, PwlPoint, SourceKind};
 use hauksbee_models::variants::{SELECT_PROPERTY, SWEEP_PROPERTY};
@@ -102,6 +105,8 @@ fn artifact_provenance(
 /// Apply BOM, placement and assembly-variant inputs through the production
 /// readers and binder. Used by both `run` and `check`, so an editor validation
 /// cannot call an artifact safe that the gate later refuses.
+// One linear pass over the assembly inputs; a split would only thread the same state around.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn prepare_assembly_inputs(
     spec: &Spec,
     mut board: ExtractedBoard,
@@ -180,7 +185,7 @@ pub(crate) fn prepare_assembly_inputs(
             &effective_spec.fit,
             &effective_spec.no_fit,
         )
-        .map_err(|error| SpecError::Invalid(format!("dnp: {error}")))?;
+        .map_err(SpecError::invalid("dnp"))?;
 
     if !board.components.is_empty() && board.components.iter().all(|component| component.dnp) {
         return Err(SpecError::Invalid(
@@ -287,6 +292,8 @@ pub struct PeripheralSnapshot {
 /// `Default` yields an empty outcome (no UART, no faults, empty maps,
 /// `analog_valid: false`); real runs fill every field. Tests build a minimal
 /// outcome with `RunOutcome { <fields under test>, ..Default::default() }`.
+// Independent per-seed facts the assertions read, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
 pub struct RunOutcome {
     /// Seed index (0-based).
@@ -378,7 +385,7 @@ pub struct RunOutcome {
     /// Numerical qualification measured by this seed's actual scheduler run.
     /// `None` exists for synthetic unit-test outcomes that did not execute a
     /// solver, not as a zero-error claim.
-    pub error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
+    pub error_budget: Option<ErrorBudget>,
     /// True once the analog solve failed `STRICT_CONSECUTIVE_FAILED_ABORT` chunks
     /// in a row at any point (the strict/CI hard-refusal condition). Drives exit 3
     /// on its own, even if no single assertion's window happened to overlap.
@@ -666,6 +673,12 @@ fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<St
 }
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
+///
+/// # Errors
+///
+/// Every error [`run_spec_seeded`] returns: an unreadable `models_dir`, an
+/// unloadable board or firmware, spec references the board lacks, or a
+/// solver failure.
 pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     run_spec_seeded(spec, None)
 }
@@ -721,16 +734,22 @@ impl Drop for DescriptorDirGuard {
     }
 }
 
-/// Run the spec, optionally restricted to one ensemble seed (`--seed N`, the
-/// failing-seed isolation path). Tolerance sampling and net fuzz are both
-/// keyed by the absolute seed number, so the isolated member reproduces the
-/// full run's values exactly.
+/// Run the spec, optionally restricted to one ensemble seed.
+///
+/// `--seed N` is the failing-seed isolation path. Tolerance sampling and net
+/// fuzz are both keyed by the absolute seed number, so the isolated member
+/// reproduces the full run's values exactly.
 ///
 /// The model library is the same layered one `hauksbee run` uses (builtin →
 /// packs → `~/.hauksbee/models` → `~/.config/hauksbee/models`), so a
 /// `[[models]]` routing entry in a user model dir binds in CI exactly as it
 /// does interactively. For an explicit extra layer (the `--models-dir` flag)
 /// use [`run_spec_with_lib`].
+///
+/// # Errors
+///
+/// [`SpecError::Invalid`] when the spec's `models_dir` is not a readable
+/// directory, plus every error [`run_spec_with_lib`] returns.
 pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOutcome>, SpecError> {
     let models_dir = spec.models_dir_path();
     if let Some(path) = &models_dir {
@@ -748,6 +767,13 @@ pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOut
 
 /// [`run_spec_seeded`] against an explicit, already-built model library (how
 /// the CLI threads `--models-dir` through).
+///
+/// # Errors
+///
+/// A [`SpecError`] when the board, its companion schematic or the firmware
+/// cannot be loaded, when the spec names nets or component references the
+/// board lacks or sets up an invalid supply, tolerance or peripheral, or
+/// [`SpecError::Solver`] when an analysis fails or refuses.
 pub fn run_spec_with_lib(
     spec: &Spec,
     only_seed: Option<u32>,
@@ -779,7 +805,7 @@ pub fn run_spec_with_lib(
         schematic_path.as_deref(),
         board_is_eagle,
     )
-    .map_err(|error| SpecError::Invalid(format!("resolving companion schematic: {error}")))?;
+    .map_err(SpecError::invalid("resolving companion schematic"))?;
     let prepared = prepare_assembly_inputs(spec, normalized.board, lib)?;
     let base = prepared.board;
     let spec = &prepared.spec;
@@ -1425,23 +1451,25 @@ fn sweep_variants(
 /// channel the backend could not inject into, a bus peripheral no modelled
 /// controller ever addressed, and each window where the primary trapezoidal
 /// march failed and a fallback integrator produced the accepted values.
+// A flat list of independent disclosure sources, each a few lines.
+#[allow(clippy::too_many_lines)]
 fn production_assumptions(
     spec: &Spec,
     board: &ExtractedBoard,
     engine: &HauksbeeEngine,
     lib: &ModelLibrary,
     seed: u32,
-    hollow_assumptions: Vec<hauksbee_ir::evidence::Assumption>,
-) -> Result<Vec<hauksbee_ir::evidence::Assumption>, SpecError> {
+    hollow_assumptions: Vec<Assumption>,
+) -> Result<Vec<Assumption>, SpecError> {
     let mut production_assumptions = hollow_assumptions;
     for drop in engine.scheduler().adc_dropped() {
-        let scope = hauksbee_ir::evidence::Scope::Nets(
-            hauksbee_ir::evidence::NetScope::new([drop.net.as_str()], None)
-                .map_err(|e| SpecError::Invalid(format!("building ADC evidence: {e}")))?,
+        let scope = Scope::Nets(
+            NetScope::new([drop.net.as_str()], None)
+                .map_err(SpecError::invalid("building ADC evidence"))?,
         );
-        production_assumptions.push(hauksbee_ir::evidence::Assumption::not_exercised(
-            hauksbee_ir::evidence::AssumptionSource::Scheduler,
-            hauksbee_ir::evidence::Subject::new(
+        production_assumptions.push(Assumption::not_exercised(
+            AssumptionSource::Scheduler,
+            Subject::new(
                 &format!("adc/{}/{}", drop.mcu_ref, drop.channel),
                 &format!("{} ADC channel {} on net {}", drop.mcu_ref, drop.channel, drop.net),
             ),
@@ -1456,13 +1484,13 @@ fn production_assumptions(
             .iter()
             .filter(|assertion| assertion.id.as_deref() == Some(bus.id.as_str()))
         {
-            production_assumptions.push(hauksbee_ir::evidence::Assumption::not_exercised(
-                hauksbee_ir::evidence::AssumptionSource::Scheduler,
-                hauksbee_ir::evidence::Subject::new(
+            production_assumptions.push(Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::new(
                     &format!("{}/{}", bus.bus.to_ascii_lowercase(), bus.id),
                     &format!("{} peripheral {}", bus.bus, bus.id),
                 ),
-                hauksbee_ir::evidence::Scope::Check {
+                Scope::Check {
                     check: "ci".into(),
                     kind: Some(assertion.label()),
                 },
@@ -1487,7 +1515,7 @@ fn production_assumptions(
             "no_faults" => decisive,
             _ => false,
         };
-        let scope = |a: &crate::spec::Assertion| hauksbee_ir::evidence::Scope::Check {
+        let scope = |a: &crate::spec::Assertion| Scope::Check {
             check: "ci".into(),
             kind: Some(a.label()),
         };
@@ -1527,24 +1555,19 @@ fn production_assumptions(
         .collect();
     for w in engine.scheduler().fallback_windows() {
         let (start, end, method) = (w.start_s, w.end_s, w.method.as_str());
-        let scope = hauksbee_ir::evidence::Scope::Nets(
-            hauksbee_ir::evidence::NetScope::new(
-                all_nets.iter().copied(),
-                Some(
-                    hauksbee_ir::evidence::TimeWindow::new(start, end).map_err(|e| {
-                        SpecError::Invalid(format!("building fallback evidence: {e}"))
-                    })?,
-                ),
-            )
-            .map_err(|e| SpecError::Invalid(format!("building fallback evidence: {e}")))?,
+        let window = TimeWindow::new(start, end)
+            .map_err(SpecError::invalid("building fallback evidence"))?;
+        let scope = Scope::Nets(
+            NetScope::new(all_nets.iter().copied(), Some(window))
+                .map_err(SpecError::invalid("building fallback evidence"))?,
         );
         let accuracy = w.error_estimate_v.map_or_else(
             || "no error estimate was established (no companion re-solve converged)".to_string(),
             |e| format!("measured chunk-end error estimate {e:.3e} V"),
         );
-        production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(
-            hauksbee_ir::evidence::AssumptionSource::Solver,
-            hauksbee_ir::evidence::Subject::new(
+        production_assumptions.push(Assumption::reduced_fidelity(
+            AssumptionSource::Solver,
+            Subject::new(
                 &format!("fallback/seed-{seed}/{method}/{start:.9}-{end:.9}"),
                 &format!("the analog solve over {start:.6}-{end:.6} s"),
             ),
@@ -1565,13 +1588,13 @@ fn build_evidence(
     engine: &HauksbeeEngine,
     run_inputs: &RunInputEvidence<'_>,
     firmware: Option<&Path>,
-    production_assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    production_assumptions: Vec<Assumption>,
 ) -> Result<hauksbee_engine::BoardEvidence, SpecError> {
     let mut evidence = hauksbee_engine::BoardEvidence::from_bound(
         board,
         engine.report(),
         run_inputs.reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
+        RunDate::from_system_clock(),
     )
     .and_then(|evidence| {
         evidence.with_input_artifact(
@@ -1589,7 +1612,7 @@ fn build_evidence(
         evidence.with_assumptions(forced)
     })
     .and_then(|evidence| evidence.with_assumptions(production_assumptions))
-    .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;
+    .map_err(SpecError::invalid("building run evidence"))?;
     if let Some(ties) = run_inputs.schematic_ties {
         evidence = evidence
             .with_schematic_artifact(
@@ -1601,37 +1624,31 @@ fn build_evidence(
                     if ties.ties.len() == 1 { "" } else { "s" }
                 ),
             )
-            .map_err(|e| SpecError::Invalid(format!("building schematic evidence: {e}")))?;
+            .map_err(SpecError::invalid("building schematic evidence"))?;
     }
     if let Some(path) = firmware {
-        let bytes = std::fs::read(path).map_err(|error| {
-            SpecError::Io(format!(
-                "reading firmware evidence '{}': {error}",
-                path.display()
-            ))
-        })?;
+        let bytes = std::fs::read(path).map_err(SpecError::io(format!(
+            "reading firmware evidence '{}'",
+            path.display()
+        )))?;
         evidence = evidence
             .with_firmware_artifact(path, &bytes)
-            .map_err(|e| SpecError::Invalid(format!("building firmware evidence: {e}")))?;
+            .map_err(SpecError::invalid("building firmware evidence"))?;
     }
     for artifact in run_inputs.supporting_artifacts {
         evidence = evidence
             .with_supporting_artifact(artifact.clone())
-            .map_err(|error| {
-                SpecError::Invalid(format!("building assembly-input evidence: {error}"))
-            })?;
+            .map_err(SpecError::invalid("building assembly-input evidence"))?;
     }
     if let Some(variant) = run_inputs.variant {
-        let fit = if variant.fit.is_empty() {
-            "none".to_string()
-        } else {
-            variant.fit.join(", ")
+        let listed = |refs: &[String]| {
+            if refs.is_empty() {
+                "none".to_string()
+            } else {
+                refs.join(", ")
+            }
         };
-        let no_fit = if variant.no_fit.is_empty() {
-            "none".to_string()
-        } else {
-            variant.no_fit.join(", ")
-        };
+        let (fit, no_fit) = (listed(&variant.fit), listed(&variant.no_fit));
         evidence = evidence
             .with_toml_artifact(
                 &variant.path,
@@ -1645,9 +1662,7 @@ fn build_evidence(
                     ),
                 },
             )
-            .map_err(|error| {
-                SpecError::Invalid(format!("building assembly-variant evidence: {error}"))
-            })?;
+            .map_err(SpecError::invalid("building assembly-variant evidence"))?;
     }
 
     Ok(evidence)
@@ -1745,6 +1760,9 @@ fn resolve_spec_firmware(spec: &Spec) -> Result<Option<PathBuf>, SpecError> {
     Ok(Some(path.canonicalize().unwrap_or(path)))
 }
 
+// The per-seed co-sim loop and its aggregates share many locals; the float-time
+// loop steps a fixed frame and the epsilon absorbs accumulated rounding.
+#[allow(clippy::too_many_lines, clippy::while_float)]
 fn run_one(
     spec: &Spec,
     base: &ExtractedBoard,
@@ -1835,7 +1853,7 @@ fn run_one(
         .collect();
     let mut hollow_assumptions: Vec<_> = hollow
         .iter()
-        .map(|(_, net)| hauksbee_ir::evidence::Assumption::held_by_ideal_source(net))
+        .map(|(_, net)| Assumption::held_by_ideal_source(net))
         .collect();
 
     // Map net name -> node for fast sampling, and remember which components are
@@ -1854,7 +1872,7 @@ fn run_one(
         .collect();
 
     let mut engine = HauksbeeEngine::from_bound(bound, firmware.as_deref(), "/ci")
-        .map_err(|e| SpecError::Invalid(format!("building engine: {e}")))?;
+        .map_err(SpecError::invalid("building engine"))?;
 
     // Ambient for the steady-state junction-temperature estimate (max_temp).
     engine.scheduler_mut().set_ambient_c(spec.ambient_c);
@@ -2204,7 +2222,7 @@ fn run_one(
         engine
             .scheduler()
             .error_budget()
-            .map_err(|error| SpecError::Invalid(format!("building run error budget: {error}")))?,
+            .map_err(SpecError::invalid("building run error budget"))?,
     );
     let production_assumptions =
         production_assumptions(spec, &board, &engine, lib, seed, hollow_assumptions)?;
@@ -2391,6 +2409,8 @@ struct ScenarioWindow {
 /// measurement windows the frame loop will populate. The window's rails are the
 /// nets named by any `rail_window` assertion scoped to this scenario (or run-wide
 /// when a `rail_window` has no scenario scope).
+// Sequential passes: attach each scenario's load, then build and scope the windows.
+#[allow(clippy::too_many_lines)]
 fn attach_scenarios(
     spec: &Spec,
     board: &ExtractedBoard,
@@ -2760,6 +2780,8 @@ fn node_or_ground(name: Option<&String>, net_node: &HashMap<String, NodeId>) -> 
         .unwrap_or(hauksbee_ir::NodeId::GROUND)
 }
 
+// One match arm per peripheral kind; each arm is short and independent.
+#[allow(clippy::too_many_lines)]
 fn attach_peripherals(
     spec: &Spec,
     board: &ExtractedBoard,
@@ -2985,7 +3007,7 @@ fn attach_peripherals(
 fn attach_sensors(
     spec: &Spec,
     sched: &mut hauksbee_engine::scheduler::Scheduler,
-) -> Result<Vec<hauksbee_ir::evidence::Assumption>, SpecError> {
+) -> Result<Vec<Assumption>, SpecError> {
     use std::sync::{Arc, Mutex};
 
     use hauksbee_engine::{I2cBus, RegisterMapSensor, SpiBus};
@@ -3025,9 +3047,7 @@ fn attach_sensors(
                     .and_then(|c| c.assumed)
                     .unwrap_or(why);
                 let fix = format!("set `address` on [[sensor]] '{}' to the one the board straps ({listed}), then re-run", sa.id);
-                assumptions.push(hauksbee_ir::evidence::Assumption::partial_model(
-                    &sa.id, name, &gap, &fix,
-                ));
+                assumptions.push(Assumption::partial_model(&sa.id, name, &gap, &fix));
             }
             None => {}
         }

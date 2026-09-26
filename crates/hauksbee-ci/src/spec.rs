@@ -121,10 +121,12 @@ impl From<DnpMode> for hauksbee_extract::dnp::DnpPolicy {
     }
 }
 
-/// A checked-in assembly variant. The board remains the electrical design
-/// authority; this artifact states only which named placements are present in
-/// one build of that design. It is separate from a BOM because a purchasing
-/// spreadsheet's populate column remains advice, never hidden fit policy.
+/// A checked-in assembly variant.
+///
+/// The board remains the electrical design authority; this artifact states only
+/// which named placements are present in one build of that design. It is
+/// separate from a BOM because a purchasing spreadsheet's populate column
+/// remains advice, never hidden fit policy.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssemblyVariant {
@@ -975,6 +977,15 @@ impl SensorAttach {
 
     /// Resolve the sensor TOML source against the spec's base directory and
     /// return the raw string to hand to `RegisterMapSensor::from_toml`.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Io`] when the `spec_file` cannot be read.
+    ///
+    /// # Panics
+    ///
+    /// If neither `spec` nor `spec_file` is set, which spec validation rules
+    /// out before any sensor is resolved.
     pub fn toml_source(&self, base_dir: &Path) -> Result<String, SpecError> {
         if let Some(inline) = &self.spec {
             return Ok(inline.clone());
@@ -992,9 +1003,10 @@ impl SensorAttach {
     }
 }
 
-/// A component value override applied before binding. With a `tolerance`, the
-/// `value` becomes the *nominal* and the component is sampled around it as part
-/// of the tolerance ensemble (see [`ToleranceRule`]).
+/// A component value override applied before binding.
+///
+/// With a `tolerance`, the `value` becomes the *nominal* and the component is
+/// sampled around it as part of the tolerance ensemble (see [`ToleranceRule`]).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
@@ -1025,9 +1037,11 @@ pub struct Override {
     pub distribution: Option<String>,
 }
 
-/// A component-tolerance rule: every component whose reference matches `ref`
-/// (a literal reference, or a pattern where `*` matches any run of characters)
-/// is sampled within ±`percent` of its value on every ensemble seed.
+/// A component-tolerance rule over components whose reference matches `ref`.
+///
+/// `ref` is a literal reference, or a pattern where `*` matches any run of
+/// characters; every match is sampled within ±`percent` of its value on every
+/// ensemble seed.
 ///
 /// ```toml
 /// [[tolerance]]
@@ -1368,6 +1382,12 @@ fn board_not_spec_message(path: &Path) -> String {
 
 impl Spec {
     /// Load and validate a spec from a TOML file.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Io`] when the path is a board file rather than a spec or
+    /// cannot be read, [`SpecError::Toml`] when it does not parse, and
+    /// [`SpecError::Invalid`] (or [`SpecError::Many`]) when it fails validation.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         // Board-by-extension is decided before the read: a binary board
         // (.PcbDoc) fails read_to_string with a UTF-8 error, which would hide
@@ -1519,7 +1539,7 @@ impl Spec {
 
     /// An optional spec-relative path, resolved against the spec's directory.
     fn resolve(&self, p: Option<&PathBuf>) -> Option<PathBuf> {
-        p.map(|p| resolve_in(&self.base_dir, p))
+        Some(resolve_in(&self.base_dir, p?))
     }
 }
 
@@ -1560,6 +1580,8 @@ impl Spec {
     /// pass. Sections are validated independently (each supply, peripheral,
     /// assertion, scenario, ...) so a spec with several mistakes reports them
     /// all at once instead of one per invocation. An empty vec = a valid spec.
+    // One independent check per spec section, collected into a single list.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_all(&self) -> Vec<SpecError> {
         let mut errs: Vec<SpecError> = Vec::new();
         let mut check = |ok: bool, msg: String| errs.extend(need(ok, msg).err());
@@ -1871,6 +1893,10 @@ impl Spec {
 
     /// The ensemble mode in effect (defaults to Monte-Carlo when tolerances
     /// exist without an explicit `[ensemble]` block).
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::Invalid`] when `[ensemble] mode` is not a known mode.
     pub fn ensemble_mode(&self) -> Result<crate::tolerance::Mode, SpecError> {
         self.ensemble
             .as_ref()
@@ -1940,6 +1966,11 @@ impl Spec {
 
     /// Validate that every referenced net exists on the bound board; produce a
     /// helpful error (with near-matches) for any that do not.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::UnknownNets`] listing every referenced net missing from
+    /// `known`, each with its context and near-matches.
     pub fn check_nets(&self, known: &[String]) -> Result<(), SpecError> {
         let set: std::collections::HashSet<&str> = known.iter().map(String::as_str).collect();
         let unknown: Vec<_> = self
@@ -1959,10 +1990,11 @@ impl Spec {
     }
 }
 
-/// Whether a peripheral `type` is a SPI slave, i.e. one whose transactions the
-/// co-sim has to frame and which therefore participates in the chip-select
-/// ladder (spec `cs_net`, else the `cs` pin role of the model bound to its
-/// `ref`, else the chunk-boundary heuristic).
+/// Whether a peripheral `type` is a SPI slave.
+///
+/// The co-sim has to frame a SPI slave's transactions, so it participates in
+/// the chip-select ladder (spec `cs_net`, else the `cs` pin role of the model
+/// bound to its `ref`, else the chunk-boundary heuristic).
 ///
 /// One list, so the `ref` validation and the framing path cannot disagree about
 /// which kinds care.
@@ -2042,6 +2074,8 @@ pub(crate) const CHEMISTRIES: &[&str] = &["liion", "lipo", "alkaline", "nimh", "
 const ALIASES: &[&str] = &["lipo", "lfp"];
 
 impl SupplySpec {
+    // One independent check per supply field, in the order a spec author reads them.
+    #[allow(clippy::too_many_lines)]
     fn validate(&self) -> Result<(), SpecError> {
         // (field, value, validity test, what a valid value is)
         type RangeCheck<'a> = (&'a str, Option<f64>, &'a dyn Fn(f64) -> bool, &'a str);
@@ -2260,6 +2294,8 @@ impl Assertion {
         self.kind == "pulse_width" || self.after_ms.is_some_and(|t| t > 0.0)
     }
 
+    // One independent rule per assertion kind; each arm is a short guard.
+    #[allow(clippy::too_many_lines)]
     fn validate(&self) -> Result<(), SpecError> {
         let kind = self.kind.as_str();
         let net = self.net.as_deref().unwrap_or("?");
@@ -2591,11 +2627,14 @@ impl Assertion {
 
     /// A human label for this assertion.
     #[must_use]
+    // One short format per assertion kind.
+    #[allow(clippy::too_many_lines)]
     pub fn label(&self) -> String {
         if let Some(n) = &self.name {
             return n.clone();
         }
-        let net = self.net.clone().unwrap_or_default();
+        let net = self.net.as_deref().unwrap_or_default();
+        let reference = self.reference.as_deref().unwrap_or_default();
         let bound = |unit: &str, none: &str| bound_label(self.min, self.max, unit, none);
         match self.kind.as_str() {
             "voltage" => {
@@ -2615,23 +2654,17 @@ impl Assertion {
                 |f| format!("{net} toggles at ~{f} Hz"),
             ),
             "no_faults" => "no stress faults raised".into(),
-            "max_current" => {
-                let reference = self.reference.clone().unwrap_or_default();
-                // No bound is a measurement, not a limit of 0 A.
-                self.amps.map_or_else(
-                    || format!("I({reference})"),
-                    |a| format!("I({reference}) <= {a} A"),
-                )
-            }
-            "max_temp" => {
-                let reference = self.reference.clone().unwrap_or_default();
-                self.celsius.map_or_else(
-                    || format!("Tj({reference}) <= device max"),
-                    |c| format!("Tj({reference}) <= {c} C"),
-                )
-            }
+            // No bound is a measurement, not a limit of 0 A.
+            "max_current" => self.amps.map_or_else(
+                || format!("I({reference})"),
+                |a| format!("I({reference}) <= {a} A"),
+            ),
+            "max_temp" => self.celsius.map_or_else(
+                || format!("Tj({reference}) <= device max"),
+                |c| format!("Tj({reference}) <= {c} C"),
+            ),
             "peripheral" => {
-                let id = self.id.clone().unwrap_or_default();
+                let id = self.id.as_deref().unwrap_or_default();
                 match (&self.bytes, &self.field) {
                     (Some(b), _) => format!("peripheral {id} contains bytes {b}"),
                     (None, Some(f)) => format!("peripheral {id}.{f} {}", bound("", "set")),
@@ -2639,31 +2672,27 @@ impl Assertion {
                 }
             }
             "rail_window" => {
-                let mut parts = Vec::new();
-                if let Some(lo) = self.min {
-                    parts.push(format!("min >= {lo} V"));
-                }
-                if let Some(hi) = self.max {
-                    parts.push(format!("max <= {hi} V"));
-                }
-                if let (Some(d), Some(ms)) = (self.dip_below, self.for_max_ms) {
-                    parts.push(format!("dip <{d}V for <= {ms} ms"));
-                }
-                if let (Some(d), Some(r), Some(ms)) =
-                    (self.dip_below, self.recover_to, self.recover_within_ms)
-                {
-                    parts.push(format!("recover to {r}V within {ms} ms of dipping <{d}V"));
-                }
-                if let (Some(s), Some(ms)) = (self.spike_above, self.spike_for_max_ms) {
-                    parts.push(format!("spike >{s}V for <= {ms} ms"));
-                }
-                if let (Some(s), Some(settle), Some(ms)) =
-                    (self.spike_above, self.settle_to, self.settle_within_ms)
-                {
-                    parts.push(format!(
-                        "settle to <= {settle}V within {ms} ms of spiking >{s}V"
-                    ));
-                }
+                let recover = self.recover_to.zip(self.recover_within_ms);
+                let settle = self.settle_to.zip(self.settle_within_ms);
+                let parts: Vec<String> = [
+                    self.min.map(|lo| format!("min >= {lo} V")),
+                    self.max.map(|hi| format!("max <= {hi} V")),
+                    self.dip_below
+                        .zip(self.for_max_ms)
+                        .map(|(d, ms)| format!("dip <{d}V for <= {ms} ms")),
+                    self.dip_below.zip(recover).map(|(d, (r, ms))| {
+                        format!("recover to {r}V within {ms} ms of dipping <{d}V")
+                    }),
+                    self.spike_above
+                        .zip(self.spike_for_max_ms)
+                        .map(|(s, ms)| format!("spike >{s}V for <= {ms} ms")),
+                    self.spike_above.zip(settle).map(|(s, (settle, ms))| {
+                        format!("settle to <= {settle}V within {ms} ms of spiking >{s}V")
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 let scope = self
                     .scenario
                     .as_ref()
@@ -2673,7 +2702,7 @@ impl Assertion {
             }
             "protection_trip" => format!(
                 "{} protection {}",
-                self.supply_net.clone().unwrap_or_default(),
+                self.supply_net.as_deref().unwrap_or_default(),
                 if self.expect_trip.unwrap_or(false) {
                     "trips"
                 } else {

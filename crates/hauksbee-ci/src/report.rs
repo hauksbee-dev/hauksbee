@@ -1,9 +1,10 @@
-//! Rendering the outcome of a CI run into the formats a pipeline consumes: a
-//! human-readable terminal report, `JUnit` XML for any CI system to ingest, and
-//! GitHub Actions workflow-command annotations. [`CiResult`] also owns the process
-//! exit code and the honest ensemble-coverage wording, so a green run never
-//! over-claims worst-case proof and a diverged co-sim refuses rather than
-//! reporting a fake verdict.
+//! Rendering the outcome of a CI run into the formats a pipeline consumes.
+//!
+//! The formats are a human-readable terminal report, `JUnit` XML for any CI
+//! system to ingest, and GitHub Actions workflow-command annotations.
+//! [`CiResult`] also owns the process exit code and the honest
+//! ensemble-coverage wording, so a green run never over-claims worst-case proof
+//! and a diverged co-sim refuses rather than reporting a fake verdict.
 
 use std::{collections::HashSet, fmt::Write as _, time::Duration};
 
@@ -12,12 +13,14 @@ use hauksbee_engine::result::Refusal;
 
 type ExplainedAssumptions = HashSet<hauksbee_ir::evidence::AssumptionId>;
 
-/// Published JSON shape for one evaluated assertion. Kept separate from the
-/// runtime [`AssertResult`] because subject nets/refs are internal waiver keys,
-/// while the causal evidence map is part of the external contract. The
-/// committed schema is generated from this type via [`CiJsonReport`]: see
-/// `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`. `why`, `waived`, and
-/// `evidence` are the only fields a consumer may find ABSENT rather than null.
+/// Published JSON shape for one evaluated assertion.
+///
+/// Kept separate from the runtime [`AssertResult`] because subject nets/refs
+/// are internal waiver keys, while the causal evidence map is part of the
+/// external contract. The committed schema is generated from this type via
+/// [`CiJsonReport`]: see `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`.
+/// `why`, `waived`, and `evidence` are the only fields a consumer may find
+/// ABSENT rather than null.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CiJsonAssertion {
     /// The assertion's label: its `label` in the spec, or a generated one
@@ -225,18 +228,21 @@ impl EnsembleCoverage {
     }
 }
 
-/// Version of the `hauksbee-ci run --json` document shape, carried in every
-/// emitted line as `schema_version`. Additive fields do NOT bump it (a
-/// consumer that ignores unknown keys keeps working); a removal, a rename, or
-/// a changed meaning does. The published contract, including what counts as
-/// additive, is `docs/ci/JSON_OUTPUT.md`.
+/// Version of the `hauksbee-ci run --json` document shape.
+///
+/// Carried in every emitted line as `schema_version`. Additive fields do NOT
+/// bump it (a consumer that ignores unknown keys keeps working); a removal, a
+/// rename, or a changed meaning does. The published contract, including what
+/// counts as additive, is `docs/ci/JSON_OUTPUT.md`.
 pub const CI_REPORT_SCHEMA_VERSION: u32 = 2;
 
 /// One line of `hauksbee-ci run --json`: either a run report or a spec/board
-/// error. The two are told apart by `ok`, which is `true` on a report and
-/// `false` on an error, so a consumer branches on one boolean before reading
-/// anything else. A multi-spec invocation prints one of these per spec, one per
-/// line (NDJSON), and the variants may be mixed within the one stream.
+/// error.
+///
+/// The two are told apart by `ok`, which is `true` on a report and `false` on
+/// an error, so a consumer branches on one boolean before reading anything
+/// else. A multi-spec invocation prints one of these per spec, one per line
+/// (NDJSON), and the variants may be mixed within the one stream.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum CiJsonLine {
@@ -256,6 +262,8 @@ pub enum CiJsonLine {
 /// top-level `refusal` (exit 3 only). Inside each result, `why`, `waived`,
 /// and `evidence` are also conditionally absent (see [`CiJsonAssertion`]),
 /// omitted entirely rather than set to `null`.
+// Each flag is an independent published JSON field; the schema is the contract.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CiJsonReport {
     /// [`CI_REPORT_SCHEMA_VERSION`]: the shape of this document.
@@ -447,37 +455,21 @@ impl CiResult {
                 ));
             }
         }
-        let next = self
-            .results
-            .iter()
-            .find(|r| r.invalid)
-            .map(|r| {
-                if r.detail.contains(" regulation of ") {
-                    format!(
-                        "read the regulator reason under INVALID assertion '{}': declare a [[supply]] on that regulator's input net with the headroom it names (or fit a lower-dropout part), then rerun the same spec",
-                        r.label
-                    )
+        let next = self.results.iter().find(|r| r.invalid).map_or_else(
+            || "inspect the first analog non-convergence diagnosis in the job log, fix its named net/device, then rerun the same spec".to_string(),
+            |r| {
+                let (before, after) = if r.detail.contains(" regulation of ") {
+                    ("read the regulator reason under", ": declare a [[supply]] on that regulator's input net with the headroom it names (or fit a lower-dropout part)")
                 } else if open_part(r) {
-                    format!(
-                        "close the assumption named under INVALID assertion '{}' (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names), then rerun the same spec",
-                        r.label
-                    )
+                    ("close the assumption named under", " (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names)")
                 } else if r.detail.starts_with("INVALID: timing coverage refusal:") {
-                    format!(
-                        "read the timing refusal under INVALID assertion '{}'; run on a backend that measures it, or drop the timing claim, then rerun the same spec",
-                        r.label
-                    )
+                    ("read the timing refusal under", "; run on a backend that measures it, or drop the timing claim")
                 } else {
-                    format!(
-                        "inspect INVALID assertion '{}' and its failed-window detail, fix the first named net/device, then rerun the same spec",
-                        r.label
-                    )
-                }
-            })
-            .unwrap_or_else(|| {
-                "inspect the first analog non-convergence diagnosis in the job log, fix its named net/device, then rerun the same spec"
-                    .to_string()
-            });
+                    ("inspect", " and its failed-window detail, fix the first named net/device")
+                };
+                format!("{before} INVALID assertion '{}'{after}, then rerun the same spec", r.label)
+            },
+        );
         Some(Refusal::new(
             "an overall CI verdict for the requested assertions",
             missing,
@@ -992,26 +984,19 @@ impl CiResult {
         let mut out = String::new();
         // Per-assertion verdict errors, capped to leave room for the overflow
         // line and the rollup inside GitHub's 10-per-type truncation.
-        let bad: Vec<&AssertResult> = self
+        let bad: Vec<String> = self
             .results
             .iter()
             .filter(|r| !r.passed && r.waived.is_none())
+            .map(|r| {
+                let title = if r.invalid { "INVALID" } else { "FAIL" };
+                let (label, detail) = (gh_escape(&r.label), gh_escape(&r.detail));
+                format!("::error title=hauksbee-ci {title}::{label} - {detail}")
+            })
             .collect();
-        for r in bad.iter().take(Self::MAX_ERROR_ANNOTATIONS) {
-            let title = if r.invalid { "INVALID" } else { "FAIL" };
-            let _ = writeln!(
-                out,
-                "::error title=hauksbee-ci {title}::{} - {}",
-                gh_escape(&r.label),
-                gh_escape(&r.detail)
-            );
-        }
-        if bad.len() > Self::MAX_ERROR_ANNOTATIONS {
-            let _ = writeln!(out,
-                "::error title=hauksbee-ci::...and {} more failing assertion(s); see the job log or the JUnit report for the full list",
-                bad.len() - Self::MAX_ERROR_ANNOTATIONS
-            );
-        }
+        write_capped(&mut out, &bad, Self::MAX_ERROR_ANNOTATIONS, |n| {
+            format!("::error title=hauksbee-ci::...and {n} more failing assertion(s); see the job log or the JUnit report for the full list")
+        });
 
         // Warnings: dead rails first (they change what every other line
         // means), then waived failures, unclean evidence assumptions (each
@@ -1053,16 +1038,11 @@ impl CiResult {
             .chain(tagged("SUBSTITUTE MCU", &self.substitutions))
             .chain(tagged("COSIM COVERAGE HOLE", &self.coverage_warnings))
             .chain(tagged("WAIVERS", &self.waiver_notes))
+            .map(|w| format!("::warning title=hauksbee-ci {w}"))
             .collect();
-        for w in warnings.iter().take(Self::MAX_WARNING_ANNOTATIONS) {
-            let _ = writeln!(out, "::warning title=hauksbee-ci {w}");
-        }
-        if warnings.len() > Self::MAX_WARNING_ANNOTATIONS {
-            let _ = writeln!(out,
-                "::warning title=hauksbee-ci::...and {} more warning(s); see the job log for the full list",
-                warnings.len() - Self::MAX_WARNING_ANNOTATIONS
-            );
-        }
+        write_capped(&mut out, &warnings, Self::MAX_WARNING_ANNOTATIONS, |n| {
+            format!("::warning title=hauksbee-ci::...and {n} more warning(s); see the job log for the full list")
+        });
 
         if !self.timing_coverage.is_empty() {
             let coverage = self
@@ -1079,8 +1059,7 @@ impl CiResult {
         }
 
         // The rollup: exactly one summary annotation, always emitted.
-        if self.analog_invalid() {
-            let refusal = self.refusal().expect("analog-invalid has refusal");
+        if let Some(refusal) = self.refusal() {
             let _ = writeln!(
                 out,
                 "::error title=hauksbee-ci refusal::{}",
@@ -1111,10 +1090,28 @@ impl CiResult {
     pub const MAX_WARNING_ANNOTATIONS: usize = 9;
 }
 
+/// Write the first `cap` of `lines`, then one `overflow(n)` line when `n` more
+/// were cut, so a CI's per-type annotation truncation never hides the count.
+fn write_capped(
+    out: &mut String,
+    lines: &[String],
+    cap: usize,
+    overflow: impl Fn(usize) -> String,
+) {
+    for line in lines.iter().take(cap) {
+        let _ = writeln!(out, "{line}");
+    }
+    if lines.len() > cap {
+        let _ = writeln!(out, "{}", overflow(lines.len() - cap));
+    }
+}
+
 /// One rendered `<testsuite>` fragment plus the counters the `<testsuites>`
-/// envelope aggregates. A multi-spec `hauksbee-ci run a.toml b.toml --junit`
-/// merges one of these per spec (a spec that failed to LOAD contributes the
-/// [`junit_error_suite`] shape) into a single document.
+/// envelope aggregates.
+///
+/// A multi-spec `hauksbee-ci run a.toml b.toml --junit` merges one of these per
+/// spec (a spec that failed to LOAD contributes the [`junit_error_suite`]
+/// shape) into a single document.
 #[derive(Debug, Clone)]
 pub struct JunitSuite {
     /// The `  <testsuite ...>...</testsuite>\n` fragment, indented for the
@@ -1127,8 +1124,10 @@ pub struct JunitSuite {
 }
 
 /// Wrap one or more suites in the `<testsuites>` envelope with honest
-/// aggregate counts. Every `JUnit` document this crate emits goes through here,
-/// so the single-spec and merged multi-spec shapes cannot drift.
+/// aggregate counts.
+///
+/// Every `JUnit` document this crate emits goes through here, so the
+/// single-spec and merged multi-spec shapes cannot drift.
 #[must_use]
 pub fn render_junit_document(suites: &[JunitSuite]) -> String {
     let tests: usize = suites.iter().map(|s| s.tests).sum();
@@ -1146,12 +1145,13 @@ pub fn render_junit_document(suites: &[JunitSuite]) -> String {
     out
 }
 
-/// The suite for a spec/board error (exit 2): a single errored testcase
-/// carrying the message, so a CI that only reads the JUnit/Checks tab still
-/// sees *something*. Reuses the `<error>` shape the per-assertion INVALID path
-/// emits, so downstream ingestors (GitLab, Jenkins, GitHub) render it as an
-/// errored test, distinct from a failure. `name` labels the suite (the spec
-/// path in a multi-spec run, "spec error" for one).
+/// The suite for a spec/board error (exit 2).
+///
+/// A single errored testcase carries the message, so a CI that only reads the
+/// JUnit/Checks tab still sees *something*. Reuses the `<error>` shape the
+/// per-assertion INVALID path emits, so downstream ingestors (GitLab, Jenkins,
+/// GitHub) render it as an errored test, distinct from a failure. `name` labels
+/// the suite (the spec path in a multi-spec run, "spec error" for one).
 #[must_use]
 pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
     let message = xml_escape(message);
