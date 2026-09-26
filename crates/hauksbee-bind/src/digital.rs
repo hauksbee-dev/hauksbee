@@ -1821,6 +1821,9 @@ mod tests {
         assert!((step(&mut gate, &mut circuit, false) - i_static).abs() < 1e-15);
 
         gate.update_supply(&mut circuit, DT, &|_n: NodeId| 0.0);
-        assert_eq!(drawn_amps(&circuit), 0.0, "unpowered rail draws nothing");
+        assert!(
+            drawn_amps(&circuit).abs() < 1e-18,
+            "unpowered rail: no draw"
+        );
     }
 }

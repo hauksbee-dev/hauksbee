@@ -995,6 +995,7 @@ impl StressMonitor {
     /// `node_v(node)` returns the node voltage; `branch_current(id)` returns the
     /// branch current for a `Vsource`/`Inductor` device if the layout owns one.
     /// `t` is the current sim time. Returns any faults newly raised this chunk.
+    #[allow(clippy::too_many_lines)] // the three documented passes share the sampled state
     pub fn evaluate(
         &mut self,
         circuit: &mut Circuit,
@@ -1314,6 +1315,7 @@ impl OperatingPoint {
 }
 
 /// Compute a device's operating point from the chunk's solved state.
+#[allow(clippy::too_many_lines)] // one arm per device kind
 fn operating_point(
     circuit: &Circuit,
     meta: &DeviceMeta,
@@ -1666,7 +1668,7 @@ mod monitor_temp_tests {
             "idle part ~0"
         );
         // Exactly ambient reads 0.
-        assert_eq!(thermal_stress_frac(25.0, 125.0, 25.0), 0.0);
+        assert!(thermal_stress_frac(25.0, 125.0, 25.0).abs() < 1e-12);
         // Halfway up the rise band reads 0.5.
         assert!((thermal_stress_frac(75.0, 125.0, 25.0) - 0.5).abs() < 1e-9);
         // At the junction limit reads exactly 1.0 (the trip boundary is preserved).
@@ -1674,7 +1676,7 @@ mod monitor_temp_tests {
         // Over the limit reads > 1 (still trips).
         assert!(thermal_stress_frac(150.0, 125.0, 25.0) > 1.0);
         // A below-ambient junction never reads negative.
-        assert_eq!(thermal_stress_frac(10.0, 125.0, 25.0), 0.0);
+        assert!(thermal_stress_frac(10.0, 125.0, 25.0).abs() < 1e-12);
     }
 
     #[test]
@@ -1945,8 +1947,8 @@ mod monitor_temp_tests {
             .iter()
             .find(|c| c.kind == FaultKind::Overcurrent && !c.surge)
             .expect("passive continuous over-current check present");
-        assert_eq!(oc.limit, 2.0);
-        assert_eq!(oc.value, 3.0);
+        assert!((oc.limit - 2.0).abs() < 1e-12);
+        assert!((oc.value - 3.0).abs() < 1e-12);
     }
 
     #[test]
@@ -2102,8 +2104,8 @@ mod monitor_temp_tests {
         assert_eq!(raised.len(), 1, "raised once, not per chunk");
         assert_eq!(raised[0].component, "U1");
         assert_eq!(raised[0].kind, FaultKind::Overvoltage);
-        assert_eq!(raised[0].limit, 6.0);
-        assert_eq!(raised[0].value, 100.0);
+        assert!((raised[0].limit - 6.0).abs() < 1e-12);
+        assert!((raised[0].value - 100.0).abs() < 1e-12);
 
         // reset_tracks clears the latch: a replay re-raises.
         monitor.reset_tracks();

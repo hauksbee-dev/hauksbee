@@ -968,7 +968,7 @@ mod tests {
             } => {
                 assert_eq!(name, "R_PULL_OE");
                 assert_eq!((a.0, b.0), (1, 2));
-                assert_eq!(*ohms, 10_000.0);
+                assert!((*ohms - 10_000.0).abs() < 1e-9, "{ohms}");
             }
             other => panic!("expected the fitted resistor, got {other:?}"),
         }
@@ -1064,21 +1064,15 @@ mod tests {
             ron: 25.0,
         };
 
-        let mut role_nets = HashMap::new();
-        role_nets.insert("adc0".to_string(), n);
-        let mut adc_nets = HashMap::new();
-        adc_nets.insert(0u8, n);
-        let mut gpio_drivers = HashMap::new();
-        gpio_drivers.insert(('A', 5u8), drv(n));
         let mcu = McuBinding {
             reference: "U1".to_string(),
             backend: String::new(),
             requested_part: String::new(),
             external_clock_present: false,
             pad_roles: HashMap::new(),
-            role_nets,
-            gpio_drivers,
-            adc_nets,
+            role_nets: HashMap::from([("adc0".to_string(), n)]),
+            gpio_drivers: HashMap::from([(('A', 5u8), drv(n))]),
+            adc_nets: HashMap::from([(0u8, n)]),
             adc_pin: HashMap::new(),
             module: false,
             max_supply_v: None,
@@ -1095,10 +1089,6 @@ mod tests {
         // sit on the net being merged away: after the jumper its cached role
         // NodeId and driver net must follow to BUS or it samples/drives the
         // orphaned floating node.
-        let mut dig_roles = HashMap::new();
-        dig_roles.insert("a0".to_string(), n);
-        let mut dig_drivers = HashMap::new();
-        dig_drivers.insert("y0".to_string(), drv(n));
         let digital = DigitalComponent {
             reference: "U7".to_string(),
             levels: LogicLevels {
@@ -1108,18 +1098,14 @@ mod tests {
                 vil: 1.35,
                 ro: 25.0,
             },
-            roles: dig_roles,
-            drivers: dig_drivers,
+            roles: HashMap::from([("a0".to_string(), n)]),
+            drivers: HashMap::from([("y0".to_string(), drv(n))]),
             logic: None,
             supply: None,
         };
 
-        let mut net_nodes = HashMap::new();
-        net_nodes.insert("BUS".to_string(), bus);
-        net_nodes.insert("N".to_string(), n);
-
         let mut bound = BoundBoard {
-            net_nodes,
+            net_nodes: HashMap::from([("BUS".to_string(), bus), ("N".to_string(), n)]),
             digital: vec![digital],
             mcus: vec![mcu],
             dacs: vec![dac],

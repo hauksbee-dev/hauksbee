@@ -126,6 +126,28 @@ pub struct BindRow {
     pub guesses: Vec<String>,
 }
 
+impl BindRow {
+    /// A row with no model, source, warning or guesses (skips, rails, refusals).
+    #[must_use]
+    pub const fn without_model(
+        reference: String,
+        value: String,
+        confidence: Confidence,
+        outcome: BindOutcome,
+    ) -> Self {
+        Self {
+            reference,
+            value,
+            model_id: None,
+            confidence,
+            source: None,
+            outcome,
+            warning: None,
+            guesses: Vec::new(),
+        }
+    }
+}
+
 /// The full report from one bind pass.
 #[derive(Debug, Clone, Default)]
 pub struct BindReport {
@@ -366,6 +388,7 @@ impl BindReport {
         self.render_table_with_bulk_passives(false)
     }
 
+    #[allow(clippy::too_many_lines)] // one table: widths, rows, summary, warnings, legend
     fn render_table_with_bulk_passives(&self, include_bulk_passives: bool) -> String {
         let mut refs = "Ref".to_string();
         let mut vals = "Value".to_string();
@@ -979,26 +1002,18 @@ mod tests {
     use hauksbee_ir::evidence::{ModelSource, ModelSourceTier};
 
     fn row(reference: &str, confidence: Confidence, outcome: BindOutcome) -> BindRow {
-        BindRow {
-            reference: reference.to_string(),
-            value: String::new(),
-            model_id: None,
-            confidence,
-            source: None,
-            outcome,
-            warning: None,
-            guesses: Vec::new(),
-        }
+        BindRow::without_model(reference.to_string(), String::new(), confidence, outcome)
     }
 
     /// A bind row carrying a model source at `tier`.
     fn sourced_row(reference: &str, model_id: &str, tier: ModelSourceTier) -> BindRow {
         use hauksbee_ir::evidence::{ModelLayer, ModelUncertainty, ModelValidation};
+        let outcome = BindOutcome::Analog {
+            device: "nmos".into(),
+        };
         BindRow {
-            reference: reference.to_string(),
             value: "NMOS".to_string(),
             model_id: Some(model_id.to_string()),
-            confidence: Confidence::Exact,
             source: Some(
                 ModelSource::new(
                     tier,
@@ -1012,11 +1027,7 @@ mod tests {
                 )
                 .expect("valid source"),
             ),
-            outcome: BindOutcome::Analog {
-                device: "nmos".into(),
-            },
-            warning: None,
-            guesses: Vec::new(),
+            ..row(reference, Confidence::Exact, outcome)
         }
     }
 

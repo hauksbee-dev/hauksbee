@@ -324,6 +324,7 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
 /// by that [`CustomBehavior`](crate::behavioral::CustomBehavior) instead of the declarative
 /// layer.
 #[must_use]
+#[allow(clippy::too_many_lines)] // the ordered bind passes share many locals
 pub fn bind_board_with(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -413,18 +414,13 @@ pub fn bind_board_with(
                 ) {
                     dnp_mcus.push((comp.reference.clone(), comp.value.clone()));
                 }
-                report.push(BindRow {
-                    reference: comp.reference.clone(),
-                    value: comp.value.clone(),
-                    model_id: None,
-                    confidence: Confidence::Exact,
-                    source: None,
-                    outcome: BindOutcome::Skipped {
-                        reason: absence.describe().to_string(),
-                    },
-                    warning: None,
-                    guesses: Vec::new(),
-                });
+                let reason = absence.describe().to_string();
+                report.push(BindRow::without_model(
+                    comp.reference.clone(),
+                    comp.value.clone(),
+                    Confidence::Exact,
+                    BindOutcome::Skipped { reason },
+                ));
                 continue;
             }
             AssemblyState::IdentityUnknown(refusal) => {
@@ -433,20 +429,18 @@ pub fn bind_board_with(
                 // would turn an unresolved identity choice into precise
                 // simulation. Left open, and said out loud.
                 let reason = format!("{}; left open", refusal.reason());
+                let warning = format!(
+                    "cannot bind '{}' ({}): {reason}",
+                    comp.reference, comp.value
+                );
                 report.push(BindRow {
-                    reference: comp.reference.clone(),
-                    value: comp.value.clone(),
-                    model_id: None,
-                    confidence: Confidence::Unresolved,
-                    source: None,
-                    outcome: BindOutcome::Unresolved {
-                        reason: reason.clone(),
-                    },
-                    warning: Some(format!(
-                        "cannot bind '{}' ({}): {reason}",
-                        comp.reference, comp.value
-                    )),
-                    guesses: Vec::new(),
+                    warning: Some(warning),
+                    ..BindRow::without_model(
+                        comp.reference.clone(),
+                        comp.value.clone(),
+                        Confidence::Unresolved,
+                        BindOutcome::Unresolved { reason },
+                    )
                 });
                 continue;
             }
@@ -600,16 +594,12 @@ pub fn bind_board_with(
             PowerSupply::Ideal { volts: *volts },
         );
         supplies.push(leg);
-        report.push(BindRow {
-            reference: format!("RAIL:{name}"),
-            value: format!("{volts:.2}V"),
-            model_id: None,
-            confidence: Confidence::Exact,
-            source: None,
-            outcome: BindOutcome::PowerRail { volts: *volts },
-            warning: None,
-            guesses: Vec::new(),
-        });
+        report.push(BindRow::without_model(
+            format!("RAIL:{name}"),
+            format!("{volts:.2}V"),
+            Confidence::Exact,
+            BindOutcome::PowerRail { volts: *volts },
+        ));
     }
 
     // A board whose only processor was skipped for DNP still analyses fine as
@@ -825,6 +815,7 @@ fn resolve_from_ref_params(
 /// circuit and matches each monitorable device to its originating component
 /// (by reference == device name) and that component's resolved ratings +
 /// footprint. Vreg sources and the configurable supplies are matched too.
+#[allow(clippy::too_many_lines)] // one pass per meta source, in order
 fn gather_device_meta(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -1231,6 +1222,7 @@ fn is_port_class(prefix: &str) -> bool {
 /// Synthesize a model entry for a component the library could not resolve,
 /// using only the reference-designator class and a parseable value. Returns
 /// `None` when no confident fallback applies.
+#[allow(clippy::too_many_lines)] // an ordered heuristic ladder; order is the logic
 fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     use std::collections::BTreeMap;
     let prefix = ref_prefix(&comp.reference);
@@ -1943,6 +1935,7 @@ fn unresolved_outcome(
 
 /// Bind a single resolved component. Mutates the circuit and the digital/mcu
 /// collections; returns its outcome and any warning.
+#[allow(clippy::too_many_lines)] // the per-kind dispatch table
 fn bind_component(
     comp: &Component,
     model: &ModelEntry,
@@ -2224,6 +2217,7 @@ fn bound_digital_outcome(
 /// number was recognised. A register-map spec's own `[sensor.pins]` fills the
 /// roles the card's `[models.pins]` leaves out, and its address-select table
 /// picks the address from the board's straps.
+#[allow(clippy::too_many_lines)] // one refusal per unwired bus/power role
 fn bind_model_peripheral(
     comp: &Component,
     model: &ModelEntry,
@@ -2742,6 +2736,7 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
 
 // ── Per-kind binders ────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_lines)] // array split, series path, then per-class stamping
 fn bind_passive(
     comp: &Component,
     model: &ModelEntry,
@@ -3573,6 +3568,7 @@ fn vreg_stability_warning(
     ))
 }
 
+#[allow(clippy::too_many_lines)] // converter, shunt, adjustable, fixed, then caveats
 fn bind_vreg(
     comp: &Component,
     model: &ModelEntry,
@@ -4108,6 +4104,7 @@ fn timer_cmp(a: &str, b: &str, vcc: &str, gain: f64) -> String {
 /// deck (`hauksbee-solve/tests/decks/ne555_astable.*`) is what pins the latch
 /// band and the comparator gain; a wiring the part cannot work from REFUSES
 /// with a named reason rather than reporting a fabricated frequency.
+#[allow(clippy::too_many_lines)] // one stamp of the documented 555 macro-model
 fn bind_timer_555(
     comp: &Component,
     model: &ModelEntry,
@@ -4431,6 +4428,7 @@ fn stamp_spdt(
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per switch topology, in precedence order
 fn bind_analog_switch(
     comp: &Component,
     model: &ModelEntry,
@@ -4995,13 +4993,11 @@ fn bind_nor_latches(
             lroles.insert("set".to_string(), set_node);
             lroles.insert("reset".to_string(), reset_node);
             lroles.insert("q".to_string(), q_net);
-            let mut ldrivers = HashMap::new();
-            ldrivers.insert("q".to_string(), drv);
             digital.push(DigitalComponent::new_nor_latch(
                 format!("{}_L{}", comp.reference, gates[q_gate].idx),
                 levels,
                 lroles,
-                ldrivers,
+                HashMap::from([("q".to_string(), drv)]),
             ));
             used.insert(i);
             used.insert(j);
@@ -6203,6 +6199,7 @@ const WRONG_BOARD_MATCH_DIVISOR: usize = 2;
 /// Returns [`IdentityRefusal::Contradiction`] when a hint names a part the
 /// layout identifies differently, and [`IdentityRefusal::WrongBoard`] when most
 /// of the hinted references are not on this board.
+#[allow(clippy::too_many_lines)] // the documented reconciliation rules, in order
 pub fn apply_identity(
     board: &mut ExtractedBoard,
     hints: &[hauksbee_extract::bom::IdentityHint],
@@ -6665,6 +6662,7 @@ fn designator_dimension(reference: &str) -> Option<&'static str> {
 /// library has no entry for: `10k` against `100nF` is ohms against farads whether
 /// or not either resolves. And a designator prefix is itself a class claim, which
 /// catches the case the brief exists for: a `Q5` the BOM calls `10k`.
+#[allow(clippy::too_many_lines)] // one early return per contradiction detector
 fn contradiction_between(
     comp: &Component,
     hint: &hauksbee_extract::bom::IdentityHint,
@@ -7266,7 +7264,7 @@ style = "i2c_pointer"
     fn digital_output_driver_honours_model_ro() {
         let mut model = resolve_value(&ModelLibrary::builtin(), "74HC595", "");
         let custom_ro = 123.0;
-        assert_ne!(custom_ro, DEFAULT_RO);
+        assert!((custom_ro - DEFAULT_RO).abs() > 1e-9);
         model.params.set_f64("ro", custom_ro);
         let mut circuit = Circuit::new();
         let roles = roles(&mut circuit, &["srclk", "rclk", "ser", "qa", "qb"]);
@@ -7274,7 +7272,7 @@ style = "i2c_pointer"
         bind_digital(&comp("U1", ""), &model, &mut circuit, &roles, &mut digital)
             .expect("the builtin 595 spec compiles");
         assert_eq!(digital.len(), 1);
-        assert_eq!(digital[0].drivers["qa"].ron, custom_ro);
+        assert!((digital[0].drivers["qa"].ron - custom_ro).abs() < 1e-12);
     }
 
     /// A digital part whose [models.logic] fails to compile must surface the
@@ -7332,14 +7330,9 @@ style = "i2c_pointer"
 
         let mut report = BindReport::default();
         report.push(BindRow {
-            reference: "U1".into(),
-            value: "SENSOR".into(),
             model_id: Some(model.id),
-            confidence: Confidence::Exact,
-            source: None,
-            outcome,
             warning: Some("identity only; remains OPEN".into()),
-            guesses: Vec::new(),
+            ..BindRow::without_model("U1".into(), "SENSOR".into(), Confidence::Exact, outcome)
         });
         let summary = crate::bind_report::BindSummary::from_report(&report);
         assert_eq!(summary.critical_parts_bound, "0/1");
@@ -7459,7 +7452,8 @@ style = "i2c_pointer"
             assert_eq!((reg.reference.as_str(), reg.input), ("U9", roles["in"]));
             assert_eq!((reg.source.0, reg.dropout_v), (0, dropout_v));
             assert!((reg.min_in_v - min_in_v).abs() < 1e-12, "{case}: {reg:?}");
-            assert_eq!(reg.max_in_v, max_in_v, "{case}");
+            // Card ratings pass through untouched (including the unrated `inf`).
+            assert_eq!(reg.max_in_v.to_bits(), max_in_v.to_bits(), "{case}");
         }
     }
 

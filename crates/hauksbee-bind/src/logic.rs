@@ -289,6 +289,7 @@ impl ParallelMemoryStorage {
         });
     }
 
+    #[allow(clippy::too_many_lines)] // the AT28 page-write protocol, step by step
     fn timed_write(
         &mut self,
         address: usize,
@@ -374,17 +375,11 @@ impl ParallelMemoryStorage {
                     && protection.write_window.is_none()
                     && protection.command_buffer.is_empty()
             });
-            if blocked_attempt {
-                self.busy = Some(TimedProgram {
-                    until_cycle: cycle.saturating_add(program_cycles),
-                    values: Vec::new(),
-                    poll_value: value,
-                    toggle: false,
-                });
-            } else if protection_was_enabled && self.protection.as_ref().is_some_and(|p| !p.enabled)
-            {
-                // The final SDP-disable command itself has a write-cycle
-                // recovery interval even though it changes no array byte.
+            // The final SDP-disable command itself has a write-cycle
+            // recovery interval even though it changes no array byte.
+            let sdp_disabled =
+                protection_was_enabled && self.protection.as_ref().is_some_and(|p| !p.enabled);
+            if blocked_attempt || sdp_disabled {
                 self.busy = Some(TimedProgram {
                     until_cycle: cycle.saturating_add(program_cycles),
                     values: Vec::new(),
@@ -1038,6 +1033,7 @@ impl LogicComponent {
     ///
     /// Returns a [`LogicCompileError`] when the block fails validation, an
     /// expression does not compile, or a combinational cycle does not converge.
+    #[allow(clippy::too_many_lines)] // the compile stages share the pin/register indices
     pub fn compile(spec_id: &str, logic: &Logic) -> Result<Self, LogicCompileError> {
         let validated = logic.validate_with_features(&[Logic::FEATURE_MEMORY])?;
 
@@ -1649,6 +1645,7 @@ impl LogicComponent {
     /// Re-evaluate the combinational outputs and tri-state enables from the
     /// CURRENT input levels and register state (also the entry point after an
     /// external register overwrite via [`LogicComponent::set_register`]).
+    #[allow(clippy::too_many_lines)] // one ordered combinational refresh
     pub fn refresh_outputs(&mut self) {
         // Bind every variable the expressions read.
         for i in 0..self.input_names.len() {

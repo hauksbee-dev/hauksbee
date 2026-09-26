@@ -626,7 +626,7 @@ mod tests {
         };
         // Keep drawing over the trip current: output stays at 0 V (open).
         let v = s.update(2.0, 4.2, 0.0, dt);
-        assert_eq!(v, 0.0, "tripped pack should command 0 V, got {v}");
+        assert!(v.abs() < 1e-12, "tripped pack commands 0 V, got {v}");
         assert!(s.protection_tripped());
 
         // Remove the load (below reset) for longer than the delay: re-arms.

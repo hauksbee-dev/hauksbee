@@ -185,12 +185,17 @@ pub fn junction_temp_c(ambient_c: f64, power_w: f64, theta_ja: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// Table lookups return the tabulated constant exactly, so compare bits.
+    fn theta_bits(footprint: &str, kind: ComponentKind) -> u64 {
+        theta_ja_from_footprint(footprint, kind).to_bits()
+    }
+
     #[test]
     fn hand_checked_sot23_half_watt_reaches_150c() {
         // 0.5 W in a SOT-23 (theta_JA = 250 C/W) at 25 C ambient:
         // Tj = 25 + 0.5 * 250 = 150 C. The canonical hand-check.
         let theta = theta_ja_from_footprint("Package_TO_SOT_SMD:SOT-23", ComponentKind::BjtNpn);
-        assert_eq!(theta, 250.0);
+        assert!((theta - 250.0).abs() < 1e-12);
         let tj = junction_temp_c(25.0, 0.5, theta);
         assert!((tj - 150.0).abs() < 1e-9, "Tj = {tj}, expected 150");
     }
@@ -199,11 +204,11 @@ mod tests {
     fn to220_free_air_default() {
         let theta =
             theta_ja_from_footprint("Package_TO_SOT_THT:TO-220-3_Vertical", ComponentKind::Vreg);
-        assert_eq!(theta, 62.0);
+        assert!((theta - 62.0).abs() < 1e-12);
         // A 1 W TO-220 in 25 C air: 25 + 62 = 87 C, comfortably under its 150 C limit.
         let tj = junction_temp_c(25.0, 1.0, theta);
         assert!((tj - 87.0).abs() < 1e-9);
-        assert_eq!(default_tj_max("...TO-220..."), 150.0);
+        assert!((default_tj_max("...TO-220...") - 150.0).abs() < 1e-12);
     }
 
     #[test]
@@ -213,20 +218,19 @@ mod tests {
         // the 0402's 600 (which would under-estimate Tj, the unsafe direction).
         let theta =
             theta_ja_from_footprint("Resistor_SMD:R_01005_0402Metric", ComponentKind::Passive);
-        assert_ne!(theta, 600.0, "must not collide with the 0402 metric twin");
         assert!(theta > 900.0, "01005 sits above 0201's 900, got {theta}");
         // The 0201 whose metric twin is 0603 still resolves to 0201.
         assert_eq!(
-            theta_ja_from_footprint("Resistor_SMD:R_0201_0603Metric", ComponentKind::Passive),
-            900.0
+            theta_bits("Resistor_SMD:R_0201_0603Metric", ComponentKind::Passive),
+            900f64.to_bits()
         );
     }
 
     #[test]
     fn soic8_default() {
         assert_eq!(
-            theta_ja_from_footprint("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", ComponentKind::Opamp),
-            120.0
+            theta_bits("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", ComponentKind::Opamp),
+            120f64.to_bits()
         );
     }
 
@@ -234,29 +238,30 @@ mod tests {
     fn sot223_before_sot23() {
         // SOT-223 must not be mis-matched as SOT-23.
         assert_eq!(
-            theta_ja_from_footprint("Package_TO_SOT_SMD:SOT-223-3_TabPin2", ComponentKind::Vreg),
-            65.0
+            theta_bits("Package_TO_SOT_SMD:SOT-223-3_TabPin2", ComponentKind::Vreg),
+            65f64.to_bits()
         );
     }
 
     #[test]
     fn chip_resistor_sizes() {
         assert_eq!(
-            theta_ja_from_footprint("Resistor_SMD:R_0402_1005Metric", ComponentKind::Passive),
-            600.0
+            theta_bits("Resistor_SMD:R_0402_1005Metric", ComponentKind::Passive),
+            600f64.to_bits()
         );
         assert_eq!(
-            theta_ja_from_footprint("Resistor_SMD:R_2512_6332Metric", ComponentKind::Passive),
-            80.0
+            theta_bits("Resistor_SMD:R_2512_6332Metric", ComponentKind::Passive),
+            80f64.to_bits()
         );
     }
 
     #[test]
     fn unknown_package_falls_back() {
         assert_eq!(
-            theta_ja_from_footprint("Some:Weird_Package", ComponentKind::BjtNpn),
-            DEFAULT_THETA_JA
+            theta_bits("Some:Weird_Package", ComponentKind::BjtNpn),
+            DEFAULT_THETA_JA.to_bits()
         );
-        assert_eq!(default_tj_max("Some:Weird_Package"), DEFAULT_TJ_MAX_C);
+        let tj_max = default_tj_max("Some:Weird_Package");
+        assert_eq!(tj_max.to_bits(), DEFAULT_TJ_MAX_C.to_bits());
     }
 }

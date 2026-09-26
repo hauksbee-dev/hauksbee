@@ -450,6 +450,7 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
 /// Returns [`BoardInputError::NotFound`] or [`BoardInputError::Io`] when the
 /// path cannot be read, and the same format errors as [`from_bytes`] plus
 /// gerber-directory and `.kicad_sch` hierarchy failures.
+#[allow(clippy::too_many_lines)] // the format-dispatch ladder, in precedence order
 pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let file_name = path
         .file_name()

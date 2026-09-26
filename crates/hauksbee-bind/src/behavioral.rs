@@ -1563,11 +1563,11 @@ mod tests {
     use hauksbee_models::Segment;
 
     fn roles() -> BTreeMap<String, NodeId> {
-        let mut r = BTreeMap::new();
-        r.insert("io".to_string(), NodeId(1));
-        r.insert("vbus".to_string(), NodeId(2));
-        r.insert("gnd".to_string(), NodeId::GROUND);
-        r
+        BTreeMap::from([
+            ("io".to_string(), NodeId(1)),
+            ("vbus".to_string(), NodeId(2)),
+            ("gnd".to_string(), NodeId::GROUND),
+        ])
     }
 
     fn params() -> Params {
@@ -1640,7 +1640,7 @@ mod tests {
                 _ => None,
             })
             .expect("stamped series resistor");
-        assert_eq!(resistance, 1e9);
+        assert!((resistance - 1e9).abs() < 1e-3, "{resistance}");
     }
 
     #[test]
