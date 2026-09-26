@@ -134,10 +134,12 @@ pub fn record(took: Duration) {
 }
 
 /// Run a CLI extraction with its phase, elapsed time and typical duration on
-/// stderr, and remember how long it took if it succeeded. On a terminal that is
-/// one line redrawn in place (no cursor or mode changes, so Ctrl-C leaves the
-/// terminal as it was); anywhere else a plain line every 30 s, never a control
-/// code. The line is erased before `run` returns, success or error.
+/// stderr, and remember how long it took if it succeeded.
+///
+/// On a terminal that is one line redrawn in place (no cursor or mode changes,
+/// so Ctrl-C leaves the terminal as it was); anywhere else a plain line every
+/// 30 s, never a control code. The line is erased before `run` returns, success
+/// or error.
 ///
 /// # Errors
 ///

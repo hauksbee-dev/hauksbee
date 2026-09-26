@@ -270,12 +270,14 @@ pub enum Topology {
     BuckBoost,
 }
 
-/// An averaged (cycle-averaged) switching-converter block. The runtime realises
-/// it as a controllable source on the output pin behind a measurable series
-/// resistor (the [`SupplyLeg`](../../hauksbee-engine) pattern), regulating to
-/// `vout_setpoint` until an input- or output-current limit folds the output
-/// back. Power is conserved through `efficiency`, so the input current the
-/// runtime draws on the input pin is `Vout*Iout / (efficiency*Vin)`.
+/// An averaged (cycle-averaged) switching-converter block.
+///
+/// The runtime realises it as a controllable source on the output pin behind a
+/// measurable series resistor (the [`SupplyLeg`](../../hauksbee-engine)
+/// pattern), regulating to `vout_setpoint` until an input- or output-current
+/// limit folds the output back. Power is conserved through `efficiency`, so the
+/// input current the runtime draws on the input pin is
+/// `Vout*Iout / (efficiency*Vin)`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Converter {
     pub topology: Topology,
@@ -421,8 +423,10 @@ pub enum LawKind {
 
 /// An expression-defined law: a current or voltage computed each chunk from an
 /// `evalexpr` expression over the device's pin voltages, active state, and
-/// params. Sandboxed: only arithmetic, comparison, and `if`/`min`/`max`/`abs`
-/// builtins are available, no variables the runtime did not bind, no I/O.
+/// params.
+///
+/// Sandboxed: only arithmetic, comparison, and `if`/`min`/`max`/`abs` builtins
+/// are available, no variables the runtime did not bind, no I/O.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Law {
     /// Diagnostic name (e.g. "`balancer_leak`").
@@ -456,10 +460,11 @@ pub struct Law {
 
 // ── Validation ──────────────────────────────────────────────────────────────
 
-/// Validate a behavioural block for internal consistency. Returns a list of
-/// human-readable problems (empty = valid). Cheap structural checks only; the
-/// expression syntax is checked separately by the engine when it compiles the
-/// laws against a real pin set.
+/// Validate a behavioural block for internal consistency.
+///
+/// Returns a list of human-readable problems (empty = valid). Cheap structural
+/// checks only; the expression syntax is checked separately by the engine when
+/// it compiles the laws against a real pin set.
 ///
 /// Every float here is stamped verbatim into the solve (pull / open-drain /
 /// drive targets as DC sources, resistances unfloored, dwells as

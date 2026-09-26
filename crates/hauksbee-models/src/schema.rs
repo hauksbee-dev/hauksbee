@@ -284,9 +284,11 @@ impl ModelCoverage {
     }
 }
 
-/// Where a model entry's numbers come from, on the source accuracy ladder:
-/// the tier, whether the entry has been validated, and any declared numeric
-/// uncertainty. Feeds the evidence spine's `ModelSource` records.
+/// Where a model entry's numbers come from, on the source accuracy ladder: the
+/// tier, whether the entry has been validated, and any declared numeric
+/// uncertainty.
+///
+/// Feeds the evidence spine's `ModelSource` records.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelSourceSpec {
@@ -320,8 +322,10 @@ pub struct Pinout {
 
 /// One published characteristic row carrying only the min/typ/max columns the
 /// row prints, so a one-sided limit or a typical-only value keeps its number
-/// without becoming a two-sided interval. As a `[models.params]` value it is
-/// that param's row, and `parameter` defaults to the key.
+/// without becoming a two-sided interval.
+///
+/// As a `[models.params]` value it is that param's row, and `parameter`
+/// defaults to the key.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Characteristic {

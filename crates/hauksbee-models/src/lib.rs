@@ -173,8 +173,9 @@ fn holds_toml(dir: &Path) -> bool {
 
 // ── Source layers ─────────────────────────────────────────────────────────────
 
-/// The explicit resolution priority layer an entry was loaded from. A
-/// higher-priority layer beats a lower one *regardless of specificity*;
+/// The explicit resolution priority layer an entry was loaded from.
+///
+/// A higher-priority layer beats a lower one *regardless of specificity*;
 /// specificity only breaks ties within a layer, so user-over-builtin holds by
 /// construction rather than by an entry happening to score more specifically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -964,8 +965,10 @@ impl ModelLibrary {
 }
 
 /// Provenance for a model with an optional `[models.source]` or
-/// `[sensor.source]`. A pack-manifest `pack_tier` is authoritative: an entry in
-/// a datasheet-derived pack cannot promote itself to a vendor tier. Omitted
+/// `[sensor.source]`.
+///
+/// A pack-manifest `pack_tier` is authoritative: an entry in a
+/// datasheet-derived pack cannot promote itself to a vendor tier. Omitted
 /// fields take the defaults, and an omitted uncertainty is an explicit UNKNOWN.
 ///
 /// # Errors

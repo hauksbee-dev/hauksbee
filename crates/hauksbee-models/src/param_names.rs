@@ -283,10 +283,12 @@ pub fn param_unit(name: &str) -> Option<&'static str> {
 }
 
 /// The column table: the printed column (`min`, `typ` or `max`) a row param
-/// reads. A param that IS a guaranteed limit reads its worst case: an input
-/// threshold or output level (VIH/VOH min, VIL/VOL max), a headroom or dropout
-/// (max), and any name carrying a `min` or `max` word. Everything else reads
-/// its nominal, the typ.
+/// reads.
+///
+/// A param that IS a guaranteed limit reads its worst case: an input threshold
+/// or output level (VIH/VOH min, VIL/VOL max), a headroom or dropout (max), and
+/// any name carrying a `min` or `max` word. Everything else reads its nominal,
+/// the typ.
 #[must_use]
 pub fn row_column(name: &str) -> &'static str {
     const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi"];
@@ -382,12 +384,15 @@ fn form_ignored(entry: &ModelEntry) -> &'static [&'static str] {
     }
 }
 
-/// Warnings that tie `[models.params]` to the card's own characteristic rows,
-/// matched by value: a param equal to a row printed in another base unit than
-/// the param's documented one (a current stored as a conductance), and a
-/// nominal equal to the min or max of a row that prints no typ (unless another
-/// row prints it as a typ). The unit check only looks below 1e-3, where a copied
-/// current or capacitance lives and a round volt or ohm value cannot collide.
+/// Warnings that tie `[models.params]` to the card's own characteristic rows.
+///
+/// Rows are matched by value: a param equal to a row printed in another base
+/// unit than the param's documented one (a current stored as a conductance),
+/// and a nominal equal to the min or max of a row that prints no typ (unless
+/// another row prints it as a typ).
+///
+/// The unit check only looks below 1e-3, where a copied current or capacitance
+/// lives and a round volt or ohm value cannot collide.
 #[must_use]
 pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     let rows = cited_rows(entry);

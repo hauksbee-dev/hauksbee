@@ -1,8 +1,10 @@
-//! Physical-range validation for model parameters. Used by the extraction
-//! pipeline to reject LLM-generated model entries whose parameters are missing or
-//! out of physical bounds before they are saved to the user database, so a
-//! hallucinated part value cannot silently enter the model library. [`validate`]
-//! collects every violation at once rather than stopping at the first.
+//! Physical-range validation for model parameters.
+//!
+//! Used by the extraction pipeline to reject LLM-generated model entries whose
+//! parameters are missing or out of physical bounds before they are saved to
+//! the user database, so a hallucinated part value cannot silently enter the
+//! model library. [`validate`] collects every violation at once rather than
+//! stopping at the first.
 
 use std::collections::HashSet;
 
@@ -1112,8 +1114,10 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
 
 /// Why a card's pin map leaves it OPEN at bind time: one line per role the
 /// binder's path for its kind reads (`bind_vreg`, `bind_adj_vreg`, the device
-/// binders) that the map does not declare. `models resolve` reports the same
-/// lines, so a card that lints clean is not left open for its pin map.
+/// binders) that the map does not declare.
+///
+/// `models resolve` reports the same lines, so a card that lints clean is not
+/// left open for its pin map.
 #[must_use]
 pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     // A behavioral part (converter/FSM/DAC power IC) references its pins from
@@ -1326,10 +1330,11 @@ pub fn param_bounds(kind: ComponentKind) -> Vec<String> {
     lines
 }
 
-/// A did-you-mean for a kind name the schema rejected. Common industry
-/// synonyms map directly (an author typing `ldo` should be told `vreg`, not
-/// left to guess which of seventeen names we meant); anything else falls back
-/// to nearest-edit-distance over [`KIND_NAMES`].
+/// A did-you-mean for a kind name the schema rejected.
+///
+/// Common industry synonyms map directly (an author typing `ldo` should be told
+/// `vreg`, not left to guess which of seventeen names we meant); anything else
+/// falls back to nearest-edit-distance over [`KIND_NAMES`].
 #[must_use]
 pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
     let lower = unknown.trim().to_ascii_lowercase();
@@ -1363,10 +1368,11 @@ pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
     })
 }
 
-/// If a TOML deserialization error is an unknown [`ComponentKind`] variant,
-/// the note to append: the did-you-mean, or the full vocabulary. Detected
-/// from the error text (serde owns the wording); the `bjt_npn` probe keeps it
-/// from firing on some other enum's unknown-variant error.
+/// If a TOML deserialization error is an unknown [`ComponentKind`] variant, the
+/// note to append: the did-you-mean, or the full vocabulary.
+///
+/// Detected from the error text (serde owns the wording); the `bjt_npn` probe
+/// keeps it from firing on some other enum's unknown-variant error.
 #[must_use]
 pub fn kind_error_note(err_text: &str) -> Option<String> {
     if !err_text.contains("unknown variant") || !err_text.contains("bjt_npn") {
@@ -1388,9 +1394,11 @@ const RECORD_KINDS: &str = " ([[...source.uncertainty]] status = \"interval\" bo
     printed row's min/typ/max columns as printed)";
 
 /// Every missing and unknown key of every `[models.source]` / `[sensor.source]`
-/// record, read from the raw TOML so one lint run names them all (a parse stops
-/// at the first, and an uncertainty record drops an unknown key silently, so a
-/// `typ` written there would otherwise vanish).
+/// record.
+///
+/// Read from the raw TOML so one lint run names them all: a parse stops at the
+/// first, and an uncertainty record drops an unknown key silently, so a `typ`
+/// written there would otherwise vanish.
 pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
     let models = root.get("models").and_then(toml::Value::as_array);
     let sources = models.into_iter().flatten().enumerate();

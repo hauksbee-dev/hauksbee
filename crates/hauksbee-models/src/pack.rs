@@ -47,9 +47,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// A pack-format or pack-store failure. Every validation category is a named
-/// variant (the `sensor_spec.rs` discipline): a bad pack fails loud and
-/// specific, at `models add` time, before anything is copied.
+/// A pack-format or pack-store failure.
+///
+/// Every validation category is a named variant (the `sensor_spec.rs`
+/// discipline): a bad pack fails loud and specific, at `models add` time,
+/// before anything is copied.
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
     /// The pack directory does not exist or is not a directory.
@@ -122,9 +124,11 @@ fn io_err(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> PackErro
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
-/// Where a pack's model data came from. Declared, not inferred: the point is
-/// that a reviewer of `models list` output can see at a glance whether numbers
-/// were typed by a human, extracted by a model, or shipped by the part vendor.
+/// Where a pack's model data came from.
+///
+/// Declared, not inferred: the point is that a reviewer of `models list` output
+/// can see at a glance whether numbers were typed by a human, extracted by a
+/// model, or shipped by the part vendor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provenance {
     #[serde(rename = "hand-written")]

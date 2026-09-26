@@ -1,7 +1,9 @@
 //! Orderable variants: sibling `[[models]]` entries that share `variant_of` and
-//! the family match, told apart by `[models.variant]`. [`select`] scores each
-//! sibling against the component at the resolve tie point, so a part name that
-//! pins no variant is never silently simulated as whichever sibling sorts first.
+//! the family match, told apart by `[models.variant]`.
+//!
+//! [`select`] scores each sibling against the component at the resolve tie
+//! point, so a part name that pins no variant is never silently simulated as
+//! whichever sibling sorts first.
 
 use hauksbee_ir::evidence::Assumption;
 use regex::Regex;
@@ -60,6 +62,7 @@ pub struct Member {
 }
 
 /// A variant set scored against one component (`reference`, `value`).
+///
 /// `determined` is the one member left once contradicted ones drop;
 /// `same_pinout` says every member maps the same pads to the same roles.
 #[derive(Debug, Clone, Serialize)]

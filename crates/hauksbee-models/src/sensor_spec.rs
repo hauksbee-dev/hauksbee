@@ -332,10 +332,11 @@ impl BitFieldSpec {
 }
 
 /// One pointer-framed writable register (`i2c_pointer` write style): the
-/// firmware writes the register pointer, then the payload bytes. When the
-/// payload reaches the encoding's width it is decoded and stored under `store`
-/// (a float variable read expressions may reference), and each declared field
-/// is extracted and stored under its own name.
+/// firmware writes the register pointer, then the payload bytes.
+///
+/// When the payload reaches the encoding's width it is decoded and stored under
+/// `store` (a float variable read expressions may reference), and each declared
+/// field is extracted and stored under its own name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteRegisterSpec {
     /// Register address (the I2C pointer value).
@@ -397,8 +398,9 @@ const fn default_channel_select() -> ChannelSelectSpec {
     }
 }
 
-/// One command family of a command-framed write protocol (the MCP4728 shape):
-/// the first write byte selects the command by mask/value, then the remaining
+/// One command family of a command-framed write protocol (the MCP4728 shape).
+///
+/// The first write byte selects the command by mask/value, then the remaining
 /// bytes decode as fixed-size big-endian groups whose bit fields update the
 /// per-channel state.
 ///
@@ -439,9 +441,11 @@ pub struct WriteCommandSpec {
 }
 
 /// A driven analog output: an evalexpr law over the device's variables (one
-/// channel's state + inputs + stores) producing a voltage. The engine binds a
-/// net driver to the output by name/channel; at each transaction end
-/// (`on_stop(ctx)`) the law is evaluated and pushed onto the net.
+/// channel's state + inputs + stores) producing a voltage.
+///
+/// The engine binds a net driver to the output by name/channel; at each
+/// transaction end (`on_stop(ctx)`) the law is evaluated and pushed onto the
+/// net.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputSpec {
     /// Stable name ("`vout_a`") the engine binds a driver to.
@@ -456,10 +460,12 @@ pub struct OutputSpec {
 
 /// A streamed read frame for command-framed devices that answer a master read
 /// with a fixed byte sequence instead of a pointered register (the MCP4728's
-/// 24-byte status/EEPROM frame). Each entry is an evalexpr producing one byte
-/// (rounded, clamped to 0..=255). With `per_channel = true` the byte list is
-/// emitted once per channel (channel 0 first), and each channel's exprs see
-/// that channel's state; reads wrap at the frame end.
+/// 24-byte status/EEPROM frame).
+///
+/// Each entry is an evalexpr producing one byte (rounded, clamped to 0..=255).
+/// With `per_channel = true` the byte list is emitted once per channel (channel
+/// 0 first), and each channel's exprs see that channel's state; reads wrap at
+/// the frame end.
 ///
 /// Mutually exclusive with `[[sensor.register]]`: a device either answers
 /// pointered reads or streams a frame, both at once has no defined wire

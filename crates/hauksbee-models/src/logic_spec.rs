@@ -144,8 +144,9 @@ pub struct ClockSpec {
     pub edge: Edge,
 }
 
-/// An asynchronous, level-sensitive reset/preset to a constant value. A
-/// register may declare several (the 74HC74 has independent CLR and PRE);
+/// An asynchronous, level-sensitive reset/preset to a constant value.
+///
+/// A register may declare several (the 74HC74 has independent CLR and PRE);
 /// when more than one is active simultaneously the FIRST declared wins; the
 /// silicon's both-asserted race (both outputs high) is not representable in a
 /// single register and is deliberately not faked.
@@ -218,10 +219,11 @@ pub struct TristateSpec {
     pub active: Level,
 }
 
-/// One address/value write in a memory's command protocol. Parallel EEPROMs
-/// use ordinary bus writes to enter and leave protected modes; declaring the
-/// sequence keeps that device-specific protocol in model data rather than in
-/// the engine.
+/// One address/value write in a memory's command protocol.
+///
+/// Parallel EEPROMs use ordinary bus writes to enter and leave protected modes;
+/// declaring the sequence keeps that device-specific protocol in model data
+/// rather than in the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryCommandWrite {
     pub address: u64,
@@ -229,6 +231,7 @@ pub struct MemoryCommandWrite {
 }
 
 /// Software-data-protection command sequences for an EEPROM-like memory.
+///
 /// Writes are blocked while protection is enabled except for the exact
 /// `disable` sequence. The engine consumes command writes rather than storing
 /// them in the array, just as the physical device does.
@@ -243,13 +246,16 @@ pub struct SoftwareDataProtectionSpec {
     pub disable: Vec<MemoryCommandWrite>,
 }
 
-/// One addressable memory array (`[[models.logic.memory]]`): the data store
-/// of a parallel-bus memory part (a 28C-series EEPROM, a 62256-class SRAM, a
-/// 27C-series ROM), which is categorically wider than the 64-bit
-/// `[[models.logic.register]]` ceiling. The array is declared, not enumerated:
-/// `words` x `bits` cells, addressed by the `address` pins (LSB first), read
-/// onto the `data_out` output pins, and (when `write` is present) committed
-/// from the `data_in` pins on the write strobe's qualifying edge.
+/// One addressable memory array (`[[models.logic.memory]]`).
+///
+/// It is the data store of a parallel-bus memory part (a 28C-series EEPROM, a
+/// 62256-class SRAM, a 27C-series ROM), which is categorically wider than the
+/// 64-bit `[[models.logic.register]]` ceiling.
+///
+/// The array is declared, not enumerated: `words` x `bits` cells, addressed by
+/// the `address` pins (LSB first), read onto the `data_out` output pins, and
+/// (when `write` is present) committed from the `data_in` pins on the write
+/// strobe's qualifying edge.
 ///
 /// The data bus of a real memory is bidirectional. That is expressed by
 /// declaring the bus pins as OUTPUTS (tri-stated via `[models.logic.tristate]`
@@ -600,9 +606,11 @@ pub fn parse_logic_expr(src: &str) -> Result<LogicExpr, LogicExprError> {
 // Validation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A named `[models.logic]` validation failure. Every category the evaluator
-/// depends on gets its own variant so a broken spec (hand-written or
-/// LLM-extracted) fails with a diagnosis, not a generic parse error.
+/// A named `[models.logic]` validation failure.
+///
+/// Every category the evaluator depends on gets its own variant so a broken
+/// spec (hand-written or LLM-extracted) fails with a diagnosis, not a generic
+/// parse error.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LogicSpecError {
     #[error("logic block declares no outputs (a part that drives nothing is a spec bug)")]

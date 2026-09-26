@@ -692,9 +692,11 @@ impl KeyInfo {
     }
 }
 
-/// The environment variables that override the file. A settings surface shows
-/// the ones that are set, because a saved choice that is silently overridden
-/// by a stale `export` is the first thing people ask about.
+/// The environment variables that override the file.
+///
+/// A settings surface shows the ones that are set, because a saved choice that
+/// is silently overridden by a stale `export` is the first thing people ask
+/// about.
 pub const KNOWN_ENV_VARS: &[&str] = &[
     ENV_BACKEND,
     "HAUKSBEE_LLM_API_KEY",
@@ -1149,7 +1151,9 @@ pub fn is_local_url(url: &str) -> bool {
 // ── The file on disk ──────────────────────────────────────────────────────────
 
 /// Where the file lives: `$HAUKSBEE_EXTRACT_CONFIG`, else
-/// `$XDG_CONFIG_HOME/hauksbee/extract.toml`, else `~/.config/hauksbee/extract.toml`.
+/// `$XDG_CONFIG_HOME/hauksbee/extract.toml`, else
+/// `~/.config/hauksbee/extract.toml`.
+///
 /// Windows has no `$HOME`: there it is `%APPDATA%\hauksbee\extract.toml`, else
 /// `%USERPROFILE%\.config\hauksbee\extract.toml`.
 ///
@@ -1193,11 +1197,12 @@ pub struct Loaded {
     pub exists: bool,
 }
 
-/// Read the config file (a missing file is an empty config, not an error). A
-/// file that exists but cannot be parsed IS an error, with the path in it:
+/// Read the config file (a missing file is an empty config, not an error).
+///
+/// A file that exists but cannot be parsed IS an error, with the path in it:
 /// silently ignoring it would run an extraction on settings the user did not
-/// choose.
-/// So is a missing file that `$HAUKSBEE_EXTRACT_CONFIG` names: never silent defaults.
+/// choose. So is a missing file that `$HAUKSBEE_EXTRACT_CONFIG` names: never
+/// silent defaults.
 ///
 /// # Errors
 ///
