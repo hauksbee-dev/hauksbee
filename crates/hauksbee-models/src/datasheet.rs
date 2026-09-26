@@ -2114,11 +2114,12 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              (negative for an enhancement PMOS), kp in A/V^2, and rd/rs are the drain and source \
              ohmic series resistances, not the channel. Small-VDS on-resistance here equals \
              1/(kp*(|VGS| - |vto|)) + rd + rs, so an RDS(on) typ row fixes kp and rd + rs \
-             together. With rows at two VGS values, solve kp from their difference and split the \
-             residue at the higher-VGS row evenly between rd and rs; with one row, take kp from \
-             gFS at its ID (kp = gFS^2 / (2*ID)) and put the residue in rd + rs, or, without \
-             gFS, derive kp from that row alone with rd = rs = 0. Comment each value `derived \
-             from RDS(on) row at VGS=..., ID=..., typ column`"
+             together; the law must give every RDS(on) row, a typ within 10% and a max-only row at \
+             or below its max. With rows at two VGS values, solve kp from their difference and \
+             split the residue at the higher-VGS row evenly between rd and rs; with one row, take \
+             kp from gFS at its ID (kp = gFS^2 / (2*ID)) and put the residue in rd + rs, or, \
+             without gFS, derive kp from that row alone with rd = rs = 0. Comment each value \
+             `derived from RDS(on) row at VGS=..., ID=..., typ column`"
         }
         "vreg" => {
             "fixed: vout, dropout_v, iq_a; adjustable (ADJ/FB pin): vref (the reference, \
@@ -3365,8 +3366,9 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
         bail!("reply for {part} has no model-error record (rule 0)");
     }
     supply_relative_rows(entry.source.as_ref())?;
-    if let Some([is, n, rs]) = crate::param_names::diode_refit(entry) {
-        bail!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}");
+    let refit = crate::param_names::diode_refit(entry).map(|[is, n, rs]| format!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}"));
+    if let Some(why) = refit.or_else(|| crate::param_names::ron_miss(entry)) {
+        bail!("{why}");
     }
     crate::validation::validate(entry).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
