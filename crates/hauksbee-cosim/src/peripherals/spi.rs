@@ -188,6 +188,7 @@ pub enum CsProvenance {
 impl CsProvenance {
     /// Lower-case tag for JSON coverage: `"spec"` | `"model-roles"` |
     /// `"bitbang-pins"`.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SpecDeclared => "spec",
@@ -198,6 +199,7 @@ impl CsProvenance {
 
     /// The clause a report appends after the `exact` tier, naming who supplied
     /// the CS net.
+    #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
             Self::SpecDeclared => "CS net declared by the spec",
@@ -233,6 +235,7 @@ pub enum SpiFramingMode {
 
 impl SpiFramingMode {
     /// Lower-case tag for JSON coverage: `"exact"` | `"backend"` | `"heuristic"`.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Exact(_) => "exact",
@@ -244,6 +247,7 @@ impl SpiFramingMode {
     /// Where the CS net came from, on the exact tier only. `None` on the backend
     /// tier (the emulator framed it, no net was resolved) and on the heuristic
     /// tier (there was no net to resolve).
+    #[must_use]
     pub const fn cs_provenance(self) -> Option<CsProvenance> {
         match self {
             Self::Exact(p) => Some(p),
@@ -318,6 +322,7 @@ pub struct SpiBus {
 }
 
 impl SpiBus {
+    #[must_use]
     pub fn new(id: &str, slave: Box<dyn SpiSlave>) -> Self {
         let spi_mode = slave.spi_mode();
         Self {
@@ -338,11 +343,13 @@ impl SpiBus {
     /// The declared SPI clock mode (0..=3) of this bus's slave, cached from
     /// [`SpiSlave::spi_mode`] at construction. Consumed by the bit-banged SPI
     /// responder to time its sample/shift edges.
+    #[must_use]
     pub const fn spi_mode(&self) -> u8 {
         self.spi_mode
     }
 
     /// The MCU pin driving this slave's chip-select, if resolved.
+    #[must_use]
     pub const fn cs_pin(&self) -> Option<(char, u8)> {
         self.cs_pin
     }
@@ -368,11 +375,13 @@ impl SpiBus {
     /// Whether this bus's chip-select is currently asserted. The scheduler's
     /// shared `on_spi` handler routes a byte to the selected bus when more than
     /// one SPI slave is on the controller.
+    #[must_use]
     pub const fn is_selected(&self) -> bool {
         self.selected
     }
 
     /// Which framing tier this bus is actually running on, for coverage.
+    #[must_use]
     pub const fn framing_mode(&self) -> SpiFramingMode {
         if self.backend_deselect_seen {
             SpiFramingMode::Backend
@@ -388,6 +397,7 @@ impl SpiBus {
     /// the chunk-boundary deselect heuristic to it, since doing so would truncate a
     /// transaction that legitimately spans a chunk boundary (failure mode
     /// b: the debug warning below must stop firing on these buses).
+    #[must_use]
     pub const fn frames_itself(&self) -> bool {
         self.cs_pin.is_some() || self.backend_deselect_seen
     }
@@ -409,6 +419,7 @@ impl SpiBus {
         self.powered = powered;
     }
 
+    #[must_use]
     pub const fn powered(&self) -> bool {
         self.powered
     }
@@ -417,6 +428,7 @@ impl SpiBus {
         self.slave.take_activity()
     }
 
+    #[must_use]
     pub fn low_power_mode(&self) -> bool {
         self.slave.low_power_mode()
     }
@@ -460,15 +472,18 @@ impl SpiBus {
     /// True if the active slave is partway through a transaction. See
     /// [`SpiSlave::mid_transaction`]; used for the scheduler's debug-time
     /// chunk-boundary sanity check.
+    #[must_use]
     pub fn slave_mid_transaction(&self) -> bool {
         self.slave.mid_transaction()
     }
 
     /// The bus identifier (the reference designator passed to [`SpiBus::new`]).
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
 
+    #[must_use]
     pub fn slave<T: 'static>(&self) -> Option<&T> {
         self.slave.as_any().downcast_ref::<T>()
     }
@@ -529,6 +544,7 @@ enum SpiCmd {
 }
 
 impl Spi25Eeprom {
+    #[must_use]
     pub fn new(size: usize) -> Self {
         Self {
             mem: vec![0xFF; size.max(1)],
@@ -539,10 +555,12 @@ impl Spi25Eeprom {
         }
     }
 
+    #[must_use]
     pub fn contents(&self) -> &[u8] {
         &self.mem
     }
 
+    #[must_use]
     pub fn contains(&self, needle: &[u8]) -> bool {
         if needle.is_empty() {
             return true;
@@ -696,6 +714,7 @@ enum NorCmd {
 }
 
 impl SpiNorFlash {
+    #[must_use]
     pub fn new(
         size: usize,
         page_size: usize,
@@ -731,6 +750,7 @@ impl SpiNorFlash {
         }
     }
 
+    #[must_use]
     pub fn contents(&self) -> &[u8] {
         &self.mem
     }
@@ -945,6 +965,7 @@ pub struct Mcp3008 {
 }
 
 impl Mcp3008 {
+    #[must_use]
     pub const fn new(vref: f64) -> Self {
         Self {
             vref: vref.max(1e-6),
@@ -1170,7 +1191,10 @@ mod tests {
         let lo = bus.transfer(0x00);
         let counts = (u16::from(hi & 0x03) << 8) | u16::from(lo);
         // 2.5/5.0 * 1024 = 512.
-        assert!((i32::from(counts) - 512).abs() <= 1, "counts {counts} not ~512");
+        assert!(
+            (i32::from(counts) - 512).abs() <= 1,
+            "counts {counts} not ~512"
+        );
     }
 
     #[test]

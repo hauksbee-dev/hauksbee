@@ -157,6 +157,7 @@ pub enum ChunkFallbackMethod {
 
 impl ChunkFallbackMethod {
     /// Stable machine-readable name (serialized into the co-sim JSON).
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::ReducedStep => "reduced-step",
@@ -169,6 +170,7 @@ impl ChunkFallbackMethod {
     /// Qualitative numerical-fidelity context for this rung: it names the
     /// rung's algorithmic trade-off and points at the measured number, which
     /// lives on `FallbackWindow::error_estimate_v`.
+    #[must_use]
     pub const fn fidelity_note(&self) -> &'static str {
         match self {
             Self::ReducedStep => {
@@ -178,9 +180,7 @@ impl ChunkFallbackMethod {
                  state, from a companion re-solve at a shifted accuracy dial \
                  (absent when no companion converged)"
             }
-            Self::BackwardEuler
-            | Self::ColdStartBackwardEuler
-            | Self::SubdividedBackwardEuler => {
+            Self::BackwardEuler | Self::ColdStartBackwardEuler | Self::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
                  to the second-order primary solve; error_estimate_v carries \
@@ -719,6 +719,7 @@ pub struct ScopedMcuSubstitution {
 }
 
 impl ScopedMcuSubstitution {
+    #[must_use]
     pub fn new(event: McuSubstitution, subject: String) -> Self {
         let assumption = Assumption::substitute_model_for_component(
             AssumptionSource::Scheduler,
@@ -735,16 +736,19 @@ impl ScopedMcuSubstitution {
     }
 
     /// The presentation event paired with this exact occurrence.
+    #[must_use]
     pub const fn event(&self) -> &McuSubstitution {
         &self.event
     }
 
     /// The opaque board-occurrence subject used for causal traversal.
+    #[must_use]
     pub fn subject(&self) -> &str {
         &self.subject
     }
 
     /// The substitution assumption constructed from the paired event/subject.
+    #[must_use]
     pub const fn assumption(&self) -> &Assumption {
         &self.assumption
     }
@@ -766,6 +770,7 @@ pub struct UnexercisedBus {
 
 impl UnexercisedBus {
     /// The one-line warning every surface emits for this device.
+    #[must_use]
     pub fn message(&self) -> String {
         let on = match &self.controller {
             Some(c) => format!(" (bound to controller '{c}')"),
@@ -804,6 +809,7 @@ pub struct AdcDrop {
 
 impl AdcDrop {
     /// The one-line warning every surface emits for this channel.
+    #[must_use]
     pub fn message(&self) -> String {
         let parts = if self.parts.is_empty() {
             String::new()
@@ -832,12 +838,14 @@ impl AdcDrop {
 /// UNCHANGED. Two surfaces wording one coverage hole differently is the failure
 /// this shared formatter exists to prevent, so nothing here may paraphrase it;
 /// the only thing added is which MCU it is about.
+#[must_use]
 pub fn watchdog_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
 /// The same, for an entry of [`Scheduler::timing_limitations`]: the backend's
 /// whole sentence, unchanged, prefixed only with which MCU it is about.
+#[must_use]
 pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
@@ -847,6 +855,7 @@ pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
 /// actually run, and whether the stamps are cycle-exact or poll-boundary.
 /// Shared so no surface words one core's resolution two ways. The leading
 /// indent belongs to the text table and is added there, not here.
+#[must_use]
 pub fn timing_coverage_line(t: &TimingCoverage) -> String {
     format!(
         "{} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; \
@@ -866,6 +875,7 @@ pub fn timing_coverage_line(t: &TimingCoverage) -> String {
 
 /// The one-line finding every surface emits for an entry of
 /// [`Scheduler::watchdog_resets`].
+#[must_use]
 pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
     let plural = if resets == 1 { "" } else { "s" };
     format!(
@@ -883,6 +893,7 @@ const UNVERIFIED_HEADROOM: &str = "; UNVERIFIED HEADROOM: the model has no dropo
 /// so those two cannot drift apart. Each is a claim the run cannot fully back:
 /// a systematic time bias on a core, or an ideal setpoint with no proven input
 /// headroom standing in for a simulated result.
+#[must_use]
 pub fn coverage_limitation_messages(scheduler: &Scheduler) -> Vec<String> {
     let limitations = scheduler.watchdog_limitations();
     let resets = scheduler.watchdog_resets();
@@ -947,6 +958,7 @@ fn fmt_seconds(s: f64) -> String {
 
 impl ShortPulse {
     /// The one-line warning every surface emits for this net.
+    #[must_use]
     pub fn message(&self) -> String {
         let suggest_us = (self.pulse_s * 1e6 / 2.0).max(0.1);
         format!(
@@ -1012,6 +1024,7 @@ pub struct DriverContention {
 
 impl DriverContention {
     /// The one-line finding every surface but hauksbee-ci emits for this net.
+    #[must_use]
     pub fn message(&self) -> String {
         format!(
             "co-sim: driver contention on net '{}' from t={:.6}s: firmware configured \
@@ -1040,6 +1053,7 @@ impl McuSubstitution {
     /// ends with the actionable "here is how to model the real part exactly",
     /// adding a chip is a two-file, no-recompile recipe, so a substitution should
     /// point the user straight at it rather than leave them stuck on a substitute.
+    #[must_use]
     pub fn message(&self) -> String {
         format!(
             "co-sim: {} requested {} but it is modelled as an {} core; \
@@ -1110,6 +1124,7 @@ impl NetStat {
     /// `NetStat` literal directly; this exposes just enough for those tests
     /// (they live in `hauksbee-engine`, so it cannot be `cfg(test)`).
     #[doc(hidden)]
+    #[must_use]
     pub fn with_toggles(toggles: u64) -> Self {
         Self {
             toggles,
@@ -1120,6 +1135,7 @@ impl NetStat {
     /// Test constructor with an explicit voltage range, for the activity-ranking
     /// tie-break (equal toggles, differing swing) the web/CLI/JSON tables share.
     #[doc(hidden)]
+    #[must_use]
     pub fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
         Self {
             toggles,
@@ -2257,11 +2273,13 @@ impl Scheduler {
 
     /// Chip-substitution events detected at build time. Empty when every
     /// instantiated MCU was modelled by its exact requested part.
+    #[must_use]
     pub fn substitutions(&self) -> &[McuSubstitution] {
         &self.substitutions
     }
 
     /// Substitution events paired with their exact board-occurrence evidence.
+    #[must_use]
     pub fn scoped_substitutions(&self) -> &[ScopedMcuSubstitution] {
         &self.scoped_substitutions
     }
@@ -2279,6 +2297,7 @@ impl Scheduler {
     ///
     /// Empty on any board where nothing contests a net, which is every ordinary
     /// board, so this costs one allocation and no notes in the common case.
+    #[must_use]
     pub fn drive_conflicts(&self) -> Vec<String> {
         let mut out = Vec::new();
         for c in hauksbee_solve::blame::source_conflicts(&self.circuit) {
@@ -2320,6 +2339,7 @@ impl Scheduler {
 
     /// Bus peripherals attached on a platform that models no matching bus
     /// controller: never exercised, recorded at attach time.
+    #[must_use]
     pub fn unexercised_buses(&self) -> &[UnexercisedBus] {
         &self.unexercised_buses
     }
@@ -2337,6 +2357,7 @@ impl Scheduler {
     /// other, observed MCU driver is actively pushing on is excluded too: that
     /// reading is a real driven measurement. Recomputed per frame, so the flag
     /// clears the moment the pin first reports a level.
+    #[must_use]
     pub fn unobserved_drive_nets(&self) -> Vec<String> {
         let driven: std::collections::HashSet<u32> = self
             .mcus
@@ -2363,6 +2384,7 @@ impl Scheduler {
     /// Populated by the run itself (a drop is recorded when the scheduler's
     /// per-chunk push hits the backend's unmapped path), so query it after
     /// the co-sim, deterministic ordering by (mcu, channel).
+    #[must_use]
     pub fn adc_dropped(&self) -> Vec<AdcDrop> {
         let node_names: HashMap<u32, &String> = self
             .net_nodes
@@ -2408,6 +2430,7 @@ impl Scheduler {
     /// Host serial bytes not delivered to each MCU's UART, whether due to a
     /// pending-buffer overflow or an external backend transport/configuration
     /// failure. Zero everywhere on a healthy run. Ordered by MCU reference.
+    #[must_use]
     pub fn uart_rx_overflow(&self) -> Vec<(String, u64)> {
         self.per_mcu(|core| Some(core.uart_rx_overflow()).filter(|&n| n > 0))
     }
@@ -2415,6 +2438,7 @@ impl Scheduler {
     /// Host serial bytes accepted by a backend but not yet presented to its
     /// emulated UART. A non-empty result at session teardown is undelivered
     /// input, even when the backend's overflow count is zero.
+    #[must_use]
     pub fn uart_rx_pending(&self) -> Vec<(String, usize)> {
         self.per_mcu(|core| Some(core.uart_rx_pending()).filter(|&n| n > 0))
     }
@@ -2430,6 +2454,7 @@ impl Scheduler {
     /// [`watchdog_limitation_message`]. Backends whose armed, never-fed watchdog
     /// reboots the core the way silicon does (simavr) are absent: the silence is
     /// what makes the warning mean something. Ordered by MCU reference.
+    #[must_use]
     pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
         self.per_mcu(|core| core.watchdog_limitation())
     }
@@ -2443,6 +2468,7 @@ impl Scheduler {
     /// verbatim through [`timing_limitation_message`]. Clock-truth-gated
     /// backends are absent: the silence is the claim the gate measures. Ordered
     /// by MCU reference.
+    #[must_use]
     pub fn timing_limitations(&self) -> Vec<(String, String)> {
         self.per_mcu(|core| core.timing_limitation())
     }
@@ -2453,6 +2479,7 @@ impl Scheduler {
     /// behaviour it observed belongs to a rebooted core. Read together with
     /// [`Scheduler::watchdog_limitations`], since a backend that cannot reboot
     /// at all reports zero here and says so there. Ordered by MCU reference.
+    #[must_use]
     pub fn watchdog_resets(&self) -> Vec<(String, u64)> {
         self.per_mcu(|core| Some(core.watchdog_resets()).filter(|&n| n > 0))
     }
@@ -2500,6 +2527,7 @@ impl Scheduler {
     /// once and HELD (e.g. a boot-gate firmware that sets a control line high and
     /// leaves it), which contributes zero net transitions yet clearly ran. Keyed
     /// on `last_levels`, which is populated only from firmware pin-change edges.
+    #[must_use]
     pub fn any_gpio_driven(&self) -> bool {
         self.mcus.iter().any(|m| !m.last_levels.is_empty())
     }
@@ -2768,6 +2796,7 @@ impl Scheduler {
     /// pins. Input pins resolve too: every wired digital-capable pin gets a
     /// (possibly tri-stated) GPIO driver, so a MISO/SDA-style read pin carries
     /// the mapping even though the firmware never drives it.
+    #[must_use]
     pub fn mcu_pin_for_net(&self, net: &str) -> Option<(char, u8)> {
         let node = *self.net_nodes.get(net)?;
         self.pin_driving_node(node)
@@ -2778,6 +2807,7 @@ impl Scheduler {
     /// resolution the binder uses to populate `cs_pin`, and the same
     /// net-to-driving-pin trace the 74HC595 chain wiring performs to find its
     /// SRCLK/RCLK/SER pins.
+    #[must_use]
     pub fn pin_driving_node(&self, node: NodeId) -> Option<(char, u8)> {
         // `gpio_drivers` is a HashMap with randomized iteration order, and more
         // than one of an MCU's pins can legitimately sit on `node` (a
@@ -2796,6 +2826,7 @@ impl Scheduler {
     /// every attached SPI bus. A consumer reads this to know whether each
     /// slave's transaction boundaries are real (`exact`/`backend`) or guessed
     /// (`heuristic`).
+    #[must_use]
     pub fn spi_framing_modes(&self) -> Vec<(String, SpiFramingMode)> {
         self.spi_buses
             .iter()
@@ -2812,6 +2843,7 @@ impl Scheduler {
     /// [`Self::attach_spi_bus_on`]. Buses attached via the controller-agnostic
     /// [`Self::attach_spi_bus`] are not findable by name (they carry no controller
     /// key in the map).
+    #[must_use]
     pub fn spi_bus_for_controller(&self, controller: &str) -> Option<&Arc<Mutex<SpiBus>>> {
         self.spi_controller_map.get(controller)
     }
@@ -2836,11 +2868,13 @@ impl Scheduler {
     }
 
     /// Borrow the attached I2C buses (for assertions / sweeps).
+    #[must_use]
     pub fn i2c_buses(&self) -> &[Arc<Mutex<I2cBus>>] {
         &self.i2c_buses
     }
 
     /// Borrow the attached SPI buses.
+    #[must_use]
     pub fn spi_buses(&self) -> &[Arc<Mutex<SpiBus>>] {
         &self.spi_buses
     }
@@ -2852,6 +2886,7 @@ impl Scheduler {
     }
 
     /// (id, kind) of every attached peripheral and bus, for board_info.
+    #[must_use]
     pub fn peripheral_infos(&self) -> Vec<(String, String)> {
         use crate::peripherals::Peripheral as _;
         let mut out: Vec<(String, String)> = self
@@ -2872,6 +2907,7 @@ impl Scheduler {
     }
 
     /// Peripheral state map, keyed by id, for component-state frames.
+    #[must_use]
     pub fn peripheral_states(&self) -> HashMap<String, HashMap<String, f64>> {
         let mut m = self.peripherals.states();
         use crate::peripherals::Peripheral as _;
@@ -2894,11 +2930,13 @@ impl Scheduler {
     }
 
     /// Number of live MCU cores.
+    #[must_use]
     pub const fn mcu_count(&self) -> usize {
         self.mcus.len()
     }
 
     /// Reference strings of the live MCUs (for serial routing).
+    #[must_use]
     pub fn mcu_refs(&self) -> Vec<String> {
         self.mcus
             .iter()
@@ -2909,6 +2947,7 @@ impl Scheduler {
     /// `(reference, backend, requested_part)` for each live MCU, in board order.
     /// The co-sim summary reads this to report what part the board
     /// asked for alongside the backend that actually ran it.
+    #[must_use]
     pub fn mcu_identities(&self) -> Vec<(String, String, String)> {
         self.mcus
             .iter()
@@ -2930,6 +2969,7 @@ impl Scheduler {
     /// co-sim should coarsen `chunk_s` to a few milliseconds, the way the proven
     /// QEMU integration tests do, so the wall cost is the emulator's, not the
     /// chunk count's.
+    #[must_use]
     pub fn has_external_backend(&self) -> bool {
         self.mcus
             .iter()
@@ -2942,6 +2982,7 @@ impl Scheduler {
     /// Chunk-sampled logic gets one row: its outputs follow inputs sampled at
     /// the previous chunk boundary, so an edge lands up to one chunk late and
     /// the datasheet propagation delay is not applied.
+    #[must_use]
     pub fn timing_coverage(&self) -> Vec<TimingCoverage> {
         let logic = self.chunk_sampled_logic();
         let logic_row = (!logic.is_empty()).then(|| TimingCoverage {
@@ -2980,6 +3021,7 @@ impl Scheduler {
     /// Firmware-driven nets use at least the ordered MCU edge count, preserving
     /// sub-chunk pulses. Analog-only nets retain the settled-voltage count. The
     /// maximum avoids double-counting an edge also seen at a chunk boundary.
+    #[must_use]
     pub fn toggle_counts(&self) -> HashMap<String, u64> {
         let mut counts: HashMap<String, u64> = self
             .stats
@@ -2994,6 +3036,7 @@ impl Scheduler {
     }
 
     /// Runtime timing/replay limits reached by this scheduler run.
+    #[must_use]
     pub fn timing_refusals(&self) -> &[String] {
         &self.timing_refusals
     }
@@ -3071,6 +3114,7 @@ impl Scheduler {
     /// OR held LOW") rather than assert Hi-Z. Vacuously true with no MCUs
     /// (there is no pin whose direction could be misread), matching the old
     /// `!has_external_backend()` proxy this replaces.
+    #[must_use]
     pub fn drive_direction_observable(&self) -> bool {
         self.mcus
             .iter()
@@ -3566,6 +3610,7 @@ impl Scheduler {
     }
 
     /// Every regulator whose output (and what it powers) is invalid this run.
+    #[must_use]
     pub fn regulation_taint(&self) -> &[RegulationTaint] {
         &self.regulation
     }
@@ -3751,6 +3796,7 @@ impl Scheduler {
 
     /// Live readout per behavioural device: (reference, state, converter input
     /// current A, converter input limit A). For diagnostics / frames / tests.
+    #[must_use]
     pub fn behavioral_states(&self) -> Vec<(String, String, Option<f64>, Option<f64>)> {
         self.behavioral
             .iter()
@@ -3792,6 +3838,7 @@ impl Scheduler {
     /// (e.g. the LTC6803 balancer-leak current). `None` if absent. An implicit
     /// law is evaluated at the last solved node voltages, which is the current
     /// the solver stamped there.
+    #[must_use]
     pub fn behavioral_law_value(&self, reference: &str, law: &str) -> Option<f64> {
         let d = self.behavioral.iter().find(|d| d.reference == reference)?;
         let node_v = |n: NodeId| self.node_volts.get(n.0 as usize).copied().unwrap_or(0.0);
@@ -4589,6 +4636,7 @@ impl Scheduler {
     }
 
     /// Current sim time (s).
+    #[must_use]
     pub const fn sim_time(&self) -> f64 {
         self.sim_time
     }
@@ -4596,12 +4644,14 @@ impl Scheduler {
     /// Number of chunks this run whose analog transient solve failed to converge.
     /// Zero on a clean run. A non-zero count means at least one window held stale
     /// voltages and cannot vouch for analog-derived findings there.
+    #[must_use]
     pub const fn failed_chunk_count(&self) -> u64 {
         self.failed_chunks
     }
 
     /// The sim-time windows `[start_s, end_s)` where the analog solve failed,
     /// merged where consecutive. Empty on a clean run.
+    #[must_use]
     pub fn failed_windows(&self) -> &[(f64, f64)] {
         &self.failed_windows
     }
@@ -4609,6 +4659,7 @@ impl Scheduler {
     /// The solver's message from the most recent non-convergent chunk, or
     /// `None` if every chunk this run solved. Pairs with `failed_windows`, so
     /// a failed span carries its cause, not just its extent.
+    #[must_use]
     pub fn last_solve_error(&self) -> Option<&str> {
         self.last_solve_error.as_deref()
     }
@@ -4618,12 +4669,14 @@ impl Scheduler {
     /// that refused to settle, the devices on it, and any element whose
     /// conductance is outside the board's own distribution. Empty on a
     /// clean run.
+    #[must_use]
     pub fn failed_window_reasons(&self) -> &[String] {
         &self.failed_window_reasons
     }
 
     /// The failed windows with their diagnoses, formatted one per line, ready
     /// to print. Empty on a clean run.
+    #[must_use]
     pub fn failed_window_diagnoses(&self) -> Vec<String> {
         self.failed_windows
             .iter()
@@ -4638,6 +4691,7 @@ impl Scheduler {
     /// toward neither `failed_chunk_count` nor the strict abort), but their
     /// numbers were produced by a second-class method whose known numerical
     /// trade-off is recorded per window (`fallback_windows`).
+    #[must_use]
     pub const fn fallback_chunk_count(&self) -> u64 {
         self.fallback_chunks
     }
@@ -4646,6 +4700,7 @@ impl Scheduler {
     /// the rung that produced each and its measured chunk-end error estimate,
     /// merged where consecutive with the same rung. Empty on a run the primary
     /// path carried whole.
+    #[must_use]
     pub fn fallback_windows(&self) -> &[FallbackWindow] {
         &self.fallback_windows
     }
@@ -4690,6 +4745,7 @@ impl Scheduler {
     /// refused to advance (`run_micros` errored), so the digital side of that
     /// chunk never ran. Either way the co-sim cannot vouch for that window.
     /// Drives `analog_valid` in coverage and the co-sim JSON.
+    #[must_use]
     pub const fn analog_valid(&self) -> bool {
         self.failed_chunks == 0
     }
@@ -4697,6 +4753,7 @@ impl Scheduler {
     /// True once the analog solve failed [`STRICT_CONSECUTIVE_FAILED_ABORT`]
     /// chunks in a row at any point this run. A strict headless run (`--strict`)
     /// or hauksbee-ci must abort (exit 3) rather than complete a fake-quiet run.
+    #[must_use]
     pub const fn analog_abort_tripped(&self) -> bool {
         self.max_consecutive_failed_chunks >= STRICT_CONSECUTIVE_FAILED_ABORT
     }
@@ -4708,6 +4765,7 @@ impl Scheduler {
 
     /// The net names currently carrying a forced post-solve voltage override,
     /// sorted for deterministic output. Empty in every ordinary run.
+    #[must_use]
     pub fn forced_net_names(&self) -> Vec<String> {
         // Keys are NodeId indices (see force_net_voltage_windowed), so the
         // circuit's own reverse map is the resolution.
@@ -4901,6 +4959,7 @@ impl Scheduler {
     }
 
     /// Digital reset failure, separate from the retained analog evidence.
+    #[must_use]
     pub fn reset_failure(&self) -> Option<&str> {
         self.reset_failure.as_deref()
     }
@@ -5018,11 +5077,13 @@ impl Scheduler {
     /// Per-device peak |current| (A) over the last completed frame's sub-chunks,
     /// keyed by reference designator. Captures intra-frame surges the final-chunk
     /// snapshot misses.
+    #[must_use]
     pub const fn frame_peak_current(&self) -> &HashMap<String, f64> {
         &self.frame_peak_current
     }
 
     /// Per-net (min_v, max_v) over the last completed frame's sub-chunks.
+    #[must_use]
     pub const fn frame_v_extremes(&self) -> &HashMap<String, (f64, f64)> {
         &self.frame_v_extremes
     }
@@ -5130,6 +5191,7 @@ impl Scheduler {
     }
 
     /// Current voltage of a net by name.
+    #[must_use]
     pub fn net_voltage(&self, net: &str) -> Option<f64> {
         let node = self.net_nodes.get(net)?;
         self.node_volts.get(node.0 as usize).copied()
@@ -5138,6 +5200,7 @@ impl Scheduler {
     /// The (min, max) a net covered across the run's converged chunks, the
     /// floor counted once the board is powered and the ceiling throughout (a
     /// power-on overshoot is real). `None` before any powered sample.
+    #[must_use]
     pub fn net_range(&self, net: &str) -> Option<(f64, f64)> {
         let st = self.stats.get(net)?;
         (st.powered_min_v <= st.max_v).then_some((st.powered_min_v, st.max_v))
@@ -5305,17 +5368,20 @@ impl Scheduler {
 
     /// Sub-chunk GPIO pulse warnings raised this run, one per
     /// offending net, in detection order.
+    #[must_use]
     pub fn short_pulses(&self) -> &[ShortPulse] {
         &self.short_pulses
     }
 
     /// Runtime driver-contention findings raised this run (the model-vs-MCU
     /// case the static lint cannot reach), one per offending net.
+    #[must_use]
     pub fn driver_contentions(&self) -> &[DriverContention] {
         &self.contentions
     }
 
     /// Snapshot every net's current voltage.
+    #[must_use]
     pub fn net_voltages(&self) -> HashMap<String, f64> {
         self.net_nodes
             .iter()
@@ -5399,6 +5465,7 @@ impl Scheduler {
     /// physically reaching a clear logic-high (>= 3.0 V, the floor
     /// `update_stats` uses) with at most one rising edge: driven once and held.
     /// Many edges is SPI / UART / PWM / a blinking LED, not a control hold.
+    #[must_use]
     pub fn firmware_held_high_nets(&self) -> Vec<String> {
         self.gpio_nets_where(|_, m, pin, name| {
             m.last_levels.get(&pin) == Some(&true)
@@ -5415,6 +5482,7 @@ impl Scheduler {
     /// reaches its level because a pull-up holds it there has NOT been shown to
     /// boot, and calling that a pass vouches for firmware behaviour that never
     /// ran.
+    #[must_use]
     pub fn level_provenance(&self, net: &str) -> LevelProvenance {
         if self.firmware_driven_nets().iter().any(|n| n == net) {
             return LevelProvenance::FirmwareDriven;
@@ -5440,6 +5508,7 @@ impl Scheduler {
     /// The wording is the point. "Driven to 3.3 V at 1.00 ms" is a claim about
     /// firmware; when no firmware drove the net, the honest sentence names the
     /// passive network instead, and when the backend cannot tell, it says that.
+    #[must_use]
     pub fn level_reached_clause(&self, net: &str, volts: f64, t_ms: f64) -> String {
         match self.level_provenance(net) {
             LevelProvenance::FirmwareDriven => format!(
@@ -5464,6 +5533,7 @@ impl Scheduler {
     /// driven LOW, not floating). A net NOT in this set was never driven by any
     /// MCU: it floats. Used by the boot-state panel to classify each gate as
     /// driven-high / driven-low / floating without enabling any circuit driver.
+    #[must_use]
     pub fn firmware_driven_nets(&self) -> Vec<String> {
         let configured = self.configured_output_pins();
         self.gpio_nets_where(|mi, m, pin, _| {
@@ -5475,12 +5545,14 @@ impl Scheduler {
     /// (DDR set, by latest direction). A net high in this set is a strong
     /// push-pull drive; a net high but NOT in it is a weak internal pull-up.
     /// Observation metadata (from `pins_configured_output`), never a drive.
+    #[must_use]
     pub fn firmware_output_configured_nets(&self) -> Vec<String> {
         let configured = self.configured_output_pins();
         self.gpio_nets_where(|mi, _, pin, _| configured[mi].contains(&pin))
     }
 
     /// Last GPIO levels per MCU, for component-state frames.
+    #[must_use]
     pub fn mcu_states(&self) -> HashMap<String, HashMap<String, f64>> {
         let mut out = HashMap::new();
         for m in &self.mcus {
@@ -5740,6 +5812,7 @@ impl Scheduler {
     /// Micro-ticks replayed through the generalized digital path in the last
     /// chunk (one per distinct edge-group cycle). A diagnostic that a bit-banged
     /// burst produced N ordered micro-ticks rather than one collapsed level.
+    #[must_use]
     pub const fn last_replay_microticks(&self) -> usize {
         self.last_replay_microticks
     }
@@ -5749,6 +5822,7 @@ impl Scheduler {
     /// count. Empty when no chain is clocked by the MCU (the once-per-chunk
     /// path handles it). Exposed for diagnostics and co-sim tests of the chain
     /// wiring.
+    #[must_use]
     pub fn hc595_chain_pins(&self) -> Vec<Hc595ChainPins> {
         self.chains
             .iter()
@@ -5759,6 +5833,7 @@ impl Scheduler {
     /// Per edge-driven 74HC165 read chain, the MCU GPIO `(port,bit)` bound to
     /// its PL, CLK, and MISO input, plus chip count. Empty when no MCU-clocked
     /// 165 chain was identified. For diagnostics and read-chain co-sim tests.
+    #[must_use]
     pub fn hc165_chain_pins(&self) -> Vec<(GpioPin, GpioPin, GpioPin, usize)> {
         self.hc165_chains
             .iter()
@@ -5771,6 +5846,7 @@ impl Scheduler {
 
     /// The last word each 74HC165 read chain captured on its most recent PL
     /// load (MSB-first, as the firmware accumulates it). For diagnostics/tests.
+    #[must_use]
     pub fn hc165_loaded_words(&self) -> Vec<u16> {
         self.hc165_chains
             .iter()
@@ -5779,6 +5855,7 @@ impl Scheduler {
     }
 
     /// Digital component register states, for component-state frames.
+    #[must_use]
     pub fn digital_states(&self) -> HashMap<String, HashMap<String, f64>> {
         self.digital
             .iter()
@@ -5810,6 +5887,7 @@ impl Scheduler {
     }
 
     /// Live supply readout per net: (kind label, last rail current A, SoC).
+    #[must_use]
     pub fn supply_states(&self) -> HashMap<String, (String, f64, f64)> {
         self.supplies
             .iter()
@@ -5827,12 +5905,14 @@ impl Scheduler {
     }
 
     /// Live per-component stress fraction (0..1) for heat-mapping.
+    #[must_use]
     pub fn stress_states(&self) -> HashMap<String, f64> {
         self.stress.stress_by_ref().clone()
     }
 
     /// Live per-component estimated junction temperature (C) for the thermal
     /// view. Only populated for dissipating devices.
+    #[must_use]
     pub fn temp_states(&self) -> HashMap<String, f64> {
         self.stress.temp_by_ref().clone()
     }
@@ -5844,6 +5924,7 @@ impl Scheduler {
     }
 
     /// The configured ambient temperature (C).
+    #[must_use]
     pub const fn ambient_c(&self) -> f64 {
         self.stress.ambient_c
     }
@@ -6154,6 +6235,7 @@ fn is_direct_supply_role(role: &str) -> bool {
 /// rather than inherit capabilities it does not have. Both hauksbee-ci's
 /// scaffold gate and the runtime diagnosis route through this one predicate
 /// so the two cannot drift (review finding on the ARM-honesty commit).
+#[must_use]
 pub fn backend_is_external(backend: &str) -> bool {
     !backend.starts_with("simavr")
 }
@@ -6401,6 +6483,7 @@ pub enum LevelProvenance {
 ///     GPIO port carries a direction-register map (`dir = {...}`, verified
 ///     per-part; see `db/mcu/*.soc.toml`);
 ///   - anything else (QEMU, unknown futures), false, fail-safe.
+#[must_use]
 pub fn backend_reports_drive_direction(backend: &str) -> bool {
     if !backend_is_external(backend) {
         return true;

@@ -125,11 +125,15 @@ fn encode(enc: Encoding, value: f64) -> Vec<u8> {
             v.to_le_bytes().to_vec()
         }
         Encoding::I16Be => {
-            let v = value.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+            let v = value
+                .round()
+                .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
             v.to_be_bytes().to_vec()
         }
         Encoding::I16Le => {
-            let v = value.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+            let v = value
+                .round()
+                .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
             v.to_le_bytes().to_vec()
         }
         Encoding::Q71Be => {
@@ -517,11 +521,13 @@ impl RegisterMapSensor {
     }
 
     /// Sensor name (from the spec).
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Which bus the spec declares.
+    #[must_use]
     pub const fn bus(&self) -> Bus {
         self.bus
     }
@@ -535,6 +541,7 @@ impl RegisterMapSensor {
     }
 
     /// Read an input's current value (for assertions).
+    #[must_use]
     pub fn input(&self, name: &str) -> Option<f64> {
         self.inputs.get(name).copied()
     }
@@ -573,11 +580,13 @@ impl RegisterMapSensor {
 
     /// A stored write variable (a write register's `store` or one of its
     /// extracted fields), for assertions.
+    #[must_use]
     pub fn store(&self, name: &str) -> Option<f64> {
         self.stores.get(name).copied()
     }
 
     /// One channel's current value of a per-channel state variable.
+    #[must_use]
     pub fn channel_state(&self, name: &str, channel: usize) -> Option<f64> {
         self.chan_state
             .get(name)
@@ -612,6 +621,7 @@ impl RegisterMapSensor {
 
     /// Evaluate an output law's current voltage by name (whether or not a
     /// driver is bound).
+    #[must_use]
     pub fn output_volts(&self, name: &str) -> Option<f64> {
         self.outputs
             .iter()
@@ -621,6 +631,7 @@ impl RegisterMapSensor {
 
     /// Write bytes accepted but not decoded (undeclared command families,
     /// payload past a register's width, payload for a non-writable register).
+    #[must_use]
     pub const fn ignored_write_bytes(&self) -> u64 {
         self.ignored_write_bytes
     }
@@ -778,6 +789,7 @@ impl RegisterMapSensor {
     /// datasheet register address (e.g. 0xD0) for an SPI sensor and still hit the
     /// post-mask key (0x50) the register is stored under.
     /// Public so tests can compare against a hand-coded model directly.
+    #[must_use]
     pub fn register_bytes(&self, addr: u8) -> Vec<u8> {
         let key = self.normalize_addr(addr);
         // Reads see the merged variables: physical inputs PLUS the stored
@@ -865,8 +877,9 @@ impl I2cSlave for RegisterMapSensor {
                                 // the channel cursor; not part of any group.
                                 if c.channel.source == ChannelSource::PrefixBits {
                                     let bits = c.channel.bits.expect("validated");
-                                    self.chan_cursor =
-                                        (extract_bits(bits, u32::from(data)) as usize) % self.channels;
+                                    self.chan_cursor = (extract_bits(bits, u32::from(data))
+                                        as usize)
+                                        % self.channels;
                                 }
                             } else {
                                 self.cmd_acc.push(data);

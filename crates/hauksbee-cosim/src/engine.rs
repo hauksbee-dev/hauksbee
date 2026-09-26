@@ -112,11 +112,13 @@ impl HauksbeeEngine {
     }
 
     /// The bind report for this engine's board.
+    #[must_use]
     pub const fn report(&self) -> &BindReport {
         &self.report_store
     }
 
     /// Direct access to the scheduler (headless stats, tests).
+    #[must_use]
     pub const fn scheduler(&self) -> &Scheduler {
         &self.sched
     }
@@ -159,6 +161,7 @@ impl HauksbeeEngine {
     }
 
     /// Current sim time (s).
+    #[must_use]
     pub const fn sim_time(&self) -> f64 {
         self.sched.sim_time()
     }
@@ -603,6 +606,7 @@ impl Engine for HauksbeeEngine {
 }
 
 /// Map a wire [`PowerSupplyConfig`] onto the engine's behavioral [`PowerSupply`].
+#[must_use]
 pub const fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
     match c {
         PowerSupplyConfig::Ideal { volts } => PowerSupply::Ideal { volts },
@@ -656,6 +660,7 @@ pub const fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
 }
 
 /// Map the engine's [`PowerSupply`] back to a wire [`PowerSupplyConfig`].
+#[must_use]
 pub const fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
     match s {
         PowerSupply::Ideal { volts } => PowerSupplyConfig::Ideal { volts: *volts },
@@ -707,6 +712,7 @@ pub const fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
 }
 
 /// Map the UI's [`SolverControls`] onto solver [`SolverOptions`].
+#[must_use]
 pub fn controls_to_options(c: &SolverControls) -> SolverOptions {
     let integration = match c.integration.as_str() {
         "gear2" => Integration::Gear2,

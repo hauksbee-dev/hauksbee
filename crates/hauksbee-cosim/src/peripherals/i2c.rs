@@ -115,6 +115,7 @@ pub struct I2cBus {
 }
 
 impl I2cBus {
+    #[must_use]
     pub fn new(id: &str) -> Self {
         Self {
             id: id.to_string(),
@@ -126,6 +127,7 @@ impl I2cBus {
         }
     }
 
+    #[must_use]
     pub fn with_slave(mut self, slave: Box<dyn I2cSlave>) -> Self {
         self.slaves.push(slave);
         self
@@ -136,6 +138,7 @@ impl I2cBus {
     }
 
     /// 7-bit addresses currently modeled on this bus.
+    #[must_use]
     pub fn addresses(&self) -> Vec<u8> {
         self.slaves.iter().map(|s| s.address()).collect()
     }
@@ -143,6 +146,7 @@ impl I2cBus {
     /// `(address, milli_celsius)` for every temperature sensor on the bus. Used by
     /// a backend (QEMU) that pushes the modeled temperature into its own emulated
     /// I2C device rather than serving bytes through the `on_i2c` callback.
+    #[must_use]
     pub fn temperature_sensors(&self) -> Vec<(u8, i32)> {
         self.slaves
             .iter()
@@ -219,6 +223,7 @@ impl I2cBus {
         self.powered = powered;
     }
 
+    #[must_use]
     pub const fn powered(&self) -> bool {
         self.powered
     }
@@ -263,6 +268,7 @@ impl I2cBus {
     }
 
     /// Borrow a concrete slave by address for assertions / temperature sweeps.
+    #[must_use]
     pub fn slave<T: 'static>(&self, addr: u8) -> Option<&T> {
         self.slaves
             .iter()
@@ -341,6 +347,7 @@ impl Eeprom24c {
     pub const DEFAULT_PAGE_SIZE: usize = 32;
 
     /// `size` is the total byte capacity (e.g. 4096 for a 24C32 = 32 kbit).
+    #[must_use]
     pub fn new(address: u8, size: usize) -> Self {
         Self {
             addr: address,
@@ -356,6 +363,7 @@ impl Eeprom24c {
 
     /// Select a one- or two-byte word-address phase. Refuse any other width
     /// rather than silently consuming the first firmware data byte as address.
+    #[must_use]
     pub fn with_word_address_bytes(mut self, bytes: u8) -> Self {
         assert!(
             matches!(bytes, 1 | 2),
@@ -368,6 +376,7 @@ impl Eeprom24c {
     /// Set the write-page size (bytes) for the modeled part. Must be a power of
     /// two (every 24Cxx page size is); a non-power-of-two or zero panics, since
     /// it describes an EEPROM that does not exist.
+    #[must_use]
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         assert!(
             page_size.is_power_of_two(),
@@ -378,11 +387,13 @@ impl Eeprom24c {
     }
 
     /// Read the backing memory (for assertions).
+    #[must_use]
     pub fn contents(&self) -> &[u8] {
         &self.mem
     }
 
     /// True if `needle` appears anywhere in the EEPROM contents.
+    #[must_use]
     pub fn contains(&self, needle: &[u8]) -> bool {
         if needle.is_empty() {
             return true;
@@ -444,7 +455,10 @@ impl I2cSlave for Eeprom24c {
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("ptr".into(), self.ptr as f64);
         m.insert("page_size".into(), self.page_size as f64);
-        m.insert("word_address_bytes".into(), f64::from(self.word_address_bytes));
+        m.insert(
+            "word_address_bytes".into(),
+            f64::from(self.word_address_bytes),
+        );
         m
     }
 
@@ -492,6 +506,7 @@ impl Lm75 {
     /// Default LM75 address with all address pins low is 0x48.
     pub const DEFAULT_ADDR: u8 = 0x48;
 
+    #[must_use]
     pub const fn new(address: u8, temp_c: f64) -> Self {
         Self {
             addr: address,
@@ -512,6 +527,7 @@ impl Lm75 {
         self.temp_c = t;
     }
 
+    #[must_use]
     pub const fn temp_c(&self) -> f64 {
         self.temp_c
     }

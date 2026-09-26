@@ -70,6 +70,7 @@ impl BusActivity {
         self.other_units = self.other_units.saturating_add(other.other_units);
     }
 
+    #[must_use]
     pub const fn is_idle(self) -> bool {
         self.read_units == 0 && self.write_units == 0 && self.other_units == 0
     }
@@ -101,6 +102,7 @@ impl<'a> TickCtx<'a> {
     }
 
     /// Voltage on a node from the last solve (0 if out of range).
+    #[must_use]
     pub fn volts(&self, node: NodeId) -> f64 {
         self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0)
     }
@@ -161,6 +163,7 @@ pub struct PeripheralSet {
 }
 
 impl PeripheralSet {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -171,10 +174,12 @@ impl PeripheralSet {
     }
 
     /// Number of attached peripherals.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.peripherals.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.peripherals.is_empty()
     }
@@ -232,6 +237,7 @@ impl PeripheralSet {
     }
 
     /// State of every peripheral, keyed by id, for frame reporting.
+    #[must_use]
     pub fn states(&self) -> HashMap<String, HashMap<String, f64>> {
         self.peripherals
             .iter()
@@ -240,6 +246,7 @@ impl PeripheralSet {
     }
 
     /// Find a peripheral by id and downcast to a concrete type.
+    #[must_use]
     pub fn get<T: 'static>(&self, id: &str) -> Option<&T> {
         self.peripherals
             .iter()

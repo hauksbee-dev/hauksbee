@@ -26,6 +26,7 @@ pub type Verdict = Result<f64, String>;
 /// adjustable regulator the source's `n` is ADJ or a private node, so the
 /// board return the card named is returned in its place: everything downstream
 /// measures the rail and its headroom against the same node.
+#[must_use]
 pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f64) {
     match &circuit.devices[reg.source.0 as usize] {
         Device::Vsource { p, n, kind, .. } => {
@@ -39,6 +40,7 @@ pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f
     }
 }
 
+#[must_use]
 pub fn headroom_ok(reg: &SimpleRegulator, headroom_v: f64) -> bool {
     // A datasheet-guaranteed row sits exactly on the bound (VI = VO + dropout),
     // and the solved input carries Newton residual, so a bare `>=` refuses a row
@@ -140,6 +142,7 @@ pub fn evaluate(
 
 /// The one disclosure every surface repeats. `revoked_at_s` marks a verdict
 /// from the post-chunk monitor (the full solve) rather than from [`evaluate`].
+#[must_use]
 pub fn reason(
     circuit: &Circuit,
     reg: &SimpleRegulator,
@@ -213,6 +216,7 @@ pub struct Walk {
 }
 
 impl Walk {
+    #[must_use]
     pub fn new(
         circuit: &Circuit,
         regs: &[SimpleRegulator],
@@ -258,6 +262,7 @@ impl Walk {
     }
 
     /// Everything regulator `reg`'s output can power.
+    #[must_use]
     pub fn regulator(&self, circuit: &Circuit, reg: &SimpleRegulator) -> Vec<NodeId> {
         let (p, n, _) = terminals(circuit, reg);
         let seed = |x: &NodeId| !self.stop.contains(x) || (*x == p && !p.is_ground());
@@ -288,6 +293,7 @@ impl Walk {
 pub const OPEN_DRIVER: &str = "has no model, so it is absent from the simulated circuit";
 
 /// The one disclosure every surface repeats for an open part that would drive.
+#[must_use]
 pub fn open_driver_reason(r: &str, v: &str, from: &str, nets: &[String]) -> String {
     let more = nets.len().saturating_sub(6);
     let mut list = nets[..nets.len() - more].join(", ");

@@ -65,6 +65,7 @@ pub struct InputDrive {
 }
 
 impl InputDrive {
+    #[must_use]
     pub const fn drive(pin: (char, u8), high: bool) -> Self {
         Self {
             pin,
@@ -72,6 +73,7 @@ impl InputDrive {
         }
     }
 
+    #[must_use]
     pub const fn release(pin: (char, u8)) -> Self {
         Self { pin, level: None }
     }
@@ -160,6 +162,7 @@ pub struct ResponderRegistry {
 }
 
 impl ResponderRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -292,10 +295,12 @@ impl ResponderRegistry {
         out
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.responders.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.responders.len()
     }
@@ -890,6 +895,7 @@ impl BitBangSpiResponder {
 
     /// True once a waveform or preview-contract violation disabled this
     /// responder for the rest of the run.
+    #[must_use]
     pub const fn faulted(&self) -> bool {
         self.faulted
     }

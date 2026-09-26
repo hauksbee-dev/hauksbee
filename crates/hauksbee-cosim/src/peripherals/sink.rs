@@ -95,6 +95,7 @@ pub struct VcdSink {
 impl VcdSink {
     /// Create a sink logging `nets` (name + resolved node), with default
     /// thresholds. `path` is where [`VcdSink::write`] dumps the trace.
+    #[must_use]
     pub fn new(id: &str, nets: Vec<(String, NodeId)>, path: Option<PathBuf>) -> Self {
         let logged = nets
             .into_iter()
@@ -118,6 +119,7 @@ impl VcdSink {
     }
 
     /// Number of recorded transitions (for assertions / tests).
+    #[must_use]
     pub fn transition_count(&self) -> usize {
         // The initial value dump every net emits at t=0 is not a transition,
         // regardless of its level, exclude it by timestamp only. The old
@@ -128,6 +130,7 @@ impl VcdSink {
     }
 
     /// Transitions recorded for a named net.
+    #[must_use]
     pub fn transitions_for(&self, net: &str) -> usize {
         let Some(code) = self
             .nets
@@ -146,6 +149,7 @@ impl VcdSink {
     }
 
     /// Render the VCD document as a string (gtkwave-compatible).
+    #[must_use]
     pub fn render(&self) -> String {
         let mut s = String::new();
         s.push_str("$date hauksbee $end\n");
@@ -282,7 +286,12 @@ mod tests {
         let mut volts = vec![0.0; c.node_count()];
         for step in 0..6 {
             volts[n.0 as usize] = if step % 2 == 0 { 0.0 } else { 5.0 };
-            sink.post_solve(&mut TickCtx::new(&mut c, &volts, f64::from(step) * 1e-4, 1e-4));
+            sink.post_solve(&mut TickCtx::new(
+                &mut c,
+                &volts,
+                f64::from(step) * 1e-4,
+                1e-4,
+            ));
         }
         // 6 samples alternating low/high -> 5 transitions after the initial.
         assert_eq!(sink.transitions_for("CLK"), 5, "expected 5 CLK edges");

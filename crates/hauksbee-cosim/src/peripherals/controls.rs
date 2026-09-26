@@ -565,6 +565,7 @@ fn stamp_driver(circuit: &mut Circuit, net: NodeId, tag: &str, v0: f64) -> Devic
 }
 
 /// Build a [`SourceKind`] PWL from `(t_s, value)` points.
+#[must_use]
 pub fn pwl(points: Vec<(f64, f64)>) -> SourceKind {
     SourceKind::Pwl(points.into_iter().map(|(t, v)| PwlPoint { t, v }).collect())
 }
