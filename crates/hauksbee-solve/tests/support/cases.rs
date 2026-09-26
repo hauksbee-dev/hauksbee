@@ -9,6 +9,7 @@
 use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity, SourceKind};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl};
 use hauksbee_testkit::circuits::{bjt, cap_ic, res, vdc, vswitch, GND};
+use std::fmt::Write as _;
 
 // --- the rectifier -----------------------------------------------------------
 
@@ -54,6 +55,7 @@ pub struct Synapse {
     pub membrane_nodes: Vec<String>,
 }
 
+#[allow(clippy::cast_precision_loss)] // block index k < n, tiny
 pub fn build_synapse_array(n: usize) -> Synapse {
     let mut c = Circuit::new();
     let vcc = c.node("vcc");
@@ -89,9 +91,10 @@ pub fn build_synapse_array(n: usize) -> Synapse {
                 period: 200e-6,
             },
         });
-        net.push_str(&format!(
-            "VP{k} ctrl{k} 0 PULSE(0 3 {delay:.6e} 10u 10u 50u 200u)\n"
-        ));
+        let _ = writeln!(
+            net,
+            "VP{k} ctrl{k} 0 PULSE(0 3 {delay:.6e} 10u 10u 50u 200u)"
+        );
 
         let sw = c.node(&format!("sw{k}"));
         vswitch(
@@ -103,28 +106,28 @@ pub fn build_synapse_array(n: usize) -> Synapse {
             (2.5, 0.5),
             (10.0, 1e9),
         );
-        net.push_str(&format!("S{k} vcc sw{k} ctrl{k} 0 SMOD\n"));
+        let _ = writeln!(net, "S{k} vcc sw{k} ctrl{k} 0 SMOD");
 
         let rref = c.node(&format!("ref{k}"));
         res(&mut c, &format!("RR{k}"), sw, rref, 10e3);
-        net.push_str(&format!("RR{k} sw{k} ref{k} 10k\n"));
+        let _ = writeln!(net, "RR{k} sw{k} ref{k} 10k");
 
         // Bleeder: keeps the mirror reference defined while the switch is open,
         // so the diode-connected base does not float and stall Newton.
         res(&mut c, &format!("RB{k}"), rref, GND, 1e6);
-        net.push_str(&format!("RB{k} ref{k} 0 1meg\n"));
+        let _ = writeln!(net, "RB{k} ref{k} 0 1meg");
 
         bjt(&mut c, &format!("Q1_{k}"), rref, rref, GND, &model);
-        net.push_str(&format!("Q1_{k} ref{k} ref{k} 0 QMOD\n"));
+        let _ = writeln!(net, "Q1_{k} ref{k} ref{k} 0 QMOD");
 
         let mem = c.node(&format!("mem{k}"));
         bjt(&mut c, &format!("Q2_{k}"), mem, rref, GND, &model);
-        net.push_str(&format!("Q2_{k} mem{k} ref{k} 0 QMOD\n"));
+        let _ = writeln!(net, "Q2_{k} mem{k} ref{k} 0 QMOD");
 
         res(&mut c, &format!("RM{k}"), vcc, mem, 47e3);
-        net.push_str(&format!("RM{k} vcc mem{k} 47k\n"));
+        let _ = writeln!(net, "RM{k} vcc mem{k} 47k");
         cap_ic(&mut c, &format!("CM{k}"), mem, GND, 1e-9, 5.0);
-        net.push_str(&format!("CM{k} mem{k} 0 1n IC=5\n"));
+        let _ = writeln!(net, "CM{k} mem{k} 0 1n IC=5");
         membrane_nodes.push(format!("mem{k}"));
     }
 

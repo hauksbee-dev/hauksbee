@@ -117,8 +117,8 @@ fn astable_fails_dc_but_runs_power_on() {
 
     // t=0 is a power-on rest state: every node starts at zero.
     for node in 0..c.node_count() {
-        assert_eq!(
-            wf.node_voltages[node][0], 0.0,
+        assert!(
+            wf.node_voltages[node][0] == 0.0,
             "power-on t=0 must be zero at node {node}"
         );
     }
@@ -275,7 +275,7 @@ fn run_staged_is_bitwise_deterministic() {
     // `absorbed` map carries seven entries whose iteration order sets device
     // push order in the consumer sub-circuit.
     let vals = [5.0, 1.2, 4.3, 0.6, 3.9, 2.1, 4.8];
-    for (k, &vv) in vals.iter().enumerate() {
+    for (k, &vv) in (0u32..).zip(&vals) {
         let v = c.node(&format!("vd{k}"));
         add_vdc(&mut c, &format!("VD{k}"), v, NodeId::GROUND, vv);
         let sel = c.node(&format!("sel{k}"));
@@ -284,7 +284,7 @@ fn run_staged_is_bitwise_deterministic() {
             &format!("Ra{k}"),
             v,
             sel,
-            1e3 * 0.2f64.mul_add(k as f64, 1.0),
+            1e3 * 0.2f64.mul_add(f64::from(k), 1.0),
         );
         add_resistor(&mut c, &format!("Rb{k}"), sel, NodeId::GROUND, 1e3);
         vswitch(
@@ -293,8 +293,8 @@ fn run_staged_is_bitwise_deterministic() {
             sup,
             out,
             (sel, NodeId::GROUND),
-            (0.1f64.mul_add(k as f64, 1.5), 0.5),
-            (10.0 + k as f64, 1e9),
+            (0.1f64.mul_add(f64::from(k), 1.5), 0.5),
+            (10.0 + f64::from(k), 1e9),
         );
     }
 

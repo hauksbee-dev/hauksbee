@@ -55,7 +55,11 @@ fn decade_sweep_includes_endpoints_for_non_integer_decades() {
         sweep: Sweep::Decade,
     };
     let f = spec.frequencies();
-    assert_eq!(f[0], 100.0, "first point should be fstart");
+    assert_eq!(
+        f[0].to_bits(),
+        100.0f64.to_bits(),
+        "first point should be fstart"
+    );
     assert!(
         (f.last().copied().unwrap() - 3000.0).abs() < 1e-6,
         "last={:?}",
@@ -125,6 +129,7 @@ fn rc_lowpass_rolloff_is_minus_20db_per_decade() {
 }
 
 #[test]
+#[allow(clippy::many_single_char_names)] // r, c, f: the closed-form RC names
 fn rc_lowpass_matches_closed_form_across_sweep() {
     let r = 4.7e3;
     let c = 22e-9;
@@ -705,7 +710,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
     // Transient-path cross-check: the small-signal gain the Newton tangent
     // predicts is the DC sensitivity d v_out / d v_ctrl at the bias. Central
     // finite difference over the FULL nonlinear DC solve.
-    let vout_dc = |vc: f64| -> f64 {
+    let dc_vout = |vc: f64| -> f64 {
         let mut c = build(vc);
         let out = c.node("out");
         let mut ws = hauksbee_solve::Workspace::new(&c);
@@ -713,7 +718,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
         ws.x[ws.layout.node(out).unwrap()]
     };
     let d = 1e-5;
-    let gain_fd = (vout_dc(vmid + d) - vout_dc(vmid - d)) / (2.0 * d);
+    let gain_fd = (dc_vout(vmid + d) - dc_vout(vmid - d)) / (2.0 * d);
     assert!(
         (vout_ac - gain_fd.abs()).abs() / gain_fd.abs() < 1e-2,
         "AC gain must match the transient tangent's DC sensitivity: \

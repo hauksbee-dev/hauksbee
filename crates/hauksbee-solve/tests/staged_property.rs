@@ -36,6 +36,7 @@ use hauksbee_testkit::circuits::{cap, comparator, vswitch};
 /// Deterministic xorshift64*; good enough to scatter topologies, and every
 /// draw is reproducible from the seed printed on failure.
 struct Rng(u64);
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)] // random bits: truncation is intended
 impl Rng {
     const fn next(&mut self) -> u64 {
         let mut x = self.0;
@@ -193,14 +194,13 @@ fn random_feedforward_boards_match_the_monolith() {
     for seed in 1..=20u64 {
         let c = random_board(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let d = Decomposition::analyze(&c, TearMotive::Profit);
-        if !d.certificate.sound() {
-            // Random boards must not be able to produce unsound certificates:
-            // every sense edge here is conducted upstream by construction.
-            panic!(
-                "seed {seed}: generator produced an unsound certificate\n{}",
-                d.certificate.summary(&c)
-            );
-        }
+        // Random boards must not be able to produce unsound certificates:
+        // every sense edge here is conducted upstream by construction.
+        assert!(
+            d.certificate.sound(),
+            "seed {seed}: generator produced an unsound certificate\n{}",
+            d.certificate.summary(&c)
+        );
         sound_boards += 1;
         if d.dag.groups.len() > 1 {
             staged_boards += 1;
@@ -212,11 +212,11 @@ fn random_feedforward_boards_match_the_monolith() {
             .run(&c, tstop)
             .unwrap_or_else(|e| panic!("seed {seed}: monolith failed: {e}"));
 
-        for node in 1..c.node_count() {
+        for (node, id) in (1..c.node_count()).zip(1u32..) {
             if let Some((t, sv, mv)) = diverges(&staged.waveforms, &mono, node, dt, tol) {
                 panic!(
                     "seed {seed}: node {} diverged at t={t:.3e}: staged {sv:.9} vs mono {mv:.9}",
-                    c.node_name(NodeId(node as u32)),
+                    c.node_name(NodeId(id)),
                 );
             }
         }

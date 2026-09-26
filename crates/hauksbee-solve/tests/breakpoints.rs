@@ -89,8 +89,8 @@ fn fixed_step_grid_is_untouched_by_breakpoints() {
     let (c, _) = pulse_circuit();
     let opts = SolverOptions::fixed(50e-6);
     let wf = Transient::new(opts).run(&c, 500e-6).expect("transient");
-    for (i, &t) in wf.time.iter().enumerate() {
-        let expect = i as f64 * 50e-6;
+    for (i, &t) in (0u32..).zip(&wf.time) {
+        let expect = f64::from(i) * 50e-6;
         assert!(
             (t - expect).abs() < 1e-12,
             "fixed grid disturbed at sample {i}: {t} vs {expect}"

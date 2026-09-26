@@ -259,6 +259,7 @@ const GATE_WARMUP: usize = 2;
 const GATE_REPS: usize = 21;
 
 #[test]
+#[allow(clippy::too_many_lines)] // capture, compare and report in one gate
 fn perf_gate() {
     // 1. Debug builds cannot be compared to a release baseline: skip loudly.
     if cfg!(debug_assertions) {
@@ -389,14 +390,14 @@ fn perf_gate() {
 #[test]
 #[ignore = "capture tool, not a gate: run explicitly to record/update a baseline"]
 fn perf_capture_baseline() {
+    const WARMUP: usize = 3;
+    const REPS: usize = 25;
     if cfg!(debug_assertions) {
         eprintln!("Capture must run in --release, or the numbers are meaningless. Add --release.");
         return;
     }
     let class = perf_class();
     let arch = std::env::consts::ARCH;
-    const WARMUP: usize = 3;
-    const REPS: usize = 25;
 
     eprintln!("=== perf baseline capture: class '{class}', arch '{arch}', reps {REPS} ===\n");
 

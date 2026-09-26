@@ -41,7 +41,8 @@ fn rc_ladder(stages: usize) -> Circuit {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
+#[allow(clippy::cast_precision_loss)] // step counts << 2^53
 fn rc_ladder_1000_stages_10k_steps() {
     let stages = 1000;
     let steps = 10_000;
@@ -118,7 +119,7 @@ fn rc_ladder_1000_stages_10k_steps() {
 /// steps and still matches a 5000-step monolithic run to <1e-3, a 100x step
 /// reduction. This is the Tarski trick's actual leverage.
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
 fn small_rc_exact_with_fewer_steps() {
     // V - R - out - C - gnd. tau = 1ms. Settle over 5 tau.
     let mut c = Circuit::new();
@@ -173,7 +174,7 @@ fn small_rc_exact_with_fewer_steps() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
 fn rectifier_wallclock_vs_ngspice() {
     // Same half-wave rectifier as the cross-check, timed end to end.
     let net = cases::RECTIFIER_DECK;
@@ -217,7 +218,7 @@ fn rectifier_wallclock_vs_ngspice() {
 // --- synapse array: the partitioning win ------------------------------------
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
 fn synapse_array_partitioned_vs_monolithic() {
     let blocks = 90;
     let syn = cases::build_synapse_array(blocks);
@@ -290,7 +291,7 @@ fn synapse_array_partitioned_vs_monolithic() {
 // --- accuracy: partitioned vs monolithic on ngspice circuits ----------------
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
 fn accuracy_partitioned_vs_monolithic() {
     // Fixed-step versions of the ngspice cross-check circuits, comparing the
     // partitioned engine against the monolithic reference. Max rel error target
@@ -356,8 +357,8 @@ fn accuracy_partitioned_vs_monolithic() {
         let parted = run(Partitioning::Auto);
 
         let mut max_rel = 0.0f64;
-        for node in 0..c.node_count() {
-            let nm = c.node_name(NodeId(node as u32)).to_string();
+        for node in (0u32..).take(c.node_count()) {
+            let nm = c.node_name(NodeId(node)).to_string();
             let a = mono.node(&c, &nm).map_or(0.0, |w| *w.last().unwrap());
             let b = parted.node(&c, &nm).map_or(0.0, |w| *w.last().unwrap());
             let denom = a.abs().max(0.05);

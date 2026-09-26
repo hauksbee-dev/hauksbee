@@ -7,6 +7,7 @@
 
 use hauksbee_ir::SpiceLoader;
 use hauksbee_solve::{SolverOptions, StepControl, Transient};
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -77,7 +78,7 @@ fn with_analysis(net: &str, tran: &str, probe: &str) -> String {
     }
     out.push_str(tran);
     out.push('\n');
-    out.push_str(&format!(".print tran v({probe})\n"));
+    let _ = writeln!(out, ".print tran v({probe})");
     out.push_str(".options reltol=1e-4\n.end\n");
     out
 }
@@ -145,7 +146,7 @@ fn interp(res: &NgResult, time: f64) -> f64 {
     let mut lo = 0usize;
     let mut hi = last;
     while hi - lo > 1 {
-        let mid = (lo + hi) / 2;
+        let mid = lo.midpoint(hi);
         if res.t[mid] <= time {
             lo = mid;
         } else {

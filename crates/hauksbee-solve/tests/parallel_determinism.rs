@@ -97,6 +97,7 @@ fn check_board(name: &str, c: &Circuit, tstop: f64, dt: f64) {
 /// A fan of independent RC legs off one ideal rail: `n` LINEAR islands (the
 /// source pin is the only shared node), exercising the linear phase-(a)
 /// parallel path, which the mirror arrays (all-nonlinear islands) do not.
+#[allow(clippy::cast_precision_loss)] // leg index < n, tiny
 fn build_rc_fan(n: usize) -> Circuit {
     let mut c = Circuit::new();
     let rail = c.node("rail");

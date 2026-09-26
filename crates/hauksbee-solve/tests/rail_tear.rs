@@ -139,7 +139,7 @@ fn rail_with_ground_bypass_cap_is_not_torn() {
 /// tear's win grows with the fused island size, since it replaces one large
 /// sparse factorization with many tiny independent ones plus a scalar balance.
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
 fn rail_tear_speed_scaling() {
     for &blocks in &[24usize, 90, 240] {
         let (max_abs, mono_t, part_t, nl, steps) = solve_both(blocks, 200e-6);

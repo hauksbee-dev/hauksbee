@@ -253,8 +253,8 @@ fn profile_isource_agrees_in_both_solver_paths() {
     let n = mono.len().min(part.len());
     let mut worst_self = 0.0f64;
     let mut worst_pair = 0.0f64;
-    for k in 0..n {
-        let t = k as f64 * dt;
+    for (k, step) in (0..n).zip(0u32..) {
+        let t = f64::from(step) * dt;
         if t < 4.0f64.mul_add(dt, t_edge) {
             continue;
         }

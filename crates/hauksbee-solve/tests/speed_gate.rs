@@ -46,6 +46,7 @@ mod oracle;
 
 use cases::{build_synapse_array, rectifier_opts, synapse_opts, RECTIFIER_DECK};
 use hauksbee_solve::{Partitioning, Transient};
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 /// How many times each side of a comparison is run, keeping the best.
@@ -210,6 +211,7 @@ fn a_missing_oracle_skips_loudly_and_refuses_when_required() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one gate over every marketed case, with its report
 fn faster_than_ngspice_on_the_marketed_cases() {
     let require = std::env::var("HAUKSBEE_REQUIRE_NGSPICE").is_ok();
     let bin = match oracle_decision(oracle::find_ngspice(), require) {
@@ -480,11 +482,12 @@ fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
          startup-corrected speedup drops below its recorded floor, when an accuracy claim \
          rises above its bound, or when a disclosed disagreement widens past its ceiling.\n\n",
     );
-    s.push_str(&format!(
+    let _ = write!(
+        s,
         "Oracle: {version}. ngspice process-start floor: {:.3} ms, measured as the minimum \
          of five trivial-deck runs.\n\n",
         startup.as_secs_f64() * 1e3
-    ));
+    );
     s.push_str(
         "`raw` divides ngspice's whole wall clock, process start included, by ours: it is \
          what a user waiting at a shell experiences. `corrected` subtracts the process-start \
@@ -498,9 +501,10 @@ fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
     );
     s.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     for c in cases {
-        s.push_str(&format!(
+        let _ = writeln!(
+            s,
             "| {} | {:.3} ms | {} | {:.3} ms | {:.3} ms | {:.2}x | {:.2}x | {:.2}x | \
-             {:.3e} | {} | {:.3e} | {} | {} | {} |\n",
+             {:.3e} | {} | {:.3e} | {} | {} | {} |",
             c.name,
             c.ours.as_secs_f64() * 1e3,
             c.steps,
@@ -521,7 +525,7 @@ fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
                 |r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound)
             ),
             if c.passed() { "PASS" } else { "FAIL" }
-        ));
+        );
     }
     s.push_str(
         "\nAccuracy against ngspice is measured on the oracle's own `.print tran` table, \
@@ -534,7 +538,7 @@ fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
          such a row as ngspice agreement.\n\n",
     );
     for c in cases {
-        s.push_str(&format!("- **{}**: {}.\n", c.name, c.note));
+        let _ = writeln!(s, "- **{}**: {}.", c.name, c.note);
     }
 
     // Best-effort: a read-only checkout still runs the gate, and the assertions

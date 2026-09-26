@@ -67,7 +67,7 @@ fn assert_mirror_sane(c: &Circuit, wf: &Waveforms) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: prints timings, run on demand"]
 fn s4_parallel_speedup_table() {
     let dt = 1e-6;
     let tstop = 200e-6;
