@@ -3576,7 +3576,8 @@ impl Scheduler {
             let settle = |d: &mut BehavioralDevice| d.settle_converter(circuit, &node_v);
             if self.behavioral.iter_mut().map(settle).fold(0.0, f64::max) < 1e-6 {
                 for (node, v) in self.node_volts.iter_mut().enumerate().skip(1) {
-                    *v = layout.node(NodeId(node as u32)).map_or(0.0, |i| x[i]);
+                    let id = u32::try_from(node).ok().map(NodeId);
+                    *v = id.and_then(|n| layout.node(n)).map_or(0.0, |i| x[i]);
                 }
                 return;
             }

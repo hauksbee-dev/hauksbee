@@ -196,17 +196,19 @@ impl LoadProfile {
             let (rise, dur) = (seg.rise_s.max(0.0), seg.duration_s.max(0.0));
             if seg.period_s > 0.0 {
                 let period = (seg.period_s + jitter(seed, i, seg.jitter_s)).max(1e-9);
-                let first = ((a - cursor) / period).floor().max(0.0);
-                let last = ((b - cursor) / period).ceil();
-                if last - first > max_corners as f64 {
+                let from = ((a - cursor) / period)
+                    .floor()
+                    .max(0.0)
+                    .mul_add(period, cursor);
+                let bases: Vec<f64> = (0u32..)
+                    .map(|k| f64::from(k).mul_add(period, from))
+                    .take_while(|base| *base < b)
+                    .take(max_corners + 1)
+                    .collect();
+                if bases.len() > max_corners {
                     return None;
                 }
-                let mut k = first;
-                while k <= last {
-                    let base = cursor + k * period;
-                    corners.extend([base, base + rise, base + rise + dur]);
-                    k += 1.0;
-                }
+                corners.extend(bases.iter().flat_map(|&t| [t, t + rise, t + rise + dur]));
                 break;
             }
             corners.extend([cursor, cursor + rise, cursor + rise + dur]);
@@ -231,7 +233,7 @@ impl LoadProfile {
         if corners.len() > max_corners {
             return None;
         }
-        let bounds = [a].into_iter().chain(corners.iter().copied()).chain([b]);
+        let bounds = std::iter::once(a).chain(corners.iter().copied()).chain([b]);
         let gap = bounds.clone().zip(bounds.skip(1)).map(|(x, y)| y - x);
         let edge = gap.fold(1e-9_f64, f64::min) / 4.0;
         let mut pts = vec![(0.0, self.current_at(open, seed))];

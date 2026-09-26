@@ -103,7 +103,7 @@ impl Peripheral for DynamicLoad {
         let a = ctx.t - self.start_s;
         let i = self.current_at(ctx.t + ctx.dt);
         let kind = match self.profile.pwl_over(a, a + ctx.dt, self.seed, MAX_CORNERS) {
-            Some(pts) if pts.iter().any(|p| p.1 != i) => {
+            Some(pts) if pts.iter().any(|p| p.1.total_cmp(&i).is_ne()) => {
                 self.peak_i = pts.iter().fold(self.peak_i, |m, p| m.max(p.1));
                 SourceKind::Pwl(pts.into_iter().map(|(t, v)| PwlPoint { t, v }).collect())
             }
