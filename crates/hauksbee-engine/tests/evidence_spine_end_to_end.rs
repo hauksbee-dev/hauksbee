@@ -311,8 +311,9 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
     assert!(map.error_budget().is_some());
     let budget = map.error_budget().unwrap();
     assert_eq!(budget.failed_windows().len(), 1);
-    assert_eq!(budget.tolerance().reltol(), options.reltol);
-    assert_eq!(budget.tolerance().vntol(), options.vntol);
+    let tol = budget.tolerance();
+    assert_eq!(tol.reltol().to_bits(), options.reltol.to_bits());
+    assert_eq!(tol.vntol().to_bits(), options.vntol.to_bits());
     assert_eq!(
         budget.methods()[0].method(),
         hauksbee_ir::evidence::IntegrationMethod::Gear2
@@ -368,23 +369,10 @@ fn transient_budget_partitions_solved_and_invalid_windows_without_overlap() {
     let windows: Vec<_> = budget
         .methods()
         .iter()
-        .map(|method| {
-            (
-                method.window().start_s(),
-                method.window().end_s(),
-                method.method(),
-            )
-        })
+        .map(|m| [m.window().start_s(), m.window().end_s()].map(f64::to_bits))
         .collect();
-    assert_eq!(windows.len(), 4, "three primary spans plus one fallback");
-    assert_eq!(windows[0].0, 0.0);
-    assert_eq!(windows[0].1, 0.2);
-    assert_eq!(windows[1].0, 0.3);
-    assert_eq!(windows[1].1, 0.5);
-    assert_eq!(windows[2].0, 0.6);
-    assert_eq!(windows[2].1, 1.0);
-    assert_eq!(windows[3].0, 0.5);
-    assert_eq!(windows[3].1, 0.6);
+    let expected = [[0.0, 0.2], [0.3, 0.5], [0.6, 1.0], [0.5, 0.6]].map(|w| w.map(f64::to_bits));
+    assert_eq!(windows, expected, "three primary spans plus one fallback");
     assert!(BoardEvidence::transient_error_budget(
         &options,
         0.0,

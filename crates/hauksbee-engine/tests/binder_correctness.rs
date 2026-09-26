@@ -834,7 +834,7 @@ fn negative_rails_get_supply_legs_at_negative_voltage() {
     let b = board(&[(1, "-5V"), (2, "-12V"), (3, "GND")], vec![r1, r2]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let leg_volts = |net: &str| -> f64 {
+    let leg_volt_bits = |net: &str| -> u64 {
         bound
             .supplies
             .iter()
@@ -842,9 +842,15 @@ fn negative_rails_get_supply_legs_at_negative_voltage() {
             .unwrap_or_else(|| panic!("net {net} must get a SupplyLeg, not float at 0 V"))
             .supply
             .nominal_volts()
+            .to_bits()
     };
-    assert_eq!(leg_volts("-5V"), -5.0, "-5V rail supplies -5.0 V");
-    assert_eq!(leg_volts("-12V"), -12.0, "-12V rail supplies -12.0 V");
+    let (minus_5, minus_12) = ((-5.0_f64).to_bits(), (-12.0_f64).to_bits());
+    assert_eq!(leg_volt_bits("-5V"), minus_5, "-5V rail supplies -5.0 V");
+    assert_eq!(
+        leg_volt_bits("-12V"),
+        minus_12,
+        "-12V rail supplies -12.0 V"
+    );
 
     // Not ground: the rail keeps its own (non-ground) node.
     let n5 = bound.node("-5V").expect("-5V interned");

@@ -49,7 +49,8 @@ fn zero_ohm_resistor_stamps_the_link_resistance_with_a_warning() {
         })
         .expect("R12 is stamped");
     assert_eq!(
-        ohms, STIFF_R_OHMS,
+        ohms.to_bits(),
+        STIFF_R_OHMS.to_bits(),
         "a 0-ohm value stamps the shared link resistance, not the raw floor"
     );
 

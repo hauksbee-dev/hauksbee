@@ -64,7 +64,7 @@ fn ina186_sc70_binds_as_behavioral_current_sense_amp() {
     assert_eq!(bound.circuit.node_name(inp), "SENSE_P");
     assert_eq!(bound.circuit.node_name(inn), "SENSE_N");
     assert_eq!(reference.map(|n| bound.circuit.node_name(n)), Some("VREF"));
-    assert_eq!(gain, 25.0);
+    assert_eq!(gain.to_bits(), 25.0_f64.to_bits());
     assert_eq!(pole_hz, Some(45_000.0));
     assert!(
         bound

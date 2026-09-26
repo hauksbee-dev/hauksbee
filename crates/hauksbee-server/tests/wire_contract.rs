@@ -98,7 +98,7 @@ fn explicit_input_sources_and_live_attachments_match_the_browser_wire() {
             assert_eq!(spec.id, "U7_ACCEL");
             assert_eq!(spec.request_id, Some(42));
             assert!(spec.spec_toml.contains("i2c_pointer"));
-            assert_eq!(spec.inputs["accel_x_g"], 0.25);
+            assert_eq!(spec.inputs["accel_x_g"].to_bits(), 0.25_f64.to_bits());
         }
         other => panic!("expected AttachRegisterMap, got {other:?}"),
     }
