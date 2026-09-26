@@ -27,6 +27,11 @@ impl CompiledEntry {
     ///
     /// Returns an error if any regex pattern is invalid. The `id` from the
     /// entry is included in error messages.
+    ///
+    /// # Errors
+    ///
+    /// The [`regex::Error`] of the first `value_re`, `footprint_re`, `mpn_re` or
+    /// property pattern that does not compile.
     pub fn compile(entry: ModelEntry) -> Result<Self, regex::Error> {
         // Every pattern is case-INSENSITIVE, footprints included: a rule
         // `footprint_re = "sot-23"` must match `Package_TO_SOT_SMD:SOT-23`. A

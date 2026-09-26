@@ -206,6 +206,13 @@ impl PackManifest {
     /// Parse and validate a `pack.toml` source string. `hauksbee_version` is
     /// the running build's version (pass [`HAUKSBEE_VERSION`]), checked
     /// against `min_hauksbee_version`.
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when the source is not TOML or lacks a `[pack]` table, when
+    /// a required field such as `name`, `version` or `provenance` is missing, when
+    /// the name, a version or the provenance is malformed, or when this build is
+    /// older than `min_hauksbee_version`.
     pub fn from_toml(src: &str, hauksbee_version: &str) -> Result<Self, PackError> {
         let raw: RawManifestFile =
             toml::from_str(src).map_err(|e| PackError::ManifestParse(e.to_string()))?;
@@ -288,6 +295,12 @@ pub struct Pack {
 impl Pack {
     /// Load and fully validate a pack directory. Everything `models add`
     /// checks happens here, so the library loader and the installer agree.
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when `dir` is not a directory or has no `pack.toml`, when the
+    /// manifest fails [`PackManifest::from_toml`], when a file cannot be read, or
+    /// when the model files are missing or fail entry validation.
     pub fn load(dir: &Path) -> Result<Self, PackError> {
         if !dir.is_dir() {
             return Err(PackError::NotADirectory(dir.to_path_buf()));
@@ -450,6 +463,12 @@ impl PackStore {
     /// Validate the pack at `src`, copy it into the store, and record it.
     /// `source_label` is what `packs.toml` remembers as the origin (the path
     /// or URL the user typed). Fails loud before copying anything.
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when the pack fails [`Pack::load`], a pack of that name is
+    /// already installed, `packs.toml` is corrupt, or the copy or record write
+    /// fails.
     pub fn install(&self, src: &Path, source_label: &str) -> Result<PackRecord, PackError> {
         let pack = Pack::load(src)?;
         let mut file = self.read_record()?;
@@ -484,6 +503,12 @@ impl PackStore {
 
     /// Remove an installed pack by name: deletes its directory and drops it
     /// from `packs.toml`.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::NotInstalled`] when no pack of that name is recorded, and a
+    /// [`PackError`] when `packs.toml` is corrupt or the directory removal or record
+    /// write fails.
     pub fn remove(&self, name: &str) -> Result<PackRecord, PackError> {
         let mut file = self.read_record()?;
         let idx = file
@@ -504,6 +529,10 @@ impl PackStore {
     }
 
     /// The installed packs, from `packs.toml` (empty when none installed).
+    ///
+    /// # Errors
+    ///
+    /// A [`PackError`] when `packs.toml` exists but cannot be read or parsed.
     pub fn list(&self) -> Result<Vec<PackRecord>, PackError> {
         Ok(self.read_record()?.packs)
     }

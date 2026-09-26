@@ -329,6 +329,10 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
 
 /// Validate a [`ModelEntry`], checking that required params are present and
 /// within physical bounds. Returns `Ok(())` on success, or a list of violations.
+///
+/// # Errors
+///
+/// Returns every [`ValidationError`] found, not just the first.
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut p = Problems::default();
     let params = &entry.params;

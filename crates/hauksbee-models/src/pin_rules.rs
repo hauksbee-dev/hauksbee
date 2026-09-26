@@ -101,6 +101,12 @@ impl PinRuleTable {
     ///
     /// `prepend` puts the new rules *ahead* of the existing ones (so a later,
     /// user-supplied file overrides the built-ins). Returns the rule ids loaded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, loading nothing, when `src` is not valid TOML or a rule has no match
+    /// condition, maps no pad to a role, or carries a `footprint_re` that does not
+    /// compile.
     pub fn load_toml_str(&mut self, src: &str, prepend: bool) -> Result<Vec<String>, String> {
         let file: PinRuleFile =
             toml::from_str(src).map_err(|e| format!("pin_rules: TOML parse error: {e}"))?;

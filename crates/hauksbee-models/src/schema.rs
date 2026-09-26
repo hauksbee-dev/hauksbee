@@ -466,6 +466,10 @@ pub struct ModelSourceReference {
 impl ModelSourceSpec {
     /// Every citation and every uncertainty and characteristic record must be
     /// well formed; all problems at once, `; `-joined (see [`Self::problems`]).
+    ///
+    /// # Errors
+    ///
+    /// Fails with every problem [`Self::problems`] finds, `; `-joined.
     pub fn validate(&self) -> Result<(), String> {
         let problems = self.problems();
         if problems.is_empty() {
@@ -553,6 +557,12 @@ pub fn model_error_warning(source: Option<&ModelSourceSpec>) -> Option<&'static 
 impl ModelSourceReference {
     /// A citation must be fetchable over TLS, name what it cites, and carry a
     /// well-formed digest when it carries one.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the url is not `https://` (and the citation is not a local file
+    /// with a digest), the title or locator is blank, or the digest is not 64 hex
+    /// characters.
     pub fn validate(&self) -> Result<(), String> {
         let local = self.url.is_empty() && self.sha256.is_some();
         if !local && !self.url.starts_with("https://") {

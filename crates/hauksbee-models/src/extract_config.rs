@@ -302,6 +302,12 @@ impl ExtractConfig {
         )
     }
 
+    /// Trim every text setting, turning blank ones into unset, and drop blank
+    /// extra arguments.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` has an agent section.
     pub fn normalise(&mut self) {
         for a in AGENTS {
             let s = self.agent_mut(a.backend).expect("agent");
@@ -320,6 +326,17 @@ impl ExtractConfig {
     /// Refuse what cannot work, with the fix in the message. Runs on every
     /// save so a bad value is caught while the user is looking at the form,
     /// not ten minutes into an extraction.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `retries` exceeds 10, `timeout_secs` is outside 30..=7200, an agent
+    /// `command` holds a control character, a model name is malformed, an effort or
+    /// permission mode is not one the agent accepts, `api.base_url` is not http(s),
+    /// or `api.api_key_env` is not a usable variable name.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` has an agent section.
     pub fn validate(&self) -> Result<()> {
         if let Some(r) = self.retries.filter(|r| *r > 10) {
             bail!("retries must be at most 10 (each retry is a full model run), not {r}");
@@ -364,6 +381,11 @@ impl ExtractConfig {
 
     /// Every settable key, its meaning, and its default, for `--help` and the
     /// web form's hints. Order is display order.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` names an agent backend, which has
+    /// a default tool.
     #[must_use]
     pub fn keys() -> Vec<KeyInfo> {
         let mut keys = vec![
@@ -426,6 +448,12 @@ impl ExtractConfig {
     /// Set one key. An empty value clears it (back to the default). A value
     /// that fails validation leaves the config exactly as it was, so
     /// `set a=bad b=good` writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails, leaving `self` unchanged, when `key` is not a known setting, a number
+    /// setting gets a non-number, `backend` gets an unknown name, or the result fails
+    /// [`Self::validate`].
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let mut next = self.clone();
         next.set_unchecked(key.trim(), value.trim())?;
@@ -496,6 +524,10 @@ impl ExtractConfig {
     }
 
     /// Parse `KEY=VALUE` and set it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `pair` has no `=`, or for any reason [`Self::set`] fails.
     pub fn set_pair(&mut self, pair: &str) -> Result<()> {
         let (key, value) = pair
             .split_once('=')
@@ -514,6 +546,11 @@ impl ExtractConfig {
 
     /// Apply a preset: set the backend and that backend's own section. Other
     /// sections are left alone, so switching back keeps what was there.
+    ///
+    /// # Errors
+    ///
+    /// Fails, leaving `self` unchanged, when `id` names no preset; the message lists
+    /// the preset ids.
     pub fn apply_preset(&mut self, id: &str) -> Result<&'static Preset> {
         let preset = presets().iter().find(|p| p.id == id).with_context(|| {
             format!(
@@ -539,6 +576,11 @@ impl ExtractConfig {
 
     /// Fold the file, the environment and the defaults into one answer.
     /// `flag_backend` is a `--backend` flag, which wins outright.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every entry of `AGENTS` has an agent section and a
+    /// default tool.
     pub fn resolve(&self, host: &dyn Host, flag_backend: Option<Backend>) -> Resolved {
         let env = |name: &str| host.var(name).filter(|v| !v.trim().is_empty());
         let pick = |var: &str, file: &Option<String>, default: &str| -> String {
@@ -1110,10 +1152,21 @@ pub fn is_local_url(url: &str) -> bool {
 /// `$XDG_CONFIG_HOME/hauksbee/extract.toml`, else `~/.config/hauksbee/extract.toml`.
 /// Windows has no `$HOME`: there it is `%APPDATA%\hauksbee\extract.toml`, else
 /// `%USERPROFILE%\.config\hauksbee\extract.toml`.
+///
+/// # Errors
+///
+/// Fails when none of those variables is set (or all are blank), so there is
+/// nowhere to keep the file.
 pub fn config_path() -> Result<PathBuf> {
     config_path_in(&ProcessHost)
 }
 
+/// [`config_path`] with the environment read through `host`.
+///
+/// # Errors
+///
+/// Fails when `host` sets none of `$HAUKSBEE_EXTRACT_CONFIG`, `$XDG_CONFIG_HOME`,
+/// `$HOME`, `%APPDATA%` or `%USERPROFILE%` to a non-blank value.
 pub fn config_path_in(host: &dyn Host) -> Result<PathBuf> {
     let set = |name: &str| {
         host.var(name)
@@ -1145,6 +1198,12 @@ pub struct Loaded {
 /// silently ignoring it would run an extraction on settings the user did not
 /// choose.
 /// So is a missing file that `$HAUKSBEE_EXTRACT_CONFIG` names: never silent defaults.
+///
+/// # Errors
+///
+/// Fails when no config path can be found (see [`config_path`]), when the file
+/// cannot be read or parsed or holds a value [`ExtractConfig::validate`] refuses,
+/// or when `$HAUKSBEE_EXTRACT_CONFIG` names a file that does not exist.
 pub fn load() -> Result<Loaded> {
     load_in(&ProcessHost)
 }
@@ -1162,10 +1221,22 @@ fn load_in(host: &dyn Host) -> Result<Loaded> {
 }
 
 /// `load` for a command about to write the file: a missing one is created.
+///
+/// # Errors
+///
+/// Fails when no config path can be found (see [`config_path`]), or when an
+/// existing file cannot be read, parsed or validated.
 pub fn load_for_edit() -> Result<Loaded> {
     load_from(&config_path()?)
 }
 
+/// Read the config at `path`; a missing file loads as the empty config.
+///
+/// # Errors
+///
+/// Fails, naming `path`, when the file exists but cannot be read, is not valid
+/// TOML for an [`ExtractConfig`], or holds a value [`ExtractConfig::validate`]
+/// refuses.
 pub fn load_from(path: &Path) -> Result<Loaded> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -1193,6 +1264,11 @@ pub fn load_from(path: &Path) -> Result<Loaded> {
 
 /// Write the config. Validated first; written atomically (a temp file then a
 /// rename) so a crash mid-write cannot leave half a file behind.
+///
+/// # Errors
+///
+/// Fails when `config` does not validate, or when the parent directory cannot be
+/// created, the temp file cannot be written, or the rename into place fails.
 pub fn save(config: &ExtractConfig, path: &Path) -> Result<()> {
     let mut config = config.clone();
     config.normalise();

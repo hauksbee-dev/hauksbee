@@ -82,6 +82,11 @@ const EMBEDDED_PROFILES: &str = include_str!("../db/load_profiles.toml");
 
 impl LoadProfile {
     /// All built-in profiles parsed from the embedded TOML.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the embedded `load_profiles.toml` fails to parse, which the test
+    /// suite rules out before release.
     #[must_use]
     pub fn builtin() -> Vec<Self> {
         let file: ProfileFile = toml::from_str(EMBEDDED_PROFILES)

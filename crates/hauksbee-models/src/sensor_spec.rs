@@ -718,6 +718,11 @@ fn check_refs(
 
 impl SensorSpec {
     /// Parse a `[sensor]` spec from TOML and validate it.
+    ///
+    /// # Errors
+    ///
+    /// A [`SensorSpecError`] when `src` is not a valid `[sensor]` spec in TOML, or
+    /// when the parsed spec fails [`Self::validate`].
     pub fn from_toml(src: &str) -> Result<Self, SensorSpecError> {
         let spec: Self = toml::from_str(src)?;
         spec.validate()?;
@@ -725,6 +730,10 @@ impl SensorSpec {
     }
 
     /// Serialise back to TOML (used by the round-trip validation).
+    ///
+    /// # Errors
+    ///
+    /// A [`SensorSpecError`] when the TOML serialiser rejects the spec.
     pub fn to_toml(&self) -> Result<String, SensorSpecError> {
         Ok(toml::to_string(self)?)
     }
@@ -739,6 +748,10 @@ impl SensorSpec {
     /// expr/const exclusivity, protocol/bus agreement, byte widths, and the
     /// write side (framing coherence, bit ranges, namespace uniqueness,
     /// expression references).
+    ///
+    /// # Errors
+    ///
+    /// A [`SensorSpecError`] naming the first rule above that the spec breaks.
     pub fn validate(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
         check!(!s.name.trim().is_empty(), "sensor.name must not be empty");

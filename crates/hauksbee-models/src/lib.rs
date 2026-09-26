@@ -380,7 +380,10 @@ impl ModelLibrary {
 
     /// Create a library loaded with all built-in database entries.
     ///
-    /// Panics if the embedded TOML is malformed (compile-time guarantee).
+    /// # Panics
+    ///
+    /// Panics when a built-in model database, `pin_rules.toml` or `unmodelled.toml`
+    /// fails to load, which the test suite rules out before release.
     #[must_use]
     pub fn builtin() -> Self {
         let mut lib = Self::empty();
@@ -571,6 +574,11 @@ impl ModelLibrary {
     ///
     /// Every `.toml` file in `dir` is parsed and validated. Files that fail
     /// are reported but do not prevent other files from loading.
+    ///
+    /// # Errors
+    ///
+    /// Returns every per-file [`ModelError`] from [`Self::load_user_dir`] when any
+    /// file failed; the entries that did load are dropped with `self`.
     pub fn with_user_dir(mut self, dir: &Path) -> Result<Self, Vec<ModelError>> {
         match self.load_user_dir(dir) {
             errs if errs.is_empty() => Ok(self),
@@ -650,6 +658,10 @@ impl ModelLibrary {
     }
 
     /// Add all `.model` and `.subckt` cards from a SPICE file.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be read.
     pub fn add_spice_file(&mut self, path: &Path) -> anyhow::Result<usize> {
         let cards = spice_input::parse_spice_file(path)?;
         let n = cards.len();
@@ -669,6 +681,11 @@ impl ModelLibrary {
     /// needs. A file with no `.model` or `.subckt` card in it is one of them:
     /// the user named the file expecting the parts in it to bind, and loading
     /// zero cards quietly leaves those parts unresolved with nothing said.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be read, or when it holds no `.model` or `.subckt`
+    /// card; both messages say what to point `--spice-models` at.
     pub fn load_spice_models(&mut self, path: &Path) -> anyhow::Result<usize> {
         let added = self.add_spice_file(path).map_err(|e| {
             anyhow::anyhow!(
@@ -950,6 +967,16 @@ impl ModelLibrary {
 /// `[sensor.source]`. A pack-manifest `pack_tier` is authoritative: an entry in
 /// a datasheet-derived pack cannot promote itself to a vendor tier. Omitted
 /// fields take the defaults, and an omitted uncertainty is an explicit UNKNOWN.
+///
+/// # Errors
+///
+/// Fails when the resulting [`ModelSource`] is malformed, for example an
+/// uncertainty record the source rules reject; the error is its message.
+///
+/// # Panics
+///
+/// Never in practice: the fallback UNKNOWN uncertainty is built from a fixed,
+/// valid reason.
 pub fn model_source(
     declared: Option<&schema::ModelSourceSpec>,
     pack_tier: Option<ModelSourceTier>,

@@ -323,6 +323,11 @@ fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
 /// The value the simulator reads from `row` as param `name`: the column
 /// [`row_column`] picks, converted from the printed unit to the one its name
 /// reads (`_ua` is micro-amperes).
+///
+/// # Errors
+///
+/// Fails when the row's printed unit cannot convert to the unit `name` reads, or
+/// when the row prints neither the column `name` reads nor its fallback.
 pub fn row_value(name: &str, row: &Characteristic) -> Result<f64, String> {
     let suffix = crate::units::suffix_unit(name).map_or(1.0, |(scale, _)| scale);
     let scale = row_scale(name, &row.unit)? / suffix;

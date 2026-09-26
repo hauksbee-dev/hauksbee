@@ -114,6 +114,11 @@ impl UnmodelledTable {
     ///
     /// `prepend` puts the new entries *ahead* of the existing ones, so a later
     /// user-supplied file overrides the built-ins. Returns the ids loaded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, loading nothing, when `src` is not valid TOML or an entry has a blank
+    /// `value_re`, `because` or `unlocked_by`, or a pattern that does not compile.
     pub fn load_toml_str(&mut self, src: &str, prepend: bool) -> Result<Vec<String>, String> {
         let file: UnmodelledFile =
             toml::from_str(src).map_err(|e| format!("unmodelled: TOML parse error: {e}"))?;

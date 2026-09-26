@@ -37,6 +37,10 @@ pub enum SpiceCardKind {
 }
 
 /// Parse all `.model` and `.subckt` cards from a SPICE file.
+///
+/// # Errors
+///
+/// Fails when the file cannot be read.
 pub fn parse_spice_file(path: &Path) -> Result<Vec<SpiceCard>> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading SPICE file {}", path.display()))?;
@@ -44,6 +48,11 @@ pub fn parse_spice_file(path: &Path) -> Result<Vec<SpiceCard>> {
 }
 
 /// Parse SPICE model cards from a string.
+///
+/// # Errors
+///
+/// None today: lines that are not a well-formed card are skipped. The `Result`
+/// keeps room for stricter parsing.
 pub fn parse_spice_text(text: &str) -> Result<Vec<SpiceCard>> {
     let lines = join_continuation_lines(text);
     let mut cards = Vec::new();

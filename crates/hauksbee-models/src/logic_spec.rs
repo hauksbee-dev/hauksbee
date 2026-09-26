@@ -577,6 +577,11 @@ impl<'a> Parser<'a> {
 }
 
 /// Parse one combinational expression. See the module docs for the grammar.
+///
+/// # Errors
+///
+/// A [`LogicExprError`] at the first character the grammar cannot accept,
+/// including trailing characters after a complete expression.
 pub fn parse_logic_expr(src: &str) -> Result<LogicExpr, LogicExprError> {
     let mut p = Parser {
         src,
@@ -916,6 +921,11 @@ impl Logic {
     /// named [`LogicSpecError`]. A spec using feature-gated constructs
     /// (memory arrays) FAILS here; an engine that implements them calls
     /// [`Logic::validate_with_features`] instead.
+    ///
+    /// # Errors
+    ///
+    /// The first structural fault [`Logic::validate_with_features`] finds, and any
+    /// use of a feature-gated construct.
     pub fn validate(&self) -> Result<ValidatedLogic, LogicSpecError> {
         self.validate_with_features(&[])
     }
@@ -926,6 +936,13 @@ impl Logic {
     /// `features` is rejected loudly, never silently half-run: an engine
     /// without memory support must not bind a memory part whose bus it will
     /// never drive.
+    ///
+    /// # Errors
+    ///
+    /// The first structural fault as a named [`LogicSpecError`]: no outputs, a name
+    /// declared twice, an expression that does not parse or references an unknown
+    /// name or bit, a malformed register, memory or tristate group, or a construct
+    /// outside `features`.
     pub fn validate_with_features(
         &self,
         features: &[&str],
@@ -1424,6 +1441,12 @@ impl Logic {
 
     /// Expand one tristate group key (`"qa"` or `"qa..qh"`) into output names
     /// over the outputs-declaration order.
+    ///
+    /// # Errors
+    ///
+    /// [`LogicSpecError::TristateRangeInvalid`] when a range end is not an output or
+    /// the range runs backwards, and [`LogicSpecError::TristateUnknownOutput`] when a
+    /// single name is not an output.
     pub fn expand_tristate_group(&self, group: &str) -> Result<Vec<String>, LogicSpecError> {
         if let Some((a, b)) = group.split_once("..") {
             let ia = self.outputs.iter().position(|o| o == a);

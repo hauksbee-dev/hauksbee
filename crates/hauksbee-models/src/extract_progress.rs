@@ -138,6 +138,10 @@ pub fn record(took: Duration) {
 /// one line redrawn in place (no cursor or mode changes, so Ctrl-C leaves the
 /// terminal as it was); anywhere else a plain line every 30 s, never a control
 /// code. The line is erased before `run` returns, success or error.
+///
+/// # Errors
+///
+/// Returns `run`'s own error unchanged; the spinner adds none.
 // The ticker holds its lock across a redraw so `stop` cannot land mid-line.
 #[allow(clippy::significant_drop_tightening)]
 pub fn with_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
