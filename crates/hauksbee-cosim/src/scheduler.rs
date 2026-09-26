@@ -1540,7 +1540,7 @@ impl Scheduler {
             slave.set_i2c_address(d.address);
             for ch in 0..4 {
                 slave.set_channel_state("vref", ch, d.vref);
-                slave.set_channel_state("gain", ch, d.gain as f64);
+                slave.set_channel_state("gain", ch, f64::from(d.gain));
             }
             for (ch, drv) in d.vout_drivers.into_iter().enumerate() {
                 if let Some(drv) = drv {
@@ -1926,7 +1926,7 @@ impl Scheduler {
             .binding
             .gpio_drivers
             .iter()
-            .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+            .map(|(&(port, bit), drv)| (i64::from(drv.net.0), (port, bit)))
             .collect();
         let chains: Vec<hauksbee_bind::digital::Hc595Chain> = self
             .chains
@@ -2059,7 +2059,7 @@ impl Scheduler {
             {
                 return None;
             }
-            if let Some(&pin) = gpio.get(&(node.0 as i64)) {
+            if let Some(&pin) = gpio.get(&i64::from(node.0)) {
                 return Some(ParallelSignal::Mcu(pin));
             }
             for (chain_i, chain) in chains.iter().enumerate() {
@@ -2206,7 +2206,7 @@ impl Scheduler {
                 if *node == NodeId::GROUND || producer_counts.get(node).copied().unwrap_or(0) != 1 {
                     return None;
                 }
-                gpio.get(&(node.0 as i64)).copied()
+                gpio.get(&i64::from(node.0)).copied()
             })
             .collect::<Option<Vec<_>>>()?;
 
@@ -6532,7 +6532,7 @@ fn build_generic_replay_chips(
         .collect();
     let driven_nets: std::collections::HashSet<i64> = pin_nets
         .iter()
-        .flat_map(|m| m.values().map(|n| n.0 as i64))
+        .flat_map(|m| m.values().map(|n| i64::from(n.0)))
         .collect();
 
     // Chips owned by a 165 read chain (resolved via the synchronous responder).
@@ -6561,7 +6561,7 @@ fn build_generic_replay_chips(
         }
         let seq_pins = d.sequential_pins();
         let gpio_clocked = d.roles.iter().any(|(role, n)| {
-            seq_pins.contains(&role.as_str()) && driven_nets.contains(&(n.0 as i64))
+            seq_pins.contains(&role.as_str()) && driven_nets.contains(&i64::from(n.0))
         });
         if gpio_clocked {
             chips.push(i);

@@ -113,23 +113,23 @@ fn eval_number(program: &EvalNode, inputs: &HashMap<String, f64>) -> Option<f64>
 fn encode(enc: Encoding, value: f64) -> Vec<u8> {
     match enc {
         Encoding::U8 => {
-            let v = value.round().clamp(0.0, u8::MAX as f64) as u8;
+            let v = value.round().clamp(0.0, f64::from(u8::MAX)) as u8;
             vec![v]
         }
         Encoding::U16Be => {
-            let v = value.round().clamp(0.0, u16::MAX as f64) as u16;
+            let v = value.round().clamp(0.0, f64::from(u16::MAX)) as u16;
             v.to_be_bytes().to_vec()
         }
         Encoding::U16Le => {
-            let v = value.round().clamp(0.0, u16::MAX as f64) as u16;
+            let v = value.round().clamp(0.0, f64::from(u16::MAX)) as u16;
             v.to_le_bytes().to_vec()
         }
         Encoding::I16Be => {
-            let v = value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+            let v = value.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
             v.to_be_bytes().to_vec()
         }
         Encoding::I16Le => {
-            let v = value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+            let v = value.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
             v.to_le_bytes().to_vec()
         }
         Encoding::Q71Be => {
@@ -148,7 +148,7 @@ fn encode(enc: Encoding, value: f64) -> Vec<u8> {
             // The XLSB low nibble is unused on the wire (reads back as 0). The
             // register's `expr` supplies the RAW ADC count; the raw→physical
             // Bosch compensation is applied by the firmware / test consumer.
-            let count = value.round().clamp(0.0, 0xF_FFFF as f64) as u32;
+            let count = value.round().clamp(0.0, f64::from(0xF_FFFF)) as u32;
             let msb = ((count >> 12) & 0xFF) as u8;
             let lsb = ((count >> 4) & 0xFF) as u8;
             let xlsb = ((count << 4) & 0xF0) as u8;
@@ -169,22 +169,22 @@ fn encode(enc: Encoding, value: f64) -> Vec<u8> {
 /// encodings, so this panicking on them indicates an unvalidated spec.
 fn decode(enc: Encoding, bytes: &[u8]) -> (f64, u32) {
     match enc {
-        Encoding::U8 => (bytes[0] as f64, bytes[0] as u32),
+        Encoding::U8 => (f64::from(bytes[0]), u32::from(bytes[0])),
         Encoding::U16Be => {
             let v = u16::from_be_bytes([bytes[0], bytes[1]]);
-            (v as f64, v as u32)
+            (f64::from(v), u32::from(v))
         }
         Encoding::U16Le => {
             let v = u16::from_le_bytes([bytes[0], bytes[1]]);
-            (v as f64, v as u32)
+            (f64::from(v), u32::from(v))
         }
         Encoding::I16Be => {
             let v = i16::from_be_bytes([bytes[0], bytes[1]]);
-            (v as f64, v as u16 as u32)
+            (f64::from(v), u32::from(v as u16))
         }
         Encoding::I16Le => {
             let v = i16::from_le_bytes([bytes[0], bytes[1]]);
-            (v as f64, v as u16 as u32)
+            (f64::from(v), u32::from(v as u16))
         }
         other => panic!(
             "RegisterMapSensor: encoding {other:?} has no write decode; \
@@ -419,7 +419,7 @@ impl RegisterMapSensor {
                 as u32;
             stores.insert(w.store.clone(), w.default);
             for f in &w.fields {
-                stores.insert(f.name.clone(), f.extract(raw) as f64);
+                stores.insert(f.name.clone(), f64::from(f.extract(raw)));
             }
             write_regs.insert(w.addr, w);
         }
@@ -632,7 +632,7 @@ impl RegisterMapSensor {
         for (k, v) in &self.stores {
             m.insert(k.clone(), *v);
         }
-        m.insert("i2c_address".into(), self.i2c_address as f64);
+        m.insert("i2c_address".into(), f64::from(self.i2c_address));
         if let Some(ch) = channel {
             for (k, v) in &self.chan_state {
                 if let Some(val) = v.get(ch) {
@@ -663,7 +663,7 @@ impl RegisterMapSensor {
         let (value, raw) = decode(w.encoding, &self.write_buf);
         let mut updates = vec![(w.store.clone(), value)];
         for f in &w.fields {
-            updates.push((f.name.clone(), f.extract(raw) as f64));
+            updates.push((f.name.clone(), f64::from(f.extract(raw))));
         }
         for (k, v) in updates {
             self.stores.insert(k, v);
@@ -686,7 +686,7 @@ impl RegisterMapSensor {
             // Group value: big-endian fold of the wire bytes.
             let mut value: u32 = 0;
             for b in self.cmd_acc.drain(..group_bytes) {
-                value = (value << 8) | b as u32;
+                value = (value << 8) | u32::from(b);
             }
             // Channel for this group.
             let channel = match spec_channel.source {
@@ -701,7 +701,7 @@ impl RegisterMapSensor {
             // commit together (spec contract: update order cannot matter).
             let mut vars = self.vars(Some(channel));
             for f in &fields {
-                vars.insert(f.name.clone(), f.extract(value) as f64);
+                vars.insert(f.name.clone(), f64::from(f.extract(value)));
             }
             let mut committed: Vec<(String, f64)> = Vec::new();
             for (target, program) in &self.write_cmds[cmd_idx].programs {
@@ -866,7 +866,7 @@ impl I2cSlave for RegisterMapSensor {
                                 if c.channel.source == ChannelSource::PrefixBits {
                                     let bits = c.channel.bits.expect("validated");
                                     self.chan_cursor =
-                                        (extract_bits(bits, data as u32) as usize) % self.channels;
+                                        (extract_bits(bits, u32::from(data)) as usize) % self.channels;
                                 }
                             } else {
                                 self.cmd_acc.push(data);
@@ -974,7 +974,7 @@ impl I2cSlave for RegisterMapSensor {
 
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
-        m.insert("pointer".into(), self.pointer as f64);
+        m.insert("pointer".into(), f64::from(self.pointer));
         for (k, v) in &self.inputs {
             m.insert(k.clone(), *v);
         }
@@ -1098,7 +1098,7 @@ impl SpiSlave for RegisterMapSensor {
 
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
-        m.insert("spi_addr".into(), self.spi_addr as f64);
+        m.insert("spi_addr".into(), f64::from(self.spi_addr));
         for (k, v) in &self.inputs {
             m.insert(k.clone(), *v);
         }
@@ -1384,8 +1384,8 @@ addr_mask = 0x7f
 
         let cal1 = i2c_read_burst(&mut bus, addr, 0x88, 26);
         let cal2 = i2c_read_burst(&mut bus, addr, 0xE1, 7);
-        let le16 = |b: &[u8], i: usize| i16::from_le_bytes([b[i], b[i + 1]]) as i32;
-        let leu16 = |b: &[u8], i: usize| u16::from_le_bytes([b[i], b[i + 1]]) as i32;
+        let le16 = |b: &[u8], i: usize| i32::from(i16::from_le_bytes([b[i], b[i + 1]]));
+        let leu16 = |b: &[u8], i: usize| i32::from(u16::from_le_bytes([b[i], b[i + 1]]));
         let (t1, t2, t3) = (leu16(&cal1, 0), le16(&cal1, 2), le16(&cal1, 4));
         let p = [
             leu16(&cal1, 6),
@@ -1399,12 +1399,12 @@ addr_mask = 0x7f
             le16(&cal1, 22),
         ];
         let h = [
-            cal1[25] as i32,
+            i32::from(cal1[25]),
             le16(&cal2, 0),
-            cal2[2] as i32,
-            ((cal2[3] as i8 as i32) << 4) | (cal2[4] & 0x0F) as i32,
-            ((cal2[5] as i8 as i32) << 4) | ((cal2[4] >> 4) as i32),
-            cal2[6] as i8 as i32,
+            i32::from(cal2[2]),
+            (i32::from(cal2[3] as i8) << 4) | i32::from(cal2[4] & 0x0F),
+            (i32::from(cal2[5] as i8) << 4) | i32::from(cal2[4] >> 4),
+            i32::from(cal2[6] as i8),
         ];
         assert_eq!((t1, t2, t3), (27504, 26435, -1000));
         assert_eq!(p, [36477, -10685, 3024, 2855, 140, -7, 15500, -14600, 6000]);
@@ -1413,9 +1413,9 @@ addr_mask = 0x7f
         let d = i2c_read_burst(&mut bus, addr, 0xF7, 8);
         assert_eq!(&d[0..3], &[0x65, 0x5A, 0xC0]);
         assert_eq!(&d[3..6], &[0x7E, 0xED, 0x00]);
-        let adc_p = ((d[0] as i32) << 12) | ((d[1] as i32) << 4) | ((d[2] as i32) >> 4);
-        let adc_t = ((d[3] as i32) << 12) | ((d[4] as i32) << 4) | ((d[5] as i32) >> 4);
-        let adc_h = ((d[6] as i32) << 8) | (d[7] as i32);
+        let adc_p = (i32::from(d[0]) << 12) | (i32::from(d[1]) << 4) | (i32::from(d[2]) >> 4);
+        let adc_t = (i32::from(d[3]) << 12) | (i32::from(d[4]) << 4) | (i32::from(d[5]) >> 4);
+        let adc_h = (i32::from(d[6]) << 8) | i32::from(d[7]);
         assert_eq!((adc_p, adc_t, adc_h), (415148, 519888, 30000));
 
         let (t_fine, t) = bme280_compensate_t(adc_t, t1, t2, t3);
@@ -1423,7 +1423,7 @@ addr_mask = 0x7f
         assert_eq!(bme280_compensate_p(adc_p, t_fine, p), 100656);
         let h_q = bme280_compensate_h(adc_h, t_fine, h);
         assert_eq!(h_q, 55759);
-        let rh = h_q as f64 / 1024.0;
+        let rh = f64::from(h_q) / 1024.0;
         assert!((54.0..55.0).contains(&rh), "{rh}");
     }
 
@@ -1441,7 +1441,7 @@ addr_mask = 0x7f
         assert_eq!((be(0), be(2)), (0, 0), "accel X/Y at rest");
         assert_eq!(be(4), 16384, "accel Z = +1 g at 16384 LSB/g");
         assert_eq!(be(8), 32750, "gyro X = 250 °/s at 131 LSB/(°/s)");
-        let temp_c = be(6) as f64 / 340.0 + 36.53;
+        let temp_c = f64::from(be(6)) / 340.0 + 36.53;
         assert!((temp_c - 25.0).abs() < 0.05, "{temp_c}");
     }
 
@@ -1491,7 +1491,7 @@ style = "i2c_pointer"
         i2c_write_u16(&mut bus, addr, 0x01, 0x0200);
         {
             let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
-            assert_eq!(s.store("config"), Some(0x0200 as f64));
+            assert_eq!(s.store("config"), Some(f64::from(0x0200)));
             assert_eq!(s.store("pga"), Some(1.0));
             assert_eq!(s.ignored_write_bytes(), 0);
         }
@@ -1770,7 +1770,7 @@ style = "i2c_pointer"
             i2c_write(&mut bus, 0x60, &fast_write_pair(code));
             assert_eq!(dac_code(&bus, 0x60, 0), code);
             assert!(
-                (dac_vout(&bus, 0x60, 0) - code as f64 * 0.001).abs() < 1e-9,
+                (dac_vout(&bus, 0x60, 0) - f64::from(code) * 0.001).abs() < 1e-9,
                 "code {code}"
             );
         }
@@ -1795,7 +1795,7 @@ style = "i2c_pointer"
         let hi = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
         let lo = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
         bus.dispatch(I2cEvent::Stop { addr: 0x60 });
-        assert_eq!((((hi & 0x0F) as u16) << 8) | lo as u16, 100);
+        assert_eq!((u16::from(hi & 0x0F) << 8) | u16::from(lo), 100);
     }
 
     /// Multi-Write (C2C1C0 = 010, W1W0 = 01) names its channel in the command

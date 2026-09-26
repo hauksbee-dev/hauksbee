@@ -444,7 +444,7 @@ impl I2cSlave for Eeprom24c {
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("ptr".into(), self.ptr as f64);
         m.insert("page_size".into(), self.page_size as f64);
-        m.insert("word_address_bytes".into(), self.word_address_bytes as f64);
+        m.insert("word_address_bytes".into(), f64::from(self.word_address_bytes));
         m
     }
 
@@ -591,7 +591,7 @@ impl I2cSlave for Lm75 {
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("temp_c".into(), self.temp_c);
-        m.insert("pointer".into(), self.pointer as f64);
+        m.insert("pointer".into(), f64::from(self.pointer));
         m
     }
 
@@ -604,9 +604,9 @@ impl I2cSlave for Lm75 {
 }
 
 fn be_to_temp(msb: u8, lsb: u8) -> f64 {
-    let raw = ((msb as u16) << 8 | lsb as u16) as i16;
+    let raw = (u16::from(msb) << 8 | u16::from(lsb)) as i16;
     // Right-justify (drop the 5 unused LSBs) and scale.
-    (raw >> 5) as f64 * 0.125
+    f64::from(raw >> 5) * 0.125
 }
 
 /// Alias kept for the brief's "BME280 or LM75" choice: LM75 is the modelled

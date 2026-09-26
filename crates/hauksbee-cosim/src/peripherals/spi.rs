@@ -597,7 +597,7 @@ impl SpiSlave for Spi25Eeprom {
             }
             SpiCmd::Read => {
                 if self.addr_bytes < 2 {
-                    self.addr = (self.addr << 8) | mosi as u16;
+                    self.addr = (self.addr << 8) | u16::from(mosi);
                     self.addr_bytes += 1;
                     0xFF
                 } else {
@@ -612,7 +612,7 @@ impl SpiSlave for Spi25Eeprom {
             }
             SpiCmd::Write => {
                 if self.addr_bytes < 2 {
-                    self.addr = (self.addr << 8) | mosi as u16;
+                    self.addr = (self.addr << 8) | u16::from(mosi);
                     self.addr_bytes += 1;
                     0xFF
                 } else {
@@ -1168,9 +1168,9 @@ mod tests {
         bus.transfer(0x01); // start byte
         let hi = bus.transfer(3 << 4); // single-ended, channel 3
         let lo = bus.transfer(0x00);
-        let counts = (((hi & 0x03) as u16) << 8) | lo as u16;
+        let counts = (u16::from(hi & 0x03) << 8) | u16::from(lo);
         // 2.5/5.0 * 1024 = 512.
-        assert!((counts as i32 - 512).abs() <= 1, "counts {counts} not ~512");
+        assert!((i32::from(counts) - 512).abs() <= 1, "counts {counts} not ~512");
     }
 
     #[test]
@@ -1185,7 +1185,7 @@ mod tests {
             bus.transfer(0x01);
             let hi = bus.transfer(0 << 4);
             let lo = bus.transfer(0x00);
-            (((hi & 0x03) as u16) << 8) | lo as u16
+            (u16::from(hi & 0x03) << 8) | u16::from(lo)
         };
         // One-quarter scale: 1024 * 0.25 = 256 exactly (1023*0.25 = 255.75 → 256
         // by rounding, so pick a fraction where the two formulas diverge).

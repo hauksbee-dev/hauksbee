@@ -648,7 +648,7 @@ mod tests {
         // Step forward 4 detents -> full Gray cycle back to phase 0.
         let mut seq = Vec::new();
         for step in 1..=4 {
-            enc.set_value(step as f64);
+            enc.set_value(f64::from(step));
             seq.push(GRAY[enc.phase as usize]);
         }
         assert_eq!(
