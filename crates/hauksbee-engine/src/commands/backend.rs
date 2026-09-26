@@ -33,6 +33,16 @@ fn print_backend_line(resolved: &Resolved) {
 
 // ── show ─────────────────────────────────────────────────────────────────────
 
+/// The extraction backend `show` resolves and whether it can run, as
+/// `(available, "<backend> (<why chosen>): <detail>")`. Nothing is called.
+pub fn extract_status() -> anyhow::Result<(bool, String)> {
+    let (_, resolved) = load_and_resolve()?;
+    let status = resolved.status(&ProcessHost, resolved.backend);
+    let why = resolved.backend_source.describe();
+    let line = format!("{} ({why}): {}", resolved.summary(), status.detail);
+    Ok((status.available, line))
+}
+
 /// `hauksbee models backend show [--json]`
 pub fn show(json: bool) -> anyhow::Result<()> {
     let (loaded, resolved) = load_and_resolve()?;

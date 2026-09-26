@@ -51,6 +51,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 
 use crate::extract_config::{self, ProcessHost, Resolved, ResolvedApi};
+use crate::extract_output as output;
 use crate::extract_progress as progress;
 use crate::schema::{ComponentKind, ModelEntry};
 use crate::sensor_spec::{Bus, SensorSpec};
@@ -332,13 +333,23 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
     );
 
     let (part, kind) = (args.part.as_str(), args.kind_str.as_str());
+    // The destination is settled before anything is sent: an existing model
+    // may be hand-corrected, and finding that out after a paid run is too late.
+    let sensor = is_sensor_kind(kind);
+    let suffix = if sensor { ".sensor.toml" } else { ".toml" };
+    let out_dir = args.out_dir.clone().unwrap_or_else(default_out_dir);
+    let out_path = out_dir.join(format!("{}{suffix}", sanitise_filename(part)));
+    if !args.force && out_path.exists() {
+        let shown = out_path.display();
+        bail!("{shown} already exists, and it may hold your corrections; hauksbee will not overwrite it. Nothing was sent. Move or delete it, write the draft elsewhere with --out-dir, or pass --force to replace it.");
+    }
     // Declarative register-map sensor kinds emit a `[sensor]` spec validated
     // as a `SensorSpec`, NOT the SPICE `[[models]]` schema.
-    let (raw, id, suffix) = if is_sensor_kind(kind) {
+    let (raw, id) = if sensor {
         let prompt = build_sensor_prompt(part, kind, &pdf_text);
         let raw = call_backend(&prompt, &args, Reply::Sensor { part, kind })?;
         let name = validate_sensor_reply(&raw, part, kind)?.sensor.name;
-        (raw, name, ".sensor.toml")
+        (raw, name)
     } else {
         // An explicit kind the schema cannot accept fails HERE, before any
         // datasheet text is sent anywhere. A behavioural FAMILY (charger/pmic
@@ -357,14 +368,12 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         let prompt = build_prompt(part, kind, &pdf_text);
         let raw = call_backend(&prompt, &args, Reply::Model { part, kind })?;
         let id = parse_and_validate_reply(&raw, part, kind)?.id;
-        (raw, id, ".toml")
+        (output::finalise(&raw, part, &args.pdf)?, id)
     };
 
-    let out_dir = args.out_dir.clone().unwrap_or_else(default_out_dir);
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
-    let out_path = out_dir.join(format!("{}{suffix}", sanitise_filename(part)));
-    std::fs::write(&out_path, &raw)
+    output::publish(&out_path, &raw, args.force)
         .with_context(|| format!("writing output to {}", out_path.display()))?;
     progress::out(&format!(
         "[model-extract] written: {}\n{id}",
@@ -699,6 +708,8 @@ pub struct Args {
     /// `<checker> models lint model.toml`. `None` (the standalone binary)
     /// tells the agent there is no checker rather than letting it find one.
     pub checker: Option<PathBuf>,
+    /// Replace an existing `<part>.toml` rather than refuse (`--force`).
+    pub force: bool,
 }
 
 impl Args {
@@ -717,6 +728,7 @@ impl Args {
             api_base: None,
             api_key_env: None,
             checker: None,
+            force: false,
         }
     }
 
@@ -796,7 +808,7 @@ pub const CONSENT_NOTICE: &str =
      Code out of your home and temporary directories and off the web, but Antigravity, or \
      Codex in another sandbox mode, can read anything your account can. Nothing is sent until \
      you ask for it. The result is a draft for you to check, not a measurement: a model it \
-     writes carries provenance \"datasheet-extracted\".";
+     writes carries tier \"datasheet-derived\" and the sha256 of the PDF it read.";
 
 /// Ask a yes/no question on the terminal, the prompt going to `out`; only `y`
 /// or `yes` is a yes. A pipe cannot answer, and guessing "yes" on its behalf
@@ -849,6 +861,7 @@ pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
                 out.backend = Some(value("a value (codex, claude-code, agy, or api)")?.parse()?)
             }
             "--api-base" => out.api_base = Some(value("a value")?),
+            "--force" => out.force = true,
             "--api-key-env" => {
                 let name = value("an environment variable NAME")?;
                 validate_api_key_env_name(&name)?;
@@ -877,6 +890,7 @@ OPTIONS:
                           (charger|pmic|balancer are behavioural families;
                           i2c_sensor|spi_sensor give a [sensor] spec, not SPICE)
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
+    --force               Replace an existing model of the same name
     --model <id>          Model for the extraction agent (default: the
                           backend's own, e.g. claude-opus-5 for claude-code,
                           gemini-3.8-flash for agy, gpt-5.6-sol for codex)

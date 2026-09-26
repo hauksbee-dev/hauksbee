@@ -43,6 +43,7 @@ pub mod behavioral;
 mod check;
 pub mod datasheet;
 pub mod extract_config;
+pub mod extract_output;
 pub mod extract_progress;
 pub mod logic_spec;
 pub mod matcher;
@@ -746,7 +747,7 @@ impl ModelLibrary {
                     .into_iter()
                     .collect(),
                 model: Some(le.compiled.entry.clone()),
-                confidence: score_to_confidence(rank(le).2),
+                confidence: score_to_confidence(rank(le).2 + le.compiled.outright_bonus()),
                 query: q.clone(),
                 source: Some(le.layer.coarse_name().to_string()),
                 layer: Some(le.layer),
@@ -1265,6 +1266,14 @@ mod tests {
         });
         assert_eq!(res.confidence, Confidence::Unresolved);
         assert!(res.model.is_none());
+
+        // A rule listing the value outright is exact; a family pattern is not.
+        for (rule, want) in [("^XY1$", Confidence::Exact), ("^XY1", Confidence::Family)] {
+            let card = format!("[[models]]\nid = 'x'\nkind = 'ignore'\nmatch.value_re = '{rule}'");
+            let mut lib = ModelLibrary::empty();
+            lib.load_toml_str(&card, "x", SourceLayer::Builtin).unwrap();
+            assert_eq!(by_value(&lib, "XY1").confidence, want, "{rule}");
+        }
     }
 
     #[test]

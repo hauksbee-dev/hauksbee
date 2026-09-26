@@ -128,6 +128,16 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         summary: "STM32 / nRF52 / RISC-V firmware co-sim",
     });
 
+    // Datasheet extraction, resolved as `models backend show` resolves it.
+    let (ok, detail) = super::backend::extract_status()
+        .unwrap_or_else(|e| (false, format!("extraction config unreadable: {e:#}")));
+    backends.push(Backend {
+        name: "extract",
+        status: if ok { "ok" } else { "absent" },
+        detail: detail.replace('\n', " "),
+        summary: "datasheet model extraction (`hauksbee models backend show`)",
+    });
+
     if json {
         let arr: Vec<serde_json::Value> = backends
             .iter()

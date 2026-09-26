@@ -27,7 +27,6 @@
 // Test code is exempt: an unwrap in a test is an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -937,24 +936,12 @@ fn save_to_dir(
 ) -> Result<String, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let path = dir.join(file_name_for(part, !sensor));
-    // Write and fsync a private file in the destination directory, then publish
-    // it with a no-clobber atomic persist. Opening the final path first exposes
-    // a partially-written TOML document to a concurrent model-library scan.
-    let mut draft = tempfile::NamedTempFile::new_in(dir)
-        .map_err(|e| format!("could not create a draft in {}: {e}", dir.display()))?;
-    if let Err(e) = draft
-        .write_all(toml_text.as_bytes())
-        .and_then(|()| draft.as_file().sync_all())
-    {
-        return Err(format!("could not write {}: {e}", path.display()));
-    }
-    match draft.persist_noclobber(&path) {
-        Ok(_) => {}
-        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(existing_model_error(&path));
-        }
-        Err(e) => return Err(format!("could not publish {}: {}", path.display(), e.error)),
-    }
+    // The same no-clobber publish the CLI uses: a scan never sees half a file.
+    let published = hauksbee_models::extract_output::publish(&path, toml_text, false);
+    published.map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => existing_model_error(&path),
+        _ => format!("could not write {}: {e}", path.display()),
+    })?;
 
     let coverage_note = if sensor {
         None

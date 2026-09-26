@@ -1096,18 +1096,32 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
         p.push("digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing");
         return;
     }
+    p.0.extend(missing_pin_roles(entry));
+}
+
+/// Why a card's pin map leaves it OPEN at bind time: one line per role the
+/// binder's path for its kind reads (`bind_vreg`, `bind_adj_vreg`, the device
+/// binders) that the map does not declare. `models resolve` reports the same
+/// lines, so a card that lints clean is not left open for its pin map.
+pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     // A behavioral part (converter/FSM/DAC power IC) references its pins from
     // the [models.behavioral] block by arbitrary datasheet names, NOT through
-    // the simple analog binder, so the canonical anchor roles do not apply.
-    if entry.pins.is_empty() || !entry.behavioral.is_empty() {
-        return;
+    // the simple analog binder, so the canonical anchor roles do not apply;
+    // except a vreg, which `bind_vreg` binds by role unless a converter owns it.
+    let conv = entry.behavioral.converter.as_ref();
+    let vreg = entry.kind == ComponentKind::Vreg;
+    if entry.pins.is_empty() || (!entry.behavioral.is_empty() && !vreg) {
+        return Vec::new();
     }
+    let conv_roles = conv.map(|c| [[c.out_pin.as_str()], [c.in_pin.as_str()]]);
     // Each inner slice is one required role; the model satisfies it by mapping
     // some pin to ANY name in the slice, after normalization. Names are the
     // binder's accepted aliases. analog_switch is deliberately EXCLUDED: it
     // binds SPST (`in_out_a`/`in_out_b`) and SPDT (`com`/`s0`/`s1`) forms with
     // too varied a vocabulary to anchor-check without false positives.
+    let conv_required: Vec<&[&str]> = conv_roles.iter().flatten().map(|r| &r[..]).collect();
     let required: &[&[&str]] = match entry.kind {
+        ComponentKind::Vreg if conv.is_some() => &conv_required,
         ComponentKind::Diode => &[&["anode", "a", "p"], &["cathode", "k", "n"]],
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
             &[&["collector", "c"], &["base", "b"], &["emitter", "e"]]
@@ -1130,21 +1144,17 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
             &["in_plus", "inp", "in+"],
             &["in_minus", "inn", "in-"],
         ],
-        _ => return,
+        _ => return Vec::new(),
     };
-
     let declared: HashSet<String> = entry.pins.values().map(|role| fold_role(role)).collect();
-
-    for family in required {
-        p.require(family.iter().any(|name| declared.contains(*name)), || {
-            format!(
-                "[models.pins] declares no '{}' pin (a {:?} needs it); the part would bind OPEN. Accepted role names: {}",
-                family[0],
-                entry.kind,
-                family.join(" / ")
-            )
-        });
-    }
+    let missing = required
+        .iter()
+        .filter(|f| !f.iter().any(|n| declared.contains(&fold_role(n))));
+    let why = |f: &&[&str]| {
+        let (role, kind, names) = (f[0], entry.kind, f.join(" / "));
+        format!("[models.pins] declares no '{role}' pin (a {kind:?} needs it); the part would bind OPEN. Accepted role names: {names}")
+    };
+    missing.map(why).collect()
 }
 
 /// A role folded onto its base: lowercase, less a trailing channel suffix
@@ -1613,6 +1623,11 @@ mod tests {
         let mut vdd = vreg(&[]);
         pins(&mut vdd, &[("1", "vdd"), ("2", "out"), ("3", "gnd")]);
         rejects(&vdd, "declares no 'in' pin");
+        // A behavioral pin without a converter still binds through `bind_vreg`.
+        let mut sink = vreg(&[]);
+        pins(&mut sink, &[("1", "in"), ("2", "gate"), ("3", "gnd")]);
+        sink.behavioral.pins.insert("gate".into(), Default::default());
+        rejects(&sink, "declares no 'out' pin");
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),

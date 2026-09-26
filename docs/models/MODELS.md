@@ -27,8 +27,11 @@ The four authoring routes:
   the web report, from
   `hauksbee models extract`, or from the standalone `model-extract` binary.
   Every one of the three states what leaves your machine and asks before it
-  sends anything. The result is a draft to check, carries provenance
-  `datasheet-extracted`. Electrical model cards land in
+  sends anything. The result is a draft to check. It carries tier
+  `datasheet-derived` (the machine-draft rung in
+  [SOURCE_LADDER.md](SOURCE_LADDER.md); the web card labels it
+  `datasheet-extracted`) and a `[[models.source.references]]` entry pinning the
+  PDF's sha256. Electrical model cards land in
   `~/.hauksbee/models/` and load as user-dir entries; register-map sensor
   drafts use `<part>.sensor.toml` and must be reviewed and attached explicitly.
 - **Hand-written behavioural** TOML: a `[models.behavioral]` entry you
@@ -90,6 +93,22 @@ hauksbee models extract \
 It prints what will leave your machine and waits for a yes. In a script, where
 there is nobody to ask, it refuses rather than assuming: pass `--yes` (or `-y`)
 when you mean it.
+
+If `<part>.toml` (or `<part>.sensor.toml`) already exists in the output
+directory it refuses before sending anything, since that file may hold your
+corrections: move it, pick another `--out-dir`, or pass `--force` to replace
+it. A saved `[[models]]` draft is stamped by the tool, not the model:
+`tier = "datasheet-derived"` and a reference naming the PDF file and its
+sha256 (no URL: the tool only knows the local file; add one when you review).
+A `[sensor]` spec has no source table and is saved as validated.
+A `value_re` that is just the literal part name is rewritten to a
+case- and separator-insensitive rule (`^PART[-_ ]?002DD$` style) that also
+admits the ordering codes the draft lists under `[models.variant].orderable`,
+and nothing with other digits. A value rule that lists the value outright (a
+finite, anchored set of spellings) resolves with confidence `exact`; a family
+pattern resolves `family`. `hauksbee doctor` shows the resolved extraction
+backend on an `extract` row, from the same resolution as
+`hauksbee models backend show`, without calling a model.
 
 ### Choosing a backend
 
@@ -277,6 +296,12 @@ run the same lint again, then check the board binding:
 hauksbee models lint U3-model.toml
 hauksbee models resolve path/to/board.kicad_pcb --models-dir .
 ```
+
+Lint also refuses a pin map missing a role the binder reads for the kind (a
+set-point `vreg` without `in`/`out`, including one that carries only
+`[models.behavioral.pins]`, since no converter owns its output), so a card
+that would bind OPEN at run time fails lint, and `resolve` prints that reason
+and shows the part UNRESOLVED instead of bound.
 
 For a shareable pack, use `--pack-dir` instead. It writes `pack.toml` and
 `models/<id>.toml`, refuses to overwrite either, and leaves the license as an
