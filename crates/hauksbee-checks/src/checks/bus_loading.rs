@@ -121,11 +121,7 @@ fn effective_pullup(board: &ExtractedBoard, net_id: i64) -> Option<(f64, f64, Ve
             refs.push(c.reference.clone());
         }
     }
-    if inv_r > 0.0 {
-        Some((1.0 / inv_r, rail_v, refs))
-    } else {
-        None
-    }
+    (inv_r > 0.0).then_some((1.0 / inv_r, rail_v, refs))
 }
 
 /// Count the distinct non-resistor devices attached to the net (the bus

@@ -2019,11 +2019,7 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
             actionable: true,
             message: pf.what.clone(),
             plain: pf.what.clone(),
-            fix: if pf.fix.is_empty() {
-                None
-            } else {
-                Some(pf.fix.clone())
-            },
+            fix: (!pf.fix.is_empty()).then(|| pf.fix.clone()),
         })
         .collect()
 }

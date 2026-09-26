@@ -386,13 +386,8 @@ fn pin_overcurrent_fires_on_driver_leg_current() {
         };
         let mut mon = StressMonitor::new(vec![meta]);
         let node_v = |_: NodeId| 0.0;
-        let branch = move |id: hauksbee_ir::DeviceId| -> Option<f64> {
-            if id == vd {
-                Some(pin_amps)
-            } else {
-                None
-            }
-        };
+        let branch =
+            move |id: hauksbee_ir::DeviceId| -> Option<f64> { (id == vd).then_some(pin_amps) };
         let mut all = Vec::new();
         for _ in 0..8 {
             all.extend(mon.evaluate(&mut circuit, &node_v, &branch, 0.0));

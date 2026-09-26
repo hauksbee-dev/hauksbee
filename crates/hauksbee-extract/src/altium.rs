@@ -1522,13 +1522,8 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
     }
 
     let net_id = |field: u16| -> Option<i64> {
-        if field == NONE_U16 || field == POLYGON_BOARD_NET {
-            None
-        } else if (field as usize) < net_names.len() {
-            Some(i64::from(field) + 1)
-        } else {
-            None
-        }
+        let real = field != NONE_U16 && field != POLYGON_BOARD_NET;
+        (real && (field as usize) < net_names.len()).then(|| i64::from(field) + 1)
     };
 
     // Use the same reference semantics as DRC ownership: replicated channels

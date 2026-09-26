@@ -873,11 +873,7 @@ struct InstallSlot;
 
 impl InstallSlot {
     fn acquire() -> Option<Self> {
-        if INSTALL_ACTIVE.swap(true, Ordering::AcqRel) {
-            None
-        } else {
-            Some(Self)
-        }
+        (!INSTALL_ACTIVE.swap(true, Ordering::AcqRel)).then_some(Self)
     }
 }
 

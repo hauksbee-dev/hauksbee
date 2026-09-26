@@ -1711,11 +1711,7 @@ fn parse_dc(line: &Line, circuit: &Circuit) -> Result<DcDirective, SpiceError> {
             step,
         })
     };
-    let outer = if args.len() == 8 {
-        Some(group(&args[4..])?)
-    } else {
-        None
-    };
+    let outer = (args.len() == 8).then(|| group(&args[4..])).transpose()?;
     Ok(DcDirective {
         inner: group(&args[..4])?,
         outer,

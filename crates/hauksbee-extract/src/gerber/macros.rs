@@ -345,11 +345,7 @@ fn eval_expr(expr: &str, vars: &HashMap<u32, f64>) -> Option<f64> {
     let tokens = tokenize(expr, vars)?;
     let mut p = Parser { t: &tokens, i: 0 };
     let v = p.expr()?;
-    if p.i == p.t.len() {
-        Some(v)
-    } else {
-        None
-    }
+    (p.i == p.t.len()).then_some(v)
 }
 
 #[derive(Debug, Clone, PartialEq)]

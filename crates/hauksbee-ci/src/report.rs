@@ -1261,11 +1261,7 @@ fn number_after(text: &str, prefix: &str) -> Option<String> {
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
-    if n.chars().any(|c| c.is_ascii_digit()) {
-        Some(n)
-    } else {
-        None
-    }
+    n.chars().any(|c| c.is_ascii_digit()).then_some(n)
 }
 
 /// A threshold of zero means the window was never past the end of anything, so

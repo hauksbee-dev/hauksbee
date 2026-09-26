@@ -353,11 +353,7 @@ impl Layout {
             return None;
         }
         let ints = &self.bjt_internal_of[id.0 as usize];
-        if ints.iter().all(std::option::Option::is_none) {
-            None
-        } else {
-            Some(ints)
-        }
+        ints.iter().any(Option::is_some).then_some(ints)
     }
 
     /// Internal-node unknowns of a drain/source series-resistance MOSFET, in
@@ -381,11 +377,7 @@ impl Layout {
             return None;
         }
         let ints = &self.mos_internal_of[id.0 as usize];
-        if ints.iter().all(std::option::Option::is_none) {
-            None
-        } else {
-            Some(ints)
-        }
+        ints.iter().any(Option::is_some).then_some(ints)
     }
 }
 

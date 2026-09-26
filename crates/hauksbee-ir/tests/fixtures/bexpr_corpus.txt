@@ -1,0 +1,80 @@
+# Behavioral-expression corpus for the differential and timing tests in
+# crates/hauksbee-ir/src/bexpr.rs: one canonical expression per line; `#` lines
+# are comments. Every line must compile.
+# Converter loop expressions (hauksbee-bind's `loop_exprs` template instantiated
+# for a limited buck, then for an input-limited non-buck):
+max(min(0.5*(math::hypot(__d1+__d2+min(max(__d3*100.0,0.0),1.0)*3.0,0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))-math::hypot(__d1+__d2-(min(max(__d3*100.0,0.0),1.0)*3.0),0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))),(((1.0-0.050000000000000044*min(max(__d3*100.0,0.0),1.0))*max(__d4,0.0))-__d0)/0.02)-0.25*max(0.2*__d4*min(max(__d3*100.0,0.0),1.0),1e-6)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(max(__d3*100.0,0.0),1.0)*3.0,0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))-math::hypot(__d1+__d2-(min(max(__d3*100.0,0.0),1.0)*3.0),0.02*(min(max(__d3*100.0,0.0),1.0)*3.0)))-(((1.0-0.050000000000000044*min(max(__d3*100.0,0.0),1.0))*max(__d4,0.0))-__d0)/0.02)/max(0.2*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(max(__d3*100.0,0.0),1.0)*3.0,0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))-math::hypot(__d1+__d2-(min(max(__d3*100.0,0.0),1.0)*3.0),0.02*(min(max(__d3*100.0,0.0),1.0)*3.0)))-(((1.0-0.050000000000000044*min(max(__d3*100.0,0.0),1.0))*max(__d4,0.0))-__d0)/0.02)/max(0.2*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0),-__d0/0.02)
+1e-6*(31415.926535897932*(max(min(0.5*(math::hypot(__d1+__d2+min(max(__d3*100.0,0.0),1.0)*3.0,0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))-math::hypot(__d1+__d2-(min(max(__d3*100.0,0.0),1.0)*3.0),0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))),(((1.0-0.050000000000000044*min(max(__d3*100.0,0.0),1.0))*max(__d4,0.0))-__d0)/0.02)-0.25*max(0.2*__d4*min(max(__d3*100.0,0.0),1.0),1e-6)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(max(__d3*100.0,0.0),1.0)*3.0,0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))-math::hypot(__d1+__d2-(min(max(__d3*100.0,0.0),1.0)*3.0),0.02*(min(max(__d3*100.0,0.0),1.0)*3.0)))-(((1.0-0.050000000000000044*min(max(__d3*100.0,0.0),1.0))*max(__d4,0.0))-__d0)/0.02)/max(0.2*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(max(__d3*100.0,0.0),1.0)*3.0,0.02*(min(max(__d3*100.0,0.0),1.0)*3.0))-math::hypot(__d1+__d2-(min(max(__d3*100.0,0.0),1.0)*3.0),0.02*(min(max(__d3*100.0,0.0),1.0)*3.0)))-(((1.0-0.050000000000000044*min(max(__d3*100.0,0.0),1.0))*max(__d4,0.0))-__d0)/0.02)/max(0.2*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0),-__d0/0.02)-__d1)-1.2566370614359175*__d1)
+29.53097094374405*(__d6-__d5)-__d2
+max(min(0.5*(math::hypot(__d1+__d2+min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))-math::hypot(__d1+__d2-(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))),((1e4)-__d0)/0.05)-0.25*max(0.08*__d4*min(max(__d3*100.0,0.0),1.0),1e-6)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))-math::hypot(__d1+__d2-(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)))))-((1e4)-__d0)/0.05)/max(0.08*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))-math::hypot(__d1+__d2-(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)))))-((1e4)-__d0)/0.05)/max(0.08*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0),-__d0/0.05)
+1e-6*(15707.963267948966*(max(min(0.5*(math::hypot(__d1+__d2+min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))-math::hypot(__d1+__d2-(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))),((1e4)-__d0)/0.05)-0.25*max(0.08*__d4*min(max(__d3*100.0,0.0),1.0),1e-6)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))-math::hypot(__d1+__d2-(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)))))-((1e4)-__d0)/0.05)/max(0.08*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0)*max(1.0-math::abs(0.5*(math::hypot(__d1+__d2+min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))))-math::hypot(__d1+__d2-(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3))),0.02*(min(1000.0,max(__d3,0.0)*0.85*max(__d4,0.0)/max(__d0,1e-3)))))-((1e4)-__d0)/0.05)/max(0.08*__d4*min(max(__d3*100.0,0.0),1.0),1e-6),0.0),-__d0/0.05)-__d1)-0.6283185307179587*__d1)
+1.382300767579509*(__d6-__d5)-__d2
+# SPICE B-source cards from the solver and loader tests, canonicalized:
+0.001*(math::exp(__d0/0.2)-1.0)
+0.001*math::tanh(__d0) + 2.0*__d1
+4.0*__d0
+math::ln(0.5 - time)
+math::ln(__d0)
+math::sin(6.283185307179586*1000.0*time)
+math::tanh(__d0) + 50.0*__d1
+0.001/__d0
+2.5 + 2.48*math::tanh(10000.0*(__d0-__d1)/2.48)
+2.0*math::tanh(__d0)
+0.5*math::sin(6.283185307179586e3*time) + 0.25*math::sin(1.8849555921538758e4*time)
+(2.0)*math::tanh(__d0) + 3.0*__d1 - (__d0 - __d2)^2.0 + 1.0/2.0
+0.5*__d0 + 100.0*math::tanh(__d1) + 0.1*time
+0.3 + 0.7*(max(0.5*(1.0+math::tanh(1200.0*(__d0-__d1)/max(__d2,1.0))), 1.0-0.5*(1.0+math::tanh(1200.0*(__d3-0.7)/max(__d2,1.0)))) + 1.0-__d6/max(__d2,1.0)) - 0.5*(1.0+math::tanh(1200.0*(__d4-__d5)/max(__d2,1.0)))*0.5*(1.0+math::tanh(1200.0*(__d3-0.7)/max(__d2,1.0)))
+0.1 + (__d0-1.4-0.1)*0.5*(1.0+math::tanh(20.0*(__d1-0.5*__d0)/max(__d0,1.0)))
+# The binder's 555 and open-collector forms, whose `{}`-formatted gains are integers:
+0.3 + 0.7*(max(0.5*(1.0+math::tanh(1200*(__d0-__d1)/max(__d2,1.0))), 1.0-0.5*(1.0+math::tanh(1200*(__d3-0.7)/max(__d2,1.0)))) + 1.0-__d6/max(__d2,1.0)) - 0.5*(1.0+math::tanh(1200*(__d4-__d5)/max(__d2,1.0)))*0.5*(1.0+math::tanh(1200*(__d3-0.7)/max(__d2,1.0)))
+0.1 + (__d1-1.4-0.1)*0.5*(1.0+math::tanh(20*(__d0-0.5*__d1)/max(__d1,1.0)))
+__d0*max(__d1,0.0)/32.5 + __d1*0.00000000002
+__d0 / (0.0)
+# Every builtin the loader maps:
+math::log10(__d0) + math::log2(__d1) + math::sqrt(__d1) + math::cbrt(__d0)
+math::sin(__d0) + math::cos(__d0) + math::tan(__d0) + math::asin(__d1) + math::acos(__d1) + math::atan(__d0)
+math::sinh(__d0) + math::cosh(__d0) + math::tanh(__d0) + math::asinh(__d0) + math::acosh(__d1) + math::atanh(__d1)
+math::atan2(__d0, __d1) + math::hypot(__d0, __d1) + math::pow(__d0, __d1)
+floor(__d0) + ceil(__d1) + round(__d0 * 2.5) + math::abs(__d1)
+__d0 % __d1 + __d0 ^ __d1 - -__d0
+if(__d0 > __d1, __d0, __d1) + if(__d0 <= 0.0 || __d1 >= 1.0, 1.0, 2.0) * if(__d0 < __d1 && __d0 != 0.0, 3.0, 4.0)
+(__d0 == __d1) + (__d0 != __d1)
+min(__d0, __d1, time) + max(__d0, __d1, -time)
+# Integer and boolean semantics (evalexpr keeps literals without a point as ints):
+__d0 / 2 + 1 / 2 + 7 % 3 + 2 ^ 3
+min(__d0, 1) / 2
+max(__d0, 1) / 2 + min(3, 2) * 5
+if(__d0 > 1, 5, 2) / 2
+if(__d0 > 1, true, false) == true
+__d0 == 1
+__d0 == 1.0
+math::abs(-3) + math::abs(__d0 - 3)
+!(__d0 > 0.0) || __d1 > 0.0
+-(9223372036854775807 * 1) - 1 + __d0
+# Evaluation faults
+# (faults, and forms no emitter produces, left to evalexpr; the lines above all lower):
+9223372036854775807 + 1 + __d0
+if(__d0 > 0.0, 9223372036854775807 * 2, __d0)
+5 % 0 * __d0
+1 / 0 + __d0
+__d0 > 0.0 && 1
+!__d0
+-(__d0 > 0.0)
+__d0 + true
+min(__d0)
+min(__d0, true)
+min((__d0, 1.0), 2.0)
+math::hypot(__d0)
+math::exp(__d0, __d1)
+if(__d0, 1.0, 2.0)
+if(__d0 > 0.0, 1.0)
+(__d0, 1.0)
+__d0; 2.0
+"text"
+__d0 + "text"
+typeof(__d0)
+math::is_nan(__d0 / __d1)
+unknown_fn(__d0)
+__d0 = 1.0
+()
+math::exp2(__d0) + math::log(__d0, __d1)

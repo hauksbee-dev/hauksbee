@@ -171,11 +171,7 @@ fn prompt_index(buf: &str) -> Option<usize> {
     }
     // The '(' must start a line (preceded by a newline or be at the buffer head).
     let preceding = stripped[..open].chars().last();
-    if preceding.is_none() || preceding == Some('\n') || preceding == Some('\r') {
-        Some(open)
-    } else {
-        None
-    }
+    matches!(preceding, None | Some('\n' | '\r')).then_some(open)
 }
 
 /// Strip ANSI escapes, the echoed command line, and trailing whitespace.

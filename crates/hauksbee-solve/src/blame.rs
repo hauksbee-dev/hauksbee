@@ -336,11 +336,7 @@ pub fn blame_clause(
             1.0 / worst
         ));
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("; "))
-    }
+    (!parts.is_empty()).then(|| parts.join("; "))
 }
 
 #[cfg(test)]

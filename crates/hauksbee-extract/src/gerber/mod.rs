@@ -1764,11 +1764,7 @@ fn is_archive_noise(name: &Path) -> bool {
 fn single_subdir(dir: &Path) -> Option<PathBuf> {
     let mut it = std::fs::read_dir(dir).ok()?.flatten();
     let first = it.next()?.path();
-    if it.next().is_none() && first.is_dir() {
-        Some(first)
-    } else {
-        None
-    }
+    (it.next().is_none() && first.is_dir()).then_some(first)
 }
 
 /// Minimal zip extractor (stored + deflate) so we don't pull a zip crate for
