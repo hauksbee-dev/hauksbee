@@ -345,11 +345,11 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
     }
     // Declarative register-map sensor kinds emit a `[sensor]` spec validated
     // as a `SensorSpec`, NOT the SPICE `[[models]]` schema.
-    let (raw, id) = if sensor {
+    let (raw, id, timed_out) = if sensor {
         let prompt = build_sensor_prompt(part, kind, &pdf_text);
-        let raw = call_backend(&prompt, &args, Reply::Sensor { part, kind })?;
+        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Sensor { part, kind })?;
         let name = validate_sensor_reply(&raw, part, kind)?.sensor.name;
-        (raw, name)
+        (raw, name, timed_out)
     } else {
         // An explicit kind the schema cannot accept fails HERE, before any
         // datasheet text is sent anywhere. A behavioural FAMILY (charger/pmic
@@ -366,15 +366,18 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
             );
         }
         let prompt = build_prompt(part, kind, &pdf_text);
-        let raw = call_backend(&prompt, &args, Reply::Model { part, kind })?;
+        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })?;
         let id = parse_and_validate_reply(&raw, part, kind)?.id;
-        (output::finalise(&raw, part, &args.pdf)?, id)
+        (output::finalise(&raw, part, &args.pdf)?, id, timed_out)
     };
 
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("creating output directory {}", out_dir.display()))?;
     output::publish(&out_path, &raw, args.force)
         .with_context(|| format!("writing output to {}", out_path.display()))?;
+    if let Some(t) = timed_out {
+        bail!(TimedOut(t.0, t.1, Some(out_path)));
+    }
     progress::out(&format!(
         "[model-extract] written: {}\n{id}",
         out_path.display()
@@ -562,6 +565,33 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
     }
     supply_relative_rows(spec.sensor.source.as_ref())?;
     Ok(spec)
+}
+
+/// An agent run killed at its time limit. When the sandbox held a lint-clean
+/// draft it is still saved for review (`kept`), and this stays the run's error
+/// so the exit status says the draft is incomplete. Fields: the tool, the
+/// limit in seconds, and where the kept draft was published.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0} timed out after {1}s{tail}", tail = timeout_tail(.2.as_deref()))]
+pub struct TimedOut(pub String, pub u64, pub Option<PathBuf>);
+
+/// What a timeout leaves the user: nothing, or a kept draft to review.
+fn timeout_tail(kept: Option<&Path>) -> String {
+    kept.map_or_else(
+        || {
+            " with no answer; retry with a tighter prompt, raise timeout_secs, or pick another \
+             backend (hauksbee models backend setup)"
+                .into()
+        },
+        |p| {
+            format!(
+                "; its last lint-clean draft was kept at {} for review, but it is INCOMPLETE and \
+                 may be missing sections beyond its [models.coverage] missing list. Review it, or \
+                 raise timeout_secs and re-run.",
+                p.display()
+            )
+        },
+    )
 }
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -2285,7 +2315,9 @@ impl Reply<'_> {
     }
 }
 
-fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
+/// The validated reply, plus the timeout when it is a timed-out run's last
+/// lint-clean draft rather than a finished answer.
+fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, Option<TimedOut>)> {
     // Test / offline hook: HAUKSBEE_EXTRACT_MOCK_REPLY points to a file holding
     // a canned backend reply. This exercises the full parse + validate path
     // with no codex and no network, and the reply is validated exactly like a
@@ -2295,7 +2327,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
             .with_context(|| format!("reading mock reply from {path}"))?;
         let raw = reply.complete(extract_toml_block(&canned, reply.table()));
         reply.check(&raw)?;
-        return Ok(raw);
+        return Ok((raw, None));
     }
 
     // Flags, then environment, then the config file, then defaults: one
@@ -2321,9 +2353,10 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
     let tool = match chosen {
         Backend::Api => {
             let request = ApiRequest::prepare(&resolved.api)?;
-            return validated_attempts(resolved.retries, prompt, reply, "api", |p| {
+            let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
                 Ok(extract_toml_block(&request.send(p)?, reply.table()))
             });
+            return raw.map(|raw| (raw, None));
         }
         agent => resolved.agent(agent).expect("agent").command.as_str(),
     };
@@ -2345,9 +2378,22 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
     let agent_prompt = prompt_for_agent_backend(prompt);
     let clause = verification_clause(&ws, reply.table());
     let base_prompt = format!("{agent_prompt}\n\n{clause}");
-    validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
+    let mut timed_out = None;
+    let raw = validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
         let _ = std::fs::remove_file(ws.answer_path());
-        let stdout = run_agent_once(&resolved, p, &ws)?;
+        let stdout = match run_agent_once(&resolved, p, &ws) {
+            // A killed run keeps its draft only if it passes the finished-answer check.
+            Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
+                let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
+                let draft = extract_toml_block(&draft, reply.table());
+                let t = e.downcast::<TimedOut>()?;
+                let checked = reply.check(&reply.complete(draft.clone()));
+                checked.map_err(|_| t.clone())?;
+                timed_out = Some(t);
+                return Ok(draft);
+            }
+            outcome => outcome?,
+        };
         // Prefer the file we asked for. Falling back to stdout keeps a model
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
@@ -2357,7 +2403,8 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
             .filter(|t| !t.trim().is_empty())
             .unwrap_or(stdout);
         Ok(extract_toml_block(&text, reply.table()))
-    })
+    });
+    raw.map(|raw| (raw, timed_out))
 }
 
 /// Fetch, validate, and retry with feedback: one loop for every backend.
@@ -2472,7 +2519,7 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
 /// it, and a mis-identified kind is the one error they are best placed to
 /// catch.
 fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
-    let reply = call_backend(&identify_prompt(&args.part, pdf_text), args, Reply::Word)?;
+    let (reply, _) = call_backend(&identify_prompt(&args.part, pdf_text), args, Reply::Word)?;
     kind_from_reply(&args.part, &reply.to_ascii_lowercase())
 }
 
@@ -3029,11 +3076,7 @@ fn wait_for_cli_backend(
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            bail!(
-                "{tool} timed out after {}s with no answer; retry with a tighter prompt, raise \
-                 timeout_secs, or pick another backend (hauksbee models backend setup)",
-                timeout.as_secs()
-            );
+            return Err(TimedOut(tool.to_string(), timeout.as_secs(), None).into());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -3759,7 +3802,7 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
     fn draft(src: PathBuf, text: &str, part: &str, kind: &str) -> (String, ModelEntry) {
         let prompt = build_prompt(part, kind, text);
         let args = Args::new(src, part.into(), kind.into());
-        let raw = call_backend(&prompt, &args, Reply::Model { part, kind }).expect("backend call");
+        let (raw, _) = call_backend(&prompt, &args, Reply::Model { part, kind }).expect("backend");
         let entry = parse_and_validate_reply(&raw, part, kind).unwrap();
         (raw, entry)
     }
@@ -4250,6 +4293,43 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             .to_string()
             .contains("custom wrapper"));
         assert!(smoke_test(&resolved, &mut |_| {}).is_err());
+    }
+
+    /// A timed-out agent's lint-clean draft is published, stamped and flagged,
+    /// and the run still fails; an invalid one is dropped as before.
+    #[cfg(unix)]
+    #[test]
+    fn timeout_keeps_only_a_lint_clean_draft_and_still_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let (dir, ex) = (tempfile::tempdir().unwrap(), FORMAT_EXAMPLES[0]);
+        let [pdf, agent, draft, cfg] = ["a.pdf", "agent", "draft", "c"].map(|f| dir.path().join(f));
+        let script = format!("#!/bin/sh\ncp {draft:?} model.toml\nexec sleep 30\n");
+        for (path, text) in [(&pdf, "%PDF-1.4\n"), (&cfg, ""), (&agent, script.as_str())] {
+            std::fs::write(path, text).unwrap();
+        }
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [
+            (extract_config::ENV_CONFIG_PATH, &cfg),
+            ("HAUKSBEE_CLAUDE_COMMAND", &agent),
+        ];
+        env.iter().for_each(|(k, v)| std::env::set_var(k, v));
+        std::env::set_var("HAUKSBEE_EXTRACT_TIMEOUT_SECS", "1");
+        let [(clean, kept), (bad, dropped)] = [ex.card, "[[models]]\nid = 1\n"].map(|text| {
+            std::fs::write(&draft, text).unwrap();
+            let out = tempfile::tempdir_in(dir.path()).unwrap();
+            let args = Args::new(pdf.clone(), ex.part.into(), ex.kind.into());
+            let args = args.backend(Some(Backend::ClaudeCode));
+            let args = args.out_dir(Some(out.path().into()));
+            let err = run(args).unwrap_err().downcast::<TimedOut>().unwrap();
+            let file = format!("{}.toml", sanitise_filename(ex.part));
+            (err, std::fs::read_to_string(out.path().join(file)).ok())
+        });
+        env.iter().for_each(|(k, _)| std::env::remove_var(k));
+        std::env::remove_var("HAUKSBEE_EXTRACT_TIMEOUT_SECS");
+        assert!(clean.to_string().contains("INCOMPLETE"), "{clean}");
+        assert!(kept.is_some_and(|k| k.contains("datasheet-derived") && k.contains("sha256")));
+        assert!(bad.2.is_none() && dropped.is_none(), "{bad}");
     }
 
     #[test]
