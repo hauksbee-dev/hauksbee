@@ -1,8 +1,0 @@
-# Clippy reads the nearest clippy.toml, so this one shadows the workspace root's:
-# keep its arity threshold in step with ../../clippy.toml.
-too-many-arguments-threshold = 12
-# Board, vendor and tool names this crate's docs cite as prose, not code.
-doc-valid-idents = [
-  "KiCad", "SparkFun", "ZSWatch", "PicoDVI", "LumenPnP", "EasyEDA", "PCBWay", "ClockworkPi",
-  "PolyKybd", "ODrive", "PowerPCB", "DevKit", "LibreSolar", "CubeSat", "BeagleBone", "..",
-]
