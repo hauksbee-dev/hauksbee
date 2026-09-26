@@ -41,6 +41,11 @@ fn has_role_ci(entry: &ModelEntry, role: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(role))
 }
 
+/// The message every role rule shares: `what` '`role`' is not a role in `[models.pins]`.
+fn not_a_role(what: impl std::fmt::Display, role: &str) -> String {
+    format!("{what} '{role}' is not a role in [models.pins]")
+}
+
 /// A role several pads may share as one net inside: supply, ground, NC, exposed pad.
 #[must_use]
 pub fn repeatable_role(role: &str) -> bool {
@@ -176,6 +181,8 @@ fn printed(entry: &ModelEntry, key: &str, v: f64) -> bool {
     rows.any(|r| [r.min, r.typ, r.max].iter().flatten().any(|x| hit(r, *x)))
 }
 
+// One table: each kind's required params and physical ranges, one arm per kind.
+#[allow(clippy::too_many_lines)]
 fn kind_rules(entry: &ModelEntry) -> KindRules {
     use ComponentKind::{
         AnalogSwitch, BjtNpn, BjtPnp, Comparator, Diode, Nmos, Opamp, Pmos, Timer, Vreg,
@@ -335,6 +342,8 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
 /// # Errors
 ///
 /// Returns every [`ValidationError`] found, not just the first.
+// The entry validator: one flat walk, one rule per line, in the order the card's tables appear.
+#[allow(clippy::too_many_lines)]
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut p = Problems::default();
     let params = &entry.params;
@@ -356,16 +365,14 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             } => {
                 supplies.extend([*min_v, *max_v, abs_max_v.unwrap_or(0.0)]);
                 p.require(has_role_ci(entry, pin), || {
-                    format!("operating envelope pin '{pin}' is not a role in [models.pins]")
+                    not_a_role("operating envelope pin", pin)
                 });
-                p.require(
-                    min_v.is_finite() && max_v.is_finite() && min_v < max_v,
-                    || {
-                        format!(
+                let ordered = min_v.is_finite() && max_v.is_finite() && min_v < max_v;
+                p.require(ordered, || {
+                    format!(
                         "operating envelope requires finite min_v < max_v, got {min_v} and {max_v}"
                     )
-                    },
-                );
+                });
                 p.require(
                     !abs_max_v.is_some_and(|v| !v.is_finite() || v < *max_v),
                     || format!("operating envelope abs_max_v must be finite and at least max_v {max_v}"),
@@ -374,9 +381,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             OperatingEnvelope::RailOrder { lower, upper, .. } => {
                 for (field, role) in [("lower", lower), ("upper", upper)] {
                     p.require(has_role_ci(entry, role), || {
-                        format!(
-                            "operating envelope {field} role '{role}' is not a role in [models.pins]"
-                        )
+                        not_a_role(format!("operating envelope {field} role"), role)
                     });
                 }
                 p.require(!lower.eq_ignore_ascii_case(upper), || {
@@ -707,6 +712,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+// One arm per peripheral kind, each a flat list of its rules.
+#[allow(clippy::too_many_lines)]
 fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Problems) {
     match peripheral {
         PeripheralSpec::I2cEeprom {
@@ -830,9 +837,7 @@ fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Pro
             };
             for (name, role) in roles {
                 p.require(!role.trim().is_empty() && has_role(entry, role), || {
-                    format!(
-                        "peripheral register-map {name} '{role}' is not a role in [models.pins]"
-                    )
+                    not_a_role(format!("peripheral register-map {name}"), role)
                 });
             }
             for (level, role) in required_high_roles
@@ -886,10 +891,7 @@ fn check_current_program(
 ) {
     let role_ok = |role: &str| !role.trim().is_empty() && has_role_ci(entry, role.trim());
     p.require(role_ok(&program.pin), || {
-        format!(
-            "current_program.pin '{}' is not a role in [models.pins]",
-            program.pin
-        )
+        not_a_role("current_program.pin", &program.pin)
     });
 
     let regulated = program.semantics == CurrentProgramSemantics::RegulatedCurrent;
@@ -903,9 +905,7 @@ fn check_current_program(
         let mut seen = HashSet::new();
         for role in roles {
             if !role_ok(role) {
-                p.push(format!(
-                    "current_program.{field} entry '{role}' is not a role in [models.pins]"
-                ));
+                p.push(not_a_role(format!("current_program.{field} entry"), role));
             } else if !seen.insert(role.trim().to_ascii_lowercase()) {
                 p.push(format!("current_program.{field} repeats role '{role}'"));
             }
@@ -969,9 +969,7 @@ fn check_current_program(
             let mut seen = HashSet::new();
             for role in sense_roles {
                 p.require(role_ok(role), || {
-                    format!(
-                        "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
-                    )
+                    not_a_role("current_program.sense_roles entry", role)
                 });
                 p.require(seen.insert(role.trim().to_ascii_lowercase()), || {
                     format!("current_program.sense_roles repeats role '{role}'")

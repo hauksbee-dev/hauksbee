@@ -758,6 +758,8 @@ impl SensorSpec {
     /// # Errors
     ///
     /// A [`SensorSpecError`] naming the first rule above that the spec breaks.
+    // One flat walk, one rule per line, in the order the spec's fields are declared.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
         check!(!s.name.trim().is_empty(), "sensor.name must not be empty");
@@ -974,6 +976,8 @@ impl SensorSpec {
 
     /// The write side: framing coherence, bit ranges, namespace uniqueness,
     /// expression references.
+    // One flat walk over the write side, one rule per line, in declaration order.
+    #[allow(clippy::too_many_lines)]
     fn validate_write_side(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
         let has_write_side = !s.write_registers.is_empty()

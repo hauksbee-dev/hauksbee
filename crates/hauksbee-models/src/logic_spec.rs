@@ -951,6 +951,8 @@ impl Logic {
     /// declared twice, an expression that does not parse or references an unknown
     /// name or bit, a malformed register, memory or tristate group, or a construct
     /// outside `features`.
+    // One ordered pass, so the fault reported is the first one; a split would scatter it.
+    #[allow(clippy::too_many_lines)]
     pub fn validate_with_features(
         &self,
         features: &[&str],
@@ -1148,11 +1150,8 @@ impl Logic {
                 });
             }
             if let Some(page_words) = m.page_words {
-                if page_words == 0
-                    || !page_words.is_power_of_two()
-                    || page_words > m.words
-                    || m.words % page_words != 0
-                {
+                // Zero is no power of two; a page wider than the array leaves a remainder.
+                if !page_words.is_power_of_two() || m.words % page_words != 0 {
                     return Err(LogicSpecError::MemoryPageWordsInvalid {
                         name: m.name.clone(),
                         page_words,

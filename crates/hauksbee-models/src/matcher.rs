@@ -204,17 +204,13 @@ fn branch_constrainedness(branch: &str) -> u32 {
         match cs[i] {
             '\\' => {
                 i += 1;
-                match cs.get(i) {
-                    Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => {
-                        score += 1;
-                        last_atom = 1;
-                    }
-                    Some(_) => {
-                        score += 2;
-                        last_atom = 2;
-                    }
-                    None => {}
-                }
+                // A class escape is one unit, any other escaped char two.
+                last_atom = match cs.get(i) {
+                    Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => 1,
+                    Some(_) => 2,
+                    None => 0,
+                };
+                score += last_atom;
             }
             '[' => {
                 score += 1;
@@ -313,9 +309,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                 score = score.saturating_sub(last_atom + 1);
                 last_atom = 0;
             }
-            ')' | '.' | '+' => {
-                last_atom = 0;
-            }
+            ')' | '.' | '+' => last_atom = 0,
             _ => {
                 score += 2;
                 last_atom = 2;

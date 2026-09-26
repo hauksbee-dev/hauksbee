@@ -460,6 +460,23 @@ pub struct Law {
 
 // ── Validation ──────────────────────────────────────────────────────────────
 
+/// Record a series-path or profiled-load name that is not an identifier, or
+/// that an earlier one of the same list already took.
+fn unique_identifier<'a>(
+    p: &mut Problems,
+    seen: &mut BTreeSet<&'a str>,
+    what: &str,
+    name: &'a str,
+) {
+    if !is_identifier(name) {
+        p.push(format!(
+            "{what}: name '{name}' must be a non-empty expression identifier"
+        ));
+    } else if !seen.insert(name) {
+        p.push(format!("{what}: duplicate name '{name}'"));
+    }
+}
+
 /// Validate a behavioural block for internal consistency.
 ///
 /// Returns a list of human-readable problems (empty = valid). Cheap structural
@@ -473,6 +490,8 @@ pub struct Law {
 /// that "validated OK" poisons the whole MNA solve or panics a `clamp`, and a
 /// negative limit silently folds a regulated rail to 0 V for the whole run.
 #[must_use]
+// One flat walk, one rule per line, in the order the block's sections are declared.
+#[allow(clippy::too_many_lines)]
 pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut p = Problems::default();
 
@@ -514,26 +533,20 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             if let Err(e) = units::check_dimensions(&tr.guard, None) {
                 p.push(format!("fsm transition {i}: guard {e}"));
             }
-            for (name, dwell) in [
-                ("min_dwell_s", tr.min_dwell_s),
-                ("guard_dwell_s", tr.guard_dwell_s),
-            ] {
-                p.nonneg(format!("fsm transition {i}: {name}"), dwell);
-            }
+            p.nonneg(format!("fsm transition {i}: min_dwell_s"), tr.min_dwell_s);
+            p.nonneg(
+                format!("fsm transition {i}: guard_dwell_s"),
+                tr.guard_dwell_s,
+            );
         }
         for (st, pins) in &fsm.state_pins {
             p.require(states.contains(st.as_str()), || {
                 format!("fsm state_pins: unknown state '{st}'")
             });
             for (role, ov) in pins {
-                p.finite(
-                    format!("fsm state_pins '{st}.{role}': drive_volts"),
-                    ov.drive_volts,
-                );
-                p.positive(
-                    format!("fsm state_pins '{st}.{role}': drive_ohms"),
-                    ov.drive_ohms,
-                );
+                let at = format!("fsm state_pins '{st}.{role}'");
+                p.finite(format!("{at}: drive_volts"), ov.drive_volts);
+                p.positive(format!("{at}: drive_ohms"), ov.drive_ohms);
             }
         }
     }
@@ -541,14 +554,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut path_names = BTreeSet::new();
     for (i, path) in b.series_paths.iter().enumerate() {
         let what = format!("series_path {i}");
-        if !is_identifier(&path.name) {
-            p.push(format!(
-                "{what}: name '{}' must be a non-empty expression identifier",
-                path.name
-            ));
-        } else if !path_names.insert(path.name.as_str()) {
-            p.push(format!("{what}: duplicate name '{}'", path.name));
-        }
+        unique_identifier(&mut p, &mut path_names, &what, &path.name);
         p.require(
             !path.a.trim().is_empty() && !path.b.trim().is_empty() && path.a != path.b,
             || format!("{what}: a and b must be distinct non-empty pin roles"),
@@ -571,14 +577,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     let mut load_names = BTreeSet::new();
     for (i, load) in b.profiled_loads.iter().enumerate() {
         let what = format!("profiled_load {i}");
-        if !is_identifier(&load.name) {
-            p.push(format!(
-                "{what}: name '{}' must be a non-empty expression identifier",
-                load.name
-            ));
-        } else if !load_names.insert(load.name.as_str()) {
-            p.push(format!("{what}: duplicate name '{}'", load.name));
-        }
+        unique_identifier(&mut p, &mut load_names, &what, &load.name);
         p.non_empty(format!("{what}: supply_pin"), &load.supply_pin);
         let bad_return = load
             .return_pin
@@ -632,20 +631,13 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 format!("converter: efficiency must be in (0,1], got {e}")
             });
         }
-        for (name, lim) in [
-            ("iout_limit_a", c.iout_limit_a),
-            ("iin_limit_a", c.iin_limit_a),
-        ] {
-            p.positive(format!("converter: {name}"), lim);
-        }
+        p.positive("converter: iout_limit_a", c.iout_limit_a);
+        p.positive("converter: iin_limit_a", c.iin_limit_a);
         if let Some(sp) = &c.iin_program {
-            p.require(
-                sp.rsense_ohms.is_some() == sp.rsense_refs.is_empty(),
-                || {
-                    "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs"
-                        .into()
-                },
-            );
+            let one_rsense = sp.rsense_ohms.is_some() == sp.rsense_refs.is_empty();
+            p.require(one_rsense, || {
+                "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs".into()
+            });
             p.require(sp.prog_ohms.is_some() != sp.prog_ref.is_some(), || {
                 "converter.iin_program: specify exactly one of prog_ohms or prog_ref".into()
             });
@@ -660,13 +652,12 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // The literal resistances are floored by the engine (`rsense.max(1e-6)`),
             // so a sign typo balloons the limit to ~50 kA; the reference constants
             // are divisors, so a zero/inf collapses it to 0 A. Both silently.
-            for (name, v) in [("rsense_ohms", sp.rsense_ohms), ("prog_ohms", sp.prog_ohms)] {
-                p.positive(format!("converter.iin_program: {name}"), v);
-            }
             for (name, v) in [
-                ("prog_ref_ohms", sp.prog_ref_ohms),
-                ("vprog_ref", sp.vprog_ref),
-                ("v_sense_full", sp.v_sense_full),
+                ("rsense_ohms", sp.rsense_ohms),
+                ("prog_ohms", sp.prog_ohms),
+                ("prog_ref_ohms", Some(sp.prog_ref_ohms)),
+                ("vprog_ref", Some(sp.vprog_ref)),
+                ("v_sense_full", Some(sp.v_sense_full)),
             ] {
                 p.positive(format!("converter.iin_program: {name}"), v);
             }

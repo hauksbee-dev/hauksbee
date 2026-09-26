@@ -471,6 +471,8 @@ fn the_74lvc1g66_has_one_pinout_and_pad_three_is_ground() {
 /// here are the ones whose mis-assignment would be electrically destructive
 /// rather than merely wrong: supplies, grounds, and driven outputs.
 #[test]
+// Five parts in sequence, each with its datasheet pinout notes beside its asserts.
+#[allow(clippy::too_many_lines)]
 fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     // FT231X: the QFN-20 and SSOP-20 have DIFFERENT pin orders, so only the Q
     // may borrow this map. VCCIO (pad 20) is the rail every logic level is
