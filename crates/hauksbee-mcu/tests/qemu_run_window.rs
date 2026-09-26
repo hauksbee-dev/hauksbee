@@ -55,11 +55,18 @@ fn boot_floor_lifts_once_firmware_raises_magic() {
     // QMP round-trip slack the guest runs through, so the assertion is a
     // bracket: at least the requested window (crediting less would mean the
     // slack went back to being dropped), and strictly under the boot floor
-    // (crediting 8 ms would mean the floor never lifted).
+    // (crediting 8 ms would mean the floor never lifted). The quickest of five
+    // chunks is judged: a loaded host's round trip can stall one past 8 ms of
+    // real guest time, but a floor that never lifted credits 8 ms every time.
     let freq = mcu.frequency() as f64;
-    let before = mcu.current_cycle();
-    mcu.run_micros(100).expect("run steady-state chunk");
-    let credited = mcu.current_cycle() - before;
+    let credited = (0..5)
+        .map(|_| {
+            let before = mcu.current_cycle();
+            mcu.run_micros(100).expect("run steady-state chunk");
+            mcu.current_cycle() - before
+        })
+        .min()
+        .expect("five chunks");
     let expected = (100e-6 * freq).round() as u64;
     let floored = (8e-3 * freq).round() as u64;
     assert!(
