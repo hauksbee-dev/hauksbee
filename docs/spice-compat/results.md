@@ -16,8 +16,8 @@ worst-case columns.
 deck here at all.
 
 - Oracle: **ngspice-47**
-- Decks: **49**
-- Passing: **49/49**
+- Decks: **58**
+- Passing: **58/58**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
@@ -33,7 +33,8 @@ deck here at all.
 |  |  | `I(VB)` | 7.212e-6 | 2.0e-4 | 28x | op | PASS |
 | bjt_switch_tail | tran | `V(c)` | 3.333e-5 | 1.0e-3 | 30x | t=2.060e-6s | PASS |
 | bsource_clamp | tran | `V(out)` | 1.869e-4 | 2.5e-3 | 13x | t=1.996e-3s | PASS |
-| bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 2.0e-3 | 20x | t=1.436e-3s | PASS |
+| bsource_opamp_subckt | tran | `V(out)` | 3.168e-5 | 1.5e-3 | 47x | t=1.996e-3s | PASS |
+| bsource_tanh_wien | tran | `V(out)` | 2.791e-6 | 5.0e-5 | 18x | t=1.115e-4s | PASS |
 | bsource_time | tran | `V(out)` | 2.334e-4 | 1.0e-2 | 43x | t=3.654e-6s | PASS |
 | cap_ic_uic_decay | tran | `V(out)` | 2.000e-4 | 1.0e-3 | 5x | t=0.000e0s | PASS |
 |  |  | `V(out) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
@@ -44,6 +45,14 @@ deck here at all.
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 5.0e-3 | 27x | t=1.644e-6s | PASS |
 | ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | 1x | t=9.225e-6s | PASS |
 | cj2301_rdson | op | `V(d)` | 9.710e-8 | 2.0e-6 | 21x | op | PASS |
+| comparator_hysteresis_triangle | tran | `V(out)` | 9.226e-1 | 1.0e0 | 1x | t=6.250e-7s | PASS |
+|  |  | `V(out) vs closed form` | 2.000e-12 | 1.0e-6 | 499956x | t=6.200e-7 | PASS |
+|  |  | `V(out) vs closed form` | 1.386e-9 | 1.0e-6 | 721x | t=6.300e-7 | PASS |
+|  |  | `V(out) vs closed form` | 1.473e-9 | 1.0e-6 | 679x | t=1.620e-6 | PASS |
+|  |  | `V(out) vs closed form` | 3.242e-8 | 1.0e-6 | 31x | t=1.630e-6 | PASS |
+|  |  | `V(f)` | 7.982e-4 | 1.0e-2 | 13x | t=6.250e-7s | PASS |
+|  |  | `V(f) vs closed form` | 8.834e-9 | 1.0e-6 | 113x | t=7.251e-7 | PASS |
+|  |  | `V(f) vs closed form` | 1.036e-8 | 1.0e-6 | 96x | t=1.725e-6 | PASS |
 | diode_iv_dc | dc | `V(d)` | 1.094e-4 | 2.5e-3 | 23x | sweep=8.500e-1 | PASS |
 |  |  | `V(a,d)` | 9.617e-4 | 2.0e-2 | 21x | sweep=6.500e-1 | PASS |
 | diode_op | op | `V(d)` | 4.556e-6 | 1.0e-4 | 22x | op | PASS |
@@ -55,23 +64,45 @@ deck here at all.
 | flyback_diode | tran | `V(out)` | 1.596e-2 | 5.0e-2 | 3x | t=2.556e-5s | PASS |
 | forced_base_current | op | `V(base)` | 7.556e-6 | 2.0e-4 | 26x | op | PASS |
 |  |  | `V(coll)` | 3.510e-9 | 1.0e-6 | 285x | op | PASS |
-| inductive_kickback_zener | tran | `V(sw)` | 2.728e-1 | 3.0e-1 | 1x | t=1.003e-4s | PASS |
-|  |  | `V(sw) vs closed form` | 2.113e-13 | 1.0e-3 | 4732587863x | t=5.000e-5 | PASS |
-|  |  | `V(sw) vs closed form` | 5.152e-7 | 2.0e-3 | 3882x | t=1.203e-4 | PASS |
-|  |  | `V(sw) vs closed form` | 1.034e-6 | 2.0e-3 | 1935x | t=1.403e-4 | PASS |
-|  |  | `V(sw) vs closed form` | 1.938e-4 | 1.0e-3 | 5x | t=1.550e-3 | PASS |
-| mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | 5x | sweep=1.800e0 | PASS |
-| mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | 2x | t=2.049e-6s | PASS |
-| mos_load_switch | tran | `V(d)` | 3.222e-1 | 5.0e-1 | 2x | t=5.238e-6s | PASS |
-|  |  | `V(g)` | 6.854e-2 | 1.5e-1 | 2x | t=5.680e-6s | PASS |
+| inductive_kickback_zener | tran | `V(sw)` | 3.621e-1 | 4.0e-1 | 1x | t=1.003e-4s | PASS |
+|  |  | `V(sw) vs closed form` | 2.102e-13 | 1.0e-3 | 4757794722x | t=5.000e-5 | PASS |
+|  |  | `V(sw) vs closed form` | 3.592e-8 | 2.0e-3 | 55676x | t=1.203e-4 | PASS |
+|  |  | `V(sw) vs closed form` | 1.259e-9 | 2.0e-3 | 1588641x | t=1.403e-4 | PASS |
+|  |  | `V(sw) vs closed form` | 1.940e-4 | 1.0e-3 | 5x | t=1.550e-3 | PASS |
+| ldo_gnd_adj | op | `V(out)` | 7.576e-9 | 2.0e-8 | 3x | op | PASS |
+|  |  | `V(out) vs closed form` | 7.576e-9 | 2.0e-8 | 3x | op=0.000e0 | PASS |
+|  |  | `I(VIN)` | 7.657e-9 | 2.0e-8 | 3x | op | PASS |
+|  |  | `I(VIN) vs closed form` | 7.657e-9 | 2.0e-8 | 3x | op=0.000e0 | PASS |
+| lm317_adj | op | `V(out)` | 5.413e-10 | 1.0e-9 | 2x | op | PASS |
+|  |  | `V(out) vs closed form` | 5.413e-10 | 1.0e-8 | 18x | op=0.000e0 | PASS |
+|  |  | `V(adj)` | 7.200e-10 | 1.0e-9 | 1x | op | PASS |
+|  |  | `V(adj) vs closed form` | 7.200e-10 | 1.0e-8 | 14x | op=0.000e0 | PASS |
+| mos_body_bias | dc | `V(d)` | 1.085e-3 | 3.0e-3 | 3x | sweep=1.750e0 | PASS |
+| mos_body_diode | tran | `V(d)` | 1.218e-1 | 2.5e-1 | 2x | t=2.050e-6s | PASS |
+| mos_load_switch | tran | `V(d)` | 3.935e-1 | 5.0e-1 | 1x | t=1.144e-6s | PASS |
+|  |  | `V(g)` | 6.691e-2 | 1.5e-1 | 2x | t=5.680e-6s | PASS |
 | mos_rds_on | dc | `V(d)` | 3.101e-7 | 5.0e-4 | 1612x | sweep=1.600e0 | PASS |
 |  |  | `V(d) vs closed form` | 3.989e-12 | 1.0e-6 | 250673x | sweep=5.000e0 | PASS |
+| ne555_astable | tran | `V(thres)` | 8.281e-4 | 1.0e-2 | 12x | t=4.286e-4s | PASS |
+|  |  | `V(thres) vs closed form` | 7.772e-3 | 6.0e-2 | 8x | t=4.600e-4 | PASS |
+| opamp_deck_gain11 | op | `V(outb)` | 6.501e-8 | 1.0e-6 | 15x | op | PASS |
+|  |  | `V(outb) vs closed form` | 7.469e-7 | 1.0e-5 | 13x | op=0.000e0 | PASS |
+|  |  | `V(outd)` | 7.590e-8 | 1.0e-6 | 13x | op | PASS |
+| opamp_lm358_dynamics | tran | `V(os)` | 1.637e-5 | 2.0e-4 | 12x | t=1.240e-6s | PASS |
+|  |  | `V(os) vs closed form` | 1.599e-5 | 1.0e-4 | 6x | t=1.227e-6 | PASS |
+|  |  | `V(os) vs closed form` | 6.477e-6 | 1.0e-4 | 15x | t=1.682e-6 | PASS |
+|  |  | `V(ob)` | 5.404e-7 | 2.0e-5 | 37x | t=1.000e-5s | PASS |
+|  |  | `V(ob) vs closed form` | 1.876e-7 | 1.0e-5 | 53x | t=3.000e-6 | PASS |
+|  |  | `V(ob) vs closed form` | 8.826e-8 | 1.0e-5 | 113x | t=9.000e-6 | PASS |
 | opamp_subckt | tran | `V(out)` | 8.650e-3 | 1.0e-2 | 1x | t=9.327e-6s | PASS |
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-6 | 1333x | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-6 | exact | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-6 | 160x | op | PASS |
-| pmos_load_switch | tran | `V(d)` | 6.718e-1 | 1.2e0 | 2x | t=1.110e-6s | PASS |
-|  |  | `V(g)` | 7.108e-2 | 1.5e-1 | 2x | t=5.110e-6s | PASS |
+| pmos_floating_drains | op | `V(out)` | 1.200e-6 | 1.0e-5 | 8x | op | PASS |
+|  |  | `V(gd0)` | 1.052e-6 | 1.0e-5 | 10x | op | PASS |
+| pmos_load_switch | tran | `V(d)` | 7.855e-1 | 1.2e0 | 2x | t=1.111e-6s | PASS |
+|  |  | `V(g)` | 7.100e-2 | 1.5e-1 | 2x | t=5.110e-6s | PASS |
+| pmos_near_threshold_switch | op | `V(out)` | 1.184e-6 | 1.0e-5 | 8x | op | PASS |
 | rc_ac_bode | ac | `V(out) mag` | 2.760e-7 | 1.0e-5 | 36x | f=1.259e4Hz | PASS |
 |  |  | `V(out) phase(deg)` | 2.706e-4 | 1.0e-2 | 37x | f=2.512e5Hz | PASS |
 | rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-3 | 20x | t=0.000e0s | PASS |
@@ -81,25 +112,25 @@ deck here at all.
 |  |  | `V(in)` | 0.000e0 | 1.0e-6 | exact | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-6 | 160x | op | PASS |
 | rlc_series | tran | `V(out)` | 8.520e-3 | 2.0e-2 | 2x | t=3.151e-6s | PASS |
-| s8050_datasheet_point | op | `V(base)` | 7.149e-6 | 2.0e-4 | 28x | op | PASS |
-|  |  | `V(coll)` | 2.964e-7 | 1.0e-5 | 34x | op | PASS |
+| s8050_datasheet_point | op | `V(base)` | 7.224e-6 | 2.0e-4 | 28x | op | PASS |
+|  |  | `V(coll)` | 3.324e-7 | 1.0e-5 | 30x | op | PASS |
 | schottky_1n5817_two_points | op | `V(v1a)` | 9.271e-9 | 1.0e-6 | 108x | op | PASS |
 |  |  | `V(v31a)` | 2.887e-8 | 1.0e-6 | 35x | op | PASS |
-| switch_bjt_mirror_membrane | tran | `V(mem0)` | 5.320e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
+| switch_bjt_mirror_membrane | tran | `V(mem0)` | 5.428e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
 |  |  | `V(mem0) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
 |  |  | `V(mem0) vs closed form` | 1.630e-8 | 1.0e-6 | 61x | t=2.000e-5 | PASS |
 |  |  | `V(mem0) vs closed form` | 2.805e-7 | 2.0e-3 | 7129x | t=6.000e-5 | PASS |
 |  |  | `V(mem0) vs closed form` | 2.805e-7 | 2.0e-3 | 7129x | t=8.000e-5 | PASS |
-| switch_gate_drive_edge | tran | `V(g)` | 2.949e-2 | 3.0e-1 | 10x | t=1.063e-5s | PASS |
-|  |  | `V(g) vs closed form` | 3.205e-4 | 2.0e-3 | 6x | t=2.160e-5 | PASS |
-|  |  | `V(g) vs closed form` | 2.888e-5 | 1.0e-3 | 35x | t=4.360e-5 | PASS |
-|  |  | `V(g) vs closed form` | 3.743e-6 | 1.0e-3 | 267x | t=6.560e-5 | PASS |
+| switch_gate_drive_edge | tran | `V(g)` | 5.678e-2 | 3.0e-1 | 5x | t=1.060e-5s | PASS |
+|  |  | `V(g) vs closed form` | 2.216e-7 | 2.0e-3 | 9027x | t=2.160e-5 | PASS |
+|  |  | `V(g) vs closed form` | 4.842e-8 | 1.0e-3 | 20654x | t=4.360e-5 | PASS |
+|  |  | `V(g) vs closed form` | 9.942e-9 | 1.0e-3 | 100583x | t=6.560e-5 | PASS |
 |  |  | `V(g) vs closed form` | 5.200e-4 | 1.0e0 | 1923x | t=1.040e-5 | PASS |
 | switch_sw_thresholds | dc | `V(out)` | 9.990e-9 | 1.0e-6 | 100x | sweep=3.050e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=5.000e-2 | PASS |
 |  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=1.550e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=2.450e0 | PASS |
-|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=2.550e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.905e-12 | 1.0e-6 | 100956x | sweep=2.550e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=3.050e0 | PASS |
 | temp_diode_tc_85 | op | `V(d1)` | 5.270e-7 | 2.0e-5 | 38x | op | PASS |
 |  |  | `V(d1) vs closed form` | 3.616e-12 | 1.0e-4 | 27655038x | op=0.000e0 | PASS |
@@ -127,12 +158,14 @@ deck here at all.
 - **bjt_switch_tail**: saturated switch turn-off: storage delay + charge-limited rise
 - **bsource_clamp**: B-source tanh soft clamp (V-output) of a divided 1 kHz sine
 - **bsource_opamp_subckt**: behavioral opamp subckt (B gain stage), closed-loop x10 sine
+- **bsource_tanh_wien**: Wien oscillator whose amplifier is a high-gain tanh B-source (f0 = 1591.5 Hz)
 - **bsource_time**: time-dependent B-source (two-tone) into an RC low-pass
 - **cap_ic_uic_decay**: Capacitor IC= under uic: the node starts at its declared 5 V and decays as 5*exp(-t/100us).
 - **cccs_mirror**: CCCS mirror (gain 2 into 500 || 100n) of an ammeter current
 - **cccs_subckt**: CCCS in a subckt controlled by its own local ammeter
 - **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
 - **cj2301_rdson**: CJ2301 PMOS on-resistance at VGS = -5 V
+- **comparator_hysteresis_triangle**: push-pull comparator with a 0.25 V full hysteresis band, crossed rising and falling by a triangle: trip instants and output rails
 - **diode_iv_dc**: Diode forward V-I DC sweep (Vin 0..1 V): junction voltage V(d) and the drop V(a,d) across the 100 ohm series resistor, re-solving the nonlinear OP at every sweep point.
 - **diode_op**: diode forward-drop DC operating point
 - **diode_rectifier**: half-wave rectifier with RC smoothing
@@ -142,13 +175,20 @@ deck here at all.
 - **flyback_diode**: flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R
 - **forced_base_current**: forced base current, the shape a datasheet test condition takes
 - **inductive_kickback_zener**: 12 V solenoid loop broken by a low-side switch: 1 A of stored current clamped by a 24 V zener, plateau + duration + settle against closed forms
+- **ldo_gnd_adj**: Ground-referenced adjustable LDO stamp (VREF + unity VCVS + CCCS pass element + IQ)
+- **lm317_adj**: Adjustable-regulator stamp (VREF + CCCS pass element + IADJ) at R1 = 240, R2 = 720
 - **mos_body_bias**: reverse body bias shifts the threshold via GAMMA/PHI
 - **mos_body_diode**: body-diode reverse conduction, then synchronous channel takeover
 - **mos_load_switch**: NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing
 - **mos_rds_on**: power NMOS on-state drop set by RD+RS (datasheet Rds(on) split)
+- **ne555_astable**: NE555 astable composite (RA 10k, RB 10k, C 10n, VCC 5): one hysteretic VSwitch is both SR latch and discharge transistor
+- **opamp_deck_gain11**: deck op-amp (A card + .model opamp): non-inverting gain of 11 and unity follower
+- **opamp_lm358_dynamics**: deck op-amp transient: closed-loop pole on a 10 mV step, slew clip on a 5 V step
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
+- **pmos_floating_drains**: floating-drain off PMOS stages behind a near-threshold rail switch
 - **pmos_load_switch**: PMOS high-side switch: folded negative VTO + P-channel gate charge
+- **pmos_near_threshold_switch**: near-threshold PMOS switch current into a resistive load
 - **rc_ac_bode**: RC low-pass Bode: magnitude and phase of V(out) vs a unit AC source, 10 Hz .. 1 MHz at 10 points/decade. Corner near 1 kHz (-3 dB, -45 deg).
 - **rc_ic_decay**: RC discharge from .ic V(out)=5 under uic (tau = 1 ms)
 - **rc_ladder**: 8-stage RC ladder step response
