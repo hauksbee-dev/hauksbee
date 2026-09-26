@@ -22,10 +22,10 @@ const HELP: &str = concat!(
 );
 
 fn version_string() -> String {
-    match option_env!("GIT_HASH") {
-        Some(hash) => format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_string(),
-    }
+    option_env!("GIT_HASH").map_or_else(
+        || env!("CARGO_PKG_VERSION").to_string(),
+        |hash| format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
+    )
 }
 
 fn main() {
@@ -56,11 +56,7 @@ fn main() {
     let stdout = std::io::stdout();
     let mut server = hauksbee_mcp::protocol::Server::new();
     for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            // A read error means the client side is gone; exit quietly.
-            Err(_) => break,
-        };
+        let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
@@ -68,7 +64,7 @@ fn main() {
             let mut out = stdout.lock();
             // A broken pipe here also means the client is gone.
             if writeln!(out, "{response}")
-                .and_then(|_| out.flush())
+                .and_then(|()| out.flush())
                 .is_err()
             {
                 break;
