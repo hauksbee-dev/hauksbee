@@ -1248,24 +1248,7 @@ impl Assumption {
     /// A model stood in for the real part: an engine fallback entry
     /// (`source: Binder`) or a substitute MCU core (`source: Scheduler`).
     /// `requested` is what the board asked for, `stand_in` what actually
-    /// modelled it.
-    #[must_use]
-    pub fn substitute_model(
-        source: AssumptionSource,
-        reference: &str,
-        requested: &str,
-        stand_in: &str,
-    ) -> Self {
-        Self::substitute_model_for_component(
-            source,
-            reference.trim(),
-            reference,
-            requested,
-            stand_in,
-        )
-    }
-
-    /// [`Self::substitute_model`] with an occurrence-safe causal component id.
+    /// modelled it; `component_subject` is the occurrence-safe causal component id.
     #[must_use]
     pub fn substitute_model_for_component(
         source: AssumptionSource,
@@ -1330,13 +1313,7 @@ impl Assumption {
     }
 
     /// A pin's role was inferred from the pin-rule table rather than read from
-    /// the schematic.
-    #[must_use]
-    pub fn inferred_pin_role(reference: &str, pin: &str, role: &str) -> Self {
-        Self::inferred_pin_role_for_component(reference.trim(), reference, pin, role)
-    }
-
-    /// [`Self::inferred_pin_role`] with an occurrence-safe causal component id.
+    /// the schematic; `component_subject` is the occurrence-safe causal component id.
     #[must_use]
     pub fn inferred_pin_role_for_component(
         component_subject: &str,
@@ -1374,13 +1351,8 @@ impl Assumption {
         )
     }
 
-    /// A parameter took a documented default because no input carried a value.
-    #[must_use]
-    pub fn default_parameter(reference: &str, parameter: &str, value: &str) -> Self {
-        Self::default_parameter_for_component(reference.trim(), reference, parameter, value)
-    }
-
-    /// [`Self::default_parameter`] with an occurrence-safe causal component id.
+    /// A parameter took a documented default because no input carried a value;
+    /// `component_subject` is the occurrence-safe causal component id.
     #[must_use]
     pub fn default_parameter_for_component(
         component_subject: &str,

@@ -13,14 +13,15 @@ fn all_kinds() -> Vec<Assumption> {
             "10k",
             "no model matched it, and its pins sit on connected nets",
         ),
-        Assumption::substitute_model(
+        Assumption::substitute_model_for_component(
             AssumptionSource::Scheduler,
+            "U1",
             "U1",
             "ATmega328PB",
             "atmega328p",
         ),
-        Assumption::inferred_pin_role("U2", "3", "output"),
-        Assumption::default_parameter("U2", "vout", "3.3 V"),
+        Assumption::inferred_pin_role_for_component("U2", "U2", "3", "output"),
+        Assumption::default_parameter_for_component("U2", "U2", "vout", "3.3 V"),
         Assumption::fitted_by_default(
             AssumptionSource::Reader,
             Subject::new("odbpp", "the ODB++ archive"),
@@ -251,9 +252,9 @@ fn dot_prefixed_artifact_names_are_data_not_sentence_holes() {
 fn no_constructor_can_produce_an_unciteable_id() {
     let from_nothing = [
         Assumption::open_part("", "", ""),
-        Assumption::substitute_model(AssumptionSource::Binder, "", "", ""),
-        Assumption::inferred_pin_role("", "", ""),
-        Assumption::default_parameter("", "", ""),
+        Assumption::substitute_model_for_component(AssumptionSource::Binder, "", "", "", ""),
+        Assumption::inferred_pin_role_for_component("", "", "", ""),
+        Assumption::default_parameter_for_component("", "", "", ""),
         Assumption::not_checked(AssumptionSource::Reader, "", None, "", ""),
         Assumption::held_by_ideal_source(""),
         Assumption::fitted_by_default(AssumptionSource::Reader, Subject::same(""), Scope::Board),
@@ -282,9 +283,9 @@ fn no_constructor_can_produce_an_unciteable_id() {
 fn a_missing_datum_falls_back_rather_than_leaving_a_hole() {
     let thin = [
         Assumption::open_part("R7", "", ""),
-        Assumption::substitute_model(AssumptionSource::Binder, "U1", "", ""),
-        Assumption::inferred_pin_role("U2", "", ""),
-        Assumption::default_parameter("U2", "", ""),
+        Assumption::substitute_model_for_component(AssumptionSource::Binder, "U1", "U1", "", ""),
+        Assumption::inferred_pin_role_for_component("U2", "U2", "", ""),
+        Assumption::default_parameter_for_component("U2", "U2", "", ""),
         Assumption::fitted_by_default(
             AssumptionSource::Reader,
             Subject::new("odbpp", ""),
@@ -532,16 +533,16 @@ fn two_gaps_on_unnameable_subjects_stay_two_gaps() {
             Assumption::open_part("", "47k", "no model matched"),
         ],
         [
-            Assumption::substitute_model(AssumptionSource::Binder, "", "a", "b"),
-            Assumption::substitute_model(AssumptionSource::Binder, "", "c", "d"),
+            Assumption::substitute_model_for_component(AssumptionSource::Binder, "", "", "a", "b"),
+            Assumption::substitute_model_for_component(AssumptionSource::Binder, "", "", "c", "d"),
         ],
         [
-            Assumption::inferred_pin_role("", "", "output"),
-            Assumption::inferred_pin_role("", "", "input"),
+            Assumption::inferred_pin_role_for_component("", "", "", "output"),
+            Assumption::inferred_pin_role_for_component("", "", "", "input"),
         ],
         [
-            Assumption::default_parameter("", "", "3.3 V"),
-            Assumption::default_parameter("", "", "5 V"),
+            Assumption::default_parameter_for_component("", "", "", "3.3 V"),
+            Assumption::default_parameter_for_component("", "", "", "5 V"),
         ],
         [
             Assumption::fitted_by_default(
@@ -1424,7 +1425,7 @@ fn a_named_abstention_puts_its_unlocking_input_in_the_what_to_do() {
 
 #[test]
 fn registry_owned_rekey_is_atomic_and_updates_every_reference() {
-    let assumption = Assumption::default_parameter("U1", "vout", "3.3 V");
+    let assumption = Assumption::default_parameter_for_component("U1", "U1", "vout", "3.3 V");
     let old = assumption.id().clone();
     let replacement = assumption.clone().disambiguate_colliding_id();
     let new = replacement.id().clone();
@@ -1460,8 +1461,8 @@ fn registry_owned_rekey_is_atomic_and_updates_every_reference() {
         )
         .unwrap();
     map = map.with_artifacts(&registry, [artifact_id]).unwrap();
-    let unrelated =
-        Assumption::default_parameter("U1", "vout", "5.0 V").disambiguate_colliding_id();
+    let unrelated = Assumption::default_parameter_for_component("U1", "U1", "vout", "5.0 V")
+        .disambiguate_colliding_id();
     assert!(registry
         .rekey_collision_transaction(
             std::slice::from_ref(&map),

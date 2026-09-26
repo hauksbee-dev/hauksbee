@@ -88,14 +88,15 @@ fn rests_on_block(map: &EvidenceMap, registry: &[Assumption]) -> String {
 fn a_consumer_can_build_every_kind_and_read_every_sentence() {
     let registry = vec![
         Assumption::open_part("U2", "XC6206", "no model matched"),
-        Assumption::substitute_model(
+        Assumption::substitute_model_for_component(
             AssumptionSource::Scheduler,
+            "U1",
             "U1",
             "ATmega328PB",
             "atmega328p",
         ),
-        Assumption::inferred_pin_role("U2", "3", "output"),
-        Assumption::default_parameter("U2", "vout", "3.3 V"),
+        Assumption::inferred_pin_role_for_component("U2", "U2", "3", "output"),
+        Assumption::default_parameter_for_component("U2", "U2", "vout", "3.3 V"),
         Assumption::fitted_by_default(
             AssumptionSource::Reader,
             Subject::new("odbpp", "the ODB++ archive"),
