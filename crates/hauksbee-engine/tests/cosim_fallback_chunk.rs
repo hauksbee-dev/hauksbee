@@ -226,7 +226,7 @@ fn unrescuable_board_still_refuses_loudly() {
 
 /// Series RLC (V -> R -> L -> C -> ground), underdamped, stepped 5 us into
 /// the chunk: R = 20 ohm, L = 1 mH, C = 100 nF gives alpha = 1e4 1/s,
-/// omega_0 = 1e5 rad/s (Q = 5), so the capacitor RINGS through the chunk and
+/// `omega_0` = 1e5 rad/s (Q = 5), so the capacitor RINGS through the chunk and
 /// a dissipative fallback rung accumulates a real, analytically checkable
 /// output error.
 fn rlc_ringing_board() -> BoundBoard {
@@ -271,7 +271,8 @@ fn rlc_analytic_vc(t: f64) -> f64 {
     let alpha = RLC_R / (2.0 * RLC_L);
     let w0 = 1.0 / (RLC_L * RLC_C).sqrt();
     let wd = (w0 * w0 - alpha * alpha).sqrt();
-    RLC_V0 * (1.0 - (-alpha * tau).exp() * ((wd * tau).cos() + (alpha / wd) * (wd * tau).sin()))
+    let ring = (alpha / wd).mul_add((wd * tau).sin(), (wd * tau).cos());
+    RLC_V0 * (-alpha * tau).exp().mul_add(-ring, 1.0)
 }
 
 /// Whether a reported chunk-end value with its recorded error estimate
@@ -435,7 +436,7 @@ fn merged_window_keeps_the_worst_per_chunk_estimate() {
     );
     let window = windows[0];
     assert!(
-        (window.end_s - 2.0 * CHUNK).abs() < CHUNK * 1e-6,
+        2.0f64.mul_add(-CHUNK, window.end_s).abs() < CHUNK * 1e-6,
         "the merged window spans both chunks, got {windows:?}"
     );
     let merged = window

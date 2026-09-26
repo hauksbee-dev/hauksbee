@@ -110,11 +110,10 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     let bus = Arc::new(Mutex::new(
         I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, temp_c))),
     ));
-    engine.scheduler_mut().attach_i2c_bus(bus.clone());
+    engine.scheduler_mut().attach_i2c_bus(bus);
 
     let frame_dt = 5e-3_f64;
-    let n = ((ms as f64) / (frame_dt * 1e3)).round() as usize;
-    let n = n.max(1);
+    let n = usize::try_from(ms / 5).expect("frame count fits").max(1); // 5 ms frames
 
     let last_flag = crate::support::last_flag(&mut engine, frame_dt, n);
     assert!(

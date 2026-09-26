@@ -173,7 +173,7 @@ fn a_skipped_sole_processor_warns_on_its_own_row() {
     assert!(w.contains("--fit U1"), "{w}");
 }
 
-/// Two-sided DnpAbsent contract: the left-open 0R link contributes NOTHING to
+/// Two-sided `DnpAbsent` contract: the left-open 0R link contributes NOTHING to
 /// the bound circuit (the two ground planes it would bridge stay separate
 /// nodes), and its absence is on the bind report with the reason the policy
 /// recorded, not as a silent hole.

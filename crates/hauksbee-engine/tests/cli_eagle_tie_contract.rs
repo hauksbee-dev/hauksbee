@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{fmt::Write as _, process::Command};
 
 use sha2::{Digest, Sha256};
 
@@ -49,8 +49,10 @@ fn schematic_context_never_downgrades_the_json_exit_or_junit_short() {
     let schematic = include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.sch");
     let expected_sha = Sha256::digest(schematic)
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+        .fold(String::new(), |mut hex, byte| {
+            write!(hex, "{byte:02x}").unwrap();
+            hex
+        });
     let input = json["inputs"]
         .as_array()
         .expect("top-level input inventory")

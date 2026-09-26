@@ -1,7 +1,7 @@
 //! Proof: AVR firmware reads an I2C LM75 temperature sensor and acts on it.
 //!
-//! The firmware (testdata/firmware/i2c_thermostat) polls the LM75 at address
-//! 0x48 over the ATmega328P hardware TWI peripheral and drives PB0 HIGH when the
+//! The firmware (`testdata/firmware/i2c_thermostat`) polls the LM75 at address
+//! 0x48 over the `ATmega328P` hardware TWI peripheral and drives PB0 HIGH when the
 //! reported temperature is at or above 30 C, LOW otherwise. This test attaches
 //! a hauksbee LM75 slave to the co-sim, sweeps its temperature across the
 //! threshold, and asserts the firmware's GPIO (PB0 -> net "FLAG") follows.
@@ -19,7 +19,7 @@ use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
-/// Minimal board: U1 ATmega328P with PB0 (pad 14) on net "FLAG", power/ground
+/// Minimal board: U1 `ATmega328P` with PB0 (pad 14) on net "FLAG", power/ground
 /// wired, and an SDA/SCL pair on the ADC4/ADC5 pads (the AVR TWI pins). The
 /// LM75 is intercepted at the TWI peripheral, not through these nets, but
 /// wiring them keeps the board realistic.
@@ -71,7 +71,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     let bus = Arc::new(Mutex::new(
         I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, temp_c))),
     ));
-    engine.scheduler_mut().attach_i2c_bus(bus.clone());
+    engine.scheduler_mut().attach_i2c_bus(bus);
 
     // Run the co-sim.
     let frame_dt = 1e-3_f64;

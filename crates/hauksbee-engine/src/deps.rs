@@ -11,7 +11,7 @@
 //! another lane owns, keep the two in lockstep if either changes).
 //!
 //! The install side shells KILLABLE children and streams their output.
-//! `hauksbee install esp-qemu --yes` uses the checksum-pinned native PowerShell
+//! `hauksbee install esp-qemu --yes` uses the checksum-pinned native `PowerShell`
 //! installer on Windows and this binary's Rust manifest-verifying installer on
 //! Unix. Renode likewise uses the checksum-pinned platform installer
 //! (`install-sims.sh` on Unix, `install-sims-windows.ps1` on Windows; both are
@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 /// One probed dependency, serialized verbatim as the `/api/deps` JSON.
@@ -73,7 +73,7 @@ pub struct DepStatus {
 impl DepStatus {
     /// An absent row for a local binary (running it sends nothing anywhere):
     /// no path, version, install button or detail until the probe says so.
-    fn local(
+    const fn local(
         id: &'static str,
         name: &'static str,
         unlocks: &'static str,
@@ -96,11 +96,19 @@ impl DepStatus {
     }
 }
 
-/// Probe every dependency. Each probe runs the engine's own discovery; none of
-/// this is a plain `which` that could disagree with a real run. Independent
-/// resolvers run in parallel so a slow local tool cannot hold up all the other
-/// rows. Version and authentication commands are intentionally deferred to the
-/// operation that needs them.
+/// Probe every dependency.
+///
+/// Each probe runs the engine's own discovery; none of this is a plain `which`
+/// that could disagree with a real run. Independent resolvers run in parallel so
+/// a slow local tool cannot hold up all the other rows. Version and
+/// authentication commands are intentionally deferred to the operation that
+/// needs them.
+///
+/// # Panics
+///
+/// Panics if any individual probe thread panics; the panic is propagated with
+/// the name of the dependency whose probe failed.
+#[must_use]
 pub fn probe_all() -> Vec<DepStatus> {
     std::thread::scope(|scope| {
         let renode = scope.spawn(probe_renode);
@@ -239,7 +247,7 @@ fn probe_agy() -> DepStatus {
 ///
 /// It is listed with the co-simulation backends because it is discovered the
 /// same way and unlocks a capability the same way. It differs in one respect
-/// that the UI must not smooth over: using it sends datasheet text to OpenAI.
+/// that the UI must not smooth over: using it sends datasheet text to `OpenAI`.
 /// So it is never auto-installed, never runs without being asked, and carries
 /// `sends_data_offhost` so no surface can present it as just another local
 /// tool.
@@ -298,7 +306,7 @@ fn probe_codex() -> DepStatus {
 
 /// Whether codex can actually run, and how it is authenticated.
 enum CodexLogin {
-    /// Signed in. Carries codex's own description, e.g. "Logged in using ChatGPT".
+    /// Signed in. Carries codex's own description, e.g. "Logged in using `ChatGPT`".
     LoggedIn(Option<String>),
     NotLoggedIn,
 }
@@ -370,13 +378,14 @@ fn deps_cache() -> &'static Mutex<Option<(Instant, String)>> {
 
 /// Discard the status snapshot after an installer changes the filesystem.
 pub fn invalidate_deps_cache() {
-    let mut cache = deps_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = deps_cache().lock().unwrap_or_else(PoisonError::into_inner);
     *cache = None;
 }
 
 /// The `/api/deps` response body: `{"deps":[...]}`.
+#[must_use]
 pub fn deps_json() -> String {
-    let mut cache = deps_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = deps_cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((at, json)) = cache.as_ref() {
         if at.elapsed() < DEPS_CACHE_TTL {
             return json.clone();
@@ -467,39 +476,38 @@ fn probe_esp_qemu() -> DepStatus {
         use hauksbee_mcu::qemu::{find_qemu, QemuArch};
         let xtensa = find_qemu(QemuArch::Xtensa);
         let riscv = find_qemu(QemuArch::Riscv32);
-        match (&xtensa, &riscv) {
-            // The machine-help invocation in the resolver is enough to reject
-            // mainline QEMU. A second `--version` subprocess adds no readiness
-            // information, so leave cosmetic version blank.
-            (Ok(x), Ok(r)) => DepStatus {
+        // The machine-help invocation in the resolver is enough to reject
+        // mainline QEMU. A second `--version` subprocess adds no readiness
+        // information, so leave cosmetic version blank.
+        if let (Ok(x), Ok(r)) = (&xtensa, &riscv) {
+            DepStatus {
                 present: true,
                 path: Some(format!("{}; {}", x.display(), r.display())),
                 ..base
-            },
-            _ => {
-                // Name which half is missing rather than a blanket "absent":
-                // a partial idf_tools install is a real state a user hits.
-                let mut parts = Vec::new();
-                match &xtensa {
-                    Ok(p) => parts.push(format!("qemu-system-xtensa found at {}", p.display())),
-                    Err(e) => parts.push(format!(
-                        "qemu-system-xtensa: {}",
-                        first_line(&e.to_string())
-                    )),
-                }
-                match &riscv {
-                    Ok(p) => parts.push(format!("qemu-system-riscv32 found at {}", p.display())),
-                    Err(e) => parts.push(format!(
-                        "qemu-system-riscv32: {}",
-                        first_line(&e.to_string())
-                    )),
-                }
-                DepStatus {
-                    installable: cfg!(windows)
-                        || hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
-                    detail: Some(parts.join("; ")),
-                    ..base
-                }
+            }
+        } else {
+            // Name which half is missing rather than a blanket "absent":
+            // a partial idf_tools install is a real state a user hits.
+            let mut parts = Vec::new();
+            match &xtensa {
+                Ok(p) => parts.push(format!("qemu-system-xtensa found at {}", p.display())),
+                Err(e) => parts.push(format!(
+                    "qemu-system-xtensa: {}",
+                    first_line(&e.to_string())
+                )),
+            }
+            match &riscv {
+                Ok(p) => parts.push(format!("qemu-system-riscv32 found at {}", p.display())),
+                Err(e) => parts.push(format!(
+                    "qemu-system-riscv32: {}",
+                    first_line(&e.to_string())
+                )),
+            }
+            DepStatus {
+                installable: cfg!(windows)
+                    || hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
+                detail: Some(parts.join("; ")),
+                ..base
             }
         }
     }
@@ -864,11 +872,11 @@ static INSTALL_ACTIVE: AtomicBool = AtomicBool::new(false);
 struct InstallSlot;
 
 impl InstallSlot {
-    fn acquire() -> Option<InstallSlot> {
+    fn acquire() -> Option<Self> {
         if INSTALL_ACTIVE.swap(true, Ordering::AcqRel) {
             None
         } else {
-            Some(InstallSlot)
+            Some(Self)
         }
     }
 }
@@ -879,11 +887,16 @@ impl Drop for InstallSlot {
     }
 }
 
-/// Run the install for one dependency id, streaming human-readable progress
-/// lines through `progress`. Returns `Err(message)` with the child's real
-/// output tail on any failure. Refuses (fast) when an install is already
-/// running, when the id is unknown, and when the id is not installable from
-/// here (the error then carries the manual command).
+/// Run the install for one dependency id.
+///
+/// Streams human-readable progress lines through `progress`.
+///
+/// # Errors
+///
+/// Returns `Err(message)` with the child's real output tail on any install
+/// failure. Refuses (fast) when an install is already running, when the id is
+/// unknown, and when the id is not installable from here (the error then carries
+/// the manual command).
 pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     let _slot = InstallSlot::acquire().ok_or_else(|| {
         "another install is already running; wait for it to finish and try again".to_string()
@@ -915,7 +928,7 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
     result
 }
 
-/// Espressif QEMU: use the native checksum-pinned PowerShell installer on
+/// Espressif QEMU: use the native checksum-pinned `PowerShell` installer on
 /// Windows; elsewhere shell this binary's Rust installer. Both routes run as
 /// structurally owned child trees so downloads cannot survive a timeout.
 pub(crate) fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
@@ -1006,13 +1019,13 @@ fn run_streaming(
     }
     let (child, tree_guard) = hauksbee_mcu::children::spawn_owned(&mut cmd)
         .map_err(|e| format!("could not start the installer: {e}"))?;
-    stream_owned_child(child, tree_guard, progress, timeout)
+    stream_owned_child(child, &tree_guard, progress, timeout)
 }
 
 // Keep the production deadline unchanged; callers already own the process tree.
 fn stream_owned_child(
     mut child: std::process::Child,
-    tree_guard: hauksbee_mcu::children::ProcessTreeGuard,
+    tree_guard: &hauksbee_mcu::children::ProcessTreeGuard,
     progress: &mut dyn FnMut(&str),
     timeout: Duration,
 ) -> Result<(), String> {
@@ -1085,7 +1098,7 @@ fn stream_owned_child(
             break;
         }
         if started.elapsed() > timeout {
-            kill_process_group(&mut child, &tree_guard);
+            kill_process_group(&mut child, tree_guard);
             for r in readers {
                 let _ = r.join();
             }
@@ -1107,8 +1120,7 @@ fn stream_owned_child(
             "the installer exited with {}. Last output:\n{}",
             status
                 .code()
-                .map(|c| format!("code {c}"))
-                .unwrap_or_else(|| "a signal".to_string()),
+                .map_or_else(|| "a signal".to_string(), |c| format!("code {c}")),
             tail_text(&tail)
         ))
     }
@@ -1147,11 +1159,11 @@ fn kill_process_group(
 mod tests {
     use super::*;
 
-    /// Serializes tests that touch the global INSTALL_ACTIVE flag.
+    /// Serializes tests that touch the global `INSTALL_ACTIVE` flag.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+        SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn shell_command(script: &str) -> Command {
@@ -1267,12 +1279,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fast_extractor_rows_do_not_spawn_cli_status_commands() {
+        use std::os::unix::fs::PermissionsExt;
         let _serial = serial_guard();
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("called");
         let marker_literal = marker.to_string_lossy().replace('\'', "'\\''");
         let script = format!("#!/bin/sh\ntouch '{marker_literal}'\n");
-        use std::os::unix::fs::PermissionsExt;
         for name in ["codex", "claude"] {
             let path = dir.path().join(name);
             std::fs::write(&path, &script).unwrap();
@@ -1512,7 +1524,7 @@ echo "codex-cli 0.0.0""#,
             std::thread::sleep(Duration::from_millis(50));
         };
         let started = Instant::now();
-        let err = stream_owned_child(child, guard, &mut |_| {}, Duration::from_secs(1))
+        let err = stream_owned_child(child, &guard, &mut |_| {}, Duration::from_secs(1))
             .expect_err("owned installer tree times out");
         assert!(
             started.elapsed() < Duration::from_secs(10),

@@ -11,6 +11,7 @@ use hauksbee_engine::power_supply::PowerSupply;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
@@ -111,7 +112,6 @@ fn a_one_percent_over_limit_draw_settles_at_the_limit_with_a_positive_rail() {
         "bench supply applied to +5V"
     );
 
-    use hauksbee_frontdoor_api::engine::Engine;
     let mut v = 0.0;
     let mut history = Vec::new();
     for _ in 0..400 {
@@ -123,8 +123,7 @@ fn a_one_percent_over_limit_draw_settles_at_the_limit_with_a_positive_rail() {
         .scheduler()
         .supply_states()
         .get("+5V")
-        .map(|(_, i, _)| *i)
-        .unwrap_or(0.0);
+        .map_or(0.0, |(_, i, _)| *i);
 
     assert!(
         (i - limit).abs() <= 0.01 * limit,
@@ -158,7 +157,6 @@ fn a_draw_under_the_limit_does_not_fold() {
             current_limit_a: 0.5,
         },
     );
-    use hauksbee_frontdoor_api::engine::Engine;
     let mut v = 0.0;
     for _ in 0..200 {
         v = *engine.step(1e-4).net_voltages.get("+5V").unwrap_or(&0.0);

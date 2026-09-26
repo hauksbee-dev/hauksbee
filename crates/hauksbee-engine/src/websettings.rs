@@ -36,6 +36,7 @@ pub fn hooks() -> ExtractSettingsHooks {
 /// A config file that exists but fails to parse must not blank the page: the
 /// user still needs to see the rest of the settings surface (and the presets,
 /// which are how they would fix it) with `load_error` naming what is wrong.
+#[must_use]
 pub fn settings_json() -> String {
     let (config, path, exists, load_error) = match extract_config::load() {
         Ok(loaded) => (loaded.config, loaded.path, loaded.exists, None),
@@ -103,10 +104,16 @@ fn build_payload(
     })
 }
 
-/// `PUT /api/settings/extract`: replace the saved config with the JSON body
-/// (the same shape `GET` returns under `config`). Refused, with a readable
-/// reason, before anything is written: an unknown field, a bad backend name,
-/// or an out-of-range value never reaches the file.
+/// `PUT /api/settings/extract`: replace the saved config with the JSON body.
+///
+/// The body has the same shape `GET` returns under `config`. Refused, with a
+/// readable reason, before anything is written: an unknown field, a bad backend
+/// name, or an out-of-range value never reaches the file.
+///
+/// # Errors
+///
+/// Returns a readable message if the body is not a valid extraction config, if
+/// it fails validation, or if the config path cannot be resolved or written.
 pub fn settings_save(body: &str) -> Result<String, String> {
     let mut cfg: ExtractConfig = serde_json::from_str(body)
         .map_err(|e| format!("the settings body is not a valid extraction config: {e}"))?;
@@ -120,6 +127,11 @@ pub fn settings_save(body: &str) -> Result<String, String> {
 /// `POST /api/settings/extract/preset/{id}`: apply a named preset (the
 /// backend plus that backend's own model/effort) on top of whatever is
 /// already saved, and keep it.
+///
+/// # Errors
+///
+/// Returns a readable message if the saved config cannot be loaded, if `id` is
+/// not a known preset, or if the updated config cannot be written.
 pub fn settings_preset(id: &str) -> Result<String, String> {
     let loaded = extract_config::load_for_edit().map_err(|e| format!("{e:#}"))?;
     let mut cfg = loaded.config;
@@ -130,6 +142,11 @@ pub fn settings_preset(id: &str) -> Result<String, String> {
 
 /// `POST /api/settings/extract/test`: run the currently configured backend on
 /// a one-line connectivity check, streaming progress as it goes.
+///
+/// # Errors
+///
+/// Returns a readable message if the saved config cannot be loaded or the
+/// backend's smoke test fails.
 pub fn settings_test(progress: &mut dyn FnMut(&str)) -> Result<String, String> {
     let loaded = extract_config::load().map_err(|e| format!("{e:#}"))?;
     let resolved = loaded.config.resolve(&ProcessHost, None);

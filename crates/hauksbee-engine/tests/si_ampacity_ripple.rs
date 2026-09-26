@@ -14,7 +14,7 @@ use hauksbee_engine::checks::{ampacity, converter, ripple};
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiReport, SiSeverity};
 use hauksbee_models::ModelLibrary;
 
-/// Build a board + its raw text from inline kicad_pcb body.
+/// Build a board + its raw text from inline `kicad_pcb` body.
 fn board_and_text(body: &str) -> (ExtractedBoard, String) {
     let text =
         format!("(kicad_pcb (version 20240101) (generator pcbnew)\n  (net 0 \"\")\n{body}\n)");
@@ -240,7 +240,7 @@ fn an_assumed_copper_weight_reports_but_does_not_convict() {
     );
 }
 
-/// Two-sided IdentityUnknown contract on the full `--si` surface: the same
+/// Two-sided `IdentityUnknown` contract on the full `--si` surface: the same
 /// undersized rail with the charger's identity refused fires NO ampacity
 /// finding (no current may be attributed from an unknown part), and an Info
 /// note names the skipped part and the refusal, so the silence reads as a
@@ -280,7 +280,7 @@ fn si_skips_an_identity_unknown_part_and_says_so() {
 
 /// R15: the SI chokepoint `engine_si` must carry the engine-layer ampacity +
 /// ripple findings that the bare extractor `si_checks` structurally cannot
-/// produce (it has no ModelLibrary to attribute currents). This is the call the
+/// produce (it has no `ModelLibrary` to attribute currents). This is the call the
 /// aggregate surfaces (`--check`, the combined `--json`, the TUI, the web front
 /// door) now make, so they no longer print a false-clean SI section over an
 /// under-width power trace that `--si` flags.

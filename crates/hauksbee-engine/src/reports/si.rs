@@ -1,8 +1,10 @@
-//! The `--si` report: the signal-integrity / physics static checks from the
-//! extractor, augmented with the engine-layer checks whose attribution needs the
-//! bound database models, trace ampacity (IPC-2221) and input-cap ripple. It
-//! renders in the requested mode and, under `--strict`, exits non-zero on a real
-//! finding. CLI glue over the extract- and engine-layer SI checks.
+//! The `--si` report: the signal-integrity / physics static checks.
+//!
+//! The extractor's checks are augmented with the engine-layer checks whose
+//! attribution needs the bound database models, trace ampacity (IPC-2221) and
+//! input-cap ripple. It renders in the requested mode and, under `--strict`,
+//! exits non-zero on a real finding. CLI glue over the extract- and engine-layer
+//! SI checks.
 
 use crate::binder::bind_board;
 use crate::result::{si_findings_json, BindSummary, JsonReport};
@@ -38,10 +40,10 @@ pub(crate) fn emit_quiet(
     let bound = bind_board(board, lib);
     let evidence = input.evidence(&bound.report)?;
     let coverage = evidence.check_coverage_map("si", "Signal-integrity input coverage")?;
-    let run_level = if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
-        vec![coverage]
-    } else {
+    let run_level = if coverage.status() == hauksbee_ir::evidence::EvidenceStatus::Clean {
         Vec::new()
+    } else {
+        vec![coverage]
     };
     let coverage_undermined = run_level
         .iter()
@@ -68,7 +70,7 @@ pub(crate) fn emit_quiet(
                 .with_inputs(input.inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
-            jr.attach_finding_evidence(&evidence, run_level.clone())?;
+            jr.attach_finding_evidence(&evidence, run_level)?;
             if !blockers.is_empty() {
                 jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
             }
@@ -79,7 +81,7 @@ pub(crate) fn emit_quiet(
         }
         OutputMode::Plain => {
             let mut plain = crate::plain_si(&report);
-            plain.unmodelled_critical = blockers.clone();
+            plain.unmodelled_critical.clone_from(&blockers);
             print!("{}", plain.render());
             // The coverage refusal on the human surface too: a healthy plain
             // verdict above an undermined input-coverage claim is the same

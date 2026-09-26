@@ -1,10 +1,11 @@
-//! The headless co-sim path's leaf machinery: driving the scheduler for a fixed
-//! wall of simulated time (`run_headless`), the structured co-sim summary
-//! (`build_cosim_json`), and the `--probe` net-name validation helpers. `cmd_run`
-//! orchestrates these; the boot advisory it layers on top lives in
-//! `crate::checks::boot`.
+//! The headless co-sim path's leaf machinery.
+//!
+//! Driving the scheduler for a fixed wall of simulated time (`run_headless`),
+//! the structured co-sim summary (`build_cosim_json`), and the `--probe`
+//! net-name validation helpers. `cmd_run` orchestrates these; the boot advisory
+//! it layers on top lives in `crate::checks::boot`.
 
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 use crate::engine::HauksbeeEngine;
 use crate::result::{CosimFailedWindow, CosimFallbackWindow, CosimJson, NetActivity};
@@ -30,10 +31,18 @@ fn truncate(s: &str, max: usize) -> String {
 /// substitution board-wide, so scoping this to the first-bound MCU made the JSON
 /// field contradict its own notes[] (and the web report) whenever a NON-first
 /// MCU was the substituted one.
-fn cosim_substituted(subs: &[crate::scheduler::McuSubstitution], _first_ref: &str) -> bool {
+const fn cosim_substituted(subs: &[crate::scheduler::McuSubstitution], _first_ref: &str) -> bool {
     !subs.is_empty()
 }
 
+/// Build the structured co-sim summary, or `None` when no MCU ran.
+///
+/// # Errors
+///
+/// Returns an [`hauksbee_ir::evidence::EvidenceError`] if the scheduler's
+/// numerical error budget is invalid (a non-finite or non-positive tolerance,
+/// or a failed or fallback window outside or overlapping the run span).
+#[allow(clippy::too_many_lines, reason = "one CosimJson built field by field")]
 pub fn build_cosim_json(
     engine: &HauksbeeEngine,
     uart_seen: bool,
@@ -216,12 +225,14 @@ pub fn build_cosim_json(
     }))
 }
 
-/// One canonical warning per HEURISTIC-framed SPI bus,
-/// shared by the default-text summary, the `--plain` heads-ups, and the
+/// One canonical warning per HEURISTIC-framed SPI bus.
+///
+/// Shared by the default-text summary, the `--plain` heads-ups, and the
 /// `--json` coverage notes so those three name the same failure mode in the same
 /// words. The TUI, the web front door and hauksbee-ci each report the framing
 /// tier from `Scheduler::spi_framing_modes` directly instead of through here.
 /// Exact/backend-framed buses produce nothing, their boundaries are real.
+#[must_use]
 pub fn heuristic_framing_warnings(
     framing: &[(String, crate::peripherals::SpiFramingMode)],
 ) -> Vec<String> {
@@ -242,6 +253,7 @@ pub fn heuristic_framing_warnings(
 
 /// Trim, drop empties, and de-duplicate probe net names while preserving the
 /// order the user gave (which becomes the CSV column order).
+#[must_use]
 pub fn dedup_probes(raw: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for n in raw {
@@ -253,10 +265,16 @@ pub fn dedup_probes(raw: &[String]) -> Vec<String> {
     out
 }
 
-/// Validate `--probe` preconditions before a headless run: a `--probe-csv` sink
-/// is required, and every probed net must exist on the board. An unknown net
-/// fails loudly with near-matches, the same did-you-mean style the spec loader
-/// uses for a bad net name.
+/// Validate `--probe` preconditions before a headless run.
+///
+/// A `--probe-csv` sink is required, and every probed net must exist on the
+/// board. An unknown net fails loudly with near-matches, the same did-you-mean
+/// style the spec loader uses for a bad net name.
+///
+/// # Errors
+///
+/// Returns an error if probes are given without a `--probe-csv` path, or if a
+/// probed net is not among the board's `known` nets.
 pub fn validate_probes(
     probes: &[String],
     csv: Option<&Path>,
@@ -286,9 +304,12 @@ pub fn validate_probes(
     Ok(())
 }
 
-/// Up to `limit` known net names closest to `target` by edit distance, favouring
-/// substring matches. A compact twin of the spec loader's net suggester, kept
-/// local because the engine binary cannot depend on the CI crate.
+/// Up to `limit` known net names closest to `target` by edit distance.
+///
+/// Favours substring matches. A compact twin of the spec loader's net
+/// suggester, kept local because the engine binary cannot depend on the CI
+/// crate.
+#[must_use]
 pub fn nearest_nets(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let t = target.to_ascii_lowercase();
     let mut scored: Vec<(usize, &String)> = known
@@ -316,6 +337,7 @@ pub fn nearest_nets(target: &str, known: &[String], limit: usize) -> Vec<String>
 }
 
 /// Classic Levenshtein edit distance.
+#[must_use]
 pub fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -331,7 +353,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     for i in 1..=n {
         cur[0] = i;
         for j in 1..=m {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let cost = usize::from(a[i - 1] != b[j - 1]);
             cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut cur);
@@ -369,6 +391,7 @@ pub struct HeadlessRun {
 impl HeadlessRun {
     /// Achieved realtime factor: sim seconds per wall second. 0 when the run
     /// was too short to measure.
+    #[must_use]
     pub fn realtime_factor(&self) -> f64 {
         if self.wall_s > 0.0 {
             self.sim_s / self.wall_s
@@ -378,6 +401,17 @@ impl HeadlessRun {
     }
 }
 
+/// Step the engine headlessly for `seconds` of simulated time.
+///
+/// Collects faults and UART output, prints the human summary unless `quiet`,
+/// and writes the probed nets' waveforms to `probe_csv`.
+///
+/// # Errors
+///
+/// Returns an error if `chunk_us` is not a positive finite number, or if the
+/// probe CSV cannot be written.
+#[allow(clippy::too_many_lines, reason = "setup, step loop, then summary")]
+#[allow(clippy::while_float, reason = "f64 time sum fixes the frame count")]
 pub fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
@@ -423,9 +457,9 @@ pub fn run_headless(
             us > 0.0 && us.is_finite(),
             "--chunk-us must be a positive number of microseconds, got {us}"
         );
-        let chunk_s = us * 1e-6;
-        engine.scheduler_mut().chunk_s = chunk_s;
-        frame_dt = frame_dt.max(chunk_s);
+        let chunk_secs = us * 1e-6;
+        engine.scheduler_mut().chunk_s = chunk_secs;
+        frame_dt = frame_dt.max(chunk_secs);
         eprintln!("co-sim: solver chunk set to {us} us (--chunk-us)");
     }
     // Wall-clock accounting for the achieved-rate line: measured around the
@@ -552,7 +586,7 @@ pub fn run_headless(
                  those windows held stale voltages:"
             );
             for &(start_s, end_s) in sched.failed_windows() {
-                println!("  [{:.6}s .. {:.6}s)", start_s, end_s);
+                println!("  [{start_s:.6}s .. {end_s:.6}s)");
             }
         }
 
@@ -572,12 +606,14 @@ pub fn run_headless(
                  solve failed; those windows are converged but second-class:"
             );
             for w in sched.fallback_windows() {
-                let estimate = match w.error_estimate_v {
-                    Some(e) => format!("measured chunk-end error estimate {e:.3e} V"),
-                    None => "no error estimate established (no companion re-solve \
+                let estimate = w.error_estimate_v.map_or_else(
+                    || {
+                        "no error estimate established (no companion re-solve \
                              converged)"
-                        .to_string(),
-                };
+                            .to_string()
+                    },
+                    |e| format!("measured chunk-end error estimate {e:.3e} V"),
+                );
                 println!(
                     "  [{:.6}s .. {:.6}s) via {}; {} ({})",
                     w.start_s,
@@ -697,9 +733,9 @@ pub fn run_headless(
     if let Some(path) = probe_csv {
         let mut csv = probe_csv_header(probes);
         for (t, volts) in &probe_rows {
-            csv.push_str(&format!("{t:.6}"));
+            let _ = write!(csv, "{t:.6}");
             for v in volts {
-                csv.push_str(&format!(",{v:.6}"));
+                let _ = write!(csv, ",{v:.6}");
             }
             csv.push('\n');
         }

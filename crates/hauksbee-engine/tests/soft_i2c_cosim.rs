@@ -1,8 +1,8 @@
 //! Proof: AVR firmware bit-bangs I2C on plain GPIOs and reads a spec-driven
 //! MPU-6050 through the synchronous input responder (05 §1.5).
 //!
-//! The firmware (testdata/firmware/soft_i2c_sensor) toggles SCL/SDA on
-//! PD2/PD3, deliberately NOT the ATmega328P's hardware TWI pins, with the
+//! The firmware (`testdata/firmware/soft_i2c_sensor`) toggles SCL/SDA on
+//! PD2/PD3, deliberately NOT the `ATmega328P`'s hardware TWI pins, with the
 //! push-pull master waveform the [`SoftI2cResponder`] documents, sampling
 //! every ACK and read bit with a plain `PIND` read one instruction after the
 //! SCL rising edge. The slave is the shipped declarative MPU-6050 spec
@@ -10,9 +10,9 @@
 //! model class the hardware-TWI path serves, no parallel device.
 //!
 //! The firmware performs two classic pointered reads with repeated-START
-//! framing (WHO_AM_I 0x75; TEMP_OUT 0x41, two-byte burst with a master ACK
+//! framing (`WHO_AM_I` 0x75; `TEMP_OUT` 0x41, two-byte burst with a master ACK
 //! between) and reports "<A|n>W<who>T<hi><lo>" over UART. The test asserts
-//! WHO_AM_I = 0x68, every address byte ACKed, and, transport equality, that
+//! `WHO_AM_I` = 0x68, every address byte `ACKed`, and, transport equality, that
 //! the temperature bytes the firmware clocked in over pin edges are exactly
 //! the bytes the sensor model holds for the driven temperature.
 
@@ -26,13 +26,13 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
 
-/// The shipped declarative MPU-6050 spec (address 0x68, WHO_AM_I = 0x68).
+/// The shipped declarative MPU-6050 spec (address 0x68, `WHO_AM_I` = 0x68).
 const MPU6050_SPEC: &str = include_str!("../../hauksbee-server/assets/sensor-specs/mpu6050.toml");
 
 /// The temperature the test drives into the model.
 const TEMP_C: f64 = 30.0;
 
-/// Minimal board: U1 ATmega328P with the soft-I2C GPIOs on PD2/PD3 (DIP-28
+/// Minimal board: U1 `ATmega328P` with the soft-I2C GPIOs on PD2/PD3 (DIP-28
 /// pads 4, 5), power/ground wired, and pull-up resistors on SCL/SDA the way a
 /// real I2C bus is dressed.
 const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
@@ -114,7 +114,7 @@ fn firmware_reads_i2c_sensor_over_bitbanged_gpios() {
         if let Some(bytes) = frame.uart.get("U1") {
             out.extend_from_slice(bytes);
         }
-        if out.iter().filter(|&&b| b == b'\n').count() >= 2 {
+        if out.iter().filter(|&&b| b == b'\n').nth(1).is_some() {
             break;
         }
     }

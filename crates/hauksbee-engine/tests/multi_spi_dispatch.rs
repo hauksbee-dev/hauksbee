@@ -23,14 +23,14 @@ use hauksbee_engine::peripherals::SpiSlave;
 
 struct WhoAmISlave {
     who_am_i: u8,
-    /// True when we have received the WHO_AM_I command byte (0x75) and the
+    /// True when we have received the `WHO_AM_I` command byte (0x75) and the
     /// next transfer should return the identity byte.
     pending: bool,
 }
 
 impl WhoAmISlave {
-    fn new(who_am_i: u8) -> Self {
-        WhoAmISlave {
+    const fn new(who_am_i: u8) -> Self {
+        Self {
             who_am_i,
             pending: false,
         }
@@ -181,7 +181,7 @@ fn attach_spi_bus_on_coexists_with_legacy_attach_spi_bus() {
     )));
 
     let mut sched = empty_scheduler();
-    sched.attach_spi_bus(legacy_bus.clone(), None);
+    sched.attach_spi_bus(legacy_bus, None);
     sched.attach_spi_bus_on("spi2", named_bus.clone(), None);
 
     // Both show up in the flat spi_buses() slice.

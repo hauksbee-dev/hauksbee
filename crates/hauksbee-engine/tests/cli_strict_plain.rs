@@ -501,7 +501,7 @@ fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
 #[test]
 fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
     // Validated (KiCad 7): the short gates the build.
-    let validated = crossing_short_board(20221018, "validated");
+    let validated = crossing_short_board(20_221_018, "validated");
     let out = run_board(&validated, &["--drc", "--strict"]);
     assert_eq!(
         out.status.code(),
@@ -513,7 +513,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
         .contains("short"));
 
     // Unvalidated (KiCad 10): the same short does NOT gate (caveat printed).
-    let unvalidated = crossing_short_board(20260206, "unvalidated");
+    let unvalidated = crossing_short_board(20_260_206, "unvalidated");
     let out = run_board(&unvalidated, &["--drc", "--strict"]);
     assert_eq!(
         out.status.code(),
@@ -537,7 +537,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 
 /// The boot-safety advisory, end to end through the compiled binary: a board
 /// whose firmware drives a transistor-gate net HIGH and holds it from reset
-/// (boot_gate + variant A) is named in `--headless --json` as a
+/// (`boot_gate` + variant A) is named in `--headless --json` as a
 /// `boot_control_net` note, advisory-only by default (exit 0), and escalated to
 /// exit 2 under `--strict-boot`. Uses committed fixtures.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
@@ -671,7 +671,7 @@ fn clean_firmware_raises_no_boot_advisory() {
 }
 
 /// The informational boot-state panel, end to end: a board with a transistor
-/// gate driven HIGH at boot (boot_gate + variant A) names that gate in the
+/// gate driven HIGH at boot (`boot_gate` + variant A) names that gate in the
 /// --plain panel and in --json `boot_gates`; variant B (gate never driven)
 /// reports it as floating. Reporting, not gating, exit stays 0 either way.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,

@@ -20,7 +20,7 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
-/// A KiCad PCB with one 2-pin diode (value 1N4148, SOD-323 body) wired between
+/// A `KiCad` PCB with one 2-pin diode (value 1N4148, SOD-323 body) wired between
 /// two nets, pads numbered 1/2 with NO pinfunction; the layout-only case.
 const LAYOUT_DIODE_PCB: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -38,7 +38,7 @@ const LAYOUT_DIODE_PCB: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1
     (pad 2 smd rect (at 6 0) (size 1 1) (layers F.Cu) (net 1 "CATHODE_NET"))))
 "#;
 
-/// The same diode as a KiCad netlist, carrying explicit `pinfunction "A"/"K"`.
+/// The same diode as a `KiCad` netlist, carrying explicit `pinfunction "A"/"K"`.
 const NETLIST_DIODE_WITH_PINFUNC: &str = r#"(export (version "E")
   (components
     (comp (ref "D1")

@@ -18,7 +18,7 @@
 //! AC bode points, and thermal peaks, and adds the honesty annotations
 //! (`valid`/`reason`, `critical_parts_bound`, grouped DRC) on top.
 //!
-//! ## Exit-code contract (see ONBOARDING_PLAN §4.2)
+//! ## Exit-code contract (see `ONBOARDING_PLAN` §4.2)
 //! - `0`  clean, or findings present but not `--strict`.
 //! - `1`  the run never happened: the board could not be read, or the analysis
 //!   could not be set up. An input error, not a verdict about the board.
@@ -32,7 +32,7 @@
 //! One path per output surface, each reading the structured types below rather
 //! than re-deriving a finding of its own:
 //!
-//! - **text**: `reports::<family>::emit` under [`crate::reports::OutputMode`]`::Text`,
+//! - **text**: `reports::<family>::emit` under <code>[crate::reports::OutputMode]::Text</code>,
 //!   rendering through [`DrcStructured::render_with_clearance_rule_provenance`],
 //!   [`crate::reports::bind::BindReport::render_table_compact`],
 //!   [`BindSummary::render_banner`], [`Refusal::render_text`] and
@@ -65,6 +65,7 @@
 use serde::ser::SerializeStruct;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use hauksbee_extract::{DrcReport, ViolationKind};
 
@@ -76,10 +77,11 @@ pub use hauksbee_bind::bind_report::{BindSummary, UnresolvedActive};
 
 pub use hauksbee_bind::EXIT_INVALID_FOR_ANALYSIS;
 
-/// The C5.3 refusal contract.  Exit 3 means the requested claim could not be
-/// made; it is neither a finding nor a malformed-input error.  Every renderer
-/// carries these same four answers so a refusal is actionable and does not
-/// discard work that remains valid.
+/// The C5.3 refusal contract.
+///
+/// Exit 3 means the requested claim could not be made; it is neither a finding
+/// nor a malformed-input error.  Every renderer carries these same four answers
+/// so a refusal is actionable and does not discard work that remains valid.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Refusal {
     /// The conclusion the run declined to make.
@@ -111,6 +113,7 @@ impl Refusal {
     }
 
     /// Lossless human rendering used by terminal and CI-native text surfaces.
+    #[must_use]
     pub fn render_text(&self) -> String {
         format!(
             "refused claim: {}\nmissing prerequisite: {}\nvalid partial conclusions: {}\nnext action: {}",
@@ -122,16 +125,21 @@ impl Refusal {
     }
 }
 
-/// Version of the `run --json` document contract (`JsonReport` plus the
-/// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
-/// prepends). Bump on a breaking change only; additive fields keep it.
+/// Version of the `run --json` document contract.
+///
+/// Covers `JsonReport` plus the `ok`/`verdict`/`serious_count`/`actionable_count`
+/// rollup `to_json` prepends. Bump on a breaking change only; additive fields
+/// keep it.
 pub const RUN_REPORT_SCHEMA_VERSION: u32 = 3;
 
-/// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
-/// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both
-/// entry points resolve the same code ([`EXIT_INVALID_FOR_ANALYSIS`]) and a test
-/// can assert the contract without spawning a process. `None` means the run is
+/// Exit code for a strict run whose analog co-sim tripped the failed-chunk abort.
+///
+/// A strict headless run (`--strict`) or hauksbee-ci must use it when the analog
+/// co-sim tripped the consecutive-failed-chunk abort. Centralised so both entry
+/// points resolve the same code ([`EXIT_INVALID_FOR_ANALYSIS`]) and a test can
+/// assert the contract without spawning a process. `None` means the run is
 /// analysable and the ordinary pass/fail exit codes apply.
+#[must_use]
 pub fn strict_analog_exit_code(analog_abort_tripped: bool) -> Option<i32> {
     analog_abort_tripped.then_some(EXIT_INVALID_FOR_ANALYSIS)
 }
@@ -140,13 +148,16 @@ pub fn strict_analog_exit_code(analog_abort_tripped: bool) -> Option<i32> {
 // AC validity
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The magnitude floor in [`hauksbee_solve`]'s `bode()`: `20*log10(1e-300)`
-/// clamps to exactly `-6000.0 dB` when a node has no signal path. We treat every
-/// point being at (or below) this floor as "no path to this net".
+/// The magnitude floor in [`hauksbee_solve`]'s `bode()`.
+///
+/// `20*log10(1e-300)` clamps to exactly `-6000.0 dB` when a node has no signal
+/// path. We treat every point being at (or below) this floor as "no path to
+/// this net".
 pub const AC_FLOOR_DB: f64 = -6000.0;
 
 /// Whether an AC sweep (the `(freq, mag_db, phase)` triples for one net) is the
 /// all-sentinel "no signal path" result. Empty input is also meaningless.
+#[must_use]
 pub fn ac_is_all_sentinel(bode: &[(f64, f64, f64)]) -> bool {
     !bode.is_empty() && bode.iter().all(|(_, db, _)| *db <= AC_FLOOR_DB + 1.0)
 }
@@ -165,23 +176,25 @@ pub struct Validity {
 }
 
 impl Validity {
-    pub fn valid() -> Self {
-        Validity {
+    #[must_use]
+    pub const fn valid() -> Self {
+        Self {
             valid: true,
             reason: None,
             refusal: None,
         }
     }
     pub fn invalid(reason: impl Into<String>) -> Self {
-        Validity {
+        Self {
             valid: false,
             reason: Some(reason.into()),
             refusal: None,
         }
     }
 
+    #[must_use]
     pub fn refused(refusal: Refusal) -> Self {
-        Validity {
+        Self {
             valid: false,
             reason: Some(refusal.missing_prerequisite.clone()),
             refusal: Some(refusal),
@@ -191,6 +204,7 @@ impl Validity {
 
 /// Build the "no signal path" reason naming the unresolved driving ICs. Used by
 /// both AC (no path) and the warning text.
+#[must_use]
 pub fn no_signal_path_reason(net: &str, summary: &BindSummary) -> String {
     let drivers: Vec<String> = summary
         .active_ic_unresolved()
@@ -212,9 +226,12 @@ pub fn no_signal_path_reason(net: &str, summary: &BindSummary) -> String {
     }
 }
 
-/// Thermal validity: invalid when no resolved dissipating device made the table
-/// *and* the board has unresolved active parts that would have dissipated. The
-/// `dissipating_rows` is the count of devices that produced a finite peak temp.
+/// Thermal validity: invalid when no resolved dissipating device made the table.
+///
+/// Invalid only when that holds *and* the board has unresolved active parts that
+/// would have dissipated. The `dissipating_rows` is the count of devices that
+/// produced a finite peak temp.
+#[must_use]
 pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Validity {
     if dissipating_rows > 0 {
         return Validity::valid();
@@ -260,13 +277,14 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
 // Per-check COVERAGE (distinct from Validity); the honest "N of M" annotation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives
-/// exit 3. `CheckCoverage` is the honest "N of M active parts actually entered
-/// this check" metric: it is ALWAYS emittable and NEVER changes the exit code on
-/// its own (the partial-coverage thermal escalation is applied by the thermal
-/// report, by default; `--no-strict-thermal` opts out). `partial == true` means
-/// a renderer should print a coverage caveat even though the check itself
-/// produced rows.
+/// Coverage is distinct from [`Validity`].
+///
+/// `Validity` stays BINARY and drives exit 3. `CheckCoverage` is the honest "N of
+/// M active parts actually entered this check" metric: it is ALWAYS emittable and
+/// NEVER changes the exit code on its own (the partial-coverage thermal
+/// escalation is applied by the thermal report, by default; `--no-strict-thermal`
+/// opts out). `partial == true` means a renderer should print a coverage caveat
+/// even though the check itself produced rows.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CheckCoverage {
     /// Covered active ICs / total active ICs, clamped to `[0, 1]`: how much of the
@@ -285,12 +303,14 @@ pub struct CheckCoverage {
     pub partial: bool,
 }
 
-/// Thermal coverage, parallel to [`thermal_validity`]. Returns `partial = true`
-/// when there ARE dissipating rows yet an active IC on the live circuit is open
-/// or unresolved, i.e. the table is real but incomplete (rows exist only because
-/// some passives/parts resolved while a power IC is open). The thermal report
-/// escalates the partial case to exit 3 by default (`--no-strict-thermal` opts
-/// out); `thermal_validity` itself is unchanged.
+/// Thermal coverage, parallel to [`thermal_validity`].
+///
+/// Returns `partial = true` when there ARE dissipating rows yet an active IC on
+/// the live circuit is open or unresolved, i.e. the table is real but incomplete
+/// (rows exist only because some passives/parts resolved while a power IC is
+/// open). The thermal report escalates the partial case to exit 3 by default
+/// (`--no-strict-thermal` opts out); `thermal_validity` itself is unchanged.
+#[must_use]
 pub fn thermal_coverage(dissipating_rows: usize, summary: &BindSummary) -> CheckCoverage {
     let open_unresolved = summary
         .active_path_unresolved
@@ -314,6 +334,7 @@ pub fn thermal_coverage(dissipating_rows: usize, summary: &BindSummary) -> Check
         1.0
     } else {
         let covered_active = total_active.saturating_sub(open_active);
+        #[allow(clippy::cast_precision_loss, reason = "IC counts never reach 2^52")]
         (covered_active as f64 / total_active as f64).clamp(0.0, 1.0)
     };
     let partial = dissipating_rows > 0
@@ -330,6 +351,7 @@ pub fn thermal_coverage(dissipating_rows: usize, summary: &BindSummary) -> Check
 /// The active ICs (unresolved + resolved-but-open) on the live circuit that a
 /// coverage caveat should name. Shared by the CLI text/plain/json renderers so
 /// every surface names the SAME parts.
+#[must_use]
 pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
     summary
         .active_path_unresolved
@@ -349,14 +371,14 @@ pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
 // The INCONCLUSIVE verdict vocabulary (one dialect for every static surface)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The current-carrying / active parts whose absence of a model makes a clean
-/// static verdict vacuous: the [`coverage_open_active_refs`] set (active ICs
-/// that are unresolved or resolved-but-open on the live circuit) plus
-/// unresolved discrete transistors (`Q` prefix) on the live circuit, the power
-/// FETs on a protection path. A clean `--lint`/`--si` result over these parts
-/// is not a clean bill, and the verdict line must say so instead of "Looks
-/// healthy" (PROCESS_AND_UX_LOG item 4: a vacuous pass on a BMS protection
-/// path is the most dangerous UX failure here).
+/// The current-carrying / active parts whose missing models make a static verdict vacuous.
+///
+/// The [`coverage_open_active_refs`] set (active ICs that are unresolved or
+/// resolved-but-open on the live circuit) plus unresolved discrete transistors
+/// (`Q` prefix) on the live circuit, the power FETs on a protection path. A clean
+/// `--lint`/`--si` result over these parts is not a clean bill, and the verdict
+/// line must say so instead of "Looks healthy" (`PROCESS_AND_UX_LOG` item 4: a
+/// vacuous pass on a BMS protection path is the most dangerous UX failure here).
 ///
 /// Passives are deliberately excluded: an unbound connector or resistor does
 /// not blind these checks the way an open driver or FET does, and flagging
@@ -378,6 +400,7 @@ pub fn run_level_undermined(
         .any(|map| map.is_undermined() && !is_finding_assertion(map.assertion()))
 }
 
+#[must_use]
 pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
     let mut refs: Vec<String> = summary
         .active_path_unresolved
@@ -396,15 +419,17 @@ pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
     refs
 }
 
-/// The one INCONCLUSIVE verdict sentence the lint/SI/check surfaces share: the
-/// count, the named parts, and the input that unlocks a conclusive verdict.
-/// Their `--plain` verdict lines, default text summaries, the `--check`
+/// The one INCONCLUSIVE verdict sentence the lint/SI/check surfaces share.
+///
+/// It gives the count, the named parts, and the input that unlocks a conclusive
+/// verdict. Their `--plain` verdict lines, default text summaries, the `--check`
 /// closing verdict and their JSON coverage notes all render THIS string (the
 /// closing verdict drops the leading tag it already states), so the vocabulary
 /// cannot fork across those surfaces. Thermal and AC speak through their own
-/// coverage caveats, which lead with the same INCONCLUSIVE tag. It never
-/// changes an exit code on its own; the exit-code contract is documented in
+/// coverage caveats, which lead with the same INCONCLUSIVE tag. It never changes
+/// an exit code on its own; the exit-code contract is documented in
 /// docs/ci/CI.md.
+#[must_use]
 pub fn inconclusive_verdict(refs: &[String]) -> String {
     let list = refs.join(", ");
     format!(
@@ -435,7 +460,7 @@ fn is_transistor_ref(reference: &str) -> bool {
     }
     let prefix: String = reference
         .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
+        .take_while(char::is_ascii_alphabetic)
         .map(|c| c.to_ascii_uppercase())
         .collect();
     prefix == "Q"
@@ -473,9 +498,11 @@ pub struct JsonNote {
     pub message: String,
 }
 
-/// One row of the boot-state panel: a transistor gate and what the firmware does
-/// to it at power-up (`driven_high` / `driven_low` / `floating`). Informational
-/// (reported, not judged), so a consumer can read it without it being a verdict.
+/// One row of the boot-state panel.
+///
+/// A transistor gate and what the firmware does to it at power-up
+/// (`driven_high` / `driven_low` / `floating`). Informational (reported, not
+/// judged), so a consumer can read it without it being a verdict.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct BootGateJson {
     pub reference: String,
@@ -497,9 +524,10 @@ pub enum JsonNoteKind {
     BootControlNet,
 }
 
-/// Machine-readable co-sim summary (today only emitted as CLI text). Populated
-/// from the headless run + the MCU binding. `substituted` is true when the part
-/// the user asked for was modelled by a less-specific core (Track B).
+/// Machine-readable co-sim summary (today only emitted as CLI text).
+///
+/// Populated from the headless run + the MCU binding. `substituted` is true when
+/// the part the user asked for was modelled by a less-specific core (Track B).
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimJson {
     pub mcu_ref: String,
@@ -708,9 +736,10 @@ pub struct CosimSpiFraming {
     pub cs_provenance: Option<String>,
 }
 
-/// One sim-time window `[start_s, end_s)` where the analog solve failed to
-/// converge and the co-sim held stale voltages. Reported so a consumer knows the
-/// exact span that cannot be trusted rather than inferring a quiet run.
+/// One sim-time window `[start_s, end_s)` where the analog solve failed to converge.
+///
+/// The co-sim held stale voltages there. Reported so a consumer knows the exact
+/// span that cannot be trusted rather than inferring a quiet run.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimFailedWindow {
     pub start_s: f64,
@@ -723,18 +752,18 @@ pub struct CosimFailedWindow {
     pub reason: String,
 }
 
-/// One sim-time window `[start_s, end_s)` whose answer was produced by a
-/// per-chunk fallback integration rung after the primary analog solve failed
-/// there. `method` is the rung's stable name
-/// (`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names
-/// the known algorithmic trade-off, and `error_estimate_v` is a MEASURED
-/// estimate, in volts, of the chunk-end node-voltage error each chunk's march
-/// added relative to its own chunk-start state, from a companion re-solve at
-/// a 4x-shifted accuracy dial (tighter first, a coarser leg when the tight
-/// companion will not converge), conservatively Richardson-scaled. Worst
-/// chunk of a merged window, not a sum across it; omitted when no companion
-/// converged, never invented. The record travels with the number it
-/// qualifies.
+/// One sim-time window `[start_s, end_s)` whose answer came from a fallback rung.
+///
+/// The answer was produced by a per-chunk fallback integration rung after the
+/// primary analog solve failed there. `method` is the rung's stable name
+/// (`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names the
+/// known algorithmic trade-off, and `error_estimate_v` is a MEASURED estimate, in
+/// volts, of the chunk-end node-voltage error each chunk's march added relative
+/// to its own chunk-start state, from a companion re-solve at a 4x-shifted
+/// accuracy dial (tighter first, a coarser leg when the tight companion will not
+/// converge), conservatively Richardson-scaled. Worst chunk of a merged window,
+/// not a sum across it; omitted when no companion converged, never invented. The
+/// record travels with the number it qualifies.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimFallbackWindow {
     pub start_s: f64,
@@ -762,7 +791,7 @@ pub struct NetActivity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClearanceRuleSource {
-    /// Netclass rules were read from the sibling KiCad project file.
+    /// Netclass rules were read from the sibling `KiCad` project file.
     ProjectFileFound,
     /// No usable project rules were available, so the extractor's fallback was
     /// applied.  Renderers must never call this the user's rule.
@@ -772,11 +801,11 @@ pub enum ClearanceRuleSource {
     ToolDefault,
     /// A non-KiCad layout format carried its own clearance value.
     BoardFile,
-    /// A sibling KiCad custom-rules file supplied the report-wide value.
+    /// A sibling `KiCad` custom-rules file supplied the report-wide value.
     CustomRulesFile,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CustomRuleScopeOmission {
     pub name: String,
     pub line_number: usize,
@@ -785,17 +814,17 @@ pub struct CustomRuleScopeOmission {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
     pub constraint_types: Vec<String>,
-    /// Constraint types whose bounds contain a bare, unitless value. KiCad
+    /// Constraint types whose bounds contain a bare, unitless value. `KiCad`
     /// 10.0.5 deactivates the whole rules file, so this is disclosure, not a
     /// fidelity qualification on otherwise matching findings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bare_value_constraint_types: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CustomRulesCoverage {
     pub file_name: String,
-    /// KiCad 10.0.5 silently deactivates every custom rule in a file when any
+    /// `KiCad` 10.0.5 silently deactivates every custom rule in a file when any
     /// constraint bound omits its unit.
     pub file_inactive_due_to_bare_values: bool,
     pub unevaluated_rules: Vec<CustomRuleScopeOmission>,
@@ -804,6 +833,7 @@ pub struct CustomRulesCoverage {
 }
 
 impl CustomRulesCoverage {
+    #[must_use]
     pub fn from_parsed(file_name: String, parsed: &hauksbee_extract::KicadDruRules) -> Self {
         let describe = |rule: &hauksbee_extract::KicadDruRule| CustomRuleScopeOmission {
             name: rule.name.clone(),
@@ -841,6 +871,7 @@ impl CustomRulesCoverage {
         }
     }
 
+    #[must_use]
     pub fn qualifies_clearance_findings(&self) -> bool {
         !self.file_inactive_due_to_bare_values
             && self.unevaluated_rules.iter().any(|rule| {
@@ -849,11 +880,11 @@ impl CustomRulesCoverage {
             })
     }
 
+    #[must_use]
     pub fn unevaluated_notice(&self) -> Option<String> {
         if self.unevaluated_rules.is_empty() {
             return None;
         }
-        use std::fmt::Write as _;
         let bare_rules = self
             .unevaluated_rules
             .iter()
@@ -954,6 +985,7 @@ impl CustomRulesCoverage {
         Some(notice)
     }
 
+    #[must_use]
     pub fn not_covered_summary(&self) -> Option<String> {
         if self.not_covered_rules.is_empty() && self.unsupported_constraint_counts.is_empty() {
             return None;
@@ -1017,7 +1049,8 @@ impl Default for ClearanceRuleProvenance {
 }
 
 impl ClearanceRuleProvenance {
-    pub fn project_file(value_mm: f64) -> Self {
+    #[must_use]
+    pub const fn project_file(value_mm: f64) -> Self {
         Self {
             source: ClearanceRuleSource::ProjectFileFound,
             value_mm,
@@ -1027,7 +1060,8 @@ impl ClearanceRuleProvenance {
         }
     }
 
-    pub fn defaulted(value_mm: f64, project_file_found: bool) -> Self {
+    #[must_use]
+    pub const fn defaulted(value_mm: f64, project_file_found: bool) -> Self {
         Self {
             source: ClearanceRuleSource::Defaulted,
             value_mm,
@@ -1037,7 +1071,8 @@ impl ClearanceRuleProvenance {
         }
     }
 
-    pub fn board_file(value_mm: f64) -> Self {
+    #[must_use]
+    pub const fn board_file(value_mm: f64) -> Self {
         Self {
             source: ClearanceRuleSource::BoardFile,
             value_mm,
@@ -1047,7 +1082,8 @@ impl ClearanceRuleProvenance {
         }
     }
 
-    pub fn tool_default(value_mm: f64) -> Self {
+    #[must_use]
+    pub const fn tool_default(value_mm: f64) -> Self {
         Self {
             source: ClearanceRuleSource::ToolDefault,
             value_mm,
@@ -1057,7 +1093,8 @@ impl ClearanceRuleProvenance {
         }
     }
 
-    pub fn custom_rules_file(
+    #[must_use]
+    pub const fn custom_rules_file(
         value_mm: f64,
         overridden_project_value_mm: Option<f64>,
         coverage: CustomRulesCoverage,
@@ -1071,19 +1108,21 @@ impl ClearanceRuleProvenance {
         }
     }
 
+    #[must_use]
     pub fn with_custom_rules(mut self, coverage: CustomRulesCoverage) -> Self {
         self.custom_rules = Some(coverage);
         self
     }
 
-    pub fn is_defaulted(&self) -> bool {
+    #[must_use]
+    pub const fn is_defaulted(&self) -> bool {
         matches!(
             self.source,
             ClearanceRuleSource::Defaulted | ClearanceRuleSource::ToolDefault
         )
     }
 
-    fn missing_reason(&self) -> &'static str {
+    const fn missing_reason(&self) -> &'static str {
         if self.project_file_found {
             "the sibling .kicad_pro was found, but its netclass rules were not read"
         } else {
@@ -1092,6 +1131,7 @@ impl ClearanceRuleProvenance {
     }
 
     /// Qualification appended to every human rule reference.
+    #[must_use]
     pub fn rule_reference(&self, value_mm: f64) -> String {
         match self.source {
             ClearanceRuleSource::ProjectFileFound => format!("your {value_mm:.3} mm rule"),
@@ -1109,13 +1149,13 @@ impl ClearanceRuleProvenance {
                 "the {value_mm:.3} mm custom rule from {}",
                 self.custom_rules
                     .as_ref()
-                    .map(|coverage| coverage.file_name.as_str())
-                    .unwrap_or("the sibling .kicad_dru")
+                    .map_or("the sibling .kicad_dru", |coverage| coverage.file_name.as_str())
             ),
         }
     }
 
     /// Prominent source + unlocking-input sentence for a CLI report.
+    #[must_use]
     pub fn source_notice(&self) -> String {
         match self.source {
             ClearanceRuleSource::ProjectFileFound => format!(
@@ -1139,18 +1179,14 @@ impl ClearanceRuleProvenance {
                 let file = self
                     .custom_rules
                     .as_ref()
-                    .map(|coverage| coverage.file_name.as_str())
-                    .unwrap_or("sibling .kicad_dru");
-                match self.overridden_project_value_mm {
-                    Some(project) => format!(
-                        "CLEARANCE RULE SOURCE: custom rules file {file} (report-wide value {:.3} mm), which overrides the .kicad_pro netclass value of {project:.3} mm.",
-                        self.value_mm
-                    ),
-                    None => format!(
+                    .map_or("sibling .kicad_dru", |coverage| coverage.file_name.as_str());
+                self.overridden_project_value_mm.map_or_else(|| format!(
                         "CLEARANCE RULE SOURCE: custom rules file {file} (report-wide value {:.3} mm).",
                         self.value_mm
-                    ),
-                }
+                    ), |project| format!(
+                        "CLEARANCE RULE SOURCE: custom rules file {file} (report-wide value {:.3} mm), which overrides the .kicad_pro netclass value of {project:.3} mm.",
+                        self.value_mm
+                    ))
             }
         }
     }
@@ -1168,6 +1204,7 @@ impl ClearanceRuleProvenance {
     }
 
     /// Prominent source + unlocking-input sentence for a CLI report.
+    #[must_use]
     pub fn cli_notice(&self) -> String {
         let notice = self.source_notice();
         if self.source == ClearanceRuleSource::Defaulted {
@@ -1184,6 +1221,7 @@ impl ClearanceRuleProvenance {
 
     /// Web-specific unlocking instruction: this path has upload bytes, not a
     /// sibling filesystem path.
+    #[must_use]
     pub fn web_notice(&self) -> String {
         match self.source {
             ClearanceRuleSource::Defaulted if self.project_file_found => format!(
@@ -1208,7 +1246,7 @@ pub struct DrcShort {
     pub gap_mm: f64,
     pub loc_mm: [f64; 2],
     /// "serious" for a validated-format short or an unvalidated-format short
-    /// independently confirmed by KiCad's own DRC. "note" remains for a
+    /// independently confirmed by `KiCad`'s own DRC. "note" remains for a
     /// tool-only unvalidated-format claim or where board-local physical
     /// authority qualifies this location. A companion Eagle schematic adds
     /// context but cannot change severity.
@@ -1237,15 +1275,17 @@ impl DrcShort {
         if let Some((claim, _)) = self.plain.split_once(TOOL_ONLY_FORMAT_MARKER) {
             self.plain = claim.to_string();
         }
-        self.plain.push_str(&format!(
+        let _ = write!(
+            self.plain,
             "; {ORACLE_AGREEMENT_MARKER}confirmed by KiCad's own DRC ({version}) for this \
              specific net pair; the coordinates shown are Hauksbee's reported contact location"
-        ));
+        );
     }
 }
 
-/// A group of clearance findings that share (net_a, net_b, layer, root cause),
-/// collapsed to one line with a count. `at_limit` separates `gap == rule` (no
+/// A group of clearance findings that share (`net_a`, `net_b`, layer, root cause).
+///
+/// Collapsed to one line with a count. `at_limit` separates `gap == rule` (no
 /// margin, but not below) from genuine sub-clearance violations.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct DrcGroup {
@@ -1290,10 +1330,12 @@ impl DrcGroup {
     /// (no margin)", NOT "below the spacing the board asks for" (which is only
     /// true when gap < rule). For a mixed group we name BOTH counts so we never
     /// overstate how many locations are actually below the rule.
+    #[must_use]
     pub fn label(&self) -> String {
         self.label_with_rule_provenance(&ClearanceRuleProvenance::defaulted(self.rule_mm, false))
     }
 
+    #[must_use]
     pub fn label_with_rule_provenance(&self, provenance: &ClearanceRuleProvenance) -> String {
         let loc = locations;
         let rule = provenance.rule_reference(self.rule_mm);
@@ -1346,9 +1388,9 @@ pub struct DrcStructured {
     /// Grouped findings that sit exactly AT the rule (no margin, not below).
     pub at_limit: Vec<DrcGroup>,
     /// Set when the board's format is newer than hauksbee's validated copper
-    /// extraction (KiCad 10+), making tool-only shorts above unreliable.
+    /// extraction (`KiCad` 10+), making tool-only shorts above unreliable.
     /// Surfaced by every renderer; CI gates ignore those tool-only shorts, but
-    /// an exact net-pair match from KiCad's own DRC restores a short's serious
+    /// an exact net-pair match from `KiCad`'s own DRC restores a short's serious
     /// severity and gate status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
@@ -1360,21 +1402,22 @@ pub struct DrcStructured {
 }
 
 impl DrcStructured {
+    #[must_use]
     pub fn from_report(report: &DrcReport) -> Self {
         Self::from_report_with_ties(report, None, false)
     }
 
+    #[must_use]
+    #[allow(clippy::too_many_lines, reason = "one grouping pass over DRC findings")]
     pub fn from_report_with_ties(
         report: &DrcReport,
         qualification: Option<&hauksbee_extract::DrcTieQualification>,
         missing_eagle_schematic: bool,
     ) -> Self {
-        let mut shorts = Vec::new();
         // Group clearance findings by (net_a, net_b, layer). Within a group we
         // split at_limit (gap >= rule, i.e. exactly at or, defensively, above)
         // from below-rule. A KiCad clearance finding has positive gap; "at limit"
         // means gap is within a hair of the rule.
-        use std::collections::BTreeMap;
         // (count, below_count, min_gap, rule, min_gap_loc, item kinds)
         type Group = (
             usize,
@@ -1384,6 +1427,7 @@ impl DrcStructured {
             [f64; 2],
             (hauksbee_extract::ItemKind, hauksbee_extract::ItemKind),
         );
+        let mut shorts = Vec::new();
         let mut groups: BTreeMap<(String, String, String), Group> = BTreeMap::new();
 
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
@@ -1408,25 +1452,29 @@ impl DrcStructured {
                     // demotion site that changes the severity. Pair-specific
                     // oracle agreement later replaces this sentence and restores
                     // the real severity; an unmatched finding keeps both.
-                    let mut plain = match declared_tie {
-                        Some(tie) => format!(
-                            "{} and {} are joined in copper on {} at ({:.2}, {:.2}) mm \
+                    let mut plain = declared_tie.map_or_else(
+                        || {
+                            format!(
+                                "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
+                                f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
+                            )
+                        },
+                        |tie| {
+                            format!(
+                                "{} and {} are joined in copper on {} at ({:.2}, {:.2}) mm \
                              (gap {:.3} mm). The schematic names this net pair ({}; {}), but \
                              does not identify or authorize this physical location",
-                            f.net_a_name,
-                            f.net_b_name,
-                            f.layer,
-                            f.x,
-                            f.y,
-                            f.gap_mm,
-                            tie.declaration,
-                            tie.source,
-                        ),
-                        None => format!(
-                            "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
-                            f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
-                        ),
-                    };
+                                f.net_a_name,
+                                f.net_b_name,
+                                f.layer,
+                                f.x,
+                                f.y,
+                                f.gap_mm,
+                                tie.declaration,
+                                tie.source,
+                            )
+                        },
+                    );
                     if phantom {
                         plain.push_str(
                             "; TOOL-ONLY: Hauksbee reports this contact from an unvalidated \
@@ -1536,7 +1584,7 @@ impl DrcStructured {
             }
         }
 
-        DrcStructured {
+        Self {
             clearance_rule_mm: report.clearance_mm,
             primitive_count: report.primitive_count,
             shorts,
@@ -1550,16 +1598,18 @@ impl DrcStructured {
     /// Attach provenance after the extractor has resolved its rule set. This
     /// also rebuilds every group label, preventing serialized `plain` text from
     /// retaining the constructor's conservative default qualification.
-    pub fn with_clearance_rule_provenance(mut self, provenance: ClearanceRuleProvenance) -> Self {
+    #[must_use]
+    pub fn with_clearance_rule_provenance(mut self, provenance: &ClearanceRuleProvenance) -> Self {
         for group in self.violations.iter_mut().chain(&mut self.at_limit) {
-            group.plain = group.label_with_rule_provenance(&provenance);
+            group.plain = group.label_with_rule_provenance(provenance);
         }
         self
     }
 
     /// The combined-check section heading. A default must be visible before a
     /// reader reaches any individual finding.
-    pub fn section_title(&self, provenance: &ClearanceRuleProvenance) -> &'static str {
+    #[must_use]
+    pub const fn section_title(&self, provenance: &ClearanceRuleProvenance) -> &'static str {
         if provenance.is_defaulted() {
             "Copper spacing (DRC; DEFAULT rules, not your rules)"
         } else {
@@ -1569,6 +1619,7 @@ impl DrcStructured {
 
     /// The flood warning is evidence about this run, not a guess at the correct
     /// replacement rule. "Exceeds" is strict: exactly 10x does not qualify.
+    #[must_use]
     pub fn default_rule_flood_note(&self, provenance: &ClearanceRuleProvenance) -> Option<String> {
         let clearance = self.violations.len();
         let shorts = self.shorts.len();
@@ -1585,11 +1636,11 @@ impl DrcStructured {
     /// then the at-limit bucket (separated and labelled correctly). The only
     /// text rendering of a DRC result; `provenance` decides whether the header
     /// announces the clearance as the project's rule or as a tool default.
+    #[must_use]
     pub fn render_with_clearance_rule_provenance(
         &self,
         provenance: &ClearanceRuleProvenance,
     ) -> String {
-        use std::fmt::Write as _;
         let mut s = String::new();
         if provenance.is_defaulted() {
             let _ = writeln!(
@@ -1687,7 +1738,7 @@ use hauksbee_extract::{LintCheck, NetLintReport, Severity, SiCheck, SiReport, Si
 pub struct JsonFinding {
     /// Which check produced it ("si" / "lint" / "drc").
     pub check: String,
-    /// The specific rule (e.g. "controlled_impedance", "strap_pin").
+    /// The specific rule (e.g. `"controlled_impedance"`, `"strap_pin"`).
     pub kind: String,
     /// "serious" | "warning" | "note" | "info".
     pub severity: String,
@@ -1717,6 +1768,7 @@ impl JsonFinding {
     /// machine-readable wire property does not break downstream Rust struct
     /// literals. Every serious finding gates; lint warnings, all real SI
     /// findings and co-sim fault/strict-boot findings widen that rule.
+    #[must_use]
     pub fn gates(&self) -> bool {
         self.severity == "serious"
             || (self.check == "lint" && self.severity == "warning")
@@ -1760,7 +1812,7 @@ impl Serialize for JsonFinding {
 struct JsonFindingSchema {
     /// Which check produced it ("si" / "lint" / "drc").
     check: String,
-    /// The specific rule (e.g. "controlled_impedance", "strap_pin").
+    /// The specific rule (e.g. `"controlled_impedance"`, `"strap_pin"`).
     kind: String,
     /// "serious" | "warning" | "note" | "info".
     severity: String,
@@ -1815,7 +1867,7 @@ impl schemars::JsonSchema for JsonFinding {
     }
 }
 
-fn si_sev_str(s: SiSeverity) -> &'static str {
+const fn si_sev_str(s: SiSeverity) -> &'static str {
     match s {
         SiSeverity::High => "serious",
         SiSeverity::Medium => "warning",
@@ -1824,7 +1876,7 @@ fn si_sev_str(s: SiSeverity) -> &'static str {
     }
 }
 
-fn lint_sev_str(s: Severity) -> &'static str {
+const fn lint_sev_str(s: Severity) -> &'static str {
     match s {
         Severity::High => "serious",
         Severity::Medium => "warning",
@@ -1840,8 +1892,10 @@ fn si_info_actionable(message: &str) -> bool {
 }
 
 /// Convert an [`SiReport`] (findings AND info notes) to uniform JSON findings.
-/// Info notes are INCLUDED in JSON even though `--plain` suppresses most of
-/// them, so a machine consumer sees every note the text surface hides.
+///
+/// Info notes are INCLUDED in JSON even though `--plain` suppresses most of them,
+/// so a machine consumer sees every note the text surface hides.
+#[must_use]
 pub fn si_findings_json(report: &SiReport) -> Vec<JsonFinding> {
     report
         .findings
@@ -1869,10 +1923,12 @@ pub fn si_findings_json(report: &SiReport) -> Vec<JsonFinding> {
         .collect()
 }
 
-/// Convert a USB-C CC compliance report to a uniform JSON finding for the
-/// `--check` aggregate, so the aggregate stays a single valid JSON document
-/// (the standalone `--usb-c --json` keeps the richer dedicated shape). `None`
-/// for an `Ok` verdict (nothing to report).
+/// Convert a USB-C CC compliance report to a uniform JSON finding.
+///
+/// Used by the `--check` aggregate, so the aggregate stays a single valid JSON
+/// document (the standalone `--usb-c --json` keeps the richer dedicated shape).
+/// `None` for an `Ok` verdict (nothing to report).
+#[must_use]
 pub fn usbc_finding_json(report: &crate::checks::usb_c::UsbcReport) -> Option<JsonFinding> {
     use crate::checks::usb_c::UsbcLevel;
     let (severity, actionable) = match report.level {
@@ -1900,6 +1956,7 @@ pub fn usbc_finding_json(report: &crate::checks::usb_c::UsbcReport) -> Option<Js
 }
 
 /// Convert a [`NetLintReport`] to uniform JSON findings.
+#[must_use]
 pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
     report
         .findings
@@ -1920,12 +1977,15 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
         .collect()
 }
 
-/// Convert co-sim electrical-stress faults (overcurrent, overvoltage, a destroyed
-/// MOSFET, …) to uniform JSON findings, so the machine `--json` co-sim surface
-/// carries them like `--plain` (`plain_faults`), `--strict` (the exit gate), and
-/// the web report already do. They were silently dropped from `--json`, so a CI
-/// consumer parsing the JSON saw a clean run over a board the co-sim flagged.
-/// `plain_faults` emits one finding per fault in order, so the zip is 1:1.
+/// Convert co-sim electrical-stress faults to uniform JSON findings.
+///
+/// Faults (overcurrent, overvoltage, a destroyed MOSFET, …) convert so the
+/// machine `--json` co-sim surface carries them like `--plain` (`plain_faults`),
+/// `--strict` (the exit gate), and the web report already do. They were silently
+/// dropped from `--json`, so a CI consumer parsing the JSON saw a clean run over
+/// a board the co-sim flagged. `plain_faults` emits one finding per fault in
+/// order, so the zip is 1:1.
+#[must_use]
 pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFinding> {
     let plain = crate::plain::plain_faults(faults);
     faults
@@ -1956,9 +2016,11 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
         .collect()
 }
 
-/// The top-level `--json` document. Only the section(s) for the requested check
-/// are populated; the rest stay `None` (omitted from output). `board` + `bind`
-/// are always present so an AI always has the bind-role context.
+/// The top-level `--json` document.
+///
+/// Only the section(s) for the requested check are populated; the rest stay
+/// `None` (omitted from output). `board` + `bind` are always present so an AI
+/// always has the bind-role context.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonReport {
     /// Version of the `run --json` document contract. Bumped when a field
@@ -2102,7 +2164,7 @@ pub struct JsonWaived {
 
 impl From<crate::waiver::WaivedFinding> for JsonWaived {
     fn from(w: crate::waiver::WaivedFinding) -> Self {
-        JsonWaived {
+        Self {
             check: w.check,
             kind: w.kind,
             subject: w.subject,
@@ -2167,8 +2229,9 @@ pub struct ThermalDeviceJson {
 
 impl JsonReport {
     /// Start a JSON report with just the always-present board + bind header.
+    #[must_use]
     pub fn new(board_name: &str, bind: BindSummary) -> Self {
-        JsonReport {
+        Self {
             schema_version: RUN_REPORT_SCHEMA_VERSION,
             board: board_name.to_string(),
             bind,
@@ -2205,7 +2268,8 @@ impl JsonReport {
     /// Mark this report as a model-dependent-claim surface: unbound
     /// verdict-critical parts flip its verdict to `invalid` (the machine
     /// mirror of the INCONCLUSIVE refusal the text surfaces print).
-    pub fn with_bind_verdict_gate(mut self) -> Self {
+    #[must_use]
+    pub const fn with_bind_verdict_gate(mut self) -> Self {
         self.bind_gates_verdict = true;
         self
     }
@@ -2215,7 +2279,8 @@ impl JsonReport {
     /// (see [`Self::surface_gate_fails`]). Pass the surface's post-waiver gate
     /// predicate: `lint_fails`, `si_fails`, the combined `--check` gate, or the
     /// co-sim fault gate.
-    pub fn with_surface_gate(mut self, fails: bool) -> Self {
+    #[must_use]
+    pub const fn with_surface_gate(mut self, fails: bool) -> Self {
         self.surface_gate_fails = fails;
         self
     }
@@ -2223,17 +2288,20 @@ impl JsonReport {
     /// Mark this report as descriptive only, so undermined run-level evidence
     /// does not become a refusal verdict on a surface that never gates (see
     /// [`Self::descriptive_only`]).
-    pub fn with_descriptive_only(mut self) -> Self {
+    #[must_use]
+    pub const fn with_descriptive_only(mut self) -> Self {
         self.descriptive_only = true;
         self
     }
 
+    #[must_use]
     pub fn with_inputs(mut self, inputs: &[JsonInputEvidence]) -> Self {
         self.inputs = inputs.to_vec();
         self
     }
 
     /// Attach the one evidence object used by every report renderer.
+    #[must_use]
     pub fn with_evidence(mut self, evidence: &crate::evidence::BoardEvidence) -> Self {
         self.inventory = evidence.inventory().to_vec();
         self.assumptions = evidence.assumptions().to_vec();
@@ -2248,6 +2316,12 @@ impl JsonReport {
     /// specialist surface that swapped them out for finding-backed maps alone
     /// would read `pass` over an undermined coverage claim, because
     /// finding-backed maps carry their own badges without vetoing the run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`hauksbee_ir::evidence::EvidenceError`] if building a
+    /// finding's evidence map fails (a blank or unknown net, or a map that fails
+    /// validation against the evidence registry).
     pub fn attach_finding_evidence(
         &mut self,
         evidence: &crate::evidence::BoardEvidence,
@@ -2285,6 +2359,7 @@ impl JsonReport {
     /// Mirrors the run's own exit gate: DRC shorts are ignored when the board is
     /// newer than the validated copper extraction (`version_warning` set), the
     /// same carve-out the CI gate makes.
+    #[must_use]
     pub fn verdict(&self) -> (bool, &'static str, usize, usize) {
         let (v, _) = self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         v
@@ -2402,14 +2477,12 @@ impl JsonReport {
     /// `serious_count`, `actionable_count`) computed by [`Self::verdict`], so a
     /// success document shares the `{"ok": ...}` shape with the hard-error
     /// envelope and a CI consumer never has to re-derive pass/fail.
+    #[must_use]
     pub fn to_json(&self) -> String {
         let (ok, verdict, serious, actionable) = self.verdict();
-        let mut value = match serde_json::to_value(self) {
-            Ok(serde_json::Value::Object(map)) => map,
-            _ => {
-                return serde_json::to_string_pretty(self)
-                    .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"))
-            }
+        let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
+            return serde_json::to_string_pretty(self)
+                .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"));
         };
         // Insert the rollup at the front so it reads first. serde_json::Map
         // preserves insertion order under the `preserve_order` feature; without
@@ -2425,10 +2498,13 @@ impl JsonReport {
     }
 }
 
-/// Best-effort plain text for an SI finding kind (so JSON `plain` is not just a
-/// copy of `message` for the kinds we have templates for). Kept tiny on purpose;
-/// the full plain templates live in [`crate::plain`].
-pub fn si_plain_hint(check: SiCheck) -> &'static str {
+/// Best-effort plain text for an SI finding kind.
+///
+/// So JSON `plain` is not just a copy of `message` for the kinds we have
+/// templates for. Kept tiny on purpose; the full plain templates live in
+/// [`crate::plain`].
+#[must_use]
+pub const fn si_plain_hint(check: SiCheck) -> &'static str {
     match check {
         SiCheck::ControlledImpedance => "trace impedance is off the target value",
         SiCheck::UsbDiffPair => "USB data pair is mismatched",
@@ -2440,10 +2516,12 @@ pub fn si_plain_hint(check: SiCheck) -> &'static str {
     }
 }
 
-/// A concise suggested fix for an SI finding kind, for the machine-readable
-/// `fix` field. Kept to a single sentence; the full plain remediation prose
-/// lives in [`crate::plain::plain_si`]. `None` when no template applies.
-pub fn si_fix_hint(check: SiCheck) -> Option<&'static str> {
+/// A concise suggested fix for an SI finding kind, for the machine-readable `fix` field.
+///
+/// Kept to a single sentence; the full plain remediation prose lives in
+/// [`crate::plain::plain_si`]. `None` when no template applies.
+#[must_use]
+pub const fn si_fix_hint(check: SiCheck) -> Option<&'static str> {
     Some(match check {
         SiCheck::ControlledImpedance => {
             "Adjust trace width/spacing for the actual stackup to hit the target impedance, or have the fab build a controlled-impedance stackup."
@@ -2469,11 +2547,12 @@ pub fn si_fix_hint(check: SiCheck) -> Option<&'static str> {
     })
 }
 
-/// A concise suggested fix for a lint finding kind, for the machine-readable
-/// `fix` field. `None` when no template applies. Severity disambiguates the
-/// resource-conflict check, whose low-severity form (a single function
-/// committed to a pin-locked group) has a different honest remedy than the
-/// serious two-function contention.
+/// A concise suggested fix for a lint finding kind, for the machine-readable `fix` field.
+///
+/// `None` when no template applies. Severity disambiguates the resource-conflict
+/// check, whose low-severity form (a single function committed to a pin-locked
+/// group) has a different honest remedy than the serious two-function contention.
+#[must_use]
 pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
     if check == LintCheck::McuResourceConflict && severity != Severity::High {
         return Some(
@@ -2550,7 +2629,7 @@ mod tests {
             confidence: Confidence::Exact,
             source: None,
             outcome,
-            warning: warning.map(|s| s.to_string()),
+            warning: warning.map(ToString::to_string),
             guesses: Vec::new(),
         }
     }
@@ -2966,7 +3045,7 @@ mod tests {
 
     #[test]
     fn ac_all_floor_is_sentinel() {
-        let bode: Vec<(f64, f64, f64)> = (0..10).map(|i| (i as f64, -6000.0, 0.0)).collect();
+        let bode: Vec<(f64, f64, f64)> = (0..10).map(|i| (f64::from(i), -6000.0, 0.0)).collect();
         assert!(ac_is_all_sentinel(&bode));
         assert!(!ac_is_all_sentinel(&[
             (1.0, -3.0, -45.0),

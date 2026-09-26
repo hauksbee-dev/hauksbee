@@ -10,7 +10,7 @@ use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 
 /// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
-pub fn bin() -> &'static str {
+pub const fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee")
 }
 
@@ -62,9 +62,7 @@ pub fn run(args: &[&str]) -> Output {
 /// [`run`] against a board: the `run` subcommand, that board's path, then
 /// `args`. Every CLI test that analyses a board spells this same prefix.
 pub fn run_board(board: &std::path::Path, args: &[&str]) -> Output {
-    let mut argv = vec!["run", board.to_str().unwrap()];
-    argv.extend_from_slice(args);
-    run(&argv)
+    run(&[&["run", board.to_str().unwrap()], args].concat())
 }
 
 /// Decode a captured `Output`'s stdout as UTF-8.
@@ -104,7 +102,7 @@ pub fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Return a device without changing the caller's insertion order or DeviceId.
+/// Return a device without changing the caller's insertion order or `DeviceId`.
 pub fn resistor(name: String, a: NodeId, b: NodeId, ohms: f64) -> Device {
     Device::resistor(name, a, b, ohms)
 }
@@ -113,7 +111,7 @@ pub fn capacitor(name: String, a: NodeId, b: NodeId, farads: f64) -> Device {
     Device::capacitor(name, a, b, farads)
 }
 
-pub fn vsource(name: String, p: NodeId, n: NodeId, kind: SourceKind) -> Device {
+pub const fn vsource(name: String, p: NodeId, n: NodeId, kind: SourceKind) -> Device {
     Device::Vsource { name, p, n, kind }
 }
 
@@ -191,7 +189,7 @@ pub fn component(
     }
 }
 
-pub fn net(id: i64, name: String) -> Net {
+pub const fn net(id: i64, name: String) -> Net {
     Net { id, name }
 }
 

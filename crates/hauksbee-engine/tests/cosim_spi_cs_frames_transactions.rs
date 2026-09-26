@@ -27,7 +27,7 @@ fn framed_mcp3008_read(bus: &mut SpiBus, channel: u8) -> u16 {
     let hi = bus.transfer(channel << 4); // SGL=0 here is fine; channel in bits 6..4
     let lo = bus.transfer(0x00);
     bus.cs_deassert(); // CS rising edge: end
-    (((hi & 0x03) as u16) << 8) | lo as u16
+    (u16::from(hi & 0x03) << 8) | u16::from(lo)
 }
 
 /// FAILURE MODE (a): two CS-framed transactions inside ONE chunk must be framed
@@ -47,11 +47,11 @@ fn two_transactions_one_chunk_are_framed_separately() {
     let second = framed_mcp3008_read(&mut bus, 1);
 
     assert!(
-        (first as i32 - 512).abs() <= 2,
+        (i32::from(first) - 512).abs() <= 2,
         "first transaction reads channel 3 (~512), got {first}"
     );
     assert!(
-        (second as i32 - 256).abs() <= 2,
+        (i32::from(second) - 256).abs() <= 2,
         "second transaction, framed separately, reads channel 1 (~256), got {second}"
     );
 
@@ -69,7 +69,7 @@ fn two_transactions_one_chunk_are_framed_separately() {
     // No cs_deassert/cs_assert here: the six bytes run as one merged stream.
     let mhi = merged.transfer(0x01); // seq 3 -> treated as a low-byte, not a start
     let mlo = merged.transfer(1 << 4);
-    let merged_second = (((mhi & 0x03) as u16) << 8) | mlo as u16;
+    let merged_second = (u16::from(mhi & 0x03) << 8) | u16::from(mlo);
     assert_ne!(
         merged_second, second,
         "the merged (unframed) path must MISDECODE the second read; that is the \

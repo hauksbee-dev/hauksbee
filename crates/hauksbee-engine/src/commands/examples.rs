@@ -53,11 +53,21 @@ fn materialize(table: &[(&str, &str, &[u8])], what: &str, name: &str) -> anyhow:
 }
 
 /// Materialize the named example board and return its path.
+///
+/// # Errors
+///
+/// Returns an error if no embedded example board has that name, or if its temp
+/// directory or file cannot be written.
 pub fn board(name: &str) -> anyhow::Result<PathBuf> {
     materialize(BOARDS, "board", name)
 }
 
 /// Materialize the named example SPICE deck and return its path.
+///
+/// # Errors
+///
+/// Returns an error if no embedded example deck has that name, or if its temp
+/// directory or file cannot be written.
 pub fn deck(name: &str) -> anyhow::Result<PathBuf> {
     materialize(DECKS, "deck", name)
 }

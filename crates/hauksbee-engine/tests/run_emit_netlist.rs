@@ -60,7 +60,7 @@ fn a_schematic_with_no_models_answers_what_is_connected_to_what_across_sheets() 
     // R1 pin 2 and R2 pin 1 share the one wire; the other two pins each sit on
     // a net of their own.
     let by_net = members(&emit("two_resistors.kicad_sch", true));
-    let pins = |s: &[&str]| s.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+    let pins = |s: &[&str]| s.iter().map(ToString::to_string).collect::<Vec<_>>();
     assert_eq!(
         by_net,
         BTreeMap::from([

@@ -186,7 +186,7 @@ struct PacedInbox {
 }
 
 impl PacedInbox {
-    fn new(scale: f64) -> Self {
+    const fn new(scale: f64) -> Self {
         Self {
             scale,
             anchor: None,
@@ -194,14 +194,14 @@ impl PacedInbox {
         }
     }
 
-    fn engaged(&self) -> bool {
+    const fn engaged(&self) -> bool {
         self.anchor.is_some()
     }
 
     /// Plant the first anchor: sim instant `sim_now` corresponds to wall
     /// instant `wall_now`. No-op once engaged (use [`Self::re_anchor`] for the
     /// per-event moves).
-    fn engage(&mut self, sim_now: f64, wall_now: f64) {
+    const fn engage(&mut self, sim_now: f64, wall_now: f64) {
         if self.anchor.is_none() {
             self.anchor = Some((sim_now, wall_now));
         }
@@ -217,7 +217,7 @@ impl PacedInbox {
     /// from `sim_now`), and targets stamped under the OLD anchor keep their
     /// instants because [`Self::push`] clamps each new target to be no
     /// earlier than the queue's tail.
-    fn re_anchor(&mut self, sim_now: f64, wall_now: f64) {
+    const fn re_anchor(&mut self, sim_now: f64, wall_now: f64) {
         if self.anchor.is_some() {
             self.anchor = Some((sim_now, wall_now));
         }
@@ -226,9 +226,9 @@ impl PacedInbox {
     /// The sim instant a chunk observed at `wall_now` is due.
     fn target_for(&self, sim_now: f64, wall_now: f64) -> f64 {
         match self.anchor {
-            Some((sim_anchor, wall_anchor)) => {
-                sim_anchor + self.scale * (wall_now - wall_anchor).max(0.0)
-            }
+            Some((sim_anchor, wall_anchor)) => self
+                .scale
+                .mul_add((wall_now - wall_anchor).max(0.0), sim_anchor),
             None => sim_now,
         }
     }
@@ -239,7 +239,7 @@ impl PacedInbox {
         let target = self.target_for(sim_now, wall_now);
         // Monotonic by construction (anchors and wall time only grow), but
         // never trust float arithmetic to keep FIFO release order on its own.
-        let floor = self.queue.back().map(|(t, _)| *t).unwrap_or(f64::MIN);
+        let floor = self.queue.back().map_or(f64::MIN, |(t, _)| *t);
         self.queue.push_back((target.max(floor), bytes));
     }
 
@@ -281,7 +281,7 @@ impl PacedInbox {
 /// liveness, not an open/close history, so allowing a detached free-run window
 /// would make a close+reopen between polls behave differently from an observed
 /// handoff.
-fn engage_session_clock_once(
+const fn engage_session_clock_once(
     inbox: &mut PacedInbox,
     sim_now: f64,
     wall_now: f64,
@@ -292,7 +292,7 @@ fn engage_session_clock_once(
     }
 }
 
-fn session_clock_requires_wait(pace: bool, inbox: &PacedInbox) -> bool {
+const fn session_clock_requires_wait(pace: bool, inbox: &PacedInbox) -> bool {
     pace || inbox.engaged()
 }
 
@@ -322,7 +322,7 @@ fn ensure_terminal_io_delivered(
     )
 }
 
-fn sync_peer_state(
+const fn sync_peer_state(
     attached: bool,
     was_attached: &mut bool,
     last_activity_wall: &mut f64,
@@ -399,6 +399,13 @@ fn validate_mcu_selection(requested: &str, available: &[String]) -> Result<()> {
 ///
 /// `announce` receives every human-facing line (already prefixed), so the CLI can
 /// send them to stderr while a test can collect them.
+///
+/// # Errors
+///
+/// Returns an error if the board has no emulated MCU, if `seconds`, `chunk_us` or
+/// `unpaced_wall_scale` is out of range, if `mcu` names no emulated MCU, if the
+/// host serial endpoint cannot be opened, or if `wait_secs` passes with no peer.
+#[allow(clippy::too_many_lines, reason = "real-time loop over shared state")]
 pub fn run_session(
     engine: &mut HauksbeeEngine,
     seconds: f64,
@@ -719,16 +726,19 @@ fn report_events(
                     "host serial: peer DETACHED ({} byte(s) in, {} byte(s) out so far); \
                      the co-sim keeps running and a new peer may attach",
                     st.to_mcu, st.to_peer
-                ))
+                ));
             }
         }
     }
     summary.attach_count = endpoint.stats().attach_count;
 }
 
-/// Render the closing summary. Separate from the loop so the wording is one
-/// place, and so the honesty checks (nobody attached, bytes dropped, host bytes
-/// the backend could not deliver) cannot be forgotten by a caller.
+/// Render the closing summary.
+///
+/// Separate from the loop so the wording is one place, and so the honesty checks
+/// (nobody attached, bytes dropped, host bytes the backend could not deliver) cannot be
+/// forgotten by a caller.
+#[must_use]
 pub fn summary_lines(s: &SerialSessionSummary) -> Vec<String> {
     let mut out = vec![format!(
         "host serial: session over {} ({:.3}s simulated in {:.2}s wall): {} byte(s) host->MCU, \
@@ -879,7 +889,7 @@ mod tests {
             let mut next = 0;
             let mut t = 0.0f64;
             for frame in 0..200 {
-                let wall = frame as f64 * wall_per_sim_frame;
+                let wall = f64::from(frame) * wall_per_sim_frame;
                 while next < arrivals.len() && arrivals[next].0 <= wall {
                     inbox.push(t, arrivals[next].0, arrivals[next].1.to_vec());
                     next += 1;
@@ -1017,7 +1027,7 @@ mod tests {
             let mut next_emit = 0;
             let mut t = 0.0f64;
             for frame in 0..400 {
-                let wall = frame as f64 * wall_per_sim_frame;
+                let wall = f64::from(frame) * wall_per_sim_frame;
                 if let Some((reply_wall, bytes)) = pending_reply.take() {
                     if reply_wall <= wall {
                         inbox.push(t, reply_wall, bytes);
@@ -1036,7 +1046,7 @@ mod tests {
                         // clock happens to read `wall` here, and the host's
                         // reply lands a fixed wall gap later.
                         inbox.re_anchor(t, wall);
-                        pending_reply = Some((wall + reaction_wall, vec![b'0' + next_emit as u8]));
+                        pending_reply = Some((wall + reaction_wall, vec![b"01"[next_emit]]));
                         next_emit += 1;
                     }
                 }

@@ -20,7 +20,7 @@ use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 
 /// A red LED `D1` driven from +5V through a series resistor `R1` of the given
-/// value, LED cathode to GND. Nets: 1 GND, 2 +5V, 3 LED_A.
+/// value, LED cathode to GND. Nets: 1 GND, 2 +5V, 3 `LED_A`.
 fn led_board(series_ohms: &str) -> String {
     format!(
         r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
@@ -210,7 +210,7 @@ fn polarized_cap_reverse_bias_faults() {
     // Reverse bias must persist past the sustain window before it raises.
     let mut raised = None;
     for chunk in 0..10 {
-        let faults = mon.evaluate(&mut circuit, &node_v, &no_branch, chunk as f64 * 1e-4);
+        let faults = mon.evaluate(&mut circuit, &node_v, &no_branch, f64::from(chunk) * 1e-4);
         if let Some(f) = faults.into_iter().next() {
             raised = Some(f);
             break;
@@ -276,7 +276,7 @@ fn overloaded_nmos_overcurrent_faults() {
     // A continuous rating must be sustained past the SUSTAIN_CHUNKS window.
     let mut raised = None;
     for chunk in 0..10 {
-        let faults = mon.evaluate(&mut circuit, &node_v, &no_branch, chunk as f64 * 1e-4);
+        let faults = mon.evaluate(&mut circuit, &node_v, &no_branch, f64::from(chunk) * 1e-4);
         if let Some(f) = faults
             .into_iter()
             .find(|f| f.kind.as_str() == "overcurrent")
@@ -419,8 +419,8 @@ fn pin_overcurrent_fires_on_driver_leg_current() {
 }
 
 /// Binder-level: binding a 74HC595 (25 mA/pin rating in the model DB) produces
-/// one per-pin DeviceMeta over each stamped output driver's Vsource; the
-/// structural half that makes the PinOvercurrent arm reachable on real boards.
+/// one per-pin `DeviceMeta` over each stamped output driver's Vsource; the
+/// structural half that makes the `PinOvercurrent` arm reachable on real boards.
 #[test]
 fn binder_gathers_per_pin_metas_for_logic_outputs() {
     // One 74HC595 with two connected outputs (QA, QB), full control/supply
@@ -475,7 +475,7 @@ fn binder_gathers_per_pin_metas_for_logic_outputs() {
         .filter(|m| m.reference.starts_with("U1:"))
         .map(|m| m.reference.as_str())
         .collect();
-    pin_refs.sort();
+    pin_refs.sort_unstable();
     assert_eq!(
         pin_refs,
         vec!["U1:qa", "U1:qb"],

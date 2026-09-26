@@ -1,9 +1,9 @@
 //! Renode co-sim proofs for the previously-configured-but-unproven MCU paths:
-//! nRF52840 (Cortex-M4) and SiFive FE310 (RISC-V RV32). Both ship a Renode
+//! nRF52840 (Cortex-M4) and `SiFive` FE310 (RISC-V RV32). Both ship a Renode
 //! `RenodeConfig` and platform but had never been run end-to-end.
 //!
 //! These run real, battle-tested Zephyr demo firmware (the upstream Renode demo
-//! ELFs) through the identical RenodeBackend code path the STM32F103 proof
+//! ELFs) through the identical `RenodeBackend` code path the STM32F103 proof
 //! exercises: spawn headless Renode, bring up the machine, bridge UART over the
 //! socket, and lockstep with `RunFor`. The proof standard met here is UART boot:
 //! the firmware boots under the backend and its banner arrives through the UART
@@ -30,7 +30,7 @@ fn demo_elf(name: &str) -> Option<PathBuf> {
     crate::support::testdata(&format!("firmware/renode_demos/{name}"))
 }
 
-/// Boot `elf` under `config` through the RenodeBackend and collect UART for a
+/// Boot `elf` under `config` through the `RenodeBackend` and collect UART for a
 /// short window. Returns the UART text.
 fn boot_and_collect_uart(config: RenodeConfig, elf: &Path) -> String {
     let mut be = RenodeBackend::new(config).expect("spawn Renode backend");
@@ -38,14 +38,18 @@ fn boot_and_collect_uart(config: RenodeConfig, elf: &Path) -> String {
     let uart = Arc::new(Mutex::new(Vec::<u8>::new()));
     let sink = uart.clone();
     be.on_uart(Box::new(move |b| {
-        sink.lock().unwrap_or_else(|e| e.into_inner()).push(b)
+        sink.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(b);
     }));
     be.set_active_ports(&['0', '1']);
     // ~200 ms of virtual time in 5 ms chunks: enough for the Zephyr banner.
     for _ in 0..40 {
         be.run_micros(5000).expect("run chunk");
     }
-    let u = uart.lock().unwrap_or_else(|e| e.into_inner());
+    let u = uart
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     String::from_utf8_lossy(&u).to_string()
 }
 

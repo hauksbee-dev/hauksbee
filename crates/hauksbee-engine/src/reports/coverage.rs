@@ -30,10 +30,12 @@ use crate::scheduler::{
     UnexercisedBus,
 };
 
-/// Semantic tier of a co-sim disclosure. These are deliberately not collapsed
-/// into one warning count: a strict-invalid timing refusal is stronger than a
-/// bounded limitation, while a measured timing floor and a fallback-method
-/// qualification are evidence about resolution rather than missing coverage.
+/// Semantic tier of a co-sim disclosure.
+///
+/// These are deliberately not collapsed into one warning count: a strict-invalid
+/// timing refusal is stronger than a bounded limitation, while a measured timing
+/// floor and a fallback-method qualification are evidence about resolution
+/// rather than missing coverage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CoverageDisposition {
@@ -48,10 +50,11 @@ pub enum CoverageDisposition {
     ElectricalFault,
 }
 
-/// One class of co-sim coverage disclosure. Twelve of them, which is the count
-/// `docs/cosim/MCU.md`'s per-surface matrix rows are counted from;
-/// [`CoverageClass::ALL`] is the list and `class_count_matches_the_matrix`
-/// counts it rather than asserting it.
+/// One class of co-sim coverage disclosure.
+///
+/// Twelve of them, which is the count `docs/cosim/MCU.md`'s per-surface matrix
+/// rows are counted from; [`CoverageClass::ALL`] is the list and
+/// `class_count_matches_the_matrix` counts it rather than asserting it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CoverageClass {
@@ -91,37 +94,38 @@ pub enum CoverageClass {
 
 impl CoverageClass {
     /// Every class, in the order the caveat list emits them.
-    pub const ALL: [CoverageClass; 12] = [
-        CoverageClass::AdcDropped,
-        CoverageClass::UnexercisedBus,
-        CoverageClass::WatchdogLimitation,
-        CoverageClass::WatchdogReboot,
-        CoverageClass::TimingLimitation,
-        CoverageClass::TimingCoverage,
-        CoverageClass::TimingRefusal,
-        CoverageClass::FallbackIntegration,
-        CoverageClass::ShortPulse,
-        CoverageClass::DriverContention,
-        CoverageClass::DriveConflict,
-        CoverageClass::HeuristicSpiFraming,
+    pub const ALL: [Self; 12] = [
+        Self::AdcDropped,
+        Self::UnexercisedBus,
+        Self::WatchdogLimitation,
+        Self::WatchdogReboot,
+        Self::TimingLimitation,
+        Self::TimingCoverage,
+        Self::TimingRefusal,
+        Self::FallbackIntegration,
+        Self::ShortPulse,
+        Self::DriverContention,
+        Self::DriveConflict,
+        Self::HeuristicSpiFraming,
     ];
 
     /// A short label for a cramped surface (the TUI pane is a quarter of a
     /// terminal wide, so the banner lists labels, not sentences).
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            CoverageClass::AdcDropped => "ADC drop",
-            CoverageClass::UnexercisedBus => "bus never exercised",
-            CoverageClass::WatchdogLimitation => "watchdog cannot bite",
-            CoverageClass::WatchdogReboot => "watchdog reboot",
-            CoverageClass::TimingLimitation => "timing bias",
-            CoverageClass::TimingCoverage => "timing resolution",
-            CoverageClass::TimingRefusal => "timing replay invalid",
-            CoverageClass::FallbackIntegration => "fallback-qualified span",
-            CoverageClass::ShortPulse => "pulse too short to see",
-            CoverageClass::DriverContention => "driver contention",
-            CoverageClass::DriveConflict => "drive overridden",
-            CoverageClass::HeuristicSpiFraming => "SPI framing guessed",
+            Self::AdcDropped => "ADC drop",
+            Self::UnexercisedBus => "bus never exercised",
+            Self::WatchdogLimitation => "watchdog cannot bite",
+            Self::WatchdogReboot => "watchdog reboot",
+            Self::TimingLimitation => "timing bias",
+            Self::TimingCoverage => "timing resolution",
+            Self::TimingRefusal => "timing replay invalid",
+            Self::FallbackIntegration => "fallback-qualified span",
+            Self::ShortPulse => "pulse too short to see",
+            Self::DriverContention => "driver contention",
+            Self::DriveConflict => "drive overridden",
+            Self::HeuristicSpiFraming => "SPI framing guessed",
         }
     }
 
@@ -130,26 +134,26 @@ impl CoverageClass {
     /// ([`CoverageClass::TimingCoverage`]): counting it as a hole would put a
     /// permanent red number on a healthy run, which is how a caveat stops being
     /// read at all.
-    pub fn is_hole(self) -> bool {
+    #[must_use]
+    pub const fn is_hole(self) -> bool {
         matches!(self.disposition(), CoverageDisposition::Limitation)
     }
 
-    pub fn disposition(self) -> CoverageDisposition {
+    #[must_use]
+    pub const fn disposition(self) -> CoverageDisposition {
         match self {
-            CoverageClass::TimingCoverage => CoverageDisposition::TimingBound,
-            CoverageClass::TimingRefusal => CoverageDisposition::StrictRefusal,
-            CoverageClass::FallbackIntegration => CoverageDisposition::FallbackQualification,
-            CoverageClass::WatchdogReboot | CoverageClass::DriveConflict => {
-                CoverageDisposition::ObservedEvent
-            }
-            CoverageClass::DriverContention => CoverageDisposition::ElectricalFault,
+            Self::TimingCoverage => CoverageDisposition::TimingBound,
+            Self::TimingRefusal => CoverageDisposition::StrictRefusal,
+            Self::FallbackIntegration => CoverageDisposition::FallbackQualification,
+            Self::WatchdogReboot | Self::DriveConflict => CoverageDisposition::ObservedEvent,
+            Self::DriverContention => CoverageDisposition::ElectricalFault,
             _ => CoverageDisposition::Limitation,
         }
     }
 }
 
 /// One caveat, ready to render on any surface.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoverageCaveat {
     pub class: CoverageClass,
     /// What it is about: an MCU reference, a net, or a bus/peripheral id.
@@ -167,14 +171,17 @@ pub struct CoverageCaveat {
 
 impl CoverageCaveat {
     /// True when this caveat names something the run could not do.
-    pub fn is_hole(&self) -> bool {
+    #[must_use]
+    pub const fn is_hole(&self) -> bool {
         self.class.is_hole()
     }
 }
 
-/// The scheduler signals the caveat list is built from, copied out so the
-/// enumeration is testable without staging a whole board through the engine and
-/// so a live TUI worker can snapshot them at a chunk boundary.
+/// The scheduler signals the caveat list is built from.
+///
+/// Copied out so the enumeration is testable without staging a whole board
+/// through the engine and so a live TUI worker can snapshot them at a chunk
+/// boundary.
 #[derive(Debug, Clone, Default)]
 pub struct CoverageInputs {
     pub adc_dropped: Vec<AdcDrop>,
@@ -195,6 +202,7 @@ impl CoverageInputs {
     /// The single extraction point: read every coverage signal off the live
     /// scheduler. Any surface that wants coverage caveats comes through here,
     /// so a surface cannot read four of the ten accessors and call it coverage.
+    #[must_use]
     pub fn from_scheduler(sched: &Scheduler) -> Self {
         Self::from_scheduler_with_drive_conflicts(sched, sched.drive_conflicts())
     }
@@ -240,6 +248,8 @@ impl CoverageInputs {
     /// The caveats these signals carry, in [`CoverageClass::ALL`] order. Empty
     /// on a run with nothing to disclose and no live core, which is what makes a
     /// non-empty list worth reading.
+    #[must_use]
+    #[allow(clippy::too_many_lines, reason = "one flat push per coverage class")]
     pub fn caveats(&self) -> Vec<CoverageCaveat> {
         let mut out: Vec<CoverageCaveat> = Vec::new();
         for d in &self.adc_dropped {
@@ -425,15 +435,17 @@ impl CoverageInputs {
 
 /// How many of the caveats in `caveats` name something the run could not do
 /// (as opposed to a resolution statement).
+#[must_use]
 pub fn hole_count(caveats: &[CoverageCaveat]) -> usize {
     caveats.iter().filter(|c| c.is_hole()).count()
 }
 
+#[must_use]
 pub fn fallback_qualification_message(window: &crate::result::CosimFallbackWindow) -> String {
-    let estimate = window
-        .error_estimate_v
-        .map(|value| format!("measured chunk-end error estimate {value:.3e} V"))
-        .unwrap_or_else(|| "no measured error estimate (no companion re-solve converged)".into());
+    let estimate = window.error_estimate_v.map_or_else(
+        || "no measured error estimate (no companion re-solve converged)".into(),
+        |value| format!("measured chunk-end error estimate {value:.3e} V"),
+    );
     format!(
         "[{:.6}s .. {:.6}s) via {}; {}; {}",
         window.start_s, window.end_s, window.method, estimate, window.fidelity_note
@@ -443,6 +455,7 @@ pub fn fallback_qualification_message(window: &crate::result::CosimFallbackWindo
 /// The distinct classes present in `caveats`, in [`CoverageClass::ALL`] order,
 /// so a cramped surface can list "which kinds" without repeating a class once
 /// per offending net.
+#[must_use]
 pub fn classes_present(caveats: &[CoverageCaveat]) -> Vec<CoverageClass> {
     CoverageClass::ALL
         .into_iter()

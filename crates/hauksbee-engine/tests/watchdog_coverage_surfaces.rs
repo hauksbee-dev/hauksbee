@@ -45,14 +45,14 @@ fn repo(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-/// An ATmega328P board; `wdt.elf` drives PB5, which is `D13` here.
+/// An `ATmega328P` board; `wdt.elf` drives PB5, which is `D13` here.
 #[cfg(feature = "avr")]
 fn avr_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
 }
 
-/// 5 ms chunks over 200 ms of virtual time: the WDTO_15MS timeout bites in
+/// 5 ms chunks over 200 ms of virtual time: the `WDTO_15MS` timeout bites in
 /// chunk 3 or 4 of every reboot cycle, so this window holds about a dozen
 /// reboots rather than resting on the first one.
 #[cfg(feature = "avr")]
@@ -68,7 +68,7 @@ fn run_avr(firmware: &Path, extra: &[&str]) -> std::process::Output {
         "--chunk-us".to_string(),
         "5000".to_string(),
     ];
-    args.extend(extra.iter().map(|s| s.to_string()));
+    args.extend(extra.iter().map(ToString::to_string));
     Command::new(bin())
         .args(&args)
         .output()
@@ -199,7 +199,7 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
 ///
 /// 1. **A watchdog that cannot bite** (`watchdog_limitations`): the board's
 ///    watchdog arms and never fires under Renode.
-/// 2. **A known timing bias** (`timing_limitations`): the F103's TIMx blocks
+/// 2. **A known timing bias** (`timing_limitations`): the F103's `TIMx` blocks
 ///    run at the post-PLL 72 MHz against the 8 MHz reset-default core.
 ///
 /// Skips without Renode or the STM32 firmware, like every other `renode_*` test.

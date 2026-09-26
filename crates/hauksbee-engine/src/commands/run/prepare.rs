@@ -19,7 +19,7 @@ use super::{
     warn_sibling_boards, Notes, RunConfig, SelectedSurface,
 };
 
-pub(crate) struct RunInputs {
+pub struct RunInputs {
     pub(crate) board: ExtractedBoard,
     pub(crate) raw: Vec<u8>,
     pub(crate) text: String,
@@ -31,7 +31,7 @@ pub(crate) struct RunInputs {
     pub(crate) inputs: Vec<JsonInputEvidence>,
 }
 
-pub(crate) struct RunArtifacts {
+pub struct RunArtifacts {
     pub(crate) prebound: Option<BoundBoard>,
     pub(crate) schematic_ties: Option<SchematicTies>,
     pub(crate) ci_findings: Option<Vec<JsonFinding>>,
@@ -239,7 +239,8 @@ fn gather_ci_artifact_findings(
     Ok(findings)
 }
 
-pub(crate) fn prepare_run_inputs(
+#[allow(clippy::too_many_lines, reason = "linear input-preparation pipeline")]
+pub fn prepare_run_inputs(
     cfg: &mut RunConfig,
     quiet: bool,
     surface: SelectedSurface,
@@ -421,7 +422,7 @@ pub(crate) fn prepare_run_inputs(
                 // states the invariant, and every other rollup honours it). This
                 // envelope read `ok:true` beside `verdict:"invalid"` and exit 3,
                 // so a consumer gating on `ok` treated a refusal as a clean run.
-                serde_json::json!({ "ok": false, "verdict": "invalid", "refusal": refusal.clone() })
+                serde_json::json!({ "ok": false, "verdict": "invalid", "refusal": refusal })
             );
         } else {
             eprintln!("error: {msg}");
@@ -444,8 +445,7 @@ pub(crate) fn prepare_run_inputs(
     // does not describe this board is a hard error everywhere. The bound board
     // it produced is reused by the circuit-reading branches below (--ac,
     // --list-nets, co-sim, --serve).
-    let mut prebound: Option<crate::binder::BoundBoard> = None;
-    if let Some(asbuilt_path) = &cfg.asbuilt {
+    let prebound = if let Some(asbuilt_path) = &cfg.asbuilt {
         let overlay = crate::asbuilt::AsBuiltOverlay::load(asbuilt_path)?;
         let mut b = bind_board(&board, &lib);
         let overlay_report = overlay.apply(&mut b)?;
@@ -461,8 +461,10 @@ pub(crate) fn prepare_run_inputs(
                  applied to the simulated circuit (co-sim, --ac, --serve)."
             );
         }
-        prebound = Some(b);
-    }
+        Some(b)
+    } else {
+        None
+    };
 
     // The companion Eagle `.sch`, if the user named one or one sits beside the
     // board. Resolved ONCE here, where both the explicit option and board path
@@ -484,12 +486,7 @@ pub(crate) fn prepare_run_inputs(
         board_is_eagle,
     )?;
     if let Some(ties) = &schematic_ties {
-        use sha2::{Digest, Sha256};
-
-        let sha256 = Sha256::digest(&ties.raw)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let sha256 = crate::run_manifest::hex_digest(&ties.raw);
         inputs.push(JsonInputEvidence {
             path: ties.path.display().to_string(),
             kind: "schematic".to_string(),

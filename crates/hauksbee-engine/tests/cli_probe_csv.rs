@@ -23,7 +23,6 @@ fn out_csv(tag: &str) -> PathBuf {
 #[test]
 fn probe_writes_csv_with_header_and_plausible_rows() {
     let csv = out_csv("ok");
-    let seconds = 0.05; // 50 ms at the 1 kHz headless cadence => ~50 rows.
     let out = run_board(
         &board(),
         &[
@@ -56,7 +55,7 @@ fn probe_writes_csv_with_header_and_plausible_rows() {
     // One row per chunk, each with three fields (time + two nets). Row count is
     // ~seconds/frame_dt; allow a small slack around the loop boundary.
     let rows: Vec<&str> = lines.filter(|l| !l.is_empty()).collect();
-    let expected = (seconds * 1000.0) as usize; // 1 kHz cadence
+    let expected = 50; // `--seconds 0.05` (50 ms) at the 1 kHz headless cadence
     assert!(
         rows.len().abs_diff(expected) <= 2,
         "expected ~{expected} rows, got {}",

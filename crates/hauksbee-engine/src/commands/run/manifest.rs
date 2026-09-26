@@ -5,14 +5,12 @@
 
 use super::RunConfig;
 
-pub(crate) fn capture_manifest(
+pub fn capture_manifest(
     cfg: &RunConfig,
     firmware_source: Option<&std::path::Path>,
     explicit_schematic: Option<&std::path::Path>,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<crate::run_manifest::RunManifest> {
-    use std::collections::BTreeMap;
-
     use crate::run_manifest::{
         absolutize_argv_paths, board_sidecar_inputs, implicit_model_inputs, ManifestInput,
         ManifestRequest, ToolIdentity,
@@ -55,12 +53,55 @@ pub(crate) fn capture_manifest(
     }
     inputs.extend(implicit_model_inputs());
 
+    let options = manifest_options(cfg);
+    let mut features = Vec::new();
+    if cfg!(feature = "avr") {
+        features.push("avr".to_string());
+    }
+    if cfg!(feature = "embed-web") {
+        features.push("embed-web".to_string());
+    }
+    if cfg!(feature = "qemu") {
+        features.push("qemu".to_string());
+    }
+    if cfg!(feature = "renode") {
+        features.push("renode".to_string());
+    }
+    let replay_paths = [
+        cfg.example.is_none().then(|| cfg.board.clone()),
+        cfg.bom.clone(),
+        cfg.placement.clone(),
+        explicit_schematic.map(std::path::Path::to_path_buf),
+        firmware_source.map(std::path::Path::to_path_buf),
+        cfg.firmware.clone(),
+        cfg.asbuilt.clone(),
+        cfg.junit.clone(),
+        cfg.sarif.clone(),
+        cfg.models_dir.clone(),
+        cfg.ac_csv.clone(),
+        cfg.probe_csv.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let base = std::env::current_dir()?;
+    crate::run_manifest::RunManifest::capture(ManifestRequest {
+        tool: ToolIdentity::workspace("hauksbee"),
+        command: absolutize_argv_paths(cfg.manifest_command.clone(), &base, &replay_paths),
+        options,
+        inputs,
+        feature_flags: features,
+    })
+}
+
+/// Every run option as the manifest records it, keyed by its stable name.
+fn manifest_options(cfg: &RunConfig) -> std::collections::BTreeMap<String, serde_json::Value> {
     let dnp_policy = match cfg.dnp_policy {
         hauksbee_extract::dnp::DnpPolicy::FitExceptLinks => "fit-except-links",
         hauksbee_extract::dnp::DnpPolicy::FitAll => "fit-all",
         hauksbee_extract::dnp::DnpPolicy::Honour => "honour",
     };
-    let options = BTreeMap::from([
+    std::collections::BTreeMap::from([
         ("ac".into(), serde_json::json!(cfg.ac)),
         ("ac_csv".into(), serde_json::json!(cfg.ac_csv)),
         ("ac_loop".into(), serde_json::json!(cfg.ac_loop)),
@@ -118,43 +159,5 @@ pub(crate) fn capture_manifest(
         ("thermal".into(), serde_json::json!(cfg.thermal)),
         ("usb_c".into(), serde_json::json!(cfg.usb_c)),
         ("verbose".into(), serde_json::json!(cfg.verbose)),
-    ]);
-    let mut features = Vec::new();
-    if cfg!(feature = "avr") {
-        features.push("avr".to_string());
-    }
-    if cfg!(feature = "embed-web") {
-        features.push("embed-web".to_string());
-    }
-    if cfg!(feature = "qemu") {
-        features.push("qemu".to_string());
-    }
-    if cfg!(feature = "renode") {
-        features.push("renode".to_string());
-    }
-    let replay_paths = [
-        cfg.example.is_none().then(|| cfg.board.clone()),
-        cfg.bom.clone(),
-        cfg.placement.clone(),
-        explicit_schematic.map(std::path::Path::to_path_buf),
-        firmware_source.map(std::path::Path::to_path_buf),
-        cfg.firmware.clone(),
-        cfg.asbuilt.clone(),
-        cfg.junit.clone(),
-        cfg.sarif.clone(),
-        cfg.models_dir.clone(),
-        cfg.ac_csv.clone(),
-        cfg.probe_csv.clone(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    let base = std::env::current_dir()?;
-    crate::run_manifest::RunManifest::capture(ManifestRequest {
-        tool: ToolIdentity::workspace("hauksbee"),
-        command: absolutize_argv_paths(cfg.manifest_command.clone(), &base, &replay_paths),
-        options,
-        inputs,
-        feature_flags: features,
-    })
+    ])
 }

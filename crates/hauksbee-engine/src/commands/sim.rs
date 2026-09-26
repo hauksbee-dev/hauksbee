@@ -1,5 +1,7 @@
-//! `hauksbee sim <deck.cir>`: load a SPICE deck, run `.op`/`.tran`/`.ac`/`.dc`,
-//! and write CSV, an ngspice ASCII rawfile, or both. A malformed deck exits 2;
+//! `hauksbee sim <deck.cir>`: load a SPICE deck, run it, and write the results.
+//!
+//! It runs `.op`/`.tran`/`.ac`/`.dc` and writes CSV, an ngspice ASCII rawfile, or
+//! both. A malformed deck exits 2;
 //! a well-formed deck the solver cannot honestly answer exits 3.
 
 use crate::result::{Refusal, EXIT_INVALID_FOR_ANALYSIS};
@@ -28,12 +30,12 @@ enum SimError {
 }
 
 impl SimError {
-    fn malformed(msg: impl std::fmt::Display) -> SimError {
-        SimError::Malformed(msg.to_string())
+    fn malformed(msg: impl std::fmt::Display) -> Self {
+        Self::Malformed(msg.to_string())
     }
 
     fn refused(claim: &'static str, missing: impl Into<String>, next_action: &'static str) -> Self {
-        SimError::Refused {
+        Self::Refused {
             claim,
             missing: missing.into(),
             next_action,
@@ -43,8 +45,8 @@ impl SimError {
     /// One sentence, for a surface that cannot print a multi-line refusal.
     fn message(self) -> String {
         match self {
-            SimError::Malformed(msg) => msg,
-            SimError::Refused {
+            Self::Malformed(msg) => msg,
+            Self::Refused {
                 claim,
                 missing,
                 next_action,
@@ -55,11 +57,11 @@ impl SimError {
     /// Print the CLI's diagnostic and exit with the code it earns.
     fn exit(self) -> ! {
         let code = match self {
-            SimError::Malformed(msg) => {
+            Self::Malformed(msg) => {
                 eprintln!("error: {msg}");
                 EXIT_MALFORMED_DECK
             }
-            SimError::Refused {
+            Self::Refused {
                 claim,
                 missing,
                 next_action,
@@ -98,7 +100,22 @@ enum Analysis {
 }
 
 /// `hauksbee sim`: load a `.cir`, run the chosen analysis, write the results.
-#[allow(clippy::too_many_arguments)]
+///
+/// A malformed deck exits the process with status 2, and a deck the solver cannot
+/// honestly answer exits with `EXIT_INVALID_FOR_ANALYSIS`.
+///
+/// # Errors
+///
+/// Returns an error if the deck file does not exist or cannot be read, or if an
+/// output file cannot be written.
+///
+/// # Panics
+///
+/// Never panics in practice: `--format both` without `--out` exits as malformed
+/// before the `expect` that reads `out` is reached.
+#[allow(clippy::too_many_arguments, reason = "one param per clap flag")]
+#[allow(clippy::fn_params_excessive_bools, reason = "clap flags")]
+#[allow(clippy::too_many_lines, reason = "read, decode, simulate, write")]
 pub fn run(
     file: &Path,
     out: Option<&Path>,
@@ -234,9 +251,16 @@ pub struct DeckRun {
     pub notes: Vec<String>,
 }
 
-/// Simulate a deck supplied as text: the browser upload path, and the pure
-/// core `hauksbee sim` runs after it has read the file. No process exit, no
-/// stderr, no file IO, so the two front ends cannot drift.
+/// Simulate a deck supplied as text.
+///
+/// This is the browser upload path, and the pure core `hauksbee sim` runs after
+/// it has read the file. No process exit, no stderr, no file IO, so the two
+/// front ends cannot drift.
+///
+/// # Errors
+///
+/// Returns a message if the deck uses `.include`/`.lib`, does not parse, has no
+/// devices, asks for more than the browser point budget, or cannot be solved.
 pub fn simulate_deck(text: &str, print: &[String]) -> Result<DeckRun, String> {
     // `.include`/`.lib` resolve against the deck's own directory, which does
     // not exist on this side of an upload. Refusing is the honest answer; a
@@ -280,10 +304,16 @@ const MAX_DECK_POINTS: f64 = 200_000.0;
 /// Longest a deck uploaded to the web app may spend solving; the CLI is uncapped.
 pub const DECK_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// [`simulate_deck`] under a wall-clock limit, for the browser deck panel. The
-/// solver has no cancel hook, so an over-running solve is left on its own
+/// [`simulate_deck`] under a wall-clock limit, for the browser deck panel.
+///
+/// The solver has no cancel hook, so an over-running solve is left on its own
 /// thread to finish (the point budget bounds it); what this bounds is how long
 /// a request may wait, which is what ties the server up.
+///
+/// # Errors
+///
+/// Returns every error [`simulate_deck`] returns, and a message if the solve is
+/// still running when `limit` elapses.
 pub fn simulate_deck_within(
     text: &str,
     print: &[String],
@@ -337,6 +367,7 @@ fn ac_points(a: &AcDirective) -> f64 {
 /// explicit `--op`/`--tran`/`--ac`/`--dc`, else the deck's own card), resolve
 /// and validate the probes, solve. Caveats land in `notes`, which the caller
 /// shows however its surface shows them.
+#[allow(clippy::too_many_lines, reason = "pick, probe, then solve")]
 fn simulate(
     circuit: &Circuit,
     directives: &Directives,
@@ -364,14 +395,16 @@ fn simulate(
                 .into(),
         );
     }
-    let analysis = forced.unwrap_or(if directives.tran.is_some() {
-        Analysis::Tran
-    } else if directives.dc.is_some() {
-        Analysis::Dc
-    } else if directives.ac.is_some() {
-        Analysis::Ac
-    } else {
-        Analysis::Op
+    let analysis = forced.unwrap_or_else(|| {
+        if directives.tran.is_some() {
+            Analysis::Tran
+        } else if directives.dc.is_some() {
+            Analysis::Dc
+        } else if directives.ac.is_some() {
+            Analysis::Ac
+        } else {
+            Analysis::Op
+        }
     });
     let tag = match analysis {
         Analysis::Op => "op",
@@ -533,6 +566,7 @@ pub(crate) fn csv_escape(field: &str) -> std::borrow::Cow<'_, str> {
 /// Render a [`SimOutput`] as CSV; a transient prepends a `time_s` column.
 /// The browser deck panel downloads exactly these bytes, so there is one CSV
 /// writer and no second implementation to drift from it.
+#[must_use]
 pub fn sim_output_to_csv(o: &SimOutput) -> String {
     let mut header: Vec<String> = Vec::new();
     if o.time.is_some() {

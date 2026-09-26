@@ -1,7 +1,7 @@
 //! Board-to-firmware proof for STM32F103 external-clock readiness.
 //!
 //! The same clock-polling ELF runs on two otherwise identical boards. Only the
-//! board with a populated crystal across OSC_IN/OSC_OUT may reach its HSERDY and
+//! board with a populated crystal across `OSC_IN/OSC_OUT` may reach its HSERDY and
 //! PLLRDY marker pins, and those markers must respect the descriptor delays.
 
 #![cfg(feature = "renode")]
@@ -79,6 +79,7 @@ fn board_text(with_crystal: bool) -> String {
 }
 
 fn marker_times(with_crystal: bool) -> Option<(Option<u64>, Option<u64>)> {
+    const CHUNK_US: u16 = 50;
     if !is_available() {
         eprintln!("SKIP: Renode not installed");
         return None;
@@ -94,12 +95,11 @@ fn marker_times(with_crystal: bool) -> Option<(Option<u64>, Option<u64>)> {
     )
     .expect("build STM32 clock-readiness engine");
 
-    const CHUNK_US: u64 = 50;
-    engine.scheduler_mut().chunk_s = CHUNK_US as f64 / 1_000_000.0;
+    engine.scheduler_mut().chunk_s = f64::from(CHUNK_US) / 1_000_000.0;
     let mut hse_us = None;
     let mut pll_us = None;
-    for now_us in (CHUNK_US..=3_000).step_by(CHUNK_US as usize) {
-        let frame = engine.step(CHUNK_US as f64 / 1_000_000.0);
+    for now_us in (u64::from(CHUNK_US)..=3_000).step_by(usize::from(CHUNK_US)) {
+        let frame = engine.step(f64::from(CHUNK_US) / 1_000_000.0);
         if frame.net_voltages.get("HSE_READY").copied().unwrap_or(0.0) > 2.0 {
             hse_us.get_or_insert(now_us);
         }

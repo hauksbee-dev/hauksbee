@@ -1,8 +1,17 @@
-//! The `hauksbee doctor [--backends] [--json]` subcommand: probe co-sim backend
-//! availability (AVR, QEMU, Renode) and print one machine-readable line per
-//! backend. It calls the engine's OWN backend resolvers rather than
+//! The `hauksbee doctor [--backends] [--json]` subcommand: probe co-sim backends.
+//!
+//! It checks availability (AVR, QEMU, Renode) and prints one machine-readable line
+//! per backend. It calls the engine's OWN backend resolvers rather than
 //! re-implementing discovery, so what `doctor` reports can never drift from what a
 //! real co-sim would actually accept.
+
+/// A probed backend. `status` is a single token by contract (see [`run`]).
+struct Backend {
+    name: &'static str,
+    status: &'static str,
+    detail: String,
+    summary: &'static str,
+}
 
 /// `hauksbee doctor --backends`: report co-sim backend availability using the
 /// engine's OWN discovery, so no other availability surface can drift from
@@ -23,15 +32,79 @@
 /// stderr so the data stream stays clean. On a TTY there is no parser to
 /// protect, so the view is one box-drawing table instead of TSV interleaved
 /// with stderr framing.
+///
+/// # Errors
+///
+/// Never returns an error: a backend that fails discovery is reported as a row,
+/// not propagated. The `Result` keeps the subcommand signatures uniform.
 pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
-    // A probed backend. `status` is a single token by contract (see above).
-    struct Backend {
-        name: &'static str,
-        status: &'static str,
-        detail: String,
-        summary: &'static str,
+    // Nothing below says where the web app is; both framings say it once.
+    const SERVE_LINE: &str =
+        "The web app is `hauksbee serve`, which serves http://127.0.0.1:3001 by default.";
+    let backends = probe_backends();
+    if json {
+        let arr: Vec<serde_json::Value> = backends
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "name": b.name,
+                    "status": b.status,
+                    "available": b.status == "ok" || b.status == "builtin",
+                    "detail": b.detail,
+                    "summary": b.summary,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::json!({ "backends": arr }));
+        return Ok(());
     }
 
+    // A TTY gets ONE table a human can actually read, closed by one summary
+    // line; nothing else (U10: an earlier shape interleaved two formats). A
+    // pipe gets the TSV contract external tooling parses; its human framing
+    // goes to stderr as one contiguous block BEFORE the data lines, never
+    // alternating with them, so a `2>&1` merge stays two clean blocks.
+    let available = backends
+        .iter()
+        .filter(|b| b.status == "ok" || b.status == "builtin")
+        .count();
+    let summary_line = format!(
+        "{available} of {} backends available; `hauksbee install --help` fetches the missing ones.",
+        backends.len()
+    );
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        let rows: Vec<Vec<String>> = backends
+            .iter()
+            .map(|b| {
+                vec![
+                    b.name.to_string(),
+                    b.status.to_string(),
+                    b.summary.to_string(),
+                    b.detail.clone(),
+                ]
+            })
+            .collect();
+        print!(
+            "{}",
+            super::models::box_table(&["Backend", "Status", "Co-sim", "Detail"], &rows)
+        );
+        println!("{summary_line}");
+        println!("{SERVE_LINE}");
+    } else {
+        eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
+        eprintln!("{SERVE_LINE}");
+        for b in &backends {
+            eprintln!("    {:<13} {}", b.name, b.summary);
+        }
+        for b in &backends {
+            println!("{}\t{}\t{}", b.name, b.status, b.detail);
+        }
+    }
+    Ok(())
+}
+
+/// Probe every co-sim backend with the engine's own resolvers, in report order.
+fn probe_backends() -> Vec<Backend> {
     let mut backends: Vec<Backend> = Vec::new();
 
     // AVR: built into this binary via libsimavr (feature `avr`); there is no
@@ -127,69 +200,7 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         detail: "built without the `renode` feature".to_string(),
         summary: "STM32 / nRF52 / RISC-V firmware co-sim",
     });
-
-    if json {
-        let arr: Vec<serde_json::Value> = backends
-            .iter()
-            .map(|b| {
-                serde_json::json!({
-                    "name": b.name,
-                    "status": b.status,
-                    "available": b.status == "ok" || b.status == "builtin",
-                    "detail": b.detail,
-                    "summary": b.summary,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::json!({ "backends": arr }));
-        return Ok(());
-    }
-
-    // A TTY gets ONE table a human can actually read, closed by one summary
-    // line; nothing else (U10: an earlier shape interleaved two formats). A
-    // pipe gets the TSV contract external tooling parses; its human framing
-    // goes to stderr as one contiguous block BEFORE the data lines, never
-    // alternating with them, so a `2>&1` merge stays two clean blocks.
-    let available = backends
-        .iter()
-        .filter(|b| b.status == "ok" || b.status == "builtin")
-        .count();
-    // Nothing above says where the web app is; both framings say it once here.
-    const SERVE_LINE: &str =
-        "The web app is `hauksbee serve`, which serves http://127.0.0.1:3001 by default.";
-    let summary_line = format!(
-        "{available} of {} backends available; `hauksbee install --help` fetches the missing ones.",
-        backends.len()
-    );
-    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-        let rows: Vec<Vec<String>> = backends
-            .iter()
-            .map(|b| {
-                vec![
-                    b.name.to_string(),
-                    b.status.to_string(),
-                    b.summary.to_string(),
-                    b.detail.clone(),
-                ]
-            })
-            .collect();
-        print!(
-            "{}",
-            super::models::box_table(&["Backend", "Status", "Co-sim", "Detail"], &rows)
-        );
-        println!("{summary_line}");
-        println!("{SERVE_LINE}");
-    } else {
-        eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
-        eprintln!("{SERVE_LINE}");
-        for b in &backends {
-            eprintln!("    {:<13} {}", b.name, b.summary);
-        }
-        for b in &backends {
-            println!("{}\t{}\t{}", b.name, b.status, b.detail);
-        }
-    }
-    Ok(())
+    backends
 }
 
 /// Collapse a possibly multi-line message to its first line (discovery errors

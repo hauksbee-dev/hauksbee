@@ -9,7 +9,7 @@
 //! explicitly unavailable on the synchronous web path.
 //!
 //! The TUI half is tested in-crate against the real `draw` through a
-//! TestBackend (`tui::render`'s `every_coverage_class_reaches_the_cosim_pane_and_
+//! `TestBackend` (`tui::render`'s `every_coverage_class_reaches_the_cosim_pane_and_
 //! its_overlay`), because `draw` is crate-private. This file covers the web
 //! front door, whose `analyze_with_firmware` is public, two-sided per class:
 //!
@@ -38,7 +38,7 @@ fn repo(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-/// An ATmega328P board, the same one the batch-surface watchdog test uses.
+/// An `ATmega328P` board, the same one the batch-surface watchdog test uses.
 fn avr_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
@@ -199,7 +199,6 @@ fn per_core_timing_coverage_reaches_the_web_front_door_and_a_run_with_no_core_ca
     assert_eq!(quiet_cosim["ran"], false, "no MCU, so no co-sim ran");
     assert!(
         quiet_cosim.get("timing_coverage").is_none(),
-        "no live core means no measured resolution: {:?}",
-        quiet_cosim
+        "no live core means no measured resolution: {quiet_cosim:?}"
     );
 }

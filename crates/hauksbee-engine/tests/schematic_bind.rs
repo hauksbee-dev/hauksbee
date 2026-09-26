@@ -4,7 +4,7 @@
 //! `.kicad_sch` exactly as it accepts one from a `.kicad_pcb`. There is no
 //! copper, but the binder, model resolution and report only need components,
 //! pins and nets, all of which schematic extraction provides. We bind the
-//! pic_programmer schematic and assert it resolves at least as well as the
+//! `pic_programmer` schematic and assert it resolves at least as well as the
 //! same project's layout (it should resolve identically, since the netlist is
 //! the same and the components are the same).
 
@@ -73,7 +73,7 @@ fn schematic_and_pcb_bind_the_same_components() {
     // The same physical board, so the resolved counts should be in the same
     // ballpark whether we came from the layout or the schematic.
     let (sc, pc) = (sb.report.resolved_count(), pb.report.resolved_count());
-    let diff = (sc as i64 - pc as i64).abs();
+    let diff = sc.abs_diff(pc);
     assert!(
         diff <= 3,
         "resolved counts diverge: schematic {sc} vs pcb {pc}"

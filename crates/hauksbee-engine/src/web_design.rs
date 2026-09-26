@@ -11,7 +11,6 @@ use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution, IgnoredInput,
 };
 use hauksbee_models::ModelLibrary;
-use sha2::{Digest as _, Sha256};
 
 use crate::binder::{bind_board, BoundBoard};
 use crate::board_input::NormalizedBoard;
@@ -42,6 +41,13 @@ pub struct PreparedWebDesign {
 }
 
 impl PreparedWebDesign {
+    /// Bind the prepared board against its model library, applying the as-built
+    /// overlay when one was uploaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns the overlay's message if the as-built overlay cannot be applied to
+    /// the bound board.
     pub fn bind(&self) -> Result<BoundBoard, String> {
         let mut bound = bind_board(&self.norm.board, &self.lib);
         if let Some(overlay) = &self.asbuilt {
@@ -60,13 +66,6 @@ fn safe_leaf(name: &str, fallback: &str) -> String {
         .filter(|name| !name.is_empty() && *name != "." && *name != "..")
         .unwrap_or(fallback)
         .to_string()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn stage_models(models: &[NamedUpload]) -> Result<Option<tempfile::TempDir>, String> {
@@ -95,12 +94,25 @@ fn stage_models(models: &[NamedUpload]) -> Result<Option<tempfile::TempDir>, Str
         let mut file = std::fs::File::create(&path)
             .map_err(|error| format!("could not stage model '{leaf}': {error}"))?;
         file.write_all(&model.bytes)
-            .and_then(|_| file.flush())
+            .and_then(|()| file.flush())
             .map_err(|error| format!("could not write model '{leaf}': {error}"))?;
     }
     Ok(Some(dir))
 }
 
+/// Normalize a browser upload into a design ready to bind and analyse.
+///
+/// Reads the board, resolves a companion schematic, stages uploaded model files,
+/// and applies any BOM, placement, assembly variant and as-built overlay,
+/// recording each as a supporting artifact.
+///
+/// # Errors
+///
+/// Returns a user-facing message if the board or any companion file cannot be
+/// read or parsed (non-TOML or duplicate model files, non-UTF-8 variant or
+/// overlay, an unnamed variant), if model files cannot be staged, or if applying
+/// the BOM, placement, DNP policy or as-built overlay to the board fails.
+#[allow(clippy::too_many_lines, reason = "one upload, normalized per input")]
 pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
     let mut norm = crate::board_input::from_bytes(&upload.board.name, &upload.board.bytes)
         .map_err(|error| error.web_message())?;
@@ -238,7 +250,7 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
                 &file.name,
                 ArtifactKind::Toml,
                 ArtifactRole::Variant,
-                sha256_hex(&file.bytes),
+                crate::run_manifest::hex_digest(&file.bytes),
                 Vec::new(),
             )
             .map_err(|error| error.to_string())?
@@ -255,7 +267,7 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
     }
     norm.board
         .apply_dnp_policy(
-            Default::default(),
+            hauksbee_extract::dnp::DnpPolicy::default(),
             variant
                 .as_ref()
                 .map(|v| v.fit.as_slice())
@@ -280,7 +292,7 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
                 &file.name,
                 ArtifactKind::Toml,
                 ArtifactRole::AsBuilt,
-                sha256_hex(&file.bytes),
+                crate::run_manifest::hex_digest(&file.bytes),
                 Vec::new(),
             )
             .map_err(|error| error.to_string())?
@@ -300,7 +312,7 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
                 &model.name,
                 ArtifactKind::Toml,
                 ArtifactRole::ModelPack,
-                sha256_hex(&model.bytes),
+                crate::run_manifest::hex_digest(&model.bytes),
                 Vec::new(),
             )
             .map_err(|error| error.to_string())?
@@ -382,7 +394,7 @@ mod tests {
         let roles: Vec<_> = prepared
             .supporting_artifacts
             .iter()
-            .map(|artifact| artifact.role())
+            .map(hauksbee_ir::evidence::ArtifactProvenance::role)
             .collect();
         assert_eq!(
             roles,

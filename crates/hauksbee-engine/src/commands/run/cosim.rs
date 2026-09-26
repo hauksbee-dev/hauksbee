@@ -9,6 +9,7 @@ use super::{
     RunConfig,
 };
 use crate::result::{BindSummary, BootGateJson, JsonNote, JsonNoteKind, JsonReport, Refusal};
+use hauksbee_cosim::scheduler::{AdcDrop, DriverContention, ShortPulse, UnexercisedBus};
 
 pub(super) struct AnalogStatus {
     pub(super) valid: bool,
@@ -40,7 +41,7 @@ pub(super) struct EvidenceArtifacts {
     pub(super) faults_gate: bool,
 }
 
-pub(crate) fn run_headless(
+pub fn run_headless(
     cfg: &RunConfig,
     quiet: bool,
     run_inputs: &RunInputs,
@@ -107,7 +108,7 @@ fn execute_and_collect_observations(
         c.realtime_factor = achieved_factor;
         c
     });
-    let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
+    let total_toggles = cosim.as_ref().map_or(0, |c| c.total_toggles);
     // Analog-fidelity honesty: once any chunk's analog solve failed,
     // the run held stale voltages and cannot vouch for analog-derived findings
     // over the failed windows. `analog_abort` is the stricter condition: the
@@ -203,7 +204,7 @@ fn assemble_evidence_and_ci_artifacts(
     // emits one finding per fault, so this is the same set the JUnit
     // `<failure>` count and the SARIF error levels are built from, and the
     // exit code cannot grade the run differently from the archived file.
-    let faults_gate = fault_findings.iter().any(|f| f.gates());
+    let faults_gate = fault_findings.iter().any(crate::result::JsonFinding::gates);
     let mut run_findings = fault_findings.clone();
     if cfg.strict_boot {
         run_findings.extend(held_high_boot_nets.iter().map(|net| crate::result::JsonFinding {
@@ -335,19 +336,30 @@ fn shared_coverage_messages(
     framing_prefix: &str,
 ) -> Vec<String> {
     let mut out = scheduler.drive_conflicts();
-    out.extend(scheduler.adc_dropped().iter().map(|d| d.message()));
-    out.extend(scheduler.unexercised_buses().iter().map(|b| b.message()));
+    out.extend(scheduler.adc_dropped().iter().map(AdcDrop::message));
+    out.extend(
+        scheduler
+            .unexercised_buses()
+            .iter()
+            .map(UnexercisedBus::message),
+    );
     out.extend(crate::scheduler::coverage_limitation_messages(scheduler));
     out.extend(
         crate::reports::cosim::heuristic_framing_warnings(&scheduler.spi_framing_modes())
             .into_iter()
             .map(|w| format!("{framing_prefix}{w}")),
     );
-    out.extend(scheduler.short_pulses().iter().map(|p| p.message()));
-    out.extend(scheduler.driver_contentions().iter().map(|c| c.message()));
+    out.extend(scheduler.short_pulses().iter().map(ShortPulse::message));
+    out.extend(
+        scheduler
+            .driver_contentions()
+            .iter()
+            .map(DriverContention::message),
+    );
     out
 }
 
+#[allow(clippy::too_many_lines, reason = "three output modes, shared bindings")]
 fn emit_report(
     cfg: &RunConfig,
     run_inputs: &RunInputs,
@@ -467,8 +479,8 @@ fn emit_report(
         if !run_findings.is_empty() {
             jr.findings = Some(run_findings.clone());
         }
-        jr.cosim = cosim.clone();
-        jr.refusal = strict_refusal.clone();
+        jr.cosim.clone_from(cosim);
+        jr.refusal.clone_from(strict_refusal);
         println!("{}", jr.to_json());
     } else if cfg.plain {
         // A co-sim with no stress faults is NOT plainly "healthy" if it ran on

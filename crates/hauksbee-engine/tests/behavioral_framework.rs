@@ -38,7 +38,7 @@ impl Harness {
         let layout = Layout::new(&circuit);
         let n_nodes = circuit.node_count();
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
-        Harness {
+        Self {
             circuit,
             dev,
             node_volts: vec![0.0; n_nodes],
@@ -100,8 +100,9 @@ impl Harness {
             .iter()
             .flat_map(|(_, d)| d.nodes())
             .find(|n| self.circuit.node_name(*n) == name);
-        id.map(|n| self.node_volts.get(n.0 as usize).copied().unwrap_or(0.0))
-            .unwrap_or(f64::NAN)
+        id.map_or(f64::NAN, |n| {
+            self.node_volts.get(n.0 as usize).copied().unwrap_or(0.0)
+        })
     }
 }
 
@@ -506,17 +507,17 @@ v_sense_full = 0.05
 "#;
 
     assert_eq!(
-        converter_limit_from_toml(program, &[("R49", 0.02), ("R8", 100000.0)]),
+        converter_limit_from_toml(program, &[("R49", 0.02), ("R8", 100_000.0)]),
         None,
         "one missing Kelvin shunt makes the programmed limit unknown"
     );
     assert_eq!(
-        converter_limit_from_toml(program, &[("R49", 0.02), ("R50", 0.01), ("R8", 100000.0)]),
+        converter_limit_from_toml(program, &[("R49", 0.02), ("R50", 0.01), ("R8", 100_000.0)]),
         None,
         "unequal paired shunts contradict the model and must not be averaged or selected"
     );
     let limit =
-        converter_limit_from_toml(program, &[("R49", 0.02), ("R50", 0.02), ("R8", 100000.0)])
+        converter_limit_from_toml(program, &[("R49", 0.02), ("R50", 0.02), ("R8", 100_000.0)])
             .expect("equal, resolved shunts define the limit");
     assert!(
         (limit - 2.5).abs() < 1e-12,
@@ -526,13 +527,13 @@ v_sense_full = 0.05
 
 #[test]
 fn literal_only_sense_program_remains_supported() {
-    let program = r#"
+    let program = r"
 rsense_ohms = 0.02
 prog_ohms = 50000.0
 vprog_ref = 0.05
 prog_ref_ohms = 100000.0
 v_sense_full = 0.05
-"#;
+";
     let limit = converter_limit_from_toml(program, &[]).expect("literal program is complete");
     assert!((limit - 1.25).abs() < 1e-12, "got {limit}");
 }
@@ -805,7 +806,7 @@ impl CustomBehavior for RunawaySink {
         }
     }
 
-    fn state(&self) -> &str {
+    fn state(&self) -> &'static str {
         "runaway"
     }
 }
@@ -855,7 +856,7 @@ fn custom_behavior_escape_hatch_binds_and_runs() {
     );
     assert_eq!(bound.behavioral[0].state(), "runaway");
 
-    let mut ambiguous_board = board.clone();
+    let mut ambiguous_board = board;
     ambiguous_board.components[0].properties.push((
         hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
         "inferred reference without source UID".to_string(),

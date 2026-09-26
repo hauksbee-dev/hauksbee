@@ -9,7 +9,7 @@
 //! voltage equal AT EVERY EDGE (89/54/24/16 edges respectively), plus a
 //! 4-chip daisy chain compared per edge against [`Hc595Chain`] (99 edges × 4
 //! chips). That old-vs-new proof is commit `ed80984` ("tests: byte-exact
-//! regression, legacy DigitalKind vs spec-driven LogicComponent"), check it
+//! regression, legacy `DigitalKind` vs spec-driven `LogicComponent`"), check it
 //! out to re-run the two-sided comparison. Only after it passed was the enum
 //! deleted.
 //!
@@ -21,7 +21,7 @@
 //!
 //! ## Deliberately excluded corners (documented, not hidden)
 //!
-//! * **SRCLK rising while SRCLR_n is HELD low (74HC595).** The legacy
+//! * **SRCLK rising while `SRCLR_n` is HELD low (74HC595).** The legacy
 //!   `tick_595` cleared the register and THEN shifted within the same
 //!   sample; the TI SN74HC595 function table (SCLS041I, "SRCLR L, SRCLK X
 //!   -> shift register clear") says the register stays cleared, which is
@@ -71,7 +71,7 @@ struct Rig {
 impl Rig {
     fn from_model(model: &hauksbee_models::ModelEntry) -> Self {
         let lc = LogicComponent::compile(&model.id, &model.logic).expect("db spec compiles");
-        Rig {
+        Self {
             lc,
             levels: HashMap::new(),
             ll: LogicLevels::from_params(model),
@@ -275,7 +275,7 @@ fn hc165_silicon_direction_matches_datasheet() {
 fn passthrough_fallback_mirrors_wired_pairs() {
     let mut model = builtin("74HC595");
     model.id = "test_buffer".into();
-    model.logic = Default::default();
+    model.logic = Logic::default();
     let mut circuit = Circuit::new();
     let mut roles = HashMap::new();
     let mut nets = HashMap::new();
@@ -308,11 +308,12 @@ fn passthrough_fallback_mirrors_wired_pairs() {
     println!("[buffer] passthrough fallback mirrors all 8 patterns");
 }
 
-/// STILL TWO-SIDED: a 4-chip spec-driven daisy chain (qh_serial -> next ser
+/// STILL TWO-SIDED: a 4-chip spec-driven daisy chain (`qh_serial` -> next ser
 /// through emulated nets with simultaneous-clock overlay semantics) versus
 /// the legacy [`Hc595Chain`] controller, independent Rust that survives the
 /// migration as the MCU-facing fast path. Byte-exact per chip per edge.
 #[test]
+#[allow(clippy::too_many_lines, reason = "byte-exact per-edge scenario")]
 fn spec_chain_matches_hc595chain_reference() {
     const N: usize = 4;
     let model = builtin("74HC595");
@@ -330,16 +331,16 @@ fn spec_chain_matches_hc595chain_reference() {
     let mut circuit = Circuit::new();
     let mut ref_chips: Vec<DigitalComponent> = Vec::new();
     let mut prev_qh: Option<NodeId> = None;
-    let n_srclk = circuit.node("SRCLK");
-    let n_rclk = circuit.node("RCLK");
-    let n_srclr = circuit.node("SRCLR");
-    let n_ser0 = circuit.node("SER0");
+    let shift_clk = circuit.node("SRCLK");
+    let latch_clk = circuit.node("RCLK");
+    let clear_n = circuit.node("SRCLR");
+    let ser0 = circuit.node("SER0");
     for k in 0..N {
         let mut roles = HashMap::new();
-        roles.insert("srclk".to_string(), n_srclk);
-        roles.insert("rclk".to_string(), n_rclk);
-        roles.insert("srclr_n".to_string(), n_srclr);
-        roles.insert("ser".to_string(), prev_qh.unwrap_or(n_ser0));
+        roles.insert("srclk".to_string(), shift_clk);
+        roles.insert("rclk".to_string(), latch_clk);
+        roles.insert("srclr_n".to_string(), clear_n);
+        roles.insert("ser".to_string(), prev_qh.unwrap_or(ser0));
         let qh = circuit.node(&format!("QHS{k}"));
         roles.insert("qh_serial".to_string(), qh);
         ref_chips.push(
@@ -349,10 +350,10 @@ fn spec_chain_matches_hc595chain_reference() {
         prev_qh = Some(qh);
     }
     let mut gpio: HashMap<i64, (char, u8)> = HashMap::new();
-    gpio.insert(n_srclk.0 as i64, ('B', 5));
-    gpio.insert(n_rclk.0 as i64, ('D', 6));
-    gpio.insert(n_srclr.0 as i64, ('C', 3));
-    gpio.insert(n_ser0.0 as i64, ('B', 3));
+    gpio.insert(i64::from(shift_clk.0), ('B', 5));
+    gpio.insert(i64::from(latch_clk.0), ('D', 6));
+    gpio.insert(i64::from(clear_n.0), ('C', 3));
+    gpio.insert(i64::from(ser0.0), ('B', 3));
     let order = hauksbee_engine::digital::order_595_chain(&ref_chips);
     let mut reference = Hc595Chain::build(&ref_chips, order, &gpio).expect("reference chain binds");
 
@@ -402,12 +403,12 @@ fn spec_chain_matches_hc595chain_reference() {
         for (k, chip) in chips.iter().enumerate() {
             assert_eq!(
                 chip.register("shift"),
-                Some(reference.shift[k] as u64),
+                Some(u64::from(reference.shift[k])),
                 "edge {i}: chip {k} shift register diverged from Hc595Chain"
             );
             assert_eq!(
                 chip.register("store"),
-                Some(reference.latched[k] as u64),
+                Some(u64::from(reference.latched[k])),
                 "edge {i}: chip {k} storage register diverged from Hc595Chain"
             );
         }
@@ -416,7 +417,7 @@ fn spec_chain_matches_hc595chain_reference() {
     for p in 0..N {
         assert_eq!(
             chips[p].register("store"),
-            Some(weights[N - 1 - p] as u64),
+            Some(u64::from(weights[N - 1 - p])),
             "chain position {p} latches weights[{}]",
             N - 1 - p
         );
