@@ -782,10 +782,10 @@ fn derated_run(
 }
 
 /// 5 A through a part rated 5.7 A at TA = 25 C and 4.7 A at 70 C: fine at 25,
-/// over at 70, and with the ambient left unset the 70 C row would flip the
-/// verdict, so the defaulted 25 C is disclosed. Past the hottest row the limit
-/// falls to zero at Tj,max: 2.5 A passes at 70 C but not at 110 C (limit
-/// 4.7 * 40/80 = 2.35 A with Tj,max 150).
+/// over at 70, and with the ambient left unset the 85 C probe (limit
+/// 4.7 * 65/80 = 3.8 A with Tj,max 150) would flip the verdict, so the
+/// defaulted 25 C is disclosed. Past the hottest row the limit falls to zero at
+/// Tj,max: 2.5 A passes at 70 C but not at 110 C (limit 4.7 * 40/80 = 2.35 A).
 #[test]
 fn ambient_rows_are_read_at_the_ambient_and_fall_to_zero_past_the_hottest() {
     let rows = [(25.0, 5.7), (70.0, 4.7)];
@@ -798,7 +798,7 @@ fn ambient_rows_are_read_at_the_ambient_and_fall_to_zero_past_the_hottest() {
         (5.0, Some(25.0), false, false),
         (5.0, Some(70.0), true, false),
         (5.0, None, false, true),
-        (4.0, None, false, false),
+        (3.5, None, false, false),
         (2.5, Some(70.0), false, false),
         (2.5, Some(110.0), true, false),
     ];
@@ -818,7 +818,8 @@ fn ambient_rows_are_read_at_the_ambient_and_fall_to_zero_past_the_hottest() {
     let no_tj_max = Ratings::default();
     let (_, said) = derated_run(TempRef::Ambient, &rows, &no_tj_max, (1.0, 0.4), Some(110.0));
     assert!(
-        said.iter().any(|a| a.because().contains("assumed 125 C")),
+        said.iter()
+            .any(|a| a.because().contains("125 C junction limit assumed")),
         "no Tj,max: {said:?}"
     );
 }

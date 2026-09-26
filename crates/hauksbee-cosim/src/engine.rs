@@ -411,8 +411,10 @@ impl Engine for HauksbeeEngine {
         self.sched.opts = controls_to_options(&controls);
         // The stress monitor's junction-temperature estimate sits on its own
         // ambient, not the solver's temperature: without this, the UI slider
-        // changes device physics but never the over-temperature checks.
-        self.sched.set_ambient_c(controls.temperature_c);
+        // changes device physics but never the over-temperature checks. The
+        // slider always carries a value, so it never counts as a stated
+        // ambient: a rating it decides stays disclosed.
+        self.sched.stress.ambient_c = controls.temperature_c;
         self.sched
             .set_destructive_faults(controls.destructive_faults);
         if controls.fixed_dt > 0.0 {

@@ -53,7 +53,7 @@ use std::collections::HashMap;
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
-use hauksbee_models::derating::{Derating, TempRef, ASSUMED_TJ_MAX_C};
+use hauksbee_models::derating::{Derating, TempRef};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 use hauksbee_solve::{mos_body_vth, mos_channel};
 
@@ -715,8 +715,14 @@ struct RunStats {
     /// Hottest estimated junction temperature (C). `None` if it never dissipated.
     peak_tj_c: Option<f64>,
     /// With the ambient defaulted, a current or power check that passed at it
-    /// would have failed at the part's hottest printed rating temperature.
+    /// would have failed at [`HOT_PROBE_AMBIENT_C`] or the hottest printed row.
     hot_flip: bool,
+    /// On a package-guessed `theta_JA`, a derated current or power check that
+    /// passed would have failed at twice the guess.
+    theta_flip: bool,
+    /// The endpoint current and the derated continuous limit in force when it
+    /// stood furthest over that limit.
+    peak_vs_limit: Option<(f64, f64)>,
     /// The deposits `(elapsed s, energy J)` inside the trailing [`TJ_AVG_S`]
     /// window, with their running sums: the junction heats on this average.
     heat: std::collections::VecDeque<(f64, f64)>,
@@ -765,6 +771,10 @@ const CONDUCTING_ID_FRACTION: f64 = 1e-3;
 /// onsemi and Vishay parts), so anything shorter is pulsed by the datasheets'
 /// own definition. Rounded up to 1 ms, one order above the solver's chunk.
 const IDM_PULSE_S: f64 = 1e-3;
+
+/// The ambient (C) a defaulted ambient is also judged at, so a card whose
+/// rows all sit at 25 C still discloses a default its verdict rests on.
+const HOT_PROBE_AMBIENT_C: f64 = 85.0;
 
 /// Fraction of the specified VGS a gate may fall short by and still count as
 /// driven. A gate series resistor's static drop into the pulldown is a few mV,
@@ -878,11 +888,10 @@ impl StressMonitor {
             // lag never did, so no fault was raised: honest only while the card
             // carries no pulsed rating to judge that peak against. A lag over
             // the rating is the continuous fault's business, not a note's.
-            if let Some(cont) = rt
-                .max_current_a
-                .filter(|c| !s.lag_over_limit && rt.max_surge_current_a.is_none() && s.peak_a > *c)
+            if let Some((pk, cont)) = s
+                .peak_vs_limit
+                .filter(|(pk, c)| !s.lag_over_limit && rt.max_surge_current_a.is_none() && pk > c)
             {
-                let pk = s.peak_a;
                 out.push(Assumption::partial_model_for_component(&format!("{r}-peak-current"), r, "",
                     &format!("{r} peaks at {pk:.3} A, above the {cont:.3} A its card rates CONTINUOUSLY, and the card carries no pulsed (IDM) rating for the peak to be judged against"),
                     "add the datasheet's pulsed drain/forward current to the card, then re-run"));
@@ -898,13 +907,13 @@ impl StressMonitor {
     #[must_use]
     pub fn rating_disclosures(&self) -> Vec<Assumption> {
         let (mut out, mut said) = (Vec::new(), std::collections::HashSet::new());
-        for (m, s) in self.metas.iter().zip(&self.run) {
+        for ((m, s), limits) in self.metas.iter().zip(&self.run).zip(&self.limits) {
             let r = strip_unit_suffix(&m.reference);
             let Some(hot) = m.derating.hottest() else {
                 continue;
             };
             if s.hot_flip && said.insert((r, "ambient")) {
-                let at = format!("{} C", crate::thermal::DEFAULT_AMBIENT_C);
+                let at = format!("{} C", self.ambient_c);
                 out.push(Assumption::default_parameter_for_component(
                     r,
                     r,
@@ -915,7 +924,7 @@ impl StressMonitor {
             let seen = s.peak_tj_c.unwrap_or(self.ambient_c).max(self.ambient_c);
             if m.ratings.max_junction_temp_c.is_none() && seen > hot && said.insert((r, "tj")) {
                 out.push(Assumption::partial_model_for_component(&format!("{r}-tj-max"), r, "",
-                    &format!("{r}'s current and power limits past their hottest printed row ({hot} C) fall to zero at an assumed {ASSUMED_TJ_MAX_C} C junction limit, because its card carries no max_junction_temp_c"),
+                    &format!("{r}'s current and power limits past their hottest printed row ({hot} C) fall to zero at a {} C junction limit assumed from its package, because its card carries no max_junction_temp_c", limits.2),
                     "add the datasheet's max_junction_temp_c to the card, then re-run"));
             }
         }
@@ -926,7 +935,8 @@ impl StressMonitor {
     /// because the card carries none, qualifies each claim it feeds.
     /// `claims(reference, decisive)` names those claims' scopes; `decisive` is
     /// true when twice the inferred `theta_JA` would put the peak at or over the
-    /// part's Tj limit, so a verdict drawn from the limit rests on the guess.
+    /// part's Tj limit, or flip a case- or junction-referred current or power
+    /// rating, so a verdict drawn from the limit rests on the guess.
     pub fn inferred_theta_ja(&self, claims: impl Fn(&str, bool) -> Vec<Scope>) -> Vec<Assumption> {
         let mut out = Vec::new();
         for (m, s) in self.metas.iter().zip(&self.run) {
@@ -934,7 +944,7 @@ impl StressMonitor {
                 continue;
             };
             let (r, theta, limit) = (&m.reference, m.theta_ja_c_per_w(), m.tj_max_c());
-            let decisive = 2.0f64.mul_add(peak, -self.ambient_c) >= limit;
+            let decisive = s.theta_flip || 2.0f64.mul_add(peak, -self.ambient_c) >= limit;
             let key = format!("{r}-theta-ja");
             let text = format!("{r}'s junction temperature (peak {peak:.1} C)");
             let how = format!(
@@ -1269,22 +1279,34 @@ impl StressMonitor {
                 .unwrap_or(0.0);
             // A card printing its current or power rating at several
             // temperatures is judged on the row for where the part sits now.
-            let (amps, watts) = derated(&meta, theta_ja, self.ambient_c, package_w);
-            meta.ratings.max_current_a = amps.or(meta.ratings.max_current_a);
-            meta.ratings.max_power_w = watts.or(meta.ratings.max_power_w);
-            rated_w = watts.or(rated_w);
+            let read = |theta, ta| derated(&self.metas[i], theta, ta, package_w, tj_max);
+            let now = read(theta_ja, self.ambient_c);
+            meta.ratings.max_current_a = now.0.or(meta.ratings.max_current_a);
+            meta.ratings.max_power_w = now.1.or(meta.ratings.max_power_w);
+            rated_w = now.1.or(rated_w);
+            // Whether the verdict would flip on limits read somewhere else: a
+            // defaulted ambient's hot probe, or twice a guessed theta_JA.
+            let over =
+                |v: f64, l: Option<f64>| l.is_some_and(|l| v > l * (1.0 + OVER_LIMIT_NOISE_MARGIN));
+            let flips = |(a, w): (Option<f64>, Option<f64>)| {
+                (over(op.current_a, a) && !over(op.current_a, now.0))
+                    || (over(op.power_w, w) && !over(op.power_w, now.1))
+            };
+            let hot = (meta.derating.hottest()).map(|h| h.max(HOT_PROBE_AMBIENT_C));
+            let hot_flip = hot.is_some_and(|h| !self.ambient_given && flips(read(theta_ja, h)));
+            let guessed = meta.ratings.theta_ja_c_per_w.is_none();
+            let theta_flip = guessed && flips(read(2.0 * theta_ja, self.ambient_c));
             let run = &mut self.run[i];
             run.lag_over_limit |= meta.ratings.max_current_a.is_some_and(|c| run.lagged_a > c);
-            let hot = meta.derating.hottest();
-            if let Some(hot) = hot.filter(|h| !self.ambient_given && *h > self.ambient_c) {
-                let (hot_a, hot_w) = derated(&meta, theta_ja, hot, package_w);
-                let over = |v: f64, l: Option<f64>| {
-                    l.is_some_and(|l| v > l * (1.0 + OVER_LIMIT_NOISE_MARGIN))
-                };
-                let flips = |v, now, hot| over(v, hot) && !over(v, now);
-                run.hot_flip |= flips(op.current_a, meta.ratings.max_current_a, hot_a)
-                    || flips(op.power_w, meta.ratings.max_power_w, hot_w);
+            if let Some(c) = meta
+                .ratings
+                .max_current_a
+                .filter(|c| run.peak_vs_limit.is_none_or(|(p, l)| peak_a / c > p / l))
+            {
+                run.peak_vs_limit = Some((peak_a, c));
             }
+            run.hot_flip |= hot_flip;
+            run.theta_flip |= theta_flip;
             let mut checks = build_checks(&meta, op, peak_a, rated_w);
 
             // Thermal: turn the package's pooled dissipation into a
@@ -1641,14 +1663,16 @@ fn operating_point(
 }
 
 /// A card's current and power limits read off its printed rows at ambient
-/// `ta_c` with the package dissipating `package_w`: TA rows at the ambient, TC
-/// rows at the case (Tj less `P * theta_JC`, or Tj itself, an upper bound, when
-/// the card has no `theta_JC`), TJ rows at Tj. `None` where no row is tagged.
+/// `ta_c` with the package dissipating `package_w`, falling to zero at
+/// `tj_max_c` past the hottest row: TA rows at the ambient, TC rows at the case
+/// (Tj less `P * theta_JC`, or Tj itself, an upper bound, when the card has no
+/// `theta_JC`), lead, board and TJ rows at Tj. `None` where no row is tagged.
 fn derated(
     meta: &DeviceMeta,
     theta_ja: f64,
     ta_c: f64,
     package_w: f64,
+    tj_max_c: f64,
 ) -> (Option<f64>, Option<f64>) {
     let tj = crate::thermal::junction_temp_c(ta_c, package_w, theta_ja);
     let jc = meta.ratings.theta_jc_c_per_w;
@@ -1656,11 +1680,10 @@ fn derated(
     let at = |r| match r {
         TempRef::Ambient => ta_c,
         TempRef::Case => tc,
-        TempRef::Junction => tj,
+        TempRef::Lead | TempRef::Junction => tj,
     };
-    let tj_max = meta.ratings.max_junction_temp_c.unwrap_or(ASSUMED_TJ_MAX_C);
     let d = &meta.derating;
-    (d.current.limit(at, tj_max), d.power.limit(at, tj_max))
+    (d.current.limit(at, tj_max_c), d.power.limit(at, tj_max_c))
 }
 
 /// One limit check: value vs limit, flagged surge or continuous.

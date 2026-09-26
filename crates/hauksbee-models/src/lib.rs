@@ -865,6 +865,7 @@ impl ModelLibrary {
             // Taken before compiling so provenance is carried once, by
             // `ModelSource`, not also inside the compiled entry. Builtin cards
             // skip `validate` above, so their source is checked here too.
+            entry.derating = derating::Derating::of(&entry);
             let mut declaration = entry.source.take();
             if let Some(Err(e)) = declaration.as_ref().map(schema::ModelSourceSpec::validate) {
                 return Err(invalid(format!("[models.source]: {e}")));

@@ -509,7 +509,7 @@ pub fn check(
     code_path: &Path,
     seconds: f64,
     destructive: bool,
-    ambient: f64,
+    ambient: Option<f64>,
     json: bool,
 ) -> anyhow::Result<()> {
     let opts = CheckOptions {
@@ -551,6 +551,7 @@ fn check_json(r: &crate::boardcode::CheckReport) -> String {
         "components": r.component_count,
         "nets": r.net_count,
         "resolved_fraction": r.resolved_fraction,
+        "assumptions": r.assumptions,
         "unresolved": r
             .unresolved
             .iter()

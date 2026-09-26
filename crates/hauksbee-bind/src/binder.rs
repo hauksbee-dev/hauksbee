@@ -838,7 +838,7 @@ fn gather_device_meta(
                 CompInfo {
                     kind: m.kind,
                     ratings: m.ratings.clone(),
-                    derating: hauksbee_models::derating::Derating::of(&m),
+                    derating: m.derating.clone(),
                     footprint: comp.footprint.clone(),
                 },
             );

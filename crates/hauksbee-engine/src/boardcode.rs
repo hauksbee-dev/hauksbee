@@ -60,6 +60,9 @@ pub struct CheckReport {
     /// result on their nets is incomplete, naming them makes "N% resolved"
     /// actionable instead of a bare number.
     pub unresolved: Vec<(String, String)>,
+    /// What a clean result rests on without evidence: a defaulted ambient that
+    /// decides a temperature-dependent rating, a Tj,max taken from the package.
+    pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
 }
 
 impl CheckReport {
@@ -76,8 +79,9 @@ pub struct CheckOptions {
     /// Run the stress monitor in destructive mode (parts can be destroyed).
     pub destructive: bool,
     /// Ambient temperature (C) for the steady-state junction-temperature
-    /// estimate. Defaults to [`crate::thermal::DEFAULT_AMBIENT_C`] (25 C).
-    pub ambient_c: f64,
+    /// estimate and temperature-dependent ratings. `None` runs at
+    /// [`crate::thermal::DEFAULT_AMBIENT_C`] (25 C), disclosed where it decides a rating.
+    pub ambient_c: Option<f64>,
 }
 
 impl Default for CheckOptions {
@@ -85,7 +89,7 @@ impl Default for CheckOptions {
         Self {
             seconds: 0.2,
             destructive: false,
-            ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
+            ambient_c: None,
         }
     }
 }
@@ -246,7 +250,10 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         controls.destructive_faults = true;
         engine.set_controls(controls);
     }
-    engine.scheduler_mut().set_ambient_c(opts.ambient_c);
+    match opts.ambient_c {
+        Some(ambient) => engine.scheduler_mut().set_ambient_c(ambient),
+        None => engine.scheduler_mut().stress.ambient_c = crate::thermal::DEFAULT_AMBIENT_C,
+    }
 
     // Headless co-sim, collecting faults each frame.
     let frame_dt = 1.0 / 1000.0;
@@ -290,6 +297,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         faults,
         active_nets,
         unresolved,
+        assumptions: sched.stress.rating_disclosures(),
     })
 }
 
@@ -346,6 +354,9 @@ pub fn render_check_report(r: &CheckReport) -> String {
     let _ = writeln!(s, "  simulated {:.3}s", r.simulated_seconds);
     if r.faults.is_empty() {
         let _ = writeln!(s, "  no faults: circuit is within ratings.");
+        for a in &r.assumptions {
+            let _ = writeln!(s, "    qualified: {} {}", a.statement(), a.consequence());
+        }
     } else {
         let _ = writeln!(s, "  {} fault(s):", r.faults.len());
         let _ = writeln!(
@@ -401,6 +412,7 @@ mod render_tests {
             faults: Vec::new(),
             active_nets: 5,
             unresolved: Vec::new(),
+            assumptions: Vec::new(),
         }
     }
 

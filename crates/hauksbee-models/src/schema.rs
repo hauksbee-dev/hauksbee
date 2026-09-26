@@ -153,6 +153,11 @@ pub struct ModelEntry {
     /// `[models.source]`: provenance tier, citations and declared uncertainty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ModelSourceSpec>,
+
+    /// The temperature curves read from `source`'s tagged rating rows, kept
+    /// when the library takes `source` into the resolution's provenance.
+    #[serde(skip)]
+    pub derating: crate::derating::Derating,
 }
 
 /// Declared executable scope of a model card.

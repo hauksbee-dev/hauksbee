@@ -5,7 +5,9 @@
 //! Between printed rows the limit is interpolated linearly, which sits on or
 //! below both the linear PD derating and the concave √-law ID derating. Past the
 //! hottest row it falls linearly to zero at Tj,max, never along the rows' own
-//! slope; below the coldest row it holds that row's value.
+//! slope; below the coldest row it holds that row's value. Rows that cannot be
+//! read as one continuous, non-rising curve leave the key to its scalar, the
+//! least favourable row.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -18,47 +20,63 @@ use crate::schema::{Characteristic, ModelEntry, Ratings};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TempRef {
     Ambient,
-    /// TC, and the case-like mounting-base, lead and solder-point temperatures.
+    /// TC and the mounting-base temperature, read at the case.
     Case,
+    /// Lead, solder-point, heatsink and board temperatures, read at Tj (an
+    /// upper bound): the card carries no thermal resistance to them.
+    Lead,
     Junction,
 }
 
-/// Tj,max a curve declines to past its hottest row when the card states none.
-pub const ASSUMED_TJ_MAX_C: f64 = 125.0;
-
 const NUM: &str = r"([-+]?\d+(?:\.\d+)?)\s*(?:°\s*C|℃|C\b)?";
-const SYM: &str = r"\bT\s*_?(?i:(amb|a|case|c|mb|l|sp|j))\b";
+const SYM: &str = r"\bT\s*_?(?i:(amb|a|case|c|mb|l|sp|sb|s|pcb|board|j))\b";
+const OP: &str = r"\s*(≤|<=|<|≥|>=|>)\s*";
 
 /// `TA = 25 °C`, `TC = 25 to 100 °C`, `TJ ≤ 150 °C`.
 static SYMBOL_FIRST: LazyLock<Regex> = LazyLock::new(|| {
-    let range = format!(r"(?:\s*(?:to|\.\.\.?|…|~|–|-)\s*{NUM})?");
-    Regex::new(&format!(r"{SYM}\s*(?:=|:|≤|<=|<)?\s*{NUM}{range}")).expect("a valid pattern")
+    let range = format!(r"(?:\s*(?:to|\.\.\.?|…|~)\s*{NUM})?");
+    let op = r"\s*(=|:|≤|<=|<|≥|>=|>)?\s*";
+    Regex::new(&format!(r"{SYM}{op}{NUM}{range}")).expect("a valid pattern")
 });
-/// `−40 °C ≤ TA ≤ 85 °C`.
+/// `−40 °C ≤ TA ≤ 85 °C`, `25 °C ≤ TA`.
 static RANGE_FIRST: LazyLock<Regex> = LazyLock::new(|| {
-    let le = r"\s*(?:≤|<=|<)\s*";
-    Regex::new(&format!(r"{NUM}{le}{SYM}{le}{NUM}")).expect("a valid pattern")
+    Regex::new(&format!(r"{NUM}{OP}{SYM}(?:{OP}{NUM})?")).expect("a valid pattern")
 });
+/// A pulsed or time-limited row: `tp = 10 µs`, `t ≤ 10 s`, `duty cycle`, `single pulse`.
+static PULSED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\btp\b|\bt\s*[≤<=]|(?i:duty|pulse)").expect("a valid pattern"));
 
 /// The reference and signed span (lo <= hi, °C) of the temperature a row's
 /// conditions name; a single temperature is a span of one point.
+///
+/// TA or TC wins over a junction temperature named beside it, and a junction
+/// inequality (`TJ ≤ 175 °C`) is the part's bound, not the row's temperature.
 #[must_use]
 pub fn temp_span(conditions: &str) -> Option<(TempRef, f64, f64)> {
-    let text = conditions.replace('−', "-");
-    let (sym, lo, hi) = if let Some(c) = RANGE_FIRST.captures(&text) {
-        (c.get(2)?, c.get(1)?, c.get(3))
-    } else {
-        let c = SYMBOL_FIRST.captures(&text)?;
-        (c.get(1)?, c.get(2)?, c.get(3))
-    };
-    let reference = match sym.as_str().to_ascii_lowercase().as_str() {
-        "a" | "amb" => TempRef::Ambient,
-        "j" => TempRef::Junction,
-        _ => TempRef::Case,
-    };
-    let lo: f64 = lo.as_str().parse().ok()?;
-    let hi: f64 = hi.map_or(Ok(lo), |h| h.as_str().parse()).ok()?;
-    Some((reference, lo.min(hi), lo.max(hi)))
+    let text = conditions.replace(['−', '–', '‒'], "-");
+    let range_first =
+        (RANGE_FIRST.captures_iter(&text)).map(|c| [c.get(3), c.get(1), c.get(5), c.get(2)]);
+    let symbol_first =
+        (SYMBOL_FIRST.captures_iter(&text)).map(|c| [c.get(1), c.get(3), c.get(4), c.get(2)]);
+    let spans = range_first
+        .chain(symbol_first)
+        .filter_map(|[sym, lo, hi, op]| {
+            let reference = match sym?.as_str().to_ascii_lowercase().as_str() {
+                "a" | "amb" => TempRef::Ambient,
+                "c" | "case" | "mb" => TempRef::Case,
+                "j" => TempRef::Junction,
+                _ => TempRef::Lead,
+            };
+            let bound = op.is_some_and(|o| !matches!(o.as_str(), "=" | ":"));
+            let lo: f64 = lo?.as_str().parse().ok()?;
+            let hi: f64 = hi.map_or(Some(lo), |h| h.as_str().parse().ok())?;
+            (reference != TempRef::Junction || !bound).then_some((
+                reference,
+                lo.min(hi),
+                lo.max(hi),
+            ))
+        });
+    spans.min_by_key(|s| s.0 == TempRef::Junction)
 }
 
 /// Whether `key` names a `[models.ratings]` key.
@@ -85,14 +103,13 @@ pub fn rating_value(key: &str, row: &Characteristic) -> Option<f64> {
     value.map(f64::abs)
 }
 
-/// The least favourable of two values of `key`: the lower ceiling, else the
-/// higher (a thermal resistance, a regulation floor, a gate threshold).
-#[must_use]
-pub fn worse(key: &str, a: f64, b: f64) -> f64 {
+/// `v` of `key` ordered so that lower is less favourable: a ceiling as is, a
+/// thermal resistance negated.
+fn rank(key: &str, v: f64) -> f64 {
     if key.starts_with("max_") {
-        a.min(b)
+        v
     } else {
-        a.max(b)
+        -v
     }
 }
 
@@ -101,44 +118,64 @@ pub fn worse(key: &str, a: f64, b: f64) -> f64 {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Curve(pub Vec<(TempRef, Vec<(f64, f64)>)>);
 
-/// `key`'s curve from the card's rows tagged `rating = key`.
-///
-/// Rows whose package and mounting match are kept (an untagged side matches
-/// anything). A row naming no temperature is read at the datasheet default,
-/// TA = 25 °C.
-#[must_use]
-pub fn curve(
-    entry: &ModelEntry,
-    key: &str,
-    package: Option<&str>,
-    mounting: Option<&str>,
-) -> Curve {
-    let fits = |want: Option<&str>, has: &Option<String>| {
-        want.is_none_or(|w| has.as_deref().is_none_or(|h| h == w))
-    };
+/// `key`'s rows tagged `rating = key` as a curve, with every reason they cannot
+/// be trusted as one: a row with no readable temperature or value, a pulsed
+/// row, a group that rises with temperature.
+fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
+    let (mut problems, mut groups) = (Vec::new(), BTreeMap::<_, Vec<(f64, f64)>>::new());
     let rows = entry.source.iter().flat_map(|s| &s.characteristic);
-    let rows = rows.filter(|r| r.rating.as_deref() == Some(key));
-    let mut groups: BTreeMap<_, Vec<(f64, f64)>> = BTreeMap::new();
-    for row in rows.filter(|r| fits(package, &r.package) && fits(mounting, &r.mounting)) {
-        let Some(v) = rating_value(key, row) else {
-            continue;
-        };
-        let (at, lo, hi) = temp_span(&row.conditions).unwrap_or((TempRef::Ambient, 25.0, 25.0));
-        let points = groups.entry((at, &row.package, &row.mounting)).or_default();
-        points.extend([(lo, v), (hi, v)]);
+    for row in rows.filter(|r| r.rating.as_deref() == Some(key)) {
+        let what = format!("characteristic '{}' (rating = \"{key}\")", row.parameter);
+        let (span, value) = (temp_span(&row.conditions), rating_value(key, row));
+        if span.is_none() {
+            problems.push(format!(
+                "{what}: name its temperature in conditions (TA, TC or TJ = ... °C)"
+            ));
+        }
+        if value.is_none() {
+            problems.push(format!(
+                "{what}: its unit or columns cannot be read as {key}"
+            ));
+        }
+        if key.starts_with("max_") && PULSED.is_match(&row.conditions) {
+            problems.push(format!(
+                "{what}: a pulsed or time-limited row is no continuous rating; leave it untagged"
+            ));
+        }
+        if let (Some((at, lo, hi)), Some(v)) = (span, value) {
+            let points = groups.entry((at, &row.package, &row.mounting)).or_default();
+            points.extend([(lo, v), (hi, v)]);
+        }
     }
-    Curve(
-        groups
-            .into_iter()
+    let curve = Curve(
+        (groups.into_iter())
             .map(|((at, ..), mut points)| {
                 // Two rows at one temperature: keep the least favourable.
-                let rank = |v: f64| if key.starts_with("max_") { v } else { -v };
-                points.sort_by(|a, b| a.0.total_cmp(&b.0).then(rank(a.1).total_cmp(&rank(b.1))));
+                points.sort_by(|a, b| {
+                    a.0.total_cmp(&b.0)
+                        .then(rank(key, a.1).total_cmp(&rank(key, b.1)))
+                });
                 points.dedup_by(|later, kept| later.0.total_cmp(&kept.0).is_eq());
                 (at, points)
             })
             .collect(),
-    )
+    );
+    if (curve.0.iter()).any(|(_, p)| p.windows(2).any(|w| rank(key, w[1].1) > rank(key, w[0].1))) {
+        problems.push(format!("rating = \"{key}\" rows rise with temperature: tag only rows printed under one set of conditions (one VGS, continuous)"));
+    }
+    (curve, problems)
+}
+
+/// `key`'s curve from the card's tagged rows; empty, leaving the key to its
+/// scalar, when no row is tagged or any tagged row cannot be read as the curve.
+#[must_use]
+pub fn curve(entry: &ModelEntry, key: &str) -> Curve {
+    let (curve, problems) = read_rows(entry, key);
+    if problems.is_empty() {
+        curve
+    } else {
+        Curve::default()
+    }
 }
 
 impl Curve {
@@ -185,54 +222,42 @@ impl Derating {
     #[must_use]
     pub fn of(entry: &ModelEntry) -> Self {
         Self {
-            current: curve(entry, "max_current_a", None, None),
-            power: curve(entry, "max_power_w", None, None),
+            current: curve(entry, "max_current_a"),
+            power: curve(entry, "max_power_w"),
         }
     }
 
     /// The hottest temperature (°C) either curve is printed at.
     #[must_use]
     pub fn hottest(&self) -> Option<f64> {
-        self.current
-            .hottest()
-            .into_iter()
+        (self.current.hottest().into_iter())
             .chain(self.power.hottest())
             .reduce(f64::max)
     }
 }
 
-/// Every problem with the card's `rating`-tagged rows.
-///
-/// These are a key that is no rating, a row naming neither a temperature nor a
-/// package or mounting, a value that cannot be read as its key, and a scalar
-/// that is not the least favourable row.
+/// Every problem with the card's `rating`-tagged rows: a key that is no
+/// rating, rows [`curve`] cannot read, and a scalar that is not the least
+/// favourable row.
 #[must_use]
 pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
     let scalars = toml::Table::try_from(&entry.ratings).unwrap_or_default();
-    let (mut out, mut least) = (Vec::new(), BTreeMap::<&str, f64>::new());
-    for row in entry.source.iter().flat_map(|s| &s.characteristic) {
-        let Some(key) = row.rating.as_deref() else {
+    let rows = entry.source.iter().flat_map(|s| &s.characteristic);
+    let mut keys: Vec<&str> = rows.filter_map(|r| r.rating.as_deref()).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut out = Vec::new();
+    for key in keys {
+        if !is_rating_key(key) {
+            out.push(format!("rating = \"{key}\" is not a [models.ratings] key"));
+            continue;
+        }
+        let (curve, problems) = read_rows(entry, key);
+        out.extend(problems);
+        let values = curve.0.iter().flat_map(|(_, p)| p.iter().map(|p| p.1));
+        let Some(worst) = values.min_by(|a, b| rank(key, *a).total_cmp(&rank(key, *b))) else {
             continue;
         };
-        let what = format!("characteristic '{}' (rating = \"{key}\")", row.parameter);
-        if !is_rating_key(key) {
-            out.push(format!("{what}: '{key}' is not a [models.ratings] key"));
-            continue;
-        }
-        if temp_span(&row.conditions).is_none() && row.package.is_none() && row.mounting.is_none() {
-            out.push(format!("{what}: name its temperature in conditions (TA, TC or TJ = ... °C), or its package or mounting"));
-        }
-        match rating_value(key, row) {
-            Some(v) => {
-                let worst = least.get(key).map_or(v, |w| worse(key, *w, v));
-                least.insert(key, worst);
-            }
-            None => out.push(format!(
-                "{what}: its unit or columns cannot be read as {key}"
-            )),
-        }
-    }
-    for (key, worst) in least {
         let scalar = scalars.get(key).and_then(toml::Value::as_float);
         if scalar.is_none_or(|s| (s - worst).abs() > 1e-9 * worst.abs()) {
             out.push(format!("ratings.{key} must be {worst}, the least favourable of its tagged rows: the scalar is the fallback, and Hauksbee reads the tagged rows at the scenario's temperature"));
@@ -245,24 +270,37 @@ pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn span(text: &str) -> Option<(TempRef, f64, f64)> {
-        temp_span(text)
-    }
-
     #[test]
     fn temperatures_are_read_signed_with_their_reference() {
-        use TempRef::{Ambient, Case, Junction};
-        assert_eq!(span("TA = 70 °C, VGS = 10 V"), Some((Ambient, 70.0, 70.0)));
-        assert_eq!(span("Tamb = −40 °C"), Some((Ambient, -40.0, -40.0)));
-        assert_eq!(span("TC=100°C"), Some((Case, 100.0, 100.0)));
-        assert_eq!(span("Tmb = 25 C"), Some((Case, 25.0, 25.0)));
-        assert_eq!(span("TJ = −40 to 125 °C"), Some((Junction, -40.0, 125.0)));
-        assert_eq!(span("−40 °C ≤ TA ≤ 85 °C"), Some((Ambient, -40.0, 85.0)));
-        assert_eq!(span("VGS = −10 V, ID = −3 A"), None);
+        use TempRef::{Ambient, Case, Junction, Lead};
+        let cases = [
+            ("TA = 70 °C, VGS = 10 V", Some((Ambient, 70.0, 70.0))),
+            ("Tamb = −40 °C", Some((Ambient, -40.0, -40.0))),
+            ("TA = –40 °C", Some((Ambient, -40.0, -40.0))),
+            ("TC=100°C", Some((Case, 100.0, 100.0))),
+            ("Tmb = 25 C", Some((Case, 25.0, 25.0))),
+            ("Tsp = 25 °C", Some((Lead, 25.0, 25.0))),
+            ("TPCB = 70 °C", Some((Lead, 70.0, 70.0))),
+            ("TJ = −40 to 125 °C", Some((Junction, -40.0, 125.0))),
+            ("−40 °C ≤ TA ≤ 85 °C", Some((Ambient, -40.0, 85.0))),
+            ("25 °C ≤ TA", Some((Ambient, 25.0, 25.0))),
+            ("TA ≥ 85 °C", Some((Ambient, 85.0, 85.0))),
+            ("TJ ≤ 175 °C, TC = 25 °C", Some((Case, 25.0, 25.0))),
+            ("TA = 25 °C -10 V", Some((Ambient, 25.0, 25.0))),
+            ("TJ ≤ 175 °C", None),
+            ("−55 °C ≤ TJ ≤ 150 °C", None),
+            ("VGS = −10 V, ID = −3 A", None),
+        ];
+        for (text, want) in cases {
+            assert_eq!(temp_span(text), want, "{text}");
+        }
     }
 
-    fn card(rows: &[(&str, f64, &str)]) -> ModelEntry {
-        let rows = rows.iter().map(|(key, v, at)| format!("[[models.source.characteristic]]\nparameter = \"row\"\nrating = \"{key}\"\nmax = {v}\nunit = \"A\"\nconditions = \"{at}\"\nbasis = \"b\"\n")).collect::<Vec<_>>().concat();
+    fn card(rows: &[(f64, &str)]) -> ModelEntry {
+        let row = |(v, at): &(f64, &str)| {
+            format!("[[models.source.characteristic]]\nparameter = \"ID\"\nrating = \"max_current_a\"\nmax = {v}\nunit = \"A\"\nconditions = \"{at}\"\nbasis = \"b\"\n")
+        };
+        let rows = rows.iter().map(row).collect::<Vec<_>>().concat();
         let text = format!("[[models]]\nid = \"q\"\nkind = \"nmos\"\ndescription = \"d\"\n[models.ratings]\nmax_current_a = 4.7\n[models.source]\ntier = \"datasheet-derived\"\n{rows}");
         let db: crate::schema::DbFile = toml::from_str(&text).expect("a card");
         db.models.into_iter().next().expect("one card")
@@ -270,10 +308,7 @@ mod tests {
 
     #[test]
     fn rows_interpolate_hold_below_and_fall_to_zero_at_tj_max() {
-        let entry = card(&[
-            ("max_current_a", 5.7, "TA = 25 °C"),
-            ("max_current_a", 4.7, "TA = 70 °C"),
-        ]);
+        let entry = card(&[(5.7, "TA = 25 °C"), (4.7, "TA = 70 °C")]);
         let c = Derating::of(&entry).current;
         // Held below the coldest row, linear between rows, and past the
         // hottest row to zero at Tj,max (150 C here), not along the rows' slope.
@@ -294,18 +329,42 @@ mod tests {
     }
 
     #[test]
-    fn tagged_rows_are_validated() {
-        let hot_scalar = card(&[("max_current_a", 5.7, "TA = 25 °C")]);
-        assert!(tag_problems(&hot_scalar)[0].contains("must be 5.7"));
-        let bad = card(&[
-            ("max_current_a", 4.7, "VGS = 10 V"),
-            ("max_amps", 1.0, "TA = 25 °C"),
-        ]);
-        let found = tag_problems(&bad);
-        assert!(
-            found[0].contains("name its temperature")
-                && found[1].contains("not a [models.ratings] key"),
-            "{found:?}"
-        );
+    fn rows_that_are_not_one_falling_continuous_curve_are_refused() {
+        let cases: [(&[(f64, &str)], &str); 5] = [
+            (&[(5.7, "TA = 25 °C")], "must be 5.7"),
+            (&[(4.7, "VGS = 10 V")], "name its temperature"),
+            (
+                &[(4.7, "TA = 25 °C"), (5.0, "TA = 70 °C, t ≤ 10 s")],
+                "pulsed",
+            ),
+            (
+                &[(4.7, "TA = 25 °C"), (4.9, "TA = 70 °C")],
+                "rise with temperature",
+            ),
+            (
+                &[
+                    (4.7, "VGS = 4.5 V, TA = 25 °C"),
+                    (5.7, "VGS = 10 V, TA = 25 °C"),
+                    (4.9, "VGS = 10 V, TA = 70 °C"),
+                ],
+                "rise with temperature",
+            ),
+        ];
+        for (rows, want) in cases {
+            let entry = card(rows);
+            let found = tag_problems(&entry);
+            assert!(
+                found.iter().any(|p| p.contains(want)),
+                "{rows:?}: {found:?}"
+            );
+            let refused = !found.iter().all(|p| p.contains("must be"));
+            assert!(
+                !refused || Derating::of(&entry).current.0.is_empty(),
+                "{rows:?} still read as a curve"
+            );
+        }
+        let mut odd = card(&[(4.7, "TA = 25 °C")]);
+        odd.source.as_mut().expect("source").characteristic[0].rating = Some("max_amps".into());
+        assert!(tag_problems(&odd)[0].contains("not a [models.ratings] key"));
     }
 }

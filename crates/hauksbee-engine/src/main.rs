@@ -1389,16 +1389,16 @@ struct CheckCodeArgs {
     destructive: bool,
 
     /// Ambient temperature (C) for the steady-state junction-temperature
-    /// estimate (Tj = Tambient + P * theta_JA). Default 25 C.
+    /// estimate (Tj = Tambient + P * theta_JA) and temperature-dependent
+    /// ratings. Default 25 C.
     #[arg(
         long,
-        default_value_t = 25.0,
         value_name = "C",
         value_parser = parse_ambient,
         allow_negative_numbers = true,
         help_heading = "Advanced / analyses"
     )]
-    ambient: f64,
+    ambient: Option<f64>,
 
     /// Emit the check as one JSON object ({"ok","board","components","nets",
     /// "resolved_fraction","unresolved","simulated_seconds","active_nets",

@@ -2236,6 +2236,14 @@ fn run_web_cosim_with_bound(
             ),
         );
     }
+    // A temperature-dependent rating decided by the ambient nobody stated, or
+    // read past its hottest row on a package-guessed Tj,max.
+    for a in sched.stress.rating_disclosures() {
+        findings.insert(
+            0,
+            WebFinding::unplaced("note", a.statement(), a.because(), a.replacement()),
+        );
+    }
     // Chip-substitution: the firmware was emulated on a less-specific core.
     for sub in sched.substitutions() {
         findings.insert(
