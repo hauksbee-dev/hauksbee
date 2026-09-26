@@ -127,7 +127,7 @@ fn rc_tc1(tc1: Option<f64>) -> Circuit {
 fn run_out(c: &Circuit, opts: SolverOptions, tstop: f64) -> (Vec<f64>, Vec<f64>) {
     let wf = Transient::new(opts).run(c, tstop).unwrap();
     let out = wf.node(c, "out").expect("out node").to_vec();
-    (wf.time.clone(), out)
+    (wf.time, out)
 }
 
 /// Bug-hunt #4: a `tc1` resistor classified into a linear island must be
@@ -278,7 +278,7 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
 /// changes h at almost every step (growth factor up to 2x), so the 2nd-order
 /// stencil was applied to unequally spaced history and silently degraded to
 /// FIRST order exactly where Gear2 is selected. The fix threads the previous
-/// accepted step into the coefficients (variable-step BDF2, r = h/h_prev; the
+/// accepted step into the coefficients (variable-step BDF2, r = `h/h_prev`; the
 /// derivation and order proof live in stamp.rs unit tests). Black-box gate:
 /// an adaptive-step Gear2 RC charge must track the analytic exponential to
 /// the controller's accuracy class across the whole waveform, not just at the
@@ -386,7 +386,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
     // the island would hold v(d) dead flat for the whole march; the live SIN
     // swings it by over a volt peak-to-peak.
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    for &v in w_auto.iter() {
+    for &v in w_auto {
         lo = lo.min(v);
         hi = hi.max(v);
     }

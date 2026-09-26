@@ -57,6 +57,7 @@
 //! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
@@ -120,16 +121,16 @@ pub struct StagedResult {
 /// principle, because a strategy that CAN fire changes results when removed.
 ///
 /// Strategies deliberately NOT trimmed, and why the structural bar fails:
-/// - TransientDyn: arming is unconditional at march start (branch series
+/// - `TransientDyn`: arming is unconditional at march start (branch series
 ///   regularizers change the stamps of every branch-bearing island), so it
 ///   always "fires" when granted.
-/// - DynamicPivot / DynamicPivotEveryStep: a permission consulted only when
+/// - `DynamicPivot` / `DynamicPivotEveryStep`: a permission consulted only when
 ///   the frozen-order LU fails. On a fully-linear island an EXACTLY singular
 ///   static matrix fails both orderings identically (rank deficiency is
 ///   order-independent), but the threshold row-pivoting can reject a
 ///   near-singular pivot under one ordering and accept it under another, so
 ///   "frozen fails => dynamic fails" is not provable and the trim is refused.
-/// - Ptc / ResidualAccept: the staged-DC rescue rungs are meaningful on any
+/// - Ptc / `ResidualAccept`: the staged-DC rescue rungs are meaningful on any
 ///   island that reaches the staged fallback, regardless of device mix.
 fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
     let mut opts = *caller;
@@ -151,12 +152,19 @@ fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
     // backsolve and RETURNS before the line-search block exists, so the grant
     // is structurally unreachable. (Uses the SAME predicate Workspace::new
     // uses to set ws.linear, so the two cannot disagree.)
-    if sub.devices.iter().all(|d| d.is_linear()) {
+    if sub.devices.iter().all(Device::is_linear) {
         opts.ladder = opts.ladder.without(Strategy::LineSearch);
     }
     opts
 }
 
+/// Run a sound decomposition group by group on the capture/replay grid.
+///
+/// # Errors
+///
+/// Refuses an unsound decomposition, exogenous boundaries and adaptive step
+/// control; otherwise propagates a group's solve failure after escalation.
+#[allow(clippy::too_many_lines)] // the ordered group schedule, one arm per executor
 pub fn run_staged(
     circuit: &Circuit,
     decomp: &Decomposition,
@@ -188,15 +196,11 @@ pub fn run_staged(
             names.join(", ")
         )));
     }
-    let dt = match opts.step {
-        StepControl::Fixed { dt } => dt,
-        _ => {
-            return Err(SolveError::refused(
-                "staged execution requires fixed step control: the capture grid is the step \
-                 grid, and an adaptive run has no grid whose error the certificate could state",
-            ))
-        }
-    };
+    let dt = super::fixed_dt(
+        opts,
+        "staged execution requires fixed step control: the capture grid is the step \
+         grid, and an adaptive run has no grid whose error the certificate could state",
+    )?;
 
     // Sub-circuits are solved with the reference monolithic engine: Off is
     // bit-identical to the classic solver, so each group's answer carries no
@@ -391,40 +395,37 @@ pub fn run_staged(
                         &mut refusals,
                     )?
                 };
-                match exec {
-                    Some(exec) => {
-                        // Certificate: one record per boundary, and every one
-                        // joins the supply-integrity refusal (balanced, held,
-                        // and signal alike: all are pinned or re-grouped nodes
-                        // whose loading questions beyond the record's claim
-                        // must be refused; pinning removed the sag they ask
-                        // about).
-                        for o in &exec.outcomes {
-                            let gnode = NodeId(l2g[&o.node.0]);
-                            certificate_stiff.push(boundary_tear_record(o, gnode));
-                            certificate_refused_nodes.push(gnode);
-                            stiff_outcomes.push((
-                                g,
-                                StiffOutcome {
-                                    node: gnode,
-                                    ..o.clone()
-                                },
-                            ));
-                        }
-                        stiff_run = Some(exec.waveforms);
-                        torn_groups.push(g);
+                if let Some(exec) = exec {
+                    // Certificate: one record per boundary, and every one
+                    // joins the supply-integrity refusal (balanced, held,
+                    // and signal alike: all are pinned or re-grouped nodes
+                    // whose loading questions beyond the record's claim
+                    // must be refused; pinning removed the sag they ask
+                    // about).
+                    for o in &exec.outcomes {
+                        let gnode = NodeId(l2g[&o.node.0]);
+                        certificate_stiff.push(boundary_tear_record(o, gnode));
+                        certificate_refused_nodes.push(gnode);
+                        stiff_outcomes.push((
+                            g,
+                            StiffOutcome {
+                                node: gnode,
+                                ..o.clone()
+                            },
+                        ));
                     }
-                    None => {
-                        // The refusal summary rides into any later fused-path
-                        // error: three flagship runs could not see WHY the
-                        // mega group fell through, because the fused DC error
-                        // masked the stiff refusal that caused it.
-                        stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
-                        stiff_outcomes.extend(refusals.into_iter().map(|o| {
-                            let gnode = NodeId(l2g[&o.node.0]);
-                            (g, StiffOutcome { node: gnode, ..o })
-                        }));
-                    }
+                    stiff_run = Some(exec.waveforms);
+                    torn_groups.push(g);
+                } else {
+                    // The refusal summary rides into any later fused-path
+                    // error: three flagship runs could not see WHY the
+                    // mega group fell through, because the fused DC error
+                    // masked the stiff refusal that caused it.
+                    stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
+                    stiff_outcomes.extend(refusals.into_iter().map(|o| {
+                        let gnode = NodeId(l2g[&o.node.0]);
+                        (g, StiffOutcome { node: gnode, ..o })
+                    }));
                 }
             }
 
@@ -435,7 +436,7 @@ pub fn run_staged(
                     // says only "group 3" costs another half-hour run to
                     // learn what group 3 is. Devices and a name sample turn
                     // the next failure into a standalone fixture.
-                    let sample: Vec<&str> = sub.devices.iter().take(6).map(|d| d.name()).collect();
+                    let sample: Vec<&str> = sub.devices.iter().take(6).map(Device::name).collect();
                     let stiff_note = if stiff_refusal_note.is_empty() {
                         String::new()
                     } else {
@@ -504,7 +505,7 @@ pub fn run_staged(
             owner = consumers[0];
         }
         let (wf, g2l) = &runs[&owner];
-        let Some(&ln) = g2l.get(&(node as u32)) else {
+        let Some(&ln) = g2l.get(&crate::node_id(node).0) else {
             continue;
         };
         waveforms.node_voltages[node] = resample(wf, ln as usize, &grid);
@@ -570,7 +571,7 @@ fn solve_group(
 ) -> SolveResult<(Waveforms, bool, bool)> {
     if !imposed.is_empty() {
         let part = Partition::analyze_imposing_tears(sub, imposed);
-        if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
+        if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, &part) {
             let torn = Waveforms::collect_nodes(sub.node_count(), |sink| {
                 engine.run_streaming(sub, tstop, sink)
             });
@@ -614,7 +615,7 @@ fn solve_group(
                 // A non-fixed run reached here only if run_staged's own guard
                 // were bypassed; keep the original error rather than invent a
                 // window with no grid.
-                _ => return Err(e),
+                StepControl::Adaptive { .. } => return Err(e),
             };
             // A LADDER of ramp windows, quasi-static first, step-like last.
             // Provenance: the flagship's group 2 died at t=134us of a 200us
@@ -638,9 +639,10 @@ fn solve_group(
                 match Transient::new(ramp_opts).run(&ramped_sub, tstop) {
                     Ok(wf) => return Ok((wf, false, true)),
                     Err(e2) => {
-                        errors.push_str(&format!(
+                        let _ = write!(
+                            errors,
                             "; power-ramp retry (window {ramp_window:.3e}s) also failed: {e2}"
-                        ));
+                        );
                     }
                 }
             }
@@ -655,7 +657,7 @@ fn solve_group(
 /// power-on retry so a DC-unreachable group starts from zero and ramps up.
 pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
     let mut c = sub.clone();
-    for dev in c.devices.iter_mut() {
+    for dev in &mut c.devices {
         match dev {
             Device::Vsource { name, kind, .. } => {
                 // Replay pins carry a CERTIFIED upstream waveform: real,
@@ -691,7 +693,7 @@ pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
 ///   nothing was measured, so the record says `Stiff`/`AssumedFeedHold`/
 ///   `Unmeasured`, an assumption on the supply leg's stiffness, not a proof.
 /// * `Signal`: the relaxation's measured sag, as the stiff executor records.
-fn boundary_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
+const fn boundary_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
     match o.kind {
         BoundaryKind::BalancedRail => TearRecord {
             node,
@@ -763,7 +765,7 @@ fn remap_tear(
     Some(RailTear {
         rail,
         feed,
-        shunt: DeviceId(shunt_pos as u32),
+        shunt: DeviceId(u32::try_from(shunt_pos).ok()?),
         r_shunt: c.shunt_ohms,
         extra_loads: Vec::new(),
     })
@@ -809,12 +811,15 @@ pub struct GroupDcProbe {
 }
 
 /// Diagnostic: enumerate the solve groups exactly as [`run_staged`] would and
-/// try ONLY each group's DC operating point. Exists because a failing group
+/// try ONLY each group's DC operating point.
+///
+/// Exists because a failing group
 /// deep inside a half-hour staged run is unidentifiable at acceptable cost
 /// without it (the flagship burned two runs learning that). Groups larger
 /// than `size_cap` are enumerated but not solved (the flagship's mega group
 /// is the known DC-collapse case and takes minutes to fail; probing it tells
 /// nothing new).
+#[must_use]
 pub fn probe_groups_dc(
     circuit: &Circuit,
     decomp: &Decomposition,
@@ -876,13 +881,14 @@ pub fn probe_groups_dc(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decompose::rails::TearMotive;
+    use crate::decompose::{rails::TearMotive, DriverPolicy, RailPolicy};
     use crate::options::RobustnessLadder;
     use crate::orchestrate::lerp_at;
     use crate::test_fixtures::{
         assert_matches_within_grid, cap, comparator, diode, fixed_opts, max_error, monolith,
         pnp_blocks, res, shunt_array, sw, swing, vdc, vpulse, GND,
     };
+    use hauksbee_ir::DiodeModel;
 
     /// The two structurally-justified ladder trims fire on the right island
     /// classes, everything else passes through, and an empty ladder stays empty.
@@ -912,7 +918,7 @@ mod tests {
 
         let mut dio = lin.clone();
         let c = dio.node("c");
-        diode(&mut dio, "D", b, c, Default::default());
+        diode(&mut dio, "D", b, c, DiodeModel::default());
         res(&mut dio, "R3", c, GND, 1e3);
         let sel = select_group_ladder(&dio, &full);
         assert!(sel.ladder.has(Strategy::LineSearch));
@@ -1082,7 +1088,7 @@ mod tests {
             &staged.waveforms.node_voltages,
             &mono,
             dt,
-            &|mv| 2.0 * (opts.reltol * mv.abs() + opts.vntol),
+            &|mv| 2.0 * opts.reltol.mul_add(mv.abs(), opts.vntol),
             "cascaded torn group",
         );
         // DC-settled: the final sample equals the monolith to round-off.
@@ -1097,7 +1103,7 @@ mod tests {
             assert!(
                 (sv - mv).abs() <= 1e-9,
                 "node {}: {sv:.12} vs {mv:.12}",
-                c.node_name(NodeId(node as u32))
+                c.node_name(crate::node_id(node))
             );
         }
         let vmid = staged.waveforms.final_node(&c, "MID").unwrap();
@@ -1143,7 +1149,7 @@ mod tests {
         let (dt, tstop) = (100e-9, 6e-6);
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         assert!(
-            d.balance_tears.iter().any(|t| t.torn()),
+            d.balance_tears.iter().any(BalanceTearCandidate::torn),
             "{:?}",
             d.balance_tears
         );
@@ -1209,7 +1215,7 @@ mod tests {
         );
     }
 
-    /// Analysis nominates cut nodes on a chain of BJT blocks, run_staged runs
+    /// Analysis nominates cut nodes on a chain of BJT blocks, `run_staged` runs
     /// the measured relaxation, the certificate carries Stiff records, and the
     /// result matches the monolith within the certificate's numbers.
     #[test]
@@ -1234,8 +1240,8 @@ mod tests {
         let d = Decomposition::analyze_with_boundaries(
             &c,
             TearMotive::Profit,
-            Default::default(),
-            Default::default(),
+            RailPolicy::default(),
+            DriverPolicy::default(),
             StiffPolicy {
                 min_block_devices: 2,
                 max_probes_per_block: 8,
@@ -1279,7 +1285,7 @@ mod tests {
     }
 
     /// What each [`BoundaryKind`] may claim, keyed on the structured kind and
-    /// never the prose note: a held rail is Stiff + AssumedFeedHold +
+    /// never the prose note: a held rail is Stiff + `AssumedFeedHold` +
     /// Unmeasured even with a doctored "balanced rail" note.
     #[test]
     fn composed_records_never_overclaim_a_held_rail() {

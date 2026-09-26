@@ -48,7 +48,7 @@ fn ic_uic_seeds_rc_initial_voltage_and_decays() {
     )
     .expect("transient runs");
     let v = out.column("V(out)").unwrap();
-    let t = out.time.clone().unwrap();
+    let t = out.time.unwrap();
 
     // Starts at the initial condition, not zero.
     assert!(

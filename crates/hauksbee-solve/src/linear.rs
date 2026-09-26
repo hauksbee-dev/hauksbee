@@ -57,9 +57,9 @@ pub struct LinearIsland {
     /// Current sources inside the island: extra input columns after the
     /// voltage inputs, evaluated by the caller per step (ZOH).
     isources: Vec<(DeviceId, NodeId, NodeId)>,
-    /// Continuous `A` (n_states x n_states), row-major.
+    /// Continuous `A` (`n_states` x `n_states`), row-major.
     a: Vec<f64>,
-    /// Continuous `B` (n_states x n_inputs), row-major.
+    /// Continuous `B` (`n_states` x `n_inputs`), row-major.
     b: Vec<f64>,
     /// Node id -> island-local free-node index, sized `n_nodes+1`.
     node_local: Vec<Option<usize>>,
@@ -70,8 +70,8 @@ pub struct LinearIsland {
     /// Sparse CSR of `A` (state coupling), for the matrix-free advance used on
     /// large islands where a dense `exp(A dt)` would be ruinous.
     a_sparse: Csr,
-    /// Sparse CSR of the free-node reconstruction `Sx` (n_free x n_states), used
-    /// for large islands so probing doesn't cost a dense n_free*n_states matvec.
+    /// Sparse CSR of the free-node reconstruction `Sx` (`n_free` x `n_states`), used
+    /// for large islands so probing doesn't cost a dense `n_free`*`n_states` matvec.
     sx_sparse: Rect,
     cache: Option<ExpCache>,
     /// Matrix-free propagator parameters, cached per dt (substep count + Taylor
@@ -93,7 +93,7 @@ struct Csr {
 }
 
 impl Csr {
-    fn from_dense(a: &[f64], n: usize) -> Csr {
+    fn from_dense(a: &[f64], n: usize) -> Self {
         let mut row_ptr = vec![0usize; n + 1];
         let mut col = Vec::new();
         let mut val = Vec::new();
@@ -107,7 +107,7 @@ impl Csr {
             }
             row_ptr[i + 1] = col.len();
         }
-        Csr {
+        Self {
             n,
             row_ptr,
             col,
@@ -151,7 +151,7 @@ struct Rect {
 }
 
 impl Rect {
-    fn from_dense(a: &[f64], rows: usize, cols: usize) -> Rect {
+    fn from_dense(a: &[f64], rows: usize, cols: usize) -> Self {
         let mut row_ptr = vec![0usize; rows + 1];
         let mut col = Vec::new();
         let mut val = Vec::new();
@@ -166,7 +166,7 @@ impl Rect {
             }
             row_ptr[i + 1] = col.len();
         }
-        Rect {
+        Self {
             rows,
             cols,
             row_ptr,
@@ -217,32 +217,38 @@ enum Slot {
 
 impl LinearIsland {
     /// Number of linear states (caps + inductors).
-    pub fn n_states(&self) -> usize {
+    #[must_use]
+    pub const fn n_states(&self) -> usize {
         self.states.len()
     }
 
     /// Number of free (solvable) nodes owned by this island.
-    pub fn n_free(&self) -> usize {
+    #[must_use]
+    pub const fn n_free(&self) -> usize {
         self.n_free
     }
 
     /// Input nodes, in `u` order.
+    #[must_use]
     pub fn inputs(&self) -> &[NodeId] {
         &self.inputs
     }
 
     /// Current sources whose values the caller must append to the input
     /// vector, in order, after the voltage inputs.
+    #[must_use]
     pub fn isources(&self) -> &[(DeviceId, NodeId, NodeId)] {
         &self.isources
     }
 
     /// Total input vector length: voltage inputs then current inputs.
-    pub fn n_inputs_total(&self) -> usize {
+    #[must_use]
+    pub const fn n_inputs_total(&self) -> usize {
         self.inputs.len() + self.isources.len()
     }
 
     /// The island-local index for a node, if it is a free node here.
+    #[must_use]
     pub fn local_of(&self, n: NodeId) -> Option<usize> {
         self.node_local.get(n.0 as usize).copied().flatten()
     }
@@ -266,12 +272,9 @@ impl LinearIsland {
     /// (`stamp::resistor_value`) or the fast path silently disagrees with the
     /// reference engine on every thermal sweep. Callers with temperature
     /// effects off pass TNOM (27), which makes the derating a no-op.
-    pub fn compile(
-        circuit: &Circuit,
-        island: &Island,
-        gmin: f64,
-        temp_c: f64,
-    ) -> Option<LinearIsland> {
+    #[must_use]
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)] // one reduction; matrix notation
+    pub fn compile(circuit: &Circuit, island: &Island, gmin: f64, temp_c: f64) -> Option<Self> {
         if !island.linear {
             return None;
         }
@@ -372,7 +375,7 @@ impl LinearIsland {
                 // and the only shape that survives perfect coupling. Modeling
                 // k < 1 groups in the reduction is a later optimization with
                 // its own exactness gate (the E/G precedent).
-                Device::Coupling { .. } => return None,
+                //
                 // Nonlinear / event-driven kinds cannot appear in a linear
                 // island (the `island.linear` gate above already returned
                 // `None`), but the match stays exhaustive so a future variant
@@ -380,7 +383,8 @@ impl LinearIsland {
                 // nonlinear by construction (`is_linear() == false` taints the
                 // island), so it can only reach this walk through that gate,
                 // and refusing is still the only honest answer here.
-                Device::Diode { .. }
+                Device::Coupling { .. }
+                | Device::Diode { .. }
                 | Device::Bjt { .. }
                 | Device::Mosfet { .. }
                 | Device::VSwitch { .. }
@@ -449,10 +453,8 @@ impl LinearIsland {
                 a, b, ohms, tc1, ..
             } = &circuit.devices[id.0 as usize]
             {
-                let r = match tc1 {
-                    Some(tc) => *ohms * (1.0 + tc * (temp_c - 27.0)),
-                    None => *ohms,
-                };
+                // Same fused form as `stamp::resistor_value`, so both paths agree bit-for-bit.
+                let r = tc1.map_or(*ohms, |tc| *ohms * tc.mul_add(temp_c - 27.0, 1.0));
                 // Non-positive resistance = SHORT (matching the interpreted
                 // stamp): clamp to the shared 1e-6 Ω floor and stamp a stiff
                 // conductance rather than skipping, which would silently turn
@@ -606,7 +608,7 @@ impl LinearIsland {
         let a_sparse = Csr::from_dense(&a_mat, n_states);
         let sx_sparse = Rect::from_dense(&sx, n_free, n_states);
 
-        Some(LinearIsland {
+        Some(Self {
             states,
             inputs,
             isources,
@@ -624,16 +626,17 @@ impl LinearIsland {
     }
 
     /// True if this island uses the matrix-free advance (large island).
-    fn uses_matrix_free(&self) -> bool {
+    const fn uses_matrix_free(&self) -> bool {
         self.states.len() > DENSE_EXPM_MAX
     }
 
     /// Ensure the discrete update for `dt` is prepared. Small islands build a
     /// dense `[Ad|Bd]`; large islands prepare matrix-free propagator parameters.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // norm > 0.5: small exponent
     pub fn ensure_cache(&mut self, dt: f64) {
         if self.uses_matrix_free() {
             if let Some(mf) = &self.mf {
-                if mf.dt == dt {
+                if mf.dt.to_bits() == dt.to_bits() {
                     return;
                 }
             }
@@ -653,7 +656,7 @@ impl LinearIsland {
             return;
         }
         if let Some(c) = &self.cache {
-            if c.dt == dt {
+            if c.dt.to_bits() == dt.to_bits() {
                 return;
             }
         }
@@ -673,6 +676,7 @@ impl LinearIsland {
     }
 
     /// Dense advance: `x <- Ad x + Bd u` (one mat-vec). Small islands.
+    #[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
     fn step_dense(&self, x: &mut [f64], u: &[f64]) {
         let cache = self.cache.as_ref().expect("ensure_cache first");
         let n = self.states.len();
@@ -701,6 +705,8 @@ impl LinearIsland {
     /// augmenting: track `[y; 1]` with the constant row, i.e. apply the Taylor
     /// recurrence to `(A y + d)`. Concretely each substep does
     /// `y <- y + sum_{k>=1} (h^k/k!) A^{k-1}(A y + d)`.
+    #[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
+    #[allow(clippy::cast_precision_loss)] // substep and Taylor-order counts are tiny
     fn step_matrix_free(&self, x: &mut [f64], u: &[f64]) {
         let mf = self.mf.as_ref().expect("ensure_cache first");
         let n = self.states.len();
@@ -745,6 +751,7 @@ impl LinearIsland {
 
     /// Reconstruct free-node voltages from state and inputs into `out_v`
     /// (indexed by island-local free-node index).
+    #[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
     pub fn node_voltages(&self, x: &[f64], u: &[f64], out_v: &mut [f64]) {
         let n = self.states.len();
         let m = self.n_inputs_total();
@@ -786,7 +793,7 @@ struct DenseLu {
 }
 
 impl DenseLu {
-    fn factor(a: &[f64], n: usize) -> Option<DenseLu> {
+    fn factor(a: &[f64], n: usize) -> Option<Self> {
         let mut lu = a.to_vec();
         let mut piv: Vec<usize> = (0..n).collect();
         for k in 0..n {
@@ -817,7 +824,7 @@ impl DenseLu {
                 }
             }
         }
-        Some(DenseLu { n, lu, piv })
+        Some(Self { n, lu, piv })
     }
 
     fn solve(&self, b: &mut [f64]) {
@@ -848,6 +855,7 @@ impl DenseLu {
 
 /// Discretize `(A,B)` over `dt` via the augmented matrix exponential (Van Loan):
 /// `expm([[A,B],[0,0]] dt) = [[Ad, Bd],[0, I]]`.
+#[allow(clippy::many_single_char_names)] // matrix notation: n states, m inputs, x/u/s
 fn discretize(a: &[f64], b: &[f64], n: usize, m: usize, dt: f64) -> (Vec<f64>, Vec<f64>) {
     let dim = n + m;
     let mut aug = vec![0.0f64; dim * dim];
@@ -876,6 +884,7 @@ fn discretize(a: &[f64], b: &[f64], n: usize, m: usize, dt: f64) -> (Vec<f64>, V
 /// Dense matrix exponential by scaling-and-squaring with a truncated Taylor
 /// core. Scaling drives `||A/2^s||_1 <= 0.5`, where ~18 Taylor terms are
 /// machine-exact; squaring `s` times recovers `exp(A)`.
+#[allow(clippy::cast_possible_truncation)] // norm > 0.5: log2 is a small finite exponent
 fn expm(a: &[f64], n: usize) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
@@ -895,7 +904,7 @@ fn expm(a: &[f64], n: usize) -> Vec<f64> {
     };
     let scale = 2f64.powi(-s);
     let mut sa = a.to_vec();
-    for v in sa.iter_mut() {
+    for v in &mut sa {
         *v *= scale;
     }
     let mut m = expm_taylor(&sa, n, 18);
@@ -906,6 +915,7 @@ fn expm(a: &[f64], n: usize) -> Vec<f64> {
 }
 
 /// Taylor series `I + A + A^2/2! + ...` for a well-scaled `A`.
+#[allow(clippy::cast_precision_loss)] // k <= terms (~18)
 fn expm_taylor(a: &[f64], n: usize, terms: usize) -> Vec<f64> {
     let mut result = identity(n);
     // `power` holds A^k; `coef` holds 1/k!.
@@ -1009,7 +1019,7 @@ mod tests {
         let mut x = vec![0.0];
         for step in 1..=100 {
             li.step(&mut x, &[1.0]);
-            let want = 1.0 - (-(step as f64 * dt) / 1e-3).exp();
+            let want = 1.0 - (-(f64::from(step) * dt) / 1e-3).exp();
             assert!(
                 (x[0] - want).abs() < 1e-4,
                 "step {step}: {} vs {want}",

@@ -1,5 +1,6 @@
 //! I2C slave framework and two concrete devices: a 24Cxx EEPROM and an LM75
 //! temperature sensor with its real datasheet register map.
+//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! ## How it plugs into the co-sim
@@ -115,8 +116,9 @@ pub struct I2cBus {
 }
 
 impl I2cBus {
+    #[must_use]
     pub fn new(id: &str) -> Self {
-        I2cBus {
+        Self {
             id: id.to_string(),
             active: None,
             txn_addrs: Vec::new(),
@@ -126,6 +128,7 @@ impl I2cBus {
         }
     }
 
+    #[must_use]
     pub fn with_slave(mut self, slave: Box<dyn I2cSlave>) -> Self {
         self.slaves.push(slave);
         self
@@ -136,6 +139,7 @@ impl I2cBus {
     }
 
     /// 7-bit addresses currently modeled on this bus.
+    #[must_use]
     pub fn addresses(&self) -> Vec<u8> {
         self.slaves.iter().map(|s| s.address()).collect()
     }
@@ -143,6 +147,7 @@ impl I2cBus {
     /// `(address, milli_celsius)` for every temperature sensor on the bus. Used by
     /// a backend (QEMU) that pushes the modeled temperature into its own emulated
     /// I2C device rather than serving bytes through the `on_i2c` callback.
+    #[must_use]
     pub fn temperature_sensors(&self) -> Vec<(u8, i32)> {
         self.slaves
             .iter()
@@ -153,6 +158,7 @@ impl I2cBus {
     /// Dispatch one I2C event to the matching slave. Returns the reply byte for
     /// a Read event (`None` otherwise). This is the body of the `on_i2c`
     /// closure the engine installs.
+    #[allow(clippy::needless_pass_by_value)] // public API: callers in other crates pass owned events
     pub fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
         if !self.powered {
             if matches!(ev, I2cEvent::Start { .. } | I2cEvent::Stop { .. }) {
@@ -219,7 +225,8 @@ impl I2cBus {
         self.powered = powered;
     }
 
-    pub fn powered(&self) -> bool {
+    #[must_use]
+    pub const fn powered(&self) -> bool {
         self.powered
     }
 
@@ -263,6 +270,7 @@ impl I2cBus {
     }
 
     /// Borrow a concrete slave by address for assertions / temperature sweeps.
+    #[must_use]
     pub fn slave<T: 'static>(&self, addr: u8) -> Option<&T> {
         self.slaves
             .iter()
@@ -287,6 +295,7 @@ impl Peripheral for I2cBus {
         "i2c_bus"
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("slaves".into(), self.slaves.len() as f64);
@@ -308,16 +317,18 @@ impl Peripheral for I2cBus {
 // 24Cxx EEPROM
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A generic 24Cxx I2C EEPROM. The default 16-bit word address covers
-/// 24C32..24C512; [`Eeprom24c::with_word_address_bytes`] selects the one-byte
-/// phase used by 24C01/02-class parts. Write protocol: word-address bytes then
-/// data bytes, auto-incrementing *within the write page*, like
-/// the real parts, a page write that runs past the page boundary wraps the low
-/// address bits back to the page start and overwrites from there (24C32/24C64
-/// datasheets: "the address roll over during write is from the last byte of the
-/// current page to the first byte of the same page"). Read protocol:
-/// current-address reads return successive bytes, rolling over the whole array
-/// (reads are not page-bound on the real parts either).
+/// A generic 24Cxx I2C EEPROM.
+///
+/// The default 16-bit word address covers 24C32..24C512;
+/// [`Eeprom24c::with_word_address_bytes`] selects the one-byte phase used by
+/// 24C01/02-class parts. Write protocol: word-address bytes then data bytes,
+/// auto-incrementing *within the write page*, like the real parts, a page write
+/// that runs past the page boundary wraps the low address bits back to the page
+/// start and overwrites from there (24C32/24C64 datasheets: "the address roll
+/// over during write is from the last byte of the current page to the first
+/// byte of the same page"). Read protocol: current-address reads return
+/// successive bytes, rolling over the whole array (reads are not page-bound on
+/// the real parts either).
 pub struct Eeprom24c {
     addr: u8,
     mem: Vec<u8>,
@@ -341,8 +352,9 @@ impl Eeprom24c {
     pub const DEFAULT_PAGE_SIZE: usize = 32;
 
     /// `size` is the total byte capacity (e.g. 4096 for a 24C32 = 32 kbit).
+    #[must_use]
     pub fn new(address: u8, size: usize) -> Self {
-        Eeprom24c {
+        Self {
             addr: address,
             mem: vec![0xFF; size.max(1)],
             ptr: 0,
@@ -356,6 +368,11 @@ impl Eeprom24c {
 
     /// Select a one- or two-byte word-address phase. Refuse any other width
     /// rather than silently consuming the first firmware data byte as address.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bytes` is not 1 or 2.
+    #[must_use]
     pub fn with_word_address_bytes(mut self, bytes: u8) -> Self {
         assert!(
             matches!(bytes, 1 | 2),
@@ -368,6 +385,11 @@ impl Eeprom24c {
     /// Set the write-page size (bytes) for the modeled part. Must be a power of
     /// two (every 24Cxx page size is); a non-power-of-two or zero panics, since
     /// it describes an EEPROM that does not exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `page_size` is not a power of two (including zero).
+    #[must_use]
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         assert!(
             page_size.is_power_of_two(),
@@ -378,11 +400,13 @@ impl Eeprom24c {
     }
 
     /// Read the backing memory (for assertions).
+    #[must_use]
     pub fn contents(&self) -> &[u8] {
         &self.mem
     }
 
     /// True if `needle` appears anywhere in the EEPROM contents.
+    #[must_use]
     pub fn contains(&self, needle: &[u8]) -> bool {
         if needle.is_empty() {
             return true;
@@ -439,12 +463,13 @@ impl I2cSlave for Eeprom24c {
         std::mem::take(&mut self.activity)
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("ptr".into(), self.ptr as f64);
         m.insert("page_size".into(), self.page_size as f64);
-        m.insert("word_address_bytes".into(), self.word_address_bytes as f64);
+        m.insert("word_address_bytes".into(), self.word_address_bytes.into());
         m
     }
 
@@ -492,8 +517,9 @@ impl Lm75 {
     /// Default LM75 address with all address pins low is 0x48.
     pub const DEFAULT_ADDR: u8 = 0x48;
 
-    pub fn new(address: u8, temp_c: f64) -> Self {
-        Lm75 {
+    #[must_use]
+    pub const fn new(address: u8, temp_c: f64) -> Self {
+        Self {
             addr: address,
             pointer: 0,
             temp_c,
@@ -508,28 +534,18 @@ impl Lm75 {
 
     /// Set the temperature the sensor reports (used by the sweep test and the
     /// live websocket control).
-    pub fn set_temp_c(&mut self, t: f64) {
+    pub const fn set_temp_c(&mut self, t: f64) {
         self.temp_c = t;
     }
 
-    pub fn temp_c(&self) -> f64 {
+    #[must_use]
+    pub const fn temp_c(&self) -> f64 {
         self.temp_c
-    }
-
-    /// Encode a Celsius temperature into the LM75A 11-bit register value
-    /// (0.125 °C/LSB, left-justified, big-endian), returning (msb, lsb).
-    fn temp_bytes(&self) -> (u8, u8) {
-        let counts = (self.temp_c / 0.125).round() as i32; // 11-bit signed
-        let raw = ((counts << 5) & 0xFFFF) as u16; // left-justify into 16 bits
-        ((raw >> 8) as u8, (raw & 0xFF) as u8)
     }
 
     fn reg_bytes(&self) -> Vec<u8> {
         match self.pointer {
-            0x00 => {
-                let (m, l) = self.temp_bytes();
-                vec![m, l]
-            }
+            0x00 => temp_to_be(self.temp_c),
             0x01 => vec![self.conf],
             0x02 => temp_to_be(self.thyst_c),
             0x03 => temp_to_be(self.tos_c),
@@ -538,9 +554,12 @@ impl Lm75 {
     }
 }
 
-fn temp_to_be(t: f64) -> Vec<u8> {
-    let counts = (t / 0.125).round() as i32;
-    let raw = ((counts << 5) & 0xFFFF) as u16;
+/// Encode a Celsius temperature into the LM75A 11-bit register value
+/// (0.125 °C/LSB, left-justified, big-endian), returning `[msb, lsb]`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // masked to 16 bits
+pub(crate) fn temp_to_be(t: f64) -> Vec<u8> {
+    let counts = (t / 0.125).round() as i32; // 11-bit signed
+    let raw = ((counts << 5) & 0xFFFF) as u16; // left-justify into 16 bits
     vec![(raw >> 8) as u8, (raw & 0xFF) as u8]
 }
 
@@ -549,6 +568,7 @@ impl I2cSlave for Lm75 {
         self.addr
     }
 
+    #[allow(clippy::cast_possible_truncation)] // physical temperatures in m°C fit i32 (as saturates)
     fn temperature_mc(&self) -> Option<i32> {
         Some((self.temp_c * 1000.0).round() as i32)
     }
@@ -562,10 +582,7 @@ impl I2cSlave for Lm75 {
     }
 
     fn on_write(&mut self, data: u8) {
-        if !self.got_pointer {
-            self.pointer = data & 0x03;
-            self.got_pointer = true;
-        } else {
+        if self.got_pointer {
             // Writing register data (Conf/Thyst/Tos). Accumulate.
             self.write_acc.push(data);
             match self.pointer {
@@ -578,9 +595,13 @@ impl I2cSlave for Lm75 {
                 }
                 _ => {}
             }
+        } else {
+            self.pointer = data & 0x03;
+            self.got_pointer = true;
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)] // a register image is at most a few bytes
     fn on_read(&mut self) -> u8 {
         let bytes = self.reg_bytes();
         let b = bytes.get(self.read_byte as usize).copied().unwrap_or(0);
@@ -591,7 +612,7 @@ impl I2cSlave for Lm75 {
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("temp_c".into(), self.temp_c);
-        m.insert("pointer".into(), self.pointer as f64);
+        m.insert("pointer".into(), f64::from(self.pointer));
         m
     }
 
@@ -604,9 +625,9 @@ impl I2cSlave for Lm75 {
 }
 
 fn be_to_temp(msb: u8, lsb: u8) -> f64 {
-    let raw = ((msb as u16) << 8 | lsb as u16) as i16;
+    let raw = (u16::from(msb) << 8 | u16::from(lsb)).cast_signed();
     // Right-justify (drop the 5 unused LSBs) and scale.
-    (raw >> 5) as f64 * 0.125
+    f64::from(raw >> 5) * 0.125
 }
 
 /// Alias kept for the brief's "BME280 or LM75" choice: LM75 is the modelled
@@ -632,8 +653,8 @@ mod tests {
     #[test]
     fn lm75_negative_temperature() {
         let s = Lm75::new(0x48, -10.0);
-        let (m, l) = s.temp_bytes();
-        let t = be_to_temp(m, l);
+        let b = temp_to_be(s.temp_c);
+        let t = be_to_temp(b[0], b[1]);
         assert!((t + 10.0).abs() < 0.13, "decoded {t} not ~-10");
     }
 
@@ -662,7 +683,7 @@ mod tests {
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x7f], 0xa5);
         assert_eq!(ee.contents()[0x78], 0x5a, "8-byte page wraps at 0x7f");
-        assert_eq!(ee.state()["word_address_bytes"], 1.0);
+        assert_eq!(ee.state()["word_address_bytes"].to_bits(), 1.0f64.to_bits());
     }
 
     #[test]

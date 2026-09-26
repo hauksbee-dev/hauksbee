@@ -70,8 +70,10 @@ use crate::subcircuit::SubCircuit;
 use crate::transient::{Transient, Waveforms};
 use crate::{SolveError, SolveResult};
 
-/// What KIND of boundary an outcome describes: the structured discriminator
-/// callers (certificate construction above all) must branch on. The prose
+/// What KIND of boundary an outcome describes.
+///
+/// It is the structured discriminator callers (certificate construction above
+/// all) must branch on. The prose
 /// `note` field is telemetry for humans; discriminating on note STRINGS is how
 /// a feed-held rail once shipped a balance-exact certificate record (review
 /// finding on the first composed commit).
@@ -162,7 +164,7 @@ pub struct CapturePolicy {
     /// board, the same provenance as [`ComposedPolicy::max_balance_block`]); a
     /// block an order of magnitude larger is the fused core wearing a sense
     /// edge, and pulling it re-fuses the very island the tear exists to avoid
-    /// (measured on the flagship: pulling it ballooned every OUTPUT_I capture
+    /// (measured on the flagship: pulling it ballooned every `OUTPUT_I` capture
     /// to 3600 devices and pushed each solve onto the adaptive rescue). An
     /// oversized block is skipped, deterministically, and the growth continues
     /// past it; whether skipping cost anything is measured by the same sag the
@@ -172,7 +174,7 @@ pub struct CapturePolicy {
 
 impl Default for CapturePolicy {
     fn default() -> Self {
-        CapturePolicy {
+        Self {
             max_growth_blocks: 64,
             max_block_devices: 300,
         }
@@ -190,6 +192,10 @@ impl Default for CapturePolicy {
 /// boundary it cannot certify; the dead candidate carries an infinite
 /// residual in `refusal_report`). `Err` is reserved for structural
 /// mis-use (adaptive step control).
+///
+/// # Errors
+///
+/// [`SolveError::refused`] when `opts` uses adaptive step control.
 pub fn execute_stiff_group(
     sub: &Circuit,
     candidates: &[NodeId],
@@ -210,6 +216,7 @@ pub fn execute_stiff_group(
 
 /// [`execute_stiff_group`] with a set of EXTRA nodes HELD (not relaxed) and an
 /// explicit [`CapturePolicy`] for the generator-inclusive capture pre-pass.
+///
 /// Each `held` node is treated as a boundary during fragmentation (so the
 /// candidate capture groups stay small even when the held node is a
 /// heavily-connected hub) and pinned at its supplied train in every capture
@@ -217,6 +224,16 @@ pub fn execute_stiff_group(
 /// the rails at their balance-solved trains: a signal captured on its small
 /// adjacent-block group with the rails held stays small, where freeing it in
 /// the whole rail-torn group would re-fuse the hub it belongs to.
+///
+/// # Errors
+///
+/// As [`execute_stiff_group`].
+///
+/// # Panics
+///
+/// If a `held` node's train is shorter than the step grid it is replayed on.
+#[allow(clippy::too_many_lines)] // one capture/replay round loop
+#[allow(clippy::implicit_hasher)] // every caller builds `held` with the std hasher
 pub fn execute_stiff_group_held_capped(
     sub: &Circuit,
     candidates: &[NodeId],
@@ -226,14 +243,7 @@ pub fn execute_stiff_group_held_capped(
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
 ) -> SolveResult<Option<StiffExecution>> {
-    let dt = match opts.step {
-        StepControl::Fixed { dt } => dt,
-        _ => {
-            return Err(SolveError::refused(
-                "stiff execution requires fixed step control",
-            ))
-        }
-    };
+    let dt = super::fixed_dt(opts, "stiff execution requires fixed step control")?;
     if candidates.is_empty() {
         return Ok(None);
     }
@@ -247,18 +257,14 @@ pub fn execute_stiff_group_held_capped(
     // flagship, because absorption creates companion islands by design.
     let mut islands: HashSet<usize> = HashSet::new();
     for c in candidates {
-        match graph.node_island.get(c.0 as usize).copied().flatten() {
-            Some(i) => {
-                islands.insert(i);
-            }
-            None => {
-                refusal_report.extend(out_of_scope_outcomes(
-                    candidates,
-                    "a candidate nobody conducts",
-                ));
-                return Ok(None);
-            }
-        }
+        let Some(i) = graph.node_island.get(c.0 as usize).copied().flatten() else {
+            refusal_report.extend(out_of_scope_outcomes(
+                candidates,
+                "a candidate nobody conducts",
+            ));
+            return Ok(None);
+        };
+        islands.insert(i);
     }
     if islands.len() != 1 {
         refusal_report.extend(out_of_scope_outcomes(
@@ -271,8 +277,9 @@ pub fn execute_stiff_group_held_capped(
     // Companion devices: everything outside the candidates' island rides
     // into every capture (they hold the sense boundaries; without them the
     // dead-membrane bug returns wearing a stiff certificate).
-    let companions: Vec<DeviceId> = (0..sub.devices.len() as u32)
-        .map(DeviceId)
+    let companions: Vec<DeviceId> = sub
+        .iter()
+        .map(|(id, _)| id)
         .filter(|id| !graph.islands[island].contains(id))
         .collect();
 
@@ -322,7 +329,7 @@ pub fn execute_stiff_group_held_capped(
         }
     }
     for c in candidates {
-        if adjacent.get(&c.0).is_none_or(|v| v.is_empty()) {
+        if adjacent.get(&c.0).is_none_or(Vec::is_empty) {
             refusal_report.extend(out_of_scope_outcomes(
                 candidates,
                 "a candidate with no adjacent block to capture against",
@@ -362,11 +369,8 @@ pub fn execute_stiff_group_held_capped(
     let grew: HashMap<u32, usize> = candidates
         .iter()
         .map(|c| {
-            let base = adjacent.get(&c.0).map(|v| v.len()).unwrap_or(0);
-            (
-                c.0,
-                capture_blocks.get(&c.0).map(|v| v.len()).unwrap_or(base) - base,
-            )
+            let base = adjacent.get(&c.0).map_or(0, Vec::len);
+            (c.0, capture_blocks.get(&c.0).map_or(base, Vec::len) - base)
         })
         .collect();
     if std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok() {
@@ -403,7 +407,7 @@ pub fn execute_stiff_group_held_capped(
                         .node_block
                         .iter()
                         .find(|(_, &bb)| bb == b)
-                        .map(|(&n, _)| sub.node_name(NodeId(n as u32)).to_string())
+                        .map(|(&n, _)| sub.node_name(crate::node_id(n)).to_string())
                         .unwrap_or_default();
                     (b, block_size.get(&b).copied().unwrap_or(0), name)
                 })
@@ -436,6 +440,13 @@ pub fn execute_stiff_group_held_capped(
     // the "we both captured the same generator" signature, and it leaves every
     // ungrown group's execution bit-identical to the pre-merge code.
     let (clusters, cluster_blocks, cand_rep) = {
+        fn find(parent: &mut [usize], mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
         let n = candidates.len();
         let sets: Vec<HashSet<usize>> = candidates
             .iter()
@@ -451,13 +462,6 @@ pub fn execute_stiff_group_held_capped(
             })
             .collect();
         let mut parent: Vec<usize> = (0..n).collect();
-        fn find(parent: &mut [usize], mut i: usize) -> usize {
-            while parent[i] != i {
-                parent[i] = parent[parent[i]];
-                i = parent[i];
-            }
-            i
-        }
         for i in 0..n {
             for j in (i + 1)..n {
                 let entangled = sets[i]
@@ -529,44 +533,40 @@ pub fn execute_stiff_group_held_capped(
     let mut bootstrapped = false;
     let whole_dc = {
         let mut ws = Workspace::new(sub);
-        dc_operating_point(&mut ws, sub, opts).ok().map(|_| ws)
+        dc_operating_point(&mut ws, sub, opts).ok().map(|()| ws)
     };
-    match whole_dc {
-        Some(ws) => {
-            for c in candidates {
-                let v = ws.layout.node(*c).map(|i| ws.x[i]).unwrap_or(0.0);
-                rest.insert(c.0, v);
-            }
+    if let Some(ws) = whole_dc {
+        for c in candidates {
+            let v = ws.layout.node(*c).map_or(0.0, |i| ws.x[i]);
+            rest.insert(c.0, v);
         }
-        None => {
-            // Bootstrap: per-cluster capture-group DC with the external
-            // candidates at 0 (the pins' construction value) and held rails at
-            // their train's t=0 estimate; every member's rest reads from the
-            // joint point.
-            bootstrapped = true;
-            for cluster in &clusters {
-                let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
-                let (mut cap, g2l, pins) = group.circuit(&cluster_blocks[&cluster[0].0], &members);
-                for &(sid, pin) in &pins {
-                    if let (Pin::Rail(gn), Device::Vsource { kind, .. }) =
-                        (pin, &mut cap.devices[sid.0 as usize])
-                    {
-                        *kind = SourceKind::Dc(held[&gn].first().copied().unwrap_or(0.0));
-                    }
+    } else {
+        // Bootstrap: per-cluster capture-group DC with the external
+        // candidates at 0 (the pins' construction value) and held rails at
+        // their train's t=0 estimate; every member's rest reads from the
+        // joint point.
+        bootstrapped = true;
+        for cluster in &clusters {
+            let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
+            let (mut cap, g2l, pins) = group.circuit(&cluster_blocks[&cluster[0].0], &members);
+            for &(sid, pin) in &pins {
+                if let (Pin::Rail(gn), Device::Vsource { kind, .. }) =
+                    (pin, &mut cap.devices[sid.0 as usize])
+                {
+                    *kind = SourceKind::Dc(held[&gn].first().copied().unwrap_or(0.0));
                 }
-                let mut ws = Workspace::new(&cap);
-                let solved = dc_operating_point(&mut ws, &cap, opts).is_ok();
-                for c in cluster {
-                    let v = if solved {
-                        g2l.get(&c.0)
-                            .and_then(|ln| ws.layout.node(NodeId(*ln)))
-                            .map(|i| ws.x[i])
-                            .unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    rest.insert(c.0, v);
-                }
+            }
+            let mut ws = Workspace::new(&cap);
+            let solved = dc_operating_point(&mut ws, &cap, opts).is_ok();
+            for c in cluster {
+                let v = if solved {
+                    g2l.get(&c.0)
+                        .and_then(|ln| ws.layout.node(NodeId(*ln)))
+                        .map_or(0.0, |i| ws.x[i])
+                } else {
+                    0.0
+                };
+                rest.insert(c.0, v);
             }
         }
     }
@@ -588,8 +588,7 @@ pub fn execute_stiff_group_held_capped(
     let reltol = opts.reltol;
     let max_rounds = 6usize;
     let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
-    let tol_of =
-        |c: &NodeId| 10.0 * reltol * rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+    let tol_of = |c: &NodeId| 10.0 * reltol * rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
 
     let mut trains: HashMap<u32, Vec<f64>> = HashMap::new();
     let mut runs: HashMap<u32, CaptureRun> = HashMap::new();
@@ -628,7 +627,7 @@ pub fn execute_stiff_group_held_capped(
                 (&trains, runs.get(&rep.0))
             };
             let t_solve = std::time::Instant::now();
-            let wf = match group.solve(
+            let Ok(wf) = group.solve(
                 &cluster_blocks[&rep.0],
                 &members,
                 rep,
@@ -636,18 +635,15 @@ pub fn execute_stiff_group_held_capped(
                 Some((source, &grid)),
                 seed,
                 grown,
-            ) {
-                Ok(wf) => wf,
-                Err(_) => {
-                    refusal_report.extend(dead_capture_outcomes(
-                        candidates,
-                        rep,
-                        &rest,
-                        reltol,
-                        bootstrapped,
-                    ));
-                    return Ok(None);
-                }
+            ) else {
+                refusal_report.extend(dead_capture_outcomes(
+                    candidates,
+                    rep,
+                    &rest,
+                    reltol,
+                    bootstrapped,
+                ));
+                return Ok(None);
             };
             if dbg && round == 0 {
                 eprintln!(
@@ -766,11 +762,11 @@ pub fn execute_stiff_group_held_capped(
 
     let n_out = sub.node_count();
     let mut waveforms = Waveforms::on_grid(n_out, &grid);
-    for node in 1..n_out {
-        let series: Vec<f64> = if held.contains_key(&(node as u32)) {
-            held[&(node as u32)].clone()
+    for (node, key) in (1..n_out).zip(1u32..) {
+        let series: Vec<f64> = if held.contains_key(&key) {
+            held[&key].clone()
         } else if bound[node] {
-            trains[&(node as u32)].clone()
+            trains[&key].clone()
         } else {
             // A block reads from its owning run. Companion-island nodes
             // (absorbed copies, replay-pin islands) ride in every capture and
@@ -785,7 +781,7 @@ pub fn execute_stiff_group_held_capped(
                 None => clusters[0][0].0,
             };
             let (wf, g2l) = &runs[&owner];
-            match g2l.get(&(node as u32)) {
+            match g2l.get(&key) {
                 Some(&ln) => resample(wf, ln as usize, &grid),
                 None => continue,
             }
@@ -804,7 +800,7 @@ pub fn execute_stiff_group_held_capped(
 ///
 /// This is the sibling of [`execute_stiff_group`] for a group whose stiff
 /// nominations include genuine supply RAILS (load-dependent nets on which
-/// Gauss-Seidel limit-cycles instead of contracting, the flagship's ANALOG_VDD
+/// Gauss-Seidel limit-cycles instead of contracting, the flagship's `ANALOG_VDD`
 /// and +5V) alongside ordinary SIGNAL cuts (which relax fine). The rails are
 /// handed to the exact scalar KCL balance (`analyze_imposing_tears` +
 /// `PartitionedTransient`), and the signals are relaxed on top of it.
@@ -820,7 +816,7 @@ pub fn execute_stiff_group_held_capped(
 /// naive "pin every signal, solve once, resample" measures a signal's residual
 /// as identically zero (a pinned node reads back its pin), and freeing a signal
 /// in the WHOLE rail-torn group re-fuses the large hub it belongs to (the
-/// flagship's OUTPUT_I nets fuse thousands of devices when freed). So neither a
+/// flagship's `OUTPUT_I` nets fuse thousands of devices when freed). So neither a
 /// whole-group free-solve nor a whole-group pinned-solve works.
 ///
 /// The composition instead ALTERNATES:
@@ -864,6 +860,11 @@ pub fn execute_stiff_group_held_capped(
 ///
 /// `Ok(None)` is an honest refusal (a signal that would not contract, or a solve
 /// that died); rails then carry no exactness claim.
+///
+/// # Errors
+///
+/// [`SolveError::refused`] when `opts` uses adaptive step control.
+#[allow(clippy::too_many_lines)] // one balance/capture composition loop
 pub fn execute_composed_group(
     sub: &Circuit,
     signal_cuts: &[NodeId],
@@ -873,14 +874,7 @@ pub fn execute_composed_group(
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
 ) -> SolveResult<Option<StiffExecution>> {
-    let dt = match opts.step {
-        StepControl::Fixed { dt } => dt,
-        _ => {
-            return Err(SolveError::refused(
-                "composed execution requires fixed step control",
-            ))
-        }
-    };
+    let dt = super::fixed_dt(opts, "composed execution requires fixed step control")?;
     if rails.is_empty() {
         return Err(SolveError::refused(
             "composed execution needs at least one rail tear",
@@ -906,10 +900,10 @@ pub fn execute_composed_group(
         if dc_operating_point(&mut ws, sub, opts).is_ok() {
             bootstrapped = false;
             for s in signal_cuts {
-                rest.insert(s.0, ws.layout.node(*s).map(|i| ws.x[i]).unwrap_or(0.0));
+                rest.insert(s.0, ws.layout.node(*s).map_or(0.0, |i| ws.x[i]));
             }
             for rt in rails {
-                let v = ws.layout.node(rt.rail).map(|i| ws.x[i]).unwrap_or(0.0);
+                let v = ws.layout.node(rt.rail).map_or(0.0, |i| ws.x[i]);
                 rail_vnom.insert(rt.rail.0, v.abs().max(1.0));
                 rail_seed.insert(rt.rail.0, v);
             }
@@ -973,7 +967,7 @@ pub fn execute_composed_group(
     // captures. When the group DOES fragment (the mini fixtures, real synapse
     // arrays), the exact whole-group scalar balance runs and the composition is
     // exact up to the inner relaxation's sag.
-    let whole_group_balances = balance_group_fragments(sub, rails, signal_cuts, policy);
+    let whole_group_balances = balance_group_fragments(sub, rails, signal_cuts, *policy);
     // The kind every rail outcome (success or refusal) will carry: it is a
     // property of HOW this run closes the rails, decided here, once.
     let rail_kind = if whole_group_balances {
@@ -1040,7 +1034,7 @@ pub fn execute_composed_group(
             break;
         }
         let mut inner_refusals = Vec::new();
-        let exec = match execute_stiff_group_held_capped(
+        let Some(exec) = execute_stiff_group_held_capped(
             sub,
             signal_cuts,
             &rail_trains,
@@ -1048,22 +1042,20 @@ pub fn execute_composed_group(
             &sub_opts,
             tstop,
             &mut inner_refusals,
-        )? {
-            Some(exec) => exec,
-            None => {
-                if debug {
-                    eprintln!("COMPOSED signal relaxation refused: {inner_refusals:?}");
-                }
-                refusal_report.extend(inner_refusals);
-                refusal_report.extend(rail_refusals(
-                    rails,
-                    rail_kind,
-                    &rail_vnom,
-                    reltol,
-                    bootstrapped,
-                ));
-                return Ok(None);
+        )?
+        else {
+            if debug {
+                eprintln!("COMPOSED signal relaxation refused: {inner_refusals:?}");
             }
+            refusal_report.extend(inner_refusals);
+            refusal_report.extend(rail_refusals(
+                rails,
+                rail_kind,
+                &rail_vnom,
+                reltol,
+                bootstrapped,
+            ));
+            return Ok(None);
         };
 
         let mut outer_move = 0.0f64;
@@ -1088,7 +1080,7 @@ pub fn execute_composed_group(
         let bar = signal_cuts
             .iter()
             .map(|c| {
-                let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+                let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
                 (10.0 * reltol * vnom).max(1e-6 * vnom)
             })
             .fold(0.0f64, f64::max);
@@ -1139,7 +1131,7 @@ pub fn execute_composed_group(
             // No signals to relax: just the held rails.
             for rt in rails {
                 if let Some(tr) = rail_trains.get(&rt.rail.0) {
-                    waveforms.node_voltages[rt.rail.0 as usize] = tr.clone();
+                    waveforms.node_voltages[rt.rail.0 as usize].clone_from(tr);
                 }
             }
         }
@@ -1149,14 +1141,14 @@ pub fn execute_composed_group(
     let mut outcomes = Vec::new();
     for c in signal_cuts {
         let s = sag.get(&c.0).copied().unwrap_or(0.0);
-        let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+        let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
         // Quiet-basin telemetry (pure diagnostics, no behavior change): a
         // converged train that is essentially FLAT may have relaxed into a
         // quiet basin instead of the true spiking answer (the flagship's O2
         // hazard); flag it so the outcome table names the candidates.
         let train = &signal_trains[&c.0];
-        let ptp = train.iter().cloned().fold(f64::MIN, f64::max)
-            - train.iter().cloned().fold(f64::MAX, f64::min);
+        let ptp = train.iter().copied().fold(f64::MIN, f64::max)
+            - train.iter().copied().fold(f64::MAX, f64::min);
         outcomes.push(StiffOutcome {
             node: *c,
             kind: BoundaryKind::Signal,
@@ -1214,7 +1206,7 @@ pub struct ComposedPolicy {
 
 impl Default for ComposedPolicy {
     fn default() -> Self {
-        ComposedPolicy {
+        Self {
             max_balance_block: 600,
         }
     }
@@ -1229,7 +1221,7 @@ fn balance_group_fragments(
     sub: &Circuit,
     rails: &[RailTear],
     signal_cuts: &[NodeId],
-    policy: &ComposedPolicy,
+    policy: ComposedPolicy,
 ) -> bool {
     let mut subp = sub.clone();
     for s in signal_cuts {
@@ -1305,7 +1297,8 @@ fn solve_composed(
     }
 
     let part = Partition::analyze_imposing_tears(&subp, rails.to_vec());
-    let Some(mut engine) = PartitionedTransient::try_build_from_partition(&subp, opts, part) else {
+    let Some(mut engine) = PartitionedTransient::try_build_from_partition(&subp, opts, &part)
+    else {
         return Ok(None);
     };
     Waveforms::collect_nodes(subp.node_count(), |sink| {
@@ -1328,7 +1321,7 @@ fn signal_refusals(
             node: *c,
             kind: BoundaryKind::Signal,
             sag_v: f64::NAN,
-            tol_v: 10.0 * reltol * rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0),
+            tol_v: 10.0 * reltol * rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0),
             accepted: false,
             bootstrapped,
             capture_growth: 0,
@@ -1392,7 +1385,7 @@ fn dead_capture_outcomes(
     candidates
         .iter()
         .map(|c| {
-            let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+            let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
             StiffOutcome {
                 node: *c,
                 kind: BoundaryKind::Signal,
@@ -1531,7 +1524,7 @@ fn grow_capture_blocks(
                     break;
                 }
                 // A core-scale block is not a generator: skip it (policy doc).
-                if block_devs.get(&b).map(|v| v.len()).unwrap_or(0) > policy.max_block_devices {
+                if block_devs.get(&b).map_or(0, Vec::len) > policy.max_block_devices {
                     rejected.insert(b);
                     continue;
                 }
@@ -1644,7 +1637,7 @@ impl CaptureGroup<'_> {
     /// DC (no `trains`) or at PWL trains, held rails at their trains, member
     /// candidates interior. `c` is the cluster representative (naming, error
     /// messages). Returns the run plus its node map.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one capture run: pins, solve, map
     fn solve(
         &self,
         blocks: &[usize],
@@ -1889,6 +1882,7 @@ mod tests {
     /// feed -> Rd -> X -> [block M] -> Y -> [block R], BJT loads in both
     /// blocks, a pulsed feed. `r_scale` sets the chain impedances: low = stiff
     /// boundaries, high = boundaries whose waveforms depend on the neighbours.
+    #[allow(clippy::many_single_char_names)] // node names mirror the diagram
     fn two_cut_chain(r_scale: f64) -> (Circuit, NodeId, NodeId) {
         let mut c = Circuit::new();
         let vs = c.node("vs");
@@ -2010,12 +2004,12 @@ mod tests {
         c: &Circuit,
         signals: &[NodeId],
         rails: &[RailTear],
-        policy: &ComposedPolicy,
+        policy: ComposedPolicy,
         opts: &SolverOptions,
         tstop: f64,
     ) -> StiffExecution {
         let mut refusals = Vec::new();
-        execute_composed_group(c, signals, rails, policy, opts, tstop, &mut refusals)
+        execute_composed_group(c, signals, rails, &policy, opts, tstop, &mut refusals)
             .expect("mechanical success")
             .unwrap_or_else(|| panic!("composed execution must succeed: {refusals:?}"))
     }
@@ -2026,7 +2020,7 @@ mod tests {
                 a.waveforms.node_voltages[node],
                 b.waveforms.node_voltages[node],
                 "waveform at {} drifted between runs",
-                c.node_name(NodeId(node as u32))
+                c.node_name(crate::node_id(node))
             );
         }
     }
@@ -2040,7 +2034,7 @@ mod tests {
         let opts = tight_opts(dt);
         let mono = monolith(&c, &opts, tstop);
         let rails = vec![shunt_tear(rail, feed, shunt)];
-        let exec = run_composed(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop);
+        let exec = run_composed(&c, &[mid], &rails, ComposedPolicy::default(), &opts, tstop);
         assert!(exec
             .outcomes
             .iter()
@@ -2066,7 +2060,7 @@ mod tests {
             "composed",
         );
         let vr = &exec.waveforms.node_voltages[rail.0 as usize];
-        let vr_min = vr.iter().cloned().fold(f64::MAX, f64::min);
+        let vr_min = vr.iter().copied().fold(f64::MAX, f64::min);
         assert!(
             vr.iter().all(|&v| v <= 5.0 + 1e-9) && vr_min < 4.999,
             "rail must sag: {vr_min}"
@@ -2088,7 +2082,7 @@ mod tests {
             "fixture must have no whole-group DC"
         );
         let rails = vec![shunt_tear(rail, feed, shunt)];
-        let run = || run_composed(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop);
+        let run = || run_composed(&c, &[mid], &rails, ComposedPolicy::default(), &opts, tstop);
         let (a, b) = (run(), run());
         assert_deterministic(&c, &a, &b);
         assert!(a
@@ -2112,7 +2106,7 @@ mod tests {
     }
 
     /// The HELD (feed-hold) degradation on a two-rail fixture: deterministic,
-    /// both rails HeldRail, and the assembly matches the monolith of the same
+    /// both rails `HeldRail`, and the assembly matches the monolith of the same
     /// circuit with both rails pinned at their hold value.
     #[test]
     fn held_rails_run_deterministically_and_match_the_pinned_monolith() {
@@ -2141,7 +2135,7 @@ mod tests {
         let policy = ComposedPolicy {
             max_balance_block: 1,
         };
-        let run = || run_composed(&c, &[mid], &rails, &policy, &opts, tstop);
+        let run = || run_composed(&c, &[mid], &rails, policy, &opts, tstop);
         let (a, b) = (run(), run());
         assert_deterministic(&c, &a, &b);
         for rn in &rail_nodes {
@@ -2250,9 +2244,7 @@ mod tests {
     }
 
     fn held_vdd(vdd: NodeId, hold_v: f64, dt: f64, tstop: f64) -> HashMap<u32, Vec<f64>> {
-        [(vdd.0, vec![hold_v; uniform_grid(dt, tstop).len()])]
-            .into_iter()
-            .collect()
+        std::iter::once((vdd.0, vec![hold_v; uniform_grid(dt, tstop).len()])).collect()
     }
 
     /// Plain adjacency leaves the sense-driven output FLAT; the
@@ -2377,7 +2369,7 @@ mod tests {
                 for node in 1..c.node_count() {
                     mono_c
                         .nodesets
-                        .push((NodeId(node as u32), exec.waveforms.node_voltages[node][0]));
+                        .push((crate::node_id(node), exec.waveforms.node_voltages[node][0]));
                 }
                 let mono = monolith(&mono_c, &opts, 2e-6);
                 let tol = (3.0 * max_sag(&exec.outcomes)).max(1e-4);

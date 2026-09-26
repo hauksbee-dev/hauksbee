@@ -1,5 +1,5 @@
 //! S3 acceptance gate (`docs/dev-plans/03-solver-performance.md` §5, §11):
-//! `AssemblyMode::Planned` (two-tier compiled assembly through the StampPlan)
+//! `AssemblyMode::Planned` (two-tier compiled assembly through the `StampPlan`)
 //! must match the interpreted reference to SOLVER TOLERANCE on the graded
 //! boards, reltol/vntol, the run's own convergence convention, not a bespoke
 //! bound. Bit-identity is deliberately NOT required here: the two-tier split
@@ -147,7 +147,7 @@ fn planned_matches_interpreted_adaptive_rlc() {
     for name in ["in", "n1", "out"] {
         let a = interp.final_node(&c, name).expect("node present");
         let b = planned.final_node(&c, name).expect("node present");
-        let ratio = (a - b).abs() / (reltol * a.abs().max(b.abs()) + vntol);
+        let ratio = (a - b).abs() / reltol.mul_add(a.abs().max(b.abs()), vntol);
         println!("adaptive_rlc {name}: interpreted={a:.9} planned={b:.9} tol ratio={ratio:.3e}");
         worst = worst.max(ratio);
     }

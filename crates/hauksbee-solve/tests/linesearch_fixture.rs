@@ -2,7 +2,7 @@
 //! optimization work inside `newton_solve`'s Armijo/staged machinery.
 //!
 //! The flagship general path marches its joint capture with
-//! Strategy::TransientDyn granted (which arms the staged regularizers, the
+//! `Strategy::TransientDyn` granted (which arms the staged regularizers, the
 //! event-freeze retry AND the global Armijo line search) plus the SPDT
 //! break-before-make and control-gm device knobs. Any "this optimization is
 //! bit-identical" claim about that machinery needs a fast fixture that
@@ -12,7 +12,7 @@
 //! comparator whose output flips an SPDT pair (binder-style `_s0`/`_s1` legs
 //! sharing the common node, so the BBM winner-take-all path runs), shorting
 //! the membrane through a fast discharge leg. No consistent DC exists (the
-//! usual self-resetting shape), so it powers on FromZero like the capture
+//! usual self-resetting shape), so it powers on `FromZero` like the capture
 //! recipe and spikes repeatedly; comparator flips guarantee the event/backtrack
 //! paths see real work.
 //!
@@ -93,7 +93,7 @@ fn wf_hash(wf: &Waveforms) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut fold = |v: f64| {
         for b in v.to_bits().to_le_bytes() {
-            h ^= b as u64;
+            h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
     };

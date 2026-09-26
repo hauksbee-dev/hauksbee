@@ -7,6 +7,7 @@
 
 use hauksbee_ir::SpiceLoader;
 use hauksbee_solve::{SolverOptions, StepControl, Transient};
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -46,7 +47,9 @@ fn preprocess(path: &Path) -> Option<String> {
             let resolved = if Path::new(inc_path).is_absolute() {
                 PathBuf::from(inc_path)
             } else {
-                path.parent().unwrap_or(Path::new(".")).join(inc_path)
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(inc_path)
             };
             let Ok(inc) = std::fs::read_to_string(&resolved) else {
                 eprintln!("include missing: {}", resolved.display());
@@ -75,7 +78,7 @@ fn with_analysis(net: &str, tran: &str, probe: &str) -> String {
     }
     out.push_str(tran);
     out.push('\n');
-    out.push_str(&format!(".print tran v({probe})\n"));
+    let _ = writeln!(out, ".print tran v({probe})");
     out.push_str(".options reltol=1e-4\n.end\n");
     out
 }
@@ -143,7 +146,7 @@ fn interp(res: &NgResult, time: f64) -> f64 {
     let mut lo = 0usize;
     let mut hi = last;
     while hi - lo > 1 {
-        let mid = (lo + hi) / 2;
+        let mid = lo.midpoint(hi);
         if res.t[mid] <= time {
             lo = mid;
         } else {
@@ -154,7 +157,7 @@ fn interp(res: &NgResult, time: f64) -> f64 {
     if span == 0.0 {
         return res.v[hi];
     }
-    res.v[lo] + (res.v[hi] - res.v[lo]) * ((time - res.t[lo]) / span)
+    (res.v[hi] - res.v[lo]).mul_add((time - res.t[lo]) / span, res.v[lo])
 }
 
 /// Run one vector through both engines; return (max rel error, full scale).
@@ -167,12 +170,9 @@ fn cross_check(file: &str, tran: &str, probe: &str, tstop: f64) -> Option<f64> {
     let net = preprocess(&path)?;
     let net = with_analysis(&net, tran, probe);
 
-    let ng = match run_ngspice(&net) {
-        Some(r) => r,
-        None => {
-            eprintln!("ngspice unavailable/failed for {file}; skipping");
-            return None;
-        }
+    let Some(ng) = run_ngspice(&net) else {
+        eprintln!("ngspice unavailable/failed for {file}; skipping");
+        return None;
     };
 
     let circuit = SpiceLoader::load(&net).unwrap_or_else(|e| panic!("{file}: loader failed: {e}"));

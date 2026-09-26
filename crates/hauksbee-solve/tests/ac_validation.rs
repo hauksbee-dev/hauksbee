@@ -24,7 +24,7 @@ fn smooth_switch_opts() -> SolverOptions {
 }
 
 /// A single-frequency sweep at `f`.
-fn spot(f: f64) -> AcSpec {
+const fn spot(f: f64) -> AcSpec {
     AcSpec {
         fstart: f,
         fstop: f,
@@ -55,7 +55,11 @@ fn decade_sweep_includes_endpoints_for_non_integer_decades() {
         sweep: Sweep::Decade,
     };
     let f = spec.frequencies();
-    assert_eq!(f[0], 100.0, "first point should be fstart");
+    assert_eq!(
+        f[0].to_bits(),
+        100.0f64.to_bits(),
+        "first point should be fstart"
+    );
     assert!(
         (f.last().copied().unwrap() - 3000.0).abs() < 1e-6,
         "last={:?}",
@@ -125,6 +129,7 @@ fn rc_lowpass_rolloff_is_minus_20db_per_decade() {
 }
 
 #[test]
+#[allow(clippy::many_single_char_names)] // r, c, f: the closed-form RC names
 fn rc_lowpass_matches_closed_form_across_sweep() {
     let r = 4.7e3;
     let c = 22e-9;
@@ -232,7 +237,7 @@ fn series_rlc_resonant_frequency_and_q() {
 
 /// RLC notch (band-stop): output taken across the series L+C tank to ground is a
 /// notch at f0. Built as Vin -> R -> out, with a series LC from out to ground.
-/// At f0 the LC is a short, so V_out -> 0 (deep notch).
+/// At f0 the LC is a short, so `V_out` -> 0 (deep notch).
 #[test]
 fn series_lc_notch_at_resonance() {
     let r = 1.0e3_f64;
@@ -481,7 +486,7 @@ fn ac_resistor_gets_the_dc_paths_tc1_derating() {
     let r = 1.0e3_f64;
     let tc1 = 4e-3_f64;
     let temp_c = 77.0_f64; // +50 C over the 27 C reference
-    let r_derated = r * (1.0 + tc1 * (temp_c - 27.0)); // 1.2k, stamp.rs formula
+    let r_derated = r * tc1.mul_add(temp_c - 27.0, 1.0); // 1.2k, stamp.rs formula
     let c = 159.155e-9_f64;
     let mut ckt = Circuit::new();
     let vin = ckt.node("in");
@@ -623,7 +628,7 @@ fn spdt_bbm_loser_leg_is_open_in_ac_like_dc() {
 }
 
 /// The DC limit of an AC sweep: an inductor's branch row at f -> 0 is the
-/// transient path's short (v_a - v_b = 0), never a singular/blown stamp, and
+/// transient path's short (`v_a` - `v_b` = 0), never a singular/blown stamp, and
 /// a capacitor's admittance -> 0 stays regular through the gmin shunt.
 #[test]
 fn reactive_stamps_are_regular_at_the_dc_limit() {
@@ -651,14 +656,14 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
 }
 
 /// A voltage switch biased MID-TRANSITION is a modulator: the smooth tanh
-/// conductance has a nonzero control tangent, so with v_a != v_b an AC signal
+/// conductance has a nonzero control tangent, so with `v_a` != `v_b` an AC signal
 /// on the CONTROL node must appear at the output (the switch-as-VGA path the
 /// transient stamp captures via `gm_ctrl = vab * dgsw/dvctrl`). Regression for
 /// the AC arm stamping only the quiescent conductance and dropping the
 /// control transconductance entirely, `.ac` then reported the transfer
 /// function of a fixed resistor (output ~0 here, since the through path is
 /// AC-grounded) while transient saw the modulation. The AC answer must match
-/// the DC sensitivity d v_out / d v_ctrl (the same tangent the transient
+/// the DC sensitivity d `v_out` / d `v_ctrl` (the same tangent the transient
 /// Newton stamp linearizes) to small-signal accuracy.
 #[test]
 fn vswitch_mid_transition_control_modulation_appears_in_ac() {
@@ -705,7 +710,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
     // Transient-path cross-check: the small-signal gain the Newton tangent
     // predicts is the DC sensitivity d v_out / d v_ctrl at the bias. Central
     // finite difference over the FULL nonlinear DC solve.
-    let vout_dc = |vc: f64| -> f64 {
+    let dc_vout = |vc: f64| -> f64 {
         let mut c = build(vc);
         let out = c.node("out");
         let mut ws = hauksbee_solve::Workspace::new(&c);
@@ -713,7 +718,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
         ws.x[ws.layout.node(out).unwrap()]
     };
     let d = 1e-5;
-    let gain_fd = (vout_dc(vmid + d) - vout_dc(vmid - d)) / (2.0 * d);
+    let gain_fd = (dc_vout(vmid + d) - dc_vout(vmid - d)) / (2.0 * d);
     assert!(
         (vout_ac - gain_fd.abs()).abs() / gain_fd.abs() < 1e-2,
         "AC gain must match the transient tangent's DC sensitivity: \

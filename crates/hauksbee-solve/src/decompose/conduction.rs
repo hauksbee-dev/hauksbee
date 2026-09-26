@@ -8,7 +8,7 @@
 //!
 //! A device terminal either *conducts* (its node's KCL row receives current
 //! from the device's stamp: a resistor end, a BJT collector) or it only
-//! *senses* (it steers the stamp but its own row receives nothing: a VSwitch
+//! *senses* (it steers the stamp but its own row receives nothing: a `VSwitch`
 //! control pin, a comparator input). The distinction is load-bearing for
 //! decomposition: two blocks joined only through sense terminals exchange no
 //! current, so cutting that wire and replaying its voltage as a source is
@@ -43,8 +43,10 @@ use crate::partition::UnionFind;
 use hauksbee_ir::{Circuit, DeviceId, NodeId};
 
 /// A device reading a node it does not conduct into: the raw material of a
-/// free tear. If `node` is owned by one island and `device` lives in another,
-/// the coupling between those islands through this edge carries zero current.
+/// free tear.
+///
+/// If `node` is owned by one island and `device` lives in another, the
+/// coupling between those islands through this edge carries zero current.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SenseEdge {
     /// The sensing device.
@@ -77,7 +79,8 @@ impl ConductionGraph {
     /// no source-pinning, no linearity verdicts. Those are policy; this is
     /// topology. The tear passes need the raw conduction components first and
     /// apply rail/source reasoning on top.
-    pub fn analyze(circuit: &Circuit) -> ConductionGraph {
+    #[must_use]
+    pub fn analyze(circuit: &Circuit) -> Self {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1);
 
@@ -151,7 +154,7 @@ impl ConductionGraph {
             }
         }
 
-        ConductionGraph {
+        Self {
             islands,
             node_island,
             sense_edges,
@@ -159,6 +162,7 @@ impl ConductionGraph {
     }
 
     /// The island a device was assigned to, if any.
+    #[must_use]
     pub fn island_of_device(&self, id: DeviceId) -> Option<usize> {
         self.islands.iter().position(|isl| isl.contains(&id))
     }
@@ -167,6 +171,7 @@ impl ConductionGraph {
     /// node it senses is conducted by another (or by none). These are the
     /// candidate free-tear boundaries the feedforward pass will prove or
     /// refuse one-directionality for.
+    #[must_use]
     pub fn cross_island_sense_edges(&self) -> Vec<SenseEdge> {
         self.sense_edges
             .iter()
@@ -322,7 +327,7 @@ mod tests {
         assert_eq!(ConductionGraph::analyze(&c).islands.len(), 1);
     }
 
-    /// The staged and BBM stamp paths (SPDT sibling coupling, branch_reg > 0,
+    /// The staged and BBM stamp paths (SPDT sibling coupling, `branch_reg` > 0,
     /// frozen comparator/switch decisions) keep sense rows as clean as the
     /// baseline.
     #[test]
@@ -386,7 +391,7 @@ mod tests {
                 ctx.switch_freeze = freeze_on.then_some(&sw_frozen);
                 ctx.spdt_sibling = &siblings;
                 stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
-                for dev in circuit.devices.iter() {
+                for dev in &circuit.devices {
                     assert_sense_rows_clean(
                         dev.name(),
                         &ws,

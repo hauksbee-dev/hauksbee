@@ -1,6 +1,7 @@
-//! Deck-to-results glue shared by `hauksbee sim` and the ngspice harness: parse
-//! probes (`V(a)`, `V(a,b)`, `I(V1)`), run the requested analysis, and return a
-//! column-per-probe [`SimOutput`]. No physics lives here; it only routes.
+//! Deck-to-results glue shared by `hauksbee sim` and the ngspice harness.
+//!
+//! It parses probes (`V(a)`, `V(a,b)`, `I(V1)`), runs the requested analysis,
+//! and returns a column-per-probe [`SimOutput`]. No physics lives here; it only routes.
 
 use crate::{
     dc_operating_point, AcAnalysis, AcSpec, SolveError, SolvePhase, SolveResult, SolverOptions,
@@ -17,7 +18,7 @@ use hauksbee_ir::{AcDirective, AcSweep, Circuit, DcDirective, Device, NodeId, So
 pub(crate) const OP_KCL_TOL: f64 = 1e-6;
 
 /// One output quantity requested from a run.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Probe {
     /// `V(node)`.
     NodeVoltage(String),
@@ -29,22 +30,27 @@ pub enum Probe {
 
 impl Probe {
     /// The canonical column label, e.g. `V(out)`, `V(a,b)`, `I(V1)`.
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
-            Probe::NodeVoltage(a) => format!("V({a})"),
-            Probe::NodeDiff(a, b) => format!("V({a},{b})"),
-            Probe::BranchCurrent(d) => format!("I({d})"),
+            Self::NodeVoltage(a) => format!("V({a})"),
+            Self::NodeDiff(a, b) => format!("V({a},{b})"),
+            Self::BranchCurrent(d) => format!("I({d})"),
         }
     }
 
     /// Parse `V(a)`, `V(a,b)`, `I(name)` (any case), or a bare node name.
-    pub fn parse(s: &str) -> SolveResult<Probe> {
+    ///
+    /// # Errors
+    ///
+    /// [`SolveError::invalid`] for an empty or malformed probe.
+    pub fn parse(s: &str) -> SolveResult<Self> {
         let t = s.trim();
         if t.is_empty() {
             return Err(SolveError::invalid("empty probe"));
         }
         let Some(open) = t.find('(') else {
-            return Ok(Probe::NodeVoltage(t.to_string()));
+            return Ok(Self::NodeVoltage(t.to_string()));
         };
         if !t.ends_with(')') {
             return Err(SolveError::invalid(format!(
@@ -57,9 +63,9 @@ impl Probe {
             "v" => {
                 let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
                 match parts.as_slice() {
-                    [a] if !a.is_empty() => Ok(Probe::NodeVoltage((*a).to_string())),
+                    [a] if !a.is_empty() => Ok(Self::NodeVoltage((*a).to_string())),
                     [a, b] if !a.is_empty() && !b.is_empty() => {
-                        Ok(Probe::NodeDiff((*a).to_string(), (*b).to_string()))
+                        Ok(Self::NodeDiff((*a).to_string(), (*b).to_string()))
                     }
                     _ => Err(SolveError::invalid(format!(
                         "probe `{t}`: V() takes one node `V(a)` or two `V(a,b)`"
@@ -67,7 +73,7 @@ impl Probe {
                 }
             }
             "i" if !inner.is_empty() && !inner.contains(',') => {
-                Ok(Probe::BranchCurrent(inner.to_string()))
+                Ok(Self::BranchCurrent(inner.to_string()))
             }
             "i" => Err(SolveError::invalid(format!(
                 "probe `{t}`: I() takes one element name `I(V1)`"
@@ -93,13 +99,14 @@ pub struct SimOutput {
 
 impl SimOutput {
     /// The full series for column `label`, if present.
+    #[must_use]
     pub fn column(&self, label: &str) -> Option<Vec<f64>> {
         let j = self.columns.iter().position(|c| c == label)?;
         Some(self.rows.iter().map(|r| r[j]).collect())
     }
 }
 
-fn integration_method(method: crate::Integration) -> IntegrationMethod {
+const fn integration_method(method: crate::Integration) -> IntegrationMethod {
     match method {
         crate::Integration::Trapezoidal => IntegrationMethod::Trapezoidal,
         crate::Integration::Gear2 => IntegrationMethod::Gear2,
@@ -115,10 +122,12 @@ pub(crate) fn error_budget(opts: &SolverOptions) -> SolveResult<ErrorBudget> {
 
 fn residual_label(circuit: &Circuit, layout: &crate::Layout, unknown: usize) -> String {
     (1..circuit.node_count())
-        .map(|n| NodeId(n as u32))
+        .map(crate::node_id)
         .find(|n| layout.node(*n) == Some(unknown))
-        .map(|n| circuit.node_name(n).to_string())
-        .unwrap_or_else(|| format!("unknown #{unknown}"))
+        .map_or_else(
+            || format!("unknown #{unknown}"),
+            |n| circuit.node_name(n).to_string(),
+        )
 }
 
 fn residual(max_abs: f64, label: String) -> SolveResult<Residual> {
@@ -127,9 +136,10 @@ fn residual(max_abs: f64, label: String) -> SolveResult<Residual> {
 }
 
 /// Every non-ground node voltage, in node order: the default probe set.
+#[must_use]
 pub fn default_probes(circuit: &Circuit) -> Vec<Probe> {
     (1..circuit.node_count())
-        .map(|i| Probe::NodeVoltage(circuit.node_name(NodeId(i as u32)).to_string()))
+        .map(|i| Probe::NodeVoltage(circuit.node_name(crate::node_id(i)).to_string()))
         .collect()
 }
 
@@ -158,15 +168,21 @@ fn no_branch(d: &str) -> SolveError {
 
 /// A `.temp` card sets the analysis temperature unless the caller already moved
 /// `temperature_c` off the 27 C default (an explicit control outranks the deck).
-fn opts_with_deck_temp(circuit: &Circuit, opts: &SolverOptions) -> SolverOptions {
+const fn opts_with_deck_temp(circuit: &Circuit, opts: &SolverOptions) -> SolverOptions {
     let mut o = *opts;
-    if o.temperature_c == 27.0 && circuit.temp_c != 27.0 {
+    let default = 27.0f64.to_bits();
+    if o.temperature_c.to_bits() == default && circuit.temp_c.to_bits() != default {
         o.temperature_c = circuit.temp_c;
     }
     o
 }
 
 /// Run the DC operating point and read the probes off the solved vector.
+///
+/// # Errors
+///
+/// A probe naming an unknown node or device, and any failure of the analysis
+/// itself (non-convergence, a singular system, a behavioral fault).
 pub fn run_op(circuit: &Circuit, opts: &SolverOptions, probes: &[Probe]) -> SolveResult<SimOutput> {
     let opts = &opts_with_deck_temp(circuit, opts);
     let mut ws = Workspace::new(circuit);
@@ -226,6 +242,11 @@ pub fn run_op(circuit: &Circuit, opts: &SolverOptions, probes: &[Probe]) -> Solv
 }
 
 /// Run a transient to `tstop` and read the probes off the waveforms.
+///
+/// # Errors
+///
+/// A probe naming an unknown node or device, and any failure of the analysis
+/// itself (non-convergence, a singular system, a behavioral fault).
 pub fn run_tran(
     circuit: &Circuit,
     opts: &SolverOptions,
@@ -288,11 +309,17 @@ pub fn run_tran(
 
 /// `start` to `stop` inclusive by `step`. The interval count is floored with a
 /// small tolerance so a ratio like `9.999999…` (0.1 is inexact) keeps `stop`.
+#[allow(clippy::similar_names)] // start/stop/step are the SPICE `.dc` fields
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)] // small n >= 0
 fn dc_sweep_values(start: f64, stop: f64, step: f64) -> Vec<f64> {
     let ratio = (stop - start) / step;
     let eps = 1e-9 * ratio.abs().max(1.0);
     let n = (ratio + eps).floor().max(0.0) as u64;
-    (0..=n).map(|i| start + step * i as f64).collect()
+    (0..=n).map(|i| step.mul_add(i as f64, start)).collect()
 }
 
 fn set_source_value(circuit: &mut Circuit, id: hauksbee_ir::DeviceId, value: f64) {
@@ -305,8 +332,15 @@ fn set_source_value(circuit: &mut Circuit, id: hauksbee_ir::DeviceId, value: f64
 }
 
 /// Run a `.dc` sweep: an operating point per sweep value, re-stamping the
-/// source each time. Columns: the inner swept value, the probes, and (for a
+/// source each time.
+///
+/// Columns: the inner swept value, the probes, and (for a
 /// nested sweep) the outer value; the outer sweep's blocks are concatenated.
+///
+/// # Errors
+///
+/// A probe naming an unknown node or device, and any failure of the analysis
+/// itself (non-convergence, a singular system, a behavioral fault).
 pub fn run_dc(
     circuit: &Circuit,
     opts: &SolverOptions,
@@ -314,10 +348,10 @@ pub fn run_dc(
     probes: &[Probe],
 ) -> SolveResult<SimOutput> {
     let inner_vals = dc_sweep_values(dc.inner.start, dc.inner.stop, dc.inner.step);
-    let outer_vals = match &dc.outer {
-        Some(o) => dc_sweep_values(o.start, o.stop, o.step),
-        None => vec![f64::NAN],
-    };
+    let outer_vals = dc.outer.as_ref().map_or_else(
+        || vec![f64::NAN],
+        |o| dc_sweep_values(o.start, o.stop, o.step),
+    );
     let mut columns = vec![dc.inner.name.clone()];
     columns.extend(probes.iter().map(Probe::label));
     if let Some(outer) = &dc.outer {
@@ -360,7 +394,11 @@ pub fn run_dc(
 }
 
 /// Run a `.ac` sweep: per frequency, each probe's magnitude (linear) and phase
-/// (degrees) as two columns after `frequency`. Refuses a deck with no `AC`
+/// (degrees) as two columns after `frequency`.
+///
+/// # Errors
+///
+/// Refuses a deck with no `AC`
 /// stimulus (the response would be an all-zeros non-answer) and branch-current
 /// probes (the AC analysis reports node phasors only).
 pub fn run_ac(
@@ -369,6 +407,10 @@ pub fn run_ac(
     ac: &AcDirective,
     probes: &[Probe],
 ) -> SolveResult<SimOutput> {
+    enum Target {
+        Node(NodeId),
+        Diff(NodeId, NodeId),
+    }
     if circuit.ac_stimulus.is_empty() {
         return Err(SolveError::refused(
             "`.ac` analysis has no AC stimulus: no source carries an `AC <mag> [phase]` \
@@ -376,10 +418,6 @@ pub fn run_ac(
              a meaningless all-zeros table. Add `AC 1` to the driving source (e.g. \
              `VIN in 0 AC 1`).",
         ));
-    }
-    enum Target {
-        Node(NodeId),
-        Diff(NodeId, NodeId),
     }
     let mut targets = Vec::with_capacity(probes.len());
     let mut columns = vec!["frequency".to_string()];
@@ -463,10 +501,10 @@ mod tests {
         .unwrap();
         assert_eq!(out.columns, vec!["Vin", "V(out)"]);
         assert_eq!(out.rows.len(), 4);
-        for (i, row) in out.rows.iter().enumerate() {
-            let vin = i as f64;
+        for (i, row) in (0u32..).zip(&out.rows) {
+            let vin = f64::from(i);
             assert!((row[0] - vin).abs() < 1e-9, "sweep value");
-            assert!((row[1] - 2.0 * vin).abs() < 1e-6, "gain-2 output");
+            assert!(2.0f64.mul_add(-vin, row[1]).abs() < 1e-6, "gain-2 output");
         }
     }
 

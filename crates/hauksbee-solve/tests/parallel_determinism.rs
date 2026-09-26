@@ -97,6 +97,7 @@ fn check_board(name: &str, c: &Circuit, tstop: f64, dt: f64) {
 /// A fan of independent RC legs off one ideal rail: `n` LINEAR islands (the
 /// source pin is the only shared node), exercising the linear phase-(a)
 /// parallel path, which the mirror arrays (all-nonlinear islands) do not.
+#[allow(clippy::cast_precision_loss)] // leg index < n, tiny
 fn build_rc_fan(n: usize) -> Circuit {
     let mut c = Circuit::new();
     let rail = c.node("rail");
@@ -146,7 +147,7 @@ fn rc_ladder_bit_identical_across_thread_counts() {
 }
 
 /// S3 composition under S4: islands inherit `AssemblyMode::Planned` through
-/// `clone_remapped` (their sub-workspaces compile their own StampPlans), and
+/// `clone_remapped` (their sub-workspaces compile their own `StampPlans`), and
 /// that must be exactly as thread-count-invariant as the interpreted path.
 #[test]
 fn planned_assembly_islands_bit_identical_across_thread_counts() {

@@ -15,11 +15,12 @@ thread_local! {
 }
 
 /// Note that a strategy's code path engaged on this thread.
-pub(crate) fn note(s: Strategy) {
+pub fn note(s: Strategy) {
     ACTIVATED.with(|c| c.set(c.get() | s.bit()));
 }
 
 /// Strategies that fired on this thread since the last drain, draining them.
+#[must_use]
 pub fn take_strategy_activations() -> Vec<Strategy> {
     let bits = ACTIVATED.with(|c| c.replace(0));
     Strategy::ALL

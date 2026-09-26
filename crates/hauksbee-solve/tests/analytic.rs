@@ -14,7 +14,7 @@ fn max_norm_err(got: &[f64], want: &[f64], scale: f64) -> f64 {
     let atol = 1e-3 * scale; // 0.1% of full scale as the absolute floor
     got.iter()
         .zip(want)
-        .map(|(g, w)| (g - w).abs() / (w.abs() * 1e-3 + atol))
+        .map(|(g, w)| (g - w).abs() / w.abs().mul_add(1e-3, atol))
         .fold(0.0f64, f64::max)
 }
 
@@ -87,7 +87,11 @@ fn series_rlc_underdamped() {
     let want: Vec<f64> = wf
         .time
         .iter()
-        .map(|&t| v * (1.0 - (-alpha * t).exp() * ((wd * t).cos() + (alpha / wd) * (wd * t).sin())))
+        .map(|&t| {
+            v * (-alpha * t)
+                .exp()
+                .mul_add(-(alpha / wd).mul_add((wd * t).sin(), (wd * t).cos()), 1.0)
+        })
         .collect();
     let err = max_norm_err(got, &want, v);
     assert!(err < 5.0, "RLC underdamped normalized err {err:.3}");
@@ -113,10 +117,10 @@ fn diode_resistor_dc_operating_point() {
     diode(&mut circuit, "D1", nd, NodeId::GROUND, model);
 
     // Reference: solve (V - Vd)/R = Is*(exp(Vd/Vt) - 1) for Vd by Newton.
-    let vt = 0.025852_f64; // kT/q at 27 C
+    let vt = 0.025_852_f64; // kT/q at 27 C
     let mut vd = 0.6_f64;
     for _ in 0..100 {
-        let id = model.is * ((vd / vt).exp() - 1.0);
+        let id = model.is * (vd / vt).exp_m1();
         let gd = model.is / vt * (vd / vt).exp();
         let f = (v - vd) / r - id;
         let df = -1.0 / r - gd;

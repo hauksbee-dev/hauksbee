@@ -6,7 +6,7 @@
 //! OFF (the reference) and ON, on identical fixed-step grids so the accepted
 //! samples align one-to-one, and assert the waveforms agree within the
 //! reltol-scaled convergence tolerance. The stiff flagship-shaped fixture
-//! (the linesearch_fixture board, TransientDyn-armed, adaptive) is compared
+//! (the `linesearch_fixture` board, TransientDyn-armed, adaptive) is compared
 //! on its physics verdicts (spike count, spike times) because an adaptive
 //! grid legitimately re-times under any iterate-path change.
 //!
@@ -42,7 +42,7 @@ fn waveform_err(a: &Waveforms, b: &Waveforms, opts: &SolverOptions) -> (f64, f64
     for (col_a, col_b) in a.node_voltages.iter().zip(&b.node_voltages) {
         for (&va, &vb) in col_a.iter().zip(col_b) {
             let err = (va - vb).abs();
-            let tol = opts.reltol * va.abs().max(vb.abs()) + opts.vntol;
+            let tol = opts.reltol.mul_add(va.abs().max(vb.abs()), opts.vntol);
             max_abs = max_abs.max(err);
             max_norm = max_norm.max(err / tol);
         }
@@ -94,7 +94,7 @@ fn mirror_array_gate(blocks: usize, tstop: f64) -> (f64, f64) {
     // A moving rail keeps every mirror junction re-solving (3+ iterations),
     // so the ON run genuinely replays cached stamps and the tolerance
     // assertion tests something real (verified via the census skip counter).
-    for dev in c.devices.iter_mut() {
+    for dev in &mut c.devices {
         if let Device::Vsource { name, kind, .. } = dev {
             if name == "V5" {
                 *kind = SourceKind::Sin {
@@ -148,9 +148,9 @@ fn mirror_array_240_bypass_matches_reference() {
     mirror_array_gate(240, 60e-6);
 }
 
-/// The flagship-shaped stiff fixture (the linesearch_fixture board:
-/// integrate-and-fire relaxation oscillator, SPDT pair, TransientDyn armed,
-/// staged regularizers + event retry + Armijo line search, FromZero,
+/// The flagship-shaped stiff fixture (the `linesearch_fixture` board:
+/// integrate-and-fire relaxation oscillator, SPDT pair, `TransientDyn` armed,
+/// staged regularizers + event retry + Armijo line search, `FromZero`,
 /// adaptive). This board exists in `tests/linesearch_fixture.rs`, which must
 /// stay the only test in its binary; the construction is replicated verbatim
 /// here.

@@ -97,7 +97,13 @@ pub struct Layout {
 
 impl Layout {
     /// Build the layout for a circuit.
-    pub fn new(circuit: &Circuit) -> Layout {
+    ///
+    /// # Panics
+    ///
+    /// If a coupling references a device that is not an inductor of this
+    /// circuit (a sub-circuit extraction that dropped a winding).
+    #[allow(clippy::too_many_lines)] // node, internal and branch numbering in one pass
+    pub fn new(circuit: &Circuit) -> Self {
         let named_nodes = circuit.node_count().saturating_sub(1);
         let max_node = circuit.max_node() as usize;
         let (n_real, node_map) = if max_node == named_nodes {
@@ -107,9 +113,7 @@ impl Layout {
             // then append only the actually referenced out-of-band ids. This
             // keeps dense circuits bit-identical while a cut node such as
             // NodeId(800_000) costs one row, not 800_000 rows.
-            let mut node_of: Vec<NodeId> = (1..circuit.node_count())
-                .map(|i| NodeId(i as u32))
-                .collect();
+            let mut node_of: Vec<NodeId> = (1..circuit.node_count()).map(crate::node_id).collect();
             let mut extra: Vec<NodeId> = circuit
                 .devices
                 .iter()
@@ -275,7 +279,7 @@ impl Layout {
                 couplings[l2.0 as usize].push((*l1, m));
             }
         }
-        Layout {
+        Self {
             n_nodes,
             size: next,
             external_nodes: n_real,
@@ -290,6 +294,7 @@ impl Layout {
 
     /// Unknown index of a non-ground node. Ground returns `None`.
     #[inline]
+    #[must_use]
     pub fn node(&self, node: hauksbee_ir::NodeId) -> Option<usize> {
         if node.is_ground() {
             None
@@ -307,18 +312,20 @@ impl Layout {
     /// External node id represented by a node-block unknown. Device-private
     /// internal unknowns and branch-current unknowns return `None`.
     #[inline]
+    #[must_use]
     pub fn node_id(&self, unknown: usize) -> Option<NodeId> {
         if unknown >= self.external_nodes {
             return None;
         }
         match &self.node_map {
-            NodeMap::Dense => Some(NodeId((unknown + 1) as u32)),
+            NodeMap::Dense => Some(crate::node_id(unknown + 1)),
             NodeMap::Sparse { node_of, .. } => node_of.get(unknown).copied(),
         }
     }
 
     /// Branch-current unknown index for a device, if it owns one.
     #[inline]
+    #[must_use]
     pub fn branch(&self, id: DeviceId) -> Option<usize> {
         self.branch_of[id.0 as usize]
     }
@@ -328,6 +335,7 @@ impl Layout {
     /// K-free circuit (one `is_empty` branch, no allocation, no float math,
     /// the fast path the bit-identity bar demands), and for non-inductors.
     #[inline]
+    #[must_use]
     pub fn mutual_partners(&self, id: DeviceId) -> &[(DeviceId, f64)] {
         if self.couplings.is_empty() {
             return &[];
@@ -339,12 +347,13 @@ impl Layout {
     /// `[c_int, b_int, e_int]`. `None` when the device allocated none (the
     /// common case: default models, or not a BJT).
     #[inline]
+    #[must_use]
     pub fn bjt_internal(&self, id: DeviceId) -> Option<&[Option<usize>; 3]> {
         if self.bjt_internal_of.is_empty() {
             return None;
         }
         let ints = &self.bjt_internal_of[id.0 as usize];
-        if ints.iter().all(|i| i.is_none()) {
+        if ints.iter().all(std::option::Option::is_none) {
             None
         } else {
             Some(ints)
@@ -358,6 +367,7 @@ impl Layout {
     #[inline]
     /// The intrinsic anode of a diode whose model sets a series resistance.
     /// `None` when it sets none and the junction sits on the external anode.
+    #[must_use]
     pub fn diode_internal(&self, id: DeviceId) -> Option<usize> {
         if self.diode_internal_of.is_empty() {
             return None;
@@ -365,12 +375,13 @@ impl Layout {
         self.diode_internal_of[id.0 as usize]
     }
 
+    #[must_use]
     pub fn mos_internal(&self, id: DeviceId) -> Option<&[Option<usize>; 2]> {
         if self.mos_internal_of.is_empty() {
             return None;
         }
         let ints = &self.mos_internal_of[id.0 as usize];
-        if ints.iter().all(|i| i.is_none()) {
+        if ints.iter().all(std::option::Option::is_none) {
             None
         } else {
             Some(ints)
@@ -418,9 +429,9 @@ mod tests {
 /// independent charges spill into the SECONDARY banks `xb[k]`, one extra
 /// state each, in a documented per-device order:
 ///
-/// * BJT (two charges):    bank A = Q_be,  `xb[0]` = Q_bc.
-/// * MOSFET (up to four):  bank A = Q_gs,  `xb[0]` = Q_gd,
-///   `xb[1]` = Q_bd, `xb[2]` = Q_bs.
+/// * BJT (two charges):    bank A = `Q_be`,  `xb[0]` = `Q_bc`.
+/// * MOSFET (up to four):  bank A = `Q_gs`,  `xb[0]` = `Q_gd`,
+///   `xb[1]` = `Q_bd`, `xb[2]` = `Q_bs`.
 ///
 /// (A single named secondary bank exists for "the one
 /// device with two charges"; the MOSFET's four charges are why it is now an
@@ -461,7 +472,7 @@ impl ReactiveState {
             dx1: vec![0.0; n],
             x2: vec![0.0; n],
         };
-        ReactiveState {
+        Self {
             x1: vec![0.0; n],
             dx1: vec![0.0; n],
             x2: vec![0.0; n],

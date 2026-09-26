@@ -2,8 +2,8 @@
 //! rail. A unity-gain follower (out tied to in-) whose + input sits at a rail
 //! has its operating point inside a linear window only `span/gain` volts wide;
 //! the hard rail clamp used to drop every input tangent outside that window,
-//! so Newton degenerated to a Picard fixed-point map v_out <- clamp(gain*(vp -
-//! v_out)) that flips rail-to-rail forever (the stormduino LM358 follower on
+//! so Newton degenerated to a Picard fixed-point map `v_out` <- clamp(gain*(vp -
+//! `v_out`)) that flips rail-to-rail forever (the stormduino LM358 follower on
 //! /D13 under firmware GPIO drive). These tests pin the cure: the solve must
 //! CONVERGE, to the closed-form operating point, from a cold start on either
 //! rail.
@@ -43,11 +43,11 @@ fn dc_out(c: &Circuit) -> f64 {
     let mut ws = Workspace::new(c);
     dc_operating_point(&mut ws, c, &opts).expect("follower DC converges");
     let out = c.find_node("out").unwrap();
-    ws.layout.node(out).map(|i| ws.x[i]).unwrap_or(0.0)
+    ws.layout.node(out).map_or(0.0, |i| ws.x[i])
 }
 
 /// Follower's exact operating point when the loop stays linear: the classic
-/// finite-gain error, v_out = vin * gain / (1 + gain).
+/// finite-gain error, `v_out` = vin * gain / (1 + gain).
 fn linear_op(vin: f64, gain: f64) -> f64 {
     vin * gain / (1.0 + gain)
 }

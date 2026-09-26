@@ -13,7 +13,7 @@
 //!   never a tear candidate), and the node-less Coupling device itself must
 //!   land IN that island's device list, a dropped Coupling would silently
 //!   decouple the windings inside the island's own Layout.
-//! * **The LinearIsland refusal.** Coupling is `is_linear() == true`, so a
+//! * **The `LinearIsland` refusal.** Coupling is `is_linear() == true`, so a
 //!   coupled RL island reaches the state-space reducer under Auto; the
 //!   reducer must return `None` (its inductor model assumes di/dt = v/L per
 //!   winding; the group form needs L INVERTED, which k=1 forbids), never
@@ -111,7 +111,7 @@ fn closed_form_vsec(f: f64, k: f64, l1: f64, l2: f64, rs: f64, rl: f64) -> Compl
 /// two-winding closed form (which at k=1 includes the magnetizing droop:
 /// wL1 = 62.8 ohm at 10 kHz shunts the 250-ohm reflected load, so the exact
 /// value is well below the ideal 1.667 V, grading against the ideal would
-/// be grading the wrong physics). The ngspice deck xfmr_k1 pins the exact
+/// be grading the wrong physics). The ngspice deck `xfmr_k1` pins the exact
 /// waveform; this gate needs no oracle installed.
 #[test]
 fn k1_singular_group_solves_to_closed_form() {
@@ -231,7 +231,7 @@ fn linear_island_with_coupling_forces_mna() {
 // --- assembly / partition parity ------------------------------------------------
 
 /// Planned two-tier assembly (−M folded into the reactive backbone, history
-/// through the windings' RhsOnly restamps) vs the interpreted reference.
+/// through the windings' `RhsOnly` restamps) vs the interpreted reference.
 #[test]
 fn planned_assembly_matches_interpreted_on_coupled_deck() {
     let (c, _, _) = transformer(0.999, 1e-3, 4e-3);
@@ -325,7 +325,7 @@ fn ac_matches_two_winding_closed_form() {
         let got = p.node(&c, "sec").expect("sec phasor present");
         let err = (got - vs).norm();
         assert!(
-            err <= 1e-6 + 1e-9 * vs.norm().max(got.norm()),
+            err <= 1e-9f64.mul_add(vs.norm().max(got.norm()), 1e-6),
             "f={} Hz: engine {got:?} vs closed form {vs:?} (|err|={err:.3e})",
             p.freq
         );

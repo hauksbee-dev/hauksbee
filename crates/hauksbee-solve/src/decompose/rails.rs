@@ -35,7 +35,7 @@
 //!
 //! ## Stacked feeds
 //!
-//! Real supplies cascade (source -> +5V -> 1k shunt -> ANALOG_VDD), and
+//! Real supplies cascade (source -> +5V -> 1k shunt -> `ANALOG_VDD`), and
 //! single-hop detection (feed must be source-pinned) stops one hop short of
 //! the rail that fragments the board. Discovery is therefore transitive: a
 //! discovered rail is a valid feed for the next hop, walked to a fixpoint.
@@ -76,7 +76,7 @@ pub enum TearMotive {
     /// Normal path: tear only where the cost model predicts a win.
     Profit,
     /// The monolithic solve failed (DC homotopy exhausted or transient died
-    /// at dt_min): structural guards still apply, the cost gate does not.
+    /// at `dt_min`): structural guards still apply, the cost gate does not.
     ConvergenceEscalation,
 }
 
@@ -99,7 +99,7 @@ pub struct RailPolicy {
 
 impl Default for RailPolicy {
     fn default() -> Self {
-        RailPolicy {
+        Self {
             alpha: 1.4,
             outer_iters: 3.0,
             min_nonlinear_fanout: 2,
@@ -143,7 +143,8 @@ pub struct BalanceTearCandidate {
 
 impl BalanceTearCandidate {
     /// Convenience: was this candidate accepted?
-    pub fn torn(&self) -> bool {
+    #[must_use]
+    pub const fn torn(&self) -> bool {
         matches!(self.decision, TearDecision::Tear { .. })
     }
 }
@@ -153,6 +154,9 @@ impl BalanceTearCandidate {
 /// `graph` must be the [`ConductionGraph`] of the same circuit. Pinned-ness
 /// (ideal-source-driven, propagated through stacked sources) is recomputed
 /// here the same way the proven partitioner computes it.
+#[must_use]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // ordered passes; block sizes << 2^53
+#[allow(clippy::suspicious_operation_groupings)] // feed/rail roles are swapped on purpose
 pub fn detect_balance_tears(
     circuit: &Circuit,
     graph: &ConductionGraph,
@@ -245,7 +249,7 @@ pub fn detect_balance_tears(
 
     let candidate_of = |rail: usize| -> (NodeId, NodeId, DeviceId, f64) {
         let (feed, dev, ohms) = links_of[rail][0];
-        (NodeId(rail as u32), NodeId(feed as u32), dev, ohms)
+        (crate::node_id(rail), crate::node_id(feed), dev, ohms)
     };
 
     // ---- Phase 2: refusals, then a joint decision. -----------------------
@@ -380,8 +384,6 @@ pub(crate) fn fragment_blocks(
     island: usize,
     bound: &[bool],
 ) -> Fragmentation {
-    let n_nodes = circuit.max_node() as usize;
-    let mut parent: Vec<usize> = (0..n_nodes + 1).collect();
     fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]];
@@ -389,6 +391,8 @@ pub(crate) fn fragment_blocks(
         }
         x
     }
+    let n_nodes = circuit.max_node() as usize;
+    let mut parent: Vec<usize> = (0..=n_nodes).collect();
 
     let known_side = |dev: &Device| -> bool {
         dev.conduction_nodes()

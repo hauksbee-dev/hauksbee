@@ -77,8 +77,8 @@ pub trait SpiSlave: Send {
     fn transfer(&mut self, mosi: u8) -> u8;
 
     /// Chip-select ASSERTED (active-low falling edge): begin a fresh transaction
-    /// by resetting the command state machine to its start-of-transaction state
-    ///. The default reuses [`Self::deselect`], which for the built-in slaves
+    /// by resetting the command state machine to its start-of-transaction state.
+    /// The default reuses [`Self::deselect`], which for the built-in slaves
     /// resets the sequence/command counter to idle without disturbing latched
     /// permission bits (the 25xx `deselect` only clears the write-enable latch
     /// when it lands mid-WRITE, and a select edge never does, because the previous
@@ -188,29 +188,32 @@ pub enum CsProvenance {
 impl CsProvenance {
     /// Lower-case tag for JSON coverage: `"spec"` | `"model-roles"` |
     /// `"bitbang-pins"`.
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            CsProvenance::SpecDeclared => "spec",
-            CsProvenance::ModelRoles => "model-roles",
-            CsProvenance::BitBangPins => "bitbang-pins",
+            Self::SpecDeclared => "spec",
+            Self::ModelRoles => "model-roles",
+            Self::BitBangPins => "bitbang-pins",
         }
     }
 
     /// The clause a report appends after the `exact` tier, naming who supplied
     /// the CS net.
-    pub fn describe(self) -> &'static str {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
         match self {
-            CsProvenance::SpecDeclared => "CS net declared by the spec",
-            CsProvenance::ModelRoles => "CS net resolved from the bound model's pin roles",
-            CsProvenance::BitBangPins => "CS pin taken from the bit-banged SPI wiring",
+            Self::SpecDeclared => "CS net declared by the spec",
+            Self::ModelRoles => "CS net resolved from the bound model's pin roles",
+            Self::BitBangPins => "CS pin taken from the bit-banged SPI wiring",
         }
     }
 }
 
 /// How a bus's transactions are being framed, surfaced per-slave in the co-sim
-/// coverage so a consumer knows whether the CS boundaries are real or guessed
-///. Precedence when reported: `Backend` (a real backend CS event was
-/// observed) over `Exact` (a CS pin resolved) over `Heuristic`.
+/// coverage so a consumer knows whether the CS boundaries are real or guessed.
+///
+/// Precedence when reported: `Backend` (a real backend CS event was observed)
+/// over `Exact` (a CS pin resolved) over `Heuristic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpiFramingMode {
     /// Framed from the real CS-pin GPIO edge stream: the CS net resolved to the
@@ -233,21 +236,23 @@ pub enum SpiFramingMode {
 
 impl SpiFramingMode {
     /// Lower-case tag for JSON coverage: `"exact"` | `"backend"` | `"heuristic"`.
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            SpiFramingMode::Exact(_) => "exact",
-            SpiFramingMode::Backend => "backend",
-            SpiFramingMode::Heuristic => "heuristic",
+            Self::Exact(_) => "exact",
+            Self::Backend => "backend",
+            Self::Heuristic => "heuristic",
         }
     }
 
     /// Where the CS net came from, on the exact tier only. `None` on the backend
     /// tier (the emulator framed it, no net was resolved) and on the heuristic
     /// tier (there was no net to resolve).
-    pub fn cs_provenance(self) -> Option<CsProvenance> {
+    #[must_use]
+    pub const fn cs_provenance(self) -> Option<CsProvenance> {
         match self {
-            SpiFramingMode::Exact(p) => Some(p),
-            SpiFramingMode::Backend | SpiFramingMode::Heuristic => None,
+            Self::Exact(p) => Some(p),
+            Self::Backend | Self::Heuristic => None,
         }
     }
 }
@@ -318,9 +323,10 @@ pub struct SpiBus {
 }
 
 impl SpiBus {
+    #[must_use]
     pub fn new(id: &str, slave: Box<dyn SpiSlave>) -> Self {
         let spi_mode = slave.spi_mode();
-        SpiBus {
+        Self {
             id: id.to_string(),
             slave,
             cs_pin: None,
@@ -338,12 +344,14 @@ impl SpiBus {
     /// The declared SPI clock mode (0..=3) of this bus's slave, cached from
     /// [`SpiSlave::spi_mode`] at construction. Consumed by the bit-banged SPI
     /// responder to time its sample/shift edges.
-    pub fn spi_mode(&self) -> u8 {
+    #[must_use]
+    pub const fn spi_mode(&self) -> u8 {
         self.spi_mode
     }
 
     /// The MCU pin driving this slave's chip-select, if resolved.
-    pub fn cs_pin(&self) -> Option<(char, u8)> {
+    #[must_use]
+    pub const fn cs_pin(&self) -> Option<(char, u8)> {
         self.cs_pin
     }
 
@@ -356,7 +364,7 @@ impl SpiBus {
     /// forgot to set it reported `exact (CS net declared by the spec)` for a bus
     /// no spec had declared a net for. Making the caller say both means a new
     /// route onto the exact tier cannot silently inherit someone else's story.
-    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>, provenance: CsProvenance) {
+    pub const fn set_cs_pin(&mut self, pin: Option<(char, u8)>, provenance: CsProvenance) {
         self.cs_provenance = provenance;
         // A resolved CS pin means selection is driven by the CS edge, so start
         // DESELECTED until the firmware asserts it. A bus with no CS pin stays
@@ -368,12 +376,14 @@ impl SpiBus {
     /// Whether this bus's chip-select is currently asserted. The scheduler's
     /// shared `on_spi` handler routes a byte to the selected bus when more than
     /// one SPI slave is on the controller.
-    pub fn is_selected(&self) -> bool {
+    #[must_use]
+    pub const fn is_selected(&self) -> bool {
         self.selected
     }
 
     /// Which framing tier this bus is actually running on, for coverage.
-    pub fn framing_mode(&self) -> SpiFramingMode {
+    #[must_use]
+    pub const fn framing_mode(&self) -> SpiFramingMode {
         if self.backend_deselect_seen {
             SpiFramingMode::Backend
         } else if self.cs_pin.is_some() {
@@ -388,7 +398,8 @@ impl SpiBus {
     /// the chunk-boundary deselect heuristic to it, since doing so would truncate a
     /// transaction that legitimately spans a chunk boundary (failure mode
     /// b: the debug warning below must stop firing on these buses).
-    pub fn frames_itself(&self) -> bool {
+    #[must_use]
+    pub const fn frames_itself(&self) -> bool {
         self.cs_pin.is_some() || self.backend_deselect_seen
     }
 
@@ -409,7 +420,8 @@ impl SpiBus {
         self.powered = powered;
     }
 
-    pub fn powered(&self) -> bool {
+    #[must_use]
+    pub const fn powered(&self) -> bool {
         self.powered
     }
 
@@ -417,6 +429,7 @@ impl SpiBus {
         self.slave.take_activity()
     }
 
+    #[must_use]
     pub fn low_power_mode(&self) -> bool {
         self.slave.low_power_mode()
     }
@@ -460,15 +473,18 @@ impl SpiBus {
     /// True if the active slave is partway through a transaction. See
     /// [`SpiSlave::mid_transaction`]; used for the scheduler's debug-time
     /// chunk-boundary sanity check.
+    #[must_use]
     pub fn slave_mid_transaction(&self) -> bool {
         self.slave.mid_transaction()
     }
 
     /// The bus identifier (the reference designator passed to [`SpiBus::new`]).
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
 
+    #[must_use]
     pub fn slave<T: 'static>(&self) -> Option<&T> {
         self.slave.as_any().downcast_ref::<T>()
     }
@@ -479,7 +495,7 @@ impl SpiBus {
 
 impl Peripheral for SpiBus {
     fn id(&self) -> &str {
-        SpiBus::id(self)
+        Self::id(self)
     }
     fn kind(&self) -> &'static str {
         "spi_bus"
@@ -506,7 +522,9 @@ impl Peripheral for SpiBus {
 // 25xx SPI EEPROM
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 25xx (25LCxxx / AT25) SPI EEPROM. Instruction set (datasheet):
+/// 25xx (25LCxxx / AT25) SPI EEPROM.
+///
+/// Instruction set (datasheet):
 ///   0x06 WREN, 0x04 WRDI, 0x05 RDSR, 0x01 WRSR,
 ///   0x03 READ  (1 instr + 2 addr bytes, then read data),
 ///   0x02 WRITE (1 instr + 2 addr bytes, then write data).
@@ -529,8 +547,9 @@ enum SpiCmd {
 }
 
 impl Spi25Eeprom {
+    #[must_use]
     pub fn new(size: usize) -> Self {
-        Spi25Eeprom {
+        Self {
             mem: vec![0xFF; size.max(1)],
             state: SpiCmd::Idle,
             addr: 0,
@@ -539,10 +558,12 @@ impl Spi25Eeprom {
         }
     }
 
+    #[must_use]
     pub fn contents(&self) -> &[u8] {
         &self.mem
     }
 
+    #[must_use]
     pub fn contains(&self, needle: &[u8]) -> bool {
         if needle.is_empty() {
             return true;
@@ -597,7 +618,7 @@ impl SpiSlave for Spi25Eeprom {
             }
             SpiCmd::Read => {
                 if self.addr_bytes < 2 {
-                    self.addr = (self.addr << 8) | mosi as u16;
+                    self.addr = (self.addr << 8) | u16::from(mosi);
                     self.addr_bytes += 1;
                     0xFF
                 } else {
@@ -612,17 +633,16 @@ impl SpiSlave for Spi25Eeprom {
             }
             SpiCmd::Write => {
                 if self.addr_bytes < 2 {
-                    self.addr = (self.addr << 8) | mosi as u16;
+                    self.addr = (self.addr << 8) | u16::from(mosi);
                     self.addr_bytes += 1;
-                    0xFF
                 } else {
                     if self.wel {
                         let i = self.addr as usize % self.mem.len();
                         self.mem[i] = mosi;
                     }
                     self.addr = self.addr.wrapping_add(1);
-                    0xFF
                 }
+                0xFF
             }
         }
     }
@@ -639,6 +659,7 @@ impl SpiSlave for Spi25Eeprom {
         self.state != SpiCmd::Idle
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("size".into(), self.mem.len() as f64);
@@ -696,6 +717,11 @@ enum NorCmd {
 }
 
 impl SpiNorFlash {
+    /// # Panics
+    ///
+    /// Panics if `size` is zero, if `page_size` or `sector_size` is not a power of
+    /// two no larger than `size`, or if `spi_mode` is above 3.
+    #[must_use]
     pub fn new(
         size: usize,
         page_size: usize,
@@ -731,17 +757,18 @@ impl SpiNorFlash {
         }
     }
 
+    #[must_use]
     pub fn contents(&self) -> &[u8] {
         &self.mem
     }
 
-    fn begin_address(&mut self, state: NorCmd) {
+    const fn begin_address(&mut self, state: NorCmd) {
         self.state = state;
         self.addr = 0;
         self.addr_bytes = 0;
     }
 
-    fn address_byte(&mut self, byte: u8) -> bool {
+    const fn address_byte(&mut self, byte: u8) -> bool {
         self.addr = ((self.addr << 8) | byte as usize) % self.mem.len();
         self.addr_bytes += 1;
         self.addr_bytes == 3
@@ -788,7 +815,6 @@ impl SpiSlave for SpiNorFlash {
                         self.activity.write_units = self.activity.write_units.saturating_add(1);
                     }
                     0xb9 => self.powered_down = true,
-                    0xab => {}
                     _ => {}
                 }
                 0xff
@@ -897,6 +923,7 @@ impl SpiSlave for SpiNorFlash {
         self.spi_mode
     }
 
+    #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
         HashMap::from([
             ("size".into(), self.mem.len() as f64),
@@ -929,9 +956,11 @@ impl SpiSlave for SpiNorFlash {
 // MCP3008 8-channel 10-bit SPI ADC
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// MCP3008 8-channel 10-bit ADC. Protocol (datasheet): the master clocks a
-/// start bit, a SGL/DIFF + channel-select nibble, then reads back a null bit
-/// and 10 data bits. The common 3-byte transfer is:
+/// MCP3008 8-channel 10-bit ADC.
+///
+/// Protocol (datasheet): the master clocks a start bit, a SGL/DIFF +
+/// channel-select nibble, then reads back a null bit and 10 data bits. The
+/// common 3-byte transfer is:
 ///   byte0 = 0x01 (start bit), byte1 = (SGL<<7)|(chan<<4), byte2 = 0x00.
 /// The slave returns the 10-bit result split across byte1's low 2 bits and all
 /// of byte2. Channel voltages are settable (0..vref) and converted to counts.
@@ -945,8 +974,9 @@ pub struct Mcp3008 {
 }
 
 impl Mcp3008 {
-    pub fn new(vref: f64) -> Self {
-        Mcp3008 {
+    #[must_use]
+    pub const fn new(vref: f64) -> Self {
+        Self {
             vref: vref.max(1e-6),
             channels: [0.0; 8],
             seq: 0,
@@ -956,12 +986,13 @@ impl Mcp3008 {
     }
 
     /// Set a channel's input voltage (clamped to 0..vref).
-    pub fn set_channel(&mut self, ch: usize, volts: f64) {
+    pub const fn set_channel(&mut self, ch: usize, volts: f64) {
         if ch < 8 {
             self.channels[ch] = volts.clamp(0.0, self.vref);
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // frac is clamped to [0, 1], so the code fits u16
     fn counts(&self, ch: usize) -> u16 {
         // MCP3008 datasheet (DS21295) transfer function: code = 1024 * Vin/Vref,
         // i.e. LSB = Vref/2^n = Vref/1024, with the code saturating at 2^n-1 =
@@ -1168,9 +1199,9 @@ mod tests {
         bus.transfer(0x01); // start byte
         let hi = bus.transfer(3 << 4); // single-ended, channel 3
         let lo = bus.transfer(0x00);
-        let counts = (((hi & 0x03) as u16) << 8) | lo as u16;
+        let counts = (u16::from(hi & 0x03) << 8) | u16::from(lo);
         // 2.5/5.0 * 1024 = 512.
-        assert!((counts as i32 - 512).abs() <= 1, "counts {counts} not ~512");
+        assert!(counts.abs_diff(512) <= 1, "counts {counts} not ~512");
     }
 
     #[test]
@@ -1185,7 +1216,7 @@ mod tests {
             bus.transfer(0x01);
             let hi = bus.transfer(0 << 4);
             let lo = bus.transfer(0x00);
-            (((hi & 0x03) as u16) << 8) | lo as u16
+            (u16::from(hi & 0x03) << 8) | u16::from(lo)
         };
         // One-quarter scale: 1024 * 0.25 = 256 exactly (1023*0.25 = 255.75 → 256
         // by rounding, so pick a fraction where the two formulas diverge).

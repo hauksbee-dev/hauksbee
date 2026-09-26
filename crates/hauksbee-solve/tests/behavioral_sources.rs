@@ -61,7 +61,7 @@ fn behavioral_vdep(out: NodeId, ctrl: NodeId, voltage_out: bool) -> Device {
 
 /// A V(node) dep fuses the sensed island with the output island in the
 /// partitioner (like an E/G control pair), and the fused island is TAINTED
-/// nonlinear, which is itself the LinearIsland gate: `compile` refuses any
+/// nonlinear, which is itself the `LinearIsland` gate: `compile` refuses any
 /// non-linear island before it ever walks devices.
 #[test]
 fn behavioral_vdep_fuses_islands_and_taints_nonlinear() {
@@ -231,7 +231,7 @@ fn behavioral_current_dc_matches_analytic() {
     dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
     let node = |name: &str| ws.x[ws.layout.node(c.find_node(name).unwrap()).unwrap()];
     // i(Vs) = 1 V / 1 k = 1 mA; f = 1m*tanh(1) + 2 mA; v_out = -1k * f.
-    let want = -(1e-3 * 1.0f64.tanh() + 2e-3) * 1e3;
+    let want = -1e-3f64.mul_add(1.0f64.tanh(), 2e-3) * 1e3;
     let v_out = node("out");
     assert!(
         (v_out - want).abs() < 1e-5,
@@ -256,7 +256,7 @@ fn behavioral_self_reference_converges() {
     dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
     let v = ws.x[ws.layout.node(c.find_node("out").unwrap()).unwrap()];
     let lhs = (1.0 - v) / 1e3;
-    let rhs = 1e-3 * ((v / 0.2).exp() - 1.0);
+    let rhs = 1e-3 * (v / 0.2).exp_m1();
     assert!(
         (lhs - rhs).abs() < 1e-9,
         "KCL balance violated: {lhs:.3e} vs {rhs:.3e} at v={v}"
@@ -271,7 +271,7 @@ fn behavioral_self_reference_converges() {
 
 /// Under `Partitioning::Auto` the transient must match the bit-exact `Off`
 /// monolith AND the analytic steady state (0 V would mean the device was
-/// silently dropped). Exercises the NonlinearIsland build with the B-source's
+/// silently dropped). Exercises the `NonlinearIsland` build with the B-source's
 /// per-slot control retargeting (the plural F/H path) and V-dep remapping.
 #[test]
 fn auto_partitioning_never_drops_behavioral() {

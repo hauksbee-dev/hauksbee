@@ -32,8 +32,9 @@ pub struct ComplexSystem {
 
 impl ComplexSystem {
     /// A fresh `n x n` system of zeros.
+    #[must_use]
     pub fn new(n: usize) -> Self {
-        ComplexSystem {
+        Self {
             n,
             a: vec![Complex64::new(0.0, 0.0); n * n],
             b: vec![Complex64::new(0.0, 0.0); n],
@@ -41,16 +42,17 @@ impl ComplexSystem {
     }
 
     /// Dimension.
-    pub fn dim(&self) -> usize {
+    #[must_use]
+    pub const fn dim(&self) -> usize {
         self.n
     }
 
     /// Zero every entry, keeping the size (reused across a frequency sweep).
     pub fn clear(&mut self) {
-        for v in self.a.iter_mut() {
+        for v in &mut self.a {
             *v = Complex64::new(0.0, 0.0);
         }
-        for v in self.b.iter_mut() {
+        for v in &mut self.b {
             *v = Complex64::new(0.0, 0.0);
         }
     }
@@ -86,6 +88,7 @@ impl ComplexSystem {
     /// Solve `A x = b` in place, returning the solution vector, or `None` if the
     /// matrix is singular. Uses LU with partial pivoting; the assembled matrix is
     /// consumed (factorized in place).
+    #[must_use]
     pub fn solve(mut self) -> Option<Vec<Complex64>> {
         let n = self.n;
         if n == 0 {

@@ -67,10 +67,11 @@ pub enum AssemblyMode {
     Planned,
 }
 
-/// The classic SPICE device-evaluation bypass: reuse a
-/// quiescent nonlinear device's previous linearization (its recorded matrix +
-/// RHS stamp) when none of the unknowns it reads moved more than
-/// `0.1·(reltol·max(|v|,|v_last|) + vntol)` since its last evaluation.
+/// The classic SPICE device-evaluation bypass.
+///
+/// It reuses a quiescent nonlinear device's previous linearization (its
+/// recorded matrix + RHS stamp) when none of the unknowns it reads moved more
+/// than `0.1·(reltol·max(|v|,|v_last|) + vntol)` since its last evaluation.
 ///
 /// `Off` (the default) is the reference: no cache exists, no movement test
 /// runs, and every solve path is bit-for-bit the classic assembly. `On` is an
@@ -205,6 +206,7 @@ pub enum SwitchModel {
 /// Device-physics switches. Each `false` removes the corresponding term from
 /// every device that has it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // independent physics toggles, not a state machine
 pub struct DeviceEffects {
     /// BJT/MOS Early effect (output-conductance from base-width / channel-len
     /// modulation). Off => ideal current sources in saturation.
@@ -219,7 +221,7 @@ pub struct DeviceEffects {
     pub junction_caps: bool,
     /// Ohmic series resistances. Honored for BJTs (RB/RE/RC via layout-private
     /// internal nodes). The diode's RS is NOT stamped yet,
-    /// a diode model carrying a nonzero RS logs once (under HAUKSBEE_DEBUG)
+    /// a diode model carrying a nonzero RS logs once (under `HAUKSBEE_DEBUG`)
     /// instead of silently ignoring it; it can ride the same
     /// internal-node machinery in a follow-up.
     pub series_resistance: bool,
@@ -276,22 +278,22 @@ pub struct DeviceEffects {
     pub switch_transition_frac: f64,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_spdt_bbm_k() -> f64 {
+const fn default_spdt_bbm_k() -> f64 {
     6.0
 }
-fn default_cmp_smooth_gain() -> f64 {
+const fn default_cmp_smooth_gain() -> f64 {
     2000.0
 }
-fn default_switch_transition_frac() -> f64 {
+const fn default_switch_transition_frac() -> f64 {
     0.01
 }
 
 impl Default for DeviceEffects {
     fn default() -> Self {
-        DeviceEffects {
+        Self {
             early_effect: true,
             junction_caps: true,
             series_resistance: true,
@@ -307,10 +309,10 @@ impl Default for DeviceEffects {
 }
 
 /// One rung of the robustness ladder: a named permission for an escalation
-/// mechanism the solver may engage when the plain path is not enough. Each is
-/// BIT-IDENTICAL to baseline when not reached: granting a strategy that never
-/// fires changes nothing. That is the invariant the
-/// gates pin.
+/// mechanism the solver may engage when the plain path is not enough.
+///
+/// Each is BIT-IDENTICAL to baseline when not reached: granting a strategy
+/// that never fires changes nothing. That is the invariant the gates pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     /// Global Armijo line search in the per-step transient Newton (the
@@ -343,38 +345,40 @@ pub enum Strategy {
 
 impl Strategy {
     /// Stable bit for the activation diagnostics.
-    pub(crate) fn bit(self) -> u16 {
+    pub(crate) const fn bit(self) -> u16 {
         match self {
-            Strategy::LineSearch => 1 << 0,
-            Strategy::DynamicPivot => 1 << 1,
-            Strategy::DynamicPivotEveryStep => 1 << 2,
-            Strategy::EventFreeze => 1 << 3,
-            Strategy::Ptc => 1 << 4,
-            Strategy::ResidualAccept => 1 << 5,
-            Strategy::TransientDyn => 1 << 6,
+            Self::LineSearch => 1 << 0,
+            Self::DynamicPivot => 1 << 1,
+            Self::DynamicPivotEveryStep => 1 << 2,
+            Self::EventFreeze => 1 << 3,
+            Self::Ptc => 1 << 4,
+            Self::ResidualAccept => 1 << 5,
+            Self::TransientDyn => 1 << 6,
         }
     }
 
     /// Every strategy, in the canonical escalation order (cheapest first).
-    pub const ALL: [Strategy; 7] = [
-        Strategy::LineSearch,
-        Strategy::DynamicPivot,
-        Strategy::DynamicPivotEveryStep,
-        Strategy::EventFreeze,
-        Strategy::Ptc,
-        Strategy::ResidualAccept,
-        Strategy::TransientDyn,
+    pub const ALL: [Self; 7] = [
+        Self::LineSearch,
+        Self::DynamicPivot,
+        Self::DynamicPivotEveryStep,
+        Self::EventFreeze,
+        Self::Ptc,
+        Self::ResidualAccept,
+        Self::TransientDyn,
     ];
 }
 
 /// The typed escalation ladder: the explicit, per-run control-flow permission
-/// set. MEMBERSHIP is the permission, consulted by
-/// the solve paths at each escalation point; the insertion order documents the
-/// intended escalation order (the partitioner selecting ladder aggressiveness
-/// per island builds on that). `Copy` because `SolverOptions` is copied through
-/// every orchestration layer, which is also how the ladder reaches nested
-/// sub-solves without any process-global state.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+/// set.
+///
+/// MEMBERSHIP is the permission, consulted by the solve paths at each
+/// escalation point; the insertion order documents the intended escalation
+/// order (the partitioner selecting ladder aggressiveness per island builds on
+/// that). `Copy` because `SolverOptions` is copied through every orchestration
+/// layer, which is also how the ladder reaches nested sub-solves without any
+/// process-global state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RobustnessLadder {
     steps: [Option<Strategy>; 8],
 }
@@ -382,14 +386,16 @@ pub struct RobustnessLadder {
 impl RobustnessLadder {
     /// The empty ladder: the plain solver with no escalation granted. This is
     /// the default.
+    #[must_use]
     pub const fn none() -> Self {
-        RobustnessLadder { steps: [None; 8] }
+        Self { steps: [None; 8] }
     }
 
     /// The full ladder in canonical order: every escalation the solver has.
     /// This is the substrate the flagship spike paths run on.
+    #[must_use]
     pub fn full() -> Self {
-        let mut l = RobustnessLadder::none();
+        let mut l = Self::none();
         for s in Strategy::ALL {
             l = l.with(s);
         }
@@ -397,11 +403,12 @@ impl RobustnessLadder {
     }
 
     /// Grant a strategy (idempotent; appended in call order).
+    #[must_use]
     pub fn with(mut self, s: Strategy) -> Self {
         if self.has(s) {
             return self;
         }
-        for slot in self.steps.iter_mut() {
+        for slot in &mut self.steps {
             if slot.is_none() {
                 *slot = Some(s);
                 return self;
@@ -411,6 +418,7 @@ impl RobustnessLadder {
     }
 
     /// Is this strategy granted?
+    #[must_use]
     pub fn has(&self, s: Strategy) -> bool {
         self.steps.contains(&Some(s))
     }
@@ -418,6 +426,7 @@ impl RobustnessLadder {
     /// Revoke a strategy, preserving the order of the rest. The per-island
     /// selection (`orchestrate::staged::select_group_ladder`) only ever TRIMS
     /// with this: the caller's ladder is the ceiling, never escalated past.
+    #[must_use]
     pub fn without(mut self, s: Strategy) -> Self {
         let mut out = [None; 8];
         let mut k = 0;
@@ -440,7 +449,7 @@ impl RobustnessLadder {
 /// Tuning for the event-freeze retry machinery (the discrete-state
 /// Gauss-Seidel that resolves comparator/switch flips). These were env-tuned
 /// knobs; they are solver configuration, so they live here.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventRetryTuning {
     /// Inner Newton budget per frozen solve. `None` uses
     /// `max(max_newton, 400)` (the frozen inner circuit converges linearly in
@@ -458,7 +467,7 @@ pub struct EventRetryTuning {
 
 impl Default for EventRetryTuning {
     fn default() -> Self {
-        EventRetryTuning {
+        Self {
             inner_max_newton: None,
             flip_budget: 64,
             smooth_comparator_first: false,
@@ -541,17 +550,17 @@ pub struct SolverOptions {
     pub max_failed_steps: Option<u32>,
 }
 
-fn default_residual_accept_tol() -> f64 {
+const fn default_residual_accept_tol() -> f64 {
     1e-9
 }
 
-fn default_granularity() -> f64 {
+const fn default_granularity() -> f64 {
     1.0
 }
 
 impl Default for SolverOptions {
     fn default() -> Self {
-        SolverOptions {
+        Self {
             integration: Integration::Trapezoidal,
             step: StepControl::Adaptive {
                 dt_initial: 1e-9,
@@ -583,16 +592,18 @@ impl Default for SolverOptions {
 
 impl SolverOptions {
     /// Convenience: fixed-step trapezoidal with the given `dt`.
+    #[must_use]
     pub fn fixed(dt: f64) -> Self {
-        SolverOptions {
+        Self {
             step: StepControl::Fixed { dt },
             ..Default::default()
         }
     }
 
     /// Convenience: adaptive run seeded with `dt_initial`.
+    #[must_use]
     pub fn adaptive(dt_initial: f64, dt_max: f64) -> Self {
-        SolverOptions {
+        Self {
             step: StepControl::Adaptive {
                 dt_initial,
                 dt_min: dt_initial * 1e-9,
@@ -603,7 +614,8 @@ impl SolverOptions {
     }
 
     /// The effective temperature to evaluate models at (TNOM if temp is off).
-    pub fn model_temp(&self) -> f64 {
+    #[must_use]
+    pub const fn model_temp(&self) -> f64 {
         if self.effects.temperature {
             self.temperature_c
         } else {

@@ -29,15 +29,17 @@ pub struct SparseMatrix {
 
 impl SparseMatrix {
     /// An `n x n` matrix of structural zeros.
+    #[must_use]
     pub fn new(n: usize) -> Self {
-        SparseMatrix {
+        Self {
             n,
             rows: vec![Vec::new(); n],
         }
     }
 
     /// Dimension.
-    pub fn dim(&self) -> usize {
+    #[must_use]
+    pub const fn dim(&self) -> usize {
         self.n
     }
 
@@ -66,6 +68,7 @@ impl SparseMatrix {
     ///
     /// Only valid after the pattern is fully reserved (see `reserve_pattern`);
     /// the returned position indexes into `rows[row]`.
+    #[must_use]
     pub fn slot(&self, row: usize, col: usize) -> Option<(usize, usize)> {
         self.rows[row]
             .binary_search_by_key(&col, |&(c, _)| c)
@@ -91,6 +94,7 @@ impl SparseMatrix {
 
     /// The assembled `(col, value)` entries of one row. Used to evaluate the KCL
     /// residual `g·x - rhs` at a candidate operating point without a full solve.
+    #[must_use]
     pub fn row(&self, i: usize) -> &[(usize, f64)] {
         &self.rows[i]
     }
@@ -123,6 +127,7 @@ impl SparseMatrix {
     }
 
     /// Compute the fill-reducing column ordering. Reuse the result every step.
+    #[must_use]
     pub fn factorize_symbolic(&self) -> Symbolic {
         Symbolic::analyze(self)
     }
@@ -194,7 +199,7 @@ impl DynCsc {
 }
 
 impl Symbolic {
-    fn analyze(m: &SparseMatrix) -> Symbolic {
+    fn analyze(m: &SparseMatrix) -> Self {
         let n = m.n;
         // Symmetric adjacency of A + A^T for the ordering heuristic.
         let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -216,7 +221,7 @@ impl Symbolic {
         let (csc_col_ptr, csc_row_idx, _) = m.to_csc();
         let nnz = csc_row_idx.len();
 
-        Symbolic {
+        Self {
             n,
             perm,
             l: DynCsc::default(),
@@ -242,12 +247,13 @@ impl Symbolic {
 
     /// Enable/disable the dynamic-pivot fallback (off by default). The staged-DC
     /// driver turns it on only for the diode-laden solves that need it.
-    pub fn set_allow_dynamic(&mut self, allow: bool) {
+    pub const fn set_allow_dynamic(&mut self, allow: bool) {
         self.allow_dynamic = allow;
     }
 
     /// Whether the dynamic-pivot fallback is currently enabled.
-    pub fn allow_dynamic(&self) -> bool {
+    #[must_use]
+    pub const fn allow_dynamic(&self) -> bool {
         self.allow_dynamic
     }
 
@@ -302,12 +308,12 @@ impl Symbolic {
     pub fn refactor_frozen(&mut self, m: &SparseMatrix) -> bool {
         let n = self.n;
         // Refresh the cached CSC values in place (structure is fixed).
-        if self.fill_map.len() != n {
-            self.fill_map = self.csc_col_ptr[..n].to_vec();
-        } else {
+        if self.fill_map.len() == n {
             self.fill_map.copy_from_slice(&self.csc_col_ptr[..n]);
+        } else {
+            self.fill_map = self.csc_col_ptr[..n].to_vec();
         }
-        for v in self.csc_vals.iter_mut() {
+        for v in &mut self.csc_vals {
             *v = 0.0;
         }
         for row in &m.rows {
@@ -418,7 +424,7 @@ impl Symbolic {
 
         // Remap L's stored original rows to elimination steps now that every
         // row has a pivot position.
-        for ri in self.l.row_idx.iter_mut() {
+        for ri in &mut self.l.row_idx {
             *ri = pivot_pos[*ri];
         }
         for k in 0..n {
@@ -444,7 +450,18 @@ impl Symbolic {
     ///
     /// This is O(work) sparse, but it rebuilds the ordering, so it is the slow
     /// path by design; it runs only when `refactor_frozen` fails.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: a floating block is anchored only while a live row
+    /// and a live column remain, and the trailing block is square.
+    #[allow(clippy::too_many_lines)] // one Markowitz elimination loop
     pub fn refactor_dynamic(&mut self, m: &SparseMatrix) -> bool {
+        // Threshold partial pivoting: a candidate pivot must be at least
+        // PIVOT_THRESH times the largest magnitude in its column to be accepted
+        // for stability; among acceptable candidates pick the lowest Markowitz
+        // count (product of remaining row and column nonzeros).
+        const PIVOT_THRESH: f64 = 0.1;
         let n = self.n;
         if n == 0 {
             self.l.clear();
@@ -494,12 +511,6 @@ impl Symbolic {
         // U(:,kk) holds entries on rows pivoted at steps < kk).
         let mut u_def: Vec<(usize, usize, f64)> = Vec::new();
 
-        // Threshold partial pivoting: a candidate pivot must be at least
-        // PIVOT_THRESH times the largest magnitude in its column to be accepted
-        // for stability; among acceptable candidates pick the lowest Markowitz
-        // count (product of remaining row and column nonzeros).
-        const PIVOT_THRESH: f64 = 0.1;
-
         for k in 0..n {
             // Choose the pivot (row r, col c) over the remaining submatrix.
             // Scan columns in increasing nonzero count to keep the Markowitz
@@ -541,10 +552,7 @@ impl Symbolic {
                     if row_elim[i] {
                         continue;
                     }
-                    let v = match entry(&row[i], c) {
-                        Some(v) => v,
-                        None => continue,
-                    };
+                    let Some(v) = entry(&row[i], c) else { continue };
                     if v.abs() < thresh {
                         continue;
                     }
@@ -650,9 +658,8 @@ impl Symbolic {
             pcol_rows.dedup();
 
             for &i in &pcol_rows {
-                let aic = match entry(&row[i], pc) {
-                    Some(v) => v,
-                    None => continue,
+                let Some(aic) = entry(&row[i], pc) else {
+                    continue;
                 };
                 if aic == 0.0 {
                     continue;
@@ -681,7 +688,7 @@ impl Symbolic {
                         col[j].push(i);
                         col_cnt[j] += 1;
                     }
-                    work[j] = before - factor * vj;
+                    work[j] = factor.mul_add(-vj, before);
                 }
                 // Gather back into row[i], dropping the eliminated pivot column
                 // and any numeric-zero results from cancellation.
@@ -715,7 +722,7 @@ impl Symbolic {
         }
 
         // Remap L's stored original rows to their elimination steps.
-        for ri in self.l.row_idx.iter_mut() {
+        for ri in &mut self.l.row_idx {
             *ri = row_step[*ri];
         }
 
@@ -830,7 +837,11 @@ fn dfs_reach(
     while let Some(&node) = stack.last() {
         let step = pivot_pos[node];
         let mut advanced = false;
-        if step != usize::MAX {
+        if step == usize::MAX {
+            stack.pop();
+            cursor.pop();
+            reach.push(node);
+        } else {
             let (ls, le) = (l.col_ptr[step], l.col_ptr[step + 1]);
             let ci = *cursor.last().unwrap();
             let mut p = ls + ci;
@@ -851,10 +862,6 @@ fn dfs_reach(
                 cursor.pop();
                 reach.push(node);
             }
-        } else {
-            stack.pop();
-            cursor.pop();
-            reach.push(node);
         }
     }
 }
@@ -948,6 +955,7 @@ mod tests {
     }
 
     /// Dense partial-pivot reference.
+    #[allow(clippy::many_single_char_names)] // textbook LU names: a, b, x, n, p
     fn dense_solve(n: usize, ent: &[(usize, usize, f64)], b: &[f64]) -> Vec<f64> {
         let mut a = vec![0.0f64; n * n];
         for &(r, c, v) in ent {
@@ -1054,7 +1062,7 @@ mod tests {
             }
         }
         let b: Vec<f64> = (0..n)
-            .map(|i| 2.0 - (i > 0) as i32 as f64 - (i + 1 < n) as i32 as f64)
+            .map(|i| 2.0 - f64::from(i32::from(i > 0)) - f64::from(i32::from(i + 1 < n)))
             .collect();
         assert_close(&solve_with(&m, &b, false), &[1.0; 5], 1e-9);
     }
@@ -1098,6 +1106,7 @@ mod tests {
     /// anchors a structurally empty row instead of spinning, and recovers
     /// (against a dense reference) where the frozen order corners a tiny pivot.
     #[test]
+    #[allow(clippy::cast_precision_loss)] // indices < 12 seed the values
     fn dynamic_pivoting_matches_frozen_and_recovers_from_bad_orders() {
         // (size, (row, column, value) entries, rhs)
         type Case = (usize, &'static [(usize, usize, f64)], &'static [f64]);
@@ -1125,7 +1134,7 @@ mod tests {
 
         let x = solve_with(&matrix(2, &[(0, 0, 2.0)]), &[4.0, 0.0], true);
         assert!((x[0] - 2.0).abs() < 1e-12);
-        assert_eq!(x[1], 0.0, "floating unknown was not anchored");
+        assert!(x[1] == 0.0, "floating unknown was not anchored");
 
         let arrow = [
             (0, 0, 3.0),
@@ -1157,7 +1166,7 @@ mod tests {
                 if i % 4 == 2 {
                     1e-12
                 } else {
-                    2.0 + (i as f64) * 0.1
+                    (i as f64).mul_add(0.1, 2.0)
                 },
             ));
             if i > 0 {
@@ -1166,14 +1175,14 @@ mod tests {
             }
         }
         ent.extend([(0, n - 1, 0.5), (n - 1, 0, 0.4), (3, 8, 0.9), (8, 3, 0.8)]);
-        let b: Vec<f64> = (0..n).map(|i| 1.0 + 0.3 * i as f64).collect();
+        let b: Vec<f64> = (0..n).map(|i| 0.3f64.mul_add(i as f64, 1.0)).collect();
         let xd = solve_with(&matrix(n, &ent), &b, true);
         assert_close(&xd, &dense_solve(n, &ent, &b), 1e-6);
         assert!(residual(&ent, &xd, &b) < 1e-8);
     }
 
     /// Every unknown carrying only its gmin diagonal (the ghost-row shape a
-    /// high as-built NodeId manufactures) drains in linear time.
+    /// high as-built `NodeId` manufactures) drains in linear time.
     #[test]
     fn gmin_only_unknowns_are_drained_without_quadratic_symbolic_scan() {
         const N: usize = 20_000;

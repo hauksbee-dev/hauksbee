@@ -11,7 +11,7 @@
 //! mirror arms guard against).
 //!
 //! This builds the flagship rail-tear shape, PNP mirrors with emitters on a
-//! shunt-fed ANALOG_VDD, but with models carrying rb/re/rc AND cje/cjc/tf,
+//! shunt-fed `ANALOG_VDD`, but with models carrying rb/re/rc AND cje/cjc/tf,
 //! so the torn path exercises internal-node sub-layouts and both charge banks
 //! at once (PNP polarity also pins the charge sign-folding). The tear must
 //! fire, the array must fragment, and the torn transient must match the

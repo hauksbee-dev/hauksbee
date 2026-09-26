@@ -19,6 +19,7 @@ use hauksbee_solve::{
 };
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 #[path = "support/oracle.rs"]
 mod oracle;
@@ -117,7 +118,7 @@ struct AnalyticPoint {
 const MAX_HEADROOM: f64 = 50.0;
 
 /// Do not tighten below 1e-6 relative just because solvers agree to rounding noise
-/// (e.g. exact divider V(in), or 7.5e-10 error for param_divider).
+/// (e.g. exact divider V(in), or 7.5e-10 error for `param_divider`).
 const HEADROOM_FLOOR: f64 = 1e-6;
 
 /// Is this probe's tolerance tight enough to be a gate? `None` when it is (or is
@@ -227,7 +228,7 @@ fn rewrite_with_print(orig: &str, print_card: &str) -> String {
 /// expect file states one (the op-branch convention, extended to tran for
 /// probes whose off-state is an exponential tail toward zero, a switch
 /// drain settling to millivolts turns sub-mV agreement into O(1) "relative"
-/// noise without it), else 1% of `full_scale`. Returns (worst, at_time).
+/// noise without it), else 1% of `full_scale`. Returns (worst, `at_time`).
 fn worst_tran_error(
     ours_t: &[f64],
     ours_v: &[f64],
@@ -350,6 +351,7 @@ fn decks_dir() -> PathBuf {
 }
 
 /// Run one deck end-to-end; missing, invalid or failed oracle output is fatal.
+#[allow(clippy::too_many_lines)] // one deck: load, per-analysis oracle compare, record
 fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
     let name = cir_path.file_stem().unwrap().to_string_lossy().to_string();
     let deck = std::fs::read_to_string(cir_path).expect("read deck");
@@ -435,7 +437,6 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
         "dc" => {
             let dc = directives
                 .dc
-                .clone()
                 .unwrap_or_else(|| panic!("{name}: dc deck has no .dc card"));
             let ours: SimOutput = run_dc(&circuit, &opts, &dc, &probes)
                 .unwrap_or_else(|e| panic!("{name}: hauksbee dc failed: {e}"));
@@ -480,8 +481,7 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
                 let node = match pr {
                     Probe::NodeVoltage(a) => a.clone(),
                     other => panic!(
-                        "{name}: the AC cross-check supports V(node) probes only, got {:?}",
-                        other
+                        "{name}: the AC cross-check supports V(node) probes only, got {other:?}"
                     ),
                 };
                 let ng_deck =
@@ -586,10 +586,10 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
          `docs/spice-compat/compatibility.md` lists the supported cards that have no\n\
          deck here at all.\n\n",
     );
-    s.push_str(&format!("- Oracle: **{ng_version}**\n"));
-    s.push_str(&format!("- Decks: **{}**\n", results.len()));
+    let _ = writeln!(s, "- Oracle: **{ng_version}**");
+    let _ = writeln!(s, "- Decks: **{}**", results.len());
     let passed = results.iter().filter(|d| d.passed()).count();
-    s.push_str(&format!("- Passing: **{passed}/{}**\n\n", results.len()));
+    let _ = writeln!(s, "- Passing: **{passed}/{}**\n", results.len());
 
     s.push_str(
         "| Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | \
@@ -609,8 +609,9 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
             } else {
                 "exact".to_string()
             };
-            s.push_str(&format!(
-                "| {} | {} | `{}` | {:.3e} | {:.1e} | {} | {} | {} |\n",
+            let _ = writeln!(
+                s,
+                "| {} | {} | `{}` | {:.3e} | {:.1e} | {} | {} | {} |",
                 deck_cell,
                 analysis_cell,
                 q.probe,
@@ -619,13 +620,13 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
                 headroom,
                 q.at,
                 if q.pass { "PASS" } else { "**FAIL**" },
-            ));
+            );
         }
     }
     s.push('\n');
     s.push_str("## Deck descriptions\n\n");
     for d in results {
-        s.push_str(&format!("- **{}**: {}\n", d.name, d.description));
+        let _ = writeln!(s, "- **{}**: {}", d.name, d.description);
     }
     s.push('\n');
     std::fs::write(&path, s).expect("write results.md");
@@ -657,9 +658,9 @@ fn mos_on_resistance_bound_rejects_lost_series_resistance() {
         );
     }
     for analysis in ["tran", "dc", "ac"] {
-        let print = format!(".print {analysis} V(out)");
-        let rewritten = rewrite_with_print("title\n.subckt x a b\n.ends x\n.end\n", &print);
-        assert!(rewritten.ends_with(&format!(".ends x\n{print}\n.end\n")));
+        let card = format!(".print {analysis} V(out)");
+        let rewritten = rewrite_with_print("title\n.subckt x a b\n.ends x\n.end\n", &card);
+        assert!(rewritten.ends_with(&format!(".ends x\n{card}\n.end\n")));
     }
 }
 
@@ -686,11 +687,10 @@ fn ngspice_corpus() {
         // tolerating the skip on contributor machines without ngspice) sets
         // HAUKSBEE_REQUIRE_NGSPICE=1 so a missing oracle is a hard failure,
         // never a silently-green gate with zero coverage.
-        if std::env::var_os("HAUKSBEE_REQUIRE_NGSPICE").is_some() {
-            panic!(
+        assert!(
+            std::env::var_os("HAUKSBEE_REQUIRE_NGSPICE").is_none(),
                 "HAUKSBEE_REQUIRE_NGSPICE is set but ngspice was not found                  ($NGSPICE / PATH / known locations); the SPICE differential                  gate cannot run"
-            );
-        }
+        );
         eprintln!("ngspice not found ($NGSPICE / PATH / known locations); skipping corpus.");
         return;
     };

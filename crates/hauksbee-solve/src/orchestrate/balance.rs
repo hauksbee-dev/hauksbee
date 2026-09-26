@@ -22,7 +22,7 @@
 //! monolithic reference stamps exactly ONE such shunt on the single shared
 //! rail node. Summing the blocks' boundary currents therefore over-draws the
 //! rail by `(n_loads - 1) * gmin * v_rail`, and without the correction the
-//! torn solution is O(n_loads * gmin) below the monolithic one: small enough
+//! torn solution is `O(n_loads * gmin)` below the monolithic one: small enough
 //! to pass a sloppy eyeball, large enough to fail the 1e-6 gate. The surplus
 //! term is added back inside [`settle_rails`] so every executor gets the
 //! correction whether or not its author has read this paragraph.
@@ -61,6 +61,10 @@ pub trait RailLoads {
     /// Set rail `i`'s trial voltage to `v_rail` and re-solve every block
     /// loading it (in place, no history advance). Blocks not loading rail
     /// `i` must not be re-solved (the loop's cost model depends on it).
+    ///
+    /// # Errors
+    ///
+    /// Any block's re-solve failure, which aborts the balance.
     fn resolve(&mut self, i: usize, v_rail: f64) -> SolveResult<()>;
     /// Rail `i`'s current trial voltage.
     fn rail_voltage(&self, i: usize) -> f64;
@@ -116,7 +120,7 @@ pub struct BalancePolicy {
     /// second order, so real boards converge in a handful of passes; 60 is
     /// a generous ceiling, not a tuning.
     pub max_outer: usize,
-    /// Relative size of the finite-difference probe for df/dv_rail.
+    /// Relative size of the finite-difference probe for `df/dv_rail`.
     pub probe_rel: f64,
     /// Absolute probe floor (volts), for rails sitting near zero.
     pub probe_floor: f64,
@@ -124,7 +128,7 @@ pub struct BalancePolicy {
 
 impl Default for BalancePolicy {
     fn default() -> Self {
-        BalancePolicy {
+        Self {
             v_target_frac: 0.1,
             max_outer: 60,
             probe_rel: 1e-6,
@@ -153,6 +157,11 @@ pub struct BalanceReport {
 /// `gmin`, `vntol`, and `abstol` are the solver options the blocks were
 /// stamped with; they parameterize the surplus correction and the two
 /// convergence tests exactly as the partitioned engine's inlined loop did.
+///
+/// # Errors
+///
+/// A block re-solve failure from [`RailLoads::resolve`]. Exhausting the pass
+/// budget is NOT an error: it is reported (see [`ensure_balanced`]).
 pub fn settle_rails<L: RailLoads>(
     loads: &mut L,
     channels: &[RailChannel],
@@ -189,14 +198,20 @@ pub fn settle_rails<L: RailLoads>(
     })
 }
 
-/// Enforce the caller contract on a [`BalanceReport`]: `settle_rails` returns
-/// `Ok` even when it exhausts its pass budget without converging (it reports the
+/// Enforce the caller contract on a [`BalanceReport`].
+///
+/// `settle_rails` returns `Ok` even when it exhausts its pass budget without converging (it reports the
 /// fact rather than erroring), so a caller that can escalate MUST refuse a
 /// non-converged balance rather than stream a silently-unbalanced rail, or the
 /// torn path quietly violates the 1e-6 torn-vs-monolithic exactness gate. This
 /// turns that non-convergence into the same `Err(String)` channel a per-island
 /// Newton failure travels, which the staged orchestrator escalates by
 /// re-solving the group fused on the monolithic engine.
+///
+/// # Errors
+///
+/// A non-convergence error naming the worst rail when `report` did not
+/// converge.
 pub fn ensure_balanced(report: &BalanceReport) -> SolveResult<()> {
     if report.converged {
         return Ok(());
@@ -215,6 +230,7 @@ pub fn ensure_balanced(report: &BalanceReport) -> SolveResult<()> {
 /// One scalar-Newton update on rail `i`. Returns the residual current found
 /// BEFORE the update, so the outer loop tests convergence on the actual
 /// balance error rather than on the step size.
+#[allow(clippy::cast_precision_loss)] // per-rail block counts << 2^53
 fn balance_one<L: RailLoads>(
     loads: &mut L,
     i: usize,
@@ -292,8 +308,8 @@ mod tests {
     }
 
     impl LinearLoads {
-        fn new(feeds: Vec<f64>, blocks: Vec<Vec<f64>>, v: Vec<f64>) -> LinearLoads {
-            LinearLoads {
+        fn new(feeds: Vec<f64>, blocks: Vec<Vec<f64>>, v: Vec<f64>) -> Self {
+            Self {
                 feeds,
                 blocks,
                 v,
@@ -329,7 +345,7 @@ mod tests {
     fn channels(n: usize, r: f64) -> Vec<RailChannel> {
         (0..n)
             .map(|k| RailChannel {
-                rail: NodeId(k as u32 + 1),
+                rail: crate::node_id(k + 1),
                 shunt_ohms: r,
                 children: Vec::new(),
             })
@@ -394,6 +410,7 @@ mod tests {
     }
 
     impl CascadeLoads {
+        #[allow(clippy::suspicious_operation_groupings)] // Thevenin algebra: g2*g2 is intended
         fn monolithic(&self) -> (f64, f64) {
             let (g1, g2) = (1.0 / self.r1, 1.0 / self.r2);
             let gm: f64 = self.g_mid.iter().sum::<f64>() + GMIN;

@@ -16,6 +16,8 @@ use crate::sparse::{SparseMatrix, Symbolic};
 use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 /// Debug flags, read once: `getenv` locks libc's environment on every Newton solve.
 static NEWTON_DBG: LazyLock<bool> = LazyLock::new(|| std::env::var("HAUKSBEE_NEWTON_DBG").is_ok());
@@ -30,6 +32,7 @@ pub struct NewtonResult {
 
 /// Reusable workspace for a transient/DC run: the layout, the frozen symbolic
 /// factorization, and scratch buffers. Created once, reused every step.
+#[allow(clippy::struct_excessive_bools)] // independent per-run flags, not a state machine
 pub struct Workspace {
     pub layout: Layout,
     pub symbolic: Symbolic,
@@ -54,14 +57,14 @@ pub struct Workspace {
     /// Per-node UNDAMPED Newton step from the previous iteration, used by the
     /// staged-DC adaptive damping to detect oscillating nodes (a sign reversal)
     /// and damp only those, leaving converging nodes near-full steps. Allocated
-    /// once; only touched on the staged path (branch_reg>0).
+    /// once; only touched on the staged path (`branch_reg>0`).
     prev_step: Vec<f64>,
     /// Per-node consecutive-oscillation counter: how many iterations in a row a
     /// node's undamped step has reversed sign. Used by the staged-DC adaptive
     /// damping to damp a persistently-oscillating node PROGRESSIVELY harder (a
     /// fixed fraction can sustain a stubborn 2-cycle, the measured refractory-reset
     /// follow-on limit cycle on the synapse-mesh / BJT-mirror nodes). Allocated
-    /// once; only touched on the staged path (branch_reg>0).
+    /// once; only touched on the staged path (`branch_reg>0`).
     osc_count: Vec<u32>,
     /// True when every device is linear, so one solve per step is exact and
     /// Newton needs no second iteration to confirm convergence.
@@ -90,20 +93,20 @@ pub struct Workspace {
     /// self-deciding and the path bit-identical; the staged-DC outer loop sets
     /// it so each inner Newton solve holds comparator state fixed (smooth) and
     /// re-evaluates between solves.
-    cmp_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    cmp_freeze: Option<HashMap<DeviceId, bool>>,
     /// FROZEN analog-switch on/off decisions for the event-driven staged solve,
     /// keyed by device id. `None` (every normal solve) keeps the switches'
     /// smooth tanh conductance + control tangent and the path bit-identical; the
     /// staged-DC outer loop sets it so each inner Newton solve holds switch state
     /// fixed (smooth resistor network) and re-evaluates between solves.
-    switch_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    switch_freeze: Option<HashMap<DeviceId, bool>>,
     /// LATCHED analog-switch states carried between solves under
     /// [`crate::options::SwitchModel::Hysteretic`] -- the memory that makes the
     /// SPICE3 `SW` device a relay rather than a threshold. `None` until the first
     /// solve on a circuit that actually has a `VSwitch`; a switch missing from the
     /// map is OPEN, ngspice's own power-on convention. Maintained entirely by
     /// [`newton_solve`]; the smooth switch model never touches it.
-    switch_latch: Option<std::collections::HashMap<DeviceId, bool>>,
+    switch_latch: Option<HashMap<DeviceId, bool>>,
     /// Armed by the transient driver on a stiff comparator/switch board: when a
     /// bare per-step Newton fails, retry the step through the event-freeze loop
     /// (`newton_solve_event`) before cutting the timestep. Off by default, so an
@@ -115,7 +118,7 @@ pub struct Workspace {
     /// cycle (the post-reset overshoot whose maxdV rotates across mesh nodes, which
     /// per-node damping cannot catch). Off by default so an ordinary circuit's
     /// per-step path is bit-identical (no residual evaluation). Also force-on via
-    /// Strategy::LineSearch for direct grants.
+    /// `Strategy::LineSearch` for direct grants.
     tran_line_search: bool,
     /// The device-named fault of the most recent Newton solve that aborted on
     /// a behavioral-expression error (`stamp::take_behavioral_fault`): an
@@ -157,7 +160,7 @@ pub struct Workspace {
     /// geometric-mean conductance and bridging the two throws. Consulted when
     /// `effects.spdt_bbm` is on (the device-model default; the typed compat
     /// field restores the bridging model).
-    spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    spdt_sibling: HashMap<DeviceId, DeviceId>,
     /// Set by [`newton_solve`] when the solve it just finished COMMITTED a
     /// hysteretic switch-latch state different from the one it entered with
     /// (i.e. a relay made or broke during this step). The transient driver
@@ -189,21 +192,21 @@ pub struct Workspace {
 
 impl Workspace {
     /// Arm/disarm the per-step transient event-freeze retry. Set by the transient
-    /// driver only on a board that needed the staged DC (or via TRANSIENT_DYN);
+    /// driver only on a board that needed the staged DC (or via `TRANSIENT_DYN`);
     /// the default-false keeps ordinary circuits on the plain per-step path.
-    pub fn set_tran_event(&mut self, on: bool) {
+    pub const fn set_tran_event(&mut self, on: bool) {
         self.tran_event = on;
     }
 
     /// Whether the per-step transient event-freeze retry is armed.
-    pub fn tran_event(&self) -> bool {
+    pub const fn tran_event(&self) -> bool {
         self.tran_event
     }
 
     /// Hold device-evaluation bypass for the next solves (the transient driver
     /// sets this for the trials after an event-resolved accept; see the
     /// `bypass_hold` field). A no-op unless `NewtonBypass::On` is armed.
-    pub fn set_bypass_hold(&mut self, hold: bool) {
+    pub const fn set_bypass_hold(&mut self, hold: bool) {
         self.bypass_hold = hold;
     }
 
@@ -216,7 +219,7 @@ impl Workspace {
 
     /// Whether the most recent `newton_solve` committed a hysteretic
     /// switch-latch flip (see the `latch_flipped` field).
-    pub fn latch_flipped(&self) -> bool {
+    pub const fn latch_flipped(&self) -> bool {
         self.latch_flipped
     }
 
@@ -224,7 +227,7 @@ impl Workspace {
     /// the transient driver on the stiff-board path (same condition as
     /// `set_tran_event`); the default-false keeps ordinary per-step Newton
     /// bit-identical (and free of the extra residual evaluation).
-    pub fn set_tran_line_search(&mut self, on: bool) {
+    pub const fn set_tran_line_search(&mut self, on: bool) {
         self.tran_line_search = on;
     }
 
@@ -235,12 +238,12 @@ impl Workspace {
     /// degeneracy that collapses the cold DC also destabilizes each transient
     /// step. `reg_ohms` is the negligible series resistance (e.g. 1e-2) added to
     /// every Vsource/Inductor branch; 0.0 restores the bit-identical normal path.
-    pub fn set_staged_branch_reg(&mut self, reg_ohms: f64) {
+    pub const fn set_staged_branch_reg(&mut self, reg_ohms: f64) {
         self.staged_branch_reg = reg_ohms;
     }
 
     /// Whether the last DC operating-point solve used the staged-DC fallback.
-    pub fn used_staged_dc(&self) -> bool {
+    pub const fn used_staged_dc(&self) -> bool {
         self.used_staged_dc
     }
 
@@ -261,7 +264,7 @@ impl Workspace {
     /// `use_ic = false`; a transient initial-condition solve pins reactive nodes
     /// to their `.ic` via a penalty conductance, so measuring the residual with
     /// caps OPEN (`use_ic = false`) would report the KCL of a *different* system
-    /// than the one the iterate actually satisfies, making the ResidualAccept
+    /// than the one the iterate actually satisfies, making the `ResidualAccept`
     /// backstop reject a genuine IC operating point (or judge it against the
     /// wrong system). The caller passes the `use_ic` in force for that solve.
     pub fn dc_residual_inf_norm_with(
@@ -350,16 +353,17 @@ impl Workspace {
 
 impl Workspace {
     /// Build the workspace and analyze the (fixed) sparsity pattern.
-    pub fn new(circuit: &Circuit) -> Workspace {
+    #[must_use]
+    pub fn new(circuit: &Circuit) -> Self {
         let layout = Layout::new(circuit);
         let mut matrix = SparseMatrix::new(layout.size);
         reserve_pattern(circuit, &layout, &mut matrix);
         let symbolic = matrix.factorize_symbolic();
         let size = layout.size;
-        let linear = circuit.devices.iter().all(|d| d.is_linear());
+        let linear = circuit.devices.iter().all(Device::is_linear);
         let plan = StampPlan::compile(circuit, &layout, &matrix);
         let spdt_sibling = SpdtPairs::analyze(circuit).sibling;
-        Workspace {
+        Self {
             layout,
             symbolic,
             matrix,
@@ -397,13 +401,13 @@ impl Workspace {
     /// must stamp the SAME device the operating point was solved with. `.ac`
     /// linearizes about that point and so needs it; without it the AC arm modelled
     /// a switch the DC solve never had.
-    pub fn switch_latch(&self) -> Option<&std::collections::HashMap<DeviceId, bool>> {
+    pub const fn switch_latch(&self) -> Option<&HashMap<DeviceId, bool>> {
         self.switch_latch.as_ref()
     }
 
     /// Seed the relay state from OUTSIDE this workspace (a co-sim chunk builds
     /// a fresh one, and a latch must not forget which way it is at the boundary).
-    pub fn set_switch_latch(&mut self, latch: Option<std::collections::HashMap<DeviceId, bool>>) {
+    pub fn set_switch_latch(&mut self, latch: Option<HashMap<DeviceId, bool>>) {
         self.switch_latch = latch;
     }
 
@@ -443,10 +447,10 @@ impl Workspace {
     ) -> SolveError {
         let blame = self.stall_blame(circuit);
         if let Some(fault) = &self.behavioral_fault {
-            message.push_str(&format!("; {fault}"));
+            let _ = write!(message, "; {fault}");
         }
         if let Some(blame) = &blame {
-            message.push_str(&format!(" [{blame}]"));
+            let _ = write!(message, " [{blame}]");
         }
         if let Some(fault) = &self.behavioral_fault {
             SolveError::behavioral(message, crate::error::behavioral_device(fault), phase)
@@ -482,10 +486,10 @@ const STALL_WINDOW: usize = 12;
 /// smooth-switch or switch-free circuit keeps the classic self-deciding stamp.
 fn hyst_latch<'a>(
     opts: &SolverOptions,
-    latch: &'a Option<std::collections::HashMap<DeviceId, bool>>,
-) -> Option<&'a std::collections::HashMap<DeviceId, bool>> {
+    latch: Option<&'a HashMap<DeviceId, bool>>,
+) -> Option<&'a HashMap<DeviceId, bool>> {
     if opts.effects.switch_model == crate::options::SwitchModel::Hysteretic {
-        latch.as_ref()
+        latch
     } else {
         None
     }
@@ -519,6 +523,7 @@ fn hyst_latch<'a>(
 /// Costs nothing on a circuit with no `VSwitch`, on [`SwitchModel::Smooth`], or
 /// when an outer path already owns `ws.switch_freeze`: those all fall straight
 /// through to [`newton_solve_core`] and stay bit-identical.
+#[allow(clippy::too_many_lines)] // one bounded Gauss-Seidel loop over the switch states
 pub fn newton_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -532,6 +537,11 @@ pub fn newton_solve(
     gmin: f64,
     src_scale: f64,
 ) -> NewtonResult {
+    // Bounded Gauss-Seidel over the discrete states. Two passes suffice whenever
+    // no switch flips (the common case: one solve plus one confirming
+    // re-evaluation); the cap catches a control node that a switch's own current
+    // drags back across its threshold, which cannot settle and must not spin.
+    const MAX_PASSES: usize = 16;
     ws.latch_flipped = false;
     let hysteretic = opts.effects.switch_model == crate::options::SwitchModel::Hysteretic
         && ws.switch_freeze.is_none()
@@ -569,11 +579,6 @@ pub fn newton_solve(
     let latch_entry = latch.clone();
     let x_entry = ws.x.clone();
 
-    // Bounded Gauss-Seidel over the discrete states. Two passes suffice whenever
-    // no switch flips (the common case: one solve plus one confirming
-    // re-evaluation); the cap catches a control node that a switch's own current
-    // drags back across its threshold, which cannot settle and must not spin.
-    const MAX_PASSES: usize = 16;
     let mut last = NewtonResult {
         converged: false,
         iters: 0,
@@ -740,6 +745,7 @@ pub fn newton_solve(
     last
 }
 
+#[allow(clippy::too_many_lines)] // the Newton iteration: limiting, damping and acceptance in one loop
 fn newton_solve_core(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -753,6 +759,8 @@ fn newton_solve_core(
     gmin: f64,
     src_scale: f64,
 ) -> NewtonResult {
+    const ARMIJO_C: f64 = 1e-4;
+    const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     let mut iters = 0;
     ws.last_singular = false;
     let dbg_newton = *NEWTON_DBG;
@@ -787,8 +795,6 @@ fn newton_solve_core(
         // record the activation.
         crate::diagnostics::note(Strategy::LineSearch);
     }
-    const ARMIJO_C: f64 = 1e-4;
-    const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     // Device-evaluation bypass: an explicit opt-in, and even
     // then only on the per-step transient Newton with self-deciding discrete
     // states, never DC (reactive elements open/short and the staged ladder
@@ -832,10 +838,10 @@ fn newton_solve_core(
     // Same discipline for the stall site: a stale one from a previous attempt
     // would blame the wrong net.
     ws.stall_site = None;
-    for s in ws.prev_step.iter_mut() {
+    for s in &mut ws.prev_step {
         *s = 0.0;
     }
-    for c in ws.osc_count.iter_mut() {
+    for c in &mut ws.osc_count {
         *c = 0;
     }
     // Staged-path stall detection: track the best (smallest) undamped node-step
@@ -859,7 +865,7 @@ fn newton_solve_core(
         // lifetime change.
         ws.lin_point.copy_from_slice(&ws.x);
         ws.matrix.clear_values();
-        for v in ws.rhs.iter_mut() {
+        for v in &mut ws.rhs {
             *v = 0.0;
         }
         let branch_reg = ws.staged_branch_reg;
@@ -880,7 +886,7 @@ fn newton_solve_core(
                 branch_reg,
                 cmp_freeze: ws.cmp_freeze.as_ref(),
                 switch_freeze: ws.switch_freeze.as_ref(),
-                switch_latch: hyst_latch(opts, &ws.switch_latch),
+                switch_latch: hyst_latch(opts, ws.switch_latch.as_ref()),
                 spdt_sibling: &ws.spdt_sibling,
                 junction_eval: Some(&ws.junction_eval),
             };
@@ -1074,7 +1080,8 @@ fn newton_solve_core(
                 // round-off, and backtracking on it is what turned the 555
                 // deck's latch edges into a 63/64-per-iteration crawl.
                 let accept = trial_norm.is_finite()
-                    && (f_norm_lin <= 1.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
+                    && (f_norm_lin <= 1.0
+                        || trial_norm < ARMIJO_C.mul_add(-alpha, 1.0) * f_norm_lin);
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
                     break;
                 }
@@ -1153,8 +1160,8 @@ fn newton_solve_core(
         // and would read as wildly unconverged against the pristine residual.
         // Restricting the gate to a plain cold start keeps every regularized
         // path bit-identical.
-        let pristine = gmin == opts.gmin
-            && src_scale == 1.0
+        let pristine = gmin.to_bits() == opts.gmin.to_bits()
+            && src_scale.to_bits() == 1.0f64.to_bits()
             && branch_reg == 0.0
             && ws.cmp_freeze.is_none()
             && ws.switch_freeze.is_none();
@@ -1246,7 +1253,7 @@ fn newton_solve_core(
 /// the staged per-node damping) rewrites it. Both are path globalizations:
 /// they shorten the step the iteration walks, not the distance to the root,
 /// so measuring after either one hands the stall detector a shrunken norm
-/// (use_alpha*|dx| after the search, alpha_node*|dx| after the damping) that
+/// (`use_alpha`*|dx| after the search, `alpha_node`*|dx| after the damping) that
 /// registers phantom "progress" every backtracking iteration, resetting the
 /// stall counter on a genuine limit cycle, and misreports the
 /// "maxdV(undamped)" readout. Same doctrine as the convergence
@@ -1284,7 +1291,7 @@ fn node_step_norm(ws: &Workspace) -> (f64, usize) {
 /// same-sign step means it is converging, so take a near-full step. This
 /// kills the oscillation while letting the well-behaved majority converge
 /// fast. At the root every step is zero, so damping is inert. Active only for
-/// branch_reg>0 (`damp`), so the normal solve paths stay bit-identical.
+/// `branch_reg>0` (`damp`), so the normal solve paths stay bit-identical.
 fn damp_node_steps(ws: &mut Workspace, damp: bool) {
     if damp {
         const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
@@ -1311,7 +1318,7 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
                 ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
                 // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
                 let shrink = ws.osc_count[i].saturating_sub(1).min(8);
-                ALPHA_OSCILLATING / (1u32 << shrink) as f64
+                ALPHA_OSCILLATING / f64::from(1u32 << shrink)
             } else {
                 ws.osc_count[i] = 0;
                 ALPHA_CONVERGING
@@ -1343,7 +1350,7 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
 /// MNT Reform power stage: one KCL row carrying 1.5e4 A of stiff-wire terms
 /// read 2.74e-12 A (1.8e-16 relative) at every alpha, the merit sat just above
 /// the 1e-12 A root bar, and every Newton step was cut to the 1/64 floor until
-/// max_newton gave out. (`node_norm` only flags a poisoned trial here.)
+/// `max_newton` gave out. (`node_norm` only flags a poisoned trial here.)
 fn merit(ws: &Workspace, node_norm: f64, opts: &SolverOptions) -> f64 {
     if !node_norm.is_finite() {
         return f64::INFINITY;
@@ -1391,7 +1398,7 @@ fn residual_argmax_at(
     branch_reg: f64,
 ) -> (f64, usize) {
     ws.matrix.clear_values();
-    for v in ws.rhs.iter_mut() {
+    for v in &mut ws.rhs {
         *v = 0.0;
     }
     {
@@ -1426,7 +1433,7 @@ fn residual_argmax_at(
             branch_reg,
             cmp_freeze: ws.cmp_freeze.as_ref(),
             switch_freeze: ws.switch_freeze.as_ref(),
-            switch_latch: hyst_latch(opts, &ws.switch_latch),
+            switch_latch: hyst_latch(opts, ws.switch_latch.as_ref()),
             spdt_sibling: &ws.spdt_sibling,
             // Stateless on purpose: a trial/probe stamp must neither consult
             // nor advance the live iteration's junction evaluation schedule.
@@ -1568,7 +1575,7 @@ fn node_block_converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOpt
         if !x[i].is_finite() {
             return false;
         }
-        let tol = opts.reltol * x[i].abs().max(xp[i].abs()) + opts.vntol;
+        let tol = opts.reltol.mul_add(x[i].abs().max(xp[i].abs()), opts.vntol);
         if (x[i] - xp[i]).abs() > tol {
             return false;
         }
@@ -1587,9 +1594,10 @@ fn converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bo
             return false;
         }
         let tol = if i < layout.n_nodes {
-            opts.reltol * x[i].abs().max(xp[i].abs()) + opts.vntol
+            opts.reltol.mul_add(x[i].abs().max(xp[i].abs()), opts.vntol)
         } else {
-            opts.reltol * x[i].abs().max(xp[i].abs()) + opts.abstol
+            opts.reltol
+                .mul_add(x[i].abs().max(xp[i].abs()), opts.abstol)
         };
         if (x[i] - xp[i]).abs() > tol {
             return false;
@@ -1604,6 +1612,11 @@ fn converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bo
 /// When `use_ic` is set, reactive elements that declare an initial condition
 /// are pinned to it, giving the transient "initial conditions" operating point
 /// rather than the steady-state DC bias.
+///
+/// # Errors
+///
+/// The final stage's failure (non-convergence, a singular system or a
+/// behavioral fault) once every homotopy stage has been tried.
 pub fn dc_operating_point(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1613,7 +1626,9 @@ pub fn dc_operating_point(
 }
 
 /// Solve the DC operating point for AC small-signal analysis, NEVER honoring
-/// initial conditions. SPICE `.ac` always linearizes around the ordinary DC
+/// initial conditions.
+///
+/// SPICE `.ac` always linearizes around the ordinary DC
 /// operating point and ignores `.ic`/UIC. [`dc_operating_point`] sets `use_ic`
 /// whenever any cap/inductor carries an IC, which pins those elements to their
 /// IC (a cap with `ic` is shorted, an inductor's branch current is fixed); the
@@ -1632,11 +1647,17 @@ pub fn dc_operating_point_no_ic(
 
 /// Solve the DC operating point, optionally warm-started from a `seed` (a prior
 /// operating point of the same circuit, e.g. the previous co-sim chunk's final
-/// unknowns). A good seed lets plain Newton converge in ~1 iteration, skipping
+/// unknowns).
+///
+/// A good seed lets plain Newton converge in ~1 iteration, skipping
 /// the expensive gmin/source-stepping homotopy that a cold start needs on a
 /// stiff nonlinear board. This is EXACT: Newton converges to the same unique root
 /// regardless of the starting guess; the seed only changes the iteration count,
 /// and a seed that fails falls back to the identical cold (zeroed) path below.
+///
+/// # Errors
+///
+/// As [`dc_operating_point`]: the cold path's failure after every stage.
 pub fn dc_operating_point_seeded(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1667,7 +1688,7 @@ fn seed_bjt_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
                 let ext = [*c, *b, *e];
                 for t in 0..3 {
                     if let Some(ii) = ints[t] {
-                        ws.x[ii] = ws.layout.node(ext[t]).map(|i| ws.x[i]).unwrap_or(0.0);
+                        ws.x[ii] = ws.layout.node(ext[t]).map_or(0.0, |i| ws.x[i]);
                     }
                 }
             }
@@ -1692,7 +1713,7 @@ fn seed_mosfet_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
                 let ext = [*d, *s];
                 for t in 0..2 {
                     if let Some(ii) = ints[t] {
-                        ws.x[ii] = ws.layout.node(ext[t]).map(|i| ws.x[i]).unwrap_or(0.0);
+                        ws.x[ii] = ws.layout.node(ext[t]).map_or(0.0, |i| ws.x[i]);
                     }
                 }
             }
@@ -1710,12 +1731,13 @@ fn seed_diode_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
     for (id, dev) in circuit.iter() {
         if let Device::Diode { a, .. } = dev {
             if let Some(int) = ws.layout.diode_internal(id) {
-                ws.x[int] = ws.layout.node(*a).map(|i| ws.x[i]).unwrap_or(0.0);
+                ws.x[int] = ws.layout.node(*a).map_or(0.0, |i| ws.x[i]);
             }
         }
     }
 }
 
+#[allow(clippy::too_many_lines)] // the ordered homotopy stages, each a short early return
 fn dc_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1723,6 +1745,16 @@ fn dc_solve(
     use_ic: bool,
     seed: Option<&[f64]>,
 ) -> SolveResult<()> {
+    const STAGED_GMIN: f64 = 1e-7;
+    // A negligible series resistance on every Vsource/Inductor branch so the
+    // frozen sparse ordering keeps a nonzero pivot on those rows even as
+    // conducting diodes reshape the elimination: far below the 50-ohm driver
+    // output impedance and any meaningful series element, so it does not move
+    // the operating point within solver tolerance. It also arms the
+    // "converged-then-singular" acceptance and the per-node damping in
+    // newton_solve (at the true root every signal diode is reverse-biased, so
+    // the next Jacobian can be singular even though the root is well-defined).
+    const STAGED_BRANCH_REG: f64 = 1e-2;
     ws.used_staged_dc = false;
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
@@ -1791,7 +1823,7 @@ fn dc_solve(
     let steps = 50;
     let mut last = (0.0, 0);
     let src_ok = (1..=steps).all(|s| {
-        let scale = s as f64 / steps as f64;
+        let scale = f64::from(s) / f64::from(steps);
         let r = solve(ws, opts.gmin, scale);
         last = (scale, r.iters);
         if !r.converged && dbg {
@@ -1840,16 +1872,6 @@ fn dc_solve(
     // default keeps the frozen-singular -> adopt-the-relaxed-point behaviour
     // bit-for-bit. Restored to off before every return so the workspace-reused
     // transient keeps frozen-only semantics.
-    const STAGED_GMIN: f64 = 1e-7;
-    // A negligible series resistance on every Vsource/Inductor branch so the
-    // frozen sparse ordering keeps a nonzero pivot on those rows even as
-    // conducting diodes reshape the elimination: far below the 50-ohm driver
-    // output impedance and any meaningful series element, so it does not move
-    // the operating point within solver tolerance. It also arms the
-    // "converged-then-singular" acceptance and the per-node damping in
-    // newton_solve (at the true root every signal diode is reverse-biased, so
-    // the next Jacobian can be singular even though the root is well-defined).
-    const STAGED_BRANCH_REG: f64 = 1e-2;
     let staged_gmin = STAGED_GMIN.max(opts.gmin);
     let dc_dyn = opts.ladder.has(Strategy::DynamicPivot);
     if dc_dyn {
@@ -1940,6 +1962,7 @@ fn gmin_ladder(
     dbg: bool,
 ) -> bool {
     let mut gmin = start;
+    #[allow(clippy::while_float)] // decade walk: gmin shrinks 10x per rung, so it terminates
     while gmin > floor {
         let r = solve(ws, gmin, 1.0);
         if !r.converged {
@@ -2046,9 +2069,9 @@ fn eval_comparator_states(
     circuit: &Circuit,
     layout: &Layout,
     x: &[f64],
-    prev: &std::collections::HashMap<DeviceId, bool>,
-) -> std::collections::HashMap<DeviceId, bool> {
-    let mut out = std::collections::HashMap::new();
+    prev: &HashMap<DeviceId, bool>,
+) -> HashMap<DeviceId, bool> {
+    let mut out = HashMap::new();
     for (id, dev) in circuit.iter() {
         if let Device::Comparator {
             inp,
@@ -2057,8 +2080,8 @@ fn eval_comparator_states(
             ..
         } = dev
         {
-            let vp = layout.node(*inp).map(|i| x[i]).unwrap_or(0.0);
-            let vn = layout.node(*inn).map(|i| x[i]).unwrap_or(0.0);
+            let vp = layout.node(*inp).map_or(0.0, |i| x[i]);
+            let vn = layout.node(*inn).map_or(0.0, |i| x[i]);
             let d = vp - vn;
             let was_high = prev.get(&id).copied().unwrap_or(d > 0.0);
             out.insert(id, d > crate::stamp::comparator_trip(was_high, *hysteresis));
@@ -2072,9 +2095,9 @@ fn eval_comparator_states(
 /// `a` = the summing/common node, opposite control senses). The summing bus must
 /// never be simultaneously low-Z to BOTH throws, so the break-before-make logic
 /// in [`eval_switch_states`] consults these pairs.
-pub(crate) struct SpdtPairs {
+pub struct SpdtPairs {
     /// device id -> the device id of its sibling leg (only present for paired legs).
-    pub(crate) sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    pub(crate) sibling: HashMap<DeviceId, DeviceId>,
 }
 
 impl SpdtPairs {
@@ -2086,35 +2109,34 @@ impl SpdtPairs {
     /// No SPDT pairs (the break-before-make is inert). Used by unit tests on
     /// circuits with no complementary-leg SPDTs.
     #[cfg(test)]
-    fn empty() -> SpdtPairs {
-        SpdtPairs {
-            sibling: std::collections::HashMap::new(),
+    fn empty() -> Self {
+        Self {
+            sibling: HashMap::new(),
         }
     }
 
-    pub(crate) fn analyze(circuit: &Circuit) -> SpdtPairs {
+    pub(crate) fn analyze(circuit: &Circuit) -> Self {
         // Group VSwitch legs by (common node a, base name without the _sN suffix).
-        let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
-            std::collections::HashMap::new();
+        let mut groups: HashMap<(u32, String), Vec<DeviceId>> = HashMap::new();
         for (id, dev) in circuit.iter() {
             if let Device::VSwitch { name, a, .. } = dev {
                 let base = name
                     .strip_suffix("_s0")
                     .or_else(|| name.strip_suffix("_s1"))
-                    .map(|s| s.to_string());
+                    .map(ToString::to_string);
                 if let Some(base) = base {
                     groups.entry((a.0, base)).or_default().push(id);
                 }
             }
         }
-        let mut sibling = std::collections::HashMap::new();
+        let mut sibling = HashMap::new();
         for (_, ids) in groups {
             if ids.len() == 2 {
                 sibling.insert(ids[0], ids[1]);
                 sibling.insert(ids[1], ids[0]);
             }
         }
-        SpdtPairs { sibling }
+        Self { sibling }
     }
 }
 
@@ -2155,14 +2177,14 @@ fn eval_switch_states(
     circuit: &Circuit,
     layout: &Layout,
     x: &[f64],
-    prev: &std::collections::HashMap<DeviceId, bool>,
+    prev: &HashMap<DeviceId, bool>,
     pairs: &SpdtPairs,
     transition_frac: f64,
-) -> std::collections::HashMap<DeviceId, bool> {
+) -> HashMap<DeviceId, bool> {
     // First pass: each switch's raw hysteretic decision and its "on-margin" (how
     // far the control sits past the on threshold; higher = more firmly on).
-    let mut on: std::collections::HashMap<DeviceId, bool> = std::collections::HashMap::new();
-    let mut margin: std::collections::HashMap<DeviceId, f64> = std::collections::HashMap::new();
+    let mut on: HashMap<DeviceId, bool> = HashMap::new();
+    let mut margin: HashMap<DeviceId, f64> = HashMap::new();
     for (id, dev) in circuit.iter() {
         if let Device::VSwitch {
             ctrl_p,
@@ -2172,8 +2194,8 @@ fn eval_switch_states(
             ..
         } = dev
         {
-            let vp = layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
-            let vn = layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
+            let vp = layout.node(*ctrl_p).map_or(0.0, |i| x[i]);
+            let vn = layout.node(*ctrl_n).map_or(0.0, |i| x[i]);
             let vctrl = vp - vn;
             let vmid = 0.5 * (von + voff);
             let was_on = prev.get(&id).copied().unwrap_or(vctrl > vmid);
@@ -2194,7 +2216,7 @@ fn eval_switch_states(
         }
     }
     // Break-before-make: resolve every SPDT pair so at most one leg is ON.
-    for (&id, &sib) in pairs.sibling.iter() {
+    for (&id, &sib) in &pairs.sibling {
         // Process each unordered pair once (id < sib).
         if id.0 >= sib.0 {
             continue;
@@ -2246,7 +2268,7 @@ fn staged_event_solve(
         flip_budget: usize::MAX,
         max_passes: 40,
     };
-    event_solve(ws, circuit, &inner, ev) == Some(true)
+    event_solve(ws, circuit, &inner, &ev) == Some(true)
 }
 
 /// Event-driven TRANSIENT step solve: [`event_solve`] at `t+dt` with the real
@@ -2262,7 +2284,7 @@ fn staged_event_solve(
 /// comparator with adaptation feedback (its output capacitively coupled back to
 /// its own threshold node) stalls right at the crossing when pinned to a rail;
 /// left SELF-DECIDING through the smooth high-gain logistic transfer (the
-/// branch_reg>0 path, which has a real tangent) it tracks its flip
+/// `branch_reg>0` path, which has a real tangent) it tracks its flip
 /// continuously while the switch mesh stays frozen. A refractory reset is the
 /// opposite regime: the smooth comparator's ~2000 V^-1 gain couples the
 /// collapsing membrane straight back into the fast positive-feedback discharge
@@ -2308,17 +2330,14 @@ pub fn newton_solve_event(
         flip_budget: opts.event_retry.flip_budget,
         max_passes: 60,
     };
-    match event_solve(ws, circuit, &inner, ev) {
-        Some(ok) => ok,
-        // Nothing discrete to freeze: a plain step is already smooth. Caller
-        // should not have routed here, but stay correct: one ordinary solve.
-        None => {
-            newton_solve(
-                ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
-            )
-            .converged
-        }
-    }
+    // Nothing discrete to freeze: a plain step is already smooth. Caller
+    // should not have routed here, but stay correct: one ordinary solve.
+    event_solve(ws, circuit, &inner, &ev).unwrap_or_else(|| {
+        newton_solve(
+            ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
+        )
+        .converged
+    })
 }
 
 /// What one event-driven solve freezes and integrates (see [`event_solve`]).
@@ -2367,7 +2386,7 @@ fn event_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
-    ev: EventSolve<'_>,
+    ev: &EventSolve<'_>,
 ) -> Option<bool> {
     let dbg = *STAGED_DBG;
     let spdt = SpdtPairs::analyze(circuit);
@@ -2375,9 +2394,9 @@ fn event_solve(
     // Seed the discrete states from the entry iterate, anchored on no previous
     // decision (a control sitting in a hysteresis band takes its raw side).
     let mut x = ws.x.clone();
-    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &x, &Default::default());
+    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &x, &HashMap::default());
     let mut sw_states =
-        eval_switch_states(circuit, &ws.layout, &x, &Default::default(), &spdt, frac);
+        eval_switch_states(circuit, &ws.layout, &x, &HashMap::default(), &spdt, frac);
     if cmp_states.is_empty() && sw_states.is_empty() {
         return None;
     }
@@ -2434,9 +2453,9 @@ fn event_solve(
             {
                 let want = want_sw.get(&id).copied().unwrap_or(false);
                 if sw_states.get(&id).copied() != Some(want) {
-                    let vp = ws.layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
-                    let vn = ws.layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
-                    disagree.push((id, want, (vp - vn - 0.5 * (von + voff)).abs()));
+                    let vp = ws.layout.node(*ctrl_p).map_or(0.0, |i| x[i]);
+                    let vn = ws.layout.node(*ctrl_n).map_or(0.0, |i| x[i]);
+                    disagree.push((id, want, 0.5f64.mul_add(-(von + voff), vp - vn).abs()));
                 }
             }
         }
@@ -2506,9 +2525,9 @@ fn solve_diode_is_homotopy(
     let mut x = seed.to_vec();
 
     // Geometric ramp of the Is scale: 1e-4, 1e-3.5, ... up to 1.0.
-    let steps = 16usize;
+    let steps = 16u32;
     for s in 1..=steps {
-        let frac = s as f64 / steps as f64; // 0<frac<=1
+        let frac = f64::from(s) / f64::from(steps); // 0<frac<=1
         let scale = 10f64.powf(-4.0 * (1.0 - frac)); // 1e-4 .. 1.0
         for &(i, is_real) in &diodes {
             if let Device::Diode { model, .. } = &mut work.devices[i] {
@@ -2560,7 +2579,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     const DIODE_OFF_OHMS: f64 = 1e9;
     let mut relaxed = circuit.clone();
     let mut any = false;
-    for dev in relaxed.devices.iter_mut() {
+    for dev in &mut relaxed.devices {
         if let Device::Diode { name, a, k, .. } = dev {
             any = true;
             *dev = Device::resistor(format!("{name}__relaxed_off"), *a, *k, DIODE_OFF_OHMS);
@@ -2614,7 +2633,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
         }
         if let Some(int) = full.diode_internal(id) {
             if let Device::Diode { a, .. } = &circuit.devices[id.0 as usize] {
-                out[int] = full.node(*a).map(|i| out[i]).unwrap_or(0.0);
+                out[int] = full.node(*a).map_or(0.0, |i| out[i]);
             }
         }
     }
@@ -2636,20 +2655,20 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
 fn ptc_settle_from_seed(circuit: &Circuit, opts: &SolverOptions, seed: &[f64]) -> Option<Vec<f64>> {
     use crate::options::{Integration, Partitioning, StepControl};
     use crate::transient::Transient;
-
-    let n_nodes = circuit.max_node() as usize;
-    let orig_size = seed.len();
-    let mut aug = circuit.clone();
     // Pseudo-cap value: large enough to dominate the smallest real conductance
     // (anchoring floating nodes) yet give a fast settle time constant with the
     // chosen step. 1 nF with a 1 us step => C/dt = 1e-3 S on every node.
     const PSEUDO_C: f64 = 1e-9;
+
+    let n_nodes = circuit.max_node() as usize;
+    let orig_size = seed.len();
+    let mut aug = circuit.clone();
     for ni in 1..=n_nodes {
         // IC = the seed's voltage for this node (node i -> unknown index i-1).
         let v0 = seed.get(ni - 1).copied().unwrap_or(0.0);
         aug.add(Device::Capacitor {
             name: format!("__ptc_c{ni}"),
-            a: NodeId(ni as u32),
+            a: crate::node_id(ni),
             b: NodeId::GROUND,
             farads: PSEUDO_C,
             ic: Some(v0),
@@ -2705,7 +2724,6 @@ mod tests {
         cap, cap_ic, comparator, diode, divider, res, sw, vdc, vpulse, vswitch, GND,
     };
     use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, NodeId};
-    use std::collections::HashMap;
 
     fn node_v(ws: &Workspace, n: NodeId) -> f64 {
         ws.layout.node(n).map(|i| ws.x[i]).unwrap()
@@ -3027,12 +3045,12 @@ mod tests {
     /// on a scripted constant-amplitude two-cycle the norm from
     /// `node_step_norm` is the cycle amplitude every iteration while the
     /// damped step in `ws.x` shrinks, so the detector bails right after
-    /// STALL_WINDOW where the post-damping norm never would.
+    /// `STALL_WINDOW` where the post-damping norm never would.
     #[test]
     fn stall_norm_is_the_undamped_step_not_the_damped_one() {
+        const A: f64 = 0.5;
         let (c, _, _) = divider();
         let mut ws = Workspace::new(&c);
-        const A: f64 = 0.5;
         let (mut best_norm, mut stall, mut bailed_at) = (f64::INFINITY, 0usize, None);
         let (mut damped_best, mut damped_stall, mut damped_bailed) = (f64::INFINITY, 0usize, false);
         let mut last_damped = f64::INFINITY;
@@ -3128,7 +3146,7 @@ mod tests {
         );
     }
 
-    /// On the TransientDyn path the stall detector is handed the true undamped
+    /// On the `TransientDyn` path the stall detector is handed the true undamped
     /// step, never the line-searched one: the probed norm is never below the
     /// post-line-search re-measurement, and diverges from it on a hard
     /// backtrack.

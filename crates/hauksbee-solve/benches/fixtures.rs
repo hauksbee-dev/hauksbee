@@ -32,6 +32,7 @@ use hauksbee_testkit::circuits::{bjt, cap_ic, res, vdc};
 ///
 /// `r_ohms` / `c_farads` per stage set the stage time constant (`R*C`); the
 /// defaults below give `1 us`.
+#[must_use]
 pub fn build_rc_ladder(n: usize) -> Circuit {
     let r_ohms = 1e3;
     let c_farads = 1e-9;
@@ -59,9 +60,9 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 
 /// Build an `n`-block current-mirror array sharing a SHUNT-FED analog rail.
 ///
-/// +5V --[R_shunt 1k]-- ANALOG_VDD --(per block: mirror emitters + membrane R)
+/// +5V --[`R_shunt` 1k]-- `ANALOG_VDD` --(per block: mirror emitters + membrane R)
 /// Each block: ref resistor -> diode-connected Q1 mirror reference -> Q2 mirror
-/// output charges a membrane RC pulled up to ANALOG_VDD. Bias is quasi-static
+/// output charges a membrane RC pulled up to `ANALOG_VDD`. Bias is quasi-static
 /// (DC drive) so the array reaches a steady operating point, exactly like an
 /// inference window with latched weights.
 ///
@@ -74,6 +75,7 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 ///
 /// Returns the circuit plus the list of membrane node names, so a caller can
 /// probe the per-block outputs.
+#[must_use]
 pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
     let mut c = Circuit::new();
     let p5 = c.node("+5V");

@@ -23,10 +23,10 @@ fn operating_point_reports_the_options_used_and_the_measured_kcl_residual() {
 
     let output = run_op(&divider(), &options, &[Probe::NodeVoltage("rail".into())]).unwrap();
     let tolerance = output.error_budget.tolerance();
-    assert_eq!(tolerance.reltol(), options.reltol);
-    assert_eq!(tolerance.vntol(), options.vntol);
-    assert_eq!(tolerance.abstol(), options.abstol);
-    assert_eq!(tolerance.chgtol(), options.chgtol);
+    assert_eq!(tolerance.reltol().to_bits(), options.reltol.to_bits());
+    assert_eq!(tolerance.vntol().to_bits(), options.vntol.to_bits());
+    assert_eq!(tolerance.abstol().to_bits(), options.abstol.to_bits());
+    assert_eq!(tolerance.chgtol().to_bits(), options.chgtol.to_bits());
 
     let residual = output
         .error_budget
@@ -52,8 +52,8 @@ fn transient_reports_the_selected_integration_method_and_solved_window() {
     assert_eq!(output.error_budget.methods().len(), 1);
     let method = &output.error_budget.methods()[0];
     assert_eq!(method.method(), IntegrationMethod::Gear2);
-    assert_eq!(method.window().start_s(), 0.0);
-    assert_eq!(method.window().end_s(), 5e-6);
+    assert!(method.window().start_s() == 0.0);
+    assert_eq!(method.window().end_s().to_bits(), 5e-6f64.to_bits());
     let residual = output
         .error_budget
         .residual()

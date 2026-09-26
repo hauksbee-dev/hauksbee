@@ -1,7 +1,7 @@
 //! Power-ramp (pseudo-transient continuation) gates for the `FromZero` /
 //! `Ramped` power-on start.
 //!
-//! The motivating case (ledger e57c0f0, tarski_general_e2e.rs): on the flagship,
+//! The motivating case (ledger e57c0f0, `tarski_general_e2e.rs`): on the flagship,
 //! some solve groups have NO reachable DC operating point (self-resetting
 //! oscillator shapes), so the honest way to carry them is to power on: sources
 //! ramp from zero, the state integrates from zero, and there is no DC solve to
@@ -48,10 +48,10 @@ fn comparator_astable() -> Circuit {
 }
 
 /// Wrap every independent source in a `Ramped` envelope reaching full amplitude
-/// at `win` (the power-on retry policy: ramp_window = 200 * dt).
+/// at `win` (the power-on retry policy: `ramp_window` = 200 * dt).
 fn ramp_sources(c: &Circuit, win: f64) -> Circuit {
     let mut c = c.clone();
-    for d in c.devices.iter_mut() {
+    for d in &mut c.devices {
         if let Device::Vsource { kind, .. } | Device::Isource { kind, .. } = d {
             let inner = std::mem::replace(kind, SourceKind::Dc(0.0));
             *kind = inner.ramped(win);
@@ -117,8 +117,8 @@ fn astable_fails_dc_but_runs_power_on() {
 
     // t=0 is a power-on rest state: every node starts at zero.
     for node in 0..c.node_count() {
-        assert_eq!(
-            wf.node_voltages[node][0], 0.0,
+        assert!(
+            wf.node_voltages[node][0] == 0.0,
             "power-on t=0 must be zero at node {node}"
         );
     }
@@ -156,7 +156,7 @@ fn power_on_settles_to_the_same_steady_state() {
     let tau = rc * cout; // 22 us
     let ramp_window = 200.0 * dt; // 20 us
                                   // Run well past ramp_window + 5*tau so the ramp transient has fully decayed.
-    let tstop = ramp_window + 20.0 * tau;
+    let tstop = 20.0f64.mul_add(tau, ramp_window);
 
     let normal = Transient::new(fixed(dt))
         .run(&c, tstop)
@@ -186,7 +186,7 @@ fn power_on_settles_to_the_same_steady_state() {
     );
 }
 
-/// The group index that conducts a named node (mirrors run_staged's routing).
+/// The group index that conducts a named node (mirrors `run_staged`'s routing).
 fn group_of_node(d: &Decomposition, node: NodeId) -> Option<usize> {
     let isl = d
         .graph
@@ -259,9 +259,9 @@ fn run_staged_power_ramps_the_no_dc_group() {
     );
 }
 
-/// Gate: run_staged is deterministic. On a fixture with several absorbed
+/// Gate: `run_staged` is deterministic. On a fixture with several absorbed
 /// drivers, two runs on the same decomposition must produce bitwise-identical
-/// executed_groups, torn_groups, and assembled waveforms. This guards the
+/// `executed_groups`, `torn_groups`, and assembled waveforms. This guards the
 /// `absorbed`-map ordering fix (device construction order is solver-visible).
 #[test]
 fn run_staged_is_bitwise_deterministic() {
@@ -275,7 +275,7 @@ fn run_staged_is_bitwise_deterministic() {
     // `absorbed` map carries seven entries whose iteration order sets device
     // push order in the consumer sub-circuit.
     let vals = [5.0, 1.2, 4.3, 0.6, 3.9, 2.1, 4.8];
-    for (k, &vv) in vals.iter().enumerate() {
+    for (k, &vv) in (0u32..).zip(&vals) {
         let v = c.node(&format!("vd{k}"));
         add_vdc(&mut c, &format!("VD{k}"), v, NodeId::GROUND, vv);
         let sel = c.node(&format!("sel{k}"));
@@ -284,7 +284,7 @@ fn run_staged_is_bitwise_deterministic() {
             &format!("Ra{k}"),
             v,
             sel,
-            1e3 * (1.0 + 0.2 * k as f64),
+            1e3 * 0.2f64.mul_add(f64::from(k), 1.0),
         );
         add_resistor(&mut c, &format!("Rb{k}"), sel, NodeId::GROUND, 1e3);
         vswitch(
@@ -293,8 +293,8 @@ fn run_staged_is_bitwise_deterministic() {
             sup,
             out,
             (sel, NodeId::GROUND),
-            (1.5 + 0.1 * k as f64, 0.5),
-            (10.0 + k as f64, 1e9),
+            (0.1f64.mul_add(f64::from(k), 1.5), 0.5),
+            (10.0 + f64::from(k), 1e9),
         );
     }
 

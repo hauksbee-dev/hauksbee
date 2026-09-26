@@ -95,7 +95,7 @@ struct Board {
 }
 
 /// The gated board set: the §4 benchmark subset at smoke scale (the 5-minute
-/// marches and the flagship full inference stay out). rc_ladder_1k plus the
+/// marches and the flagship full inference stay out). `rc_ladder_1k` plus the
 /// mirror array at 24/90/240, both torn and monolithic.
 fn boards() -> Vec<Board> {
     let mut v = Vec::new();
@@ -176,7 +176,7 @@ fn median(samples: &[f64]) -> f64 {
 /// The gate compares quiet-vs-quiet; the median and spread are reported for
 /// transparency only.
 fn quiet(samples: &[f64]) -> f64 {
-    samples.iter().cloned().fold(f64::INFINITY, f64::min)
+    samples.iter().copied().fold(f64::INFINITY, f64::min)
 }
 
 /// Spread as (max - min) / median: the worst-case relative swing across reps.
@@ -187,8 +187,8 @@ fn spread_frac(samples: &[f64]) -> f64 {
     if med <= 0.0 {
         return f64::INFINITY;
     }
-    let min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min = samples.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     (max - min) / med
 }
 
@@ -228,7 +228,7 @@ struct BoardBaseline {
     advisory: bool,
 }
 
-fn default_tol() -> f64 {
+const fn default_tol() -> f64 {
     0.15
 }
 
@@ -259,6 +259,7 @@ const GATE_WARMUP: usize = 2;
 const GATE_REPS: usize = 21;
 
 #[test]
+#[allow(clippy::too_many_lines)] // capture, compare and report in one gate
 fn perf_gate() {
     // 1. Debug builds cannot be compared to a release baseline: skip loudly.
     if cfg!(debug_assertions) {
@@ -285,18 +286,15 @@ fn perf_gate() {
 
     // 3. Load the baseline for this class, or skip loudly if none exists.
     let path = baseline_path(&class);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!(
-                "PERF GATE SKIPPED: no baseline for class '{class}' at {}.\n  Capture one \
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        eprintln!(
+            "PERF GATE SKIPPED: no baseline for class '{class}' at {}.\n  Capture one \
                  (honest-update rule 08 §4, commit it on its own with an explanation):\n  \
                  HAUKSBEE_PERF_CLASS={class} cargo test -p hauksbee-solve --release --test \
                  perf_gate perf_capture_baseline -- --ignored --nocapture",
-                path.display()
-            );
-            return;
-        }
+            path.display()
+        );
+        return;
     };
     let base: Baseline = toml::from_str(&text).expect("baseline TOML parses");
 
@@ -392,14 +390,14 @@ fn perf_gate() {
 #[test]
 #[ignore = "capture tool, not a gate: run explicitly to record/update a baseline"]
 fn perf_capture_baseline() {
+    const WARMUP: usize = 3;
+    const REPS: usize = 25;
     if cfg!(debug_assertions) {
         eprintln!("Capture must run in --release, or the numbers are meaningless. Add --release.");
         return;
     }
     let class = perf_class();
     let arch = std::env::consts::ARCH;
-    const WARMUP: usize = 3;
-    const REPS: usize = 25;
 
     eprintln!("=== perf baseline capture: class '{class}', arch '{arch}', reps {REPS} ===\n");
 
@@ -427,7 +425,7 @@ fn perf_capture_baseline() {
         let q_ms = quiet(&samples) * 1e3;
         let med_ms = median(&samples) * 1e3;
         let spread = spread_frac(&samples);
-        let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * 1e3;
+        let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max) * 1e3;
         let noisy = spread > ADVISORY_SPREAD;
         eprintln!(
             "  {:<16} quiet {:>10}  median {:>10}  spread {:>6.0}%  (max {:.3} ms){}",

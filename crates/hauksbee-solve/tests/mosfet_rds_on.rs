@@ -20,7 +20,7 @@ use hauksbee_solve::{run_op, run_tran, Probe, SolverOptions, StepControl};
 /// A power-NMOS model whose channel is a small fraction of `rd + rs` at high
 /// Vgs, so the on-state drop is set by the series resistance. Moderate KP so
 /// the cold-start operating point converges without an internal-node seed.
-fn power_nmos(rd: f64, rs: f64) -> MosfetModel {
+const fn power_nmos(rd: f64, rs: f64) -> MosfetModel {
     MosfetModel {
         level: MosLevel::Level1,
         polarity: Polarity::N,

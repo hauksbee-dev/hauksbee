@@ -38,12 +38,24 @@ pub use capture::{
 };
 pub use staged::{run_staged, StagedResult};
 
+use crate::options::{SolverOptions, StepControl};
+use crate::{SolveError, SolveResult};
+
+/// The fixed step of `opts`, or a refusal carrying `why` for adaptive control.
+pub(crate) fn fixed_dt(opts: &SolverOptions, why: &str) -> SolveResult<f64> {
+    match opts.step {
+        StepControl::Fixed { dt } => Ok(dt),
+        StepControl::Adaptive { .. } => Err(SolveError::refused(why)),
+    }
+}
+
 /// The uniform accepted-step grid a fixed-dt run marches (mirrors the run
 /// loop: the last step shortens to land exactly on tstop).
 pub(crate) fn uniform_grid(dt: f64, tstop: f64) -> Vec<f64> {
     let mut grid = vec![0.0];
     let mut t = 0.0;
     let eps = dt * 1e-9;
+    #[allow(clippy::while_float)] // t advances by a positive step and lands exactly on tstop
     while t < tstop - eps {
         t += dt.min(tstop - t);
         grid.push(t);

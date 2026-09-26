@@ -83,7 +83,7 @@ struct NonlinearIsland {
     state: ReactiveState,
     /// Accepted unknowns from the previous step (sub-circuit layout).
     x_accepted: Vec<f64>,
-    /// Map: sub-circuit non-ground NodeId.0 -> global NodeId, for write-back.
+    /// Map: sub-circuit non-ground NodeId.0 -> global `NodeId`, for write-back.
     l2g: Vec<NodeId>,
     /// Boundary input nodes (global) and the sub Vsource id pinning each.
     boundary: Vec<(NodeId, DeviceId)>,
@@ -92,7 +92,7 @@ struct NonlinearIsland {
     /// that is not a boundary input. Precomputed at build so the scatter phase
     /// is a flat copy with no per-write layout lookups, and so the build-time
     /// single-writer check (see `verify_single_writer`) has an explicit owned
-    /// set to verify rather than an implicit "whatever write_back skips".
+    /// set to verify rather than an implicit "whatever `write_back` skips".
     owned: Vec<(NodeId, usize)>,
     first_step: bool,
     /// Spacing of the reactive history pair (previous COMMITTED step): the
@@ -172,7 +172,7 @@ fn build_pool(policy: ParallelPolicy, n_nonlinear: usize) -> Option<rayon::Threa
                 return None;
             }
             let avail = std::thread::available_parallelism()
-                .map(|n| n.get())
+                .map(std::num::NonZero::get)
                 .unwrap_or(1);
             if avail < 2 {
                 return None; // a pool on one CPU is pure overhead
@@ -278,7 +278,7 @@ impl PartitionedTransient {
     /// Try to build a partitioned engine. Returns `None` (caller falls back to
     /// monolithic) when partitioning is off, the step is adaptive, or the
     /// circuit has no separable linear island to gain from.
-    pub fn try_build(circuit: &Circuit, opts: &SolverOptions) -> Option<PartitionedTransient> {
+    pub fn try_build(circuit: &Circuit, opts: &SolverOptions) -> Option<Self> {
         if matches!(opts.partitioning, crate::options::Partitioning::Off) {
             return None;
         }
@@ -354,7 +354,7 @@ impl PartitionedTransient {
             return None;
         }
 
-        Self::build_from_partition(circuit, opts, part)
+        Self::build_from_partition(circuit, opts, &part)
     }
 
     /// Build from a partition whose tears an EXTERNAL decision layer chose
@@ -368,8 +368,8 @@ impl PartitionedTransient {
     pub fn try_build_from_partition(
         circuit: &Circuit,
         opts: &SolverOptions,
-        part: Partition,
-    ) -> Option<PartitionedTransient> {
+        part: &Partition,
+    ) -> Option<Self> {
         if !matches!(opts.step, StepControl::Fixed { .. }) {
             return None;
         }
@@ -388,8 +388,8 @@ impl PartitionedTransient {
     fn build_from_partition(
         circuit: &Circuit,
         opts: &SolverOptions,
-        part: Partition,
-    ) -> Option<PartitionedTransient> {
+        part: &Partition,
+    ) -> Option<Self> {
         // Rail nodes: islands touching them are kept as nonlinear sub-blocks so
         // their rail-boundary current is readable for the scalar balance.
         let rail_nodes: Vec<NodeId> = part.tears.iter().map(|t| t.rail).collect();
@@ -473,8 +473,8 @@ impl PartitionedTransient {
             .collect();
         let mut owned_sets: Vec<&[NodeId]> =
             Vec::with_capacity(lin_free_nodes.len() + nl_owned.len());
-        owned_sets.extend(lin_free_nodes.iter().map(|v| v.as_slice()));
-        owned_sets.extend(nl_owned.iter().map(|v| v.as_slice()));
+        owned_sets.extend(lin_free_nodes.iter().map(Vec::as_slice));
+        owned_sets.extend(nl_owned.iter().map(Vec::as_slice));
         let claimed = match verify_single_writer(&owned_sets, &rail_nodes, n_nodes) {
             Ok(claimed) => claimed,
             Err(msg) => {
@@ -501,7 +501,7 @@ impl PartitionedTransient {
         let pool = build_pool(opts.parallel, nonlinear.len());
         let par = pool.is_some();
 
-        Some(PartitionedTransient {
+        Some(Self {
             opts: *opts,
             linear,
             lin_state,
@@ -548,7 +548,9 @@ impl PartitionedTransient {
     ) -> SolveResult<()> {
         let dt = match self.opts.step {
             StepControl::Fixed { dt } => dt,
-            _ => return Err(SolveError::refused("partitioned path requires fixed step")),
+            StepControl::Adaptive { .. } => {
+                return Err(SolveError::refused("partitioned path requires fixed step"))
+            }
         };
 
         // Seed all islands from a DC operating point, then exchange.
@@ -569,6 +571,7 @@ impl PartitionedTransient {
 
         let mut t = 0.0;
         let eps = dt * 1e-9;
+        #[allow(clippy::while_float)] // t advances by a positive step and lands exactly on tstop
         while t < tstop - eps {
             let h = dt.min(tstop - t);
             let tnext = t + h;
@@ -580,7 +583,7 @@ impl PartitionedTransient {
             // replays a full-dt advance over a shorter interval.
             // `ensure_cache` is a no-op while `h == dt`, so every interior
             // step keeps the amortized one-mat-vec fast path untouched.
-            if h != dt {
+            if h.to_bits() != dt.to_bits() {
                 for li in &mut self.linear {
                     li.ensure_cache(h);
                 }
@@ -792,7 +795,7 @@ impl PartitionedTransient {
             // Inside the engine's own pool (every caller reaches `sweep`
             // through `in_pool`), so the ambient `par_iter`s below execute on
             // it, never on the global rayon pool.
-            let (_, nl_err) = rayon::join(
+            let ((), nl_err) = rayon::join(
                 || {
                     (
                         self.linear.as_slice(),
@@ -804,8 +807,10 @@ impl PartitionedTransient {
                         .into_par_iter()
                         .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
                         .for_each(|(li, state, prev, buf, vfree)| {
-                            linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree)
-                        })
+                            linear_phase_a(
+                                li, circuit, vbuf, tnext, first, state, prev, buf, vfree,
+                            );
+                        });
                 },
                 || {
                     nonlinear_phase_a(
@@ -859,7 +864,7 @@ impl PartitionedTransient {
             let mut scatter = |gn: NodeId, vnew: f64| {
                 let ni = gn.0 as usize;
                 let vold = read[ni];
-                let w = (vnew - vold).abs() / (reltol * vnew.abs().max(vold.abs()) + vntol);
+                let w = (vnew - vold).abs() / reltol.mul_add(vnew.abs().max(vold.abs()), vntol);
                 if w > worst {
                     worst = w;
                     worst_node = gn.0;
@@ -911,7 +916,7 @@ impl PartitionedTransient {
         }
         // Fill exchange buffer with node voltages (ground stays 0).
         for ni in 1..=self.n_nodes {
-            self.vbuf[ni] = node_v(&ws, NodeId(ni as u32));
+            self.vbuf[ni] = node_v(&ws, crate::node_id(ni));
         }
         seed_linear_states(
             &self.linear,
@@ -944,7 +949,7 @@ impl PartitionedTransient {
     /// vanishes once the balance converges (typically within the first step).
     fn seed_decomposed(&mut self, circuit: &Circuit) -> SolveResult<()> {
         // 1. Boundary estimates into the exchange buffer.
-        for v in self.vbuf.iter_mut() {
+        for v in &mut self.vbuf {
             *v = 0.0;
         }
         // Cut sources (and stacked supplies) resolved at t=0.
@@ -1036,7 +1041,7 @@ impl PartitionedTransient {
         }
     }
 
-    fn global_x_len(&self) -> usize {
+    const fn global_x_len(&self) -> usize {
         // Node voltages [0..n_nodes] map to unknown indices [0..n_nodes-1]
         // exactly like the monolithic layout's node block; branch currents are
         // appended but the partitioned probe surface only fills node voltages.
@@ -1227,7 +1232,7 @@ fn linear_phase_a(
         buf[k] = vbuf[n.0 as usize];
     }
     for (k, (id, _, _)) in li.isources().iter().enumerate() {
-        if let hauksbee_ir::Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
+        if let Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
             buf[n_vin + k] = kind.eval(tnext);
         }
     }
@@ -1377,7 +1382,8 @@ fn collect_free_nodes(isl: &Island, li: &LinearIsland) -> Vec<NodeId> {
 
 impl NonlinearIsland {
     /// Extract a nonlinear island into a sub-circuit with pinned-source boundaries.
-    fn build(circuit: &Circuit, isl: &Island) -> Option<NonlinearIsland> {
+    #[allow(clippy::cast_possible_truncation)] // local device indices are u32-bounded
+    fn build(circuit: &Circuit, isl: &Island) -> Option<Self> {
         let mut sub = SubCircuit::new(circuit);
         for &id in &isl.devices {
             sub.copy(circuit, id);
@@ -1434,9 +1440,9 @@ impl NonlinearIsland {
         // scatter is a flat copy with no layout lookups or boundary scans.
         let owned = (1..l2g.len())
             .filter(|&ln| !boundary.iter().any(|(bn, _)| *bn == l2g[ln]))
-            .filter_map(|ln| ws.layout.node(NodeId(ln as u32)).map(|i| (l2g[ln], i)))
+            .filter_map(|ln| ws.layout.node(crate::node_id(ln)).map(|i| (l2g[ln], i)))
             .collect();
-        Some(NonlinearIsland {
+        Some(Self {
             state: ReactiveState::new(sub.devices.len()),
             x_accepted: vec![0.0; ws.layout.size],
             sub,
@@ -1468,11 +1474,11 @@ impl NonlinearIsland {
             if strict {
                 return Err(e);
             }
-            for xi in self.ws.x.iter_mut() {
+            for xi in &mut self.ws.x {
                 *xi = 0.0;
             }
             for (ln, gn) in self.l2g.iter().enumerate().skip(1) {
-                if let Some(i) = self.ws.layout.node(NodeId(ln as u32)) {
+                if let Some(i) = self.ws.layout.node(crate::node_id(ln)) {
                     self.ws.x[i] = vbuf[gn.0 as usize];
                 }
             }
@@ -1521,7 +1527,7 @@ impl NonlinearIsland {
             1.0,
         );
         if !r.converged {
-            let names: Vec<&str> = self.sub.devices.iter().map(|d| d.name()).take(8).collect();
+            let names: Vec<&str> = self.sub.devices.iter().map(Device::name).take(8).collect();
             let message = format!(
                 "nonlinear island Newton failed at h={h} (island of {}: {})",
                 self.sub.devices.len(),
@@ -1673,7 +1679,7 @@ mod tests {
             ],
             vec![v1],
         );
-        let _ = PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), part);
+        let _ = PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), &part);
     }
 
     /// An odd-inversion comparator ring split at its sense couplings can never
@@ -1694,7 +1700,7 @@ mod tests {
             vec![vsrc],
         );
         let mut engine =
-            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), part).unwrap();
+            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(1e-6), &part).unwrap();
         assert!(engine.coupled);
         assert!(engine.run_streaming(&c, 10e-6, |_| {}).is_err());
     }
@@ -1769,7 +1775,7 @@ mod tests {
         );
         let (dt, tstop) = (5e-8, 10e-6);
         let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part).unwrap();
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, &part).unwrap();
         assert!(engine.coupled);
         let last = run_last(&mut engine, &c, tstop);
         // The streamed x carries node k's voltage at index k-1.
@@ -1813,7 +1819,7 @@ mod tests {
         );
         let (dt, tstop) = (5e-8, 20e-6);
         let opts = fixed_opts(dt);
-        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part).unwrap();
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, &part).unwrap();
         let last = run_last(&mut engine, &c, tstop);
         let (a_mono, b_mono, m_mono) = (
             mono_final(&c, &opts, tstop, "a"),
@@ -1880,7 +1886,7 @@ mod tests {
         );
         let (dt, tstop, tau) = (1e-5, 1e-3, 1e-3);
         let mut engine =
-            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(dt), part).unwrap();
+            PartitionedTransient::try_build_from_partition(&c, &fixed_opts(dt), &part).unwrap();
         assert!(!engine.linear.is_empty() && engine.coupled);
         let mut worst = (0.0f64, 0.0f64);
         engine

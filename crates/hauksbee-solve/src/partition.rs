@@ -37,16 +37,17 @@
 //! buried bodies): docs/how-and-why/hauksbee-solve/partition.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use std::collections::BTreeMap;
 
-/// A path-halving union-find over node indices (1..=n_nodes; ground excluded).
+/// A path-halving union-find over node indices (`1..=n_nodes`; ground excluded).
 /// Shared with the conduction graph, which unions the same index space.
-pub(crate) struct UnionFind {
+pub struct UnionFind {
     parent: Vec<usize>,
 }
 
 impl UnionFind {
     pub(crate) fn new(n: usize) -> Self {
-        UnionFind {
+        Self {
             parent: (0..n).collect(),
         }
     }
@@ -131,7 +132,8 @@ pub struct Partition {
 
 impl Partition {
     /// Analyze a circuit into islands, with no rail tearing (legacy behaviour).
-    pub fn analyze(circuit: &Circuit) -> Partition {
+    #[must_use]
+    pub fn analyze(circuit: &Circuit) -> Self {
         Self::analyze_inner(circuit, &[], &[])
     }
 
@@ -140,7 +142,8 @@ impl Partition {
     /// the Tarski synapse array: every current mirror shares one `ANALOG_VDD`
     /// rail fed through a 1 kΩ sense shunt, which otherwise fuses the whole
     /// array into one giant nonlinear island.
-    pub fn analyze_with_tears(circuit: &Circuit) -> Partition {
+    #[must_use]
+    pub fn analyze_with_tears(circuit: &Circuit) -> Self {
         let tears = detect_rail_tears(circuit);
         let tear_nodes: Vec<NodeId> = tears.iter().map(|t| t.rail).collect();
         let shunts: Vec<DeviceId> = tears.iter().map(|t| t.shunt).collect();
@@ -155,7 +158,8 @@ impl Partition {
     /// identical; only the decider changes. This is the seam that lets the
     /// certificate-carrying decomposition drive the proven executor without
     /// this module's legacy magic-constant detection having a vote.
-    pub fn analyze_imposing_tears(circuit: &Circuit, tears: Vec<RailTear>) -> Partition {
+    #[must_use]
+    pub fn analyze_imposing_tears(circuit: &Circuit, tears: Vec<RailTear>) -> Self {
         let tear_nodes: Vec<NodeId> = tears.iter().map(|t| t.rail).collect();
         let shunts: Vec<DeviceId> = tears.iter().map(|t| t.shunt).collect();
         let mut p = Self::analyze_inner(circuit, &tear_nodes, &shunts);
@@ -169,11 +173,8 @@ impl Partition {
     /// currents are the analytic `(v_feed - v_rail)/R` terms of the balance
     /// equations, so they must NOT also become boundary-only islands (that
     /// would count them twice).
-    fn analyze_inner(
-        circuit: &Circuit,
-        extra_pinned: &[NodeId],
-        tear_shunts: &[DeviceId],
-    ) -> Partition {
+    #[allow(clippy::too_many_lines, clippy::cast_possible_wrap)] // one union-find pass; island counts << i64::MAX
+    fn analyze_inner(circuit: &Circuit, extra_pinned: &[NodeId], tear_shunts: &[DeviceId]) -> Self {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1); // index by NodeId.0; 0 = ground
 
@@ -321,7 +322,6 @@ impl Partition {
         // Devices land in the island of their first non-ground node. A device
         // whose only non-ground node is the source-driven boundary still needs
         // an island; voltage sources themselves stay global.
-        use std::collections::BTreeMap;
         let mut by_root: BTreeMap<usize, Island> = BTreeMap::new();
 
         // Helper: pick a representative *free* (non-pinned) node for a device,
@@ -463,7 +463,7 @@ impl Partition {
             });
         }
 
-        Partition {
+        Self {
             islands,
             sources,
             n_nodes,
@@ -472,6 +472,7 @@ impl Partition {
     }
 
     /// True if any island is purely linear and worth the state-space path.
+    #[must_use]
     pub fn has_linear_island(&self) -> bool {
         self.islands
             .iter()
@@ -479,11 +480,13 @@ impl Partition {
     }
 
     /// Number of nonlinear islands.
+    #[must_use]
     pub fn nonlinear_count(&self) -> usize {
         self.islands.iter().filter(|i| !i.linear).count()
     }
 
     /// A one-line human summary for diagnostics / benchmarks.
+    #[must_use]
     pub fn summary(&self) -> String {
         let lin = self.islands.iter().filter(|i| i.linear).count();
         let nl = self.nonlinear_count();
@@ -672,8 +675,8 @@ fn detect_rail_tears(circuit: &Circuit) -> Vec<RailTear> {
             continue;
         }
         tears.push(RailTear {
-            rail: NodeId(rail as u32),
-            feed: NodeId(feed as u32),
+            rail: crate::node_id(rail),
+            feed: crate::node_id(feed),
             shunt,
             r_shunt,
             extra_loads,

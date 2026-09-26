@@ -42,7 +42,7 @@ pub fn monolith(c: &Circuit, opts: &SolverOptions, tstop: f64) -> Waveforms {
     Transient::new(mono_opts).run(c, tstop).expect("monolith")
 }
 
-pub(crate) use crate::orchestrate::lerp_at;
+use crate::orchestrate::lerp_at;
 
 /// Max |sample - reference| over every node (ground excluded) at every sample
 /// time of `time`, interpolating the reference.
@@ -61,7 +61,7 @@ pub fn max_error(
                 - lerp_at(&reference.time, &reference.node_voltages[node], t))
             .abs();
             if err > worst.0 {
-                worst = (err, NodeId(node as u32));
+                worst = (err, crate::node_id(node));
             }
         }
     }
@@ -92,20 +92,20 @@ pub fn assert_matches_within_grid(
                 continue;
             }
             let edge = (0..=8).any(|j| {
-                let tt = t - dt + (j as f64) * (dt / 4.0);
+                let tt = f64::from(j).mul_add(dt / 4.0, t - dt);
                 (lerp_at(&reference.time, m, tt) - sv).abs() <= tol
             });
             assert!(
                 edge,
                 "{what}: diverged at {} t={t:.3e}: {sv:.9} vs {mv:.9} (tol {tol:.3e})",
-                c.node_name(NodeId(node as u32))
+                c.node_name(crate::node_id(node))
             );
         }
     }
 }
 
 pub fn swing(v: &[f64]) -> f64 {
-    v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+    v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
 }
 
 /// Up-crossings of `level`: one per spike.

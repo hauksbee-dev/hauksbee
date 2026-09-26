@@ -10,6 +10,7 @@
 //! so two runs of one deck produce identical bytes.
 
 use crate::SimOutput;
+use std::fmt::Write as _;
 
 const RAW_DATE: &str = "Thu Jan  1 00:00:00  1970";
 /// Carries the `ngspice` token so readers auto-detect the dialect.
@@ -29,12 +30,12 @@ pub enum RawPlot {
 }
 
 impl RawPlot {
-    fn plotname(self) -> &'static str {
+    const fn plotname(self) -> &'static str {
         match self {
-            RawPlot::OperatingPoint => "Operating Point",
-            RawPlot::Transient => "Transient Analysis",
-            RawPlot::Dc => "DC transfer characteristic",
-            RawPlot::Ac => "AC Analysis",
+            Self::OperatingPoint => "Operating Point",
+            Self::Transient => "Transient Analysis",
+            Self::Dc => "DC transfer characteristic",
+            Self::Ac => "AC Analysis",
         }
     }
 }
@@ -42,7 +43,7 @@ impl RawPlot {
 /// `I(...)` is a current; everything else is a voltage.
 fn var_type(label: &str) -> &'static str {
     match label.trim_start().chars().next() {
-        Some('i') | Some('I') => "current",
+        Some('i' | 'I') => "current",
         _ => "voltage",
     }
 }
@@ -107,7 +108,7 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
         RawPlot::Dc => {
             // Column 0 is the swept source; ngspice names the scale by its kind.
             let scale = match out.columns.first().and_then(|c| c.chars().next()) {
-                Some('i') | Some('I') => ("i-sweep", "current"),
+                Some('i' | 'I') => ("i-sweep", "current"),
                 _ => ("v-sweep", "voltage"),
             };
             let mut vars = vec![(scale.0.to_string(), scale.1)];
@@ -151,6 +152,7 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
 
 /// Serialize a [`SimOutput`] as an ngspice ASCII rawfile titled `title` (the
 /// deck's first line). Deterministic: same input, same bytes.
+#[must_use]
 pub fn write_ascii_rawfile(out: &SimOutput, plot: RawPlot, title: &str) -> String {
     let table = build_table(out, plot);
     let flags = if table.complex { "complex" } else { "real" };
@@ -162,13 +164,13 @@ pub fn write_ascii_rawfile(out: &SimOutput, plot: RawPlot, title: &str) -> Strin
         table.values.len()
     );
     for (i, (name, ty)) in table.vars.iter().enumerate() {
-        s.push_str(&format!("\t{i}\t{name}\t{ty}\n"));
+        let _ = writeln!(s, "\t{i}\t{name}\t{ty}");
     }
     s.push_str("Values:\n");
     for (pt, row) in table.values.iter().enumerate() {
         for (k, &(re, im)) in row.iter().enumerate() {
             if k == 0 {
-                s.push_str(&format!(" {pt}\t"));
+                let _ = write!(s, " {pt}\t");
             } else {
                 s.push('\t');
             }
@@ -190,7 +192,7 @@ mod tests {
 
     fn out(columns: &[&str], time: Option<Vec<f64>>, rows: Vec<Vec<f64>>) -> SimOutput {
         SimOutput {
-            columns: columns.iter().map(|s| s.to_string()).collect(),
+            columns: columns.iter().map(ToString::to_string).collect(),
             time,
             rows,
             error_budget: crate::sim::error_budget(&crate::SolverOptions::default()).unwrap(),

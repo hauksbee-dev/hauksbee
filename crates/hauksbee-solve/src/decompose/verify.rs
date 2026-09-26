@@ -34,9 +34,11 @@ use super::feedforward::StageDag;
 use super::rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearMotive};
 use super::stiff::{detect_stiff_candidates, StiffCandidate, StiffPolicy};
 
-/// What kind of tear a node carries. The kinds are ordered by the strength of
-/// their exactness claim: `Balance` is exact by construction, `Stiff` only
-/// within a measured sag, `Free` only to the capture grid it is replayed on.
+/// What kind of tear a node carries.
+///
+/// The kinds are ordered by the strength of their exactness claim: `Balance`
+/// is exact by construction, `Stiff` only within a measured sag, `Free` only
+/// to the capture grid it is replayed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TearKind {
     /// One scalar KCL equation reconciles the rail per step: exact.
@@ -44,9 +46,9 @@ pub enum TearKind {
     /// The node is pinned at a settled voltage with no coupling equation:
     /// exact only within the measured stiffness tolerance. NO PRODUCER YET:
     /// route-4 provisional stiffness detection (tear at the feed voltage,
-    /// sum block boundary currents, verify I*R_feed against stiff_tol) needs
+    /// sum block boundary currents, verify I*`R_feed` against `stiff_tol`) needs
     /// a DC solve and lands with the orchestrator. Until then a
-    /// non-convergent monolith gets balance tears via ConvergenceEscalation,
+    /// non-convergent monolith gets balance tears via `ConvergenceEscalation`,
     /// which is sound and merely costs the outer loop.
     Stiff,
     /// A sense-only, proven one-directional boundary: zero-current exact,
@@ -125,9 +127,10 @@ pub enum RefusedAnalysis {
 
 impl RefusedAnalysis {
     /// The plain-language reason surfaced with every refusal.
-    pub fn reason(&self) -> &'static str {
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
         match self {
-            RefusedAnalysis::SupplyIntegrityOnTornRail => {
+            Self::SupplyIntegrityOnTornRail => {
                 "a torn rail is pinned at its settled voltage, so supply sag, \
                  brownout, and inrush physics are absent from the decomposed \
                  model by construction; run this analysis on the monolithic \
@@ -167,13 +170,19 @@ pub struct TearCertificate {
 
 impl TearCertificate {
     /// Whether the certificate licenses running the decomposition at all.
-    pub fn sound(&self) -> bool {
+    #[must_use]
+    pub const fn sound(&self) -> bool {
         self.uncertified_boundaries.is_empty()
     }
 
     /// Check whether an analysis may run on the decomposed model. `Err`
     /// carries the reason and the offending nodes; surfaces must present it
     /// as a refusal (exit 3 discipline), never downgrade it to a warning.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal recorded against `analysis`, with the nodes whose
+    /// boundaries could not be certified for it.
     pub fn permits(&self, analysis: RefusedAnalysis) -> Result<(), (RefusedAnalysis, Vec<NodeId>)> {
         for (refused, nodes) in &self.refusals {
             if *refused == analysis {
@@ -184,6 +193,7 @@ impl TearCertificate {
     }
 
     /// One line per record, for reports and diagnostics.
+    #[must_use]
     pub fn summary(&self, circuit: &Circuit) -> String {
         use std::fmt::Write;
         let mut out = String::new();
@@ -237,6 +247,7 @@ impl TearCertificate {
 }
 
 /// The full decomposition analysis: the four passes plus their certificate.
+///
 /// This is the object the orchestrator consumes; `Partition::analyze` remains
 /// the fast path for circuits none of this machinery helps.
 #[derive(Debug)]
@@ -256,7 +267,8 @@ pub struct Decomposition {
 
 impl Decomposition {
     /// Run the four analysis passes and assemble the certificate.
-    pub fn analyze(circuit: &Circuit, motive: TearMotive) -> Decomposition {
+    #[must_use]
+    pub fn analyze(circuit: &Circuit, motive: TearMotive) -> Self {
         Self::analyze_with(
             circuit,
             motive,
@@ -266,12 +278,13 @@ impl Decomposition {
     }
 
     /// [`Decomposition::analyze`] with explicit policies.
+    #[must_use]
     pub fn analyze_with(
         circuit: &Circuit,
         motive: TearMotive,
         rails: RailPolicy,
         drv: DriverPolicy,
-    ) -> Decomposition {
+    ) -> Self {
         Self::analyze_with_boundaries(circuit, motive, rails, drv, StiffPolicy::default(), &[])
     }
 
@@ -279,11 +292,12 @@ impl Decomposition {
     /// nodes the run-time environment drives (co-simmed MCU pins, bench
     /// stimuli), which the netlist alone cannot know are driven. A sensed
     /// node in this list is certified by declaration instead of flagged as a
-    /// floating sense net (the analysis probe's finding 2: ENABLE_MEAS nets
+    /// floating sense net (the analysis probe's finding 2: `ENABLE_MEAS` nets
     /// on the flagship are firmware-driven, conducted by nothing in an
     /// analysis-only bind). The certificate records the trust explicitly in
     /// `exogenous_boundaries`, and any executor must actually drive every
     /// node recorded there or refuse to run.
+    #[must_use]
     pub fn analyze_with_boundaries(
         circuit: &Circuit,
         motive: TearMotive,
@@ -291,7 +305,7 @@ impl Decomposition {
         drv: DriverPolicy,
         stiff_policy: StiffPolicy,
         exogenous: &[NodeId],
-    ) -> Decomposition {
+    ) -> Self {
         let graph = ConductionGraph::analyze(circuit);
         let dag = StageDag::build(circuit, &graph);
         let balance = detect_balance_tears(circuit, &graph, motive, &rails);
@@ -425,7 +439,7 @@ impl Decomposition {
             exogenous_boundaries,
         };
 
-        Decomposition {
+        Self {
             graph,
             dag,
             balance_tears: balance,

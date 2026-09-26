@@ -54,9 +54,9 @@
 //!   (`take_behavioral_fault`) must see every iterate.
 //! * **Comparator**: bang-bang output with hysteresis read from the CURRENT
 //!   iterate; the discrete decision is the event the march bisects on.
-//! * **VSwitch**: the event-flip device, and under break-before-make its stamp
+//! * **`VSwitch`**: the event-flip device, and under break-before-make its stamp
 //!   reads its SIBLING leg's control nodes, inputs outside its own terminals.
-//! * **OpAmp**: a rail-clamp discontinuity decides its stamp shape, and
+//! * **`OpAmp`**: a rail-clamp discontinuity decides its stamp shape, and
 //!   evaluation is a handful of multiplies.
 //! * Linear devices (R, C, L, sources, E/F/G/H, coupling): matrix parts are
 //!   constant or backbone-compiled (plan.rs), RHS history changes per step,
@@ -99,7 +99,7 @@ struct DevCache {
 
 /// Workspace-owned bypass state: one cache per bypassable device, an id→cache
 /// index, the solve generation, and the observability counters.
-pub(crate) struct BypassState {
+pub struct BypassState {
     caches: Vec<DevCache>,
     /// `device id -> caches index`, `u32::MAX` = not bypassable.
     index: Vec<u32>,
@@ -115,7 +115,8 @@ impl BypassState {
     /// Build the caches for `circuit` against `layout`. Only Diode/BJT/MOSFET
     /// get an entry (the module-doc exclusion list); everything else keeps
     /// the plain interpreted stamp.
-    pub(crate) fn build(circuit: &Circuit, layout: &Layout) -> BypassState {
+    #[allow(clippy::cast_possible_truncation)] // unknown and cache indices are u32-bounded
+    pub(crate) fn build(circuit: &Circuit, layout: &Layout) -> Self {
         let mut caches = Vec::new();
         let mut index = vec![u32::MAX; circuit.devices.len()];
         for (id, dev) in circuit.iter() {
@@ -126,34 +127,8 @@ impl BypassState {
             if !bypassable {
                 continue;
             }
-            let mut read_idx: Vec<u32> = Vec::new();
-            for n in dev.nodes() {
-                if let Some(i) = layout.node(n) {
-                    if !read_idx.contains(&(i as u32)) {
-                        read_idx.push(i as u32);
-                    }
-                }
-            }
-            // A series-R BJT's intrinsic unknowns: the junction voltages the
-            // model actually evaluates live there, so their movement counts
-            // as terminal movement.
-            if let Some(ints) = layout.bjt_internal(id) {
-                for i in ints.iter().flatten() {
-                    if !read_idx.contains(&(*i as u32)) {
-                        read_idx.push(*i as u32);
-                    }
-                }
-            }
-            // A series-R MOSFET's intrinsic drain/source unknowns: the channel,
-            // body-diode and gate-charge voltages the model evaluates live
-            // there, so their movement counts as terminal movement too.
-            if let Some(ints) = layout.mos_internal(id) {
-                for i in ints.iter().flatten() {
-                    if !read_idx.contains(&(*i as u32)) {
-                        read_idx.push(*i as u32);
-                    }
-                }
-            }
+            // Intrinsic unknowns included: their movement counts as terminal movement too.
+            let read_idx = crate::plan::device_unknowns(layout, dev, id);
             index[id.0 as usize] = caches.len() as u32;
             let n_reads = read_idx.len();
             caches.push(DevCache {
@@ -165,7 +140,7 @@ impl BypassState {
                 rhs: Vec::new(),
             });
         }
-        BypassState {
+        Self {
             caches,
             index,
             gen: 0,
@@ -176,20 +151,20 @@ impl BypassState {
 
     /// Whether any device on this board is bypassable at all (a linear board
     /// or a switch/comparator-only board has nothing to skip).
-    pub(crate) fn has_candidates(&self) -> bool {
+    pub(crate) const fn has_candidates(&self) -> bool {
         !self.caches.is_empty()
     }
 
     /// Invalidate every record: called at the top of each armed
     /// `newton_solve`, so no cache survives a step / retry / dt change (the
     /// per-step inputs (companion history, coeffs, time) moved).
-    pub(crate) fn begin_solve(&mut self) {
+    pub(crate) const fn begin_solve(&mut self) {
         self.gen = self.gen.wrapping_add(1);
     }
 
     /// (evaluations, skips) since construction; the observability the bypass
     /// gate wants (skip rate measured, not guessed).
-    pub(crate) fn counters(&self) -> (u64, u64) {
+    pub(crate) const fn counters(&self) -> (u64, u64) {
         (self.evals, self.skips)
     }
 }
@@ -207,6 +182,7 @@ struct RecordingSink<'a> {
     rhs_rec: &'a mut Vec<(u32, f64)>,
 }
 
+#[allow(clippy::cast_possible_truncation)] // slots and rows index the u32-bounded unknowns
 impl StampSink for RecordingSink<'_> {
     #[inline]
     fn g(&mut self, row: usize, col: usize, v: f64) {
@@ -252,7 +228,7 @@ impl StampSink for PlainSink<'_> {
 /// at least twice per step before any skip can happen.
 // The negated `<=` deliberately treats a NaN delta as "moved", never as bypassable.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub(crate) fn stamp_all_bypass(
+pub fn stamp_all_bypass(
     ctx: &StampCtx,
     st: &mut BypassState,
     g: &mut SparseMatrix,
@@ -287,7 +263,11 @@ pub(crate) fn stamp_all_bypass(
             for (k, &ui) in cache.read_idx.iter().enumerate() {
                 let v = ctx.x[ui as usize];
                 let vl = cache.last_v[k];
-                let tol = 0.1 * (ctx.opts.reltol * v.abs().max(vl.abs()) + ctx.opts.vntol);
+                let tol = 0.1
+                    * ctx
+                        .opts
+                        .reltol
+                        .mul_add(v.abs().max(vl.abs()), ctx.opts.vntol);
                 if !((v - vl).abs() <= tol) {
                     unmoved = false;
                     break;
@@ -331,7 +311,7 @@ mod tests {
     use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs};
     use crate::system::ReactiveState;
     use crate::test_fixtures::{bjt, cap, comparator, diode, res, stamp_ctx, sw, trapz, vdc, GND};
-    use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, SourceKind};
+    use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, MosfetModel, NodeId, SourceKind};
 
     /// A stamped system: the matrix rows as (column, value) entries, and the rhs.
     type Stamped = (Vec<Vec<(usize, f64)>>, Vec<f64>);
@@ -370,7 +350,7 @@ mod tests {
             g: n2,
             s: GND,
             b: None,
-            model: Default::default(),
+            model: MosfetModel::default(),
         });
         sw(&mut c, "S1", n1, n4, n2, (2.0, 1.0), 10.0);
         comparator(&mut c, "K1", n4, n1, n2, 0.1);
@@ -388,14 +368,14 @@ mod tests {
     }
 
     impl Rig {
-        fn new(x_of: impl Fn(usize) -> f64) -> Rig {
+        fn new(x_of: impl Fn(usize) -> f64) -> Self {
             let (c, n1) = mixed_board();
             let layout = Layout::new(&c);
             let mut m = SparseMatrix::new(layout.size);
             reserve_pattern(&c, &layout, &mut m);
             let x = (0..layout.size).map(x_of).collect();
             let state = ReactiveState::new(c.devices.len());
-            Rig {
+            Self {
                 c,
                 n1,
                 layout,
@@ -446,8 +426,9 @@ mod tests {
     /// only its readers; a new generation re-evaluates everything; a NaN
     /// iterate never replays.
     #[test]
+    #[allow(clippy::cast_precision_loss)] // small unknown indices seed the iterate
     fn bypass_replays_exactly_and_invalidates_correctly() {
-        let mut rig = Rig::new(|i| ((i as f64) * 0.61).sin() * 2.0 + 0.4);
+        let mut rig = Rig::new(|i| ((i as f64) * 0.61).sin().mul_add(2.0, 0.4));
         for (i, v) in rig.state.x1.iter_mut().enumerate() {
             *v = 0.2 * (i as f64 + 1.0);
         }
@@ -549,8 +530,10 @@ mod tests {
         assert!(evals > 0 && skips > 0, "evals={evals} skips={skips}");
         let opts = SolverOptions::default();
         for i in 0..x_ref.len() {
-            let tol =
-                opts.reltol * x_ref[i].abs().max(x_byp[i].abs()) + opts.vntol.max(opts.abstol);
+            let tol = opts.reltol.mul_add(
+                x_ref[i].abs().max(x_byp[i].abs()),
+                opts.vntol.max(opts.abstol),
+            );
             assert!(
                 (x_ref[i] - x_byp[i]).abs() <= tol,
                 "unknown {i}: {} vs {}",

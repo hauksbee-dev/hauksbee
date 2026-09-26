@@ -21,6 +21,7 @@
 
 use crate::system::Layout;
 use hauksbee_ir::{Circuit, Device, NodeId};
+use std::fmt::Write as _;
 
 /// Conductance ratio above the board's median resistor conductance at which a
 /// link is called out as the stiff suspect. A 0 Ω jumper clamped to the 1 µΩ
@@ -45,20 +46,21 @@ const MAX_NAMED: usize = 3;
 /// Node-block unknown `k` is netlist node `k + 1` (ground is never an unknown),
 /// except for device-private internal unknowns appended past the netlist nodes,
 /// which have no `NodeId` and are named by index.
+#[must_use]
 pub fn name_node_unknown(circuit: &Circuit, unknown: usize) -> String {
     let layout = Layout::new(circuit);
     name_node_unknown_with_layout(circuit, &layout, unknown)
 }
 
 fn name_node_unknown_with_layout(circuit: &Circuit, layout: &Layout, unknown: usize) -> String {
-    if let Some(id) = layout.node_id(unknown) {
-        format!("net '{}'", circuit.node_name(id))
-    } else {
-        format!("device-internal unknown #{unknown}")
-    }
+    layout.node_id(unknown).map_or_else(
+        || format!("device-internal unknown #{unknown}"),
+        |id| format!("net '{}'", circuit.node_name(id)),
+    )
 }
 
 /// Names of the devices connected to a netlist node, in circuit order.
+#[must_use]
 pub fn devices_on_node(circuit: &Circuit, node: NodeId) -> Vec<String> {
     circuit
         .devices
@@ -86,6 +88,7 @@ pub struct StiffLink {
 /// are milli-siemens, and the resulting condition number is what stops Newton.
 /// Returns an empty vec on any board with fewer than three resistors (no
 /// meaningful median to compare against) or when nothing stands out.
+#[must_use]
 pub fn stiff_links(circuit: &Circuit) -> Vec<StiffLink> {
     let mut ohms: Vec<f64> = circuit
         .devices
@@ -98,7 +101,7 @@ pub fn stiff_links(circuit: &Circuit) -> Vec<StiffLink> {
     if ohms.len() < 3 {
         return Vec::new();
     }
-    ohms.sort_by(|a, b| a.partial_cmp(b).expect("filtered to finite positives"));
+    ohms.sort_by(f64::total_cmp);
     let median = ohms[ohms.len() / 2];
     if median.is_nan() || median <= 0.0 {
         return Vec::new();
@@ -150,10 +153,11 @@ impl SourceConflict {
     /// The source whose commanded voltage the settled node voltage matches, if
     /// exactly one does. This is the honest way to say "which won": not by
     /// guessing at pivot order, but by reading the answer the solve produced.
+    #[must_use]
     pub fn winner(&self, settled_volts: f64) -> Option<&NodeSource> {
         // A generous window: the point is to identify WHICH source the node
         // followed, not to grade the solve's accuracy.
-        let tol = 1e-3 + 1e-3 * settled_volts.abs();
+        let tol = 1e-3f64.mul_add(settled_volts.abs(), 1e-3);
         let mut hits = self
             .sources
             .iter()
@@ -170,6 +174,7 @@ impl SourceConflict {
 
     /// One loud line naming every contender and, when the settled voltage is
     /// known, which one the net actually followed.
+    #[must_use]
     pub fn describe(&self, settled_volts: Option<f64>) -> String {
         let contenders = self
             .sources
@@ -199,24 +204,29 @@ impl SourceConflict {
                         .map(|s| s.name.clone())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    line.push_str(&format!(
+                    let _ = write!(
+                        line,
                         "; the net settled at {v:.3} V, so {} won and {lost} had no effect",
                         w.name
-                    ));
+                    );
                 }
-                None => line.push_str(&format!(
-                    "; the net settled at {v:.3} V, which matches no single source,                      so the result is not any of the requested voltages"
-                )),
+                None => {
+                    let _ = write!(
+                        line,
+                        "; the net settled at {v:.3} V, which matches no single source,                      so the result is not any of the requested voltages"
+                    );
+                }
             },
-            None => line.push_str(
-                "; the matrix is singular there and the solve cannot honour both",
-            ),
+            None => {
+                line.push_str("; the matrix is singular there and the solve cannot honour both");
+            }
         }
         line
     }
 }
 
 /// Every ideal ground-referenced voltage source pinning `node`.
+#[must_use]
 pub fn sources_on_node(circuit: &Circuit, node: NodeId) -> Vec<NodeSource> {
     if node.is_ground() {
         return Vec::new();
@@ -252,10 +262,11 @@ pub fn sources_on_node(circuit: &Circuit, node: NodeId) -> Vec<NodeSource> {
 /// refusal that until now named nothing. As an honesty fault it is how a
 /// requested override loses: forcing a net to 20 V next to a 3.3 V rail leaves
 /// the net reading 3.300 V, and without this nobody says so.
+#[must_use]
 pub fn source_conflicts(circuit: &Circuit) -> Vec<SourceConflict> {
     let mut out: Vec<SourceConflict> = Vec::new();
     for k in 1..circuit.node_count() {
-        let node = NodeId(k as u32);
+        let node = crate::node_id(k);
         let sources = sources_on_node(circuit, node);
         if sources.len() > 1 {
             out.push(SourceConflict {
@@ -303,7 +314,7 @@ pub fn blame_clause(
             if let Some(id) = layout.node_id(unknown) {
                 let on = devices_on_node(circuit, id);
                 if !on.is_empty() {
-                    clause.push_str(&format!(", devices on it: {}", elide(&on)));
+                    let _ = write!(clause, ", devices on it: {}", elide(&on));
                 }
             }
             parts.push(clause);

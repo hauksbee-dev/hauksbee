@@ -36,22 +36,23 @@ use hauksbee_testkit::circuits::{cap, comparator, vswitch};
 /// Deterministic xorshift64*; good enough to scatter topologies, and every
 /// draw is reproducible from the seed printed on failure.
 struct Rng(u64);
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)] // random bits: truncation is intended
 impl Rng {
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
         self.0 = x;
-        x.wrapping_mul(0x2545F4914F6CDD1D)
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
-    fn pick(&mut self, lo: usize, hi: usize) -> usize {
+    const fn pick(&mut self, lo: usize, hi: usize) -> usize {
         lo + (self.next() as usize) % (hi - lo + 1)
     }
     fn f(&mut self, lo: f64, hi: f64) -> f64 {
-        lo + (self.next() as f64 / u64::MAX as f64) * (hi - lo)
+        (self.next() as f64 / u64::MAX as f64).mul_add(hi - lo, lo)
     }
-    fn coin(&mut self) -> bool {
+    const fn coin(&mut self) -> bool {
         self.next() & 1 == 1
     }
 }
@@ -165,7 +166,7 @@ fn diverges(
         }
         // Edge window: does the reference reach sv within +/- dt of t?
         let hit = (0..=8).any(|j| {
-            let tt = t - dt + (j as f64) * (dt / 4.0);
+            let tt = f64::from(j).mul_add(dt / 4.0, t - dt);
             (lerp_at(&mono.time, &mono.node_voltages[node], tt) - sv).abs() <= tol
         });
         if !hit {
@@ -191,16 +192,15 @@ fn random_feedforward_boards_match_the_monolith() {
     let mut sound_boards = 0;
     let mut staged_boards = 0;
     for seed in 1..=20u64 {
-        let c = random_board(seed.wrapping_mul(0x9E3779B97F4A7C15));
+        let c = random_board(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let d = Decomposition::analyze(&c, TearMotive::Profit);
-        if !d.certificate.sound() {
-            // Random boards must not be able to produce unsound certificates:
-            // every sense edge here is conducted upstream by construction.
-            panic!(
-                "seed {seed}: generator produced an unsound certificate\n{}",
-                d.certificate.summary(&c)
-            );
-        }
+        // Random boards must not be able to produce unsound certificates:
+        // every sense edge here is conducted upstream by construction.
+        assert!(
+            d.certificate.sound(),
+            "seed {seed}: generator produced an unsound certificate\n{}",
+            d.certificate.summary(&c)
+        );
         sound_boards += 1;
         if d.dag.groups.len() > 1 {
             staged_boards += 1;
@@ -212,11 +212,11 @@ fn random_feedforward_boards_match_the_monolith() {
             .run(&c, tstop)
             .unwrap_or_else(|e| panic!("seed {seed}: monolith failed: {e}"));
 
-        for node in 1..c.node_count() {
+        for (node, id) in (1..c.node_count()).zip(1u32..) {
             if let Some((t, sv, mv)) = diverges(&staged.waveforms, &mono, node, dt, tol) {
                 panic!(
                     "seed {seed}: node {} diverged at t={t:.3e}: staged {sv:.9} vs mono {mv:.9}",
-                    c.node_name(NodeId(node as u32)),
+                    c.node_name(NodeId(id)),
                 );
             }
         }

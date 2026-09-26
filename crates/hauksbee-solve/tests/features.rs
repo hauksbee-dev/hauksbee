@@ -1,4 +1,4 @@
-//! Feature coverage: Gear-2 integration, the SpiceLoader -> solver path, the
+//! Feature coverage: Gear-2 integration, the `SpiceLoader` -> solver path, the
 //! streaming callback, the device-effect toggles, and a switch event.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
