@@ -266,27 +266,31 @@ fn main() -> ExitCode {
     // Renode/QEMU child on SIGTERM/SIGINT. See hauksbee_mcu::children.
     hauksbee_mcu::children::install_signal_reaper();
     let cli = Cli::parse();
-    let mut args = match cli.command {
-        Command::Run(args) => args,
-        Command::Check(args) => return cmd_check(args),
-        Command::Init(args) => return cmd_init(args),
+    match cli.command {
+        Command::Run(args) => cmd_run(args),
+        Command::Check(args) => cmd_check(args),
+        Command::Init(args) => cmd_init(args),
         Command::Hook(HookCommand::Install) => {
-            return report(cwd().and_then(|cwd| integrate::hook_install(&cwd)))
+            report(cwd().and_then(|cwd| integrate::hook_install(&cwd)))
         }
         Command::Hook(HookCommand::Uninstall) => {
-            return report(cwd().and_then(|cwd| integrate::hook_uninstall(&cwd)))
+            report(cwd().and_then(|cwd| integrate::hook_uninstall(&cwd)))
         }
         Command::GithubAction(GithubActionArgs { write: None }) => {
-            return report(integrate::try_github_workflow_yaml().map(|yaml| {
+            report(integrate::try_github_workflow_yaml().map(|yaml| {
                 print!("{yaml}");
                 String::new()
             }))
         }
         Command::GithubAction(GithubActionArgs { write: Some(path) }) => {
-            return report(cwd().and_then(|cwd| integrate::github_action_write(&cwd, &path)))
+            report(cwd().and_then(|cwd| integrate::github_action_write(&cwd, &path)))
         }
-    };
+    }
+}
 
+// The run command end to end: the per-spec loop and the aggregate output share its state.
+#[allow(clippy::too_many_lines)]
+fn cmd_run(mut args: RunArgs) -> ExitCode {
     if args.specs.is_empty() && args.example.is_none() {
         eprintln!("{}", missing_spec_error());
         return ExitCode::from(2);
@@ -384,7 +388,7 @@ fn main() -> ExitCode {
                     // second, non-JSON output line.
                     eprint!("{}", result.render_github_annotations());
                 }
-                let code = result.exit_code() as u8;
+                let code = u8::try_from(result.exit_code()).unwrap_or(u8::MAX);
                 verdicts.push((spec.display().to_string(), code));
                 worst = worst.max(code);
             }
@@ -419,7 +423,7 @@ fn main() -> ExitCode {
                         hauksbee_ci::report::gh_escape(&e.to_string())
                     );
                 }
-                let code = e.exit_code() as u8;
+                let code = u8::try_from(e.exit_code()).unwrap_or(u8::MAX);
                 verdicts.push((spec.display().to_string(), code));
                 worst = worst.max(code);
             }
@@ -610,8 +614,8 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
     use std::collections::BTreeMap;
 
     use hauksbee_engine::run_manifest::{
-        absolutize_argv_paths, board_sidecar_inputs, implicit_model_inputs, ManifestInput,
-        ManifestRequest, RunManifest, ToolIdentity,
+        absolutize_argv_paths, implicit_model_inputs, ManifestInput, ManifestRequest, RunManifest,
+        ToolIdentity,
     };
 
     let mut inputs = Vec::new();
@@ -621,83 +625,7 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         .enumerate()
         .filter(|_| args.example.is_none())
     {
-        let spec = hauksbee_ci::Spec::load(spec_path)?;
-        inputs.push(ManifestInput::new(format!("spec[{index}]"), spec_path));
-        let board_path = spec.board_path();
-        inputs.push(ManifestInput::new(format!("board[{index}]"), &board_path));
-        inputs.extend(board_sidecar_inputs(
-            &board_path,
-            &format!("board[{index}]"),
-        ));
-        if let Some(path) = spec.bom_path() {
-            inputs.push(ManifestInput::new(format!("bom[{index}]"), path));
-        }
-        if let Some(path) = spec.placement_path() {
-            inputs.push(ManifestInput::new(format!("placement[{index}]"), path));
-        }
-        if let Some(path) = spec.variant_path() {
-            inputs.push(ManifestInput::new(format!("variant[{index}]"), path));
-        }
-        if let Some(path) = spec.firmware_path() {
-            inputs.push(ManifestInput::new(
-                format!("firmware_source[{index}]"),
-                &path,
-            ));
-            if let Some(resolved) = hauksbee_engine::firmware_input::resolve_firmware_cli(&path)? {
-                if resolved.path != path {
-                    inputs.push(ManifestInput::new(
-                        format!("firmware_resolved[{index}]"),
-                        resolved.path,
-                    ));
-                }
-            }
-        }
-        if let Some(path) = spec.asbuilt_path() {
-            inputs.push(ManifestInput::new(format!("asbuilt[{index}]"), path));
-        }
-        if let Some(path) = spec.mcu_descriptor_dir() {
-            inputs.push(ManifestInput::new(
-                format!("mcu_descriptor_dir[{index}]"),
-                path,
-            ));
-        }
-        for (sensor_index, sensor) in spec.sensors.iter().enumerate() {
-            if let Some(path) = &sensor.spec_file {
-                let path = std::path::Path::new(path);
-                let path = if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    spec.base_dir.join(path)
-                };
-                inputs.push(ManifestInput::new(
-                    format!("sensor_spec[{index}][{sensor_index}]"),
-                    path,
-                ));
-            }
-        }
-        for (assert_index, assertion) in spec.asserts.iter().enumerate() {
-            if assertion.kind != "hwtrace" {
-                continue;
-            }
-            let trace_path = hauksbee_ci::hwtrace::trace_path(&spec, assertion)?;
-            let trace = hauksbee_ci::hwtrace::Trace::load(&trace_path)?;
-            inputs.push(ManifestInput::new(
-                format!("hardware_trace[{index}][{assert_index}]"),
-                &trace_path,
-            ));
-            for (channel_index, channel) in trace.channels.iter().enumerate() {
-                let path = std::path::Path::new(&channel.file);
-                let path = if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    trace.base_dir.join(path)
-                };
-                inputs.push(ManifestInput::new(
-                    format!("hardware_trace_data[{index}][{assert_index}][{channel_index}]"),
-                    path,
-                ));
-            }
-        }
+        spec_inputs(&mut inputs, index, spec_path)?;
     }
     if let Some(path) = &args.models_dir {
         inputs.push(ManifestInput::new("models_dir", path));
@@ -724,16 +652,15 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
             },
         ),
     ]);
-    let mut features = Vec::new();
-    if cfg!(feature = "avr") {
-        features.push("avr".to_string());
-    }
-    if cfg!(feature = "qemu") {
-        features.push("qemu".to_string());
-    }
-    if cfg!(feature = "renode") {
-        features.push("renode".to_string());
-    }
+    let features = [
+        ("avr", cfg!(feature = "avr")),
+        ("qemu", cfg!(feature = "qemu")),
+        ("renode", cfg!(feature = "renode")),
+    ]
+    .into_iter()
+    .filter(|&(_, on)| on)
+    .map(|(name, _)| name.to_string())
+    .collect();
     let replay_paths = args
         .specs
         .iter()
@@ -755,4 +682,82 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         inputs,
         feature_flags: features,
     })
+}
+
+/// The manifest inputs one spec (the `index`th) reads: the spec, its board and
+/// sidecars, every optional file it names, and its sensor and trace data.
+fn spec_inputs(
+    inputs: &mut Vec<hauksbee_engine::run_manifest::ManifestInput>,
+    index: usize,
+    spec_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use hauksbee_engine::run_manifest::{board_sidecar_inputs, ManifestInput};
+
+    let spec = hauksbee_ci::Spec::load(spec_path)?;
+    inputs.push(ManifestInput::new(format!("spec[{index}]"), spec_path));
+    let board_path = spec.board_path();
+    inputs.push(ManifestInput::new(format!("board[{index}]"), &board_path));
+    inputs.extend(board_sidecar_inputs(
+        &board_path,
+        &format!("board[{index}]"),
+    ));
+    if let Some(path) = spec.bom_path() {
+        inputs.push(ManifestInput::new(format!("bom[{index}]"), path));
+    }
+    if let Some(path) = spec.placement_path() {
+        inputs.push(ManifestInput::new(format!("placement[{index}]"), path));
+    }
+    if let Some(path) = spec.variant_path() {
+        inputs.push(ManifestInput::new(format!("variant[{index}]"), path));
+    }
+    if let Some(path) = spec.firmware_path() {
+        inputs.push(ManifestInput::new(
+            format!("firmware_source[{index}]"),
+            &path,
+        ));
+        if let Some(resolved) = hauksbee_engine::firmware_input::resolve_firmware_cli(&path)? {
+            if resolved.path != path {
+                inputs.push(ManifestInput::new(
+                    format!("firmware_resolved[{index}]"),
+                    resolved.path,
+                ));
+            }
+        }
+    }
+    if let Some(path) = spec.asbuilt_path() {
+        inputs.push(ManifestInput::new(format!("asbuilt[{index}]"), path));
+    }
+    if let Some(path) = spec.mcu_descriptor_dir() {
+        inputs.push(ManifestInput::new(
+            format!("mcu_descriptor_dir[{index}]"),
+            path,
+        ));
+    }
+    for (sensor_index, sensor) in spec.sensors.iter().enumerate() {
+        if let Some(path) = &sensor.spec_file {
+            // `join` keeps an absolute path as it is.
+            inputs.push(ManifestInput::new(
+                format!("sensor_spec[{index}][{sensor_index}]"),
+                spec.base_dir.join(path),
+            ));
+        }
+    }
+    for (assert_index, assertion) in spec.asserts.iter().enumerate() {
+        if assertion.kind != "hwtrace" {
+            continue;
+        }
+        let trace_path = hauksbee_ci::hwtrace::trace_path(&spec, assertion)?;
+        let trace = hauksbee_ci::hwtrace::Trace::load(&trace_path)?;
+        inputs.push(ManifestInput::new(
+            format!("hardware_trace[{index}][{assert_index}]"),
+            &trace_path,
+        ));
+        for (channel_index, channel) in trace.channels.iter().enumerate() {
+            inputs.push(ManifestInput::new(
+                format!("hardware_trace_data[{index}][{assert_index}][{channel_index}]"),
+                trace.base_dir.join(&channel.file),
+            ));
+        }
+    }
+    Ok(())
 }

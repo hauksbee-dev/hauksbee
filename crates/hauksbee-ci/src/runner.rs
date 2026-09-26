@@ -3810,7 +3810,7 @@ fn main {
         w.observe(3.30);
         w.fold(0.0);
         w.fold(5.0);
-        assert_eq!(w.last_v, 3.30);
+        assert_eq!(w.last_v.to_bits(), 3.30_f64.to_bits());
         assert_eq!((w.min_v, w.max_v), (0.0, 5.0));
         assert_eq!(w.samples, 3);
     }

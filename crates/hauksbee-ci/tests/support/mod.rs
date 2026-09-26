@@ -26,6 +26,8 @@ pub fn pad(n: u32, net: &str) -> String {
 
 /// One board-DSL component: reference `r`, footprint `lib`, value `val`, placed
 /// at x = `x`, carrying `pads` (built from [`pad`]).
+// Callers hand over freshly built pad strings; owning them keeps call sites borrow-free.
+#[allow(clippy::needless_pass_by_value)]
 pub fn comp(r: &str, lib: &str, val: &str, x: usize, pads: String) -> String {
     format!("comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n")
 }

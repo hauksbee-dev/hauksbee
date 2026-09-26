@@ -1,7 +1,9 @@
 //! Spec-loading and validation errors, plus the "did you mean ...?" net-name
-//! suggester. [`SpecError`] carries the IO / TOML / invalid / unknown-net cases a
-//! spec can fail on, and [`near_matches`] ranks known net names by edit distance
-//! so a typo'd net reference points the user at the real name instead of failing
+//! suggester.
+//!
+//! [`SpecError`] carries the IO / TOML / invalid / unknown-net cases a spec can
+//! fail on, and [`near_matches`] ranks known net names by edit distance so a
+//! typo'd net reference points the user at the real name instead of failing
 //! blankly.
 
 use std::fmt;
@@ -82,6 +84,10 @@ impl std::error::Error for SpecError {
 impl SpecError {
     /// Fold independently collected errors into one result: none is `Ok`, one
     /// comes back as itself, several as [`SpecError::Many`].
+    ///
+    /// # Errors
+    ///
+    /// The single error, or [`SpecError::Many`], whenever `errs` is non-empty.
     pub fn from_many(mut errs: Vec<Self>) -> Result<(), Self> {
         match errs.len() {
             0 => Ok(()),
@@ -117,9 +123,11 @@ impl SpecError {
     }
 }
 
-/// Return up to `limit` known names closest to `target`, ranked by edit
-/// distance, preferring substring/case-insensitive matches. Only returns names
-/// within a sensible distance so the suggestions are actually useful.
+/// Return up to `limit` known names closest to `target`.
+///
+/// Ranked by edit distance, preferring substring/case-insensitive matches. Only
+/// returns names within a sensible distance so the suggestions are actually
+/// useful.
 #[must_use]
 pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let t_lower = target.to_ascii_lowercase();
@@ -201,9 +209,10 @@ fn designator_class(r: &str) -> Option<char> {
         .map(|c| c.to_ascii_lowercase())
 }
 
-/// The `; did you mean: a, b?` clause for a suggestion list, or empty when
-/// there is nothing worth suggesting. One formatter so every call site's
-/// wording (and the parser in `check` that splits it back out) agrees.
+/// The `; did you mean: a, b?` clause for a suggestion list.
+///
+/// Empty when there is nothing worth suggesting. One formatter so every call
+/// site's wording (and the parser in `check` that splits it back out) agrees.
 #[must_use]
 pub fn suggestion_clause(suggestions: &[String]) -> String {
     if suggestions.is_empty() {
@@ -213,12 +222,13 @@ pub fn suggestion_clause(suggestions: &[String]) -> String {
     }
 }
 
-/// The closest option to `target` within edit distance 2, for a "did you
-/// mean ...?" hint on a closed vocabulary (assertion kinds, supply kinds,
-/// peripheral types). Distance 2 covers the real mistakes (a dropped letter, a
-/// swapped pair, an added character) without ever suggesting something the
-/// user plainly did not type; a full-list dump already follows in the error,
-/// so a wild guess here would only mislead.
+/// The closest option to `target` within edit distance 2.
+///
+/// For a "did you mean ...?" hint on a closed vocabulary (assertion kinds,
+/// supply kinds, peripheral types). Distance 2 covers the real mistakes (a
+/// dropped letter, a swapped pair, an added character) without ever suggesting
+/// something the user plainly did not type; a full-list dump already follows in
+/// the error, so a wild guess here would only mislead.
 #[must_use]
 pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
     let t = target.to_ascii_lowercase();

@@ -16,29 +16,41 @@ use hauksbee_models::ModelLibrary;
 use crate::error::SpecError;
 use crate::runner;
 
-/// Scaffold `<board-stem>.toml` into the CURRENT DIRECTORY and return its
-/// path. The old default (beside the board) put the spec where no CI tooling
-/// looks; writing where the user is standing means `hauksbee-ci init
+/// Scaffold `<board-stem>.toml` into the CURRENT DIRECTORY and return its path.
+///
+/// The old default (beside the board) put the spec where no CI tooling looks;
+/// writing where the user is standing means `hauksbee-ci init
 /// hardware/board.kicad_pcb` run from `ci/` lands the spec in `ci/`, which is
-/// exactly where the pre-commit hook and the action's auto-detect search.
-/// The generated `board = "..."` path is computed relative to the output
-/// directory, so the spec is valid wherever it lands. Refuses to overwrite an
-/// existing file: the point is a starting point, not a clobber of
-/// hand-written work.
+/// exactly where the pre-commit hook and the action's auto-detect search. The
+/// generated `board = "..."` path is computed relative to the output directory,
+/// so the spec is valid wherever it lands. Refuses to overwrite an existing
+/// file: the point is a starting point, not a clobber of hand-written work.
+///
+/// # Errors
+///
+/// As [`init_to`].
 pub fn init(board: &Path) -> Result<PathBuf, SpecError> {
     init_to(board, None)
 }
 
-/// [`init`] with an explicit destination (`--out`): a path ending in `.toml` is
-/// the spec file itself, and anything else is a directory that gets
-/// `<board-stem>.toml` inside it (created if it does not exist yet). `None`
-/// means the current directory.
+/// [`init`] with an explicit destination (`--out`).
+///
+/// A path ending in `.toml` is the spec file itself, and anything else is a
+/// directory that gets `<board-stem>.toml` inside it (created if it does not
+/// exist yet). `None` means the current directory.
 ///
 /// The suffix decides, not the filesystem. `--out ci` on a repo that has no
 /// `ci/` yet is the common first command, and the guidance printed right after
 /// says specs are discovered in `ci/`; resolving that to a FILE named `ci`
 /// would scaffold a spec no tool ever finds, which is a gate that silently
 /// checks nothing.
+///
+/// # Errors
+///
+/// [`SpecError::Io`] when the current directory or a destination directory
+/// cannot be read or created, or the spec cannot be written;
+/// [`SpecError::Invalid`] when the spec file already exists; and any error
+/// from loading the board while rendering it.
 pub fn init_to(board: &Path, out: Option<&Path>) -> Result<PathBuf, SpecError> {
     let out = match out {
         None => {
@@ -150,9 +162,15 @@ fn board_stem(board: &Path) -> String {
         .to_string()
 }
 
-/// Render the starter spec's TOML text for `board`, with the `board = "..."`
-/// reference written relative to the board's own directory (the historical
-/// beside-the-board shape). Kept for callers that place the file themselves.
+/// Render the starter spec's TOML text for `board`.
+///
+/// The `board = "..."` reference is written relative to the board's own
+/// directory (the historical beside-the-board shape). Kept for callers that
+/// place the file themselves.
+///
+/// # Errors
+///
+/// As [`render_spec_at`].
 pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let dir = board
         .parent()
@@ -212,10 +230,16 @@ fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
 /// Render the starter spec's TOML text for `board` as it should read when the
 /// file lives in `spec_dir`. Split out from [`init_to`] so it can be exercised
 /// without touching disk.
+///
+/// # Errors
+///
+/// Any error from loading `board` ([`runner::load_board`]).
 pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError> {
     render_spec_at_with_run_hint(board, spec_dir, &format!("{}.toml", board_stem(board)))
 }
 
+// One linear template: each block writes the next section of the starter spec.
+#[allow(clippy::too_many_lines)]
 fn render_spec_at_with_run_hint(
     board: &Path,
     spec_dir: &Path,
@@ -240,18 +264,14 @@ fn render_spec_at_with_run_hint(
     // Rail-looking nets, from the shared rail-name helper rather than a fresh
     // heuristic: every non-ground net the binder recognises as a supply rail,
     // deduped and ordered. These become commented voltage assertions.
-    let mut rails: Vec<(String, f64)> = Vec::new();
-    for net in &extracted.nets {
-        if is_ground(&net.name) {
-            continue;
-        }
-        if let Some(v) = power_rail_voltage(&net.name) {
-            if !rails.iter().any(|(n, _)| n == &net.name) {
-                rails.push((net.name.clone(), v));
-            }
-        }
-    }
+    let mut rails: Vec<(String, f64)> = extracted
+        .nets
+        .iter()
+        .filter(|n| !is_ground(&n.name))
+        .filter_map(|n| Some((n.name.clone(), power_rail_voltage(&n.name)?)))
+        .collect();
     rails.sort_by(|a, b| a.0.cmp(&b.0));
+    rails.dedup_by(|a, b| a.0 == b.0);
 
     // Rails the binder found by name but could not put a voltage to. Same
     // detector the run uses, so the scaffold asks about exactly the nets the

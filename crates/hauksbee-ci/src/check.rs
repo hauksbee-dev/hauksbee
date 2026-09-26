@@ -416,7 +416,7 @@ fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
     (cleaned.trim().to_string(), Some(clause))
 }
 
-/// For an `unknown field \`x\`, expected ...` message: suggest the nearest
+/// For serde's "unknown field ..., expected ..." message: suggest the nearest
 /// expected field name, when one is within typo distance.
 fn unknown_field_fix(msg: &str) -> Option<String> {
     // Message shape: unknown field `typo`, expected one of `a`, `b`, ...
@@ -464,9 +464,10 @@ fn locate(text: &str, ident: &str) -> Option<(u32, u32)> {
 fn line_col(text: &str, byte: usize) -> (u32, u32) {
     let byte = byte.min(text.len());
     let before = &text[..byte];
-    let line = before.bytes().filter(|&b| b == b'\n').count() as u32 + 1;
-    let col = (byte - before.rfind('\n').map_or(0, |i| i + 1)) as u32 + 1;
-    (line, col)
+    let line = before.bytes().filter(|&b| b == b'\n').count() + 1;
+    let col = byte - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+    let sat = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    (sat(line), sat(col))
 }
 
 #[cfg(test)]

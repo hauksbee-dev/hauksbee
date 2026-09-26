@@ -44,15 +44,16 @@ pub use init::init;
 pub use report::CiResult;
 pub use spec::Spec;
 
-/// The `--version` string: crate version plus the git hash this binary was
-/// built from (`build.rs` sets `GIT_HASH`; absent outside a git checkout, e.g.
-/// a source tarball, in which case the bare crate version is all we honestly
-/// have). Two consumers must agree on it byte for byte: clap's `version =` in
-/// main.rs, and the `# installed by ...` line [`integrate::hook_install`]
-/// writes into the pre-commit hook so the hook can warn when the binary on
-/// PATH is a different build. Returned as `&'static str` because that is what
-/// clap's `version` wants; the one-time `OnceLock` init is the cheapest way to
-/// a static composed string.
+/// The `--version` string: crate version plus the git hash of this build.
+///
+/// `build.rs` sets `GIT_HASH` (absent outside a git checkout, e.g. a source
+/// tarball, in which case the bare crate version is all we honestly have). Two
+/// consumers must agree on it byte for byte: clap's `version =` in main.rs, and
+/// the `# installed by ...` line [`integrate::hook_install`] writes into the
+/// pre-commit hook so the hook can warn when the binary on PATH is a different
+/// build. Returned as `&'static str` because that is what clap's `version`
+/// wants; the one-time `OnceLock` init is the cheapest way to a static composed
+/// string.
 pub fn version_string() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     V.get_or_init(|| {
@@ -83,12 +84,13 @@ pub struct RunConfig {
     pub spice_models: Vec<PathBuf>,
 }
 
-/// Apply the board's waiver file to the evaluated assertion results: a real
-/// failure (never a pass, never an INVALID refusal) that an active `check =
-/// "ci"` waiver matches is marked visible-but-not-gating. INVALID stays
-/// unwaivable on purpose: a waiver overrules a *finding*, and an INVALID is
-/// the absence of one; letting a waiver green an untrustworthy run would fail
-/// open. Matching mirrors the engine's `--check` semantics exactly (same
+/// Apply the board's waiver file to the evaluated assertion results.
+///
+/// A real failure (never a pass, never an INVALID refusal) that an active
+/// `check = "ci"` waiver matches is marked visible-but-not-gating. INVALID
+/// stays unwaivable on purpose: a waiver overrules a *finding*, and an INVALID
+/// is the absence of one; letting a waiver green an untrustworthy run would
+/// fail open. Matching mirrors the engine's `--check` semantics exactly (same
 /// [`hauksbee_engine::waiver::WaiverSet`], same expiry, same nets/refs rules),
 /// so a board+waiver behaves the same under `hauksbee-ci run` as under the
 /// static gates.
@@ -117,7 +119,9 @@ pub fn apply_waivers(
 const WAIVER_SURFACES: &[&str] = &["ci", "drc", "lint", "si"];
 
 /// The housekeeping notes for this run's waiver set, filtered to the `ci`
-/// check: a lapsed `ci` waiver whose finding gates again, and an active `ci`
+/// check.
+///
+/// That is a lapsed `ci` waiver whose finding gates again, and an active `ci`
 /// waiver that matched nothing. Waivers for the static checks (`drc` / `lint`
 /// / `si`) live in the same file but belong to `hauksbee run`'s surfaces;
 /// reporting them stale HERE would tell the user to delete waivers this run
@@ -202,6 +206,14 @@ fn union_across(
 }
 
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
+///
+/// # Errors
+///
+/// [`SpecError`] when the spec, a model directory, a SPICE model file or an
+/// evidence input cannot be loaded, when the co-sim cannot be set up, or when
+/// the run's evidence cannot be assembled.
+// One pipeline read top to bottom; its counts are ensemble sizes, bounded by the u32 seed space.
+#[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
     let spec = Spec::load(&cfg.spec)?;

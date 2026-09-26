@@ -68,6 +68,11 @@ pub fn names() -> Vec<&'static str> {
 /// Materialize the named example into a stable temp directory and return the
 /// path of its runnable spec. Overwrites on every call, so the on-disk copy
 /// can never drift stale relative to the binary.
+///
+/// # Errors
+///
+/// When `name` is not an embedded example, or a file or directory cannot be
+/// written under the temp directory.
 pub fn materialize(name: &str) -> anyhow::Result<PathBuf> {
     let Some(example) = EXAMPLES.iter().find(|e| e.name == name) else {
         anyhow::bail!(
@@ -85,9 +90,7 @@ pub fn materialize(name: &str) -> anyhow::Result<PathBuf> {
     }
     let mut spec = example.spec.to_string();
     for (from, to) in SPEC_REWRITES {
-        if spec.contains(from) {
-            spec = spec.replace(from, to);
-        }
+        spec = spec.replace(from, to);
     }
     let spec_path = dir.join(format!("{name}.toml"));
     fs::write(&spec_path, &spec).with_context(|| format!("writing {}", spec_path.display()))?;

@@ -99,7 +99,7 @@ fn hwtrace_deliberate_mismatch_names_feature_and_values() {
     // A clean 300 ms-period square-wave "capture", 1 s at 1 kSa/s.
     let mut csv = String::from("time_s,volts\n");
     let mut t = 0.0_f64;
-    while t <= 1.0 {
+    for _ in 0..1000 {
         let phase = (t / 0.3).fract();
         let v = if phase >= 0.5 { 4.9 } else { 0.04 };
         let _ = writeln!(csv, "{t:.4},{v:.3}");

@@ -717,8 +717,8 @@ mod tests {
     fn samples_are_nominal_at_seed_zero_deterministic_and_inside_the_band() {
         let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
         let g = rule("C1", 1e-7, 20.0, Distribution::Gaussian);
-        assert_eq!(sample(0, &t).si, 10_000.0);
-        assert_eq!(sample(0, &g).si, 1e-7);
+        assert_eq!(sample(0, &t).si.to_bits(), 10_000.0_f64.to_bits());
+        assert_eq!(sample(0, &g).si.to_bits(), 1e-7_f64.to_bits());
         // Same (seed, ref) => same value; a different ref gets its own stream.
         assert_eq!(sample(7, &t).si.to_bits(), sample(7, &t).si.to_bits());
         let u = rule("R2", 10_000.0, 10.0, Distribution::Uniform);
@@ -759,8 +759,8 @@ mod tests {
         assert_eq!(corners.len(), 4);
         let all_at = |p: &SeedPlan, si: f64| p.values.iter().all(|v| (v.si - si).abs() < 1e-9);
         assert!(all_at(corners[0], 9_000.0) && all_at(corners[3], 11_000.0));
-        assert_eq!(corners[1].values[0].si, 11_000.0);
-        assert_eq!(corners[1].values[1].si, 9_000.0);
+        assert_eq!(corners[1].values[0].si.to_bits(), 11_000.0_f64.to_bits());
+        assert_eq!(corners[1].values[1].si.to_bits(), 9_000.0_f64.to_bits());
         assert_eq!(plans.len() - corners.len(), interior_probe_count(2));
         let mut seeds: Vec<u32> = plans.iter().map(|p| p.seed).collect();
         seeds.sort_unstable();

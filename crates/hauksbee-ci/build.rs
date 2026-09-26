@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// One linear pass: validate the env, find the owned git root, watch it, stamp the build.
+#[allow(clippy::too_many_lines)]
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT");

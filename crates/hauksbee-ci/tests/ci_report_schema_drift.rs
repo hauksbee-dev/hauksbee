@@ -137,7 +137,19 @@ fn schema_file_matches_report_types() {
     );
 }
 
+/// The `required` key list of one schema definition.
+fn required_keys<'a>(def: &'a Value, what: &str) -> Vec<&'a str> {
+    def["required"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{what} required list"))
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect()
+}
+
 #[test]
+// One test pins every optionality promise of the published schema side by side.
+#[allow(clippy::too_many_lines)]
 fn generated_schema_pins_the_optionality() {
     let schema: Value = serde_json::from_str(&generated_schema()).expect("valid JSON");
     // The union: exactly two variants, each a reference to one definition.
@@ -179,24 +191,14 @@ fn generated_schema_pins_the_optionality() {
 
     // The error line is two keys and nothing else. A consumer that sees
     // `ok: false` must not go looking for a verdict.
-    let mut error_required: Vec<&str> = error["required"]
-        .as_array()
-        .expect("error required list")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let mut error_required = required_keys(error, "error");
     error_required.sort_unstable();
     assert_eq!(error_required, ["error", "ok"]);
 
     // Every field of the report is ALWAYS present, `coverage` included: it is
     // an Option that serializes as null rather than being skipped, and schemars
     // would leave it out of `required` without the explicit annotation.
-    let required: Vec<&str> = report["required"]
-        .as_array()
-        .expect("report required list")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let required = required_keys(report, "report");
     for field in [
         "schema_version",
         "ok",
@@ -239,12 +241,7 @@ fn generated_schema_pins_the_optionality() {
     // and are, with the report's top-level `refusal` (exit 3 only), the only
     // keys in the whole document a consumer may find ABSENT.
     let assertion = &schema["definitions"]["CiJsonAssertion"];
-    let a_required: Vec<&str> = assertion["required"]
-        .as_array()
-        .expect("CiJsonAssertion required list")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let a_required = required_keys(assertion, "CiJsonAssertion");
     for field in [
         "label",
         "kind",

@@ -67,7 +67,7 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
     // 3 V minimum input-to-output differential. The assertion band is +/-1 mV
     // around the datasheet equation, so a PASS is that equation and not merely a
     // plausible 5 V.
-    let vout = 1.25 * (1.0 + 720.0 / 240.0) + 50.0e-6 * 720.0;
+    let vout = 1.25_f64.mul_add(1.0 + 720.0 / 240.0, 50.0e-6 * 720.0);
     // Ground-referenced, 0.8 V over R1 = 31.25k and R2 = 10k is 3.300 V at a 33R
     // (100 mA) load, where the LM317 law reads that divider as 1.056 V. Swapped,
     // the divider IS 1.056 V: the faulty control, whose 3.3 V band must fail

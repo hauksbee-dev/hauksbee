@@ -25,6 +25,7 @@
 //!
 //! Corpus-gated: skipped when the board-corpus symlink is absent.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::support::{self, corpus_boards_root as corpus, require_corpus, run_body};
@@ -70,17 +71,19 @@ fn boot_state_fuzz(
         !nets.is_empty(),
         "{case}: a fuzz over no nets proves nothing"
     );
-    let rails: String = supplies
-        .iter()
-        .map(|(net, v)| format!("[[supply]]\nnet = \"{net}\"\nkind = \"ideal\"\nvolts = {v}\n"))
-        .collect();
-    let drives: String = nets
-        .iter()
-        .map(|net| format!("[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0\n"))
-        .collect();
+    let mut setup = String::new();
+    for (net, v) in supplies {
+        let _ = writeln!(
+            setup,
+            "[[supply]]\nnet = \"{net}\"\nkind = \"ideal\"\nvolts = {v}"
+        );
+    }
+    for net in nets {
+        let _ = writeln!(setup, "[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0");
+    }
     let fuzzed: Vec<String> = nets.iter().map(|net| format!("\"{net}\"")).collect();
     let body = format!(
-        "name = \"{case} boot-state fuzz\"\nboard = {}\nduration_ms = 1\n{rails}{drives}\
+        "name = \"{case} boot-state fuzz\"\nboard = {}\nduration_ms = 1\n{setup}\
          [fuzz]\nseeds = {seeds}\nnets = [{}]\nlevels = [0.0, 3.3]\n\
          {asserts}[[assert]]\nkind = \"no_faults\"\n",
         support::toml_path(board),

@@ -414,7 +414,7 @@ mod tests {
         ] {
             w.observe(t, v);
         }
-        assert_eq!(w.spike_duration_s(3.5), 0.001);
+        assert_eq!(w.spike_duration_s(3.5).to_bits(), 0.001_f64.to_bits());
         assert!((w.settling_s(3.5, 3.4) - 0.001).abs() < 1e-9);
     }
 
@@ -424,8 +424,8 @@ mod tests {
         w.observe(0.000, 3.30);
         w.observe(0.001, 3.30);
         w.fold(4.20); // intra-frame spike, recovered by the settled sample
-        assert_eq!(w.max_v, 4.20);
-        assert_eq!(w.spike_duration_s(3.5), 0.0);
+        assert_eq!(w.max_v.to_bits(), 4.20_f64.to_bits());
+        assert_eq!(w.spike_duration_s(3.5).to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
