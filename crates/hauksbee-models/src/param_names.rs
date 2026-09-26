@@ -646,9 +646,10 @@ fn at_25(row: &Characteristic) -> bool {
 }
 
 /// The magnitude of `sym = <number> <unit>` in `text`, in `unit` (`IR = 10 mA`);
-/// `≈`, `:` or a space may stand for the `=` (`IF ≈ 10 mA`, `IF 10 mA`).
+/// `≈`, `:` or a space may stand for the `=` (`IF ≈ 10 mA`, `IF 10 mA`), and a
+/// Unicode minus is read as the magnitude it negates (`VGS = −2.5 V`).
 pub(crate) fn quantity(text: &str, sym: &str, unit: &str) -> Option<f64> {
-    let re = format!(r"\b{sym}[\s=≈:]+([-+]?\d*\.?\d+)\s*([a-zA-ZµμΩ]*)");
+    let re = format!(r"\b{sym}[\s=≈:−]+([-+]?\d*\.?\d+)\s*([a-zA-ZµμΩ]*)");
     let c = regex::Regex::new(&re).ok()?.captures(text)?;
     let scale = crate::units::scale_between(&c[2], unit).or_else(|| c[2].is_empty().then_some(1.0));
     Some(c[1].parse::<f64>().ok()?.abs() * scale?)
@@ -1276,14 +1277,14 @@ mod tests {
         let (law, ron) = ("is = 1e-9\nn = 1.8\nrs = 0.2", "RON IN1 to OUT1 ; typ = 90 ; mΩ ; VIN2 = 5 V");
         let hedge = "Table 2, max; law fitted to guaranteed maxima, a conservative stand-in for typical";
         let ilim = "ILIM channel A ; typ = 1.5 ; A ; - + ILIM channel B ; typ = 2 ; A ; -";
-        let rds = "RDS(on) ; typ = 38.57 ; mΩ ; VGS = -4.5 V, ID = -2.8 A + RDS(on) ; typ = 76.67 ; mΩ ; VGS = -2.5 V, ID = -2 A";
+        let rds = "RDS(on) ; typ = 38.57 ; mΩ ; VGS = -4.5 V, ID = -2.8 A + RDS(on) ; typ = 76.67 ; mΩ ; VGS = −2.5 V, ID = -2 A";
         for case in [
             format!("diode | {law} | {} ; {hedge} + {} | ", vf("max", 1000.0), vf("max", 3000.0)),
             format!("diode | {law} | {} + {} | fitted to max VF rows alone", vf("max", 1000.0), vf("max", 3000.0)),
             format!("diode | {law} | {} + {} + VF ; max = {} ; V ; IF = 1 A | IF = 1 A where a VF row", vf("typ", 10.0), vf("typ", 100.0), 1.2 * diode_vf([1e-9, 1.8, 0.2], 1.0)),
             format!("diode | is = 2.6e-4\nn = 2.0\nrs = 0.2 | {} ; {hedge} + {} ; {hedge} | over 10% off", vf("max", 1000.0), vf("max", 3000.0)),
             format!("diode | {law} | {} + {} | ", vf("max", 1.0), [1.0, 10.0, 100.0].map(|i| vf("typ", i)).join(" + ")),
-            format!("pmos | vto = -1\nkp = 7.4077 | {rds} | at |VGS| = 2.5 V where row 'RDS(on)' (VGS = -2.5 V, ID = -2 A) prints typ 76.67 mΩ, over 10% off"),
+            format!("pmos | vto = -1\nkp = 7.4077 | {rds} | at |VGS| = 2.5 V where row 'RDS(on)' (VGS = −2.5 V, ID = -2 A) prints typ 76.67 mΩ, over 10% off"),
             format!("pmos | vto = -1\nkp = 10\nrd = 0.005\nrs = 0.005 | {rds} | "),
             "pmos | vto = -1\nkp = 7.4077 | RDS(on) ; max = 50 ; mΩ ; VGS = -4.5 V | ".into(),
             "nmos | vto = 1\nkp = 5 | RDS(on) ; max = 50 ; mΩ ; VGS = 4.5 V | prints max 50 mΩ, above that guaranteed bound".into(),
