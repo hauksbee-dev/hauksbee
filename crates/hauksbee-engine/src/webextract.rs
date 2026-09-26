@@ -446,7 +446,7 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     std::thread::spawn(move || {
         let outcome = datasheet::run(args).map(|_| None).or_else(|e| {
             let kept = e.downcast_ref::<TimedOut>().filter(|t| t.2.is_some());
-            kept.map(|t| Some(t.to_string())).ok_or(format!("{e:#}"))
+            kept.map(|t| Some(t.to_string())).ok_or_else(|| format!("{e:#}"))
         });
         let _ = tx.send(outcome);
     });
