@@ -148,10 +148,6 @@ impl Peripheral for Pushbutton {
         m.insert("pressed".into(), if self.pressed { 1.0 } else { 0.0 });
         m
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,10 +199,6 @@ impl Peripheral for ToggleSwitch {
         let mut m = HashMap::new();
         m.insert("closed".into(), if self.closed { 1.0 } else { 0.0 });
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -284,10 +276,6 @@ impl Peripheral for Potentiometer {
         let mut m = HashMap::new();
         m.insert("position".into(), self.pos);
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -385,10 +373,6 @@ impl Peripheral for Encoder {
         m.insert("b".into(), if b { 1.0 } else { 0.0 });
         let _ = (self.a_node, self.b_node);
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -533,10 +517,6 @@ impl Peripheral for Stimulus {
         let mut m = HashMap::new();
         m.insert("value".into(), self.last_value);
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

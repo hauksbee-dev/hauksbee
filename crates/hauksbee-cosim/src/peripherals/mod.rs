@@ -113,7 +113,7 @@ impl<'a> TickCtx<'a> {
 /// A live peripheral attached to a board. Implementors stamp whatever circuit
 /// devices they need at construction (via [`controls`] helpers) and react each
 /// chunk.
-pub trait Peripheral: Send {
+pub trait Peripheral: AsAny + Send {
     /// Stable identifier for live control / state readout (e.g. "BTN1").
     fn id(&self) -> &str;
 
@@ -139,10 +139,25 @@ pub trait Peripheral: Send {
     fn state(&self) -> HashMap<String, f64> {
         HashMap::new()
     }
+}
 
-    /// Downcast hook so the engine can reach a concrete peripheral (e.g. read an
-    /// EEPROM's bytes for an assertion). Default returns self as `Any`.
+/// Downcast hook so the engine can reach a concrete peripheral or bus slave.
+///
+/// Used to read an EEPROM's bytes for an assertion, say; every `'static` type
+/// has it. Call it on the trait object (`(**boxed).as_any()`), never on the
+/// `Box` itself, or the `Box` is what gets downcast.
+pub trait AsAny: std::any::Any {
     fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+impl<T: std::any::Any> AsAny for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// A timeline event: at time `t_s`, set peripheral `target` to `value`.
@@ -253,6 +268,6 @@ impl PeripheralSet {
         self.peripherals
             .iter()
             .find(|p| p.id() == id)
-            .and_then(|p| p.as_any().downcast_ref::<T>())
+            .and_then(|p| (**p).as_any().downcast_ref::<T>())
     }
 }

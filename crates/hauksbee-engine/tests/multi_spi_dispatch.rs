@@ -58,13 +58,6 @@ impl SpiSlave for WhoAmISlave {
     fn deselect(&mut self) {
         self.pending = false;
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

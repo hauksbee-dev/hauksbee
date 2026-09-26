@@ -171,10 +171,6 @@ impl Peripheral for DynamicLoad {
         m.insert("peak_a".into(), self.peak_i);
         m
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]

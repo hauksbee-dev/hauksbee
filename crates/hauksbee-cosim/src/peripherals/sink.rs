@@ -274,10 +274,6 @@ impl Peripheral for VcdSink {
         m.insert("transitions".into(), self.transition_count() as f64);
         m
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]

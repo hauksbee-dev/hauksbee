@@ -33,10 +33,10 @@ use std::collections::HashMap;
 
 use hauksbee_mcu::I2cEvent;
 
-use super::{BusActivity, Peripheral, TickCtx};
+use super::{AsAny, BusActivity, Peripheral, TickCtx};
 
 /// A device that answers on the I2C bus at a fixed 7-bit address.
-pub trait I2cSlave: Send {
+pub trait I2cSlave: AsAny + Send {
     /// The device's 7-bit bus address.
     fn address(&self) -> u8;
 
@@ -86,9 +86,6 @@ pub trait I2cSlave: Send {
     fn temperature_mc(&self) -> Option<i32> {
         None
     }
-
-    fn as_any(&self) -> &dyn std::any::Any;
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// The I2C bus peripheral: a router over attached slaves. Register its
@@ -275,7 +272,7 @@ impl I2cBus {
         self.slaves
             .iter()
             .find(|s| s.address() == addr)
-            .and_then(|s| s.as_any().downcast_ref::<T>())
+            .and_then(|s| (**s).as_any().downcast_ref::<T>())
     }
 
     /// Mutable borrow of a concrete slave by address (e.g. to set temperature).
@@ -283,7 +280,7 @@ impl I2cBus {
         self.slaves
             .iter_mut()
             .find(|s| s.address() == addr)
-            .and_then(|s| (s.as_any_mut()).downcast_mut::<T>())
+            .and_then(|s| (**s).as_any_mut().downcast_mut::<T>())
     }
 }
 
@@ -306,10 +303,6 @@ impl Peripheral for I2cBus {
             }
         }
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -472,13 +465,6 @@ impl I2cSlave for Eeprom24c {
         m.insert("word_address_bytes".into(), self.word_address_bytes.into());
         m
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -615,13 +601,6 @@ impl I2cSlave for Lm75 {
         m.insert("pointer".into(), f64::from(self.pointer));
         m
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 fn be_to_temp(msb: u8, lsb: u8) -> f64 {
@@ -751,12 +730,6 @@ mod tests {
         }
         fn on_stop(&mut self, _ctx: &mut TickCtx) {
             self.stops += 1;
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
         }
     }
 

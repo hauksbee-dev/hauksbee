@@ -69,10 +69,10 @@
 
 use std::collections::HashMap;
 
-use super::{BusActivity, Peripheral, TickCtx};
+use super::{AsAny, BusActivity, Peripheral, TickCtx};
 
 /// A device on the SPI bus that exchanges one byte per transfer.
-pub trait SpiSlave: Send {
+pub trait SpiSlave: AsAny + Send {
     /// Exchange a byte: receive the firmware's MOSI byte, return MISO.
     fn transfer(&mut self, mosi: u8) -> u8;
 
@@ -153,9 +153,6 @@ pub trait SpiSlave: Send {
     fn low_power_mode(&self) -> bool {
         false
     }
-
-    fn as_any(&self) -> &dyn std::any::Any;
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Where the chip-select net that produced exact framing came from.
@@ -486,10 +483,10 @@ impl SpiBus {
 
     #[must_use]
     pub fn slave<T: 'static>(&self) -> Option<&T> {
-        self.slave.as_any().downcast_ref::<T>()
+        (*self.slave).as_any().downcast_ref::<T>()
     }
     pub fn slave_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.slave.as_any_mut().downcast_mut::<T>()
+        (*self.slave).as_any_mut().downcast_mut::<T>()
     }
 }
 
@@ -511,10 +508,6 @@ impl Peripheral for SpiBus {
         let mut state = self.slave.state();
         state.insert("powered".into(), if self.powered { 1.0 } else { 0.0 });
         state
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -665,13 +658,6 @@ impl SpiSlave for Spi25Eeprom {
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("wel".into(), if self.wel { 1.0 } else { 0.0 });
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 
@@ -942,14 +928,6 @@ impl SpiSlave for SpiNorFlash {
     fn low_power_mode(&self) -> bool {
         self.powered_down
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1036,13 +1014,6 @@ impl SpiSlave for Mcp3008 {
             m.insert(format!("ch{i}"), *v);
         }
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

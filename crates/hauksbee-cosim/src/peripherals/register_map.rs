@@ -1008,13 +1008,6 @@ impl I2cSlave for RegisterMapSensor {
         }
         m
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 // ── SPI: spi_reg protocol ──────────────────────────────────────────────────
@@ -1115,13 +1108,6 @@ impl SpiSlave for RegisterMapSensor {
             m.insert(k.clone(), *v);
         }
         m
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

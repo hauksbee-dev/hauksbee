@@ -62,10 +62,4 @@ impl SpiSlave for FixedSpiSlave {
         self.got.lock_or_recover().push(mosi);
         self.miso
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
