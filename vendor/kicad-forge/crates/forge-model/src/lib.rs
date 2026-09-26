@@ -14,7 +14,7 @@ mod schematic;
 pub use builder::{FootprintBuilder, LayerBuilder, NetBuilder, PcbBuilder};
 pub use error::Error;
 pub use pcb::{
-    fmt_f64, Footprint, FootprintMut, General, GrLine, GrText, Layer, Net, Pad, PadKind, Pcb,
-    Segment, TrackArc, Via, Zone,
+    fmt_f64, Footprint, General, GrLine, Layer, Net, Pad, PadKind, Pcb, Segment, TrackArc, Via,
+    Zone,
 };
 pub use schematic::{Schematic, SchematicSheet, SchematicSymbol};

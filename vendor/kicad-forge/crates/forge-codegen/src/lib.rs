@@ -94,11 +94,3 @@ pub fn decompile(pcb: &Pcb) -> String {
     let (nl, analysis) = decompile_analysis(pcb);
     emit::emit_program(&nl, &analysis)
 }
-
-/// Decompile and also return the textual analysis report.
-pub fn decompile_with_report(pcb: &Pcb) -> (String, String) {
-    let (nl, analysis) = decompile_analysis(pcb);
-    let code = emit::emit_program(&nl, &analysis);
-    let rep = report::render_report(&nl, &analysis);
-    (code, rep)
-}

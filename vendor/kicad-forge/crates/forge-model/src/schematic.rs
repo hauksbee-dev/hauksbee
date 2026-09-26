@@ -98,22 +98,4 @@ impl<'a> SchematicSheet<'a> {
     pub fn uuid(&self) -> Option<String> {
         self.list.find_value("uuid")
     }
-
-    pub fn sheet_name(&self) -> Option<String> {
-        for l in self.list.find_all("property") {
-            if l.arg_value(0).as_deref() == Some("Sheetname") {
-                return l.arg_value(1);
-            }
-        }
-        None
-    }
-
-    pub fn sheet_file(&self) -> Option<String> {
-        for l in self.list.find_all("property") {
-            if l.arg_value(0).as_deref() == Some("Sheetfile") {
-                return l.arg_value(1);
-            }
-        }
-        None
-    }
 }

@@ -136,35 +136,9 @@ impl Pcb {
             .collect()
     }
 
-    /// All `(gr_text ...)` children.
-    pub fn gr_texts(&self) -> Vec<GrText<'_>> {
-        self.root()
-            .find_all("gr_text")
-            .map(|l| GrText { list: l })
-            .collect()
-    }
-
     // -----------------------------------------------------------------------
     // Mutation API
     // -----------------------------------------------------------------------
-
-    /// Get a mutable view of the footprint identified by its `Reference`.
-    pub fn footprint_mut(&mut self, reference: &str) -> Result<FootprintMut<'_>, Error> {
-        let root = self.root_mut();
-        let list = root
-            .children
-            .iter_mut()
-            .filter_map(|c| match c {
-                Sexpr::List(l) if matches!(l.name(), Some("footprint") | Some("module")) => Some(l),
-                _ => None,
-            })
-            .find(|l| {
-                let fp = Footprint { list: l };
-                fp.reference().as_deref() == Some(reference)
-            })
-            .ok_or_else(|| Error::FootprintNotFound(reference.to_string()))?;
-        Ok(FootprintMut { list })
-    }
 
     /// Add a routed segment. The new node is appended to the root list.
     pub fn add_segment(
@@ -221,35 +195,6 @@ impl Pcb {
         }
         let node = Sexpr::list("via", args);
         self.root_mut().push(node);
-    }
-
-    /// Renumber a net: updates `(net N "name")` declaration and all pad/
-    /// segment/via `(net N ...)` references with numeric IDs.
-    pub fn renumber_net(&mut self, old_id: i64, new_id: i64) {
-        let root = self.root_mut();
-        for child in root.children.iter_mut() {
-            if let Sexpr::List(l) = child {
-                renumber_net_in_list(l, old_id, new_id);
-            }
-        }
-    }
-}
-
-/// Recursively update numeric net IDs in a list tree.
-fn renumber_net_in_list(list: &mut List, old_id: i64, new_id: i64) {
-    if list.name() == Some("net") {
-        // Could be top-level `(net N "name")` or inline `(net N name)`.
-        if let Some(Sexpr::Token(t)) = list.children.get_mut(1) {
-            if t.as_i64() == Some(old_id) {
-                t.raw = new_id.to_string().into();
-                return; // Don't recurse into net children.
-            }
-        }
-    }
-    for child in list.children.iter_mut() {
-        if let Sexpr::List(l) = child {
-            renumber_net_in_list(l, old_id, new_id);
-        }
     }
 }
 
@@ -406,65 +351,6 @@ fn fp_text_or_property(list: &List, fp_text_kind: &str, property_name: &str) -> 
         }
     }
     None
-}
-
-// ---------------------------------------------------------------------------
-// FootprintMut
-// ---------------------------------------------------------------------------
-
-/// Mutable view of a footprint list for CST-editing operations.
-pub struct FootprintMut<'a> {
-    pub(crate) list: &'a mut List,
-}
-
-impl FootprintMut<'_> {
-    /// Move the footprint: update (or insert) the `(at x y rot)` child.
-    pub fn set_at(&mut self, x: f64, y: f64, rot: f64) {
-        let args = vec![
-            Sexpr::atom(fmt_f64(x)),
-            Sexpr::atom(fmt_f64(y)),
-            Sexpr::atom(fmt_f64(rot)),
-        ];
-        if let Some(at) = self.list.find_mut("at") {
-            at.children.truncate(1); // keep the "at" keyword
-            at.children.extend(args.into_iter().map(|a| {
-                let mut tok = a;
-                if let Sexpr::Token(ref mut t) = tok {
-                    t.leading = " ".into();
-                }
-                tok
-            }));
-        } else {
-            let node = Sexpr::list("at", args);
-            self.list.push(node);
-        }
-    }
-
-    /// Update the reference designator.
-    pub fn set_reference(&mut self, reference: &str) {
-        // Try v6+ property first.
-        for l in self.list.children.iter_mut() {
-            if let Sexpr::List(l) = l {
-                if l.name() == Some("property") && l.arg_value(0).as_deref() == Some("Reference") {
-                    if let Some(Sexpr::Token(t)) = l.children.get_mut(2) {
-                        t.raw = forge_sexpr::quote(reference).into();
-                        return;
-                    }
-                }
-            }
-        }
-        // Fall back to v5 fp_text.
-        for l in self.list.children.iter_mut() {
-            if let Sexpr::List(l) = l {
-                if l.name() == Some("fp_text") && l.arg_value(0).as_deref() == Some("reference") {
-                    if let Some(Sexpr::Token(t)) = l.children.get_mut(2) {
-                        t.raw = forge_sexpr::quote(reference).into();
-                        return;
-                    }
-                }
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,15 +588,6 @@ impl<'a> Zone<'a> {
     pub fn layer(&self) -> String {
         self.list.find_value("layer").unwrap_or_default()
     }
-
-    /// Outline polygon points from the first `(polygon (pts ...))` child.
-    pub fn outline_pts(&self) -> Vec<(f64, f64)> {
-        self.list
-            .find("polygon")
-            .and_then(|p| p.find("pts"))
-            .map(pts_list)
-            .unwrap_or_default()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -749,7 +626,7 @@ impl<'a> TrackArc<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// GrLine / GrText
+// GrLine
 // ---------------------------------------------------------------------------
 
 /// A graphical line on a non-copper layer.
@@ -771,25 +648,6 @@ impl<'a> GrLine<'a> {
     }
 }
 
-/// A graphical text element.
-pub struct GrText<'a> {
-    pub(crate) list: &'a List,
-}
-
-impl<'a> GrText<'a> {
-    pub fn text(&self) -> String {
-        self.list.arg_value(0).unwrap_or_default()
-    }
-
-    pub fn at(&self) -> (f64, f64) {
-        xy(self.list.find("at"))
-    }
-
-    pub fn layer(&self) -> String {
-        self.list.find_value("layer").unwrap_or_default()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -801,13 +659,6 @@ fn xy(list: Option<&List>) -> (f64, f64) {
         None => return (0.0, 0.0),
     };
     (l.arg_f64(0).unwrap_or(0.0), l.arg_f64(1).unwrap_or(0.0))
-}
-
-/// Extract points from `(pts (xy x y) (xy x y) ...)`.
-fn pts_list(pts: &List) -> Vec<(f64, f64)> {
-    pts.find_all("xy")
-        .map(|l| (l.arg_f64(0).unwrap_or(0.0), l.arg_f64(1).unwrap_or(0.0)))
-        .collect()
 }
 
 /// Extract a numeric net ID from a list containing `(net N ...)`.

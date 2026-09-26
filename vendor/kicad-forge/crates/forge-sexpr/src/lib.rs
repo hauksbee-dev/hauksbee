@@ -210,14 +210,6 @@ impl List {
     pub fn push(&mut self, node: Sexpr) {
         self.children.push(node);
     }
-
-    /// Remove all child lists named `name`; returns how many were removed.
-    pub fn remove_all(&mut self, name: &str) -> usize {
-        let before = self.children.len();
-        self.children
-            .retain(|c| !matches!(c, Sexpr::List(l) if l.name() == Some(name)));
-        before - self.children.len()
-    }
 }
 
 impl Sexpr {
