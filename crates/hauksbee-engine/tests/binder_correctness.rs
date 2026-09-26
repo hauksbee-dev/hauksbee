@@ -6,7 +6,7 @@
 //! hand-built [`ExtractedBoard`] (constructed directly so DNP flags and
 //! footprints are exact, independent of any netlist parser).
 
-use hauksbee_engine::binder::bind_board;
+use hauksbee_engine::binder::{bind_board, BoundBoard};
 use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::Device;
@@ -75,6 +75,48 @@ fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
             .collect(),
         components,
     }
+}
+
+/// Bind a board holding only one part, whose pad `i` sits on net `i` named
+/// `nets[i - 1]`.
+fn bind_single_part(reference: &str, value: &str, footprint: &str, nets: &[&str]) -> BoundBoard {
+    let numbered: Vec<(i64, &str)> = (1..).zip(nets.iter().copied()).collect();
+    let pins = numbered
+        .iter()
+        .map(|(i, _)| pin(&i.to_string(), *i, ""))
+        .collect();
+    let part = comp(reference, value, footprint, pins);
+    bind_board(&board(&numbered, vec![part]), &ModelLibrary::builtin())
+}
+
+/// Bind one SN74LVC1G3157 SPDT, wired per its SOT-23-6 pad map, with its VCC
+/// pad on the net named `vcc_net`.
+fn bind_spdt(vcc_net: &str) -> BoundBoard {
+    let sw = comp(
+        "SW1",
+        "SN74LVC1G3157",
+        "Package_TO_SOT_SMD:SOT-23-6",
+        vec![
+            pin("1", 4, ""), // B2 = s1
+            pin("2", 6, ""), // GND
+            pin("3", 3, ""), // B1 = s0
+            pin("4", 2, ""), // A  = com
+            pin("5", 1, ""), // VCC
+            pin("6", 5, ""), // S  = select
+        ],
+    );
+    let b = board(
+        &[
+            (1, vcc_net),
+            (2, "COM_NET"),
+            (3, "S0_NET"),
+            (4, "S1_NET"),
+            (5, "SEL"),
+            (6, "GND"),
+        ],
+        vec![sw],
+    );
+    bind_board(&b, &ModelLibrary::builtin())
 }
 
 fn ltc4020_program_board() -> ExtractedBoard {
@@ -285,32 +327,8 @@ fn split_grounds_stay_distinct_nodes() {
 /// open. The thresholds must follow the actual rail on the vcc net.
 #[test]
 fn spdt_s0_thresholds_follow_the_actual_rail() {
-    // SN74LVC1G3157 on a 3.3 V rail, wired per its SOT-23-6 pad map.
-    let sw = comp(
-        "SW1",
-        "SN74LVC1G3157",
-        "Package_TO_SOT_SMD:SOT-23-6",
-        vec![
-            pin("1", 4, ""), // B2 = s1
-            pin("2", 6, ""), // GND
-            pin("3", 3, ""), // B1 = s0
-            pin("4", 2, ""), // A  = com
-            pin("5", 1, ""), // VCC
-            pin("6", 5, ""), // S  = select
-        ],
-    );
-    let b = board(
-        &[
-            (1, "+3V3"),
-            (2, "COM_NET"),
-            (3, "S0_NET"),
-            (4, "S1_NET"),
-            (5, "SEL"),
-            (6, "GND"),
-        ],
-        vec![sw],
-    );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
+    // SN74LVC1G3157 on a 3.3 V rail.
+    let bound = bind_spdt("+3V3");
 
     let (von, voff) = bound
         .circuit
@@ -353,31 +371,8 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
 /// the bind report.
 #[test]
 fn spdt_unresolved_vcc_rail_warns() {
-    let sw = comp(
-        "SW1",
-        "SN74LVC1G3157",
-        "Package_TO_SOT_SMD:SOT-23-6",
-        vec![
-            pin("1", 4, ""), // B2 = s1
-            pin("2", 6, ""), // GND
-            pin("3", 3, ""), // B1 = s0
-            pin("4", 2, ""), // A  = com
-            pin("5", 1, ""), // VCC (non-canonical net name below)
-            pin("6", 5, ""), // S  = select
-        ],
-    );
-    let b = board(
-        &[
-            (1, "VDD_MUX"), // no recognizable rail voltage
-            (2, "COM_NET"),
-            (3, "S0_NET"),
-            (4, "S1_NET"),
-            (5, "SEL"),
-            (6, "GND"),
-        ],
-        vec![sw],
-    );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
+    // VCC on a non-canonical net name with no recognizable rail voltage.
+    let bound = bind_spdt("VDD_MUX");
     let row = bound.report.row("SW1").expect("SW1 gets a bind row");
     let w = row.warning.as_deref().unwrap_or("");
     assert!(
@@ -691,22 +686,12 @@ fn reference_ambiguous_merge_with_source_uid_binds_one_scalar() {
 fn isolated_passive_array_stamps_one_element_per_pad_pair() {
     // 4-pad isolated array: element 1 = pads 1-2 (NET_A..NET_B), element 2 =
     // pads 3-4 (NET_C..NET_D).
-    let rn = comp(
+    let bound = bind_single_part(
         "RN1",
         "10k",
         "Resistor_SMD:R_Array_Concave_2x0603",
-        vec![
-            pin("1", 1, ""),
-            pin("2", 2, ""),
-            pin("3", 3, ""),
-            pin("4", 4, ""),
-        ],
+        &["NET_A", "NET_B", "NET_C", "NET_D"],
     );
-    let b = board(
-        &[(1, "NET_A"), (2, "NET_B"), (3, "NET_C"), (4, "NET_D")],
-        vec![rn],
-    );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
 
     let resistors: Vec<_> = bound
         .circuit
@@ -760,23 +745,12 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
 #[test]
 fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
     // 5-pad bussed array: pad 1 common, elements to pads 2..5.
-    let rn = comp(
+    let bound = bind_single_part(
         "RN2",
         "4k7",
         "Resistor_THT:R_Array_SIP5",
-        vec![
-            pin("1", 1, ""),
-            pin("2", 2, ""),
-            pin("3", 3, ""),
-            pin("4", 4, ""),
-            pin("5", 5, ""),
-        ],
+        &["COM", "N2", "N3", "N4", "N5"],
     );
-    let b = board(
-        &[(1, "COM"), (2, "N2"), (3, "N3"), (4, "N4"), (5, "N5")],
-        vec![rn],
-    );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
 
     let resistors: Vec<_> = bound
         .circuit
@@ -939,35 +913,14 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
 fn dual_opamp_stamps_one_device_per_channel() {
     // LM358 SOIC-8 pad map (opamp_comparator.toml): 1=out_a, 2=in_minus_a,
     // 3=in_plus_a, 4=vss, 5=in_plus_b, 6=in_minus_b, 7=out_b, 8=vcc.
-    let u = comp(
+    let bound = bind_single_part(
         "U1",
         "LM358",
         "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
-        vec![
-            pin("1", 1, ""),
-            pin("2", 2, ""),
-            pin("3", 3, ""),
-            pin("4", 4, ""),
-            pin("5", 5, ""),
-            pin("6", 6, ""),
-            pin("7", 7, ""),
-            pin("8", 8, ""),
-        ],
-    );
-    let b = board(
         &[
-            (1, "OUT_A"),
-            (2, "INM_A"),
-            (3, "INP_A"),
-            (4, "GND"),
-            (5, "INP_B"),
-            (6, "INM_B"),
-            (7, "OUT_B"),
-            (8, "+3V3"),
+            "OUT_A", "INM_A", "INP_A", "GND", "INP_B", "INM_B", "OUT_B", "+3V3",
         ],
-        vec![u],
     );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
 
     let out_of = |unit: &str| {
         bound
@@ -1003,35 +956,14 @@ fn dual_opamp_stamps_one_device_per_channel() {
 fn dual_comparator_stamps_one_device_per_channel() {
     // LM393 SOIC-8 pad map: 1=out_a, 2=in_minus_a, 3=in_plus_a, 4=vss,
     // 5=in_plus_b, 6=in_minus_b, 7=out_b, 8=vcc.
-    let u = comp(
+    let bound = bind_single_part(
         "U2",
         "LM393",
         "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
-        vec![
-            pin("1", 1, ""),
-            pin("2", 2, ""),
-            pin("3", 3, ""),
-            pin("4", 4, ""),
-            pin("5", 5, ""),
-            pin("6", 6, ""),
-            pin("7", 7, ""),
-            pin("8", 8, ""),
-        ],
-    );
-    let b = board(
         &[
-            (1, "OUT_A"),
-            (2, "INM_A"),
-            (3, "INP_A"),
-            (4, "GND"),
-            (5, "INP_B"),
-            (6, "INM_B"),
-            (7, "OUT_B"),
-            (8, "+5V"),
+            "OUT_A", "INM_A", "INP_A", "GND", "INP_B", "INM_B", "OUT_B", "+5V",
         ],
-        vec![u],
     );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
 
     let outs: Vec<(String, hauksbee_ir::NodeId)> = bound
         .circuit
@@ -1057,23 +989,12 @@ fn dual_comparator_stamps_one_device_per_channel() {
 #[test]
 fn single_channel_comparator_keeps_the_bare_reference() {
     // LMV7219 SOT-23-5 pad map: 1=out, 2=vss, 3=in_plus, 4=in_minus, 5=vcc.
-    let u = comp(
+    let bound = bind_single_part(
         "U3",
         "LMV7219",
         "Package_TO_SOT_SMD:SOT-23-5",
-        vec![
-            pin("1", 1, ""),
-            pin("2", 2, ""),
-            pin("3", 3, ""),
-            pin("4", 4, ""),
-            pin("5", 5, ""),
-        ],
+        &["OUT", "GND", "INP", "INM", "+5V"],
     );
-    let b = board(
-        &[(1, "OUT"), (2, "GND"), (3, "INP"), (4, "INM"), (5, "+5V")],
-        vec![u],
-    );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
     assert!(
         bound
             .circuit
