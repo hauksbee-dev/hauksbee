@@ -685,11 +685,12 @@ impl InputResponder for ParallelMemoryResponder {
 
 /// The 74HC165 read-chain as a registry citizen: forwards PL / SCLK edges to
 /// the shared [`Hc165Chain`], which samples the latch inputs on a PL load and
-/// presents the next QH bit on MISO. Behaviour is exactly the B2 readback-fix
-/// semantics, reached through the responder registry rather than a
-/// scheduler-installed closure. The chain stays `Arc`-shared with the
-/// scheduler so `hc165_chain_pins()` / `hc165_loaded_words()` introspection
-/// keeps working.
+/// presents the next QH bit on MISO.
+///
+/// Behaviour is exactly the B2 readback-fix semantics, reached through the
+/// responder registry rather than a scheduler-installed closure. The chain
+/// stays `Arc`-shared with the scheduler so `hc165_chain_pins()` /
+/// `hc165_loaded_words()` introspection keeps working.
 pub struct Hc165Responder {
     chain: Arc<Mutex<Hc165Chain>>,
     levels: LogicLevels,
@@ -756,6 +757,8 @@ pub struct BitBangSpiPins {
     pub cs_n: (char, u8),
 }
 
+/// Bridges bit-banged SPI GPIO edges to a byte-level [`SpiBus`] slave model.
+///
 /// Firmware bit-bangs SCLK/MOSI/CS on GPIOs; this responder clocks the bits
 /// into the EXISTING byte-level [`SpiBus`] slave model and answers MISO
 /// synchronously, so `digitalRead(MISO)` inside the firmware's own clock loop
@@ -1104,6 +1107,8 @@ enum I2cPhase {
     AwaitStop,
 }
 
+/// A small I2C protocol engine over bit-banged SCL/SDA GPIO edges.
+///
 /// Firmware bit-bangs SCL/SDA as plain GPIOs; this responder is a small I2C
 /// protocol engine over the pin edges, START/STOP detection, address
 /// decoding, ACK generation, byte clocking, routing the transaction to the

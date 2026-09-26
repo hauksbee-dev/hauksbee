@@ -53,7 +53,9 @@ pub use spi::{
 };
 
 /// Firmware-visible work performed by one bus slave since the previous analog
-/// chunk. Model-owned peripheral power uses this typed signal to select the
+/// chunk.
+///
+/// Model-owned peripheral power uses this typed signal to select the
 /// datasheet's idle/read/write current; no command strings or board references
 /// leak into the electrical scheduler.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -1,4 +1,6 @@
-//! Simple-regulator validity. A simple vreg is an ideal DC source that ignores
+//! Simple-regulator validity.
+//!
+//! A simple vreg is an ideal DC source that ignores
 //! its input, so its setpoint is only a result when the input has INDEPENDENT
 //! headroom. This module establishes that or reports why not; it never
 //! substitutes a voltage of its own for an unsupported output.
@@ -21,9 +23,10 @@ pub struct RegulationTaint {
 /// Input minus return in the regulator's polarity, or why no independent solve.
 pub type Verdict = Result<f64, String>;
 
-/// `(output, return, signed setpoint)` read back from the stamped source. NaN
-/// when it is no longer a DC source, which no headroom check can pass. On an
-/// adjustable regulator the source's `n` is ADJ or a private node, so the
+/// `(output, return, signed setpoint)` read back from the stamped source.
+///
+/// NaN when it is no longer a DC source, which no headroom check can pass. On
+/// an adjustable regulator the source's `n` is ADJ or a private node, so the
 /// board return the card named is returned in its place: everything downstream
 /// measures the rail and its headroom against the same node.
 #[must_use]
@@ -53,12 +56,16 @@ pub fn headroom_ok(reg: &SimpleRegulator, headroom_v: f64) -> bool {
         && headroom_v <= reg.max_in_v + slack(reg.max_in_v)
 }
 
-/// Decide `supported` from scratch on a CLONE with every regulator source swapped
-/// in place for a 0 A current source (device ids stay valid), re-enabling only
-/// regulators whose input passes, to a fixpoint: a cascade validates in dependency
-/// order and a regulator-only cycle never gains a member. A `barred` (already
-/// tainted) regulator stays removed, so nothing it feeds regains support. At most
-/// `regs.len() + 1` solves; returns the verdict of each one left unsupported.
+/// Decide `supported` from scratch, re-enabling regulators to a fixpoint.
+///
+/// Works on a CLONE with every regulator source swapped in place for a 0 A
+/// current source (device ids stay valid), re-enabling only regulators whose
+/// input passes, to a fixpoint: a cascade validates in dependency order and a
+/// regulator-only cycle never gains a member.
+///
+/// A `barred` (already tainted) regulator stays removed, so nothing it feeds
+/// regains support. At most `regs.len() + 1` solves; returns the verdict of each
+/// one left unsupported.
 pub fn evaluate(
     circuit: &Circuit,
     regs: &mut [SimpleRegulator],

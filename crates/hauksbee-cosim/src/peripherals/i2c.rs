@@ -1,5 +1,6 @@
 //! I2C slave framework and two concrete devices: a 24Cxx EEPROM and an LM75
 //! temperature sensor with its real datasheet register map.
+//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! ## How it plugs into the co-sim
@@ -314,16 +315,18 @@ impl Peripheral for I2cBus {
 // 24Cxx EEPROM
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A generic 24Cxx I2C EEPROM. The default 16-bit word address covers
-/// 24C32..24C512; [`Eeprom24c::with_word_address_bytes`] selects the one-byte
-/// phase used by 24C01/02-class parts. Write protocol: word-address bytes then
-/// data bytes, auto-incrementing *within the write page*, like
-/// the real parts, a page write that runs past the page boundary wraps the low
-/// address bits back to the page start and overwrites from there (24C32/24C64
-/// datasheets: "the address roll over during write is from the last byte of the
-/// current page to the first byte of the same page"). Read protocol:
-/// current-address reads return successive bytes, rolling over the whole array
-/// (reads are not page-bound on the real parts either).
+/// A generic 24Cxx I2C EEPROM.
+///
+/// The default 16-bit word address covers 24C32..24C512;
+/// [`Eeprom24c::with_word_address_bytes`] selects the one-byte phase used by
+/// 24C01/02-class parts. Write protocol: word-address bytes then data bytes,
+/// auto-incrementing *within the write page*, like the real parts, a page write
+/// that runs past the page boundary wraps the low address bits back to the page
+/// start and overwrites from there (24C32/24C64 datasheets: "the address roll
+/// over during write is from the last byte of the current page to the first
+/// byte of the same page"). Read protocol: current-address reads return
+/// successive bytes, rolling over the whole array (reads are not page-bound on
+/// the real parts either).
 pub struct Eeprom24c {
     addr: u8,
     mem: Vec<u8>,
@@ -363,6 +366,10 @@ impl Eeprom24c {
 
     /// Select a one- or two-byte word-address phase. Refuse any other width
     /// rather than silently consuming the first firmware data byte as address.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `bytes` is not 1 or 2.
     #[must_use]
     pub fn with_word_address_bytes(mut self, bytes: u8) -> Self {
         assert!(
@@ -376,6 +383,10 @@ impl Eeprom24c {
     /// Set the write-page size (bytes) for the modeled part. Must be a power of
     /// two (every 24Cxx page size is); a non-power-of-two or zero panics, since
     /// it describes an EEPROM that does not exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `page_size` is not a power of two (including zero).
     #[must_use]
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         assert!(

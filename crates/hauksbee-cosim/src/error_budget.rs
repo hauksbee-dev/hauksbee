@@ -67,6 +67,13 @@ fn uncovered_windows(
 
 /// Error budget for transient/thermal/co-sim numeric claims, populated from
 /// the solver options actually used plus the run's measured windows.
+///
+/// # Errors
+///
+/// Returns an [`EvidenceError`] if the run window, the solver tolerances or the
+/// event-time error are invalid, if a failed or fallback window is invalid, lies
+/// outside the run window or overlaps another, or if a fallback window names an
+/// unknown integration method.
 pub fn transient_error_budget(
     options: &hauksbee_solve::SolverOptions,
     start_s: f64,

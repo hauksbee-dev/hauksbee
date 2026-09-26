@@ -194,6 +194,11 @@ impl VcdSink {
     }
 
     /// Write the VCD to the configured path (no-op if none set).
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the parent directory cannot be created or the file
+    /// cannot be created or written.
     pub fn write(&self) -> std::io::Result<()> {
         if let Some(p) = &self.path {
             Self::ensure_parent(p)?;
@@ -204,6 +209,11 @@ impl VcdSink {
     }
 
     /// Write the VCD to an explicit path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the parent directory cannot be created or the file
+    /// cannot be created or written.
     pub fn write_to(&self, path: &Path) -> std::io::Result<()> {
         Self::ensure_parent(path)?;
         let mut f = std::fs::File::create(path)?;

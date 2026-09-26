@@ -51,10 +51,11 @@ use hauksbee_bind::stress::{FaultEvent, StressMonitor};
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 
-/// Smallest useful poll slice supported by the MCU bridge. `Mcu::run_micros`
-/// accepts an integer microsecond count; asking Renode/QEMU (which observe GPIO
-/// only after that call) to poll more finely would execute zero guest time and
-/// manufacture precision the bridge does not have.
+/// Smallest useful poll slice supported by the MCU bridge.
+///
+/// `Mcu::run_micros` accepts an integer microsecond count; asking Renode/QEMU
+/// (which observe GPIO only after that call) to poll more finely would execute
+/// zero guest time and manufacture precision the bridge does not have.
 pub const POLL_BACKEND_QUANTUM_S: f64 = 1e-6;
 
 /// [`TimingCoverage::backend`] of the chunk-sampled digital logic row.
@@ -101,6 +102,7 @@ const WEAK_DIGITAL_DRIVE_OHMS: f64 = 1e8;
 
 /// A strict headless run (`--strict`) or hauksbee-ci aborts (exit 3,
 /// invalid-for-analysis) once the analog solve fails this many chunks in a row.
+///
 /// Three, not one: a single failed chunk is often a stiff step the warm-started
 /// next chunk recovers from, so aborting on the first would be trigger-happy on a
 /// board that self-heals within a chunk or two. Three back-to-back failures is a
@@ -135,7 +137,9 @@ impl ChunkThermalAccum {
 
 /// Which fallback rung produced a chunk's converged answer after the primary
 /// integration failed (see `Scheduler::solve_chunk`'s ladder, tried in this
-/// order). A number obtained by a more dissipative method is not the same
+/// order).
+///
+/// A number obtained by a more dissipative method is not the same
 /// number, so the rung is recorded per window and surfaced with its accuracy
 /// cost rather than the chunk passing as a first-class solve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -692,6 +696,7 @@ pub struct Scheduler {
 
 /// A chip-substitution event: the board asked for `requested_part` but the
 /// available emulator core models a less-specific platform (`modelled_core`).
+///
 /// Recorded at scheduler-build time so every surface (CLI text, JSON, TUI) can
 /// warn that co-sim results stand in for the requested silicon.
 #[derive(Debug, Clone)]
@@ -754,10 +759,11 @@ impl ScopedMcuSubstitution {
     }
 }
 
-/// A bus peripheral bound on a platform that models no matching bus controller
-///. The device is on the board, but the emulated MCU has no
-/// controller the bridge could attach to, so the firmware never talks to it,
-/// a silent no-op unless surfaced.
+/// A bus peripheral bound on a platform that models no matching bus controller.
+///
+/// The device is on the board, but the emulated MCU has no controller the
+/// bridge could attach to, so the firmware never talks to it, a silent no-op
+/// unless surfaced.
 #[derive(Debug, Clone)]
 pub struct UnexercisedBus {
     /// The peripheral/bus id (the same id `peripheral` assertions target).
@@ -850,9 +856,12 @@ pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
-/// The one-line resolution statement for a [`TimingCoverage`] row: the edge
-/// timestamp uncertainty, the narrowest pulse guaranteed observable, the chunk
-/// actually run, and whether the stamps are cycle-exact or poll-boundary.
+/// The one-line resolution statement for a [`TimingCoverage`] row.
+///
+/// It gives the edge timestamp uncertainty, the narrowest pulse guaranteed
+/// observable, the chunk actually run, and whether the stamps are cycle-exact
+/// or poll-boundary.
+///
 /// Shared so no surface words one core's resolution two ways. The leading
 /// indent belongs to the text table and is added there, not here.
 #[must_use]
@@ -888,11 +897,14 @@ const UNVERIFIED_HEADROOM: &str = "; UNVERIFIED HEADROOM: the model has no dropo
                                    only Vin >= Vout was checked";
 
 /// Watchdog limitations, watchdog resets, timing limitations, then regulation
-/// refusals, in the one order and wording every surface carries them (the CI
-/// runner's coverage warnings and the `run` binary's shared coverage messages),
-/// so those two cannot drift apart. Each is a claim the run cannot fully back:
-/// a systematic time bias on a core, or an ideal setpoint with no proven input
-/// headroom standing in for a simulated result.
+/// refusals, in the one order and wording every surface carries them.
+///
+/// Both the CI runner's coverage warnings and the `run` binary's shared
+/// coverage messages use this, so those two cannot drift apart.
+///
+/// Each is a claim the run cannot fully back: a systematic time bias on a core,
+/// or an ideal setpoint with no proven input headroom standing in for a
+/// simulated result.
 #[must_use]
 pub fn coverage_limitation_messages(scheduler: &Scheduler) -> Vec<String> {
     let limitations = scheduler.watchdog_limitations();
@@ -913,7 +925,9 @@ pub fn coverage_limitation_messages(scheduler: &Scheduler) -> Vec<String> {
 }
 
 /// A firmware GPIO pulse that rose AND fell inside a single solver chunk, on a
-/// net that clocks a TICK-evaluated sequential part. Chain-responder parts (74HC595/165 chains, bit-banged
+/// net that clocks a TICK-evaluated sequential part.
+///
+/// Chain-responder parts (74HC595/165 chains, bit-banged
 /// SPI/I2C) resolve such edges synchronously inside the firmware's instruction
 /// stream, but an ordinary sequential part (a 74HC74 latch, a ripple counter)
 /// is evaluated once per chunk against the PREVIOUS solve, so a pulse contained
@@ -986,7 +1000,9 @@ impl ShortPulse {
 
 /// Runtime driver contention: the firmware configured an MCU pin as a push-pull
 /// OUTPUT on a net where an ENABLED modelled push-pull output was already
-/// driving. This is the model-vs-MCU half of the field failure whose
+/// driving.
+///
+/// This is the model-vs-MCU half of the field failure whose
 /// model-vs-model half the static lint catches
 /// (`hauksbee_checks::checks::contention`): at lint time every MCU GPIO driver is
 /// stamped high-impedance and only firmware sets direction, so "modelled output
@@ -1177,6 +1193,12 @@ fn mcu_occurrence_subjects(report: &hauksbee_bind::bind_report::BindReport) -> V
 impl Scheduler {
     /// Build a scheduler from a bound board, instantiating MCU cores and
     /// loading firmware (one hex for all, or none).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if firmware is given and an MCU's active-low reset role is
+    /// wired directly to ground, or if an MCU core cannot be instantiated or loaded
+    /// with the firmware.
     pub fn new(
         bound: BoundBoard,
         firmware: Option<&std::path::Path>,
@@ -2702,6 +2724,11 @@ impl Scheduler {
     /// Only meaningful on push backends (simavr): on poll backends the
     /// responder never fires (`on_input_responder` is a documented no-op) and a
     /// bit-banged read stays coarse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no live MCU drives the SCLK pin, or if any of the other
+    /// pins is not a wired GPIO of that same MCU.
     pub fn attach_bitbang_spi(
         &mut self,
         bus: Arc<Mutex<SpiBus>>,
@@ -2759,6 +2786,11 @@ impl Scheduler {
     /// `on_i2c` registration: this bus lives on GPIO pins, not the TWI
     /// peripheral, and answering hardware-TWI traffic at these addresses would
     /// invent a device on the wrong pins.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no live MCU drives the SCL pin, or if the SDA pin is not
+    /// a wired GPIO of that same MCU.
     pub fn attach_soft_i2c(
         &mut self,
         bus: Arc<Mutex<I2cBus>>,
@@ -3046,6 +3078,12 @@ impl Scheduler {
     /// the cycle stamps. Poll backends can only improve by shrinking the real
     /// poll slice, so this adaptively does so. A request below the integer-
     /// microsecond MCU bridge quantum is refused before mutating the scheduler.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a requested bound is not positive and finite, or if it
+    /// is below the one-cycle resolution of a cycle-exact core, or below what a poll
+    /// backend's integer-microsecond slice can resolve.
     pub fn configure_timing(&mut self, req: TimingRequirement) -> anyhow::Result<()> {
         let limits = [
             ("minimum pulse", req.min_pulse_s),
@@ -4707,6 +4745,12 @@ impl Scheduler {
     /// The machine-readable numerical qualification for the run so far.
     /// Tolerances and methods are the options actually used. Failed spans are
     /// explicit invalid windows; an absent residual means unmeasured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`](hauksbee_ir::evidence::EvidenceError) if the
+    /// run window, solver tolerances, failed or fallback windows, or the measured
+    /// residual do not form a valid budget.
     pub fn error_budget(
         &self,
     ) -> Result<hauksbee_ir::evidence::ErrorBudget, hauksbee_ir::evidence::EvidenceError> {
@@ -4786,6 +4830,11 @@ impl Scheduler {
     /// in so many words, that these nets present an override rather than a
     /// converged solution. Returns one assumption per simple regulator, then at
     /// most one scoped to the forced nets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EvidenceError`](hauksbee_ir::evidence::EvidenceError) if a
+    /// regulator or forced-net scope cannot be built (for example an empty net list).
     pub fn forced_voltage_assumptions(
         &self,
     ) -> Result<Vec<hauksbee_ir::evidence::Assumption>, hauksbee_ir::evidence::EvidenceError> {
@@ -4868,6 +4917,11 @@ impl Scheduler {
     /// its wedged PC made Reset a lie for the one part users press it for.
     /// A refusal preserves the old diagnostics; a possibly partial core reset
     /// also latches execution off. This does not reset external bus devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if any MCU backend cannot reset, or if a core reset fails;
+    /// after a failed core reset execution stays latched off until a retry succeeds.
     pub fn reset_run_state(&mut self) -> Result<(), String> {
         for m in &self.mcus {
             if !m.core.supports_reset() {
@@ -6223,9 +6277,10 @@ fn is_direct_supply_role(role: &str) -> bool {
 }
 
 /// Whether a backend string names an EXTERNAL co-sim core (Renode, QEMU, or
-/// anything future) as opposed to the one full-stack in-process backend
-/// (simavr), which models peripheral-slave coupling and exposes pin drive
-/// direction. ALLOWLIST on purpose: an unknown future backend must fail SAFE
+/// anything future) rather than the in-process simavr backend.
+///
+/// simavr is the one full-stack backend: it models peripheral-slave coupling
+/// and exposes pin drive direction. ALLOWLIST on purpose: an unknown future backend must fail SAFE
 /// (classified external: capability-gated scaffolds, hedged diagnoses)
 /// rather than inherit capabilities it does not have. Both hauksbee-ci's
 /// scaffold gate and the runtime diagnosis route through this one predicate
@@ -6470,9 +6525,11 @@ pub enum LevelProvenance {
 }
 
 /// Whether a backend STRING names a core that can report pin drive direction,
-/// decided from static data (no emulator is spawned). The scaffold-time
-/// companion of [`Scheduler::drive_direction_observable`], for callers (like
-/// `hauksbee-ci init`) that reason about a board before any co-sim runs:
+/// decided from static data (no emulator is spawned).
+///
+/// The scaffold-time companion of [`Scheduler::drive_direction_observable`],
+/// for callers (like `hauksbee-ci init`) that reason about a board before any
+/// co-sim runs:
 ///   - `simavr:*`, true, the in-process core reads DDR;
 ///   - `renode:<part>`, true iff the part's `SoC` descriptor resolves and every
 ///     GPIO port carries a direction-register map (`dir = {...}`, verified

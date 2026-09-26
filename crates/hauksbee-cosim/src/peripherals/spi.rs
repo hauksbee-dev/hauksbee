@@ -77,8 +77,8 @@ pub trait SpiSlave: Send {
     fn transfer(&mut self, mosi: u8) -> u8;
 
     /// Chip-select ASSERTED (active-low falling edge): begin a fresh transaction
-    /// by resetting the command state machine to its start-of-transaction state
-    ///. The default reuses [`Self::deselect`], which for the built-in slaves
+    /// by resetting the command state machine to its start-of-transaction state.
+    /// The default reuses [`Self::deselect`], which for the built-in slaves
     /// resets the sequence/command counter to idle without disturbing latched
     /// permission bits (the 25xx `deselect` only clears the write-enable latch
     /// when it lands mid-WRITE, and a select edge never does, because the previous
@@ -210,9 +210,10 @@ impl CsProvenance {
 }
 
 /// How a bus's transactions are being framed, surfaced per-slave in the co-sim
-/// coverage so a consumer knows whether the CS boundaries are real or guessed
-///. Precedence when reported: `Backend` (a real backend CS event was
-/// observed) over `Exact` (a CS pin resolved) over `Heuristic`.
+/// coverage so a consumer knows whether the CS boundaries are real or guessed.
+///
+/// Precedence when reported: `Backend` (a real backend CS event was observed)
+/// over `Exact` (a CS pin resolved) over `Heuristic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpiFramingMode {
     /// Framed from the real CS-pin GPIO edge stream: the CS net resolved to the
@@ -521,7 +522,9 @@ impl Peripheral for SpiBus {
 // 25xx SPI EEPROM
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 25xx (25LCxxx / AT25) SPI EEPROM. Instruction set (datasheet):
+/// 25xx (25LCxxx / AT25) SPI EEPROM.
+///
+/// Instruction set (datasheet):
 ///   0x06 WREN, 0x04 WRDI, 0x05 RDSR, 0x01 WRSR,
 ///   0x03 READ  (1 instr + 2 addr bytes, then read data),
 ///   0x02 WRITE (1 instr + 2 addr bytes, then write data).
@@ -714,6 +717,10 @@ enum NorCmd {
 }
 
 impl SpiNorFlash {
+    /// # Panics
+    ///
+    /// Panics if `size` is zero, if `page_size` or `sector_size` is not a power of
+    /// two no larger than `size`, or if `spi_mode` is above 3.
     #[must_use]
     pub fn new(
         size: usize,
@@ -949,9 +956,11 @@ impl SpiSlave for SpiNorFlash {
 // MCP3008 8-channel 10-bit SPI ADC
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// MCP3008 8-channel 10-bit ADC. Protocol (datasheet): the master clocks a
-/// start bit, a SGL/DIFF + channel-select nibble, then reads back a null bit
-/// and 10 data bits. The common 3-byte transfer is:
+/// MCP3008 8-channel 10-bit ADC.
+///
+/// Protocol (datasheet): the master clocks a start bit, a SGL/DIFF +
+/// channel-select nibble, then reads back a null bit and 10 data bits. The
+/// common 3-byte transfer is:
 ///   byte0 = 0x01 (start bit), byte1 = (SGL<<7)|(chan<<4), byte2 = 0x00.
 /// The slave returns the 10-bit result split across byte1's low 2 bits and all
 /// of byte2. Channel voltages are settable (0..vref) and converted to counts.

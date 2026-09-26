@@ -1,5 +1,6 @@
-//! [`HauksbeeEngine`]: the concrete engine behind `hauksbee-server`'s [`Engine`]
-//! trait, the object that turns a bound board plus optional firmware into a
+//! [`HauksbeeEngine`]: the concrete engine behind `hauksbee-server`'s [`Engine`] trait.
+//!
+//! It is the object that turns a bound board plus optional firmware into a
 //! running co-simulation the server (and its many front-ends) can drive.
 //!
 //! It wraps a [`Scheduler`] over a [`BoundBoard`] and owns the board metadata
@@ -54,6 +55,12 @@ pub struct HauksbeeEngine {
 
 impl HauksbeeEngine {
     /// Build an engine from a bound board and optional firmware.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if [`Scheduler::new`] refuses the board: an active-low
+    /// MCU reset role wired to ground while firmware is given, or an MCU core that
+    /// cannot be instantiated or loaded with the firmware.
     pub fn from_bound(
         bound: BoundBoard,
         firmware: Option<&Path>,
@@ -100,6 +107,11 @@ impl HauksbeeEngine {
     }
 
     /// Convenience: extract + bind + build in one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the board text cannot be extracted, or if
+    /// [`Self::from_bound`] refuses the bound board.
     pub fn from_board_file(
         board_text: &str,
         firmware: Option<&Path>,

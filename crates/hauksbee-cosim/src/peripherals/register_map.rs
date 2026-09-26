@@ -315,6 +315,12 @@ impl RegisterMapSensor {
     /// `evalexpr`. An uncompilable expression is a hard error: a spec that
     /// silently falls back to `0.0` bytes looks like a working zero-valued sensor
     /// and would silently corrupt firmware-visible bus traffic.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SensorSpecError`](hauksbee_models::sensor_spec::SensorSpecError)
+    /// for malformed TOML, a spec that fails structural validation, or a register
+    /// `expr` that `evalexpr` cannot compile.
     pub fn from_toml(src: &str) -> Result<Self, hauksbee_models::sensor_spec::SensorSpecError> {
         let spec = SensorSpec::from_toml(src)?;
         // Validate that every expression actually compiles. This is an

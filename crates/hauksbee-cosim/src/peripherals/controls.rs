@@ -229,11 +229,12 @@ impl Peripheral for ToggleSwitch {
 // Potentiometer (three-terminal, wiper position 0..1)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A three-terminal potentiometer: terminals `a` and `b`, wiper `w`. The total
-/// track resistance `r_total` is split between the a-w and w-b legs by the
-/// wiper position `pos` in 0..1 (0 = wiper at `a`, 1 = wiper at `b`). Tied as a
-/// voltage divider (a→rail, b→ground) it gives an analog input the firmware can
-/// read on the wiper.
+/// A three-terminal potentiometer: terminals `a` and `b`, wiper `w`.
+///
+/// The total track resistance `r_total` is split between the a-w and w-b legs
+/// by the wiper position `pos` in 0..1 (0 = wiper at `a`, 1 = wiper at `b`).
+/// Tied as a voltage divider (a→rail, b→ground) it gives an analog input the
+/// firmware can read on the wiper.
 pub struct Potentiometer {
     id: String,
     r_aw: DeviceId,
@@ -310,10 +311,11 @@ impl Peripheral for Potentiometer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// An incremental rotary encoder producing quadrature A/B outputs on two nets,
-/// driven from a commanded angular position (in detents). Setting a new
-/// position advances the Gray-code state machine the right number of steps,
-/// flipping A then B (or B then A) per step direction. Each output is a
-/// stamped Thevenin driver pulled to `vhigh` / 0.
+/// driven from a commanded angular position (in detents).
+///
+/// Setting a new position advances the Gray-code state machine the right number
+/// of steps, flipping A then B (or B then A) per step direction. Each output is
+/// a stamped Thevenin driver pulled to `vhigh` / 0.
 pub struct Encoder {
     id: String,
     drv_a: DeviceId,
@@ -421,10 +423,12 @@ pub enum StimulusKind {
     },
 }
 
-/// A generic stimulus driving one net. With `is_current = false` it is a
-/// voltage source behind a small series resistor (so its branch current is
-/// measurable and it never hard-shorts the net); with `is_current = true` it is
-/// an ideal current source injecting into the net.
+/// A generic stimulus driving one net.
+///
+/// With `is_current = false` it is a voltage source behind a small series
+/// resistor (so its branch current is measurable and it never hard-shorts the
+/// net); with `is_current = true` it is an ideal current source injecting into
+/// the net.
 pub struct Stimulus {
     id: String,
     device: DeviceId,
