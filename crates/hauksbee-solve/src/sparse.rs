@@ -810,11 +810,7 @@ fn entry(rowvec: &[(usize, f64)], c: usize) -> Option<f64> {
 #[inline]
 fn pivot_index(orig_row: usize, pivot_pos: &[usize]) -> Option<usize> {
     let s = pivot_pos[orig_row];
-    if s == usize::MAX {
-        None
-    } else {
-        Some(s)
-    }
+    (s != usize::MAX).then_some(s)
 }
 
 /// Depth-first reachability over the L structure for Gilbert-Peierls. Pushes

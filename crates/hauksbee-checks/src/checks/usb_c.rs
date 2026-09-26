@@ -653,11 +653,7 @@ fn net_resistance_to_grounds(
             }
         }
     }
-    if found {
-        Some(1.0 / inv_sum)
-    } else {
-        None
-    }
+    found.then_some(1.0 / inv_sum)
 }
 
 // ---------------------------------------------------------------------------

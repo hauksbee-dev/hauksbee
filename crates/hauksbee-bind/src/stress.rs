@@ -1128,11 +1128,7 @@ impl StressMonitor {
         // either way.
         let ops: Vec<Option<OperatingPoint>> = (0..self.metas.len())
             .map(|i| {
-                if self.tracks[i].destroyed {
-                    None
-                } else {
-                    Some(self.op_of(circuit, i, node_v, branch_current))
-                }
+                (!self.tracks[i].destroyed).then(|| self.op_of(circuit, i, node_v, branch_current))
             })
             .collect();
         // Run-cumulative evidence. The lag is stepped with the exact solution

@@ -318,11 +318,7 @@ fn parse_farads(v: &str) -> Option<f64> {
     // Take only the leading whitespace-delimited token so a trailing metadata
     // token ("18 C0G") does not defeat the parse.
     let n: f64 = s.split_whitespace().next()?.parse().ok()?;
-    if (1.0..=100.0).contains(&n) {
-        Some(n * 1e-12)
-    } else {
-        None
-    }
+    (1.0..=100.0).contains(&n).then_some(n * 1e-12)
 }
 
 // ===========================================================================
@@ -1647,11 +1643,7 @@ fn track_width_range(root: &List, net_id: i64) -> Option<(f64, f64)> {
             }
         }
     }
-    if min.is_finite() {
-        Some((min, max))
-    } else {
-        None
-    }
+    min.is_finite().then_some((min, max))
 }
 
 /// Find USB D+/D- pairs by net name. Returns (`plus_net_id`, `minus_net_id`,
