@@ -38,11 +38,8 @@ async fn main() -> anyhow::Result<()> {
     // one), so we direct the user to the dedicated `hauksbee` binary instead.
     if let Some(a) = &arg {
         let lower = a.to_ascii_lowercase();
-        if lower.ends_with(".kicad_pcb")
-            || lower.ends_with(".net")
-            || lower.ends_with(".brd")
-            || lower.ends_with(".pcbdoc")
-        {
+        let board_exts = [".kicad_pcb", ".net", ".brd", ".pcbdoc"];
+        if board_exts.iter().any(|ext| lower.ends_with(ext)) {
             eprintln!(
                 "hauksbee-server is the demo MCU server. To bring a real board to life run:\n  \
                  hauksbee run {a} [--firmware <hex>] [--port 3001]\n(the `hauksbee` binary is built \
@@ -51,9 +48,10 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(2);
         }
     }
-    let firmware = arg.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex")
-    });
+    let firmware = arg.map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex"),
+        PathBuf::from,
+    );
     let engine = McuDemoEngine::new(&firmware, "demo", "/boards/demo.kicad_pcb")?;
     let server = Server::new(Box::new(engine));
     let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist");

@@ -31,13 +31,13 @@ async fn spawn_demo_server() -> Option<std::net::SocketAddr> {
 
 #[tokio::test]
 async fn ws_protocol_roundtrip() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let Some(addr) = spawn_demo_server().await else {
         eprintln!("SKIP: demo.hex missing");
         return;
     };
 
     // Raw websocket handshake without extra deps.
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream
         .write_all(
@@ -131,7 +131,7 @@ async fn read_ws_text(stream: &mut tokio::net::TcpStream, residue: &mut Vec<u8>)
                 127 if residue.len() >= 10 => {
                     let mut b = [0u8; 8];
                     b.copy_from_slice(&residue[2..10]);
-                    (10, u64::from_be_bytes(b) as usize)
+                    (10, usize::try_from(u64::from_be_bytes(b)).unwrap())
                 }
                 n if n < 126 => (2, n as usize),
                 _ => (0, usize::MAX), // need more bytes for the header
@@ -189,10 +189,10 @@ async fn write_ws_text(stream: &mut tokio::net::TcpStream, text: &str) {
     let mask = [0x12u8, 0x34, 0x56, 0x78];
     let mut frame = vec![0x81u8];
     if payload.len() < 126 {
-        frame.push(0x80 | payload.len() as u8);
+        frame.push(0x80 | u8::try_from(payload.len()).unwrap());
     } else {
         frame.push(0x80 | 126);
-        frame.extend((payload.len() as u16).to_be_bytes());
+        frame.extend(u16::try_from(payload.len()).unwrap().to_be_bytes());
     }
     frame.extend(mask);
     frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));

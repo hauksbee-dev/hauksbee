@@ -84,7 +84,9 @@ struct LiveSession {
     _keepalive: Option<Box<dyn std::any::Any + Send>>,
 }
 
-/// The one live-sim slot behind `/ws`. `hauksbee serve` starts it empty (the
+/// The one live-sim slot behind `/ws`.
+///
+/// `hauksbee serve` starts it empty (the
 /// drop zone launches a session on demand via `/api/live/launch`);
 /// `run --serve` preloads it with the CLI board. A second launch replaces the
 /// current session: the old sim task is aborted after its subscribers get a
@@ -96,6 +98,7 @@ pub struct LiveHub {
 impl LiveHub {
     // LiveHub::new returns Arc<LiveHub>, so implementing Default would be the wrong trait.
     #[allow(clippy::new_without_default)]
+    #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             session: std::sync::Mutex::new(None),
@@ -105,6 +108,11 @@ impl LiveHub {
     /// Install a new live session, replacing any current one. Must be called
     /// from within a tokio runtime (the sim loop is spawned here). Returns
     /// true when an existing session was replaced.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the session mutex is poisoned, which requires an earlier panic
+    /// while it was held.
     pub fn launch(
         &self,
         engine: Box<dyn Engine>,
@@ -170,6 +178,11 @@ impl LiveHub {
     }
 
     /// Name of the currently live board, if a session is running.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the session mutex is poisoned, which requires an earlier panic
+    /// while it was held.
     pub fn active_board(&self) -> Option<String> {
         self.session
             .lock()
@@ -197,6 +210,7 @@ pub struct Server {
 
 impl Server {
     /// Spawn the simulation loop around `engine` and return the server.
+    #[must_use]
     pub fn new(engine: Box<dyn Engine>) -> Self {
         Self::new_named(engine, None)
     }
@@ -205,16 +219,18 @@ impl Server {
     /// and the frontend's session-identity surfaces. Callers that know the
     /// board's FILE name should pass it: many layout files carry no board
     /// name, so the engine-derived fallback is often empty.
+    #[must_use]
     pub fn new_named(engine: Box<dyn Engine>, name: Option<String>) -> Self {
         let hub = LiveHub::new();
         let name = name
             .filter(|n| !n.trim().is_empty())
-            .unwrap_or_else(|| engine.board_info().name.clone());
+            .unwrap_or_else(|| engine.board_info().name);
         hub.launch(engine, name, None, None);
         Self { hub }
     }
 
     /// The live-session hub this server preloaded, for wiring the launch API.
+    #[must_use]
     pub fn hub(&self) -> Arc<LiveHub> {
         self.hub.clone()
     }
@@ -232,6 +248,11 @@ impl Server {
     /// Serve [`Self::router`] on `addr`, falling back to a nearby / OS-assigned
     /// port if the requested one is busy rather than dying with a bare
     /// "Address already in use (os error 48)".
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no port can be bound (the requested one, the fallbacks
+    /// and an OS-assigned one) or if the HTTP server fails while serving.
     pub async fn serve(&self, addr: &str, static_dir: Option<&Path>) -> anyhow::Result<()> {
         let (listener, bound) = bind_frontdoor(addr).await?;
         eprintln!("hauksbee-server listening on http://{bound}");
@@ -253,6 +274,10 @@ impl Server {
     /// `startup_json` is the JSON the frontend fetches from `/api/startup`:
     /// `{"preloaded":true,"board_name":...,"report":<WebReport>}` here (lands
     /// on that board's report, "run it" expands to the sim).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP server fails while serving on `listener`.
     #[allow(clippy::too_many_arguments)]
     pub async fn serve_app_on_with_design(
         &self,
@@ -323,13 +348,15 @@ fn unified_router(parts: RouterParts) -> Router {
     // (see `live_board_handler`) exists to avoid. "No board here" is an
     // answer, not an error. A `run --serve` preloaded board's static route
     // (exact path, below) takes priority over the parameterised one.
-    let mut router = match &hub {
-        Some(hub) => Router::new()
-            .route("/ws", get(ws_handler))
-            .route("/boards/{name}", get(live_board_handler))
-            .with_state(hub.clone()),
-        None => Router::new().route("/boards/{name}", get(no_board_handler)),
-    };
+    let mut router = hub.as_ref().map_or_else(
+        || Router::new().route("/boards/{name}", get(no_board_handler)),
+        |hub| {
+            Router::new()
+                .route("/ws", get(ws_handler))
+                .route("/boards/{name}", get(live_board_handler))
+                .with_state(hub.clone())
+        },
+    );
     if let (Some(hub), Some(launch)) = (&hub, design_launch) {
         router = router.merge(frontdoor::live_routes_with_design(hub.clone(), launch));
     }
@@ -408,11 +435,18 @@ async fn no_cache_html(mut res: axum::response::Response) -> axum::response::Res
     res
 }
 
-/// Bind the front-door address (applying the busy-port fallback) and return the
-/// listener together with the address that was *actually* bound. The requested
+/// Bind the front-door address (applying the busy-port fallback).
+///
+/// Returns the listener together with the address that was *actually* bound. The
+/// requested
 /// port and the bound port differ whenever the requested one was in use, so a
 /// caller must print a URL from this returned address, not from the requested
 /// `addr`, or it advertises a stale port.
+///
+/// # Errors
+///
+/// Returns an error if neither `addr`, the nearby fallback ports nor an
+/// OS-assigned port can be bound, or if the bound address cannot be read back.
 pub async fn bind_frontdoor(
     addr: &str,
 ) -> anyhow::Result<(tokio::net::TcpListener, std::net::SocketAddr)> {
@@ -421,14 +455,19 @@ pub async fn bind_frontdoor(
     Ok((listener, bound))
 }
 
-/// Serve the drop-zone front door (no preloaded board: the React landing
-/// lands on the drop zone and `/api/startup` reports `preloaded:false`) on a
-/// listener already produced by [`bind_frontdoor`], so the caller can print
-/// the real bound URL before the server takes over the thread. Used by
-/// `hauksbee serve`. The hub starts empty: `/ws` answers 409 until a board is
-/// launched through `/api/live/launch`; it is mounted even without a launcher
-/// so the route surface stays stable. Report, Checks and Live Sim all accept
-/// the complete design-input bundle.
+/// Serve the drop-zone front door, with no preloaded board.
+///
+/// The React landing lands on the drop zone and `/api/startup` reports
+/// `preloaded:false`. It serves on a listener already produced by [`bind_frontdoor`],
+/// so the caller can print the real bound URL before the server takes over the thread.
+/// Used by `hauksbee serve`. The hub starts empty: `/ws` answers 409 until a board is
+/// launched through `/api/live/launch`; it is mounted even without a launcher so the
+/// route surface stays stable. Report, Checks and Live Sim all accept the complete
+/// design-input bundle.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP server fails while serving on `listener`.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_frontdoor_on_with_design(
     listener: tokio::net::TcpListener,
@@ -585,18 +624,16 @@ async fn live_board_handler(
     State(hub): State<Arc<LiveHub>>,
     UrlPath(name): UrlPath<String>,
 ) -> axum::response::Response {
-    match hub.board_file(&name) {
-        Some(contents) => (
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            contents,
-        )
-            .into_response(),
-        None => (
-            [(header::CONTENT_TYPE, "application/json")],
-            "{\"available\":false}",
-        )
-            .into_response(),
-    }
+    hub.board_file(&name).map_or_else(
+        || {
+            let miss = "{\"available\":false}";
+            ([(header::CONTENT_TYPE, "application/json")], miss).into_response()
+        },
+        |contents| {
+            let text_plain = "text/plain; charset=utf-8";
+            ([(header::CONTENT_TYPE, text_plain)], contents).into_response()
+        },
+    )
 }
 
 /// GET `/boards/{name}` with no live session: the same `200 application/json`
@@ -658,7 +695,7 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
                             return;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => return,
                 }
             }
@@ -744,6 +781,7 @@ fn end_session_fatally(shared: &Shared, broadcast: &impl Fn(&ServerMessage), rea
     });
 }
 
+#[allow(clippy::too_many_lines, reason = "async select loop on shared state")]
 async fn sim_loop(
     mut engine: Box<dyn Engine>,
     wire_name: String,
@@ -1019,7 +1057,6 @@ async fn sim_loop(
                     // lets a rejoining client restore its probes from the
                     // backlog instead of losing them on reload.
                     ClientMessage::AddProbe { net } => {
-                        let mut backlog = shared.backlog.lock().expect("backlog lock");
                         // Bounded because `net` is an arbitrary client string and
                         // the whole list is replayed to every new subscriber, so an
                         // uncapped list is both unbounded memory and unbounded work
@@ -1027,6 +1064,7 @@ async fn sim_loop(
                         // exist, so the cap only ever bites on a client sending
                         // rubbish.
                         const MAX_PROBES: usize = 512;
+                        let mut backlog = shared.backlog.lock().expect("backlog lock");
                         if backlog.probes.len() >= MAX_PROBES {
                             continue;
                         }
@@ -1098,7 +1136,7 @@ mod rate_honesty_tests {
                 healed: false,
                 reset_fails: false,
                 controls: SolverControls::default(),
-                stepped: Default::default(),
+                stepped: Arc::default(),
             }
         }
     }
@@ -1111,11 +1149,11 @@ mod rate_honesty_tests {
                 num_components: 0,
                 num_nets: 0,
                 nets: Vec::new(),
-                component_kinds: Default::default(),
+                component_kinds: std::collections::HashMap::default(),
                 mcus: Vec::new(),
-                power_supplies: Default::default(),
-                peripherals: Default::default(),
-                input_sources: Default::default(),
+                power_supplies: std::collections::HashMap::default(),
+                peripherals: Vec::default(),
+                input_sources: Vec::default(),
                 shorts: None,
             }
         }
@@ -1199,14 +1237,14 @@ mod rate_honesty_tests {
             let mut seen = Vec::new();
             while tokio::time::Instant::now() < deadline && !done(&seen) {
                 tokio::select! {
-                    _ = tokio::time::sleep_until(deadline) => break,
+                    () = tokio::time::sleep_until(deadline) => break,
                     msg = self.rx.recv() => match msg {
                         Ok(json) => {
                             if let Ok(m) = serde_json::from_str::<ServerMessage>(&json) {
                                 seen.push(m);
                             }
                         }
-                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
@@ -1298,6 +1336,7 @@ mod rate_honesty_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::float_cmp, reason = "a frozen sim clock stays bit-exact")]
     async fn refused_reset_retains_both_clients_history_until_success() {
         for (dies, already_failed) in [(false, false), (true, false), (true, true)] {
             let mut engine = TestEngine::new(0.0, dies);
@@ -1360,14 +1399,12 @@ mod rate_honesty_tests {
                 second.push(serde_json::from_str::<ServerMessage>(&json).unwrap());
             }
             assert_eq!(errors(&messages), errors(&second));
-            {
-                let backlog = s.shared.backlog.lock().unwrap();
-                assert_eq!(backlog.faults.len(), 1);
-                assert_eq!(backlog.faults[0].t, 0.01);
-                assert!(backlog.fatal.is_some());
-                if dies {
-                    assert_eq!(backlog.fatal, old_fatal);
-                }
+            let backlog = s.shared.backlog.lock().unwrap().clone();
+            assert_eq!(backlog.faults.len(), 1);
+            assert!((backlog.faults[0].t - 0.01).abs() < 1e-12);
+            assert!(backlog.fatal.is_some());
+            if dies {
+                assert_eq!(backlog.fatal, old_fatal);
             }
             s.cmd.send(ClientMessage::Reset).await.unwrap();
             let messages = s
