@@ -270,7 +270,7 @@ impl RegisterSpec {
         if let Some(c) = &self.r#const {
             return c.len();
         }
-        self.encoding.map(|e| e.natural_width()).unwrap_or(1).max(1)
+        self.encoding.map_or(1, Encoding::natural_width).max(1)
     }
 }
 

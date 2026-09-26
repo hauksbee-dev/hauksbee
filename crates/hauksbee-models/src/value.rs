@@ -24,7 +24,7 @@ impl fmt::Display for ParsedValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.si)?;
         if let Some(u) = &self.unit {
-            write!(f, " {}", u)?;
+            write!(f, " {u}")?;
         }
         Ok(())
     }
@@ -99,9 +99,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // current token be mis-picked as the magnitude ("2A_22u" → 2 F instead of 22 uF).
     // Filter both so V and A are treated identically everywhere.
     parse_inner(v).filter(|p| {
-        p.si.is_finite()
-            && p.si >= 0.0
-            && !matches!(p.unit.as_deref(), Some("V") | Some("A") | Some("Hz"))
+        p.si.is_finite() && p.si >= 0.0 && !matches!(p.unit.as_deref(), Some("V" | "A" | "Hz"))
     })
 }
 
@@ -241,13 +239,9 @@ fn normalise_comma_decimal(s: &str) -> String {
         let prev_digit = before_comma
             .chars()
             .next_back()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false);
+            .is_some_and(|c| c.is_ascii_digit());
         // Length of the digit run immediately after the comma.
-        let run = after_comma
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .count();
+        let run = after_comma.chars().take_while(char::is_ascii_digit).count();
         if prev_digit && run >= 1 {
             // A single comma is a thousands separator for a grouped integer: a
             // nonzero integer part with no leading zero and a 3-digit group. The
@@ -261,9 +255,9 @@ fn normalise_comma_decimal(s: &str) -> String {
             let int_grouped = before_comma.bytes().all(|b| b.is_ascii_digit())
                 && before_comma.as_bytes().first() != Some(&b'0');
             if run == 3 && int_grouped {
-                return format!("{}{}", before_comma, after_comma);
+                return format!("{before_comma}{after_comma}");
             }
-            return format!("{}.{}", before_comma, after_comma);
+            return format!("{before_comma}.{after_comma}");
         }
     }
     s.to_string()
@@ -322,7 +316,7 @@ fn fixup_tolerance_unit(unit: Option<String>, suffix: Option<&str>) -> Option<St
         // 'R' already means ohms; the trailing F is tolerance → ohmic value.
         Some("R") => Some("Ω".to_string()),
         // Resistance-scale multipliers: F is a tolerance code, not a unit.
-        Some("k") | Some("M") | Some("G") | Some("T") | Some("MEG") | Some("GIG") => None,
+        Some("k" | "M" | "G" | "T" | "MEG" | "GIG") => None,
         // No multiplier, or a capacitance-scale prefix (p/n/u/m): genuine Farad.
         _ => unit,
     }
@@ -441,7 +435,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let digits = after_suffix.bytes().take_while(u8::is_ascii_digit).count();
         let (frac_digits, after_frac) = after_suffix.split_at(digits);
         // Rebuild as "4.7"
-        let combined = format!("{}.{}", before, frac_digits);
+        let combined = format!("{before}.{frac_digits}");
         let mut unit = parse_tail(after_frac)?;
         if unit.is_none() {
             // An RKM decimal-point letter that is ITSELF a unit, H in "4H7",
@@ -469,7 +463,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     let mantissa: f64 = mantissa_str.parse().ok()?;
     Some(ParsedValue {
         si: mantissa * multiplier,
-        suffix: suffix_str.map(|s| s.to_string()),
+        suffix: suffix_str.map(ToString::to_string),
         unit,
     })
 }
@@ -506,7 +500,7 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
         while j < bytes.len() && bytes[j].is_ascii_digit() {
             j += 1;
         }
-        !matches!(bytes.get(j), Some(b'V') | Some(b'v'))
+        !matches!(bytes.get(j), Some(b'V' | b'v'))
     };
     match bytes[0] {
         b'H' | b'h' if next_is_digit => return (1.0, Some("H"), &s[1..]),

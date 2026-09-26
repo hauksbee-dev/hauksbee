@@ -617,7 +617,7 @@ impl ExtractConfig {
             env_overrides: KNOWN_ENV_VARS
                 .iter()
                 .filter(|v| env(v).is_some())
-                .map(|v| v.to_string())
+                .map(ToString::to_string)
                 .collect(),
         }
     }

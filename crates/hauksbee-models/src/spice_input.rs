@@ -150,7 +150,7 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
     let ports: Vec<String> = tokens[2..]
         .iter()
         .take_while(|t| !t.to_lowercase().starts_with("params"))
-        .map(|t| t.to_string())
+        .map(ToString::to_string)
         .collect();
 
     // Collect the full subckt body (from .subckt to .ends)
@@ -164,7 +164,7 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
             // substring of the whole line. A substring match opened the wrong
             // body whenever this name was a substring of another subckt's name
             // (".subckt OP" vs ".subckt OPAMP") or appeared as a port/comment.
-            let decl_name = line.split_whitespace().nth(1).map(|t| t.to_lowercase());
+            let decl_name = line.split_whitespace().nth(1).map(str::to_lowercase);
             if decl_name.as_deref() == Some(lower_name.as_str()) {
                 in_body = true;
             }

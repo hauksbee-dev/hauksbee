@@ -137,7 +137,7 @@ pub enum RegisterOp {
 }
 
 /// The clock of a sequential register.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockSpec {
     pub pin: String,
     pub edge: Edge,
@@ -148,7 +148,7 @@ pub struct ClockSpec {
 /// when more than one is active simultaneously the FIRST declared wins; the
 /// silicon's both-asserted race (both outputs high) is not representable in a
 /// single register and is deliberately not faked.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResetSpec {
     pub pin: String,
     pub active: Level,
@@ -158,7 +158,7 @@ pub struct ResetSpec {
 
 /// An asynchronous, level-sensitive parallel load from pins (the 74HC165 PL
 /// shape). `data[i]` names the input pin captured into bit `i`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsyncLoadSpec {
     pub pin: String,
     pub active: Level,
@@ -167,14 +167,14 @@ pub struct AsyncLoadSpec {
 
 /// A level-sensitive clock enable (the 74HC165 CLK_INH shape): clock edges
 /// only take effect while the enable is active.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnableSpec {
     pub pin: String,
     pub active: Level,
 }
 
 /// One sequential register.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogicRegister {
     pub name: String,
     /// Width in bits, 1..=64. The 64-bit bound is a deliberate refusal, not a
@@ -211,7 +211,7 @@ pub struct LogicRegister {
 
 /// A tri-state group: while `enable` is NOT active the listed outputs go
 /// high-impedance.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TristateSpec {
     pub enable: String,
     pub active: Level,
@@ -328,7 +328,7 @@ pub struct MemorySpec {
 }
 
 /// One independently-qualified parallel-memory write cycle.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryWriteCycleSpec {
     /// Input strobe whose selected edge commits the cycle.
     pub pin: String,
@@ -952,8 +952,8 @@ impl Logic {
             }
         }
 
-        let inputs: HashSet<&str> = self.inputs.iter().map(|s| s.as_str()).collect();
-        let outputs: HashSet<&str> = self.outputs.iter().map(|s| s.as_str()).collect();
+        let inputs: HashSet<&str> = self.inputs.iter().map(String::as_str).collect();
+        let outputs: HashSet<&str> = self.outputs.iter().map(String::as_str).collect();
         let reg_bits: HashMap<&str, u32> = self
             .registers
             .iter()
@@ -1326,20 +1326,20 @@ impl Logic {
             for n in names {
                 if let Some(&bits) = reg_bits.get(n) {
                     return Err(LogicSpecError::RegisterAsScalar {
-                        context: context.clone(),
+                        context,
                         register: n.to_string(),
                         bits,
                     });
                 }
                 if memory_names.contains(n) {
                     return Err(LogicSpecError::MemoryInComb {
-                        context: context.clone(),
+                        context,
                         name: n.to_string(),
                     });
                 }
                 if !inputs.contains(n) && !outputs.contains(n) {
                     return Err(LogicSpecError::UndeclaredName {
-                        context: context.clone(),
+                        context,
                         name: n.to_string(),
                     });
                 }
@@ -1356,7 +1356,7 @@ impl Logic {
                     Some(&bits) if i < bits => {}
                     Some(&bits) => {
                         return Err(LogicSpecError::BitIndexOutOfRange {
-                            context: context.clone(),
+                            context,
                             register: n.to_string(),
                             index: i,
                             bits,
@@ -1364,7 +1364,7 @@ impl Logic {
                     }
                     None => {
                         return Err(LogicSpecError::BitRefNotRegister {
-                            context: context.clone(),
+                            context,
                             name: n.to_string(),
                             index: i,
                         });
@@ -1449,7 +1449,7 @@ impl Logic {
     fn comb_cycles(&self, comb: &[(String, LogicExpr)]) -> (Vec<String>, HashSet<String>) {
         // out -> outputs it references directly.
         let mut deps: HashMap<&str, Vec<&str>> = HashMap::new();
-        let out_set: HashSet<&str> = self.outputs.iter().map(|s| s.as_str()).collect();
+        let out_set: HashSet<&str> = self.outputs.iter().map(String::as_str).collect();
         for (out, expr) in comb {
             let mut names = Vec::new();
             let mut bits = Vec::new();
@@ -1461,7 +1461,7 @@ impl Logic {
         }
         // An output is cyclic if it can reach itself.
         let mut cyclic: HashSet<String> = HashSet::new();
-        for start in self.outputs.iter().map(|s| s.as_str()) {
+        for start in self.outputs.iter().map(String::as_str) {
             let mut stack: Vec<&str> = deps.get(start).cloned().unwrap_or_default();
             let mut visited: HashSet<&str> = HashSet::new();
             while let Some(n) = stack.pop() {
@@ -1479,9 +1479,8 @@ impl Logic {
             let mut members: Vec<&String> = cyclic.iter().collect();
             members.sort();
             warnings.push(format!(
-                "combinational cycle through {:?}: resolved by bounded fixpoint iteration in \
-                 outputs-declaration order; convergence is verified exhaustively at bind time",
-                members
+                "combinational cycle through {members:?}: resolved by bounded fixpoint iteration in \
+                 outputs-declaration order; convergence is verified exhaustively at bind time"
             ));
         }
         (warnings, cyclic)

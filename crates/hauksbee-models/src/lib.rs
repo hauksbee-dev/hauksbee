@@ -325,7 +325,7 @@ impl std::fmt::Display for Resolution {
                 "{} ({}) => {} '{}' [{}]",
                 ref_str, val_str, m.id, m.description, self.confidence
             ),
-            None => write!(f, "{} ({}) => UNRESOLVED", ref_str, val_str),
+            None => write!(f, "{ref_str} ({val_str}) => UNRESOLVED"),
         }
     }
 }
@@ -796,7 +796,7 @@ impl ModelLibrary {
             let id = entry.id.clone();
             let invalid = |messages: String| ModelError::ValidationFailed {
                 id: id.clone(),
-                messages: format!("{}: {messages}", source_name),
+                messages: format!("{source_name}: {messages}"),
             };
             // An all-None `[match]` block (an omitted section, or a typo'd key
             // serde silently drops) matches EVERY component at specificity 0;

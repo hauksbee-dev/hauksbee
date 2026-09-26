@@ -63,7 +63,7 @@ pub struct LoadProfile {
 }
 
 /// Match rule for auto-binding a profile to a part.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProfileMatch {
     #[serde(default)]
     pub value_re: Option<String>,
@@ -95,7 +95,7 @@ impl LoadProfile {
 
     /// The profile's baseline current (the first segment's level, or 0).
     pub fn baseline_a(&self) -> f64 {
-        self.segments.first().map(|s| s.level_a).unwrap_or(0.0)
+        self.segments.first().map_or(0.0, |s| s.level_a)
     }
 
     /// The current (A) this profile draws at time `t` (seconds), under fuzz

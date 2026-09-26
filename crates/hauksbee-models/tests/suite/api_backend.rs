@@ -170,7 +170,7 @@ fn api_backend_sends_the_documented_request_shape() {
             .out_dir(Some(dir.path().to_path_buf()))
             .model(Some("test-model".to_string()))
             .backend(Some(hauksbee_models::datasheet::Backend::Api))
-            .api_base(Some(base.clone()))
+            .api_base(Some(base))
             .api_key_env(Some(key_env.to_string()));
 
     hauksbee_models::datasheet::run(args).expect("extraction against the stub endpoint");
