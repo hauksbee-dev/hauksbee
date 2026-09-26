@@ -29,6 +29,7 @@ pub fn publish(path: &Path, text: &str, overwrite: bool) -> std::io::Result<()> 
 /// The exact, finite set of strings an anchored pattern matches (compiled
 /// case-insensitive, as the matcher compiles it), or `None` when it admits a
 /// class wider than a case fold or separator set, a repeat, or no anchors.
+#[must_use]
 pub fn literal_set(pattern: &str) -> Option<Vec<String>> {
     let hir = regex_syntax::parse(&format!("(?i){pattern}")).ok()?;
     let props = hir.properties();
@@ -50,6 +51,7 @@ fn fold(name: &str) -> String {
 /// The match rule for a part and its ordering codes: case- and
 /// separator-insensitive (`[-_ ]?` where a separator is printed), anchored, and
 /// nothing else, so a sibling with other digits never matches.
+#[must_use]
 pub fn part_rule(part: &str, codes: &[&str]) -> String {
     let arm = |name: &&str| {
         let tokens = name.split(['-', '_', ' ']).filter(|t| !t.is_empty());

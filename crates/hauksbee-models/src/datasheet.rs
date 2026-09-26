@@ -147,7 +147,7 @@ impl Workspace {
             "hauksbee-extract-check-",
             "creating the check sandbox",
         )?;
-        Ok(Workspace {
+        Ok(Self {
             pdf: dir.path().join("datasheet.pdf"),
             dir,
             pages: Vec::new(),
@@ -158,6 +158,7 @@ impl Workspace {
         })
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
@@ -165,6 +166,7 @@ impl Workspace {
     /// Where codex must write its answer. Reading a file beats scraping stdout:
     /// stdout carries the agent's narration too, and a model that says "here
     /// is the TOML" twice leaves two candidate blocks to choose between.
+    #[must_use]
     pub fn answer_path(&self) -> PathBuf {
         self.dir.path().join("model.toml")
     }
@@ -263,7 +265,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
                     say!(
                     "[model-extract] PDF page {page} failed to render, continuing without it: {}",
                     String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")
-                )
+                );
                 }
                 Err(_) => {}
             }
@@ -599,7 +601,7 @@ fn timeout_tail(kept: Option<&Path>) -> String {
 /// Which LLM backend an extraction talks to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
-    /// `codex exec`, OpenAI's agent CLI.
+    /// `codex exec`, the agent CLI from OpenAI.
     Codex,
     /// Headless `claude -p`, the same prompt contract as codex.
     ClaudeCode,
@@ -611,67 +613,63 @@ pub enum Backend {
 
 impl Backend {
     /// Every backend, in the order the surfaces list them.
-    pub const ALL: [Backend; 4] = [
-        Backend::ClaudeCode,
-        Backend::Agy,
-        Backend::Codex,
-        Backend::Api,
-    ];
+    pub const ALL: [Self; 4] = [Self::ClaudeCode, Self::Agy, Self::Codex, Self::Api];
 
     /// The stable id used on the command line, in the config file and on
     /// the wire.
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            Backend::Codex => "codex",
-            Backend::ClaudeCode => "claude-code",
-            Backend::Agy => "agy",
-            Backend::Api => "api",
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+            Self::Agy => "agy",
+            Self::Api => "api",
         }
     }
 
     /// The display name.
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            Backend::Codex => "Codex",
-            Backend::ClaudeCode => "Claude Code",
-            Backend::Agy => "Antigravity (agy)",
-            Backend::Api => "OpenAI-compatible API",
+            Self::Codex => "Codex",
+            Self::ClaudeCode => "Claude Code",
+            Self::Agy => "Antigravity (agy)",
+            Self::Api => "OpenAI-compatible API",
         }
     }
 
     /// The executable an agent backend needs on PATH; none for the API.
-    pub fn tool(self) -> Option<&'static str> {
+    #[must_use]
+    pub const fn tool(self) -> Option<&'static str> {
         match self {
-            Backend::Codex => Some("codex"),
-            Backend::ClaudeCode => Some("claude"),
-            Backend::Agy => Some("agy"),
-            Backend::Api => None,
+            Self::Codex => Some("codex"),
+            Self::ClaudeCode => Some("claude"),
+            Self::Agy => Some("agy"),
+            Self::Api => None,
         }
     }
 
     /// The one command that makes it available.
-    pub fn install_hint(self) -> &'static str {
+    #[must_use]
+    pub const fn install_hint(self) -> &'static str {
         match self {
-            Backend::Codex => "npm install -g @openai/codex   # then: codex login",
-            Backend::ClaudeCode => {
-                "npm install -g @anthropic-ai/claude-code   # then: claude login"
-            }
-            Backend::Agy => {
-                "install Antigravity from https://antigravity.google, then: agy install"
-            }
-            Backend::Api => {
+            Self::Codex => "npm install -g @openai/codex   # then: codex login",
+            Self::ClaudeCode => "npm install -g @anthropic-ai/claude-code   # then: claude login",
+            Self::Agy => "install Antigravity from https://antigravity.google, then: agy install",
+            Self::Api => {
                 "export OPENAI_API_KEY=...   # or name another variable with api.api_key_env"
             }
         }
     }
 
     /// Where the datasheet's text goes when this backend reads it.
-    pub fn sends_data_to(self) -> &'static str {
+    #[must_use]
+    pub const fn sends_data_to(self) -> &'static str {
         match self {
-            Backend::Codex => "OpenAI, via the account codex is signed in with",
-            Backend::ClaudeCode => "Anthropic, via the account claude is signed in with",
-            Backend::Agy => "Google, via the account agy is signed in with",
-            Backend::Api => "the endpoint named by api.base_url",
+            Self::Codex => "OpenAI, via the account codex is signed in with",
+            Self::ClaudeCode => "Anthropic, via the account claude is signed in with",
+            Self::Agy => "Google, via the account agy is signed in with",
+            Self::Api => "the endpoint named by api.base_url",
         }
     }
 }
@@ -680,10 +678,10 @@ impl std::str::FromStr for Backend {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
         match s.trim() {
-            "codex" => Ok(Backend::Codex),
-            "claude-code" | "claude" => Ok(Backend::ClaudeCode),
-            "agy" | "antigravity" => Ok(Backend::Agy),
-            "api" => Ok(Backend::Api),
+            "codex" => Ok(Self::Codex),
+            "claude-code" | "claude" => Ok(Self::ClaudeCode),
+            "agy" | "antigravity" => Ok(Self::Agy),
+            "api" => Ok(Self::Api),
             other => bail!("unknown backend '{other}': expected codex, claude-code, agy, or api"),
         }
     }
@@ -745,8 +743,9 @@ pub struct Args {
 impl Args {
     /// Build the arguments for one extraction, for a caller that is not the
     /// standalone binary's own `--flag` parser.
-    pub fn new(pdf: PathBuf, part: String, kind_str: String) -> Self {
-        Args {
+    #[must_use]
+    pub const fn new(pdf: PathBuf, part: String, kind_str: String) -> Self {
+        Self {
             pdf,
             part,
             kind_str,
@@ -762,6 +761,7 @@ impl Args {
         }
     }
 
+    #[must_use]
     pub fn out_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.out_dir = dir;
         self
@@ -770,34 +770,40 @@ impl Args {
     /// Pick the model the extraction agent runs on. An empty string means "not
     /// chosen", which is what a form field the user left alone posts, and must
     /// fall through to the default rather than become `--model ""`.
+    #[must_use]
     pub fn model(mut self, model: Option<String>) -> Self {
         self.model = model.filter(|m| !m.trim().is_empty());
         self
     }
 
     /// Pick the reasoning effort. Empty means "not chosen", as for `model`.
+    #[must_use]
     pub fn effort(mut self, effort: Option<String>) -> Self {
         self.effort = effort.filter(|e| !e.trim().is_empty());
         self
     }
 
     /// Pick the backend. `None` keeps the configured / auto-detected one.
-    pub fn backend(mut self, backend: Option<Backend>) -> Self {
+    #[must_use]
+    pub const fn backend(mut self, backend: Option<Backend>) -> Self {
         self.backend = backend;
         self
     }
 
+    #[must_use]
     pub fn api_base(mut self, base: Option<String>) -> Self {
         self.api_base = base.filter(|b| !b.trim().is_empty());
         self
     }
 
+    #[must_use]
     pub fn api_key_env(mut self, name: Option<String>) -> Self {
         self.api_key_env = name.filter(|n| !n.trim().is_empty());
         self
     }
 
     /// Name the checker executable; see [`Args::checker`].
+    #[must_use]
     pub fn checker(mut self, exe: Option<PathBuf>) -> Self {
         self.checker = exe;
         self
@@ -888,7 +894,7 @@ pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
             "--model" => out.model = Some(value("a value")?),
             "--effort" => out.effort = Some(value("a value (low, medium, high, ...)")?),
             "--backend" => {
-                out.backend = Some(value("a value (codex, claude-code, agy, or api)")?.parse()?)
+                out.backend = Some(value("a value (codex, claude-code, agy, or api)")?.parse()?);
             }
             "--api-base" => out.api_base = Some(value("a value")?),
             "--force" => out.force = true,
@@ -1244,8 +1250,10 @@ fn category_disclosures(pages: &[PdfPageText], selected: &[SelectedPage]) -> Vec
                     .lines()
                     .map(str::trim)
                     .find(|line| line.to_ascii_lowercase().contains("switching characteristics"))
-                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .unwrap_or_else(|| "the later matching table".to_string());
+                    .map_or_else(
+                        || "the later matching table".to_string(),
+                        |line| line.split_whitespace().collect::<Vec<_>>().join(" "),
+                    );
                 let omitted_note = if omitted.is_empty() {
                     "All matching pages are attached.".to_string()
                 } else {
@@ -1303,7 +1311,7 @@ fn format_page_numbers(numbers: &[usize]) -> String {
 fn number_word(n: usize) -> String {
     ["no", "one", "two", "three", "four", "five", "six"]
         .get(n)
-        .map_or_else(|| n.to_string(), |w| w.to_string())
+        .map_or_else(|| n.to_string(), ToString::to_string)
 }
 
 /// Where `cmd` resolves on PATH, if anywhere. Shared with the config
@@ -1332,7 +1340,7 @@ fn command_extensions(cmd: &str, windows: bool, pathext: Option<&str>) -> Vec<St
         .unwrap_or(".COM;.EXE;.BAT;.CMD")
         .split(';')
         .filter(|extension| !extension.is_empty())
-        .map(|extension| extension.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -1362,7 +1370,7 @@ fn datasheet_text_block(pdf_text: &str) -> String {
     format!("DATASHEET TEXT (truncated):\n{DATASHEET_TEXT_BEGIN}\n{text}\n{DATASHEET_TEXT_END}")
 }
 
-const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
+const SOURCE_QUANTITY_GUIDANCE: &str = r"SOURCE QUANTITIES:
 - Define each destination quantity and its units before matching a datasheet row to it.
 - Every printed row gets a record, whether or not a key exists for it; never delete a
   sourced record to pass the checker. A typical value is never a guaranteed limit.
@@ -1372,9 +1380,9 @@ const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
   own record. Where two places state different values for one quantity, record each
   with its own basis plus an `unknown` record for it naming the conflict.
 - Omit unsupported facts, or mark them explicitly unknown only where the destination
-  schema provides that representation. Never invent a field or uncertainty schema."#;
+  schema provides that representation. Never invent a field or uncertainty schema.";
 
-const PIN_ROLE_GUIDANCE: &str = r#"The listed names are canonical electrical aliases, not an exhaustive list of valid pin
+const PIN_ROLE_GUIDANCE: &str = r"The listed names are canonical electrical aliases, not an exhaustive list of valid pin
 functions. I/O direction alone is not a function. For regulators only, `in`, `out`,
 and `gnd` mean supply input, regulated output, and ground; do not use them as generic
 input/output labels. Preserve source-named switching, programming, NC, rail, and
@@ -1386,7 +1394,7 @@ pad identifier exactly, including alphanumeric and exposed-pad identifiers.
 `unknown_pad_<identifier>` (with a comment) is only for a pad whose function the
 datasheet leaves unresolved, or the identity-only abstention for an unresolved package;
 abstaining on params never makes a resolved pin table unknown: a pad the pin table names
-keeps its source-named role. Never invent a pin role."#;
+keeps its source-named role. Never invent a pin role.";
 
 /// Whether the API backend has anything to work from: it cannot open the local
 /// PDF, so a prompt carrying the no-text sentinel would reach it with nothing
@@ -1767,7 +1775,7 @@ const FORMAT_EXAMPLES: &[FormatExample] = &[
     FormatExample {
         part: "TLV9001",
         kind: "opamp",
-        card: r##"[[models]]
+        card: r#"[[models]]
 id = "tlv9001"
 kind = "opamp"
 description = "TLV9001 format example; models bounded DC gain and output rails, but does not model noise, slew rate, or input-bias-current variation; ABSTAIN: the cited table does not state input noise at 125 C"
@@ -1808,12 +1816,12 @@ basis = "Recommended Operating Conditions, supply voltage row"
 kind = "rail_order"
 lower = "vee"
 upper = "vcc"
-basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""##,
+basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""#,
     },
     FormatExample {
         part: "TLV3201",
         kind: "comparator",
-        card: r##"[[models]]
+        card: r#"[[models]]
 id = "tlv3201"
 kind = "comparator"
 description = "TLV3201 format example; models thresholds and nominal delay, but does not model overdrive-dependent delay dispersion or output-current curves; ABSTAIN: the cited table does not state delay at 125 C"
@@ -1854,12 +1862,12 @@ basis = "Recommended Operating Conditions, supply voltage row"
 kind = "rail_order"
 lower = "vee"
 upper = "vcc"
-basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""##,
+basis = "Recommended Operating Conditions, supply voltage definition: VEE < VCC""#,
     },
     FormatExample {
         part: "PCA9306",
         kind: "digital",
-        card: r##"[[models]]
+        card: r#"[[models]]
 id = "pca9306_identity"
 kind = "digital"
 description = "PCA9306 format example; records identity, pin map, and rail constraints, but does not model the bidirectional pass-FET path; ABSTAIN: the datasheet does not state a fixed propagation delay"
@@ -1913,7 +1921,7 @@ basis = "Recommended Operating Conditions, VREF2 row, EN=VREF2"
 kind = "rail_order"
 lower = "vref1"
 upper = "vref2"
-basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""##,
+basis = "Recommended Operating Conditions, VREF1 must not exceed VREF2""#,
     },
 ];
 
@@ -2232,7 +2240,7 @@ enum Reply<'a> {
 
 impl Reply<'_> {
     /// The TOML table the answer starts with (empty for a bare word).
-    fn table(self) -> &'static str {
+    const fn table(self) -> &'static str {
         match self {
             Reply::Model { .. } => "[[models]]",
             Reply::Sensor { .. } => "[sensor]",
@@ -2267,7 +2275,7 @@ impl Reply<'_> {
             let records = records.map(|e| e.or_insert(ArrayOfTables::new().into()));
             match records {
                 Some(Item::ArrayOfTables(a)) if !a.iter().any(is_model) => {
-                    a.push(Table::from_iter(record.clone()))
+                    a.push(Table::from_iter(record.clone()));
                 }
                 _ => continue,
             }
@@ -2610,6 +2618,7 @@ fn kind_definition(kind: &str) -> &'static str {
 /// guidance (`timer`, `ignore`), plus the sensor specs and the behavioural
 /// families, which resolve to a base kind (charger and pmic to vreg, balancer
 /// to digital) but carry their own parameter guidance.
+#[must_use]
 pub fn supported_kinds() -> Vec<&'static str> {
     let schema = crate::validation::KIND_NAMES.iter().copied();
     let schema = schema.filter(|k| !matches!(*k, "timer" | "ignore"));
@@ -3003,7 +3012,7 @@ pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result
 /// the full prompt goes in a FILE inside it (argv is world-readable on Linux
 /// via /proc/<pid>/cmdline and visible to `ps -ww` on macOS, and a 40,000
 /// character datasheet excerpt would undo the consent the user gave to send it
-/// to one vendor; it would also brush ARG_MAX), stdin carries only a pointer to
+/// to one vendor; it would also brush `ARG_MAX`), stdin carries only a pointer to
 /// that file, and the answer is expected in `model.toml`.
 ///
 /// stderr goes to `log`, a FILE: not a pipe, because nothing reads a pipe until
@@ -3022,9 +3031,7 @@ fn run_cli_agent(
 ) -> Result<String> {
     std::fs::write(ws.path().join("prompt.md"), prompt)
         .context("writing the prompt into the sandbox")?;
-    let stderr = std::fs::File::create(log)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
+    let stderr = std::fs::File::create(log).map_or_else(|_| Stdio::null(), Stdio::from);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -3117,7 +3124,7 @@ fn wait_for_cli_backend(
 /// system can echo it: not in argv (world-readable via `ps` / /proc), not in
 /// a log line, not in an error. curl gets it through `--config -` on stdin,
 /// and the request body travels as a private temp file rather than an
-/// argument (it embeds the datasheet text, and can outgrow ARG_MAX anyway).
+/// argument (it embeds the datasheet text, and can outgrow `ARG_MAX` anyway).
 struct ApiRequest {
     url: String,
     model: String,
@@ -3143,7 +3150,7 @@ impl ApiRequest {
         if which_path("curl").is_none() {
             bail!("the api backend needs `curl`, which is not in PATH; install curl");
         }
-        Ok(ApiRequest {
+        Ok(Self {
             url: format!(
                 "{}/chat/completions",
                 settings.base_url.trim_end_matches('/')
@@ -3336,7 +3343,7 @@ fn supply_relative_rows(source: Option<&crate::schema::ModelSourceSpec>) -> Resu
     problem.map_or(Ok(()), |e| Err(anyhow::anyhow!(e)))
 }
 
-/// The snake_case name a kind serialises as (the serde `rename_all`).
+/// The `snake_case` name a kind serialises as (the serde `rename_all`).
 fn kind_discriminant(kind: ComponentKind) -> String {
     serde_json::to_value(kind)
         .ok()
@@ -3345,6 +3352,7 @@ fn kind_discriminant(kind: ComponentKind) -> String {
 }
 
 /// A part name as a file stem: anything but alphanumerics, `-` and `_` becomes `_`.
+#[must_use]
 pub fn sanitise_filename(s: &str) -> String {
     s.replace(|c: char| !(c.is_alphanumeric() || "-_".contains(c)), "_")
 }
@@ -3360,8 +3368,7 @@ fn dirs_next() -> PathBuf {
     std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+        .map_or_else(std::env::temp_dir, PathBuf::from)
 }
 
 #[cfg(test)]
@@ -3371,7 +3378,7 @@ mod tests {
     static MOCK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn argv(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     fn parse(extra: &[&str]) -> Result<Args> {
@@ -3953,7 +3960,8 @@ uncertainty = [
         );
         // A diode law off its cited VF rows is refit by completion, then validates.
         let vf = |ma: f64| {
-            let v = 1.2 * hauksbee_ir::thermal_voltage_c(27.0) * (ma * 1e5).ln_1p() + ma * 5e-4;
+            let v =
+                (1.2 * hauksbee_ir::thermal_voltage_c(27.0)).mul_add((ma * 1e5).ln_1p(), ma * 5e-4);
             format!("[[models.source.characteristic]]\nparameter = \"VF\"\ntyp = {v}\nunit = \"V\"\nconditions = \"IF = {ma} mA\"\nbasis = \"b\"\n")
         };
         let rows = [1.0, 10.0, 100.0, 1000.0].map(vf).concat();
