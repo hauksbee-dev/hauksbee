@@ -18,10 +18,19 @@
 //! battery cases, so it does double duty. The scheduler reads the `Vsource`'s
 //! branch current each chunk and feeds it back into [`PowerSupply::update`].
 //!
+//! ## A current limit folds inside the solve
+//!
+//! A bench or USB limit is NOT a per-chunk rule: one end-of-chunk current
+//! sample into bulk capacitance is inrush, so a fold driven by it bangs the
+//! source between setpoint and 0 V every chunk, moves with the chunk size and
+//! opens each chunk with a volt step onto milliohms. Instead the leg carries a
+//! current-controlled drop in series with its source ([`SupplyLeg::stamp`]),
+//! so Newton resolves the CV/CC operating point at every timestep.
+//!
 //! Discharge / V(SoC) curves below are piecewise-linear fits to published
 //! per-cell discharge curves; each is cited inline.
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId, SourceKind};
 
 /// Series output resistance used for the "ideal" and current-source-limited supplies.
 ///
@@ -108,7 +117,10 @@ pub enum PowerSupply {
     Ideal { volts: f64 },
     /// Bench PSU in constant-voltage mode with constant-current foldback: holds
     /// `volts` until the load pulls more than `current_limit_a`, then drops the
-    /// voltage to hold the current at the limit (smooth CV→CC transition).
+    /// voltage to hold the current at the limit (smooth CV→CC transition, see
+    /// [`PowerSupply::cc_fold`]). Below the limit it is the CV Thevenin leg,
+    /// which sinks a back-driven current like it sources one: only SOURCED
+    /// current counts against the limit.
     Bench { volts: f64, current_limit_a: f64 },
     /// Cheap wall adapter: nominal `volts` behind output resistance
     /// `r_out_ohms`, with a mains-frequency ripple of `ripple_vpp` peak-to-peak
@@ -190,30 +202,19 @@ impl BatteryProtection {
     /// Advance the protection state machine by `dt` seconds given the measured
     /// pack current `i_a`. Returns `true` if the cutoff is open (no output).
     fn update(&mut self, i_a: f64, dt: f64) -> bool {
-        if self.tripped {
-            // Tripped: integrate time spent below the reset threshold to re-arm.
-            if i_a < self.reset_a {
-                self.accum_s += dt;
-                if self.accum_s >= self.delay_s {
-                    self.tripped = false;
-                    self.accum_s = 0.0;
-                }
-            } else {
-                self.accum_s = 0.0;
-            }
+        // Armed: time spent above the trip threshold latches it open. Tripped:
+        // time spent below the reset threshold re-arms it. Anything else
+        // drops the accumulator, so brief spikes under the delay do nothing.
+        let flipping = if self.tripped {
+            i_a < self.reset_a
         } else {
-            // Armed: integrate time spent above the trip threshold.
-            if i_a > self.trip_a {
-                self.accum_s += dt;
-                if self.accum_s >= self.delay_s {
-                    self.tripped = true;
-                    self.ever_tripped = true;
-                    self.accum_s = 0.0;
-                }
-            } else {
-                // Drop the accumulator; brief spikes below the delay don't trip.
-                self.accum_s = 0.0;
-            }
+            i_a > self.trip_a
+        };
+        self.accum_s = if flipping { self.accum_s + dt } else { 0.0 };
+        if flipping && self.accum_s >= self.delay_s {
+            self.tripped = !self.tripped;
+            self.ever_tripped |= self.tripped;
+            self.accum_s = 0.0;
         }
         self.tripped
     }
@@ -330,24 +331,12 @@ impl PowerSupply {
     ///
     /// The returned voltage is the ideal source value *behind* `series_r()`;
     /// the solver adds the I·R drop across the series resistor on top, so the
-    /// terminal voltage the load sees is `v_internal - i*series_r`.
-    pub fn update(&mut self, i_a: f64, last_cmd_v: f64, t: f64, dt: f64) -> f64 {
+    /// terminal voltage the load sees is `v_internal - i*series_r`. A current
+    /// limit is not applied here but in the solve ([`Self::cc_fold`]).
+    pub fn update(&mut self, i_a: f64, t: f64, dt: f64) -> f64 {
         let i = i_a.max(0.0);
-        // Computed before the match: the CC fold needs the series resistance
-        // to floor its command at rail >= 0 (see `cc_regulate`).
-        let rs = self.series_r();
         match self {
-            Self::Ideal { volts } => *volts,
-
-            // CV with constant-current foldback. Above the limit, command a
-            // lower internal voltage so that I·R_load ≈ limit. We do not know
-            // R_load directly, but holding the *commanded* voltage proportional
-            // to (limit / i) regulates the current down toward the limit over a
-            // few chunks (a discrete CC loop). Smoothed to avoid oscillation.
-            Self::Bench {
-                volts,
-                current_limit_a,
-            } => cc_regulate(*volts, *current_limit_a, rs, last_cmd_v, i),
+            Self::Ideal { volts } | Self::Bench { volts, .. } => *volts,
 
             // Nominal minus the ripple sine. The I·R_out drop is applied by the
             // solver through the series resistor, so we only add ripple here.
@@ -362,9 +351,7 @@ impl PowerSupply {
             }
 
             // 5 V nominal; the connector/cable droop is the series resistor.
-            // Past the spec limit, fold the commanded voltage back hard so the
-            // current cannot run away (models the port's current-limit trip).
-            Self::Usb { spec } => cc_regulate(5.0, spec.current_limit_a(), rs, last_cmd_v, i),
+            Self::Usb { .. } => 5.0,
 
             // Drain charge and recompute the open-circuit stack voltage. The
             // internal resistance drop is the series resistor (solver-applied).
@@ -407,35 +394,43 @@ impl PowerSupply {
             Self::Battery { .. } => "battery",
         }
     }
-}
 
-/// Constant-voltage / constant-current regulation. The pair
-/// (last commanded voltage, measured current) estimates the total load
-/// resistance seen by the source, so the voltage that delivers exactly
-/// `limit` is `limit * v_cmd / i`. CV applies whenever that exceeds the
-/// setpoint. Anchoring to the *previous command* (not the setpoint) makes the
-/// loop convergent for resistive loads in one chunk and free of the
-/// bang-bang oscillation a setpoint-anchored law produces: for any load that
-/// responds to voltage, the iteration settles at exactly I = limit, with the
-/// rail at `v_cmd - limit * series_r` (positive).
-///
-/// The command is floored at `i * series_r`, the point where the RAIL sits
-/// at exactly 0 V. Without the floor, a load that does NOT respond to
-/// voltage (an ideal current-sink model drawing over the limit, e.g. a
-/// scenario burst bigger than the port) makes the iteration divergent: each
-/// chunk divides the command down, the command passes below `i * series_r`,
-/// and the "supply" starts holding a positive rail BELOW ground, a thing no
-/// current-limited source can do (it folds toward zero; it does not sink).
-/// The floor also keeps the failure modes distinguishable: a draw slightly
-/// over the limit sags geometrically (factor limit/i per chunk, so 1% over
-/// barely moves), while a short collapses to the 0 V floor in a few chunks.
-fn cc_regulate(v_set: f64, limit_a: f64, series_r: f64, last_cmd_v: f64, i_a: f64) -> f64 {
-    if limit_a <= 0.0 || i_a <= 1e-12 {
-        return v_set;
+    /// The constant-current fold as solve-time expressions, or `None`
+    /// without a limit: `[drop, clamp]`.
+    ///
+    /// `drop` reads `__d0`, the current SOURCED into the net (in the rail's
+    /// own sense, so a negative rail mirrors), and is the voltage the source
+    /// gives up: exactly zero up to the limit `L`, so the CV leg (back-driven
+    /// current included) is untouched, then `R*q(I - L)` with `q` rounded
+    /// quadratically over a knee of `L/50` and linear past it, `R =
+    /// 1e4*|V|/L`, so folding the whole rail takes 0.25% over the limit. The
+    /// solver's finite-difference probe steps `__d0` UP, into the fold, so
+    /// its slope never undershoots near the onset (a probe that reached back
+    /// onto the flat side would throw Newton past the root and cycle). It is
+    /// NOT capped: a flat cap would hand Newton a tangent that never sees the
+    /// steep CC band between two flat regions. Instead `clamp` reads the
+    /// source node `__d0` and stops it crossing 0 V (1 mOhm, the output's
+    /// reverse diode): an overload that does not respond to voltage (an ideal
+    /// sink bigger than the port) floors the rail near 0 V instead of holding
+    /// it below ground, and the excess is the clamp's, not the supply's; a CC
+    /// source folds toward zero, it does not sink.
+    #[must_use]
+    pub fn cc_fold(&self) -> Option<[String; 2]> {
+        let (volts, limit) = match self {
+            Self::Bench {
+                volts,
+                current_limit_a,
+            } => (*volts, *current_limit_a),
+            Self::Usb { spec } => (5.0, spec.current_limit_a()),
+            _ => return None,
+        };
+        let (s, knee, r) = (volts.signum(), limit / 50.0, 1e4 * volts.abs() / limit);
+        let over = format!("(__d0-{limit:?})");
+        let q = format!("min(max({over},0.0),{knee:?})^2/{:?}", 2.0 * knee);
+        let drop = format!("{:?}*({q}+max({over}-{knee:?},0.0))", s * r);
+        let clamp = format!("{s:?}*max({:?}*__d0,0.0)/{STIFF_R_OHMS:?}", -s);
+        (limit > 0.0).then_some([drop, clamp])
     }
-    let v_cc = limit_a * (last_cmd_v.max(1e-6) / i_a);
-    let rail_floor = i_a * series_r;
-    v_set.min(v_cc.max(rail_floor)).max(0.0)
 }
 
 /// A supply stamped onto a circuit: the controllable `Vsource`, its series
@@ -452,10 +447,12 @@ pub struct SupplyLeg {
     pub resistor: DeviceId,
     /// The behavioral model.
     pub supply: PowerSupply,
-    /// Last measured rail current (A, sourced into the net).
+    /// Last solved rail current (A, sourced into the net; negative while the
+    /// net back-drives the supply).
     pub last_current_a: f64,
-    /// Voltage commanded onto the internal source last chunk.
-    last_cmd_v: f64,
+    /// The constant-current fold's sense source, drop and clamp
+    /// ([`PowerSupply::cc_fold`]), once a limited model has been stamped.
+    cc: Option<[DeviceId; 3]>,
 }
 
 impl SupplyLeg {
@@ -477,19 +474,22 @@ impl SupplyLeg {
             net,
             supply.series_r(),
         ));
-        Self {
+        let mut leg = Self {
             net_name: net_name.to_string(),
             net,
             vsource,
             resistor,
             supply,
             last_current_a: 0.0,
-            last_cmd_v: v0,
-        }
+            cc: None,
+        };
+        leg.fold(circuit);
+        leg
     }
 
-    /// Push a new behavioral model onto an already-stamped leg, retuning both
-    /// the source voltage and the series resistance to match.
+    /// Push a new behavioral model onto an already-stamped leg, retuning the
+    /// source voltage, the series resistance and the current fold to match.
+    /// May add devices (a first current limit): relayout after it.
     pub fn reconfigure(&mut self, circuit: &mut Circuit, supply: PowerSupply) {
         self.supply = supply;
         if let Some(Device::Resistor { ohms, .. }) =
@@ -497,18 +497,86 @@ impl SupplyLeg {
         {
             *ohms = self.supply.series_r();
         }
-        let v0 = self.supply.nominal_volts();
-        self.last_cmd_v = v0;
-        self.set_internal_volts(circuit, v0);
+        self.set_internal_volts(circuit, self.supply.nominal_volts());
+        self.fold(circuit);
     }
 
-    /// Update the leg from the rail current measured this chunk: recompute the
+    /// Update the leg from the rail current solved this chunk: recompute the
     /// supply's internal voltage and write it onto the `Vsource`.
     pub fn update(&mut self, circuit: &mut Circuit, i_a: f64, t: f64, dt: f64) {
         self.last_current_a = i_a;
-        let v = self.supply.update(i_a, self.last_cmd_v, t, dt);
-        self.last_cmd_v = v;
+        let v = self.supply.update(i_a, t, dt);
         self.set_internal_volts(circuit, v);
+    }
+
+    /// Stamp or retune the constant-current fold ([`PowerSupply::cc_fold`]):
+    /// the source moves onto a private `_set` node, the drop sits between it
+    /// and `_cc`, and a 0 V sense source carries the sourced current from
+    /// `_cc` onto the drive node, oriented so its branch reads positive while
+    /// the rail sources. The clamp sits on the drive node. Stamped for the
+    /// first limited model only, so an unlimited leg keeps its source
+    /// grounded on the drive node (a pinned node the partitioner cuts at); a
+    /// later model rewrites the three in place (all zero when unlimited).
+    fn fold(&mut self, circuit: &mut Circuit) {
+        let fold = self.supply.cc_fold();
+        if fold.is_none() && self.cc.is_none() {
+            return;
+        }
+        let exprs = fold.unwrap_or_else(|| ["0.0".into(), "0.0".into()]);
+        let [drop, clamp] = exprs.map(|e| CompiledExpr::compile(&e).expect("supply fold compiles"));
+        let [set, cc, drv] = ["_set", "_cc", ""]
+            .map(|tag| circuit.node(&format!("__supply_{}{tag}", self.net_name)));
+        // Oriented so the sense branch reads positive while the rail sources.
+        let [p, n] = if self.supply.nominal_volts() < 0.0 {
+            [drv, cc]
+        } else {
+            [cc, drv]
+        };
+        let ids = self.cc.unwrap_or_else(|| {
+            let next = circuit.devices.len();
+            [0, 1, 2].map(|k| DeviceId(u32::try_from(next + k).expect("device count fits u32")))
+        });
+        let b = |tag, [p, n]: [NodeId; 2], output, expr, dep| Device::Behavioral {
+            name: format!("Bsupply_{}_{tag}", self.net_name),
+            p,
+            n,
+            output,
+            expr,
+            deps: vec![dep],
+        };
+        let (sense, gnd) = (format!("Vsupply_{}_sense", self.net_name), NodeId::GROUND);
+        let (by_sense, by_drv) = (BDep::Branch(ids[0]), BDep::Volt(drv));
+        let devices = [
+            Device::vsource(sense, p, n, SourceKind::Dc(0.0)),
+            b("cc", [set, cc], BOutput::Voltage, drop, by_sense),
+            b("clamp", [gnd, drv], BOutput::Current, clamp, by_drv),
+        ];
+        if self.cc.is_some() {
+            for (id, dev) in ids.into_iter().zip(devices) {
+                circuit.devices[id.0 as usize] = dev;
+            }
+            return;
+        }
+        if let Some(Device::Vsource { p, .. }) = circuit.devices.get_mut(self.vsource.0 as usize) {
+            *p = set;
+        }
+        self.cc = Some(devices.map(|dev| circuit.add(dev)));
+    }
+
+    /// Open the leg's sources: each becomes an `ohms` resistor across its own
+    /// terminals, not a deletion, so no `DeviceId` shifts under a caller
+    /// holding one. Returns whether anything was opened.
+    pub fn open(&self, circuit: &mut Circuit, ohms: f64) -> bool {
+        let mut opened = false;
+        for id in std::iter::once(self.vsource).chain(self.cc.into_iter().flatten()) {
+            let dev = circuit.devices.get_mut(id.0 as usize);
+            if let Some(dev @ (Device::Vsource { .. } | Device::Behavioral { .. })) = dev {
+                let (name, ends) = (dev.name().to_string(), dev.nodes());
+                *dev = Device::resistor(name, ends[0], ends[1], ohms);
+                opened = true;
+            }
+        }
+        opened
     }
 
     fn set_internal_volts(&self, circuit: &mut Circuit, v: f64) {
@@ -522,28 +590,20 @@ impl SupplyLeg {
 /// Piecewise-linear interpolation of `(x, y)` knots (assumed x-ascending) at
 /// `x`. Clamps to the endpoints outside the range.
 fn interp(knots: &[(f64, f64)], x: f64) -> f64 {
-    if knots.is_empty() {
+    let (Some(&(x_first, y_first)), Some(&(x_last, y_last))) = (knots.first(), knots.last()) else {
         return 0.0;
+    };
+    if x <= x_first {
+        return y_first;
     }
-    if x <= knots[0].0 {
-        return knots[0].1;
-    }
-    if x >= knots[knots.len() - 1].0 {
-        return knots[knots.len() - 1].1;
-    }
-    for w in knots.windows(2) {
-        let (x0, y0) = w[0];
-        let (x1, y1) = w[1];
-        if x >= x0 && x <= x1 {
-            let f = if (x1 - x0).abs() < 1e-12 {
-                0.0
-            } else {
-                (x - x0) / (x1 - x0)
-            };
-            return y0 + f * (y1 - y0);
-        }
-    }
-    knots[knots.len() - 1].1
+    let segment = knots
+        .windows(2)
+        .find(|w| x <= w[1].0)
+        .filter(|_| x < x_last);
+    segment.map_or(y_last, |w| {
+        let ((x0, y0), (x1, y1)) = (w[0], w[1]);
+        (y1 - y0).mul_add((x - x0) / (x1 - x0), y0)
+    })
 }
 
 #[cfg(test)]
@@ -587,7 +647,7 @@ mod tests {
         // Draw 1 A for 36 s = 0.01 Ah = 10% of 0.1 Ah.
         let dt = 0.1;
         for _ in 0..360 {
-            s.update(1.0, 4.2, 0.0, dt);
+            s.update(1.0, 0.0, dt);
         }
         // 360 * 0.1 s = 36 s at 1 A → 0.01 Ah drained → SoC ≈ 0.90.
         assert!((s.soc() - 0.90).abs() < 0.02, "soc {} not ~0.90", s.soc());
@@ -625,13 +685,13 @@ mod tests {
             protection: Some(prot),
         };
         // Keep drawing over the trip current: output stays at 0 V (open).
-        let v = s.update(2.0, 4.2, 0.0, dt);
+        let v = s.update(2.0, 0.0, dt);
         assert!(v.abs() < 1e-12, "tripped pack commands 0 V, got {v}");
         assert!(s.protection_tripped());
 
         // Remove the load (below reset) for longer than the delay: re-arms.
         for _ in 0..10 {
-            s.update(0.0, 0.0, 0.0, dt);
+            s.update(0.0, 0.0, dt);
         }
         assert!(
             !s.protection_tripped(),
@@ -639,79 +699,52 @@ mod tests {
         );
     }
 
-    /// The CC loop's two sides on a 0.5 A USB port (series R = 0.5 ohm).
-    ///
-    /// Side one: a resistive load drawing over the limit settles at exactly
-    /// I = limit within a few chunks, rail = `v_cmd` - limit*Rs, positive.
-    /// Side two: an ideal current-sink overload (a scenario burst bigger than
-    /// the port) must floor at rail = 0, never below: pre-fix, the iteration
-    /// divided the command to zero and held the rail NEGATIVE through the
-    /// series resistor.
+    /// The CC fold's laws, per limited model. The drop at a SOURCED current
+    /// `i`: exactly none up to the limit, back-driven current included;
+    /// monotone past it; the whole rail folded 0.25% over. The clamp: nothing
+    /// while the source node stays on its rail's side of 0 V, then 1 mOhm
+    /// back to it, so an unsatisfiable sink floors the rail instead of
+    /// holding it below ground. A negative rail folds mirrored.
     #[test]
-    fn cc_foldback_settles_resistive_loads_and_floors_current_sinks() {
-        let rs = 0.5;
-        let limit = 0.5;
-
-        // Resistive load sized to draw ~0.55 A at the 5 V setpoint.
-        let r_load = 5.0 / 0.55 - rs;
-        let mut s = PowerSupply::Usb {
+    fn cc_fold_is_exact_to_the_limit_and_clamps_at_zero() {
+        let usb = PowerSupply::Usb {
             spec: UsbSpec::V5_0_5A,
         };
-        let mut v_cmd = 5.0;
-        for _ in 0..50 {
-            let i = v_cmd / (rs + r_load);
-            v_cmd = s.update(i, v_cmd, 0.0, 1e-3);
-        }
-        let i_settled = v_cmd / (rs + r_load);
-        assert!(
-            (i_settled - limit).abs() < 1e-3,
-            "resistive overload must settle at I=limit, got {i_settled}"
-        );
-        let rail = v_cmd - i_settled * rs;
-        assert!(
-            (rail - (v_cmd - limit * rs)).abs() < 1e-3 && rail > 0.0,
-            "rail must sit at v_cmd - limit*Rs (positive), got {rail}"
-        );
-
-        // Ideal current sinks: 10% over collapses geometrically but the rail
-        // floors at 0 (command >= i*Rs), and a short-scale draw floors too.
-        for i_load in [0.55, 3.0] {
-            let mut s = PowerSupply::Usb {
-                spec: UsbSpec::V5_0_5A,
-            };
-            let mut v_cmd = 5.0;
-            let mut min_rail = f64::INFINITY;
-            for _ in 0..200 {
-                v_cmd = s.update(i_load, v_cmd, 0.0, 1e-3);
-                min_rail = min_rail.min(i_load.mul_add(-rs, v_cmd));
-            }
-            assert!(
-                min_rail >= -1e-9,
-                "a positive rail must never be held below ground \
-                 (i_load={i_load}, min rail={min_rail})"
-            );
-            assert!(
-                i_load.mul_add(-rs, v_cmd).abs() < 1e-9,
-                "an unsatisfiable current-sink overload floors at rail = 0 \
-                 (i_load={i_load}, settled rail={})",
-                i_load.mul_add(-rs, v_cmd)
-            );
-        }
-
-        // A draw 1% over the limit barely moves in the burst's first chunks:
-        // the fold factor is limit/i per chunk, so 1% over is visibly NOT a
-        // short.
-        let mut s = PowerSupply::Usb {
-            spec: UsbSpec::V5_0_5A,
+        let bench = |volts| PowerSupply::Bench {
+            volts,
+            current_limit_a: 3.0,
         };
-        let mut v_cmd = 5.0;
-        for _ in 0..10 {
-            v_cmd = s.update(0.505, v_cmd, 0.0, 1e-3);
+        for (supply, v, lim) in [
+            (usb, 5.0_f64, 0.5),
+            (bench(15.0), 15.0, 3.0),
+            (bench(-12.0), -12.0, 3.0),
+        ] {
+            let [drop, clamp] = supply
+                .cc_fold()
+                .expect("a limit folds")
+                .map(|e| CompiledExpr::compile(&e).unwrap());
+            let drop = |i: f64| drop.eval(&[i], 0.0).unwrap();
+            let under = [-2.0 * lim, -1e-3, 0.0, 0.5 * lim, lim].map(drop);
+            assert!(
+                under.iter().all(|&d| d == 0.0),
+                "{supply:?}: {under:?} under the limit"
+            );
+            let over: Vec<f64> = (0..=60)
+                .map(|k| drop(lim * f64::from(k).mul_add(5e-5, 1.0)))
+                .collect();
+            let monotone = over.windows(2).all(|w| (w[1] - w[0]) * v > 0.0);
+            let (sag, full) = (over[20] / v, over[50] / v);
+            assert!(
+                monotone && sag > 0.0 && sag < 1.0 && full >= 1.0,
+                "{supply:?}: monotone {monotone}, 0.1% over sags {sag}, 0.25% over {full} of the rail"
+            );
+            let clamp = |node_v: f64| clamp.eval(&[node_v], 0.0).unwrap();
+            let (idle, below) = ([clamp(v), clamp(0.0)], clamp(-1e-3 * v.signum()));
+            assert!(
+                idle.iter().all(|&c| c == 0.0) && (below - v.signum()).abs() < 1e-9,
+                "{supply:?}: clamp {idle:?} on its side of 0 V, {below} A 1 mV past it"
+            );
         }
-        let rail = 0.505f64.mul_add(-rs, v_cmd);
-        assert!(
-            rail > 4.0,
-            "1% over the limit must sag gently, not collapse: rail={rail}"
-        );
+        assert!(PowerSupply::Ideal { volts: 5.0 }.cc_fold().is_none());
     }
 }

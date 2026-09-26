@@ -3241,43 +3241,6 @@ fn snapshot_peripherals(
     out
 }
 
-/// Remove the binder's auto-rail on `net`: drop its [`SupplyLeg`] and
-/// disconnect the leg's stamped devices so the net floats except for whatever
-/// the board itself feeds it.
-///
-/// The leg's topology matters here: `SupplyLeg::stamp` places
-/// `Vsupply_<net>` on a PRIVATE node (`__supply_<net>`) behind a series
-/// `Rsupply_<net>` resistor, so matching "a Vsource whose positive node is
-/// the rail" never finds it and the ideal source keeps sourcing through its
-/// milliohm series resistor. The reliable cut is the series
-/// resistor itself: open `Rsupply_<net>` (1 TΩ) and the source is isolated on
-/// its private node no matter how the leg is modelled. The direct-Vsource
-/// match is kept for any bare `Vrail_*` ideal source stamped straight onto
-/// the net (the pre-leg binder shape).
-fn suppress_rail(bound: &mut BoundBoard, net: &str) {
-    let Some(node) = bound.node(net) else { return };
-    bound.supplies.retain(|s| s.net != node);
-    let series = format!("Rsupply_{net}");
-    for dev in &mut bound.circuit.devices {
-        match dev {
-            // The leg's series resistor: opening it disconnects the private
-            // drive node from the rail.
-            Device::Resistor { name, ohms, .. } if name == &series => {
-                *ohms = 1e12;
-            }
-            // A bare ideal source stamped directly on the rail node.
-            Device::Vsource { name, p, .. }
-                if *p == node
-                    && (name == &format!("Vsupply_{net}") || name.starts_with("Vrail")) =>
-            {
-                let (nm, a, b) = (name.clone(), *p, NodeId::GROUND);
-                *dev = Device::resistor(nm, a, b, 1e12);
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Bias the bound board the way every run does: suppress the requested
 /// auto-rails (drop the supply leg and open its internal source so the net is
 /// fed only via board parts), attach or reconfigure the declared supplies,
@@ -3299,7 +3262,7 @@ fn bias_bound(
     let stimulated = spec.peripherals.iter().filter(|p| p.kind == "stimulus");
     let stimulated = stimulated.filter_map(|p| p.net.as_ref());
     for net in spec.suppress_rail.iter().chain(stimulated) {
-        suppress_rail(bound, net);
+        bound.suppress_rail(net);
     }
     for s in &spec.supplies {
         attach_supply(bound, s)?;

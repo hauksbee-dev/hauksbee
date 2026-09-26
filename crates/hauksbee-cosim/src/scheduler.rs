@@ -3856,8 +3856,9 @@ impl Scheduler {
         for s in &mut self.supplies {
             let i = branch_current_of(&self.layout, &self.branch_x, s.vsource).unwrap_or(0.0);
             // Branch current of a Vsource flows p->n internally; the current
-            // *delivered to the net* is the negative of that. Use magnitude.
-            s.update(&mut self.circuit, i.abs(), t, chunk);
+            // *delivered to the net* is the negative of that. Signed: current
+            // pushed back into a supply is not load.
+            s.update(&mut self.circuit, -i, t, chunk);
         }
     }
 
@@ -5977,14 +5978,16 @@ impl Scheduler {
     /// Configure the power supply on a named supply net. Returns true if a
     /// supply leg for that net existed and was reconfigured.
     pub fn set_power_supply(&mut self, net: &str, supply: PowerSupply) -> bool {
-        for s in &mut self.supplies {
-            if s.net_name == net {
-                s.reconfigure(&mut self.circuit, supply);
-                self.reg_dirty = true;
-                return true;
-            }
+        let Some(leg) = self.supplies.iter_mut().find(|s| s.net_name == net) else {
+            return false;
+        };
+        let devices = self.circuit.devices.len();
+        leg.reconfigure(&mut self.circuit, supply);
+        if self.circuit.devices.len() != devices {
+            self.relayout(); // a first current limit stamps its fold
         }
-        false
+        self.reg_dirty = true;
+        true
     }
 
     /// Live supply readout per net: (kind label, last rail current A, state of charge).

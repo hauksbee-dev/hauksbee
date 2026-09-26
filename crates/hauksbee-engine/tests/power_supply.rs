@@ -6,13 +6,11 @@
 //! droop).
 
 use hauksbee_engine::power_supply::{Chemistry, PowerSupply, UsbSpec};
-use hauksbee_engine::{bind_board, HauksbeeEngine};
-use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
+use hauksbee_engine::HauksbeeEngine;
 
 /// A minimal board: one resistor `R1` from +5V to GND. The resistor value is
 /// substituted in so each test can pick its own load. Nets: 1 GND, 2 +5V.
-fn load_board(rload_ohms: &str) -> String {
+pub fn load_board(rload_ohms: &str) -> String {
     format!(
         r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -61,82 +59,38 @@ fn default_supply_is_ideal_5v() {
     assert!((v - 5.0).abs() < 0.05, "ideal rail = {v:.3} V, want ~5.0");
 }
 
+/// Current-limited supplies into resistive loads, one row each: (supply,
+/// load, rail volts, rail amps). Under the limit the rail only droops by
+/// `I*R_droop`; over it the fold holds the current near the limit and the rail
+/// collapses toward `I*R_load`. Applying the supply also proves the binder
+/// detected +5V as a supply net.
 #[test]
-fn bench_supply_current_limit_foldback() {
-    // 5 V bench supply, 0.5 A limit, into a 1 Ω load. Unlimited current would be
-    // 5 A; CC foldback must clamp it to ~0.5 A and drop the rail voltage.
-    let text = load_board("1");
-    let board = ExtractedBoard::from_auto(&text).expect("parse");
-    let lib = ModelLibrary::builtin();
-    let bound = bind_board(&board, &lib);
-    // The +5V supply net must be detected.
-    assert!(
-        bound.supplies.iter().any(|s| s.net_name == "+5V"),
-        "supply nets: {:?}",
-        bound
-            .supplies
-            .iter()
-            .map(|s| &s.net_name)
-            .collect::<Vec<_>>()
-    );
-
-    let mut engine = engine_for("1");
-    let set = engine.scheduler_mut().set_power_supply(
-        "+5V",
-        PowerSupply::Bench {
-            volts: 5.0,
-            current_limit_a: 0.5,
-        },
-    );
-    assert!(set, "bench supply applied to +5V");
-
-    let (v, i) = settle(&mut engine, 1e-4, 200);
-    // Current clamps to the 0.5 A limit within 5%.
-    assert!(
-        (i - 0.5).abs() <= 0.05 * 0.5,
-        "rail current {i:.4} A not within 5% of 0.5 A limit (V={v:.3})"
-    );
-    // The rail voltage folds down toward I*Rload = 0.5 V (well below 5 V).
-    assert!(
-        v < 1.0,
-        "rail folded back to {v:.3} V (want < 1 V under CC)"
-    );
-}
-
-#[test]
-fn usb_droop_under_load() {
-    // USB 5V/0.5A spec into a modest load that stays under the limit: terminal
-    // voltage should droop below 5 V by roughly I * droop_R but stay near 5 V.
-    let mut engine = engine_for("50"); // ~0.1 A draw, under 0.5 A
-    engine.scheduler_mut().set_power_supply(
-        "+5V",
-        PowerSupply::Usb {
-            spec: UsbSpec::V5_0_5A,
-        },
-    );
-    let (v, i) = settle(&mut engine, 1e-4, 200);
-    assert!(i > 0.05 && i < 0.5, "USB draw {i:.3} A under limit");
-    // Droop resistance for 0.5 A spec is 0.5 Ω; ~0.1 A → ~0.05 V droop.
-    assert!(
-        v < 5.0 && v > 4.7,
-        "USB terminal drooped to {v:.3} V (want slightly under 5 V)"
-    );
-
-    // Now overload it: 2 Ω load wants 2.5 A, far over the 0.5 A limit. The hard
-    // foldback must collapse the rail and clamp current near the limit.
-    let mut engine2 = engine_for("2");
-    engine2.scheduler_mut().set_power_supply(
-        "+5V",
-        PowerSupply::Usb {
-            spec: UsbSpec::V5_0_5A,
-        },
-    );
-    let (v2, i2) = settle(&mut engine2, 1e-4, 300);
-    assert!(
-        i2 <= 0.5 * 1.10,
-        "USB overload current {i2:.3} A should be held near 0.5 A limit (V={v2:.3})"
-    );
-    assert!(v2 < 2.0, "USB rail collapsed to {v2:.3} V under overload");
+fn current_limited_supplies_hold_their_limit() {
+    let usb = PowerSupply::Usb {
+        spec: UsbSpec::V5_0_5A,
+    };
+    let bench = PowerSupply::Bench {
+        volts: 5.0,
+        current_limit_a: 0.5,
+    };
+    for (supply, load, v_ok, i_ok) in [
+        // 5 A unlimited: within 5% of the 0.5 A limit, the rail near 0.5 V.
+        (bench, "1", f64::MIN..1.0, 0.475..0.525),
+        // ~0.1 A through the 0.5 ohm droop: ~0.05 V under 5 V.
+        (usb.clone(), "50", 4.7..5.0, 0.05..0.5),
+        // 2.5 A unlimited: held near the limit, the rail collapsed.
+        (usb, "2", f64::MIN..2.0, 0.0..0.55),
+    ] {
+        let mut engine = engine_for(load);
+        let applied = engine
+            .scheduler_mut()
+            .set_power_supply("+5V", supply.clone());
+        let (v, i) = settle(&mut engine, 1e-4, 300);
+        assert!(
+            applied && v_ok.contains(&v) && i_ok.contains(&i),
+            "{supply:?} into {load} ohm: applied {applied}, {v:.3} V, {i:.4} A"
+        );
+    }
 }
 
 #[test]

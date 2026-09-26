@@ -220,7 +220,8 @@ impl BoundBoard {
     /// and leaves the source stamped at its nominal voltage. The rail keeps
     /// reading 5.000 V and a brownout test silently tests nothing.
     ///
-    /// Both shapes are handled: a `SupplyLeg`'s internal source, and a bare
+    /// Both shapes are handled: a `SupplyLeg`'s internal sources (its current
+    /// fold reads the source's branch, so it opens with it), and a bare
     /// `Vrail_*` / `Vsupply_*` ideal source sitting directly on the rail node.
     /// Each is replaced by a 1 TΩ open rather than deleted, so no `DeviceId`
     /// shifts and every index held elsewhere stays valid.
@@ -232,13 +233,7 @@ impl BoundBoard {
         // The leg's internal source, reached through the leg itself rather than
         // guessed at from the rail node.
         for leg in self.supplies.iter().filter(|s| s.net == node) {
-            if let Some(dev) = self.circuit.devices.get_mut(leg.vsource.0 as usize) {
-                if let Device::Vsource { name, p, .. } = dev {
-                    let (nm, a) = (name.clone(), *p);
-                    *dev = Device::resistor(nm, a, NodeId::GROUND, SUPPRESSED_RAIL_OHMS);
-                    opened = true;
-                }
-            }
+            opened |= leg.open(&mut self.circuit, SUPPRESSED_RAIL_OHMS);
         }
         self.supplies.retain(|s| s.net != node);
         // A bare ideal rail source stamped straight onto the net.

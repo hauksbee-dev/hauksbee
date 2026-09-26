@@ -6,34 +6,14 @@
 //! at the limit with the rail still positive, not collapse to zero or bang-bang,
 //! because 1% over is where a fold that anchors to the wrong setpoint shows up.
 
+use crate::power_supply::load_board;
 use hauksbee_engine::binder::{bind_board, BoundBoard};
 use hauksbee_engine::power_supply::PowerSupply;
 use hauksbee_engine::scheduler::Scheduler;
-use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_frontdoor_api::engine::Engine;
-use hauksbee_ir::Device;
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
-
-/// One resistor from +5V to GND, load value substituted in.
-fn load_board(rload_ohms: &str) -> String {
-    format!(
-        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
-    (at 100 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value {rload_ohms} (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (net 2 "+5V"))
-    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
-  )
-)
-"#
-    )
-}
 
 fn bound_load_board(rload_ohms: &str) -> BoundBoard {
     let text = load_board(rload_ohms);
@@ -98,33 +78,15 @@ fn a_one_percent_over_limit_draw_settles_at_the_limit_with_a_positive_rail() {
     // instead of anchoring to the previous command bang-bangs here forever.
     let limit = 0.5_f64;
     let r_load = 5.0 / (1.01 * limit);
-    let text = load_board(&format!("{r_load:.6}"));
-    let mut engine = HauksbeeEngine::from_board_file(&text, None, "/boards/load.kicad_pcb")
-        .expect("build engine");
-    assert!(
-        engine.scheduler_mut().set_power_supply(
-            "+5V",
-            PowerSupply::Bench {
-                volts: 5.0,
-                current_limit_a: limit,
-            },
-        ),
-        "bench supply applied to +5V"
-    );
-
-    let mut v = 0.0;
-    let mut history = Vec::new();
-    for _ in 0..400 {
-        let frame = engine.step(1e-4);
-        v = *frame.net_voltages.get("+5V").unwrap_or(&0.0);
-        history.push(v);
-    }
-    let i = engine
-        .scheduler()
-        .supply_states()
-        .get("+5V")
-        .map_or(0.0, |(_, i, _)| *i);
-
+    let mut sched = bench_board(&format!("{r_load:.6}"), (5.0, limit), |_, _| {});
+    sched.chunk_s = 1e-4;
+    let history: Vec<f64> = (0..400)
+        .map(|_| {
+            sched.step(1e-4);
+            sched.net_voltage("+5V").unwrap_or(0.0)
+        })
+        .collect();
+    let (v, i) = (history[399], sched.supply_states()["+5V"].1);
     assert!(
         (i - limit).abs() <= 0.01 * limit,
         "current must settle ON the {limit} A limit, got {i:.6} A (V={v:.4})"
@@ -144,27 +106,39 @@ fn a_one_percent_over_limit_draw_settles_at_the_limit_with_a_positive_rail() {
     );
 }
 
-/// Two-sided: a draw comfortably UNDER the limit must not fold at all.
+/// Two-sided: a draw comfortably UNDER the limit must not fold at all, and
+/// neither must current pushed INTO the supply. A stronger source back-driving
+/// the rail leaves it at its setpoint, sinking through its output resistance
+/// as the CV leg always has; that current is not load. Rows: (load, back-drive
+/// volts through 0.1 ohm, rail V, supply A reported).
 #[test]
 fn a_draw_under_the_limit_does_not_fold() {
-    let text = load_board("100");
-    let mut engine = HauksbeeEngine::from_board_file(&text, None, "/boards/load.kicad_pcb")
-        .expect("build engine");
-    engine.scheduler_mut().set_power_supply(
-        "+5V",
-        PowerSupply::Bench {
-            volts: 5.0,
-            current_limit_a: 0.5,
-        },
-    );
-    let mut v = 0.0;
-    for _ in 0..200 {
-        v = *engine.step(1e-4).net_voltages.get("+5V").unwrap_or(&0.0);
+    for (r_load, back, v_want, i_want) in
+        [("100", None, 5.0, 0.05), ("1k", Some(5.2), 5.002, -1.975)]
+    {
+        let mut sched = bench_board(r_load, (5.0, 0.5), |c, net| {
+            if let Some(volts) = back {
+                let node = c.node("back");
+                c.add(Device::vsource(
+                    "Vback",
+                    node,
+                    NodeId::GROUND,
+                    SourceKind::Dc(volts),
+                ));
+                c.add(Device::resistor("Rback", node, net, 0.1));
+            }
+        });
+        sched.chunk_s = 1e-4;
+        for _ in 0..50 {
+            sched.step(1e-4);
+        }
+        let v = sched.net_voltage("+5V").unwrap_or(0.0);
+        let i = sched.supply_states()["+5V"].1;
+        assert!(
+            (v - v_want).abs() < 1e-3 && (i - i_want).abs() < 0.02,
+            "R={r_load}, back-drive {back:?}: {v:.5} V, {i:.4} A, want {v_want} V, {i_want} A"
+        );
     }
-    assert!(
-        (v - 5.0).abs() < 0.05,
-        "50 mA against a 500 mA limit must not fold the rail, got {v:.4} V"
-    );
 }
 
 /// Two-sided: suppressing a net that carries no rail reports that it did nothing
@@ -191,4 +165,106 @@ fn suppressing_a_net_with_no_rail_reports_nothing_done() {
         bound.supplies.iter().any(|s| s.net_name == "+5V"),
         "the real rail must survive an unrelated suppression"
     );
+}
+
+/// A scheduler on the load board (`r_load` on +5V, plus whatever `extra`
+/// stamps on the rail) fed by a `(volts, limit)` bench supply.
+fn bench_board(
+    r_load: &str,
+    bench: (f64, f64),
+    extra: impl FnOnce(&mut Circuit, NodeId),
+) -> Scheduler {
+    let mut bound = bound_load_board(r_load);
+    let net = bound.node("+5V").expect("rail node");
+    extra(&mut bound.circuit, net);
+    let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+    let (volts, current_limit_a) = bench;
+    let supply = PowerSupply::Bench {
+        volts,
+        current_limit_a,
+    };
+    assert!(sched.set_power_supply("+5V", supply));
+    sched
+}
+
+/// The rail every 10 us over 3 ms of a 15 V / 3 A bench supply into 60 uF of
+/// bulk, marched in frames of 10 us / `per_sample`: `r_load` plus a sink
+/// stepped from `sink_a.0` to `sink_a.1` at 100 us.
+fn bench_bulk_trace(r_load: &str, sink_a: (f64, f64), per_sample: u32) -> Vec<f64> {
+    let mut sink = DeviceId(0);
+    let mut sched = bench_board(r_load, (15.0, 3.0), |c, net| {
+        c.add(Device::capacitor("Cbulk", net, NodeId::GROUND, 60e-6));
+        let dc = SourceKind::Dc(sink_a.0);
+        sink = c.add(Device::isource("Isink", net, NodeId::GROUND, dc));
+    });
+    let frame = 10e-6 / f64::from(per_sample);
+    sched.chunk_s = frame;
+    let start = std::time::Instant::now();
+    let trace = (0..300)
+        .map(|k| {
+            if k == 10 {
+                if let Some(Device::Isource { kind, .. }) =
+                    sched.circuit_mut().devices.get_mut(sink.0 as usize)
+                {
+                    *kind = SourceKind::Dc(sink_a.1);
+                }
+            }
+            for _ in 0..per_sample {
+                sched.step(frame);
+            }
+            sched.net_voltage("+5V").unwrap_or(f64::NAN)
+        })
+        .collect();
+    let rescued = sched.failed_chunk_count() > 0 || !sched.fallback_windows().is_empty();
+    assert!(
+        sched.analog_valid() && !rescued,
+        "every chunk solves first time"
+    );
+    // Generous for a debug build: the bound catches a frame that opens on a
+    // volt step and grinds the timestep down, not a slow machine.
+    let took = start.elapsed();
+    assert!(
+        took.as_secs() < 30,
+        "3 ms of {frame:e} s frames took {took:?}"
+    );
+    trace
+}
+
+/// A bench limit into bulk capacitance is resolved INSIDE the solve, so the
+/// frame size cannot change the answer. Rows: (load resistor, sink step, the
+/// analytic rail `t` seconds after the step). The step overloads 15 V / 3 A,
+/// which holds 3 A while the bulk discharges: through 10 ohm the rail settles
+/// at the CC operating point 10*(3-2.5) = 5 V with tau = RC; as a pure sink it
+/// ramps down at 1 A / 60 uF and floors at 0 V. A once-per-frame fold read the
+/// bulk's inrush as load and banged the source between 15 V and 0 V, so the
+/// trace moved with the frame (volts apart, negative minima) and every frame
+/// opened with a volt step onto 1 mOhm.
+#[test]
+fn a_bench_limit_into_bulk_settles_identically_at_every_frame_size() {
+    type Rail = fn(f64) -> f64;
+    let rows: [(&str, (f64, f64), Rail); 2] = [
+        ("10", (1.1, 2.5), |t| {
+            10.0f64.mul_add((-t / 600e-6).exp(), 5.0)
+        }),
+        ("100k", (2.6, 4.0), |t| (15.0 - t / 60e-6).max(0.0)),
+    ];
+    for (r_load, sink_a, rail) in rows {
+        let traces = [4, 2, 1].map(|n| (n, bench_bulk_trace(r_load, sink_a, n)));
+        for (n, trace) in &traces[1..] {
+            let (worst, k) = (trace.iter().zip(&traces[0].1).enumerate())
+                .map(|(k, (v, fine))| ((v - fine).abs(), k))
+                .fold((0.0, 0), |m, d| if d.0 > m.0 { d } else { m });
+            assert!(
+                worst < 0.05,
+                "R={r_load}: {n} frames per 10 us sit {worst:.4} V from 4 at sample {k}"
+            );
+        }
+        for (k, v) in (1..).zip(&traces[2].1) {
+            let want = rail(f64::from(k).mul_add(10e-6, -100e-6).max(0.0));
+            assert!(
+                (v - want).abs() < 0.15,
+                "R={r_load}: rail {v:.4} V {k}0 us in, analytic {want:.4} V"
+            );
+        }
+    }
 }
