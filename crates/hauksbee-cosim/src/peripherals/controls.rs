@@ -76,7 +76,7 @@ impl Pushbutton {
     /// pull-to-ground button). `bounce_ms` of 0 disables the bounce model.
     pub fn new(circuit: &mut Circuit, id: &str, net: NodeId, to: NodeId, bounce_ms: f64) -> Self {
         let contact = stamp_resistor(circuit, format!("Rsw_{id}"), net, to, CONTACT_ROFF);
-        Pushbutton {
+        Self {
             id: id.to_string(),
             contact,
             ron: CONTACT_RON,
@@ -185,7 +185,7 @@ impl ToggleSwitch {
     pub fn new(circuit: &mut Circuit, id: &str, net: NodeId, to: NodeId, closed: bool) -> Self {
         let r = if closed { CONTACT_RON } else { CONTACT_ROFF };
         let contact = stamp_resistor(circuit, format!("Rsw_{id}"), net, to, r);
-        ToggleSwitch {
+        Self {
             id: id.to_string(),
             contact,
             closed,
@@ -259,7 +259,7 @@ impl Potentiometer {
         let r_aw = stamp_resistor(circuit, format!("Rpot_{id}_aw"), a, w, aw_ohms);
         let wb_ohms = (r_total * (1.0 - pos)).max(1e-3);
         let r_wb = stamp_resistor(circuit, format!("Rpot_{id}_wb"), w, b, wb_ohms);
-        Potentiometer {
+        Self {
             id: id.to_string(),
             r_aw,
             r_wb,
@@ -334,7 +334,7 @@ impl Encoder {
         // Each output is an ideal source behind a small series resistor.
         let drv_a = stamp_driver(circuit, a, &format!("{id}_A"), 0.0);
         let drv_b = stamp_driver(circuit, b, &format!("{id}_B"), 0.0);
-        Encoder {
+        Self {
             id: id.to_string(),
             drv_a,
             drv_b,
@@ -438,7 +438,7 @@ impl Stimulus {
     /// Stamp a voltage stimulus on `net` (behind a 50 Ω series resistor).
     pub fn voltage(circuit: &mut Circuit, id: &str, net: NodeId, kind: StimulusKind) -> Self {
         let device = stamp_driver(circuit, net, id, kind.value_at(0.0));
-        Stimulus {
+        Self {
             id: id.to_string(),
             device,
             kind,
@@ -456,7 +456,7 @@ impl Stimulus {
             net,
             SourceKind::Dc(kind.value_at(0.0)),
         ));
-        Stimulus {
+        Self {
             id: id.to_string(),
             device,
             kind,
@@ -470,8 +470,8 @@ impl Stimulus {
 impl StimulusKind {
     fn value_at(&self, t: f64) -> f64 {
         match self {
-            StimulusKind::Wave(k) => k.eval(t),
-            StimulusKind::Noise { offset, .. } => *offset,
+            Self::Wave(k) => k.eval(t),
+            Self::Noise { offset, .. } => *offset,
         }
     }
 }

@@ -482,7 +482,7 @@ impl RegisterMapSensor {
             (f.per_channel, programs)
         });
 
-        RegisterMapSensor {
+        Self {
             name: s.name,
             bus: s.bus,
             i2c_address: s.i2c_address.unwrap_or(0),

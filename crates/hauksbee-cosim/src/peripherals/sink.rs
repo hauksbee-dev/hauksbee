@@ -26,7 +26,7 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         // 5 V CMOS-ish midpoint with wide hysteresis; works for 3.3 V too.
-        Thresholds { vih: 2.0, vil: 0.8 }
+        Self { vih: 2.0, vil: 0.8 }
     }
 }
 
@@ -107,7 +107,7 @@ impl VcdSink {
                 initialized: false,
             })
             .collect();
-        VcdSink {
+        Self {
             id: id.to_string(),
             nets: logged,
             thresholds: Thresholds::default(),

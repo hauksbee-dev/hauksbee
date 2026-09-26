@@ -416,7 +416,7 @@ impl ParallelMemoryResponder {
         watched.sort_unstable();
         watched.dedup();
 
-        ParallelMemoryResponder {
+        Self {
             id,
             port,
             levels,
@@ -705,7 +705,7 @@ impl Hc165Responder {
             let c = chain.lock_or_recover();
             (c.pl_n, c.clk)
         };
-        Hc165Responder {
+        Self {
             chain,
             levels,
             volts,
@@ -856,7 +856,7 @@ impl BitBangSpiResponder {
         };
         let cpol = mode & 0b10 != 0;
         let cpha = mode & 0b01 != 0;
-        BitBangSpiResponder {
+        Self {
             bus,
             pins,
             cpol,
@@ -1164,7 +1164,7 @@ pub struct SoftI2cResponder {
 
 impl SoftI2cResponder {
     pub fn new(bus: Arc<Mutex<I2cBus>>, scl_pin: (char, u8), sda_pin: (char, u8)) -> Self {
-        SoftI2cResponder {
+        Self {
             bus,
             scl_pin,
             sda_pin,
@@ -2334,7 +2334,7 @@ style = "i2c_pointer"
 
     impl I2cMaster {
         fn new(bus: Arc<Mutex<I2cBus>>) -> Self {
-            let mut m = I2cMaster {
+            let mut m = Self {
                 resp: SoftI2cResponder::new(bus, SCL, SDA),
                 sda_in: true,
             };

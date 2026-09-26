@@ -86,7 +86,7 @@ impl HauksbeeEngine {
         if sched.has_external_backend() {
             sched.chunk_s = EXTERNAL_BACKEND_CHUNK_S;
         }
-        Ok(HauksbeeEngine {
+        Ok(Self {
             sched,
             board_name,
             board_url: board_url.to_string(),
@@ -108,7 +108,7 @@ impl HauksbeeEngine {
         let board = ExtractedBoard::from_auto(board_text)?;
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&board, &lib);
-        HauksbeeEngine::from_bound(bound, firmware, board_url)
+        Self::from_bound(bound, firmware, board_url)
     }
 
     /// The bind report for this engine's board.

@@ -116,7 +116,7 @@ pub struct I2cBus {
 
 impl I2cBus {
     pub fn new(id: &str) -> Self {
-        I2cBus {
+        Self {
             id: id.to_string(),
             active: None,
             txn_addrs: Vec::new(),
@@ -342,7 +342,7 @@ impl Eeprom24c {
 
     /// `size` is the total byte capacity (e.g. 4096 for a 24C32 = 32 kbit).
     pub fn new(address: u8, size: usize) -> Self {
-        Eeprom24c {
+        Self {
             addr: address,
             mem: vec![0xFF; size.max(1)],
             ptr: 0,
@@ -493,7 +493,7 @@ impl Lm75 {
     pub const DEFAULT_ADDR: u8 = 0x48;
 
     pub fn new(address: u8, temp_c: f64) -> Self {
-        Lm75 {
+        Self {
             addr: address,
             pointer: 0,
             temp_c,

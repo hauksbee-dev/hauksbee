@@ -190,9 +190,9 @@ impl CsProvenance {
     /// `"bitbang-pins"`.
     pub fn as_str(self) -> &'static str {
         match self {
-            CsProvenance::SpecDeclared => "spec",
-            CsProvenance::ModelRoles => "model-roles",
-            CsProvenance::BitBangPins => "bitbang-pins",
+            Self::SpecDeclared => "spec",
+            Self::ModelRoles => "model-roles",
+            Self::BitBangPins => "bitbang-pins",
         }
     }
 
@@ -200,9 +200,9 @@ impl CsProvenance {
     /// the CS net.
     pub fn describe(self) -> &'static str {
         match self {
-            CsProvenance::SpecDeclared => "CS net declared by the spec",
-            CsProvenance::ModelRoles => "CS net resolved from the bound model's pin roles",
-            CsProvenance::BitBangPins => "CS pin taken from the bit-banged SPI wiring",
+            Self::SpecDeclared => "CS net declared by the spec",
+            Self::ModelRoles => "CS net resolved from the bound model's pin roles",
+            Self::BitBangPins => "CS pin taken from the bit-banged SPI wiring",
         }
     }
 }
@@ -235,9 +235,9 @@ impl SpiFramingMode {
     /// Lower-case tag for JSON coverage: `"exact"` | `"backend"` | `"heuristic"`.
     pub fn as_str(self) -> &'static str {
         match self {
-            SpiFramingMode::Exact(_) => "exact",
-            SpiFramingMode::Backend => "backend",
-            SpiFramingMode::Heuristic => "heuristic",
+            Self::Exact(_) => "exact",
+            Self::Backend => "backend",
+            Self::Heuristic => "heuristic",
         }
     }
 
@@ -246,8 +246,8 @@ impl SpiFramingMode {
     /// tier (there was no net to resolve).
     pub fn cs_provenance(self) -> Option<CsProvenance> {
         match self {
-            SpiFramingMode::Exact(p) => Some(p),
-            SpiFramingMode::Backend | SpiFramingMode::Heuristic => None,
+            Self::Exact(p) => Some(p),
+            Self::Backend | Self::Heuristic => None,
         }
     }
 }
@@ -320,7 +320,7 @@ pub struct SpiBus {
 impl SpiBus {
     pub fn new(id: &str, slave: Box<dyn SpiSlave>) -> Self {
         let spi_mode = slave.spi_mode();
-        SpiBus {
+        Self {
             id: id.to_string(),
             slave,
             cs_pin: None,
@@ -479,7 +479,7 @@ impl SpiBus {
 
 impl Peripheral for SpiBus {
     fn id(&self) -> &str {
-        SpiBus::id(self)
+        Self::id(self)
     }
     fn kind(&self) -> &'static str {
         "spi_bus"
@@ -530,7 +530,7 @@ enum SpiCmd {
 
 impl Spi25Eeprom {
     pub fn new(size: usize) -> Self {
-        Spi25Eeprom {
+        Self {
             mem: vec![0xFF; size.max(1)],
             state: SpiCmd::Idle,
             addr: 0,
@@ -946,7 +946,7 @@ pub struct Mcp3008 {
 
 impl Mcp3008 {
     pub fn new(vref: f64) -> Self {
-        Mcp3008 {
+        Self {
             vref: vref.max(1e-6),
             channels: [0.0; 8],
             seq: 0,

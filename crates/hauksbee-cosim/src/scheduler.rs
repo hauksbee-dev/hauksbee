@@ -159,10 +159,10 @@ impl ChunkFallbackMethod {
     /// Stable machine-readable name (serialized into the co-sim JSON).
     pub fn as_str(&self) -> &'static str {
         match self {
-            ChunkFallbackMethod::ReducedStep => "reduced-step",
-            ChunkFallbackMethod::BackwardEuler => "backward-euler",
-            ChunkFallbackMethod::ColdStartBackwardEuler => "cold-start-backward-euler",
-            ChunkFallbackMethod::SubdividedBackwardEuler => "subdivided-backward-euler",
+            Self::ReducedStep => "reduced-step",
+            Self::BackwardEuler => "backward-euler",
+            Self::ColdStartBackwardEuler => "cold-start-backward-euler",
+            Self::SubdividedBackwardEuler => "subdivided-backward-euler",
         }
     }
 
@@ -171,16 +171,16 @@ impl ChunkFallbackMethod {
     /// lives on `FallbackWindow::error_estimate_v`.
     pub fn fidelity_note(&self) -> &'static str {
         match self {
-            ChunkFallbackMethod::ReducedStep => {
+            Self::ReducedStep => {
                 "primary integration at a smaller maximum step; \
                  error_estimate_v carries the worst per-chunk measured \
                  estimate of the error each chunk's march added to its end \
                  state, from a companion re-solve at a shifted accuracy dial \
                  (absent when no companion converged)"
             }
-            ChunkFallbackMethod::BackwardEuler
-            | ChunkFallbackMethod::ColdStartBackwardEuler
-            | ChunkFallbackMethod::SubdividedBackwardEuler => {
+            Self::BackwardEuler
+            | Self::ColdStartBackwardEuler
+            | Self::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
                  to the second-order primary solve; error_estimate_v carries \
@@ -1093,7 +1093,7 @@ pub struct NetStat {
 
 impl Default for NetStat {
     fn default() -> Self {
-        NetStat {
+        Self {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
             powered_min_v: f64::INFINITY,
@@ -1111,7 +1111,7 @@ impl NetStat {
     /// (they live in `hauksbee-engine`, so it cannot be `cfg(test)`).
     #[doc(hidden)]
     pub fn with_toggles(toggles: u64) -> Self {
-        NetStat {
+        Self {
             toggles,
             ..Default::default()
         }
@@ -1121,7 +1121,7 @@ impl NetStat {
     /// tie-break (equal toggles, differing swing) the web/CLI/JSON tables share.
     #[doc(hidden)]
     pub fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
-        NetStat {
+        Self {
             toggles,
             min_v,
             max_v,
@@ -1302,7 +1302,7 @@ impl Scheduler {
         // Snapshot the pristine (post-bind, pre-run) circuit for destructive-mode
         // replay restoration in `reset_run_state`.
         let original_circuit = circuit.clone();
-        let mut sched = Scheduler {
+        let mut sched = Self {
             circuit,
             original_circuit,
             net_nodes,
@@ -6939,8 +6939,8 @@ missing = ["measurement_registers"]
          so simulated time is approximate and host-load dependent.";
 
     impl MockCore {
-        fn handles(&self) -> MockCore {
-            MockCore {
+        fn handles(&self) -> Self {
+            Self {
                 digital_ins: self.digital_ins.clone(),
                 micros: self.micros.clone(),
                 was_reset: self.was_reset.clone(),
