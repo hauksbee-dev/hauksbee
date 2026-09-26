@@ -1653,9 +1653,9 @@ IMPORTANT RULES:
    (e.g. an IF-VF or ID-VDS curve) read across its plotted range, saying so in
    the comment with the figure, the points read and their conditions; a curve
    reading is typical only, never a min/max, a rating or an uncertainty interval.
-   A diode is/n/rs fit needs VF points at two, best three, distinct IF a decade or
-   more apart: typ rows, or points read off the typical IF-VF curve, each cited as
-   a typ VF characteristic naming the figure; one row, or max rows alone, never fix it.
+   A diode is/n/rs law gives every printed VF row (typ, else max) within 10%; fit to
+   max rows alone, their basis adds "law fitted to guaranteed maxima, a conservative
+   stand-in for typical". Curve points may fix n outside a sub-decade printed range; rows win.
    A BJT `is` comes only from a forward-active VBE(on) row or curve, lowest IC
    first; never from VBE(sat) (saturated, forced beta) or a high-current point.
    Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
@@ -3350,9 +3350,6 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
         bail!("reply for {part} has no model-error record (rule 0)");
     }
     supply_relative_rows(entry.source.as_ref())?;
-    if let Some(why) = crate::param_names::underfit(entry) {
-        bail!("{why}");
-    }
     if let Some([is, n, rs]) = crate::param_names::diode_refit(entry) {
         bail!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}");
     }
@@ -3999,8 +3996,10 @@ uncertainty = [
         let off = format!("[[models]]\nid = \"d\"\nkind = \"diode\"\n[models.match]\nvalue_re = \"D\"\n[models.params]\nis = 1e-14\nn = 1.0\nrs = 0.0\n{MODEL_SOURCE}{rows}");
         let error = parse_and_validate_reply(&off, "D", "diode").unwrap_err();
         assert!(format!("{error:#}").contains("over 10% off"), "{error:#}");
-        let thin = parse_and_validate_reply(&off.replace(&rows, &vf(1000.0)), "D", "diode");
-        assert!(format!("{:#}", thin.unwrap_err()).contains("rest on 1 cited VF point"));
+        // Two rows 3× apart are refit through both, so a law off them is refused.
+        let thin = off.replace(&rows, &(vf(10.0) + &vf(30.0)));
+        let thin = parse_and_validate_reply(&thin, "D", "diode").unwrap_err();
+        assert!(format!("{thin:#}").contains("over 10% off"), "{thin:#}");
         let fixed = Reply::Model {
             part: "D",
             kind: "diode",

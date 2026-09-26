@@ -507,8 +507,9 @@ fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
     out
 }
 
-/// A diode is/n/rs on too few VF points ([`underfit`]), on max rows only, or
-/// over 10% off a cited VF row; or a bf outside every hFE row.
+/// A diode is/n/rs over 10% off any VF row on the card (typ, else max), or
+/// fitted to max rows alone without its basis saying so; or a bf outside every
+/// hFE row.
 /// Gain groups: a card its id or orderable codes pin to one (a row whose
 /// parameter words end a code, `hFE group B` for `…B`) answers to that group's
 /// rows; one pinning none, over hFE rows printed per group, must split.
@@ -534,27 +535,14 @@ fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
         return off.then(|| format!("bf = {bf} is outside the printed min..max of {whose}"));
     }
     let law = diode_law(entry).filter(|_| entry.kind == ComponentKind::Diode)?;
-    let points = vf_points(rows)?;
-    let (miss, i, v) = worst_miss(law, &points);
+    let (miss, i, v) = worst_miss(law, &vf_points(rows)?);
+    let vf: Vec<_> = rows.iter().filter(|r| symbol(r, "VF")).collect();
+    let mut bases = entry.params.rows().map(|r| r.1).chain(vf.iter().copied());
+    let hedged = bases.any(|r| r.basis.contains("guaranteed maxima"));
+    let max_only = !vf.is_empty() && !hedged && vf.iter().all(|r| r.typ.is_none());
+    let max_only = max_only.then(|| "diode is/n/rs are fitted to max VF rows alone: say so in their basis (law fitted to guaranteed maxima, a conservative stand-in for typical)".into());
     let at = diode_vf(law, i);
-    let max_only = !points.is_empty() && rows.iter().all(|r| !symbol(r, "VF") || r.typ.is_none());
-    let max_only = max_only.then(|| "diode is/n/rs are a max-only fit: a max VF is a guaranteed bound, not typical behaviour; fit typ VF rows or points read off the typical IF-VF curve".into());
-    underfit(entry).or(max_only).or_else(|| (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a cited VF row prints {v} V, over 10% off")))
-}
-
-/// A diode card's is/n/rs resting on cited VF points at under two distinct
-/// currents a decade apart: three unknowns underdetermined, refused on save.
-pub(crate) fn underfit(entry: &ModelEntry) -> Option<String> {
-    let law = diode_law(entry).filter(|_| entry.kind == ComponentKind::Diode);
-    let points = vf_points(cited_rows(entry)).filter(|p| !p.is_empty() && law.is_some())?;
-    let (count, span) = (points.len(), if_span(&points));
-    (span < 10.0).then(|| format!("diode is/n/rs rest on {count} cited VF point(s) spanning {span:.1}× in IF: three unknowns need VF points at two, best three, distinct currents a decade or more apart; cite typ VF rows or points read off the typical IF-VF curve"))
-}
-
-/// The highest over the lowest current among `points` (0 when there are none).
-fn if_span(points: &[(f64, f64)]) -> f64 {
-    let currents = points.iter().map(|p| p.0);
-    currents.clone().fold(0.0, f64::max) / currents.fold(f64::INFINITY, f64::min)
+    (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a VF row on the card prints {v} V, over 10% off")).or(max_only)
 }
 
 /// A `gain` 10 dB (3.16×) or more off every printed column of every cited
@@ -778,20 +766,17 @@ fn worst_miss(law: [f64; 3], points: &[(f64, f64)]) -> (f64, f64, f64) {
 }
 
 /// Cited `(IF, VF)` in A and V: VF rows at the IF their conditions name, at 25 °C
-/// or unstated; their typs alone where those span a decade, else each row's typ,
-/// else max (the column a curated card fits without typ).
+/// or unstated, read typ, else max (the column a curated card fits without typ).
 fn vf_points(rows: &[Characteristic]) -> Option<Vec<(f64, f64)>> {
     let current = regex::Regex::new(r"\bI_?F\s*[=≈:]?\s*(\d*\.?\d+)\s*([µμu]?A|mA)\b").ok()?;
-    let point = |row: &Characteristic, column: Option<f64>| {
+    let point = |row: &Characteristic| {
         let c = current.captures(&row.conditions).filter(|_| at_25(row))?;
         let i = c[1].parse::<f64>().ok()? * crate::units::scale_between(&c[2], "A")?;
-        let v = column? * crate::units::scale_between(&row.unit, "V")?;
+        let v = row.typ.or(row.max)? * crate::units::scale_between(&row.unit, "V")?;
         (i > 0.0).then_some((i, v))
     };
     let vf = rows.iter().filter(|r| symbol(r, "VF"));
-    let typ: Vec<_> = vf.clone().filter_map(|r| point(r, r.typ)).collect();
-    let all = vf.filter_map(|r| point(r, r.typ.or(r.max))).collect();
-    Some(if if_span(&typ) >= 10.0 { typ } else { all })
+    Some(vf.filter_map(point).collect())
 }
 
 /// Slope and intercept of `y` on `x`, by least squares.
@@ -804,9 +789,8 @@ fn line(x: &[f64], y: &[f64]) -> (f64, f64) {
 }
 
 /// `VF = n·VT·ln(IF/is) + IF·rs` is linear in `ln IF` and `IF`: `rs` is the `IF`
-/// coefficient by Frisch-Waugh (3+ points over two decades, else 0), then
-/// `VF - IF·rs` gives n and is. `None` unless the points span a decade (as
-/// [`underfit`] asks), and the law is physical and within 10%.
+/// coefficient by Frisch-Waugh (3+ points over two decades, ln 100 = 4.6, else 0),
+/// then `VF - IF·rs` gives n and is. `None` unless physical and within 10%.
 fn diode_fit(points: &[(f64, f64)]) -> Option<[f64; 3]> {
     let (i, v): (Vec<f64>, Vec<f64>) = points.iter().copied().unzip();
     let ln: Vec<f64> = i.iter().map(|x| x.ln()).collect();
@@ -817,13 +801,13 @@ fn diode_fit(points: &[(f64, f64)]) -> Option<[f64; 3]> {
     let (ri, rv) = (residual(&i), residual(&v));
     let fw =
         ri.iter().zip(&rv).map(|(a, b)| a * b).sum::<f64>() / ri.iter().map(|a| a * a).sum::<f64>();
-    let spans = points.len() >= 3 && if_span(points) >= 100.0;
+    let spans = points.len() >= 3 && ln.iter().any(|a| ln.iter().any(|b| a - b >= 4.6));
     let rs = if spans { fw.max(0.0) } else { 0.0 };
     let drop: Vec<f64> = v.iter().zip(&i).map(|(v, i)| v - i * rs).collect();
     let (a, b) = line(&ln, &drop);
     let law = [(-b / a).exp(), a / hauksbee_ir::thermal_voltage_c(27.0), rs];
     let physical = (1e-30..=1e-3).contains(&law[0]) && (0.5..=3.0).contains(&law[1]);
-    (if_span(points) >= 10.0 && physical && worst_miss(law, points).0 <= 0.1).then_some(law)
+    (points.len() >= 2 && physical && worst_miss(law, points).0 <= 0.1).then_some(law)
 }
 
 /// The fit an executable diode card must take: its law is absent or over 10% off
@@ -1258,34 +1242,41 @@ mod tests {
         }
     }
 
-    /// A source block of `+`-joined rows, each `parameter ; columns ; unit ; conditions`.
+    /// A source block of `+`-joined rows, each `parameter ; columns ; unit ;
+    /// conditions`, then `; basis` if not `b`.
     fn cited(rows: &str) -> String {
         let row = |spec: &str| {
-            let [p, cols, unit, conditions] = spec.split(" ; ").collect::<Vec<_>>()[..] else {
+            let [p, cols, unit, conditions, ref basis @ ..] =
+                spec.split(" ; ").collect::<Vec<_>>()[..]
+            else {
                 panic!("{spec}")
             };
+            let basis = basis.first().unwrap_or(&"b");
             let (cols, head) = (cols.replace(", ", "\n"), "[[models.source.characteristic]]");
-            let tail = format!("unit = \"{unit}\"\nconditions = \"{conditions}\"\nbasis = \"b\"\n");
+            let tail =
+                format!("unit = \"{unit}\"\nconditions = \"{conditions}\"\nbasis = \"{basis}\"\n");
             format!("{head}\nparameter = \"{p}\"\n{cols}\n{tail}")
         };
         let rows: String = rows.split(" + ").map(row).collect();
         format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}")
     }
 
-    /// Each flagged beside a legal control: a diode law on one VF point, under a
-    /// decade or max rows only (the first also refused on save); a gain off its
+    /// Each flagged beside a legal control: a diode law over 10% off a printed VF
+    /// row (typ, else max), or on max rows alone with no hedge in a basis; a gain off its
     /// AOL row once dB, V/mV or V/V is converted; a channel's param on another
     /// channel's row. Case: kind | params | rows | warning (empty: clean).
     #[test]
     #[rustfmt::skip]
-    fn thin_diode_fits_gain_unit_slips_and_swapped_channel_rows_are_flagged() {
+    fn diode_fits_gain_unit_slips_and_swapped_channel_rows_are_flagged() {
         let vf = |col: &str, ma: f64| format!("VF ; {col} = {} ; V ; IF = {ma} mA", diode_vf([1e-9, 1.8, 0.2], ma / 1e3));
         let (law, ron) = ("is = 1e-9\nn = 1.8\nrs = 0.2", "RON IN1 to OUT1 ; typ = 90 ; mΩ ; VIN2 = 5 V");
+        let hedge = "Table 2, max; law fitted to guaranteed maxima, a conservative stand-in for typical";
         let ilim = "ILIM channel A ; typ = 1.5 ; A ; - + ILIM channel B ; typ = 2 ; A ; -";
         for case in [
-            format!("diode | {law} | {} | rest on 1 cited VF point(s) spanning 1.0×", vf("max", 1000.0)),
-            format!("diode | {law} | {} + {} | rest on 2 cited VF point(s) spanning 5.0×", vf("typ", 1.0), vf("typ", 5.0)),
-            format!("diode | {law} | {} | a max-only fit", [1.0, 10.0, 100.0].map(|i| vf("max", i)).join(" + ")),
+            format!("diode | {law} | {} ; {hedge} + {} | ", vf("max", 1000.0), vf("max", 3000.0)),
+            format!("diode | {law} | {} + {} | fitted to max VF rows alone", vf("max", 1000.0), vf("max", 3000.0)),
+            format!("diode | {law} | {} + {} + VF ; max = {} ; V ; IF = 1 A | IF = 1 A where a VF row", vf("typ", 10.0), vf("typ", 100.0), 1.2 * diode_vf([1e-9, 1.8, 0.2], 1.0)),
+            format!("diode | is = 2.6e-4\nn = 2.0\nrs = 0.2 | {} ; {hedge} + {} ; {hedge} | over 10% off", vf("max", 1000.0), vf("max", 3000.0)),
             format!("diode | {law} | {} + {} | ", vf("max", 1.0), [1.0, 10.0, 100.0].map(|i| vf("typ", i)).join(" + ")),
             "opamp | gain = 1e8 | AOL ; typ = 100 ; dB ; RL = 2 kΩ | prints 100 dB = 1.0000e5 V/V".into(),
             "opamp | gain = 1e5 | AOL ; min = 90, typ = 100 ; dB ; RL = 2 kΩ | ".into(),
@@ -1303,7 +1294,6 @@ mod tests {
             let e = entry(kind, params, &cited(rows));
             let found = source_warnings(&e);
             assert!(found.len() == usize::from(!want.is_empty()) && found.iter().all(|w| w.contains(want)), "{case}: {found:?}");
-            assert_eq!(underfit(&e).is_some(), want.starts_with("rest on"), "{case}");
         }
     }
 
