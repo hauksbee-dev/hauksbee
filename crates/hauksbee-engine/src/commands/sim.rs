@@ -555,6 +555,7 @@ fn decode_deck_text(bytes: Vec<u8>) -> Result<String, &'static str> {
 
 /// RFC-4180 escape a CSV field (a differential probe label `V(out,ref)`
 /// carries a comma).
+#[must_use]
 pub fn csv_escape(field: &str) -> std::borrow::Cow<'_, str> {
     if field.contains([',', '"', '\n', '\r']) {
         std::borrow::Cow::Owned(format!("\"{}\"", field.replace('"', "\"\"")))

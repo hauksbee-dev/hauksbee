@@ -192,9 +192,9 @@ fn lint_json(
     if !blockers.is_empty() {
         jr.push_coverage_note(crate::result::inconclusive_verdict(blockers));
     }
-    straps
-        .iter()
-        .for_each(|line| jr.push_coverage_note(line.as_str()));
+    for line in straps {
+        jr.push_coverage_note(line.as_str());
+    }
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
         message: format!("pin-role guess {r}: {g}"),
