@@ -583,7 +583,7 @@ impl Transient {
                 if let Some(prev) = x_accepted_prev.as_ref() {
                     let scale = (h / h_prev_accepted).min(PRED_MAX_SCALE);
                     for i in 0..ws.x.len() {
-                        ws.x[i] = x_accepted[i] + scale * (x_accepted[i] - prev[i]);
+                        ws.x[i] = scale.mul_add(x_accepted[i] - prev[i], x_accepted[i]);
                     }
                 }
             }
@@ -1108,7 +1108,7 @@ fn lte_estimate(
         let (x_new, x1, x2) = (r.value, x1[r.dev], x2[r.dev]);
         let dd2 = 2.0 * ((x_new - x1) / h - (x1 - x2) / hp) / (h + hp);
         let curv = (h * h * dd2).abs();
-        let tol = opts.reltol * x_new.abs().max(x1.abs()) + r.atol;
+        let tol = opts.reltol.mul_add(x_new.abs().max(x1.abs()), r.atol);
         worst = worst.max((curv / 12.0) / tol.max(1e-30));
     });
     worst

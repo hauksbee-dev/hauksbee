@@ -117,7 +117,7 @@ pub fn max_deviation(a: &Waveforms, b: &Waveforms, reltol: f64, vntol: f64) -> (
         for (&va, &vb) in wa.iter().zip(wb.iter()) {
             assert!(va.is_finite() && vb.is_finite(), "non-finite sample");
             let err = (va - vb).abs();
-            let bound = reltol * va.abs().max(vb.abs()) + vntol;
+            let bound = reltol.mul_add(va.abs().max(vb.abs()), vntol);
             max_abs = max_abs.max(err);
             worst_ratio = worst_ratio.max(err / bound);
         }
@@ -133,7 +133,7 @@ pub fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
         Err(i) if i >= times.len() => *vals.last().unwrap(),
         Err(i) => {
             let (t0, t1) = (times[i - 1], times[i]);
-            vals[i - 1] + (t - t0) / (t1 - t0) * (vals[i] - vals[i - 1])
+            ((t - t0) / (t1 - t0)).mul_add(vals[i] - vals[i - 1], vals[i - 1])
         }
     }
 }

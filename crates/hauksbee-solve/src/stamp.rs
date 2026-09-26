@@ -103,7 +103,7 @@ impl IntegCoeffs {
                 // the sign flip of the middle/last weights.
                 let r = if dt_prev > 0.0 { dt / dt_prev } else { 1.0 };
                 Self {
-                    g: (1.0 + 2.0 * r) / ((1.0 + r) * dt),
+                    g: 2.0f64.mul_add(r, 1.0) / ((1.0 + r) * dt),
                     a1: (1.0 + r) / dt,
                     a2: (r * r) / ((1.0 + r) * dt),
                     dt,
@@ -754,7 +754,7 @@ pub fn behavioral_eval_partials(
             hauksbee_ir::BDep::Branch(_) => opts.abstol,
         };
         let x0 = vals[k];
-        let delta = opts.reltol * x0.abs() + floor;
+        let delta = opts.reltol.mul_add(x0.abs(), floor);
         vals[k] = x0 + delta;
         let fk = expr.eval(vals, time);
         vals[k] = x0;
@@ -891,7 +891,7 @@ fn stamp_behavioral<S: StampSink>(
 fn resistor_value(ohms: f64, tc1: Option<f64>, ctx: &StampCtx) -> f64 {
     match tc1 {
         Some(tc) if ctx.opts.effects.temperature => {
-            ohms * (1.0 + tc * (ctx.opts.model_temp() - 27.0))
+            ohms * tc.mul_add(ctx.opts.model_temp() - 27.0, 1.0)
         }
         _ => ohms,
     }
@@ -937,11 +937,11 @@ fn stamp_capacitor<S: StampSink>(
     let ieq = match ctx.opts.integration {
         Integration::Trapezoidal => {
             // i = geq*v - (geq*v_prev + i_prev), with i_prev = C*dv_prev.
-            geq * v_prev + c * dv_prev
+            geq.mul_add(v_prev, c * dv_prev)
         }
         Integration::Gear2 => {
             let v_prev2 = ctx.state.x2[id.0 as usize];
-            c * (ctx.coeffs.a1 * v_prev - ctx.coeffs.a2 * v_prev2)
+            c * ctx.coeffs.a1.mul_add(v_prev, -(ctx.coeffs.a2 * v_prev2))
         }
         Integration::BackwardEuler => c * ctx.coeffs.a1 * v_prev,
     };
@@ -1000,10 +1000,10 @@ fn stamp_inductor<S: StampSink>(
     let i_prev = ctx.state.x1[id.0 as usize];
     let di_prev = ctx.state.dx1[id.0 as usize];
     let veq = match ctx.opts.integration {
-        Integration::Trapezoidal => req * i_prev + l * di_prev,
+        Integration::Trapezoidal => req.mul_add(i_prev, l * di_prev),
         Integration::Gear2 => {
             let i_prev2 = ctx.state.x2[id.0 as usize];
-            l * (ctx.coeffs.a1 * i_prev - ctx.coeffs.a2 * i_prev2)
+            l * ctx.coeffs.a1.mul_add(i_prev, -(ctx.coeffs.a2 * i_prev2))
         }
         Integration::BackwardEuler => l * ctx.coeffs.a1 * i_prev,
     };
@@ -1031,12 +1031,15 @@ fn stamp_inductor<S: StampSink>(
             .expect("coupled winding owns a branch unknown");
         sink.g(br, pbr, -(m * ctx.coeffs.g));
         let veq_m = match ctx.opts.integration {
-            Integration::Trapezoidal => {
-                m * ctx.coeffs.g * ctx.state.x1[pid.0 as usize] + m * ctx.state.dx1[pid.0 as usize]
-            }
+            Integration::Trapezoidal => (m * ctx.coeffs.g).mul_add(
+                ctx.state.x1[pid.0 as usize],
+                m * ctx.state.dx1[pid.0 as usize],
+            ),
             Integration::Gear2 => {
-                m * (ctx.coeffs.a1 * ctx.state.x1[pid.0 as usize]
-                    - ctx.coeffs.a2 * ctx.state.x2[pid.0 as usize])
+                m * ctx.coeffs.a1.mul_add(
+                    ctx.state.x1[pid.0 as usize],
+                    -(ctx.coeffs.a2 * ctx.state.x2[pid.0 as usize]),
+                )
             }
             Integration::BackwardEuler => m * ctx.coeffs.a1 * ctx.state.x1[pid.0 as usize],
         };
@@ -1147,7 +1150,7 @@ fn pnjlim(vnew: f64, vold: f64, vt: f64, vcrit: f64) -> f64 {
         if vold > 0.0 {
             let arg = 1.0 + (vnew - vold) / vt;
             if arg > 0.0 {
-                vold + vt * arg.ln()
+                vt.mul_add(arg.ln(), vold)
             } else {
                 vcrit
             }
@@ -1214,7 +1217,7 @@ pub fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -> (f64,
         let ibv = model.ibv.filter(|v| *v > 0.0).unwrap_or(is);
         let e = (-(model.bv + vd) / nvt).min(40.0).exp();
         let id = -(is + ibv * e);
-        let gd = is / nvt * 1e-3 + ibv * e / nvt;
+        let gd = (is / nvt).mul_add(1e-3, ibv * e / nvt);
         (id, gd)
     }
 }
@@ -1293,14 +1296,15 @@ pub fn depletion_charge(cjo: f64, vj: f64, m: f64, fc: f64, vd: f64) -> (f64, f6
         (q, c)
     } else {
         let f2 = (1.0 - fc).powf(1.0 + m);
-        let f3 = 1.0 - fc * (1.0 + m);
+        let f3 = fc.mul_add(-(1.0 + m), 1.0);
         let f1 = if (1.0 - m).abs() < 1e-9 {
             -vj * (1.0 - fc).ln()
         } else {
             vj * (1.0 - (1.0 - fc).powf(1.0 - m)) / (1.0 - m)
         };
         let c = cjo * (f3 + m * vd / vj) / f2;
-        let q = cjo * (f1 + (f3 * (vd - fcv) + (m / (2.0 * vj)) * (vd * vd - fcv * fcv)) / f2);
+        let q =
+            cjo * (f1 + (f3 * (vd - fcv) + (m / (2.0 * vj)) * vd.mul_add(vd, -(fcv * fcv))) / f2);
         (q, c)
     }
 }
@@ -1501,13 +1505,13 @@ pub fn mos_channel(
     let u = vov / two_nvt;
     let vov_eff = two_nvt * softplus(u);
     let dvov = sigmoid(u); // d vov_eff / d vgs, the C1 chain factor
-    let clm = 1.0 + lambda * vds;
+    let clm = lambda.mul_add(vds, 1.0);
     if vds < vov_eff {
         // Triode (vov_eff > 0 always, so vds -> 0 lands here: id -> 0, no
         // phantom subthreshold current across a zero-bias channel).
         let id = beta * (vov_eff * vds - 0.5 * vds * vds) * clm;
         let gm = beta * vds * clm * dvov;
-        let gds = beta * ((vov_eff - vds) * clm + (vov_eff * vds - 0.5 * vds * vds) * lambda);
+        let gds = beta * (vov_eff - vds).mul_add(clm, (vov_eff * vds - 0.5 * vds * vds) * lambda);
         (id, gm.max(gmin), gds.max(gmin))
     } else {
         // Saturation; the subthreshold exponential is this branch's
@@ -1725,7 +1729,7 @@ fn stamp_diode<S: StampSink>(
     // unlimited forward branch would. `bv == INFINITY` (the default) makes
     // the region test unsatisfiable, keeping every deck without a breakdown
     // voltage on the plain pnjlim path.
-    let mut vd = if model.bv.is_finite() && vd_raw < (10.0 * nvt - model.bv).min(0.0) {
+    let mut vd = if model.bv.is_finite() && vd_raw < 10.0f64.mul_add(nvt, -model.bv).min(0.0) {
         -(pnjlim(-(vd_raw + model.bv), -(vd_last + model.bv), nvt, vc_bd) + model.bv)
     } else {
         pnjlim(vd_raw, vd_last, nvt, vc)
@@ -1757,7 +1761,7 @@ fn stamp_diode<S: StampSink>(
     let (idc, gd_raw) = diode_eval(model, vd, t_c, temp_on);
     let gd = gd_raw.max(ctx.opts.gmin);
     // Newton equivalent current: ieq = id - gd*vd.
-    let ieq = idc - gd * vd;
+    let ieq = gd.mul_add(-vd, idc);
     stamp_cond_idx(sink, a_eff, k_i, gd);
     stamp_current_idx(sink, a_eff, k_i, ieq);
 
@@ -1784,12 +1788,15 @@ fn stamp_diode<S: StampSink>(
     let sl = id.0 as usize;
     let q_prev = ctx.state.x1[sl];
     let ieq_hist = match ctx.opts.integration {
-        Integration::Trapezoidal => ctx.coeffs.g * q_prev + ctx.state.dx1[sl],
-        Integration::Gear2 => ctx.coeffs.a1 * q_prev - ctx.coeffs.a2 * ctx.state.x2[sl],
+        Integration::Trapezoidal => ctx.coeffs.g.mul_add(q_prev, ctx.state.dx1[sl]),
+        Integration::Gear2 => ctx
+            .coeffs
+            .a1
+            .mul_add(q_prev, -(ctx.coeffs.a2 * ctx.state.x2[sl])),
         Integration::BackwardEuler => ctx.coeffs.a1 * q_prev,
     };
     let geq = ctx.coeffs.g * c;
-    let ieq_q = (ctx.coeffs.g * q - ieq_hist) - geq * vd;
+    let ieq_q = geq.mul_add(-vd, ctx.coeffs.g.mul_add(q, -ieq_hist));
     stamp_cond_idx(sink, a_eff, k_i, geq);
     stamp_current_idx(sink, a_eff, k_i, ieq_q);
 }
@@ -1938,7 +1945,7 @@ fn stamp_bjt<S: StampSink>(
     } else {
         0.0
     };
-    let sq = (1.0 + 4.0 * q2).sqrt();
+    let sq = 4.0f64.mul_add(q2, 1.0).sqrt();
     let qbfac = 2.0 / (1.0 + sq);
     let q1_inv = q1_inv_early * qbfac; // = 1/qb
 
@@ -2046,7 +2053,7 @@ fn stamp_bjt<S: StampSink>(
         // gif·q1_inv (gmin-floored like the legacy path) plus the VAR term,
         // each Early partial scaled by qbfac since the two factors multiply.
         let gc_be = gm + var_deriv * qbfac + knee_be;
-        let gc_bc = -gir * q1_inv - gmu + early_deriv * qbfac + knee_bc;
+        let gc_bc = (-gir).mul_add(q1_inv, -gmu) + early_deriv * qbfac + knee_bc;
         // Row c: gc_be·vbe + gc_bc·vbc; row b: gpi·vbe + gmu·vbc; row e is
         // minus their sum (KCL). Each junction-voltage dependence is a
         // transconductance from the terminal pair into (b, x).
@@ -2083,26 +2090,34 @@ fn stamp_bjt<S: StampSink>(
     // the conductance stamp is polarity-free (sign² = 1) while the RHS
     // residual folds, mirroring the DC bracket above.
     let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
-        Integration::Trapezoidal => ctx.coeffs.g * x1 + dx1,
-        Integration::Gear2 => ctx.coeffs.a1 * x1 - ctx.coeffs.a2 * x2,
+        Integration::Trapezoidal => ctx.coeffs.g.mul_add(x1, dx1),
+        Integration::Gear2 => ctx.coeffs.a1.mul_add(x1, -(ctx.coeffs.a2 * x2)),
         Integration::BackwardEuler => ctx.coeffs.a1 * x1,
     };
     let geq_be = ctx.coeffs.g * c_be;
-    let ieq_be = (ctx.coeffs.g * q_be
-        - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
-        - geq_be * vbe;
+    let ieq_be = geq_be.mul_add(
+        -vbe,
+        ctx.coeffs.g.mul_add(
+            q_be,
+            -hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]),
+        ),
+    );
     stamp_cond_idx(sink, bi, ei, geq_be);
     inject(sink, bi, -sign * ieq_be);
     inject(sink, ei, sign * ieq_be);
 
     let geq_bc = ctx.coeffs.g * c_bc;
-    let ieq_bc = (ctx.coeffs.g * q_bc
-        - hist(
-            ctx.state.xb[0].x1[sl],
-            ctx.state.xb[0].dx1[sl],
-            ctx.state.xb[0].x2[sl],
-        ))
-        - geq_bc * vbc;
+    let ieq_bc = geq_bc.mul_add(
+        -vbc,
+        ctx.coeffs.g.mul_add(
+            q_bc,
+            -hist(
+                ctx.state.xb[0].x1[sl],
+                ctx.state.xb[0].dx1[sl],
+                ctx.state.xb[0].x2[sl],
+            ),
+        ),
+    );
     stamp_cond_idx(sink, bi, ci, geq_bc);
     inject(sink, bi, -sign * ieq_bc);
     inject(sink, ci, sign * ieq_bc);
@@ -2198,13 +2213,13 @@ fn stamp_mosfet<S: StampSink>(
         let arg = phi - vbs_f;
         if arg > 0.0 {
             let sq = arg.sqrt();
-            vth = model.vto + model.gamma * (sq - phi.sqrt());
+            vth = model.gamma.mul_add(sq - phi.sqrt(), model.vto);
             // Guard the sqrt singularity at vbs -> phi: cap the derivative at
             // the value it has 1 mV short of the pole (vth itself stays exact).
             dvth_dvbs = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
         } else {
             // Forward-biased bulk clamped at phi: threshold floor, no slope.
-            vth = model.vto + model.gamma * (0.0 - phi.sqrt());
+            vth = model.gamma.mul_add(0.0 - phi.sqrt(), model.vto);
         }
     }
 
@@ -2230,7 +2245,7 @@ fn stamp_mosfet<S: StampSink>(
     add_transconductance(sink, dn, sn, gi, sn, gm);
 
     // Equivalent current: id_eq = ids - gm*vgs - gds*vds, flowing d->s.
-    let mut ieq = ids - gm * vgs - gds * vds;
+    let mut ieq = gds.mul_add(-vds, gm.mul_add(-vgs, ids));
     if body_effect {
         // Bulk transconductance gmb = d ids / d vbs = -gm · d vth / d vbs:
         // the drain current additionally depends on the bulk-to-effective-
@@ -2249,8 +2264,8 @@ fn stamp_mosfet<S: StampSink>(
     // below; the diode's companion verbatim (slots hold CHARGE in
     // x1/x2, dQ/dt in dx1; the discrete current is coeffs.g·Q(v) - hist).
     let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
-        Integration::Trapezoidal => ctx.coeffs.g * x1 + dx1,
-        Integration::Gear2 => ctx.coeffs.a1 * x1 - ctx.coeffs.a2 * x2,
+        Integration::Trapezoidal => ctx.coeffs.g.mul_add(x1, dx1),
+        Integration::Gear2 => ctx.coeffs.a1.mul_add(x1, -(ctx.coeffs.a2 * x2)),
         Integration::BackwardEuler => ctx.coeffs.a1 * x1,
     };
     let sl = id.0 as usize;
@@ -2307,7 +2322,12 @@ fn stamp_mosfet<S: StampSink>(
                 let (q, c) = depletion_charge(cbx, model.pb, model.mj, DIODE_FC, vj);
                 let bk = &ctx.state.xb[bank];
                 let geq = ctx.coeffs.g * c;
-                let ieq_c = (ctx.coeffs.g * q - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq * vj;
+                let ieq_c = geq.mul_add(
+                    -vj,
+                    ctx.coeffs
+                        .g
+                        .mul_add(q, -hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])),
+                );
                 stamp_cond_idx(sink, bulk_i, term_i, geq);
                 inject(sink, bulk_i, -sign * ieq_c);
                 inject(sink, term_i, sign * ieq_c);
@@ -2333,9 +2353,13 @@ fn stamp_mosfet<S: StampSink>(
         let vgd_p = sign * (ctx.v(gnode) - vx(d_eff));
         let (q_gs, c_gs) = mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs_p);
         let geq_gs = ctx.coeffs.g * c_gs;
-        let ieq_gs = (ctx.coeffs.g * q_gs
-            - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
-            - geq_gs * vgs_p;
+        let ieq_gs = geq_gs.mul_add(
+            -vgs_p,
+            ctx.coeffs.g.mul_add(
+                q_gs,
+                -hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]),
+            ),
+        );
         stamp_cond_idx(sink, gi, s_eff, geq_gs);
         inject(sink, gi, -sign * ieq_gs);
         inject(sink, s_eff, sign * ieq_gs);
@@ -2343,8 +2367,12 @@ fn stamp_mosfet<S: StampSink>(
         let (q_gd, c_gd) = mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd_p);
         let bk = &ctx.state.xb[0];
         let geq_gd = ctx.coeffs.g * c_gd;
-        let ieq_gd =
-            (ctx.coeffs.g * q_gd - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq_gd * vgd_p;
+        let ieq_gd = geq_gd.mul_add(
+            -vgd_p,
+            ctx.coeffs
+                .g
+                .mul_add(q_gd, -hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])),
+        );
         stamp_cond_idx(sink, gi, d_eff, geq_gd);
         inject(sink, gi, -sign * ieq_gd);
         inject(sink, d_eff, sign * ieq_gd);
@@ -2415,7 +2443,7 @@ pub fn vswitch_ramp(
     // 10, and 819 MOhm at vctrl=0 against a stated 1e9). Zero slope at both ends
     // means a switch outside its band contributes no spurious control tangent and
     // Newton sees no kink where the clamp engages.
-    let s = q * q * (3.0 - 2.0 * q);
+    let s = q * q * 2.0f64.mul_add(-q, 3.0);
     let ds_dvctrl = 6.0 * q * (1.0 - q) / width;
     (s, ds_dvctrl, ramp_off, ramp_on)
 }
@@ -2424,7 +2452,7 @@ pub fn vswitch_ramp(
 pub fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
     let gon = 1.0 / ron.max(1e-12);
     let goff = 1.0 / roff.max(1e-12);
-    (goff.ln() + s * (gon.ln() - goff.ln())).exp()
+    s.mul_add(gon.ln() - goff.ln(), goff.ln()).exp()
 }
 
 /// Which threshold of a hysteretic relay is live, or `None` for the smooth model
@@ -2570,7 +2598,7 @@ fn stamp_vswitch<S: StampSink>(
         }
     }
 
-    let gln = lgoff + s * (lgon - lgoff);
+    let gln = s.mul_add(lgon - lgoff, lgoff);
     let gsw = gln.exp();
 
     // Conductance stamp between the through nodes (a, b).
@@ -2676,7 +2704,7 @@ pub fn opamp_transient_output(
     };
     // Lag the RAW target, then saturate; ∂v_out/∂target is α while the output
     // is free and 0 the moment a rail or the slew clip pins it.
-    let lagged = v_prev + (target - v_prev) * alpha;
+    let lagged = (target - v_prev).mul_add(alpha, v_prev);
     let free = lagged > rails.0 && lagged < rails.1;
     let mut v_out = lagged.clamp(rails.0, rails.1);
     let mut dscale = if free { alpha } else { 0.0 };
@@ -2723,7 +2751,7 @@ fn stamp_opamp<S: StampSink>(
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     let vref = reference.map_or(0.0, |n| ctx.v(n));
-    let raw = vref + gain * (vp - vn);
+    let raw = gain.mul_add(vp - vn, vref);
     let target = raw.clamp(rail_lo, rail_hi);
     // Linearize: out = target + gain*(d vp - d vn) within rails.
     let in_rail = target > rail_lo && target < rail_hi;
@@ -2746,7 +2774,7 @@ fn stamp_opamp<S: StampSink>(
         let vp0 = ctx.v_prev(inp);
         let vn0 = ctx.v_prev(inn);
         let vref0 = reference.map_or(0.0, |n| ctx.v_prev(n));
-        let raw0 = vref0 + gain * (vp0 - vn0);
+        let raw0 = gain.mul_add(vp0 - vn0, vref0);
         (raw >= rail_hi && raw0 <= rail_lo) || (raw <= rail_lo && raw0 >= rail_hi)
     };
     // On a crossing the EMF is the raw target: the RHS then cancels against
@@ -2862,7 +2890,7 @@ fn stamp_comparator<S: StampSink>(
         let kd = (k * d).clamp(-40.0, 40.0);
         let e = (-kd).exp();
         let sig = 1.0 / (1.0 + e); // logistic in (0,1)
-        let target = out_lo + span * sig;
+        let target = span.mul_add(sig, out_lo);
         let dsig = k * sig * (1.0 - sig);
         let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
         if let Some(oi) = ctx.layout.node(out) {
@@ -3090,17 +3118,17 @@ mod tests {
         let nvt = m.n * hauksbee_ir::thermal_voltage_c(27.0);
         let (i_at, _) = diode_eval(&m, -6.2, 27.0, false);
         assert!(
-            (i_at + 2.0 * m.is).abs() < 1e-3 * m.is,
+            2.0f64.mul_add(m.is, i_at).abs() < 1e-3 * m.is,
             "leakage plus a full-scale exponential at -bv: {i_at:e}"
         );
         let (i_below, _) = diode_eval(&m, -6.2 - 1e-6, 27.0, false);
         assert!((i_below - i_at).abs() < 1e-3 * m.is, "step at -bv");
-        let (i_past, g_past) = diode_eval(&m, -6.2 - 5.0 * nvt, 27.0, false);
+        let (i_past, g_past) = diode_eval(&m, 5.0f64.mul_add(-nvt, -6.2), 27.0, false);
         assert!(i_past < 0.0 && g_past > 0.0);
-        assert!((i_past + m.is * (1.0 + 5.0f64.exp())).abs() < 1e-6 * m.is * 5.0f64.exp());
+        assert!(m.is.mul_add(1.0 + 5.0f64.exp(), i_past).abs() < 1e-6 * m.is * 5.0f64.exp());
         let (i_deep, g_deep) = diode_eval(&m, -1e6, 27.0, false);
         assert!(i_deep.is_finite() && g_deep.is_finite());
-        assert!((i_deep + m.is * 40.0f64.exp()).abs() < 1e-6 * m.is * 40.0f64.exp());
+        assert!(m.is.mul_add(40.0f64.exp(), i_deep).abs() < 1e-6 * m.is * 40.0f64.exp());
         let m_inf = DiodeModel::default();
         let (i_rev, g_rev) = diode_eval(&m_inf, -100.0, 27.0, false);
         assert_eq!(i_rev, -m_inf.is);
@@ -3330,9 +3358,9 @@ mod tests {
         let q_fin = q_inf - vbe / 15.0;
         assert!(fc_fin.abs() < fc_inf.abs(), "finite VAR must reduce ic");
         assert!((fc_fin / fc_inf - q_fin / q_inf).abs() < 1e-9);
-        let cf = m_inf.is * ((vbe / vt).clamp(-40.0, 40.0).exp() - 1.0);
-        let cr = m_inf.is * ((vbc / vt).clamp(-40.0, 40.0).exp() - 1.0);
-        let ic = (cf - cr) * q_inf - cr / m_inf.br;
+        let cf = m_inf.is * (vbe / vt).clamp(-40.0, 40.0).exp_m1();
+        let cr = m_inf.is * (vbc / vt).clamp(-40.0, 40.0).exp_m1();
+        let ic = (cf - cr).mul_add(q_inf, -(cr / m_inf.br));
         assert!(
             (fc_inf.abs() - ic).abs() < 1e-9 * ic,
             "{} != {ic}",
@@ -3383,7 +3411,7 @@ mod tests {
         ] {
             let nvt: f64 = nsub * vt;
             let f = |vov: f64| mos_channel(beta, nvt, vov, vds, lambda, 0.0);
-            let clm = 1.0 + lambda * vds;
+            let clm = lambda.mul_add(vds, 1.0);
             let h = 1e-4;
             let mut prev = f(-0.3);
             let mut k = 1;
@@ -3391,11 +3419,11 @@ mod tests {
                 let vov = -0.3 + f64::from(k) * h;
                 let cur = f(vov);
                 assert!(
-                    (cur.0 - prev.0).abs() <= prev.1.max(cur.1) * h * 1.5 + 1e-18,
+                    (cur.0 - prev.0).abs() <= (prev.1.max(cur.1) * h).mul_add(1.5, 1e-18),
                     "id jump at vov={vov} (beta={beta})"
                 );
                 assert!(
-                    (cur.1 - prev.1).abs() <= 3.0 * beta * clm * h + 1e-18,
+                    (cur.1 - prev.1).abs() <= (3.0 * beta * clm).mul_add(h, 1e-18),
                     "gm jump at vov={vov} (beta={beta})"
                 );
                 prev = cur;
@@ -3453,7 +3481,7 @@ mod tests {
             let mut vals = vec![v, i];
             let (f0, partials) =
                 behavioral_eval_partials(&expr, &deps, &mut vals, t, &opts).unwrap();
-            let f_true = 2.0 * v + 100.0 * (5.0 * i).tanh() + 0.1 * t;
+            let f_true = 0.1f64.mul_add(t, 2.0f64.mul_add(v, 100.0 * (5.0 * i).tanh()));
             assert!((f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0));
             assert!(
                 ((partials[0] - 2.0) / 2.0).abs() < 1e-9,
@@ -3508,8 +3536,8 @@ mod tests {
             );
         }
 
-        let q = |t: f64| 2.0 + 3.0 * t + 5.0 * t * t;
-        let dq = |t: f64| 3.0 + 10.0 * t;
+        let q = |t: f64| (5.0 * t).mul_add(t, 3.0f64.mul_add(t, 2.0));
+        let dq = |t: f64| 10.0f64.mul_add(t, 3.0);
         for &(h, r) in &[
             (1e-3, 0.25),
             (1e-3, 0.5),
@@ -3522,14 +3550,14 @@ mod tests {
             let tn = 0.4_f64;
             let (t1, t2) = (tn - h, tn - h - h_prev);
             let c = IntegCoeffs::for_step(Integration::Gear2, h, h_prev, false);
-            let got = c.g * q(tn) - (c.a1 * q(t1) - c.a2 * q(t2));
+            let got = c.g.mul_add(q(tn), -c.a1.mul_add(q(t1), -(c.a2 * q(t2))));
             assert!(
                 (got - dq(tn)).abs() <= 1e-9 * dq(tn).abs().max(1.0),
                 "h={h}, r={r}: got {got}, want {}",
                 dq(tn)
             );
             let cu = IntegCoeffs::for_step(Integration::Gear2, h, h, false);
-            let bad = cu.g * q(tn) - (cu.a1 * q(t1) - cu.a2 * q(t2));
+            let bad = cu.g.mul_add(q(tn), -cu.a1.mul_add(q(t1), -(cu.a2 * q(t2))));
             assert!(
                 (bad - dq(tn)).abs() > 1e-6 * dq(tn).abs(),
                 "uniform stencil unexpectedly exact at r={r}"
@@ -3547,7 +3575,7 @@ mod tests {
             while t < 1.0 - 1e-12 {
                 let h = if long { base_h } else { base_h * 0.5 }.min(1.0 - t);
                 let c = IntegCoeffs::for_step(Integration::Gear2, h, h_prev, false);
-                let qn = (c.a1 * q1 - c.a2 * q2) / (c.g + 1.0);
+                let qn = c.a1.mul_add(q1, -(c.a2 * q2)) / (c.g + 1.0);
                 t += h;
                 worst = worst.max((qn - (-t).exp()).abs());
                 q2 = q1;

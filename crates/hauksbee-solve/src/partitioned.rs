@@ -863,7 +863,7 @@ impl PartitionedTransient {
             let mut scatter = |gn: NodeId, vnew: f64| {
                 let ni = gn.0 as usize;
                 let vold = read[ni];
-                let w = (vnew - vold).abs() / (reltol * vnew.abs().max(vold.abs()) + vntol);
+                let w = (vnew - vold).abs() / reltol.mul_add(vnew.abs().max(vold.abs()), vntol);
                 if w > worst {
                     worst = w;
                     worst_node = gn.0;

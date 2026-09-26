@@ -156,7 +156,7 @@ fn interp(res: &NgResult, time: f64) -> f64 {
     if span == 0.0 {
         return res.v[hi];
     }
-    res.v[lo] + (res.v[hi] - res.v[lo]) * ((time - res.t[lo]) / span)
+    (res.v[hi] - res.v[lo]).mul_add((time - res.t[lo]) / span, res.v[lo])
 }
 
 /// Run one vector through both engines; return (max rel error, full scale).

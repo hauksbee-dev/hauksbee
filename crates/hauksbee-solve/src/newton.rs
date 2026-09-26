@@ -1076,7 +1076,8 @@ fn newton_solve_core(
                 // round-off, and backtracking on it is what turned the 555
                 // deck's latch edges into a 63/64-per-iteration crawl.
                 let accept = trial_norm.is_finite()
-                    && (f_norm_lin <= 1.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
+                    && (f_norm_lin <= 1.0
+                        || trial_norm < ARMIJO_C.mul_add(-alpha, 1.0) * f_norm_lin);
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
                     break;
                 }
@@ -1570,7 +1571,7 @@ fn node_block_converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOpt
         if !x[i].is_finite() {
             return false;
         }
-        let tol = opts.reltol * x[i].abs().max(xp[i].abs()) + opts.vntol;
+        let tol = opts.reltol.mul_add(x[i].abs().max(xp[i].abs()), opts.vntol);
         if (x[i] - xp[i]).abs() > tol {
             return false;
         }
@@ -1589,9 +1590,10 @@ fn converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bo
             return false;
         }
         let tol = if i < layout.n_nodes {
-            opts.reltol * x[i].abs().max(xp[i].abs()) + opts.vntol
+            opts.reltol.mul_add(x[i].abs().max(xp[i].abs()), opts.vntol)
         } else {
-            opts.reltol * x[i].abs().max(xp[i].abs()) + opts.abstol
+            opts.reltol
+                .mul_add(x[i].abs().max(xp[i].abs()), opts.abstol)
         };
         if (x[i] - xp[i]).abs() > tol {
             return false;
@@ -2437,7 +2439,7 @@ fn event_solve(
                 if sw_states.get(&id).copied() != Some(want) {
                     let vp = ws.layout.node(*ctrl_p).map_or(0.0, |i| x[i]);
                     let vn = ws.layout.node(*ctrl_n).map_or(0.0, |i| x[i]);
-                    disagree.push((id, want, (vp - vn - 0.5 * (von + voff)).abs()));
+                    disagree.push((id, want, 0.5f64.mul_add(-(von + voff), vp - vn).abs()));
                 }
             }
         }

@@ -162,9 +162,9 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
         let (f1, m1) = (bode[i].0, bode[i].1);
         if m0 > 0.0 && m1 <= 0.0 {
             let frac = m0 / (m0 - m1); // where mag hits 0 dB
-            let lf = f0.log10() + frac * (f1.log10() - f0.log10());
+            let lf = frac.mul_add(f1.log10() - f0.log10(), f0.log10());
             let fc = 10f64.powf(lf);
-            let ph = phase[i - 1] + frac * (phase[i] - phase[i - 1]);
+            let ph = frac.mul_add(phase[i] - phase[i - 1], phase[i - 1]);
             gain_crossover_hz = Some(fc);
             phase_margin_deg = Some(180.0 + ph);
             // No break: keep scanning so the last (highest-frequency) downward
@@ -231,7 +231,7 @@ mod tests {
     /// frequency, in dB / degrees.
     fn single_pole(a0: f64, fp: f64, f: f64) -> (f64, f64, f64) {
         let x = f / fp;
-        let mag = a0 / (1.0 + x * x).sqrt();
+        let mag = a0 / x.mul_add(x, 1.0).sqrt();
         (f, 20.0 * mag.log10(), -x.atan().to_degrees())
     }
 
@@ -342,7 +342,7 @@ mod tests {
         let expect_fc = 10f64.powf(3.0 + 1.0 / 3.0);
         assert!((fc - expect_fc).abs() / expect_fc < 1e-9, "fc={fc}");
         let pm = m.phase_margin_deg.unwrap();
-        let expect_pm = 180.0 + (-150.0 + (1.0 / 3.0) * -20.0);
+        let expect_pm = 180.0 + (1.0f64 / 3.0).mul_add(-20.0, -150.0);
         assert!(
             (pm - expect_pm).abs() < 1e-9,
             "pm={pm} expected {expect_pm}"
@@ -352,7 +352,7 @@ mod tests {
         let expect_fp = 10f64.powf(4.5);
         assert!((fp - expect_fp).abs() / expect_fp < 1e-9, "fp={fp}");
         let gm = m.gain_margin_db.unwrap();
-        let expect_gm = -(-10.0 + 0.5 * -15.0); // 17.5 dB
+        let expect_gm = -0.5f64.mul_add(-15.0, -10.0); // 17.5 dB
         assert!(
             (gm - expect_gm).abs() < 1e-9,
             "gm={gm} expected {expect_gm}"

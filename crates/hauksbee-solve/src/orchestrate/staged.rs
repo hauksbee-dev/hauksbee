@@ -1084,7 +1084,7 @@ mod tests {
             &staged.waveforms.node_voltages,
             &mono,
             dt,
-            &|mv| 2.0 * (opts.reltol * mv.abs() + opts.vntol),
+            &|mv| 2.0 * opts.reltol.mul_add(mv.abs(), opts.vntol),
             "cascaded torn group",
         );
         // DC-settled: the final sample equals the monolith to round-off.

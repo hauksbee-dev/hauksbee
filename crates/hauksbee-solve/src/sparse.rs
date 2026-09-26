@@ -683,7 +683,7 @@ impl Symbolic {
                         col[j].push(i);
                         col_cnt[j] += 1;
                     }
-                    work[j] = before - factor * vj;
+                    work[j] = factor.mul_add(-vj, before);
                 }
                 // Gather back into row[i], dropping the eliminated pivot column
                 // and any numeric-zero results from cancellation.
@@ -1159,7 +1159,7 @@ mod tests {
                 if i % 4 == 2 {
                     1e-12
                 } else {
-                    2.0 + (i as f64) * 0.1
+                    (i as f64).mul_add(0.1, 2.0)
                 },
             ));
             if i > 0 {
@@ -1168,7 +1168,7 @@ mod tests {
             }
         }
         ent.extend([(0, n - 1, 0.5), (n - 1, 0, 0.4), (3, 8, 0.9), (8, 3, 0.8)]);
-        let b: Vec<f64> = (0..n).map(|i| 1.0 + 0.3 * i as f64).collect();
+        let b: Vec<f64> = (0..n).map(|i| 0.3f64.mul_add(i as f64, 1.0)).collect();
         let xd = solve_with(&matrix(n, &ent), &b, true);
         assert_close(&xd, &dense_solve(n, &ent, &b), 1e-6);
         assert!(residual(&ent, &xd, &b) < 1e-8);

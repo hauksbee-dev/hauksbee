@@ -42,7 +42,7 @@ fn waveform_err(a: &Waveforms, b: &Waveforms, opts: &SolverOptions) -> (f64, f64
     for (col_a, col_b) in a.node_voltages.iter().zip(&b.node_voltages) {
         for (&va, &vb) in col_a.iter().zip(col_b) {
             let err = (va - vb).abs();
-            let tol = opts.reltol * va.abs().max(vb.abs()) + opts.vntol;
+            let tol = opts.reltol.mul_add(va.abs().max(vb.abs()), opts.vntol);
             max_abs = max_abs.max(err);
             max_norm = max_norm.max(err / tol);
         }

@@ -157,7 +157,7 @@ impl SourceConflict {
     pub fn winner(&self, settled_volts: f64) -> Option<&NodeSource> {
         // A generous window: the point is to identify WHICH source the node
         // followed, not to grade the solve's accuracy.
-        let tol = 1e-3 + 1e-3 * settled_volts.abs();
+        let tol = 1e-3f64.mul_add(settled_volts.abs(), 1e-3);
         let mut hits = self
             .sources
             .iter()

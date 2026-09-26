@@ -634,7 +634,7 @@ mod tests {
         let (layout, mut m, plan) = compiled(&c);
         let size = layout.size;
         let x: Vec<f64> = (0..size)
-            .map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1)
+            .map(|i| ((i as f64 * 0.7391).sin()).mul_add(3.0, 0.1))
             .collect();
         let mut state = ReactiveState::new(c.devices.len());
         for (i, v) in state.x1.iter_mut().enumerate() {

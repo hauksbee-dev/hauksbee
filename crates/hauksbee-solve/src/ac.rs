@@ -785,7 +785,7 @@ fn is_dedicated_ac_source(name: &str) -> bool {
 
 fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
     match tc1 {
-        Some(tc) if opts.effects.temperature => ohms * (1.0 + tc * (opts.model_temp() - 27.0)),
+        Some(tc) if opts.effects.temperature => ohms * tc.mul_add(opts.model_temp() - 27.0, 1.0),
         _ => ohms,
     }
 }
@@ -894,7 +894,7 @@ fn stamp_bjt_ac(
             0.0
         };
         let gc_be = gm + var_deriv;
-        let gc_bc = -gir * q1_inv - gmu + early_deriv;
+        let gc_bc = (-gir).mul_add(q1_inv, -gmu) + early_deriv;
         stamp_transconductance(sys, ci, ei, bi, ei, gc_be);
         stamp_transconductance(sys, ci, ei, bi, ci, gc_bc);
         stamp_transconductance(sys, bi, ei, bi, ei, gpi);
@@ -988,15 +988,15 @@ fn stamp_mosfet_ac(
     let mut dvth_dvbs = 0.0;
     let body_effect = model.gamma > 0.0 && b.is_some();
     if body_effect {
-        let vbs_f = sign * op.v(bulk) - vs;
+        let vbs_f = sign.mul_add(op.v(bulk), -vs);
         let phi = model.phi.max(1e-6);
         let arg = phi - vbs_f;
         if arg > 0.0 {
             let sq = arg.sqrt();
-            vth = model.vto + model.gamma * (sq - phi.sqrt());
+            vth = model.gamma.mul_add(sq - phi.sqrt(), model.vto);
             dvth_dvbs = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
         } else {
-            vth = model.vto + model.gamma * (0.0 - phi.sqrt());
+            vth = model.gamma.mul_add(0.0 - phi.sqrt(), model.vto);
         }
     }
     let nsub = model.n_sub.max(1.0);
@@ -1097,7 +1097,9 @@ fn stamp_opamp_ac(
 ) {
     let gout = 1.0;
     let vref = reference.map_or(0.0, |n| op.v(n));
-    let target = (vref + gain * (op.v(inp) - op.v(inn))).clamp(rail_lo, rail_hi);
+    let target = gain
+        .mul_add(op.v(inp) - op.v(inn), vref)
+        .clamp(rail_lo, rail_hi);
     let in_rail = target > rail_lo && target < rail_hi;
     let oi = layout.node(out);
     if let Some(oi) = oi {

@@ -297,7 +297,7 @@ fn dc_sweep_values(start: f64, stop: f64, step: f64) -> Vec<f64> {
     let ratio = (stop - start) / step;
     let eps = 1e-9 * ratio.abs().max(1.0);
     let n = (ratio + eps).floor().max(0.0) as u64;
-    (0..=n).map(|i| start + step * i as f64).collect()
+    (0..=n).map(|i| step.mul_add(i as f64, start)).collect()
 }
 
 fn set_source_value(circuit: &mut Circuit, id: hauksbee_ir::DeviceId, value: f64) {
@@ -471,7 +471,7 @@ mod tests {
         for (i, row) in out.rows.iter().enumerate() {
             let vin = i as f64;
             assert!((row[0] - vin).abs() < 1e-9, "sweep value");
-            assert!((row[1] - 2.0 * vin).abs() < 1e-6, "gain-2 output");
+            assert!(2.0f64.mul_add(-vin, row[1]).abs() < 1e-6, "gain-2 output");
         }
     }
 

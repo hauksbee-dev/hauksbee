@@ -345,7 +345,7 @@ fn vcvs_control_port_is_high_impedance() {
             w_ctrl[i]
         );
         assert!(
-            (w_out[i] - 3.0 * w_ctrl[i]).abs() < 1e-6,
+            3.0f64.mul_add(-w_ctrl[i], w_out[i]).abs() < 1e-6,
             "output must track gain*control exactly at t={t}"
         );
     }

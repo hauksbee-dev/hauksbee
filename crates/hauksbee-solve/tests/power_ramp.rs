@@ -156,7 +156,7 @@ fn power_on_settles_to_the_same_steady_state() {
     let tau = rc * cout; // 22 us
     let ramp_window = 200.0 * dt; // 20 us
                                   // Run well past ramp_window + 5*tau so the ramp transient has fully decayed.
-    let tstop = ramp_window + 20.0 * tau;
+    let tstop = 20.0f64.mul_add(tau, ramp_window);
 
     let normal = Transient::new(fixed(dt))
         .run(&c, tstop)
@@ -284,7 +284,7 @@ fn run_staged_is_bitwise_deterministic() {
             &format!("Ra{k}"),
             v,
             sel,
-            1e3 * (1.0 + 0.2 * k as f64),
+            1e3 * 0.2f64.mul_add(k as f64, 1.0),
         );
         add_resistor(&mut c, &format!("Rb{k}"), sel, NodeId::GROUND, 1e3);
         vswitch(
@@ -293,7 +293,7 @@ fn run_staged_is_bitwise_deterministic() {
             sup,
             out,
             (sel, NodeId::GROUND),
-            (1.5 + 0.1 * k as f64, 0.5),
+            (0.1f64.mul_add(k as f64, 1.5), 0.5),
             (10.0 + k as f64, 1e9),
         );
     }

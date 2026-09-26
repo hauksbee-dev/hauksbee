@@ -231,7 +231,7 @@ fn behavioral_current_dc_matches_analytic() {
     dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
     let node = |name: &str| ws.x[ws.layout.node(c.find_node(name).unwrap()).unwrap()];
     // i(Vs) = 1 V / 1 k = 1 mA; f = 1m*tanh(1) + 2 mA; v_out = -1k * f.
-    let want = -(1e-3 * 1.0f64.tanh() + 2e-3) * 1e3;
+    let want = -1e-3f64.mul_add(1.0f64.tanh(), 2e-3) * 1e3;
     let v_out = node("out");
     assert!(
         (v_out - want).abs() < 1e-5,
@@ -256,7 +256,7 @@ fn behavioral_self_reference_converges() {
     dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
     let v = ws.x[ws.layout.node(c.find_node("out").unwrap()).unwrap()];
     let lhs = (1.0 - v) / 1e3;
-    let rhs = 1e-3 * ((v / 0.2).exp() - 1.0);
+    let rhs = 1e-3 * (v / 0.2).exp_m1();
     assert!(
         (lhs - rhs).abs() < 1e-9,
         "KCL balance violated: {lhs:.3e} vs {rhs:.3e} at v={v}"

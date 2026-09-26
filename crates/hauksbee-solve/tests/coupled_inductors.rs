@@ -325,7 +325,7 @@ fn ac_matches_two_winding_closed_form() {
         let got = p.node(&c, "sec").expect("sec phasor present");
         let err = (got - vs).norm();
         assert!(
-            err <= 1e-6 + 1e-9 * vs.norm().max(got.norm()),
+            err <= 1e-9f64.mul_add(vs.norm().max(got.norm()), 1e-6),
             "f={} Hz: engine {got:?} vs closed form {vs:?} (|err|={err:.3e})",
             p.freq
         );

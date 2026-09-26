@@ -73,7 +73,7 @@ pub fn build_synapse_array(n: usize) -> Synapse {
         // Gentle 10 µs edges after a quiescent settle, so a fixed-step run
         // resolves the switch transition over many steps rather than slamming it
         // into one (there is no event bisection on fixed steps).
-        let delay = 30e-6 + 1e-4 * (k as f64 / n as f64);
+        let delay = 1e-4f64.mul_add(k as f64 / n as f64, 30e-6);
         let ctrl = c.node(&format!("ctrl{k}"));
         c.add(Device::Vsource {
             name: format!("VP{k}"),

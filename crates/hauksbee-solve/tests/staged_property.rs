@@ -49,7 +49,7 @@ impl Rng {
         lo + (self.next() as usize) % (hi - lo + 1)
     }
     fn f(&mut self, lo: f64, hi: f64) -> f64 {
-        lo + (self.next() as f64 / u64::MAX as f64) * (hi - lo)
+        (self.next() as f64 / u64::MAX as f64).mul_add(hi - lo, lo)
     }
     const fn coin(&mut self) -> bool {
         self.next() & 1 == 1
@@ -165,7 +165,7 @@ fn diverges(
         }
         // Edge window: does the reference reach sv within +/- dt of t?
         let hit = (0..=8).any(|j| {
-            let tt = t - dt + f64::from(j) * (dt / 4.0);
+            let tt = f64::from(j).mul_add(dt / 4.0, t - dt);
             (lerp_at(&mono.time, &mono.node_voltages[node], tt) - sv).abs() <= tol
         });
         if !hit {

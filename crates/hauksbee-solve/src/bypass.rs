@@ -287,7 +287,11 @@ pub fn stamp_all_bypass(
             for (k, &ui) in cache.read_idx.iter().enumerate() {
                 let v = ctx.x[ui as usize];
                 let vl = cache.last_v[k];
-                let tol = 0.1 * (ctx.opts.reltol * v.abs().max(vl.abs()) + ctx.opts.vntol);
+                let tol = 0.1
+                    * ctx
+                        .opts
+                        .reltol
+                        .mul_add(v.abs().max(vl.abs()), ctx.opts.vntol);
                 if !((v - vl).abs() <= tol) {
                     unmoved = false;
                     break;
@@ -447,7 +451,7 @@ mod tests {
     /// iterate never replays.
     #[test]
     fn bypass_replays_exactly_and_invalidates_correctly() {
-        let mut rig = Rig::new(|i| ((i as f64) * 0.61).sin() * 2.0 + 0.4);
+        let mut rig = Rig::new(|i| ((i as f64) * 0.61).sin().mul_add(2.0, 0.4));
         for (i, v) in rig.state.x1.iter_mut().enumerate() {
             *v = 0.2 * (i as f64 + 1.0);
         }
@@ -549,8 +553,10 @@ mod tests {
         assert!(evals > 0 && skips > 0, "evals={evals} skips={skips}");
         let opts = SolverOptions::default();
         for i in 0..x_ref.len() {
-            let tol =
-                opts.reltol * x_ref[i].abs().max(x_byp[i].abs()) + opts.vntol.max(opts.abstol);
+            let tol = opts.reltol.mul_add(
+                x_ref[i].abs().max(x_byp[i].abs()),
+                opts.vntol.max(opts.abstol),
+            );
             assert!(
                 (x_ref[i] - x_byp[i]).abs() <= tol,
                 "unknown {i}: {} vs {}",

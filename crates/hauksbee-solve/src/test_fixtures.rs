@@ -92,7 +92,7 @@ pub fn assert_matches_within_grid(
                 continue;
             }
             let edge = (0..=8).any(|j| {
-                let tt = t - dt + f64::from(j) * (dt / 4.0);
+                let tt = f64::from(j).mul_add(dt / 4.0, t - dt);
                 (lerp_at(&reference.time, m, tt) - sv).abs() <= tol
             });
             assert!(

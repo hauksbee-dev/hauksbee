@@ -481,7 +481,7 @@ fn ac_resistor_gets_the_dc_paths_tc1_derating() {
     let r = 1.0e3_f64;
     let tc1 = 4e-3_f64;
     let temp_c = 77.0_f64; // +50 C over the 27 C reference
-    let r_derated = r * (1.0 + tc1 * (temp_c - 27.0)); // 1.2k, stamp.rs formula
+    let r_derated = r * tc1.mul_add(temp_c - 27.0, 1.0); // 1.2k, stamp.rs formula
     let c = 159.155e-9_f64;
     let mut ckt = Circuit::new();
     let vin = ckt.node("in");

@@ -105,11 +105,17 @@ fn ideal_cap_constant_current_discharge_with_esr() {
         if t <= t_edge {
             v0
         } else {
-            v0 - i_step * r_esr - (i_step / cap) * (t - t_edge)
+            (i_step / cap).mul_add(-(t - t_edge), v0 - i_step * r_esr)
         }
     };
     // Skip a couple of dt past the edge so the PWL ramp isn't penalised.
-    let err = max_rel_err(&wf.time, got, &want, t_edge + 2.0 * (tstop / 4000.0), 0.1);
+    let err = max_rel_err(
+        &wf.time,
+        got,
+        &want,
+        2.0f64.mul_add(tstop / 4000.0, t_edge),
+        0.1,
+    );
     assert!(
         err < 0.01,
         "RC decoupling sag (ESR+ramp) rel err {err:.5} (>1%)"
@@ -120,13 +126,13 @@ fn ideal_cap_constant_current_discharge_with_esr() {
     let just_after = got
         .iter()
         .zip(&wf.time)
-        .find(|(_, t)| **t >= t_edge + 5.0 * (tstop / 4000.0))
+        .find(|(_, t)| **t >= 5.0f64.mul_add(tstop / 4000.0, t_edge))
         .map(|(v, _)| *v)
         .unwrap();
     let expected_esr_sag = i_step * r_esr;
     let measured_esr_sag = v0 - just_after;
     assert!(
-        (measured_esr_sag - expected_esr_sag).abs() < 0.1 * expected_esr_sag + 1e-3,
+        (measured_esr_sag - expected_esr_sag).abs() < 0.1f64.mul_add(expected_esr_sag, 1e-3),
         "instantaneous ESR sag {measured_esr_sag:.4} V vs hand {expected_esr_sag:.4} V"
     );
     // 2. Discharge slope dV/dt = I/C = 0.5/10u = 50,000 V/s.
@@ -176,10 +182,16 @@ fn supplied_rail_step_sag_first_order() {
         if t <= t_edge {
             v0
         } else {
-            v0 - i_step * r_s * (1.0 - (-(t - t_edge) / tau).exp())
+            (i_step * r_s).mul_add(-(1.0 - (-(t - t_edge) / tau).exp()), v0)
         }
     };
-    let err = max_rel_err(&wf.time, got, &want, t_edge + 4.0 * (tau / 500.0), 0.1);
+    let err = max_rel_err(
+        &wf.time,
+        got,
+        &want,
+        4.0f64.mul_add(tau / 500.0, t_edge),
+        0.1,
+    );
     assert!(
         err < 0.01,
         "first-order load-step sag rel err {err:.5} (>1%)"
@@ -235,7 +247,7 @@ fn profile_isource_agrees_in_both_solver_paths() {
         if t <= t_edge {
             v0
         } else {
-            v0 - i_step * r_s * (1.0 - (-(t - t_edge) / tau).exp())
+            (i_step * r_s).mul_add(-(1.0 - (-(t - t_edge) / tau).exp()), v0)
         }
     };
     let n = mono.len().min(part.len());
@@ -243,7 +255,7 @@ fn profile_isource_agrees_in_both_solver_paths() {
     let mut worst_pair = 0.0f64;
     for k in 0..n {
         let t = k as f64 * dt;
-        if t < t_edge + 4.0 * dt {
+        if t < 4.0f64.mul_add(dt, t_edge) {
             continue;
         }
         let w = want(t).max(0.1);
