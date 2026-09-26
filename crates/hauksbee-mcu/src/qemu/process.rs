@@ -47,7 +47,8 @@ pub enum QemuArch {
 
 impl QemuArch {
     /// The QEMU system binary file name for this architecture.
-    pub fn binary_name(self) -> &'static str {
+    #[must_use]
+    pub const fn binary_name(self) -> &'static str {
         match self {
             Self::Xtensa => "qemu-system-xtensa",
             Self::Riscv32 => "qemu-system-riscv32",
@@ -55,7 +56,7 @@ impl QemuArch {
     }
 
     /// The per-arch env override variable name.
-    fn env_override(self) -> &'static str {
+    const fn env_override(self) -> &'static str {
         match self {
             Self::Xtensa => "HAUKSBEE_QEMU_XTENSA",
             Self::Riscv32 => "HAUKSBEE_QEMU_RISCV32",
@@ -71,6 +72,11 @@ impl QemuArch {
 }
 
 /// Locate an Espressif QEMU binary for `arch`, or describe how to install it.
+///
+/// # Errors
+///
+/// When the override variable names a missing file, or no Espressif-fork
+/// binary is found; the message says how to install one.
 pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     if let Some(p) = env_override(arch.env_override())? {
         return Ok(p);
@@ -156,6 +162,7 @@ fn idf_tools_candidates(root: &Path, file: &str) -> Vec<PathBuf> {
 
 /// True if a usable Espressif QEMU for `arch` can be located. Used to skip
 /// integration tests cleanly when the emulator is absent.
+#[must_use]
 pub fn is_available(arch: QemuArch) -> bool {
     find_qemu(arch).is_ok()
 }
@@ -165,7 +172,7 @@ pub fn is_available(arch: QemuArch) -> bool {
 /// Homebrew mainline binary on `PATH` from being mistaken for the fork.
 /// `pub(crate)` so the installer (`qemu::install`) accepts a freshly unpacked
 /// binary through the exact same check discovery uses.
-pub(crate) fn is_esp_fork(bin: &Path) -> bool {
+pub fn is_esp_fork(bin: &Path) -> bool {
     Command::new(bin)
         .args(["-machine", "help"])
         .stdin(Stdio::null())
@@ -208,6 +215,10 @@ impl QemuProcess {
     /// "hello" without it). The lockstep uses QMP stop/cont over the
     /// free-running virtual clock instead; `_icount_shift` is retained in the
     /// signature for forward compatibility but not passed to QEMU.
+    ///
+    /// # Errors
+    ///
+    /// When no Espressif QEMU binary is found or the process cannot be spawned.
     pub fn spawn(
         arch: QemuArch,
         machine: &str,
@@ -238,12 +249,14 @@ impl QemuProcess {
     }
 
     /// What QEMU wrote to stderr so far, trimmed, capped to its last 2 KiB.
+    #[must_use]
     pub fn stderr_output(&self) -> String {
         self.inner.stderr_output()
     }
 
     /// How long to wait for the QMP port to come up after spawn.
-    pub fn startup_timeout() -> Duration {
+    #[must_use]
+    pub const fn startup_timeout() -> Duration {
         Duration::from_secs(20)
     }
 
@@ -256,11 +269,16 @@ impl QemuProcess {
     /// Refuse an operation once the emulator child has exited, retaining the
     /// exit status and QEMU's captured stderr; safe to call on every later
     /// chunk, so a terminal QEMU failure never degrades into bare QMP errors.
+    ///
+    /// # Errors
+    ///
+    /// When QEMU has exited, naming `operation`, the exit status and stderr.
     pub fn ensure_running(&mut self, operation: &str) -> Result<()> {
         self.inner.ensure_running(operation)
     }
 
     /// The spawned QEMU's OS process id (diagnostics and the reaping tests).
+    #[must_use]
     pub fn pid(&self) -> u32 {
         self.inner.pid()
     }

@@ -2,7 +2,7 @@
 //! override directory must feed the co-sim's descriptor resolution exactly the
 //! way `$HAUKSBEE_MCU_DIR` does, with no env var set by the caller.
 //!
-//! The proof reuses the cosim_coverage_honesty fixture shape: the shipped
+//! The proof reuses the `cosim_coverage_honesty` fixture shape: the shipped
 //! stm32f103 descriptor with its I2C controllers emptied, placed in a
 //! directory the SPEC (not the environment) points at. If the overridden
 //! descriptor is really loaded from there, the run reports the "models no I2C

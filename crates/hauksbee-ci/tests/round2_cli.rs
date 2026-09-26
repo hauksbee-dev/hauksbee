@@ -2,7 +2,7 @@
 //! boards, real exit codes.
 //!
 //! * Multi-spec `hauksbee-ci run a.toml b.toml --junit out.xml`: one merged
-//!   JUnit document, one aggregate summary, worst exit code of the set
+//!   `JUnit` document, one aggregate summary, worst exit code of the set
 //!   (severity order 3 > 2 > 1 > 0).
 //! * `hauksbee-ci init` writes to the CURRENT DIRECTORY by default and
 //!   honours `--out`, with the generated `board = "..."` path relative to
@@ -287,7 +287,7 @@ fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
     // front-runs the per-package default ceiling).
     let max_temp = format!("\n{IDEAL_5V}[[assert]]\nkind = \"max_temp\"\nref = \"R1\"\n");
     let (_dir, spec) = blinky_spec("maxtemp", &max_temp);
-    let err = run(&crate::support::run_config(spec.clone()))
+    let err = run(&crate::support::run_config(spec))
         .expect_err("the unfalsifiable form must be refused at load");
     let msg = err.to_string();
     assert!(

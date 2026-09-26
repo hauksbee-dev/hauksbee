@@ -1,13 +1,13 @@
 //! Live-Renode CI-level proofs for the co-sim coverage honesty surfaces (U3).
 //!
 //! Two silent-degradation modes, each proven end to end through the REAL
-//! hauksbee-ci pipeline (spec → runner → assertions → CiResult → all three
+//! hauksbee-ci pipeline (spec → runner → assertions → `CiResult` → all three
 //! report formats) against the live Renode install:
 //!
 //!   1. **Dropped ADC injection** (finding 1): a board with a divider on PA0
 //!      (`pa0_adc0` → engine channel 0) on the stock STM32F103 platform, which
 //!      models no ADC. The run must carry a coverage warning naming the net in
-//!      `CiResult::coverage_warnings` and render it in the human, JUnit, and
+//!      `CiResult::coverage_warnings` and render it in the human, `JUnit`, and
 //!      GitHub-annotation formats.
 //!
 //!   2. **Unexercised bus sensor** (finding 2): the LM75 thermostat spec run

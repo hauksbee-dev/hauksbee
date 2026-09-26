@@ -8,9 +8,9 @@
 //! * The GitHub annotation budget: no per-assertion `::notice` on passes,
 //!   capped `::error`/`::warning` counts (GitHub truncates at 10/type/step),
 //!   the rollup always present.
-//! * Waived failures are visible-but-not-gating on every surface (JUnit
+//! * Waived failures are visible-but-not-gating on every surface (`JUnit`
 //!   `<skipped>`, exit code 0).
-//! * The merged multi-spec JUnit document aggregates honest counts.
+//! * The merged multi-spec `JUnit` document aggregates honest counts.
 
 use std::path::PathBuf;
 

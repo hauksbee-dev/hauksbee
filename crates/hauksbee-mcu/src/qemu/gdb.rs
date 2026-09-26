@@ -27,6 +27,7 @@
 
 use crate::external::{connect_loopback, read_step};
 use anyhow::{bail, Context, Result};
+use std::fmt::Write as _;
 use std::io::Write;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -93,8 +94,11 @@ impl GdbStub {
         if bytes.is_empty() {
             return Ok(());
         }
-        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        let resp = self.packet(&format!("M{addr:x},{:x}:{hex}", bytes.len()))?;
+        let mut packet = format!("M{addr:x},{:x}:", bytes.len());
+        for b in bytes {
+            let _ = write!(packet, "{b:02x}"); // writing to a String cannot fail
+        }
+        let resp = self.packet(&packet)?;
         if resp != "OK" {
             bail!("gdbstub memory write to 0x{addr:08x} failed: {resp}");
         }
@@ -207,7 +211,7 @@ fn scan_packet(buf: &[u8]) -> Scan {
     Scan::Ok(String::from_utf8_lossy(payload).into_owned(), consumed)
 }
 
-fn hex_val(b: u8) -> Option<u8> {
+const fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),

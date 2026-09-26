@@ -85,7 +85,7 @@ fn assert_trustworthy(route: &str, out: &Output) {
     let code = out.status.code();
     let (stdout, stderr) = (stdout(out), stderr(out));
     assert!(
-        matches!(code, Some(0) | Some(1)),
+        matches!(code, Some(0 | 1)),
         "{route}: expected a trustworthy verdict (0 or 1), got {code:?}.\n\
          If this is now a 3, the route is OPEN and exit 3 finally has an \
          end-to-end fixture: promote this spec into one.\n{stdout}\n{stderr}"

@@ -26,6 +26,8 @@ pub fn pad(n: u32, net: &str) -> String {
 
 /// One board-DSL component: reference `r`, footprint `lib`, value `val`, placed
 /// at x = `x`, carrying `pads` (built from [`pad`]).
+// Callers hand over freshly built pad strings; owning them keeps call sites borrow-free.
+#[allow(clippy::needless_pass_by_value)]
 pub fn comp(r: &str, lib: &str, val: &str, x: usize, pads: String) -> String {
     format!("comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n")
 }
@@ -47,7 +49,7 @@ pub fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
 }
 
 /// A [`hauksbee_ci::CiResult`] carrying `results` and nothing else: spec "t" on
-/// board "b.kicad_pcb", one seed, no elapsed time, and every honesty list empty.
+/// board "`b.kicad_pcb`", one seed, no elapsed time, and every honesty list empty.
 ///
 /// The report surfaces are judged from synthesized results in several modules,
 /// and each one needs the same otherwise-empty carrier around them.
@@ -134,7 +136,7 @@ pub fn run_config(spec: PathBuf) -> hauksbee_ci::RunConfig {
 }
 
 /// The compiled `hauksbee-ci` binary (Cargo sets this for the crate's tests).
-pub fn bin() -> &'static str {
+pub const fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee-ci")
 }
 
@@ -162,7 +164,7 @@ pub fn stderr(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// Serializes every test that runs a co-sim whose SoC descriptor resolution
+/// Serializes every test that runs a co-sim whose `SoC` descriptor resolution
 /// matters.
 ///
 /// Descriptor overrides reach the runner through `HAUKSBEE_MCU_DIR`, which is
@@ -181,5 +183,5 @@ pub static DESCRIPTOR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(())
 pub fn descriptor_env_lock() -> std::sync::MutexGuard<'static, ()> {
     DESCRIPTOR_ENV_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

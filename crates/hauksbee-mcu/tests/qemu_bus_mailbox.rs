@@ -44,6 +44,14 @@ macro_rules! qemu_or_skip {
     };
 }
 
+/// The backend's documented 2^n transfer function (R14), recomputed here.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rounded, clamped to the code range
+fn expected_count(volts: f64) -> u32 {
+    ((volts / mailbox::ADC_FULL_SCALE_VOLTS) * (f64::from(mailbox::ADC_MAX_COUNT) + 1.0))
+        .round()
+        .min(f64::from(mailbox::ADC_MAX_COUNT)) as u32
+}
+
 /// an injected analog voltage must land as a firmware-visible 12-bit
 /// count in the channel's mailbox slot, with the channel's mask bit raised.
 #[test]
@@ -60,10 +68,7 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     // The backend's documented 2^n transfer function (R14), not 2^n-1: the
     // two coincidentally rounded to the same count at the old 3.3 V full
     // scale, which is how a 2^n-1 copy of the formula hid here.
-    let expected = ((volts / mailbox::ADC_FULL_SCALE_VOLTS)
-        * (f64::from(mailbox::ADC_MAX_COUNT) + 1.0))
-        .round()
-        .min(f64::from(mailbox::ADC_MAX_COUNT)) as u32;
+    let expected = expected_count(volts);
     let got = mcu
         .debug_read_u32(mailbox::adc_channel_word(0))
         .expect("read ADC slot 0");
@@ -87,11 +92,11 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     let updated = mcu
         .debug_read_u32(mailbox::adc_channel_word(0))
         .expect("re-read ADC slot 0");
-    let expected2 = ((0.4 / mailbox::ADC_FULL_SCALE_VOLTS)
-        * (f64::from(mailbox::ADC_MAX_COUNT) + 1.0))
-        .round()
-        .min(f64::from(mailbox::ADC_MAX_COUNT)) as u32;
-    assert_eq!(updated, expected2, "count must track the injected voltage");
+    assert_eq!(
+        updated,
+        expected_count(0.4),
+        "count must track the injected voltage"
+    );
 }
 
 /// an I2C transaction submitted through the mailbox cell must surface
@@ -105,29 +110,20 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     let reply_counter = Arc::new(Mutex::new(0u8));
-    let counter = reply_counter.clone();
+    let counter = reply_counter;
     mcu.on_i2c(Box::new(move |ev| {
-        let mut log = sink.lock().unwrap();
-        match ev {
-            I2cEvent::Start { addr, read } => {
-                log.push(format!("start {addr:#04x} read={read}"));
-                None
-            }
-            I2cEvent::Write { addr, data } => {
-                log.push(format!("write {addr:#04x} {data:#04x}"));
-                None
-            }
+        let (line, reply) = match ev {
+            I2cEvent::Start { addr, read } => (format!("start {addr:#04x} read={read}"), None),
+            I2cEvent::Write { addr, data } => (format!("write {addr:#04x} {data:#04x}"), None),
             I2cEvent::Read { addr } => {
-                log.push(format!("read {addr:#04x}"));
                 let mut c = counter.lock().unwrap();
                 *c += 1;
-                Some(0xB0 + *c) // 0xB1, 0xB2, ...
+                (format!("read {addr:#04x}"), Some(0xB0 + *c)) // 0xB1, 0xB2, ...
             }
-            I2cEvent::Stop { addr } => {
-                log.push(format!("stop {addr:#04x}"));
-                None
-            }
-        }
+            I2cEvent::Stop { addr } => (format!("stop {addr:#04x}"), None),
+        };
+        sink.lock().unwrap().push(line);
+        reply
     }));
 
     // Play the firmware's half of the contract: raise the v2 magic, submit a
@@ -171,15 +167,12 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     mcu.debug_write_u32(mailbox::I2C_REQ_SEQ, 2).expect("seq");
     mcu.run_micros(5_000).expect("run chunk");
 
-    {
-        let log = events.lock().unwrap();
-        assert_eq!(
-            &log[4..],
-            ["start 0x50 read=true", "read 0x50", "read 0x50"],
-            "same-address write→read must be a repeated START (no Stop), \
-             then one Read per byte"
-        );
-    }
+    assert_eq!(
+        &events.lock().unwrap()[4..],
+        ["start 0x50 read=true", "read 0x50", "read 0x50"],
+        "same-address write→read must be a repeated START (no Stop), \
+         then one Read per byte"
+    );
     let rsp = mcu.debug_read_u32(mailbox::I2C_RSP_DATA).expect("rsp data");
     assert_eq!(
         rsp & 0xFFFF,

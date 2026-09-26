@@ -8,9 +8,11 @@
 //! lives at this layer rather than in `hauksbee_engine::evidence`.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 pub const OCCURRENCE_PREFIX: &str = "@hkb-occurrence:";
 
+#[must_use]
 pub fn component_occurrence_subject(
     reference: &str,
     total_occurrences: usize,
@@ -21,11 +23,10 @@ pub fn component_occurrence_subject(
     {
         return reference.to_string();
     }
-    let encoded = reference
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<String>();
+    let encoded = reference.bytes().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02X}");
+        out
+    });
     format!("{OCCURRENCE_PREFIX}{encoded}:{ordinal}")
 }
 

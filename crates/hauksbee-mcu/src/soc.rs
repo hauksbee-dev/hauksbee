@@ -65,6 +65,7 @@
 //! only configures the three backends that already exist.
 
 use hauksbee_ir::levenshtein;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// A SoC-descriptor load or validation failure.
@@ -307,6 +308,10 @@ pub enum Backend {
 
 impl Backend {
     /// Parse a backend token, erroring (loud, named) on anything unknown.
+    ///
+    /// # Errors
+    ///
+    /// [`SocError::UnknownBackend`] for anything but `renode` or `qemu`.
     pub fn parse(s: &str) -> Result<Self, SocError> {
         match s {
             "renode" => Ok(Self::Renode),
@@ -316,7 +321,8 @@ impl Backend {
     }
 
     /// The canonical token for this backend (the `backend:` half of a spec).
-    pub fn name(self) -> &'static str {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Renode => "renode",
             Self::Qemu => "qemu",
@@ -366,6 +372,11 @@ struct SocHeader {
 }
 
 /// Read a descriptor's declared backend without fully parsing it.
+///
+/// # Errors
+///
+/// When the TOML does not parse, lacks `[soc] backend`, or names an unknown
+/// backend.
 pub fn peek_backend(src: &str) -> Result<Backend, SocError> {
     let header: SocHeaderFile = toml::from_str(src)?;
     Backend::parse(&header.soc.backend)
@@ -519,7 +530,7 @@ mod renode_schema {
     /// encoding can decode. The pin counts are structural: `moder` reads 2 bits
     /// per pin and `stm32f1_crl_crh` 4 bits per pin out of one 32-bit word (plus
     /// a second word for CRH), so both top out at 16 pins whatever the port is.
-    fn dir_encoding_reach(encoding: DirEncoding) -> (&'static str, u8) {
+    const fn dir_encoding_reach(encoding: DirEncoding) -> (&'static str, u8) {
         match encoding {
             DirEncoding::Moder => ("moder", 16),
             DirEncoding::Stm32f1CrlCrh => ("stm32f1_crl_crh", 16),
@@ -655,6 +666,10 @@ impl crate::renode::RenodeConfig {
     /// backend, empty `platform_repl`, overlapping/zero-width ports, duplicate
     /// controllers, unknown `expected_e_machine`), and constructs the config.
     /// A `backend = "qemu"` descriptor is refused with [`SocError::BackendMismatch`].
+    ///
+    /// # Errors
+    ///
+    /// The named [`SocError`] for a malformed, mismatched or invalid descriptor.
     pub fn from_soc_toml(src: &str) -> Result<Self, SocError> {
         parse_for::<renode_schema::RenodeSocFile>(src, Backend::Renode)?
             .soc
@@ -743,8 +758,14 @@ mod qemu_schema {
 
 #[cfg(feature = "qemu")]
 impl crate::qemu::QemuConfig {
-    /// Load a QEMU config from a `*.soc.toml` descriptor. Same validated
-    /// path as the Renode loader; a `backend = "renode"` descriptor is refused.
+    /// Load a QEMU config from a `*.soc.toml` descriptor.
+    ///
+    /// Same validated path as the Renode loader; a `backend = "renode"`
+    /// descriptor is refused.
+    ///
+    /// # Errors
+    ///
+    /// The named [`SocError`] for a malformed, mismatched or invalid descriptor.
     pub fn from_soc_toml(src: &str) -> Result<Self, SocError> {
         parse_for::<qemu_schema::QemuSocFile>(src, Backend::Qemu)?
             .soc
@@ -762,7 +783,7 @@ impl crate::qemu::QemuConfig {
 /// external backends divides a cycle count by it to get the run window, so a
 /// zero clock asks for an infinite window instead of erroring, and on Renode
 /// [`check_clock_declarations`] holds the platform's own declarations to it.
-fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
+const fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
     if frequency_hz == 0 {
         return Err(SocError::ZeroFrequency);
     }
@@ -796,13 +817,13 @@ fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
             continue;
         };
         let value = value.trim().trim_end_matches(';').trim();
-        let parsed = match value
+        let parsed = value
             .strip_prefix("0x")
             .or_else(|| value.strip_prefix("0X"))
-        {
-            Some(hex) => u64::from_str_radix(hex, 16).ok(),
-            None => value.parse::<u64>().ok(),
-        };
+            .map_or_else(
+                || value.parse::<u64>().ok(),
+                |hex| u64::from_str_radix(hex, 16).ok(),
+            );
         if let Some(v) = parsed {
             out.push(v);
         }
@@ -838,6 +859,7 @@ fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
 /// `systickFrequency`; `PerformanceInMips` is the one declaration every Renode
 /// part can and must make.
 #[cfg(feature = "renode")]
+#[allow(clippy::cast_precision_loss)] // the ratio is only a diagnostic in the error
 fn check_clock_declarations(
     platform_repl: &str,
     support_bundle: Option<&str>,
@@ -873,10 +895,8 @@ fn check_clock_declarations(
                 let mut expected_prose =
                     format!("not the declared part clock of {frequency_hz} Hz");
                 if scale != 1 {
-                    expected_prose.push_str(&format!(
-                        " expressed in MHz ({} MIPS)",
-                        frequency_hz / scale
-                    ));
+                    let mips = frequency_hz / scale;
+                    let _ = write!(expected_prose, " expressed in MHz ({mips} MIPS)");
                 }
                 return Err(SocError::ClockMismatch {
                     property: label,
@@ -944,22 +964,19 @@ fn validate_ports(ports: impl Iterator<Item = (char, u8)>) -> Result<(), SocErro
             return Err(SocError::PortTooWide { letter, width });
         }
     }
-    match first_duplicate(ports.iter().map(|p| p.0)) {
-        Some(letter) => Err(SocError::DuplicatePortLetter(letter)),
-        None => Ok(()),
-    }
+    first_duplicate(ports.iter().map(|p| p.0))
+        .map_or(Ok(()), |letter| Err(SocError::DuplicatePortLetter(letter)))
 }
 
 #[cfg(any(feature = "renode", feature = "qemu"))]
 /// Validate a bus controller list has no duplicate names.
 fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(), SocError> {
-    match first_duplicate(controllers) {
-        Some(name) => Err(SocError::DuplicateController {
+    first_duplicate(controllers).map_or(Ok(()), |name| {
+        Err(SocError::DuplicateController {
             bus,
             name: name.clone(),
-        }),
-        None => Ok(()),
-    }
+        })
+    })
 }
 
 // ── Resolution: a `backend:part` spec → a descriptor ───────────────
@@ -999,6 +1016,11 @@ pub enum SocConfig {
 
 impl SocConfig {
     /// Parse a descriptor string, dispatching to the backend it declares.
+    ///
+    /// # Errors
+    ///
+    /// The named [`SocError`] for an invalid descriptor, or
+    /// [`SocError::BackendDisabled`] when its backend is not compiled in.
     pub fn from_soc_toml(src: &str) -> Result<Self, SocError> {
         match peek_backend(src)? {
             Backend::Renode => {
@@ -1048,6 +1070,11 @@ impl SocConfig {
     /// An invalid override for a builtin name (say a typo'd field in a user
     /// `stm32f103.soc.toml`) therefore fails the resolution rather than being
     /// silently skipped in favour of the builtin.
+    ///
+    /// # Errors
+    ///
+    /// A malformed spec, an unknown backend, an unreadable or invalid descriptor
+    /// file, or no descriptor for the part (with a did-you-mean hint).
     pub fn resolve(spec: &str) -> Result<Self, SocError> {
         let (backend_tok, part) = spec
             .split_once(':')
@@ -1091,7 +1118,7 @@ impl SocConfig {
                             source: Box::new(source),
                         });
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(source) => {
                     return Err(SocError::Io {
                         path: path.display().to_string(),
@@ -1133,6 +1160,7 @@ impl SocConfig {
     }
 
     /// The `backend:part` specs of every embedded built-in descriptor.
+    #[must_use]
     pub fn builtin_specs() -> Vec<&'static str> {
         EMBEDDED.iter().map(|(k, _)| *k).collect()
     }
@@ -1149,12 +1177,19 @@ impl SocConfig {
     /// Note the layering: this is the EMBEDDED source, deliberately not the
     /// override-directory file that `resolve` would prefer. A caller asking for
     /// the shipped descriptor is asking about the binary, not the machine.
+    #[must_use]
     pub fn builtin_source(spec: &str) -> Option<&'static str> {
         EMBEDDED.iter().find(|(k, _)| *k == spec).map(|(_, v)| *v)
     }
 
     /// The backend this resolved descriptor targets.
-    pub fn backend(&self) -> Backend {
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: only a build with no backend feature has the
+    /// panicking arm, and such a build cannot construct a `SocConfig`.
+    #[must_use]
+    pub const fn backend(&self) -> Backend {
         match self {
             #[cfg(feature = "renode")]
             Self::Renode(_) => Backend::Renode,
@@ -1163,7 +1198,7 @@ impl SocConfig {
             // A build with no backend feature has no variants, but `&Self` is
             // still considered inhabited, so the match needs an arm to compile.
             #[cfg(not(any(feature = "renode", feature = "qemu")))]
-            _ => unreachable!("SocConfig cannot be constructed without a backend feature"),
+            _ => panic!("SocConfig cannot be constructed without a backend feature"),
         }
     }
 }
@@ -1244,15 +1279,16 @@ fn builtin_fallback_hints(part: &str, dirs: &[PathBuf]) -> Vec<String> {
 fn not_found_hint(spec: &str, builtins: &[&'static str]) -> String {
     let mut hint = String::new();
     if let Some(near) = nearest_builtin(spec, builtins) {
-        hint.push_str(&format!(" Did you mean \"{near}\"?"));
+        let _ = write!(hint, " Did you mean \"{near}\"?");
     }
-    hint.push_str(&format!(
+    let _ = write!(
+        hint,
         " Available built-ins: {}. Run `hauksbee models list --builtin` to \
          list them, or add a `<part>.soc.toml` descriptor in $HAUKSBEE_MCU_DIR \
          or ~/.config/hauksbee/mcu ({}).",
         builtins.join(", "),
         hauksbee_ir::docs_url("docs/extending/add-an-mcu-variant.md")
-    ));
+    );
     hint
 }
 

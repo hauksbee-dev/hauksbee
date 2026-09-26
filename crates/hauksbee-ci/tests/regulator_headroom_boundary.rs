@@ -20,7 +20,7 @@ fn minimum_input_v() -> f64 {
         .provenance
         .as_ref()
         .into_iter()
-        .flat_map(|source| source.uncertainty())
+        .flat_map(hauksbee_ir::evidence::ModelSource::uncertainty)
         .find_map(|uncertainty| match uncertainty {
             ModelUncertainty::Interval {
                 parameter, high, ..

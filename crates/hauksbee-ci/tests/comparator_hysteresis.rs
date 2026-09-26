@@ -33,8 +33,8 @@ fn board(rf: Option<&str>) -> String {
     // with no pull-up. It must bind, and it must not make the board refuse.
     let u1: String = ["OUT", "VIN", "NP", "GND", "GND", "VCC", "OUT_B", "VCC"]
         .iter()
-        .enumerate()
-        .map(|(i, n)| pad(i as u32 + 1, n))
+        .zip(1..)
+        .map(|(n, i)| pad(i, n))
         .collect();
     let mut parts = comp("U1", "Package_DIP:DIP-8_W7.62mm", "LM393", 20, u1);
     for (i, (r, val, a, b)) in [

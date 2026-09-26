@@ -20,6 +20,11 @@ type Sink = Box<dyn FnMut(&str) + Send>;
 static SINK: Mutex<Option<Sink>> = Mutex::new(None);
 
 /// Install a sink, or `None` to go quiet again. Tests use this to capture.
+///
+/// # Panics
+///
+/// Panics if the sink mutex is poisoned, i.e. an earlier sink panicked while
+/// writing a line.
 pub fn set_sink(sink: Option<Sink>) {
     *SINK.lock().expect("progress sink") = sink;
 }
@@ -41,6 +46,11 @@ pub fn to_stderr() {
 }
 
 /// True when anything is listening. Callers can skip formatting work.
+///
+/// # Panics
+///
+/// Panics if the sink mutex is poisoned, i.e. an earlier sink panicked while
+/// writing a line.
 pub fn enabled() -> bool {
     SINK.lock().expect("progress sink").is_some()
 }
@@ -91,6 +101,8 @@ impl Ticker {
     }
 
     /// Report progress through the phase. `frac` is 0.0 to 1.0.
+    // `frac` is clamped to [0, 1], so the whole percentage fits a u8.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn at(&mut self, frac: f64) {
         if !enabled() {
             return;
@@ -136,13 +148,14 @@ fn remaining(elapsed: Duration, frac: f64) -> String {
     format!("  about {} left", human_secs(left))
 }
 
+// A non-negative duration in seconds, rounded to whole seconds on purpose.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn human_secs(s: f64) -> String {
     if s < 60.0 {
         format!("{}s", s.round() as u64)
     } else {
-        let m = (s / 60.0).floor() as u64;
-        let rem = (s - (m as f64) * 60.0).round() as u64;
-        format!("{m}m{rem:02}s")
+        let m = (s / 60.0).floor();
+        format!("{}m{:02}s", m as u64, m.mul_add(-60.0, s).round() as u64)
     }
 }
 
@@ -158,7 +171,9 @@ mod tests {
         Arc<StdMutex<Vec<String>>>,
         std::sync::MutexGuard<'static, ()>,
     ) {
-        let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let lines = Arc::new(StdMutex::new(Vec::new()));
         let sink = Arc::clone(&lines);
         set_sink(Some(Box::new(move |l: &str| {
@@ -169,7 +184,9 @@ mod tests {
 
     #[test]
     fn silent_without_a_sink_and_for_a_quick_phase() {
-        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_sink(None);
         assert!(!enabled());
         // Must neither panic nor write.
@@ -177,12 +194,12 @@ mod tests {
         let mut t = Ticker::new("phase");
         t.at(0.5);
         t.done();
-        drop(_guard);
+        drop(guard);
 
         let (lines, _guard) = capture();
         let mut t = Ticker::new("quick");
         for i in 0..=100 {
-            t.at(i as f64 / 100.0);
+            t.at(f64::from(i) / 100.0);
         }
         t.done();
         set_sink(None);
@@ -198,9 +215,9 @@ mod tests {
         let (lines, _guard) = capture();
         let mut t = Ticker::new("slow");
         // Backdate the start so the phase counts as slow without sleeping.
-        t.started = Instant::now() - Duration::from_secs(10);
+        t.started = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
         for i in 0..=10_000 {
-            t.at(i as f64 / 10_000.0);
+            t.at(f64::from(i) / 10_000.0);
         }
         t.done();
         set_sink(None);

@@ -165,6 +165,7 @@ fn pullups_to_rails(board: &ExtractedBoard, net_id: i64) -> Vec<(String, String,
 }
 
 /// Run the back-powering lint over every modelled part on the board.
+#[must_use]
 pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     // (part ref, net id, rail net) already reported, so a bus with several

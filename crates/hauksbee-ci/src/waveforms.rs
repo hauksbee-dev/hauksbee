@@ -16,6 +16,7 @@
 //! timestamp and is not in the series. A series longer than [`MAX_POINTS`] is
 //! min/max-bucket decimated, which keeps every bucket's extremes.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::runner::RunOutcome;
@@ -40,7 +41,7 @@ pub fn decimate(series: &[(f64, f64)]) -> Vec<(f64, f64)> {
             out.extend(if lo.0 <= hi.0 { [lo, hi] } else { [hi, lo] });
         }
     }
-    out.dedup_by(|a, b| a.0 == b.0);
+    out.dedup_by(|a, b| a.0.total_cmp(&b.0).is_eq());
     out
 }
 
@@ -61,13 +62,17 @@ fn write_csv(path: &Path, net: &str, series: &[(f64, f64)]) -> std::io::Result<u
         hauksbee_engine::commands::sim::csv_escape(net)
     );
     for (t, v) in &rows {
-        csv.push_str(&format!("{t:.9},{v}\n"));
+        let _ = writeln!(csv, "{t:.9},{v}");
     }
     std::fs::write(path, csv)?;
     Ok(rows.len())
 }
 
 /// Write every seed's series for `spec` under `dir/<spec-stem>/`.
+///
+/// # Errors
+///
+/// Any IO error creating a directory or writing a CSV or the index.
 pub fn export(
     dir: &Path,
     spec_path: &Path,
@@ -132,7 +137,9 @@ mod tests {
     #[test]
     fn decimation_bounds_points_and_keeps_extremes() {
         let n = MAX_POINTS * 5;
-        let mut s: Vec<(f64, f64)> = (0..n).map(|i| (i as f64 * 1e-6, 1.0)).collect();
+        let mut s: Vec<(f64, f64)> = (0..u32::try_from(n).unwrap())
+            .map(|i| (f64::from(i) * 1e-6, 1.0))
+            .collect();
         s[12_345].1 = -3.0;
         s[77_777].1 = 9.0;
         let d = decimate(&s);

@@ -33,7 +33,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Owns the platform primitive that ties an emulator process tree to the
-/// hauksbee process. Unix uses the process group established before spawn, so
+/// hauksbee process.
+///
+/// Unix uses the process group established before spawn, so
 /// there is no additional handle to retain. Windows needs a Job Object with
 /// `KILL_ON_JOB_CLOSE`: unlike a best-effort `taskkill` in `Drop`, the kernel
 /// closes this handle and terminates the whole tree even when hauksbee itself
@@ -50,6 +52,9 @@ pub struct ProcessTreeGuard {
 unsafe impl Send for ProcessTreeGuard {}
 
 impl ProcessTreeGuard {
+    // Trivial off Windows; the Windows body calls Win32 and can fail.
+    #[cfg_attr(not(windows), allow(clippy::missing_const_for_fn))]
+    #[cfg_attr(not(windows), allow(clippy::unnecessary_wraps))]
     fn attach(child: &std::process::Child) -> std::io::Result<Self> {
         #[cfg(windows)]
         {
@@ -103,6 +108,12 @@ impl ProcessTreeGuard {
     /// Windows uses the retained Job Object handle, never a numeric PID that
     /// may already have been reaped and recycled. Unix teardown is performed
     /// by the caller's process-group kill; the guard is only a marker there.
+    ///
+    /// # Errors
+    ///
+    /// On Windows, the OS error when `TerminateJobObject` fails. Never errors
+    /// on unix.
+    #[cfg_attr(not(windows), allow(clippy::missing_const_for_fn))] // the Windows body calls Win32
     pub fn terminate(&self) -> std::io::Result<()> {
         #[cfg(windows)]
         {
@@ -191,6 +202,11 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
 /// than represented as an impossible guarantee. Unix callers establish their
 /// process group on `cmd` before entering here; the guard is then a zero-sized
 /// owner marker.
+///
+/// # Errors
+///
+/// The spawn error from `cmd`, or (Windows) the error creating or assigning
+/// the Job Object or resuming the child, after which the child is killed.
 pub fn spawn_owned(
     cmd: &mut std::process::Command,
 ) -> std::io::Result<(std::process::Child, ProcessTreeGuard)> {
@@ -378,6 +394,7 @@ pub(crate) fn unregister(pid: u32) {
 /// PID is not a stable process identity and may already name an unrelated
 /// process.
 #[cfg(unix)]
+#[allow(clippy::cast_possible_wrap)] // registered PIDs came from the kernel's pid_t
 pub(crate) fn kill_tree(pid: u32) {
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
@@ -385,11 +402,13 @@ pub(crate) fn kill_tree(pid: u32) {
     }
 }
 
-/// Kill every registered child's tree and empty the table. Returns how many
-/// children were killed. Public so a host binary can flush emulators on its
-/// own shutdown path; the signal handler does the same thing inline (it
-/// cannot call this: `taskkill` spawning is not async-signal-safe, and the
-/// handler is unix-only anyway).
+/// Kill every registered child's tree and empty the table.
+///
+/// Returns how many children were killed. Public so a host binary can flush
+/// emulators on its own shutdown path; the signal handler does the same thing
+/// inline (it cannot call this: `taskkill` spawning is not async-signal-safe,
+/// and the handler is unix-only anyway).
+#[must_use]
 pub fn kill_all_registered() -> usize {
     #[cfg(unix)]
     {
@@ -428,6 +447,7 @@ pub fn kill_all_registered() -> usize {
 /// the default disposition and re-raise, so the process still dies with the
 /// correct signal status. Only async-signal-safe calls.
 #[cfg(unix)]
+#[allow(clippy::cast_possible_wrap)] // registered PIDs came from the kernel's pid_t
 extern "C" fn reap_and_die(sig: libc::c_int) {
     for slot in &CHILD_PIDS {
         let pid = slot.load(Ordering::Acquire);
@@ -444,11 +464,13 @@ extern "C" fn reap_and_die(sig: libc::c_int) {
     }
 }
 
-/// Install the reaper for SIGTERM, SIGINT and SIGHUP (unix). Call once, early
-/// in `main`, from any binary that can spawn emulators. Terminal behaviour is
-/// unchanged: the handler ends by re-raising the signal with the default
-/// disposition, so exit statuses and shell job control look exactly as
-/// before; the only difference is that no emulator survives the parent.
+/// Install the reaper for SIGTERM, SIGINT and SIGHUP (unix).
+///
+/// Call once, early in `main`, from any binary that can spawn emulators.
+/// Terminal behaviour is unchanged: the handler ends by re-raising the signal
+/// with the default disposition, so exit statuses and shell job control look
+/// exactly as before; the only difference is that no emulator survives the
+/// parent.
 ///
 /// On Windows this is a no-op because there are no POSIX signals to catch.
 /// Every Renode/QEMU child instead owns a kill-on-close Job Object through
@@ -475,6 +497,7 @@ pub(crate) static SPAWN_PTY_EXCLUSION: std::sync::Mutex<()> = std::sync::Mutex::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::PoisonError;
 
     /// The registry is global to the process, so tests that flush it must not
     /// interleave.
@@ -485,9 +508,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn registry_bookkeeping() {
-        let _serial = SERIAL
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
         // PIDs nothing real can hold during the test: register/unregister
         // only touch the table, and kill_tree on a nonexistent pid is a
         // harmless ESRCH.
@@ -509,15 +530,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn kill_all_kills_a_live_child() {
+        use std::os::unix::process::CommandExt;
         // See SPAWN_PTY_EXCLUSION: the spawn below transiently clones every
         // fd in the process, including any pty slave a concurrent test holds.
         let _quiesce = SPAWN_PTY_EXCLUSION
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _serial = SERIAL
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        use std::os::unix::process::CommandExt;
+            .unwrap_or_else(PoisonError::into_inner);
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
         let mut cmd = std::process::Command::new("sleep");
         cmd.arg("300");
         cmd.process_group(0);
@@ -553,7 +572,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_kill_all_uses_registered_job_handles() {
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
         let mut command = std::process::Command::new("cmd");
         command.args(["/C", "ping -n 30 127.0.0.1 > NUL"]);
         let (mut child, guard) = spawn_owned(&mut command).expect("spawn in kill-on-close job");
@@ -566,7 +585,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_reaped_child_teardown_uses_owned_job() {
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
         let mut command = std::process::Command::new("cmd");
         command.args(["/C", "exit 0"]);
         let (mut child, guard) = spawn_owned(&mut command).expect("spawn in owned job");

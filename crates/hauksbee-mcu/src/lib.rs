@@ -29,10 +29,11 @@
 ///
 /// The lint suppressions are scoped to this module on purpose. bindgen emits
 /// C naming, self-transmutes, same-type casts and undocumented `unsafe fn`s for
-/// a C header's typedefs, none of which anyone can act on: the file is
-/// regenerated from simavr's headers on every build. Silencing them here keeps
-/// the rest of the crate under a clean `-D warnings` gate instead of drowning
-/// it in several hundred warnings about code nobody here writes.
+/// a C header's typedefs (plus pedantic/nursery noise), none of which anyone
+/// can act on: the file is regenerated from simavr's headers on every build.
+/// Silencing them here keeps the rest of the crate under a clean `-D warnings`
+/// gate instead of drowning it in several hundred warnings about code nobody
+/// here writes.
 #[cfg(feature = "avr")]
 #[allow(
     non_upper_case_globals,
@@ -42,7 +43,9 @@
     clippy::useless_transmute,
     clippy::unnecessary_cast,
     clippy::missing_safety_doc,
-    clippy::ptr_offset_with_cast
+    clippy::ptr_offset_with_cast,
+    clippy::pedantic,
+    clippy::nursery
 )]
 pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/simavr_bindings.rs"));
@@ -84,6 +87,11 @@ use std::path::{Path, PathBuf};
 /// absolute path that was tried and says whether it was missing, a directory,
 /// or unreadable. Callers with extra provenance (e.g. a CI spec field) should
 /// wrap this error to add where the path came from.
+///
+/// # Errors
+///
+/// When the path does not exist, names a directory, or cannot be opened for
+/// reading.
 pub fn validate_firmware_path(path: &Path) -> anyhow::Result<PathBuf> {
     // Absolute for the message without requiring existence (`canonicalize`
     // fails on a missing path, which is the case being diagnosed).
@@ -117,6 +125,7 @@ pub use qemu::{QemuBackend, QemuConfig};
 pub use soc::{Backend, SocConfig, SocError};
 
 /// Immutable simavr source revision linked into a provenance-bound AVR build.
+///
 /// Ordinary local system-library builds may not carry this optional identity;
 /// release and CI builds require it and expose it through `doctor --backends`.
 #[cfg(feature = "avr")]
@@ -125,6 +134,7 @@ pub const SIMAVR_BUILD_COMMIT: Option<&str> = option_env!("HAUKSBEE_SIMAVR_COMMI
 /// Human-readable provenance for the built-in AVR backend. Shared by CLI and
 /// MCP so the two public capability surfaces cannot drift.
 #[cfg(feature = "avr")]
+#[must_use]
 pub fn simavr_build_detail() -> String {
     SIMAVR_BUILD_COMMIT.map_or_else(
         || "simavr linked into this binary (source commit not embedded)".to_string(),

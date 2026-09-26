@@ -9,7 +9,7 @@
 //! node to 0.000 V, which sits neatly inside the asserted band, and the old
 //! behavior reported INVALID on BOTH revisions (undermined by the same open
 //! parts), so the one assertion that should discriminate the defect could
-//! not. The refinement (hauksbee_engine::dcpath) reads the built circuit:
+//! not. The refinement (`hauksbee_engine::dcpath`) reads the built circuit:
 //!
 //! - nothing with DC conductance on the net -> the number is a convention,
 //!   not a level: ordinary RED, traced to the missing pull ("add a pull

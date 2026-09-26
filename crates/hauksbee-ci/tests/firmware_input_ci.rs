@@ -1,5 +1,5 @@
 //! CI parity for the firmware input tiers (see `hauksbee-engine`'s
-//! `firmware_input`): the spec's `firmware` key accepts a zip or a PlatformIO
+//! `firmware_input`): the spec's `firmware` key accepts a zip or a `PlatformIO`
 //! project exactly like `run --firmware` and the web drop zone, so the same
 //! repo layout works on every surface, including the GitHub Action, which
 //! shells `hauksbee-ci run`.
@@ -20,8 +20,8 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// A spec whose `firmware` is a ZIP containing a built image (at the
-/// PlatformIO artifact path) must resolve and run to the same green verdict as
-/// pointing at the .hex directly. Uses the committed boot_gate hex + board, so
+/// `PlatformIO` artifact path) must resolve and run to the same green verdict as
+/// pointing at the .hex directly. Uses the committed `boot_gate` hex + board, so
 /// it needs the GPL-gated `avr` feature like the other boot-gate tests.
 #[cfg(feature = "avr")]
 #[test]

@@ -8,7 +8,7 @@
 //! part exceeds its rating.
 //!
 //! Input is a hand-written [`spec::Spec`] (TOML) checked into a hardware repo.
-//! Output is a human report, a process exit code (0 green / 1 red), JUnit XML
+//! Output is a human report, a process exit code (0 green / 1 red), `JUnit` XML
 //! for any CI system, and GitHub Actions annotations.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ci/README.md.
@@ -45,20 +45,23 @@ pub use init::init;
 pub use report::CiResult;
 pub use spec::Spec;
 
-/// The `--version` string: crate version plus the git hash this binary was
-/// built from (`build.rs` sets `GIT_HASH`; absent outside a git checkout, e.g.
-/// a source tarball, in which case the bare crate version is all we honestly
-/// have). Two consumers must agree on it byte for byte: clap's `version =` in
-/// main.rs, and the `# installed by ...` line [`integrate::hook_install`]
-/// writes into the pre-commit hook so the hook can warn when the binary on
-/// PATH is a different build. Returned as `&'static str` because that is what
-/// clap's `version` wants; the one-time `OnceLock` init is the cheapest way to
-/// a static composed string.
+/// The `--version` string: crate version plus the git hash of this build.
+///
+/// `build.rs` sets `GIT_HASH` (absent outside a git checkout, e.g. a source
+/// tarball, in which case the bare crate version is all we honestly have). Two
+/// consumers must agree on it byte for byte: clap's `version =` in main.rs, and
+/// the `# installed by ...` line [`integrate::hook_install`] writes into the
+/// pre-commit hook so the hook can warn when the binary on PATH is a different
+/// build. Returned as `&'static str` because that is what clap's `version`
+/// wants; the one-time `OnceLock` init is the cheapest way to a static composed
+/// string.
 pub fn version_string() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    V.get_or_init(|| match option_env!("GIT_HASH") {
-        Some(hash) => format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_string(),
+    V.get_or_init(|| {
+        option_env!("GIT_HASH").map_or_else(
+            || env!("CARGO_PKG_VERSION").to_string(),
+            |hash| format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
+        )
     })
 }
 
@@ -86,12 +89,13 @@ pub struct RunConfig {
     pub waveforms: Option<PathBuf>,
 }
 
-/// Apply the board's waiver file to the evaluated assertion results: a real
-/// failure (never a pass, never an INVALID refusal) that an active `check =
-/// "ci"` waiver matches is marked visible-but-not-gating. INVALID stays
-/// unwaivable on purpose: a waiver overrules a *finding*, and an INVALID is
-/// the absence of one; letting a waiver green an untrustworthy run would fail
-/// open. Matching mirrors the engine's `--check` semantics exactly (same
+/// Apply the board's waiver file to the evaluated assertion results.
+///
+/// A real failure (never a pass, never an INVALID refusal) that an active
+/// `check = "ci"` waiver matches is marked visible-but-not-gating. INVALID
+/// stays unwaivable on purpose: a waiver overrules a *finding*, and an INVALID
+/// is the absence of one; letting a waiver green an untrustworthy run would
+/// fail open. Matching mirrors the engine's `--check` semantics exactly (same
 /// [`hauksbee_engine::waiver::WaiverSet`], same expiry, same nets/refs rules),
 /// so a board+waiver behaves the same under `hauksbee-ci run` as under the
 /// static gates.
@@ -120,7 +124,9 @@ pub fn apply_waivers(
 const WAIVER_SURFACES: &[&str] = &["ci", "drc", "lint", "si"];
 
 /// The housekeeping notes for this run's waiver set, filtered to the `ci`
-/// check: a lapsed `ci` waiver whose finding gates again, and an active `ci`
+/// check.
+///
+/// That is a lapsed `ci` waiver whose finding gates again, and an active `ci`
 /// waiver that matched nothing. Waivers for the static checks (`drc` / `lint`
 /// / `si`) live in the same file but belong to `hauksbee run`'s surfaces;
 /// reporting them stale HERE would tell the user to delete waivers this run
@@ -132,6 +138,7 @@ const WAIVER_SURFACES: &[&str] = &["ci", "drc", "lint", "si"];
 /// (missing `reason`, unparseable `until`, no `nets`/`refs`) refuses to load at
 /// all. It gets folded into the matched-nothing accounting here, with the
 /// surface it probably meant.
+#[must_use]
 pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String> {
     let mut notes = Vec::new();
     for w in waivers.expired() {
@@ -204,6 +211,14 @@ fn union_across(
 }
 
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
+///
+/// # Errors
+///
+/// [`SpecError`] when the spec, a model directory, a SPICE model file or an
+/// evidence input cannot be loaded, when the co-sim cannot be set up, or when
+/// the run's evidence cannot be assembled.
+// One pipeline read top to bottom; its counts are ensemble sizes, bounded by the u32 seed space.
+#[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
     let mut spec = Spec::load(&cfg.spec)?;
@@ -266,10 +281,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // Coverage banner data for a tolerance ensemble: how many members ran and
     // how many components were sampled (from any outcome; the set is fixed).
     let coverage = if spec.has_tolerances() {
-        let components = outcomes
-            .first()
-            .map(|o| o.sampled_values.len())
-            .unwrap_or(0);
+        let components = outcomes.first().map_or(0, |o| o.sampled_values.len());
         let members = outcomes.len() as u32;
         // A pinned `--seed N` filters the ensemble down to that one member, so the
         // "nominal baseline + members-1 sampled" (Monte-Carlo) and "N corners"
@@ -495,6 +507,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         .unwrap_or_default();
     let mut floating_reds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (result, map) in results.iter_mut().zip(maps.iter_mut()) {
+        use hauksbee_engine::dcpath::NetDcDefinition;
         if result.kind != "voltage" || result.invalid {
             continue;
         }
@@ -506,7 +519,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         if statuses.is_empty() {
             continue;
         }
-        use hauksbee_engine::dcpath::NetDcDefinition;
         if statuses
             .iter()
             .all(|s| matches!(s.definition, NetDcDefinition::Floating))
@@ -532,8 +544,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 result
                     .subject_nets
                     .first()
-                    .map(String::as_str)
-                    .unwrap_or("the net"),
+                    .map_or("the net", String::as_str),
                 result.detail
             );
             floating_reds.insert(result.label.clone());

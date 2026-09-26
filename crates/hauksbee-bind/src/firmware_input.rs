@@ -1,7 +1,7 @@
 //! Resolve a firmware *input*, whatever the user handed us, into a bootable
 //! image the MCU backends can load.
 //!
-//! The co-sim loaders want one compiled `.elf`/`.hex`. Users have a PlatformIO
+//! The co-sim loaders want one compiled `.elf`/`.hex`. Users have a `PlatformIO`
 //! project, an ESP-IDF build tree, or a zip of either, and should not need to
 //! know that the artifact lives at `.pio/build/<env>/firmware.elf`. This module
 //! closes that gap in three tiers:
@@ -65,17 +65,17 @@ const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 /// a hostile header can lie.
 struct ZipLimits {
     /// Maximum number of entries in the archive.
-    max_entries: usize,
+    entries: usize,
     /// Maximum uncompressed bytes for any single entry.
-    max_entry_bytes: u64,
+    entry_bytes: u64,
     /// Maximum uncompressed bytes across the whole archive.
-    max_total_bytes: u64,
+    total_bytes: u64,
 }
 
 const ZIP_LIMITS: ZipLimits = ZipLimits {
-    max_entries: 10_000,
-    max_entry_bytes: 256 * 1024 * 1024,
-    max_total_bytes: 512 * 1024 * 1024,
+    entries: 10_000,
+    entry_bytes: 256 * 1024 * 1024,
+    total_bytes: 512 * 1024 * 1024,
 };
 
 /// The `pio` binary to invoke. `HAUKSBEE_PIO` overrides the PATH lookup (used
@@ -87,9 +87,15 @@ fn pio_bin() -> String {
 /// Resolve uploaded firmware bytes (the web drop zone's firmware part).
 ///
 /// Non-zip inputs pass through untouched. Zips resolve to the best built image
-/// inside, or, if the archive is a PlatformIO project with no built image,
+/// inside, or, if the archive is a `PlatformIO` project with no built image,
 /// to a `pio run` build of it. Errors are user-facing strings (they land in
 /// the co-sim card verbatim).
+///
+/// # Errors
+///
+/// Returns a user-facing message when the zip cannot be read or exceeds the
+/// extraction limits, or holds neither a built image nor a buildable
+/// `PlatformIO` project, or the `pio run` build fails.
 pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<ResolvedFirmware, String> {
     resolve_firmware_bytes_limited(fw_name, fw_bytes, &ZIP_LIMITS)
 }
@@ -109,13 +115,13 @@ fn resolve_firmware_bytes_limited(
 
     let mut archive = zip::ZipArchive::new(Cursor::new(fw_bytes))
         .map_err(|e| format!("could not open '{fw_name}' as a zip archive: {e}"))?;
-    if archive.len() > limits.max_entries {
+    if archive.len() > limits.entries {
         return Err(format!(
             "'{fw_name}' contains {} entries, over the {} allowed for an uploaded \
              archive (zip-bomb guard). Upload the compiled image, or a leaner \
              project snapshot.",
             archive.len(),
-            limits.max_entries
+            limits.entries
         ));
     }
 
@@ -124,28 +130,28 @@ fn resolve_firmware_bytes_limited(
         let mut file = archive
             .by_index(best.index)
             .map_err(|e| format!("could not read '{}' from the archive: {e}", best.entry_name))?;
-        if file.size() > limits.max_entry_bytes {
+        if file.size() > limits.entry_bytes {
             return Err(format!(
                 "'{}' inside the archive declares {} uncompressed bytes, over the \
                  {} MiB per-file limit for uploaded archives (zip-bomb guard)",
                 best.entry_name,
                 file.size(),
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         // Read through a hard cap, not to the declared size: a lying header
         // must still trip the quota instead of exhausting memory.
         let mut bytes = Vec::new();
         (&mut file)
-            .take(limits.max_entry_bytes + 1)
+            .take(limits.entry_bytes + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| format!("could not read '{}' from the archive: {e}", best.entry_name))?;
-        if bytes.len() as u64 > limits.max_entry_bytes {
+        if bytes.len() as u64 > limits.entry_bytes {
             return Err(format!(
                 "'{}' inside the archive inflates past the {} MiB per-file limit \
                  for uploaded archives (zip-bomb guard)",
                 best.entry_name,
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         let name = Path::new(&best.entry_name)
@@ -206,6 +212,12 @@ fn resolve_firmware_bytes_limited(
 /// Resolve a CLI `--firmware` path that is a directory or a zip. Returns
 /// `Ok(None)` for a plain file that is not a zip; the caller keeps its
 /// existing path untouched.
+///
+/// # Errors
+///
+/// Fails when a directory has neither a `platformio.ini` nor a built image,
+/// when the `PlatformIO` build fails, or when a zip cannot be read, resolved to
+/// firmware, or staged to a temporary file.
 pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwareFile>> {
     if path.is_dir() {
         // A live project directory: build it (pio run is incremental), or fall
@@ -282,9 +294,8 @@ fn best_image_entry<R: Read + std::io::Seek>(
 ) -> Option<ImageEntry> {
     let mut candidates: Vec<(u8, i64, usize, String)> = Vec::new();
     for i in 0..archive.len() {
-        let entry = match archive.by_index(i) {
-            Ok(e) => e,
-            Err(_) => continue,
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
         };
         if entry.is_dir() {
             continue;
@@ -297,13 +308,15 @@ fn best_image_entry<R: Read + std::io::Seek>(
         }
         let lower = name.to_ascii_lowercase();
         let in_pio_build = lower.contains(".pio/build/");
-        let rank = if lower.ends_with(".elf") {
-            if in_pio_build {
-                0
-            } else {
-                1
-            }
-        } else if lower.ends_with(".hex") {
+        let rank = if std::path::Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("elf"))
+        {
+            u8::from(!in_pio_build)
+        } else if std::path::Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("hex"))
+        {
             if in_pio_build {
                 2
             } else {
@@ -314,17 +327,14 @@ fn best_image_entry<R: Read + std::io::Seek>(
         };
         // Newest wins within a rank; the zip DateTime collapses to a sortable
         // scalar (seconds precision is plenty for "which build is fresher").
-        let stamp = entry
-            .last_modified()
-            .map(|dt| {
-                (dt.year() as i64) * 33177600
-                    + (dt.month() as i64) * 2764800
-                    + (dt.day() as i64) * 86400
-                    + (dt.hour() as i64) * 3600
-                    + (dt.minute() as i64) * 60
-                    + dt.second() as i64
-            })
-            .unwrap_or(0);
+        let stamp = entry.last_modified().map_or(0, |dt| {
+            i64::from(dt.year()) * 33_177_600
+                + i64::from(dt.month()) * 2_764_800
+                + i64::from(dt.day()) * 86400
+                + i64::from(dt.hour()) * 3600
+                + i64::from(dt.minute()) * 60
+                + i64::from(dt.second())
+        });
         candidates.push((rank, -stamp, i, name));
     }
     let total = candidates.len();
@@ -355,7 +365,7 @@ fn archive_has_platformio_ini<R: Read + std::io::Seek>(archive: &mut zip::ZipArc
 /// `enclosed_name` so a hostile archive cannot write outside it (zip-slip),
 /// and the [`ZipLimits`] quotas are enforced on what actually inflates, so a
 /// zip bomb cannot exhaust disk. The dir comes from `tempfile` (unpredictable
-/// name, created 0700 with O_EXCL semantics), not a guessable PID-derived path
+/// name, created 0700 with `O_EXCL` semantics), not a guessable PID-derived path
 /// a local attacker could pre-create as a symlink; it is removed when the
 /// returned guard drops.
 fn extract_zip_to_temp<R: Read + std::io::Seek>(
@@ -372,13 +382,13 @@ fn extract_zip_to_temp<R: Read + std::io::Seek>(
         let Some(rel) = entry.enclosed_name() else {
             continue; // absolute or ..-escaping path: refuse silently, never write it
         };
-        if entry.size() > limits.max_entry_bytes {
+        if entry.size() > limits.entry_bytes {
             return Err(format!(
                 "'{}' in '{fw_name}' declares {} uncompressed bytes, over the {} MiB \
                  per-file limit for uploaded archives (zip-bomb guard)",
                 entry.name(),
                 entry.size(),
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         let out = dir.path().join(rel);
@@ -393,22 +403,22 @@ fn extract_zip_to_temp<R: Read + std::io::Seek>(
             .map_err(|e| format!("extract of '{}' failed: {e}", out.display()))?;
         // Copy through a hard cap, one byte past the per-file limit, so an
         // entry whose header lies about its size still trips the quota.
-        let copied = std::io::copy(&mut (&mut entry).take(limits.max_entry_bytes + 1), &mut f)
+        let copied = std::io::copy(&mut (&mut entry).take(limits.entry_bytes + 1), &mut f)
             .map_err(|e| format!("extract of '{}' failed: {e}", out.display()))?;
-        if copied > limits.max_entry_bytes {
+        if copied > limits.entry_bytes {
             return Err(format!(
                 "'{}' in '{fw_name}' inflates past the {} MiB per-file limit for \
                  uploaded archives (zip-bomb guard)",
                 entry.name(),
-                limits.max_entry_bytes / (1024 * 1024)
+                limits.entry_bytes / (1024 * 1024)
             ));
         }
         total += copied;
-        if total > limits.max_total_bytes {
+        if total > limits.total_bytes {
             return Err(format!(
                 "'{fw_name}' inflates past the {} MiB total limit for uploaded \
                  archives (zip-bomb guard)",
-                limits.max_total_bytes / (1024 * 1024)
+                limits.total_bytes / (1024 * 1024)
             ));
         }
     }
@@ -469,7 +479,7 @@ fn drain_tail(mut r: impl Read) -> Vec<u8> {
     let mut chunk = [0u8; 8192];
     loop {
         match r.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
                 if buf.len() > PIO_OUTPUT_TAIL_BYTES {
@@ -477,13 +487,12 @@ fn drain_tail(mut r: impl Read) -> Vec<u8> {
                     buf.drain(..excess);
                 }
             }
-            Err(_) => break,
         }
     }
     buf
 }
 
-/// Build a PlatformIO project with the user's own toolchain and return the
+/// Build a `PlatformIO` project with the user's own toolchain and return the
 /// built image. Detect-don't-bundle: a missing `pio` and a failing build are
 /// both loud errors that say exactly what to do.
 fn pio_build(project: &Path) -> Result<(PathBuf, String), String> {
@@ -650,7 +659,7 @@ mod tests {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
-    /// Tests that mutate process-wide env vars (HAUKSBEE_PIO, the timeout
+    /// Tests that mutate process-wide env vars (`HAUKSBEE_PIO`, the timeout
     /// override) serialize on this lock so the parallel test runner cannot
     /// interleave them.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -739,9 +748,9 @@ mod tests {
     fn zip_with_too_many_entries_is_refused() {
         let z = zip_of(&[("a.txt", b"x"), ("b.txt", b"y"), ("c.txt", b"z")]);
         let limits = ZipLimits {
-            max_entries: 2,
-            max_entry_bytes: 1024,
-            max_total_bytes: 4096,
+            entries: 2,
+            entry_bytes: 1024,
+            total_bytes: 4096,
         };
         let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
         assert!(err.contains("entries"), "names the quota: {err}");
@@ -753,9 +762,9 @@ mod tests {
         let big = vec![0u8; 1024];
         let z = zip_of(&[("build/app.elf", big.as_slice())]);
         let limits = ZipLimits {
-            max_entries: 10,
-            max_entry_bytes: 512,
-            max_total_bytes: 1 << 20,
+            entries: 10,
+            entry_bytes: 512,
+            total_bytes: 1 << 20,
         };
         let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
         assert!(err.contains("per-file limit"), "names the quota: {err}");
@@ -769,9 +778,9 @@ mod tests {
             ("p/src/big.bin", big.as_slice()),
         ]);
         let limits = ZipLimits {
-            max_entries: 10,
-            max_entry_bytes: 128,
-            max_total_bytes: 1 << 20,
+            entries: 10,
+            entry_bytes: 128,
+            total_bytes: 1 << 20,
         };
         let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
         assert!(err.contains("per-file limit"), "names the quota: {err}");
@@ -787,9 +796,9 @@ mod tests {
             ("p/src/c.bin", chunk.as_slice()),
         ]);
         let limits = ZipLimits {
-            max_entries: 10,
-            max_entry_bytes: 400,
-            max_total_bytes: 700,
+            entries: 10,
+            entry_bytes: 400,
+            total_bytes: 700,
         };
         let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
         assert!(err.contains("total limit"), "names the quota: {err}");
@@ -856,9 +865,9 @@ mod tests {
 
     /// Real end-to-end `pio run` build. Ignored by default: it needs pio on
     /// PATH and the atmelavr toolchain installed (first run downloads it).
-    /// Run with: cargo test -p hauksbee-engine --lib firmware_input -- --ignored
+    /// Run with: cargo test -p hauksbee-engine --lib `firmware_input` -- --ignored
     #[test]
-    #[ignore]
+    #[ignore = "needs pio on PATH and the atmelavr toolchain"]
     fn real_pio_project_builds_and_resolves() {
         let dir = std::env::temp_dir().join(format!("hauksbee-pio-e2e-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();

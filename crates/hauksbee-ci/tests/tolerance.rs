@@ -150,8 +150,8 @@ fn corners_land_on_the_analytic_envelope() {
     );
 
     let vs: Vec<f64> = corners.iter().map(|o| vout(o)).collect();
-    let lo = vs.iter().cloned().fold(f64::INFINITY, f64::min);
-    let hi = vs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let lo = vs.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = vs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     assert!(
         (lo - V_MIN).abs() < 1e-6,
         "min corner {lo} != analytic {V_MIN}"

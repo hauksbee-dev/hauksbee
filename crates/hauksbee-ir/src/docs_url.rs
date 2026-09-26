@@ -18,6 +18,7 @@
 /// `repo_path` is the path as it appears in the repository, e.g.
 /// `docs/cosim/MCU.md`; the result is
 /// `https://docs.hauksbee.dev/docs/cosim/mcu`.
+#[must_use]
 pub fn docs_url(repo_path: &str) -> String {
     let trimmed = repo_path.strip_suffix(".md").unwrap_or(repo_path);
     format!("https://docs.hauksbee.dev/{}", trimmed.to_lowercase())

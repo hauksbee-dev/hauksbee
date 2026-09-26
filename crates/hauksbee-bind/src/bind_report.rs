@@ -17,6 +17,7 @@
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelSourceTier};
 use hauksbee_models::Confidence;
 use serde::Serialize;
+use std::fmt::Write as _;
 
 /// What a component turned into during binding.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,10 +38,13 @@ pub enum BindOutcome {
     Unresolved { reason: String },
 }
 
-/// Whether a stamped device kind is an ACTIVE part, whose generic fallback
-/// model would carry invented breakdown/current/power ratings that a stress
-/// verdict can cite. Passives (resistor, capacitor, inductor) are excluded: their
-/// fallbacks carry no such ratings and bind on nearly every board.
+/// Whether a stamped device kind is an ACTIVE part, whose generic fallback model
+/// would carry invented breakdown/current/power ratings that a stress verdict can
+/// cite.
+///
+/// Passives (resistor, capacitor, inductor) are excluded: their fallbacks carry
+/// no such ratings and bind on nearly every board.
+#[must_use]
 pub fn is_active_fallback_device(device: &str) -> bool {
     let d = device.to_ascii_lowercase();
     [
@@ -71,15 +75,16 @@ impl BindOutcome {
     /// A named abstention's `reason` arrives with its two halves joined by
     /// `UNLOCKED_BY_MARKER`; the marker is stripped here so no reader surface
     /// shows the plumbing.
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
-            BindOutcome::Analog { device } => format!("analog {device}"),
-            BindOutcome::Behavioral { device } => format!("behavioral {device}"),
-            BindOutcome::Digital { kind } => format!("digital {kind}"),
-            BindOutcome::Mcu { backend } => format!("mcu {backend}"),
-            BindOutcome::PowerRail { volts } => format!("rail {volts:.2}V"),
-            BindOutcome::Skipped { reason } => format!("skipped ({reason})"),
-            BindOutcome::Unresolved { reason } => {
+            Self::Analog { device } => format!("analog {device}"),
+            Self::Behavioral { device } => format!("behavioral {device}"),
+            Self::Digital { kind } => format!("digital {kind}"),
+            Self::Mcu { backend } => format!("mcu {backend}"),
+            Self::PowerRail { volts } => format!("rail {volts:.2}V"),
+            Self::Skipped { reason } => format!("skipped ({reason})"),
+            Self::Unresolved { reason } => {
                 let reason = reason
                     .split_once(hauksbee_ir::evidence::Assumption::UNLOCKED_BY_MARKER)
                     .map_or(reason.as_str(), |(because, _)| because.trim());
@@ -89,13 +94,15 @@ impl BindOutcome {
     }
 
     /// Whether this outcome counts as a "resolved" component (for stats).
-    pub fn is_resolved(&self) -> bool {
-        !matches!(self, BindOutcome::Unresolved { .. })
+    #[must_use]
+    pub const fn is_resolved(&self) -> bool {
+        !matches!(self, Self::Unresolved { .. })
     }
 
     /// Whether this outcome was deliberately ignored (excluded from resolve %).
-    pub fn is_ignored(&self) -> bool {
-        matches!(self, BindOutcome::Skipped { .. })
+    #[must_use]
+    pub const fn is_ignored(&self) -> bool {
+        matches!(self, Self::Skipped { .. })
     }
 }
 
@@ -119,6 +126,28 @@ pub struct BindRow {
     pub guesses: Vec<String>,
 }
 
+impl BindRow {
+    /// A row with no model, source, warning or guesses (skips, rails, refusals).
+    #[must_use]
+    pub const fn without_model(
+        reference: String,
+        value: String,
+        confidence: Confidence,
+        outcome: BindOutcome,
+    ) -> Self {
+        Self {
+            reference,
+            value,
+            model_id: None,
+            confidence,
+            source: None,
+            outcome,
+            warning: None,
+            guesses: Vec::new(),
+        }
+    }
+}
+
 /// The full report from one bind pass.
 #[derive(Debug, Clone, Default)]
 pub struct BindReport {
@@ -132,6 +161,7 @@ pub struct BindReport {
 
 /// One unresolved (open-circuit) part and where its pins land, so the scheduler
 /// can tell a bystander from a part that would DRIVE a net if it were modelled.
+///
 /// `pins` pairs each connected node with whether the pin can drive: `false` only
 /// when the schematic types it `input`, `power_in` or `no_connect`.
 #[derive(Debug, Clone)]
@@ -183,7 +213,7 @@ impl BindReport {
     /// These entries exist so an unmodeled power FET in a recognised package
     /// binds to something and can be simulated at all, but their numbers are
     /// invented: the generic power-FET catch-alls carry a nominal 30 V / 20 A /
-    /// 30 W and a 20 mOhm Rds_on that belong to no datasheet. Naming them puts
+    /// 30 W and a 20 mOhm `Rds_on` that belong to no datasheet. Naming them puts
     /// the invented basis of any verdict resting on them on the record.
     ///
     /// Scoped to active devices ([`is_active_fallback_device`]) on purpose.
@@ -194,6 +224,7 @@ impl BindReport {
     ///
     /// Deduped and order-stable, so this can be chained straight into a CI
     /// report's `coverage_warnings`. Empty on a board with no fallback binding.
+    #[must_use]
     pub fn estimated_fallback_warnings(&self) -> Vec<String> {
         let mut seen = std::collections::BTreeSet::new();
         self.non_ignored()
@@ -221,11 +252,11 @@ impl BindReport {
             )
             .into_iter()
             .map(|(model, mut refs)| {
+                const SHOWN: usize = 5;
                 // Aggregated per MODEL, not per part: a motor driver board with
                 // eight identical unmodeled FETs is one hole with eight instances,
                 // and eight near-identical notes is how this channel gets ignored.
                 refs.sort();
-                const SHOWN: usize = 5;
                 let listed = refs
                     .iter()
                     .take(SHOWN)
@@ -259,6 +290,7 @@ impl BindReport {
     }
 
     /// Count of non-ignored components.
+    #[must_use]
     pub fn non_ignored_count(&self) -> usize {
         self.non_ignored().count()
     }
@@ -270,6 +302,7 @@ impl BindReport {
     /// (e.g. an open diode whose pins are not both connected) is NOT resolved,
     /// so the "N of M resolved" headline agrees with the open parts listed
     /// below it.
+    #[must_use]
     pub fn resolved_count(&self) -> usize {
         self.non_ignored()
             .filter(|r| r.outcome.is_resolved())
@@ -277,6 +310,9 @@ impl BindReport {
     }
 
     /// Fraction of non-ignored components that resolved (0.0..=1.0).
+    #[must_use]
+    // Component counts are far below 2^53, so the ratio is exact enough.
+    #[allow(clippy::cast_precision_loss)]
     pub fn resolved_fraction(&self) -> f64 {
         let n = self.non_ignored_count();
         if n == 0 {
@@ -290,16 +326,19 @@ impl BindReport {
         self.rows.iter().filter(|r| pred(&r.outcome)).count()
     }
 
+    #[must_use]
     pub fn mcu_count(&self) -> usize {
         self.count_where(|o| matches!(o, BindOutcome::Mcu { .. }))
     }
 
     /// Count of components bound as shift registers specifically.
+    #[must_use]
     pub fn shift_register_count(&self) -> usize {
         self.count_where(|o| matches!(o, BindOutcome::Digital { kind } if kind == "shift_register"))
     }
 
     /// Total components bound into the event-driven digital layer.
+    #[must_use]
     pub fn digital_count(&self) -> usize {
         self.count_where(|o| matches!(o, BindOutcome::Digital { .. }))
     }
@@ -335,6 +374,7 @@ impl BindReport {
     }
 
     /// Render a Unicode box-drawing table of every row.
+    #[must_use]
     pub fn render_table(&self) -> String {
         self.render_table_with_bulk_passives(true)
     }
@@ -343,10 +383,12 @@ impl BindReport {
     /// Generic R/C/L fallbacks are sound enough to account for in the summary,
     /// but printing hundreds of them ahead of the active devices hides the
     /// answer. [`Self::render_table`] remains the full form.
+    #[must_use]
     pub fn render_table_compact(&self) -> String {
         self.render_table_with_bulk_passives(false)
     }
 
+    #[allow(clippy::too_many_lines)] // one table: widths, rows, summary, warnings, legend
     fn render_table_with_bulk_passives(&self, include_bulk_passives: bool) -> String {
         let mut refs = "Ref".to_string();
         let mut vals = "Value".to_string();
@@ -399,7 +441,7 @@ impl BindReport {
             })
             .collect();
 
-        let pad = |s: &str, w: usize| format!("{:<width$}", s, width = w);
+        let pad = |s: &str, w: usize| format!("{s:<w$}");
 
         let widths = [w_ref, w_val, w_mod, w_conf, w_out];
         let rule = |left: &str, mid: &str, right: &str| {
@@ -415,19 +457,18 @@ impl BindReport {
         models = pad(&models, w_mod);
         confs = pad(&confs, w_conf);
         outs = pad(&outs, w_out);
-        out.push_str(&format!(
-            "│ {refs} │ {vals} │ {models} │ {confs} │ {outs} │\n"
-        ));
+        let _ = writeln!(out, "│ {refs} │ {vals} │ {models} │ {confs} │ {outs} │");
         out.push_str(&rule("├", "┼", "┤"));
         for (r, v, m, c, o) in &cells {
-            out.push_str(&format!(
-                "│ {} │ {} │ {} │ {} │ {} │\n",
+            let _ = writeln!(
+                out,
+                "│ {} │ {} │ {} │ {} │ {} │",
                 pad(r, w_ref),
                 pad(v, w_val),
                 pad(m, w_mod),
                 pad(c, w_conf),
                 pad(o, w_out),
-            ));
+            );
         }
         out.push_str(&rule("└", "┴", "┘"));
 
@@ -455,10 +496,11 @@ impl BindReport {
                         kinds.push(format!("{n} {kind}{}", if n == 1 { "" } else { "s" }));
                     }
                 }
-                out.push_str(&format!(
-                    "{total} passives bound by footprint/value fallback: {}. Use --verbose to show every bind row.\n",
+                let _ = writeln!(
+                    out,
+                    "{total} passives bound by footprint/value fallback: {}. Use --verbose to show every bind row.",
                     kinds.join(", ")
-                ));
+                );
             }
         }
 
@@ -471,8 +513,9 @@ impl BindReport {
                 format!("{n} {many}")
             }
         };
-        out.push_str(&format!(
-            "\n{} of {} non-ignored components resolved ({:.0}%); {}, {} digital, {}, {}\n",
+        let _ = writeln!(
+            out,
+            "\n{} of {} non-ignored components resolved ({:.0}%); {}, {} digital, {}, {}",
             self.resolved_count(),
             self.non_ignored_count(),
             self.resolved_fraction() * 100.0,
@@ -480,12 +523,12 @@ impl BindReport {
             self.count_where(|o| matches!(o, BindOutcome::Digital { .. })),
             plural(self.warnings().count(), "warning", "warnings"),
             plural(guess_count, "pin-role guess", "pin-role guesses"),
-        ));
+        );
         for (r, w) in self.warnings() {
-            out.push_str(&format!("  ⚠ {r}: {w}\n"));
+            let _ = writeln!(out, "  ⚠ {r}: {w}");
         }
         for (r, g) in self.guess_warnings() {
-            out.push_str(&format!("  ? {r}: {g}\n"));
+            let _ = writeln!(out, "  ? {r}: {g}");
         }
         // Legend for the Conf column, shown only when a row is not `exact` so a
         // first-timer knows whether to worry about a `guessed`/`family` row.
@@ -534,14 +577,17 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Natural sort key for a reference designator: alpha prefix (case-folded),
 /// then the numeric part as a NUMBER (so R2 sorts before R10), then any
-/// remaining suffix. Shared by every user-facing table that lists parts.
+/// remaining suffix.
+///
+/// Shared by every user-facing table that lists parts.
+#[must_use]
 pub fn natural_ref_key(reference: &str) -> (String, u64, String) {
     let prefix: String = reference
         .chars()
         .take_while(|c| !c.is_ascii_digit())
         .collect();
     let rest = &reference[prefix.len()..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     let suffix = rest[digits.len()..].to_string();
     (
         prefix.to_ascii_uppercase(),
@@ -736,7 +782,7 @@ impl BindSummary {
             }
         }
 
-        BindSummary {
+        Self {
             resolved: report.resolved_count(),
             unresolved: report.non_ignored_count() - report.resolved_count(),
             non_ignored: report.non_ignored_count(),
@@ -756,6 +802,7 @@ impl BindSummary {
     /// outcome is not `Unresolved`, yet the part still does not drive its nets,
     /// so a thermal/AC result over those nets is just as untrustworthy. We walk
     /// `Mcu`/`Resolved`-style rows that carry a `warning` and name an active IC.
+    #[must_use]
     pub fn active_open_on_live_circuit(&self) -> bool {
         self.resolved_but_open_active.iter().any(|u| u.active_ic)
     }
@@ -771,6 +818,7 @@ impl BindSummary {
     /// result, so it must not trigger a false "invalid" verdict (a board that
     /// genuinely runs cool would otherwise be wrongly declared invalid). The
     /// `critical_parts_bound` ratio is still reported in the banner for audit.
+    #[must_use]
     pub fn active_ics_unresolved(&self) -> bool {
         self.active_path_unresolved.iter().any(|u| u.active_ic)
     }
@@ -785,8 +833,8 @@ impl BindSummary {
     /// Render the honest summary banner that augments the bind table. Leads with
     /// the role metric, then WARNS (loudly) when the active circuit is open, then
     /// lists each affected active-path part.
+    #[must_use]
     pub fn render_banner(&self) -> String {
-        use std::fmt::Write as _;
         let mut s = String::new();
         let mcu_state = if self.mcu_bound {
             "MCU bound"
@@ -835,9 +883,8 @@ impl BindSummary {
             if actives > 0 {
                 let _ = writeln!(
                     s,
-                    "  {} of these are active ICs left OPEN: analog/AC/thermal results on \
-                     their nets are NOT trustworthy.",
-                    actives
+                    "  {actives} of these are active ICs left OPEN: analog/AC/thermal results on \
+                     their nets are NOT trustworthy."
                 );
             }
             if actives < self.active_path_unresolved.len() {
@@ -891,6 +938,7 @@ fn grouped_refs(parts: &[UnresolvedActive]) -> String {
 
 /// Whether a reference designator names an active IC (prefix U / IC / MCU),
 /// matching the binder's MCU-candidate convention.
+#[must_use]
 pub fn is_active_ic_ref(reference: &str) -> bool {
     // Eagle names any element the designer left unnamed `U$12`, and that covers
     // mounting holes, fiducials, logos, frames and test points. They take the
@@ -903,7 +951,7 @@ pub fn is_active_ic_ref(reference: &str) -> bool {
     }
     let prefix: String = reference
         .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
+        .take_while(char::is_ascii_alphabetic)
         .map(|c| c.to_ascii_uppercase())
         .collect();
     matches!(prefix.as_str(), "U" | "IC" | "MCU")
@@ -911,6 +959,7 @@ pub fn is_active_ic_ref(reference: &str) -> bool {
 
 /// Whether a reference is a CAD tool's placeholder for an unnamed element
 /// (Eagle's `U$12` form) rather than a designator a person assigned.
+#[must_use]
 pub fn is_tool_generated_ref(reference: &str) -> bool {
     let Some((head, tail)) = reference.split_once('$') else {
         return false;
@@ -923,11 +972,14 @@ pub fn is_tool_generated_ref(reference: &str) -> bool {
 
 /// Whether a resolved row's `warning` indicates a GENUINE open/undriven-pin
 /// condition (which makes thermal/AC over its nets untrustworthy) as opposed to
-/// an auto-bind GPIO-map note. The binder routinely attaches an
-/// `[auto-bind] ... GPIO map derived/cannot be derived ...` note to a perfectly
-/// working MCU when it infers (or fails to infer) the pin map from schematic pin
-/// names; that is a naming limitation, not an open circuit, and must NOT mark the
-/// part as untrustworthy on the live circuit.
+/// an auto-bind GPIO-map note.
+///
+/// The binder routinely attaches an `[auto-bind] ... GPIO map derived/cannot be
+/// derived ...` note to a perfectly working MCU when it infers (or fails to
+/// infer) the pin map from schematic pin names; that is a naming limitation, not
+/// an open circuit, and must NOT mark the part as untrustworthy on the live
+/// circuit.
+#[must_use]
 pub fn is_open_pin_warning(warning: &str) -> bool {
     // Positive match on explicit open-pin markers, NOT a negative catch-all: a
     // benign advisory on a fully-wired resolved IC (e.g. an analog switch whose
@@ -950,26 +1002,18 @@ mod tests {
     use hauksbee_ir::evidence::{ModelSource, ModelSourceTier};
 
     fn row(reference: &str, confidence: Confidence, outcome: BindOutcome) -> BindRow {
-        BindRow {
-            reference: reference.to_string(),
-            value: String::new(),
-            model_id: None,
-            confidence,
-            source: None,
-            outcome,
-            warning: None,
-            guesses: Vec::new(),
-        }
+        BindRow::without_model(reference.to_string(), String::new(), confidence, outcome)
     }
 
     /// A bind row carrying a model source at `tier`.
     fn sourced_row(reference: &str, model_id: &str, tier: ModelSourceTier) -> BindRow {
         use hauksbee_ir::evidence::{ModelLayer, ModelUncertainty, ModelValidation};
+        let outcome = BindOutcome::Analog {
+            device: "nmos".into(),
+        };
         BindRow {
-            reference: reference.to_string(),
             value: "NMOS".to_string(),
             model_id: Some(model_id.to_string()),
-            confidence: Confidence::Exact,
             source: Some(
                 ModelSource::new(
                     tier,
@@ -983,11 +1027,7 @@ mod tests {
                 )
                 .expect("valid source"),
             ),
-            outcome: BindOutcome::Analog {
-                device: "nmos".into(),
-            },
-            warning: None,
-            guesses: Vec::new(),
+            ..row(reference, Confidence::Exact, outcome)
         }
     }
 

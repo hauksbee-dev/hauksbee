@@ -36,13 +36,14 @@ ratings = { max_current_a = 0.5, max_voltage_v = 6.0 }
 fn board(grounded: bool, r1: f64, r2: Option<f64>, rl: Option<f64>) -> String {
     // Pads are offset by pad number so that no two of a part's land coincide.
     let u1 = pad(1, "ADJ") + &pad(2, "VOUT") + &pad(3, "VIN");
-    let (lib, value, u1) = match grounded {
-        true => (
+    let (lib, value, u1) = if grounded {
+        (
             "Package_TO_SOT_SMD:SOT-23-5",
             "GREF-LDO",
             u1 + &pad(4, "GND"),
-        ),
-        false => ("Package_TO_SOT_SMD:SOT-223-3_TabPin2", "LM317", u1),
+        )
+    } else {
+        ("Package_TO_SOT_SMD:SOT-223-3_TabPin2", "LM317", u1)
     };
     let mut parts = comp("U1", lib, value, 20, u1);
     for (i, (r, val, a, b)) in [
@@ -66,7 +67,7 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
     // 3 V minimum input-to-output differential. The assertion band is +/-1 mV
     // around the datasheet equation, so a PASS is that equation and not merely a
     // plausible 5 V.
-    let vout = 1.25 * (1.0 + 720.0 / 240.0) + 50.0e-6 * 720.0;
+    let vout = 1.25_f64.mul_add(1.0 + 720.0 / 240.0, 50.0e-6 * 720.0);
     // Ground-referenced, 0.8 V over R1 = 31.25k and R2 = 10k is 3.300 V at a 33R
     // (100 mA) load, where the LM317 law reads that divider as 1.056 V. Swapped,
     // the divider IS 1.056 V: the faulty control, whose 3.3 V band must fail

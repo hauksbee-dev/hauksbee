@@ -74,15 +74,14 @@ fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
     let served = Arc::new(Mutex::new(0usize));
-    let counter = served.clone();
+    let counter = served;
     mcu.set_i2c_slave_addresses(&[SLAVE_ADDR]);
     mcu.on_i2c(Box::new(move |event| match event {
         I2cEvent::Read { addr } => {
             log.lock().unwrap().push(format!("read {addr:#04X}"));
             let mut n = counter.lock().unwrap();
-            let byte = if (*n).is_multiple_of(2) { 0xAB } else { 0xCD };
-            *n += 1;
-            Some(byte)
+            *n += 1; // the 1st, 3rd, ... read serves 0xAB
+            Some(if n.is_multiple_of(2) { 0xCD } else { 0xAB })
         }
         I2cEvent::Write { addr, data } => {
             log.lock()
@@ -152,7 +151,7 @@ fn rp2040_spi_bridge_probe() {
     let mosi: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     let seen = mosi.clone();
     let served = Arc::new(Mutex::new(0usize));
-    let counter = served.clone();
+    let counter = served;
     mcu.on_spi(Box::new(move |event| {
         if event.deselect {
             return 0;

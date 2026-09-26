@@ -11,7 +11,7 @@ use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 
 /// A pin with the given pad `number` on `net`, with no schematic name/type
 /// and no board position.
-pub(crate) fn pin(number: &str, net: i64) -> Pin {
+pub fn pin(number: &str, net: i64) -> Pin {
     Pin {
         number: number.into(),
         net: Some(net),
@@ -21,7 +21,7 @@ pub(crate) fn pin(number: &str, net: i64) -> Pin {
 
 /// A pin like [`pin`], but with a schematic pin function name set (e.g. a
 /// named CC/D+/D- pad).
-pub(crate) fn pin_fn(number: &str, net: i64, function: &str) -> Pin {
+pub fn pin_fn(number: &str, net: i64, function: &str) -> Pin {
     Pin {
         function: function.into(),
         ..pin(number, net)
@@ -30,7 +30,7 @@ pub(crate) fn pin_fn(number: &str, net: i64, function: &str) -> Pin {
 
 /// A two-terminal `Device:R` resistor in an `R_0603` footprint: pad 1 on net
 /// 1, pad 2 on net 2, populated (not DNP), no extra properties.
-pub(crate) fn two_pin_resistor(reference: &str, value: &str) -> Component {
+pub fn two_pin_resistor(reference: &str, value: &str) -> Component {
     Component {
         reference: reference.into(),
         value: value.into(),
@@ -44,11 +44,7 @@ pub(crate) fn two_pin_resistor(reference: &str, value: &str) -> Component {
 
 /// A board named `name`, with `nets` as `(id, name)` pairs and the given
 /// components.
-pub(crate) fn board(
-    name: &str,
-    nets: &[(i64, &str)],
-    components: Vec<Component>,
-) -> ExtractedBoard {
+pub fn board(name: &str, nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
     ExtractedBoard {
         name: name.into(),
         nets: nets.iter().map(|(id, n)| Net::new(*id, *n)).collect(),

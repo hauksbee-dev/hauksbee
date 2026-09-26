@@ -23,18 +23,19 @@
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 
-/// Series output resistance used for the "ideal" and current-source-limited
-/// supplies, small enough to be electrically negligible (a few mΩ) but
+/// Series output resistance used for the "ideal" and current-source-limited supplies.
+///
+/// Small enough to be electrically negligible (a few mΩ) but
 /// non-zero so the `Vsource` branch current is well defined and so the rail
 /// never becomes a hard short in MNA.
 pub const STIFF_R_OHMS: f64 = 1e-3;
 
 /// Battery / cell electrochemistry. Per-cell open-circuit voltage is a
-/// piecewise-linear function of state-of-charge (SoC, 0..1), see
+/// piecewise-linear function of state-of-charge (`SoC`, 0..1), see
 /// [`Chemistry::ocv_per_cell`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chemistry {
-    /// Lithium-ion / LiPo (graphite ‖ NMC/LCO), nominal 3.7 V/cell.
+    /// Lithium-ion / `LiPo` (graphite ‖ NMC/LCO), nominal 3.7 V/cell.
     LiIon,
     /// Primary alkaline (Zn‖MnO2), nominal 1.5 V/cell.
     Alkaline,
@@ -46,7 +47,7 @@ pub enum Chemistry {
 
 impl Chemistry {
     /// Open-circuit terminal voltage of a *single cell* at the given
-    /// state-of-charge (SoC in `[0, 1]`). Piecewise-linear interpolation over
+    /// state-of-charge (`SoC` in `[0, 1]`). Piecewise-linear interpolation over
     /// `(soc, volts)` knots taken from published discharge curves.
     ///
     /// Sources (typical room-temperature, low-rate discharge):
@@ -54,14 +55,15 @@ impl Chemistry {
     ///   ~3.7 V nominal plateau, ~3.0 V knee, 2.5 V empty.
     /// - Alkaline: Energizer E91 AA application data, 1.6 V fresh sloping
     ///   steadily to ~0.9 V cutoff (alkalines have no plateau).
-    /// - NiMH: Panasonic eneloop HR-3UTGB, 1.45 V full, flat ~1.25 V plateau,
+    /// - `NiMH`: Panasonic eneloop HR-3UTGB, 1.45 V full, flat ~1.25 V plateau,
     ///   1.0 V cutoff.
-    /// - LiFePO4: A123 / generic LFP, 3.6 V surface-charge, extremely flat
+    /// - `LiFePO4`: A123 / generic LFP, 3.6 V surface-charge, extremely flat
     ///   ~3.3–3.2 V plateau, 2.5 V cutoff.
+    #[must_use]
     pub fn ocv_per_cell(self, soc: f64) -> f64 {
         let s = soc.clamp(0.0, 1.0);
         let knots: &[(f64, f64)] = match self {
-            Chemistry::LiIon => &[
+            Self::LiIon => &[
                 (0.00, 3.00),
                 (0.05, 3.30),
                 (0.15, 3.50),
@@ -70,7 +72,7 @@ impl Chemistry {
                 (0.85, 4.00),
                 (1.00, 4.20),
             ],
-            Chemistry::Alkaline => &[
+            Self::Alkaline => &[
                 (0.00, 0.90),
                 (0.10, 1.05),
                 (0.30, 1.20),
@@ -78,7 +80,7 @@ impl Chemistry {
                 (0.85, 1.50),
                 (1.00, 1.60),
             ],
-            Chemistry::NiMh => &[
+            Self::NiMh => &[
                 (0.00, 1.00),
                 (0.10, 1.15),
                 (0.25, 1.22),
@@ -86,7 +88,7 @@ impl Chemistry {
                 (0.90, 1.30),
                 (1.00, 1.45),
             ],
-            Chemistry::LiFePO4 => &[
+            Self::LiFePO4 => &[
                 (0.00, 2.50),
                 (0.08, 3.10),
                 (0.20, 3.20),
@@ -124,10 +126,10 @@ pub enum PowerSupply {
     /// charge store from initial `soc`, behind `r_internal_ohms` per pack.
     ///
     /// `protection` is an optional BMS-style over-current cutoff. Real protected
-    /// LiPo cells (and the DW01/FS312-class protection ICs on bare cells) trip a
+    /// `LiPo` cells (and the DW01/FS312-class protection ICs on bare cells) trip a
     /// MOSFET open when the pack current stays above a threshold for a short
     /// delay. This is exactly the dynamic that DC misses and that the Inkplate
-    /// WiFi cold-boot inrush hits: the pack is fine at steady state but the TX
+    /// `WiFi` cold-boot inrush hits: the pack is fine at steady state but the TX
     /// burst trips protection.
     Battery {
         chemistry: Chemistry,
@@ -173,8 +175,9 @@ pub struct BatteryProtection {
 
 impl BatteryProtection {
     /// New protection with a trip threshold and delay; reset threshold = trip.
-    pub fn new(trip_a: f64, delay_s: f64) -> Self {
-        BatteryProtection {
+    #[must_use]
+    pub const fn new(trip_a: f64, delay_s: f64) -> Self {
+        Self {
             trip_a,
             delay_s,
             reset_a: trip_a,
@@ -187,7 +190,18 @@ impl BatteryProtection {
     /// Advance the protection state machine by `dt` seconds given the measured
     /// pack current `i_a`. Returns `true` if the cutoff is open (no output).
     fn update(&mut self, i_a: f64, dt: f64) -> bool {
-        if !self.tripped {
+        if self.tripped {
+            // Tripped: integrate time spent below the reset threshold to re-arm.
+            if i_a < self.reset_a {
+                self.accum_s += dt;
+                if self.accum_s >= self.delay_s {
+                    self.tripped = false;
+                    self.accum_s = 0.0;
+                }
+            } else {
+                self.accum_s = 0.0;
+            }
+        } else {
             // Armed: integrate time spent above the trip threshold.
             if i_a > self.trip_a {
                 self.accum_s += dt;
@@ -198,17 +212,6 @@ impl BatteryProtection {
                 }
             } else {
                 // Drop the accumulator; brief spikes below the delay don't trip.
-                self.accum_s = 0.0;
-            }
-        } else {
-            // Tripped: integrate time spent below the reset threshold to re-arm.
-            if i_a < self.reset_a {
-                self.accum_s += dt;
-                if self.accum_s >= self.delay_s {
-                    self.tripped = false;
-                    self.accum_s = 0.0;
-                }
-            } else {
                 self.accum_s = 0.0;
             }
         }
@@ -229,16 +232,18 @@ pub enum UsbSpec {
 
 impl UsbSpec {
     /// Spec current limit (A).
-    pub fn current_limit_a(self) -> f64 {
+    #[must_use]
+    pub const fn current_limit_a(self) -> f64 {
         match self {
-            UsbSpec::V5_0_5A => 0.5,
-            UsbSpec::V5_1_5A => 1.5,
-            UsbSpec::V5_3A => 3.0,
+            Self::V5_0_5A => 0.5,
+            Self::V5_1_5A => 1.5,
+            Self::V5_3A => 3.0,
         }
     }
 
     /// Effective cable + connector droop resistance (ohms). A real USB cable
     /// drops ~0.25 V at the rated current; we back that out into an ohmic droop.
+    #[must_use]
     pub fn droop_ohms(self) -> f64 {
         // ~0.25 V at full rated current.
         0.25 / self.current_limit_a()
@@ -247,53 +252,55 @@ impl UsbSpec {
 
 impl Default for PowerSupply {
     fn default() -> Self {
-        PowerSupply::Ideal { volts: 5.0 }
+        Self::Ideal { volts: 5.0 }
     }
 }
 
 impl PowerSupply {
     /// Nominal open-circuit voltage (no load), for seeding the first chunk and
     /// for diagnostics.
+    #[must_use]
     pub fn nominal_volts(&self) -> f64 {
         match self {
-            PowerSupply::Ideal { volts }
-            | PowerSupply::Bench { volts, .. }
-            | PowerSupply::Wall { volts, .. } => *volts,
-            PowerSupply::Usb { .. } => 5.0,
-            PowerSupply::Battery {
+            Self::Ideal { volts } | Self::Bench { volts, .. } | Self::Wall { volts, .. } => *volts,
+            Self::Usb { .. } => 5.0,
+            Self::Battery {
                 chemistry,
                 cells,
                 soc,
                 ..
-            } => chemistry.ocv_per_cell(*soc) * (*cells as f64),
+            } => chemistry.ocv_per_cell(*soc) * f64::from(*cells),
         }
     }
 
     /// The series output resistance to stamp for this supply's Thevenin leg.
+    #[must_use]
     pub fn series_r(&self) -> f64 {
         match self {
-            PowerSupply::Ideal { .. } | PowerSupply::Bench { .. } => STIFF_R_OHMS,
-            PowerSupply::Wall { r_out_ohms, .. } => r_out_ohms.max(STIFF_R_OHMS),
-            PowerSupply::Usb { spec } => spec.droop_ohms().max(STIFF_R_OHMS),
-            PowerSupply::Battery {
+            Self::Ideal { .. } | Self::Bench { .. } => STIFF_R_OHMS,
+            Self::Wall { r_out_ohms, .. } => r_out_ohms.max(STIFF_R_OHMS),
+            Self::Usb { spec } => spec.droop_ohms().max(STIFF_R_OHMS),
+            Self::Battery {
                 r_internal_ohms, ..
             } => r_internal_ohms.max(STIFF_R_OHMS),
         }
     }
 
     /// State-of-charge readout (0..1), 1.0 for non-depleting supplies.
-    pub fn soc(&self) -> f64 {
+    #[must_use]
+    pub const fn soc(&self) -> f64 {
         match self {
-            PowerSupply::Battery { soc, .. } => *soc,
+            Self::Battery { soc, .. } => *soc,
             _ => 1.0,
         }
     }
 
     /// Whether this supply's protection has latched open *right now*. False for
     /// supplies without protection (or unprotected batteries).
-    pub fn protection_tripped(&self) -> bool {
+    #[must_use]
+    pub const fn protection_tripped(&self) -> bool {
         match self {
-            PowerSupply::Battery {
+            Self::Battery {
                 protection: Some(p),
                 ..
             } => p.tripped,
@@ -304,9 +311,10 @@ impl PowerSupply {
     /// Whether this supply's protection has tripped at *any* point so far
     /// (sticky). This is what a coarse-frame CI sampler should read, so a
     /// trip-then-rearm inside one frame is not aliased away.
-    pub fn protection_ever_tripped(&self) -> bool {
+    #[must_use]
+    pub const fn protection_ever_tripped(&self) -> bool {
         match self {
-            PowerSupply::Battery {
+            Self::Battery {
                 protection: Some(p),
                 ..
             } => p.ever_tripped,
@@ -317,8 +325,8 @@ impl PowerSupply {
     /// Compute the `Vsource` target voltage for the *next* chunk, given the
     /// rail current `i_a` (A, positive = sourced into the net) measured over
     /// the chunk just solved, the simulation time `t` (s, for ripple phase),
-    /// and the chunk length `dt` (s, for battery SoC integration). May mutate
-    /// internal state (battery SoC drains here).
+    /// and the chunk length `dt` (s, for battery `SoC` integration). May mutate
+    /// internal state (battery `SoC` drains here).
     ///
     /// The returned voltage is the ideal source value *behind* `series_r()`;
     /// the solver adds the I·R drop across the series resistor on top, so the
@@ -329,21 +337,21 @@ impl PowerSupply {
         // to floor its command at rail >= 0 (see `cc_regulate`).
         let rs = self.series_r();
         match self {
-            PowerSupply::Ideal { volts } => *volts,
+            Self::Ideal { volts } => *volts,
 
             // CV with constant-current foldback. Above the limit, command a
             // lower internal voltage so that I·R_load ≈ limit. We do not know
             // R_load directly, but holding the *commanded* voltage proportional
             // to (limit / i) regulates the current down toward the limit over a
             // few chunks (a discrete CC loop). Smoothed to avoid oscillation.
-            PowerSupply::Bench {
+            Self::Bench {
                 volts,
                 current_limit_a,
             } => cc_regulate(*volts, *current_limit_a, rs, last_cmd_v, i),
 
             // Nominal minus the ripple sine. The I·R_out drop is applied by the
             // solver through the series resistor, so we only add ripple here.
-            PowerSupply::Wall {
+            Self::Wall {
                 volts,
                 ripple_vpp,
                 ripple_hz,
@@ -356,15 +364,13 @@ impl PowerSupply {
             // 5 V nominal; the connector/cable droop is the series resistor.
             // Past the spec limit, fold the commanded voltage back hard so the
             // current cannot run away (models the port's current-limit trip).
-            PowerSupply::Usb { spec } => {
-                cc_regulate(5.0, spec.current_limit_a(), rs, last_cmd_v, i)
-            }
+            Self::Usb { spec } => cc_regulate(5.0, spec.current_limit_a(), rs, last_cmd_v, i),
 
             // Drain charge and recompute the open-circuit stack voltage. The
             // internal resistance drop is the series resistor (solver-applied).
             // An optional BMS protection cutoff can latch the output to ~0 V when
             // the pack current trips it (the inrush-vs-protection interaction).
-            PowerSupply::Battery {
+            Self::Battery {
                 chemistry,
                 cells,
                 capacity_mah,
@@ -376,7 +382,7 @@ impl PowerSupply {
                 let cap_ah = (*capacity_mah / 1000.0).max(1e-9);
                 let d_soc = (i * dt / 3600.0) / cap_ah;
                 *soc = (*soc - d_soc).clamp(0.0, 1.0);
-                let ocv = chemistry.ocv_per_cell(*soc) * (*cells as f64);
+                let ocv = chemistry.ocv_per_cell(*soc) * f64::from(*cells);
                 if let Some(prot) = protection {
                     // Advance the cutoff state machine on the measured current.
                     if prot.update(i, dt) {
@@ -391,13 +397,14 @@ impl PowerSupply {
     }
 
     /// Short human-readable kind label for diagnostics / protocol.
-    pub fn kind_label(&self) -> &'static str {
+    #[must_use]
+    pub const fn kind_label(&self) -> &'static str {
         match self {
-            PowerSupply::Ideal { .. } => "ideal",
-            PowerSupply::Bench { .. } => "bench",
-            PowerSupply::Wall { .. } => "wall",
-            PowerSupply::Usb { .. } => "usb",
-            PowerSupply::Battery { .. } => "battery",
+            Self::Ideal { .. } => "ideal",
+            Self::Bench { .. } => "bench",
+            Self::Wall { .. } => "wall",
+            Self::Usb { .. } => "usb",
+            Self::Battery { .. } => "battery",
         }
     }
 }
@@ -470,7 +477,7 @@ impl SupplyLeg {
             net,
             supply.series_r(),
         ));
-        SupplyLeg {
+        Self {
             net_name: net_name.to_string(),
             net,
             vsource,
@@ -560,7 +567,7 @@ mod tests {
             // Monotonic non-decreasing in SoC.
             let mut prev = empty;
             for k in 1..=10 {
-                let v = chem.ocv_per_cell(k as f64 / 10.0);
+                let v = chem.ocv_per_cell(f64::from(k) / 10.0);
                 assert!(v + 1e-9 >= prev, "{chem:?} non-monotonic at soc={k}/10");
                 prev = v;
             }
@@ -619,7 +626,7 @@ mod tests {
         };
         // Keep drawing over the trip current: output stays at 0 V (open).
         let v = s.update(2.0, 4.2, 0.0, dt);
-        assert_eq!(v, 0.0, "tripped pack should command 0 V, got {v}");
+        assert!(v.abs() < 1e-12, "tripped pack commands 0 V, got {v}");
         assert!(s.protection_tripped());
 
         // Remove the load (below reset) for longer than the delay: re-arms.
@@ -635,7 +642,7 @@ mod tests {
     /// The CC loop's two sides on a 0.5 A USB port (series R = 0.5 ohm).
     ///
     /// Side one: a resistive load drawing over the limit settles at exactly
-    /// I = limit within a few chunks, rail = v_cmd - limit*Rs, positive.
+    /// I = limit within a few chunks, rail = `v_cmd` - limit*Rs, positive.
     /// Side two: an ideal current-sink overload (a scenario burst bigger than
     /// the port) must floor at rail = 0, never below: pre-fix, the iteration
     /// divided the command to zero and held the rail NEGATIVE through the
@@ -676,7 +683,7 @@ mod tests {
             let mut min_rail = f64::INFINITY;
             for _ in 0..200 {
                 v_cmd = s.update(i_load, v_cmd, 0.0, 1e-3);
-                min_rail = min_rail.min(v_cmd - i_load * rs);
+                min_rail = min_rail.min(i_load.mul_add(-rs, v_cmd));
             }
             assert!(
                 min_rail >= -1e-9,
@@ -684,10 +691,10 @@ mod tests {
                  (i_load={i_load}, min rail={min_rail})"
             );
             assert!(
-                (v_cmd - i_load * rs).abs() < 1e-9,
+                i_load.mul_add(-rs, v_cmd).abs() < 1e-9,
                 "an unsatisfiable current-sink overload floors at rail = 0 \
                  (i_load={i_load}, settled rail={})",
-                v_cmd - i_load * rs
+                i_load.mul_add(-rs, v_cmd)
             );
         }
 
@@ -701,7 +708,7 @@ mod tests {
         for _ in 0..10 {
             v_cmd = s.update(0.505, v_cmd, 0.0, 1e-3);
         }
-        let rail = v_cmd - 0.505 * rs;
+        let rail = 0.505f64.mul_add(-rs, v_cmd);
         assert!(
             rail > 4.0,
             "1% over the limit must sag gently, not collapse: rail={rail}"

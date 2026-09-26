@@ -130,7 +130,7 @@
       ]
     },
     "mcu": {
-      "description": "Either an informational MCU-kind note (`mcu = \"atmega328p\"`, the legacy\nstring form; nothing reads it, the binder detects the MCU from the\nboard), or an `[mcu]` table carrying co-sim MCU configuration such as\n`descriptor_dir` (a directory of `<part>.soc.toml` SoC descriptor\noverrides, resolved relative to the spec file's directory). Note the\nbinder still detects WHICH MCU from the board's part value; neither\nform can force a backend.",
+      "description": "Either an informational MCU-kind note (`mcu = \"atmega328p\"`, the legacy\nstring form; nothing reads it, the binder detects the MCU from the\nboard), or an `[mcu]` table carrying co-sim MCU configuration such as\n`descriptor_dir` (a directory of `<part>.soc.toml` `SoC` descriptor\noverrides, resolved relative to the spec file's directory). Note the\nbinder still detects WHICH MCU from the board's part value; neither\nform can force a backend.",
       "anyOf": [
         {
           "$ref": "#/definitions/McuField"
@@ -320,7 +320,7 @@
           "default": null
         },
         "amps": {
-          "description": "max_current: ceiling in amps for the component named by `ref`.",
+          "description": "`max_current`: ceiling in amps for the component named by `ref`.",
           "type": [
             "number",
             "null"
@@ -337,7 +337,7 @@
           "default": null
         },
         "celsius": {
-          "description": "max_temp: ceiling in C for the steady-state junction temperature of the\ncomponent named by `ref`. When omitted, the device's own max junction\ntemperature (from the model DB, or the per-package-class default) is used.",
+          "description": "`max_temp`: ceiling in C for the steady-state junction temperature of the\ncomponent named by `ref`. When omitted, the device's own max junction\ntemperature (from the model DB, or the per-package-class default) is used.",
           "type": [
             "number",
             "null"
@@ -363,7 +363,7 @@
           "default": null
         },
         "dip_below": {
-          "description": "rail_window: the rail is considered \"dipped\" while it is below this\nvoltage. Combined with `for_max_ms` to bound dip duration, and with\n`recover_to` / `recover_within_ms` to bound recovery.",
+          "description": "`rail_window`: the rail is considered \"dipped\" while it is below this\nvoltage. Combined with `for_max_ms` to bound dip duration, and with\n`recover_to` / `recover_within_ms` to bound recovery.",
           "type": [
             "number",
             "null"
@@ -372,7 +372,7 @@
           "default": null
         },
         "expect_trip": {
-          "description": "protection_trip: whether a protection trip is expected (true) or must NOT\noccur (false).",
+          "description": "`protection_trip`: whether a protection trip is expected (true) or must NOT\noccur (false).",
           "type": [
             "boolean",
             "null"
@@ -380,7 +380,7 @@
           "default": null
         },
         "field": {
-          "description": "A peripheral state field that must lie in [min, max] (e.g. \"transitions\"\non a vcd_sink, \"temp_c\" on a sensor). Uses the assertion's min/max.",
+          "description": "A peripheral state field that must lie in [min, max] (e.g. \"transitions\"\non a `vcd_sink`, \"`temp_c`\" on a sensor). Uses the assertion's min/max.",
           "type": [
             "string",
             "null"
@@ -388,7 +388,7 @@
           "default": null
         },
         "for_max_ms": {
-          "description": "rail_window: the rail must not stay below `dip_below` for longer than\nthis many milliseconds (total, summed over the window).",
+          "description": "`rail_window`: the rail must not stay below `dip_below` for longer than\nthis many milliseconds (total, summed over the window).",
           "type": [
             "number",
             "null"
@@ -397,7 +397,7 @@
           "default": null
         },
         "freq_hz": {
-          "description": "toggle: expected toggle frequency (Hz); ac_gain: measurement frequency.",
+          "description": "toggle: expected toggle frequency (Hz); `ac_gain`: measurement frequency.",
           "type": [
             "number",
             "null"
@@ -445,7 +445,7 @@
           ]
         },
         "level": {
-          "description": "pulse_width: which pulse to time, `\"high\"` (the default) or `\"low\"`.",
+          "description": "`pulse_width`: which pulse to time, `\"high\"` (the default) or `\"low\"`.",
           "type": [
             "string",
             "null"
@@ -474,7 +474,7 @@
           "default": null
         },
         "max_active_unresolved": {
-          "description": "model_coverage: how many unresolved parts may sit on a connected net.\nThese are the ones whose open default actually changes the solve, so 0\nis the meaningful setting on a board you trust.",
+          "description": "`model_coverage`: how many unresolved parts may sit on a connected net.\nThese are the ones whose open default actually changes the solve, so 0\nis the meaningful setting on a board you trust.",
           "type": [
             "integer",
             "null"
@@ -501,7 +501,7 @@
           "default": null
         },
         "min_critical": {
-          "description": "model_coverage: the minimum fraction (0.0 to 1.0) of active ICs that\nmust bind to a real model. This is the metric that matters: an\nunbound regulator changes the answer, an unbound 0402 resistor\nusually does not.",
+          "description": "`model_coverage`: the minimum fraction (0.0 to 1.0) of active ICs that\nmust bind to a real model. This is the metric that matters: an\nunbound regulator changes the answer, an unbound 0402 resistor\nusually does not.",
           "type": [
             "number",
             "null"
@@ -512,7 +512,7 @@
           "minimum": 0.0
         },
         "min_resolved": {
-          "description": "model_coverage: the minimum fraction (0.0 to 1.0) of all non-ignored\nparts that must bind. Coarser than `min_critical`, and useful as a\nboard-wide trend line.",
+          "description": "`model_coverage`: the minimum fraction (0.0 to 1.0) of all non-ignored\nparts that must bind. Coarser than `min_critical`, and useful as a\nboard-wide trend line.",
           "type": [
             "number",
             "null"
@@ -523,7 +523,7 @@
           "minimum": 0.0
         },
         "min_toggles": {
-          "description": "Minimum toggle count over the run (alternative to freq_hz).",
+          "description": "Minimum toggle count over the run (alternative to `freq_hz`).",
           "type": [
             "integer",
             "null"
@@ -541,7 +541,7 @@
           "default": null
         },
         "net": {
-          "description": "Target net (voltage / toggle / rail_window / boot-coverage /\nphase_margin / ac_gain).",
+          "description": "Target net (voltage / toggle / `rail_window` / boot-coverage /\n`phase_margin` / `ac_gain`).",
           "type": [
             "string",
             "null"
@@ -549,7 +549,7 @@
           "default": null
         },
         "recover_to": {
-          "description": "rail_window: the voltage the rail must climb back to for \"recovered\".",
+          "description": "`rail_window`: the voltage the rail must climb back to for \"recovered\".",
           "type": [
             "number",
             "null"
@@ -558,7 +558,7 @@
           "default": null
         },
         "recover_within_ms": {
-          "description": "rail_window: the rail must recover (reach `recover_to`) within this many\nmilliseconds of first dipping below `dip_below`.",
+          "description": "`rail_window`: the rail must recover (reach `recover_to`) within this many\nmilliseconds of first dipping below `dip_below`.",
           "type": [
             "number",
             "null"
@@ -567,7 +567,7 @@
           "default": null
         },
         "ref": {
-          "description": "max_current / max_temp: the component to check.",
+          "description": "`max_current` / `max_temp`: the component to check.",
           "type": [
             "string",
             "null"
@@ -583,7 +583,7 @@
           "default": null
         },
         "settle_to": {
-          "description": "rail_window: the voltage the rail must return to (at or below) for\n\"settled\".",
+          "description": "`rail_window`: the voltage the rail must return to (at or below) for\n\"settled\".",
           "type": [
             "number",
             "null"
@@ -592,7 +592,7 @@
           "default": null
         },
         "settle_within_ms": {
-          "description": "rail_window: the rail must settle (reach `settle_to`) within this many\nmilliseconds of first spiking above `spike_above`.",
+          "description": "`rail_window`: the rail must settle (reach `settle_to`) within this many\nmilliseconds of first spiking above `spike_above`.",
           "type": [
             "number",
             "null"
@@ -602,7 +602,7 @@
           "minimum": 0.0
         },
         "spike_above": {
-          "description": "rail_window: the rail is considered \"spiking\" while it is strictly\nabove this voltage. Combine with `spike_for_max_ms` to bound total\novervoltage duration, and with `settle_to` / `settle_within_ms` to bound\nsettling.",
+          "description": "`rail_window`: the rail is considered \"spiking\" while it is strictly\nabove this voltage. Combine with `spike_for_max_ms` to bound total\novervoltage duration, and with `settle_to` / `settle_within_ms` to bound\nsettling.",
           "type": [
             "number",
             "null"
@@ -611,7 +611,7 @@
           "default": null
         },
         "spike_for_max_ms": {
-          "description": "rail_window: the rail must not stay above `spike_above` for longer than\nthis many milliseconds (total, summed over the window).",
+          "description": "`rail_window`: the rail must not stay above `spike_above` for longer than\nthis many milliseconds (total, summed over the window).",
           "type": [
             "number",
             "null"
@@ -621,7 +621,7 @@
           "minimum": 0.0
         },
         "supply_net": {
-          "description": "protection_trip: the supply net whose battery protection is checked.",
+          "description": "`protection_trip`: the supply net whose battery protection is checked.",
           "type": [
             "string",
             "null"
@@ -866,7 +866,7 @@
       "type": "object",
       "properties": {
         "descriptor_dir": {
-          "description": "Directory of `<part>.soc.toml` SoC descriptor overrides for this run,\nresolved relative to the spec file's directory. The same layer the\n`HAUKSBEE_MCU_DIR` environment variable provides, made declarative so a\nhardware repo can check its descriptor overrides in beside the spec.\nPrecedence: an explicitly set `HAUKSBEE_MCU_DIR` environment variable\nWINS over this field (the env var is the operator's override of last\nresort; a spec must not be able to silently defeat it).",
+          "description": "Directory of `<part>.soc.toml` `SoC` descriptor overrides for this run,\nresolved relative to the spec file's directory. The same layer the\n`HAUKSBEE_MCU_DIR` environment variable provides, made declarative so a\nhardware repo can check its descriptor overrides in beside the spec.\nPrecedence: an explicitly set `HAUKSBEE_MCU_DIR` environment variable\nWINS over this field (the env var is the operator's override of last\nresort; a spec must not be able to silently defeat it).",
           "type": [
             "string",
             "null"
@@ -922,7 +922,7 @@
       ]
     },
     "Override": {
-      "description": "A component value override applied before binding. With a `tolerance`, the\n`value` becomes the *nominal* and the component is sampled around it as part\nof the tolerance ensemble (see [`ToleranceRule`]).",
+      "description": "A component value override applied before binding.\n\nWith a `tolerance`, the `value` becomes the *nominal* and the component is\nsampled around it as part of the tolerance ensemble (see [`ToleranceRule`]).",
       "type": "object",
       "properties": {
         "distribution": {
@@ -946,7 +946,7 @@
           "default": null
         },
         "ref": {
-          "description": "Reference designator, e.g. \"R_Shunt15301\".",
+          "description": "Reference designator, e.g. \"`R_Shunt15301`\".",
           "type": "string"
         },
         "select": {
@@ -1031,7 +1031,7 @@
           "default": null
         },
         "cs_net": {
-          "description": "Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).\nWhen set and the net resolves to an MCU GPIO pin, the co-sim frames the\nslave's transactions on the real CS edges (exact framing) instead\nof the chunk-boundary heuristic.\n\nTakes precedence over the `cs` pin role of the model bound to this\nperipheral's `ref`, so a board whose model pad map is wrong, or whose chip\nselect is buffered through something the model cannot see, stays\noverridable by hand. Absent AND no model-declared `cs` role reachable\nthrough `ref` = heuristic framing.",
+          "description": "Chip-select net for a SPI slave (`spi_eeprom` / `spi_mcp3008` / SPI sensor).\nWhen set and the net resolves to an MCU GPIO pin, the co-sim frames the\nslave's transactions on the real CS edges (exact framing) instead\nof the chunk-boundary heuristic.\n\nTakes precedence over the `cs` pin role of the model bound to this\nperipheral's `ref`, so a board whose model pad map is wrong, or whose chip\nselect is buffered through something the model cannot see, stays\noverridable by hand. Absent AND no model-declared `cs` role reachable\nthrough `ref` = heuristic framing.",
           "type": [
             "string",
             "null"
@@ -1091,7 +1091,7 @@
           "default": null
         },
         "nets": {
-          "description": "Nets a vcd_sink should log.",
+          "description": "Nets a `vcd_sink` should log.",
           "type": [
             "array",
             "null"
@@ -1153,7 +1153,7 @@
           "default": null
         },
         "size": {
-          "description": "EEPROM size in bytes (i2c_eeprom / spi_eeprom).",
+          "description": "EEPROM size in bytes (`i2c_eeprom` / `spi_eeprom`).",
           "type": [
             "integer",
             "null"
@@ -1163,7 +1163,7 @@
           "minimum": 1
         },
         "temp_c": {
-          "description": "Sensor temperature in Celsius (i2c_lm75).",
+          "description": "Sensor temperature in Celsius (`i2c_lm75`).",
           "type": [
             "number",
             "null"
@@ -1213,7 +1213,7 @@
           "default": null
         },
         "vref": {
-          "description": "ADC reference voltage (spi_mcp3008).",
+          "description": "ADC reference voltage (`spi_mcp3008`).",
           "type": [
             "number",
             "null"
@@ -1266,7 +1266,7 @@
           "type": "string"
         },
         "profile": {
-          "description": "The named load profile to apply (built-in id, e.g. \"esp32_boot_wifi\", or\none defined in `profiles` below).",
+          "description": "The named load profile to apply (built-in id, e.g. \"`esp32_boot_wifi`\", or\none defined in `profiles` below).",
           "type": "string"
         },
         "seed": {
@@ -1603,7 +1603,7 @@
       ]
     },
     "TimingSpec": {
-      "description": "Timing coverage a strict check requires from the MCU/co-sim bridge.\nDeclaring this opts the run into adaptive poll chunking and fail-closed\ncapability negotiation; absent means the report still publishes measured\ntiming coverage but makes no extra timing claim.",
+      "description": "Timing coverage a strict check requires from the MCU/co-sim bridge.\n\nDeclaring this opts the run into adaptive poll chunking and fail-closed\ncapability negotiation; absent means the report still publishes measured\ntiming coverage but makes no extra timing claim.",
       "type": "object",
       "properties": {
         "max_edge_error_us": {
@@ -1630,7 +1630,7 @@
       "additionalProperties": false
     },
     "ToleranceRule": {
-      "description": "A component-tolerance rule: every component whose reference matches `ref`\n(a literal reference, or a pattern where `*` matches any run of characters)\nis sampled within ±`percent` of its value on every ensemble seed.\n\n```toml\n[[tolerance]]\nref = \"R*\"                 # every resistor\npercent = 10.0             # ±10%\ndistribution = \"gaussian\"  # optional; default \"uniform\"\n```\n\nRules apply in order and the last matching rule wins per component, so a\nbroad pattern can be followed by a tighter per-part rule. The nominal is\nthe component's board value (after any `[[override]]`).",
+      "description": "A component-tolerance rule over components whose reference matches `ref`.\n\n`ref` is a literal reference, or a pattern where `*` matches any run of\ncharacters; every match is sampled within ±`percent` of its value on every\nensemble seed.\n\n```toml\n[[tolerance]]\nref = \"R*\"                 # every resistor\npercent = 10.0             # ±10%\ndistribution = \"gaussian\"  # optional; default \"uniform\"\n```\n\nRules apply in order and the last matching rule wins per component, so a\nbroad pattern can be followed by a tighter per-part rule. The nominal is\nthe component's board value (after any `[[override]]`).",
       "type": "object",
       "properties": {
         "distribution": {

@@ -29,35 +29,42 @@ impl RunDate {
     pub const EARLIEST_CREDIBLE_DAY: i64 = 20_663;
 
     /// Capture the system clock and apply the credibility rule.
+    #[must_use]
     pub fn from_system_clock() -> Self {
-        match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => Self::from_epoch_days((d.as_secs() / 86_400) as i64),
-            Err(_) => Self::unknown(),
-        }
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_secs() / 86_400).ok())
+            .map_or_else(Self::unknown, Self::from_epoch_days)
     }
 
     /// Construct from days since the Unix epoch. Pre-floor readings become
     /// unknown instead of being clamped into a date that could activate a waiver.
+    #[must_use]
     pub fn from_epoch_days(days: i64) -> Self {
         Self((days >= Self::EARLIEST_CREDIBLE_DAY).then_some(days))
     }
 
     /// No trustworthy run date. Every waiver reads as expired.
-    pub fn unknown() -> Self {
+    #[must_use]
+    pub const fn unknown() -> Self {
         Self(None)
     }
 
     /// Whether an end-of-day expiry still covers this run.
+    #[must_use]
     pub fn is_covered_by(self, expiry_epoch_days: i64) -> bool {
         self.0.is_some_and(|today| expiry_epoch_days >= today)
     }
 
     /// Days since the Unix epoch, or `None` when the clock is untrustworthy.
-    pub fn epoch_days(self) -> Option<i64> {
+    #[must_use]
+    pub const fn epoch_days(self) -> Option<i64> {
         self.0
     }
 
     /// Classify one waiver using the shared parser and fail-closed clock rule.
+    #[must_use]
     pub fn waiver_state(self, until: &str) -> WaiverState {
         match parse_ymd_epoch_days(until) {
             Some(expiry) if self.is_covered_by(expiry) => WaiverState::Active,
@@ -75,6 +82,7 @@ pub enum WaiverState {
 }
 
 /// Parse a real `YYYY-MM-DD` calendar date into days since the Unix epoch.
+#[must_use]
 pub fn parse_ymd_epoch_days(s: &str) -> Option<i64> {
     let mut parts = s.trim().split('-');
     let y: i64 = parts.next()?.parse().ok()?;
@@ -91,11 +99,11 @@ pub fn parse_ymd_epoch_days(s: &str) -> Option<i64> {
     Some(days_from_civil(y, m, d))
 }
 
-fn is_leap(y: i64) -> bool {
+const fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-fn days_in_month(y: i64, m: u32) -> u32 {
+const fn days_in_month(y: i64, m: u32) -> u32 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,

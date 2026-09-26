@@ -27,7 +27,7 @@ pub struct Scenario {
     pub id: Option<String>,
     /// The part the load attaches to (reference designator, e.g. "U5").
     pub part: String,
-    /// The named load profile to apply (built-in id, e.g. "esp32_boot_wifi", or
+    /// The named load profile to apply (built-in id, e.g. "`esp32_boot_wifi`", or
     /// one defined in `profiles` below).
     pub profile: String,
     /// The supply net the load current is drawn from. If omitted, the runner
@@ -88,11 +88,12 @@ pub struct InlineSegment {
 
 impl InlineProfile {
     /// Convert to the model-layer [`hauksbee_models::LoadProfile`].
+    #[must_use]
     pub fn to_profile(&self) -> hauksbee_models::LoadProfile {
         hauksbee_models::LoadProfile {
             id: self.id.clone(),
             description: self.description.clone(),
-            match_rule: Default::default(),
+            match_rule: hauksbee_models::profile::ProfileMatch::default(),
             segments: self
                 .segments
                 .iter()
@@ -155,8 +156,9 @@ pub struct RailWindow {
 }
 
 impl RailWindow {
-    pub fn new() -> Self {
-        RailWindow {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
             samples: Vec::new(),
@@ -177,9 +179,9 @@ impl RailWindow {
     /// would then false-pass the very sag it exists to catch. The scheduler's
     /// per-frame min/max is folded here so the min/max bounds match what the plain
     /// `voltage` assertion path already sees. (The `samples` timeseries, and hence
-    /// dip_duration/recovery and spike_duration/settling still reflect settled
+    /// `dip_duration/recovery` and `spike_duration/settling` still reflect settled
     /// per-frame values.)
-    pub fn fold(&mut self, v: f64) {
+    pub const fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
         self.max_v = self.max_v.max(v);
     }
@@ -217,12 +219,14 @@ impl RailWindow {
 
     /// Total time (s) the rail spent strictly below `threshold` volts, summed
     /// over the sampled window (rectangular integration on the sample grid).
+    #[must_use]
     pub fn dip_duration_s(&self, threshold: f64) -> f64 {
         self.duration_past_s(threshold, true)
     }
 
     /// Total time (s) the rail spent strictly above `threshold` volts, summed
     /// over the sampled window (rectangular integration on the sample grid).
+    #[must_use]
     pub fn spike_duration_s(&self, threshold: f64) -> f64 {
         self.duration_past_s(threshold, false)
     }
@@ -281,6 +285,7 @@ impl RailWindow {
     /// if the rail never dipped, and `+∞` if it dipped but never climbed back to
     /// `recover_to` (so a `recover_within_ms` assertion FAILS loud rather than
     /// passing on the small `window_end − t_dip` value a late dip produced).
+    #[must_use]
     pub fn recovery_s(&self, threshold: f64, recover_to: f64) -> f64 {
         self.recovered_at_s(threshold, recover_to, true)
     }
@@ -289,6 +294,7 @@ impl RailWindow {
     /// sample at or below `settle_to` after the last sample above `settle_to`.
     /// Returns 0 if the rail never spiked, and `+∞` if it spiked but the final
     /// sample is still above `settle_to`.
+    #[must_use]
     pub fn settling_s(&self, threshold: f64, settle_to: f64) -> f64 {
         self.recovered_at_s(threshold, settle_to, false)
     }
@@ -408,7 +414,7 @@ mod tests {
         ] {
             w.observe(t, v);
         }
-        assert_eq!(w.spike_duration_s(3.5), 0.001);
+        assert_eq!(w.spike_duration_s(3.5).to_bits(), 0.001_f64.to_bits());
         assert!((w.settling_s(3.5, 3.4) - 0.001).abs() < 1e-9);
     }
 
@@ -418,8 +424,8 @@ mod tests {
         w.observe(0.000, 3.30);
         w.observe(0.001, 3.30);
         w.fold(4.20); // intra-frame spike, recovered by the settled sample
-        assert_eq!(w.max_v, 4.20);
-        assert_eq!(w.spike_duration_s(3.5), 0.0);
+        assert_eq!(w.max_v.to_bits(), 4.20_f64.to_bits());
+        assert_eq!(w.spike_duration_s(3.5).to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]

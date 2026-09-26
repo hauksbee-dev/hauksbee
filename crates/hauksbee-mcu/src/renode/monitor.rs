@@ -50,7 +50,7 @@ impl Monitor {
     }
 
     /// Set the default per-command response timeout.
-    pub fn set_timeout(&mut self, t: Duration) {
+    pub const fn set_timeout(&mut self, t: Duration) {
         self.timeout = t;
     }
 
@@ -131,12 +131,12 @@ impl Monitor {
         // Split at the prompt: everything up to the prompt is this response;
         // anything after the prompt suffix is carried to the next read.
         let text = String::from_utf8_lossy(&buf).into_owned();
-        let (resp, rest) = text.split_at(end);
+        let (response, rest) = text.split_at(end);
         self.carry = rest
             .find(") ")
             .map(|i| rest[i + 2..].to_string())
             .unwrap_or_default();
-        Ok(resp.to_string())
+        Ok(response.to_string())
     }
 }
 

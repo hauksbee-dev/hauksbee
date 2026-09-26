@@ -1,4 +1,5 @@
 //! Generic evaluator for declarative digital logic (`[models.logic]`).
+//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/digital.md
 //! (the digital-domain essay) and docs/how-and-why/hauksbee-models/logic_spec.md
 //! (the format and the byte-exact migration record).
@@ -62,31 +63,38 @@
 //! CONTROL pin reads the level that keeps the part operating normally:
 //! resets and loads released, clocks enabled, tri-states driving. (A board
 //! that ties these does so in copper; a spec input left unwired must not
-//! freeze the part.) So an unwired SRCLR_n reads released and an unwired
-//! OE_n reads enabled. The rule is uniform: an unwired 74HC165 PL_n also
+//! freeze the part.) So an unwired `SRCLR_n` reads released and an unwired
+//! `OE_n` reads enabled. The rule is uniform: an unwired 74HC165 `PL_n` also
 //! reads released rather than LOW, so parallel load is NOT permanently
-//! transparent on an unwired PL_n. A permanently transparent load is a
+//! transparent on an unwired `PL_n`. A permanently transparent load is a
 //! modeling artifact rather than silicon behaviour, so a board that wants it
-//! must tie PL_n low in copper as the real part requires.
+//! must tie `PL_n` low in copper as the real part requires.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
 };
-use hauksbee_models::logic_spec::{Edge, Level, Logic, LogicExpr, LogicSpecError, RegisterOp};
+use hauksbee_models::logic_spec::{
+    Edge, Level, Logic, LogicExpr, LogicRegister, LogicSpecError, MemorySpec, RegisterOp,
+};
 
-/// Fixpoint sweep bound for combinational cycles. Part of the semantics
-/// contract: the compile-time exhaustive check verifies every SCC settles
-/// within this many Gauss–Seidel sweeps for every input/seed combination.
-/// Physical latch structures settle in ≤ 2 sweeps; 16 leaves generous slack
-/// for legitimate wider cycles without letting a pathological spec spin.
+/// Fixpoint sweep bound for combinational cycles.
+///
+/// Part of the semantics contract: the compile-time exhaustive check
+/// verifies every SCC settles within this many Gauss–Seidel sweeps for
+/// every input/seed combination. Physical latch structures settle in ≤ 2
+/// sweeps; 16 leaves generous slack for legitimate wider cycles without
+/// letting a pathological spec spin.
 pub const COMB_FIXPOINT_BOUND: usize = 16;
 
 /// Maximum `external inputs + cycle members` the exhaustive convergence check
-/// will enumerate (2^cap evaluations). A cycle wider than this is refused
-/// rather than shipped unverified, refuse-rather-than-fake.
+/// will enumerate (2^cap evaluations).
+///
+/// A cycle wider than this is refused rather than shipped unverified,
+/// refuse-rather-than-fake.
 pub const CONVERGENCE_ENUM_CAP: u32 = 12;
 
 /// A named logic-compilation failure (everything `logic_spec` validation
@@ -281,6 +289,7 @@ impl ParallelMemoryStorage {
         });
     }
 
+    #[allow(clippy::too_many_lines)] // the AT28 page-write protocol, step by step
     fn timed_write(
         &mut self,
         address: usize,
@@ -366,17 +375,11 @@ impl ParallelMemoryStorage {
                     && protection.write_window.is_none()
                     && protection.command_buffer.is_empty()
             });
-            if blocked_attempt {
-                self.busy = Some(TimedProgram {
-                    until_cycle: cycle.saturating_add(program_cycles),
-                    values: Vec::new(),
-                    poll_value: value,
-                    toggle: false,
-                });
-            } else if protection_was_enabled && self.protection.as_ref().is_some_and(|p| !p.enabled)
-            {
-                // The final SDP-disable command itself has a write-cycle
-                // recovery interval even though it changes no array byte.
+            // The final SDP-disable command itself has a write-cycle
+            // recovery interval even though it changes no array byte.
+            let sdp_disabled =
+                protection_was_enabled && self.protection.as_ref().is_some_and(|p| !p.enabled);
+            if blocked_attempt || sdp_disabled {
                 self.busy = Some(TimedProgram {
                     until_cycle: cycle.saturating_add(program_cycles),
                     values: Vec::new(),
@@ -503,14 +506,14 @@ impl ParallelMemoryStorage {
     fn finish_write_period(&mut self) {
         if let Some(protection) = &mut self.protection {
             protection.write_window = None;
-            if !protection.enabled {
+            if protection.enabled {
+                protection.command_buffer.clear();
+            } else {
                 for (pending_address, pending_value) in
                     std::mem::take(&mut protection.command_buffer)
                 {
                     self.cells[pending_address] = pending_value;
                 }
-            } else {
-                protection.command_buffer.clear();
             }
         }
     }
@@ -605,8 +608,10 @@ impl ParallelMemoryStorage {
 }
 
 /// Cloneable description and shared storage for one compiled parallel-memory
-/// port. The scheduler combines these role names with the bound board's nets
-/// when it installs an edge-synchronous firmware responder.
+/// port.
+///
+/// The scheduler combines these role names with the bound board's nets when
+/// it installs an edge-synchronous firmware responder.
 #[derive(Debug, Clone)]
 pub struct ParallelMemoryPort {
     pub name: String,
@@ -629,57 +634,62 @@ pub struct ParallelMemoryWritePort {
 }
 
 impl ParallelMemoryPort {
+    #[must_use]
     pub fn words(&self) -> usize {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .cells
             .len()
     }
 
+    #[must_use]
     pub fn read(&self, address: usize) -> Option<u64> {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .read(address, self.mask)
     }
 
+    #[must_use]
     pub fn read_at(&self, address: usize, cycle: u64, frequency_hz: u64) -> Option<u64> {
         let program_s = self.program_time_s?;
         let program_cycles = seconds_to_cycles(program_s, frequency_hz);
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .timed_read(address, self.mask, cycle, program_cycles)
     }
 
     #[cfg(test)]
+    #[must_use]
     pub fn write(&self, address: usize, value: u64) -> bool {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write(address, value, self.mask, false)
     }
 
+    #[must_use]
     pub fn write_after_gap(&self, address: usize, value: u64, gap_exceeded: bool) -> bool {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write(address, value, self.mask, gap_exceeded)
     }
 
+    #[must_use]
     pub fn write_at(&self, address: usize, value: u64, cycle: u64, frequency_hz: u64) -> bool {
         let Some(program_s) = self.program_time_s else {
             return self.write_after_gap(address, value, false);
         };
         let timeout_cycles = self
             .byte_load_timeout_s
-            .map(|seconds| seconds_to_cycles(seconds, frequency_hz))
-            .unwrap_or(0);
+            .map_or(0, |seconds| seconds_to_cycles(seconds, frequency_hz));
         let program_cycles = seconds_to_cycles(program_s, frequency_hz);
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .timed_write(
                 address,
                 value,
@@ -691,6 +701,12 @@ impl ParallelMemoryPort {
     }
 }
 
+// Clock rates are far below 2^53 and the ceil'd, >= 1 cycle count saturates via `as`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn seconds_to_cycles(seconds: f64, frequency_hz: u64) -> u64 {
     (seconds * frequency_hz.max(1) as f64).ceil().max(1.0) as u64
 }
@@ -742,7 +758,7 @@ fn lower_expr(e: &LogicExpr, out: &mut String) {
             out.push_str(n);
         }
         LogicExpr::Bit(n, i) => {
-            out.push_str(&format!("b_{n}_{i}"));
+            let _ = write!(out, "b_{n}_{i}");
         }
         LogicExpr::Not(a) => {
             out.push_str("(!");
@@ -832,11 +848,192 @@ fn tarjan_sccs(deps: &[Vec<usize>]) -> Vec<Vec<usize>> {
     sccs
 }
 
+/// All-ones mask for a validated 1..=64-bit wide value.
+const fn width_mask(bits: u32) -> u64 {
+    if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
+}
+
+/// Compile one validated `[[models.logic.memory]]` block against the pin tables.
+// `words`, `page_words` and protection addresses are bounded by
+// `Logic::validate` (`MAX_TOTAL_BITS`), so they fit `usize`.
+#[allow(clippy::cast_possible_truncation)]
+fn compile_memory(
+    m: &MemorySpec,
+    input_idx: &HashMap<&str, usize>,
+    output_idx: &HashMap<&str, usize>,
+) -> CompMemory {
+    let mask = width_mask(m.bits);
+    CompMemory {
+        name: m.name.clone(),
+        mask,
+        address: m.address.iter().map(|p| input_idx[p.as_str()]).collect(),
+        writes: m
+            .write
+            .iter()
+            .map(|w| CompMemoryWrite {
+                pin: input_idx[w.pin.as_str()],
+                edge: w.edge,
+                prev: false,
+                gates: m
+                    .write_gates
+                    .iter()
+                    .map(|g| (input_idx[g.pin.as_str()], g.active))
+                    .collect(),
+            })
+            .chain(m.write_cycles.iter().map(|w| {
+                CompMemoryWrite {
+                    pin: input_idx[w.pin.as_str()],
+                    edge: w.edge,
+                    prev: false,
+                    gates: w
+                        .gates
+                        .iter()
+                        .map(|g| (input_idx[g.pin.as_str()], g.active))
+                        .collect(),
+                }
+            }))
+            .collect(),
+        read_gates: m
+            .read_gates
+            .iter()
+            .map(|g| (input_idx[g.pin.as_str()], g.active))
+            .collect(),
+        data_in_names: m.data_in.clone(),
+        data_in_levels: vec![false; m.data_in.len()],
+        data_out: m.data_out.iter().map(|p| output_idx[p.as_str()]).collect(),
+        byte_load_timeout_s: m.byte_load_timeout_s,
+        program_time_s: m.program_time_s,
+        storage: Arc::new(Mutex::new(ParallelMemoryStorage {
+            cells: vec![m.init & mask; m.words as usize].into_boxed_slice(),
+            protection: m
+                .software_data_protection
+                .as_ref()
+                .map(|p| SoftwareProtectionState {
+                    enabled: p.initial,
+                    enable: p
+                        .enable
+                        .iter()
+                        .map(|w| (w.address as usize, w.value))
+                        .collect(),
+                    disable: p
+                        .disable
+                        .iter()
+                        .map(|w| (w.address as usize, w.value))
+                        .collect(),
+                    page_words: m.page_words.unwrap_or(1) as usize,
+                    command_buffer: Vec::new(),
+                    write_window: None,
+                }),
+            page_words: m.page_words.unwrap_or(1) as usize,
+            timed_page: None,
+            busy: None,
+            last_timed_write_cycle: None,
+        })),
+    }
+}
+
+/// Compile one `[[models.logic.register]]` block against the pin and register tables.
+fn compile_register(
+    r: &LogicRegister,
+    input_idx: &HashMap<&str, usize>,
+    reg_idx: &HashMap<&str, usize>,
+) -> CompReg {
+    let mask = width_mask(r.bits);
+    CompReg {
+        name: r.name.clone(),
+        bits: r.bits,
+        mask,
+        state: r.init & mask,
+        clock: r
+            .clock
+            .as_ref()
+            .map(|c| (input_idx[c.pin.as_str()], c.edge)),
+        prev_clock: false,
+        resets: r
+            .resets
+            .iter()
+            .map(|rst| (input_idx[rst.pin.as_str()], rst.active, rst.value))
+            .collect(),
+        op: r.op,
+        data_in: r.data_in.as_ref().map(|d| {
+            if let Some(&ri) = reg_idx.get(d.as_str()) {
+                DataSrc::Reg(ri)
+            } else {
+                DataSrc::Pin(input_idx[d.as_str()])
+            }
+        }),
+        load: r.load.as_ref().map(|l| {
+            (
+                input_idx[l.pin.as_str()],
+                l.active,
+                l.data.iter().map(|p| input_idx[p.as_str()]).collect(),
+            )
+        }),
+        clock_enable: r
+            .clock_enable
+            .as_ref()
+            .map(|e| (input_idx[e.pin.as_str()], e.active)),
+    }
+}
+
+/// Unwired-pin defaults (see module docs): every control input starts at the
+/// level that leaves its register, tri-state group or memory released.
+fn unwired_input_defaults(
+    inputs: usize,
+    registers: &[CompReg],
+    tristates: &[CompTristate],
+    memories: &[CompMemory],
+) -> Vec<bool> {
+    let mut input_defaults = vec![false; inputs];
+    for r in registers {
+        for &(pin, active, _) in &r.resets {
+            // Released = inactive.
+            input_defaults[pin] = active == Level::Low;
+        }
+        if let Some((pin, active, _)) = &r.load {
+            input_defaults[*pin] = *active == Level::Low;
+        }
+        if let Some((pin, active)) = r.clock_enable {
+            // Clock enabled = active.
+            input_defaults[pin] = active == Level::High;
+        }
+    }
+    for ts in tristates {
+        // Outputs driven = active.
+        input_defaults[ts.enable] = ts.active == Level::High;
+    }
+    for m in memories {
+        // Unwired memory controls fail safe: selects/enables are inactive,
+        // and the write strobe starts released so the first observed idle
+        // level cannot manufacture a write edge.
+        for &(pin, active) in &m.read_gates {
+            input_defaults[pin] = active == Level::Low;
+        }
+        for write in &m.writes {
+            for &(pin, active) in &write.gates {
+                input_defaults[pin] = active == Level::Low;
+            }
+            input_defaults[write.pin] = write.edge == Edge::Rising;
+        }
+    }
+    input_defaults
+}
+
 impl LogicComponent {
     /// Compile a validated `[models.logic]` block. Runs `Logic::validate`,
     /// lowers and compiles every expression, builds the evaluation plan, and
     /// exhaustively verifies fixpoint convergence for every combinational
     /// cycle. All failures are named.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LogicCompileError`] when the block fails validation, an
+    /// expression does not compile, or a combinational cycle does not converge.
+    #[allow(clippy::too_many_lines)] // the compile stages share the pin/register indices
     pub fn compile(spec_id: &str, logic: &Logic) -> Result<Self, LogicCompileError> {
         let validated = logic.validate_with_features(&[Logic::FEATURE_MEMORY])?;
 
@@ -860,127 +1057,17 @@ impl LogicComponent {
             .collect();
 
         // ── Addressable memories ──
-        let mut memories: Vec<CompMemory> = Vec::with_capacity(validated.memories.len());
-        for m in &validated.memories {
-            let mask = if m.bits == 64 {
-                u64::MAX
-            } else {
-                (1u64 << m.bits) - 1
-            };
-            memories.push(CompMemory {
-                name: m.name.clone(),
-                mask,
-                address: m.address.iter().map(|p| input_idx[p.as_str()]).collect(),
-                writes: m
-                    .write
-                    .iter()
-                    .map(|w| CompMemoryWrite {
-                        pin: input_idx[w.pin.as_str()],
-                        edge: w.edge,
-                        prev: false,
-                        gates: m
-                            .write_gates
-                            .iter()
-                            .map(|g| (input_idx[g.pin.as_str()], g.active))
-                            .collect(),
-                    })
-                    .chain(m.write_cycles.iter().map(|w| {
-                        CompMemoryWrite {
-                            pin: input_idx[w.pin.as_str()],
-                            edge: w.edge,
-                            prev: false,
-                            gates: w
-                                .gates
-                                .iter()
-                                .map(|g| (input_idx[g.pin.as_str()], g.active))
-                                .collect(),
-                        }
-                    }))
-                    .collect(),
-                read_gates: m
-                    .read_gates
-                    .iter()
-                    .map(|g| (input_idx[g.pin.as_str()], g.active))
-                    .collect(),
-                data_in_names: m.data_in.clone(),
-                data_in_levels: vec![false; m.data_in.len()],
-                data_out: m.data_out.iter().map(|p| output_idx[p.as_str()]).collect(),
-                byte_load_timeout_s: m.byte_load_timeout_s,
-                program_time_s: m.program_time_s,
-                storage: Arc::new(Mutex::new(ParallelMemoryStorage {
-                    cells: vec![m.init & mask; m.words as usize].into_boxed_slice(),
-                    protection: m.software_data_protection.as_ref().map(|p| {
-                        SoftwareProtectionState {
-                            enabled: p.initial,
-                            enable: p
-                                .enable
-                                .iter()
-                                .map(|w| (w.address as usize, w.value))
-                                .collect(),
-                            disable: p
-                                .disable
-                                .iter()
-                                .map(|w| (w.address as usize, w.value))
-                                .collect(),
-                            page_words: m.page_words.unwrap_or(1) as usize,
-                            command_buffer: Vec::new(),
-                            write_window: None,
-                        }
-                    }),
-                    page_words: m.page_words.unwrap_or(1) as usize,
-                    timed_page: None,
-                    busy: None,
-                    last_timed_write_cycle: None,
-                })),
-            });
-        }
+        let mut memories: Vec<CompMemory> = validated
+            .memories
+            .iter()
+            .map(|m| compile_memory(m, &input_idx, &output_idx))
+            .collect();
 
         // ── Registers ──
         let registers: Vec<CompReg> = logic
             .registers
             .iter()
-            .map(|r| {
-                let mask = if r.bits == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << r.bits) - 1
-                };
-                CompReg {
-                    name: r.name.clone(),
-                    bits: r.bits,
-                    mask,
-                    state: r.init & mask,
-                    clock: r
-                        .clock
-                        .as_ref()
-                        .map(|c| (input_idx[c.pin.as_str()], c.edge)),
-                    prev_clock: false,
-                    resets: r
-                        .resets
-                        .iter()
-                        .map(|rst| (input_idx[rst.pin.as_str()], rst.active, rst.value))
-                        .collect(),
-                    op: r.op,
-                    data_in: r.data_in.as_ref().map(|d| {
-                        if let Some(&ri) = reg_idx.get(d.as_str()) {
-                            DataSrc::Reg(ri)
-                        } else {
-                            DataSrc::Pin(input_idx[d.as_str()])
-                        }
-                    }),
-                    load: r.load.as_ref().map(|l| {
-                        (
-                            input_idx[l.pin.as_str()],
-                            l.active,
-                            l.data.iter().map(|p| input_idx[p.as_str()]).collect(),
-                        )
-                    }),
-                    clock_enable: r
-                        .clock_enable
-                        .as_ref()
-                        .map(|e| (input_idx[e.pin.as_str()], e.active)),
-                }
-            })
+            .map(|r| compile_register(r, &input_idx, &reg_idx))
             .collect();
 
         // ── Comb compilation ──
@@ -1048,59 +1135,8 @@ impl LogicComponent {
         }
 
         // ── Unwired-pin defaults (see module docs) ──
-        let mut input_defaults = vec![false; input_names.len()];
-        for r in &registers {
-            for &(pin, active, _) in &r.resets {
-                // Released = inactive.
-                input_defaults[pin] = match active {
-                    Level::Low => true,
-                    Level::High => false,
-                };
-            }
-            if let Some((pin, active, _)) = &r.load {
-                input_defaults[*pin] = match active {
-                    Level::Low => true,
-                    Level::High => false,
-                };
-            }
-            if let Some((pin, active)) = r.clock_enable {
-                // Clock enabled = active.
-                input_defaults[pin] = match active {
-                    Level::Low => false,
-                    Level::High => true,
-                };
-            }
-        }
-        for ts in &tristates {
-            // Outputs driven = active.
-            input_defaults[ts.enable] = match ts.active {
-                Level::Low => false,
-                Level::High => true,
-            };
-        }
-        for m in &memories {
-            // Unwired memory controls fail safe: selects/enables are inactive,
-            // and the write strobe starts released so the first observed idle
-            // level cannot manufacture a write edge.
-            for &(pin, active) in &m.read_gates {
-                input_defaults[pin] = match active {
-                    Level::Low => true,
-                    Level::High => false,
-                };
-            }
-            for write in &m.writes {
-                for &(pin, active) in &write.gates {
-                    input_defaults[pin] = match active {
-                        Level::Low => true,
-                        Level::High => false,
-                    };
-                }
-                input_defaults[write.pin] = match write.edge {
-                    Edge::Rising => true,
-                    Edge::Falling => false,
-                };
-            }
-        }
+        let input_defaults =
+            unwired_input_defaults(input_names.len(), &registers, &tristates, &memories);
 
         for m in &mut memories {
             for write in &mut m.writes {
@@ -1117,7 +1153,7 @@ impl LogicComponent {
         let input_vars: Vec<String> = input_names.iter().map(|n| format!("v_{n}")).collect();
         let output_vars: Vec<String> = output_names.iter().map(|n| format!("v_{n}")).collect();
 
-        let mut lc = LogicComponent {
+        let mut lc = Self {
             spec_id: spec_id.to_string(),
             input_levels: input_defaults.clone(),
             input_defaults,
@@ -1144,6 +1180,8 @@ impl LogicComponent {
     /// [`COMB_FIXPOINT_BOUND`] Gauss–Seidel sweeps for EVERY assignment of
     /// its external inputs and EVERY seed state of its members. Refuses
     /// (named error) when it cannot verify.
+    // Cycle operand counts are bounded by the part's pin count, far below `u32::MAX`.
+    #[allow(clippy::cast_possible_truncation)]
     fn check_convergence(&mut self) -> Result<(), LogicCompileError> {
         // Collect the plan's SCC steps first (borrow gymnastics: we mutate ctx
         // during evaluation).
@@ -1255,32 +1293,38 @@ impl LogicComponent {
     }
 
     /// The model id / spec name this component was compiled from.
+    #[must_use]
     pub fn spec_id(&self) -> &str {
         &self.spec_id
     }
 
     /// Declared input pin names.
+    #[must_use]
     pub fn input_names(&self) -> &[String] {
         &self.input_names
     }
 
     /// Declared output names, in declaration order.
+    #[must_use]
     pub fn output_names(&self) -> &[String] {
         &self.output_names
     }
 
     /// Does the spec declare this input pin?
+    #[must_use]
     pub fn has_input(&self, name: &str) -> bool {
         self.input_names.iter().any(|n| n == name)
     }
 
     /// Does the spec declare this output?
+    #[must_use]
     pub fn has_output(&self, name: &str) -> bool {
         self.output_names.iter().any(|n| n == name)
     }
 
     /// True when the part has at least one clocked register; the parts whose
     /// sub-chunk pulse trains demand edge-granular replay.
+    #[must_use]
     pub fn is_sequential(&self) -> bool {
         self.registers.iter().any(|r| r.clock.is_some())
             || self.memories.iter().any(|m| !m.writes.is_empty())
@@ -1333,12 +1377,14 @@ impl LogicComponent {
     }
 
     /// Current logic level of an output.
+    #[must_use]
     pub fn output_level(&self, name: &str) -> Option<bool> {
         let i = self.output_names.iter().position(|n| n == name)?;
         Some(self.output_levels[i])
     }
 
     /// Is an output currently driving (not tri-stated)?
+    #[must_use]
     pub fn output_enabled(&self, name: &str) -> Option<bool> {
         let i = self.output_names.iter().position(|n| n == name)?;
         Some(self.output_enabled[i])
@@ -1346,6 +1392,7 @@ impl LogicComponent {
 
     /// Addressable memories declared by this component, sharing their backing
     /// cells with the tick evaluator. Empty for ordinary logic parts.
+    #[must_use]
     pub fn memory_ports(&self) -> Vec<ParallelMemoryPort> {
         self.memories
             .iter()
@@ -1394,6 +1441,7 @@ impl LogicComponent {
     /// component's ordinary tick entirely. It is therefore safe only when no
     /// register, combinational expression, tri-state group, second memory, or
     /// unrelated output also depends on that tick.
+    #[must_use]
     pub fn has_exclusive_memory_port(&self, name: &str) -> bool {
         if self.memories.len() != 1
             || self.memories[0].name != name
@@ -1418,6 +1466,7 @@ impl LogicComponent {
     }
 
     /// Current value of a register.
+    #[must_use]
     pub fn register(&self, name: &str) -> Option<u64> {
         self.registers
             .iter()
@@ -1431,6 +1480,7 @@ impl LogicComponent {
     }
 
     /// Declared width of a register, if the spec has one by this name.
+    #[must_use]
     pub fn register_bits(&self, name: &str) -> Option<u32> {
         self.registers
             .iter()
@@ -1481,7 +1531,7 @@ impl LogicComponent {
         for ri in 0..self.registers.len() {
             let (cur_clock, next) = {
                 let r = &self.registers[ri];
-                let cur_clock = r.clock.map(|(p, _)| self.input_levels[p]).unwrap_or(false);
+                let cur_clock = r.clock.is_some_and(|(p, _)| self.input_levels[p]);
                 let edge_fired = match r.clock {
                     Some((_, Edge::Rising)) => cur_clock && !r.prev_clock,
                     Some((_, Edge::Falling)) => !cur_clock && r.prev_clock,
@@ -1555,7 +1605,7 @@ impl LogicComponent {
             let _ = m
                 .storage
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .write(address, value, m.mask, false);
         }
 
@@ -1574,11 +1624,11 @@ impl LogicComponent {
         };
         match r.op {
             Some(RegisterOp::ShiftLeft) => {
-                let d = r.data_in.as_ref().map(din_bit).unwrap_or(0);
+                let d = r.data_in.as_ref().map_or(0, din_bit);
                 (r.state.wrapping_shl(1) | d) & r.mask
             }
             Some(RegisterOp::ShiftRight) => {
-                let d = r.data_in.as_ref().map(din_bit).unwrap_or(0);
+                let d = r.data_in.as_ref().map_or(0, din_bit);
                 (r.state >> 1) | (d.wrapping_shl(r.bits - 1))
             }
             Some(RegisterOp::Load) => match r.data_in {
@@ -1595,6 +1645,7 @@ impl LogicComponent {
     /// Re-evaluate the combinational outputs and tri-state enables from the
     /// CURRENT input levels and register state (also the entry point after an
     /// external register overwrite via [`LogicComponent::set_register`]).
+    #[allow(clippy::too_many_lines)] // one ordered combinational refresh
     pub fn refresh_outputs(&mut self) {
         // Bind every variable the expressions read.
         for i in 0..self.input_names.len() {
@@ -1621,8 +1672,12 @@ impl LogicComponent {
             let address = m.address.iter().enumerate().fold(0usize, |a, (bit, &pin)| {
                 a | (usize::from(self.input_levels[pin]) << bit)
             });
-            let mut storage = m.storage.lock().unwrap_or_else(|e| e.into_inner());
-            let word = storage.read(address, m.mask).unwrap_or(0);
+            let word = m
+                .storage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .read(address, m.mask)
+                .unwrap_or(0);
             for (bit, &out) in m.data_out.iter().enumerate() {
                 self.output_levels[out] = word & (1u64 << bit) != 0;
             }
@@ -1894,7 +1949,7 @@ disable = [
         assert_eq!(lc.output_enabled("qa"), Some(true));
     }
 
-    /// Unwired SRCLR_n / OE_n read released / enabled.
+    /// Unwired `SRCLR_n` / `OE_n` read released / enabled.
     #[test]
     fn unwired_controls_read_released() {
         let mut lc = compile(HC595);

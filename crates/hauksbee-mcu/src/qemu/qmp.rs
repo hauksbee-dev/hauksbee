@@ -61,7 +61,7 @@ impl Qmp {
     }
 
     /// Set the default per-command response timeout.
-    pub fn set_timeout(&mut self, t: Duration) {
+    pub const fn set_timeout(&mut self, t: Duration) {
         self.timeout = t;
     }
 
@@ -196,7 +196,7 @@ impl Qmp {
     /// empty-socket probe costs a blocking read timeout on every chunk);
     /// instead [`Qmp::measured_run_window`] refuses to settle until the pair
     /// is ordered, which a stale STOP next to this chunk's RESUME never is.
-    pub fn clear_run_events(&mut self) {
+    pub const fn clear_run_events(&mut self) {
         self.event_resume = None;
         self.event_stop = None;
     }
@@ -387,13 +387,12 @@ fn unescape_json_string(s: &str) -> String {
                 Some('r') => out.push('\r'),
                 Some('t') => out.push('\t'),
                 Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
+                Some('\\') | None => out.push('\\'),
                 Some('/') => out.push('/'),
                 Some(other) => {
                     out.push('\\');
                     out.push(other);
                 }
-                None => out.push('\\'),
             }
         } else {
             out.push(c);
@@ -462,7 +461,7 @@ mod tests {
         assert_eq!(parse_xp_word("000000003ff44004: 0x00000020"), Some(0x20));
         assert_eq!(
             parse_xp_word("0x3ff44004: 0xdeadbeef\r\n"),
-            Some(0xdeadbeef)
+            Some(0xdead_beef)
         );
         assert_eq!(parse_xp_word("no hex here"), None);
     }
@@ -478,6 +477,7 @@ mod tests {
     /// drain, not the command path). The write end is returned so a test can
     /// feed more, and must be kept alive or the reader sees EOF.
     fn qmp_with_pending(events: &str) -> (Qmp, std::net::TcpStream) {
+        use std::io::Write as _;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let client = TcpStream::connect(addr).unwrap();
@@ -485,7 +485,6 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
         let (server, _) = listener.accept().unwrap();
-        use std::io::Write as _;
         (&server).write_all(events.as_bytes()).unwrap();
         let qmp = Qmp {
             stream: client,

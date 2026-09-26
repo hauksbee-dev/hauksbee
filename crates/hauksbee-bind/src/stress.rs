@@ -98,32 +98,34 @@ pub enum FaultKind {
 }
 
 impl FaultKind {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            FaultKind::Overcurrent => "overcurrent",
-            FaultKind::SurgeCurrent => "surge_current",
-            FaultKind::Overpower => "overpower",
-            FaultKind::Overvoltage => "overvoltage",
-            FaultKind::ReverseBias => "reverse_bias",
-            FaultKind::PinOvercurrent => "pin_overcurrent",
-            FaultKind::Short => "short",
-            FaultKind::Overtemperature => "overtemperature",
+            Self::Overcurrent => "overcurrent",
+            Self::SurgeCurrent => "surge_current",
+            Self::Overpower => "overpower",
+            Self::Overvoltage => "overvoltage",
+            Self::ReverseBias => "reverse_bias",
+            Self::PinOvercurrent => "pin_overcurrent",
+            Self::Short => "short",
+            Self::Overtemperature => "overtemperature",
         }
     }
 
     /// Inverse of [`Self::as_str`]; unknown strings map to `Overcurrent`.
     // Infallible (unknown maps to Overcurrent), so FromStr and its Err type do not fit.
     #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> FaultKind {
+    #[must_use]
+    pub fn from_str(s: &str) -> Self {
         match s {
-            "surge_current" => FaultKind::SurgeCurrent,
-            "overpower" => FaultKind::Overpower,
-            "overvoltage" => FaultKind::Overvoltage,
-            "reverse_bias" => FaultKind::ReverseBias,
-            "pin_overcurrent" => FaultKind::PinOvercurrent,
-            "overtemperature" => FaultKind::Overtemperature,
-            "short" => FaultKind::Short,
-            _ => FaultKind::Overcurrent,
+            "surge_current" => Self::SurgeCurrent,
+            "overpower" => Self::Overpower,
+            "overvoltage" => Self::Overvoltage,
+            "reverse_bias" => Self::ReverseBias,
+            "pin_overcurrent" => Self::PinOvercurrent,
+            "overtemperature" => Self::Overtemperature,
+            "short" => Self::Short,
+            _ => Self::Overcurrent,
         }
     }
 }
@@ -163,6 +165,7 @@ pub struct DeviceMeta {
 impl DeviceMeta {
     /// Effective power rating (W): explicit `max_power_w`, else derived from the
     /// resistor footprint size. `None` if no power limit is known.
+    #[must_use]
     pub fn power_rating_w(&self) -> Option<f64> {
         if let Some(p) = self.ratings.max_power_w {
             return Some(p);
@@ -206,7 +209,7 @@ impl DeviceMeta {
         let prefix: String = self
             .reference
             .chars()
-            .take_while(|c| c.is_ascii_alphabetic())
+            .take_while(char::is_ascii_alphabetic)
             .collect::<String>()
             .to_ascii_uppercase();
         matches!(prefix.as_str(), "R" | "RN" | "RA")
@@ -222,6 +225,7 @@ impl DeviceMeta {
     /// The aggregation key: boards commonly carry dozens of resistors from one
     /// library whose naming this cannot parse, and reporting each separately
     /// floods the honesty channel to the point where it stops being read.
+    #[must_use]
     pub fn power_coverage_package(&self) -> Option<&str> {
         if !matches!(self.kind, ComponentKind::Passive)
             || self.ratings.max_power_w.is_some()
@@ -239,6 +243,7 @@ impl DeviceMeta {
         })
     }
 
+    #[must_use]
     pub fn power_coverage_gap(&self) -> Option<String> {
         let package = self.power_coverage_package()?;
         Some(format!(
@@ -253,6 +258,7 @@ impl DeviceMeta {
     /// `theta_ja_c_per_w` from the model, else derived from the footprint
     /// package class. Always returns a value (the footprint default is the
     /// conservative fallback), so every dissipating device gets a temperature.
+    #[must_use]
     pub fn theta_ja_c_per_w(&self) -> f64 {
         self.ratings
             .theta_ja_c_per_w
@@ -262,6 +268,7 @@ impl DeviceMeta {
     /// Effective maximum junction temperature (C): explicit
     /// `max_junction_temp_c` from the model, else the per-package-class default
     /// (150 C for power packages, 125 C otherwise).
+    #[must_use]
     pub fn tj_max_c(&self) -> f64 {
         self.ratings
             .max_junction_temp_c
@@ -269,9 +276,11 @@ impl DeviceMeta {
     }
 }
 
-/// What a resistor's power rating was derived from. The rating is only as good
-/// as the package evidence behind it, and an overstress verdict that rests on a
-/// guessed package must say so rather than read as a measurement.
+/// What a resistor's power rating was derived from.
+///
+/// The rating is only as good as the package evidence behind it, and an
+/// overstress verdict that rests on a guessed package must say so rather than
+/// read as a measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResistorPowerBasis {
     /// A recognised chip-resistor size code (the imperial token in the
@@ -299,6 +308,7 @@ pub struct ResistorPower {
 /// A board with fifty resistors from one unparseable library is one coverage hole
 /// with fifty instances, not fifty holes, and rendering it as fifty is how an
 /// honesty channel gets tuned out.
+#[must_use]
 pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
     let mut by_package: std::collections::BTreeMap<&str, Vec<&str>> =
         std::collections::BTreeMap::new();
@@ -313,8 +323,8 @@ pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
     by_package
         .into_iter()
         .map(|(pkg, mut refs)| {
-            refs.sort_unstable();
             const SHOWN: usize = 5;
+            refs.sort_unstable();
             let listed = refs
                 .iter()
                 .take(SHOWN)
@@ -358,6 +368,7 @@ pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
 /// imperial or metric token) gives the standard rating; a recognised small axial
 /// body gives its genuine 1/4 W; everything else derives nothing and becomes a
 /// named coverage gap naming the unlock.
+#[must_use]
 pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     let f = footprint.to_ascii_uppercase();
     let chip = |w: f64| ResistorPower {
@@ -393,26 +404,26 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // packages MUST be matched first, before the larger imperial tokens they
     // embed as a metric suffix, or they are silently over-rated.
     if let Some(w) = imperial_chip_watts(|code| f.contains(code)) {
-        chip(w)
-    } else if let Some(w) = din_axial_rating(&f) {
-        // A DIN body code IS size evidence, and the codes are not interchangeable:
-        // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
-        // over-rates the smaller one twofold and suppresses its overpower check.
-        // An axial footprint with no DIN code carries no size evidence and falls
-        // through to the abstention below.
-        ResistorPower {
+        return chip(w);
+    }
+    // A DIN body code IS size evidence, and the codes are not interchangeable:
+    // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
+    // over-rates the smaller one twofold and suppresses its overpower check.
+    // An axial footprint with no DIN code carries no size evidence and falls
+    // through to the abstention below.
+    if let Some(w) = din_axial_rating(&f) {
+        return ResistorPower {
             watts: Some(w),
             basis: ResistorPowerBasis::ThtAxial,
-        }
-    } else {
-        // The package class may be known but its SIZE is not, or nothing is known
-        // at all. Either way there is no rating to derive: a real 0603 behind a
-        // custom footprint name is a 1/10 W part, and handing it any floor either
-        // invents an overpower fault (if the floor is lower than the truth) or
-        // suppresses a real one (if it is higher). It becomes a named coverage
-        // gap instead, which is the honest form of not knowing.
-        unknown()
+        };
     }
+    // The package class may be known but its SIZE is not, or nothing is known
+    // at all. Either way there is no rating to derive: a real 0603 behind a
+    // custom footprint name is a 1/10 W part, and handing it any floor either
+    // invents an overpower fault (if the floor is lower than the truth) or
+    // suppresses a real one (if it is higher). It becomes a named coverage
+    // gap instead, which is the honest form of not knowing.
+    unknown()
 }
 
 /// Every imperial chip size code the rating table recognises, smallest body
@@ -451,12 +462,12 @@ enum MetricCode {
     Rated(f64),
     /// A metric-only name whose code is not in the table.
     Unrecognised,
-    /// No usable metric-only code: either no METRIC suffix at all, or KiCad's
+    /// No usable metric-only code: either no METRIC suffix at all, or `KiCad`'s
     /// dual form whose imperial token is authoritative.
     Absent,
 }
 
-/// The run of ASCII digits that ends `s`, in order ("R_0402" -> "0402").
+/// The run of ASCII digits that ends `s`, in order ("`R_0402`" -> "0402").
 fn trailing_digits(s: &str) -> String {
     let mut d: Vec<char> = s.chars().rev().take_while(char::is_ascii_digit).collect();
     d.reverse();
@@ -530,18 +541,20 @@ fn din_axial_rating(f: &str) -> Option<f64> {
         .map(|(_, w)| *w)
 }
 
-/// Strip a multi-unit stamping suffix from a device name, yielding the package
-/// reference. Multi-unit packages stamp one IR device per unit with a suffix
+/// Strip a multi-unit stamping suffix from a device name, yielding the package reference.
+///
+/// Multi-unit packages stamp one IR device per unit with a suffix
 /// on the reference designator: `_q<N>` (dual BJTs, opamp/comparator channels),
-/// `_s<N>` (analog-switch banks), `_e<N>` (passive-array elements). "Q1_q2"
-/// and "Q1_q1" are two dice in the one physical package "Q1".
+/// `_s<N>` (analog-switch banks), `_e<N>` (passive-array elements). "`Q1_q2`"
+/// and "`Q1_q1`" are two dice in the one physical package "Q1".
 ///
 /// This is THE unit-suffix rule: the binder uses it to apply a package's
 /// ratings to every unit, [`StressMonitor::evaluate`] uses it to pool sibling
 /// dissipation through the shared package, and hauksbee-ci mirrors it
 /// (`key_belongs_to_ref`) to aggregate per-unit keys under the bare ref. Only
-/// an all-digit tail after the marker counts, so "SW1_heater" or "U1_qspi" are
+/// an all-digit tail after the marker counts, so "`SW1_heater`" or "`U1_qspi`" are
 /// left alone (and "SW1" never claims "SW10"'s units).
+#[must_use]
 pub fn strip_unit_suffix(name: &str) -> &str {
     ["_q", "_s", "_e"]
         .into_iter()
@@ -553,14 +566,15 @@ pub fn strip_unit_suffix(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// A supply-rail absolute-maximum watch for a part that is not an analog
-/// device in the solver (an MCU / logic IC): the part's supply NET is checked
-/// against the model's `max_voltage_v` each chunk. These parts deliberately get
-/// no whole-device [`DeviceMeta`] (their per-pin currents are covered by the
-/// pin-driver metas). Without this check a rail driven far past the chip's
-/// absolute-maximum Vcc would raise nothing at all, which is an honesty gap the
-/// model DB can close: it carries the rating (e.g. ATmega328P
-/// `max_voltage_v = 6.0`).
+/// A supply-rail absolute-maximum watch for a part that is not an analog device
+/// in the solver (an MCU / logic IC): the part's supply NET is checked against
+/// the model's `max_voltage_v` each chunk.
+///
+/// These parts deliberately get no whole-device [`DeviceMeta`] (their per-pin
+/// currents are covered by the pin-driver metas). Without this check a rail
+/// driven far past the chip's absolute-maximum Vcc would raise nothing at all,
+/// which is an honesty gap the model DB can close: it carries the rating (e.g.
+/// `ATmega328P` `max_voltage_v = 6.0`).
 #[derive(Debug, Clone)]
 pub struct SupplyWatch {
     /// Component reference designator the fault names (e.g. "U1").
@@ -621,7 +635,7 @@ pub struct StressMonitor {
     chunk_elapsed_s: f64,
     /// Run-cumulative per-device evidence, index-aligned with `metas`.
     run: Vec<RunStats>,
-    /// Each meta's (power rating, theta_JA, Tj max): footprint parses, so resolved once.
+    /// Each meta's (power rating, `theta_JA`, Tj max): footprint parses, so resolved once.
     limits: Vec<(Option<f64>, f64, f64)>,
 }
 
@@ -664,7 +678,7 @@ const CONDUCTING_ID_FRACTION: f64 = 1e-3;
 
 /// Time constant (s) of the lag a CONTINUOUS current rating is judged through.
 /// MOSFET and diode pulsed ratings are specified at a 300 us pulse width
-/// (Infineon IRF540NPbF Rev. 2.1 note 3, and the same convention across AOS,
+/// (Infineon `IRF540NPbF` Rev. 2.1 note 3, and the same convention across AOS,
 /// onsemi and Vishay parts), so anything shorter is pulsed by the datasheets'
 /// own definition. Rounded up to 1 ms, one order above the solver's chunk.
 const IDM_PULSE_S: f64 = 1e-3;
@@ -676,15 +690,16 @@ const GATE_DRIVE_TOLERANCE: f64 = 0.02;
 
 impl Default for StressMonitor {
     fn default() -> Self {
-        StressMonitor::new(Vec::new())
+        Self::new(Vec::new())
     }
 }
 
 impl StressMonitor {
     /// Build a monitor over the device metadata gathered at bind time.
+    #[must_use]
     pub fn new(metas: Vec<DeviceMeta>) -> Self {
         let n = metas.len();
-        StressMonitor {
+        Self {
             limits: (metas.iter())
                 .map(|m| (m.power_rating_w(), m.theta_ja_c_per_w(), m.tj_max_c()))
                 .collect(),
@@ -713,6 +728,7 @@ impl StressMonitor {
     ///   guarantee the part is on at all, so that undermines.
     /// * A current peak above a continuous rating on a card with NO pulsed
     ///   rating to judge it against: qualified, naming how long it lasted.
+    #[must_use]
     pub fn run_disclosures(&self) -> Vec<Assumption> {
         let mut out = Vec::new();
         for (m, s) in self.metas.iter().zip(&self.run) {
@@ -764,10 +780,10 @@ impl StressMonitor {
         out
     }
 
-    /// A junction temperature judged on a theta_JA inferred from the package,
+    /// A junction temperature judged on a `theta_JA` inferred from the package,
     /// because the card carries none, qualifies each claim it feeds.
     /// `claims(reference, decisive)` names those claims' scopes; `decisive` is
-    /// true when twice the inferred theta_JA would put the peak at or over the
+    /// true when twice the inferred `theta_JA` would put the peak at or over the
     /// part's Tj limit, so a verdict drawn from the limit rests on the guess.
     pub fn inferred_theta_ja(&self, claims: impl Fn(&str, bool) -> Vec<Scope>) -> Vec<Assumption> {
         let mut out = Vec::new();
@@ -776,7 +792,7 @@ impl StressMonitor {
                 continue;
             };
             let (r, theta, limit) = (&m.reference, m.theta_ja_c_per_w(), m.tj_max_c());
-            let decisive = 2.0 * peak - self.ambient_c >= limit;
+            let decisive = 2.0f64.mul_add(peak, -self.ambient_c) >= limit;
             let key = format!("{r}-theta-ja");
             let text = format!("{r}'s junction temperature (peak {peak:.1} C)");
             let how = format!(
@@ -801,6 +817,7 @@ impl StressMonitor {
     /// [`crate::binder::BoundBoard::power_coverage_gaps`] is the same list for
     /// callers holding a bound board rather than a live monitor; between them the
     /// CI report, the evidence map and the TUI all carry these.
+    #[must_use]
     pub fn power_coverage_gaps(&self) -> Vec<String> {
         let mut gaps = aggregate_power_coverage_gaps(&self.metas);
         // A MOSFET that conducted but whose card states no VGS for its RDS(on)
@@ -813,7 +830,8 @@ impl StressMonitor {
     }
 
     /// Number of monitored devices.
-    pub fn device_count(&self) -> usize {
+    #[must_use]
+    pub const fn device_count(&self) -> usize {
         self.metas.len()
     }
 
@@ -960,13 +978,15 @@ impl StressMonitor {
     }
 
     /// Live stress fraction per component reference (0..1).
-    pub fn stress_by_ref(&self) -> &HashMap<String, f64> {
+    #[must_use]
+    pub const fn stress_by_ref(&self) -> &HashMap<String, f64> {
         &self.stress_by_ref
     }
 
     /// Live estimated steady-state junction temperature (C) per component
     /// reference, for dissipating devices.
-    pub fn temp_by_ref(&self) -> &HashMap<String, f64> {
+    #[must_use]
+    pub const fn temp_by_ref(&self) -> &HashMap<String, f64> {
         &self.temp_by_ref
     }
 
@@ -975,6 +995,7 @@ impl StressMonitor {
     /// `node_v(node)` returns the node voltage; `branch_current(id)` returns the
     /// branch current for a `Vsource`/`Inductor` device if the layout owns one.
     /// `t` is the current sim time. Returns any faults newly raised this chunk.
+    #[allow(clippy::too_many_lines)] // the three documented passes share the sampled state
     pub fn evaluate(
         &mut self,
         circuit: &mut Circuit,
@@ -1283,7 +1304,7 @@ struct OperatingPoint {
 
 impl OperatingPoint {
     /// A two-terminal point: `|I|`, the signed across-voltage, dissipation.
-    fn new(current_a: f64, voltage_v: f64, power_w: f64) -> Self {
+    const fn new(current_a: f64, voltage_v: f64, power_w: f64) -> Self {
         Self {
             vgs: None,
             current_a,
@@ -1294,6 +1315,7 @@ impl OperatingPoint {
 }
 
 /// Compute a device's operating point from the chunk's solved state.
+#[allow(clippy::too_many_lines)] // one arm per device kind
 fn operating_point(
     circuit: &Circuit,
     meta: &DeviceMeta,
@@ -1410,7 +1432,7 @@ fn operating_point(
                     let phi = model.phi.max(1e-6);
                     let vbs = sign * node_v(*bulk) - vs;
                     let arg = (phi - vbs).max(0.0);
-                    vth = model.vto + model.gamma * (arg.sqrt() - phi.sqrt());
+                    vth = model.gamma.mul_add(arg.sqrt() - phi.sqrt(), model.vto);
                 }
             }
 
@@ -1433,7 +1455,7 @@ fn operating_point(
             // gates it on a sim option the monitor cannot see); lambda is 0
             // for most models, and when it isn't, including it errs toward
             // the slightly *higher* current, conservative for a limit check.
-            let clm = 1.0 + model.lambda * vds_f;
+            let clm = model.lambda.mul_add(vds_f, 1.0);
             let ids = if vds_f < vov_eff {
                 // Triode.
                 model.beta() * (vov_eff * vds_f - 0.5 * vds_f * vds_f) * clm
@@ -1609,17 +1631,17 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     // Vt). Pairing a temp-corrected Vt with the nominal `is` understated the
     // forward current of a hot junction; the monitor's over-current/over-power
     // checks saw a cooler device than the solve actually settled at.
-    let i = model.is_at(temp_c) * (exp_arg.exp() - 1.0);
+    let i = model.is_at(temp_c) * exp_arg.exp_m1();
     i.clamp(-1e3, 1e3)
 }
 
-/// Thermal utilisation as a RISE-based fraction: (Tj − ambient)/(Tj_max −
+/// Thermal utilisation as a RISE-based fraction: (Tj − `ambient)/(Tj_max` −
 /// ambient). An idle part reads ~0, comparable with the power/current/voltage
 /// checks, which are all true 0-at-idle ratios, and a part at its junction
-/// limit reads 1.0. An absolute-Celsius ratio (Tj/Tj_max) instead floors every
-/// dissipating part at ~ambient/Tj_max (~0.2), giving the exported heat-map a
+/// limit reads 1.0. An absolute-Celsius ratio (`Tj/Tj_max`) instead floors every
+/// dissipating part at ~`ambient/Tj_max` (~0.2), giving the exported heat-map a
 /// spurious floor. The trip threshold is the same either way: frac > 1 ⟺ Tj >
-/// Tj_max under both. Clamped at 0 so a below-ambient junction never reads
+/// `Tj_max` under both. Clamped at 0 so a below-ambient junction never reads
 /// negative.
 fn thermal_stress_frac(tj_c: f64, tj_max_c: f64, ambient_c: f64) -> f64 {
     let span = tj_max_c - ambient_c;
@@ -1635,7 +1657,7 @@ mod monitor_temp_tests {
     use super::*;
 
     /// R15: the exported thermal stress fraction is rise-based, so a lightly-
-    /// loaded part reads ~0, not the ~0.2 floor the absolute Tj/Tj_max ratio gave
+    /// loaded part reads ~0, not the ~0.2 floor the absolute `Tj/Tj_max` ratio gave
     /// every dissipating device, while the fault trip (frac > 1) is unchanged.
     #[test]
     fn thermal_stress_is_rise_based_not_absolute() {
@@ -1646,7 +1668,7 @@ mod monitor_temp_tests {
             "idle part ~0"
         );
         // Exactly ambient reads 0.
-        assert_eq!(thermal_stress_frac(25.0, 125.0, 25.0), 0.0);
+        assert!(thermal_stress_frac(25.0, 125.0, 25.0).abs() < 1e-12);
         // Halfway up the rise band reads 0.5.
         assert!((thermal_stress_frac(75.0, 125.0, 25.0) - 0.5).abs() < 1e-9);
         // At the junction limit reads exactly 1.0 (the trip boundary is preserved).
@@ -1654,7 +1676,7 @@ mod monitor_temp_tests {
         // Over the limit reads > 1 (still trips).
         assert!(thermal_stress_frac(150.0, 125.0, 25.0) > 1.0);
         // A below-ambient junction never reads negative.
-        assert_eq!(thermal_stress_frac(10.0, 125.0, 25.0), 0.0);
+        assert!(thermal_stress_frac(10.0, 125.0, 25.0).abs() < 1e-12);
     }
 
     #[test]
@@ -1925,8 +1947,8 @@ mod monitor_temp_tests {
             .iter()
             .find(|c| c.kind == FaultKind::Overcurrent && !c.surge)
             .expect("passive continuous over-current check present");
-        assert_eq!(oc.limit, 2.0);
-        assert_eq!(oc.value, 3.0);
+        assert!((oc.limit - 2.0).abs() < 1e-12);
+        assert!((oc.value - 3.0).abs() < 1e-12);
     }
 
     #[test]
@@ -1956,7 +1978,7 @@ mod monitor_temp_tests {
                 ..Default::default()
             };
             let (mut circuit, node, mut monitor) = resistor_monitor(1.0, ratings);
-            let raised = amps.iter().enumerate().any(|(k, i)| {
+            let raised = (0u32..).zip(amps.iter()).any(|(k, i)| {
                 monitor.deposit_chunk_energy(&[0.0], dt);
                 let v = *i;
                 monitor
@@ -1964,7 +1986,7 @@ mod monitor_temp_tests {
                         &mut circuit,
                         &|n| if n == node { v } else { 0.0 },
                         &|_| None,
-                        k as f64 * dt,
+                        f64::from(k) * dt,
                     )
                     .iter()
                     .any(|f| f.kind == FaultKind::Overcurrent)
@@ -2082,8 +2104,8 @@ mod monitor_temp_tests {
         assert_eq!(raised.len(), 1, "raised once, not per chunk");
         assert_eq!(raised[0].component, "U1");
         assert_eq!(raised[0].kind, FaultKind::Overvoltage);
-        assert_eq!(raised[0].limit, 6.0);
-        assert_eq!(raised[0].value, 100.0);
+        assert!((raised[0].limit - 6.0).abs() < 1e-12);
+        assert!((raised[0].value - 100.0).abs() < 1e-12);
 
         // reset_tracks clears the latch: a replay re-raises.
         monitor.reset_tracks();
@@ -2186,13 +2208,13 @@ mod monitor_temp_tests {
         // And the reported current must equal the temp-corrected Shockley value,
         // not the nominal-Is one.
         let vt_hot = hauksbee_ir::thermal_voltage_c(125.0) * model.n;
-        let expected = model.is_at(125.0) * ((vd / vt_hot).exp() - 1.0);
+        let expected = model.is_at(125.0) * (vd / vt_hot).exp_m1();
         assert!(
             (i_hot - expected).abs() <= expected.abs() * 1e-9,
             "diode_current must use is_at(T): got {i_hot:e}, expected {expected:e}"
         );
         // A nominal-Is result would be materially smaller, guard the gap.
-        let nominal = model.is * ((vd / vt_hot).exp() - 1.0);
+        let nominal = model.is * (vd / vt_hot).exp_m1();
         assert!(
             i_hot > nominal * 1.5,
             "temp-corrected current must exceed the nominal-Is current it replaced"

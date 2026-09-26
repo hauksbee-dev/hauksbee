@@ -216,7 +216,10 @@ fn invalid_budget_members_cannot_be_constructed_or_silently_omitted() {
 
     assert_eq!(budget.methods().len(), 1);
     assert_eq!(budget.failed_windows().len(), 1);
-    assert_eq!(budget.residual().unwrap().max_abs(), 4.2e-9);
+    assert_eq!(
+        budget.residual().unwrap().max_abs().to_bits(),
+        4.2e-9_f64.to_bits()
+    );
 }
 
 #[test]

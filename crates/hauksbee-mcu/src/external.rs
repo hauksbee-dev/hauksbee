@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 /// A spawned emulator child: owned as a process tree (see [`crate::children`]),
 /// registered with the signal reaper, and torn down whole on drop.
-pub(crate) struct EmulatorProcess {
+pub struct EmulatorProcess {
     // The three QEMU-only members below (this label, `ensure_running`, and
     // `nonempty_or`) go unread in a renode-only build.
     #[cfg_attr(not(feature = "qemu"), allow(dead_code))]
@@ -56,8 +56,9 @@ impl EmulatorProcess {
             .and_then(|p| std::fs::File::create(p).ok())
             .map_or_else(Stdio::null, Stdio::from);
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(sink);
+        let program = cmd.get_program().to_owned();
         let (child, guard) = spawn_emulator(cmd)
-            .with_context(|| format!("spawning owned {label} from {:?}", cmd.get_program()))?;
+            .with_context(|| format!("spawning owned {label} from {}", program.display()))?;
         Ok(Self {
             label,
             child,
@@ -149,7 +150,7 @@ impl Drop for EmulatorProcess {
 /// `s` unless it is empty, else the fallback: an error that embeds captured
 /// stderr must say "nothing" rather than trail off into blank space.
 #[cfg_attr(not(feature = "qemu"), allow(dead_code))]
-pub(crate) fn nonempty_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {
+pub const fn nonempty_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {
     if s.is_empty() {
         fallback
     } else {
@@ -161,7 +162,7 @@ pub(crate) fn nonempty_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {
 
 /// An explicit `VAR=<path>` override: `Some(path)` when set and present, an
 /// error when set and missing (a typo must not fall through to autodetection).
-pub(crate) fn env_override(var: &str) -> Result<Option<PathBuf>> {
+pub fn env_override(var: &str) -> Result<Option<PathBuf>> {
     let Some(p) = std::env::var_os(var).map(PathBuf::from) else {
         return Ok(None);
     };
@@ -176,7 +177,7 @@ pub(crate) fn env_override(var: &str) -> Result<Option<PathBuf>> {
 /// Allocate `N` distinct free loopback TCP ports, holding every listener until
 /// all the numbers are read so the OS cannot reissue one to another. The
 /// emulator binds each shortly after they are released.
-pub(crate) fn free_ports<const N: usize>() -> Result<[u16; N]> {
+pub fn free_ports<const N: usize>() -> Result<[u16; N]> {
     let listeners: Vec<std::net::TcpListener> = (0..N)
         .map(|_| {
             std::net::TcpListener::bind(("127.0.0.1", 0)).context("allocating a loopback port")
@@ -200,7 +201,7 @@ pub(crate) fn free_ports<const N: usize>() -> Result<[u16; N]> {
 /// the wait when the peer process has already exited: without it a child that
 /// died at startup costs the whole timeout and then reports "connection
 /// refused", which names the symptom and hides the cause.
-pub(crate) fn connect_loopback(
+pub fn connect_loopback(
     label: &str,
     port: u16,
     timeout: Duration,
@@ -233,7 +234,7 @@ pub(crate) fn connect_loopback(
 /// sleep briefly through a read timeout. `Ok(false)` once `deadline` has
 /// passed with nothing new, `Err` on EOF or a real socket error. The caller
 /// keeps `buf` (its carry) on every path, so a half-read frame is never lost.
-pub(crate) fn read_step(
+pub fn read_step(
     stream: &mut TcpStream,
     buf: &mut Vec<u8>,
     deadline: Instant,
@@ -272,7 +273,7 @@ pub(crate) fn read_step(
 /// tcp:127.0.0.1:<port>,server,nowait`) both expose the firmware's UART as a
 /// raw byte stream on a loopback port: bytes the firmware transmits arrive on
 /// the socket, and bytes written here are injected into the UART receiver.
-pub(crate) struct UartSocket {
+pub struct UartSocket {
     label: &'static str,
     stream: TcpStream,
 }
@@ -304,7 +305,7 @@ impl UartSocket {
 /// A UART socket write that stopped partway: the trait's lossless-or-loud
 /// accounting needs to know how many bytes the emulator did accept.
 #[derive(Debug)]
-pub(crate) struct UartWriteFailure {
+pub struct UartWriteFailure {
     pub written: usize,
     pub source: std::io::Error,
 }
@@ -325,7 +326,7 @@ impl std::error::Error for UartWriteFailure {
     }
 }
 
-pub(crate) fn write_uart_bytes_counted(writer: &mut impl Write, bytes: &[u8]) -> Result<usize> {
+pub fn write_uart_bytes_counted(writer: &mut impl Write, bytes: &[u8]) -> Result<usize> {
     let mut written = 0;
     while written < bytes.len() {
         match writer.write(&bytes[written..]) {
@@ -347,7 +348,7 @@ pub(crate) fn write_uart_bytes_counted(writer: &mut impl Write, bytes: &[u8]) ->
     Ok(written)
 }
 
-pub(crate) fn drain_uart_bytes(reader: &mut impl Read, backend: &str) -> Result<Vec<u8>> {
+pub fn drain_uart_bytes(reader: &mut impl Read, backend: &str) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut chunk = [0u8; 2048];
     loop {
@@ -374,7 +375,7 @@ pub(crate) fn drain_uart_bytes(reader: &mut impl Read, backend: &str) -> Result<
 /// accounting signal. External emulators cannot return a `Result` through the
 /// source-compatible [`Mcu::uart_write`] method, so they retain the failed
 /// byte count and expose it through [`Mcu::uart_rx_overflow`].
-pub(crate) fn account_uart_injection(
+pub fn account_uart_injection(
     backend: &str,
     bytes: usize,
     result: Result<usize>,
@@ -405,7 +406,7 @@ pub(crate) fn account_uart_injection(
 /// The state every poll-based external backend keeps between chunks: the UART
 /// bridge and its accounting, the engine's callbacks, the wired-port hint, and
 /// the virtual-cycle counter the coarse edge stamps come from.
-pub(crate) struct PollState {
+pub struct PollState {
     pub label: &'static str,
     pub uart: Option<UartSocket>,
     /// Host bytes not accepted by the emulator UART socket. Sticky and exposed
@@ -492,13 +493,16 @@ impl PollState {
     }
 
     /// Credit `seconds` of virtual time to the cycle counter.
+    // Clock rates and chunk lengths are far below 2^53; rounding to whole cycles is the intent.
+    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub(crate) fn credit(&mut self, seconds: f64, frequency_hz: u64) {
         self.cycles += (seconds * frequency_hz as f64).round() as u64;
     }
 
     /// [`Mcu::state`]: the poll path carries no PC or terminal-CPU signal, so
     /// it reports the cached cycle count and "still running".
-    pub(crate) fn state(&self) -> McuState {
+    pub(crate) const fn state(&self) -> McuState {
         McuState {
             pc: 0,
             cycles: self.cycles,
@@ -516,6 +520,7 @@ impl PollState {
 /// that one method itself; everything else is shared either way.
 macro_rules! poll_state_mcu_methods {
     ($core:ident) => {
+        #[allow(clippy::cast_precision_loss)] // a chunk's microseconds are far below 2^53
         fn run_micros(&mut self, us: u64) -> Result<()> {
             self.run_seconds(us as f64 / 1_000_000.0)
         }
@@ -591,7 +596,7 @@ pub(crate) use builtin_configs;
 /// Write/Read/FinishTransmission, the QEMU mailbox's op cells), so they share
 /// one state machine and the engine's slave models see identical event streams.
 #[derive(Default)]
-pub(crate) struct I2cTxn(Option<(u8, bool)>);
+pub struct I2cTxn(Option<(u8, bool)>);
 
 impl I2cTxn {
     /// Bring the transaction into `(addr, read)` mode, synthesising the Stop
@@ -634,7 +639,8 @@ impl I2cTxn {
 /// every backend (and the engine's SPI ADC path uses the same law) so a given
 /// voltage quantizes to the same code everywhere. A non-positive full scale
 /// reads as stuck at zero, never NaN-poisoned.
-pub(crate) fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped to 0..=max_count+1
+pub fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
     if full_scale_volts.is_nan() || full_scale_volts <= 0.0 {
         return 0;
     }
@@ -644,7 +650,7 @@ pub(crate) fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u3
 
 /// Firmware discovery helper shared by the process locators: the first
 /// candidate that is a regular file and passes `accept`.
-pub(crate) fn first_accepted(
+pub fn first_accepted(
     candidates: impl IntoIterator<Item = PathBuf>,
     accept: impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
@@ -694,8 +700,6 @@ mod tests {
 
     #[test]
     fn uart_drain_refuses_eof_and_non_timeout_errors() {
-        assert!(drain_uart_bytes(&mut std::io::Cursor::new(Vec::<u8>::new()), "test").is_err());
-
         struct Broken;
         impl Read for Broken {
             fn read(&mut self, _bytes: &mut [u8]) -> std::io::Result<usize> {
@@ -705,6 +709,7 @@ mod tests {
                 ))
             }
         }
+        assert!(drain_uart_bytes(&mut std::io::Cursor::new(Vec::<u8>::new()), "test").is_err());
         assert!(drain_uart_bytes(&mut Broken, "test").is_err());
     }
 

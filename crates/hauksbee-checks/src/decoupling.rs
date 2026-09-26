@@ -42,12 +42,13 @@ pub struct EsrEsl {
 
 impl EsrEsl {
     /// Zero parasitics: an ideal capacitor.
-    pub const IDEAL: EsrEsl = EsrEsl {
+    pub const IDEAL: Self = Self {
         esr_ohms: 0.0,
         esl_henries: 0.0,
     };
 
     /// True when both parasitics are zero (ideal).
+    #[must_use]
     pub fn is_ideal(&self) -> bool {
         self.esr_ohms == 0.0 && self.esl_henries == 0.0
     }
@@ -59,11 +60,11 @@ impl EsrEsl {
     ///
     /// | class        | ESR     | ESL    | source                                   |
     /// |--------------|---------|--------|------------------------------------------|
-    /// | MLCC 0201    | 80 mΩ   | 0.3 nH | Murata GRM033 datasheets / SimSurfing    |
-    /// | MLCC 0402    | 50 mΩ   | 0.4 nH | Murata GRM155 datasheets / SimSurfing    |
-    /// | MLCC 0603    | 30 mΩ   | 0.6 nH | Murata GRM188 datasheets / SimSurfing    |
-    /// | MLCC 0805    | 20 mΩ   | 0.8 nH | Murata GRM21 datasheets / SimSurfing     |
-    /// | MLCC 1206    | 15 mΩ   | 1.2 nH | Murata GRM31 datasheets / SimSurfing     |
+    /// | MLCC 0201    | 80 mΩ   | 0.3 nH | Murata GRM033 datasheets / `SimSurfing`    |
+    /// | MLCC 0402    | 50 mΩ   | 0.4 nH | Murata GRM155 datasheets / `SimSurfing`    |
+    /// | MLCC 0603    | 30 mΩ   | 0.6 nH | Murata GRM188 datasheets / `SimSurfing`    |
+    /// | MLCC 0805    | 20 mΩ   | 0.8 nH | Murata GRM21 datasheets / `SimSurfing`     |
+    /// | MLCC 1206    | 15 mΩ   | 1.2 nH | Murata GRM31 datasheets / `SimSurfing`     |
     /// | Electrolytic | 1.0 Ω   | 5 nH   | Nichicon/Panasonic alum-poly datasheets  |
     /// | Tantalum     | 0.5 Ω   | 3 nH   | KEMET T49x / AVX TAJ datasheets          |
     ///
@@ -71,54 +72,57 @@ impl EsrEsl {
     /// mounted self-inductance (the body plus a short pad loop). Electrolytic /
     /// tantalum ESR is the datasheet 100 kHz figure for a mid-value part; these
     /// are deliberately representative, not a per-MPN table.
-    pub fn for_class(class: CapClass) -> EsrEsl {
+    #[must_use]
+    pub const fn for_class(class: CapClass) -> Self {
         match class {
-            CapClass::Mlcc0201 => EsrEsl {
+            CapClass::Mlcc0201 => Self {
                 esr_ohms: 0.080,
                 esl_henries: 0.3e-9,
             },
-            CapClass::Mlcc0402 => EsrEsl {
+            CapClass::Mlcc0402 => Self {
                 esr_ohms: 0.050,
                 esl_henries: 0.4e-9,
             },
-            CapClass::Mlcc0603 => EsrEsl {
+            CapClass::Mlcc0603 => Self {
                 esr_ohms: 0.030,
                 esl_henries: 0.6e-9,
             },
-            CapClass::Mlcc0805 => EsrEsl {
+            CapClass::Mlcc0805 => Self {
                 esr_ohms: 0.020,
                 esl_henries: 0.8e-9,
             },
-            CapClass::Mlcc1206 => EsrEsl {
+            CapClass::Mlcc1206 => Self {
                 esr_ohms: 0.015,
                 esl_henries: 1.2e-9,
             },
-            CapClass::Electrolytic => EsrEsl {
+            CapClass::Electrolytic => Self {
                 esr_ohms: 1.0,
                 esl_henries: 5e-9,
             },
-            CapClass::Tantalum => EsrEsl {
+            CapClass::Tantalum => Self {
                 esr_ohms: 0.5,
                 esl_henries: 3e-9,
             },
         }
     }
 
-    /// Infer a capacitor class from a KiCad footprint string and value, then
+    /// Infer a capacitor class from a `KiCad` footprint string and value, then
     /// return its default parasitics. Electrolytic/tantalum footprints (CP_*,
     /// large can / EIA tant case codes) get the electrolytic/tantalum row; an
     /// MLCC footprint is bucketed by its size code (imperial or the equivalent
     /// metric code). Falls back to 0603 MLCC.
-    pub fn from_footprint(footprint: &str, value_farads: f64) -> EsrEsl {
+    #[must_use]
+    pub fn from_footprint(footprint: &str, value_farads: f64) -> Self {
         if let Some(class) = Self::class_from_footprint(footprint, value_farads) {
-            return EsrEsl::for_class(class);
+            return Self::for_class(class);
         }
-        EsrEsl::for_class(CapClass::Mlcc0603)
+        Self::for_class(CapClass::Mlcc0603)
     }
 
     /// The inferred [`CapClass`] for a footprint + value, or `None` when nothing
     /// in the name is recognised (the caller then falls back to a default MLCC).
     /// Split out so the inference is unit-testable on its own.
+    #[must_use]
     pub fn class_from_footprint(footprint: &str, value_farads: f64) -> Option<CapClass> {
         let fp = footprint.to_ascii_uppercase();
 
@@ -187,7 +191,9 @@ pub enum CapClass {
 }
 
 /// Replace an ideal `Device::Capacitor` (by name) in `circuit` with a series
-/// R-L-C network carrying the given parasitics. The capacitor keeps its value,
+/// R-L-C network carrying the given parasitics.
+///
+/// The capacitor keeps its value,
 /// IC and name (the C leg retains the name so reports/assertions still find it);
 /// the R and L legs are named `<name>_esr` / `<name>_esl`. Zero legs are
 /// skipped, so `EsrEsl::IDEAL` leaves the capacitor untouched.
@@ -366,18 +372,18 @@ mod tests {
         };
         assert!(apply_parasitics(&mut c, "C1", p));
         // One R, one L added; the C is rewritten to start at the ESL node.
-        let r = c
+        let esr = c
             .devices
             .iter()
             .find(|d| matches!(d, Device::Resistor { name, .. } if name == "C1_esr"));
-        let l = c
+        let esl = c
             .devices
             .iter()
             .find(|d| matches!(d, Device::Inductor { name, .. } if name == "C1_esl"));
-        assert!(r.is_some(), "ESR leg missing");
-        assert!(l.is_some(), "ESL leg missing");
+        assert!(esr.is_some(), "ESR leg missing");
+        assert!(esl.is_some(), "ESL leg missing");
         // The R leg starts at the original rail node.
-        if let Some(Device::Resistor { a: ra, .. }) = r {
+        if let Some(Device::Resistor { a: ra, .. }) = esr {
             assert_eq!(*ra, a, "ESR should start at the cap's original pad");
         }
         // The capacitor no longer touches the rail directly.

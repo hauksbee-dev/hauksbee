@@ -17,7 +17,7 @@
 //! was hand-verified to carry a pull resistor that defines its safe state, so
 //! the expected and observed result is GREEN. The voltage assertion has teeth
 //! only on rails the binder can hold directly (externally-supplied input rails:
-//! LumenPnP +3.3V/VDC, Olimex +3.3V/+5V); on a regulator *output* rail the
+//! `LumenPnP` +3.3V/VDC, Olimex +3.3V/+5V); on a regulator *output* rail the
 //! schematic-stage solve cannot close the converter loop, so those rails are not
 //! asserted (see the doc). The fuzz still exercises the full extract -> bind ->
 //! solve path across every boot state, which is the point: the negative is run,
@@ -25,6 +25,7 @@
 //!
 //! Corpus-gated: skipped when the board-corpus symlink is absent.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::support::{self, corpus_boards_root as corpus, require_corpus, run_body};
@@ -70,17 +71,19 @@ fn boot_state_fuzz(
         !nets.is_empty(),
         "{case}: a fuzz over no nets proves nothing"
     );
-    let rails: String = supplies
-        .iter()
-        .map(|(net, v)| format!("[[supply]]\nnet = \"{net}\"\nkind = \"ideal\"\nvolts = {v}\n"))
-        .collect();
-    let drives: String = nets
-        .iter()
-        .map(|net| format!("[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0\n"))
-        .collect();
+    let mut setup = String::new();
+    for (net, v) in supplies {
+        let _ = writeln!(
+            setup,
+            "[[supply]]\nnet = \"{net}\"\nkind = \"ideal\"\nvolts = {v}"
+        );
+    }
+    for net in nets {
+        let _ = writeln!(setup, "[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0");
+    }
     let fuzzed: Vec<String> = nets.iter().map(|net| format!("\"{net}\"")).collect();
     let body = format!(
-        "name = \"{case} boot-state fuzz\"\nboard = {}\nduration_ms = 1\n{rails}{drives}\
+        "name = \"{case} boot-state fuzz\"\nboard = {}\nduration_ms = 1\n{setup}\
          [fuzz]\nseeds = {seeds}\nnets = [{}]\nlevels = [0.0, 3.3]\n\
          {asserts}[[assert]]\nkind = \"no_faults\"\n",
         support::toml_path(board),
@@ -98,7 +101,7 @@ fn boot_state_fuzz(
     );
 }
 
-/// LumenPnP motherboard: the low-side AO3400A MOSFET gates are driven by
+/// `LumenPnP` motherboard: the low-side AO3400A MOSFET gates are driven by
 /// STM32F407 GPIOs that are Hi-Z at reset; only a 10k-to-GND pull holds each
 /// gate. We fuzz each gate node directly across its undefined boot level
 /// (0 / 3.3 V), which is more conservative than fuzzing the GPIO behind the 1k
@@ -108,7 +111,7 @@ fn boot_state_fuzz(
 /// The gate nets are read off the board rather than written down here. Naming
 /// them meant naming one revision's reference designators, and the revision the
 /// corpus fetches has three AO3400A gates at Q2, Q5 and Q6 where the spec said
-/// Q1 through Q4, so every net_drive and fuzz entry addressed a net that does
+/// Q1 through Q4, so every `net_drive` and fuzz entry addressed a net that does
 /// not exist. The spec still refused rather than fuzzing nothing, which is the
 /// behaviour that surfaced this.
 #[test]
@@ -171,8 +174,8 @@ fn olimex_evb_relay_boot_states_are_safe() {
 }
 
 /// MNT Reform motherboard 3.0: the LPC11U24 power supervisor (U18) PIO pins are
-/// Hi-Z at reset; the buck-regulator enables (3V3_PWR_EN, 5V_PWR_EN,
-/// 1V2_PWR_EN, PCIE1_PWR_EN, USB_PWR_EN) are held only by 10k-to-GND pulls
+/// Hi-Z at reset; the buck-regulator enables (`3V3_PWR_EN`, `5V_PWR_EN`,
+/// `1V2_PWR_EN`, `PCIE1_PWR_EN`, `USB_PWR_EN`) are held only by 10k-to-GND pulls
 /// (R105/R92/..., hand-verified to GND), so every regulator is disabled at boot
 /// until firmware enables it - textbook-correct sequencing. We fuzz all five
 /// enables across their undefined boot level and require no stress fault.

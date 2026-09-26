@@ -17,7 +17,7 @@ use crate::source::{AcStim, PwlPoint, SourceKind};
 use crate::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId};
 use evalexpr::{build_operator_tree, Value};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -122,22 +122,40 @@ pub struct SpiceLoader;
 
 impl SpiceLoader {
     /// Parse a netlist string into a [`Circuit`], discarding directives.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpiceLoader::load_with_directives`].
     pub fn load(text: &str) -> Result<Circuit, SpiceError> {
         Ok(Self::load_with_directives(text)?.0)
     }
 
     /// Parse a netlist string; `.include` paths resolve against the working
     /// directory (use [`SpiceLoader::load_file`] for deck-relative includes).
+    ///
+    /// # Errors
+    ///
+    /// A [`SpiceError`] naming the offending card for any malformed,
+    /// unsupported or inconsistent card, and for an unreadable `.include`.
     pub fn load_with_directives(text: &str) -> Result<(Circuit, Directives), SpiceError> {
         load_deck(text, Path::new("."))
     }
 
     /// Parse a netlist file into a [`Circuit`].
+    ///
+    /// # Errors
+    ///
+    /// As [`SpiceLoader::load_file_with_directives`].
     pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Circuit, SpiceError> {
         Ok(Self::load_file_with_directives(path)?.0)
     }
 
     /// Parse a netlist file; `.include` paths resolve against its directory.
+    ///
+    /// # Errors
+    ///
+    /// A [`SpiceError`] when the file cannot be read, and otherwise as
+    /// [`SpiceLoader::load_with_directives`].
     pub fn load_file_with_directives<P: AsRef<Path>>(
         path: P,
     ) -> Result<(Circuit, Directives), SpiceError> {
@@ -147,7 +165,7 @@ impl SpiceLoader {
             line: 0,
             msg: msg(e),
         })?;
-        load_deck(&text, path.parent().unwrap_or(Path::new(".")))
+        load_deck(&text, path.parent().unwrap_or_else(|| Path::new(".")))
     }
 }
 
@@ -158,7 +176,7 @@ macro_rules! bail {
 
 fn load_deck(text: &str, dir: &Path) -> Result<(Circuit, Directives), SpiceError> {
     let mut lines = Vec::new();
-    read_lines(text, dir, Rc::from(""), true, 0, &mut lines)?;
+    read_lines(text, dir, &Rc::from(""), true, 0, &mut lines)?;
     let mut circuit = Circuit::new();
     let mut d = Directives::default();
     let deck = collect(lines, &mut circuit, &mut d)?;
@@ -222,7 +240,7 @@ impl Line {
 fn read_lines(
     text: &str,
     dir: &Path,
-    file: Rc<str>,
+    file: &Rc<str>,
     is_top: bool,
     depth: usize,
     out: &mut Vec<Line>,
@@ -231,7 +249,7 @@ fn read_lines(
     for (i, raw) in text.lines().enumerate().skip(usize::from(is_top)) {
         let t = raw.split(';').next().unwrap_or("").trim();
         match (t.strip_prefix('+'), lines.last_mut()) {
-            (Some(cont), Some(last)) => last.text.push_str(&format!(" {}", cont.trim())),
+            (Some(cont), Some(last)) => last.text.extend([" ", cont.trim()]),
             _ if t.is_empty() || t.starts_with('*') => {}
             _ => lines.push(Line {
                 file: file.clone(),
@@ -306,8 +324,8 @@ fn read_lines(
                 picked
             }
         };
-        let sub = path.parent().unwrap_or(Path::new("."));
-        read_lines(&inc, sub, Rc::from(arg), false, depth + 1, out)?;
+        let sub = path.parent().unwrap_or_else(|| Path::new("."));
+        read_lines(&inc, sub, &Rc::from(arg), false, depth + 1, out)?;
     }
     Ok(())
 }
@@ -352,9 +370,12 @@ fn number_end(t: &str) -> usize {
     (1..=t.len()).rev().find(parses).unwrap_or(0)
 }
 
-/// Parse a SPICE number with an optional engineering suffix (`1k`, `2.2u`,
-/// `1meg`, `4.7nF`, `5A`). A stray tail (`1kk`, `1x`) is `None`, not silently
-/// truncated. Public because the CLI accepts the same vocabulary.
+/// Parse a SPICE number with an optional engineering suffix.
+///
+/// Accepts `1k`, `2.2u`, `1meg`, `4.7nF`, `5A`. A stray tail (`1kk`, `1x`) is
+/// `None`, not silently truncated. Public because the CLI accepts the same
+/// vocabulary.
+#[must_use]
 pub fn parse_spice_number(tok: &str) -> Option<f64> {
     const SCALES: [&str; 10] = ["meg", "mil", "t", "g", "k", "m", "u", "n", "p", "f"];
     const EXP: [i32; 10] = [6, -6, 12, 9, 3, -3, -6, -9, -12, -15];
@@ -375,6 +396,7 @@ pub fn parse_spice_number(tok: &str) -> Option<f64> {
 }
 
 /// Iterative Levenshtein edit distance; shared by did-you-mean hints elsewhere.
+#[must_use]
 pub fn levenshtein(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
@@ -408,15 +430,15 @@ fn canonicalize(expr: &str, env: &ParamEnv, mut sink: Option<DepSink>) -> Result
     let b = s.as_bytes();
     let (mut out, mut i) = (String::with_capacity(s.len() + 8), 0);
     while i < b.len() {
-        let c = b[i];
-        if c == b'{' || c == b'}' {
+        let byte = b[i];
+        if byte == b'{' || byte == b'}' {
             return Err("nested braces in expression".into());
         }
-        if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        if byte.is_ascii_digit() || (byte == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
             let end = i + number_end(&s[i..]);
             let lit = &s[i..end];
             if b.get(end)
-                .is_some_and(|d| d.is_ascii_alphabetic() || *d == b'_')
+                .is_some_and(|next| next.is_ascii_alphabetic() || *next == b'_')
             {
                 return Err(format!(
                     "engineering suffix inside a braced expression (`{lit}{}`)",
@@ -430,7 +452,7 @@ fn canonicalize(expr: &str, env: &ParamEnv, mut sink: Option<DepSink>) -> Result
             i = end;
             continue;
         }
-        if !(c.is_ascii_alphabetic() || c == b'_') {
+        if !(byte.is_ascii_alphabetic() || byte == b'_') {
             let ch = s[i..].chars().next().unwrap_or(' ');
             out.push(ch);
             i += ch.len_utf8();
@@ -439,17 +461,17 @@ fn canonicalize(expr: &str, env: &ParamEnv, mut sink: Option<DepSink>) -> Result
         let start = i;
         i += b[i..]
             .iter()
-            .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_')
+            .take_while(|byte| byte.is_ascii_alphanumeric() || **byte == b'_')
             .count();
         let (ident, low) = (&s[start..i], s[start..i].to_ascii_lowercase());
         let j = i + b[i..]
             .iter()
-            .take_while(|c| c.is_ascii_whitespace())
+            .take_while(|byte| byte.is_ascii_whitespace())
             .count();
         if b.get(j) != Some(&b'(') {
             match env.get(&low) {
                 _ if low == "time" && sink.is_some() => out.push_str("time"),
-                Some(v) => out.push_str(&format!("({v:?})")),
+                Some(val) => write!(out, "({val:?})").map_err(|e| e.to_string())?,
                 None => return Err(format!("undefined parameter `{low}`")),
             }
         } else if low == "v" || low == "i" {
@@ -474,13 +496,13 @@ fn canonicalize(expr: &str, env: &ParamEnv, mut sink: Option<DepSink>) -> Result
         } else if low == "log" {
             return Err("`log` is ambiguous (ln vs log10); write `ln` or `log10`".into());
         } else if MATH_FNS.contains(&low.as_str()) {
-            out.push_str(&format!("math::{low}"));
+            out.extend(["math::", &low]);
         } else if BARE_FNS.contains(&low.as_str()) {
             out.push_str(&low);
         } else {
-            let (m, b) = (MATH_FNS.join(", "), BARE_FNS.join(", "));
+            let (math, bare) = (MATH_FNS.join(", "), BARE_FNS.join(", "));
             return Err(format!(
-                "unsupported function `{ident}(` (supported: {m}, {b})"
+                "unsupported function `{ident}(` (supported: {math}, {bare})"
             ));
         }
     }
@@ -493,10 +515,10 @@ fn eval_expr(inner: &str, env: &ParamEnv) -> Result<f64, String> {
     let tree =
         build_operator_tree(&canon).map_err(|e| format!("malformed expression `{inner}`: {e}"))?;
     match tree.eval() {
-        Ok(Value::Float(f)) => Ok(f),
-        Ok(Value::Int(i)) => Ok(i as f64),
         Ok(Value::Boolean(b)) => Ok(f64::from(u8::from(b))),
-        Ok(v) => Err(format!("expression `{inner}` is not a number ({v:?})")),
+        Ok(v) => v
+            .as_number()
+            .map_err(|_| format!("expression `{inner}` is not a number ({v:?})")),
         Err(e) => Err(format!("expression `{inner}` failed: {e}")),
     }
 }
@@ -630,7 +652,7 @@ fn add_model(
             None => {} // string metadata (mfg=, type=)
         }
     }
-    if let Some(level) = params.get("level").filter(|l| **l != 1.0) {
+    if let Some(level) = params.get("level").filter(|l| l.total_cmp(&1.0).is_ne()) {
         if matches!(kind.as_str(), "nmos" | "pmos") {
             bail!(
                 line,
@@ -931,6 +953,8 @@ impl<'a> Build<'a> {
         });
     }
 
+    // One flat arm per element letter; splitting it would only scatter the dispatch.
+    #[allow(clippy::too_many_lines)]
     fn element(
         &mut self,
         line: &Line,
@@ -967,7 +991,7 @@ impl<'a> Build<'a> {
                         a,
                         b,
                         ohms: v.max(1e-6),
-                        tc1: kv.get("tc1").or(kv.get("tc")).copied(),
+                        tc1: kv.get("tc1").or_else(|| kv.get("tc")).copied(),
                     },
                     'C' => Device::Capacitor {
                         name,
@@ -1188,6 +1212,8 @@ impl<'a> Build<'a> {
 
     /// `Bxxx n+ n- V={expr}` / `I={expr}`: the expression is canonicalized with
     /// `v(...)`/`i(...)` turned into positional dependency slots.
+    // `{expr}` in the messages is literal card syntax, not a format argument.
+    #[allow(clippy::literal_string_with_formatting_args)]
     fn behavioral(
         &mut self,
         line: &Line,
@@ -1500,6 +1526,8 @@ const UNMODELLED: &[(&str, f64, &str, &[&str])] = &[
 /// a vendor card pasted whole is degraded, and silence about that is the lie
 /// `sim` forbids. Cards a library file defines but no element uses are not the
 /// user's circuit, so they say nothing.
+// A stated value counts as unmodelled only when it differs AT ALL from the default.
+#[allow(clippy::float_cmp)]
 fn unmodelled_notes(deck: &Deck, used: &HashSet<String>) -> Vec<String> {
     let mut notes: Vec<String> = deck.models.iter().filter(|(name, _)| used.contains(*name)).filter_map(|(name, m)| {
         let lost: Vec<String> = UNMODELLED.iter()
@@ -1544,9 +1572,9 @@ fn mosfet_model(m: &Model, kv: &ParamEnv) -> MosfetModel {
     // Cards state VTO in device convention (negative for an enhancement PMOS);
     // the solver stores it polarity-folded.
     d.vto = m.get("vto").map_or(d.vto, |v| d.polarity.sign() * v);
-    let l = kv.get("l").copied().or(m.get("l")).unwrap_or(1.0);
-    let w = kv.get("w").copied().or(m.get("w")).unwrap_or(1.0);
-    d.w_over_l = if l != 0.0 { w / l } else { 1.0 };
+    let l = kv.get("l").copied().or_else(|| m.get("l")).unwrap_or(1.0);
+    let w = kv.get("w").copied().or_else(|| m.get("w")).unwrap_or(1.0);
+    d.w_over_l = if l == 0.0 { 1.0 } else { w / l };
     d.cgs_ov = m.get_or("cgso", 0.0) * w;
     d.cgd_ov = m.get_or("cgdo", 0.0) * w;
     d.c_ox = m
@@ -1572,18 +1600,19 @@ fn parse_tran(
             nums.push(number(line, Some(t))?);
         }
     }
-    let [tstep, tstop, ..] = nums[..] else {
+    if nums.len() < 2 {
         bail!(line, "`.tran` needs at least tstep and tstop");
-    };
-    let (tstart, tmax) = (nums.get(2).copied().unwrap_or(0.0), nums.get(3).copied());
+    }
     Ok(TranDirective {
-        tstep,
-        tstop,
-        tstart,
-        tmax,
+        tstep: nums[0],
+        tstop: nums[1],
+        tstart: nums.get(2).copied().unwrap_or(0.0),
+        tmax: nums.get(3).copied(),
     })
 }
 
+// `points` is checked above to be a positive whole number before the cast.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn parse_ac(line: &Line, toks: &[String]) -> Result<AcDirective, SpiceError> {
     exact(
         line,
@@ -1632,6 +1661,8 @@ fn parse_print(line: &Line, is_plot: bool) -> Result<PrintRequest, SpiceError> {
     })
 }
 
+// start/stop/step are the `.dc` card's own names; `stop != start` is deliberately exact.
+#[allow(clippy::float_cmp, clippy::similar_names)]
 fn parse_dc(line: &Line, circuit: &Circuit) -> Result<DcDirective, SpiceError> {
     let toks = tokenize(&line.text);
     let args = &toks[1..];
@@ -1769,7 +1800,7 @@ mod tests {
     fn passive_elements_with_options() {
         let c = load("t\nV1 in 0 5\nR1 in out 1k tc1=1e-3\nC1 out 0 10n IC=2\nL1 out x 1m ic=0.5\nR0 x 0 0\n.end\n");
         assert!(
-            matches!(dev(&c, "R1"), Device::Resistor { ohms, tc1: Some(t), .. } if *ohms == 1e3 && *t == 1e-3)
+            matches!(dev(&c, "R1"), Device::Resistor { ohms, tc1: Some(t), .. } if close(*ohms, 1e3) && close(*t, 1e-3))
         );
         assert!(
             matches!(dev(&c, "C1"), Device::Capacitor { farads, ic: Some(2.0), .. } if close(*farads, 1e-8))
@@ -1777,7 +1808,7 @@ mod tests {
         assert!(
             matches!(dev(&c, "L1"), Device::Inductor { henries, ic: Some(0.5), .. } if close(*henries, 1e-3))
         );
-        assert!(matches!(dev(&c, "R0"), Device::Resistor { ohms, .. } if *ohms == 1e-6));
+        assert!(matches!(dev(&c, "R0"), Device::Resistor { ohms, .. } if close(*ohms, 1e-6)));
         assert_eq!(c.node_count(), 4);
         assert!(err("t\nR1 a 0 1k oops\n").contains("unexpected token `oops`"));
         assert!(err("t\nR1 a 0 1k foo=2\n").contains("unexpected token"));
@@ -1823,7 +1854,7 @@ mod tests {
             matches!(dev(&c, "I1"), Device::Isource { kind: SourceKind::Pulse { v2: 1.0, period, .. }, .. } if close(*period, 5e-6))
         );
         assert!(
-            matches!(dev(&c, "V4"), Device::Vsource { kind: SourceKind::Pwl(p), .. } if p.len() == 3 && p[1].v == 5.0)
+            matches!(dev(&c, "V4"), Device::Vsource { kind: SourceKind::Pwl(p), .. } if p.len() == 3 && close(p[1].v, 5.0))
         );
         assert!(matches!(
             dev(&c, "V5"),
@@ -1868,16 +1899,16 @@ mod tests {
             panic!()
         };
         assert!(
-            d.is == 1e-15
-                && d.n == 1.5
+            close(d.is, 1e-15)
+                && close(d.n, 1.5)
                 && close(d.cjo, 4e-12)
-                && d.bv == 6.0
+                && close(d.bv, 6.0)
                 && d.ibv == Some(1e-3)
         );
         let Device::Bjt { model: q, .. } = dev(&c, "Q1") else {
             panic!()
         };
-        assert!(q.polarity == Polarity::P && q.bf == 50.0 && q.ikf.is_infinite());
+        assert!(q.polarity == Polarity::P && close(q.bf, 50.0) && q.ikf.is_infinite());
         let Device::Mosfet {
             model: m,
             b: Some(_),
@@ -1886,7 +1917,7 @@ mod tests {
         else {
             panic!()
         };
-        assert!(m.polarity == Polarity::P && m.vto == 0.7 && close(m.w_over_l, 10.0));
+        assert!(m.polarity == Polarity::P && close(m.vto, 0.7) && close(m.w_over_l, 10.0));
         assert!(close(m.cgs_ov, 2e-14) && m.c_ox > 0.0 && m.has_gate_charge());
         let Device::VSwitch {
             von,
@@ -1898,7 +1929,7 @@ mod tests {
         else {
             panic!()
         };
-        assert!(*von == 2.0 && *voff == 1.0 && *ron == 10.0 && *roff == 1e9);
+        assert!(close(*von, 2.0) && close(*voff, 1.0) && close(*ron, 10.0) && close(*roff, 1e9));
         assert!(err("t\nD1 a 0 NOPE\n").contains("undefined .model `NOPE`"));
         assert!(err("t\nD1 a 0 Q\n.model Q NPN(BF=1)\n").contains("not a diode model"));
         assert!(err("t\nM1 d g s b MM\n.model MM NMOS(LEVEL=3)\n").contains("LEVEL=1"));
@@ -1955,7 +1986,7 @@ mod tests {
             matches!(dev(&c, "F1"), Device::Cccs { ctrl_src, gain: 2.0, .. } if *ctrl_src == vs)
         );
         assert!(
-            matches!(dev(&c, "H1"), Device::Ccvs { ctrl_src, transres, .. } if *ctrl_src == vs && *transres == 3e3)
+            matches!(dev(&c, "H1"), Device::Ccvs { ctrl_src, transres, .. } if *ctrl_src == vs && close(*transres, 3e3))
         );
         let Device::Coupling { l1, l2, k, .. } = dev(&c, "K1") else {
             panic!()
@@ -1963,7 +1994,7 @@ mod tests {
         assert!(
             c.devices[l1.0 as usize].name() == "L1"
                 && c.devices[l2.0 as usize].name() == "L2"
-                && *k == 0.9
+                && close(*k, 0.9)
         );
         assert!(err("t\nF1 a 0 Vnope 1\n").contains("undefined element `Vnope`"));
         assert!(err("t\nF1 a 0 R1 1\nR1 a 0 1k\n").contains("not an independent voltage source"));
@@ -1974,6 +2005,8 @@ mod tests {
     }
 
     #[test]
+    // `{expr}` is the literal card syntax the error message quotes.
+    #[allow(clippy::literal_string_with_formatting_args)]
     fn behavioral_sources_canonicalize() {
         let c = load("t\n.param g=2\nB1 out 0 V={g*tanh(v(a)) + 3*i(Vs) - v(a,b)**2 + 1/2}\nB2 y 0 I={sin(time)}\n\
                       Vs a 0 1\nRb b 0 1\n");
@@ -2009,9 +2042,9 @@ mod tests {
     #[test]
     fn params_and_expressions() {
         let c = load("t\n.param c={a*2} a=1k b={c/4+0.5}\nR1 a 0 {b}\nR2 b 0 c\nR3 d 0 {3/2}\nV1 a 0 {if(a>5,1,0)}\n");
-        assert!(matches!(dev(&c, "R1"), Device::Resistor { ohms, .. } if *ohms == 500.5));
-        assert!(matches!(dev(&c, "R2"), Device::Resistor { ohms, .. } if *ohms == 2e3));
-        assert!(matches!(dev(&c, "R3"), Device::Resistor { ohms, .. } if *ohms == 1.5));
+        assert!(matches!(dev(&c, "R1"), Device::Resistor { ohms, .. } if close(*ohms, 500.5)));
+        assert!(matches!(dev(&c, "R2"), Device::Resistor { ohms, .. } if close(*ohms, 2e3)));
+        assert!(matches!(dev(&c, "R3"), Device::Resistor { ohms, .. } if close(*ohms, 1.5)));
         assert!(matches!(
             dev(&c, "V1"),
             Device::Vsource {
@@ -2033,14 +2066,14 @@ mod tests {
                    .subckt outer a b\nX1 a b amp gain=10\n.ends\n\
                    V1 in 0 1\nX1 in o1 amp\nX2 in o2 amp gain=2\nX3 in o3 outer\nF9 x 0 X1.Vs 1\n";
         let c = load(net);
-        assert!(matches!(dev(&c, "X1.Rin"), Device::Resistor { ohms, .. } if *ohms == 1e3));
+        assert!(matches!(dev(&c, "X1.Rin"), Device::Resistor { ohms, .. } if close(*ohms, 1e3)));
         assert!(matches!(dev(&c, "X1.E1"), Device::Vcvs { gain: 4.0, .. }));
         assert!(matches!(dev(&c, "X2.E1"), Device::Vcvs { gain: 2.0, .. }));
         assert!(matches!(
             dev(&c, "X3.X1.E1"),
             Device::Vcvs { gain: 10.0, .. }
         ));
-        assert!(matches!(dev(&c, "X2.Rk"), Device::Resistor { ohms, .. } if *ohms == 4.0));
+        assert!(matches!(dev(&c, "X2.Rk"), Device::Resistor { ohms, .. } if close(*ohms, 4.0)));
         let Device::Vcvs { p, cp, .. } = dev(&c, "X1.E1") else {
             panic!()
         };
@@ -2078,7 +2111,7 @@ mod tests {
         )
         .unwrap();
         let c = SpiceLoader::load_file(dir.join("main.cir")).unwrap_or_else(|e| panic!("{e}"));
-        assert!(matches!(dev(&c, "D1"), Device::Diode { model, .. } if model.n == 1.2));
+        assert!(matches!(dev(&c, "D1"), Device::Diode { model, .. } if close(model.n, 1.2)));
         std::fs::write(
             dir.join("bad.cir"),
             "bad\n.include lib/d.lib\nD1 a 0 DM extra\n",
@@ -2108,17 +2141,19 @@ mod tests {
                    .tran 1u 2m 0 0.5u uic\n.ac dec 10 1 1meg\n.dc V1 0 5 0.5 Vg 0 1 1\n.print tran v(out) V(in,out)\n\
                    .plot ac v(out)\n.ic V(out)=2\n.nodeset v(in)={1+1}\n.op\n.end\n";
         let (c, d) = SpiceLoader::load_with_directives(net).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(c.temp_c, 85.0);
+        assert!(close(c.temp_c, 85.0));
         assert!(d.reltol == Some(1e-4) && close(d.abstol.unwrap(), 1e-12) && d.vntol.is_none());
         let t = d.tran.unwrap();
-        assert!(t.tstep == 1e-6 && t.tstop == 2e-3 && t.tstart == 0.0 && t.tmax == Some(5e-7));
+        assert!(
+            close(t.tstep, 1e-6) && close(t.tstop, 2e-3) && t.tstart == 0.0 && t.tmax == Some(5e-7)
+        );
         assert!(d.use_initial_conditions);
         let ac = d.ac.unwrap();
-        assert!(ac.sweep == AcSweep::Decade && ac.points == 10 && ac.fstop == 1e6);
+        assert!(ac.sweep == AcSweep::Decade && ac.points == 10 && close(ac.fstop, 1e6));
         let dc = d.dc.unwrap();
         assert!(
             dc.inner.name == "V1"
-                && dc.inner.step == 0.5
+                && close(dc.inner.step, 0.5)
                 && dc.outer.as_ref().unwrap().name == "Vg"
         );
         assert_eq!(d.prints.len(), 2);
