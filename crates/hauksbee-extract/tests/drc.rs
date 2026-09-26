@@ -471,8 +471,8 @@ fn drc4(items: &str) -> hauksbee_extract::DrcReport {
     ExtractedBoard::drc(&board4(items)).expect("drc runs")
 }
 
-/// The PolyKybd Kailh-socket proof geometry: pad `2` of SW_K_2 (2.55 x 1.54,
-/// chamfer_ratio 0.5 on bottom_left + bottom_right: 0.77 mm sliced off both
+/// The PolyKybd Kailh-socket proof geometry: pad `2` of `SW_K_2` (2.55 x 1.54,
+/// `chamfer_ratio` 0.5 on `bottom_left` + `bottom_right`: 0.77 mm sliced off both
 /// bottom corners) exactly as the board places it, world centre
 /// (64.744, 49.3715) on B.Cu.
 const KAILH_CHAMFERED_PAD: &str = r#"
@@ -544,7 +544,7 @@ fn chamfered_pad_notch_is_not_a_short() {
 // ring-removed layer only the barrel (drill radius) owns spacing.
 
 /// GND fill on `layer` whose left edge sits `edge_x` mm from the origin; the
-/// via under test sits at (5,5), so edge_x = 5.45 puts the fill 0.45 mm from
+/// via under test sits at (5,5), so `edge_x` = 5.45 puts the fill 0.45 mm from
 /// the via center: drill radius (0.15) + a zone clearance of 0.30, exactly
 /// the geometry KiCad writes when the ring is absent.
 fn gnd_fill(layer: &str, edge_x: f64) -> String {

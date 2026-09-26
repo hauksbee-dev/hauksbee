@@ -16,6 +16,6 @@ pub fn extract_fresh(
     std::fs::create_dir_all(&dir).unwrap();
     build(&dir);
     let result = from_gerber_dir(&dir);
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(dir);
     result
 }

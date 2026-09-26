@@ -31,13 +31,11 @@ use hauksbee_extract::{ExtractedBoard, LintCheck};
 /// so the join named a directory that was not there and every gold row here
 /// failed on board LOCATION rather than on a finding.
 fn boards_root() -> Option<PathBuf> {
-    match hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")) {
-        Some(p) => Some(p),
-        None => {
-            require_corpus("the board corpus (neither <corpus>/famous/ nor <corpus>/ resolved)");
-            None
-        }
+    let root = hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR"));
+    if root.is_none() {
+        require_corpus("the board corpus (neither <corpus>/famous/ nor <corpus>/ resolved)");
     }
+    root
 }
 
 /// One gold-row board, by corpus-relative path, in whichever layout holds it.
@@ -46,13 +44,11 @@ fn boards_root() -> Option<PathBuf> {
 /// `zswatch_devkit/v1.2.0/`, and the fetch writes the same grouping via the
 /// manifest's `dest`. Going through the resolver keeps both live.
 fn board(rel: &str) -> Option<PathBuf> {
-    match hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel) {
-        Some(p) => Some(p),
-        None => {
-            require_corpus(rel);
-            None
-        }
+    let path = hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel);
+    if path.is_none() {
+        require_corpus(rel);
     }
+    path
 }
 
 /// An opt-in external-corpus adjudication must fail, not silently pass, when
@@ -63,12 +59,13 @@ fn required_external_board(rel: &str) -> PathBuf {
     })
 }
 
-/// A required corpus file is missing: skip, unless HAUKSBEE_REQUIRE_CORPUS is set,
+/// A required corpus file is missing: skip, unless `HAUKSBEE_REQUIRE_CORPUS` is set,
 /// in which case fail loudly so the calibration is genuinely CI-enforced.
 fn require_corpus(what: &str) {
-    if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but required corpus path is missing: {what}");
-    }
+    assert!(
+        std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+        "HAUKSBEE_REQUIRE_CORPUS set but required corpus path is missing: {what}"
+    );
     eprintln!("corpus path absent ({what}); skipping (set HAUKSBEE_REQUIRE_CORPUS=1 to fail)");
 }
 
@@ -296,6 +293,9 @@ fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
 // not part of the agreement.
 // ---------------------------------------------------------------------------
 
+/// A short keyed by (sorted net pair, layer, sorted footprint pair).
+type Key = ([String; 2], String, [String; 2]);
+
 /// One `shorting_items` violation as KiCad recorded it: the net pair and the two
 /// pads, each with its owning footprint, pad number and centre.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -307,7 +307,7 @@ struct RecordedShort {
     pads: [String; 2],
     /// The two pad centres, in file order, as micrometre integers (`Ord`, and
     /// exact: KiCad writes them to 6 decimal places at most).
-    anchors_um: [(i64, i64); 2],
+    anchors_um: [(i32, i32); 2],
 }
 
 /// KiCad's recorded verdict on MWGEN-G1, parsed out of the committed report
@@ -333,8 +333,10 @@ fn kicad_recorded_shorts(oracle: &str) -> Vec<RecordedShort> {
             let pad_no = d
                 .strip_prefix("Pad ")
                 .and_then(|r| r.split_once(' '))
-                .map(|(n, _)| n.to_string())
-                .unwrap_or_else(|| panic!("no leading 'Pad <n>' in {d:?}"));
+                .map_or_else(
+                    || panic!("no leading 'Pad <n>' in {d:?}"),
+                    |(n, _)| n.to_string(),
+                );
             let (net, rest) = d
                 .split_once('[')
                 .and_then(|(_, r)| r.split_once(']'))
@@ -343,7 +345,8 @@ fn kicad_recorded_shorts(oracle: &str) -> Vec<RecordedShort> {
             let (reference, layer) = rest
                 .split_once(" on ")
                 .unwrap_or_else(|| panic!("no ' on <layer>' in {d:?}"));
-            let um = |v: &serde_json::Value| (v.as_f64().expect("pos is a number") * 1e3) as i64;
+            #[allow(clippy::cast_possible_truncation, reason = "um coords fit i32")]
+            let um = |v: &serde_json::Value| (v.as_f64().expect("pos is a number") * 1e3) as i32;
             nets.push(net.to_string());
             pads.push(format!("{reference} pad {pad_no}"));
             layers.push(layer.to_string());
@@ -363,6 +366,41 @@ fn kicad_recorded_shorts(oracle: &str) -> Vec<RecordedShort> {
     out.sort();
     out
 }
+
+/// hauksbee's own pad-overlap gap for each MWGEN-G1 short, by net pair and owners.
+const MWGEN_GAPS: &[(&str, &str, [&str; 2], f64)] = &[
+    (
+        "/Clock reference/Input Clocks/REFIN",
+        "/Clock reference/Input Clocks/REFIN_GND",
+        ["C205", "D503"],
+        -0.015_386,
+    ),
+    (
+        "/Clock reference/Input Clocks/REFIN",
+        "/Clock reference/Input Clocks/REFIN_GND",
+        ["D503", "R204"],
+        -0.015_386,
+    ),
+    (
+        "/Clock reference/Input Clocks/REFIN_GND",
+        "Net-(D202-Pad3)",
+        ["D202", "D503"],
+        -0.059_614,
+    ),
+    (
+        "/Clock reference/Input Clocks/REFIN_GND",
+        "Net-(D202-Pad3)",
+        ["D203", "D503"],
+        -0.059_614,
+    ),
+    (
+        "/Clock reference/REFOUT_SEC",
+        "GND",
+        ["D203", "D503"],
+        -0.150_001,
+    ),
+    ("GND", "Net-(FB204-Pad1)", ["FB204", "J206"], -0.000_001),
+];
 
 #[test]
 fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
@@ -398,8 +436,7 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     // six keys are distinct on this board, so a map loses nothing and lets the
     // gap and the location be checked PER finding: a sorted list of gaps would
     // pass if two findings swapped their measurements.
-    type Key = ([String; 2], String, [String; 2]);
-    let mut got: std::collections::BTreeMap<Key, (f64, f64, f64)> = Default::default();
+    let mut got = std::collections::BTreeMap::<Key, (f64, f64, f64)>::new();
     for s in report.shorts() {
         let mut nets = [s.net_a_name.clone(), s.net_b_name.clone()];
         nets.sort();
@@ -440,41 +477,8 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
     // hauksbee's own measurement of each overlap, keyed so it cannot be satisfied
     // by the right numbers on the wrong findings. Negative throughout, because
     // every one is pad copper inside pad copper.
-    let expected: &[(&str, &str, [&str; 2], f64)] = &[
-        (
-            "/Clock reference/Input Clocks/REFIN",
-            "/Clock reference/Input Clocks/REFIN_GND",
-            ["C205", "D503"],
-            -0.015386,
-        ),
-        (
-            "/Clock reference/Input Clocks/REFIN",
-            "/Clock reference/Input Clocks/REFIN_GND",
-            ["D503", "R204"],
-            -0.015386,
-        ),
-        (
-            "/Clock reference/Input Clocks/REFIN_GND",
-            "Net-(D202-Pad3)",
-            ["D202", "D503"],
-            -0.059614,
-        ),
-        (
-            "/Clock reference/Input Clocks/REFIN_GND",
-            "Net-(D202-Pad3)",
-            ["D203", "D503"],
-            -0.059614,
-        ),
-        (
-            "/Clock reference/REFOUT_SEC",
-            "GND",
-            ["D203", "D503"],
-            -0.150001,
-        ),
-        ("GND", "Net-(FB204-Pad1)", ["FB204", "J206"], -0.000001),
-    ];
-    assert_eq!(expected.len(), got.len());
-    for (net_a, net_b, owners, want_gap) in expected {
+    assert_eq!(MWGEN_GAPS.len(), got.len());
+    for (net_a, net_b, owners, want_gap) in MWGEN_GAPS {
         let key = (
             [net_a.to_string(), net_b.to_string()],
             "F.Cu".to_string(),
@@ -503,13 +507,13 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
         let key = (r.nets.clone(), r.layer.clone(), owners);
         let (_, x, y) = got[&key];
         for (ax, ay) in r.anchors_um {
-            let d = ((x - ax as f64 / 1e3).powi(2) + (y - ay as f64 / 1e3).powi(2)).sqrt();
+            let d = (x - f64::from(ax) / 1e3).hypot(y - f64::from(ay) / 1e3);
             assert!(
                 d < 2.0,
                 "contact point ({x:.3}, {y:.3}) is {d:.3} mm from KiCad's pad anchor \
                  ({:.3}, {:.3}) for {:?}",
-                ax as f64 / 1e3,
-                ay as f64 / 1e3,
+                f64::from(ax) / 1e3,
+                f64::from(ay) / 1e3,
                 r.pads
             );
         }
@@ -613,16 +617,13 @@ fn gerber_dark_regions(text: &str) -> Vec<Vec<(f64, f64)>> {
             continue;
         }
         let coord = |tag: char, fallback: f64| -> f64 {
-            match block.split(tag).nth(1) {
-                Some(rest) => {
-                    let digits: String = rest
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit() || *c == '-')
-                        .collect();
-                    digits.parse::<f64>().map(|v| v / 1e4).unwrap_or(fallback)
-                }
-                None => fallback,
-            }
+            block.split(tag).nth(1).map_or(fallback, |rest| {
+                let digits: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '-')
+                    .collect();
+                digits.parse::<f64>().map(|v| v / 1e4).unwrap_or(fallback)
+            })
         };
         let op = if block.ends_with("D01") {
             1
@@ -640,10 +641,8 @@ fn gerber_dark_regions(text: &str) -> Vec<Vec<(f64, f64)>> {
                 } else {
                     pts.clear();
                 }
-                pts.push((nx, ny));
-            } else {
-                pts.push((nx, ny));
             }
+            pts.push((nx, ny));
         }
         (cx, cy) = (nx, ny);
     }
@@ -750,9 +749,8 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
     // decide whether either observed board contact is deliberate.
     let sch = required_external_board("emontx3/hardware/V3.4.5/emonTx V3.4.5.sch");
     let sch_text = std::fs::read_to_string(&sch).expect("read emonTx schematic");
-    let gnd_net = sch_text
-        .split("<net name=\"GND\"")
-        .nth(1)
+    let (_, gnd_net) = sch_text
+        .split_once("<net name=\"GND\"")
         .expect("a GND net in the schematic");
     let gnd_net = &gnd_net[..gnd_net.find("</net>").expect("GND net closes")];
     let tie = gnd_net

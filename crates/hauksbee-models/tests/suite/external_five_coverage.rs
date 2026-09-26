@@ -767,26 +767,27 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
         );
     }
 
-    // TPS2104: the mux whose modelled throw MUST be IN2, because the
-    // single-throw binder path closes on a HIGH control and IN2 is the throw the
-    // real part selects when EN is high. `s0` on IN1 would conduct from the
-    // battery exactly when the board has switched to USB.
+    // TPS2104: the mux whose modelled throw is IN1, the main (higher-rated)
+    // input. The single-throw binder path closes on a LOW control when its second
+    // terminal is the `s0` role, and IN1 is the throw the real part selects when
+    // EN is low, so IN1 carries `s0` and OUT carries `com`. IN2 is not a switch
+    // terminal: the kind cannot stamp a second throw without a VCC pin.
     let m = expect_id("TPS2104", "tps2104");
     assert_pins(
         &m,
         &[
             ("1", "ctrl"),
             ("2", "vss"),
-            ("3", "in_out_b"),
-            ("4", "in_out_a"),
-            ("5", "in1"),
+            ("3", "in2"),
+            ("4", "com"),
+            ("5", "s0"),
         ],
     );
     assert_eq!(
         m.params.get_f64("ron"),
-        Some(1.3),
-        "the IN2 (PMOS) path's on-resistance, since that is the throw stamped; \
-         the 250 mOhm figure belongs to the unmodelled IN1 path"
+        Some(0.25),
+        "the IN1 (NMOS) path's on-resistance, since that is the throw stamped; \
+         the 1.3 Ohm figure belongs to the unmodelled IN2 path"
     );
     assert!(
         resolve("TPS2105").is_none_or(|e| e.id != "tps2104"),
@@ -794,12 +795,12 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
          wrong half of the control range"
     );
 
-    // NONE of the three active-high switches may name a terminal `s0`.
+    // NONE of the active-high switches may name a terminal `s0`.
     // `bind_analog_switch`'s single-throw path senses the INVERTED control when the
     // second terminal it picks is the `s0` role, because `s0` is the SPDT
     // normally-closed throw. On an active-high load switch that models the rail off
     // when the silicon is on, undisclosed. The role names are the polarity here.
-    for value in ["TPS22916YFP", "MIC94090C6", "TPS2104"] {
+    for value in ["TPS22916YFP", "MIC94090C6"] {
         let m = expect(value);
         assert!(
             !m.pins.values().any(|r| r == "s0"),
@@ -1264,6 +1265,14 @@ fn a_switch_naming_com_and_only_the_high_throw_has_no_pickable_pair() {
     ])));
 }
 
+/// Single-throw entries whose stamped throw really does close on a LOW control,
+/// so naming it `s0` is the polarity the silicon has. Each is here by id with the
+/// datasheet reason, so the sweep below still refuses every other `s0`.
+const ACTIVE_LOW_SINGLE_THROW: &[(&str, &str)] = &[(
+    "tps2104",
+    "SLVS235A: EN low selects IN1, the throw this entry stamps",
+)];
+
 #[test]
 fn no_single_throw_switch_names_the_control_low_throw() {
     let mut checked = 0usize;
@@ -1277,7 +1286,8 @@ fn no_single_throw_switch_names_the_control_low_throw() {
         let roles: std::collections::HashSet<&str> = m.pins.values().map(String::as_str).collect();
 
         // A true SPDT names both throws and is fine.
-        if roles.contains("s0") && !roles.contains("s1") {
+        let active_low = ACTIVE_LOW_SINGLE_THROW.iter().any(|(id, _)| *id == m.id);
+        if roles.contains("s0") && !roles.contains("s1") && !active_low {
             failures.push(format!(
                 "{file}: {} names `s0` with no `s1`, so it binds through the \
                  single-throw path, which senses the INVERTED control and \

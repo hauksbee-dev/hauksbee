@@ -50,7 +50,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
         } else if let Some(id) = first.as_i64() {
             // Net 0 is the "no net" sentinel (empty name); never intern it.
             if id != 0 {
-                table.declare(id, n.arg_value(1).unwrap_or_default());
+                table.declare(id, &n.arg_value(1).unwrap_or_default());
             }
         } else if let Some(name) = n.arg_value(1).filter(|s| !s.is_empty()) {
             // The id slot is present but not a valid i64 (overflow, garbage).
@@ -105,7 +105,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
 
 /// Net identity across format generations: declared ids where the file has
 /// them, synthesized ids (negative of insertion order is avoided; we use
-/// max_id+1 onward) for name-only references.
+/// `max_id+1` onward) for name-only references.
 #[derive(Default)]
 struct NetTable {
     by_id: std::collections::BTreeMap<i64, String>,
@@ -133,16 +133,16 @@ impl NetTable {
             // KiCad's own name for a net it cannot label; the parenthesised id
             // makes it obvious in a report that the name came from us, not the
             // file.
-            self.declare(id, format!("Net-({id})"));
+            self.declare(id, &format!("Net-({id})"));
             self.synthesized_from_pads += 1;
         }
         id
     }
 
-    fn declare(&mut self, id: i64, name: String) {
+    fn declare(&mut self, id: i64, name: &str) {
         // File-syntax escapes ({slash}, subscript braces) end here: the table
         // keys and the emitted Net names are the real KiCad display names.
-        let name = crate::netname::unescape_net_name(&name);
+        let name = crate::netname::unescape_net_name(name);
         self.by_name.insert(name.clone(), id);
         self.by_id.insert(id, name);
         self.next_synthetic = self.next_synthetic.max(id + 1);
@@ -155,7 +155,7 @@ impl NetTable {
         }
         let id = self.next_synthetic.max(1);
         self.next_synthetic = id + 1;
-        self.declare(id, name);
+        self.declare(id, &name);
         id
     }
 
@@ -303,7 +303,10 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
         // Pad offsets are in the footprint frame; KiCad's y axis points
         // down, and footprint rotation is counter-clockwise, so the world
         // offset is (x cos + y sin, -x sin + y cos).
-        let abs = (fx + px * cos + py * sin, fy - px * sin + py * cos);
+        let abs = (
+            py.mul_add(sin, px.mul_add(cos, fx)),
+            py.mul_add(cos, px.mul_add(-sin, fy)),
+        );
         pins.push(Pin {
             number,
             net,
@@ -316,7 +319,7 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
     // Do-Not-Populate: KiCad writes a `dnp` flag inside the footprint's
     // `(attr ...)` list (e.g. `(attr smd exclude_from_bom dnp)`). A DNP footprint
     // is on the layout but not assembled, so it is electrically absent.
-    let dnp = fp.find("attr").map(|a| a.has_flag("dnp")).unwrap_or(false);
+    let dnp = fp.find("attr").is_some_and(|a| a.has_flag("dnp"));
 
     Component {
         reference,
@@ -335,13 +338,12 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
 ///
 /// Shared by every KiCad s-expression reader (layout, schematic, DRC): they all
 /// meet the same node with the same defaults.
-pub(crate) fn at_of(list: &List) -> (f64, f64, f64) {
-    match list.find("at") {
-        Some(at) => (
+pub fn at_of(list: &List) -> (f64, f64, f64) {
+    list.find("at").map_or((0.0, 0.0, 0.0), |at| {
+        (
             at.arg_f64(0).unwrap_or(0.0),
             at.arg_f64(1).unwrap_or(0.0),
             at.arg_f64(2).unwrap_or(0.0),
-        ),
-        None => (0.0, 0.0, 0.0),
-    }
+        )
+    })
 }

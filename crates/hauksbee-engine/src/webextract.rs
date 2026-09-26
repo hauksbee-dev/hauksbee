@@ -423,8 +423,8 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
         job.pdf.len() / 1024
     ));
     progress(
-        "The datasheet is copied into a scratch sandbox and its first pages rendered; the \
-         agent never sees your own directories.",
+        "The datasheet is copied into a scratch sandbox and its first pages rendered; codex \
+         and Claude Code shell reads are confined to it, agy's are not.",
     );
     progress(
         "Sent. The model reads the pages, checks each value against the page it came from, and \
@@ -438,7 +438,8 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     let args = datasheet::Args::new(pdf_path, job.part.clone(), job.kind.clone())
         .out_dir(Some(out_dir.clone()))
         .backend(engine_backend)
-        .model(Some(job.model.clone()));
+        .model(Some(job.model.clone()))
+        .checker(std::env::current_exe().ok());
 
     // On its own thread so the heartbeat below can run: `datasheet::run` is one
     // long blocking call with no callback of its own.
@@ -676,7 +677,7 @@ fn build_card(job: &DatasheetJob, toml_text: &str, is_model_entry: bool) -> Mode
     // assumed. The schema drops the key on parse, so it is read off the raw
     // text; the TOML parse (not the line scan) is used because a notes array
     // spans lines.
-    let parsed: Option<toml::Value> = toml_text.parse().ok();
+    let parsed: Option<toml::Value> = toml::from_str(toml_text).ok();
     let entry = parsed.as_ref().and_then(|root| {
         root.get("models")
             .and_then(|m| m.as_array())

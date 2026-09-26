@@ -1336,18 +1336,35 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
 /// mixed norm cannot tell a volt-scale branch residual from an amp-scale node
 /// one, so it damps a Wien oscillator that was converging at full steps down to
 /// the alpha floor and drags its frequency from 1591 Hz to 512.
+///
+/// Each row's tolerance is also floored at the floating-point resolution of
+/// its own sum, `8*eps*(sum|g*x| + |rhs|)`: a residual below that is round-off,
+/// the same at every trial point, so no step can decrease it. Measured on the
+/// MNT Reform power stage: one KCL row carrying 1.5e4 A of stiff-wire terms
+/// read 2.74e-12 A (1.8e-16 relative) at every alpha, the merit sat just above
+/// the 1e-12 A root bar, and every Newton step was cut to the 1/64 floor until
+/// max_newton gave out. (`node_norm` only flags a poisoned trial here.)
 fn merit(ws: &Workspace, node_norm: f64, opts: &SolverOptions) -> f64 {
-    let mut worst = node_norm / opts.abstol;
-    for i in ws.layout.n_nodes..ws.rhs.len() {
-        let mut acc = 0.0;
+    if !node_norm.is_finite() {
+        return f64::INFINITY;
+    }
+    let mut worst = 0.0f64;
+    for i in 0..ws.rhs.len() {
+        let (mut acc, mut mag) = (0.0, ws.rhs[i].abs());
         for &(col, val) in ws.matrix.row(i) {
             acc += val * ws.x[col];
+            mag += (val * ws.x[col]).abs();
         }
         let f = acc - ws.rhs[i];
         if !f.is_finite() {
             return f64::INFINITY;
         }
-        worst = worst.max(f.abs() / opts.vntol);
+        let tol = if i < ws.layout.n_nodes {
+            opts.abstol
+        } else {
+            opts.vntol
+        };
+        worst = worst.max(f.abs() / tol.max(8.0 * f64::EPSILON * mag));
     }
     worst
 }
@@ -2725,6 +2742,26 @@ mod tests {
         ws.x[ws.layout.node(mid).unwrap()] += 1.0;
         let r_off = ws.dc_residual_inf_norm(&c, &opts);
         assert!((r_off - 2e-3).abs() < 1e-4, "got {r_off:e}");
+    }
+
+    /// Behind a 1 uOhm link, one ulp of node voltage is ~1e-10 A of KCL
+    /// residual: 100x abstol, yet pure round-off no step can remove. The merit
+    /// must read it as a root, or Armijo backtracks every step to its floor.
+    #[test]
+    fn merit_reads_round_off_behind_a_stiff_link_as_a_root() {
+        let mut c = Circuit::new();
+        let (top, mid) = (c.node("top"), c.node("mid"));
+        vdc(&mut c, "V", top, 1.0);
+        res(&mut c, "R1", top, mid, 1e-6);
+        res(&mut c, "R2", mid, GND, 1.0);
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).unwrap();
+        let i = ws.layout.node(mid).unwrap();
+        ws.x[i] = f64::from_bits(ws.x[i].to_bits() + 1);
+        let (raw, _) = ws.dc_residual_argmax(&c, &opts);
+        assert!(raw > 50.0 * opts.abstol, "raw residual {raw:e}");
+        assert!(merit(&ws, 0.0, &opts) <= 1.0);
     }
 
     /// A cap with ic=0 across the divider's lower leg: the ic-honoring DC

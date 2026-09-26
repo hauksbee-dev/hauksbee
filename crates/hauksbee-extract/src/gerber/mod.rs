@@ -109,7 +109,7 @@ fn ldp_declared_span(role: &layers::LdpDrillRole, classified_copper_layers: usiz
         })
         .max()
         .unwrap_or(2)
-        .max(classified_copper_layers.min(u32::MAX as usize) as u32);
+        .max(u32::try_from(classified_copper_layers).unwrap_or(u32::MAX));
     let physical: Vec<u32> = role
         .layers
         .iter()
@@ -183,7 +183,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn drill_is_gerber_format(head: &str, ext: Option<&str>) -> bool {
     head.contains("%FS")
         || head.contains("%AD")
-        || ext.map(|s| s.eq_ignore_ascii_case("art")).unwrap_or(false)
+        || ext.is_some_and(|s| s.eq_ignore_ascii_case("art"))
 }
 
 /// Up to 64 KiB of the file's leading text, lossily decoded, for
@@ -396,8 +396,9 @@ struct PackageMetadata {
 }
 
 impl PackageMetadata {
+    #[allow(clippy::too_many_lines, reason = "one pass over every metadata file")]
     fn read(dir: &Path, files: &[PathBuf], notes: &mut Vec<String>) -> Result<Self, ExtractError> {
-        let mut meta = PackageMetadata::default();
+        let mut meta = Self::default();
         let mut ldp_sources: HashMap<String, String> = HashMap::new();
         let mut extrep_contested: BTreeSet<String> = BTreeSet::new();
         for p in files {
@@ -432,8 +433,7 @@ impl PackageMetadata {
                                 "conflicting .LDP declarations for drill file {drill}: {} and {name}. Resolve the package metadata; choosing either span could merge nets the stack keeps apart",
                                 ldp_sources
                                     .get(&drill)
-                                    .map(String::as_str)
-                                    .unwrap_or("an earlier .LDP file"),
+                                    .map_or("an earlier .LDP file", String::as_str),
                             )));
                         }
                         Some(_) => {}
@@ -523,7 +523,7 @@ impl PackageMetadata {
         meta.gbrjob_numbers_physical = job_copper
             .iter()
             .map(|(_, n, _)| *n)
-            .eq(1..=job_copper.len() as u32);
+            .eq(1..=u32::try_from(job_copper.len()).unwrap_or(u32::MAX));
         meta.gbrjob_index = job_copper
             .iter()
             .enumerate()
@@ -577,7 +577,7 @@ impl PackageMetadata {
                     self.gbrjob_index
                         .get(&*fname)
                         .copied()
-                        .unwrap_or(layer.saturating_sub(1) as usize),
+                        .unwrap_or_else(|| layer.saturating_sub(1) as usize),
                     path,
                 ),
                 GbrJobRole::Outline => LayerRole::Outline,
@@ -595,8 +595,9 @@ impl PackageMetadata {
         if in_ldp {
             return Ok(LayerRole::Drill);
         }
-        match extrep {
-            Some(declared) => {
+        extrep.map_or_else(
+            || Ok(inferred()),
+            |declared| {
                 let inferred = inferred();
                 if !same_layer_role(&declared, &inferred) {
                     notes.push(format!(
@@ -606,9 +607,8 @@ impl PackageMetadata {
                     ));
                 }
                 Ok(declared)
-            }
-            None => Ok(inferred()),
-        }
+            },
+        )
     }
 
     /// What the manifests say about a drill file's plating: `.gbrjob` and
@@ -715,6 +715,12 @@ fn read_placements(
 /// name-based role guess for exotic jobs. The board name is the directory's
 /// file name. The pick-and-place is picked up from a `.csv`/`.pos` that parses
 /// as one, or an Allegro `smt_loc.txt`.
+///
+/// # Errors
+///
+/// Returns an [`ExtractError`] when the job cannot be read or is refused: a
+/// film or drill file that fails to read or parse, package metadata that
+/// contradicts itself, or no copper layer to reconstruct from.
 pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     let name = dir
         .file_name()
@@ -739,6 +745,7 @@ struct ParsedDrill {
 /// directory. The zip path needs it: extraction goes to a throwaway directory
 /// whose name exists only to be unique, so naming the board after it would put a
 /// nanosecond clock reading in every report.
+#[allow(clippy::too_many_lines, reason = "the reader's top-level pipeline")]
 fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtraction, ExtractError> {
     let mut all_files = Vec::new();
     collect_files(dir, &mut all_files);
@@ -960,7 +967,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let token_to_stack =
         copper_layer_tokens(&ordered, &files.copper, &physical_to_stack, implied_layers);
 
-    for p in parsed.iter_mut() {
+    for p in &mut parsed {
         p.claim = match p.declared {
             DeclaredSpan::Pair(pair) => {
                 if let (Some(&f), Some(&t)) = (
@@ -1064,7 +1071,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let (placements, bom) = read_placements(&files.csvs, &files.loc_files);
 
     let n_castellations = count_castellations(&holes, &outline_prims);
-    let (mut board, mut stats) = connect::reconstruct(board_name, layer_prims, holes, placements);
+    let (mut board, mut stats) = connect::reconstruct(board_name, layer_prims, &holes, &placements);
     stats.n_castellations = n_castellations;
     stats.refused_plating_files = refused_plating_files;
     stats.inferred_plating_holes = inferred_plating_holes;
@@ -1142,6 +1149,7 @@ enum SpanClaim {
 ///
 /// Returns `(diameter, start, end)`; `start == end` for a round hit.
 fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
+    type Vec2 = (f64, f64);
     let pts: &[(f64, f64)] = match shape {
         geo::Shape::Capsule(c) => {
             // Already a stadium: the aperture radius is the tool, the segment
@@ -1150,7 +1158,7 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         }
         geo::Shape::Polygon { pts, .. } => pts,
         geo::Shape::MultiPolygon { contours, .. } => {
-            contours.first().map(|c| c.as_slice()).unwrap_or(&[])
+            contours.first().map_or(&[], std::vec::Vec::as_slice)
         }
     };
     let inflate = match shape {
@@ -1159,13 +1167,12 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
     };
     if pts.len() < 3 {
         let b = shape.bounds();
-        let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let (cx, cy) = (f64::midpoint(b[0], b[2]), f64::midpoint(b[1], b[3]));
         let narrow = (b[2] - b[0]).min(b[3] - b[1]);
         let dia = if narrow > 0.0 { narrow } else { 0.1 };
         return (dia, (cx, cy), (cx, cy));
     }
     // Minimum-width orientation over the outline's own edges.
-    type Vec2 = (f64, f64);
     let mut best: Option<(f64, f64, f64, Vec2, Vec2)> = None; // (w, umin, umax, dir, perp)
     for i in 0..pts.len() {
         let (ax, ay) = pts[i];
@@ -1178,41 +1185,41 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         let dir = (dx / len, dy / len);
         let perp = (-dir.1, dir.0);
         let (mut umin, mut umax) = (f64::INFINITY, f64::NEG_INFINITY);
-        let (mut vmin, mut vmax) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut side_lo, mut side_hi) = (f64::INFINITY, f64::NEG_INFINITY);
         for &(px, py) in pts {
-            let u = px * dir.0 + py * dir.1;
-            let v = px * perp.0 + py * perp.1;
+            let u = px.mul_add(dir.0, py * dir.1);
+            let v = px.mul_add(perp.0, py * perp.1);
             umin = umin.min(u);
             umax = umax.max(u);
-            vmin = vmin.min(v);
-            vmax = vmax.max(v);
+            side_lo = side_lo.min(v);
+            side_hi = side_hi.max(v);
         }
-        let w = vmax - vmin;
+        let w = side_hi - side_lo;
         if !w.is_finite() {
             continue;
         }
-        if best.map(|(bw, ..)| w < bw).unwrap_or(true) {
-            let mid_v = (vmin + vmax) / 2.0;
+        if best.is_none_or(|(bw, ..)| w < bw) {
+            let mid_v = f64::midpoint(side_lo, side_hi);
             best = Some((w, umin, umax, dir, (perp.0 * mid_v, perp.1 * mid_v)));
         }
     }
     let Some((w, umin, umax, dir, perp_off)) = best else {
         let b = shape.bounds();
-        let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let (cx, cy) = (f64::midpoint(b[0], b[2]), f64::midpoint(b[1], b[3]));
         return (0.1, (cx, cy), (cx, cy));
     };
-    let dia = w + 2.0 * inflate;
-    let length = (umax - umin) + 2.0 * inflate;
+    let dia = 2.0f64.mul_add(inflate, w);
+    let length = 2.0f64.mul_add(inflate, umax - umin);
     // The stadium's two centres sit half a tool diameter in from each end.
     let half_path = ((length - dia) / 2.0).max(0.0);
-    let mid_u = (umin + umax) / 2.0;
-    let cx = dir.0 * mid_u + perp_off.0;
-    let cy = dir.1 * mid_u + perp_off.1;
+    let mid_u = f64::midpoint(umin, umax);
+    let cx = dir.0.mul_add(mid_u, perp_off.0);
+    let cy = dir.1.mul_add(mid_u, perp_off.1);
     let dia = if dia > 0.0 { dia } else { 0.1 };
     (
         dia,
-        (cx - dir.0 * half_path, cy - dir.1 * half_path),
-        (cx + dir.0 * half_path, cy + dir.1 * half_path),
+        (dir.0.mul_add(-half_path, cx), dir.1.mul_add(-half_path, cy)),
+        (dir.0.mul_add(half_path, cx), dir.1.mul_add(half_path, cy)),
     )
 }
 
@@ -1274,10 +1281,9 @@ fn film_file_function(text: &str) -> Option<String> {
 /// The copper layer pair a gerber-format drill film declares, read from the
 /// same `TF.FileFunction` attribute an Excellon file carries it in.
 fn film_declared_span(text: &str) -> DeclaredSpan {
-    match film_file_function(text) {
-        Some(f) => excellon::parse_file_function_span(&f),
-        None => DeclaredSpan::Absent,
-    }
+    film_file_function(text).map_or(DeclaredSpan::Absent, |f| {
+        excellon::parse_file_function_span(&f)
+    })
 }
 
 /// Whether a gerber-format drill film declares its own holes non-plated.
@@ -1308,7 +1314,7 @@ fn copper_physical_layer(text: &str) -> Option<u32> {
     let head = film_file_function(text)?;
     let at = head.find("FILEFUNCTION")? + "FILEFUNCTION".len();
     let rest = head[at..].trim_start_matches([',', ' ']);
-    let mut fields = rest.split(',').map(|f| f.trim());
+    let mut fields = rest.split(',').map(str::trim);
     if fields.next()? != "COPPER" {
         return None;
     }
@@ -1675,6 +1681,11 @@ fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
 /// The board is named after the ARCHIVE, never after the extraction directory,
 /// which is unique per call so two concurrent analyses cannot tread on each
 /// other. The archive's stem is a property of the input; the directory's is not.
+///
+/// # Errors
+///
+/// Returns an [`ExtractError`] when the archive cannot be read or unpacked, or
+/// for any reason [`from_gerber_dir`] refuses the unpacked job.
 pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError> {
     let name = zip_path
         .file_stem()
@@ -1691,18 +1702,22 @@ pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError
 /// A web upload arrives as bytes and is parked on disk before the reader can see
 /// it, and the name it is parked under is a staging detail, not the board's
 /// identity. Passing the name keeps the two apart.
+///
+/// # Errors
+///
+/// As [`from_gerber_zip`].
 pub fn from_gerber_zip_named(
     zip_path: &Path,
     board_name: &str,
 ) -> Result<GerberExtraction, ExtractError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
     let bytes = std::fs::read(zip_path)
         .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", film(zip_path))))?;
     // Uniqueness only, and nothing here reaches the report: pid plus a
     // process-local counter plus the clock, because a bare clock reading can
     // repeat across two calls in the same nanosecond and two jobs unzipping
     // into one directory would mix their films.
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
     let tmp = std::env::temp_dir().join(format!(
         "hauksbee_gerber_{}_{}_{}",
         std::process::id(),
@@ -1784,7 +1799,7 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| ExtractError::Xml(format!("zip mkdir {}: {e}", film(parent))))?;
         }
-        let mut buf = Vec::with_capacity(file.size() as usize);
+        let mut buf = Vec::with_capacity(usize::try_from(file.size()).unwrap_or(0));
         file.read_to_end(&mut buf)
             .map_err(|e| ExtractError::Xml(format!("zip read: {e}")))?;
         std::fs::write(&dest, buf)
@@ -1801,6 +1816,12 @@ impl ExtractedBoard {
     /// reaches a user: the stats carry the reader's refusal notes and the
     /// pad-location accounting, and dropping them makes a partial
     /// reconstruction indistinguishable from a complete one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExtractError`] when `path` is neither a directory nor a
+    /// `.zip`, or for any reason [`from_gerber_dir`] or [`from_gerber_zip`]
+    /// refuses the job.
     pub fn from_gerber_with_stats(path: &Path) -> Result<GerberExtraction, ExtractError> {
         if path.is_dir() {
             from_gerber_dir(path)
@@ -1816,6 +1837,10 @@ impl ExtractedBoard {
     ///
     /// For a caller that has parked bytes in a temp file: the staging name is
     /// the filesystem's business, the board name is the user's.
+    ///
+    /// # Errors
+    ///
+    /// As [`from_gerber_with_stats`](Self::from_gerber_with_stats).
     pub fn from_gerber_with_stats_named(
         path: &Path,
         board_name: &str,
@@ -1829,8 +1854,13 @@ impl ExtractedBoard {
         }
     }
 
-    /// Reverse-extract from a gerber job directory or a gerber `.zip`. The
-    /// universal "hand us only the fab files" entry point.
+    /// Reverse-extract from a gerber job directory or a gerber `.zip`.
+    ///
+    /// The universal "hand us only the fab files" entry point.
+    ///
+    /// # Errors
+    ///
+    /// As [`from_gerber_with_stats`](Self::from_gerber_with_stats).
     pub fn from_gerber(path: &Path) -> Result<Self, ExtractError> {
         Self::from_gerber_with_stats(path).map(|g| g.board)
     }

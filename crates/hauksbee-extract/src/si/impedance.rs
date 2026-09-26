@@ -108,8 +108,9 @@ use crate::ExtractedBoard;
 // Stackup model.
 // ===========================================================================
 
-/// Default substrate dielectric constant for FR4 (the corpus stackups all
-/// declare 4.5; the textbook quick-estimate value is 4.3). Used only when the
+/// Default substrate dielectric constant for FR4.
+///
+/// The corpus stackups all declare 4.5; the textbook quick-estimate value is 4.3. Used only when the
 /// board declares no stackup, and only ever to produce an *info* estimate.
 pub const DEFAULT_ER: f64 = 4.3;
 /// Default 1 oz copper thickness (mm).
@@ -118,7 +119,9 @@ pub const DEFAULT_CU_THICKNESS_MM: f64 = 0.035;
 /// FR4. The microstrip reference height is the full core for a 2-layer board.
 pub const DEFAULT_DIELECTRIC_MM: f64 = 1.51;
 
-/// Impedance tolerance band (fraction). A controlled-impedance target is met if
+/// Impedance tolerance band (fraction).
+///
+/// A controlled-impedance target is met if
 /// the estimate is within +-15% of target. 15% is the looser of the two common
 /// fab tolerances (+-10% / +-15%); using the looser band keeps the model's own
 /// few-percent error from ever producing the finding on its own.
@@ -135,7 +138,9 @@ pub enum StackupSource {
     Default,
 }
 
-/// The stackup parameters the impedance formulas need. A minimal model: the
+/// The stackup parameters the impedance formulas need.
+///
+/// A minimal model: the
 /// outer-layer microstrip reference height (dielectric below F.Cu / above B.Cu),
 /// the copper thickness, and the substrate Er. This is all the closed-form
 /// quasi-static formulas consume.
@@ -162,8 +167,8 @@ pub struct Stackup {
 impl Stackup {
     /// The default-assumption stackup (used only for info-level estimates when
     /// the file has no stackup block).
-    fn default_assumed() -> Self {
-        Stackup {
+    const fn default_assumed() -> Self {
+        Self {
             h_microstrip_mm: DEFAULT_DIELECTRIC_MM,
             t_cu_mm: DEFAULT_CU_THICKNESS_MM,
             er: DEFAULT_ER,
@@ -197,6 +202,7 @@ impl Stackup {
 /// stripline are not modelled: claiming a stripline reference plane requires
 /// knowing which inner layer is a solid plane, which the stackup block does not
 /// say.
+#[must_use]
 pub fn read_stackup(root: &List) -> Option<Stackup> {
     let setup = root.find("setup")?;
     let stackup = setup.find("stackup")?;
@@ -235,8 +241,7 @@ pub fn read_stackup(root: &List) -> Option<Stackup> {
     // Controlled-impedance intent: `(dielectric_constraints yes)`.
     let impedance_controlled = stackup
         .find_value("dielectric_constraints")
-        .map(|v| v.eq_ignore_ascii_case("yes") || v == "true")
-        .unwrap_or(false);
+        .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v == "true");
     Some(Stackup {
         h_microstrip_mm: h,
         t_cu_mm: t_cu.unwrap_or(DEFAULT_CU_THICKNESS_MM),
@@ -258,11 +263,12 @@ pub fn read_stackup(root: &List) -> Option<Stackup> {
 /// `w`, `h`, `t` in the same length unit (mm here). Returns `None` for a
 /// degenerate geometry (the log argument <= 1, i.e. a trace too wide for the
 /// formula's validity band, which we then decline to judge).
+#[must_use]
 pub fn microstrip_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
     if w <= 0.0 || h <= 0.0 || er <= 0.0 {
         return None;
     }
-    let denom = 0.8 * w + t;
+    let denom = 0.8f64.mul_add(w, t);
     if denom <= 0.0 {
         return None;
     }
@@ -278,11 +284,12 @@ pub fn microstrip_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
 /// centred in a dielectric of total plane-to-plane height `h`.
 ///
 /// `Z0 = (60 / sqrt(Er)) * ln(4*H / (0.67*pi*(0.8*W + T)))`
+#[must_use]
 pub fn stripline_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
     if w <= 0.0 || h <= 0.0 || er <= 0.0 {
         return None;
     }
-    let denom = 0.67 * std::f64::consts::PI * (0.8 * w + t);
+    let denom = 0.67 * std::f64::consts::PI * 0.8f64.mul_add(w, t);
     if denom <= 0.0 {
         return None;
     }
@@ -300,11 +307,12 @@ pub fn stripline_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
 ///
 /// `z0` is the single-ended microstrip impedance of one trace, `s` the
 /// edge-to-edge spacing, `h` the dielectric height.
+#[must_use]
 pub fn differential_microstrip_z(z0: f64, s: f64, h: f64) -> Option<f64> {
     if z0 <= 0.0 || s < 0.0 || h <= 0.0 {
         return None;
     }
-    Some(2.0 * z0 * (1.0 - 0.48 * (-0.96 * s / h).exp()))
+    Some(2.0 * z0 * 0.48f64.mul_add(-(-0.96 * s / h).exp(), 1.0))
 }
 
 // ===========================================================================
@@ -325,18 +333,20 @@ pub enum ImpedanceClass {
 
 impl ImpedanceClass {
     /// Target impedance (ohms).
-    pub fn target_ohm(self) -> f64 {
+    #[must_use]
+    pub const fn target_ohm(self) -> f64 {
         match self {
-            ImpedanceClass::UsbDiff => 90.0,
-            ImpedanceClass::EthernetDiff => 100.0,
-            ImpedanceClass::SingleEnded50 => 50.0,
+            Self::UsbDiff => 90.0,
+            Self::EthernetDiff => 100.0,
+            Self::SingleEnded50 => 50.0,
         }
     }
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            ImpedanceClass::UsbDiff => "USB 90 ohm differential",
-            ImpedanceClass::EthernetDiff => "Ethernet 100 ohm differential",
-            ImpedanceClass::SingleEnded50 => "50 ohm single-ended",
+            Self::UsbDiff => "USB 90 ohm differential",
+            Self::EthernetDiff => "Ethernet 100 ohm differential",
+            Self::SingleEnded50 => "50 ohm single-ended",
         }
     }
 
@@ -344,11 +354,12 @@ impl ImpedanceClass {
     /// [`Self::label`] carries the number, so pairing it with the target read
     /// back as "[target 90 ohm USB 90 ohm differential]"; this says the kind
     /// once and lets the caller print the number once.
-    pub fn kind_label(self) -> &'static str {
+    #[must_use]
+    pub const fn kind_label(self) -> &'static str {
         match self {
-            ImpedanceClass::UsbDiff => "USB differential",
-            ImpedanceClass::EthernetDiff => "Ethernet differential",
-            ImpedanceClass::SingleEnded50 => "single-ended",
+            Self::UsbDiff => "USB differential",
+            Self::EthernetDiff => "Ethernet differential",
+            Self::SingleEnded50 => "single-ended",
         }
     }
 }
@@ -540,7 +551,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
         // width of the pair; the pad neck-down is the narrow end and is not the
         // controlled section.
         let w = match (wp, wm) {
-            (Some((_, maxp)), Some((_, maxm))) => (maxp + maxm) / 2.0,
+            (Some((_, plus_hi)), Some((_, minus_hi))) => f64::midpoint(plus_hi, minus_hi),
             _ => continue,
         };
         if w <= 0.0 {
@@ -589,8 +600,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             class,
             zdiff,
             &format!(
-                "{} / {}: W~{:.3} mm, S~{:.3} mm microstrip -> Zdiff ~ {:.0} ohm{}",
-                pname, mname, w, s, zdiff, reference_note
+                "{pname} / {mname}: W~{w:.3} mm, S~{s:.3} mm microstrip -> Zdiff ~ {zdiff:.0} ohm{reference_note}"
             ),
             vec![pname.clone(), mname.clone()],
         );
@@ -608,9 +618,7 @@ fn emit_diff_info_no_spacing(
     report: &mut SiReport,
 ) {
     let z0 = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er);
-    let z0s = z0
-        .map(|z| format!("{z:.0} ohm"))
-        .unwrap_or_else(|| "n/a".into());
+    let z0s = z0.map_or_else(|| "n/a".into(), |z| format!("{z:.0} ohm"));
     report.findings.push(SiFinding {
         check: SiCheck::ControlledImpedance,
         severity: SiSeverity::Info,
@@ -961,8 +969,14 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             let mut leg_total = 0usize;
             for s in segs.iter().filter(|s| &s.layer == layer && s.net == net) {
                 let len = s.length();
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "clamped"
+                )]
                 let steps = ((len / SAMPLE_PITCH_MM).ceil() as usize).clamp(2, MAX_SAMPLES_PER_SEG);
                 for i in 0..=steps {
+                    #[allow(clippy::cast_precision_loss, reason = "sample counts are small")]
                     let t = i as f64 / steps as f64;
                     let (x, y) = (s.ax + t * (s.bx - s.ax), s.ay + t * (s.by - s.ay));
                     // A sample inside an anti-pad carries no information about
@@ -1048,7 +1062,9 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
                     continue;
                 }
                 let b = uncovered[j];
-                if (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) <= VOID_LINK_MM * VOID_LINK_MM {
+                if (a.1 - b.1).mul_add(a.1 - b.1, (a.0 - b.0).powi(2))
+                    <= VOID_LINK_MM * VOID_LINK_MM
+                {
                     group[j] = id;
                     members.push(j);
                 }
@@ -1063,7 +1079,7 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
         let mut extent = 0.0_f64;
         for (i, a) in pts.iter().enumerate() {
             for b in &pts[i + 1..] {
-                extent = extent.max(((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+                extent = extent.max((b.0 - a.0).hypot(b.1 - a.1));
             }
         }
         // The uncovered samples sit INSIDE the void, so the distance between the
@@ -1114,7 +1130,7 @@ impl Piercing {
         self.layers.is_empty() || self.layers.iter().any(|l| l == layer)
     }
     fn covers(&self, x: f64, y: f64) -> bool {
-        (x - self.x).powi(2) + (y - self.y).powi(2) <= self.radius * self.radius
+        (y - self.y).mul_add(y - self.y, (x - self.x).powi(2)) <= self.radius * self.radius
     }
 }
 
@@ -1155,10 +1171,9 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             let Some(pat) = pad.find("at") else { continue };
             let (px, py) = (pat.arg_f64(0).unwrap_or(0.0), pat.arg_f64(1).unwrap_or(0.0));
             let (x, y) = local_to_board(fx, fy, frot, px, py);
-            let (sx, sy) = pad
-                .find("size")
-                .map(|s| (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0)))
-                .unwrap_or((0.0, 0.0));
+            let (sx, sy) = pad.find("size").map_or((0.0, 0.0), |s| {
+                (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0))
+            });
             // A round mounting hole may carry only a drill.
             let drill = pad.find("drill").and_then(|d| d.arg_f64(0)).unwrap_or(0.0);
             let extent = sx.max(sy).max(drill);
@@ -1172,9 +1187,7 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             // just outside the excuse: a row of them along a fanout read as a
             // void. Using the corner distance over-excuses a little, which only
             // ever loses an abstention.
-            let half_diag = ((sx.max(drill) / 2.0 + margin).powi(2)
-                + (sy.max(drill) / 2.0 + margin).powi(2))
-            .sqrt();
+            let half_diag = (sx.max(drill) / 2.0 + margin).hypot(sy.max(drill) / 2.0 + margin);
             let mut layers: Vec<String> = pad
                 .find("layers")
                 .map(|l| (0..).map_while(|i| l.arg_value(i)).collect())
@@ -1260,12 +1273,12 @@ fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
             continue;
         }
         for fp in zone.find_all("filled_polygon") {
-            let belongs = match fp.find_value("layer") {
-                // Tagged: the tag decides, whatever the zone header says.
-                Some(fl) => fl == layer,
+            let belongs = fp.find_value("layer").map_or_else(
                 // Untagged: fall back to the zone's own declaration.
-                None => zone_covers_layer(zone, layer),
-            };
+                || zone_covers_layer(zone, layer),
+                // Tagged: the tag decides, whatever the zone header says.
+                |fl| fl == layer,
+            );
             if !belongs {
                 continue;
             }
@@ -1349,9 +1362,8 @@ fn zone_covers_layer(zone: &List, layer: &str) -> bool {
             || (n == "F&B.Cu" && (layer == "F.Cu" || layer == "B.Cu"))
     };
     zone.find("layers")
-        .map(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| named(&n)))
-        .unwrap_or(false)
-        || zone.find_value("layer").map(|l| named(&l)).unwrap_or(false)
+        .is_some_and(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| named(&n)))
+        || zone.find_value("layer").is_some_and(|l| named(&l))
 }
 
 /// The abstention: say the reference plane is missing over the named void, and say
@@ -1468,7 +1480,7 @@ fn pair_edge_spacing(root: &List, pid: i64, mid: i64) -> Option<f64> {
     let median = if gaps.len() % 2 == 1 {
         gaps[mid_idx]
     } else {
-        (gaps[mid_idx - 1] + gaps[mid_idx]) / 2.0
+        f64::midpoint(gaps[mid_idx - 1], gaps[mid_idx])
     };
     // A pair that never runs close (median gap implausibly large for coupling)
     // is not a routed coupled pair we can model: decline.
@@ -1491,7 +1503,7 @@ struct Seg {
 
 impl Seg {
     fn length(&self) -> f64 {
-        ((self.bx - self.ax).powi(2) + (self.by - self.ay).powi(2)).sqrt()
+        (self.bx - self.ax).hypot(self.by - self.ay)
     }
 }
 

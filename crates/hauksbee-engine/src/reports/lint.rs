@@ -55,6 +55,9 @@ pub(crate) fn emit_quiet(
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     let human_maps = evidence.maps_for_findings(&lint_findings_json(&report))?;
     let human_evidence = evidence.clone().with_maps(human_maps);
+    // The strap lint only speaks on a fault; say what it examined so a clean
+    // strap check is not the same silence as one that never ran.
+    let straps = crate::checks::straps::strap_coverage(board, lib);
     match mode {
         OutputMode::Json => {
             println!(
@@ -62,7 +65,7 @@ pub(crate) fn emit_quiet(
                 lint_json(
                     &bound,
                     &report,
-                    &guesses,
+                    (&guesses, &straps),
                     &waived,
                     &blockers,
                     input.inputs,
@@ -84,6 +87,9 @@ pub(crate) fn emit_quiet(
                     println!("{}", crate::result::inconclusive_verdict(&blockers));
                 }
                 print!("{}", hauksbee_extract::render_netlint(&report));
+            }
+            if !straps.is_empty() {
+                println!("\nstrap-pin coverage:\n  {}", straps.join("\n  "));
             }
             if !guesses.is_empty() {
                 print!("{}", render_pin_role_guesses(&guesses));
@@ -162,7 +168,7 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
 fn lint_json(
     bound: &crate::binder::BoundBoard,
     report: &hauksbee_extract::NetLintReport,
-    guesses: &[(String, String)],
+    (guesses, straps): (&[(String, String)], &[String]),
     waived: &[crate::waiver::WaivedFinding],
     blockers: &[String],
     inputs: &[JsonInputEvidence],
@@ -186,6 +192,9 @@ fn lint_json(
     if !blockers.is_empty() {
         jr.push_coverage_note(crate::result::inconclusive_verdict(blockers));
     }
+    straps
+        .iter()
+        .for_each(|line| jr.push_coverage_note(line.as_str()));
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
         message: format!("pin-role guess {r}: {g}"),
@@ -225,7 +234,7 @@ pub(crate) fn emit_resources_quiet(
                 lint_json(
                     &bound,
                     &report,
-                    &[],
+                    (&[], &[]),
                     &waived,
                     &blockers,
                     input.inputs,
@@ -372,7 +381,7 @@ mod tests {
             ("U1.PA0".to_string(), "adc0".to_string()),
             ("U1.PB3".to_string(), "spi_sck".to_string()),
         ];
-        let out = lint_json(&bound, &report, &guesses, &[], &[], &[], &evidence)
+        let out = lint_json(&bound, &report, (&guesses, &[]), &[], &[], &[], &evidence)
             .expect("evidence attachment succeeds");
         // The ENTIRE output must parse as a single JSON value, no trailing text.
         let v: serde_json::Value =
@@ -391,7 +400,7 @@ mod tests {
             .any(|n| n.get("message").and_then(|m| m.as_str())
                 == Some("pin-role guess U1.PA0: adc0")));
         // With no guesses, notes is omitted (skip_serializing_if) and it still parses.
-        let clean = lint_json(&bound, &report, &[], &[], &[], &[], &evidence)
+        let clean = lint_json(&bound, &report, (&[], &[]), &[], &[], &[], &evidence)
             .expect("evidence attachment succeeds");
         let cv: serde_json::Value = serde_json::from_str(&clean).expect("clean lint --json parses");
         assert!(cv.get("notes").is_none(), "no guesses => no notes key");

@@ -20,34 +20,23 @@ use std::collections::HashMap;
 /// quick-xml deprecates `unescape_value` in favour of `normalized_value`, which
 /// takes an `XmlVersion` the crate does not export, so the replacement is not
 /// callable from outside quick-xml.
-pub(crate) fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
+pub fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
     e.attributes()
         .flatten()
         .map(|a| {
             #[allow(deprecated)]
-            let value = a
-                .unescape_value()
-                .map(|c| c.into_owned())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+            let value = a.unescape_value().map_or_else(
+                |_| String::from_utf8_lossy(&a.value).into_owned(),
+                std::borrow::Cow::into_owned,
+            );
             (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
         })
         .collect()
 }
 
+#[allow(clippy::too_many_lines, reason = "one streaming pass over the XML")]
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
-    let mut reader = Reader::from_str(text);
-    reader.config_mut().trim_text(true);
-
     type Pads = Vec<(String, f64, f64)>;
-    // (library name, package name) -> [(pad name, dx, dy)]. Eagle namespaces
-    // packages per <library>: two embedded libraries may each define a package
-    // named e.g. "0805" with different pads. Keying by bare package name merged
-    // them, so an element resolved to the concatenation of both libraries' pads
-    // and was emitted with doubled/mixed pins.
-    let mut packages: HashMap<(String, String), Pads> = HashMap::new();
-    let mut cur_library = String::new();
-    let mut cur_package: Option<String> = None;
-    // elements
     struct El {
         name: String,
         library: String,
@@ -59,6 +48,18 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         mirrored: bool,
         dnp: bool,
     }
+    let mut reader = Reader::from_str(text);
+    reader.config_mut().trim_text(true);
+
+    // (library name, package name) -> [(pad name, dx, dy)]. Eagle namespaces
+    // packages per <library>: two embedded libraries may each define a package
+    // named e.g. "0805" with different pads. Keying by bare package name merged
+    // them, so an element resolved to the concatenation of both libraries' pads
+    // and was emitted with doubled/mixed pins.
+    let mut packages: HashMap<(String, String), Pads> = HashMap::new();
+    let mut cur_library = String::new();
+    let mut cur_package: Option<String> = None;
+    // elements
     let mut elements: Vec<El> = Vec::new();
     // signals
     let mut signals: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -67,7 +68,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 let attrs = xml_attrs;
                 match e.name().as_ref() {
                     b"eagle" => saw_eagle_root = true,
@@ -105,7 +106,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                         if let Some(bad) = non_finite_coord(&a) {
                             return Err(corrupt_coord("element", &bad.0, &bad.1));
                         }
-                        let rot = a.get("rot").map(String::as_str).unwrap_or("R0");
+                        let rot = a.get("rot").map_or("R0", String::as_str);
                         elements.push(El {
                             name: a.get("name").cloned().unwrap_or_default(),
                             library: a.get("library").cloned().unwrap_or_default(),
@@ -128,8 +129,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             // the KiCad readers which thread the analogous field.
                             dnp: a
                                 .get("populate")
-                                .map(|p| p.eq_ignore_ascii_case("no"))
-                                .unwrap_or(false),
+                                .is_some_and(|p| p.eq_ignore_ascii_case("no")),
                         });
                     }
                     b"signal" => {
@@ -167,15 +167,15 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
 
     let nets: Vec<Net> = signals
         .iter()
-        .enumerate()
-        .map(|(i, (name, _))| Net::new(i as i64 + 1, name.clone()))
+        .zip(1_i64..)
+        .map(|((name, _), id)| Net::new(id, name.clone()))
         .collect();
 
     // (element, pad) -> net id
     let mut pad_net: HashMap<(String, String), i64> = HashMap::new();
-    for (i, (_, refs)) in signals.iter().enumerate() {
+    for ((_, refs), id) in signals.iter().zip(1_i64..) {
         for (el, pad) in refs {
-            pad_net.insert((el.clone(), pad.clone()), i as i64 + 1);
+            pad_net.insert((el.clone(), pad.clone()), id);
         }
     }
 
@@ -211,7 +211,10 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                         .map(|(pname, dx, dy)| {
                             let dx = if el.mirrored { -dx } else { *dx };
                             // Eagle rotation is counter-clockwise, y up.
-                            let abs = (el.x + dx * cos - dy * sin, el.y + dx * sin + dy * cos);
+                            let abs = (
+                                dx.mul_add(cos, el.x) - dy * sin,
+                                dx.mul_add(sin, el.y) + dy * cos,
+                            );
                             Pin {
                                 number: pname.clone(),
                                 net: pad_net.get(&(el.name.clone(), pname.clone())).copied(),
@@ -308,6 +311,7 @@ fn corrupt_coord(tag: &str, attr: &str, raw: &str) -> ExtractError {
 /// accepted-format list at someone holding a board hauksbee reads happily
 /// after a re-save. The `.brd` and `.sch` forms share the header, so the
 /// message must not claim to know which of the two this is.
+#[must_use]
 pub fn looks_like_eagle_binary(bytes: &[u8]) -> bool {
     matches!(bytes, [0x10, 0x00 | 0x80, _, 0x00, ..])
 }
@@ -321,6 +325,7 @@ pub fn looks_like_eagle_binary(bytes: &[u8]) -> bool {
 /// asserts it would be trading one wrong instruction for another. The
 /// requirement is stated instead of the vendor, so the sentence stays true as
 /// the tooling moves.
+#[must_use]
 pub fn eagle_binary_message() -> String {
     format!(
         "this is an Eagle drawing in the pre-Eagle-6 BINARY format, which hauksbee does \

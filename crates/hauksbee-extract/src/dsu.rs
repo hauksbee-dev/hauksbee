@@ -4,7 +4,7 @@
 //! reads the final partition back with `find`, so the merge rules live in the
 //! readers and the bookkeeping lives in one place.
 
-pub(crate) struct Dsu {
+pub struct Dsu {
     parent: Vec<usize>,
     size: Vec<usize>,
 }
@@ -12,7 +12,7 @@ pub(crate) struct Dsu {
 impl Dsu {
     /// `n` singleton sets.
     pub(crate) fn new(n: usize) -> Self {
-        Dsu {
+        Self {
             parent: (0..n).collect(),
             size: vec![1; n],
         }

@@ -105,8 +105,7 @@ fn forbidden_path_key(spec_fragment: &str) -> Option<&'static str> {
             return Some(hit);
         }
     }
-    spec_fragment
-        .parse::<toml::Value>()
+    toml::from_str::<toml::Value>(spec_fragment)
         .ok()
         .as_ref()
         .and_then(toml_path_key)
@@ -217,7 +216,7 @@ fn as_number(v: &toml::Value) -> Option<f64> {
 /// not invent a worse one. The path-key checks in `forbidden_path_key` are a
 /// separate gate and still apply regardless.
 fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
-    let Ok(value) = spec_fragment.parse::<toml::Value>() else {
+    let Ok(value) = toml::from_str::<toml::Value>(spec_fragment) else {
         return Ok(());
     };
     let Some(table) = value.as_table() else {

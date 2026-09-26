@@ -45,6 +45,7 @@ const SNAP: f64 = 1000.0; // points per mm → 0.001 mm resolution
 /// A point snapped to the comparison grid: integer micrometres.
 type Pt = (i64, i64);
 
+#[allow(clippy::cast_possible_truncation, reason = "um coords fit i64")]
 fn snap(x: f64, y: f64) -> Pt {
     ((x * SNAP).round() as i64, (y * SNAP).round() as i64)
 }
@@ -61,7 +62,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let doc = forge_sexpr::parse(text)?;
     let mut builder = NetlistBuilder::new();
     let root = builder.add_sheet_doc(&doc, "/", None, None)?;
-    builder.finish(root)
+    Ok(builder.finish(root))
 }
 
 /// Extract from a `.kicad_sch` on disk, recursing into its hierarchy. This is
@@ -88,23 +89,24 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     let doc = forge_sexpr::parse(&text)?;
 
     if !is_root_sheet(&doc) {
-        return match find_hierarchy_root(path) {
-            Some(root_path) => extract_root_from_path(&root_path),
-            None => Err(ExtractError::OrphanSubSheet {
-                sheet: path.display().to_string(),
-                needs: match path.parent() {
-                    Some(dir) => format!(
+        let Some(root_path) = find_hierarchy_root(path) else {
+            let needs = path.parent().map_or_else(
+                || "the root schematic of its project".to_string(),
+                |dir| {
+                    format!(
                         "the root schematic of its project. No .kicad_sch in {} \
                          carries a (sheet_instances) block and reaches this file \
                          through its (sheet ... Sheetfile) references. Point \
                          hauksbee at the root schematic, or supply the whole \
                          project directory.",
                         dir.display()
-                    ),
-                    None => "the root schematic of its project".to_string(),
+                    )
                 },
-            }),
+            );
+            let sheet = path.display().to_string();
+            return Err(ExtractError::OrphanSubSheet { sheet, needs });
         };
+        return extract_root_from_path(&root_path);
     }
 
     extract_root_from_path(path)
@@ -128,7 +130,7 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .ancestor_sheets
         .push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
-    builder.finish(root)
+    Ok(builder.finish(root))
 }
 
 /// Whether a parsed schematic is the ROOT of its hierarchy.
@@ -138,6 +140,7 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
 /// board corpus carries it and no sub-sheet does, across KiCad 6 through 10.
 /// A flat single-sheet design is its own root and carries it too, so this does
 /// not mistake a one-file project for a fragment.
+#[must_use]
 pub fn is_root_sheet(doc: &Document) -> bool {
     doc.root()
         .is_some_and(|r| r.find_all("sheet_instances").next().is_some())
@@ -262,7 +265,7 @@ enum NameScope {
 enum AnchorKind {
     /// Global label (and a global bus label's promoted members).
     Global,
-    /// Power symbol pin, or a hidden power_in pin's implicit connection.
+    /// Power symbol pin, or a hidden `power_in` pin's implicit connection.
     Power,
     /// Local label.
     Local,
@@ -272,14 +275,14 @@ enum AnchorKind {
 
 impl AnchorKind {
     /// Naming precedence, highest wins. Mirrors KiCad's driver priority
-    /// (`connection_graph.h`): GLOBAL > GLOBAL_POWER_PIN > LOCAL_LABEL >
-    /// HIER_LABEL. Ties still break to the lexicographically smallest name.
-    fn prio(self) -> u8 {
+    /// (`connection_graph.h`): GLOBAL > `GLOBAL_POWER_PIN` > `LOCAL_LABEL` >
+    /// `HIER_LABEL`. Ties still break to the lexicographically smallest name.
+    const fn prio(self) -> u8 {
         match self {
-            AnchorKind::Global => 4,
-            AnchorKind::Power => 3,
-            AnchorKind::Local => 2,
-            AnchorKind::Hier => 1,
+            Self::Global => 4,
+            Self::Power => 3,
+            Self::Local => 2,
+            Self::Hier => 1,
         }
     }
 }
@@ -376,7 +379,7 @@ struct BusBoundary {
 
 impl NetlistBuilder {
     fn new() -> Self {
-        NetlistBuilder {
+        Self {
             uf: Dsu::new(0),
             components: Vec::new(),
             pin_sites: Vec::new(),
@@ -421,6 +424,7 @@ impl NetlistBuilder {
     /// their parent-side union-find nodes.
     ///
     /// Returns the root board name (only meaningful for the top sheet).
+    #[allow(clippy::too_many_lines, reason = "one pass over a sheet's items")]
     fn add_sheet_doc(
         &mut self,
         doc: &Document,
@@ -447,10 +451,8 @@ impl NetlistBuilder {
         // "/", so seed the real path from this file's uuid; sub-sheets already
         // arrive with a fully-qualified path from their parent.
         let inst_path: String = if inst_path == "/" {
-            match root.find_value("uuid") {
-                Some(u) => format!("/{u}"),
-                None => "/".to_string(),
-            }
+            root.find_value("uuid")
+                .map_or_else(|| "/".to_string(), |u| format!("/{u}"))
         } else {
             inst_path.to_string()
         };
@@ -647,16 +649,15 @@ impl NetlistBuilder {
         // instance must contribute *only* its own unit's pins plus the unit-0
         // pins common to every gate (power pins usually live there). All
         // instances sharing a reference are merged into one component later.
-        let inst_unit: u32 = sym.find_i64("unit").unwrap_or(1).max(0) as u32;
+        let inst_unit = u32::try_from(sym.find_i64("unit").unwrap_or(1).max(0)).unwrap_or(u32::MAX);
         // Likewise a De Morgan part draws each unit in two body styles, and
         // only the placed style's pins exist: `(convert N)` through KiCad 8,
         // `(body_style N)` from KiCad 9. The alternate style can carry other
         // pin numbers at the same spots, so admitting it adds phantom pins.
-        let inst_style = sym
+        let style = sym
             .find_i64("convert")
-            .or_else(|| sym.find_i64("body_style"))
-            .unwrap_or(1)
-            .max(0) as u32;
+            .or_else(|| sym.find_i64("body_style"));
+        let inst_style = u32::try_from(style.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
         // Per-instance reference. When a sheet is instantiated more than once
         // (reused hierarchy), each placement gets its own designator, recorded
         // in `(instances (project .. (path "/uuid/uuid" (reference "R201"))))`.
@@ -677,7 +678,7 @@ impl NetlistBuilder {
         // power symbols, so the reference test is what catches them. The
         // power_in/power_out distinction (handled per pin below) then decides
         // whether it actually *names* the net or merely flags it.
-        let is_power = def.map(|d| d.is_power).unwrap_or(false) || reference.starts_with("#PWR");
+        let is_power = def.is_some_and(|d| d.is_power) || reference.starts_with("#PWR");
 
         // Power symbols and other "#"-referenced symbols (PWR_FLAG, mounting
         // holes are real refs) are not simulation components in the usual
@@ -707,6 +708,7 @@ impl NetlistBuilder {
                 let abs = place_pin(lp.at, (sx, sy, srot), mirror.as_deref());
                 let node = self.node_at(sheet, abs);
                 let pin_idx = pins.len();
+                #[allow(clippy::cast_precision_loss, reason = "um coords fit f64 exactly")]
                 pins.push(Pin {
                     number: lp.number.clone(),
                     net: None,
@@ -763,8 +765,7 @@ impl NetlistBuilder {
         // absent and checks reasoning about populated parts must skip it.
         let dnp = sym
             .find_value("dnp")
-            .map(|v| v.eq_ignore_ascii_case("yes") || v == "true")
-            .unwrap_or(false);
+            .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v == "true");
 
         self.components.push(Component {
             reference,
@@ -814,59 +815,56 @@ impl NetlistBuilder {
             // must not, or `D[0..7]` would become one giant net). We record the
             // bus label's members and position so a sheet pin sitting on this
             // bus under a different name can map its members positionally.
-            match self.expand_bus_on_sheet(sheet, &name) {
-                Some(members) => {
-                    // A GLOBAL bus label additionally globalizes every member,
-                    // exactly as a plain global label globalizes its one net:
-                    // `D[0..7]` as a global label means each of D0..D7 connects
-                    // across the whole design. Each member gets a fresh node
-                    // anchored twice under the member's name, Local scope, so
-                    // it joins the member's own labelled net on *this* sheet,
-                    // and Global scope, so same-named members unify design-wide
-                    // through `global_by_name`. A local bus label must NOT do
-                    // this (its members are sheet-local; globalizing them would
-                    // short same-named members across unrelated sheets).
-                    if scope == NameScope::Global {
-                        for m in &members {
-                            let mnode = self.uf.make();
-                            self.push_anchor(
-                                sheet,
-                                NamedAnchor {
-                                    name: m.clone(),
-                                    scope: NameScope::Local,
-                                    kind: AnchorKind::Global,
-                                    node: mnode,
-                                },
-                            );
-                            self.push_anchor(
-                                sheet,
-                                NamedAnchor {
-                                    name: m.clone(),
-                                    scope: NameScope::Global,
-                                    kind: AnchorKind::Global,
-                                    node: mnode,
-                                },
-                            );
-                        }
+            if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
+                // A GLOBAL bus label additionally globalizes every member,
+                // exactly as a plain global label globalizes its one net:
+                // `D[0..7]` as a global label means each of D0..D7 connects
+                // across the whole design. Each member gets a fresh node
+                // anchored twice under the member's name, Local scope, so
+                // it joins the member's own labelled net on *this* sheet,
+                // and Global scope, so same-named members unify design-wide
+                // through `global_by_name`. A local bus label must NOT do
+                // this (its members are sheet-local; globalizing them would
+                // short same-named members across unrelated sheets).
+                if scope == NameScope::Global {
+                    for m in &members {
+                        let mnode = self.uf.make();
+                        self.push_anchor(
+                            sheet,
+                            NamedAnchor {
+                                name: m.clone(),
+                                scope: NameScope::Local,
+                                kind: AnchorKind::Global,
+                                node: mnode,
+                            },
+                        );
+                        self.push_anchor(
+                            sheet,
+                            NamedAnchor {
+                                name: m.clone(),
+                                scope: NameScope::Global,
+                                kind: AnchorKind::Global,
+                                node: mnode,
+                            },
+                        );
                     }
-                    self.bus_labels.push((sheet, at, members));
                 }
-                None => {
-                    // A plain label's naming rank follows its scope directly.
-                    let kind = match scope {
-                        NameScope::Global => AnchorKind::Global,
-                        NameScope::Local => AnchorKind::Local,
-                    };
-                    self.push_anchor(
-                        sheet,
-                        NamedAnchor {
-                            name,
-                            scope,
-                            kind,
-                            node,
-                        },
-                    );
-                }
+                self.bus_labels.push((sheet, at, members));
+            } else {
+                // A plain label's naming rank follows its scope directly.
+                let kind = match scope {
+                    NameScope::Global => AnchorKind::Global,
+                    NameScope::Local => AnchorKind::Local,
+                };
+                self.push_anchor(
+                    sheet,
+                    NamedAnchor {
+                        name,
+                        scope,
+                        kind,
+                        node,
+                    },
+                );
             }
         }
     }
@@ -1045,6 +1043,7 @@ impl NetlistBuilder {
     /// any. Bus segments on the sheet are walked from `at` to discover the
     /// subgraph; a bus label whose coordinate lies on a reached segment names
     /// the bus.
+    #[allow(clippy::tuple_array_conversions, reason = "a, b also used apart")]
     fn bus_label_on_same_bus(&self, sheet: SheetId, at: Pt) -> Option<Vec<String>> {
         // Collect this sheet's bus segments.
         let segs: Vec<(Pt, Pt)> = self
@@ -1105,7 +1104,8 @@ impl NetlistBuilder {
 
     /// Resolve the union-find into nets, name them KiCad-style, and assign net
     /// ids to component pins.
-    fn finish(mut self, name: String) -> Result<ExtractedBoard, ExtractError> {
+    #[allow(clippy::too_many_lines, reason = "sequential netlist phases")]
+    fn finish(mut self, name: String) -> ExtractedBoard {
         // 0. Mid-span incidence. KiCad joins anything lying *on* a wire (or
         //    bus) segment, not only at its endpoints: a net label or a pin
         //    placed mid-span on a wire is electrically on that wire. Almost
@@ -1209,7 +1209,7 @@ impl NetlistBuilder {
                         *e = (prio, a.name.clone());
                     }
                 })
-                .or_insert((prio, a.name.clone()));
+                .or_insert_with(|| (prio, a.name.clone()));
         }
 
         // Group pins by root.
@@ -1351,11 +1351,11 @@ impl NetlistBuilder {
         }
         nets.retain(|n| used.contains(&n.id));
 
-        Ok(ExtractedBoard {
+        ExtractedBoard {
             name,
             nets,
             components: self.components,
-        })
+        }
     }
 }
 
@@ -1448,19 +1448,18 @@ fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) 
             let prior = (!p.number.is_empty())
                 .then(|| seen.get(&p.number).copied())
                 .flatten();
-            match prior {
-                Some(idx) => match (deduped[idx].net, p.net) {
+            if let Some(idx) = prior {
+                match (deduped[idx].net, p.net) {
                     (None, other) => deduped[idx].net = other,
                     // Same physical pin on two nets: bridge them, as above.
                     (Some(a), Some(b)) if a != b => bridged.push((a, b)),
                     _ => {}
-                },
-                None => {
-                    if !p.number.is_empty() {
-                        seen.insert(p.number.clone(), deduped.len());
-                    }
-                    deduped.push(p);
                 }
+            } else {
+                if !p.number.is_empty() {
+                    seen.insert(p.number.clone(), deduped.len());
+                }
+                deduped.push(p);
             }
         }
         c.pins = deduped;
@@ -1493,13 +1492,13 @@ struct LibDef {
     is_power: bool,
 }
 
-/// All lib symbol definitions embedded in one schematic, indexed by lib_id.
+/// All lib symbol definitions embedded in one schematic, indexed by `lib_id`.
 struct LibSymbols {
     defs: HashMap<String, LibDef>,
 }
 
 impl LibSymbols {
-    fn parse(root: &List) -> LibSymbols {
+    fn parse(root: &List) -> Self {
         let mut defs = HashMap::new();
         if let Some(lib) = root.find("lib_symbols") {
             for sym in lib.find_all("symbol") {
@@ -1528,7 +1527,7 @@ impl LibSymbols {
                 defs.insert(lib_id, LibDef { pins, is_power });
             }
         }
-        LibSymbols { defs }
+        Self { defs }
     }
 
     fn get(&self, lib_id: &str) -> Option<&LibDef> {
@@ -1617,8 +1616,8 @@ fn place_pin(local: (f64, f64, f64), inst: (f64, f64, f64), mirror: Option<&str>
     let (lx, ly) = (local.0, -local.1);
     let theta = inst.2.to_radians();
     let (s, c) = theta.sin_cos();
-    let mut rx = lx * c + ly * s;
-    let mut ry = -lx * s + ly * c;
+    let mut rx = lx.mul_add(c, ly * s);
+    let mut ry = (-lx).mul_add(s, ly * c);
     match mirror {
         Some("x") => ry = -ry,
         Some("y") => rx = -rx,
@@ -1636,7 +1635,7 @@ fn at_xy(list: &List) -> Option<Pt> {
 /// True if `p` lies strictly between `a` and `b` on the segment a–b (collinear,
 /// excluding the endpoints). Coordinates are integer micrometres, so the cross
 /// product is exact.
-fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
+const fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
     let cross =
         (b.0 - a.0) as i128 * (p.1 - a.1) as i128 - (b.1 - a.1) as i128 * (p.0 - a.0) as i128;
     if cross != 0 {

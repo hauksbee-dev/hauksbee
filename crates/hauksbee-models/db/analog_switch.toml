@@ -944,26 +944,34 @@ max_voltage_v       = 6.0    # VIN and VEN
 #
 # ONLY HALF OF THIS PART IS MODELLED, AND THE HALF IS NAMED. It is a two-throw
 # mux: EN low selects IN1 through a 250 mOhm NMOS, EN high selects IN2 through a
-# 1.3 Ohm PMOS. `bind_analog_switch`'s two-throw path needs a VCC pin to
-# reference its complementary thresholds against, and this part HAS no VCC pin
-# (it powers itself from whichever input is live), so it binds through the
-# single-throw path instead: ONE VSwitch, closed when the control pin is high.
+# 1.3 Ohm PMOS. The analog_switch kind cannot stamp both throws of this part:
+#   - its two-throw (SPDT) path needs a VCC pin to reference the inverted leg's
+#     threshold against, and this part HAS no VCC pin (it powers itself from
+#     whichever input is live);
+#   - its multi-gate path gives each switch its own `ctrl_<n>` pad, closing on a
+#     HIGH, and this part has one EN pad for both throws.
+# So it binds through the single-throw path: ONE VSwitch. That path closes on a
+# LOW control when its second terminal carries the `s0` role, so the throw it
+# stamps is the MAIN one, IN1, the higher-rated path (700 mA absolute maximum,
+# 500 mA recommended, against IN2's 140 mA and 100 mA):
+#   MODELLED:     IN1 -> OUT, 250 mOhm, closed when EN is below 0.8 V.
+#   NOT MODELLED: IN2 -> OUT, 1.3 Ohm. Pad 3 carries the role `in2` and no
+#                 device. A board running from IN2 (EN high) sees its OUT net
+#                 unfed. IN2's on-resistance and current ratings are kept as
+#                 characteristic records under [models.source] below.
+# On the margay datalogger IN1 is the switched battery and IN2 the USB rail, so
+# the battery-powered case simulates and the USB-powered case does not. That is a
+# real, named gap; closing it needs a two-throw option on the analog switch
+# binder that does not need a VCC pin.
 #
-# That decides which throw the pin map may name `s0`. It must be IN2, the throw
-# the real part selects when EN is HIGH, because the single-throw path closes on a
-# high control and nothing here can invert it. Naming IN1 as `s0` would have given
-# a switch that conducts from the battery exactly when the board has switched to
-# USB: a fabricated current path, and the wrong one. So:
-#   MODELLED:     IN2 -> OUT, 1.3 Ohm, closed when EN is above 2 V.
-#   NOT MODELLED: IN1 -> OUT, 250 mOhm. Pad 5 carries the role `in1` and no
-#                 device. A board running from IN1 sees its OUT net unfed.
-# On the margay datalogger IN2 is the USB rail and IN1 the switched battery, so
-# the USB-powered case simulates and the battery-powered case does not. That is a
-# real, named gap; the fix is an inverting/complementary option on the analog
-# switch binder, not a different pin map here.
+# `ron` is therefore the IN1 (NMOS) path's 250 mOhm typ at TJ = 25 C.
 #
-# `ron` is therefore the IN2 (PMOS) path's 1.3 Ohm typ, NOT the headline
-# 250 mOhm, which belongs to the throw this entry does not stamp.
+# `vth` is the EN VIL max, 0.8 V: the edge of the range over which the datasheet
+# guarantees IN1 is selected. The single-throw path closes the LOW-selected
+# throw once EN is 0.1 V below vth and opens it 0.1 V above, so the model
+# conducts from IN1 only where the part is guaranteed to. Between 0.9 V and the
+# 2.0 V VIH min the real part is in neither guaranteed state; the model calls
+# that open.
 #
 # `roff` HAS NO DATASHEET BASIS AT ALL. The sheet gives an enable-pin input
 # current (+/-0.5 uA max) and quiescent supply currents and no output leakage, so
@@ -976,7 +984,7 @@ max_voltage_v       = 6.0    # VIN and VEN
 [[models]]
 id = "tps2104"
 kind = "analog_switch"
-description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN2/PMOS throw is stamped)"
+description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN1/NMOS main throw is stamped)"
 
 [models.match]
 # The TPS2105 is the same silicon with the OPPOSITE enable polarity, so it must
@@ -995,10 +1003,10 @@ description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN2/PMOS throw i
 #   OUT           4                7, 8
 #   IN1           5                  5
 #   NC            -                4, 6
-# So a SOIC-8 board bound to this map got `ctrl` on IN2 (a supply rail), `in_out_b`
-# on EN and `in_out_a` on a no-connect, with OUT unmapped entirely: a 1.3 Ohm path
-# stamped between the enable signal and a dead pad, gated by a rail, and carrying
-# this entry's confident `warning` describing a throw that is not there. The
+# So a SOIC-8 board bound to this map would get `ctrl` on IN2 (a supply rail), `s0`
+# on EN and `com` on a no-connect, with OUT unmapped entirely: a switch stamped
+# between the enable signal and a dead pad, gated by a rail, and carrying this
+# entry's confident `warning` describing a throw that is not there. The
 # single-throw binder's open-terminal guard cannot save it, because both pads it
 # wants do resolve to nets.
 #
@@ -1014,19 +1022,20 @@ description = "TPS2104 dual-input power mux, SOT-23-5 (only the IN2/PMOS throw i
 value_re = "(?i)^TPS2104(DBV[A-Z0-9-]*)?$"
 
 [models.params]
-ron  = 1.3       # IN2-OUT (PMOS) typ at TJ = 25 C, VI = 5 V. At TJ = 125 C the
-                 # same row is 1.5 typ / 2.4 MAX, so 2.4 is a maximum and not the
-                 # hot typical. The IN1-OUT NMOS path is 250 mOhm and is not stamped.
+ron  = 0.25      # IN1-OUT (NMOS) rDS(on) typ at TJ = 25 C, VI(IN1) = VI(IN2) = 5 V,
+                 # IO = rated current: SLVS235A electrical characteristics, power
+                 # switch. At TJ = 125 C the same row is 350 typ / 435 mOhm max.
 roff = 1.0e9     # NO DATASHEET BASIS: the sheet publishes no output leakage. This
                  # is the engine's ideal-open value. See the note above.
-vth  = 2.0       # EN VIH min, 2.7 V <= VI <= 5.5 V (VIL max 0.8 V)
+vth  = 0.8       # EN VIL max, 2.7 V <= VI(INx) <= 5.5 V: the guaranteed
+                 # IN1-selected end (VIH min is 2.0 V). See the note above.
 # The package assumption rides along with the throw disclosure below, because the
 # bare spelling this entry accepts does not say which of the two pinouts it is.
 # See the PCA9306 note earlier in this file for why this is a param and not a
 # comment.
-warning = """only the IN2 throw is modelled (IN2<->OUT, 1.3 Ohm, closed on a HIGH \
-EN); the IN1 main-input path is not stamped, so with EN low this model leaves OUT \
-open instead of powering it from IN1, and it cannot answer which source is carrying \
+warning = """only the IN1 throw is modelled (IN1<->OUT, 250 mOhm, closed on a LOW \
+EN); the IN2 auxiliary path is not stamped, so with EN high this model leaves OUT \
+open instead of powering it from IN2, and it cannot answer which source is carrying \
 the load. A value string with no package code is taken to be the SOT-23-5 (DBV) \
 part; the SOIC-8 has a different pinout and does not bind here"""
 
@@ -1036,25 +1045,59 @@ part; the SOIC-8 has a different pinout and does not bind here"""
 # on the main rail, pad 5 on the switched battery rail.
 "1" = "ctrl"      # EN. Active LOW for IN1 / active HIGH for IN2 on this part.
 "2" = "vss"       # GND
-"3" = "in_out_b"  # IN2, the auxiliary input: the throw selected on a HIGH control.
-                  # `s0` would have inverted it; see the note at the head of this
-                  # block.
-"4" = "in_out_a"  # OUT
-"5" = "in1"       # IN1, the main input. Deliberately NOT a switch-terminal role:
-                  # the two-throw path cannot fire without a VCC pin, and a name
-                  # the binder recognises as a throw would be a claim this entry
-                  # does not make.
+"3" = "in2"       # IN2, the auxiliary input. Deliberately NOT a switch-terminal
+                  # role: this entry stamps no IN2 device (see the note above).
+"4" = "com"       # OUT, the common terminal of the two throws
+"5" = "s0"        # IN1, the main input: the throw selected on a LOW control,
+                  # which is what the `s0` role means to the single-throw path.
 
 [models.ratings]
-# `max_current_a` is the IN2 path's rating, because IN2 is the path this entry
-# stamps. The datasheet gives two figures per path and they are different
-# questions: the absolute-maximum continuous output current (the destruction
-# threshold, 700 mA on IN1 and 140 mA on IN2) and the recommended continuous
-# operating current (500 mA and 100 mA). A stress check asks the first, so 140 mA
-# is what is carried, and the datasheet's own footnote adds that IN2 will deliver
-# 220 mA at the cost of a larger drop.
-max_current_a = 0.14   # IO(IN2) absolute-maximum continuous; recommended is 100 mA
-max_voltage_v = 6.0    # IN1 / IN2 / EN / OUT, -0.3 to 6 V
+# Ratings of the IN1 path, the one this entry stamps. IN2's are in the
+# characteristic records below.
+max_current_a = 0.5    # IO(IN1) recommended continuous (absolute maximum 700 mA):
+                       # SLVS235A recommended operating conditions
+max_voltage_v = 6.0    # IN1 / IN2 / EN / OUT, -0.3 to 6 V absolute maximum
 max_power_w = 0.309    # DBV dissipation rating at TA < 25 C, derating
                        # 3.1 mW/C above 25 C (170 mW at 70 C, 123 mW at 85 C)
+theta_ja_c_per_w = 322.6  # DERIVED: 1 / (3.1 mW/C), the DBV derating factor in
+                          # the same dissipation rating table (the D package's
+                          # 5.7 mW/C does not apply: this entry refuses it)
 max_junction_temp_c = 125.0
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps2104.pdf"
+title = "TI TPS2104, TPS2105 VAUX Power-Distribution Switches, SLVS235A, September 1999, revised April 2000"
+locator = "Absolute maximum ratings; dissipation rating table; recommended operating conditions; electrical characteristics, power switch and enable input"
+
+# The IN2 throw this entry does not stamp, as printed.
+[[models.source.characteristic]]
+parameter = "rDS(on) IN2-OUT"
+typ = 1.3
+unit = "ohm"
+conditions = "TJ = 25 °C, VI(IN1) = VI(IN2) = 5 V, IO = rated current"
+basis = "SLVS235A electrical characteristics, power switch, typ column"
+
+[[models.source.characteristic]]
+parameter = "rDS(on) IN2-OUT hot"
+typ = 1.5
+max = 2.4
+unit = "ohm"
+conditions = "TJ = 125 °C, VI(IN1) = VI(IN2) = 5 V, IO = rated current"
+basis = "SLVS235A electrical characteristics, power switch, typ and max columns"
+
+[[models.source.characteristic]]
+parameter = "IO(IN2) continuous output current, recommended"
+max = 0.1
+unit = "A"
+conditions = "recommended operating conditions; footnote: up to 220 mA with a larger drop"
+basis = "SLVS235A recommended operating conditions, max column"
+
+[[models.source.characteristic]]
+parameter = "IO(IN2) continuous output current, absolute"
+max = 0.14
+unit = "A"
+conditions = "absolute maximum ratings"
+basis = "SLVS235A absolute maximum ratings, 140 mA max"

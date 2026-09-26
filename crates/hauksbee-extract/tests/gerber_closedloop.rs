@@ -59,8 +59,7 @@ fn kicad_cli_version(cli: &Path) -> String {
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+        .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string())
 }
 
 /// Locate a usable `kicad-cli` (PATH or the macOS app bundle).
@@ -125,6 +124,7 @@ fn export_fab(cli: &Path, pcb: &Path, tag: &str) -> Option<PathBuf> {
 /// pads 0.001 mm apart fail to match whenever they straddle a cell boundary,
 /// so lookups scan the 3x3 neighbourhood and accept the nearest hit within
 /// `PAD_MATCH_TOL_MM`.
+#[allow(clippy::cast_possible_truncation, reason = "rounded board coordinates")]
 fn pad_key(x: f64, y: f64) -> (i64, i64) {
     ((x * 10.0).round() as i64, (y * 10.0).round() as i64)
 }
@@ -187,7 +187,7 @@ fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
             for dy in -1..=1 {
                 let cell = (nk.0 + dx, nk.1 + dy);
                 for &(rx, ry) in recon_cells.get(&cell).into_iter().flatten() {
-                    let d = ((rx - nx).powi(2) + (ry - ny).powi(2)).sqrt();
+                    let d = (rx - nx).hypot(ry - ny);
                     if d <= PAD_MATCH_TOL_MM && best.as_ref().is_none_or(|&(_, bd)| d < bd) {
                         best = Some((pad_key(rx, ry), d));
                     }
@@ -224,7 +224,7 @@ fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
     for c in &native.components {
         let nn = c.pins.iter().filter(|p| p.position.is_some()).count();
         if let Some(&rn) = recon_by_ref.get(c.reference.as_str()) {
-            if nn > 0 && rn > 0 && (nn as i64 - rn as i64).abs() <= 1 {
+            if nn > 0 && rn > 0 && nn.abs_diff(rn) <= 1 {
                 components_matched += 1;
             }
         }
@@ -261,7 +261,7 @@ fn run_board_any(rels: &[&str], tag: &str) -> Option<Agreement> {
         a.native_components,
         a.pads_located,
         a.native_pads,
-        100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64,
+        pct(&a),
         a.pad_pairs_agree,
         a.pad_pairs,
     );
@@ -294,7 +294,7 @@ fn run_repo_board(rel: &str, tag: &str) -> Option<Agreement> {
         a.native_components,
         a.pads_located,
         a.native_pads,
-        100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64,
+        pct(&a),
     );
     let _ = std::fs::remove_dir_all(&dir);
     Some(a)
@@ -365,12 +365,11 @@ fn shipped_boards_survive_gerbers() {
         // evidence. HAUKSBEE_REQUIRE_KICAD=1 makes a missing kicad-cli a hard
         // failure, and scripts/make-public.sh sets it, so the release gate
         // exercises the claim even though a per-PR runner does not.
-        if std::env::var_os("HAUKSBEE_REQUIRE_KICAD").is_some() {
-            panic!(
-                "HAUKSBEE_REQUIRE_KICAD is set but kicad-cli was not found. Gerber \
-                 reverse extraction is a headline claim and this run cannot test it."
-            );
-        }
+        assert!(
+            std::env::var_os("HAUKSBEE_REQUIRE_KICAD").is_none(),
+            "HAUKSBEE_REQUIRE_KICAD is set but kicad-cli was not found. Gerber \
+             reverse extraction is a headline claim and this run cannot test it."
+        );
         eprintln!(
             "skipping shipped-board gerber sweep: no kicad-cli, so THIS RUN HAS NOT \
              tested gerber reverse extraction. Set HAUKSBEE_REQUIRE_KICAD=1 to make \
@@ -414,6 +413,7 @@ fn shipped_boards_survive_gerbers() {
     }
 }
 
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn pct(a: &Agreement) -> f64 {
     100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64
 }
@@ -436,9 +436,7 @@ fn rp2040_minimal_exact_nets() {
         ],
         "rp2040_minimal",
     ) else {
-        if crate::support::require_corpus() {
-            panic!("corpus/kicad-cli required but couldn't round-trip rp2040_minimal");
-        }
+        assert!(!crate::support::require_corpus(), "corpus/kicad-cli required but couldn't round-trip rp2040_minimal");
         eprintln!("skipping rp2040_minimal (no corpus/kicad-cli)");
         return;
     };
@@ -465,6 +463,7 @@ fn rp2040_minimal_exact_nets() {
 /// so a slot or castellation read wrongly shows up as a partition breach against
 /// ground truth rather than only against a fixture we wrote ourselves.
 #[test]
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn advanced_geometry_boards_match_kicad() {
     // (paths, tag, partition floor %, located-pad floor, net count must be exact)
     let boards: [(&[&str], &str, f64, f64, bool); 2] = [
@@ -538,7 +537,7 @@ fn advanced_geometry_boards_match_kicad() {
 /// Every board listed in `docs/ingest/GERBER.md`'s accuracy table is gated here, so
 /// the documented numbers are reproducible (run `HAUKSBEE_REQUIRE_CORPUS=1
 /// cargo test --test gerber_closedloop -- --nocapture`). KiCad-10-format demos
-/// (pic_programmer / stickhub) are skipped, not failed: the installed CLI 9.x
+/// (`pic_programmer` / stickhub) are skipped, not failed: the installed CLI 9.x
 /// cannot load them to make ground-truth gerbers.
 ///
 /// Each board gates two things, because net-partition alone is computed only
@@ -546,6 +545,7 @@ fn advanced_geometry_boards_match_kicad() {
 /// pads: `part_floor` is the partition-agreement floor over located pads, and
 /// `loc_floor` is the fraction of native pads the reconstruction must locate.
 #[test]
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn corpus_sweep_partition_floor() {
     // (candidate paths, tag, partition-floor %, located-pad floor)
     //
@@ -603,9 +603,7 @@ fn corpus_sweep_partition_floor() {
     ];
     // Half of this loop is kicad-cli's output, so a floor breach has to say
     // which version produced it.
-    let running = kicad_cli()
-        .map(|c| kicad_cli_version(&c))
-        .unwrap_or_else(|| "no kicad-cli".to_string());
+    let running = kicad_cli().map_or_else(|| "no kicad-cli".to_string(), |c| kicad_cli_version(&c));
     eprintln!(
         "closed-loop floors calibrated against kicad-cli {CALIBRATED_KICAD_CLI}; running {running}"
     );

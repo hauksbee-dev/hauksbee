@@ -53,8 +53,8 @@ fn lint_with(
 
 #[test]
 fn resistor_designator_on_capacitor_footprint_is_flagged() {
-    let comps = r#"
-    (comp (ref R1) (value 4k7) (footprint Capacitor_SMD:C_0603))"#;
+    let comps = r"
+    (comp (ref R1) (value 4k7) (footprint Capacitor_SMD:C_0603))";
     let r = lint(comps, "");
     assert_eq!(count(&r, LintCheck::DesignatorFootprintMismatch), 1);
     let f = r
@@ -67,8 +67,8 @@ fn resistor_designator_on_capacitor_footprint_is_flagged() {
 
 #[test]
 fn impossible_capacitance_for_0603_is_flagged() {
-    let comps = r#"
-    (comp (ref C6) (value 220uF) (footprint Capacitor_SMD:C_0603))"#;
+    let comps = r"
+    (comp (ref C6) (value 220uF) (footprint Capacitor_SMD:C_0603))";
     let r = lint(comps, "");
     assert_eq!(count(&r, LintCheck::ValuePackageSanity), 1);
     let f = r.of_check(LintCheck::ValuePackageSanity).next().unwrap();
@@ -81,9 +81,9 @@ fn capacitor_value_with_voltage_rating_or_package_suffix_is_not_misparsed() {
     // Collecting every digit in the string reads "10uF25V" as 1025 uF and
     // "10u_0402" as 100402 uF, both falsely tripping the 0402 ceiling. Only the
     // leading number+unit token counts, so these are 10 uF and not flagged.
-    let comps = r#"
+    let comps = r"
     (comp (ref C1) (value 10uF25V) (footprint Capacitor_SMD:C_0402))
-    (comp (ref C2) (value 10u_0402) (footprint Capacitor_SMD:C_0402))"#;
+    (comp (ref C2) (value 10u_0402) (footprint Capacitor_SMD:C_0402))";
     let r = lint(comps, "");
     assert_eq!(
         count(&r, LintCheck::ValuePackageSanity),
@@ -94,18 +94,18 @@ fn capacitor_value_with_voltage_rating_or_package_suffix_is_not_misparsed() {
 
 #[test]
 fn placeholder_passive_value_is_flagged() {
-    let comps = r#"
+    let comps = r"
     (comp (ref R13) (value R) (footprint Resistor_SMD:R_0402))
-    (comp (ref C7) (value C) (footprint Capacitor_SMD:C_0402))"#;
+    (comp (ref C7) (value C) (footprint Capacitor_SMD:C_0402))";
     let r = lint(comps, "");
     assert_eq!(count(&r, LintCheck::PlaceholderValue), 2);
 }
 
 #[test]
 fn ordinary_passive_values_and_matching_footprints_are_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref R1) (value 4k7) (footprint Resistor_SMD:R_0603))
-    (comp (ref C1) (value 10uF) (footprint Capacitor_SMD:C_0603))"#;
+    (comp (ref C1) (value 10uF) (footprint Capacitor_SMD:C_0603))";
     let r = lint(comps, "");
     assert_eq!(count(&r, LintCheck::DesignatorFootprintMismatch), 0);
     assert_eq!(count(&r, LintCheck::ValuePackageSanity), 0);
@@ -119,11 +119,11 @@ fn ordinary_passive_values_and_matching_footprints_are_clean() {
 /// A pull-up resistor to a named rail is recognised: no finding.
 #[test]
 fn i2c_with_named_rail_pullup_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
     (comp (ref U2) (value SENSOR) (footprint Package:SON))
     (comp (ref R1) (value 4k7) (footprint Resistor_SMD:R_0402))
-    (comp (ref R2) (value 4k7) (footprint Resistor_SMD:R_0402))"#;
+    (comp (ref R2) (value 4k7) (footprint Resistor_SMD:R_0402))";
     let nets = r#"
     (net (code 1) (name "+3V3")
       (node (ref R1) (pin 1)) (node (ref R2) (pin 1)))
@@ -145,11 +145,11 @@ fn i2c_with_named_rail_pullup_is_clean() {
 /// pull-up must never clear the finding.
 #[test]
 fn dnp_or_refused_pullups_do_not_clear_the_missing_pullup_finding() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
     (comp (ref U2) (value SENSOR) (footprint Package:SON))
     (comp (ref R1) (value 4k7) (footprint Resistor_SMD:R_0402))
-    (comp (ref R2) (value 4k7) (footprint Resistor_SMD:R_0402))"#;
+    (comp (ref R2) (value 4k7) (footprint Resistor_SMD:R_0402))";
     let nets = r#"
     (net (code 1) (name "+3V3")
       (node (ref R1) (pin 1)) (node (ref R2) (pin 1)))
@@ -199,10 +199,10 @@ fn i2c_resistor_array_pullup_is_clean() {
     // pull-up (a standard I2C termination) was invisible and a false "missing
     // pull-up" fired on a correctly-terminated bus, and RN1 was also miscounted
     // as an active device.
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
     (comp (ref U2) (value SENSOR) (footprint Package:SON))
-    (comp (ref RN1) (value 2k2) (footprint Resistor_SMD:R_Array_Convex_4x0603))"#;
+    (comp (ref RN1) (value 2k2) (footprint Resistor_SMD:R_Array_Convex_4x0603))";
     let nets = r#"
     (net (code 1) (name "+3V3")
       (node (ref RN1) (pin 1)) (node (ref RN1) (pin 3)))
@@ -221,9 +221,9 @@ fn i2c_resistor_array_pullup_is_clean() {
 /// An on-board bus with no pull-up anywhere fires at medium.
 #[test]
 fn i2c_without_pullup_on_board_fires_medium() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
-    (comp (ref U2) (value SENSOR) (footprint Package:SON))"#;
+    (comp (ref U2) (value SENSOR) (footprint Package:SON))";
     let nets = r#"
     (net (code 2) (name "SDA")
       (node (ref U1) (pin 1)) (node (ref U2) (pin 1)))
@@ -241,11 +241,11 @@ fn i2c_without_pullup_on_board_fires_medium() {
 /// rail so the pull-up counts. No finding.
 #[test]
 fn i2c_pullup_to_structural_local_rail_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U3) (value ESP32) (footprint Module:ESP))
     (comp (ref R18) (value 2k2) (footprint Resistor_SMD:R_0603))
     (comp (ref R21) (value 2k2) (footprint Resistor_SMD:R_0603))
-    (comp (ref C5) (value 22uF) (footprint Capacitor_SMD:C_0603))"#;
+    (comp (ref C5) (value 22uF) (footprint Capacitor_SMD:C_0603))";
     let nets = r#"
     (net (code 7) (name "Net-(C5-Pad2)")
       (node (ref R18) (pin 1)) (node (ref R21) (pin 1)) (node (ref C5) (pin 2)))
@@ -267,9 +267,9 @@ fn i2c_pullup_to_structural_local_rail_is_clean() {
 /// must not be flagged.
 #[test]
 fn i2c_with_integrated_pullup_translator_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref M601) (value NORA-B106) (footprint uBlox:NORA))
-    (comp (ref IC604) (value NTS0104GU12) (footprint Package_QFN:XQFN-12))"#;
+    (comp (ref IC604) (value NTS0104GU12) (footprint Package_QFN:XQFN-12))";
     let nets = r#"
     (net (code 14) (name "TOUCH-SCL")
       (node (ref M601) (pin A5)) (node (ref IC604) (pin 4)))
@@ -287,9 +287,9 @@ fn i2c_with_integrated_pullup_translator_is_clean() {
 /// module" pattern: downgraded to Low, not Medium.
 #[test]
 fn i2c_header_breakout_is_low() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
-    (comp (ref J1) (value HEADER) (footprint Connector:Header_1x04))"#;
+    (comp (ref J1) (value HEADER) (footprint Connector:Header_1x04))";
     let nets = r#"
     (net (code 2) (name "SDA")
       (node (ref U1) (pin 1)) (node (ref J1) (pin 1)))
@@ -308,11 +308,11 @@ fn i2c_header_breakout_is_low() {
 fn pullup_resistor_with_extra_footprint_pads_is_recognised() {
     // The netlist form lists only connected nodes, so this models the same
     // "two connected pads, rest dangling" shape the layout produced.
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
     (comp (ref U2) (value RTC) (footprint Package:SON))
     (comp (ref R1) (value 3k3) (footprint Resistor_SMD:R_0201_0603Metric))
-    (comp (ref R2) (value 3k3) (footprint Resistor_SMD:R_0201_0603Metric))"#;
+    (comp (ref R2) (value 3k3) (footprint Resistor_SMD:R_0201_0603Metric))";
     let nets = r#"
     (net (code 5) (name "VBAT")
       (node (ref R1) (pin 1)) (node (ref R2) (pin 1)))
@@ -335,8 +335,8 @@ fn pullup_resistor_with_extra_footprint_pads_is_recognised() {
 /// A dedicated enable pin on a single-pin (degree-1) named net is floating.
 #[test]
 fn floating_enable_pin_fires_high() {
-    let comps = r#"
-    (comp (ref U1) (value LOADSWITCH) (footprint Package:SOT))"#;
+    let comps = r"
+    (comp (ref U1) (value LOADSWITCH) (footprint Package:SOT))";
     let nets = r#"
     (net (code 10) (name "EN_STUB")
       (node (ref U1) (pin 4) (pinfunction "EN") (pintype "input")))"#;
@@ -348,9 +348,9 @@ fn floating_enable_pin_fires_high() {
 /// The same enable pin driven by another part (degree 2) is fine.
 #[test]
 fn driven_enable_pin_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value LOADSWITCH) (footprint Package:SOT))
-    (comp (ref U2) (value MCU) (footprint Package:QFN))"#;
+    (comp (ref U2) (value MCU) (footprint Package:QFN))";
     let nets = r#"
     (net (code 10) (name "EN")
       (node (ref U1) (pin 4) (pinfunction "EN") (pintype "input"))
@@ -359,12 +359,12 @@ fn driven_enable_pin_is_clean() {
     assert_eq!(count(&r, LintCheck::FloatingControlPin), 0);
 }
 
-/// A multiplexed GPIO name that merely contains "EN" (an Ethernet TX_EN, the
+/// A multiplexed GPIO name that merely contains "EN" (an Ethernet `TX_EN`, the
 /// real Olimex false positive) is not a control pin.
 #[test]
 fn muxed_signal_name_is_not_a_control_pin() {
-    let comps = r#"
-    (comp (ref U3) (value ESP32) (footprint Module:ESP))"#;
+    let comps = r"
+    (comp (ref U3) (value ESP32) (footprint Module:ESP))";
     let nets = r#"
     (net (code 33) (name "Net-(U3-Pad33)")
       (node (ref U3) (pin 33) (pinfunction "GPIO21/VSPIHD/EMAC_TX_EN") (pintype "bidirectional")))"#;
@@ -372,12 +372,12 @@ fn muxed_signal_name_is_not_a_control_pin() {
     assert_eq!(count(&r, LintCheck::FloatingControlPin), 0);
 }
 
-/// An explicit no-connect (pintype no_connect, or an `unconnected-(...)` net) is
+/// An explicit no-connect (pintype `no_connect`, or an `unconnected-(...)` net) is
 /// the designer's choice, never a floating-pin fault.
 #[test]
 fn explicit_no_connect_does_not_fire() {
-    let comps = r#"
-    (comp (ref U6) (value SENSOR) (footprint Package:QFN))"#;
+    let comps = r"
+    (comp (ref U6) (value SENSOR) (footprint Package:QFN))";
     let nets = r#"
     (net (code 83) (name "unconnected-(U6-EN-Pad11)")
       (node (ref U6) (pin 11) (pinfunction "EN") (pintype "input+no_connect")))"#;
@@ -394,9 +394,9 @@ fn explicit_no_connect_does_not_fire() {
 #[test]
 fn led_overcurrent_fires() {
     // 5 V rail, 68 ohm series, Vf 2 V -> ~44 mA, clearly over the 30 mA band.
-    let comps = r#"
+    let comps = r"
     (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
-    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))"#;
+    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))";
     let nets = r#"
     (net (code 1) (name "+5V") (node (ref R1) (pin 1)))
     (net (code 2) (name "LEDA") (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
@@ -408,15 +408,15 @@ fn led_overcurrent_fires() {
 /// R15: the LED-current check must not abandon its rail search on the first
 /// co-located R-ref part whose value does not parse. Here a DNP option resistor
 /// (R0, value "DNP") sits on the anode net BEFORE the real 68 ohm series
-/// resistor; the old `?` on parse_ohms returned None for the whole search, so
+/// resistor; the old `?` on `parse_ohms` returned None for the whole search, so
 /// the over-current LED was silently passed. The genuine series resistor must
 /// still be found and the finding must fire.
 #[test]
 fn led_current_search_skips_unparseable_resistor_and_still_fires() {
-    let comps = r#"
+    let comps = r"
     (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
     (comp (ref R0) (value DNP) (footprint Resistor_SMD:R_0402))
-    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))"#;
+    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))";
     let nets = r#"
     (net (code 1) (name "+5V") (node (ref R1) (pin 1)))
     (net (code 2) (name "LEDA") (node (ref R0) (pin 1)) (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
@@ -432,9 +432,9 @@ fn led_current_search_skips_unparseable_resistor_and_still_fires() {
 /// A sane 1 kohm series resistor from 3.3 V (~1.3 mA) does not fire.
 #[test]
 fn led_sane_current_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
-    (comp (ref R1) (value 1k) (footprint Resistor_SMD:R_0402))"#;
+    (comp (ref R1) (value 1k) (footprint Resistor_SMD:R_0402))";
     let nets = r#"
     (net (code 1) (name "+3V3") (node (ref R1) (pin 1)))
     (net (code 2) (name "LEDA") (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
@@ -457,9 +457,9 @@ fn led_sane_current_is_clean() {
 /// to resolve them: a real bus fight. Fires at medium.
 #[test]
 fn two_outputs_tied_directly_fires_medium() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
-    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))"#;
+    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))";
     let nets = r#"
     (net (code 1) (name "DRIVE")
       (node (ref U1) (pin 1) (pinfunction OUT) (pintype output))
@@ -478,9 +478,9 @@ fn two_outputs_tied_directly_fires_medium() {
 /// short. Fires at HIGH.
 #[test]
 fn two_power_outputs_tied_directly_fires_high() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value REG_A) (footprint Package:SOT23))
-    (comp (ref U2) (value REG_B) (footprint Package:SOT23))"#;
+    (comp (ref U2) (value REG_B) (footprint Package:SOT23))";
     let nets = r#"
     (net (code 1) (name "RAILX")
       (node (ref U1) (pin 1) (pinfunction VOUT) (pintype power_out))
@@ -495,10 +495,10 @@ fn two_power_outputs_tied_directly_fires_high() {
 /// (This is the dominant benign shape: a wired-OR through series R.)
 #[test]
 fn series_resistor_between_outputs_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
     (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))
-    (comp (ref R1) (value 100) (footprint Resistor_SMD:R_0402))"#;
+    (comp (ref R1) (value 100) (footprint Resistor_SMD:R_0402))";
     let nets = r#"
     (net (code 1) (name "DRIVE_A")
       (node (ref U1) (pin 1) (pintype output))
@@ -512,13 +512,13 @@ fn series_resistor_between_outputs_is_clean() {
 
 /// An `input` member on the net reframes it as a driven input the symbol author
 /// also typed `output` (the shared-IO / repurposed-pin case, e.g. Reform's
-/// EDP_IRQ where a SoM pin is typed output): do not fire.
+/// `EDP_IRQ` where a `SoM` pin is typed output): do not fire.
 #[test]
 fn output_with_input_member_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value SOM) (footprint Package:BGA))
     (comp (ref U2) (value BRIDGE) (footprint Package:QFP))
-    (comp (ref U3) (value MCU) (footprint Package:QFN))"#;
+    (comp (ref U3) (value MCU) (footprint Package:QFN))";
     let nets = r#"
     (net (code 1) (name "SHARED_IO")
       (node (ref U1) (pin 1) (pintype output))
@@ -531,9 +531,9 @@ fn output_with_input_member_is_clean() {
 /// An IRQ-named net carries open-drain "outputs" by convention: excluded by name.
 #[test]
 fn irq_named_net_is_excluded() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value SOM) (footprint Package:BGA))
-    (comp (ref U2) (value BRIDGE) (footprint Package:QFP))"#;
+    (comp (ref U2) (value BRIDGE) (footprint Package:QFP))";
     let nets = r#"
     (net (code 1) (name "EDP_IRQ")
       (node (ref U1) (pin 1) (pintype output))
@@ -546,8 +546,8 @@ fn irq_named_net_is_excluded() {
 /// symbol, not an inter-part fight: do not fire.
 #[test]
 fn two_outputs_of_one_part_is_clean() {
-    let comps = r#"
-    (comp (ref U1) (value DUAL) (footprint Package:QFP))"#;
+    let comps = r"
+    (comp (ref U1) (value DUAL) (footprint Package:QFP))";
     let nets = r#"
     (net (code 1) (name "DRIVE")
       (node (ref U1) (pin 1) (pintype output))
@@ -560,10 +560,10 @@ fn two_outputs_of_one_part_is_clean() {
 /// on-board contention: do not fire.
 #[test]
 fn output_to_connector_is_clean() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U1) (value DRIVER) (footprint Package:SOT23))
     (comp (ref U2) (value DRIVER) (footprint Package:SOT23))
-    (comp (ref J1) (value HEADER) (footprint Connector:PinHeader_1x03))"#;
+    (comp (ref J1) (value HEADER) (footprint Connector:PinHeader_1x03))";
     let nets = r#"
     (net (code 1) (name "OUT_TO_J1")
       (node (ref U1) (pin 1) (pintype output))
@@ -574,19 +574,19 @@ fn output_to_connector_is_clean() {
 }
 
 /// R35: the output-contention finding's `refs` were collected straight from a
-/// randomized HashSet, so `--lint --json` emitted them in a run-varying order.
+/// randomized `HashSet`, so `--lint --json` emitted them in a run-varying order.
 /// With six distinct drivers on one net the array must come out sorted every
 /// run (the fix sorts it). On the un-sorted base this holds only ~1/720 of runs,
 /// so running this binary a few times reliably catches the disorder.
 #[test]
 fn output_contention_refs_are_sorted_deterministically() {
-    let comps = r#"
+    let comps = r"
     (comp (ref U6) (value D) (footprint Package:SOT23))
     (comp (ref U3) (value D) (footprint Package:SOT23))
     (comp (ref U1) (value D) (footprint Package:SOT23))
     (comp (ref U5) (value D) (footprint Package:SOT23))
     (comp (ref U2) (value D) (footprint Package:SOT23))
-    (comp (ref U4) (value D) (footprint Package:SOT23))"#;
+    (comp (ref U4) (value D) (footprint Package:SOT23))";
     let nets = r#"
     (net (code 1) (name "BUSFIGHT")
       (node (ref U6) (pin 1) (pintype output))
@@ -616,8 +616,8 @@ fn output_contention_refs_are_sorted_deterministically() {
 #[test]
 fn floating_bare_trailing_n_reset_fires_high() {
     for func in ["RESETN", "RSTN"] {
-        let comps = r#"
-    (comp (ref U3) (value MCU) (footprint Package:QFN))"#;
+        let comps = r"
+    (comp (ref U3) (value MCU) (footprint Package:QFN))";
         let nets = format!(
             r#"
     (net (code 10) (name "MCU_RST")
@@ -633,15 +633,15 @@ fn floating_bare_trailing_n_reset_fires_high() {
     }
 }
 
-/// R46: control_role listed active-low reset (RSTN/RESETN) but not the equally
+/// R46: `control_role` listed active-low reset (RSTN/RESETN) but not the equally
 /// common active-low chip-select CSN/SSN (the nRF24L01 SPI select pin name), so a
 /// floating CSN input was silently unflagged while an identically-structured RSTN
 /// on the same net fired. Both must fire.
 #[test]
 fn floating_active_low_chip_select_fires_high() {
     for func in ["CSN", "SSN"] {
-        let comps = r#"
-    (comp (ref U4) (value NRF24L01) (footprint Package:QFN))"#;
+        let comps = r"
+    (comp (ref U4) (value NRF24L01) (footprint Package:QFN))";
         let nets = format!(
             r#"
     (net (code 11) (name "SPI_CS")

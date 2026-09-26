@@ -103,14 +103,13 @@ fn x2_roles_recover_six_user_named_copper_films_without_a_job_manifest() {
 
 #[test]
 fn duplicate_x2_physical_layers_refuse_instead_of_choosing_by_file_order() {
-    let error = match extract_fresh(tmp("duplicate_layer"), |dir| {
+    let Err(error) = extract_fresh(tmp("duplicate_layer"), |dir| {
         write(&dir.join("board-F_Cu.gbr"), &film(1, "Top", 1));
         write(&dir.join("board-GND_Cu.gbr"), &film(2, "Inr", 2));
         write(&dir.join("board-Power_Cu.gbr"), &film(2, "Inr", 3));
         write(&dir.join("board-B_Cu.gbr"), &film(4, "Bot", 4));
-    }) {
-        Ok(_) => panic!("duplicate physical layer must refuse"),
-        Err(error) => error,
+    }) else {
+        panic!("duplicate physical layer must refuse");
     };
     let message = error.to_string();
     assert!(message.contains("physical layer L2"), "{message}");
@@ -123,7 +122,7 @@ fn duplicate_x2_physical_layers_refuse_instead_of_choosing_by_file_order() {
 
 #[test]
 fn duplicate_x2_and_manifest_physical_layers_refuse_together() {
-    let error = match extract_fresh(tmp("duplicate_authorities"), |dir| {
+    let Err(error) = extract_fresh(tmp("duplicate_authorities"), |dir| {
         write(&dir.join("top.gbr"), &film_without_x2(1));
         write(&dir.join("manifest-inner.gbr"), &film_without_x2(2));
         write(&dir.join("x2-inner.gbr"), &film(2, "Inr", 3));
@@ -137,9 +136,8 @@ fn duplicate_x2_and_manifest_physical_layers_refuse_together() {
   {"Path": "bottom.gbr", "FileFunction": "Copper,L4,Bot"}
 ]}"#,
         );
-    }) {
-        Ok(_) => panic!("X2 and manifest must not claim the same physical layer"),
-        Err(error) => error,
+    }) else {
+        panic!("X2 and manifest must not claim the same physical layer");
     };
     let message = error.to_string();
     assert!(message.contains("physical layer L2"), "{message}");

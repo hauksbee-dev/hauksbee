@@ -7,7 +7,7 @@ description = "Typed model of KiCad schematic and board files over the forge-sex
 
 [dependencies]
 forge-sexpr = { version = "0.1.0", path = "../forge-sexpr" }
-thiserror = "1"
+thiserror = "2"
 
 # The upstream crate declares integration tests under tests/. Only the library
 # sources are vendored here (hauksbee links the libs, not the test targets), so

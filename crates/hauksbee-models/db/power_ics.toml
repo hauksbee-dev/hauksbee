@@ -763,14 +763,22 @@ max_voltage_v = 7.0          # Absolute Maximum Ratings, VDD 7.0 V
 max_junction_temp_c = 125.0  # TJ operating max (TSD trips at 150 C typ)
 theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
 
-# The 3.75-6 V operating range is the check that fires below the 7 V abs max.
+# The RECOMMENDED supply range, which is the check that fires below the 7 V abs
+# max. DS20001984H prints two lower ends and they answer different questions:
+# the DC Characteristics "Supply Voltage" row is 3.75 V min (the part runs, UVLO
+# releases at 3.45 V typ), but that table's own limits are stated only for
+# VDD = [VREG(typ) + 1.0 V] to 6 V, and Section 3.1 says "A supply voltage of
+# [VREG (typical) + 0.3V] to 6V is recommended". For the 4.20 V code this entry
+# models that is 4.5 V. The envelope is a recommended operating condition, so it
+# carries 4.5 V; between 3.75 V and 4.5 V the part is on but cannot hold its
+# 4.2 V float across its own pass element. The input pin is `in` (pad 4, VDD).
 [[models.envelope]]
 kind = "supply_range"
 pin = "in"
-min_v = 3.75
+min_v = 4.5
 max_v = 6.0
 abs_max_v = 7.0
-basis = "Microchip MCP73831/2 DS21984A, DC Characteristics, supply voltage VDD 3.75 V to 6 V; Absolute Maximum Ratings, VDD 7.0 V"
+basis = "Microchip MCP73831/2 DS20001984H (2005-2020), Section 3.1 Battery Management Input Supply: VDD of [VREG(typ) + 0.3 V] to 6 V recommended, 4.2 + 0.3 = 4.5 V for the -2 code (DC Characteristics Supply Voltage row 3.75 V to 6 V); Absolute Maximum Ratings, VDD 7.0 V"
 
 # Same programming law as the MCP73833 below: datasheet section 4.2 states
 # I_REG = 1000 V / R_PROG, and a floating PROG disables charging entirely, so an

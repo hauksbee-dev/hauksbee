@@ -376,9 +376,8 @@ fn run_checks(args: &Value) -> Result<Value, String> {
     // not the temp file; and a `board`/`firmware` key in the body would fight
     // the injected one, so reject it with instructions instead of letting a
     // duplicate-key parse error confuse the caller.
-    let parsed: toml::Value = spec_body
-        .parse()
-        .map_err(|e| format!("spec_toml is not valid TOML: {e}"))?;
+    let parsed: toml::Value =
+        toml::from_str(spec_body).map_err(|e| format!("spec_toml is not valid TOML: {e}"))?;
     if let Some(table) = parsed.as_table() {
         if let Some(key) = ["board", "firmware", "schematic"]
             .into_iter()

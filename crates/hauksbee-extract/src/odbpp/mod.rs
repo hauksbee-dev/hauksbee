@@ -111,7 +111,7 @@ use crate::{sample_list, Component, ExtractError, ExtractedBoard, Net, Pin};
 /// as a `PRP` property and plenty of producers do not write one (Valor NPI writes
 /// `PRP CLASS` and routing rules but no `PRP Value`). The value is never
 /// fabricated from `part_name`: that field is a footprint string in KiCad's
-/// export, and reading "R_0603" as a resistance is how phantom faults appear.
+/// export, and reading "`R_0603`" as a resistance is how phantom faults appear.
 pub const VALUE_UNRESOLVED_REASON: &str =
     "no value in the ODB++ job: it carries no `PRP Value` property for this part, \
      and the part name is a library/footprint id rather than a value";
@@ -129,10 +129,11 @@ pub enum PlacementSource {
 }
 
 impl PlacementSource {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            PlacementSource::EdaData => "eda/data",
-            PlacementSource::ComponentLayers => "component layers",
+            Self::EdaData => "eda/data",
+            Self::ComponentLayers => "component layers",
         }
     }
 }
@@ -151,7 +152,8 @@ pub struct OdbLayer {
 }
 
 impl OdbLayer {
-    pub fn features(&self) -> usize {
+    #[must_use]
+    pub const fn features(&self) -> usize {
         self.lines + self.pads + self.arcs + self.surfaces
     }
 }
@@ -208,6 +210,7 @@ impl OdbStats {
     /// Computing a disagreement and then leaving it inside the extractor is the
     /// same failure as not computing it, so this is the accessor the
     /// board-input normalizer copies onto its own notes.
+    #[must_use]
     pub fn notes(&self) -> Vec<String> {
         let mut out = vec![format!(
             "ODB++ input: the circuit was read from the job's own EDA data \
@@ -251,9 +254,13 @@ pub struct OdbExtraction {
 
 /// Read an ODB++ job from a path: an unpacked job directory (or any directory
 /// containing exactly one), a `.tgz`/`.tar.gz`/`.tar`, or a `.zip`.
+///
+/// # Errors
+/// [`ExtractError::Odb`] when the path cannot be read, is not an ODB++ job, or
+/// the job lacks the data a netlist needs.
 pub fn from_odbpp(path: &Path) -> Result<OdbExtraction, ExtractError> {
     if path.is_dir() {
-        return extract_tree(OdbTree::from_dir(path)?);
+        return extract_tree(&OdbTree::from_dir(path)?);
     }
     let bytes = std::fs::read(path)
         .map_err(|e| ExtractError::Odb(format!("read {}: {e}", path.display())))?;
@@ -261,20 +268,28 @@ pub fn from_odbpp(path: &Path) -> Result<OdbExtraction, ExtractError> {
 }
 
 /// Read an ODB++ job from archive bytes (`.tgz`, `.tar`, or `.zip`).
+///
+/// # Errors
+/// [`ExtractError::Odb`] when the archive cannot be unpacked or does not hold
+/// a readable ODB++ job.
 pub fn from_odbpp_archive(bytes: &[u8]) -> Result<OdbExtraction, ExtractError> {
-    extract_tree(OdbTree::from_archive(bytes)?)
+    extract_tree(&OdbTree::from_archive(bytes)?)
 }
 
 /// Content sniff for the archive forms: an archive holding a `matrix/matrix`
-/// member. Keyed on the matrix file because it is what makes a tree an ODB++
+/// member.
+///
+/// Keyed on the matrix file because it is what makes a tree an ODB++
 /// job, and because a zip of gerbers (the other archive hauksbee accepts) never
 /// has one.
+#[must_use]
 pub fn looks_like_odbpp_archive(bytes: &[u8]) -> bool {
     tree::archive_has_matrix(bytes)
 }
 
 /// Content sniff for the directory form: does this directory (or a single job
 /// directory inside it) hold `matrix/matrix`?
+#[must_use]
 pub fn looks_like_odbpp_dir(dir: &Path) -> bool {
     if dir.join("matrix").join("matrix").is_file() {
         return true;
@@ -289,7 +304,8 @@ pub fn looks_like_odbpp_dir(dir: &Path) -> bool {
 
 // ── The read ──────────────────────────────────────────────────────────────────
 
-fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
+#[allow(clippy::too_many_lines, reason = "one ordered read of the job")]
+fn extract_tree(tree: &OdbTree) -> Result<OdbExtraction, ExtractError> {
     if !tree.has_matrix() {
         return Err(ExtractError::Odb(
             "this is not an ODB++ job: it has no matrix/matrix file, which every \
@@ -322,10 +338,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     // instances, with no components of its own) ahead of `steps/pcb`. No step
     // with a placement falls through to the first step, so the "carries no
     // component placement" refusal below can name what that step DID contain.
-    let with_placement = steps.iter().any(|s| step_has_placement(&tree, s, &matrix));
+    let with_placement = steps.iter().any(|s| step_has_placement(tree, s, &matrix));
     let step = match steps
         .iter()
-        .find(|s| step_has_placement(&tree, s, &matrix))
+        .find(|s| step_has_placement(tree, s, &matrix))
         .or_else(|| steps.first())
     {
         Some(s) => s.clone(),
@@ -373,9 +389,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
 
     // `misc/info`'s `UNITS` is the job-wide default for any file that declares
     // none of its own; see [`records::declared_units`].
-    let job_units = info_field(&info, "UNITS")
-        .map(|u| records::unit_scale(&u))
-        .unwrap_or(1.0);
+    let job_units = info_field(&info, "UNITS").map_or(1.0, |u| records::unit_scale(&u));
 
     let eda_path = format!("steps/{step}/eda/data");
     let eda_text = tree.text(&eda_path);
@@ -394,7 +408,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         layer_components.extend(records::parse_components_file(&text, is_bottom, job_units));
     }
 
-    let eda_components = eda.as_ref().map(|e| e.components.len()).unwrap_or(0);
+    let eda_components = eda.as_ref().map_or(0, |e| e.components.len());
     let (raw_components, placement_source) = if eda_components > 0 {
         // eda/data is the electrical view and owns the net ordinals; the
         // component layers become a cross-check.
@@ -495,11 +509,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             net_names[0]
         ));
     }
-    let nets: Vec<Net> = net_names
-        .iter()
-        .enumerate()
+    let nets: Vec<Net> = (0..)
+        .zip(&net_names)
         .skip(1)
-        .map(|(i, name)| Net::new(i as i64, unescape(name)))
+        .map(|(id, name)| Net::new(id, unescape(name)))
         .collect();
 
     // ── Components ───────────────────────────────────────────────────────────
@@ -547,7 +560,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
                     unparseable.push(format!("{}.{number} ('{raw}')", c.refdes));
                     None
                 }
-                records::NetRef::Num(n) if n < net_names.len() => Some(n as i64),
+                records::NetRef::Num(n) if n < net_names.len() => i64::try_from(n).ok(),
                 records::NetRef::Num(n) => {
                     out_of_range.push(format!("{}.{number} (net {n})", c.refdes));
                     None
@@ -583,7 +596,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
                 continue;
             }
             if k.eq_ignore_ascii_case("value") && value.is_empty() {
-                value = v.clone();
+                value.clone_from(v);
             } else {
                 properties.push((k.clone(), v.clone()));
             }
@@ -661,7 +674,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     // The netlist file escapes its names the same way `eda/data` does, so it is
     // un-escaped on the same terms: comparing an escaped name against an
     // un-escaped one would report every hierarchical net as a disagreement.
-    let netlist = find_netlist(&tree, &step).map(|t| {
+    let netlist = find_netlist(tree, &step).map(|t| {
         let parsed = records::parse_netlist(&t);
         records::CadNetlist {
             points_per_net: parsed
@@ -733,10 +746,9 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         .filter(|l| l.is_copper() || l.is_drill())
     {
         let path = format!("steps/{step}/layers/{}/features", l.name);
-        let counts = match tree.text(&path) {
-            Some(text) => parse_features(&text),
-            None => FeatureCounts::default(),
-        };
+        let counts = tree
+            .text(&path)
+            .map_or_else(FeatureCounts::default, |text| parse_features(&text));
         // Only when this reader recognised every record in the file: otherwise a
         // shortfall is its own gap, not the header lying, and reporting it as a
         // disagreement teaches the reader to be ignored.
@@ -805,7 +817,7 @@ fn component_layers(matrix: &records::Matrix) -> Vec<String> {
     if declared.is_empty() {
         return ["comp_+_top", "comp_+_bot"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
     }
     declared
@@ -868,7 +880,10 @@ fn info_field(info: &str, key: &str) -> Option<String> {
 }
 
 fn sorted_diff(a: &HashSet<&str>, b: &HashSet<&str>) -> Vec<String> {
-    let mut v: Vec<String> = a.difference(b).map(|s| s.to_string()).collect();
+    let mut v: Vec<String> = a
+        .difference(b)
+        .map(std::string::ToString::to_string)
+        .collect();
     v.sort();
     v
 }
@@ -888,7 +903,7 @@ mod tests {
     /// A minimal but structurally complete two-resistor job, written into a zip
     /// the way KiCad writes one (placement on the component layers, `eda/data`
     /// holding nets and packages).
-    pub(crate) fn tiny_job() -> Vec<(&'static str, String)> {
+    pub fn tiny_job() -> Vec<(&'static str, String)> {
         vec![
             (
                 "matrix/matrix",
@@ -939,7 +954,7 @@ mod tests {
     }
 
     /// Zip the given members, so the archive path is exercised end to end.
-    pub(crate) fn zip_members(members: &[(&str, String)]) -> Vec<u8> {
+    pub fn zip_members(members: &[(&str, String)]) -> Vec<u8> {
         let raw: Vec<(&str, Vec<u8>)> = members
             .iter()
             .map(|(n, b)| (*n, b.as_bytes().to_vec()))
@@ -948,7 +963,7 @@ mod tests {
     }
 
     /// [`zip_members`] for members that are not valid UTF-8 (a gzip payload).
-    pub(crate) fn zip_raw(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    pub fn zip_raw(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
         use std::io::Write;
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opts: zip::write::FileOptions<'_, ()> =

@@ -84,6 +84,7 @@ pub const SHORT_TOUCH_EPS_MM: f64 = 1e-9;
 ///
 /// Negative is overlap, zero is abutment, and anything inside
 /// [`SHORT_TOUCH_EPS_MM`] is one of those two measured through floating point.
+#[must_use]
 pub fn is_touching(gap_mm: f64) -> bool {
     gap_mm <= SHORT_TOUCH_EPS_MM
 }
@@ -128,6 +129,7 @@ pub struct ClearanceRules {
 }
 
 impl ClearanceRules {
+    #[must_use]
     pub fn new(default_clearance_mm: f64) -> Self {
         let default = if default_clearance_mm > 0.0 {
             default_clearance_mm
@@ -170,6 +172,7 @@ impl ClearanceRules {
         }
     }
 
+    #[must_use]
     pub fn clearance_for_net(&self, net: &str) -> f64 {
         self.net_classes
             .get(net)
@@ -177,14 +180,13 @@ impl ClearanceRules {
             // A class clearance of 0 means "inherit the board default", not a
             // literal zero-clearance rule, resolve it to the default so a
             // diff-pair-only class does not report a 0 mm spacing requirement.
-            .map(|r| {
+            .map_or(self.default_clearance_mm, |r| {
                 if r.clearance_mm > 0.0 {
                     r.clearance_mm
                 } else {
                     self.default_clearance_mm
                 }
             })
-            .unwrap_or(self.default_clearance_mm)
     }
 
     /// Record an explicit clearance for a concrete class pair (either order;
@@ -205,6 +207,7 @@ impl ClearanceRules {
         *entry = entry.max(clearance_mm);
     }
 
+    #[must_use]
     pub fn effective_clearance(&self, net_a: &str, net_b: &str) -> f64 {
         if let Some(clearance) = self.global_clearance_override_mm {
             return clearance;
@@ -327,11 +330,11 @@ pub fn clearance_rules_from_kicad_pro<'a>(
         };
         let clearance = class
             .get("clearance")
-            .and_then(|x| x.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
         let diff_gap = class
             .get("diff_pair_gap")
-            .and_then(|x| x.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .filter(|g| *g > 0.0);
         if name == "Default" && clearance > 0.0 {
             default_clearance = clearance;
@@ -405,13 +408,11 @@ fn kicad_netclass_pattern_matches(pattern: &str, net: &str) -> bool {
                         continue;
                     }
                     '?' => Some((1, 1)),
-                    '[' => match p[pi..].iter().position(|c| *c == ']') {
-                        Some(end) => {
-                            class_matches(&p[pi + 1..pi + end], n[ni]).then_some((end + 1, 1))
-                        }
+                    '[' => p[pi..].iter().position(|c| *c == ']').map_or_else(
                         // Unterminated class: `[` is a literal.
-                        None => (p[pi] == n[ni]).then_some((1, 1)),
-                    },
+                        || (p[pi] == n[ni]).then_some((1, 1)),
+                        |end| class_matches(&p[pi + 1..pi + end], n[ni]).then_some((end + 1, 1)),
+                    ),
                     c => (c == n[ni]).then_some((1, 1)),
                 }
             };
@@ -465,10 +466,11 @@ pub enum ViolationKind {
 }
 
 impl ViolationKind {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            ViolationKind::Short => "short",
-            ViolationKind::Clearance => "clearance",
+            Self::Short => "short",
+            Self::Clearance => "clearance",
         }
     }
 }
@@ -490,14 +492,15 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            ItemKind::Track => "track",
-            ItemKind::Arc => "arc",
-            ItemKind::Via => "via",
-            ItemKind::Pad => "pad",
-            ItemKind::Zone => "zone",
-            ItemKind::Graphic => "graphic",
+            Self::Track => "track",
+            Self::Arc => "arc",
+            Self::Via => "via",
+            Self::Pad => "pad",
+            Self::Zone => "zone",
+            Self::Graphic => "graphic",
         }
     }
 }
@@ -549,6 +552,15 @@ pub struct DrcTieQualification {
     qualified: Vec<QualifiedFinding>,
 }
 
+/// A board coordinate in millimetres as whole nanometres.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "board coordinates fit i64 nm"
+)]
+fn to_nm(mm: f64) -> i64 {
+    (mm * 1_000_000.0).round() as i64
+}
+
 /// The tie recorded for exactly this net pair, layer and location. Coordinates
 /// are compared at nanometre resolution, far below any source format's own
 /// precision but enough to absorb float round-off between the layer-specific
@@ -561,8 +573,7 @@ fn find_at<'a>(
     x: f64,
     y: f64,
 ) -> Option<&'a DeclaredTie> {
-    let x_nm = (x * 1_000_000.0).round() as i64;
-    let y_nm = (y * 1_000_000.0).round() as i64;
+    let (x_nm, y_nm) = (to_nm(x), to_nm(y));
     rows.iter()
         .find(|row| {
             row.net_a_name == net_a
@@ -575,6 +586,7 @@ fn find_at<'a>(
 }
 
 impl DrcTieQualification {
+    #[must_use]
     pub fn tie_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
         self.tie_at(
             &finding.net_a_name,
@@ -585,6 +597,7 @@ impl DrcTieQualification {
         )
     }
 
+    #[must_use]
     pub fn tie_at(
         &self,
         net_a: &str,
@@ -596,12 +609,14 @@ impl DrcTieQualification {
         find_at(&self.qualified, net_a, net_b, layer, x, y)
     }
 
-    pub fn qualified_count(&self) -> usize {
+    #[must_use]
+    pub const fn qualified_count(&self) -> usize {
         self.qualified.len()
     }
 
     /// Schematic context for a unique measured contact, without implying that
     /// the declaration authorizes this physical location.
+    #[must_use]
     pub fn declaration_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
         self.declaration_at(
             &finding.net_a_name,
@@ -612,6 +627,7 @@ impl DrcTieQualification {
         )
     }
 
+    #[must_use]
     pub fn declaration_at(
         &self,
         net_a: &str,
@@ -623,20 +639,24 @@ impl DrcTieQualification {
         find_at(&self.declared, net_a, net_b, layer, x, y)
     }
 
-    pub fn declaration_count(&self) -> usize {
+    #[must_use]
+    pub const fn declaration_count(&self) -> usize {
         self.declaration_count
     }
 
     /// Distinct schematic declarations that matched exactly one measured
     /// physical contact cluster. Layer rows are not double-counted.
-    pub fn matched_declaration_count(&self) -> usize {
+    #[must_use]
+    pub const fn matched_declaration_count(&self) -> usize {
         self.matched_declaration_count
     }
 
+    #[must_use]
     pub fn source(&self) -> &str {
         &self.source
     }
 
+    #[must_use]
     pub fn source_summary(&self) -> String {
         let declared = self.declared.len();
         format!(
@@ -740,13 +760,16 @@ pub struct DrcReport {
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
-/// validated against for exact finding parity. KiCad 10 is `20260206`; its
+/// validated against for exact finding parity.
+///
+/// KiCad 10 is `20260206`; its
 /// name-only nets and keyhole-antipad fill contours are handled and checked
 /// against kicad-cli 10.0.5, but the complete finding set does not yet match the
 /// native DRC exactly. So `>= 20260000` remains explicitly unvalidated.
-pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20260000;
+pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20_260_000;
 
 /// The `(version N)` format token from a `.kicad_pcb`, if present.
+#[must_use]
 pub fn kicad_pcb_format_version(text: &str) -> Option<u32> {
     let head: String = text.chars().take(512).collect();
     let i = head.find("(version")?;
@@ -760,6 +783,7 @@ pub fn kicad_pcb_format_version(text: &str) -> Option<u32> {
 
 /// A caveat string when the board's format version is newer than hauksbee's
 /// validated range, else `None`.
+#[must_use]
 pub fn unvalidated_version_warning(text: &str) -> Option<String> {
     let v = kicad_pcb_format_version(text)?;
     if v < FIRST_UNVALIDATED_PCB_VERSION {
@@ -787,10 +811,12 @@ impl DrcReport {
             .filter(|f| f.kind == ViolationKind::Clearance)
     }
 
+    #[must_use]
     pub fn short_count(&self) -> usize {
         self.shorts().count()
     }
 
+    #[must_use]
     pub fn is_clean(&self) -> bool {
         self.short_count() == 0
     }
@@ -820,6 +846,7 @@ impl DrcReport {
     /// Records matching schematic declarations as context. A schematic net
     /// pair has no board-coordinate authority, so this does not populate the
     /// physically authorized set or change which shorts gate.
+    #[must_use]
     pub fn qualify_with_declared_ties(
         &self,
         source: &str,
@@ -842,11 +869,7 @@ impl DrcReport {
                     // One nanometre is far below the source formats' coordinate
                     // precision but absorbs harmless floating-point round-off
                     // between layer-specific geometry paths.
-                    let location = (
-                        (finding.x * 1_000_000.0).round() as i64,
-                        (finding.y * 1_000_000.0).round() as i64,
-                        finding.layer.clone(),
-                    );
+                    let location = (to_nm(finding.x), to_nm(finding.y), finding.layer.clone());
                     locations.entry(location).or_default().push(index);
                 }
             }
@@ -859,23 +882,16 @@ impl DrcReport {
                 let first_xy = xy.next();
                 let one_xy = first_xy.is_some() && xy.all(|candidate| Some(candidate) == first_xy);
                 let indices: Vec<usize> = locations.values().flatten().copied().collect();
-                if one_xy && common_vertical_via(&indices, &self.findings) {
-                    let first = locations
-                        .keys()
-                        .next()
-                        .expect("non-empty locations checked above");
-                    let key = (first.0, first.1, String::new());
+                let via_xy =
+                    first_xy.filter(|_| one_xy && common_vertical_via(&indices, &self.findings));
+                if let Some((x, y)) = via_xy {
                     locations.clear();
-                    locations.insert(key, indices);
+                    locations.insert((x, y, String::new()), indices);
                 }
             }
-            if locations.len() != 1 {
+            let (1, Some(indices)) = (locations.len(), locations.values().next()) else {
                 continue;
-            }
-            let indices = locations
-                .values()
-                .next()
-                .expect("one location checked above");
+            };
             qualification.matched_declaration_count += 1;
             for &index in indices {
                 let finding = &self.findings[index];
@@ -883,8 +899,8 @@ impl DrcReport {
                     net_a_name: finding.net_a_name.clone(),
                     net_b_name: finding.net_b_name.clone(),
                     layer: finding.layer.clone(),
-                    x_nm: (finding.x * 1_000_000.0).round() as i64,
-                    y_nm: (finding.y * 1_000_000.0).round() as i64,
+                    x_nm: to_nm(finding.x),
+                    y_nm: to_nm(finding.y),
                     tie: DeclaredTie {
                         declaration: tie.describe(),
                         source: source.to_string(),
@@ -904,6 +920,7 @@ impl DrcReport {
     /// (KiCad always carves a pad out of a different-net pour, and KiCad-10
     /// keyhole fills make those carves read as negative gaps), but a reader
     /// cannot audit a rule they were never told was applied.
+    #[must_use]
     pub fn suppression_note(&self) -> Option<String> {
         let Some(n) = self.zone_pad_overlaps_suppressed else {
             // Never measured: either no copper DRC pass ran (a netlist-only input
@@ -921,15 +938,14 @@ impl DrcReport {
         };
         (n > 0).then(|| {
             format!(
-                "drc: {} zone-versus-pad primitive pair(s) were suppressed, not evaluated as \
+                "drc: {n} zone-versus-pad primitive pair(s) were suppressed, not evaluated as \
                  shorts (a zone boundary is indexed edge by edge, so one carve around one pad \
                  contributes several pairs; this is an upper bound, not a pad count). \
                  A pad overlapping a different-net pour is nearly always the antipad carve \
                  (KiCad-10 keyhole fills draw that carve with slits running through the pad \
                  interior), so this class is dropped wholesale to avoid a false-positive \
                  epidemic. Real pour incursions by a track, via or arc are still reported. To \
-                 audit the suppressed class, run KiCad's own DRC on the board.",
-                n
+                 audit the suppressed class, run KiCad's own DRC on the board."
             )
         })
     }
@@ -976,10 +992,10 @@ struct NetResolver {
 
 impl NetResolver {
     fn from_root(root: &List) -> Self {
-        let mut r = NetResolver::default();
+        let mut r = Self::default();
         for n in root.find_all("net") {
             match (n.arg_i64(0), n.arg_value(0), n.arg_value(1)) {
-                (Some(id), _, name) => r.declare(id, name.unwrap_or_default()),
+                (Some(id), _, name) => r.declare(id, &name.unwrap_or_default()),
                 (None, Some(name), _) => {
                     r.id_of(&name);
                 }
@@ -989,10 +1005,10 @@ impl NetResolver {
         r
     }
 
-    fn declare(&mut self, id: i64, name: String) {
+    fn declare(&mut self, id: i64, name: &str) {
         // Same normalization as pcb.rs's NetTable: file-syntax escapes end
         // here, so DRC findings name nets the way the schematic shows them.
-        let name = crate::netname::unescape_net_name(&name);
+        let name = crate::netname::unescape_net_name(name);
         self.by_name.entry(name.clone()).or_insert(id);
         self.by_id.entry(id).or_insert(name);
         self.next_synthetic = self.next_synthetic.max(id + 1);
@@ -1005,7 +1021,7 @@ impl NetResolver {
         }
         let id = self.next_synthetic.max(1);
         self.next_synthetic = id + 1;
-        self.declare(id, name);
+        self.declare(id, &name);
         id
     }
 
@@ -1029,12 +1045,12 @@ impl NetResolver {
         if let Some(id) = net
             .arg(0)
             .filter(|t| !t.is_string())
-            .and_then(|t| t.as_i64())
+            .and_then(forge_sexpr::Token::as_i64)
         {
             // Some zones carry both `(net N)` and `(net_name "X")`; declare the
             // name so reporting has it.
             if let Some(name) = list.find_value("net_name") {
-                self.declare(id, name);
+                self.declare(id, &name);
             }
             return Some(id);
         }
@@ -1086,7 +1102,7 @@ impl LayerBuckets {
     /// is real fill copper (eligible for the containment short-test) or only a
     /// drawn outline.
     fn push_zone(&mut self, layer: &str, pts: Vec<(f64, f64)>, net: i64, filled: bool) {
-        self.push_zone_opts(layer, pts, net, filled, true)
+        self.push_zone_opts(layer, pts, net, filled, true);
     }
 
     /// As [`Self::push_zone`], but `edges` controls whether the boundary edges
@@ -1207,6 +1223,7 @@ pub(crate) fn copper_layers_of(root: &List) -> Vec<String> {
 }
 
 /// Build the per-layer copper primitives for a parsed board.
+#[allow(clippy::too_many_lines, reason = "one pass over the board's items")]
 fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
     let mut buckets = LayerBuckets::default();
     let copper_layers = copper_layers_of(root);
@@ -1320,7 +1337,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         // ring, matching what KiCad writes across 7.x/8.x/9.x.
         let flag_on = |name: &str| {
             via.find(name)
-                .is_some_and(|n| n.arg_value(0).map(|v| v != "no").unwrap_or(true))
+                .is_some_and(|n| n.arg_value(0).is_none_or(|v| v != "no"))
         };
         let remove_unused = flag_on("remove_unused_layers");
         let keep_ends = flag_on("keep_end_layers");
@@ -1450,29 +1467,25 @@ fn collect_pad(
     pad: &List,
     net: i64,
     owner: &str,
-    forigin: (f64, f64),
-    frot: (f64, f64),
+    (fx, fy): (f64, f64),
+    (fsin, fcos): (f64, f64),
     copper_layers: &[String],
     buckets: &mut LayerBuckets,
 ) {
-    let (fsin, fcos) = frot;
-    let (fx, fy) = forigin;
     // Pad-local placement.
     let (px, py, prot) = at_of(pad);
     // Pad shape token is the 3rd positional arg: (pad "1" smd roundrect ...).
     let shape_tok = pad.arg_value(2).unwrap_or_default();
-    let size = pad.find("size");
-    let (sx, sy) = match size {
-        Some(s) => (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0)),
-        None => (0.0, 0.0),
-    };
+    let (sx, sy) = pad.find("size").map_or((0.0, 0.0), |s| {
+        (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0))
+    });
 
     // World transform for a pad-frame offset (KiCad y-down, footprint rotation
     // counter-clockwise: matches pcb.rs's pad placement).
     let to_world = |ox: f64, oy: f64| -> (f64, f64) {
         (
-            fx + px * fcos + py * fsin + ox,
-            fy - px * fsin + py * fcos + oy,
+            py.mul_add(fsin, px.mul_add(fcos, fx)) + ox,
+            py.mul_add(fcos, px.mul_add(-fsin, fy)) + oy,
         )
     };
     let pad_origin = to_world(0.0, 0.0);
@@ -1482,7 +1495,7 @@ fn collect_pad(
     // rotated with the pad. Castellated / edge-solder module footprints use this
     // to hang half the copper past the hole, so ignoring the offset draws the
     // copper up to half a pad away from where KiCad filled the surrounding zone.
-    let (offx, offy) = pad
+    let drill_off = pad
         .find("drill")
         .and_then(|d| d.find("offset"))
         .and_then(|o| Some((o.arg_f64(0)?, o.arg_f64(1)?)))
@@ -1497,10 +1510,9 @@ fn collect_pad(
     // offset is added in the pad-local frame so it rotates with the outline.
     let (psin, pcos) = prot.to_radians().sin_cos();
     let outline_to_world = |lx: f64, ly: f64| -> (f64, f64) {
-        let lx = lx + offx;
-        let ly = ly + offy;
-        let wx = lx * pcos + ly * psin;
-        let wy = -lx * psin + ly * pcos;
+        let (lx, ly) = (lx + drill_off.0, ly + drill_off.1);
+        let wx = lx.mul_add(pcos, ly * psin);
+        let wy = (-lx).mul_add(psin, ly * pcos);
         (pad_origin.0 + wx, pad_origin.1 + wy)
     };
 
@@ -1508,20 +1520,18 @@ fn collect_pad(
     // copper layer (through-hole style). A list that names only non-copper
     // layers (e.g. `(layers "F.Mask")`) means the pad carries NO copper: it
     // must stay off the copper buckets entirely, not fall back to all of them.
-    let layers: Vec<String> = match pad.find("layers") {
-        Some(l) => {
-            let mut out = Vec::new();
-            for t in (0..).map_while(|i| l.arg_value(i)) {
-                out.extend(expand_layers(&t, copper_layers));
-            }
-            out
-        }
-        None => copper_layers.to_vec(),
-    };
+    let layers: Vec<String> = pad.find("layers").map_or_else(
+        || copper_layers.to_vec(),
+        |l| {
+            (0..)
+                .map_while(|i| l.arg_value(i))
+                .flat_map(|t| expand_layers(&t, copper_layers))
+                .collect()
+        },
+    );
 
     let shapes: Vec<Shape> = match shape_tok.as_str() {
         "circle" => vec![{
-            let r = sx.max(sy) / 2.0;
             // Through outline_to_world so a drill offset displaces the disc too.
             let c = outline_to_world(0.0, 0.0);
             Shape::Capsule(Capsule {
@@ -1529,7 +1539,7 @@ fn collect_pad(
                 ay: c.1,
                 bx: c.0,
                 by: c.1,
-                r,
+                r: sx.max(sy) / 2.0,
             })
         }],
         "oval" => vec![{
@@ -1592,8 +1602,8 @@ fn collect_pad(
                 // Inset the rectangle by the corner radius and carry `r` so the
                 // rounded outline is represented as inset-poly + radius.
                 rect_polygon(
-                    (sx - 2.0 * rr).max(0.0),
-                    (sy - 2.0 * rr).max(0.0),
+                    2.0f64.mul_add(-rr, sx).max(0.0),
+                    2.0f64.mul_add(-rr, sy).max(0.0),
                     &outline_to_world,
                     rr,
                 )
@@ -1618,7 +1628,12 @@ fn rotated_rect_pts(cx: f64, cy: f64, w: f64, h: f64, rot: f64) -> Vec<(f64, f64
     let (rs, rc) = rot.sin_cos();
     [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
         .into_iter()
-        .map(|(lx, ly)| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc))
+        .map(|(lx, ly)| {
+            (
+                ly.mul_add(-rs, lx.mul_add(rc, cx)),
+                ly.mul_add(rc, lx.mul_add(rs, cy)),
+            )
+        })
         .collect()
 }
 
@@ -1637,7 +1652,7 @@ fn rect_polygon(w: f64, h: f64, to_world: &dyn Fn(f64, f64) -> (f64, f64), r: f6
 }
 
 /// Which corners a pad's `(chamfer <corners...>)` list names, in the fixed
-/// order [top_left, top_right, bottom_right, bottom_left] (pad-local frame,
+/// order [`top_left`, `top_right`, `bottom_right`, `bottom_left`] (pad-local frame,
 /// y-down, matching KiCad's file coordinates: "top" is negative y).
 fn chamfered_corners(pad: &List) -> [bool; 4] {
     let mut out = [false; 4];
@@ -1657,8 +1672,8 @@ fn chamfered_corners(pad: &List) -> [bool; 4] {
 
 /// A chamfered (round)rect pad outline of size (w, h), corner radius `rr` on
 /// the non-chamfered corners and a straight 45-degree cut of size `ch` on each
-/// corner flagged in `chamfered` ([top_left, top_right, bottom_right,
-/// bottom_left], pad-local y-down frame), built via the world transform.
+/// corner flagged in `chamfered` ([`top_left`, `top_right`, `bottom_right`,
+/// `bottom_left`], pad-local y-down frame), built via the world transform.
 ///
 /// Same representation strategy as `rect_polygon` for a roundrect: the
 /// returned polygon is the outline deflated by `rr`, carried with inflation
@@ -1678,7 +1693,7 @@ fn chamfered_rect_polygon(
 ) -> Shape {
     let hw = w / 2.0;
     let hh = h / 2.0;
-    let cut = ch + (std::f64::consts::SQRT_2 - 1.0) * rr;
+    let cut = (std::f64::consts::SQRT_2 - 1.0).mul_add(rr, ch);
     // Corner order matches rect_polygon: TL, TR, BR, BL. `(cx, cy)` is the
     // corner's quadrant sign; `vert_first` is whether the outline traversal
     // enters the corner along the vertical pad edge (so the vertex on that
@@ -1784,6 +1799,7 @@ fn trapezoid_polygon(
 /// `(size sx sy)`, circle by default) plus every drawn primitive inside
 /// `(primitives ...)`: all `gr_poly`/`poly` outlines (not just the first),
 /// stroked lines, arcs, circles and rectangles.
+#[allow(clippy::too_many_lines, reason = "one arm per primitive kind")]
 fn custom_pad_shapes(
     pad: &List,
     sx: f64,
@@ -1834,7 +1850,7 @@ fn custom_pad_shapes(
     let filled = |l: &List| -> bool {
         matches!(
             l.find_value("fill").as_deref(),
-            Some("yes") | Some("true") | Some("solid")
+            Some("yes" | "true" | "solid")
         )
     };
     for prim in prims.lists() {
@@ -1848,9 +1864,9 @@ fn custom_pad_shapes(
             .find_f64("width")
             .or_else(|| prim.find("stroke").and_then(|s| s.find_f64("width")))
             .unwrap_or(0.0);
-        let r = width / 2.0;
+        let stroke_r = width / 2.0;
         match prim.name() {
-            Some("gr_poly") | Some("poly") => {
+            Some("gr_poly" | "poly") => {
                 let Some(pts_list) = prim.find("pts") else {
                     continue;
                 };
@@ -1861,7 +1877,7 @@ fn custom_pad_shapes(
                 if pts.len() >= 3 {
                     // Custom-pad polygon primitives are always filled; a
                     // nonzero width strokes the outline, inflating it by r.
-                    out.push(Shape::Polygon { pts, r });
+                    out.push(Shape::Polygon { pts, r: stroke_r });
                 }
             }
             Some("gr_line") => {
@@ -1873,7 +1889,7 @@ fn custom_pad_shapes(
                         ay: a.1,
                         bx: b.0,
                         by: b.1,
-                        r,
+                        r: stroke_r,
                     }));
                 }
             }
@@ -1902,14 +1918,14 @@ fn custom_pad_shapes(
                         ay: c.1,
                         bx: c.0,
                         by: c.1,
-                        r: radius + r,
+                        r: radius + stroke_r,
                     }));
                 } else {
                     // Stroke-only ring: the interior is NOT copper. Flatten the
                     // circumference into capsule links of the stroke radius so
                     // copper legitimately inside the ring stays silent.
                     out.extend(
-                        ring_capsules(c.0, c.1, radius, r)
+                        ring_capsules(c.0, c.1, radius, stroke_r)
                             .into_iter()
                             .map(Shape::Capsule),
                     );
@@ -1922,7 +1938,7 @@ fn custom_pad_shapes(
                 let corners = [(a.0, a.1), (b.0, a.1), (b.0, b.1), (a.0, b.1)];
                 if filled(prim) {
                     let pts = corners.into_iter().map(|(x, y)| to_world(x, y)).collect();
-                    out.push(Shape::Polygon { pts, r });
+                    out.push(Shape::Polygon { pts, r: stroke_r });
                 } else {
                     for i in 0..4 {
                         let p = to_world(corners[i].0, corners[i].1);
@@ -1932,7 +1948,7 @@ fn custom_pad_shapes(
                             ay: p.1,
                             bx: q.0,
                             by: q.1,
-                            r,
+                            r: stroke_r,
                         }));
                     }
                 }
@@ -1981,6 +1997,7 @@ const RING_SAGITTA_MM: f64 = 0.0025;
 /// overstatement (a couple of microns) can read as a touch and be reported a
 /// short; the alternative (chords under the true circle) silently drops real
 /// grazing shorts, the worse failure.
+#[allow(clippy::cast_precision_loss, reason = "segment counts are small")]
 fn covering_arc_capsules(
     cx: f64,
     cy: f64,
@@ -2012,6 +2029,12 @@ fn covering_arc_capsules(
 /// Segment count that keeps the chord sagitta `radius * (1 - cos(sweep/2n))`
 /// at or below [`RING_SAGITTA_MM`], floored at [`ARC_SEGMENTS`] per half-turn
 /// (minimum 1).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "small, non-negative segment counts"
+)]
 fn covering_segments(radius: f64, sweep: f64) -> usize {
     let turns = sweep.abs() / std::f64::consts::PI;
     let floor = ((ARC_SEGMENTS as f64 * turns).ceil() as usize).max(1);
@@ -2074,9 +2097,10 @@ fn flatten_arc(
     let mut caps = Vec::with_capacity(ARC_SEGMENTS);
     let mut prev = start;
     for i in 1..=ARC_SEGMENTS {
+        #[allow(clippy::cast_precision_loss, reason = "segment counts are small")]
         let t = i as f64 / ARC_SEGMENTS as f64;
-        let a = a0 + sweep * t;
-        let p = (cx + radius * a.cos(), cy + radius * a.sin());
+        let a = sweep.mul_add(t, a0);
+        let p = (radius.mul_add(a.cos(), cx), radius.mul_add(a.sin(), cy));
         caps.push(Capsule {
             ax: prev.0,
             ay: prev.1,
@@ -2123,24 +2147,9 @@ fn covering_arc_from_3(
 /// `via` (radians): the positive CCW sweep when `via` lies on it, otherwise
 /// the complementary negative sweep.
 fn arc_sweep_through(from: f64, to: f64, via: f64) -> f64 {
-    let norm = |x: f64| {
-        let mut v = x;
-        while v <= -std::f64::consts::PI {
-            v += std::f64::consts::TAU;
-        }
-        while v > std::f64::consts::PI {
-            v -= std::f64::consts::TAU;
-        }
-        v
-    };
-    let mut s = norm(to - from);
-    if s < 0.0 {
-        s += std::f64::consts::TAU;
-    }
-    let mut m = norm(via - from);
-    if m < 0.0 {
-        m += std::f64::consts::TAU;
-    }
+    // Both sweeps measured CCW from `from`, in [0, TAU).
+    let s = (to - from).rem_euclid(std::f64::consts::TAU);
+    let m = (via - from).rem_euclid(std::f64::consts::TAU);
     if m <= s {
         s
     } else {
@@ -2150,20 +2159,21 @@ fn arc_sweep_through(from: f64, to: f64, via: f64) -> f64 {
 
 /// Circumcircle (centre, radius) of three points, or None if colinear.
 fn circle_from_3(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Option<(f64, f64, f64)> {
-    let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
-    if d.abs() < 1e-12 {
+    let det = 2.0
+        * c.0
+            .mul_add(a.1 - b.1, a.0.mul_add(b.1 - c.1, b.0 * (c.1 - a.1)));
+    if det.abs() < 1e-12 {
         return None;
     }
-    let a2 = a.0 * a.0 + a.1 * a.1;
-    let b2 = b.0 * b.0 + b.1 * b.1;
-    let c2 = c.0 * c.0 + c.1 * c.1;
-    let ux = (a2 * (b.1 - c.1) + b2 * (c.1 - a.1) + c2 * (a.1 - b.1)) / d;
-    let uy = (a2 * (c.0 - b.0) + b2 * (a.0 - c.0) + c2 * (b.0 - a.0)) / d;
-    let r = ((a.0 - ux).powi(2) + (a.1 - uy).powi(2)).sqrt();
-    Some((ux, uy, r))
+    let a2 = a.0.mul_add(a.0, a.1 * a.1);
+    let b2 = b.0.mul_add(b.0, b.1 * b.1);
+    let c2 = c.0.mul_add(c.0, c.1 * c.1);
+    let ux = c2.mul_add(a.1 - b.1, a2.mul_add(b.1 - c.1, b2 * (c.1 - a.1))) / det;
+    let uy = c2.mul_add(b.0 - a.0, a2.mul_add(c.0 - b.0, b2 * (a.0 - c.0))) / det;
+    Some((ux, uy, (a.0 - ux).hypot(a.1 - uy)))
 }
 
-/// Reference designator of a footprint (property "Reference" or fp_text).
+/// Reference designator of a footprint (property "Reference" or `fp_text`).
 fn footprint_reference(fp: &List) -> String {
     for prop in fp.find_all("property") {
         if prop.arg_value(0).as_deref() == Some("Reference") {
@@ -2250,7 +2260,7 @@ impl NetTieOwners {
         }
     }
 
-    fn point_shape((x, y): (f64, f64)) -> Shape {
+    const fn point_shape((x, y): (f64, f64)) -> Shape {
         Shape::disc(x, y, 0.0)
     }
 
@@ -2434,6 +2444,7 @@ pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
 
 /// Run geometric short / clearance detection with project-derived per-net
 /// clearance rules.
+#[must_use]
 pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules>) -> DrcReport {
     let Some(root) = doc.root() else {
         return DrcReport::default();
@@ -2460,7 +2471,7 @@ pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules
         insert_kicad_net_tie_groups(&mut net_ties, fp, footprint_reference(fp), &mut nets);
     }
     net_ties.capture_geometry(&buckets);
-    sweep_buckets(buckets, &rules, &no_net, &net_ties, |id| nets.name_of(id))
+    sweep_buckets(&buckets, &rules, &no_net, &net_ties, |id| nets.name_of(id))
 }
 
 /// The geometry-source-agnostic core of the DRC: take per-layer copper buckets
@@ -2476,8 +2487,9 @@ pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules
 /// keyed by owner. An exemption therefore applies only to copper touching that
 /// particular component's geometry. Merely sharing any ordinary component can
 /// never waive a net pair globally.
+#[allow(clippy::too_many_lines, reason = "one sweep over every layer pair")]
 fn sweep_buckets(
-    buckets: LayerBuckets,
+    buckets: &LayerBuckets,
     rules: &ClearanceRules,
     no_net: &std::collections::HashSet<i64>,
     net_ties: &NetTieOwners,
@@ -2504,6 +2516,7 @@ fn sweep_buckets(
 
     // Record one finding, de-duplicating on net pair + layer + ~0.25 mm cell so
     // a pour running alongside a long track does not emit thousands of rows.
+    #[allow(clippy::cast_possible_truncation, reason = "quarter-mm cells fit i64")]
     let mut record = |kind: ViolationKind,
                       pa: i64,
                       pb: i64,
@@ -2700,6 +2713,10 @@ fn sweep_buckets(
 
 /// Convenience: parse `.kicad_pcb` text and run DRC with the default clearance
 /// rule (or the board's own rule when present).
+///
+/// # Errors
+///
+/// Returns the s-expression parse error when `text` is not well-formed.
 pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
     let doc = forge_sexpr::parse(text)?;
     let mut report = run_drc(&doc, None);
@@ -2707,12 +2724,17 @@ pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
     Ok(report)
 }
 
-/// Like [`drc_from_text`] but with concrete per-net rules. KiCad 10 (format
-/// 20260206) keeps the design-rule clearance in the sibling `.kicad_pro`
-/// (`net_settings.classes[].clearance`), not in the `.kicad_pcb` `(setup)` block,
-/// so `board_clearance` would otherwise fall back to [`DEFAULT_CLEARANCE_MM`];
+/// Like [`drc_from_text`] but with concrete per-net rules.
+///
+/// KiCad 10 (format 20260206) keeps the design-rule clearance in the sibling
+/// `.kicad_pro` (`net_settings.classes[].clearance`), not in the `.kicad_pcb`
+/// `(setup)` block, so `board_clearance` would otherwise fall back to [`DEFAULT_CLEARANCE_MM`];
 /// the caller, which knows the board path, reads the project's rules and passes
 /// them here. `None` keeps the board/`DEFAULT_CLEARANCE_MM` behaviour.
+///
+/// # Errors
+///
+/// Returns the s-expression parse error when `text` is not well-formed.
 pub fn drc_from_text_with_clearance_rules(
     text: &str,
     rules: Option<ClearanceRules>,
@@ -2725,20 +2747,26 @@ pub fn drc_from_text_with_clearance_rules(
 
 /// Convenience: run the geometric DRC on Eagle `.brd` XML text, using the
 /// board's own design-rule clearance (falling back to [`DEFAULT_CLEARANCE_MM`]).
+#[must_use]
 pub fn eagle_drc_from_text(text: &str) -> DrcReport {
     eagle_drc::run(text, None)
 }
 
 /// Convenience: run the geometric DRC on Altium `.PcbDoc` raw bytes, using the
 /// default clearance rule.
+///
+/// # Errors
+///
+/// Returns an error when `bytes` is not a readable Altium `.PcbDoc`.
 pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractError> {
     altium_drc::run(bytes, None)
 }
 
 // ── Eagle .brd geometry → the same engine ────────────────────────────────────
 
-/// Eagle `.brd` geometry extraction. The connectivity extractor in `eagle.rs`
-/// reads pad nets; this reads *copper geometry per net* (wires, vias, pads,
+/// Eagle `.brd` geometry extraction.
+///
+/// The connectivity extractor in `eagle.rs` reads pad nets; this reads *copper geometry per net* (wires, vias, pads,
 /// smds, polygons, rectangles, circles) and feeds it to `sweep_buckets`, the
 /// exact same short / clearance engine the KiCad path uses. The geometry is kept
 /// in Eagle's native frame (millimetres, y-up); the DRC is self-consistent so
@@ -2787,13 +2815,18 @@ pub mod eagle_drc {
         a.get(k)?.parse().ok()
     }
 
+    #[allow(clippy::cast_possible_truncation, reason = "Eagle writes integers")]
+    fn int(a: &Attrs, k: &str) -> Option<i64> {
+        num(a, k).map(|v| v as i64)
+    }
+
     fn layer_of(a: &Attrs) -> i64 {
-        num(a, "layer").map(|v| v as i64).unwrap_or(0)
+        int(a, "layer").unwrap_or(0)
     }
 
     /// `(degrees, mirrored)` of the element/pad `rot` attribute (`R0` if absent).
     fn rot_of(a: &Attrs) -> (f64, bool) {
-        parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"))
+        parse_rot(a.get("rot").map_or("R0", String::as_str))
     }
 
     /// Parse an Eagle length value that may carry a unit suffix (`"6mil"`,
@@ -2875,7 +2908,7 @@ pub mod eagle_drc {
     impl PkgItem {
         fn name(&self) -> &str {
             match self {
-                PkgItem::Pad { name, .. } | PkgItem::Smd { name, .. } => name,
+                Self::Pad { name, .. } | Self::Smd { name, .. } => name,
             }
         }
     }
@@ -3010,7 +3043,7 @@ pub mod eagle_drc {
     impl Default for ViaRestring {
         fn default() -> Self {
             // Eagle's stock defaults.
-            ViaRestring {
+            Self {
                 rv: 0.25,
                 min_mm: 0.2032,
                 max_mm: 0.508,
@@ -3021,7 +3054,7 @@ pub mod eagle_drc {
     impl ViaRestring {
         fn outer_diameter(&self, drill: f64) -> f64 {
             let ring = (self.rv * drill).clamp(self.min_mm, self.max_mm);
-            drill + 2.0 * ring
+            2.0f64.mul_add(ring, drill)
         }
     }
 
@@ -3037,6 +3070,7 @@ pub mod eagle_drc {
     }
 
     /// Stream the XML once, collecting packages, elements, signals and rules.
+    #[allow(clippy::too_many_lines, reason = "one streaming pass over the XML")]
     fn parse(text: &str) -> Parsed {
         let mut reader = Reader::from_str(text);
         reader.config_mut().trim_text(true);
@@ -3057,7 +3091,7 @@ pub mod eagle_drc {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                Ok(Event::Start(e) | Event::Empty(e)) => {
                     let name = e.name().as_ref().to_vec();
                     let a = attrs_of(&e);
                     match name.as_slice() {
@@ -3108,7 +3142,7 @@ pub mod eagle_drc {
                                     (num(&a, "x"), num(&a, "y"), num(&a, "dx"), num(&a, "dy"))
                                 {
                                     let (rot_deg, _) = rot_of(&a);
-                                    let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(1);
+                                    let layer = int(&a, "layer").unwrap_or(1);
                                     out.packages
                                         .entry((cur_library.clone(), pkg.clone()))
                                         .or_default()
@@ -3139,7 +3173,7 @@ pub mod eagle_drc {
                             });
                         }
                         b"class" => {
-                            if let Some(n) = num(&a, "number").map(|v| v as i64) {
+                            if let Some(n) = int(&a, "number") {
                                 cur_class = Some(n);
                                 out.classes.entry(n).or_default();
                             }
@@ -3147,7 +3181,7 @@ pub mod eagle_drc {
                         b"clearance" => {
                             if let Some(n) = cur_class {
                                 if let (Some(other), Some(v)) = (
-                                    num(&a, "class").map(|v| v as i64),
+                                    int(&a, "class"),
                                     a.get("value").and_then(|s| parse_len_mm(s)),
                                 ) {
                                     out.classes
@@ -3161,14 +3195,14 @@ pub mod eagle_drc {
                         b"signal" => {
                             out.signals
                                 .push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
-                            out.signal_classes
-                                .push(num(&a, "class").map(|v| v as i64).unwrap_or(0));
+                            out.signal_classes.push(int(&a, "class").unwrap_or(0));
                             cur_signal = Some(out.signals.len() - 1);
                         }
                         b"contactref" => {
                             if let (Some(si), Some(el), Some(pad)) =
                                 (cur_signal, a.get("element"), a.get("pad"))
                             {
+                                #[allow(clippy::cast_possible_wrap, reason = "few signals")]
                                 out.pad_net.insert((el.clone(), pad.clone()), si as i64 + 1);
                             }
                         }
@@ -3225,9 +3259,7 @@ pub mod eagle_drc {
                                         // the SAME rank; clamp keeps
                                         // hand-written out-of-range values in
                                         // the board range too.
-                                        rank: num(&a, "rank")
-                                            .map(|v| (v as i64).clamp(1, 6))
-                                            .unwrap_or(1),
+                                        rank: int(&a, "rank").map_or(1, |v| v.clamp(1, 6)),
                                         thermals: a.get("thermals").map(String::as_str)
                                             != Some("off"),
                                         orphans: a.get("orphans").map(String::as_str) == Some("on"),
@@ -3308,8 +3340,7 @@ pub mod eagle_drc {
                     }
                     _ => {}
                 },
-                Ok(Event::Eof) => break,
-                Err(_) => break,
+                Ok(Event::Eof) | Err(_) => break,
                 _ => {}
             }
             buf.clear();
@@ -3399,11 +3430,11 @@ pub mod eagle_drc {
         // The included angle is `curve_deg`; the chord subtends it. Centre lies
         // off the chord midpoint by the sagitta direction.
         let theta = curve_deg.to_radians();
-        let mx = (x1 + x2) / 2.0;
-        let my = (y1 + y2) / 2.0;
+        let mx = f64::midpoint(x1, x2);
+        let my = f64::midpoint(y1, y2);
         let dx = x2 - x1;
         let dy = y2 - y1;
-        let chord = (dx * dx + dy * dy).sqrt();
+        let chord = dx.hypot(dy);
         if chord < 1e-9 {
             return vec![Capsule {
                 ax: x1,
@@ -3415,7 +3446,10 @@ pub mod eagle_drc {
         }
         let radius = (chord / 2.0) / (theta / 2.0).sin().abs();
         // Distance from chord midpoint to centre.
-        let h = (radius * radius - (chord / 2.0).powi(2)).max(0.0).sqrt();
+        let rise = (chord / 2.0)
+            .mul_add(-(chord / 2.0), radius * radius)
+            .max(0.0)
+            .sqrt();
         // Unit normal to the chord. The centre sits a distance `h` along the
         // normal from the midpoint, but on which side depends on the sign of the
         // included angle AND on whether the arc is the major or minor one. Rather
@@ -3424,9 +3458,9 @@ pub mod eagle_drc {
         // lands the sweep on the stated endpoint.
         let nx = -dy / chord;
         let ny = dx / chord;
-        let pick = |s: f64| -> (f64, f64, f64, f64) {
-            let cx = mx + s * h * nx;
-            let cy = my + s * h * ny;
+        let pick = |side: f64| -> (f64, f64, f64, f64) {
+            let cx = (side * rise).mul_add(nx, mx);
+            let cy = (side * rise).mul_add(ny, my);
             let a0 = (y1 - cy).atan2(x1 - cx);
             let ex = cx + radius * (a0 + theta).cos();
             let ey = cy + radius * (a0 + theta).sin();
@@ -3443,8 +3477,9 @@ pub mod eagle_drc {
         let mut caps = Vec::with_capacity(n);
         let mut prev = (x1, y1);
         for i in 1..=n {
-            let t = i as f64 / n as f64;
-            let a = a0 + theta * t;
+            #[allow(clippy::cast_precision_loss, reason = "segment counts are small")]
+            let frac = i as f64 / n as f64;
+            let a = theta.mul_add(frac, a0);
             let p = (cx + radius * a.cos(), cy + radius * a.sin());
             caps.push(Capsule {
                 ax: prev.0,
@@ -3468,15 +3503,20 @@ pub mod eagle_drc {
         let (rs, rc) = rot.sin_cos();
         (0..8)
             .map(|i| {
-                let a = std::f64::consts::FRAC_PI_8 + i as f64 * std::f64::consts::FRAC_PI_4;
+                let a =
+                    f64::from(i).mul_add(std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_8);
                 let (lx, ly) = (circum * a.cos(), circum * a.sin());
-                (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc)
+                (
+                    ly.mul_add(-rs, lx.mul_add(rc, cx)),
+                    ly.mul_add(rc, lx.mul_add(rs, cy)),
+                )
             })
             .collect()
     }
 
     /// Place a package item into world coordinates and push the resulting copper
     /// primitive(s) onto the right layer(s).
+    #[allow(clippy::too_many_lines, reason = "one arm per package item kind")]
     fn place_pkg_item(
         item: &PkgItem,
         el: &Element,
@@ -3497,7 +3537,10 @@ pub mod eagle_drc {
         let (esin, ecos) = eff_rot.to_radians().sin_cos();
         let to_world = |lx: f64, ly: f64| -> (f64, f64) {
             let mx = if el.mirrored { -lx } else { lx };
-            (el.x + mx * ecos - ly * esin, el.y + mx * esin + ly * ecos)
+            (
+                ly.mul_add(-esin, mx.mul_add(ecos, el.x)),
+                ly.mul_add(ecos, mx.mul_add(esin, el.y)),
+            )
         };
         match item {
             PkgItem::Pad {
@@ -3629,29 +3672,13 @@ pub mod eagle_drc {
     }
 
     /// Run the geometric DRC on Eagle `.brd` text, feeding the shared engine.
+    ///
     /// `clearance_override` forces the clearance rule (mm) when `Some`; otherwise
     /// the board's own design-rule clearance is used, falling back to
     /// [`DEFAULT_CLEARANCE_MM`] only when the board states none.
+    #[must_use]
+    #[allow(clippy::too_many_lines, reason = "one pass over the parsed board")]
     pub fn run(text: &str, clearance_override: Option<f64>) -> DrcReport {
-        let parsed = parse(text);
-        if !parsed.saw_eagle {
-            return DrcReport::default();
-        }
-        let clearance = clearance_override
-            .or(parsed.clearance_mm)
-            .unwrap_or(DEFAULT_CLEARANCE_MM);
-
-        // Net ids: 1-based signal index, matching `eagle.rs`. Name lookup table.
-        let names: Vec<String> = parsed.signals.iter().map(|(n, _)| n.clone()).collect();
-        let name_of =
-            |id: i64| -> String { names.get((id - 1) as usize).cloned().unwrap_or_default() };
-
-        // The two-layer copper stack these boards use; a TH pad / via sits on all
-        // of them.
-        let copper_layers: Vec<i64> = vec![1, 16];
-
-        let mut buckets = LayerBuckets::default();
-
         // Signal pours, kept aside for the pour-to-pour rank check (they are
         // NOT stamped as solid copper; see the Polygon arm below).
         struct Pour {
@@ -3664,11 +3691,34 @@ pub mod eagle_drc {
             orphans: bool,
             pts: Vec<(f64, f64)>,
         }
+        let parsed = parse(text);
+        if !parsed.saw_eagle {
+            return DrcReport::default();
+        }
+        let clearance = clearance_override
+            .or(parsed.clearance_mm)
+            .unwrap_or(DEFAULT_CLEARANCE_MM);
+
+        // Net ids: 1-based signal index, matching `eagle.rs`. Name lookup table.
+        let names: Vec<String> = parsed.signals.iter().map(|(n, _)| n.clone()).collect();
+        let name_of = |id: i64| -> String {
+            let index = usize::try_from(id - 1).ok();
+            index
+                .and_then(|i| names.get(i))
+                .cloned()
+                .unwrap_or_default()
+        };
+
+        // The two-layer copper stack these boards use; a TH pad / via sits on all
+        // of them.
+        let copper_layers: Vec<i64> = vec![1, 16];
+
+        let mut buckets = LayerBuckets::default();
+
         let mut pours: Vec<Pour> = Vec::new();
 
         // ── Board-level signal geometry ──────────────────────────────────────
-        for (si, (_, geoms)) in parsed.signals.iter().enumerate() {
-            let net = si as i64 + 1;
+        for ((_, geoms), net) in parsed.signals.iter().zip(1_i64..) {
             for g in geoms {
                 match g {
                     SignalGeom::Wire {
@@ -3890,8 +3940,7 @@ pub mod eagle_drc {
                 .clearances
                 .iter()
                 .find(|(other, _)| other == number)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+                .map_or(0.0, |(_, v)| *v);
             rules.add_class(NetClassRule {
                 name: class_key(*number),
                 clearance_mm: self_clearance.max(clearance),
@@ -3914,7 +3963,7 @@ pub mod eagle_drc {
             }
         }
 
-        let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of);
+        let mut report = sweep_buckets(&buckets, &rules, &no_net, &net_ties, name_of);
 
         // ── Pour-to-pour rank arbitration ────────────────────────────────────
         // Differing ranks are arbitrated (the higher-numbered pour carves around
@@ -4052,8 +4101,9 @@ pub mod eagle_drc {
 
 // ── Altium .PcbDoc geometry → the same engine ─────────────────────────────────
 
-/// Altium `.PcbDoc` copper-geometry extraction for the DRC. The connectivity
-/// extractor in `altium.rs` reads pad nets; this reads *copper geometry per net*
+/// Altium `.PcbDoc` copper-geometry extraction for the DRC.
+///
+/// The connectivity extractor in `altium.rs` reads pad nets; this reads *copper geometry per net*
 /// (tracks, arcs, vias, pads, polygon outlines) straight from the binary record
 /// streams and feeds it to `sweep_buckets`, the exact same short / clearance
 /// engine the KiCad and Eagle paths use.
@@ -4078,7 +4128,7 @@ pub mod altium_drc {
 
     /// Map an Altium primitive's net field to the hauksbee net id (index + 1, so
     /// id 0 stays the "no net" bucket), or 0 when unattached / out of range.
-    fn net_id(field: u16, n_nets: usize) -> i64 {
+    const fn net_id(field: u16, n_nets: usize) -> i64 {
         if field == NONE_U16 || (field as usize) >= n_nets {
             0
         } else {
@@ -4096,6 +4146,12 @@ pub mod altium_drc {
         }
     }
 
+    /// Run the geometric DRC on Altium `.PcbDoc` bytes, feeding the shared engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `bytes` is not a readable `.PcbDoc` compound file.
+    #[allow(clippy::too_many_lines, reason = "one pass per record stream")]
     pub fn run(bytes: &[u8], clearance_override: Option<f64>) -> Result<DrcReport, ExtractError> {
         let mut doc = altium::PcbDoc::open(bytes)?;
         let clearance = clearance_override.unwrap_or(DEFAULT_CLEARANCE_MM);
@@ -4107,13 +4163,11 @@ pub mod altium_drc {
             .unwrap_or_default();
         let n_nets = net_names.len();
         let name_of = |id: i64| -> String {
-            match id {
-                0 => String::new(),
-                _ => net_names
-                    .get((id - 1) as usize)
-                    .cloned()
-                    .unwrap_or_default(),
-            }
+            let index = usize::try_from(id - 1).ok();
+            index
+                .and_then(|i| net_names.get(i))
+                .cloned()
+                .unwrap_or_default()
         };
 
         // Canonical component identity and native Component Type by index, so
@@ -4141,7 +4195,10 @@ pub mod altium_drc {
             .collect();
 
         let mut buckets = LayerBuckets::default();
-        let mut copper: HashSet<String> = ["F.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
+        let mut copper: HashSet<String> = ["F.Cu", "B.Cu"]
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
 
         // Tracks (TRACKS6, marker 4) and arcs (ARCS6, marker 1) are capsules on
         // one copper layer. Layouts ported from KiCad's `altium_parser_pcb.cpp`.
@@ -4251,8 +4308,7 @@ pub mod altium_drc {
         // antipad does not read as a short.
         if let Some(b) = doc.data("Polygons") {
             for m in altium::properties_records(&b) {
-                let layer =
-                    altium::layer_id_from_name(m.get("LAYER").map(String::as_str).unwrap_or(""));
+                let layer = altium::layer_id_from_name(m.get("LAYER").map_or("", String::as_str));
                 let pts: Vec<(f64, f64)> = (0..)
                     .map_while(|i| {
                         let x = altium::parse_len_mm(m.get(&format!("VX{i}"))?)?;
@@ -4266,8 +4322,7 @@ pub mod altium_drc {
                 let net = m
                     .get("NET")
                     .and_then(|s| s.trim().parse::<i64>().ok())
-                    .map(|v| if v < 0 { NONE_U16 } else { v as u16 })
-                    .unwrap_or(NONE_U16);
+                    .map_or(NONE_U16, |v| u16::try_from(v).unwrap_or(NONE_U16));
                 let layer = layer_name(layer);
                 copper.insert(layer.clone());
                 buckets.push_zone_opts(&layer, pts, net_id(net, n_nets), false, false);
@@ -4277,11 +4332,12 @@ pub mod altium_drc {
         // Net 0 carries no connectivity, so it is never a short (KiCad net 0).
         let no_net: HashSet<i64> = std::iter::once(0).collect();
         let rules = ClearanceRules::new(clearance);
-        Ok(sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of))
+        Ok(sweep_buckets(&buckets, &rules, &no_net, &net_ties, name_of))
     }
 
     /// Flatten an Altium arc (centre, radius, start/end angle in degrees,
     /// counter-clockwise) into a chain of capsule links of half-width `r`.
+    #[allow(clippy::cast_precision_loss, reason = "segment counts are small")]
     fn flatten_altium_arc(
         (cx, cy): (f64, f64),
         radius: f64,
@@ -4294,7 +4350,7 @@ pub mod altium_drc {
         let start = start_deg.to_radians();
         let at = |t: f64| {
             let ang = start + sweep * t;
-            (cx + radius * ang.cos(), cy + radius * ang.sin())
+            (radius.mul_add(ang.cos(), cx), radius.mul_add(ang.sin(), cy))
         };
         (1..=ARC_SEGMENTS)
             .map(|i| {
@@ -4330,7 +4386,12 @@ pub mod altium_drc {
         let (cx, cy, w, h) = (p.x_mm, p.y_mm, p.size_x, p.size_y);
         let rot = p.rotation_deg.to_radians();
         let (rs, rc) = rot.sin_cos();
-        let to_world = |lx: f64, ly: f64| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc);
+        let to_world = |lx: f64, ly: f64| {
+            (
+                ly.mul_add(-rs, lx.mul_add(rc, cx)),
+                ly.mul_add(rc, lx.mul_add(rs, cy)),
+            )
+        };
         match p.shape {
             1 => {
                 // Circle, or a stadium along the long axis.
@@ -4411,11 +4472,11 @@ mod version_warning_tests {
     fn parses_format_version_from_header() {
         assert_eq!(
             kicad_pcb_format_version("(kicad_pcb (version 20260206) (generator pcbnew)"),
-            Some(20260206)
+            Some(20_260_206)
         );
         assert_eq!(
             kicad_pcb_format_version("(kicad_pcb\n\t(version 20221018)\n"),
-            Some(20221018)
+            Some(20_221_018)
         );
         assert_eq!(kicad_pcb_format_version("(eagle><drawing>"), None);
     }

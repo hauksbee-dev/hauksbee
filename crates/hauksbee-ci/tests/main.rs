@@ -51,6 +51,7 @@ mod sensor_attach;
 mod shipped_examples_run;
 mod shunt_reference;
 mod spec_and_assertions;
+mod spec_models_dir_and_waveforms;
 mod spice_models_cli;
 mod tarski_staged_replay;
 mod timer555;

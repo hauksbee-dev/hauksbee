@@ -8,7 +8,9 @@ description = "LM358 dual op-amp, 32V supply, rail-to-rail input"
 [models.match]
 value_re = "(?i)^LM358"
 
-# VICR, one entry per channel. The op-amp's real rule is stricter than the
+# VICR, one entry per channel. headroom_v is the 25 C row's 1.5 V, not the
+# full-temperature 2 V, as for every card in this file whose sheet prints both.
+# The op-amp's real rule is stricter than the
 # comparator's -- EITHER input above V+ - 1.5 V leaves the guaranteed range --
 # but the envelope kind encodes the both-inputs form, so this UNDER-reports on
 # an op-amp rather than over-reporting: a flagged board is certainly out of
@@ -19,7 +21,7 @@ supply = "vcc"
 inputs = ["in_plus_a", "in_minus_a"]
 headroom_v = 1.5
 severity = "serious"
-basis = "TI LM358 SLOS068AB, Recommended Operating Conditions, common-mode input voltage 0 V to V+ - 1.5 V at VCC = 5 V"
+basis = "TI LM358 SLOS068AB, Electrical Characteristics for LM358 and LM358A, INPUT VOLTAGE RANGE, VCM (V-) to (V+) - 1.5 V at TA = 25 C, VS = 5 V to 30 V ((V+) - 2 V over TA = 0 to 70 C; Recommended Operating Conditions print the same (V+) - 2 V)"
 
 [[models.envelope]]
 kind = "input_common_mode"
@@ -27,7 +29,7 @@ supply = "vcc"
 inputs = ["in_plus_b", "in_minus_b"]
 headroom_v = 1.5
 severity = "serious"
-basis = "TI LM358 SLOS068AB, Recommended Operating Conditions, common-mode input voltage 0 V to V+ - 1.5 V at VCC = 5 V"
+basis = "TI LM358 SLOS068AB, Electrical Characteristics for LM358 and LM358A, INPUT VOLTAGE RANGE, VCM (V-) to (V+) - 1.5 V at TA = 25 C, VS = 5 V to 30 V ((V+) - 2 V over TA = 0 to 70 C; Recommended Operating Conditions print the same (V+) - 2 V)"
 
 [models.params]
 # Sources: TI "LM158/LM258/LM358/LM2904" SLOS068AB (June 1976, rev. October
@@ -285,7 +287,7 @@ supply = "vcc"
 inputs = ["in_plus_a", "in_minus_a"]
 headroom_v = 1.5
 severity = "serious"
-basis = "TI LM393 SLCS005AH, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+basis = "TI LM393 SLCS005AH, Section 5.8 Electrical Characteristics for LM193, LM293, and LM393, VICR common-mode input-voltage range 0 to VCC - 1.5 V at TA = 25 C, VCC = 5 V (0 to VCC - 2 V over the full range)"
 
 [[models.envelope]]
 kind = "input_common_mode"
@@ -293,7 +295,7 @@ supply = "vcc"
 inputs = ["in_plus_b", "in_minus_b"]
 headroom_v = 1.5
 severity = "serious"
-basis = "TI LM393 SLCS005AH, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+basis = "TI LM393 SLCS005AH, Section 5.8 Electrical Characteristics for LM193, LM293, and LM393, VICR common-mode input-voltage range 0 to VCC - 1.5 V at TA = 25 C, VCC = 5 V (0 to VCC - 2 V over the full range)"
 
 [[models.envelope]]
 kind = "supply_range"
@@ -308,7 +310,10 @@ basis = "TI SLCS005AH, Recommended Operating Conditions, LM393 supply voltage 2 
 open_collector   = true
 ron_ohms         = 32.5      # VOL 130 mV typ at IOL = 4 mA -> 32.5 ohm
 leak_s           = 2.0e-11   # IOH 0.1 nA typ at VOH = 5 V -> 2e-11 S
-supply_static_ua = 450.0     # ICC 0.45 mA typ, both channels, VO = 2.5 V, RL inf
+supply_static_ua = 450.0     # ICC 0.45 mA typ, both channels, RL = inf, VCC = 5 V,
+                             # TA = 25 C: SLCS005AH Section 5.8, LM393 column (the
+                             # VCC = 30 V row is full-range and prints 0.55 typ; the
+                             # LM393B's own table prints 400 uA typ; LM393A 0.60)
 #
 # Datasheet numbers this card records but does NOT stamp, so the reader can see
 # what the two-device stage costs rather than having to infer it:
@@ -480,6 +485,21 @@ description = "LMV7219 7ns single-supply comparator, push-pull output, SOT-23-5"
 
 [models.match]
 value_re = "(?i)^LMV7219"
+
+# VICR upper end. SNOS458I Electrical Characteristics 5 V prints the input
+# common-mode range at CMRR > 50 dB as VCC - 1.2 V min / VCC - 1 V typ at
+# TJ = 25 C and VCC - 1.3 V min over -40 to +85 C. headroom_v is the 25 C
+# guaranteed end, 1.2 V, the same 25 C choice as the LM393 above. Section 7
+# says the output stays correct while ONE input is inside the range, so the
+# check fires only when both are above it. The lower end (-0.2 V typ, -0.1 V
+# max at 25 C) is not checked.
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus", "in_minus"]
+headroom_v = 1.2
+severity = "serious"
+basis = "TI LMV7219 SNOS458I, Electrical Characteristics 5 V, VCM input common-mode voltage range, CMRR > 50 dB: upper end VCC - 1.2 V min (VCC - 1 V typ) at TJ = 25 C; VCC - 1.3 V min over -40 to +85 C"
 
 [models.params]
 # Source: Texas Instruments LMV7219 datasheet (SNOS458I), Table 6.6 (5 V).

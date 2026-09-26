@@ -463,6 +463,7 @@ impl Transient {
                                          // tell real curvature from a step-size change on a slope. 0.0 = no
                                          // accepted step yet.
         let mut h_prev_accepted: f64 = 0.0;
+        let mut failed_steps: u32 = 0; // against `opts.max_failed_steps`
 
         // Source breakpoints (PWL vertices, PULSE corners): mandatory step
         // landings for the ADAPTIVE controller. The fixed-step path is left
@@ -660,16 +661,23 @@ impl Transient {
 
             if !converged {
                 // Cut the step hard and retry.
-                if h <= dt_min * 1.0001 {
+                failed_steps += 1;
+                let over_budget = opts.max_failed_steps.is_some_and(|n| failed_steps > n);
+                if h <= dt_min * 1.0001 || over_budget {
                     // Refuse loudly with the cause (a behavioral fault names
                     // its device), never emit a truncated waveform (exit-3
                     // discipline at the CLI).
+                    let why = if over_budget {
+                        format!("Newton failed {failed_steps} times by t={t} (march budget)")
+                    } else {
+                        format!("Newton failed at t={t} even at dt_min={dt_min}")
+                    };
                     return Err(ws.failure(
                         circuit,
-                        format!("Newton failed at t={t} even at dt_min={dt_min}"),
+                        why,
                         SolvePhase::Transient,
                         Some(t),
-                        Some(dt_min),
+                        Some(h),
                         None,
                     ));
                 }
@@ -863,7 +871,16 @@ fn for_each_reactive(
                 *ic,
                 opts.chgtol.max(opts.vntol),
             ),
-            Device::Inductor { ic, .. } => push(0, branch_i(ws, id), *ic, opts.abstol.max(1e-9)),
+            // The floor is SPICE's `chgtol` on the FLUX `L*i`, as for the
+            // junction charges: a 0.6 nH ESL whose current carries ~1e-8 A of
+            // step-to-step solve noise holds 6e-18 Wb of it, which a 1e-9 A
+            // current floor read as curvature at every step (Olimex EVB).
+            Device::Inductor { ic, henries, .. } => push(
+                0,
+                branch_i(ws, id),
+                *ic,
+                opts.abstol.max(1e-9).max(opts.chgtol / henries),
+            ),
             Device::Diode { a, k, model, .. } if crate::stamp::diode_has_charge(model, effects) => {
                 push(
                     0,
@@ -882,7 +899,7 @@ fn for_each_reactive(
             Device::Mosfet {
                 d, g, s, b, model, ..
             } if crate::stamp::mos_has_charge(model, effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
+                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, id, [*d, *g, *s], *b, model, opts);
                 for (bank, q) in [q_gs, q_gd, q_bd, q_bs].into_iter().enumerate() {
                     push(bank, q, None, opts.chgtol);
                 }
@@ -981,15 +998,15 @@ pub(crate) fn advance_reactive_state(
 /// through the same model code and junction-voltage rule the stamp uses.
 fn mos_q(
     ws: &Workspace,
-    d: NodeId,
-    g: NodeId,
-    s: NodeId,
+    id: DeviceId,
+    dgs: [NodeId; 3],
     b: Option<NodeId>,
     model: &hauksbee_ir::MosfetModel,
     opts: &SolverOptions,
 ) -> (f64, f64, f64, f64) {
+    let sr = opts.effects.series_resistance;
     let (vgs, vgd, vbd, vbs) =
-        crate::stamp::mos_junction_voltages(&ws.layout, &ws.x, d, g, s, b, model);
+        crate::stamp::mos_junction_voltages(&ws.layout, &ws.x, id, dgs, b, model, sr);
     crate::stamp::mos_charges_at(
         model,
         vgs,

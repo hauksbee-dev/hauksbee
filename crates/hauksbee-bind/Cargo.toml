@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 # BindSummary is part of the generated `run --json` report schema.
 schemars = "1.2"
 same-file = "1.0"
-toml = "0.8"
+toml = "1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tempfile = { workspace = true }
 hauksbee-extract = { version = "0.1.0-beta.6", path = "../hauksbee-extract" }
