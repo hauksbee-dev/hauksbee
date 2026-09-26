@@ -31,20 +31,20 @@ impl Probe {
     /// The canonical column label, e.g. `V(out)`, `V(a,b)`, `I(V1)`.
     pub fn label(&self) -> String {
         match self {
-            Probe::NodeVoltage(a) => format!("V({a})"),
-            Probe::NodeDiff(a, b) => format!("V({a},{b})"),
-            Probe::BranchCurrent(d) => format!("I({d})"),
+            Self::NodeVoltage(a) => format!("V({a})"),
+            Self::NodeDiff(a, b) => format!("V({a},{b})"),
+            Self::BranchCurrent(d) => format!("I({d})"),
         }
     }
 
     /// Parse `V(a)`, `V(a,b)`, `I(name)` (any case), or a bare node name.
-    pub fn parse(s: &str) -> SolveResult<Probe> {
+    pub fn parse(s: &str) -> SolveResult<Self> {
         let t = s.trim();
         if t.is_empty() {
             return Err(SolveError::invalid("empty probe"));
         }
         let Some(open) = t.find('(') else {
-            return Ok(Probe::NodeVoltage(t.to_string()));
+            return Ok(Self::NodeVoltage(t.to_string()));
         };
         if !t.ends_with(')') {
             return Err(SolveError::invalid(format!(
@@ -57,9 +57,9 @@ impl Probe {
             "v" => {
                 let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
                 match parts.as_slice() {
-                    [a] if !a.is_empty() => Ok(Probe::NodeVoltage((*a).to_string())),
+                    [a] if !a.is_empty() => Ok(Self::NodeVoltage((*a).to_string())),
                     [a, b] if !a.is_empty() && !b.is_empty() => {
-                        Ok(Probe::NodeDiff((*a).to_string(), (*b).to_string()))
+                        Ok(Self::NodeDiff((*a).to_string(), (*b).to_string()))
                     }
                     _ => Err(SolveError::invalid(format!(
                         "probe `{t}`: V() takes one node `V(a)` or two `V(a,b)`"
@@ -67,7 +67,7 @@ impl Probe {
                 }
             }
             "i" if !inner.is_empty() && !inner.contains(',') => {
-                Ok(Probe::BranchCurrent(inner.to_string()))
+                Ok(Self::BranchCurrent(inner.to_string()))
             }
             "i" => Err(SolveError::invalid(format!(
                 "probe `{t}`: I() takes one element name `I(V1)`"

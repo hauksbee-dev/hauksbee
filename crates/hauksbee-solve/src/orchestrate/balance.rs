@@ -124,7 +124,7 @@ pub struct BalancePolicy {
 
 impl Default for BalancePolicy {
     fn default() -> Self {
-        BalancePolicy {
+        Self {
             v_target_frac: 0.1,
             max_outer: 60,
             probe_rel: 1e-6,
@@ -292,8 +292,8 @@ mod tests {
     }
 
     impl LinearLoads {
-        fn new(feeds: Vec<f64>, blocks: Vec<Vec<f64>>, v: Vec<f64>) -> LinearLoads {
-            LinearLoads {
+        fn new(feeds: Vec<f64>, blocks: Vec<Vec<f64>>, v: Vec<f64>) -> Self {
+            Self {
                 feeds,
                 blocks,
                 v,

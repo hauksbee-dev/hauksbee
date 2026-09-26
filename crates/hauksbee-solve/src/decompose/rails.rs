@@ -99,7 +99,7 @@ pub struct RailPolicy {
 
 impl Default for RailPolicy {
     fn default() -> Self {
-        RailPolicy {
+        Self {
             alpha: 1.4,
             outer_iters: 3.0,
             min_nonlinear_fanout: 2,

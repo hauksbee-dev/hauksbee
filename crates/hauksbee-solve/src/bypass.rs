@@ -115,7 +115,7 @@ impl BypassState {
     /// Build the caches for `circuit` against `layout`. Only Diode/BJT/MOSFET
     /// get an entry (the module-doc exclusion list); everything else keeps
     /// the plain interpreted stamp.
-    pub(crate) fn build(circuit: &Circuit, layout: &Layout) -> BypassState {
+    pub(crate) fn build(circuit: &Circuit, layout: &Layout) -> Self {
         let mut caches = Vec::new();
         let mut index = vec![u32::MAX; circuit.devices.len()];
         for (id, dev) in circuit.iter() {
@@ -165,7 +165,7 @@ impl BypassState {
                 rhs: Vec::new(),
             });
         }
-        BypassState {
+        Self {
             caches,
             index,
             gen: 0,
@@ -388,14 +388,14 @@ mod tests {
     }
 
     impl Rig {
-        fn new(x_of: impl Fn(usize) -> f64) -> Rig {
+        fn new(x_of: impl Fn(usize) -> f64) -> Self {
             let (c, n1) = mixed_board();
             let layout = Layout::new(&c);
             let mut m = SparseMatrix::new(layout.size);
             reserve_pattern(&c, &layout, &mut m);
             let x = (0..layout.size).map(x_of).collect();
             let state = ReactiveState::new(c.devices.len());
-            Rig {
+            Self {
                 c,
                 n1,
                 layout,

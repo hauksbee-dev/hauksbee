@@ -69,7 +69,7 @@ pub struct AcSpec {
 impl AcSpec {
     /// Parse a `<fstart>:<fstop>:<points>` triple (the CLI surface). An optional
     /// trailing `:lin` selects linear spacing; default is per-decade.
-    pub fn parse(s: &str) -> SolveResult<AcSpec> {
+    pub fn parse(s: &str) -> SolveResult<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() < 3 || parts.len() > 4 {
             return Err(SolveError::invalid(format!(
@@ -111,7 +111,7 @@ impl AcSpec {
         if points == 0 {
             return Err(SolveError::invalid("points must be >= 1"));
         }
-        Ok(AcSpec {
+        Ok(Self {
             fstart,
             fstop,
             points,
@@ -219,7 +219,7 @@ pub struct AcAnalysis {
 impl AcAnalysis {
     /// New analysis with the solver options used for the DC operating point.
     pub fn new(opts: SolverOptions) -> Self {
-        AcAnalysis { opts }
+        Self { opts }
     }
 
     /// Run the sweep. Computes the DC operating point once, then solves the
@@ -345,7 +345,7 @@ struct OperatingPoint {
 }
 
 impl OperatingPoint {
-    fn capture(ws: &Workspace, circuit: &Circuit) -> OperatingPoint {
+    fn capture(ws: &Workspace, circuit: &Circuit) -> Self {
         let n = circuit.node_count();
         let mut node_v = vec![0.0; n];
         for (node, v) in node_v.iter_mut().enumerate().skip(1) {
@@ -353,7 +353,7 @@ impl OperatingPoint {
                 *v = ws.x[idx];
             }
         }
-        OperatingPoint {
+        Self {
             node_v,
             x: ws.x.clone(),
         }

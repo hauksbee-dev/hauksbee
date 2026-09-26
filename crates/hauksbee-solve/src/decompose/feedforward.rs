@@ -79,7 +79,7 @@ impl StageDag {
     /// `graph` must have been computed from `circuit` (the circuit is needed
     /// only to look up which island conducts a sensed node; the graph already
     /// carries that in `node_island`).
-    pub fn build(_circuit: &Circuit, graph: &ConductionGraph) -> StageDag {
+    pub fn build(_circuit: &Circuit, graph: &ConductionGraph) -> Self {
         let n = graph.islands.len();
 
         // Island digraph: edge u -> v when island v senses a node island u
@@ -176,7 +176,7 @@ impl StageDag {
             .map(|group| group.iter().any(|&i| island_self_sense[i]))
             .collect();
 
-        StageDag {
+        Self {
             groups: sccs,
             stages,
             free_tears,

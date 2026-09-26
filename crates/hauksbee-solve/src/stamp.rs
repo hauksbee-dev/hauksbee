@@ -55,21 +55,21 @@ impl IntegCoeffs {
     /// uniform grid (fixed step, unit tests) pass `dt_prev == dt`; a
     /// non-positive `dt_prev` (no accepted step yet) also means "assume
     /// uniform", which is exact because the seeded history has x2 == x1.
-    pub fn for_step(method: Integration, dt: f64, dt_prev: f64, first_step: bool) -> IntegCoeffs {
+    pub fn for_step(method: Integration, dt: f64, dt_prev: f64, first_step: bool) -> Self {
         match method {
-            Integration::BackwardEuler => IntegCoeffs {
+            Integration::BackwardEuler => Self {
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
                 a2: 0.0,
                 dt,
             },
-            Integration::Trapezoidal if !first_step => IntegCoeffs {
+            Integration::Trapezoidal if !first_step => Self {
                 g: 2.0 / dt,
                 a1: 2.0 / dt,
                 a2: 0.0,
                 dt,
             },
-            Integration::Trapezoidal => IntegCoeffs {
+            Integration::Trapezoidal => Self {
                 // First step: backward Euler to start cleanly.
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
@@ -102,14 +102,14 @@ impl IntegCoeffs {
                 // dq/dt = g·q_n − (a1·q_{n-1} − a2·q_{n-2}), so a1/a2 carry
                 // the sign flip of the middle/last weights.
                 let r = if dt_prev > 0.0 { dt / dt_prev } else { 1.0 };
-                IntegCoeffs {
+                Self {
                     g: (1.0 + 2.0 * r) / ((1.0 + r) * dt),
                     a1: (1.0 + r) / dt,
                     a2: (r * r) / ((1.0 + r) * dt),
                     dt,
                 }
             }
-            Integration::Gear2 => IntegCoeffs {
+            Integration::Gear2 => Self {
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
                 a2: 0.0,
@@ -254,7 +254,7 @@ impl JunctionEval {
                 _ => {}
             }
         }
-        JunctionEval {
+        Self {
             slots,
             vals: std::cell::RefCell::new(vec![f64::NAN; n]),
             limited: std::cell::Cell::new(false),

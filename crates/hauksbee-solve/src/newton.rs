@@ -350,7 +350,7 @@ impl Workspace {
 
 impl Workspace {
     /// Build the workspace and analyze the (fixed) sparsity pattern.
-    pub fn new(circuit: &Circuit) -> Workspace {
+    pub fn new(circuit: &Circuit) -> Self {
         let layout = Layout::new(circuit);
         let mut matrix = SparseMatrix::new(layout.size);
         reserve_pattern(circuit, &layout, &mut matrix);
@@ -359,7 +359,7 @@ impl Workspace {
         let linear = circuit.devices.iter().all(|d| d.is_linear());
         let plan = StampPlan::compile(circuit, &layout, &matrix);
         let spdt_sibling = SpdtPairs::analyze(circuit).sibling;
-        Workspace {
+        Self {
             layout,
             symbolic,
             matrix,
@@ -2086,13 +2086,13 @@ impl SpdtPairs {
     /// No SPDT pairs (the break-before-make is inert). Used by unit tests on
     /// circuits with no complementary-leg SPDTs.
     #[cfg(test)]
-    fn empty() -> SpdtPairs {
-        SpdtPairs {
+    fn empty() -> Self {
+        Self {
             sibling: std::collections::HashMap::new(),
         }
     }
 
-    pub(crate) fn analyze(circuit: &Circuit) -> SpdtPairs {
+    pub(crate) fn analyze(circuit: &Circuit) -> Self {
         // Group VSwitch legs by (common node a, base name without the _sN suffix).
         let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
             std::collections::HashMap::new();
@@ -2114,7 +2114,7 @@ impl SpdtPairs {
                 sibling.insert(ids[1], ids[0]);
             }
         }
-        SpdtPairs { sibling }
+        Self { sibling }
     }
 }
 

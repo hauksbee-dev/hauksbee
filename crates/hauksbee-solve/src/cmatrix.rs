@@ -33,7 +33,7 @@ pub struct ComplexSystem {
 impl ComplexSystem {
     /// A fresh `n x n` system of zeros.
     pub fn new(n: usize) -> Self {
-        ComplexSystem {
+        Self {
             n,
             a: vec![Complex64::new(0.0, 0.0); n * n],
             b: vec![Complex64::new(0.0, 0.0); n],

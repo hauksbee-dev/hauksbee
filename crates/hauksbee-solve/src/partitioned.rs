@@ -278,7 +278,7 @@ impl PartitionedTransient {
     /// Try to build a partitioned engine. Returns `None` (caller falls back to
     /// monolithic) when partitioning is off, the step is adaptive, or the
     /// circuit has no separable linear island to gain from.
-    pub fn try_build(circuit: &Circuit, opts: &SolverOptions) -> Option<PartitionedTransient> {
+    pub fn try_build(circuit: &Circuit, opts: &SolverOptions) -> Option<Self> {
         if matches!(opts.partitioning, crate::options::Partitioning::Off) {
             return None;
         }
@@ -369,7 +369,7 @@ impl PartitionedTransient {
         circuit: &Circuit,
         opts: &SolverOptions,
         part: Partition,
-    ) -> Option<PartitionedTransient> {
+    ) -> Option<Self> {
         if !matches!(opts.step, StepControl::Fixed { .. }) {
             return None;
         }
@@ -389,7 +389,7 @@ impl PartitionedTransient {
         circuit: &Circuit,
         opts: &SolverOptions,
         part: Partition,
-    ) -> Option<PartitionedTransient> {
+    ) -> Option<Self> {
         // Rail nodes: islands touching them are kept as nonlinear sub-blocks so
         // their rail-boundary current is readable for the scalar balance.
         let rail_nodes: Vec<NodeId> = part.tears.iter().map(|t| t.rail).collect();
@@ -501,7 +501,7 @@ impl PartitionedTransient {
         let pool = build_pool(opts.parallel, nonlinear.len());
         let par = pool.is_some();
 
-        Some(PartitionedTransient {
+        Some(Self {
             opts: *opts,
             linear,
             lin_state,
@@ -1377,7 +1377,7 @@ fn collect_free_nodes(isl: &Island, li: &LinearIsland) -> Vec<NodeId> {
 
 impl NonlinearIsland {
     /// Extract a nonlinear island into a sub-circuit with pinned-source boundaries.
-    fn build(circuit: &Circuit, isl: &Island) -> Option<NonlinearIsland> {
+    fn build(circuit: &Circuit, isl: &Island) -> Option<Self> {
         let mut sub = SubCircuit::new(circuit);
         for &id in &isl.devices {
             sub.copy(circuit, id);
@@ -1436,7 +1436,7 @@ impl NonlinearIsland {
             .filter(|&ln| !boundary.iter().any(|(bn, _)| *bn == l2g[ln]))
             .filter_map(|ln| ws.layout.node(NodeId(ln as u32)).map(|i| (l2g[ln], i)))
             .collect();
-        Some(NonlinearIsland {
+        Some(Self {
             state: ReactiveState::new(sub.devices.len()),
             x_accepted: vec![0.0; ws.layout.size],
             sub,

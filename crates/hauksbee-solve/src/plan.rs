@@ -88,7 +88,7 @@ struct SlotTable {
 }
 
 impl SlotTable {
-    fn build(unknowns: Vec<u32>, matrix: &SparseMatrix) -> SlotTable {
+    fn build(unknowns: Vec<u32>, matrix: &SparseMatrix) -> Self {
         let n = unknowns.len();
         let mut pos = vec![u32::MAX; n * n];
         for (li, &r) in unknowns.iter().enumerate() {
@@ -98,7 +98,7 @@ impl SlotTable {
                 }
             }
         }
-        SlotTable { unknowns, pos }
+        Self { unknowns, pos }
     }
 
     /// Resolve a global `(row, col)` to its slot, if the pair is in the table.
@@ -158,7 +158,7 @@ impl StampPlan {
     /// Compile the constant backbone and the tier-2 schedule of `circuit`
     /// against a frozen `matrix` pattern. The matrix must already have every
     /// slot reserved (see `reserve_pattern`).
-    pub fn compile(circuit: &Circuit, layout: &Layout, matrix: &SparseMatrix) -> StampPlan {
+    pub fn compile(circuit: &Circuit, layout: &Layout, matrix: &SparseMatrix) -> Self {
         let mut cond_ops = Vec::new();
         let mut reactive_ops = Vec::new();
         let mut restamp = Vec::new();
@@ -460,7 +460,7 @@ impl StampPlan {
             }
         }
 
-        StampPlan {
+        Self {
             cond_ops,
             gmin_diag,
             reactive_ops,

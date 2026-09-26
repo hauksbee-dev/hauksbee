@@ -77,7 +77,7 @@ impl ConductionGraph {
     /// no source-pinning, no linearity verdicts. Those are policy; this is
     /// topology. The tear passes need the raw conduction components first and
     /// apply rail/source reasoning on top.
-    pub fn analyze(circuit: &Circuit) -> ConductionGraph {
+    pub fn analyze(circuit: &Circuit) -> Self {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1);
 
@@ -151,7 +151,7 @@ impl ConductionGraph {
             }
         }
 
-        ConductionGraph {
+        Self {
             islands,
             node_island,
             sense_edges,

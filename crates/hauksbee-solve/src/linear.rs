@@ -93,7 +93,7 @@ struct Csr {
 }
 
 impl Csr {
-    fn from_dense(a: &[f64], n: usize) -> Csr {
+    fn from_dense(a: &[f64], n: usize) -> Self {
         let mut row_ptr = vec![0usize; n + 1];
         let mut col = Vec::new();
         let mut val = Vec::new();
@@ -107,7 +107,7 @@ impl Csr {
             }
             row_ptr[i + 1] = col.len();
         }
-        Csr {
+        Self {
             n,
             row_ptr,
             col,
@@ -151,7 +151,7 @@ struct Rect {
 }
 
 impl Rect {
-    fn from_dense(a: &[f64], rows: usize, cols: usize) -> Rect {
+    fn from_dense(a: &[f64], rows: usize, cols: usize) -> Self {
         let mut row_ptr = vec![0usize; rows + 1];
         let mut col = Vec::new();
         let mut val = Vec::new();
@@ -166,7 +166,7 @@ impl Rect {
             }
             row_ptr[i + 1] = col.len();
         }
-        Rect {
+        Self {
             rows,
             cols,
             row_ptr,
@@ -271,7 +271,7 @@ impl LinearIsland {
         island: &Island,
         gmin: f64,
         temp_c: f64,
-    ) -> Option<LinearIsland> {
+    ) -> Option<Self> {
         if !island.linear {
             return None;
         }
@@ -606,7 +606,7 @@ impl LinearIsland {
         let a_sparse = Csr::from_dense(&a_mat, n_states);
         let sx_sparse = Rect::from_dense(&sx, n_free, n_states);
 
-        Some(LinearIsland {
+        Some(Self {
             states,
             inputs,
             isources,
@@ -786,7 +786,7 @@ struct DenseLu {
 }
 
 impl DenseLu {
-    fn factor(a: &[f64], n: usize) -> Option<DenseLu> {
+    fn factor(a: &[f64], n: usize) -> Option<Self> {
         let mut lu = a.to_vec();
         let mut piv: Vec<usize> = (0..n).collect();
         for k in 0..n {
@@ -817,7 +817,7 @@ impl DenseLu {
                 }
             }
         }
-        Some(DenseLu { n, lu, piv })
+        Some(Self { n, lu, piv })
     }
 
     fn solve(&self, b: &mut [f64]) {

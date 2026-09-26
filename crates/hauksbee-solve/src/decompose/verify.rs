@@ -127,7 +127,7 @@ impl RefusedAnalysis {
     /// The plain-language reason surfaced with every refusal.
     pub fn reason(&self) -> &'static str {
         match self {
-            RefusedAnalysis::SupplyIntegrityOnTornRail => {
+            Self::SupplyIntegrityOnTornRail => {
                 "a torn rail is pinned at its settled voltage, so supply sag, \
                  brownout, and inrush physics are absent from the decomposed \
                  model by construction; run this analysis on the monolithic \
@@ -256,7 +256,7 @@ pub struct Decomposition {
 
 impl Decomposition {
     /// Run the four analysis passes and assemble the certificate.
-    pub fn analyze(circuit: &Circuit, motive: TearMotive) -> Decomposition {
+    pub fn analyze(circuit: &Circuit, motive: TearMotive) -> Self {
         Self::analyze_with(
             circuit,
             motive,
@@ -271,7 +271,7 @@ impl Decomposition {
         motive: TearMotive,
         rails: RailPolicy,
         drv: DriverPolicy,
-    ) -> Decomposition {
+    ) -> Self {
         Self::analyze_with_boundaries(circuit, motive, rails, drv, StiffPolicy::default(), &[])
     }
 
@@ -291,7 +291,7 @@ impl Decomposition {
         drv: DriverPolicy,
         stiff_policy: StiffPolicy,
         exogenous: &[NodeId],
-    ) -> Decomposition {
+    ) -> Self {
         let graph = ConductionGraph::analyze(circuit);
         let dag = StageDag::build(circuit, &graph);
         let balance = detect_balance_tears(circuit, &graph, motive, &rails);
@@ -425,7 +425,7 @@ impl Decomposition {
             exogenous_boundaries,
         };
 
-        Decomposition {
+        Self {
             graph,
             dag,
             balance_tears: balance,

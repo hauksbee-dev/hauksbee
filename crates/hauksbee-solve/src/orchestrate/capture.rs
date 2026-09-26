@@ -172,7 +172,7 @@ pub struct CapturePolicy {
 
 impl Default for CapturePolicy {
     fn default() -> Self {
-        CapturePolicy {
+        Self {
             max_growth_blocks: 64,
             max_block_devices: 300,
         }
@@ -1214,7 +1214,7 @@ pub struct ComposedPolicy {
 
 impl Default for ComposedPolicy {
     fn default() -> Self {
-        ComposedPolicy {
+        Self {
             max_balance_block: 600,
         }
     }

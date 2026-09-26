@@ -47,8 +47,8 @@ impl Waveforms {
     }
 
     /// Empty table for `n_nodes` nodes (ground at index 0), no branch currents.
-    pub(crate) fn nodes_only(n_nodes: usize) -> Waveforms {
-        Waveforms {
+    pub(crate) fn nodes_only(n_nodes: usize) -> Self {
+        Self {
             time: Vec::new(),
             node_voltages: vec![Vec::new(); n_nodes],
             branch_currents: Vec::new(),
@@ -57,8 +57,8 @@ impl Waveforms {
 
     /// Zero-filled node table on a fixed sample `grid` (the torn executors'
     /// assembly surface), no branch currents.
-    pub(crate) fn on_grid(n_nodes: usize, grid: &[f64]) -> Waveforms {
-        Waveforms {
+    pub(crate) fn on_grid(n_nodes: usize, grid: &[f64]) -> Self {
+        Self {
             time: grid.to_vec(),
             node_voltages: vec![vec![0.0; grid.len()]; n_nodes],
             branch_currents: Vec::new(),
@@ -86,8 +86,8 @@ impl Waveforms {
     pub(crate) fn collect_nodes(
         n_nodes: usize,
         run: impl FnOnce(&mut dyn FnMut(StepSample)) -> SolveResult<()>,
-    ) -> SolveResult<Waveforms> {
-        let mut wf = Waveforms::nodes_only(n_nodes);
+    ) -> SolveResult<Self> {
+        let mut wf = Self::nodes_only(n_nodes);
         run(&mut |s| wf.push_nodes(&s))?;
         Ok(wf)
     }
@@ -121,7 +121,7 @@ pub struct Transient {
 impl Transient {
     /// New engine with the given options.
     pub fn new(opts: SolverOptions) -> Self {
-        Transient {
+        Self {
             opts,
             switch_latch_seed: None,
         }

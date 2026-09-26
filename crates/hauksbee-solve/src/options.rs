@@ -291,7 +291,7 @@ fn default_switch_transition_frac() -> f64 {
 
 impl Default for DeviceEffects {
     fn default() -> Self {
-        DeviceEffects {
+        Self {
             early_effect: true,
             junction_caps: true,
             series_resistance: true,
@@ -345,25 +345,25 @@ impl Strategy {
     /// Stable bit for the activation diagnostics.
     pub(crate) fn bit(self) -> u16 {
         match self {
-            Strategy::LineSearch => 1 << 0,
-            Strategy::DynamicPivot => 1 << 1,
-            Strategy::DynamicPivotEveryStep => 1 << 2,
-            Strategy::EventFreeze => 1 << 3,
-            Strategy::Ptc => 1 << 4,
-            Strategy::ResidualAccept => 1 << 5,
-            Strategy::TransientDyn => 1 << 6,
+            Self::LineSearch => 1 << 0,
+            Self::DynamicPivot => 1 << 1,
+            Self::DynamicPivotEveryStep => 1 << 2,
+            Self::EventFreeze => 1 << 3,
+            Self::Ptc => 1 << 4,
+            Self::ResidualAccept => 1 << 5,
+            Self::TransientDyn => 1 << 6,
         }
     }
 
     /// Every strategy, in the canonical escalation order (cheapest first).
-    pub const ALL: [Strategy; 7] = [
-        Strategy::LineSearch,
-        Strategy::DynamicPivot,
-        Strategy::DynamicPivotEveryStep,
-        Strategy::EventFreeze,
-        Strategy::Ptc,
-        Strategy::ResidualAccept,
-        Strategy::TransientDyn,
+    pub const ALL: [Self; 7] = [
+        Self::LineSearch,
+        Self::DynamicPivot,
+        Self::DynamicPivotEveryStep,
+        Self::EventFreeze,
+        Self::Ptc,
+        Self::ResidualAccept,
+        Self::TransientDyn,
     ];
 }
 
@@ -383,13 +383,13 @@ impl RobustnessLadder {
     /// The empty ladder: the plain solver with no escalation granted. This is
     /// the default.
     pub const fn none() -> Self {
-        RobustnessLadder { steps: [None; 8] }
+        Self { steps: [None; 8] }
     }
 
     /// The full ladder in canonical order: every escalation the solver has.
     /// This is the substrate the flagship spike paths run on.
     pub fn full() -> Self {
-        let mut l = RobustnessLadder::none();
+        let mut l = Self::none();
         for s in Strategy::ALL {
             l = l.with(s);
         }
@@ -458,7 +458,7 @@ pub struct EventRetryTuning {
 
 impl Default for EventRetryTuning {
     fn default() -> Self {
-        EventRetryTuning {
+        Self {
             inner_max_newton: None,
             flip_budget: 64,
             smooth_comparator_first: false,
@@ -551,7 +551,7 @@ fn default_granularity() -> f64 {
 
 impl Default for SolverOptions {
     fn default() -> Self {
-        SolverOptions {
+        Self {
             integration: Integration::Trapezoidal,
             step: StepControl::Adaptive {
                 dt_initial: 1e-9,
@@ -584,7 +584,7 @@ impl Default for SolverOptions {
 impl SolverOptions {
     /// Convenience: fixed-step trapezoidal with the given `dt`.
     pub fn fixed(dt: f64) -> Self {
-        SolverOptions {
+        Self {
             step: StepControl::Fixed { dt },
             ..Default::default()
         }
@@ -592,7 +592,7 @@ impl SolverOptions {
 
     /// Convenience: adaptive run seeded with `dt_initial`.
     pub fn adaptive(dt_initial: f64, dt_max: f64) -> Self {
-        SolverOptions {
+        Self {
             step: StepControl::Adaptive {
                 dt_initial,
                 dt_min: dt_initial * 1e-9,

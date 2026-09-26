@@ -97,7 +97,7 @@ pub struct Layout {
 
 impl Layout {
     /// Build the layout for a circuit.
-    pub fn new(circuit: &Circuit) -> Layout {
+    pub fn new(circuit: &Circuit) -> Self {
         let named_nodes = circuit.node_count().saturating_sub(1);
         let max_node = circuit.max_node() as usize;
         let (n_real, node_map) = if max_node == named_nodes {
@@ -275,7 +275,7 @@ impl Layout {
                 couplings[l2.0 as usize].push((*l1, m));
             }
         }
-        Layout {
+        Self {
             n_nodes,
             size: next,
             external_nodes: n_real,
@@ -461,7 +461,7 @@ impl ReactiveState {
             dx1: vec![0.0; n],
             x2: vec![0.0; n],
         };
-        ReactiveState {
+        Self {
             x1: vec![0.0; n],
             dx1: vec![0.0; n],
             x2: vec![0.0; n],

@@ -76,7 +76,7 @@ pub struct StiffPolicy {
 
 impl Default for StiffPolicy {
     fn default() -> Self {
-        StiffPolicy {
+        Self {
             min_block_devices: 64,
             max_probes_per_block: 16,
         }

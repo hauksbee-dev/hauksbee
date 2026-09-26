@@ -30,7 +30,7 @@ pub struct SparseMatrix {
 impl SparseMatrix {
     /// An `n x n` matrix of structural zeros.
     pub fn new(n: usize) -> Self {
-        SparseMatrix {
+        Self {
             n,
             rows: vec![Vec::new(); n],
         }
@@ -194,7 +194,7 @@ impl DynCsc {
 }
 
 impl Symbolic {
-    fn analyze(m: &SparseMatrix) -> Symbolic {
+    fn analyze(m: &SparseMatrix) -> Self {
         let n = m.n;
         // Symmetric adjacency of A + A^T for the ordering heuristic.
         let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -216,7 +216,7 @@ impl Symbolic {
         let (csc_col_ptr, csc_row_idx, _) = m.to_csc();
         let nnz = csc_row_idx.len();
 
-        Symbolic {
+        Self {
             n,
             perm,
             l: DynCsc::default(),

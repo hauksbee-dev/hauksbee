@@ -31,10 +31,10 @@ pub enum RawPlot {
 impl RawPlot {
     fn plotname(self) -> &'static str {
         match self {
-            RawPlot::OperatingPoint => "Operating Point",
-            RawPlot::Transient => "Transient Analysis",
-            RawPlot::Dc => "DC transfer characteristic",
-            RawPlot::Ac => "AC Analysis",
+            Self::OperatingPoint => "Operating Point",
+            Self::Transient => "Transient Analysis",
+            Self::Dc => "DC transfer characteristic",
+            Self::Ac => "AC Analysis",
         }
     }
 }

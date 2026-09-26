@@ -57,7 +57,7 @@ pub struct DriverPolicy {
 
 impl Default for DriverPolicy {
     fn default() -> Self {
-        DriverPolicy {
+        Self {
             max_driver_devices: 8,
         }
     }

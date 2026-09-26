@@ -30,7 +30,7 @@ impl SubCircuit {
     pub(crate) fn new(parent: &Circuit) -> Self {
         let mut circuit = Circuit::new();
         circuit.temp_c = parent.temp_c;
-        SubCircuit {
+        Self {
             circuit,
             g2l: HashMap::new(),
             l2g: vec![NodeId::GROUND],
