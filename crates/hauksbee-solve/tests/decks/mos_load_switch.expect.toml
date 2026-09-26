@@ -4,14 +4,18 @@
 # charge-conserving two-terminal Q(v) matches Meyer's cutoff (Cox) and
 # deep-triode (Cox/2) limits but cannot express the saturation rise to
 # 2/3*Cox (see stamp.rs `mos_charge_gs`). Measured consequence: edge-timing
-# skew <= 2 ns on ~50 ns drain edges (turn-off 2.5 V crossing: 5.26666 us
-# ours vs 5.26589 us ngspice), which the pointwise relative metric reads as
-# a large mid-edge excursion while levels, delays and edge durations agree.
-# Measured worst: V(d) 3.23e-1 (mid turn-off edge), V(g) 6.87e-2 (gate tail).
-# The V(d) bar is ~1.5x the measured skew excursion: the same deck measured
-# 5.45 before the cutoff-Cgb charge landed, so the bar still catches a
-# broken gate-charge stamp by an order of magnitude. abstol = 5% of scale
-# floors the off-state millivolt tail (ours and ngspice agree sub-mV there).
+# skew ~3 ns on the ~40 ns turn-on edge and under 1 ns at turn-off (2.5 V
+# crossings: 1.13289 / 5.26666 us ours vs 1.12973 / 5.26589 us ngspice),
+# which the pointwise relative metric reads as a large mid-edge excursion
+# while levels, delays and edge durations agree.
+# Measured worst: V(d) 3.94e-1 (foot of the turn-on edge), V(g) 6.69e-2
+# (gate tail). The channel is exact Level 1 through that edge; the former
+# softplus channel's near-threshold excess current pulled it slightly early,
+# partly masking the skew (3.22e-1 then, worst on turn-off). The V(d) bar is
+# ~1.3x the measured skew excursion: the same deck measured 5.45 before the
+# cutoff-Cgb charge landed, so the bar still catches a broken gate-charge
+# stamp by an order of magnitude. abstol = 5% of scale floors the off-state
+# millivolt tail (ours and ngspice agree sub-mV there).
 analysis = "tran"
 description = "NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing"
 full_scale = 5.0

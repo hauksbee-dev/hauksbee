@@ -1,0 +1,18 @@
+# PMOS rail switch 0.1 V over threshold into 30 ohm, vs ngspice.
+#
+# The switched rail is the channel current times the load, so it reads the
+# near-threshold square law directly. With the softplus overdrive blend the
+# rail sat 28% high (0.916 V vs 0.714 V): a 1.3x current at 0.1 V overdrive.
+# The forward/reverse channel is exact Level 1 at this bias (source end past
+# 2*n*Vt, drain end deep below threshold). The residue is hauksbee's 1e-12 S
+# node gmin on the 50k gate divider: it holds the gate 60 nV low, which the
+# square law 0.1 V over threshold amplifies by 2/vov = 20 in the current.
+#
+# Measured: V(out) 1.2e-6. The bar is ~10x that, so any overdrive blend that
+# moves the current by 1e-5 here fails.
+analysis = "op"
+description = "near-threshold PMOS switch current into a resistive load"
+
+[[probe]]
+expr = "V(out)"
+reltol = 1.0e-05

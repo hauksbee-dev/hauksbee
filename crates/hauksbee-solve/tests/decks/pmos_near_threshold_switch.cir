@@ -1,0 +1,18 @@
+PMOS rail switch 0.1 V over threshold into a resistive load
+* The pmos_floating_drains switch with a plain 30 ohm load: gate at half the
+* 2.4 V supply, 0.1 V of overdrive, drain near 0.71 V so the channel sits
+* deep in saturation. Level 1 gives beta/2*vov^2*(1 + lambda*vds) there, and
+* so must hauksbee: its channel is exactly Shichman-Hodges wherever the
+* source end is 2*n*Vt past threshold and the drain end is too (triode) or
+* sits many n*Vt below threshold (saturation).
+*
+* The former softplus overdrive blend carried 1.3x the Level 1 current at
+* this bias and put the switched rail at 0.916 V against ngspice's 0.714 V.
+VS vs 0 DC 2.4
+MSW out gsw vs vs PSW
+R1 vs gsw 100k
+R2 gsw 0 100k
+RL out 0 30
+.model PSW PMOS level=1 vto=-1.1 kp=4.5 lambda=0.04 rd=0.08 rs=0.02
+.op
+.end
