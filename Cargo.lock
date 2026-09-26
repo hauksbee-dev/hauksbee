@@ -1222,6 +1222,7 @@ dependencies = [
  "hauksbee-forge-codegen",
  "hauksbee-ir",
  "hauksbee-models",
+ "hauksbee-solve",
  "hauksbee-testkit",
  "same-file",
  "schemars",

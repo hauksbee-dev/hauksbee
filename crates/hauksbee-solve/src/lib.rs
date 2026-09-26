@@ -87,6 +87,7 @@ pub use plan::StampPlan;
 pub use rawfile::{write_ascii_rawfile, RawPlot};
 pub use sim::{default_probes, run_ac, run_dc, run_op, run_tran, Probe, SimOutput};
 pub use sparse::{SparseMatrix, Symbolic};
+pub use stamp::{mos_body_vth, mos_channel};
 pub use system::Layout;
 pub use transient::{StepSample, Transient, TransientDiagnostics, Waveforms};
 
