@@ -255,16 +255,12 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
     #[allow(clippy::while_float, reason = "t steps in the engine's f64 frames")]
     while t < opts.seconds {
         let frame = engine.step(frame_dt);
-        for f in frame.faults {
-            faults.push(FaultEvent {
-                component: f.component,
-                kind: crate::stress::FaultKind::from_str(&f.kind),
-                value: f.value,
-                limit: f.limit,
-                t: f.t,
-                destroyed: f.destroyed,
-            });
-        }
+        faults.extend(
+            frame
+                .faults
+                .into_iter()
+                .map(crate::reports::cosim::fault_event),
+        );
         t += frame_dt;
     }
 

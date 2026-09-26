@@ -1479,6 +1479,7 @@ pub fn bjt_early_partials(model: &BjtModel, free: bool, cf: f64, cr: f64) -> (f6
 
 /// Body-effect threshold `(vth, dvth/dvbs)` at the folded bulk-to-source
 /// voltage `vbs`, for a model with `gamma > 0`.
+#[must_use]
 pub fn mos_body_vth(model: &MosfetModel, vbs: f64) -> (f64, f64) {
     let phi = model.phi.max(1e-6);
     let arg = phi - vbs;
@@ -1494,9 +1495,11 @@ pub fn mos_body_vth(model: &MosfetModel, vbs: f64) -> (f64, f64) {
     }
 }
 
-/// Level-1 channel current and tangents `(id, gm, gds)` at FOLDED, post-swap
-/// voltages (`vov = vgs - vth`, `vds >= 0`), shared by the transient stamp and
-/// the AC tangent so the two linearizations CANNOT drift apart.
+/// Level-1 channel current and tangents `(id, gm, gds)`.
+///
+/// Taken at FOLDED, post-swap voltages (`vov = vgs - vth`, `vds >= 0`), shared
+/// by the transient stamp and the AC tangent so the two linearizations CANNOT
+/// drift apart.
 ///
 /// Shichman-Hodges in forward/reverse (source-end minus drain-end) form:
 ///
@@ -1527,6 +1530,7 @@ pub fn mos_body_vth(model: &MosfetModel, vbs: f64) -> (f64, f64) {
 /// (their slopes jump only where a channel end crosses the join).
 /// Channel-length modulation multiplies every region including the tail.
 #[inline]
+#[must_use]
 pub fn mos_channel(
     beta: f64,
     nvt: f64,

@@ -2018,7 +2018,7 @@ fn run_web_cosim_with_bound(
     tie_qualification: Option<&hauksbee_extract::DrcTieQualification>,
 ) -> (WebCosimSection, Option<WebCosimEvidence>) {
     use crate::plain::plain_faults;
-    use crate::stress::{FaultEvent, FaultKind};
+    use crate::stress::FaultEvent;
     use hauksbee_frontdoor_api::engine::Engine;
     use std::io::Write;
 
@@ -2161,16 +2161,12 @@ fn run_web_cosim_with_bound(
         for (_, bytes) in uart_entries {
             last_uart.extend_from_slice(bytes);
         }
-        for f in frame.faults {
-            faults.push(FaultEvent {
-                component: f.component,
-                kind: FaultKind::from_str(&f.kind),
-                value: f.value,
-                limit: f.limit,
-                t: f.t,
-                destroyed: f.destroyed,
-            });
-        }
+        faults.extend(
+            frame
+                .faults
+                .into_iter()
+                .map(crate::reports::cosim::fault_event),
+        );
     }
 
     // De-duplicate faults by (component, kind), keeping the worst value, exactly
@@ -2473,17 +2469,7 @@ fn run_web_cosim_with_bound(
     // finding).
     let timing_coverage = sched.timing_coverage();
     let timing_refusals = sched.timing_refusals().to_vec();
-    let fallback_windows = sched
-        .fallback_windows()
-        .iter()
-        .map(|window| crate::result::CosimFallbackWindow {
-            start_s: window.start_s,
-            end_s: window.end_s,
-            method: window.method.as_str().to_string(),
-            fidelity_note: window.method.fidelity_note().to_string(),
-            error_estimate_v: window.error_estimate_v,
-        })
-        .collect();
+    let fallback_windows = sched.fallback_windows().iter().map(Into::into).collect();
 
     let error_budget = match sched.error_budget() {
         Ok(budget) => Some(budget),

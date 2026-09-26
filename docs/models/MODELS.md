@@ -800,6 +800,30 @@ A `[models.behavioral]` block is a bag of optional facts:
      `v_sense_full`. The runtime regulates the output, folds it back under
      the output limit, and throttles so the reflected input draw never
      exceeds the input limit.
+   - `[models.behavioral.converter.feedback]` (`pin`, `vref_v`): regulate the
+     board's feedback divider midpoint to `vref_v` instead of `vout_setpoint`.
+   - Regulation loop: `crossover_hz` (optional) and `switching_hz`
+     (optional). The runtime closes an averaged current-mode loop inside the
+     circuit: a PI controller commands the current into `out_pin`, crossing
+     over at `crossover_hz` against the capacitance to ground on the
+     regulated node (the far side of the one inductor leaving `out_pin`, else
+     `out_pin` itself), with its zero at `crossover_hz / 4` (critically
+     damped). A load step `dI` therefore dips the rail by about
+     `0.74 * dI / (2 pi crossover_hz C_out)` and recovers within a few
+     `1 / (2 pi crossover_hz)`; the inductor current slews at
+     `(vin - vout) / L` instead of stepping, and the converter never sinks
+     output current (diode emulation: the conservative overshoot case).
+     State the crossover the part has on this board: the value is taken
+     as-is, so an internally compensated part whose crossover moves as
+     `1 / C_out` is not tracked. Absent `crossover_hz`, the binder assumes
+     `switching_hz / 10` (30 kHz when `switching_hz` is absent too, a
+     300 kHz part) and discloses it as the
+     `default-parameter:<REF>.crossover_hz` assumption, which qualifies the
+     verdicts on the part's nets and on the rail beyond its output inductor:
+     conventional designs span
+     `f_sw / 20 .. f_sw / 5`, so an unstated deviation is uncertain by about
+     2x either way. Both must be positive, and `crossover_hz` below
+     `switching_hz / 2`.
 
 4. **Expression laws**: `[[models.behavioral.laws]]`:
    - A `current` (from pin `a` to `b`) or `voltage` (forced on pin `a`

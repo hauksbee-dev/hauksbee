@@ -54,6 +54,7 @@ use std::collections::HashMap;
 use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
+use hauksbee_solve::{mos_body_vth, mos_channel};
 
 /// Consecutive chunks a continuous-rating violation must persist before it is
 /// reported as a fault (filters switching-edge transients).
@@ -1503,10 +1504,10 @@ fn operating_point(
         Some(Device::Mosfet {
             d, g, s, b, model, ..
         }) => {
-            // Shichman-Hodges level-1 channel at the sampled node voltages,
-            // the same blended-overdrive equations the solver stamps (see
-            // `mos_channel` in hauksbee-solve), so the monitor sees the
-            // current the simulated channel actually carries. This arm used
+            // The solver's own Level 1 channel and body effect
+            // (`hauksbee_solve::mos_channel`) at the sampled node voltages, so
+            // the monitor sees the current the simulated channel carries,
+            // never a drifted copy of the equations. This arm used
             // to hardcode current/power to zero, which silently disabled the
             // Overcurrent, Overpower, and power-gated Overtemperature checks
             // for every MOSFET.
@@ -1529,46 +1530,20 @@ fn operating_point(
             let vgs = vg - vs;
             let vds_f = vd - vs;
 
-            // Body-effect threshold shift, matching the solver's expression.
             // `gamma == 0` (most models) never reads the bulk voltage.
-            let mut vth = model.vto;
-            if model.gamma > 0.0 {
-                if let Some(bulk) = b {
-                    let phi = model.phi.max(1e-6);
-                    let vbs = sign * node_v(*bulk) - vs;
-                    let arg = (phi - vbs).max(0.0);
-                    vth = model.gamma.mul_add(arg.sqrt() - phi.sqrt(), model.vto);
+            let vth = match b {
+                Some(bulk) if model.gamma > 0.0 => {
+                    mos_body_vth(model, sign.mul_add(node_v(*bulk), -vs)).0
                 }
-            }
-
-            // Blended overdrive `vov_eff = 2nVt·softplus(vov/(2nVt))`: the
-            // square law above threshold, an exponential subthreshold tail
-            // below (see `mos_channel` for why the blend, not two branches).
-            let vt = hauksbee_ir::thermal_voltage_c(circuit.temp_c);
-            let two_nvt = 2.0 * model.n_sub.max(1.0) * vt;
+                _ => model.vto,
+            };
+            let nvt = model.n_sub.max(1.0) * hauksbee_ir::thermal_voltage_c(circuit.temp_c);
+            // Channel-length modulation is always applied here (the solver
+            // gates it on a sim option the monitor cannot see); lambda is 0
+            // for most models, and when it isn't, including it errs toward
+            // the slightly *higher* current, conservative for a limit check.
             let channel = |vgs: f64, vds: f64| {
-                let u = (vgs - vth) / two_nvt;
-                // Numerically stable softplus ln(1 + e^u).
-                let softplus = if u > 40.0 {
-                    u
-                } else if u < -40.0 {
-                    u.exp()
-                } else {
-                    u.exp().ln_1p()
-                };
-                let vov_eff = two_nvt * softplus;
-                // Channel-length modulation is always applied here (the solver
-                // gates it on a sim option the monitor cannot see); lambda is 0
-                // for most models, and when it isn't, including it errs toward
-                // the slightly *higher* current, conservative for a limit check.
-                let clm = model.lambda.mul_add(vds, 1.0);
-                if vds < vov_eff {
-                    // Triode.
-                    model.beta() * (vov_eff * vds - 0.5 * vds * vds) * clm
-                } else {
-                    // Saturation.
-                    0.5 * model.beta() * vov_eff * vov_eff * clm
-                }
+                mos_channel(model.beta(), nvt, vgs - vth, vds, model.lambda, 0.0).0
             };
             // The solver puts the channel between internal nodes behind
             // `rd`/`rs`, so the terminal voltages overstate its drive: a 20 mOhm
@@ -2374,19 +2349,11 @@ mod monitor_temp_tests {
         );
     }
 
-    /// The solver puts the channel behind rd/rs; reading it at the terminals
-    /// hands a hard-on FET the current of a bare channel across the full vds.
-    #[test]
-    fn mosfet_power_is_read_behind_its_series_resistance() {
+    /// The monitored operating point of N-FET `model`, source grounded, gate
+    /// at `vg` and drain at `vd`.
+    fn nmos_op(model: hauksbee_ir::MosfetModel, vg: f64, vd: f64) -> OperatingPoint {
         let mut circuit = Circuit::new();
         let (d, g) = (circuit.node("D"), circuit.node("G"));
-        let model = hauksbee_ir::MosfetModel {
-            vto: 1.0,
-            kp: 100.0,
-            rd: 0.5,
-            rs: 0.5,
-            ..Default::default()
-        };
         let device = circuit.add(Device::Mosfet {
             name: "M1".into(),
             d,
@@ -2400,16 +2367,50 @@ mod monitor_temp_tests {
             ..meta("Q1", ComponentKind::Nmos, "", Ratings::default())
         };
         let node_v = |n| {
-            [(d, 1.0), (g, 10.0)]
+            [(d, vd), (g, vg)]
                 .into_iter()
                 .find(|p| p.0 == n)
                 .map_or(0.0, |p| p.1)
         };
+        operating_point(&circuit, &meta, &node_v, &|_| None)
+    }
+
+    /// The solver puts the channel behind rd/rs; reading it at the terminals
+    /// hands a hard-on FET the current of a bare channel across the full vds.
+    #[test]
+    fn mosfet_power_is_read_behind_its_series_resistance() {
+        let model = hauksbee_ir::MosfetModel {
+            vto: 1.0,
+            kp: 100.0,
+            rd: 0.5,
+            rs: 0.5,
+            ..Default::default()
+        };
         // A near-short channel behind 1 ohm carries just under 1 A at 1 V.
-        let op = operating_point(&circuit, &meta, &node_v, &|_| None);
+        let op = nmos_op(model, 10.0, 1.0);
         let (i, w) = (op.current_a, op.power_w);
         assert!((0.95..1.0).contains(&i), "{i} A");
         assert!((w - i).abs() < 1e-9, "{w} W at {i} A");
+    }
+
+    /// The monitor reads the solver's channel, not a copy: equal currents
+    /// through threshold, where the old softplus copy read up to 1.73x high.
+    #[test]
+    fn mosfet_current_is_the_solvers_channel_near_threshold() {
+        let model = hauksbee_ir::MosfetModel {
+            vto: 1.0,
+            kp: 0.1,
+            lambda: 0.02,
+            ..Default::default()
+        };
+        let nvt = model.n_sub.max(1.0) * hauksbee_ir::thermal_voltage_c(Circuit::new().temp_c);
+        for vg in [0.8, 1.0, 1.05, 1.09, 2.0] {
+            for vd in [0.01, 0.3, 5.0] {
+                let got = nmos_op(model, vg, vd).current_a;
+                let want = mos_channel(model.beta(), nvt, vg - 1.0, vd, model.lambda, 0.0).0;
+                assert!((got / want - 1.0).abs() < 1e-12, "{vg} {vd}: {got} {want}");
+            }
+        }
     }
 
     /// A regulator's monitored device is its ideal output source, so its heat

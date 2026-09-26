@@ -430,7 +430,9 @@ fn subject(f: &JsonFinding) -> String {
         .unwrap_or_default()
 }
 
-fn xml_escape(s: &str) -> String {
+/// Escape the five XML special characters for element text and attributes.
+#[must_use]
+pub fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

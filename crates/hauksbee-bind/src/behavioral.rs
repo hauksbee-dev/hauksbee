@@ -42,9 +42,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use evalexpr::{ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value};
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::behavioral::{
-    Behavioral, Converter, Law, LawKind, SenseProgram, StatePinBehaviour,
+    Behavioral, Converter, EnableControl, Law, LawKind, SenseProgram, StatePinBehaviour, Topology,
 };
 use hauksbee_models::{LoadProfile, Params};
 
@@ -163,15 +163,104 @@ const STIFF_R_OHMS: f64 = 1e-3;
 
 /// Intern a hidden node holding a literal DC voltage, for a model-internal rail
 /// (a pull target or an open-drain sink) the board itself does not name.
-fn hidden_dc_node(circuit: &mut Circuit, reference: &str, tag: &str, volts: f64) -> NodeId {
+fn hidden_dc_node(
+    circuit: &mut Circuit,
+    reference: &str,
+    tag: &str,
+    volts: f64,
+) -> (NodeId, DeviceId) {
     let node = circuit.node(&format!("__beh_{reference}_{tag}"));
-    circuit.add(Device::vsource(
+    let dc = SourceKind::Dc(volts);
+    let source = circuit.add(Device::vsource(
         format!("Vbeh_{reference}_{tag}"),
         node,
         NodeId::GROUND,
-        SourceKind::Dc(volts),
+        dc,
     ));
-    node
+    (node, source)
+}
+
+/// A named device's terminals.
+fn terminals(circuit: &Circuit, name: &str) -> Option<Vec<NodeId>> {
+    circuit
+        .iter()
+        .find(|(_, d)| d.name() == name)
+        .map(|(_, d)| d.nodes())
+}
+
+/// The node a converter regulates: the far end of the one output inductor
+/// (through its bound DCR) leaving `out`, else `out` itself.
+fn regulated_node(circuit: &Circuit, out: NodeId) -> NodeId {
+    let mut far = circuit.iter().filter_map(|(_, d)| match d {
+        Device::Inductor { name, a, b, .. } if !name.ends_with("_esl") => {
+            let b = terminals(circuit, &format!("{name}_dcr")).map_or(*b, |t| t[1]);
+            (*a == out)
+                .then_some(b)
+                .or_else(|| (b == out).then_some(*a))
+        }
+        _ => None,
+    });
+    match (far.next(), far.next()) {
+        (Some(reg), None) => reg,
+        _ => out,
+    }
+}
+
+/// Capacitance (F) from `node` to ground, bound ESR/ESL chains followed.
+fn out_farads(circuit: &Circuit, node: NodeId) -> f64 {
+    let farads = |(_, d): (DeviceId, &Device)| match d {
+        Device::Capacitor {
+            name, a, b, farads, ..
+        } => {
+            let chain = |part| terminals(circuit, &format!("{name}_{part}")).map(|t| t[0]);
+            let ends = [chain("esr").or_else(|| chain("esl")).unwrap_or(*a), *b];
+            (ends.contains(&node) && ends.contains(&NodeId::GROUND)).then_some(*farads)
+        }
+        _ => None,
+    };
+    circuit.iter().filter_map(farads).sum()
+}
+
+/// The converter loop's delivered-current and PI-state expressions over deps
+/// `[out, pi, sense, lim, vin, ref]` (see `stamp_converter`), for
+/// `farads_per_ratio = C_out / k`.
+fn loop_exprs(c: &Converter, farads_per_ratio: f64, r: f64, eff: f64) -> [String; 2] {
+    let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
+    let (g, wz, wl) = (wc * farads_per_ratio, wc / 4.0, wc * 1e-5);
+    let dmax = c.max_duty.unwrap_or(1.0);
+    let hi = match c.topology {
+        Topology::Buck => format!("if(__d3>0.0,{dmax:?},1.0)*max(__d4,0.0)"),
+        _ => "1e9".into(),
+    };
+    let iout_max = c.iout_limit_a.unwrap_or(1e9);
+    let err = format!("{g:?}*(__d5-__d2)");
+    let cmd =
+        format!("min(max(__d1+{err},0.0),{iout_max:?},__d3*{eff:?}*max(__d4,0.0)/max(__d0,1e-3))");
+    let i = format!("min(max({cmd},-__d0/{r:?}),({hi}-__d0)/{r:?})");
+    let pi = format!("1e-6*({wz:?}*({i}-__d1)-{wl:?}*__d1)");
+    [i, pi]
+}
+
+/// The fraction of the regulated voltage a resistive divider presents at a
+/// feedback node: its conductance to other nets over its total (1 if none).
+fn divider_ratio(circuit: &Circuit, fb: NodeId) -> f64 {
+    let (mut top, mut all) = (0.0, 0.0);
+    for (_, d) in circuit.iter() {
+        if let Device::Resistor { a, b, ohms, .. } = d {
+            if (*a == fb) != (*b == fb) {
+                let g = 1.0 / ohms;
+                all += g;
+                if !a.is_ground() && !b.is_ground() {
+                    top += g;
+                }
+            }
+        }
+    }
+    if top > 0.0 {
+        top / all
+    } else {
+        1.0
+    }
 }
 
 /// High-impedance "off" resistance for a tri-stated open-drain / drive leg.
@@ -231,49 +320,34 @@ struct ProfiledLoadLeg {
 #[derive(Debug, Clone)]
 struct ConverterLeg {
     cfg: Converter,
-    /// Output source (controllable Vsource behind `out_r`).
+    /// The 0 V ammeter the loop's averaged switch node drives through, the
+    /// monitoring seam stress and dissipation read.
     out_vsource: DeviceId,
-    /// Hidden driver node the output Vsource pushes onto, before `out_r`.
+    /// Hidden averaged switch node (the ammeter's `p`), before `out_r`.
     out_drv_node: NodeId,
     /// Output-source series resistance (ohms), so the delivered current can be
     /// read as the voltage drop across it. This works under BOTH solver paths;
     /// reading the Vsource branch unknown does not, because the partitioned
     /// solver's global x carries node voltages only, not branch currents.
     out_r_ohms: f64,
+    /// Card efficiency, floored only as a divide guard.
+    eff: f64,
     out_node: NodeId,
     in_node: NodeId,
-    /// Optional external-divider midpoint used by an adjustable converter.
-    feedback_node: Option<NodeId>,
     /// Optional enable input.  A low level disables both converter legs.
     enable_node: Option<NodeId>,
+    /// False when a feedback pin the card needs is unconnected: never delivers.
+    sensed: bool,
     /// Input draw (controllable Isource from `in_node` to ground).
     in_isource: DeviceId,
+    /// Source holding the loop's input-current limit (A) on a hidden node the
+    /// in-circuit current command reads; 0 V disables the converter.
+    limit_vsource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
     /// bind time (or the literal). Recomputable if a board resistor is retuned.
     iin_limit_a: Option<f64>,
-    /// Last commanded output voltage (for the CC foldback anchor).
-    last_cmd_vout: f64,
-    /// Last delivered output current (A).
-    last_iout_a: f64,
     /// Last reflected input current commanded (A).
     last_iin_a: f64,
-    /// The previous DC-settle iterate `(command, V(fb))`, for the secant step.
-    settle_prev: Option<(f64, f64)>,
-    /// The regulated `(command, output current)` a feedback converter settled
-    /// at before t=0, when it settled enabled (see [`BehavioralDevice::settle_converter`]).
-    settled: Option<(f64, f64)>,
-}
-
-impl ConverterLeg {
-    /// Stop delivering: nothing commanded on the output, nothing reflected onto
-    /// the input. The last commanded voltage is deliberately NOT cleared here,
-    /// so a caller that wants the regulation loop to restart from zero says so.
-    fn shut_down(&mut self, circuit: &mut Circuit) {
-        self.last_iout_a = 0.0;
-        self.last_iin_a = 0.0;
-        set_source_dc(circuit, self.out_vsource, 0.0);
-        set_source_dc(circuit, self.in_isource, 0.0);
-    }
 }
 
 /// A stamped expression law: a controllable source whose value is recomputed
@@ -344,9 +418,9 @@ fn compile_law_implicit(
     expr: &str,
     role_nodes: &BTreeMap<String, NodeId>,
     params: &Params,
-) -> Option<(hauksbee_ir::CompiledExpr, Vec<hauksbee_ir::BDep>)> {
+) -> Option<(CompiledExpr, Vec<BDep>)> {
     let mut out = String::with_capacity(expr.len());
-    let mut deps: Vec<hauksbee_ir::BDep> = Vec::new();
+    let mut deps: Vec<BDep> = Vec::new();
     // role -> already-assigned dependency slot, so one pin read twice shares
     // a slot (the FD Jacobian probes each slot; duplicates would double work
     // and, worse, decouple the two reads of the same voltage).
@@ -427,7 +501,7 @@ fn compile_law_implicit(
         if let Some(role) = token.strip_prefix("v_") {
             if let Some(&node) = role_nodes.get(role) {
                 let k = *slots.entry(role.to_string()).or_insert_with(|| {
-                    deps.push(hauksbee_ir::BDep::Volt(node));
+                    deps.push(BDep::Volt(node));
                     deps.len() - 1
                 });
                 let _ = write!(out, "__d{k}");
@@ -445,7 +519,7 @@ fn compile_law_implicit(
         // change what a time-varying law computes.
         return None;
     }
-    let compiled = hauksbee_ir::CompiledExpr::compile(&out).ok()?;
+    let compiled = CompiledExpr::compile(&out).ok()?;
     // PROVE the expression evaluates FINITE before choosing the implicit
     // path. `CompiledExpr::compile` validates variable identifiers but not
     // function names, so an unknown/misnamespaced function (`bogus(x)`, bare
@@ -541,7 +615,6 @@ impl BehavioralDevice {
             c.out_drv_node = map(c.out_drv_node);
             c.out_node = map(c.out_node);
             c.in_node = map(c.in_node);
-            c.feedback_node = c.feedback_node.map(&map);
             c.enable_node = c.enable_node.map(&map);
         }
         for path in &mut self.series_paths {
@@ -627,7 +700,7 @@ impl BehavioralDevice {
                 // A literal-voltage rail stamps a hidden stiff source node.
                 let rail = pin
                     .pull_to_volts
-                    .map(|v| hidden_dc_node(circuit, reference, &format!("{role}_rail"), v))
+                    .map(|v| hidden_dc_node(circuit, reference, &format!("{role}_rail"), v).0)
                     .or_else(|| {
                         let rail_role = pin.pull_to.as_ref()?;
                         role_nodes.get(rail_role).copied()
@@ -648,7 +721,7 @@ impl BehavioralDevice {
                 let sink_node = if sink.abs() < 1e-12 {
                     NodeId::GROUND
                 } else {
-                    hidden_dc_node(circuit, reference, &format!("{role}_odsink"), sink)
+                    hidden_dc_node(circuit, reference, &format!("{role}_odsink"), sink).0
                 };
                 let on_ohms = pin.od_ohms.unwrap_or(20.0);
                 let r = circuit.add(Device::resistor(
@@ -831,10 +904,31 @@ impl BehavioralDevice {
         }
     }
 
-    /// The averaged converter: a commandable output source behind its series
-    /// resistance, plus the Isource carrying the reflected input draw. Skipped
-    /// when a programmable limit has no board evidence to read, or when either
-    /// power pin is unconnected.
+    /// The averaged converter as an in-circuit current-mode regulation loop,
+    /// so Newton, not a per-chunk relaxation, closes it:
+    ///
+    /// * `i_cmd = clamp(x + g*(ref - V(sense)), 0, iout_limit, lim*eff*V(in)/V(out))`;
+    /// * the delivered current `i`, `i_cmd` held where the averaged switch
+    ///   node `V(out) + out_r*i` stays within `[0, max_duty*V(in)]` for a buck
+    ///   (`[0, V(in)]` while disarmed: the high-side body diode), so the
+    ///   output inductor slews at `(V(in) - V(out))/L` instead of stepping, and
+    ///   `i_cmd >= 0` never sinks output current while regulating. `i` is
+    ///   injected as a current through `out_r` into the output pin: as a
+    ///   millivolt drop between volt-scale nodes, Newton's voltage tolerance
+    ///   could not resolve it;
+    /// * the PI state `x' = wz*(i - x) - wl*x`: integral action `wz*g*e`
+    ///   while regulating (`i = x + g*e`), tracking `i` against any clamp
+    ///   instead of winding up, which also keeps the DC solve off a
+    ///   limit cycle between the regulating and the clamped branch.
+    ///
+    /// `g = 2 pi f_c C_out / k` crosses the loop over at `f_c` against the
+    /// output capacitance `C_out` on the regulated node, `k` being the
+    /// feedback divider's ratio; `wz = wc/4` damps it critically, so a step
+    /// `dI` dips the output about `0.74 dI / (2 pi f_c C_out)`. A buck's
+    /// regulated node is the far side of its one output inductor. `lim` is a
+    /// hidden source holding the input-current limit, 0 while disabled.
+    /// Skipped when a programmable limit has no board evidence to read, or
+    /// when either power pin is unconnected.
     fn stamp_converter(
         &mut self,
         circuit: &mut Circuit,
@@ -843,66 +937,90 @@ impl BehavioralDevice {
         role_nodes: &BTreeMap<String, NodeId>,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
     ) {
-        if let Some(c) = &model.converter {
-            let iin_limit_a = resolve_iin_limit(c, board_resistor);
-            let has_required_program_evidence = c.iin_program.is_none() || iin_limit_a.is_some();
-            if has_required_program_evidence {
-                if let (Some(&out_node), Some(&in_node)) =
-                    (role_nodes.get(&c.out_pin), role_nodes.get(&c.in_pin))
-                {
-                    let out_r = c.out_r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
-                    let drv = circuit.node(&format!("__beh_{reference}_conv_out"));
-                    let starts_from_feedback = c.feedback.is_some();
-                    let initial_vout = if starts_from_feedback {
-                        0.0
-                    } else {
-                        c.vout_setpoint
-                    };
-                    let out_vsource = circuit.add(Device::vsource(
-                        format!("Vbeh_{reference}_conv"),
-                        drv,
-                        NodeId::GROUND,
-                        SourceKind::Dc(initial_vout),
-                    ));
-                    circuit.add(Device::resistor(
-                        format!("Rbeh_{reference}_conv_out"),
-                        drv,
-                        out_node,
-                        out_r,
-                    ));
-                    // Reflected input draw: an Isource pulling from in_node to GND.
-                    let in_isource = circuit.add(Device::isource(
-                        format!("Ibeh_{reference}_conv_in"),
-                        in_node,
-                        NodeId::GROUND,
-                        SourceKind::Dc(0.0),
-                    ));
-                    self.converter = Some(ConverterLeg {
-                        cfg: c.clone(),
-                        out_vsource,
-                        out_drv_node: drv,
-                        out_r_ohms: out_r,
-                        out_node,
-                        in_node,
-                        feedback_node: c
-                            .feedback
-                            .as_ref()
-                            .and_then(|feedback| role_nodes.get(&feedback.pin).copied()),
-                        enable_node: c
-                            .enable
-                            .as_ref()
-                            .and_then(|enable| role_nodes.get(&enable.pin).copied()),
-                        in_isource,
-                        iin_limit_a,
-                        last_cmd_vout: initial_vout,
-                        last_iout_a: 0.0,
-                        last_iin_a: 0.0,
-                        settle_prev: None,
-                        settled: None,
-                    });
-                }
-            }
+        let Some(c) = &model.converter else { return };
+        let iin_limit_a = resolve_iin_limit(c, board_resistor);
+        let (Some(&out), Some(&vin)) = (role_nodes.get(&c.out_pin), role_nodes.get(&c.in_pin))
+        else {
+            return;
+        };
+        if c.iin_program.is_some() && iin_limit_a.is_none() {
+            return;
         }
+        let r = c.out_r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
+        let eff = c.efficiency.unwrap_or(0.9).clamp(1e-9, 1.0);
+        let reg = regulated_node(circuit, out);
+        let fb = c
+            .feedback
+            .as_ref()
+            .map(|f| (f.vref_v, role_nodes.get(&f.pin)));
+        let (sense, vref, k) = match fb {
+            Some((vref, Some(&n))) => (n, vref, divider_ratio(circuit, n)),
+            _ => (reg, c.vout_setpoint, 1.0),
+        };
+        let [drive, pi] = loop_exprs(c, out_farads(circuit, reg).max(1e-6) / k, r, eff);
+        let [drv, src, pi_node] =
+            ["out", "sw", "pi"].map(|t| circuit.node(&format!("__beh_{reference}_conv_{t}")));
+        let (lim, limit_vsource) = hidden_dc_node(circuit, reference, "conv_lim", 0.0);
+        // The reference as a source, so DC source stepping ramps it with the
+        // supplies: a soft start, which is how Newton finds a clamped loop.
+        let ref_node = hidden_dc_node(circuit, reference, "conv_ref", vref).0;
+        let deps: Vec<_> = [out, pi_node, sense, lim, vin, ref_node]
+            .map(BDep::Volt)
+            .into();
+        for (name, n, expr) in [("sw", src, drive), ("pi", pi_node, pi)] {
+            let expr = CompiledExpr::compile(&expr).expect("converter loop expression compiles");
+            circuit.add(Device::Behavioral {
+                name: format!("Bbeh_{reference}_conv_{name}"),
+                p: NodeId::GROUND,
+                n,
+                output: BOutput::Current,
+                expr,
+                deps: deps.clone(),
+            });
+        }
+        circuit.add(Device::capacitor(
+            format!("Cbeh_{reference}_conv_pi"),
+            pi_node,
+            NodeId::GROUND,
+            1e-6,
+        ));
+        let out_vsource = circuit.add(Device::vsource(
+            format!("Vbeh_{reference}_conv"),
+            drv,
+            src,
+            SourceKind::Dc(0.0),
+        ));
+        circuit.add(Device::resistor(
+            format!("Rbeh_{reference}_conv_out"),
+            drv,
+            out,
+            r,
+        ));
+        // Reflected input draw: an Isource pulling from the input to GND.
+        let in_isource = circuit.add(Device::isource(
+            format!("Ibeh_{reference}_conv_in"),
+            vin,
+            NodeId::GROUND,
+            SourceKind::Dc(0.0),
+        ));
+        self.converter = Some(ConverterLeg {
+            cfg: c.clone(),
+            out_vsource,
+            out_drv_node: drv,
+            out_r_ohms: r,
+            eff,
+            out_node: out,
+            in_node: vin,
+            enable_node: c
+                .enable
+                .as_ref()
+                .and_then(|en| role_nodes.get(&en.pin).copied()),
+            sensed: !matches!(fb, Some((_, None))),
+            in_isource,
+            limit_vsource,
+            iin_limit_a,
+            last_iin_a: 0.0,
+        });
     }
 
     /// Expression laws, preferring the solver-implicit form where the law is a
@@ -947,7 +1065,7 @@ impl BehavioralDevice {
                         name: format!("Bbeh_{reference}_{}", law.name),
                         p: a_node,
                         n: b_node,
-                        output: hauksbee_ir::BOutput::Current,
+                        output: BOutput::Current,
                         expr,
                         deps,
                     });
@@ -1090,14 +1208,12 @@ impl BehavioralDevice {
     }
 
     /// Advance one chunk. `node_v(n)` returns the node's solved voltage from the
-    /// previous chunk; `branch_current(dev)` returns a Vsource's branch current
-    /// (for reading the converter's delivered output current). Recompute every
-    /// controllable leg's value and write it onto the circuit.
+    /// previous chunk. Recompute every controllable leg's value and write it
+    /// onto the circuit.
     pub fn update(
         &mut self,
         circuit: &mut Circuit,
         node_v: &dyn Fn(NodeId) -> f64,
-        _branch_current: &dyn Fn(DeviceId) -> Option<f64>,
         t: f64,
         dt: f64,
     ) {
@@ -1123,9 +1239,7 @@ impl BehavioralDevice {
         self.apply_series_paths(circuit);
 
         // 4. Converter regulation + limits.
-        if self.converter.is_some() {
-            self.update_converter(circuit, node_v, None);
-        }
+        self.update_converter(circuit, node_v);
 
         // 5. Expression laws. Evaluate against a context rebuilt AFTER the FSM
         //    advanced: `advance_fsm` may have changed the active state and reset
@@ -1308,12 +1422,14 @@ impl BehavioralDevice {
         }
     }
 
-    /// Settle the converter at a DC operating point: one converter update (no
-    /// FSM, profile or law advances), whose feedback command is a secant step
-    /// on `V(fb) = vref` once two iterates exist, since the per-chunk
-    /// relaxation alone needs hundreds of solves. Returns how far the command
-    /// moved (0 without a converter).
-    pub fn settle_converter(
+    /// The converter's per-chunk bookkeeping (the loop itself is in-circuit,
+    /// see [`Self::stamp_converter`]): arm it with its input-current limit, or
+    /// disarm it while the enable input is low, a needed feedback pin or
+    /// programming evidence is missing; and reflect the delivered power onto
+    /// the input as `V(sw) * I_out / (eff * V(in))`. `V(sw)` never exceeds
+    /// `max_duty * V(in)` for a buck, so a sagging input cannot run the draw
+    /// away. Also the DC settle's iteration; returns how far the draw moved.
+    pub fn update_converter(
         &mut self,
         circuit: &mut Circuit,
         node_v: &dyn Fn(NodeId) -> f64,
@@ -1321,187 +1437,31 @@ impl BehavioralDevice {
         let Some(c) = self.converter.as_mut() else {
             return 0.0;
         };
-        let cmd = c.last_cmd_vout;
-        let fb = c.cfg.feedback.as_ref().zip(c.feedback_node);
-        let fb = fb.map(|(f, n)| (f.vref_v, node_v(n)));
-        let secant = |(vref, vfb): (f64, f64), (cmd0, fb0): (f64, f64)| {
-            let slope = (vfb - fb0) / (cmd - cmd0);
-            (slope.is_finite() && slope > 1e-6).then(|| cmd + (vref - vfb) / slope)
+        let high = |en: &EnableControl| {
+            c.enable_node
+                .is_some_and(|n| node_v(n) >= en.high_threshold_v)
         };
-        let gain = c.cfg.feedback.as_ref().map_or(0.0, |f| f.relaxation_gain);
-        let relax = |(vref, vfb): (f64, f64)| cmd + gain * (vref - vfb);
-        let target = fb.map(|now| {
-            c.settle_prev
-                .and_then(|prev| secant(now, prev))
-                .unwrap_or_else(|| relax(now))
-        });
-        c.settle_prev = fb.map(|(_, vfb)| (cmd, vfb));
-        self.update_converter(circuit, node_v, target);
-        let Some(c) = self.converter.as_mut() else {
-            return 0.0;
-        };
-        // Only a point IN regulation is held: one pinned at a ceiling or limit
-        // must stay free to rise when that limit lifts.
-        let regulating = fb.is_some_and(|(vref, vfb)| (vfb - vref).abs() <= 1e-3 * vref.abs());
-        let on = regulating && c.last_cmd_vout > 0.0;
-        c.settled = on.then_some((c.last_cmd_vout, c.last_iout_a));
-        (c.last_cmd_vout - cmd).abs()
-    }
-
-    /// Return the converter's loop state to its stamp-time cold start (the
-    /// caller restores the circuit's sources), undoing a failed settle.
-    pub const fn reset_converter(&mut self) {
-        if let Some(c) = self.converter.as_mut() {
-            c.last_cmd_vout = if c.cfg.feedback.is_some() {
-                0.0
-            } else {
-                c.cfg.vout_setpoint
-            };
-            (c.last_iout_a, c.last_iin_a) = (0.0, 0.0);
-            (c.settle_prev, c.settled) = (None, None);
-        }
-    }
-
-    /// Converter regulation: hold `vout_setpoint`, fold the output back under an
-    /// output-current limit, and throttle so the reflected input draw never
-    /// exceeds the (programmable) input-current limit. Mirrors
-    /// `power_supply::cc_regulate`, anchored to the previous command.
-    /// `settled_cmd`, when given, is the feedback command outright (the DC
-    /// settle's iterate).
-    fn update_converter(
-        &mut self,
-        circuit: &mut Circuit,
-        node_v: &dyn Fn(NodeId) -> f64,
-        settled_cmd: Option<f64>,
-    ) {
-        let c = self.converter.as_mut().unwrap();
-        if let Some(enable) = &c.cfg.enable {
-            let enabled = c
-                .enable_node
-                .is_some_and(|node| node_v(node) >= enable.high_threshold_v);
-            if !enabled {
-                c.last_cmd_vout = 0.0;
-                c.shut_down(circuit);
-                return;
-            }
-        }
-        if c.cfg.iin_program.is_some() && c.iin_limit_a.is_none() {
-            c.shut_down(circuit);
-            return;
-        }
-        // Delivered output current = the drop across the output series resistor
-        // divided by its resistance. We read this from node voltages (always in
-        // the solver's global x) rather than the output Vsource's branch current
-        // unknown, because the partitioned solver's global x carries node
-        // voltages only, a branch read would silently return 0 whenever the
-        // fast path is taken.
-        let iout = ((node_v(c.out_drv_node) - node_v(c.out_node)) / c.out_r_ohms).abs();
-        let vout = node_v(c.out_node).max(1e-6);
-        let vin = node_v(c.in_node).max(1e-6);
-        // Validation (`hauksbee-models::validate_behavioral`) accepts any
-        // efficiency in (0,1]; honour it. The tiny floor is purely a divide
-        // guard for the reflected-current computation below, not a physics
-        // clamp, a 1% efficient stage really does reflect 100x the output
-        // power onto its input.
-        let eff = c.cfg.efficiency.unwrap_or(0.9).clamp(1e-9, 1.0);
-
-        // Reflected input current for this output power.
-        let mut iin = (vout * iout) / (eff * vin);
-
-        // Output CV/CC: if iout exceeds the output limit, fold vout back so the
-        // current is held at the limit (anchor to the last command).
-        // Fixed-output converters command their declared setpoint. Adjustable
-        // converters instead close a first-order numerical loop around the
-        // board's actual feedback divider. `relaxation_gain` is deliberately a
-        // convergence parameter, not a bandwidth claim; switching/COMP/phase
-        // behavior remains an explicit model gap.
-        let mut v_cmd = if let Some(feedback) = &c.cfg.feedback {
-            let Some(feedback_node) = c.feedback_node else {
-                c.last_cmd_vout = 0.0;
-                c.shut_down(circuit);
-                return;
-            };
-            // A converter settled in regulation holds that point, adding back
-            // only its own output resistance's change in drop. Relaxing on
-            // the chunk-end V(fb) instead closes an integrator around the
-            // board's output LC, which rings and diverges on a light load (a
-            // 3.3 V rail swung +/-5 V); the real loop's compensation that
-            // prevents that is not modelled.
-            match (settled_cmd, c.settled) {
-                (Some(v), _) => v,
-                (None, Some((v, i))) => (iout - i).mul_add(c.out_r_ohms, v),
-                (None, None) => {
-                    let fb_v = node_v(feedback_node);
-                    feedback
-                        .relaxation_gain
-                        .mul_add(feedback.vref_v - fb_v, c.last_cmd_vout)
-                }
-            }
+        let evidenced = c.cfg.iin_program.is_none() || c.iin_limit_a.is_some();
+        let on = c.sensed && evidenced && c.cfg.enable.as_ref().is_none_or(high);
+        let limit = if on {
+            c.iin_limit_a.unwrap_or(1e9)
         } else {
-            c.cfg.vout_setpoint
+            0.0
         };
-
-        // A buck cannot command an averaged switch-node voltage above VIN.
-        // `vout_setpoint` remains an explicit hard ceiling for every topology.
-        let command_ceiling = match c.cfg.topology {
-            hauksbee_models::behavioral::Topology::Buck => {
-                c.cfg.vout_setpoint.min(vin * c.cfg.max_duty.unwrap_or(1.0))
-            }
-            _ => c.cfg.vout_setpoint,
-        }
-        .max(0.0);
-        v_cmd = v_cmd.clamp(0.0, command_ceiling);
-        if let Some(ilim) = c.cfg.iout_limit_a {
-            if iout > ilim && iout > 1e-9 {
-                let v_cc = ilim * (c.last_cmd_vout.max(1e-6) / iout);
-                v_cmd = v_cmd.min(v_cc);
-            }
-        }
-
-        // Input-current limit: throttle the output further so the input draw
-        // is held at the limit. Anchored to the *previous command* like the
-        // output-CC fold and `cc_regulate`, and ungated (computed every chunk,
-        // applied through `min`) so an under-limit chunk holds the CC point
-        // instead of resetting to the setpoint. The reflected draw scales with
-        // the SQUARE of the command into a resistive load (iin ∝ vout·iout),
-        // so the command that draws exactly the limit is
-        // `last_cmd·sqrt(limit/iin)`; a setpoint-scaled (or linear-anchored)
-        // law is a period-2 limit cycle that never settles.
-        if let Some(iin_limit_a) = c.iin_limit_a.filter(|_| iin > 1e-9) {
-            let v_in_lim = c.last_cmd_vout.max(1e-6) * (iin_limit_a / iin).sqrt();
-            if v_in_lim < v_cmd {
-                v_cmd = v_in_lim;
-                // The output runs THIS chunk at the throttled command, so the
-                // input Isource must draw that operating point's power, not
-                // the stale measured one: re-reflect through the load
-                // conductance seen this chunk (iout/vout). Otherwise the
-                // output would deliver full power while the input drew the
-                // previous under-limit current, energy from nowhere, and the
-                // limit never actually enforced.
-                iin = (v_cmd.powi(2) * (iout / vout)) / (eff * vin);
-            }
-        }
-        v_cmd = v_cmd.clamp(0.0, command_ceiling);
-        // A buck's averaged input current is its duty times the output current,
-        // `(v_cmd/vin)*iout/eff`, never more. Reflecting the stale output
-        // voltage instead diverges as 1/vin when the input sags under a
-        // current-limited source: the draw folds the source, which raises the
-        // draw, until the input collapses.
-        if c.cfg.topology == hauksbee_models::behavioral::Topology::Buck {
-            iin = iin.min(v_cmd * iout / (eff * vin));
-        }
-
-        c.last_cmd_vout = v_cmd;
-        c.last_iout_a = iout;
+        // Delivered current from the drop across `out_r`, a node-voltage read
+        // that holds on the partitioned path, whose x carries no branch currents.
+        let sw = node_v(c.out_drv_node);
+        let iout = ((sw - node_v(c.out_node)) / c.out_r_ohms).max(0.0);
+        let iin = if on {
+            sw.max(0.0) * iout / (c.eff * node_v(c.in_node).max(1e-6))
+        } else {
+            0.0
+        };
+        let moved = (iin - c.last_iin_a).abs();
         c.last_iin_a = iin;
-
-        let out_v = c.out_vsource;
-        let in_i = c.in_isource;
-        set_source_dc(circuit, out_v, v_cmd);
-        set_source_dc(circuit, in_i, iin);
-        // The input-overdraw fault against a brick-power budget is raised
-        // separately by [`Self::check_input_budget`], which the scheduler calls
-        // with the configured supply budget after the leg has been updated.
+        set_source_dc(circuit, c.limit_vsource, limit);
+        set_source_dc(circuit, c.in_isource, iin);
+        moved
     }
 
     /// Re-evaluate the converter's input-current limit from the board (called if
@@ -1719,19 +1679,18 @@ mod tests {
             &|_| None,
         )
         .expect("series path stamps");
-        let no_branch = |_id: DeviceId| None;
         let high = |node: NodeId| if node == a { 0.36 } else { 0.0 }; // 9 A at 40 mΩ
         let low = |node: NodeId| if node == a { 0.04 } else { 0.0 }; // 1 A
 
-        dev.update(&mut circuit, &high, &no_branch, 1.0, 1.0);
+        dev.update(&mut circuit, &high, 1.0, 1.0);
         assert_eq!(dev.state(), "closed");
         // A safe interval resets continuous guard time. Total device age is now
         // long, but the next short pulse must not trip immediately.
-        dev.update(&mut circuit, &low, &no_branch, 11.0, 10.0);
-        dev.update(&mut circuit, &high, &no_branch, 11.5, 0.5);
-        dev.update(&mut circuit, &high, &no_branch, 12.4, 0.9);
+        dev.update(&mut circuit, &low, 11.0, 10.0);
+        dev.update(&mut circuit, &high, 11.5, 0.5);
+        dev.update(&mut circuit, &high, 12.4, 0.9);
         assert_eq!(dev.state(), "closed");
-        dev.update(&mut circuit, &high, &no_branch, 12.51, 0.11);
+        dev.update(&mut circuit, &high, 12.51, 0.11);
         assert_eq!(dev.state(), "tripped");
 
         let resistance = circuit
@@ -1774,12 +1733,11 @@ mod tests {
         )
         .expect("temperature-only FSM stamps");
         let zero = |_node: NodeId| 0.0;
-        let no_branch = |_id: DeviceId| None;
 
-        dev.update(&mut circuit, &zero, &no_branch, 0.1, 0.1);
+        dev.update(&mut circuit, &zero, 0.1, 0.1);
         assert_eq!(dev.state(), "normal");
         circuit.temp_c = 85.0;
-        dev.update(&mut circuit, &zero, &no_branch, 0.2, 0.1);
+        dev.update(&mut circuit, &zero, 0.2, 0.1);
         assert_eq!(dev.state(), "hot");
     }
 
@@ -1840,11 +1798,10 @@ mod tests {
         )
         .expect("profile stamps");
         let zero = |_node: NodeId| 0.0;
-        let no_branch = |_id: DeviceId| None;
 
-        dev.update(&mut circuit, &zero, &no_branch, 0.0, 0.0005);
+        dev.update(&mut circuit, &zero, 0.0, 0.0005);
         assert_eq!(dev.state(), "idle");
-        dev.update(&mut circuit, &zero, &no_branch, 0.0005, 0.0006);
+        dev.update(&mut circuit, &zero, 0.0005, 0.0006);
         assert_eq!(dev.state(), "busy");
         let current = circuit
             .devices

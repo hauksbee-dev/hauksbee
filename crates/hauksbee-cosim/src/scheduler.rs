@@ -3546,14 +3546,15 @@ impl Scheduler {
         }
     }
 
-    /// Before the first chunk, settle every behavioural converter at the
-    /// initial operating point. Supplies stand at their t=0 values, so the
-    /// board has been powered forever: a feedback converter whose numerical
-    /// loop started at 0 V would invent a cold start (and an inrush) that the
-    /// stimulus never asked for. A ramped or absent input settles to 0 V and
-    /// keeps the cold start. The settled point becomes the t=0 state the
-    /// first chunk's behavioural update reads (not the solver's DC seed). A
-    /// loop that neither settles nor solves keeps the cold start it had.
+    /// Before the first chunk, arm every behavioural converter at the initial
+    /// operating point and settle its reflected input draw (the regulation
+    /// loop itself is in-circuit, so each DC solve closes it). Supplies stand
+    /// at their t=0 values, so the board has been powered forever: a converter
+    /// left unarmed until its first update would invent a cold start (and an
+    /// inrush) that the stimulus never asked for. A ramped or absent input
+    /// settles to 0 V and keeps the cold start. The settled point becomes the
+    /// t=0 state the first chunk's behavioural update reads (not the solver's
+    /// DC seed). A draw that never settles keeps the cold start it had.
     fn settle_converters(&mut self) {
         let has_converter = self
             .behavioral
@@ -3573,7 +3574,7 @@ impl Scheduler {
             let (x, layout) = (&ws.x, &ws.layout);
             let node_v = |n: NodeId| layout.node(n).map_or(0.0, |i| x[i]);
             let circuit = &mut self.circuit;
-            let settle = |d: &mut BehavioralDevice| d.settle_converter(circuit, &node_v);
+            let settle = |d: &mut BehavioralDevice| d.update_converter(circuit, &node_v);
             if self.behavioral.iter_mut().map(settle).fold(0.0, f64::max) < 1e-6 {
                 for (node, v) in self.node_volts.iter_mut().enumerate().skip(1) {
                     let id = u32::try_from(node).ok().map(NodeId);
@@ -3583,9 +3584,6 @@ impl Scheduler {
             }
         }
         self.circuit = cold;
-        self.behavioral
-            .iter_mut()
-            .for_each(BehavioralDevice::reset_converter);
     }
 
     /// Re-decide regulator support when supplies, inputs or shorts changed. Works
@@ -3872,12 +3870,9 @@ impl Scheduler {
         }
         let t = self.sim_time;
         let volts = self.node_volts.clone();
-        let branch = self.branch_x.clone();
-        let layout = self.layout.clone();
         let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-        let branch_current = |id: DeviceId| branch_current_of(&layout, &branch, id);
         for d in &mut self.behavioral {
-            d.update(&mut self.circuit, &node_v, &branch_current, t, chunk);
+            d.update(&mut self.circuit, &node_v, t, chunk);
             self.faults_pending.extend(d.drain_faults());
         }
     }

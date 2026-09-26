@@ -497,17 +497,27 @@ impl BoardEvidence {
             .values()
             .map(|name| ((*name).to_string(), BTreeSet::new()))
             .collect();
+        let live = |id: &i64| net_names.get(id).is_some_and(|n| !crate::is_ground(n));
+        let inductors: Vec<BTreeSet<i64>> = (board.components.iter())
+            .filter(|c| {
+                let row = report.row(&c.reference).map(|row| &row.outcome);
+                matches!(row, Some(BindOutcome::Analog { device }) if device.starts_with("L "))
+            })
+            .map(|c| c.pins.iter().filter_map(|p| p.net).filter(live).collect())
+            .collect();
         for (component_index, component) in board.components.iter().enumerate() {
             let component_subject = component_subjects
                 .get(component_index)
                 .map_or(AssumptionId::UNNAMED_SUBJECT, String::as_str);
-            for pin in &component.pins {
-                if let Some(name) = pin.net.and_then(|id| net_names.get(&id)).copied() {
-                    incidence
-                        .entry(name.to_string())
-                        .or_default()
-                        .insert(component_subject.to_string());
-                }
+            let nets: BTreeSet<i64> = component.pins.iter().filter_map(|p| p.net).collect();
+            // A part's defaults also reach across the inductors on its pins: a
+            // converter's loop shapes the rail beyond its output inductor.
+            let reach = defaults_by_ref.contains_key(component_subject);
+            let across = inductors.iter().filter(|l| reach && !l.is_disjoint(&nets));
+            let reached = nets.iter().chain(across.flatten());
+            for name in reached.filter_map(|id| net_names.get(id)) {
+                (incidence.entry((*name).to_string()).or_default())
+                    .insert(component_subject.to_string());
             }
         }
         let owned: Vec<(String, Vec<String>)> = incidence
@@ -2116,18 +2126,21 @@ fn guessed_pin_role(message: &str) -> (String, String) {
     (pin, role)
 }
 
+/// The `(parameter, value)` a bind warning says was assumed: "`name` not
+/// stated; assumed VALUE ..." (or the vreg "no `vout` param" wording).
 fn documented_default(warning: Option<&str>) -> Option<(String, String)> {
     let warning = warning?;
-    if warning.contains("vreg model has no `vout` param") {
-        let value = warning
-            .split("assumed ")
-            .nth(1)
-            .and_then(|rest| rest.split_whitespace().next())
-            .unwrap_or("5.0")
-            .to_string();
-        return Some(("vout".into(), value));
-    }
-    None
+    let (parameter, rest) = if warning.contains("vreg model has no `vout` param") {
+        ("vout", warning)
+    } else {
+        let (head, rest) = warning.split_once("` not stated; ")?;
+        (head.rsplit_once('`')?.1, rest)
+    };
+    let value = rest.split("assumed ").nth(1).map(str::split_whitespace);
+    let value = value
+        .and_then(|mut v| v.next())
+        .or_else(|| (parameter == "vout").then_some("5.0"));
+    Some((parameter.to_string(), value?.to_string()))
 }
 
 #[cfg(test)]
