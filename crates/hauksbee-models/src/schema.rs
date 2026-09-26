@@ -279,7 +279,7 @@ default_roles!(
 
 impl ModelCoverage {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.implements.is_empty() && self.missing.is_empty()
     }
 }
@@ -569,7 +569,7 @@ impl ModelSourceReference {
     }
 }
 
-fn unvalidated() -> ModelValidation {
+const fn unvalidated() -> ModelValidation {
     ModelValidation::Unvalidated
 }
 
@@ -912,7 +912,7 @@ pub enum StrapLevel {
 
 impl StrapLevel {
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
             Self::Low => "low",
@@ -1067,7 +1067,7 @@ impl OperatingEnvelope {
     }
 
     #[must_use]
-    pub fn severity(&self) -> EnvelopeSeverity {
+    pub const fn severity(&self) -> EnvelopeSeverity {
         match self {
             Self::SupplyRange { severity, .. }
             | Self::RailOrder { severity, .. }
@@ -1190,7 +1190,7 @@ impl PassiveClass {
     /// no call site re-derives the answer from the variant list and drifts when
     /// a variant is added.
     #[must_use]
-    pub fn is_resistor(self) -> bool {
+    pub const fn is_resistor(self) -> bool {
         matches!(self, Self::Resistor)
     }
 }
@@ -1344,7 +1344,7 @@ impl ParamValue {
     /// Return as `f64`, converting integers; `None` for a row, whose value
     /// depends on its key.
     #[must_use]
-    pub fn as_f64(&self) -> Option<f64> {
+    pub const fn as_f64(&self) -> Option<f64> {
         match self {
             Self::Float(v) => Some(*v),
             Self::Int(v) => Some(*v as f64),
@@ -1354,7 +1354,7 @@ impl ParamValue {
 
     /// Return as `&str` for string values.
     #[must_use]
-    pub fn as_str(&self) -> Option<&str> {
+    pub const fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s.as_str()),
             _ => None,
@@ -1364,7 +1364,7 @@ impl ParamValue {
     /// Return as `bool` for boolean values. `None` for non-bool params, so a
     /// caller can distinguish `flag = false` from an omitted/non-bool `flag`.
     #[must_use]
-    pub fn as_bool(&self) -> Option<bool> {
+    pub const fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(b) => Some(*b),
             _ => None,

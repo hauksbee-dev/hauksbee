@@ -106,7 +106,7 @@ pub struct UnmodelledNote {
 impl UnmodelledTable {
     /// An empty table.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self { parts: Vec::new() }
     }
 
@@ -165,13 +165,13 @@ impl UnmodelledTable {
 
     /// Number of loaded abstentions.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.parts.len()
     }
 
     /// Whether the table is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.parts.is_empty()
     }
 

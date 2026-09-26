@@ -93,7 +93,7 @@ pub struct InferredRole {
 impl PinRuleTable {
     /// An empty table (no rules).
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self { rules: Vec::new() }
     }
 
@@ -142,13 +142,13 @@ impl PinRuleTable {
 
     /// Number of loaded rules.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.rules.len()
     }
 
     /// Whether the table has no rules.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
 

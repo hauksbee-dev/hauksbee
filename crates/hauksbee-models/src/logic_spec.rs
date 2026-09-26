@@ -112,7 +112,7 @@ pub enum Level {
 impl Level {
     /// Is a sampled logic level "active" for this polarity?
     #[must_use]
-    pub fn is_active(self, level: bool) -> bool {
+    pub const fn is_active(self, level: bool) -> bool {
         match self {
             Self::Low => !level,
             Self::High => level,
@@ -386,7 +386,7 @@ impl Logic {
 }
 
 /// The value mask of a `bits`-wide register (`bits` is 1..=64).
-fn width_mask(bits: u32) -> u64 {
+const fn width_mask(bits: u32) -> u64 {
     u64::MAX >> (64 - bits)
 }
 

@@ -202,7 +202,7 @@ impl SourceLayer {
     /// Layer priority integer: builtin=0, pack=10, user dir=20,
     /// user config dir=25, `--models-dir`=30, user SPICE=40.
     #[must_use]
-    pub fn priority(self) -> u32 {
+    pub const fn priority(self) -> u32 {
         match self {
             Self::Builtin => 0,
             Self::Pack => 10,
@@ -215,7 +215,7 @@ impl SourceLayer {
 
     /// Short name for reports.
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
             Self::Pack => "pack",
@@ -229,7 +229,7 @@ impl SourceLayer {
     /// The coarse source string [`Resolution::source`] keeps for existing
     /// consumers: every user layer collapses to the historical `"user"`.
     #[must_use]
-    pub fn coarse_name(self) -> &'static str {
+    pub const fn coarse_name(self) -> &'static str {
         match self {
             Self::UserDir | Self::UserConfigDir | Self::ModelsDirFlag => "user",
             other => other.name(),
@@ -303,7 +303,7 @@ pub struct Resolution {
 
 impl Resolution {
     #[must_use]
-    pub fn unresolved(query: ComponentQuery) -> Self {
+    pub const fn unresolved(query: ComponentQuery) -> Self {
         Self {
             model: None,
             confidence: Confidence::Unresolved,
@@ -370,7 +370,7 @@ use matcher::CompiledEntry;
 impl ModelLibrary {
     /// Create an empty library with no entries.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             entries: Vec::new(),
             spice: Vec::new(),
@@ -402,7 +402,7 @@ impl ModelLibrary {
     /// `pin_rules.toml`). Consulted by the binder when a pad lacks an explicit
     /// pin-function role.
     #[must_use]
-    pub fn pin_rules(&self) -> &PinRuleTable {
+    pub const fn pin_rules(&self) -> &PinRuleTable {
         &self.pin_rules
     }
 
@@ -412,7 +412,7 @@ impl ModelLibrary {
     /// disclosure's two generic sentences with specific ones. It cannot make a part
     /// bind; see `unmodelled.rs` for why that containment is the point.
     #[must_use]
-    pub fn unmodelled(&self) -> &UnmodelledTable {
+    pub const fn unmodelled(&self) -> &UnmodelledTable {
         &self.unmodelled
     }
 
@@ -990,7 +990,7 @@ pub fn model_source(
     .map_err(|error| error.to_string())
 }
 
-fn model_layer(layer: SourceLayer) -> ModelLayer {
+const fn model_layer(layer: SourceLayer) -> ModelLayer {
     match layer {
         SourceLayer::Builtin => ModelLayer::Builtin,
         SourceLayer::Pack => ModelLayer::Pack,
@@ -1001,7 +1001,7 @@ fn model_layer(layer: SourceLayer) -> ModelLayer {
     }
 }
 
-fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
+const fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
     match layer {
         SourceLayer::Builtin => ModelSourceTier::CuratedLibrary,
         SourceLayer::Pack => ModelSourceTier::CuratedPack,
@@ -1013,7 +1013,7 @@ fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
     }
 }
 
-fn default_validation(layer: SourceLayer) -> ModelValidation {
+const fn default_validation(layer: SourceLayer) -> ModelValidation {
     match layer {
         SourceLayer::Builtin | SourceLayer::Pack | SourceLayer::UserDir => {
             ModelValidation::PhysicalBoundsOnly
@@ -1025,7 +1025,7 @@ fn default_validation(layer: SourceLayer) -> ModelValidation {
 }
 
 /// Convert a specificity score to a confidence level.
-fn score_to_confidence(score: u32) -> Confidence {
+const fn score_to_confidence(score: u32) -> Confidence {
     match score {
         50.. => Confidence::Exact,
         20.. => Confidence::Family,

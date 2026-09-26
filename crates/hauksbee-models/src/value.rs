@@ -624,7 +624,7 @@ fn tail_is_annotation(rest: &str) -> bool {
 
 /// Characters that begin a tolerated trailing annotation (voltage rating,
 /// tolerance, dielectric): the magnitude before them is already complete.
-fn is_annotation_start(c: char) -> bool {
+const fn is_annotation_start(c: char) -> bool {
     matches!(c, '/' | ',' | ';' | '%' | '(' | '@' | '±' | '+')
 }
 

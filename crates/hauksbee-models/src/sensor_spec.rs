@@ -211,7 +211,7 @@ pub enum Encoding {
 impl Encoding {
     /// The natural byte width of this encoding (the default for `bytes`).
     #[must_use]
-    pub fn natural_width(self) -> usize {
+    pub const fn natural_width(self) -> usize {
         match self {
             Self::U8 => 1,
             Self::U16Be | Self::U16Le | Self::I16Be | Self::I16Le | Self::Q71Be => 2,
@@ -319,7 +319,7 @@ pub struct BitFieldSpec {
 impl BitFieldSpec {
     /// Extract this field from a decoded integer.
     #[must_use]
-    pub fn extract(&self, value: u32) -> u32 {
+    pub const fn extract(&self, value: u32) -> u32 {
         let [high, low] = self.bits;
         let width = high - low + 1;
         let mask = if width >= 32 {
@@ -390,7 +390,7 @@ pub struct ChannelSelectSpec {
     pub bits: Option<[u8; 2]>,
 }
 
-fn default_channel_select() -> ChannelSelectSpec {
+const fn default_channel_select() -> ChannelSelectSpec {
     ChannelSelectSpec {
         source: ChannelSource::Auto,
         bits: None,
@@ -520,14 +520,14 @@ pub struct AddressChoice {
     pub assumed: Option<String>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_addr_mask() -> u8 {
+const fn default_addr_mask() -> u8 {
     0x7f
 }
 
-fn default_channels() -> usize {
+const fn default_channels() -> usize {
     1
 }
 
@@ -606,7 +606,7 @@ impl Sensor {
 
     /// The bus roles `[sensor.pins]` must name for this bus.
     #[must_use]
-    pub fn bus_roles(&self) -> &'static [&'static str] {
+    pub const fn bus_roles(&self) -> &'static [&'static str] {
         match self.bus {
             Bus::I2c => &["scl", "sda"],
             Bus::Spi => &["cs", "sck", "mosi", "miso"],
@@ -734,7 +734,7 @@ impl SensorSpec {
 
     /// Convenience accessor.
     #[must_use]
-    pub fn sensor(&self) -> &Sensor {
+    pub const fn sensor(&self) -> &Sensor {
         &self.sensor
     }
 

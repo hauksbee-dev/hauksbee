@@ -142,7 +142,7 @@ pub struct BehavioralPin {
     pub enable_active_high: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -345,7 +345,7 @@ pub struct FeedbackControl {
     pub relaxation_gain: f64,
 }
 
-fn default_feedback_relaxation_gain() -> f64 {
+const fn default_feedback_relaxation_gain() -> f64 {
     1.0
 }
 
