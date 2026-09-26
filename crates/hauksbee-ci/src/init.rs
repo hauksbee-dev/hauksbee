@@ -467,7 +467,8 @@ fn render_spec_at_with_run_hint(
             hauksbee_ir::docs_url("docs/cosim/MCU.md")
         );
     }
-    #[allow(clippy::option_if_let_else, reason = "a two-arm match keeps the long lines apart")]
+    // Two over-long literal arms read better as a match than as map_or_else closures.
+    #[allow(clippy::option_if_let_else)]
     let boot_net_line = match &boot_net {
         Some(net) => format!("# net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"),
         None => "# net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net".to_string(),

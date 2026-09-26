@@ -686,6 +686,8 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
 pub(crate) struct DescriptorDirGuard {
     /// `Some(previous)` when we set the var and must restore `previous` on
     /// drop; `None` when the guard changed nothing.
+    // Three states: untouched (None), restore (Some(Some(v))), remove (Some(None)).
+    #[allow(clippy::option_option)]
     restore: Option<Option<std::ffi::OsString>>,
 }
 
@@ -980,6 +982,7 @@ fn is_kicad_sch(path: &Path) -> bool {
 fn load_normalized_board(
     board_path: &Path,
 ) -> Result<hauksbee_engine::board_input::NormalizedBoard, SpecError> {
+    use hauksbee_engine::board_input::{self, BoardInputError};
     // CI-specific guard the normalizer does not carry: a spec pointing at a
     // sub-sheet rather than the hierarchy root is an incomplete board.
     if is_kicad_sch(board_path) {
@@ -994,7 +997,6 @@ fn load_normalized_board(
         }
     }
 
-    use hauksbee_engine::board_input::{self, BoardInputError};
     board_input::from_path(board_path).map_err(|e| match e {
         // Re-word the file-system failures with the spec-relative context
         // (the path came from the spec's `board` key, not argv).
@@ -1147,10 +1149,10 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 /// drops to the chunk-boundary framing heuristic with no error (the same
 /// silent-degradation hole `cs_net` itself had, see `Spec::referenced_nets`).
 pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<SpecError> {
-    let set: std::collections::HashSet<&str> = known_refs.iter().map(String::as_str).collect();
     fn tag<'a>(ctx: &'static str) -> impl Fn(&'a String) -> (&'a str, &'static str) {
         move |r| (r.as_str(), ctx)
     }
+    let set: std::collections::HashSet<&str> = known_refs.iter().map(String::as_str).collect();
     let asserts = spec.asserts.iter().filter_map(|a| match a.kind.as_str() {
         "max_current" => a
             .reference
@@ -2044,7 +2046,7 @@ fn run_one(
             let extremes = |name: &str| {
                 vext.get(name)
                     .into_iter()
-                    .flat_map(|&(mn, mx)| [mn, mx])
+                    .flat_map(|&pair| <[f64; 2]>::from(pair))
                     .filter(|v| v.is_finite())
             };
             for &thr in thresholds.iter().filter(|&&thr| t_ms + 1e-9 >= thr) {
@@ -3094,11 +3096,11 @@ fn attach_sensors(
 /// AVR (simavr) and Renode backends have a working bus bridge and produce no
 /// warnings here.
 pub(crate) fn qemu_bus_slave_warnings(spec: &Spec, qemu_backends: &[String]) -> Vec<String> {
+    const BUS_SLAVE_KINDS: &[&str] = &["i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008"];
     if qemu_backends.is_empty() {
         return Vec::new();
     }
 
-    const BUS_SLAVE_KINDS: &[&str] = &["i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008"];
     let backend_str = qemu_backends.join(", ");
     let slaves = spec
         .peripherals
@@ -3326,14 +3328,7 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
         .devices
         .iter()
         .any(|d| matches!(d, Device::Vsource { p, .. } if *p == node));
-    if !already {
-        bound.circuit.add(Device::vsource(
-            format!("Vci_drive_{net}"),
-            node,
-            NodeId::GROUND,
-            kind,
-        ));
-    } else {
+    if already {
         // Retarget any existing CI drive source we own.
         for dev in &mut bound.circuit.devices {
             if let Device::Vsource {
@@ -3345,6 +3340,13 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
                 }
             }
         }
+    } else {
+        bound.circuit.add(Device::vsource(
+            format!("Vci_drive_{net}"),
+            node,
+            NodeId::GROUND,
+            kind,
+        ));
     }
 }
 
@@ -3634,6 +3636,7 @@ fn main {
 
     #[test]
     fn load_board_accepts_a_gerber_zip() {
+        use std::io::Write;
         // B5: a spec may point straight at the fab archive. Corpus-gated like
         // the engine's gerber tests, including their licence rule: ClockworkPi
         // publishes this adapter with no licence statement, so corpus.toml
@@ -3658,7 +3661,6 @@ fn main {
             );
             return;
         };
-        use std::io::Write;
         let dir = std::env::temp_dir().join(format!("hauksbee-ci-gerb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let zip_path = dir.join("fab.zip");

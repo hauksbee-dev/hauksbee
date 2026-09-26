@@ -496,6 +496,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         .unwrap_or_default();
     let mut floating_reds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (result, map) in results.iter_mut().zip(maps.iter_mut()) {
+        use hauksbee_engine::dcpath::NetDcDefinition;
         if result.kind != "voltage" || result.invalid {
             continue;
         }
@@ -507,7 +508,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         if statuses.is_empty() {
             continue;
         }
-        use hauksbee_engine::dcpath::NetDcDefinition;
         if statuses
             .iter()
             .all(|s| matches!(s.definition, NetDcDefinition::Floating))

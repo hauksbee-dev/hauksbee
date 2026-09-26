@@ -261,10 +261,10 @@ struct InitArgs {
 }
 
 fn main() -> ExitCode {
+    use hauksbee_ci::integrate;
     // A killed CI run must not orphan its co-sim emulators: reap every live
     // Renode/QEMU child on SIGTERM/SIGINT. See hauksbee_mcu::children.
     hauksbee_mcu::children::install_signal_reaper();
-    use hauksbee_ci::integrate;
     let cli = Cli::parse();
     let mut args = match cli.command {
         Command::Run(args) => args,

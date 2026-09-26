@@ -986,6 +986,9 @@ impl CiResult {
     /// the rollup, and warnings are capped at
     /// [`Self::MAX_WARNING_ANNOTATIONS`] plus one overflow line.
     pub fn render_github_annotations(&self) -> String {
+        fn tagged<'m>(tag: &'static str, msgs: &'m [String]) -> impl Iterator<Item = String> + 'm {
+            msgs.iter().map(move |m| format!("{tag}::{}", gh_escape(m)))
+        }
         let mut out = String::new();
         // Per-assertion verdict errors, capped to leave room for the overflow
         // line and the rollup inside GitHub's 10-per-type truncation.
@@ -1030,9 +1033,6 @@ impl CiResult {
                     gh_escape(a.replacement())
                 )
             });
-        fn tagged<'m>(tag: &'static str, msgs: &'m [String]) -> impl Iterator<Item = String> + 'm {
-            msgs.iter().map(move |m| format!("{tag}::{}", gh_escape(m)))
-        }
         let warnings: Vec<String> = (!self.dead_rails.is_empty())
             .then(|| {
                 format!(

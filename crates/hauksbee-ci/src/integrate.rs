@@ -127,6 +127,8 @@ fn pre_commit_entry() -> String {
 ///
 /// Specs run one at a time so the script can count RED ones honestly; the
 /// blocked-commit line reports that count and the `--no-verify` escape hatch.
+// False positive: the flagged braces are real args of this multi-line format! literal.
+#[allow(clippy::literal_string_with_formatting_args)]
 fn plain_hook_script() -> String {
     let installed = installed_by();
     format!(
@@ -401,10 +403,8 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
         // linters first: they finish in milliseconds, and there is no point
         // solving a circuit for a commit `black` is about to reject anyway.
         let entry = pre_commit_entry();
-        #[allow(
-            clippy::option_if_let_else,
-            reason = "two multi-statement arms read better"
-        )]
+        // Both arms build text over several statements; closures would bury them.
+        #[allow(clippy::option_if_let_else)]
         let (new_text, did) = if let Some(pos) = text.lines().position(|l| l.trim_end() == "repos:")
         {
             let mut lines: Vec<&str> = text.lines().collect();

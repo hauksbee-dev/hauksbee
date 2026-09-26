@@ -593,9 +593,6 @@ impl SplitMix {
 /// 1.82e-8 -> "18.2n". Three significant digits; trailing zeros trimmed.
 #[must_use]
 pub fn format_engineering(v: f64) -> String {
-    if v == 0.0 || !v.is_finite() {
-        return format!("{v}");
-    }
     const SUFFIX: &[(f64, &str)] = &[
         (1e9, "G"),
         (1e6, "M"),
@@ -606,6 +603,9 @@ pub fn format_engineering(v: f64) -> String {
         (1e-9, "n"),
         (1e-12, "p"),
     ];
+    if v == 0.0 || !v.is_finite() {
+        return format!("{v}");
+    }
     // Three significant digits on the scaled mantissa (which lives in [1, 1000)).
     let sig_digits = |m: f64| {
         if m >= 100.0 {
@@ -805,8 +805,8 @@ mod tests {
     #[test]
     fn variant_axes_cross_every_plan_within_the_cap() {
         use std::collections::BTreeSet;
-        let axis = |r: &str, ids: &str| (r.to_string(), ids.split(' ').map(String::from).collect());
-        let axes: [(String, Vec<String>); 2] = [axis("U3", "a b"), axis("U4", "x y z")];
+        let mk = |r: &str, ids: &str| (r.to_string(), ids.split(' ').map(String::from).collect());
+        let axes: [(String, Vec<String>); 2] = [mk("U3", "a b"), mk("U4", "x y z")];
         let plans = build_plans(Mode::MonteCarlo, 2, &[]).unwrap();
         let swept = with_variants(plans.clone(), &axes).unwrap();
         let runs: BTreeSet<_> = swept.iter().map(|p| (p.seed, &p.variants)).collect();

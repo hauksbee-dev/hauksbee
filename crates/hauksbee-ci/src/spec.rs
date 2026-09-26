@@ -1457,40 +1457,40 @@ impl Spec {
 
     #[must_use]
     pub fn bom_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.bom)
+        self.resolve(self.bom.as_ref())
     }
 
     #[must_use]
     pub fn placement_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.placement)
+        self.resolve(self.placement.as_ref())
     }
 
     #[must_use]
     pub fn models_dir_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.models_dir)
+        self.resolve(self.models_dir.as_ref())
     }
 
     #[must_use]
     pub fn variant_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.variant)
+        self.resolve(self.variant.as_ref())
     }
 
     /// The optional Eagle companion path, resolved against the spec directory.
     #[must_use]
     pub fn schematic_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.schematic)
+        self.resolve(self.schematic.as_ref())
     }
 
     /// The firmware path, resolved against the spec's directory.
     #[must_use]
     pub fn firmware_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.firmware)
+        self.resolve(self.firmware.as_ref())
     }
 
     /// The as-built overlay path, resolved against the spec's directory.
     #[must_use]
     pub fn asbuilt_path(&self) -> Option<PathBuf> {
-        self.resolve(&self.asbuilt)
+        self.resolve(self.asbuilt.as_ref())
     }
 
     /// The informational MCU-kind note, whichever spelling carried it
@@ -1512,14 +1512,14 @@ impl Spec {
     #[must_use]
     pub fn mcu_descriptor_dir(&self) -> Option<PathBuf> {
         match &self.mcu {
-            Some(McuField::Config(c)) => self.resolve(&c.descriptor_dir),
+            Some(McuField::Config(c)) => self.resolve(c.descriptor_dir.as_ref()),
             _ => None,
         }
     }
 
     /// An optional spec-relative path, resolved against the spec's directory.
-    fn resolve(&self, p: &Option<PathBuf>) -> Option<PathBuf> {
-        p.as_ref().map(|p| resolve_in(&self.base_dir, p))
+    fn resolve(&self, p: Option<&PathBuf>) -> Option<PathBuf> {
+        p.map(|p| resolve_in(&self.base_dir, p))
     }
 }
 
@@ -2043,6 +2043,8 @@ const ALIASES: &[&str] = &["lipo", "lfp"];
 
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
+        // (field, value, validity test, what a valid value is)
+        type RangeCheck<'a> = (&'a str, Option<f64>, &'a dyn Fn(f64) -> bool, &'a str);
         const KINDS: [&str; 5] = ["ideal", "bench", "wall", "usb", "battery"];
         let net = match (&self.reference, &self.pin) {
             (Some(r), Some(p)) if self.net.is_empty() => format!("{r} pin {p}"),
@@ -2074,8 +2076,6 @@ impl SupplySpec {
         let finite = |x: f64| x.is_finite();
         let positive = |x: f64| x.is_finite() && x > 0.0;
         let non_negative = |x: f64| x.is_finite() && x >= 0.0;
-        // (field, value, validity test, what a valid value is)
-        type RangeCheck<'a> = (&'a str, Option<f64>, &'a dyn Fn(f64) -> bool, &'a str);
         let ranges: [RangeCheck; 11] = [
             ("volts", self.volts, &finite, "a finite number"),
             (

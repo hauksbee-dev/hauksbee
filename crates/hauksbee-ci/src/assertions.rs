@@ -323,11 +323,11 @@ fn member_label(member: &str, out: &RunOutcome) -> String {
 /// tainted MCU (`refs[0]` is the regulator; later entries are MCUs it powers) even
 /// when it names no net of its own.
 fn regulation_reason<'a>(a: &Assertion, out: &'a RunOutcome) -> Option<&'a str> {
-    if a.kind == "model_coverage" {
-        return None;
-    }
     fn named(o: [Option<&String>; 2]) -> Vec<&String> {
         o.into_iter().flatten().collect()
+    }
+    if a.kind == "model_coverage" {
+        return None;
     }
     let nets = named([a.net.as_ref(), a.supply_net.as_ref()]);
     let refs = named([a.reference.as_ref(), a.mcu.as_ref()]);
@@ -467,7 +467,7 @@ fn evaluate_one(
                 .take(8)
                 .map(|(o, _, _)| o.seed.to_string())
                 .collect();
-            let more = if failures.len() > 8 { ", …" } else { "" };
+            let elided = if failures.len() > 8 { ", …" } else { "" };
             // The passed count must exclude held-stale (INVALID) members, not fold
             // them into "passed": those members were SKIPPED (member_invalid) and
             // never evaluated, so counting them green over-claims worst-case
@@ -493,7 +493,7 @@ fn evaluate_one(
             };
             let _ = write!(
                 detail,
-                "; passed {}/{} {noun} (failing: {}{more}{invalid_note})",
+                "; passed {}/{} {noun} (failing: {}{elided}{invalid_note})",
                 passed,
                 outcomes.len(),
                 failing.join(", "),
@@ -825,7 +825,7 @@ impl Verdict {
         if held {
             self.pass(pass_part);
         } else {
-            self.fail(format!("{fail_part} <- FAILED HERE"), Some(why));
+            self.fail(fail_part + " <- FAILED HERE", Some(why));
         }
     }
 
