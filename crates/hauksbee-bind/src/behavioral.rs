@@ -237,7 +237,10 @@ const DC_FARADS: f64 = 22e-6;
 /// clamp's rounding, so an output at or below `DC_FARADS` keeps its real gain.
 /// The factor also keeps the clamp's linear span, `cap/(g*dc)`, at least a
 /// fifth of `V(ref)`: an input-limited `cap` of milliamps left a sub-millivolt
-/// span that Newton stepped straight across, from clamp to clamp.
+/// span that Newton stepped straight across, from clamp to clamp. The clamp's
+/// slope at zero is 1 (`ask` scaled by `hypot(1, 0.02)`): its rounding's 0.9998
+/// held the DC point's `g*e` at `2e-4*x/dc`, a step in `i` as `dc` went to 1
+/// that LTE-rejected a 1 MΩ, 4.7 mF rail's first step down to femtoseconds.
 ///
 /// The input-power cap `P/V` continues below 1 mV along its tangent, not flat:
 /// a flat floor sent a Newton iterate at 0 V to `P/1 mV` and cycled from there.
@@ -265,7 +268,8 @@ fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [S
         "if(time>0.0,1.0,min({:?},({cap})/({g:?}*max(0.2*__d6,1e-6))))",
         (DC_FARADS / farads).min(1.0)
     );
-    let (ask, wid) = (format!("__d1+{dc}*__d2"), format!("0.02*({cap})"));
+    let ask = format!("{:?}*(__d1+{dc}*__d2)", 1.0_f64.hypot(0.02));
+    let wid = format!("0.02*({cap})");
     let cmd = format!("0.5*(math::hypot({ask}+{cap},{wid})-math::hypot({ask}-({cap}),{wid}))");
     let top = format!("(({hi})-__d0)/{r:?}");
     let band = format!("max({:?}*__d4*{armed},1e-6)", 4e-3 / r);

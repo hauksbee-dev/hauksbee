@@ -347,7 +347,8 @@ fn buck_output_is_capped_by_max_duty_and_heats_the_part() {
 /// meets the load, `V = sqrt(lim * eff * Vin * R)` (0.22 V for 5 mA from 5 V
 /// into 2.2R), drawing its limit and out of regulation, or regulates where that
 /// is above 3.3 V. Newton used to limit-cycle between the regulating and the
-/// clamped branch; a milliamp limit then failed its DC solve, reading 0 V.
+/// clamped branch; a milliamp limit then failed its DC solve, reading 0 V, and
+/// a 4.7 mF rail at 1 MΩ failed its first transient step at t = 0.
 #[test]
 fn input_limited_converter_finds_its_operating_point() {
     for (vin, load, ohms, cout, lim, fb) in [
@@ -356,6 +357,7 @@ fn input_limited_converter_finds_its_operating_point() {
         (5.0, "33R", 33.0, "10uF", 0.005, false),
         (24.0, "2.2R", 2.2, "100uF", 0.005, false),
         (12.0, "1Meg", 1e6, "10uF", 0.005, true),
+        (12.0, "1Meg", 1e6, "4700uF", 0.2, false),
     ] {
         let lib = lib_with_card(
             &format!("iin{vin}{load}"),
