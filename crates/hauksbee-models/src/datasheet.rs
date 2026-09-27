@@ -2153,7 +2153,11 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              high level. The binder ignores out_lo/out_hi/hysteresis when open_collector = true, \
              and ron_ohms/leak_s otherwise"
         }
-        "analog_switch" => "ron, roff, vth (no printed off-state figure: an `unknown` record for roff)",
+        "analog_switch" => {
+            "ron, roff, vth (no printed off-state figure: an `unknown` record for roff). ron is \
+             the typ column at 25 C, as for RDS(on). With on-resistance printed per path, add \
+             ron_s0/ron_s1 for the path each leg role names; ron keeps the main or first path"
+        }
         "digital" => {
             "voh (omit for an open-drain output), vol, vih, vil, tpd_s; supply_pin and gnd_pin \
              are quoted physical pad identifiers"
@@ -3563,6 +3567,7 @@ mod tests {
         assert!(bjt.contains("is, bf, nf (no VBE(on) row or curve: an `unknown` record each)"));
         let switch = build_prompt("SWITCH_FIXTURE", "analog_switch", "x");
         assert!(switch.contains("off-state figure: an `unknown` record for roff"));
+        assert!(switch.contains("add ron_s0/ron_s1 for the path each leg role names"));
     }
 
     #[test]

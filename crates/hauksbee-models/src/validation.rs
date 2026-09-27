@@ -327,8 +327,13 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
         // closes that the way the opamp/comparator rails are ordered.
         AnalogSwitch => KindRules {
             required: &["ron", "roff"],
-            ranges: &[("ron", 0.01, 10_000.0), ("roff", 1e3, 1e12)],
-            ordered: &[("ron", "roff")],
+            ranges: &[
+                ("ron", 0.01, 10_000.0),
+                ("ron_s0", 0.01, 10_000.0),
+                ("ron_s1", 0.01, 10_000.0),
+                ("roff", 1e3, 1e12),
+            ],
+            ordered: &[("ron", "roff"), ("ron_s0", "roff"), ("ron_s1", "roff")],
             ..NO_RULES
         },
         // Digital / MCU / connector / ignore / behavioural vreg: no mandatory
@@ -1665,6 +1670,9 @@ mod tests {
             "ron",
         );
         accepts(&entry(AnalogSwitch, &[("ron", 5.0), ("roff", 1e9)]));
+        let per_path = |r1| entry(AnalogSwitch, &[("ron", 5.0), ("ron_s0", 0.25), ("ron_s1", r1), ("roff", 1e9)]);
+        accepts(&per_path(1.3));
+        rejects(&per_path(50_000.0), "ron_s1");
 
         rejects(
             &entry(

@@ -229,7 +229,7 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "latch_voff",
             "latch_hold",
         ],
-        ComponentKind::AnalogSwitch => &["ron", "roff", "vth"],
+        ComponentKind::AnalogSwitch => &["ron", "ron_s0", "ron_s1", "roff", "vth"],
         ComponentKind::Digital => &CONVERTER_AND_DIGITAL[DIGITAL_FROM..],
         // A shift register is the digital vocabulary plus its stage count.
         ComponentKind::ShiftRegister => &CONVERTER_AND_DIGITAL[SHIFT_REGISTER_FROM..],

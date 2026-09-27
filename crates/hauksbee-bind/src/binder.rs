@@ -4416,17 +4416,19 @@ fn bind_comparator(
 /// Stamp one SPDT as two complementary `VSwitch` legs named `{name}_s1` and
 /// `{name}_s0`: select high closes com<->s1; the s0 leg conducts when the
 /// select is LOW by sensing (vcc - select) against the rail voltage `vcc_v`.
+/// Each leg takes its own on-resistance (`[ron_s0, ron_s1]`).
 fn stamp_spdt(
     circuit: &mut Circuit,
     name: &str,
     [com, s0, s1]: [NodeId; 3],
     [sel, vss, vcc]: [NodeId; 3],
     vcc_v: f64,
-    [ron, roff, vth]: [f64; 3],
+    ([ron_s0, ron_s1], roff, vth): ([f64; 2], f64, f64),
 ) {
-    for (leg, b, ctrl_p, ctrl_n, von) in
-        [("s1", s1, sel, vss, vth), ("s0", s0, vcc, sel, vcc_v - vth)]
-    {
+    for (leg, b, ctrl_p, ctrl_n, von, ron) in [
+        ("s1", s1, sel, vss, vth, ron_s1),
+        ("s0", s0, vcc, sel, vcc_v - vth, ron_s0),
+    ] {
         circuit.add(Device::VSwitch {
             name: format!("{name}_{leg}"),
             a: com,
@@ -4460,6 +4462,8 @@ fn bind_analog_switch(
     let ron = model.params.get_f64("ron").unwrap_or(50.0);
     let roff = model.params.get_f64("roff").unwrap_or(1e9);
     let vth = model.params.get_f64("vth").unwrap_or(1.5);
+    // A part printing on-resistance per path gives each throw its own figure.
+    let legs = ["ron_s0", "ron_s1"].map(|k| model.params.get_f64(k).unwrap_or(ron));
     let shared_dpdt = (
         roles.get("com_1").copied(),
         roles.get("s0_1").copied(),
@@ -4512,7 +4516,7 @@ fn bind_analog_switch(
                 [com, s0, s1],
                 [sel, vss, vcc],
                 vcc_v,
-                [ron, roff, vth],
+                (legs, roff, vth),
             );
         }
         let warning = [entry_warning(comp, model), vcc_warning]
@@ -4562,14 +4566,13 @@ fn bind_analog_switch(
             )
         });
         let vcc_v = rail.unwrap_or(DEFAULT_VCC);
-        let params = [ron, roff, vth];
         stamp_spdt(
             circuit,
             &comp.reference,
             [com, s0, s1],
             [sel, vss, vcc],
             vcc_v,
-            params,
+            (legs, roff, vth),
         );
         return (
             BindOutcome::Analog {
@@ -4711,7 +4714,7 @@ fn bind_analog_switch(
         ctrl_n: cn,
         von,
         voff,
-        ron,
+        ron: if b_is_control_low { legs[0] } else { ron },
         roff,
     });
     // An entry's own `warning` reaches the report from here. This path stamps
@@ -7688,13 +7691,21 @@ style = "i2c_pointer"
 
     #[test]
     fn shared_select_dpdt_stamps_both_differential_lanes_and_refuses_unmodeled_oe() {
-        let model = make_entry(
-            "generic_shared_select_dpdt",
-            ComponentKind::AnalogSwitch,
-            "two SPDT lanes with one select and active-low output enable",
-            hauksbee_models::Params::default(),
-            std::collections::BTreeMap::new(),
-        );
+        let card = |ron: &[(&str, f64)]| {
+            let mut params = hauksbee_models::Params::default();
+            for (k, v) in ron {
+                params.set_f64(*k, *v);
+            }
+            let what = "two SPDT lanes with one select and active-low output enable";
+            make_entry(
+                "generic_shared_select_dpdt",
+                ComponentKind::AnalogSwitch,
+                what,
+                params,
+                std::collections::BTreeMap::new(),
+            )
+        };
+        let model = card(&[("ron", 5.0)]);
         let build_roles = |circuit: &mut Circuit, oe: NodeId| {
             HashMap::from([
                 ("com_1".to_string(), circuit.node("D_PLUS")),
@@ -7720,6 +7731,23 @@ style = "i2c_pointer"
             matches!(outcome, BindOutcome::Behavioral { ref device } if device == "shared-select dpdt")
         );
         assert_eq!(vswitches(&enabled).len(), 4, "two SPDT lanes are four legs");
+        // Each leg takes its own path's ron; a card with only `ron` gives both legs it.
+        let per_path = card(&[("ron", 5.0), ("ron_s0", 0.25), ("ron_s1", 1.3)]);
+        for (model, s0, s1) in [(&model, 5.0, 5.0), (&per_path, 0.25, 1.3)] {
+            let mut c = Circuit::new();
+            let roles = build_roles(&mut c, NodeId::GROUND);
+            let _ = bind_analog_switch(&comp("U8", ""), model, &mut c, &roles, &power_nets);
+            let rons: Vec<_> = c
+                .devices
+                .iter()
+                .filter_map(|d| match d {
+                    Device::VSwitch { name, ron, .. } => Some((name.clone(), *ron)),
+                    _ => None,
+                })
+                .collect();
+            let want = |l| [(format!("U8_l{l}_s1"), s1), (format!("U8_l{l}_s0"), s0)];
+            assert_eq!(rons, [want(1), want(2)].concat());
+        }
 
         let mut dynamic_oe = Circuit::new();
         let oe = dynamic_oe.node("OE_N");
