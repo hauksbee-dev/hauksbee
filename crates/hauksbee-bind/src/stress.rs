@@ -2245,70 +2245,45 @@ mod monitor_temp_tests {
         }
     }
 
-    /// A synthetic dual-input power mux card: IN1 to OUT rated 500 mA, IN2 to
-    /// OUT `lo` A, 550 mA in total, the scalars the least favourable row, the
-    /// path rows on `pins`' roles.
-    fn mux_card(lo: f64, pins: [&str; 2]) -> hauksbee_models::schema::ModelEntry {
+    /// A synthetic dual-input power mux: IN1 to OUT rated 500 mA, IN2 to OUT
+    /// 140 mA (or as given), 550 mA in total, the scalars the least favourable
+    /// row, each path a 1 ohm unit into a grounded OUT. Each path is judged on
+    /// its own current and the total on their sum; a path this model cannot
+    /// measure (a pad left off the board, another device of the part on its
+    /// net) or a role the card's pins lack holds each unit to the least
+    /// favourable row, and only the unmeasured path says so, the total still
+    /// binding the sum. An analog switch's pins, once judged on the scalar
+    /// alone, take the same rows, and keep the scalar with no row per path.
+    #[test]
+    fn a_rating_printed_per_path_judges_the_current_through_that_path() {
         let row = |a: f64, pins: &str| {
             format!("[[models.source.characteristic]]\nparameter = \"IOUT\"\nrating = \"max_current_a\"\nmax = {a}\nunit = \"A\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\npins = [{pins}]\n")
         };
-        let (rows, min) = (
-            [row(0.5, pins[0]), row(lo, pins[1]), row(0.55, "")].concat(),
-            lo.min(0.5),
-        );
-        let text = format!("[[models]]\nid = \"mux\"\nkind = \"passive\"\n[models.pins]\n1 = \"in1\"\n2 = \"in2\"\n3 = \"out\"\n[models.ratings]\nmax_current_a = {min}\nmax_pin_current_a = {min}\n[models.source]\ntier = \"datasheet-derived\"\n{rows}");
-        let db: hauksbee_models::schema::DbFile = toml::from_str(&text).expect("a card");
-        db.models[0].clone()
-    }
-
-    /// Six chunks of part `U1`'s two `units`, monitored as `kind` on `card`
-    /// with `roles` bound and `volts` on the nets: the faults raised, and
-    /// whether an unmeasured path was disclosed.
-    fn run_mux(
-        circuit: &mut Circuit,
-        (units, kind): ([DeviceId; 2], ComponentKind),
-        card: &hauksbee_models::schema::ModelEntry,
-        roles: &HashMap<String, NodeId>,
-        volts: &HashMap<NodeId, f64>,
-    ) -> (Vec<FaultKind>, bool) {
-        let mut derating = Derating::of(card);
-        derating.carriers = rated_paths(circuit, "U1", &derating, roles, &units);
-        let metas = units.map(|device| DeviceMeta {
-            device,
-            derating: derating.clone(),
-            ..meta("U1_e0", kind, "", card.ratings.clone())
-        });
-        let mut monitor = StressMonitor::new(metas.to_vec());
-        let node_v = |n| volts.get(&n).copied().unwrap_or(0.0);
-        let mut chunk = |k| monitor.evaluate(circuit, &node_v, &|_| None, f64::from(k));
-        let raised = (0..6).flat_map(&mut chunk).map(|f| f.kind).collect();
-        let paths = |a: &Assumption| a.id().as_str().contains("U1-rating-paths");
-        (raised, monitor.disclosures().iter().any(paths))
-    }
-
-    /// The mux with each path a 1 ohm unit into a grounded OUT. Each path is
-    /// judged on its own current and the total on their sum; a path this model
-    /// cannot measure (a pad left off the board, another device of the part on
-    /// its net) or a role the card's pins lack holds each unit to the least
-    /// favourable row, and only the unmeasured path says so. An unmeasured
-    /// path still leaves the total binding the sum.
-    #[test]
-    fn a_rating_printed_per_path_judges_the_current_through_that_path() {
-        // (IN1 A, IN2 A, IN2's row A and roles, roles bound, a stray part device on IN1, fault, disclosed)
+        let (pa, sw) = (ComponentKind::Passive, ComponentKind::AnalogSwitch);
+        // (kind, IN1 A, IN2 A, IN2's row A and roles, roles bound, a stray part device on IN1, fault, disclosed)
         #[rustfmt::skip]
         let cases = [
-            (0.4, 0.0, 0.14, "\"in2\"", ["in1", "in2"], false, false, false),
-            (0.0, 0.2, 0.14, "\"in2\"", ["in1", "in2"], false, true, false),
-            (0.4, 0.13, 0.14, "\"in2\"", ["in1", "in2"], false, false, false),
-            (0.45, 0.13, 0.14, "\"in2\"", ["in1", "in2"], false, true, false),
-            (0.4, 0.0, 0.14, "\"in2\"", ["in1", "out"], false, true, true),
-            (0.4, 0.0, 0.14, "\"in2\"", ["in1", "in2"], true, true, true),
-            (0.4, 0.0, 0.14, "\"in3\"", ["in1", "in2"], false, true, false),
-            (0.3, 0.3, 0.5, "\"in2\"", ["in1", "out"], false, true, true),
+            (pa, 0.4, 0.0, 0.14, "\"in2\"", ["in1", "in2"], false, false, false),
+            (pa, 0.0, 0.2, 0.14, "\"in2\"", ["in1", "in2"], false, true, false),
+            (pa, 0.4, 0.13, 0.14, "\"in2\"", ["in1", "in2"], false, false, false),
+            (pa, 0.45, 0.13, 0.14, "\"in2\"", ["in1", "in2"], false, true, false),
+            (pa, 0.4, 0.0, 0.14, "\"in2\"", ["in1", "out"], false, true, true),
+            (pa, 0.4, 0.0, 0.14, "\"in2\"", ["in1", "in2"], true, true, true),
+            (pa, 0.4, 0.0, 0.14, "\"in3\"", ["in1", "in2"], false, true, false),
+            (pa, 0.3, 0.3, 0.5, "\"in2\"", ["in1", "out"], false, true, true),
+            (sw, 0.4, 0.0, 0.14, "\"in2\"", ["in1", "in2"], false, false, false),
+            (sw, 0.0, 0.2, 0.14, "\"in2\"", ["in1", "in2"], false, true, false),
+            (sw, 0.4, 0.13, 0.14, "\"in2\"", ["in1", "in2"], false, false, false),
+            (sw, 0.45, 0.13, 0.14, "\"in2\"", ["in1", "in2"], false, true, false),
+            (sw, 0.4, 0.0, 0.14, "", ["in1", "in2"], false, true, false),
         ];
-        for (i1, i2, lo, in2, bound, stray, fault, disclosed) in cases {
-            let entry = mux_card(lo, ["\"in1\"", in2]);
-            let clean = hauksbee_models::derating::tag_problems(&entry).is_empty();
+        for (kind, i1, i2, lo, in2, bound, stray, fault, disclosed) in cases {
+            let in1 = if in2.is_empty() { "" } else { "\"in1\"" };
+            let rows = [row(0.5, in1), row(lo, in2), row(0.55, "")].concat();
+            let text = format!("[[models]]\nid = \"mux\"\nkind = \"passive\"\n[models.pins]\n1 = \"in1\"\n2 = \"in2\"\n3 = \"out\"\n[models.ratings]\nmax_current_a = {min}\nmax_pin_current_a = {min}\n[models.source]\ntier = \"datasheet-derived\"\n{rows}", min = lo.min(0.5));
+            let db: hauksbee_models::schema::DbFile = toml::from_str(&text).expect("a card");
+            let entry = &db.models[0];
+            let clean = hauksbee_models::derating::tag_problems(entry).is_empty();
             assert_eq!(clean, in2 != "\"in3\"", "{in2}");
             let mut circuit = Circuit::new();
             let (n1, n2) = (circuit.node("IN1"), circuit.node("IN2"));
@@ -2320,61 +2295,23 @@ mod monitor_temp_tests {
             let nodes = [("in1", n1), ("in2", n2), ("out", NodeId::GROUND)];
             let roles = nodes.into_iter().filter(|(r, _)| bound.contains(r));
             let roles: HashMap<_, _> = roles.map(|(r, n)| (r.to_owned(), n)).collect();
+            let mut derating = Derating::of(entry);
+            derating.carriers = rated_paths(&circuit, "U1", &derating, &roles, &units);
+            let metas = units.map(|device| DeviceMeta {
+                device,
+                derating: derating.clone(),
+                ..meta("U1_e0", kind, "", entry.ratings.clone())
+            });
+            let mut monitor = StressMonitor::new(metas.to_vec());
             let volts = HashMap::from([(n1, i1), (n2, i2)]);
-            let parts = (units, ComponentKind::Passive);
-            let (raised, said) = run_mux(&mut circuit, parts, &entry, &roles, &volts);
-            let case = format!("{i1} A, {i2} A, {lo} A on {in2}, {bound:?}, {stray}");
-            let raised = raised.contains(&FaultKind::Overcurrent);
-            assert_eq!((raised, said), (fault, disclosed), "{case}");
-        }
-    }
-
-    /// The mux as an analog switch, whose pins were judged on the 140 mA scalar
-    /// alone: with path rows each leg's pin takes its path's row and the total
-    /// binds their sum; with no row printed per path the scalar still binds.
-    #[test]
-    fn an_analog_switch_pin_takes_its_path_row_and_a_total_their_sum() {
-        // (IN1 A, IN2 A, rows printed per path, fault)
-        #[rustfmt::skip]
-        let cases = [
-            (0.4, 0.0, true, false),
-            (0.0, 0.2, true, true),
-            (0.4, 0.13, true, false),
-            (0.45, 0.13, true, true),
-            (0.4, 0.0, false, true),
-        ];
-        for (i1, i2, pinned, fault) in cases {
-            let entry = mux_card(
-                0.14,
-                if pinned {
-                    ["\"in1\"", "\"in2\""]
-                } else {
-                    [""; 2]
-                },
-            );
-            let mut circuit = Circuit::new();
-            let [n1, n2, en] = ["IN1", "IN2", "EN"].map(|n| circuit.node(n));
-            let (ctrl_p, ctrl_n, b) = (en, NodeId::GROUND, NodeId::GROUND);
-            let (von, voff, ron, roff) = (1.5, 1.0, 1.0, 1e9);
-            let leg = |name: &str, a| Device::VSwitch {
-                name: name.into(),
-                a,
-                b,
-                ctrl_p,
-                ctrl_n,
-                von,
-                voff,
-                ron,
-                roff,
-            };
-            let units = [circuit.add(leg("U1_s1", n1)), circuit.add(leg("U1_s2", n2))];
-            let nodes = [("in1", n1), ("in2", n2), ("out", NodeId::GROUND)];
-            let roles = HashMap::from(nodes.map(|(r, n)| (r.to_owned(), n)));
-            let volts = HashMap::from([(n1, i1), (n2, i2), (en, 5.0)]);
-            let parts = (units, ComponentKind::AnalogSwitch);
-            let (raised, said) = run_mux(&mut circuit, parts, &entry, &roles, &volts);
-            let got = (raised.contains(&FaultKind::PinOvercurrent), said);
-            assert_eq!(got, (fault, false), "{i1} A, {i2} A, per path {pinned}");
+            let node_v = |n| volts.get(&n).copied().unwrap_or(0.0);
+            let mut chunk = |k| monitor.evaluate(&mut circuit, &node_v, &|_| None, f64::from(k));
+            let raised: Vec<_> = (0..6).flat_map(&mut chunk).map(|f| f.kind).collect();
+            let paths = |a: &Assumption| a.id().as_str().contains("U1-rating-paths");
+            let said = monitor.disclosures().iter().any(paths);
+            let case = format!("{kind:?}, {i1} A, {i2} A, {lo} A on {in2}, {bound:?}, {stray}");
+            let over = [FaultKind::Overcurrent, FaultKind::PinOvercurrent][usize::from(kind == sw)];
+            assert_eq!((raised.contains(&over), said), (fault, disclosed), "{case}");
         }
     }
 
