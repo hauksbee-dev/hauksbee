@@ -78,12 +78,33 @@ tr  = 1.55e-7     # BC847.txt TR (no datasheet row)
 
 [models.ratings]
 # Source: BC847X_SER Rev. 13, Table 6 Limiting values and Table 7 Thermal.
-max_current_a = 0.1            # IC continuous
+max_current_a = 0.1            # IC continuous. Table 6 prints it with no
+                               # temperature (it holds over the Tamb -65..150 C
+                               # range), so it carries no tagged row.
 max_surge_current_a = 0.2      # ICM, single pulse tp <= 1 ms
-max_power_w = 0.25             # Ptot, Tamb <= 25 C, standard footprint
+max_power_w = 0.25             # Ptot, Tamb <= 25 C, standard footprint (tagged row below)
 max_voltage_v = 45.0           # VCEO
 max_junction_temp_c = 150.0    # Tj
-theta_ja_c_per_w = 500.0       # Rth(j-a), in free air, standard footprint
+theta_ja_c_per_w = 500.0       # Rth(j-a), in free air, standard footprint (tagged row below)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC847X_SER Rev. 13 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC847X_SER Rev. 13 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -131,9 +152,38 @@ tr  = 6.820e-8    # 2n3904.lib TR (datasheet prints only ts max 200 ns)
 "3" = "collector"
 
 [models.ratings]
-max_current_a = 0.2
-max_power_w = 0.625
+# Source: onsemi 2N3904/D Rev. 3 (October 2024), Maximum Ratings and Thermal
+# Characteristics, both headed "Values are at TA = 25°C unless otherwise noted".
+max_current_a = 0.2            # IC continuous, TA = 25 C (tagged row below)
+max_power_w = 0.625            # PD, TA = 25 C (tagged row below); the sheet prints
+                               # only a 5.0 mW/C derating above 25 C, no second row
 max_voltage_v = 40.0
+max_junction_temp_c = 150.0    # TJ, TSTG -55 to +150 C
+theta_ja_c_per_w = 200.0       # RθJA max (RθJC max 83.3 C/W)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current, continuous"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "onsemi 2N3904/D Rev. 3 (October 2024), Maximum Ratings (values at TA = 25°C), IC continuous"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 0.625
+unit = "W"
+conditions = "TA = 25 °C"
+basis = "onsemi 2N3904/D Rev. 3 (October 2024), Thermal Characteristics (values at TA = 25°C), PD (derate above 25°C 5.0 mW/°C)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 200.0
+unit = "°C/W"
+conditions = "junction to ambient"
+basis = "onsemi 2N3904/D Rev. 3 (October 2024), Thermal Characteristics, RθJA max"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -179,9 +229,14 @@ tf  = 5.305e-10   # fT typ 300 MHz @ VCE=5 V, IC=10 mA: 1/(2*pi*300e6)
 # ─────────────────────────────────────────────────────────────────────────────
 
 [models.ratings]
-max_current_a = 0.1
-max_power_w = 0.625
+# Source: onsemi BC550/D Rev. 6 (February 2026), Absolute Maximum Ratings. That
+# table names no temperature for IC or PC and the sheet has no thermal table, so
+# the card carries no tagged rows.
+max_current_a = 0.1            # IC (DC)
+max_power_w = 0.5              # PC collector power dissipation 500 mW (was 0.625,
+                               # which this sheet does not print)
 max_voltage_v = 45.0
+max_junction_temp_c = 150.0    # TJ
 
 # ─────────────────────────────────────────────────────────────────────────────
 # S8050: NPN silicon epitaxial planar transistor, SOT-23.
@@ -267,6 +322,23 @@ max_current_a = 0.5     # IC continuous (A)
 max_power_w = 0.3       # PC collector dissipation (W)
 max_voltage_v = 25.0    # VCEO (V)
 max_junction_temp_c = 150.0  # Tj, "Junction and Storage Temperature -55 to +150"
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current, continuous"
+rating = "max_current_a"
+max = 0.5
+unit = "A"
+conditions = "Ta = 25 °C"
+basis = "Galaxy Microelectronics S8050 STM0043A (August 2020), Maximum Rating @ Ta=25℃, IC continuous"
+[[models.source.characteristic]]
+parameter = "PC collector dissipation"
+rating = "max_power_w"
+max = 0.3
+unit = "W"
+conditions = "Ta = 25 °C"
+basis = "Galaxy Microelectronics S8050 STM0043A (August 2020), Maximum Rating @ Ta=25℃, PC"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -356,6 +428,54 @@ max_junction_temp_c = 150.0 # Tj: Table 5
 theta_ja_c_per_w = 625.0  # Rth(j-a) per transistor, in free air (416 K/W per
                           # device): Table 6 Thermal characteristics. Per
                           # transistor, matching max_power_w: 125 K / 0.2 W.
+# IC is printed with no temperature (Table 5), so it carries no tagged row. The
+# per-transistor rows name each transistor's pins; the per-device rows name
+# none, so they bind the two transistors' sum.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per transistor (Q1)"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+pins = ["base_q1", "collector_q1", "emitter_q1"]
+basis = "Nexperia BCM847BS v.8 (15 July 2026), Table 5 Limiting values, per transistor Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per transistor (Q2)"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+pins = ["base_q2", "collector_q2", "emitter_q2"]
+basis = "Nexperia BCM847BS v.8 (15 July 2026), Table 5 Limiting values, per transistor Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per device"
+rating = "max_power_w"
+max = 0.3
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BCM847BS v.8 (15 July 2026), Table 5 Limiting values, per device Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient, per transistor"
+rating = "theta_ja_c_per_w"
+max = 625.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BCM847BS v.8 (15 July 2026), Table 6 Thermal characteristics, per transistor Rth(j-a) in free air, note [1] standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient, per device"
+rating = "theta_ja_c_per_w"
+max = 416.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BCM847BS v.8 (15 July 2026), Table 6 Thermal characteristics, per device Rth(j-a) in free air, note [1] standard footprint"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -409,9 +529,31 @@ tr  = 8.8e-8      # BC857.txt TR (no datasheet row)
 "3" = "collector"
 
 [models.ratings]
-max_current_a = 0.1
-max_power_w = 0.25
+# Source: BC856_BC857_BC858 Rev. 9, Table 6 Limiting values and Table 7 Thermal.
+max_current_a = 0.1            # |IC|, printed with no temperature, so no tagged row
+max_power_w = 0.25             # Ptot, Tamb <= 25 C, standard footprint (tagged row below)
 max_voltage_v = 45.0
+max_junction_temp_c = 150.0    # Tj, Table 6
+theta_ja_c_per_w = 500.0       # Rth(j-a), in free air, standard footprint (tagged row below)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC856_BC857_BC858 Rev. 9 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided 35 µm copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC856_BC857_BC858 Rev. 9 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [1] FR4 PCB, single-sided 35 µm copper, tin-plated, standard footprint"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -460,9 +602,56 @@ tr  = 4.306e-7    # 2n3906.lib TR (datasheet prints only ts max 225 ns)
 "3" = "collector"
 
 [models.ratings]
-max_current_a = 0.2
-max_power_w = 0.625
+# Source: onsemi 2N3906/D Rev. 4 (February 2010), Maximum Ratings and Thermal
+# Characteristics (onsemi.cn/pub/Collateral/2N3906-D.PDF; the card's
+# download/data-sheet URL now serves the ex-Fairchild 2N3906/MMBT3906/PZT3906
+# Rev. 1.2.2 sheet instead).
+max_current_a = 0.2            # IC continuous; the table names no temperature
+                               # for it, so it carries no tagged row
+max_power_w = 0.25             # PD @ TA = 60 C, the least favourable tagged row
+                               # (was 0.625, the TA = 25 C row; 1.5 W @ TC = 25 C)
 max_voltage_v = 40.0
+max_junction_temp_c = 150.0    # TJ, Tstg -55 to +150 C
+theta_ja_c_per_w = 200.0       # RθJA max
+theta_jc_c_per_w = 83.3        # RθJC max, the case reference of the TC = 25 C PD row
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 0.625
+unit = "W"
+conditions = "TA = 25 °C"
+basis = "onsemi 2N3906/D Rev. 4 (February 2010), Maximum Ratings, PD @ TA = 25°C (derate above 25°C 5.0 mW/°C)"
+[[models.source.characteristic]]
+parameter = "PD total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 60 °C"
+basis = "onsemi 2N3906/D Rev. 4 (February 2010), Maximum Ratings, PD @ TA = 60°C"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 1.5
+unit = "W"
+conditions = "TC = 25 °C"
+basis = "onsemi 2N3906/D Rev. 4 (February 2010), Maximum Ratings, PD @ TC = 25°C (derate above 25°C 12 mW/°C)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 200.0
+unit = "°C/W"
+conditions = "junction to ambient"
+basis = "onsemi 2N3906/D Rev. 4 (February 2010), Thermal Characteristics, RθJA max"
+[[models.source.characteristic]]
+parameter = "RθJC thermal resistance, junction-to-case"
+rating = "theta_jc_c_per_w"
+max = 83.3
+unit = "°C/W"
+conditions = "junction to case"
+basis = "onsemi 2N3906/D Rev. 4 (February 2010), Thermal Characteristics, RθJC max"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -509,9 +698,40 @@ tf  = 1.061e-9    # fT typ 150 MHz @ VCE=-5 V, IC=-10 mA: 1/(2*pi*150e6)
 "3" = "emitter"
 
 [models.ratings]
-max_current_a = 0.1
-max_power_w = 0.625
+# Source: onsemi BC556BTA/D Rev. 3 (June 2024), Absolute Maximum Ratings and
+# Thermal Characteristics, both at TA = 25 C unless otherwise noted.
+max_current_a = 0.1            # |IC| (DC), TA = 25 C (tagged row below)
+max_power_w = 0.5              # PD 500 mW, TA = 25 C (was 0.625, which this sheet
+                               # does not print); derate above 25 C 4.0 mW/C
 max_voltage_v = 45.0
+max_junction_temp_c = 150.0    # TJ
+theta_ja_c_per_w = 250.0       # RθJA max, Note 1 board
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current (DC)"
+rating = "max_current_a"
+max = -0.1
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "onsemi BC556BTA/D Rev. 3 (June 2024), Absolute Maximum Ratings (TA = 25°C unless otherwise noted), IC"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "TA = 25 °C"
+mounting = "FR-4 76 x 114 x 1.57 mm, minimum land pattern"
+basis = "onsemi BC556BTA/D Rev. 3 (June 2024), Thermal Characteristics (TA = 25°C), PD (derate above 25°C 4.0 mW/°C), Note 1 PCB FR-4 76 mm x 114 mm x 1.57 mm, minimum land pattern"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 250.0
+unit = "°C/W"
+conditions = "junction to ambient"
+mounting = "FR-4 76 x 114 x 1.57 mm, minimum land pattern"
+basis = "onsemi BC556BTA/D Rev. 3 (June 2024), Thermal Characteristics, RθJA max, Note 1 PCB FR-4 76 mm x 114 mm x 1.57 mm, minimum land pattern"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -566,9 +786,60 @@ pair_count = 2
 "6" = "collector_q1"
 
 [models.ratings]
-max_current_a = 0.1
-max_power_w = 0.25
+# Source: BCM857BS v.9 (12 August 2026), Table 5 Limiting values and Table 6
+# Thermal characteristics. Per transistor, as for bcm847bs.
+max_current_a = 0.1            # |IC| per transistor, printed with no temperature,
+                               # so no tagged row
+max_power_w = 0.2              # Ptot per transistor, Tamb <= 25 C (300 mW per
+                               # device). Was 0.25, which the sheet does not print.
 max_voltage_v = 45.0
+max_junction_temp_c = 150.0    # Tj, Table 5
+theta_ja_c_per_w = 625.0       # Rth(j-a) per transistor, in free air (416 K/W per device)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per transistor (Q1)"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+pins = ["base_q1", "collector_q1", "emitter_q1"]
+basis = "Nexperia BCM857BS v.9 (12 August 2026), Table 5 Limiting values, per transistor Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per transistor (Q2)"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+pins = ["base_q2", "collector_q2", "emitter_q2"]
+basis = "Nexperia BCM857BS v.9 (12 August 2026), Table 5 Limiting values, per transistor Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per device"
+rating = "max_power_w"
+max = 0.3
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BCM857BS v.9 (12 August 2026), Table 5 Limiting values, per device Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient, per transistor"
+rating = "theta_ja_c_per_w"
+max = 625.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BCM857BS v.9 (12 August 2026), Table 6 Thermal characteristics, per transistor Rth(j-a) in free air, note [1] standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient, per device"
+rating = "theta_ja_c_per_w"
+max = 416.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BCM857BS v.9 (12 August 2026), Table 6 Thermal characteristics, per device Rth(j-a) in free air, note [1] standard footprint"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BC817 / BC807: Nexperia 45 V, 500 mA general-purpose complementary pair,
@@ -682,6 +953,48 @@ max_voltage_v = 45.0           # VCEO (VCBO is 50 V, VEBO 5 V)
 max_junction_temp_c = 150.0    # Tj
 theta_ja_c_per_w = 500.0       # Rth(j-a), standard footprint, free air
                                # (362 K/W with a 1 cm^2 collector pad)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current"
+rating = "max_current_a"
+max = 0.5
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BC817_SER Rev. 8 (1 July 2022), Table 6 Limiting values, IC @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC817_SER Rev. 8 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.345
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
+basis = "Nexperia BC817_SER Rev. 8 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC817_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 362.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
+basis = "Nexperia BC817_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -737,6 +1050,48 @@ max_power_w = 0.25             # standard footprint (0.345 W on a 1 cm^2 pad)
 max_voltage_v = 45.0           # |VCEO|
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 500.0       # standard footprint (362 K/W with a 1 cm^2 pad)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current"
+rating = "max_current_a"
+max = -0.5
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 6 Limiting values, IC @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.345
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 362.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BC807: the UNGRADED PNP, and why a bare part number needs its own card.
@@ -870,3 +1225,45 @@ max_power_w = 0.25             # Ptot, standard footprint (0.345 W on a 1 cm^2 p
 max_voltage_v = 45.0           # |VCEO| (|VCBO| is 50 V, |VEBO| 5 V)
 max_junction_temp_c = 150.0    # Tj
 theta_ja_c_per_w = 500.0       # Rth(j-a), standard footprint, free air
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current"
+rating = "max_current_a"
+max = -0.5
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 6 Limiting values, IC @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.345
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 6 Limiting values, Ptot @ Tamb ≤ 25 °C, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [1] FR4 PCB, single-sided copper, tin-plated, standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 362.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
+basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
