@@ -38,6 +38,14 @@ status = "unknown"
 parameter = "charger_behavior"
 reason = "power-path switching, CC/CV dynamics, current programming and limiting, thermal regulation, safety timers, and battery-temperature response are not modeled"
 
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 44.5
+unit = "°C/W"
+conditions = "RGT (VQFN) 16 pins, JEDEC thermal metric"
+basis = "TI SLUS810N (October 2021), Section 8.4 Thermal Information, BQ2407x RGT (VQFN) 16 pins, RθJA 44.5 °C/W"
+
 [models.match]
 # BQ24075, the RGT package code, and its reel/package-quantity suffixes. Do not
 # capture BQ24075T: that sibling uses the voltage-based TS method in Section 6.
@@ -73,6 +81,9 @@ vout_setpoint_high = 4.23
 "14" = "tmr"
 "15" = "sysoff"
 "16" = "iset"
+
+[models.ratings]
+theta_ja_c_per_w = 44.5     # SLUS810N 8.4 Thermal Information, RGT 16 pins
 
 [[models.envelope]]
 kind = "supply_range"
@@ -133,6 +144,19 @@ iq_a = 0.001
 [models.ratings]
 max_voltage_v = 60.0      # Absolute Maximum Ratings, PVIN/SENSVIN -0.3 V to 60 V (Rev E)
 max_junction_temp_c = 125.0
+theta_ja_c_per_w = 34.0    # UHF 38-lead 5x7 QFN, Pin Configuration (Rev E)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 34.0
+unit = "°C/W"
+conditions = "UHF package, 38-lead (5 mm x 7 mm) plastic QFN"
+basis = "Analog Devices LTC4020 datasheet Rev E, Pin Configuration, UHF package 38-lead (5mm x 7mm) plastic QFN, TJMAX = 125°C, θJA = 34°C/W, θJC = 2°C/W"
 
 # The 4.5-55 V operating range is the check that fires below the 60 V abs max.
 [[models.envelope]]
@@ -233,6 +257,22 @@ value_re = "(?i)LTC6803"
 "8"  = "c9"        # C9 (representative of the commoned unused C9..C12 inputs)
 "27" = "vminus"    # V-, stack bottom = GND
 
+[models.ratings]
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, maximum junction temperature (680324fa)
+theta_ja_c_per_w = 70.0      # G package 44-lead SSOP, Pin Configuration (680324fa)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 70.0
+unit = "°C/W"
+conditions = "G package, 44-lead plastic SSOP"
+basis = "Analog Devices LTC6803-2/LTC6803-4 datasheet 680324fa (Rev A), Pin Configuration, LTC6803-4 G package 44-lead plastic SSOP, TJMAX = 150°C, θJA = 70°C/W"
+
 [models.params]
 # The external tie resistance from the commoned upper-cell inputs to the
 # top-of-pack rail. The `_from_ref` convention tells the binder to read the named
@@ -299,6 +339,26 @@ iq_a = 0.001
 
 [models.ratings]
 max_voltage_v = 22.0      # Table 5 Absolute maximum ratings, VBUS -0.3 to 22 V (PS v1.1)
+theta_ja_c_per_w = 24.2   # Table 8, QFN32, JESD51-7 (PS v1.1); the WLCSP is 48.3 (Table 9)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 24.2
+unit = "°C/W"
+conditions = "QFN 32 pins, JESD51-7"
+package = "QFN"
+basis = "Nordic nPM1300 Product Specification v1.1 (4490_483, 2024-06-16), Section 5.1 Dissipation ratings, Table 8 QFN32 thermal resistance, RϴJA 24.2 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance (WLCSP)"
+max = 48.3
+unit = "°C/W"
+conditions = "WLCSP 35 pins, JESD51-7"
+basis = "Nordic nPM1300 Product Specification v1.1 (4490_483, 2024-06-16), Section 5.1 Dissipation ratings, Table 9 WLCSP thermal resistance, RϴJA 48.3 °C/W; untagged because no package body resolves WLCSP and this card's pin map is the QFN-32"
 
 # The 4.0-5.5 V VBUS operating range is the check that fires below the 22.0 V abs max.
 [[models.envelope]]
@@ -413,6 +473,26 @@ vil       = 0.8    # HIN/LIN low threshold (V) typ
 # VDD abs max = 18V; HB (bootstrap) abs max = 118V (HB-to-VSS), SNVS333F 6.1.
 max_voltage_v       = 18.0    # Absolute Maximum Ratings, VDD to VSS -0.3 to 18 V
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+theta_ja_c_per_w    = 109.6   # SNVS333F 6.4, D (SOIC) 8 pins; the NGT (WSON) is 38.9
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 109.6
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI LM5107 SNVS333F (September 2016), Section 6.4 Thermal Information, D (SOIC) 8 pins, RθJA 109.6 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance (WSON)"
+max = 38.9
+unit = "°C/W"
+conditions = "NGT (WSON) 8 pins, 4-layer board (note 3)"
+basis = "TI LM5107 SNVS333F (September 2016), Section 6.4 Thermal Information, NGT (WSON) 8 pins, RθJA 38.9 °C/W (note 3); untagged because no package body resolves WSON"
 
 # The 8-14 V recommended VDD range is the check that fires below the 18.0 V abs max.
 [[models.envelope]]
@@ -461,6 +541,40 @@ vil       = 0.8
 # Source: LM5109 datasheet SNVSA31C, Table 7.1 Absolute Maximum Ratings.
 max_voltage_v       = 18.0    # Absolute Maximum Ratings, VDD to VSS -0.3 to 18 V
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+theta_ja_c_per_w    = 160.0   # SNVS369 LM5109 SOIC-8; the LM5109A/B SOIC is 117.6
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance, LM5109"
+rating = "theta_ja_c_per_w"
+typ = 160.0
+unit = "°C/W"
+conditions = "SOIC-8, 4-layer board (note 3)"
+package = "SOIC-8"
+basis = "TI LM5109 SNVS369 (April 2005), Electrical Characteristics, Thermal Resistance, θJA SOIC-8 160 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, LM5109A/LM5109B"
+rating = "theta_ja_c_per_w"
+max = 117.6
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI LM5109B SNVS477C (January 2016) and LM5109A SNVS412C (September 2016), Section 6.4 Thermal Information, D (SOIC) 8 pins, RθJA 117.6 °C/W"
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance, LM5109 (WSON)"
+typ = 40.0
+unit = "°C/W"
+conditions = "WSON-8, 4-layer board (note 3)"
+basis = "TI LM5109 SNVS369 (April 2005), Electrical Characteristics, Thermal Resistance, θJA WSON-8 40 °C/W; untagged because no package body resolves WSON"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, LM5109A/LM5109B (WSON)"
+max = 42.3
+unit = "°C/W"
+conditions = "NGT (WSON) 8 pins"
+basis = "TI LM5109B SNVS477C (January 2016) and LM5109A SNVS412C (September 2016), Section 6.4 Thermal Information, NGT (WSON) 8 pins, RθJA 42.3 °C/W; untagged because no package body resolves WSON"
 
 # The 8-14 V recommended VDD range is the check that fires below the 18.0 V abs max.
 [[models.envelope]]
@@ -763,6 +877,27 @@ max_voltage_v = 7.0          # Absolute Maximum Ratings, VDD 7.0 V
 max_junction_temp_c = 125.0  # TJ operating max (TSD trips at 150 C typ)
 theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
 
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "θJA thermal package resistance, 5-lead SOT-23"
+rating = "theta_ja_c_per_w"
+typ = 230.0
+unit = "°C/W"
+conditions = "4-layer JC51-7 standard board, natural convection"
+package = "SOT-23-5"
+basis = "Microchip MCP73831/2 DS20001984H, Temperature Specifications, Thermal Package Resistances, 5-Lead SOT-23 θJA 230 °C/W typ (Note 2: large copper area can reach 130 °C/W)"
+[[models.source.characteristic]]
+parameter = "θJA thermal package resistance, 8-lead 2x3 DFN"
+rating = "theta_ja_c_per_w"
+typ = 76.0
+unit = "°C/W"
+conditions = "4-layer JC51-7 standard board, natural convection, minimum copper"
+package = "DFN"
+basis = "Microchip MCP73831/2 DS20001984H, Temperature Specifications, Thermal Package Resistances, 8-Lead 2 mm x 3 mm DFN θJA 76 °C/W typ (Note 1: minimum copper condition)"
+
 # The RECOMMENDED supply range, which is the check that fires below the 7 V abs
 # max. DS20001984H prints two lower ends and they answer different questions:
 # the DC Characteristics "Supply Voltage" row is 3.75 V min (the part runs, UVLO
@@ -858,6 +993,27 @@ max_voltage_v = 7.0          # Absolute Maximum Ratings, VDD 7.0 V
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 113.0     # MSOP-10, 4-layer JC51-7 board
 
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance, MSOP-10"
+rating = "theta_ja_c_per_w"
+typ = 113.0
+unit = "°C/W"
+conditions = "4-layer JC51-7 standard board"
+package = "MSOP"
+basis = "Microchip MCP73833/4 DS20002005C (September 2025), Temperature Specifications, Thermal Resistance MSOP-10 θJA 113 °C/W typ"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance, DFN-10 3x3"
+rating = "theta_ja_c_per_w"
+typ = 41.0
+unit = "°C/W"
+conditions = "4-layer JC51-7 standard board"
+package = "DFN"
+basis = "Microchip MCP73833/4 DS20002005C (September 2025), Temperature Specifications, Thermal Resistance DFN-10 3 mm x 3 mm θJA 41 °C/W typ"
+
 # The 3.75-6 V operating range is the check that fires below the 7 V abs max.
 [[models.envelope]]
 kind = "supply_range"
@@ -946,6 +1102,43 @@ max_voltage_v = 10.0         # Absolute Maximum Ratings, VCC -0.3 to +10 V. The
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 250.0     # SOT23-5, ~1 square of 1 oz copper (Note 4)
 theta_jc_c_per_w = 130.0     # SOT23-5
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "ӨJA thermal resistance, SOT23-5"
+rating = "theta_ja_c_per_w"
+max = 250.0
+unit = "°C/W"
+conditions = "approximately 1 square of 1 oz copper (Note 4)"
+package = "SOT-23-5"
+basis = "Belling BL4054/BL4054B datasheet Rev 1.5, Thermal Resistance (Note 4), SOT23-5 ӨJA 250 °C/W"
+[[models.source.characteristic]]
+parameter = "ӨJA thermal resistance, TSOT23-5"
+rating = "theta_ja_c_per_w"
+max = 220.0
+unit = "°C/W"
+conditions = "approximately 1 square of 1 oz copper (Note 4)"
+package = "TSOT-23-5"
+basis = "Belling BL4054/BL4054B datasheet Rev 1.5, Thermal Resistance (Note 4), TSOT23-5 ӨJA 220 °C/W"
+[[models.source.characteristic]]
+parameter = "ӨJC thermal resistance, SOT23-5"
+rating = "theta_jc_c_per_w"
+max = 130.0
+unit = "°C/W"
+conditions = "approximately 1 square of 1 oz copper (Note 4)"
+package = "SOT-23-5"
+basis = "Belling BL4054/BL4054B datasheet Rev 1.5, Thermal Resistance (Note 4), SOT23-5 ӨJC 130 °C/W"
+[[models.source.characteristic]]
+parameter = "ӨJC thermal resistance, TSOT23-5"
+rating = "theta_jc_c_per_w"
+max = 110.0
+unit = "°C/W"
+conditions = "approximately 1 square of 1 oz copper (Note 4)"
+package = "TSOT-23-5"
+basis = "Belling BL4054/BL4054B datasheet Rev 1.5, Thermal Resistance (Note 4), TSOT23-5 ӨJC 110 °C/W"
 
 # The 4.25-6.5 V recommended range is the check that fires below the 10 V abs max.
 [[models.envelope]]
@@ -1214,6 +1407,32 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 230.0     # multi-layer board
 theta_jc_c_per_w = 76.0
 
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "Continuous power dissipation, SOT23"
+rating = "max_power_w"
+max = 0.3478
+unit = "W"
+conditions = "TA = 70 °C"
+basis = "Analog Devices MAX6070/MAX6071 19-6355 Rev 20 (4/25), Absolute Maximum Ratings, Continuous Power Dissipation (TA = +70°C) SOT23 (derate 4.3mW/°C above +70°C) 347.8 mW"
+[[models.source.characteristic]]
+parameter = "Junction to ambient (θJA), 6 SOT23"
+rating = "theta_ja_c_per_w"
+max = 230.0
+unit = "°C/W"
+conditions = "multi-layer board, JESD51-7"
+basis = "Analog Devices MAX6070/MAX6071 19-6355 Rev 20 (4/25), Package Information, 6 SOT23, Thermal Resistance, Multi-Layer Board, θJA 230 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction to case (θJC), 6 SOT23"
+rating = "theta_jc_c_per_w"
+max = 76.0
+unit = "°C/W"
+conditions = "multi-layer board, JESD51-7"
+basis = "Analog Devices MAX6070/MAX6071 19-6355 Rev 20 (4/25), Package Information, 6 SOT23, Thermal Resistance, Multi-Layer Board, θJC 76 °C/W"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MNT Pocket Reform charger: exact identity/binding entries
 #
@@ -1239,6 +1458,23 @@ description = "Analog Devices MAX17320G20+ fuel gauge/protector (identity-only; 
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+
+[[models.source.characteristic]]
+parameter = "Junction to ambient (θJA), 24 TQFN"
+rating = "theta_ja_c_per_w"
+max = 68.0
+unit = "°C/W"
+conditions = "single-layer board"
+mounting = "single-layer board"
+basis = "Analog Devices MAX17320 19-100749 Rev 12 (7/25), Package Information, 24 TQFN (T2444+4C), Thermal Resistance, Single-Layer Board, θJA 68 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction to ambient (θJA), 24 TQFN"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "four-layer board, JESD51-7"
+mounting = "four-layer board"
+basis = "Analog Devices MAX17320 19-100749 Rev 12 (7/25), Package Information, 24 TQFN (T2444+4C), Thermal Resistance, Four-Layer Board, θJA 60 °C/W"
 
 [models.match]
 value_re = "(?i)^MAX17320G20\\+$"
@@ -1275,6 +1511,9 @@ unlocked_by = "a validated MAX17320 battery/SOC/protection model with I2C regist
 "23" = "cell3"
 "24" = "batts"
 "25" = "gnd_aux"
+
+[models.ratings]
+theta_ja_c_per_w = 68.0   # 24 TQFN single-layer board; four-layer is 60 (Rev 12 Package Information)
 
 # Monolithic Power Systems MP2650 I2C-controlled 5 A buck/boost charger with
 # NVDC power-path management and USB OTG. Primary source: MP2650 Rev. 1.0
@@ -1394,6 +1633,7 @@ expr = "max(0.0, v_d2n - vbreak_v) / rdyn_ohms + min(0.0, v_d2n + vf_v) / rdyn_o
 
 [models.ratings]
 max_voltage_v = 6.0   # SLVSAC2G 6.1 Absolute Maximum Ratings, IO voltage (D+ and D- pins) 0 to 6 V; 5.5 V is the operating row
+theta_ja_c_per_w = 162.2   # SLVSAC2G 6.4 Thermal Information, DQA (USON) 10 pins
 
 [models.coverage]
 implements = ["esd_clamp", "negative_clamp", "positive_breakdown"]
@@ -1406,3 +1646,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 162.2
+unit = "°C/W"
+conditions = "DQA (USON) 10 pins"
+basis = "TI TPD4EUSB30 SLVSAC2G (June 2021), Section 6.4 Thermal Information, TPD4EUSB30 DQA (USON) 10 pins, RθJA 162.2 °C/W"
