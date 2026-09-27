@@ -71,6 +71,16 @@ impl CheckReport {
     pub fn healthy(&self) -> bool {
         self.faults.iter().all(|f| !f.destroyed)
     }
+
+    /// What the assumptions, and every part simulated open, leave the run
+    /// entitled to claim, in the evidence maps' wording.
+    #[must_use]
+    pub fn status(&self) -> hauksbee_ir::evidence::EvidenceStatus {
+        use hauksbee_ir::evidence::{Assumption, EvidenceMap, RunDate};
+        let open = (self.unresolved.iter()).map(|(r, v)| Assumption::open_part(r, v, ""));
+        let on_path: Vec<Assumption> = self.assumptions.iter().cloned().chain(open).collect();
+        EvidenceMap::derive_status(&on_path, RunDate::from_system_clock())
+    }
 }
 
 /// Options for [`check_code`].
@@ -297,7 +307,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         faults,
         active_nets,
         unresolved,
-        assumptions: sched.stress.rating_disclosures(),
+        assumptions: sched.stress.disclosures(),
     })
 }
 
@@ -453,5 +463,6 @@ mod render_tests {
             s.contains("simulated as OPEN"),
             "explains the consequence: {s}"
         );
+        assert_eq!(r.status().as_str(), "undermined", "open parts: {s}");
     }
 }

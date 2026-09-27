@@ -19,6 +19,20 @@ pub struct Body {
     /// A tab or leadframe body that exists to dissipate, so its Tj,max defaults
     /// to 150 C rather than 125 C.
     pub power: bool,
+    /// The name spells an exposed pad or a thermally enhanced leadframe
+    /// (`-1EP`, `PowerPAD`, `PowerPAK SO-8`, `HTSSOP`, `SO-8FL`).
+    pub exposed_pad: bool,
+}
+
+impl Body {
+    /// Whether a card row printed for `self` rates a part on `footprint`: one
+    /// specific body (a catch-all `SOT` or `SOIC` names none), and an
+    /// exposed-pad row only on a footprint with the pad.
+    #[must_use]
+    pub fn rates(self, footprint: Self) -> bool {
+        let specific = !matches!(self.name, "SOT" | "SOIC");
+        specific && self.name == footprint.name && (!self.exposed_pad || footprint.exposed_pad)
+    }
 }
 
 /// `(spellings, family, theta_JA, power)`, matched on the name uppercased with
@@ -26,16 +40,17 @@ pub struct Body {
 ///
 /// ORDER MATTERS: the first row one of whose spellings the name contains wins,
 /// so larger or more specific bodies come before the substrings a smaller one
-/// shares (TO-263 before TO-220, SOT-223 before SOT-23, TSSOP before SSOP).
+/// shares (TO-263 and TO-220F before TO-220, SOT-223 before SOT-23, TSSOP before SSOP).
 /// Bodies sharing a row read as one, so a card's rows for either both apply
 /// to it: the least favourable decides. A catch-all family row (`SOT`,
 /// `SOIC`) follows its specific bodies and carries the unrecognised-package
-/// default of 200 C/W. `DDPAK` is no power body, so its Tj,max default stays
-/// the 125 C it always was.
+/// default of 200 C/W. `DDPAK` is no power body, so its Tj,max default is
+/// 125 C, below the 150 C its old substring match on `DPAK` gave.
 const BODIES: &[(&[&str], &str, f64, bool)] = &[
     (&["TO-263", "D2PAK"], "", 50.0, true),
     (&["DDPAK"], "", 50.0, false),
     (&["TO-252", "DPAK"], "", 70.0, true),
+    (&["TO-220F", "ITO-220"], "", 62.0, true),
     (&["TO-220"], "", 62.0, true),
     (&["TO-92"], "", 200.0, false),
     (&["SOT-223"], "SOT", 65.0, true),
@@ -71,15 +86,23 @@ fn squash(text: &str) -> String {
     kept.map(|c| c.to_ascii_uppercase()).collect()
 }
 
+static EXPOSED_PAD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    let pad = r"(?i)(?:^|[^A-Z])EP(?:[^A-Z]|$)|EXPOSED|POWER ?PA[DK]|POWERSO|THERMAL ?PAD";
+    let enhanced = r"(?:^|[^A-Z])H(?:T?SS?OP|SOIC|VSSOP)|SO-?8 ?FL";
+    regex::Regex::new(&format!("{pad}|{enhanced}")).expect("a valid pattern")
+});
+
 /// The package body a footprint or package name spells, if the table knows it.
+/// A `KiCad` library prefix (`Package_DFN_QFN:`) is no part of the body.
 #[must_use]
 pub fn package_body(name: &str) -> Option<Body> {
-    let name = squash(name);
-    let row = (BODIES.iter()).find(|r| r.0.iter().any(|s| name.contains(&squash(s))));
+    let squashed = squash(name.rsplit(':').next().unwrap_or(name));
+    let row = (BODIES.iter()).find(|r| r.0.iter().any(|s| squashed.contains(&squash(s))));
     row.map(|&(names, family, theta_ja_c_per_w, power)| Body {
         name: names[0],
         family: Some(family).filter(|f| !f.is_empty()),
         theta_ja_c_per_w,
         power,
+        exposed_pad: EXPOSED_PAD.is_match(name),
     })
 }

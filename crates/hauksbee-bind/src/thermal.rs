@@ -104,20 +104,10 @@ const CHIP_THETA_JA: &[(&str, f64)] = &[
 pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
     let f = footprint.to_ascii_uppercase();
     // Chip passives: size-derived (smaller body = worse cooling).
-    if matches!(kind, ComponentKind::Passive) {
-        if let Some(t) = chip_passive_theta_ja(&f) {
-            return t;
-        }
-    }
-    package_body(&f).map_or(DEFAULT_THETA_JA, |b| b.theta_ja_c_per_w)
-}
-
-/// Size-derived `theta_JA` for a chip resistor / capacitor footprint, from
-/// [`CHIP_THETA_JA`]. `None` if the footprint carries no recognised chip size
-/// (so the caller can fall through to a default).
-fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
-    let row = CHIP_THETA_JA.iter().find(|(t, _)| f_upper.contains(t));
-    row.map(|r| r.1)
+    let chip = (CHIP_THETA_JA.iter())
+        .find(|(t, _)| matches!(kind, ComponentKind::Passive) && f.contains(t));
+    let body = || package_body(&f).map(|b| b.theta_ja_c_per_w);
+    chip.map(|c| c.1).or_else(body).unwrap_or(DEFAULT_THETA_JA)
 }
 
 /// Default maximum junction temperature (C) for a package class. Power packages

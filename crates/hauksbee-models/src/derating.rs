@@ -52,7 +52,7 @@ static RANGE_FIRST: LazyLock<Regex> = LazyLock::new(|| {
 /// A pulsed or time-limited row: `tp = 10 µs`, `T ≤ 10 s`, `duty cycle`,
 /// `single pulse`; a bare `t` only before a time, never a temperature symbol.
 static PULSED: LazyLock<Regex> = LazyLock::new(|| {
-    let time = r"\bt\s*(?:≤|<=?|=)\s*\d+(?:\.\d+)?\s*(?:[mµun]?s|sec|min)\b";
+    let time = r"\bt\s*(?:≤|<=?|=)\s*\d+(?:\.\d+)?\s*(?:[mµun]?s|sec|min)";
     Regex::new(&format!(r"(?i)\bt_?p\b|{time}|duty|pulse")).expect("a valid pattern")
 });
 
@@ -167,23 +167,21 @@ fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
             ));
         }
         if let (Some((at, lo, hi)), Some(v)) = (span, value) {
-            let points = groups.entry((at, row.package.clone(), row.mounting.clone()));
+            let tag = |t: &Option<String>| t.clone().filter(|t| !t.trim().is_empty());
+            let points = groups.entry((at, tag(&row.package), tag(&row.mounting)));
             points.or_default().extend([(lo, v), (hi, v)]);
         }
     }
-    let curve = Curve(
-        (groups.into_iter())
-            .map(|(tags, mut points)| {
-                // Two rows at one temperature: keep the least favourable.
-                points.sort_by(|a, b| {
-                    a.0.total_cmp(&b.0)
-                        .then(rank(key, a.1).total_cmp(&rank(key, b.1)))
-                });
-                points.dedup_by(|later, kept| later.0.total_cmp(&kept.0).is_eq());
-                (tags, points)
-            })
-            .collect(),
-    );
+    let mut curve = Curve(groups.into_iter().collect());
+    for (_, points) in &mut curve.0 {
+        // Two rows at one temperature: keep the least favourable.
+        let order = |a: &(f64, f64), b: &(f64, f64)| {
+            a.0.total_cmp(&b.0)
+                .then(rank(key, a.1).total_cmp(&rank(key, b.1)))
+        };
+        points.sort_by(order);
+        points.dedup_by(|later, kept| later.0.total_cmp(&kept.0).is_eq());
+    }
     if (curve.0.iter()).any(|(_, p)| p.windows(2).any(|w| rank(key, w[1].1) > rank(key, w[0].1))) {
         problems.push(format!("rating = \"{key}\" rows rise with temperature: tag only rows printed under one set of conditions (one VGS, continuous)"));
     }
@@ -262,47 +260,49 @@ impl Derating {
     /// The rows that apply to `reference` fitted with `footprint` and, when its
     /// [`MOUNTING_PROPERTY`] names one, `mounting`.
     ///
-    /// A row tagged with a package applies only when that package's body is the
-    /// footprint's; untagged rows apply to every package and mounting. When the
-    /// rows name packages and none is the footprint's, or name several
+    /// A row tagged with a package applies only when that package's body rates
+    /// the footprint ([`crate::package::Body::rates`]); untagged rows apply to
+    /// every package and mounting. When a rating's rows name packages and none
+    /// is the footprint's, or the rows name several
     /// mountings and none was chosen, every row is kept, so each limit is its
     /// least favourable row's, and a caveat says so; a chosen mounting no row
     /// names keeps them all too, and undermines the verdict until it is fixed.
     #[must_use]
     pub fn fitted(&self, reference: &str, footprint: &str, mounting: Option<&str>) -> Self {
-        let body = |p: &str| package_body(p).map(|b| b.name);
-        let (r, fits, mut caveats) = (reference, body(footprint), Vec::new());
-        let curves = [&self.current, &self.power, &self.theta_ja];
-        let groups = || curves.into_iter().flat_map(|c| &c.0);
-        let named: BTreeSet<&str> = groups().filter_map(|((_, p, _), _)| p.as_deref()).collect();
-        let matched = fits.is_some() && named.iter().any(|p| body(p) == fits);
-        let on_package =
-            |((_, p, _), _): &Group| !matched || p.as_deref().is_none_or(|p| body(p) == fits);
-        let on_it = groups().filter(|g| on_package(g));
-        let mountings: BTreeSet<&str> = on_it.filter_map(|((.., m), _)| m.as_deref()).collect();
-        if !named.is_empty() && !matched {
+        let fp = package_body(footprint);
+        let rates = |p: &str| package_body(p).zip(fp).is_some_and(|(b, f)| b.rates(f));
+        let (r, mut caveats, mut out) = (reference, Vec::new(), self.clone());
+        let mut unfitted = BTreeSet::new();
+        // Each rating by its own rows: one naming only other packages keeps them all.
+        let package = |((_, p, _), _): &Group| p.clone();
+        for c in [&mut out.current, &mut out.power, &mut out.theta_ja] {
+            if c.0.iter().filter_map(package).any(|p| rates(&p)) {
+                c.0.retain(|g| package(g).is_none_or(|p| rates(&p)));
+            }
+            unfitted.extend(c.0.iter().filter_map(package).filter(|p| !rates(p)));
+        }
+        if !unfitted.is_empty() {
             caveats.push(Assumption::partial_model_for_component(&format!("{r}-package"), r, "",
-                &format!("{r}'s rating rows are printed for packages {named:?} and its footprint '{footprint}' is none of them, so each rating is its least favourable row"),
+                &format!("{r}'s rating rows are printed for packages {unfitted:?} and its footprint '{footprint}' is none of them, so each rating is its least favourable row"),
                 "fit the footprint of the part's package, or tag its rows with that package, then re-run"));
         }
-        let same = |m: &str| (mountings.iter()).find(|x| x.trim().eq_ignore_ascii_case(m.trim()));
-        let chosen = mounting.map(|m| same(m).copied().ok_or(m));
-        match chosen {
-            Some(Err(m)) => caveats.push(Assumption::operating_limit_violated(&format!("{r}-mounting"), r,
+        let groups = [&out.current, &out.power, &out.theta_ja].map(|c| c.0.iter());
+        let mounted = groups.into_iter().flatten().filter_map(|g| g.0 .2.clone());
+        let mountings: BTreeSet<String> = mounted.collect();
+        let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        let chosen = mounting.filter(|m| mountings.iter().any(|x| same(x, m)));
+        match mounting {
+            Some(m) if chosen.is_none() => caveats.push(Assumption::operating_limit_violated(&format!("{r}-mounting"), r,
                 &format!("{r}'s {MOUNTING_PROPERTY} '{m}' names no mounting its card rates it for (it rates {mountings:?})"),
                 &format!("set {r}'s mounting to one its card rates, or add that mounting's rows to the card, then re-run"))),
             None if mountings.len() > 1 => caveats.push(Assumption::default_parameter_for_component(r, r, "mounting",
                 &format!("the least favourable of {mountings:?}"))),
             _ => {}
         }
-        let chosen = chosen.and_then(Result::ok);
-        let on_mounting =
-            |((.., m), _): &Group| chosen.is_none_or(|c| m.as_deref().is_none_or(|x| x == c));
-        let mut out = self.clone();
-        out.caveats = caveats;
         for c in [&mut out.current, &mut out.power, &mut out.theta_ja] {
-            c.0.retain(|g| on_package(g) && on_mounting(g));
+            c.0.retain(|((.., m), _)| chosen.zip(m.as_deref()).is_none_or(|(c, m)| same(c, m)));
         }
+        out.caveats = caveats;
         out
     }
 
@@ -420,8 +420,9 @@ mod tests {
 
     #[test]
     fn rows_that_are_not_one_falling_continuous_curve_are_refused() {
-        let cases: [(&[(f64, &str)], &str); 6] = [
+        let cases: [(&[(f64, &str)], &str); 7] = [
             (&[(5.7, "TA = 25 °C")], "must be 5.7"),
+            (&[(4.7, "TA = 70 °C, t = 5 secs")], "pulsed"),
             (&[(4.7, "VGS = 10 V")], "name its temperature"),
             (
                 &[(4.7, "TA = 25 °C"), (5.0, "TA = 70 °C, T ≤ 10 s")],
@@ -457,6 +458,53 @@ mod tests {
         let mut odd = card(&[(4.7, "TA = 25 °C")]);
         odd.source.as_mut().expect("source").characteristic[0].rating = Some("max_amps".into());
         assert!(tag_problems(&odd)[0].contains("not a [models.ratings] key"));
+    }
+
+    /// `(package, mounting, value)` rows printed at TA = 25 °C.
+    type Rows<'a> = &'a [(Option<&'a str>, Option<&'a str>, f64)];
+    /// `(current rows, theta_JA rows, (footprint, mounting), [current, theta_JA], caveat ids)`.
+    #[rustfmt::skip]
+    type Fit<'a> = (Rows<'a>, Rows<'a>, (&'a str, Option<&'a str>), [Option<f64>; 2], &'a str);
+    fn curve(rows: Rows) -> Curve {
+        let row = |&(p, m, v): &(Option<&str>, Option<&str>, f64)| {
+            let tags = (TempRef::Ambient, p.map(Into::into), m.map(Into::into));
+            (tags, vec![(25.0, v)])
+        };
+        Curve(rows.iter().map(row).collect())
+    }
+
+    /// A library prefix names no body (a DFN, not the QFN in `DFN_QFN`); an
+    /// exposed-pad row rates only a footprint with the pad; a full-pak is no
+    /// TO-220 and a catch-all SOT body rates nothing; each rating is fitted by
+    /// its own rows; a mounting chosen in any case keeps each spelling of it and
+    /// the untagged rows; and a blank mounting is none.
+    #[test]
+    fn rows_are_fitted_to_the_footprint_package_and_mounting() {
+        #[rustfmt::skip]
+        let cases: [Fit; 10] = [
+            (&[(Some("DFN-8"), None, 1.0), (Some("QFN-16"), None, 2.0)], &[], ("Package_DFN_QFN:QFN-16-1EP_3x3mm", None), [Some(2.0), None], ""),
+            (&[(Some("DFN-8"), None, 1.0), (Some("QFN-16"), None, 2.0)], &[], ("Package_DFN_QFN:DFN-8-1EP_3x3mm", None), [Some(1.0), None], ""),
+            (&[(Some("PowerPAK SO-8"), None, 3.0), (Some("TSSOP-8"), None, 1.0)], &[], ("Package_SO:SOIC-8_3.9x4.9mm", None), [Some(1.0), None], "reduced-fidelity:Q1-package"),
+            (&[(Some("PowerPAK SO-8"), None, 3.0), (Some("TSSOP-8"), None, 1.0)], &[], ("Package_SO:SOIC-8-1EP_3.9x4.9mm", None), [Some(3.0), None], ""),
+            (&[(Some("TO-220"), None, 5.0), (Some("D2PAK"), None, 4.0)], &[], ("TO-220F-3_Vertical", None), [Some(4.0), None], "reduced-fidelity:Q1-package"),
+            (&[(Some("SOT-323"), None, 0.3), (Some("SOT-23-5"), None, 0.2)], &[], ("SOT-523", None), [Some(0.2), None], "reduced-fidelity:Q1-package"),
+            (&[(Some("SOT-223"), None, 2.0)], &[(Some("SOT-23"), None, 250.0), (Some("SOT-223"), None, 60.0)], ("SOT-23", None), [Some(2.0), Some(250.0)], "reduced-fidelity:Q1-package"),
+            (&[(None, Some("1 In2 Copper "), 3.0), (None, Some("1 in2 copper"), 2.5), (None, Some("minimum pad"), 1.0)], &[(None, None, 90.0)], ("X", Some("1 IN2 copper")), [Some(2.5), Some(90.0)], ""),
+            (&[(None, Some("1 in2 copper"), 2.5), (None, Some("minimum pad"), 1.0)], &[], ("X", None), [Some(1.0), None], "default-parameter:Q1.mounting"),
+            (&[(None, Some("1 in2 copper"), 2.5), (None, Some("minimum pad"), 1.0)], &[], ("X", Some("2 in2")), [Some(1.0), None], "operating-limit-violated:Q1-mounting"),
+        ];
+        for (current, theta_ja, (footprint, mounting), want, caveat) in cases {
+            let mut all = Derating::default();
+            (all.current, all.theta_ja) = (curve(current), curve(theta_ja));
+            let d = all.fitted("Q1", footprint, mounting);
+            let said: String = d.caveats.iter().map(|a| a.id().as_str()).collect();
+            let got = ([d.current.limit(|_| 25.0, 150.0), d.theta_ja()], said);
+            assert_eq!(got, (want, caveat.into()), "{footprint}");
+        }
+        let at = |m: &str| format!("TA = 25 °C\"\nmounting = \"{m}");
+        let blank = card(&[(3.0, &at("1 in2 copper")), (1.0, &at(" "))]);
+        let fitted = Derating::of(&blank).fitted("Q1", "X", Some("1 in2 copper"));
+        assert_eq!(fitted.current.limit(|_| 25.0, 150.0), Some(1.0));
     }
 
     /// Builtin cards skip `validate`, so a curated row that cannot be read

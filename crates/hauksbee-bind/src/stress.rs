@@ -933,6 +933,16 @@ impl StressMonitor {
         out
     }
 
+    /// Every disclosure a verdict with no claims of its own carries: the
+    /// ratings', the run's, and a guessed `theta_JA` wherever it is decisive.
+    #[must_use]
+    pub fn disclosures(&self) -> Vec<Assumption> {
+        let mut said = self.rating_disclosures();
+        said.extend(self.run_disclosures());
+        said.extend(self.inferred_theta_ja(|_, d| d.then_some(Scope::Board).into_iter().collect()));
+        said
+    }
+
     /// A junction temperature judged on a `theta_JA` inferred from the package,
     /// because the card carries none, qualifies each claim it feeds.
     /// `claims(reference, decisive)` names those claims' scopes; `decisive` is

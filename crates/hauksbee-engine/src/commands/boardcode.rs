@@ -543,15 +543,14 @@ pub fn check(
 /// The `check-code --json` object: the whole [`crate::boardcode::CheckReport`]
 /// as one machine-readable line. `ok` mirrors the exit code (false when a part
 /// was destroyed); `status` is what the assumptions leave the run entitled to
-/// claim, in the evidence maps' wording (`clean`, `qualified`, `undermined`);
+/// claim, in the evidence maps' wording (`clean`, `qualified`, `undermined`,
+/// every part simulated open counted);
 /// `resolved_fraction` stays the raw fraction so a consumer never re-derives it
 /// from a rounded percentage.
 fn check_json(r: &crate::boardcode::CheckReport) -> String {
-    use hauksbee_ir::evidence::{EvidenceMap, RunDate};
-    let status = EvidenceMap::derive_status(&r.assumptions, RunDate::from_system_clock());
     serde_json::json!({
         "ok": r.healthy(),
-        "status": status.as_str(),
+        "status": r.status().as_str(),
         "board": r.board_name,
         "components": r.component_count,
         "nets": r.net_count,
