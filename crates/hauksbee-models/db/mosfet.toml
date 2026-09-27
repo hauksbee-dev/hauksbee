@@ -39,12 +39,56 @@ warning = "the RDS(on) rows stop at VGS = 4.5 V, so a lower gate drive is an ext
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 0.3        # ID continuous (Nexperia)
-max_surge_current_a = 0.8  # ID pulsed
-max_power_w = 0.35
+# Source: Nexperia 2N7002 Rev. 7, Table 5 Limiting values and Table 6 Thermal
+# characteristics. The ID and Ptot rows are solder-point (Tsp) referenced.
+max_current_a = 0.19       # ID at Tsp = 100 C, VGS = 10 V, the least favourable
+                           # tagged row below (300 mA at Tsp = 25 C)
+max_surge_current_a = 1.2  # IDM, pulsed, tp <= 10 us, Tsp = 25 C
+max_power_w = 0.83         # Ptot at Tsp = 25 C: a solder-point figure; in still air
+                           # the binding limit is Tj from theta_ja below
 max_voltage_v = 60.0  # VDS
+max_junction_temp_c = 150.0  # Tj max (Table 5)
+theta_ja_c_per_w = 350.0     # Rth(j-a) max, PCB, minimum footprint, vertical, still air
 rds_on_vgs = 4.5   # lowest VGS the RDS(on) rows reach (10 V and 4.5 V)
 vgs_th_max = 2.5   # VGSth max (Nexperia Table 6)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = 0.3
+unit = "A"
+conditions = "Tsp = 25 °C, VGS = 10 V"
+basis = "Nexperia 2N7002 Rev. 7 (8 September 2011), Table 5 Limiting values, ID @ VGS = 10 V, Tsp = 25 °C (300 mA)"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = 0.19
+unit = "A"
+conditions = "Tsp = 100 °C, VGS = 10 V"
+basis = "Nexperia 2N7002 Rev. 7 (8 September 2011), Table 5 Limiting values, ID @ VGS = 10 V, Tsp = 100 °C (190 mA)"
+[[models.source.characteristic]]
+parameter = "IDM peak drain current"
+max = 1.2
+unit = "A"
+conditions = "pulsed, tp ≤ 10 µs, Tsp = 25 °C"
+basis = "Nexperia 2N7002 Rev. 7 (8 September 2011), Table 5 Limiting values, IDM"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.83
+unit = "W"
+conditions = "Tsp = 25 °C"
+basis = "Nexperia 2N7002 Rev. 7 (8 September 2011), Table 5 Limiting values, Ptot @ Tsp = 25 °C"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 350.0
+unit = "K/W"
+conditions = "mounted on a printed-circuit board, minimum footprint, vertical in still air"
+mounting = "PCB, minimum footprint"
+basis = "Nexperia 2N7002 Rev. 7 (8 September 2011), Table 6 Thermal characteristics, Rth(j-a)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -86,11 +130,49 @@ cgs    = 2.1e-11  # same table/bias, Ciss typ 27 pF - Crss typ 6 pF = 21 pF (cgs
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 0.2
-max_power_w = 0.36
+# Source: Fairchild BSS138 Rev C(W), Absolute Maximum Ratings (TA = 25 C) and
+# Thermal Characteristics; Note 1a: 350 C/W mounted on a minimum pad.
+max_current_a = 0.22       # ID continuous at TA = 25 C (Note 1), the tagged row below
+max_surge_current_a = 0.88 # ID pulsed
+max_power_w = 0.36         # PD at TA = 25 C (Note 1), derate 2.8 mW/C above 25 C
 max_voltage_v = 50.0
+max_junction_temp_c = 150.0  # TJ, TSTG -55 to +150 C
+theta_ja_c_per_w = 350.0     # RthetaJA (Note 1a, minimum pad)
 rds_on_vgs = 4.5   # RDS(on) rows are VGS=10V (3.5 ohm) and VGS=4.5V (6.0 ohm)
 vgs_th_max = 1.5   # VGS(th) max @ VDS=VGS, ID=1mA (Fairchild Rev C(W), On Characteristics)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain current, continuous"
+rating = "max_current_a"
+max = 0.22
+unit = "A"
+conditions = "TA = 25 °C"
+mounting = "minimum pad"
+basis = "Fairchild BSS138 Rev C(W) (October 2005), Absolute Maximum Ratings, ID continuous (Note 1)"
+[[models.source.characteristic]]
+parameter = "ID drain current, pulsed"
+max = 0.88
+unit = "A"
+conditions = "pulsed, TA = 25 °C"
+basis = "Fairchild BSS138 Rev C(W) (October 2005), Absolute Maximum Ratings, ID pulsed"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation"
+rating = "max_power_w"
+max = 0.36
+unit = "W"
+conditions = "TA = 25 °C"
+mounting = "minimum pad"
+basis = "Fairchild BSS138 Rev C(W) (October 2005), Absolute Maximum Ratings, PD (Note 1); derate 2.8 mW/°C above 25 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 350.0
+unit = "°C/W"
+conditions = "mounted on a minimum pad"
+mounting = "minimum pad"
+basis = "Fairchild BSS138 Rev C(W) (October 2005), Thermal Characteristics, RθJA (Note 1a)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AO3400A: Alpha & Omega Semiconductor N-channel trench MOSFET, SOT-23.
@@ -165,7 +247,9 @@ max_power_w         = 1.4     # PD at TA=25C (W). Rev 3.1 Note B (p.2): PD is
                               # steady-state RthJA below is the one for the thermal
                               # estimate, so the two are not meant to agree.
 max_voltage_v       = 30.0    # VDS (V)
-theta_ja_c_per_w    = 100.0   # RthJA steady-state typ (max 125; the t<=10s value is 70)
+theta_ja_c_per_w    = 125.0   # RthJA steady-state max (typ 100; the t<=10s row is 70 typ /
+                              # 90 max), Note A: 1 in2 FR-4, 2 oz copper, still air. The
+                              # tagged row below; was the 100 typ, not the least favourable.
 max_junction_temp_c = 150.0   # TJ max (C)
 rds_on_vgs          = 2.5     # lowest RDS(on) row: 24 mOhm typ / 48 max @ VGS=2.5V, ID=3A
 vgs_th_max          = 1.45    # VGS(th) max @ VDS=VGS, ID=250mA
@@ -186,6 +270,34 @@ max = 4.7
 unit = "A"
 conditions = "TA = 70 °C"
 basis = "AO3400A Rev 3.1, Absolute Maximum Ratings, ID, TA=70°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+max = 1.4
+unit = "W"
+conditions = "TA = 25 °C; Note B: based on TJ(MAX) = 150 °C using the t ≤ 10 s RθJA"
+basis = "AO3400A Rev 3.1, Absolute Maximum Ratings, PD, TA=25°C; untagged: Note B makes it a t ≤ 10 s figure, not a continuous rating"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+max = 0.9
+unit = "W"
+conditions = "TA = 70 °C; Note B: based on TJ(MAX) = 150 °C using the t ≤ 10 s RθJA"
+basis = "AO3400A Rev 3.1, Absolute Maximum Ratings, PD, TA=70°C; untagged: Note B makes it a t ≤ 10 s figure, not a continuous rating"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient, t ≤ 10 s"
+typ = 70.0
+max = 90.0
+unit = "°C/W"
+conditions = "t ≤ 10 s; Note A: 1 in² FR-4 board, 2 oz copper, still air, TA = 25 °C"
+basis = "AO3400A Rev 3.1, Thermal Characteristics, RθJA t ≤ 10s, typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient, steady state"
+rating = "theta_ja_c_per_w"
+typ = 100.0
+max = 125.0
+unit = "°C/W"
+conditions = "steady state; Note A: 1 in² FR-4 board, 2 oz copper, still air, TA = 25 °C"
+mounting = "1 in² FR-4, 2 oz copper"
+basis = "AO3400A Rev 3.1, Thermal Characteristics, RθJA Steady-State, typ/max columns (Notes A, D)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -222,9 +334,61 @@ cgs    = 5.9e-10  # same table/bias, Ciss typ 645 pF - Crss typ 55 pF = 590 pF (
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 4.0
-max_power_w = 1.4
+# Source: AOS AO3401A Rev 3.1 (December 2023), Absolute Maximum Ratings and
+# Thermal Characteristics.
+max_current_a = 3.2         # |ID| continuous at TA=70C, the least favourable tagged
+                            # row below (4 A at TA=25C)
+max_surge_current_a = 27.0  # |IDM| pulsed (Note C)
+max_power_w = 1.4           # PD at TA=25C; Note B: derived from the t<=10s RthJA, a
+                            # short-duration figure (rows below, left untagged)
 max_voltage_v = 30.0
+max_junction_temp_c = 150.0 # TJ, TSTG -55 to 150 C
+theta_ja_c_per_w = 125.0    # RthJA steady-state max (typ 100), Note A: 1 in2 FR-4, 2 oz Cu
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -4.0
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "AO3401A Rev 3.1 (December 2023), Absolute Maximum Ratings, ID, TA=25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -3.2
+unit = "A"
+conditions = "TA = 70 °C"
+basis = "AO3401A Rev 3.1 (December 2023), Absolute Maximum Ratings, ID, TA=70°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+max = 1.4
+unit = "W"
+conditions = "TA = 25 °C; Note B: based on TJ(MAX) = 150 °C using the t ≤ 10 s RθJA"
+basis = "AO3401A Rev 3.1 (December 2023), Absolute Maximum Ratings, PD, TA=25°C; untagged: Note B makes it a t ≤ 10 s figure, not a continuous rating"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+max = 0.9
+unit = "W"
+conditions = "TA = 70 °C; Note B: based on TJ(MAX) = 150 °C using the t ≤ 10 s RθJA"
+basis = "AO3401A Rev 3.1 (December 2023), Absolute Maximum Ratings, PD, TA=70°C; untagged: Note B makes it a t ≤ 10 s figure, not a continuous rating"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient, t ≤ 10 s"
+typ = 70.0
+max = 90.0
+unit = "°C/W"
+conditions = "t ≤ 10 s; Note A: 1 in² FR-4 board, 2 oz copper, still air, TA = 25 °C"
+basis = "AO3401A Rev 3.1 (December 2023), Thermal Characteristics, RθJA t ≤ 10s, typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient, steady state"
+rating = "theta_ja_c_per_w"
+typ = 100.0
+max = 125.0
+unit = "°C/W"
+conditions = "steady state; Note A: 1 in² FR-4 board, 2 oz copper, still air, TA = 25 °C"
+mounting = "1 in² FR-4, 2 oz copper"
+basis = "AO3401A Rev 3.1 (December 2023), Thermal Characteristics, RθJA Steady-State, typ/max columns (Notes A, D)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CJ2301: Jiangsu Changjing (JSCJ) P-channel trench MOSFET, SOT-23.
@@ -294,6 +458,29 @@ theta_ja_c_per_w    = 312.5   # RthJA (C/W), datasheet value for t <= 5 s
 max_junction_temp_c = 150.0   # TJ max (C)
 rds_on_vgs          = 2.5     # lowest |VGS| RDS(on) row (110 mOhm typ @ VGS=-2.5V)
 vgs_th_max          = 1.0     # |VGS(th)| max (-1.0 V)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -2.3
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "JSCJ CJ2301 Rev. - 2.1, Maximum ratings (Ta=25℃), ID"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation"
+rating = "max_power_w"
+max = 0.4
+unit = "W"
+conditions = "TA = 25 °C"
+basis = "JSCJ CJ2301 Rev. - 2.1, Maximum ratings (Ta=25℃), PD"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance from junction to ambient (t ≤ 5 s)"
+max = 312.5
+unit = "°C/W"
+conditions = "t ≤ 5 s"
+basis = "JSCJ CJ2301 Rev. - 2.1, Maximum ratings, RθJA (t ≤5s); untagged: a time-limited figure, and the sheet prints no steady-state RθJA"
 
 # FDS4435BZ / FDS4435BZ_F085: Fairchild (now onsemi) P-channel PowerTrench
 # MOSFET, SO-8.  The pedalboard source uses the automotive-suffix sheet and the
@@ -363,6 +550,46 @@ high = 0.026
 unit = "ohm"
 kind = "typical-range"
 basis = "Fairchild/onsemi RDS(on) typical at VGS=-4.5V, ID=-6.7A"
+[[models.source.characteristic]]
+parameter = "ID drain current, continuous"
+rating = "max_current_a"
+max = -8.8
+unit = "A"
+conditions = "TA = 25 °C, Note 1a: mounted on a 1 in² pad of 2 oz copper"
+mounting = "1 in² pad, 2 oz copper"
+basis = "FDS4435BZ Rev.C1 (April 2009), MOSFET Maximum Ratings, ID continuous, TA = 25°C (Note 1a)"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 2.5
+unit = "W"
+conditions = "TA = 25 °C, Note 1a: mounted on a 1 in² pad of 2 oz copper"
+mounting = "1 in² pad, 2 oz copper"
+basis = "FDS4435BZ Rev.C1 (April 2009), MOSFET Maximum Ratings, PD, TA = 25°C (Note 1a)"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "TA = 25 °C, Note 1b: mounted on a minimum pad of 2 oz copper"
+mounting = "minimum pad, 2 oz copper"
+basis = "FDS4435BZ Rev.C1 (April 2009), MOSFET Maximum Ratings, PD, TA = 25°C (Note 1b)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "Note 1a: mounted on a 1 in² pad of 2 oz copper, 1.5 x 1.5 in. FR-4 board"
+mounting = "1 in² pad, 2 oz copper"
+basis = "FDS4435BZ Rev.C1 (April 2009), Thermal Characteristics, RθJA (Note 1a)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 125.0
+unit = "°C/W"
+conditions = "Note 1b: mounted on a minimum pad of 2 oz copper"
+mounting = "minimum pad, 2 oz copper"
+basis = "FDS4435BZ Rev.C1 (April 2009), Notes 1b, RθJA 125 °C/W on a minimum pad"
 
 [models.match]
 value_re = "(?i)^FDS4435BZ(?:_F085)?$"
@@ -383,13 +610,18 @@ warning = "source-bound level-1 DC conduction and typical gate capacitance are e
 "5-8" = "drain"
 
 [models.ratings]
-max_current_a = 8.8
+# Per-mounting rows below: FDS4435BZ Rev.C1 (April 2009), MOSFET Maximum
+# Ratings and Thermal Characteristics, Notes 1a (1 in2 pad of 2 oz copper) and
+# 1b (minimum pad of 2 oz copper). The current onsemi FDS4435BZ-F085/D
+# (September-2017, Rev.1, fetched from www.onsemi.cn/download/data-sheet/pdf/
+# fds4435bz_f085-d.pdf) prints the same ID, PD and RthJA rows.
+max_current_a = 8.8         # |ID| continuous, TA = 25 C, Note 1a (the only ID row)
 max_surge_current_a = 50.0
-max_power_w = 2.5
+max_power_w = 1.0           # PD at TA = 25 C, Note 1b minimum pad, the least favourable
+                            # tagged row below (2.5 W on the 1 in2 pad, Note 1a)
 max_voltage_v = 30.0
-# The sheet gives 50 C/W on a 1in^2 copper pad and 125 C/W on minimum pad.
-# Copper-area evidence is not part of this model card, so use the conservative
-# minimum-pad value for a whole-board thermal screen.
+# The sheet gives 50 C/W on a 1in^2 copper pad and 125 C/W on minimum pad; with
+# no mounting chosen the least favourable (minimum pad) row applies.
 theta_ja_c_per_w = 125.0
 rds_on_vgs = 4.5   # lowest |VGS| RDS(on) row (26 mOhm typ / 35 max @ VGS=-4.5V)
 vgs_th_max = 3.0   # |VGS(th)| max (-3.0 V) @ ID=-250uA
@@ -623,15 +855,60 @@ cgs    = 1.5e-9    # same table/bias, Ciss typ 1740 pF - Crss typ 240 pF = 1500 
 "8" = "d2b"   # Drain, channel 2 (second pad, tied to pin 7)
 
 [models.ratings]
-# Source: Infineon IRF9358 datasheet Rev 2.1, Absolute Maximum Ratings table
-max_current_a       = 9.2     # Id per channel (A), Tc=25C
-max_surge_current_a = 35.0    # Idm pulsed per channel (A), datasheet
-max_power_w         = 2.0     # Pd Ta=25C SO-8 (W), datasheet (or ~2.5W per channel)
+# Source: Infineon IRF9358PbF Rev. 2.1 (2024-10-08), Absolute Maximum Ratings and
+# Thermal Resistance tables; Note 4: mounted on 1 inch square copper board.
+max_current_a       = 7.3     # |ID| at TA=70C, VGS=-10V, the least favourable tagged
+                              # row below (9.2 A at TA=25C); was 9.2 cited as "Tc=25C",
+                              # but the sheet prints TA rows only
+max_surge_current_a = 73.0    # |IDM| pulsed (Note 1); was 35, not on Rev. 2.1
+max_power_w         = 1.3     # PD at TA=70C (Note 4), the least favourable tagged row
+                              # below (2.0 W at TA=25C)
 max_voltage_v       = 30.0    # |Vds| abs max (V), datasheet
-theta_ja_c_per_w    = 62.5    # theta_JA SO-8 still-air (C/W), datasheet
+theta_ja_c_per_w    = 62.5    # RthetaJA max, Note 4 (1 inch square copper board)
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
 rds_on_vgs          = 10.0    # RDS(on) 16.3 mOhm max is specified at VGS=-10V only
 vgs_th_max          = 2.0     # |Vgs(th)| max (-2.0 V)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -9.2
+unit = "A"
+conditions = "TA = 25 °C, VGS = −10 V"
+basis = "IRF9358PbF Rev. 2.1 (2024-10-08), Absolute Maximum Ratings, ID @ TA = 25°C, VGS @ -10V"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -7.3
+unit = "A"
+conditions = "TA = 70 °C, VGS = −10 V"
+basis = "IRF9358PbF Rev. 2.1 (2024-10-08), Absolute Maximum Ratings, ID @ TA = 70°C, VGS @ -10V"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 2.0
+unit = "W"
+conditions = "TA = 25 °C, Note 4: mounted on 1 inch square copper board"
+mounting = "1 in² copper board"
+basis = "IRF9358PbF Rev. 2.1 (2024-10-08), Absolute Maximum Ratings, PD @ TA = 25°C (Note 4); linear derating factor 0.016 W/°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 1.3
+unit = "W"
+conditions = "TA = 70 °C, Note 4: mounted on 1 inch square copper board"
+mounting = "1 in² copper board"
+basis = "IRF9358PbF Rev. 2.1 (2024-10-08), Absolute Maximum Ratings, PD @ TA = 70°C (Note 4)"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "Note 4: mounted on 1 inch square copper board"
+mounting = "1 in² copper board"
+basis = "IRF9358PbF Rev. 2.1 (2024-10-08), Thermal Resistance, RθJA (Note 4)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIR182DP: Vishay N-channel power MOSFET, PowerPAK SO-8
@@ -795,6 +1072,27 @@ max = 23.0
 unit = "A"
 conditions = "TC = 100 °C, VGS = 10 V"
 basis = "IRF540NPbF Rev. 2.1, Absolute Maximum Ratings, ID @ TC = 100°C"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation"
+rating = "max_power_w"
+max = 130.0
+unit = "W"
+conditions = "TC = 25 °C"
+basis = "IRF540NPbF Rev. 2.1 (2026-07-24), Absolute Maximum Rating, PD @ TC = 25°C; linear derating factor 0.87 W/°C"
+[[models.source.characteristic]]
+parameter = "RθJC junction-to-case"
+rating = "theta_jc_c_per_w"
+max = 1.15
+unit = "°C/W"
+conditions = "junction to case"
+basis = "IRF540NPbF Rev. 2.1 (2026-07-24), Thermal Resistance, RθJC"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.0
+unit = "°C/W"
+conditions = "junction to ambient"
+basis = "IRF540NPbF Rev. 2.1 (2026-07-24), Thermal Resistance, RθJA"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # The corpus batch. Nine SOT-23-class switches that between them account for the
@@ -885,7 +1183,7 @@ cgs    = 8.2e-12  # Ciss typ - Crss typ = 9.5 - 1.3 = 8.2 pF, same row group and
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 0.22        # ID continuous, TA=25 C
+max_current_a = 0.22        # ID continuous, TA=25 C, the tagged row below
 max_surge_current_a = 0.5   # ID pulsed
 max_power_w = 0.35
 max_voltage_v = 25.0        # VDS (VGS is -0.3 to +8 V)
@@ -893,6 +1191,30 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 357.0
 rds_on_vgs = 2.7   # lowest RDS(on) row (3.8 ohm typ / 5 max @ VGS=2.7V)
 vgs_th_max = 1.06  # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain/output current, continuous"
+rating = "max_current_a"
+max = 0.22
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "onsemi FDV301N/D Rev. 10 (May 2025), Absolute Maximum Ratings (TA = 25°C), ID continuous"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation"
+rating = "max_power_w"
+max = 0.35
+unit = "W"
+conditions = "TA = 25 °C"
+basis = "onsemi FDV301N/D Rev. 10 (May 2025), Absolute Maximum Ratings (TA = 25°C), PD"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 357.0
+unit = "°C/W"
+conditions = "TA = 25 °C"
+basis = "onsemi FDV301N/D Rev. 10 (May 2025), Thermal Characteristics, RθJA"
 
 # ── DMG1012T-7 ────────────────────────────────────────────────────────────────
 # Diodes Incorporated, N-channel, SOT-523. 25 instances on the KiCad demos.
@@ -946,7 +1268,7 @@ cgs    = 5.53e-11  # Ciss typ - Crss typ = 60.67 - 5.37 = 55.30 pF, same rows an
 max_current_a = 0.45        # ID continuous, TA=85 C, the least favourable tagged
                             # row below (0.63 A at TA=25 C)
 max_surge_current_a = 3.0   # IDM
-max_power_w = 0.28          # FR-4, minimum recommended pad layout (Note 6)
+max_power_w = 0.28          # PD, TA=25 C, FR-4, minimum recommended pad layout (Note 6)
 max_voltage_v = 20.0        # VDS (VGS is +-6 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 452.0
@@ -961,6 +1283,7 @@ rating = "max_current_a"
 max = 0.63
 unit = "A"
 conditions = "TA = 25 °C"
+mounting = "FR-4 PCB, minimum recommended pad layout"
 basis = "DS31783 Rev. 8-2, Maximum Ratings, ID continuous, TA = +25°C"
 [[models.source.characteristic]]
 parameter = "ID continuous drain current"
@@ -968,7 +1291,24 @@ rating = "max_current_a"
 max = 0.45
 unit = "A"
 conditions = "TA = 85 °C"
+mounting = "FR-4 PCB, minimum recommended pad layout"
 basis = "DS31783 Rev. 8-2, Maximum Ratings, ID continuous, TA = +85°C"
+[[models.source.characteristic]]
+parameter = "PD total power dissipation"
+rating = "max_power_w"
+max = 0.28
+unit = "W"
+conditions = "TA = 25 °C, Note 6: device mounted on FR-4 PCB, with minimum recommended pad layout"
+mounting = "FR-4 PCB, minimum recommended pad layout"
+basis = "DS31783 Rev. 8-2, Thermal Characteristics, PD (Note 6)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 452.0
+unit = "°C/W"
+conditions = "Note 6: device mounted on FR-4 PCB, with minimum recommended pad layout"
+mounting = "FR-4 PCB, minimum recommended pad layout"
+basis = "DS31783 Rev. 8-2, Thermal Characteristics, RθJA (Note 6)"
 
 # ── PMV50ENEAR ────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-23, AEC-Q101. 14 instances on MNT Reform.
@@ -1045,14 +1385,57 @@ rating = "max_current_a"
 max = 3.9
 unit = "A"
 conditions = "VGS = 10 V, Tamb = 25 °C"
-basis = "PMV50ENEA v.1, Limiting values, ID, Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50ENEA v.1, Limiting values, ID, Tamb = 25 °C (Note 1: 6 cm² drain pad)"
 [[models.source.characteristic]]
 parameter = "ID drain current"
 rating = "max_current_a"
 max = 2.5
 unit = "A"
 conditions = "VGS = 10 V, Tamb = 100 °C"
-basis = "PMV50ENEA v.1, Limiting values, ID, Tamb = 100 °C"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50ENEA v.1, Limiting values, ID, Tamb = 100 °C (Note 1: 6 cm² drain pad)"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.51
+unit = "W"
+conditions = "Tamb = 25 °C, Note 2: FR4 PCB, single-sided copper, tin-plated, standard footprint"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "PMV50ENEA v.1 (10 March 2016), Table 5 Limiting values, Ptot @ Tamb = 25 °C (Note 2), 510 mW"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 1.04
+unit = "W"
+conditions = "Tamb = 25 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 6 cm²"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50ENEA v.1 (10 March 2016), Table 5 Limiting values, Ptot @ Tamb = 25 °C (Note 1)"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 3.9
+unit = "W"
+conditions = "Tsp = 25 °C"
+basis = "PMV50ENEA v.1 (10 March 2016), Table 5 Limiting values, Ptot @ Tsp = 25 °C"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 211.0
+max = 245.0
+unit = "K/W"
+conditions = "in free air, Table 6 Note 1: FR4 PCB, single-sided copper, tin-plated, standard footprint"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "PMV50ENEA v.1 (10 March 2016), Table 6 Thermal characteristics, Rth(j-a), typ/max columns (Note 1)"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 102.0
+max = 120.0
+unit = "K/W"
+conditions = "in free air, Table 6 Note 2: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 6 cm²"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50ENEA v.1 (10 March 2016), Table 6 Thermal characteristics, Rth(j-a), typ/max columns (Note 2)"
 
 # ── PMV50EPEAR ────────────────────────────────────────────────────────────────
 # Nexperia, P-channel trench, SOT-23, AEC-Q101. 24 instances on MNT Reform, the
@@ -1106,7 +1489,8 @@ cgs    = 7.507e-10 # vendor .lib `CGS 2 6 7.507e-10` (preferred). Data sheet cro
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 4.2         # |ID| at VGS=-10 V, Tamb=25 C, 6 cm^2 drain pad
+max_current_a = 2.7         # |ID| at VGS=-10 V, Tamb=100 C, 6 cm^2 drain pad, the
+                            # least favourable tagged row below (4.2 A at Tamb=25 C)
 max_surge_current_a = 16.9  # |IDM|, tp <= 10 us
 max_power_w = 0.48          # Ptot, standard footprint (1.2 W on a 6 cm^2 pad)
 max_voltage_v = 30.0        # |VDS| (VGS is +-20 V)
@@ -1114,6 +1498,66 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 261.0    # Rth(j-a) max, standard footprint (227 typ)
 rds_on_vgs = 4.5            # lowest |VGS| RDS(on) row (49 mOhm typ @ VGS=-4.5V)
 vgs_th_max = 3.0            # |VGS(th)| max (-3 V)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = -4.2
+unit = "A"
+conditions = "VGS = −10 V, Tamb = 25 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 6 cm²"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 5 Limiting values, ID @ Tamb = 25 °C (Note 1)"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = -2.7
+unit = "A"
+conditions = "VGS = −10 V, Tamb = 100 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 6 cm²"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 5 Limiting values, ID @ Tamb = 100 °C (Note 1)"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.48
+unit = "W"
+conditions = "Tamb = 25 °C, Note 2: FR4 PCB, single-sided copper, tin-plated, standard footprint"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 5 Limiting values, Ptot @ Tamb = 25 °C (Note 2), 480 mW"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 1.2
+unit = "W"
+conditions = "Tamb = 25 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 6 cm²"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 5 Limiting values, Ptot @ Tamb = 25 °C (Note 1)"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 6.95
+unit = "W"
+conditions = "Tsp = 25 °C"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 5 Limiting values, Ptot @ Tsp = 25 °C"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 227.0
+max = 261.0
+unit = "K/W"
+conditions = "in free air, Table 6 Note 1: FR4 PCB, single-sided copper, tin-plated, standard footprint"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 6 Thermal characteristics, Rth(j-a), typ/max columns (Note 1)"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 91.0
+max = 104.0
+unit = "K/W"
+conditions = "in free air, Table 6 Note 2: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 6 cm²"
+mounting = "FR4 single-sided Cu, 6 cm² drain pad"
+basis = "PMV50EPEA v.1 (30 June 2016), Table 6 Thermal characteristics, Rth(j-a), typ/max columns (Note 2)"
 
 # ── WPM2015-3 ─────────────────────────────────────────────────────────────────
 # Will Semiconductor (WillSemi), P-channel, SOT-23. 28 instances across all
@@ -1166,17 +1610,111 @@ cgs    = 4.8e-10  # CISS typ - CRSS typ = 534 - 54 = 480 pF, same bias
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 2.0         # |ID| steady state, minimum pad, TA=25 C
-                            # (2.2 A on a 1 in^2 pad; the min-pad figure is the
-                            # conservative one and the one a hobby board gets)
+max_current_a = 1.6         # |ID| steady state, minimum pad (note b), TA=70 C, the
+                            # least favourable tagged row below (2.0 A at TA=25 C;
+                            # 2.2 / 1.7 A on a 1 in^2 pad, note a)
 max_surge_current_a = 10.0  # |IDM|, PW < 380 us, duty < 2%
-max_power_w = 0.6           # PD steady state, minimum pad, 1 oz copper
+max_power_w = 0.4           # PD steady state, minimum pad (note b), TA=70 C, the least
+                            # favourable tagged row below (0.6 W at TA=25 C)
 max_voltage_v = 20.0        # |VDS| (VGS is +-8 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 190.0    # max, minimum pad, steady state (145 typ)
 theta_jc_c_per_w = 75.0     # max, steady state (60 typ)
 rds_on_vgs = 2.5            # lowest |VGS| RDS(on) row (103 mOhm typ @ VGS=-2.5V)
 vgs_th_max = 0.81           # |VGS(th)| max (-0.81 V)
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = -2.2
+unit = "A"
+conditions = "TA = 25 °C, steady state, note a: FR-4 board, 1 square inch pad, 1 oz copper"
+mounting = "FR-4, 1 in² pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, ID a, TA=25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = -1.7
+unit = "A"
+conditions = "TA = 70 °C, steady state, note a: FR-4 board, 1 square inch pad, 1 oz copper"
+mounting = "FR-4, 1 in² pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, ID a, TA=70°C"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation, steady state"
+rating = "max_power_w"
+max = 0.8
+unit = "W"
+conditions = "TA = 25 °C, steady state, note a: FR-4 board, 1 square inch pad, 1 oz copper"
+mounting = "FR-4, 1 in² pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, PD a, TA=25°C"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation, steady state"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "TA = 70 °C, steady state, note a: FR-4 board, 1 square inch pad, 1 oz copper"
+mounting = "FR-4, 1 in² pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, PD a, TA=70°C"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, steady state"
+rating = "theta_ja_c_per_w"
+typ = 120.0
+max = 155.0
+unit = "°C/W"
+conditions = "steady state, note a: FR-4 board, 1 square inch pad, 1 oz copper"
+mounting = "FR-4, 1 in² pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Thermal resistance ratings, RθJA a Steady State, typ/max columns"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = -2.0
+unit = "A"
+conditions = "TA = 25 °C, steady state, note b: FR-4 board, minimum pad size, 1 oz copper"
+mounting = "FR-4, minimum pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, ID b, TA=25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = -1.6
+unit = "A"
+conditions = "TA = 70 °C, steady state, note b: FR-4 board, minimum pad size, 1 oz copper"
+mounting = "FR-4, minimum pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, ID b, TA=70°C"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation, steady state"
+rating = "max_power_w"
+max = 0.6
+unit = "W"
+conditions = "TA = 25 °C, steady state, note b: FR-4 board, minimum pad size, 1 oz copper"
+mounting = "FR-4, minimum pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, PD b, TA=25°C"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation, steady state"
+rating = "max_power_w"
+max = 0.4
+unit = "W"
+conditions = "TA = 70 °C, steady state, note b: FR-4 board, minimum pad size, 1 oz copper"
+mounting = "FR-4, minimum pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Absolute Maximum ratings, Steady State column, PD b, TA=70°C"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, steady state"
+rating = "theta_ja_c_per_w"
+typ = 145.0
+max = 190.0
+unit = "°C/W"
+conditions = "steady state, note b: FR-4 board, minimum pad size, 1 oz copper"
+mounting = "FR-4, minimum pad, 1 oz copper"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Thermal resistance ratings, RθJA b Steady State, typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJC junction-to-case thermal resistance, steady state"
+rating = "theta_jc_c_per_w"
+typ = 60.0
+max = 75.0
+unit = "°C/W"
+conditions = "steady state"
+basis = "WPM2015 Rev.1.2 (Mar 2018), Thermal resistance ratings, RθJC Steady State, typ/max columns"
 
 # ── IRLML6402 ─────────────────────────────────────────────────────────────────
 # Infineon (International Rectifier) HEXFET, P-channel, SOT-23 / Micro3.
@@ -1298,6 +1836,15 @@ unit = "W"
 conditions = "TA = 70 °C"
 mounting = "1 in^2 single-layer 1 oz Cu FR4"
 basis = "IRLML6402 datasheet 2014-04-28, Absolute Maximum Ratings, PD @ TA = 70°C"
+[[models.source.characteristic]]
+parameter = "RθJA maximum junction-to-ambient"
+rating = "theta_ja_c_per_w"
+typ = 75.0
+max = 100.0
+unit = "°C/W"
+conditions = "Note 3: surface mounted on 1 in square single layer 1 oz copper FR4 board, steady state"
+mounting = "1 in^2 single-layer 1 oz Cu FR4"
+basis = "IRLML6402PbF datasheet 2014-04-28, Thermal Resistance, RθJA typ/max columns (Note 3)"
 
 # ── AO3422 ────────────────────────────────────────────────────────────────────
 # Alpha & Omega Semiconductor, N-channel, SOT-23. Hunt boards.
@@ -1351,7 +1898,8 @@ cgs    = 2.014e-10  # Ciss typ - Crss typ = 214 - 12.6 = 201.4 pF, same bias (Ci
 max_current_a = 1.7         # ID at TA=70 C, the least favourable tagged row
                             # below (2.1 A at TA=25 C)
 max_surge_current_a = 10.0  # IDM
-max_power_w = 1.25          # PD at TA=25 C, 1 in^2 FR-4, 2 oz Cu, still air
+max_power_w = 0.8           # PD at TA=70 C, the least favourable tagged row below
+                            # (1.25 W at TA=25 C)
 max_voltage_v = 55.0        # VDS (VGS is +-12 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 150.0    # max, steady state (115 typ; 100 max at t <= 10 s).
@@ -1376,6 +1924,36 @@ max = 1.7
 unit = "A"
 conditions = "TA = 70 °C"
 basis = "AO3422 Rev 2.1, Absolute Maximum Ratings, ID, TA=70°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 1.25
+unit = "W"
+conditions = "TA = 25 °C"
+basis = "AO3422 Rev 2.1 (March 2024), Absolute Maximum Ratings, PD, TA=25°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.8
+unit = "W"
+conditions = "TA = 70 °C"
+basis = "AO3422 Rev 2.1 (March 2024), Absolute Maximum Ratings, PD, TA=70°C"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient, t ≤ 10 s"
+typ = 75.0
+max = 100.0
+unit = "°C/W"
+conditions = "t ≤ 10 s; Note A: 1 in² FR-4 board, 2 oz copper, still air, TA = 25 °C"
+basis = "AO3422 Rev 2.1 (March 2024), Thermal Characteristics, RθJA t ≤ 10s, typ/max columns; Note A: the ID rating is based on this t ≤ 10 s figure"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient, steady state"
+rating = "theta_ja_c_per_w"
+typ = 115.0
+max = 150.0
+unit = "°C/W"
+conditions = "steady state; Note A: 1 in² FR-4 board, 2 oz copper, still air, TA = 25 °C"
+mounting = "1 in² FR-4, 2 oz copper"
+basis = "AO3422 Rev 2.1 (March 2024), Thermal Characteristics, RθJA Steady-State, typ/max columns (Notes A, C)"
 
 # ── PMZ550UNE ─────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-883 / DFN1006-3. MNT Reform. The board value
@@ -1441,7 +2019,8 @@ cgs    = 2.606e-11 # vendor .lib `CGS 2 6 2.606e-11` (preferred); data sheet Cis
 "D" = "drain"
 
 [models.ratings]
-max_current_a = 0.59        # ID at VGS=4.5 V, Tamb=25 C, 1 cm^2 drain pad
+max_current_a = 0.37        # ID at VGS=4.5 V, Tamb=100 C, 1 cm^2 drain pad, the least
+                            # favourable tagged row below (0.59 A at Tamb=25 C)
 max_surge_current_a = 2.3   # IDM, tp <= 10 us
 max_power_w = 0.31          # Ptot, standard footprint (0.4 W on a 1 cm^2 pad)
 max_voltage_v = 30.0        # VDS. NOTE VGS is only +-8 V on this part, much
@@ -1451,6 +2030,66 @@ theta_ja_c_per_w = 405.0    # Rth(j-a) max, standard footprint (350 typ;
                             # 310 max with a 1 cm^2 drain pad)
 rds_on_vgs = 1.5            # lowest RDS(on) row (890 mOhm typ / 1500 max @ VGS=1.5V)
 vgs_th_max = 0.95           # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = 0.59
+unit = "A"
+conditions = "VGS = 4.5 V, Tamb = 25 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 1 cm²"
+mounting = "FR4 single-sided Cu, 1 cm² drain pad"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 5 Limiting values, ID @ Tamb = 25 °C (Note 1), 590 mA"
+[[models.source.characteristic]]
+parameter = "ID drain current"
+rating = "max_current_a"
+max = 0.37
+unit = "A"
+conditions = "VGS = 4.5 V, Tamb = 100 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 1 cm²"
+mounting = "FR4 single-sided Cu, 1 cm² drain pad"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 5 Limiting values, ID @ Tamb = 100 °C (Note 1), 370 mA"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.31
+unit = "W"
+conditions = "Tamb = 25 °C, Note 2: FR4 PCB, single-sided copper, tin-plated, standard footprint"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 5 Limiting values, Ptot @ Tamb = 25 °C (Note 2), 310 mW"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.4
+unit = "W"
+conditions = "Tamb = 25 °C, Note 1: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 1 cm²"
+mounting = "FR4 single-sided Cu, 1 cm² drain pad"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 5 Limiting values, Ptot @ Tamb = 25 °C (Note 1), 400 mW"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 1.67
+unit = "W"
+conditions = "Tsp = 25 °C"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 5 Limiting values, Ptot @ Tsp = 25 °C, 1670 mW"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 350.0
+max = 405.0
+unit = "K/W"
+conditions = "in free air, Table 6 Note 1: FR4 PCB, single-sided copper, tin-plated, standard footprint"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 6 Thermal characteristics, Rth(j-a), typ/max columns (Note 1)"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 270.0
+max = 310.0
+unit = "K/W"
+conditions = "in free air, Table 6 Note 2: FR4 PCB, single-sided copper, tin-plated, mounting pad for drain 1 cm²"
+mounting = "FR4 single-sided Cu, 1 cm² drain pad"
+basis = "PMZ550UNE v.1 (25 March 2015), Table 6 Thermal characteristics, Rth(j-a), typ/max columns (Note 2)"
 
 # ── CJ3134K ───────────────────────────────────────────────────────────────────
 # Jiangsu Changjing Electronics (JSCJ), N-channel, SOT-23. 20 instances on the
@@ -1523,6 +2162,33 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 357.0    # same min-pad FR4 condition
 rds_on_vgs = 1.8            # lowest RDS(on) row (800 mOhm max @ VGS=1.8V)
 vgs_th_max = 1.1            # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = 0.75
+unit = "A"
+conditions = "TA = 25 °C, Note 1: surface mounted on FR4 board using the minimum recommended pad size"
+mounting = "FR4, minimum recommended pad"
+basis = "JSCJ CJ3134K Rev. - 1.1, Maximum ratings (Ta=25℃), ID (note 1)"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.35
+unit = "W"
+conditions = "TA = 25 °C, Note 1: surface mounted on FR4 board using the minimum recommended pad size"
+mounting = "FR4, minimum recommended pad"
+basis = "JSCJ CJ3134K Rev. - 1.1, Maximum ratings (Ta=25℃), PD (note 1), 350 mW"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 357.0
+unit = "°C/W"
+conditions = "Note 1: surface mounted on FR4 board using the minimum recommended pad size"
+mounting = "FR4, minimum recommended pad"
+basis = "JSCJ CJ3134K Rev. - 1.1, Maximum ratings, RθJA (note 1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DMG3404L: Diodes Incorporated N-channel logic-level trench MOSFET, SOT-23.
@@ -1598,9 +2264,10 @@ cgs    = 5.9e-10   # = Ciss typ - Crss typ = 641 - 51 = 590 pF, same test condit
 "3" = "drain"
 
 [models.ratings]
-max_current_a       = 4.2     # ID continuous, TA = 25 C, minimum recommended pad
-                              # (Note 5); 5.8 A on the 1-inch-square copper of
-                              # Note 6. See the note above.
+max_current_a       = 3.5     # ID continuous, TA = 70 C, minimum recommended pad
+                              # (Note 5), the least favourable tagged row below
+                              # (4.2 A at TA = 25 C; 5.8 / 4.9 A on the 1-inch-square
+                              # copper of Note 6). See the note above.
 max_surge_current_a = 30.0    # IDM, pulse width <= 10 us, duty <= 1%
 max_power_w         = 0.78    # PD, Note 5 board (1.33 W on the Note 6 board)
 max_voltage_v       = 30.0    # BVDSS / VDSS
@@ -1608,6 +2275,73 @@ theta_ja_c_per_w    = 164.0   # RthJA, Note 5 board (96 C/W on the Note 6 board)
 max_junction_temp_c = 150.0   # TJ
 rds_on_vgs          = 4.5     # lowest RDS(on) row (24 mOhm typ / 35 max @ VGS=4.5V)
 vgs_th_max          = 2.0     # VGS(th) max @ VDS=VGS, ID=250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = 4.2
+unit = "A"
+conditions = "TA = 25 °C, VGS = 10 V, steady state, Note 5: FR-4 PC board, 2 oz copper, minimum recommended pad layout"
+mounting = "FR-4, 2 oz Cu, minimum recommended pad"
+basis = "DS37640 Rev. 2-2 (January 2016), Maximum Ratings, ID (Note 5), VGS = 10V, TA = +25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = 3.5
+unit = "A"
+conditions = "TA = 70 °C, VGS = 10 V, steady state, Note 5: FR-4 PC board, 2 oz copper, minimum recommended pad layout"
+mounting = "FR-4, 2 oz Cu, minimum recommended pad"
+basis = "DS37640 Rev. 2-2 (January 2016), Maximum Ratings, ID (Note 5), VGS = 10V, TA = +70°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.78
+unit = "W"
+conditions = "TA = 25 °C, Note 5: FR-4 PC board, 2 oz copper, minimum recommended pad layout"
+mounting = "FR-4, 2 oz Cu, minimum recommended pad"
+basis = "DS37640 Rev. 2-2 (January 2016), Thermal Characteristics, PD (Note 5)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 164.0
+unit = "°C/W"
+conditions = "Note 5: FR-4 PC board, 2 oz copper, minimum recommended pad layout"
+mounting = "FR-4, 2 oz Cu, minimum recommended pad"
+basis = "DS37640 Rev. 2-2 (January 2016), Thermal Characteristics, RθJA (Note 5)"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = 5.8
+unit = "A"
+conditions = "TA = 25 °C, VGS = 10 V, steady state, Note 6: FR-4 PC board, 2 oz copper, thermal bias to bottom layer 1 inch square copper plate"
+mounting = "FR-4, 2 oz Cu, 1 in² copper plate"
+basis = "DS37640 Rev. 2-2 (January 2016), Maximum Ratings, ID (Note 6), VGS = 10V, TA = +25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = 4.9
+unit = "A"
+conditions = "TA = 70 °C, VGS = 10 V, steady state, Note 6: FR-4 PC board, 2 oz copper, thermal bias to bottom layer 1 inch square copper plate"
+mounting = "FR-4, 2 oz Cu, 1 in² copper plate"
+basis = "DS37640 Rev. 2-2 (January 2016), Maximum Ratings, ID (Note 6), VGS = 10V, TA = +70°C"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 1.33
+unit = "W"
+conditions = "TA = 25 °C, Note 6: FR-4 PC board, 2 oz copper, thermal bias to bottom layer 1 inch square copper plate"
+mounting = "FR-4, 2 oz Cu, 1 in² copper plate"
+basis = "DS37640 Rev. 2-2 (January 2016), Thermal Characteristics, PD (Note 6)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 96.0
+unit = "°C/W"
+conditions = "Note 6: FR-4 PC board, 2 oz copper, thermal bias to bottom layer 1 inch square copper plate"
+mounting = "FR-4, 2 oz Cu, 1 in² copper plate"
+basis = "DS37640 Rev. 2-2 (January 2016), Thermal Characteristics, RθJA (Note 6)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FDN360P: onsemi (ex-Fairchild) P-channel PowerTrench MOSFET, SuperSOT-3.
@@ -1703,10 +2437,63 @@ cgs    = 2.59e-10  # = Ciss typ - Crss typ = 298 - 39 = 259 pF, same test condit
 [models.ratings]
 max_current_a       = 2.0     # |ID| continuous, Note 1a
 max_surge_current_a = 10.0    # |ID| pulsed
-max_power_w         = 0.5     # PD single operation, Note 1a (0.46 W on Note 1b)
+max_power_w         = 0.46    # PD single operation, Note 1b (minimum pad), the least
+                              # favourable tagged row below (0.5 W on Note 1a)
 max_voltage_v       = 30.0    # |BVDSS|
-theta_ja_c_per_w    = 250.0   # RthJA, Note 1a
+theta_ja_c_per_w    = 270.0   # RthJA, Note 1b (minimum pad), the least favourable
+                              # tagged row below (250 C/W on the Note 1a pad); was
+                              # 250, the Note 1a figure alone
 theta_jc_c_per_w    = 75.0    # RthJC
 max_junction_temp_c = 150.0   # TJ
 rds_on_vgs          = 4.5     # lowest |VGS| RDS(on) row (100 mOhm typ @ VGS=-4.5V)
 vgs_th_max          = 3.0     # |VGS(th)| max (-3.0 V) @ ID=-250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ID drain current, continuous"
+rating = "max_current_a"
+max = -2.0
+unit = "A"
+conditions = "TA = 25 °C, Note 1a: mounted on a 0.02 in² pad of 2 oz copper"
+mounting = "0.02 in² pad, 2 oz copper"
+basis = "onsemi FDN360P/D Rev. 8 (January 2023), Absolute Maximum Ratings (TA = 25°C), ID continuous (Note 1a)"
+[[models.source.characteristic]]
+parameter = "PD power dissipation for single operation"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "TA = 25 °C, Note 1a: mounted on a 0.02 in² pad of 2 oz copper"
+mounting = "0.02 in² pad, 2 oz copper"
+basis = "onsemi FDN360P/D Rev. 8 (January 2023), Absolute Maximum Ratings (TA = 25°C), PD (Note 1a)"
+[[models.source.characteristic]]
+parameter = "PD power dissipation for single operation"
+rating = "max_power_w"
+max = 0.46
+unit = "W"
+conditions = "TA = 25 °C, Note 1b: mounted on a minimum pad"
+mounting = "minimum pad"
+basis = "onsemi FDN360P/D Rev. 8 (January 2023), Absolute Maximum Ratings (TA = 25°C), PD (Note 1b)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 250.0
+unit = "°C/W"
+conditions = "Note 1a: mounted on a 0.02 in² pad of 2 oz copper"
+mounting = "0.02 in² pad, 2 oz copper"
+basis = "onsemi FDN360P/D Rev. 8 (January 2023), Thermal Characteristics, RθJA (Note 1a)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 270.0
+unit = "°C/W"
+conditions = "Note 1b: mounted on a minimum pad"
+mounting = "minimum pad"
+basis = "onsemi FDN360P/D Rev. 8 (January 2023), Note 1b, RθJA 270 °C/W when mounted on a minimum pad"
+[[models.source.characteristic]]
+parameter = "RθJC thermal resistance, junction-to-case"
+rating = "theta_jc_c_per_w"
+max = 75.0
+unit = "°C/W"
+conditions = "Note 1: case reference is the solder mounting surface of the drain pins"
+basis = "onsemi FDN360P/D Rev. 8 (January 2023), Thermal Characteristics, RθJC (Note 1)"
