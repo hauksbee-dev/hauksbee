@@ -14,6 +14,54 @@ description = "TI TLV1117-18 1.8V fixed LDO, 800mA (nominal DC model; protection
 [models.source]
 tier = "curated-library"
 validation = "datasheet-curves"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 104.3
+unit = "°C/W"
+conditions = "JEDEC thermal metrics, DCY (SOT-223) 4 pins"
+package = "SOT-223"
+basis = "TI TLV1117 SLVS561O (June 2025), 5.4 Thermal Information (Legacy Chip), RθJA, DCY"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, new chip fixed output"
+rating = "theta_ja_c_per_w"
+max = 95.4
+unit = "°C/W"
+conditions = "JEDEC thermal metrics, DCY (SOT-223) 4 pins"
+package = "SOT-223"
+basis = "TI TLV1117 SLVS561O (June 2025), 5.5 Thermal Information (New Chip), Fixed Output RθJA, DCY"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 50.9
+unit = "°C/W"
+conditions = "JEDEC thermal metrics, KVU (TO-252) 3 pins"
+package = "TO-252"
+basis = "TI TLV1117 SLVS561O (June 2025), 5.4 Thermal Information (Legacy Chip), RθJA, KVU"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, new chip fixed output"
+rating = "theta_ja_c_per_w"
+max = 67.2
+unit = "°C/W"
+conditions = "JEDEC thermal metrics, KVU (TO-252) 4 pins"
+package = "TO-252"
+basis = "TI TLV1117 SLVS561O (June 2025), 5.5 Thermal Information (New Chip), Fixed Output RθJA, KVU"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 30.1
+unit = "°C/W"
+conditions = "JEDEC thermal metrics, KCS/KCT (TO-220) 3 pins"
+package = "TO-220"
+basis = "TI TLV1117 SLVS561O (June 2025), 5.4 Thermal Information (Legacy Chip), RθJA, KCS, KCT"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 27.5
+unit = "°C/W"
+conditions = "JEDEC thermal metrics, KTT (TO-263) 3 pins"
+package = "TO-263"
+basis = "TI TLV1117 SLVS561O (June 2025), 5.4 Thermal Information (Legacy Chip), RθJA, KTT"
 
 [models.match]
 value_re = "(?i)^TLV1117-18(?:[A-Z0-9+._/-]*)?$"
@@ -43,6 +91,11 @@ warning = "[partial model] TLV1117-18 nominal 1.8 V DC rail and sourced ratings 
 max_current_a = 0.8
 max_voltage_v = 16.0   # SLVS561O 5.1 Absolute Maximum Ratings, continuous input voltage VIN -0.3 to 16 V
 max_junction_temp_c = 125.0
+# The value rule binds every package, and either die may ship (§8.1.1), so
+# this is the least favourable RθJA row below: the legacy SOT-223 (DCY). The
+# DRJ (WSON) and KTE/KTP (PowerFlex) columns (38.3 / 38.6 / 49.2 °C/W) are
+# not rows here: no package body spells them, so a row could never be fitted.
+theta_ja_c_per_w = 104.3
 
 # The 3.2-15 V recommended VIN range is the check that fires below the 16.0 V abs max.
 [[models.envelope]]
@@ -89,11 +142,10 @@ basis = "TI TLV1117 SLVS561O, 5.3 Recommended Operating Conditions, VIN 3.2 V to
 #   Note 2 additionally caps package dissipation at 1.2 W for SOT-223, 2.2 W for
 #   TO-252 and 780 mW for 8-lead SOIC.
 #
-# The ratings below are the SOT-223 ones, because that is the package a hobby
-# board fits. A TO-252 or SO-8 build has a different theta_JA and this entry
-# will judge its junction temperature wrongly; the match rule cannot tell them
-# apart from the value string, and guessing from the footprint was rejected
-# (see the note on ANDed match rules at the top of db/README.md).
+# The match rule cannot tell the packages apart from the value string, so the
+# theta_JA rows below are tagged by package: a SOT-223, TO-252 or SO-8
+# footprint is judged on its own row, and an unrecognised one on the least
+# favourable (SO-8, 160 C/W), which is what the scalar carries.
 #
 # DELIBERATELY NOT MODELLED: `bind_vreg` stamps an ideal DC source on the output
 # net, so line and load regulation, ripple rejection, output noise and the
@@ -123,6 +175,30 @@ high = 3.399
 unit = "V"
 kind = "specification-limits"
 basis = "AMS1117 datasheet output-voltage limits"
+[[models.source.characteristic]]
+parameter = "ϕJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "ϕJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "ϕJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
 
 [models.match]
 value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
@@ -146,7 +222,9 @@ iq_a      = 5.0e-3  # IQ typ @ (VIN - VOUT) = 1.5 V (11 mA max)
 max_current_a = 1.0          # 1 A continuous output, datasheet FEATURES
 max_voltage_v = 15.0         # input voltage, Absolute Maximum Ratings
 max_junction_temp_c = 125.0  # TJ abs max, control section and power transistor
-theta_ja_c_per_w = 90.0      # SOT-223, Thermal Resistance (46 to >90 with copper)
+theta_ja_c_per_w = 160.0     # SO-8, the least favourable package row below: the value
+                             # rule binds every package, and a SOT-223 footprint is
+                             # judged on its own 90 C/W row (46 to >90 with copper)
 theta_jc_c_per_w = 15.0      # all packages, max
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,7 +250,39 @@ iq_a      = 5.0e-3
 [models.ratings]
 max_current_a = 1.0
 max_voltage_v = 15.0
-max_power_w = 1.0
+max_junction_temp_c = 125.0  # TJ abs max, control section and power transistor
+theta_ja_c_per_w = 160.0     # SO-8, the least favourable package row below
+# `max_power_w` is gone: the AMS1117 Absolute Maximum Ratings print power
+# dissipation as internally limited, and the 1.0 W it carried is no datasheet
+# figure (see the AMS1117-3.3 note above).
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "ϕJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "ϕJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "ϕJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -205,6 +315,25 @@ iq_a      = 1.0e-4  # quiescent current typ 100 µA
 [models.ratings]
 max_current_a = 0.15
 max_voltage_v = 16.0
+theta_ja_c_per_w = 205.4  # DBV legacy chip, the least favourable row below (new chip 178.6)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 205.4
+unit = "°C/W"
+conditions = "DBV (SOT23-5) 5 pins"
+basis = "TI LP2985 SLVS522S (May 2025), 5.4 Thermal Information, RθJA, DBV (SOT23-5), Legacy Chip"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, new chip"
+rating = "theta_ja_c_per_w"
+max = 178.6
+unit = "°C/W"
+conditions = "DBV (SOT23-5) 5 pins"
+basis = "TI LP2985 SLVS522S (May 2025), 5.4 Thermal Information, RθJA, DBV (SOT23-5), New Chip"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -216,8 +345,9 @@ max_voltage_v = 16.0
 # Source: ST L78xx datasheet DS0422, Table (typical). Dropout ~2 V, Iq ~6 mA.
 
 # The 7805 is read off the datasheet in full, because it is the one a hobbyist
-# actually reaches for. Its siblings below still carry the older summary
-# figures, including a `max_power_w = 2.0` that is NOT in the datasheet.
+# actually reaches for. Its siblings below keep the older summary electrical
+# figures, but their ratings now follow the same L78 Table 1 / Table 2 (the
+# `max_power_w = 2.0` they used to carry is NOT in the datasheet).
 #
 # Source: STMicroelectronics "L78 Positive voltage regulator ICs" datasheet
 #   DS0422 Rev 38, February 2025, Table 3 "Electrical characteristics of
@@ -258,8 +388,9 @@ max_voltage_v = 16.0
 # `max_power_w` is gone: the datasheet states PD is internally limited and
 # publishes RthJC/RthJA instead, which is what the thermal monitor wants. The
 # 2.0 W it used to carry ("TO-220 no heatsink") is not a datasheet figure.
-# The ratings below are the TO-220 ones; a DPAK or D2PAK build has a different
-# RthJA and this entry will judge its junction temperature wrongly.
+# The Table 2 rows below are tagged by package, so a TO-220, TO-220FP, DPAK or
+# D2PAK footprint is judged on its own RthJA/RthJC, and an unrecognised one on
+# the least favourable (DPAK), which is what the scalars carry.
 [[models]]
 id = "7805"
 kind = "vreg"
@@ -283,8 +414,77 @@ iq_a      = 4.3e-3  # Iq typ @ TJ = 25 C (6 mA max)
 max_current_a = 1.5          # "Output current up to 1.5 A", datasheet Features
 max_voltage_v = 35.0         # VI abs max for the 5 V to 18 V output codes
 max_junction_temp_c = 125.0  # TOP abs max
-theta_ja_c_per_w = 50.0      # TO-220, Table 2 Thermal data
-theta_jc_c_per_w = 5.0       # TO-220, Table 2 Thermal data
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below; a
+                             # TO-220 footprint is judged on its own 50 C/W row
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row (TO-220: 5)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -309,7 +509,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 35.0
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -334,7 +606,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 35.0
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -359,7 +703,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 35.0
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -384,7 +800,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 35.0
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -409,7 +897,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 35.0
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -434,7 +994,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 35.0
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -459,7 +1091,79 @@ iq_a      = 6.0e-3
 [models.ratings]
 max_current_a = 1.5
 max_voltage_v = 40.0  # 24V part tolerates a higher abs-max input
-max_power_w = 2.0
+max_junction_temp_c = 125.0  # TOP abs max, ST L78 DS0422 Rev 38 Table 1
+theta_ja_c_per_w = 100.0     # DPAK, the least favourable Table 2 row below
+theta_jc_c_per_w = 8.0       # DPAK, the least favourable Table 2 row below
+# `max_power_w = 2.0` is gone: Table 1 prints PD as internally limited, and
+# 2.0 W is no L78 figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 62.5
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 50.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance junction-ambient"
+rating = "theta_ja_c_per_w"
+max = 60.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJA, TO-220FP"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 3.0
+unit = "°C/W"
+conditions = "D²PAK package"
+package = "D2PAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, D²PAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 8.0
+unit = "°C/W"
+conditions = "DPAK package"
+package = "DPAK"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, DPAK"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220 package"
+package = "TO-220"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220"
+[[models.source.characteristic]]
+parameter = "RthJC thermal resistance junction-case"
+rating = "theta_jc_c_per_w"
+max = 5.0
+unit = "°C/W"
+conditions = "TO-220FP package"
+package = "TO-220FP"
+basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, RthJC, TO-220FP"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RT9080-33: Richtek 2uA-IQ, 600 mA low-dropout linear regulator, 3.3 V fixed.
@@ -559,10 +1263,31 @@ iq_a      = 2.0e-6   # IQ typ @ ILOAD = 0 mA, VIN >= VOUT + VDROP (max is 4 uA)
 max_current_a = 0.6          # 600 mA output current (VIN >= 2.3 V), Section 3
 max_voltage_v = 6.5          # VIN/VOUT/EN to GND abs max
 max_junction_temp_c = 150.0  # TJ abs max
-theta_ja_c_per_w = 189.4     # JEDEC-standard board, TSOT-23-5
+theta_ja_c_per_w = 291.4     # ZQFN-4L 1x1, JEDEC standard, the least favourable
+                             # package row below (TSOT-23-5: 189.4); the value rule
+                             # also binds the RT9080-33GQZ ZQFN order code
 # max_power_w is deliberately absent: the datasheet publishes no package power
 # rating, only TJ(max) and theta_JA, and the thermal monitor derives the
 # junction temperature from those two directly.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance (JEDEC standard)"
+rating = "theta_ja_c_per_w"
+max = 189.4
+unit = "°C/W"
+conditions = "JEDEC standard board, TSOT-23-5"
+package = "TSOT-23-5"
+basis = "Richtek RT9080 datasheet DS9080-09 (December 2024), Section 13 Thermal Information, θJA (JEDEC standard), TSOT-23-5"
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance (JEDEC standard)"
+rating = "theta_ja_c_per_w"
+max = 291.4
+unit = "°C/W"
+conditions = "JEDEC standard board, ZQFN-4L 1x1 (ZDFN-4L 1x1)"
+package = "ZQFN-4L 1x1"
+basis = "Richtek RT9080 datasheet DS9080-09 (December 2024), Section 13 Thermal Information, θJA (JEDEC standard), ZQFN-4L 1x1"
 
 [models.coverage]
 implements = ["nominal_dc_regulation", "dropout_headroom", "quiescent_current", "continuous_current_rating", "junction_temperature_estimate"]
@@ -659,6 +1384,26 @@ iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
 max_current_a = 0.2   # IOUTMAX min for the 3.0-3.9 V codes, @ VOUT >= 0.9 x VOUT(E)
 max_voltage_v = 7.0   # VIN abs max
 max_power_w = 0.25    # SOT-23 Pd as a bare IC; 500 mW on a 40 x 40 mm board
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex XC6206 ETR03005-009, ABSOLUTE MAXIMUM RATINGS (Ta = 25 °C), Pd, SOT-23, 250 mW (IC only)"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "TA = 25 °C, PCB mounted, for reference only (*2)"
+mounting = "40 x 40 mm standard board"
+basis = "Torex XC6206 ETR03005-009, ABSOLUTE MAXIMUM RATINGS (Ta = 25 °C), Pd, SOT-23, 500 mW (40mm x 40mm Standard board) (*2)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Negative regulators, the 79xx series.
@@ -824,6 +1569,41 @@ theta_ja_c_per_w = 184.0     # SOT25, no heatsink
 theta_jc_c_per_w = 96.0      # SOT25
 # max_power_w absent: the datasheet publishes no package power rating, only
 # theta_JA/theta_JC and TJ(max), which is what the thermal monitor uses.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance (junction to ambient)(no heatsink)"
+rating = "theta_ja_c_per_w"
+max = 184.0
+unit = "°C/W"
+conditions = "no heatsink, SOT25"
+package = "SOT-23-5"
+basis = "Diodes AP2112 DS39724 Rev. 2-2 (June 2017), Absolute Maximum Ratings, θJA, SOT25"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance (junction to ambient)(no heatsink)"
+rating = "theta_ja_c_per_w"
+max = 114.0
+unit = "°C/W"
+conditions = "no heatsink, SO-8"
+package = "SOIC-8"
+basis = "Diodes AP2112 DS39724 Rev. 2-2 (June 2017), Absolute Maximum Ratings, θJA, SO-8"
+[[models.source.characteristic]]
+parameter = "θJC thermal resistance (junction to case)"
+rating = "theta_jc_c_per_w"
+typ = 96.0
+unit = "°C/W"
+conditions = "SOT25"
+package = "SOT-23-5"
+basis = "Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics, θJC typ, SOT25"
+[[models.source.characteristic]]
+parameter = "θJC thermal resistance (junction to case)"
+rating = "theta_jc_c_per_w"
+typ = 75.0
+unit = "°C/W"
+conditions = "SO-8"
+package = "SOIC-8"
+basis = "Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics, θJC typ, SO-8"
 
 # ── MIC5205-3.3 ──────────────────────────────────────────────────────────────
 # Microchip (Micrel) 150 mA low-noise LDO, SOT-23-5. 17 instances on the
@@ -866,6 +1646,26 @@ max_voltage_v = 20.0         # Absolute Maximum Ratings, input voltage VIN -20 V
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 220.0     # SOT-23-5, minimum footprint (170 on square clad)
 theta_jc_c_per_w = 130.0
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 220.0
+unit = "°C/W"
+conditions = "SOT-23-5 (M5), recommended minimum footprint"
+mounting = "recommended minimum footprint"
+basis = "Microchip MIC5205 DS20005785B (February 2022), Table 4-1 SOT-23-5 Thermal Resistance, θJA Rec. Min. Footprint (220 °C/W typ in Temperature Specifications, Note 2)"
+[[models.source.characteristic]]
+parameter = "θJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 170.0
+unit = "°C/W"
+conditions = "SOT-23-5 (M5), square copper clad"
+mounting = "square copper clad"
+basis = "Microchip MIC5205 DS20005785B (February 2022), Table 4-1 SOT-23-5 Thermal Resistance, θJA Square Copper Clad"
 
 # The 2.5-16 V operating range is the check that fires below the 20 V abs max.
 [[models.envelope]]
@@ -912,10 +1712,46 @@ iq_a      = 1.6e-6   # Iq typ @ IL = 0, VIN = VR + 1 V (4 uA max)
 max_current_a = 0.25         # 250 mA for VR >= 2.5 V (200 mA below that)
 max_voltage_v = 6.5          # VDD abs max (2.3 to 6.0 V operating)
 max_junction_temp_c = 150.0
-theta_ja_c_per_w = 212.0     # SOT-23, JEDEC JESD51-7 FR-4 4-layer board
+theta_ja_c_per_w = 212.0     # SOT-23, JEDEC JESD51-7 FR-4 4-layer board: the
+                             # least favourable of the package rows below
 theta_jc_c_per_w = 139.0     # RthJC(top), SOT-23
 # NOT MODELLED: the 408 mA typ short-circuit peak (IOUT_SC, measured 10 ms after
 # a short). `bind_vreg`'s ideal source has no current limit.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 212.0
+unit = "°C/W"
+conditions = "SOT-23, EIA/JEDEC JESD51-7"
+package = "SOT-23"
+basis = "Microchip MCP1700 DS20001826F, Temperature Specifications, Thermal Package Resistance, Thermal Resistance, SOT-23, θJA typ"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 104.0
+unit = "°C/W"
+conditions = "SOT-89, EIA/JEDEC JESD51-7"
+package = "SOT-89"
+basis = "Microchip MCP1700 DS20001826F, Temperature Specifications, Thermal Package Resistance, Thermal Resistance, SOT-89, θJA typ"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 92.0
+unit = "°C/W"
+conditions = "TO-92, EIA/JEDEC JESD51-7"
+package = "TO-92"
+basis = "Microchip MCP1700 DS20001826F, Temperature Specifications, Thermal Package Resistance, Thermal Resistance, TO-92, θJA typ"
+[[models.source.characteristic]]
+parameter = "θJA thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 91.0
+unit = "°C/W"
+conditions = "2x2 DFN, EIA/JEDEC JESD51-7"
+package = "DFN-6"
+basis = "Microchip MCP1700 DS20001826F, Temperature Specifications, Thermal Package Resistance, Thermal Resistance, 2x2 DFN, θJA typ"
 
 # ── NCP1117ST50T3G ───────────────────────────────────────────────────────────
 # onsemi 1 A LDO, SOT-223, 5.0 V fixed. The 5 V regulator on the Arduino Uno R3
@@ -1002,6 +1838,25 @@ theta_ja_c_per_w = 231.1     # DBV / SOT-23-5, JEDEC standard board
 theta_jc_c_per_w = 118.4     # RthJC(top), DBV
 # NOT MODELLED: ICL 720 mA typ current limit and the 355 mA typ short-circuit
 # current.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 231.1
+unit = "°C/W"
+conditions = "DBV (SOT-23-5), JEDEC standard PCB (2s2p, no vias to internal plane and bottom layer)"
+mounting = "JEDEC 2s2p board"
+basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DBV (SOT-23-5), JEDEC RθJA"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 100.8
+unit = "°C/W"
+conditions = "DBV (SOT-23-5), LP087A EVM with an exposed pad SOT-23-5 (DYD) layout"
+mounting = "LP087A EVM"
+basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DBV (SOT-23-5), EVM RθJA"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SWITCHING REGULATORS DELIBERATELY LEFT UNRESOLVED, and the reason is the same
@@ -1112,6 +1967,18 @@ max_current_a = 0.05  # IO continuous, Section 6.3 (ISC is a limit, not a rating
 max_voltage_v = 6.0   # input voltage abs max (max DC output voltage is 4.9 V)
 max_junction_temp_c = 85.0  # TJ operating max; the sheet gives no higher TJ abs
                             # max, so this IS the ceiling a stress check has
+theta_ja_c_per_w = 230.9     # DCK (SC70-5), 6.4 Thermal Information
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 230.9
+unit = "°C/W"
+conditions = "DCK (SC70) 5 pins"
+basis = "TI TPS797xx SLVS332J (December 2016), 6.4 Thermal Information, RθJA, DCK"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TPS7A0533DBV: TI 1-uA-IQ 200 mA LDO, 3.3 V fixed, SOT-23-5.
@@ -1185,6 +2052,18 @@ max_voltage_v = 6.0   # IN pin abs max
 max_junction_temp_c = 125.0  # OPERATING TJ, from the same abs-max table. The 150 C
                              # on the line beside it is the STORAGE limit and is not
                              # what a thermal check may spend.
+theta_ja_c_per_w = 185.6     # DBV (SOT-23-5), 6.4 Thermal Information
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 185.6
+unit = "°C/W"
+conditions = "DBV (SOT-23) 5 pins"
+basis = "TI TPS7A05 SBVS254D (August 2019), 6.4 Thermal Information, RθJA, DBV"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # XC6204B33: Torex 150 mA high-speed LDO, 3.3 V, SOT-89-5.
@@ -1304,7 +2183,68 @@ iq_a      = 7.0e-5   # IDD typ, B type (100 uA max); standby is 0.01 uA typ
 # ABSOLUTE MAXIMUM RATINGS, SOT-89-5 row of the Pd table.
 max_current_a = 0.15   # IOUTMAX min (Ilim is 300 mA typ, a limiter not a rating)
 max_voltage_v = 12.0   # VIN abs max (2 to 10 V operating)
-max_power_w = 0.5      # Pd, SOT-89-5 as a bare package (1.3 W PCB-mounted)
+max_power_w = 0.25     # Pd at Ta = 25 C, SOT-25 IC only: the least favourable row
+                       # below, since the value rule binds both the MR (SOT-25) and
+                       # PR (SOT-89-5) codes; a SOT-89 footprint is judged on its
+                       # own rows (0.5 W IC only, 1.3 W PCB-mounted)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, SOT-25, IC only"
+package = "SOT-23-5"
+mounting = "IC only"
+basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Dissipation (Ta=25℃), SOT-25 250 (IC only) mW"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.6
+unit = "W"
+conditions = "TA = 25 °C, SOT-25, 40 x 40 mm standard board, PCB mounted, for reference only (*2)"
+package = "SOT-23-5"
+mounting = "40 x 40 mm standard board"
+basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Dissipation (Ta=25℃), SOT-25 600 (40mm x 40mm Standard board)(*2) mW"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.76
+unit = "W"
+conditions = "TA = 25 °C, SOT-25, JESD51-7 board, PCB mounted, for reference only (*2)"
+package = "SOT-23-5"
+mounting = "JESD51-7 board"
+basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Dissipation (Ta=25℃), SOT-25 760 (JESD51-7 board)(*2) mW"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "TA = 25 °C, SOT-89-5, IC only"
+package = "SOT-89"
+mounting = "IC only"
+basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Dissipation (Ta=25℃), SOT-89-5 500 (IC only) mW"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 1.3
+unit = "W"
+conditions = "TA = 25 °C, SOT-89-5, 40 x 40 mm standard board, PCB mounted, for reference only (*2)"
+package = "SOT-89"
+mounting = "40 x 40 mm standard board"
+basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Dissipation (Ta=25℃), SOT-89-5 1300 (40mm x 40mm Standard board)(*2) mW"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 1.75
+unit = "W"
+conditions = "TA = 25 °C, SOT-89-5, JESD51-7 board, PCB mounted, for reference only (*2)"
+package = "SOT-89"
+mounting = "JESD51-7 board"
+basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Dissipation (Ta=25℃), SOT-89-5 1750 (JESD51-7 board)(*2) mW"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LT1461A-3.3: Analog Devices (ex-Linear) micropower precision SERIES voltage
@@ -1567,6 +2507,54 @@ high = 1.30
 unit = "V"
 kind = "specification-limits"
 basis = "LM317 datasheet reference voltage VREF over the full operating range"
+[[models.source.characteristic]]
+parameter = "Rθ(JA) junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 66.8
+unit = "°C/W"
+conditions = "DCY (SOT-223) 4 pins"
+package = "SOT-223"
+basis = "TI LM317 SLVS044Z (April 2025), 6.4 Thermal Information (Legacy Chip), Rθ(JA), DCY"
+[[models.source.characteristic]]
+parameter = "Rθ(JA) junction-to-ambient thermal resistance, new chip"
+rating = "theta_ja_c_per_w"
+max = 59.6
+unit = "°C/W"
+conditions = "DCY (SOT-223) 4 pins"
+package = "SOT-223"
+basis = "TI LM317 SLVS044Z (April 2025), 6.5 Thermal Information (New Chip), Rθ(JA), DCY"
+[[models.source.characteristic]]
+parameter = "Rθ(JA) junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 23.5
+unit = "°C/W"
+conditions = "KCS (TO-220) 3 pins"
+package = "TO-220"
+basis = "TI LM317 SLVS044Z (April 2025), 6.4 Thermal Information (Legacy Chip), Rθ(JA), KCS"
+[[models.source.characteristic]]
+parameter = "Rθ(JA) junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 37.9
+unit = "°C/W"
+conditions = "KCT (TO-220) 3 pins"
+package = "TO-220"
+basis = "TI LM317 SLVS044Z (April 2025), 6.4 Thermal Information (Legacy Chip), Rθ(JA), KCT"
+[[models.source.characteristic]]
+parameter = "Rθ(JA) junction-to-ambient thermal resistance, legacy chip"
+rating = "theta_ja_c_per_w"
+max = 38.0
+unit = "°C/W"
+conditions = "KTT (TO-263) 3 pins"
+package = "TO-263"
+basis = "TI LM317 SLVS044Z (April 2025), 6.4 Thermal Information (Legacy Chip), Rθ(JA), KTT"
+[[models.source.characteristic]]
+parameter = "Rθ(JA) junction-to-ambient thermal resistance, new chip"
+rating = "theta_ja_c_per_w"
+max = 41.0
+unit = "°C/W"
+conditions = "KTT (TO-263) 3 pins"
+package = "TO-263"
+basis = "TI LM317 SLVS044Z (April 2025), 6.5 Thermal Information (New Chip), Rθ(JA), KTT"
 
 [models.match]
 # Plain LM317 and its TO-220/A suffixes only: LM317L (100 mA) and LM317M
@@ -1604,6 +2592,9 @@ min_current_a = 0.010
 # rating, which is conservative for a positive rail since VO >= 1.25 V always.
 max_voltage_v = 40.0
 max_junction_temp_c = 125.0
+# The value rule binds every package, so this is the least favourable RθJA
+# row below (legacy-chip SOT-223, DCY); a fitted footprint is judged on its own.
+theta_ja_c_per_w = 66.8
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TL431: an adjustable precision SHUNT reference, not a series pass regulator.
@@ -1687,6 +2678,13 @@ high = 2.550
 unit = "V"
 kind = "specification-limits"
 basis = "TI SLVS543 section 6.6, VREF for the plain (I) grade at Ta = 25 C, VKA = VREF, IKA = 10 mA; the A (2.470-2.520) and B (2.483-2.507) grades are strictly inside this"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 206.0
+unit = "°C/W"
+conditions = "DBZ (SOT-23-3) package"
+basis = "TI TL431/TL432 SLVS543S (May 2024), 6.3 Thermal Information, RθJA, DBZ"
 
 [models.match]
 # Every TL431 grade and packing suffix. TLV431 is a DIFFERENT part (1.24 V
@@ -1763,6 +2761,7 @@ min_current_a = 0.001
 # Cathode voltage, Absolute Maximum Ratings.
 max_voltage_v = 37.0
 max_junction_temp_c = 125.0
+theta_ja_c_per_w = 206.0   # RθJA, DBZ (SOT-23-3), 6.3 Thermal Information
 
 # ───────────────────────────────────────────────────────────────────────────
 # The SAME electrical card in the LP (TO-92) package. Only `[models.match]`
@@ -1784,6 +2783,13 @@ high = 2.550
 unit = "V"
 kind = "specification-limits"
 basis = "TI SLVS543 section 6.6, VREF for the plain (I) grade at Ta = 25 C, VKA = VREF, IKA = 10 mA; the A (2.470-2.520) and B (2.483-2.507) grades are strictly inside this"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 140.0
+unit = "°C/W"
+conditions = "LP (TO-92) package"
+basis = "TI TL431/TL432 SLVS543S (May 2024), 6.3 Thermal Information, RθJA, LP"
 
 [models.match]
 # Every TL431 grade and packing suffix. TLV431 is a DIFFERENT part (1.24 V
@@ -1858,6 +2864,7 @@ min_current_a = 0.001
 # Cathode voltage, Absolute Maximum Ratings.
 max_voltage_v = 37.0
 max_junction_temp_c = 125.0
+theta_ja_c_per_w = 140.0   # RθJA, LP (TO-92), 6.3 Thermal Information
 
 # ───────────────────────────────────────────────────────────────────────────
 # The SAME electrical card in the PK (SOT-89) package. Only `[models.match]`
@@ -1879,6 +2886,13 @@ high = 2.550
 unit = "V"
 kind = "specification-limits"
 basis = "TI SLVS543 section 6.6, VREF for the plain (I) grade at Ta = 25 C, VKA = VREF, IKA = 10 mA; the A (2.470-2.520) and B (2.483-2.507) grades are strictly inside this"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 52.0
+unit = "°C/W"
+conditions = "PK (SOT-89) package"
+basis = "TI TL431/TL432 SLVS543S (May 2024), 6.3 Thermal Information, RθJA, PK"
 
 [models.match]
 # Every TL431 grade and packing suffix. TLV431 is a DIFFERENT part (1.24 V
@@ -1951,6 +2965,7 @@ min_current_a = 0.001
 # Cathode voltage, Absolute Maximum Ratings.
 max_voltage_v = 37.0
 max_junction_temp_c = 125.0
+theta_ja_c_per_w = 52.0   # RθJA, PK (SOT-89), 6.3 Thermal Information
 
 # ───────────────────────────────────────────────────────────────────────────
 # The SAME electrical card in the D (SOIC-8) package. Only `[models.match]`
@@ -1972,6 +2987,13 @@ high = 2.550
 unit = "V"
 kind = "specification-limits"
 basis = "TI SLVS543 section 6.6, VREF for the plain (I) grade at Ta = 25 C, VKA = VREF, IKA = 10 mA; the A (2.470-2.520) and B (2.483-2.507) grades are strictly inside this"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 97.0
+unit = "°C/W"
+conditions = "D (SOIC-8) package"
+basis = "TI TL431/TL432 SLVS543S (May 2024), 6.3 Thermal Information, RθJA, D"
 
 [models.match]
 # Every TL431 grade and packing suffix. TLV431 is a DIFFERENT part (1.24 V
@@ -2053,6 +3075,7 @@ min_current_a = 0.001
 # Cathode voltage, Absolute Maximum Ratings.
 max_voltage_v = 37.0
 max_junction_temp_c = 125.0
+theta_ja_c_per_w = 97.0   # RθJA, D (SOIC-8), 6.3 Thermal Information
 
 # Sources: TI TPS782 SBVS115D §§5-6.5; ST STLQ015 DS6765 Rev.7 Tables 1/4/7;
 # ADI LT1763 1763fh pin functions/electrical characteristics/output capacitance;
