@@ -5617,6 +5617,67 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
     SUPPLY_TOKENS.iter().any(|t| leaf.contains(t))
 }
 
+/// How many parts must hang off a supply-named net before its silence counts as
+/// a dead rail rather than an oddly-named signal. An enable called `VCC_EN`
+/// reaches a handful of pins; a rail reaches the board.
+const DEAD_RAIL_MIN_PARTS: usize = 6;
+
+/// Nets that name themselves a supply, carry a rail's worth of parts, and are
+/// powered by nothing.
+///
+/// The binder refuses to guess a voltage for `ANALOG_VDD` or a bare `VDD`,
+/// which is right: inventing one would over- or under-drive every part on the
+/// net. But the net then sits at 0 V, the operating point around it is fiction,
+/// and the stress monitor reports on that fiction with the same confidence it
+/// reports a real overload -- a named accusation against a specific part, from
+/// a run where the rails were dead. Naming the dead rails is what lets a reader
+/// tell that report from a true one.
+///
+/// Returns the net names, ordered, deduped.
+#[must_use]
+pub fn unpowered_supply_nets(
+    board: &ExtractedBoard,
+    bound: &BoundBoard,
+    also_powered: &[&str],
+) -> Vec<String> {
+    let mut powered: std::collections::BTreeSet<&str> = bound
+        .supplies
+        .iter()
+        .map(|leg| leg.net_name.as_str())
+        .collect();
+    powered.extend(also_powered.iter().copied());
+
+    // Distinct parts per net id, so a two-pin device straddling the net counts
+    // once and a bypass-capacitor farm counts as the many parts it is.
+    let mut parts_on: HashMap<i64, std::collections::BTreeSet<&str>> = HashMap::new();
+    for comp in &board.components {
+        for pin in &comp.pins {
+            if let Some(id) = pin.net {
+                parts_on
+                    .entry(id)
+                    .or_default()
+                    .insert(comp.reference.as_str());
+            }
+        }
+    }
+
+    let mut out: Vec<String> = board
+        .nets
+        .iter()
+        .filter(|net| !powered.contains(net.name.as_str()))
+        .filter(|net| names_a_supply_of_unknown_voltage(&net.name))
+        .filter(|net| {
+            parts_on
+                .get(&net.id)
+                .is_some_and(|p| p.len() >= DEAD_RAIL_MIN_PARTS)
+        })
+        .map(|net| net.name.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Extract a rail magnitude from a voltage token embedded MID-name, for
 /// suffixed rails like `VDD_1V8`, `AVCC_2V5`, `VCC_1V2` whose voltage is neither
 /// the canonical 5 V nor 3.3 V and whose name does not START with the digit (so

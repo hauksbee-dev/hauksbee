@@ -238,8 +238,23 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
              meaningless"
         );
     }
-    let lib = ModelLibrary::builtin();
+    // The live session's, `run`'s and hauksbee-ci's library (user dirs too): the bare
+    // builtin swapped a user card for a fallback and passed a part the app faulted.
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let bound = bind_board(&board, &lib);
+    // A supply-named rail nothing powers sits at 0 V, so "no faults" around it
+    // is not evidence: the same census hauksbee-ci banners, as an assumption.
+    let dead_rails = crate::binder::unpowered_supply_nets(&board, &bound, &[]).into_iter();
+    let dead_rails = dead_rails.map(|net| {
+        use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
+        Assumption::not_exercised(
+            AssumptionSource::Binder,
+            Subject::new(&net, &format!("supply rail {net}")),
+            Scope::Board,
+            "it names a supply but not a voltage, so nothing powered it and it sat at 0 V",
+            "name the net with its voltage (VDD_3V3) or give it a [[supply]] in a hauksbee-ci spec",
+        )
+    });
 
     let board_name = bound.name.clone();
     let component_count = board.components.len();
@@ -307,7 +322,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         faults,
         active_nets,
         unresolved,
-        assumptions: sched.stress.disclosures(),
+        assumptions: dead_rails.chain(sched.stress.disclosures()).collect(),
     })
 }
 
@@ -363,10 +378,13 @@ pub fn render_check_report(r: &CheckReport) -> String {
     }
     let _ = writeln!(s, "  simulated {:.3}s", r.simulated_seconds);
     if r.faults.is_empty() {
-        let _ = writeln!(s, "  no faults: circuit is within ratings.");
-        for a in &r.assumptions {
-            let _ = writeln!(s, "    qualified: {} {}", a.statement(), a.consequence());
-        }
+        // Only a clean run may claim "within ratings"; an undermined one found nothing.
+        let headline = match r.status() {
+            hauksbee_ir::evidence::EvidenceStatus::Clean => "circuit is within ratings.",
+            hauksbee_ir::evidence::EvidenceStatus::Qualified => "within ratings, qualified:",
+            hauksbee_ir::evidence::EvidenceStatus::Undermined => "none found, but NOT a pass:",
+        };
+        let _ = writeln!(s, "  no faults: {headline}");
     } else {
         let _ = writeln!(s, "  {} fault(s):", r.faults.len());
         let _ = writeln!(
@@ -396,6 +414,10 @@ pub fn render_check_report(r: &CheckReport) -> String {
             s,
             "└────────────────────────────┴──────────────┴────────────┴────────────┴───────┘"
         );
+    }
+    // The conditions a verdict rests on, faulted or not, as the live notes show them.
+    for a in &r.assumptions {
+        let _ = writeln!(s, "    qualified: {} {}", a.statement(), a.consequence());
     }
     s
 }

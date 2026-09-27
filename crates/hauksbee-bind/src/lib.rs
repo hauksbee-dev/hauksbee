@@ -50,7 +50,7 @@ pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use bind_report::{BindOutcome, BindReport, BindRow, BindSummary, UnresolvedActive};
 pub use binder::{
     bind_board, bind_board_with, is_ground, names_a_supply_of_unknown_voltage, power_rail_voltage,
-    BoundBoard,
+    unpowered_supply_nets, BoundBoard,
 };
 pub use board_input::{BoardInputError, InputKind, NormalizedBoard};
 pub use boardcode::{
