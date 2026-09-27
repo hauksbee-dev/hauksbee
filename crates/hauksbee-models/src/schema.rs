@@ -362,6 +362,10 @@ pub struct Characteristic {
     pub package: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mounting: Option<String>,
+    /// The `[models.pins]` roles whose current a path's rating row bounds (IN1
+    /// to OUT: `["in1"]`); none for the whole part, a printed total included.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<String>,
 }
 
 const COLUMNS: [&str; 3] = ["min", "typ", "max"];

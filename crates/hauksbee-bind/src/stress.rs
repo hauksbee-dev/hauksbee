@@ -49,11 +49,11 @@
 //!
 //! Non-destructive mode reports continuously and never mutates the circuit.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
-use hauksbee_models::derating::{Derating, TempRef};
+use hauksbee_models::derating::{Curve, Derating, TempRef};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 use hauksbee_solve::{mos_body_vth, mos_channel};
 
@@ -168,6 +168,45 @@ pub struct DeviceMeta {
 }
 
 impl DeviceMeta {
+    /// The devices carrying path `pins`' current, when the binder measured it.
+    fn carriers(&self, pins: &[String]) -> Option<&[DeviceId]> {
+        let path = self.derating.carriers.iter().find(|(p, _)| p == pins);
+        path.map(|(_, d)| d.as_slice()).filter(|d| !d.is_empty())
+    }
+
+    /// The paths `curve` rates this device cannot be judged on one by one:
+    /// every one, when any went unmeasured or none carries the device.
+    fn path_gap<'a>(&self, curve: &'a Curve) -> Vec<&'a [String]> {
+        let paths = curve.paths();
+        let on = |p: &&[String]| self.carriers(p).is_some_and(|d| d.contains(&self.device));
+        let measured = paths.iter().all(|p| self.carriers(p).is_some()) && paths.iter().any(on);
+        paths.into_iter().filter(|_| !measured).collect()
+    }
+
+    /// The `(value, limit)` `curve`, read at `at`, holds this device to: with
+    /// no path rows or a [`Self::path_gap`], `own` against the least favourable
+    /// row; else the worst of every unit's `amps` summed against the whole-part
+    /// rows (a printed total) and each path's carriers' against its rows.
+    fn binding(
+        &self,
+        curve: &Curve,
+        own: f64,
+        amps: &dyn Fn(&[DeviceId]) -> f64,
+        at: &dyn Fn(TempRef) -> f64,
+        tj_max_c: f64,
+    ) -> Bound {
+        let paths = curve.paths();
+        if paths.is_empty() || !self.path_gap(curve).is_empty() {
+            return curve.limit(at, tj_max_c).map(|l| (own, l));
+        }
+        let on = |p: &&[String]| self.carriers(p).is_some_and(|d| d.contains(&self.device));
+        let frac = |&(v, l): &(f64, f64)| v / l.max(f64::MIN_POSITIVE);
+        let rows = std::iter::once(&[][..]).chain(paths.into_iter().filter(on));
+        let limit = |p| curve.on(p).limit(at, tj_max_c);
+        let checks = rows.filter_map(|p| Some((amps(self.carriers(p)?), limit(p)?)));
+        checks.max_by(|a, b| frac(a).total_cmp(&frac(b)))
+    }
+
     /// Effective power rating (W): explicit `max_power_w`, else derived from the
     /// resistor footprint size. `None` if no power limit is known.
     #[must_use]
@@ -570,6 +609,35 @@ pub fn strip_unit_suffix(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+/// Each path `derating`'s rows rate on their own, with the devices carrying it.
+///
+/// Those are the `units` (part `reference`'s monitored devices) on a node of
+/// its roles, when every role has one in `roles` and no other device named for
+/// the part touches them, else none; the empty path lists every unit, for the
+/// whole-part rows (a printed total) to bind their sum.
+#[must_use]
+pub fn rated_paths(
+    circuit: &Circuit,
+    reference: &str,
+    derating: &Derating,
+    roles: &HashMap<String, NodeId, impl std::hash::BuildHasher>,
+    units: &[DeviceId],
+) -> Vec<(Vec<String>, Vec<DeviceId>)> {
+    let carriers = |pins: &[String]| {
+        let nodes: Option<Vec<NodeId>> = pins.iter().map(|p| roles.get(p).copied()).collect();
+        let on = |d: &Device| nodes.iter().flatten().any(|n| d.nodes().contains(n));
+        let (ours, stray): (Vec<_>, Vec<_>) = (circuit.iter())
+            .filter(|(id, d)| on(d) && (units.contains(id) || d.name().contains(reference)))
+            .partition(|(id, _)| units.contains(id));
+        let ours = ours.into_iter().map(|(id, _)| id);
+        ours.filter(|_| stray.is_empty()).collect()
+    };
+    let paths = (derating.current.paths().into_iter()).chain(derating.power.paths());
+    let paths: BTreeSet<_> = paths.map(|p| (p.to_vec(), carriers(p))).collect();
+    let whole = (!paths.is_empty()).then(|| (Vec::new(), units.to_vec()));
+    whole.into_iter().chain(paths).collect()
+}
+
 /// A supply-rail absolute-maximum watch for a part that is not an analog device
 /// in the solver (an MCU / logic IC): the part's supply NET is checked against
 /// the model's `max_voltage_v` each chunk.
@@ -704,6 +772,8 @@ struct RunStats {
     /// the continuous rating is judged on. Rises to a sustained level within a
     /// few time constants and barely moves for an excursion shorter than one.
     lagged_a: f64,
+    /// [`OperatingPoint::terminal_a`] through the same lag: a rated path's measure.
+    lagged_terminal_a: f64,
     /// Whether [`Self::lagged_a`] ever reached the continuous current rating,
     /// which is what separates a real overload from a pulse the card cannot
     /// judge.
@@ -923,6 +993,13 @@ impl StressMonitor {
                     &at,
                 ));
             }
+            let curves = [&m.derating.current, &m.derating.power];
+            let gap = curves.map(|c| m.path_gap(c)).concat();
+            if !gap.is_empty() && !m.derating.carriers.is_empty() && said.insert((r, "paths")) {
+                out.push(Assumption::partial_model_for_component(&format!("{r}-rating-paths"), r, "",
+                    &format!("{r}'s card rates current or power per path {gap:?}, but this model does not carry each through its pins, so {} is held to the least favourable row", m.reference),
+                    "bind every rated path's pins to a net the part's model stamps, then re-run"));
+            }
             let seen = s.peak_tj_c.unwrap_or(self.ambient_c).max(self.ambient_c);
             if m.ratings.max_junction_temp_c.is_none() && seen > hot && said.insert((r, "tj")) {
                 out.push(Assumption::partial_model_for_component(&format!("{r}-tj-max"), r, "",
@@ -1016,12 +1093,8 @@ impl StressMonitor {
     /// does not own it), so clearing `destroyed` here stays consistent with a
     /// pristine circuit only when that restore also happens.
     pub fn reset_tracks(&mut self) {
-        for track in &mut self.tracks {
-            *track = DeviceTrack::default();
-        }
-        for track in &mut self.watch_tracks {
-            *track = WatchTrack::default();
-        }
+        self.tracks.fill_with(DeviceTrack::default);
+        self.watch_tracks.fill_with(WatchTrack::default);
         self.stress_by_ref.clear();
         self.temp_by_ref.clear();
         self.clear_chunk_energy();
@@ -1065,19 +1138,11 @@ impl StressMonitor {
         circuit: &mut Circuit,
         faults: &mut Vec<FaultEvent>,
     ) -> bool {
-        if self.tracks[i]
-            .raised
-            .get(chk.kind.as_str())
-            .copied()
-            .unwrap_or(false)
-        {
+        if self.tracks[i].raised.insert(chk.kind.as_str(), true) == Some(true) {
             return false;
         }
-        self.tracks[i].raised.insert(chk.kind.as_str(), true);
         let destroyed = self.maybe_destroy(circuit, meta, chk.kind);
-        if destroyed {
-            self.tracks[i].destroyed = true;
-        }
+        self.tracks[i].destroyed |= destroyed;
         faults.push(FaultEvent {
             component: meta.reference.clone(),
             kind: chk.kind,
@@ -1101,10 +1166,8 @@ impl StressMonitor {
     /// a fabricated 0 W average for it instead of falling back to the
     /// endpoint operating point.
     pub fn deposit_chunk_energy(&mut self, energy_j: &[f64], elapsed_s: f64) {
-        if elapsed_s <= 0.0 || !elapsed_s.is_finite() {
-            return;
-        }
-        if energy_j.len() != self.chunk_energy_j.len() {
+        if elapsed_s <= 0.0 || !elapsed_s.is_finite() || energy_j.len() != self.chunk_energy_j.len()
+        {
             return;
         }
         for (slot, e) in self.chunk_energy_j.iter_mut().zip(energy_j) {
@@ -1134,9 +1197,7 @@ impl StressMonitor {
 
     /// Zero the pending chunk energy deposit.
     fn clear_chunk_energy(&mut self) {
-        for e in &mut self.chunk_energy_j {
-            *e = 0.0;
-        }
+        self.chunk_energy_j.fill(0.0);
         self.chunk_elapsed_s = 0.0;
     }
 
@@ -1210,6 +1271,7 @@ impl StressMonitor {
             let run = &mut self.run[i];
             run.peak_a = run.peak_a.max(op.current_a);
             run.lagged_a += (op.current_a - run.lagged_a) * alpha;
+            run.lagged_terminal_a += (op.terminal_a - run.lagged_terminal_a) * alpha;
             let conducting = op.current_a > limit.unwrap_or(0.0) * CONDUCTING_ID_FRACTION;
             if let Some(v) = op.vgs.filter(|_| conducting) {
                 run.worst_vgs = Some(run.worst_vgs.map_or(v, |w: f64| w.min(v)));
@@ -1226,18 +1288,11 @@ impl StressMonitor {
         // Without a deposit (direct unit-test drives), the endpoint operating
         // point is the fallback, exact for waveforms constant over the chunk.
         let thermal_elapsed = self.chunk_elapsed_s;
-        let unit_avg_w: Vec<f64> = self
-            .metas
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                if ops[i].is_none() {
-                    0.0 // destroyed: dissipates nothing
-                } else if thermal_elapsed > 0.0 {
-                    self.chunk_energy_j.get(i).copied().unwrap_or(0.0) / thermal_elapsed
-                } else {
-                    ops[i].as_ref().map_or(0.0, |op| op.power_w)
-                }
+        let unit_avg_w: Vec<f64> = (ops.iter().enumerate())
+            .map(|(i, op)| match op {
+                None => 0.0, // destroyed: dissipates nothing
+                Some(_) if thermal_elapsed > 0.0 => self.chunk_energy_j[i] / thermal_elapsed,
+                Some(op) => op.power_w,
             })
             .collect();
         let mut package_power: HashMap<String, f64> = HashMap::new();
@@ -1278,39 +1333,44 @@ impl StressMonitor {
             // time-weighted average the junction estimate uses (endpoint
             // fallback when no deposit exists). Endpoint power would make a
             // sub-chunk PWM part's Overpower verdict depend on pulse phase.
-            let peak_a = op.current_a;
-            let op = OperatingPoint {
-                current_a: self.run[i].lagged_a,
-                power_w: unit_avg_w[i],
-                ..*op
-            };
-            let op = &op;
+            let (peak_a, own) = (op.current_a, (self.run[i].lagged_a, unit_avg_w[i]));
             let (mut rated_w, theta_ja, tj_max) = self.limits[i];
             let package_w = package_power
                 .get(strip_unit_suffix(&meta.reference))
                 .copied()
                 .unwrap_or(0.0);
             // A card printing its current or power rating at several
-            // temperatures is judged on the row for where the part sits now.
-            let read = |theta, ta| derated(&self.metas[i], theta, ta, package_w, tj_max);
+            // temperatures is judged on the row for where the part sits now,
+            // and one rating paths on the current and power of each.
+            let sum = |ids: &[DeviceId]| {
+                let on = |j: &usize| ids.contains(&self.metas[*j].device) && ops[*j].is_some();
+                let units = (0..self.metas.len()).filter(on);
+                units.fold((0.0, 0.0), |(a, w), j| {
+                    (a + self.run[j].lagged_terminal_a, w + unit_avg_w[j])
+                })
+            };
+            let read = |theta, ta| derated(&self.metas[i], theta, ta, package_w, tj_max, own, &sum);
             let now = read(theta_ja, self.ambient_c);
-            meta.ratings.max_current_a = now.0.or(meta.ratings.max_current_a);
-            meta.ratings.max_power_w = now.1.or(meta.ratings.max_power_w);
-            rated_w = now.1.or(rated_w);
+            meta.ratings.max_current_a = now.0.map(|c| c.1).or(meta.ratings.max_current_a);
+            meta.ratings.max_power_w = now.1.map(|w| w.1).or(meta.ratings.max_power_w);
+            rated_w = now.1.map(|w| w.1).or(rated_w);
+            let op = &OperatingPoint {
+                current_a: now.0.map_or(own.0, |c| c.0),
+                power_w: now.1.map_or(own.1, |w| w.0),
+                ..*op
+            };
             // Whether the verdict would flip on limits read somewhere else: a
             // defaulted ambient's hot probe, or twice a guessed theta_JA.
-            let over =
-                |v: f64, l: Option<f64>| l.is_some_and(|l| v > l * (1.0 + OVER_LIMIT_NOISE_MARGIN));
-            let flips = |(a, w): (Option<f64>, Option<f64>)| {
-                (over(op.current_a, a) && !over(op.current_a, now.0))
-                    || (over(op.power_w, w) && !over(op.power_w, now.1))
+            let over = |c: Option<(f64, f64)>| {
+                c.is_some_and(|(v, l)| v > l * (1.0 + OVER_LIMIT_NOISE_MARGIN))
             };
+            let flips = |(a, w)| (over(a) && !over(now.0)) || (over(w) && !over(now.1));
             let hot = (meta.derating.hottest()).map(|h| h.max(HOT_PROBE_AMBIENT_C));
             let hot_flip = hot.is_some_and(|h| !self.ambient_given && flips(read(theta_ja, h)));
             let guessed = meta.ratings.theta_ja_c_per_w.is_none();
             let theta_flip = guessed && flips(read(2.0 * theta_ja, self.ambient_c));
             let run = &mut self.run[i];
-            run.lag_over_limit |= meta.ratings.max_current_a.is_some_and(|c| run.lagged_a > c);
+            run.lag_over_limit |= meta.ratings.max_current_a.is_some_and(|c| op.current_a > c);
             if let Some(c) = meta
                 .ratings
                 .max_current_a
@@ -1491,6 +1551,9 @@ struct OperatingPoint {
     voltage_v: f64,
     /// Power dissipation (W).
     power_w: f64,
+    /// A bound on the current through any one terminal (A): `current_a`, but
+    /// `|IC| + |IB|` on a BJT, whose emitter carries both.
+    terminal_a: f64,
 }
 
 impl OperatingPoint {
@@ -1501,6 +1564,7 @@ impl OperatingPoint {
             current_a,
             voltage_v,
             power_w,
+            terminal_a: current_a,
         }
     }
 }
@@ -1565,11 +1629,11 @@ fn operating_point(
             let ib = cf / model.bf + cr / model.br;
             let vce = node_v(*c) - node_v(*e);
             let i_worst = ic.abs().max(ib.abs()).min(1e3);
-            OperatingPoint::new(
-                i_worst,
-                vce,
-                (vce * ic).abs().min(1e6) + (sign * vbe * ib).abs().min(1e6),
-            )
+            let power = (vce * ic).abs().min(1e6) + (sign * vbe * ib).abs().min(1e6);
+            let terminal_a = (ic.abs() + ib.abs()).min(1e3);
+            let mut op = OperatingPoint::new(i_worst, vce, power);
+            op.terminal_a = terminal_a;
+            op
         }
         Some(Device::VSwitch {
             a,
@@ -1679,14 +1743,18 @@ fn operating_point(
 /// `ta_c` with the package dissipating `package_w`, falling to zero at
 /// `tj_max_c` past the hottest row: TA rows at the ambient, TC rows at the case
 /// (Tj less `P * theta_JC`, or Tj itself, an upper bound, when the card has no
-/// `theta_JC`), lead, board and TJ rows at Tj. `None` where no row is tagged.
+/// `theta_JC`), lead, board and TJ rows at Tj. Each is a `(value, limit)`
+/// ([`DeviceMeta::binding`]) of `own` `(A, W)` or, per path, `sum(devices)`;
+/// `None` where no row is tagged.
 fn derated(
     meta: &DeviceMeta,
     theta_ja: f64,
     ta_c: f64,
     package_w: f64,
     tj_max_c: f64,
-) -> (Option<f64>, Option<f64>) {
+    own: (f64, f64),
+    sum: &dyn Fn(&[DeviceId]) -> (f64, f64),
+) -> (Bound, Bound) {
     let tj = crate::thermal::junction_temp_c(ta_c, package_w, theta_ja);
     let jc = meta.ratings.theta_jc_c_per_w;
     let tc = jc.map_or(tj, |jc| package_w.max(0.0).mul_add(-jc, tj).max(ta_c));
@@ -1695,9 +1763,13 @@ fn derated(
         TempRef::Case => tc,
         TempRef::Lead | TempRef::Junction => tj,
     };
-    let d = &meta.derating;
-    (d.current.limit(at, tj_max_c), d.power.limit(at, tj_max_c))
+    let (d, amps, watts) = (&meta.derating, |d: &[_]| sum(d).0, |d: &[_]| sum(d).1);
+    let power = meta.binding(&d.power, own.1, &watts, &at, tj_max_c);
+    (meta.binding(&d.current, own.0, &amps, &at, tj_max_c), power)
 }
+
+/// The `(value, limit)` a current or power rating holds a device to.
+type Bound = Option<(f64, f64)>;
 
 /// One limit check: value vs limit, flagged surge or continuous.
 struct Check {
@@ -2138,6 +2210,65 @@ mod monitor_temp_tests {
             let meta = passive("R1", f);
             assert!(meta.power_coverage_gap().is_none(), "{f}");
             assert!(meta.power_rating_w().is_some(), "{f}");
+        }
+    }
+
+    /// A synthetic dual-input power path: IN1 to OUT rated 500 mA, IN2 to OUT
+    /// 140 mA, 550 mA in total, each path a 1 ohm unit into a grounded OUT.
+    /// Each path is judged on its own current and the total on their sum; a
+    /// path this model cannot measure (a pad left off the board, another device
+    /// of the part on its net) or a role the card's pins lack holds each unit to
+    /// the 140 mA least favourable row, and only the unmeasured path says so.
+    #[test]
+    fn a_rating_printed_per_path_judges_the_current_through_that_path() {
+        let row = |a: f64, pins: &str| {
+            format!("[[models.source.characteristic]]\nparameter = \"IOUT\"\nrating = \"max_current_a\"\nmax = {a}\nunit = \"A\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\npins = [{pins}]\n")
+        };
+        // (IN1 A, IN2 A, IN2's row roles, roles bound, a stray part device on IN1, fault, disclosed)
+        #[rustfmt::skip]
+        let cases = [
+            (0.4, 0.0, "\"in2\"", ["in1", "in2"], false, false, false),
+            (0.0, 0.2, "\"in2\"", ["in1", "in2"], false, true, false),
+            (0.4, 0.13, "\"in2\"", ["in1", "in2"], false, false, false),
+            (0.45, 0.13, "\"in2\"", ["in1", "in2"], false, true, false),
+            (0.4, 0.0, "\"in2\"", ["in1", "out"], false, true, true),
+            (0.4, 0.0, "\"in2\"", ["in1", "in2"], true, true, true),
+            (0.4, 0.0, "\"in3\"", ["in1", "in2"], false, true, false),
+        ];
+        for (i1, i2, in2, bound, stray, fault, disclosed) in cases {
+            let rows = [row(0.5, "\"in1\""), row(0.14, in2), row(0.55, "")].concat();
+            let text = format!("[[models]]\nid = \"mux\"\nkind = \"passive\"\n[models.pins]\n1 = \"in1\"\n2 = \"in2\"\n3 = \"out\"\n[models.ratings]\nmax_current_a = 0.14\n[models.source]\ntier = \"datasheet-derived\"\n{rows}");
+            let db: hauksbee_models::schema::DbFile = toml::from_str(&text).expect("a card");
+            let entry = &db.models[0];
+            let clean = hauksbee_models::derating::tag_problems(entry).is_empty();
+            assert_eq!(clean, in2 != "\"in3\"", "{in2}");
+            let mut circuit = Circuit::new();
+            let (n1, n2) = (circuit.node("IN1"), circuit.node("IN2"));
+            let unit = |n| Device::resistor("U1_e", n, NodeId::GROUND, 1.0);
+            let units = [circuit.add(unit(n1)), circuit.add(unit(n2))];
+            if stray {
+                circuit.add(Device::resistor("Rq_U1", n1, NodeId::GROUND, 1e6));
+            }
+            let nodes = [("in1", n1), ("in2", n2), ("out", NodeId::GROUND)];
+            let roles = nodes.into_iter().filter(|(r, _)| bound.contains(r));
+            let roles: HashMap<_, _> = roles.map(|(r, n)| (r.to_owned(), n)).collect();
+            let mut derating = Derating::of(entry);
+            derating.carriers = rated_paths(&circuit, "U1", &derating, &roles, &units);
+            let metas = units.map(|device| DeviceMeta {
+                device,
+                derating: derating.clone(),
+                ..meta("U1_e0", ComponentKind::Passive, "", entry.ratings.clone())
+            });
+            let mut monitor = StressMonitor::new(metas.to_vec());
+            let volts = HashMap::from([(n1, i1), (n2, i2)]);
+            let node_v = |n| volts.get(&n).copied().unwrap_or(0.0);
+            let mut chunk = |k| monitor.evaluate(&mut circuit, &node_v, &|_| None, f64::from(k));
+            let raised: Vec<_> = (0..6).flat_map(&mut chunk).map(|f| f.kind).collect();
+            let paths = |a: &Assumption| a.id().as_str().contains("U1-rating-paths");
+            let said = monitor.disclosures().iter().any(paths);
+            let case = format!("{i1} A, {i2} A, {in2}, {bound:?}, {stray}");
+            let raised = raised.contains(&FaultKind::Overcurrent);
+            assert_eq!((raised, said), (fault, disclosed), "{case}");
         }
     }
 

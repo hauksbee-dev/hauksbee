@@ -749,7 +749,7 @@ fn derated_run(
     let (mut circuit, device) = one_volt_across("Q1", ohms);
     let meta = DeviceMeta {
         derating: Derating {
-            current: Curve(vec![((at, None, None), rows.to_vec())]),
+            current: Curve(vec![((at, None, None, vec![]), rows.to_vec())]),
             ..Default::default()
         },
         reference: "Q1".into(),
@@ -841,7 +841,8 @@ fn case_rows_are_read_at_the_case_or_at_tj_without_theta_jc() {
 /// footprint that is neither the higher of the two, and a caveat says so.
 #[test]
 fn theta_ja_rows_are_read_for_the_fitted_package() {
-    let row = |p: &str, t| ((TempRef::Ambient, Some(p.into()), None), vec![(25.0, t)]);
+    let tags = |p: &str| (TempRef::Ambient, Some(p.into()), None, vec![]);
+    let row = |p: &str, t| (tags(p), vec![(25.0, t)]);
     let all = Derating {
         theta_ja: Curve(vec![row("SOT-23", 250.0), row("SOIC-8", 120.0)]),
         ..Default::default()

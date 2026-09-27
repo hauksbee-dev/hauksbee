@@ -1527,9 +1527,12 @@ is the top of the operating junction range. A stated limit with no key here goes
 in a characteristic record (rule 0), never under an invented key. A rating
 printed for several conditions (TA, TC or TJ, board copper or mounting, package)
 is one characteristic per printed row with `rating = "<key>"`, its temperature in
-`conditions` and any `package` or `mounting` as printed. The key holds the least
-favourable row (lowest current and power, highest thermal resistance, all three
-from one board); Hauksbee reads the row for the scenario's temperature:
+`conditions` and any `package` or `mounting` as printed. A current or power limit
+printed per path, channel or output is one row per path, `pins` naming its
+[models.pins] roles (IN1 to OUT: `pins = ["in1"]`), and a printed total a row
+without `pins`. The key holds the least favourable row (lowest current and
+power, highest thermal resistance, all three from one board); Hauksbee reads the
+row for the scenario's temperature:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -3584,7 +3587,8 @@ mod tests {
         assert!(bjt.contains("derives tf, cjc"));
         assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
         assert!(bjt.contains("one characteristic per printed row with `rating = \"<key>\"`"));
-        assert!(bjt.contains("The key holds the least\nfavourable row"));
+        assert!(bjt.contains("The key holds the least favourable row"));
+        assert!(bjt.contains("one row per path, `pins` naming its\n[models.pins] roles"));
         assert!(vreg.contains("at the rated output current when several loads are printed"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
         assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));

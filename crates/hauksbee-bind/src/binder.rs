@@ -626,7 +626,7 @@ pub fn bind_board_with(
     // reference for the parts we stamp) and the component's resolved ratings +
     // footprint, so the stress monitor can evaluate it. Supplies/regulators are
     // matched by their Vsource device id directly.
-    let device_meta = gather_device_meta(board, lib, &circuit, &mcus, &digital, &dacs);
+    let device_meta = gather_device_meta(board, lib, &circuit, &node_of, &mcus, &digital, &dacs);
 
     // Computed before the move: see `BoundBoard::latching_switches`.
     let latching_switches = component_kinds.values().any(|k| k == "timer");
@@ -812,6 +812,7 @@ fn gather_device_meta(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     circuit: &Circuit,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     mcus: &[McuBinding],
     digital: &[crate::digital::DigitalComponent],
     dacs: &[DacBinding],
@@ -822,6 +823,8 @@ fn gather_device_meta(
         ratings: hauksbee_models::schema::Ratings,
         derating: hauksbee_models::derating::Derating,
         footprint: String,
+        /// Role nodes, for a card rating current or power per path.
+        roles: HashMap<String, NodeId>,
     }
     let mut by_ref: HashMap<String, CompInfo> = HashMap::new();
     for comp in &board.components {
@@ -839,6 +842,7 @@ fn gather_device_meta(
             let derating = m
                 .derating
                 .fitted(&comp.reference, &comp.footprint, mounting);
+            let roles = role_node_map(comp, &m, node_of);
             by_ref.insert(
                 comp.reference.clone(),
                 CompInfo {
@@ -846,6 +850,7 @@ fn gather_device_meta(
                     ratings: m.ratings.clone(),
                     derating,
                     footprint: comp.footprint.clone(),
+                    roles,
                 },
             );
         }
@@ -922,6 +927,21 @@ fn gather_device_meta(
                     }
                 }
             }
+        }
+    }
+
+    // A card rating current or power per path: which of the part's devices
+    // carry each path, so the monitor judges the path on their current.
+    let part = |m: &DeviceMeta| crate::stress::strip_unit_suffix(&m.reference).to_owned();
+    for i in 0..metas.len() {
+        let (r, units) = (part(&metas[i]), metas.iter().map(|m| (part(m), m.device)));
+        let units: Vec<_> = units.filter(|u| u.0 == r).map(|u| u.1).collect();
+        let info = by_ref
+            .get(&r)
+            .filter(|c| c.kind != ComponentKind::AnalogSwitch);
+        if let Some(c) = info {
+            let paths = crate::stress::rated_paths(circuit, &r, &c.derating, &c.roles, &units);
+            metas[i].derating.carriers = paths;
         }
     }
 

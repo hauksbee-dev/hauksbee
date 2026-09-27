@@ -1440,7 +1440,7 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                 let (required, optional) = match (key.as_str(), status) {
                     ("characteristic", _) => (
                         "parameter unit conditions basis",
-                        "min typ max rating package mounting",
+                        "min typ max rating package mounting pins",
                     ),
                     ("pinout", _) => ("package pins", ""),
                     (_, Some("interval")) => ("status parameter low high unit kind basis", ""),

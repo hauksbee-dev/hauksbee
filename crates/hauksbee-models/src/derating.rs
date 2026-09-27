@@ -131,9 +131,11 @@ fn rank(key: &str, v: f64) -> f64 {
     }
 }
 
-/// One rating's rows printed at one `(reference, package, mounting)`: their
-/// `(°C, value)` points, sorted by temperature.
-pub type Group = ((TempRef, Option<String>, Option<String>), Vec<(f64, f64)>);
+/// One rating's rows printed at one `(reference, package, mounting, pins)`:
+/// their `(°C, value)` points, sorted by temperature. `pins` (sorted) names the
+/// path a row bounds; empty, the whole part.
+pub type Group = (Tags, Vec<(f64, f64)>);
+pub type Tags = (TempRef, Option<String>, Option<String>, Vec<String>);
 
 /// One rating's printed rows by [`Group`]. Empty when no row is tagged.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -141,8 +143,8 @@ pub struct Curve(pub Vec<Group>);
 
 /// `key`'s rows tagged `rating = key` as a curve, with every reason they cannot
 /// be trusted as one: a row with no readable temperature or value, a pulsed
-/// row, a group that rises with temperature. A thermal resistance needs no
-/// temperature.
+/// row, a group that rises with temperature, a path naming a role the card's
+/// pins do not. A thermal resistance needs no temperature.
 fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
     let (mut problems, mut groups) = (Vec::new(), BTreeMap::<_, Vec<(f64, f64)>>::new());
     let rows = entry.source.iter().flat_map(|s| &s.characteristic);
@@ -166,9 +168,15 @@ fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
                 "{what}: a pulsed or time-limited row is no continuous rating; leave it untagged"
             ));
         }
+        let known = |p: &&String| entry.pins.values().any(|r| r == *p);
+        let unknown: Vec<_> = row.pins.iter().filter(|p| !known(p)).collect();
+        if !unknown.is_empty() {
+            problems.push(format!("{what}: {unknown:?} are no [models.pins] roles"));
+        }
         if let (Some((at, lo, hi)), Some(v)) = (span, value) {
             let tag = |t: &Option<String>| t.clone().filter(|t| !t.trim().is_empty());
-            let points = groups.entry((at, tag(&row.package), tag(&row.mounting)));
+            let pins = row.pins.clone();
+            let points = groups.entry((at, tag(&row.package), tag(&row.mounting), pins));
             points.or_default().extend([(lo, v), (hi, v)]);
         }
     }
@@ -226,6 +234,20 @@ impl Curve {
         reads.reduce(f64::min)
     }
 
+    /// The rows for path `pins` alone; `&[]`, the whole-part rows.
+    #[must_use]
+    pub fn on(&self, pins: &[String]) -> Self {
+        let rows = self.0.iter().filter(|((.., p), _)| p == pins);
+        Self(rows.cloned().collect())
+    }
+
+    /// The paths (`pins`) the rows rate on their own.
+    #[must_use]
+    pub fn paths(&self) -> BTreeSet<&[String]> {
+        let pins = self.0.iter().map(|((.., p), _)| p.as_slice());
+        pins.filter(|p| !p.is_empty()).collect()
+    }
+
     /// The hottest temperature (°C) any row is printed at.
     #[must_use]
     pub fn hottest(&self) -> Option<f64> {
@@ -244,6 +266,10 @@ pub struct Derating {
     pub theta_ja: Curve,
     /// What reading one fitted part's rows rests on ([`Self::fitted`]).
     pub caveats: Vec<Assumption>,
+    /// The part's monitored devices carrying each path's current, which the
+    /// binder fills (`hauksbee-bind`'s `rated_paths`); the empty path lists
+    /// them all, for the whole-part rows (a printed total) to bind their sum.
+    pub carriers: Vec<(Vec<String>, Vec<hauksbee_ir::DeviceId>)>,
 }
 
 impl Derating {
@@ -253,7 +279,7 @@ impl Derating {
             current: curve(entry, "max_current_a"),
             power: curve(entry, "max_power_w"),
             theta_ja: curve(entry, "theta_ja_c_per_w"),
-            caveats: Vec::new(),
+            ..Self::default()
         }
     }
 
@@ -274,7 +300,7 @@ impl Derating {
         let (r, mut caveats, mut out) = (reference, Vec::new(), self.clone());
         let mut unfitted = BTreeSet::new();
         // Each rating by its own rows: one naming only other packages keeps them all.
-        let package = |((_, p, _), _): &Group| p.clone();
+        let package = |((_, p, ..), _): &Group| p.clone();
         for c in [&mut out.current, &mut out.power, &mut out.theta_ja] {
             if c.0.iter().filter_map(package).any(|p| rates(&p)) {
                 c.0.retain(|g| package(g).is_none_or(|p| rates(&p)));
@@ -299,8 +325,9 @@ impl Derating {
                 &format!("the least favourable of {mountings:?}"))),
             _ => {}
         }
+        let kept = |m: Option<&str>| chosen.zip(m).is_none_or(|(c, m)| same(c, m));
         for c in [&mut out.current, &mut out.power, &mut out.theta_ja] {
-            c.0.retain(|((.., m), _)| chosen.zip(m.as_deref()).is_none_or(|(c, m)| same(c, m)));
+            c.0.retain(|g| kept(g.0 .2.as_deref()));
         }
         out.caveats = caveats;
         out
@@ -467,8 +494,8 @@ mod tests {
     type Fit<'a> = (Rows<'a>, Rows<'a>, (&'a str, Option<&'a str>), [Option<f64>; 2], &'a str);
     fn curve(rows: Rows) -> Curve {
         let row = |&(p, m, v): &(Option<&str>, Option<&str>, f64)| {
-            let tags = (TempRef::Ambient, p.map(Into::into), m.map(Into::into));
-            (tags, vec![(25.0, v)])
+            let tag = |t: Option<&str>| t.map(Into::into);
+            ((TempRef::Ambient, tag(p), tag(m), vec![]), vec![(25.0, v)])
         };
         Curve(rows.iter().map(row).collect())
     }
