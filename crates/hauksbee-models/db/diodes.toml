@@ -34,10 +34,52 @@ ibv = 1.0e-4    # the V(BR) test current, IR = 100 uA
 "K" = "cathode"
 
 [models.ratings]
-max_current_a = 0.3        # IF repetitive peak (Vishay Rev 14)
+max_current_a = 0.3        # IF forward continuous current at Tamb = 25 C (81857 Rev. 1.6; IFRM is 500 mA)
 max_surge_current_a = 2.0  # IFSM 1us
-max_power_w = 0.5
+max_power_w = 0.44         # Ptot at l = 4 mm, TL = 45 C, the least favourable tagged row (500 mW at TL <= 25 C)
 max_voltage_v = 100.0      # VRRM
+theta_ja_c_per_w = 350.0   # RthJA at l = 4 mm, TL = constant (81857 Rev. 1.6, Thermal Characteristics)
+max_junction_temp_c = 175.0 # Tj (81857 Rev. 1.6, Thermal Characteristics)
+
+# Printed rating rows (Vishay 81857 Rev. 1.6, fetched 2026-09-28). IF(AV) 150 mA
+# (VR = 0) is kept as data: the card rates DC current by IF.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward continuous current"
+rating = "max_current_a"
+max = 0.3
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot power dissipation"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "l = 4 mm, TL = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, Ptot @ l = 4 mm, TL ≤ 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot power dissipation"
+rating = "max_power_w"
+max = 0.44
+unit = "W"
+conditions = "l = 4 mm, TL = 45 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, Ptot @ l = 4 mm, TL = 45 °C"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward current"
+max = 0.15
+unit = "A"
+conditions = "VR = 0, Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, IF(AV) @ VR = 0"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient air"
+rating = "theta_ja_c_per_w"
+max = 350.0
+unit = "K/W"
+conditions = "l = 4 mm, TL = constant"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Thermal Characteristics, RthJA @ l = 4 mm, TL = constant"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -82,6 +124,36 @@ bv  = 50.0     # 1N4001 VRRM; no V(BR) row printed; VRRM is a guaranteed lower b
 [models.ratings]
 max_current_a = 1.0        # IF(AV)
 max_surge_current_a = 30.0 # IFSM 8.3ms half-sine
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -117,6 +189,36 @@ bv  = 100.0   # 1N4002 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bo
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 100.0      # VRRM 1N4002
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -152,6 +254,36 @@ bv  = 200.0   # 1N4003 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bo
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 200.0      # VRRM 1N4003
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -187,6 +319,36 @@ bv  = 400.0   # 1N4004 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bo
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 400.0      # VRRM 1N4004
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -222,6 +384,36 @@ bv  = 600.0   # 1N4005 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bo
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 600.0      # VRRM 1N4005
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -257,6 +449,36 @@ bv  = 800.0   # 1N4006 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bo
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 800.0      # VRRM 1N4006
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -292,6 +514,36 @@ bv  = 1000.0  # 1N4007 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bo
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 1000.0     # VRRM 1N4007
+theta_ja_c_per_w = 50.0    # RθJA typ, 9.5 mm leads, PCB mounted (88503, Thermal Characteristics)
+max_junction_temp_c = 150.0 # TJ operating range -50 to +150 C (88503, Maximum Ratings)
+
+# Printed rating rows (Vishay 88503 Revision 29-Apr-2020, fetched 2026-09-28).
+# RthJL 25 C/W typ is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 25.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted"
+mounting = "PCB mounted, 9.5 mm leads"
+basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -343,6 +595,34 @@ max_power_w = 0.2               # Ptot at Tamb = 65 C
 max_voltage_v = 30.0            # VRRM
 max_junction_temp_c = 125.0     # Tj
 theta_ja_c_per_w = 300.0        # RthJA, junction to ambient air
+
+# Printed rating rows (Vishay 85660 Rev. 2.2, fetched 2026-09-28), all under
+# Note 1: leads 4 mm from the case kept at ambient. DO-35 rows; the SOD-123
+# (BAT43W-V) and MiniMELF (LL43) variants this card also matches are not on this sheet.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward continuous current"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "Tamb = 25 °C, leads 4 mm from case kept at ambient temperature (Note 1)"
+basis = "Vishay BAT42/BAT43 doc. 85660 Rev. 2.2 (12-May-2025), Absolute Maximum Ratings, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot power dissipation"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "Tamb = 65 °C, leads 4 mm from case kept at ambient temperature (Note 1)"
+basis = "Vishay BAT42/BAT43 doc. 85660 Rev. 2.2 (12-May-2025), Absolute Maximum Ratings, Ptot @ Tamb = 65 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient air"
+rating = "theta_ja_c_per_w"
+max = 300.0
+unit = "K/W"
+conditions = "leads 4 mm from case kept at ambient temperature (Note 1)"
+basis = "Vishay BAT42/BAT43 doc. 85660 Rev. 2.2 (12-May-2025), Thermal Characteristics, RthJA"
 
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -399,6 +679,35 @@ max_power_w = 0.25              # Ptot at Tamb <= 25 C, Table 5
 max_voltage_v = 30.0            # VR, Table 5
 max_junction_temp_c = 150.0     # Tj, Table 5
 theta_ja_c_per_w = 500.0        # Rth(j-a) in free air, Table 6
+
+# Printed rating rows (Nexperia BAT54 v.6, 1 July 2022, fetched 2026-09-28): SOT23
+# only; the SOT323/SC-70 footprints this card also matches are not on this sheet.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1]"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 6 Thermal characteristics, Rth(j-a) max, note [2]"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The same BAT54 die in a TWO-PIN body (SOD-523/SOD-323/SOD-123/SOD-323F). This
@@ -460,6 +769,35 @@ max_power_w = 0.2               # onsemi PD, 2-pin SOD-523
 max_voltage_v = 30.0
 max_junction_temp_c = 125.0     # onsemi Tj max, lower than Nexperia's 150 C
 theta_ja_c_per_w = 635.0        # onsemi RthJA, FR-4 minimum pad
+
+# Printed rating rows (onsemi BAT54XV2T1/D Rev. 13, December 2022, SOD-523, fetched
+# 2026-09-28 from onsemi's own mirror https://www.onsemi.cn/download/data-sheet/pdf/bat54xv2t1-d.pdf;
+# www.onsemi.com refuses automated fetches). PD derates 2.0 mW/C above 25 C (not
+# tagged as a derived row). IF (DC) 200 mA is kept as data: its row prints no temperature.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "TA = 25 °C, FR-5 board (Note 1: FR-4 minimum pad)"
+mounting = "FR-4 minimum pad"
+basis = "onsemi BAT54XV2 BAT54XV2T1/D Rev. 13 (December 2022), Thermal Characteristics, PD @ TA = 25 °C, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 635.0
+unit = "°C/W"
+conditions = "junction to ambient"
+basis = "onsemi BAT54XV2 BAT54XV2T1/D Rev. 13 (December 2022), Thermal Characteristics, RθJA max"
+[[models.source.characteristic]]
+parameter = "IF forward current (DC)"
+max = 0.2
+unit = "A"
+conditions = "DC; no temperature printed"
+basis = "onsemi BAT54XV2 BAT54XV2T1/D Rev. 13 (December 2022), Thermal Characteristics, IF (DC) 200 max"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # USBLC6-2P6: STMicroelectronics very-low-capacitance ESD protection array.
@@ -829,6 +1167,26 @@ max_voltage_v = 3.3      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4729a"
 kind = "diode"
@@ -855,6 +1213,26 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 3.6      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
 
 [[models]]
 id = "1n4730a"
@@ -883,6 +1261,26 @@ max_voltage_v = 3.9      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4732a"
 kind = "diode"
@@ -909,6 +1307,26 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 4.7      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
 
 [[models]]
 id = "1n4733a"
@@ -937,6 +1355,26 @@ max_voltage_v = 5.1      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4734a"
 kind = "diode"
@@ -963,6 +1401,26 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 5.6      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
 
 [[models]]
 id = "1n4735a"
@@ -991,6 +1449,26 @@ max_voltage_v = 6.2      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4736a"
 kind = "diode"
@@ -1017,6 +1495,26 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 6.8      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
 
 [[models]]
 id = "1n4737a"
@@ -1045,6 +1543,26 @@ max_voltage_v = 7.5      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4738a"
 kind = "diode"
@@ -1071,6 +1589,26 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 8.2      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
 
 [[models]]
 id = "1n4739a"
@@ -1099,6 +1637,26 @@ max_voltage_v = 9.1      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4740a"
 kind = "diode"
@@ -1126,6 +1684,26 @@ max_voltage_v = 10.0      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
+
 [[models]]
 id = "1n4759a"
 kind = "diode"
@@ -1152,6 +1730,26 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 62.0      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# Printed rating rows (Multicomp V1.1, https://www.farnell.com/datasheets/1333193.pdf,
+# fetched 2026-09-28). Pv is printed at Tamb ≤ 50 °C and tagged at that point.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "Pv power dissipation"
+rating = "max_power_w"
+max = 1.0
+unit = "W"
+conditions = "Tamb = 50 °C"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Absolute Maximum Ratings, Pv @ Tamb ≤ 50 °C"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 100.0
+unit = "K/W"
+conditions = "l = 9.5 mm (3/8 in), TL = constant"
+basis = "Multicomp 1N4728A-1N4764A datasheet V1.1 (06/04/11), Maximum Thermal Resistance, RthJA @ l = 9.5 mm, TL = constant"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1N581x Schottky barrier rectifiers, 1 A, DO-41.
@@ -1216,6 +1814,34 @@ theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
 # No theta_jc_c_per_w: the sheet prints no junction-to-case figure. Its 15 C/W
 # is RthJL, junction to lead (88525 rev. 01-Jul-2020, Thermal Characteristics, p.2).
 
+# Printed rating rows (Vishay 88525 Revision 01-Jul-2020, fetched 2026-09-28).
+# RthJL 15 C/W is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL = 90 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TL = 90 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 9.5 mm (0.375 in) lead length, 1.5 x 1.5 in (38 x 38 mm) copper pads"
+mounting = "vertical PCB, 9.5 mm leads, 38 x 38 mm Cu pads"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 15.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 9.5 mm (0.375 in) lead length, 1.5 x 1.5 in (38 x 38 mm) copper pads"
+mounting = "vertical PCB, 9.5 mm leads, 38 x 38 mm Cu pads"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Thermal Characteristics, RθJL typ, Note 1"
+
 [[models]]
 id = "1n5818"
 kind = "diode"
@@ -1246,6 +1872,34 @@ theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
 # No theta_jc_c_per_w: the sheet prints no junction-to-case figure. Its 15 C/W
 # is RthJL, junction to lead (88525 rev. 01-Jul-2020, Thermal Characteristics, p.2).
 
+# Printed rating rows (Vishay 88525 Revision 01-Jul-2020, fetched 2026-09-28).
+# RthJL 15 C/W is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL = 90 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TL = 90 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 9.5 mm (0.375 in) lead length, 1.5 x 1.5 in (38 x 38 mm) copper pads"
+mounting = "vertical PCB, 9.5 mm leads, 38 x 38 mm Cu pads"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 15.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 9.5 mm (0.375 in) lead length, 1.5 x 1.5 in (38 x 38 mm) copper pads"
+mounting = "vertical PCB, 9.5 mm leads, 38 x 38 mm Cu pads"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Thermal Characteristics, RθJL typ, Note 1"
+
 [[models]]
 id = "1n5819"
 kind = "diode"
@@ -1275,6 +1929,34 @@ max_junction_temp_c = 125.0     # TJ maximum
 theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
 # No theta_jc_c_per_w: the sheet prints no junction-to-case figure. Its 15 C/W
 # is RthJL, junction to lead (88525 rev. 01-Jul-2020, Thermal Characteristics, p.2).
+
+# Printed rating rows (Vishay 88525 Revision 01-Jul-2020, fetched 2026-09-28).
+# RthJL 15 C/W is kept as data (junction to lead, no card key).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL = 90 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TL = 90 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 9.5 mm (0.375 in) lead length, 1.5 x 1.5 in (38 x 38 mm) copper pads"
+mounting = "vertical PCB, 9.5 mm leads, 38 x 38 mm Cu pads"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 15.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 9.5 mm (0.375 in) lead length, 1.5 x 1.5 in (38 x 38 mm) copper pads"
+mounting = "vertical PCB, 9.5 mm leads, 38 x 38 mm Cu pads"
+basis = "Vishay 1N5817/1N5818/1N5819 doc. 88525 Revision 01-Jul-2020, Thermal Characteristics, RθJL typ, Note 1"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1N5822 / SS34 class: 3 A, 40 V Schottky rectifier.
@@ -1383,6 +2065,34 @@ theta_ja_c_per_w = 40.0        # RthJA typ, vertical PCB, 2.5in x 2.5in copper
 # No theta_jc_c_per_w: the sheet prints no junction-to-case figure. Its 10 C/W
 # is RthJL, junction to lead (Vishay 88526, Thermal Characteristics).
 
+# Printed rating rows (Vishay 88526 Rev. 05-Apr-2019, DO-201AD, fetched 2026-09-28);
+# see the package caveat above. RthJL 10 C/W is kept as data.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 3.0
+unit = "A"
+conditions = "TL = 95 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IF(AV) @ 0.375 in (9.5 mm) lead length, TL = 95 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 40.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 12.7 mm (0.500 in) lead length, 2.5 x 2.5 in (63.5 x 63.5 mm) copper pad"
+mounting = "vertical PCB, 12.7 mm leads, 63.5 x 63.5 mm Cu pad"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Thermal Characteristics, RθJA typ, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJL thermal resistance junction to lead"
+typ = 10.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 12.7 mm (0.500 in) lead length, 2.5 x 2.5 in (63.5 x 63.5 mm) copper pad"
+mounting = "vertical PCB, 12.7 mm leads, 63.5 x 63.5 mm Cu pad"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Thermal Characteristics, RθJL typ, Note 1"
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 1N5819HW: the SOD-123 surface-mount 40 V / 1 A Schottky.
 #
@@ -1479,6 +2189,34 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 225.0       # SOD-123. This is the number that makes the part
                                # different from its axial namesake; see above.
 
+# Printed rating rows (Diodes DS30217 Rev. 22-2, fetched 2026-09-28). PD 550 mW is
+# kept as data: its Thermal Characteristics table prints no temperature for it.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "Diodes Inc. 1N5819HW DS30217 Rev. 22-2 (April 2026), Maximum Ratings, IO @ TA = +25 °C"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 225.0
+unit = "°C/W"
+conditions = "device mounted on 1 inch sq. copper pad, 2 oz (Note 5)"
+mounting = "1 in² 2 oz Cu pad"
+basis = "Diodes Inc. 1N5819HW DS30217 Rev. 22-2 (April 2026), Thermal Characteristics, RθJA typ, Note 5"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+max = 0.55
+unit = "W"
+conditions = "device mounted on 1 inch sq. copper pad, 2 oz (Note 5); no temperature printed"
+mounting = "1 in² 2 oz Cu pad"
+basis = "Diodes Inc. 1N5819HW DS30217 Rev. 22-2 (April 2026), Thermal Characteristics, PD, Note 5"
+
 # ═════════════════════════════════════════════════════════════════════════════
 # BAV70: Nexperia dual common-cathode small-signal switching diode, SOT23.
 # 28 instances on the Lily58 keyboards, where it is the matrix isolation diode.
@@ -1567,3 +2305,39 @@ max_power_w = 0.25             # Ptot
 max_voltage_v = 100.0          # VR = VRRM
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 500.0       # Rth(j-a) max, free air, FR4 standard footprint
+
+# Printed rating rows (Nexperia BAV70 v.9, 1 July 2022, SOT23, fetched 2026-09-28).
+# IF and Ptot are per diode; the per-device IF (125 mA) is kept as data because the
+# card's pin roles cannot name one diode's path (both anodes are role `anode`).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current, per diode"
+rating = "max_current_a"
+max = 0.215
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAV70 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per diode, IF @ Tamb ≤ 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per diode"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAV70 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per diode, Ptot @ Tamb ≤ 25 °C, note [2]"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAV70 product data sheet v.9 (1 July 2022), Table 6 Thermal characteristics, Rth(j-a) max, note [1]"
+[[models.source.characteristic]]
+parameter = "IF forward current, per device"
+max = 0.125
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAV70 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per device, IF @ Tamb ≤ 25 °C"
