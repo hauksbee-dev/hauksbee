@@ -55,6 +55,37 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The board whose power FET Q1 has no model: every model-dependent surface
+/// must refuse its clean bill.
+fn unbound() -> PathBuf {
+    fixture("verdict_fet_unbound.kicad_pcb")
+}
+
+/// [`unbound`]'s twin with Q1 bound, so the normal verdicts return.
+fn bound() -> PathBuf {
+    fixture("verdict_fet_bound.kicad_pcb")
+}
+
+/// Real thermal rows beside an open active IC (U3): partial thermal coverage.
+fn thermal_partial() -> PathBuf {
+    fixture("thermal_partial_coverage.kicad_pcb")
+}
+
+/// The `--thermal --json` invocation under the `--no-strict-thermal` opt-out.
+const THERMAL_JSON_OPT_OUT: &[&str] = &[
+    "--thermal",
+    "--seconds",
+    "0.05",
+    "--json",
+    "--no-strict-thermal",
+];
+
+/// The headless co-sim `--json` invocation every co-sim artifact test runs.
+const HEADLESS_JSON: &[&str] = &["--headless", "--seconds", "0.05", "--json"];
+
+/// [`HEADLESS_JSON`] without the machine document.
+const HEADLESS: &[&str] = &["--headless", "--seconds", "0.05"];
+
 /// The example board with dissipating parts and NO active ICs at all:
 /// thermal coverage is vacuously complete, so its exit codes must be
 /// unchanged by the strict-thermal default flip.
@@ -106,11 +137,85 @@ fn run_in_actions(args: &[&str]) -> Output {
         .expect("hauksbee binary runs")
 }
 
+/// [`run_in_actions`] against a board, prefixed like [`run_board`].
+fn run_board_in_actions(board: &Path, args: &[&str]) -> Output {
+    run_in_actions(&[&["run", board.to_str().unwrap()], args].concat())
+}
+
+/// The one JSON document a machine surface printed on stdout.
+fn json_doc(out: &Output) -> serde_json::Value {
+    let doc = stdout(out);
+    serde_json::from_str(&doc).unwrap_or_else(|e| panic!("one JSON document ({e}):\n{doc}"))
+}
+
+/// Every note message in a machine document.
+fn note_messages(v: &serde_json::Value) -> Vec<&str> {
+    v["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|n| n["message"].as_str())
+        .collect()
+}
+
+/// The result objects of a SARIF document's only run.
+fn sarif_results(doc: &serde_json::Value) -> &Vec<serde_json::Value> {
+    doc["runs"][0]["results"].as_array().expect("results array")
+}
+
+/// One scratch directory holding a run's requested `JUnit` and SARIF paths.
+struct Artifacts {
+    dir: tempfile::TempDir,
+    junit: PathBuf,
+    sarif: PathBuf,
+}
+
+impl Artifacts {
+    /// `<stem>.xml` and `<stem>.sarif` in a fresh temporary directory.
+    fn new(stem: &str) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let junit = dir.path().join(format!("{stem}.xml"));
+        let sarif = dir.path().join(format!("{stem}.sarif"));
+        Self { dir, junit, sarif }
+    }
+
+    fn junit_path(&self) -> &str {
+        self.junit.to_str().unwrap()
+    }
+
+    fn sarif_path(&self) -> &str {
+        self.sarif.to_str().unwrap()
+    }
+
+    /// `args` then `--junit <junit>`.
+    fn with_junit<'a>(&'a self, args: &[&'a str]) -> Vec<&'a str> {
+        [args, &["--junit", self.junit_path()]].concat()
+    }
+
+    /// `args` then `--junit <junit> --sarif <sarif>`.
+    fn with_both<'a>(&'a self, args: &[&'a str]) -> Vec<&'a str> {
+        [self.with_junit(args), vec!["--sarif", self.sarif_path()]].concat()
+    }
+
+    /// Both artifact flags, then a flag `run` does not know, so clap refuses.
+    fn before_usage_error(&self) -> Vec<&str> {
+        [self.with_both(&[]), vec!["--not-a-real-run-flag"]].concat()
+    }
+
+    fn xml(&self) -> String {
+        std::fs::read_to_string(&self.junit).expect("junit written")
+    }
+
+    fn sarif_doc(&self) -> serde_json::Value {
+        read_json(&self.sarif)
+    }
+}
+
 // ── 1. Strict thermal is the default ────────────────────────────────────────
 
 #[test]
 fn thermal_partial_coverage_escalates_by_default() {
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let b = thermal_partial();
     let out = run_board(&b, &["--thermal", "--seconds", "0.05"]);
     assert_eq!(
         out.status.code(),
@@ -131,7 +236,7 @@ fn thermal_partial_coverage_escalates_by_default() {
 
 #[test]
 fn no_strict_thermal_opts_out_of_the_exit_but_never_of_the_caveat() {
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let b = thermal_partial();
     let out = run_board(
         &b,
         &["--thermal", "--seconds", "0.05", "--no-strict-thermal"],
@@ -159,7 +264,7 @@ fn no_strict_thermal_opts_out_of_the_exit_but_never_of_the_caveat() {
 fn strict_thermal_flag_is_still_accepted_quietly() {
     // Existing CI invocations pass --strict-thermal; it now names the default,
     // so it must keep working (same exit 3) without a usage error.
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let b = thermal_partial();
     let out = run_board(&b, &["--thermal", "--seconds", "0.05", "--strict-thermal"]);
     assert_eq!(
         out.status.code(),
@@ -176,7 +281,7 @@ fn strict_thermal_flag_is_still_accepted_quietly() {
 
 #[test]
 fn strict_and_no_strict_thermal_together_is_a_usage_error() {
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let b = thermal_partial();
     let out = run_board(
         &b,
         &["--thermal", "--strict-thermal", "--no-strict-thermal"],
@@ -191,27 +296,18 @@ fn strict_and_no_strict_thermal_together_is_a_usage_error() {
 
 #[test]
 fn thermal_partial_json_is_refused_by_default_and_valid_under_opt_out() {
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let b = thermal_partial();
     // Default: the JSON document carries the structured refusal and exits 3.
     let out = run_board(&b, &["--thermal", "--seconds", "0.05", "--json"]);
     assert_eq!(out.status.code(), Some(3));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     // Validity is #[serde(flatten)]ed into the thermal object.
     assert_eq!(v["thermal"]["valid"], false);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     // Opt-out: valid data, coverage still says partial, note still present.
-    let out = run_board(
-        &b,
-        &[
-            "--thermal",
-            "--seconds",
-            "0.05",
-            "--json",
-            "--no-strict-thermal",
-        ],
-    );
+    let out = run_board(&b, THERMAL_JSON_OPT_OUT);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["thermal"]["valid"], true);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     let notes = v["notes"].as_array().expect("coverage note rides notes");
@@ -251,7 +347,7 @@ fn fully_covered_board_is_unchanged_on_both_sides_of_the_flag() {
 
 #[test]
 fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let b = unbound();
     let out = run_board(&b, &["--lint", "--plain"]);
     assert_eq!(
         out.status.code(),
@@ -293,10 +389,7 @@ fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
 
 #[test]
 fn lint_with_the_fet_bound_gives_the_normal_verdict() {
-    let out = run_board(
-        &fixture("verdict_fet_bound.kicad_pcb"),
-        &["--lint", "--plain"],
-    );
+    let out = run_board(&bound(), &["--lint", "--plain"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
@@ -314,7 +407,7 @@ fn the_inconclusive_sentence_is_identical_across_lint_surfaces() {
     // One dialect: the sentence in the --plain verdict, the default text
     // summary, and the JSON coverage note must be byte-identical, or the
     // vocabulary has forked per surface.
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let b = unbound();
     let extract = |text: &str| -> String {
         text.lines()
             .find(|l| l.starts_with("INCONCLUSIVE:"))
@@ -328,13 +421,9 @@ fn the_inconclusive_sentence_is_identical_across_lint_surfaces() {
         "--plain",
     ])));
     let text = extract(&stdout(&run(&["run", b.to_str().unwrap(), "--lint"])));
-    let json_out = stdout(&run(&["run", b.to_str().unwrap(), "--lint", "--json"]));
-    let v: serde_json::Value = serde_json::from_str(&json_out).expect("one JSON document");
-    let note = v["notes"]
-        .as_array()
-        .expect("notes")
-        .iter()
-        .filter_map(|n| n["message"].as_str())
+    let v = json_doc(&run(&["run", b.to_str().unwrap(), "--lint", "--json"]));
+    let note = note_messages(&v)
+        .into_iter()
         .find(|m| m.starts_with("INCONCLUSIVE:"))
         .expect("an INCONCLUSIVE coverage note")
         .to_string();
@@ -344,10 +433,7 @@ fn the_inconclusive_sentence_is_identical_across_lint_surfaces() {
 
 #[test]
 fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
-    let out = run_board(
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        &["--check", "--plain"],
-    );
+    let out = run_board(&unbound(), &["--check", "--plain"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     // Both model-dependent sections carry the sentence.
@@ -367,25 +453,13 @@ fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
 
 #[test]
 fn thermal_json_note_leads_with_the_shared_inconclusive_tag() {
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run_board(
-        &b,
-        &[
-            "--thermal",
-            "--seconds",
-            "0.05",
-            "--json",
-            "--no-strict-thermal",
-        ],
-    );
+    let b = thermal_partial();
+    let out = run_board(&b, THERMAL_JSON_OPT_OUT);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert!(
-        v["notes"]
-            .as_array()
-            .expect("notes")
+        note_messages(&v)
             .iter()
-            .filter_map(|n| n["message"].as_str())
             .any(|m| m.starts_with("INCONCLUSIVE:") && m.contains("PARTIAL")),
         "the thermal JSON note speaks the same INCONCLUSIVE dialect as the text caveat:\n{v}"
     );
@@ -393,7 +467,7 @@ fn thermal_json_note_leads_with_the_shared_inconclusive_tag() {
 
 #[test]
 fn si_json_carries_the_inconclusive_note_and_exit_zero() {
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let b = unbound();
     let out = run_board(&b, &["--si", "--json"]);
     assert_eq!(
         out.status.code(),
@@ -402,7 +476,7 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
          for --si; stderr: {}",
         stderr(&out)
     );
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     let notes = v["notes"].as_array().expect("notes array present");
     assert!(
         notes.iter().any(|n| {
@@ -414,9 +488,9 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
         "the machine surface carries the same INCONCLUSIVE sentence:\n{notes:?}"
     );
     // Bound side: no such note.
-    let out = run_board(&fixture("verdict_fet_bound.kicad_pcb"), &["--si", "--json"]);
+    let out = run_board(&bound(), &["--si", "--json"]);
     assert_eq!(out.status.code(), Some(0));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     let empty = Vec::new();
     let notes = v["notes"].as_array().unwrap_or(&empty);
     assert!(
@@ -433,7 +507,7 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
     // Q-prefix part, NOT an active IC) demotes the headline and the
     // model-dependent sections. Before this contract the web filtered on
     // `active_ic` alone, so a Q-only board still read "Looks healthy".
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let b = unbound();
     let bytes = std::fs::read(&b).expect("fixture readable");
     let report = hauksbee_engine::frontdoor::analyze("verdict_fet_unbound.kicad_pcb", &bytes);
     assert!(
@@ -460,7 +534,7 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
         }
     }
     // The bound twin restores the normal web verdicts.
-    let b = fixture("verdict_fet_bound.kicad_pcb");
+    let b = bound();
     let bytes = std::fs::read(&b).expect("fixture readable");
     let report = hauksbee_engine::frontdoor::analyze("verdict_fet_bound.kicad_pcb", &bytes);
     assert!(
@@ -482,7 +556,7 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
 
 #[test]
 fn check_closing_verdict_is_inconclusive_not_clean() {
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let b = unbound();
     let out = run_board(&b, &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
@@ -495,7 +569,7 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
         "no clean bill over an unmodelled current-carrying part:\n{text}"
     );
     // Bound side: the clean verdict returns.
-    let out = run_board(&fixture("verdict_fet_bound.kicad_pcb"), &["--check"]);
+    let out = run_board(&bound(), &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains("VERDICT: clean"),
@@ -517,10 +591,10 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
 
 #[test]
 fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
-    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let unbound = unbound();
     let out = run_board(&unbound, &["--si", "--json"]);
     assert_eq!(out.status.code(), Some(0), "exit stays 0 without --strict");
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(
         v["verdict"], "invalid",
         "an unbound verdict-critical part invalidates the --si machine verdict:\n{v}"
@@ -529,16 +603,16 @@ fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
 
     let out = run_board(&unbound, &["--drc", "--json"]);
     assert_eq!(out.status.code(), Some(0));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_ne!(
         v["verdict"], "invalid",
         "--drc is copper-only and must not be poisoned by the bind gate:\n{v}"
     );
 
     // Bound side: the same surface earns its pass.
-    let bound = fixture("verdict_fet_bound.kicad_pcb");
+    let bound = bound();
     let out = run_board(&bound, &["--si", "--json"]);
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_ne!(v["verdict"], "invalid", "a bound board is not gated:\n{v}");
 }
 
@@ -546,12 +620,10 @@ fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
 fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
     // Scenario 08's inverse: an invalid JSON verdict must show red in the
     // JUnit file too, not a green test-report tab beside a red dashboard.
-    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("out.xml");
-    let out = run_board(&unbound, &["--check", "--junit", junit.to_str().unwrap()]);
+    let art = Artifacts::new("out");
+    let out = run_board(&unbound(), &art.with_junit(&["--check"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(
         xml.contains("INVALID evidence:"),
         "the bind blocker reaches the test report as a gate-grade entry:\n{xml}"
@@ -573,9 +645,7 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
 
 /// The `(verdict, ok)` pair a machine surface printed.
 fn json_verdict(out: &Output) -> (String, bool) {
-    let doc = stdout(out);
-    let v: serde_json::Value =
-        serde_json::from_str(&doc).unwrap_or_else(|e| panic!("one JSON document ({e}):\n{doc}"));
+    let v = json_doc(out);
     (
         v["verdict"]
             .as_str()
@@ -653,36 +723,20 @@ fn assert_bare_json_gate_matches_verdict(board: &Path, want_verdict: &str) {
 
 #[test]
 fn lint_strict_exit_agrees_with_the_lint_verdict_on_both_sides_of_the_bind_gate() {
-    assert_gate_matches_verdict(
-        &["--lint"],
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        "invalid",
-    );
-    assert_gate_matches_verdict(&["--lint"], &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(&["--lint"], &unbound(), "invalid");
+    assert_gate_matches_verdict(&["--lint"], &bound(), "pass");
 }
 
 #[test]
 fn si_strict_exit_agrees_with_the_si_verdict_on_both_sides_of_the_bind_gate() {
-    assert_gate_matches_verdict(
-        &["--si"],
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        "invalid",
-    );
-    assert_gate_matches_verdict(&["--si"], &fixture("verdict_fet_bound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(&["--si"], &unbound(), "invalid");
+    assert_gate_matches_verdict(&["--si"], &bound(), "pass");
 }
 
 #[test]
 fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gate() {
-    assert_gate_matches_verdict(
-        &["--check"],
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        "invalid",
-    );
-    assert_gate_matches_verdict(
-        &["--check"],
-        &fixture("verdict_fet_bound.kicad_pcb"),
-        "pass",
-    );
+    assert_gate_matches_verdict(&["--check"], &unbound(), "invalid");
+    assert_gate_matches_verdict(&["--check"], &bound(), "pass");
 }
 
 #[test]
@@ -690,11 +744,7 @@ fn drc_strict_exit_agrees_with_the_copper_verdict_the_bind_gate_never_touches() 
     // The exemption, both halves: the unbound FET that invalidates --lint/--si
     // above leaves --drc at `pass` AND at exit 0 under --strict, because copper
     // spacing owes nothing to device models...
-    assert_gate_matches_verdict(
-        &["--drc"],
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        "pass",
-    );
+    assert_gate_matches_verdict(&["--drc"], &unbound(), "pass");
     // ...and that exit 0 is not a dead gate: a board with real shorts reads
     // `fail` and exits 2 on the same surface.
     assert_gate_matches_verdict(&["--drc"], &boot_gate_board(), "fail");
@@ -712,11 +762,7 @@ fn usb_c_strict_exit_agrees_with_its_cc_scoped_verdict() {
     );
     // ...while the same unbound FET class on a board with no receptacle at all
     // leaves nothing for the CC claim to be inconclusive about: `pass`, exit 0.
-    assert_gate_matches_verdict(
-        &["--usb-c"],
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        "pass",
-    );
+    assert_gate_matches_verdict(&["--usb-c"], &unbound(), "pass");
 }
 
 #[test]
@@ -740,7 +786,7 @@ fn the_report_surface_describes_the_binding_and_never_gates_on_it() {
         // evidence the exemption declines to gate on is still in the document
         // for the unbound board.
         let out = run_board(&b, &["--report", "--json"]);
-        let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+        let v = json_doc(&out);
         let undermined_binding = v["evidence"].as_array().expect("evidence").iter().any(|m| {
             m["status"] == "undermined"
                 && m["assertion"]
@@ -767,7 +813,7 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
     let b = fixture("verdict_medium_lint.kicad_pcb");
     // No finding here is `serious`: the gate grade is the surface's own.
     let out = run_board(&b, &["--lint", "--json"]);
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["serious_count"], 0, "{v}");
     assert!(
         v["findings"]
@@ -811,7 +857,7 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
 fn a_medium_si_finding_fails_the_verdict_because_it_fails_the_gate() {
     let b = medium_si_board();
     let out = run_board(&b, &["--si", "--json"]);
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["serious_count"], 0, "{v}");
     assert!(
         v["findings"]
@@ -829,18 +875,10 @@ fn the_resources_subset_and_the_bare_machine_report_gate_like_their_verdicts() {
     // Two more routes with verdict/gate code of their own: `--resources` (the
     // MCU-conflict subset of the lint family) and the default machine report a
     // bare `--json` produces.
-    assert_gate_matches_verdict(
-        &["--resources"],
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        "invalid",
-    );
-    assert_gate_matches_verdict(
-        &["--resources"],
-        &fixture("verdict_fet_bound.kicad_pcb"),
-        "pass",
-    );
-    assert_bare_json_gate_matches_verdict(&fixture("verdict_fet_unbound.kicad_pcb"), "invalid");
-    assert_bare_json_gate_matches_verdict(&fixture("verdict_fet_bound.kicad_pcb"), "pass");
+    assert_gate_matches_verdict(&["--resources"], &unbound(), "invalid");
+    assert_gate_matches_verdict(&["--resources"], &bound(), "pass");
+    assert_bare_json_gate_matches_verdict(&unbound(), "invalid");
+    assert_bare_json_gate_matches_verdict(&bound(), "pass");
 }
 
 // ---------------------------------------------------------------------------
@@ -876,25 +914,12 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
     // --junit/--sarif follow the selected specialist surface, including its
     // model-dependent bind refusal, so it cannot hand CI a green artifact
     // beside its own invalid JSON verdict.
-    let dir = tempfile::tempdir().expect("tempdir");
     for (name, want_invalid) in [
         ("verdict_fet_unbound.kicad_pcb", true),
         ("verdict_fet_bound.kicad_pcb", false),
     ] {
-        let b = fixture(name);
-        let junit = dir.path().join(format!("{name}.xml"));
-        let sarif = dir.path().join(format!("{name}.sarif"));
-        let out = run_board(
-            &b,
-            &[
-                "--lint",
-                "--json",
-                "--junit",
-                junit.to_str().unwrap(),
-                "--sarif",
-                sarif.to_str().unwrap(),
-            ],
-        );
+        let art = Artifacts::new(name);
+        let out = run_board(&fixture(name), &art.with_both(&["--lint", "--json"]));
         assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
         let (verdict, _) = json_verdict(&out);
         assert_eq!(
@@ -903,7 +928,7 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
             "--lint --json verdict on {name}"
         );
 
-        let xml = std::fs::read_to_string(&junit).expect("junit written");
+        let xml = art.xml();
         assert_eq!(
             xml.contains("INVALID evidence:"),
             want_invalid,
@@ -917,8 +942,8 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
             junit_root(&xml)
         );
 
-        let doc = read_json(&sarif);
-        let results = doc["runs"][0]["results"].as_array().expect("results array");
+        let doc = art.sarif_doc();
+        let results = sarif_results(&doc);
         assert_eq!(
             results
                 .iter()
@@ -940,14 +965,7 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // pipeline that gates on the exit code alone would still get a silent
     // checks tab.
     for surface in ["--lint", "--si", "--check", "--resources"] {
-        let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-        let out = run_in_actions(&[
-            "run",
-            unbound.to_str().unwrap(),
-            surface,
-            "--json",
-            "--strict",
-        ]);
+        let out = run_board_in_actions(&unbound(), &[surface, "--json", "--strict"]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -963,14 +981,7 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
         );
         assert_eq!(json_verdict(&out).0, "invalid");
 
-        let bound = fixture("verdict_fet_bound.kicad_pcb");
-        let out = run_in_actions(&[
-            "run",
-            bound.to_str().unwrap(),
-            surface,
-            "--json",
-            "--strict",
-        ]);
+        let out = run_board_in_actions(&bound(), &[surface, "--json", "--strict"]);
         assert!(
             !stderr(&out).lines().any(|l| l.starts_with("::error ")),
             "no error annotation on the bound twin ({surface}):\n{}",
@@ -981,17 +992,11 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // blockers are reachable from both the artifact writer and the gating exit,
     // and a duplicate spends one of GitHub's ten annotations per type per step
     // on a line the reader has already seen.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run_in_actions(&[
-        "run",
-        unbound.to_str().unwrap(),
-        "--check",
-        "--json",
-        "--strict",
-        "--junit",
-        dir.path().join("out.xml").to_str().unwrap(),
-    ]);
+    let art = Artifacts::new("out");
+    let out = run_board_in_actions(
+        &unbound(),
+        &art.with_junit(&["--check", "--json", "--strict"]),
+    );
     let err = stderr(&out);
     assert_eq!(
         err.lines()
@@ -1026,9 +1031,7 @@ fn junit_failing_testcases(xml: &str) -> Vec<String> {
 
 /// SARIF `(ruleId, level)` pairs.
 fn sarif_levels(doc: &serde_json::Value) -> Vec<(String, String)> {
-    doc["runs"][0]["results"]
-        .as_array()
-        .expect("results array")
+    sarif_results(doc)
         .iter()
         .map(|r| {
             (
@@ -1044,30 +1047,20 @@ fn a_gating_medium_finding_is_red_in_the_archived_artifact_too() {
     // The fixture's only finding is a medium/`warning` one, so nothing here is
     // `serious`: the severity word alone made this artifact all-green while the
     // verdict said `fail` and `--strict` exited 2.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("out.xml");
-    let sarif = dir.path().join("out.sarif");
+    let art = Artifacts::new("out");
     let out = run_board(
         &fixture("verdict_medium_lint.kicad_pcb"),
-        &[
-            "--lint",
-            "--json",
-            "--strict",
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-        ],
+        &art.with_both(&["--lint", "--json", "--strict"]),
     );
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["verdict"], "fail");
     assert_eq!(
         v["serious_count"], 0,
         "the gating finding is not serious:\n{v}"
     );
 
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(
         !junit_all_green(&xml),
         "a run that exited 2 must not archive an all-green report: {}",
@@ -1079,7 +1072,7 @@ fn a_gating_medium_finding_is_red_in_the_archived_artifact_too() {
         "the failing testcase is the gating finding itself:\n{xml}"
     );
 
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
         sarif_levels(&doc).contains(&("lint/placeholder_value".into(), "error".into())),
         "SARIF must raise the gating finding at error level:\n{:?}",
@@ -1095,37 +1088,28 @@ fn the_same_board_archives_all_green_once_a_waiver_takes_the_gate_away() {
     // the test above, not a second reading of the flag: waivers are applied
     // before the artifact is written, so the finding is absent from the file
     // either way. What it pins is that the three surfaces go green together.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let b = dir.path().join("verdict_medium_lint.kicad_pcb");
+    let art = Artifacts::new("out");
+    let dir = art.dir.path();
+    let b = dir.join("verdict_medium_lint.kicad_pcb");
     std::fs::copy(fixture("verdict_medium_lint.kicad_pcb"), &b).expect("stage the board");
     // Beside the board, where `WaiverSet::discover` looks.
     std::fs::write(
-        dir.path().join("hauksbee-waivers.toml"),
+        dir.join("hauksbee-waivers.toml"),
         "[[waive]]\ncheck = \"lint\"\nkind = \"placeholder_value\"\nrefs = [\"R3\"]\n\
          reason = \"R3 is a documented DNP placeholder on this build\"\n\
          until = \"2999-01-01\"\n",
     )
     .expect("stage the waiver");
-    let junit = dir.path().join("out.xml");
-    let out = run_board(
-        &b,
-        &[
-            "--lint",
-            "--json",
-            "--strict",
-            "--junit",
-            junit.to_str().unwrap(),
-        ],
-    );
+    let out = run_board(&b, &art.with_junit(&["--lint", "--json", "--strict"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["verdict"], "pass");
     assert_eq!(
         v["waived"].as_array().map(Vec::len),
         Some(1),
         "the overruled finding is reported, not hidden:\n{v}"
     );
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(
         junit_all_green(&xml),
         "an exit-0 pass must archive a green report: {}",
@@ -1143,7 +1127,7 @@ fn the_same_board_archives_all_green_once_a_waiver_takes_the_gate_away() {
         vec!["--check", "--json", "--strict"],
         vec!["--lint", "--json", "--strict"],
     ] {
-        let junit = dir.path().join(format!("{}.xml", surface.join("")));
+        let junit = dir.join(format!("{}.xml", surface.join("")));
         let mut args = vec!["run", b.to_str().unwrap()];
         args.extend(surface.iter().copied());
         args.extend(["--junit", junit.to_str().unwrap()]);
@@ -1154,7 +1138,7 @@ fn the_same_board_archives_all_green_once_a_waiver_takes_the_gate_away() {
             "{surface:?} must excuse the waived finding; stderr: {}",
             stderr(&out)
         );
-        let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+        let v = json_doc(&out);
         assert_eq!(v["verdict"], "pass", "{surface:?}: {v}");
         assert_eq!(
             v["waived"].as_array().map(Vec::len),
@@ -1183,20 +1167,8 @@ fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
     // SARIF and GitHub annotations together. A hidden full-suite result would
     // give CI mutually exclusive answers about one command.
     let b = fixture("verdict_medium_lint.kicad_pcb");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("drc-selector.xml");
-    let sarif = dir.path().join("drc-selector.sarif");
-    let out = run_in_actions(&[
-        "run",
-        b.to_str().unwrap(),
-        "--drc",
-        "--json",
-        "--strict",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let art = Artifacts::new("drc-selector");
+    let out = run_board_in_actions(&b, &art.with_both(&["--drc", "--json", "--strict"]));
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -1204,7 +1176,7 @@ fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
         stderr(&out)
     );
     assert_eq!(json_verdict(&out).0, "pass");
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(junit_all_green(&xml), "selected DRC artifact: {xml}");
     assert!(
         xml.contains("testsuite name=\"drc\"")
@@ -1212,7 +1184,7 @@ fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
             && !xml.contains("testsuite name=\"si\""),
         "an unselected check must not appear as if it ran:\n{xml}"
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
         sarif_levels(&doc).iter().all(|(_, level)| level != "error"),
         "selected DRC SARIF must not contain an unselected lint error: {doc}"
@@ -1228,21 +1200,14 @@ fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
 
 #[test]
 fn usb_c_artifact_ignores_unrelated_bind_blockers_like_the_selected_report() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("usb-c.xml");
+    let art = Artifacts::new("usb-c");
     let out = run_board(
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        &[
-            "--usb-c",
-            "--json",
-            "--strict",
-            "--junit",
-            junit.to_str().unwrap(),
-        ],
+        &unbound(),
+        &art.with_junit(&["--usb-c", "--json", "--strict"]),
     );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "pass");
-    let xml = std::fs::read_to_string(&junit).expect("junit");
+    let xml = art.xml();
     assert!(
         junit_all_green(&xml) && !xml.contains("Q1"),
         "an unrelated open FET is outside the selected CC claim:\n{xml}"
@@ -1255,27 +1220,13 @@ fn a_cosim_fault_run_archives_a_failing_testcase() {
     // classifier grades most of them `warning`, so this whole family was
     // archived green beside a `fail` verdict and an exit 2 under `--strict`.
     let board = fixture("cosim_fault_led.kicad_pcb");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("out.xml");
-    let sarif = dir.path().join("out.sarif");
-    let out = run_board(
-        &board,
-        &[
-            "--headless",
-            "--seconds",
-            "0.05",
-            "--json",
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-        ],
-    );
+    let art = Artifacts::new("out");
+    let out = run_board(&board, &art.with_both(HEADLESS_JSON));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let (verdict, _) = json_verdict(&out);
     assert_eq!(verdict, "fail", "the faults fail this run's own gate");
 
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     let failing = junit_failing_testcases(&xml);
     assert!(
         failing.iter().any(|c| c == "overpower R1"),
@@ -1286,7 +1237,7 @@ fn a_cosim_fault_run_archives_a_failing_testcase() {
         "a `fail` verdict must not archive an all-green report: {}",
         junit_root(&xml)
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
         sarif_levels(&doc).contains(&("cosim/overpower".into(), "error".into())),
         "SARIF raises the fault at error level:\n{:?}",
@@ -1297,22 +1248,14 @@ fn a_cosim_fault_run_archives_a_failing_testcase() {
     // under `--strict` the exit code is 2 beside the same failing testcase. This
     // board also refuses (no firmware to exercise), and `fail` outranks that, so
     // 2 is the code the flags have to produce.
-    let strict_junit = dir.path().join("strict.xml");
+    let strict = Artifacts::new("strict");
     let out = run_board(
         &board,
-        &[
-            "--headless",
-            "--seconds",
-            "0.05",
-            "--json",
-            "--strict",
-            "--junit",
-            strict_junit.to_str().unwrap(),
-        ],
+        &strict.with_junit(&[HEADLESS_JSON, &["--strict"]].concat()),
     );
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "fail");
-    let strict_xml = std::fs::read_to_string(&strict_junit).expect("junit written");
+    let strict_xml = strict.xml();
     assert!(
         junit_failing_testcases(&strict_xml)
             .iter()
@@ -1327,24 +1270,12 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     // `invalid` route. This board's red comes from unbound verdict-critical
     // parts, so the artifact carries the INVALID evidence blocker as its only
     // gate-grade entry and the document still reads `invalid`, not `fail`.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("out.xml");
-    let sarif = dir.path().join("out.sarif");
-    let out = run_board(
-        &fixture("verdict_fet_unbound.kicad_pcb"),
-        &[
-            "--check",
-            "--json",
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-        ],
-    );
+    let art = Artifacts::new("out");
+    let out = run_board(&unbound(), &art.with_both(&["--check", "--json"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "invalid");
 
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert_eq!(
         junit_failing_testcases(&xml),
         vec!["undermined Q1".to_string()],
@@ -1359,7 +1290,7 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     // two red shapes stay distinct.
     assert!(junit_root(&xml).contains("errors=\"0\""), "{xml}");
 
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     let levels = sarif_levels(&doc);
     assert!(
         levels.contains(&("evidence/undermined".into(), "error".into())),
@@ -1381,8 +1312,8 @@ fn a_medium_finding_that_does_not_gate_stays_a_passing_testcase() {
     // and the finding is archived as a passing case carrying its text. It wears
     // the same `warning` severity a gating lint finding wears, which is how the
     // artifact proves it grades the gate and not the vocabulary.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let b = dir.path().join("phantom_short.kicad_pcb");
+    let art = Artifacts::new("out");
+    let b = art.dir.path().join("phantom_short.kicad_pcb");
     let text = std::fs::read_to_string(boot_gate_board()).expect("the shorted example board");
     // Same two shorts, re-declared as a KiCad version the copper extraction has
     // not been validated against.
@@ -1397,26 +1328,16 @@ fn a_medium_finding_that_does_not_gate_stays_a_passing_testcase() {
     )
     .expect("stage the board");
 
-    let junit = dir.path().join("out.xml");
-    let out = run_board(
-        &b,
-        &[
-            "--check",
-            "--json",
-            "--strict",
-            "--junit",
-            junit.to_str().unwrap(),
-        ],
-    );
+    let out = run_board(&b, &art.with_junit(&["--check", "--json", "--strict"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["verdict"], "pass");
     assert_eq!(
         v["drc"]["shorts"].as_array().map(Vec::len),
         Some(2),
         "the shorts are still reported, not dropped:\n{v}"
     );
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(
         junit_all_green(&xml),
         "an excused finding must not fail the archived report: {}",
@@ -1439,27 +1360,15 @@ fn cosim_junit_agrees_with_the_cosim_json_verdict_about_bind_blockers() {
     // The co-sim machine report is bind-gated like the static ones, and its CI
     // artifacts are REWRITTEN after the run; the rewrite must not lose the
     // blocker and leave a green test report beside an invalid verdict.
-    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("cosim.xml");
-    let out = run_board(
-        &unbound,
-        &[
-            "--headless",
-            "--seconds",
-            "0.05",
-            "--json",
-            "--junit",
-            junit.to_str().unwrap(),
-        ],
-    );
+    let art = Artifacts::new("cosim");
+    let out = run_board(&unbound(), &art.with_junit(HEADLESS_JSON));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(
         json_verdict(&out).0,
         "invalid",
         "an unbound verdict-critical part gates the co-sim JSON verdict too"
     );
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(
         xml.contains("INVALID evidence:") && xml.contains("Q1"),
         "the rewritten co-sim artifact keeps the bind blocker:\n{xml}"
@@ -1479,40 +1388,20 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
     // pipeline archives. The refusing run's artifact must be a SUPERSET of the
     // complete run's.
     let board = fixture("cosim_fault_led.kicad_pcb");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let complete = dir.path().join("complete.xml");
-    let out = run_board(
-        &board,
-        &[
-            "--headless",
-            "--seconds",
-            "0.05",
-            "--junit",
-            complete.to_str().unwrap(),
-        ],
-    );
+    let complete = Artifacts::new("complete");
+    let out = run_board(&board, &complete.with_junit(HEADLESS));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let complete_cases = junit_testcases(&std::fs::read_to_string(&complete).expect("junit"));
+    let complete_cases = junit_testcases(&complete.xml());
     assert!(
         complete_cases.iter().any(|c| c == "overpower R1"),
         "the complete artifact carries the stress faults: {complete_cases:?}"
     );
 
-    let refused = dir.path().join("refused.xml");
-    let refused_sarif = dir.path().join("refused.sarif");
-    let out = run_in_actions(&[
-        "run",
-        board.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--strict",
-        "--json",
-        "--junit",
-        refused.to_str().unwrap(),
-        "--sarif",
-        refused_sarif.to_str().unwrap(),
-    ]);
+    let refused = Artifacts::new("refused");
+    let out = run_board_in_actions(
+        &board,
+        &refused.with_both(&[HEADLESS, &["--strict", "--json"]].concat()),
+    );
     // This run both refuses (no firmware activity to vouch for) and found real
     // faults, and `fail` outranks `invalid`: the exit code is 2, matching the
     // verdict its own document printed, while the refusal stays on stderr and
@@ -1534,7 +1423,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         stderr(&out)
     );
 
-    let xml = std::fs::read_to_string(&refused).expect("junit");
+    let xml = refused.xml();
     let refused_cases = junit_testcases(&xml);
     for case in &complete_cases {
         assert!(
@@ -1554,8 +1443,8 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
 
     // SARIF is rewritten from the same findings list, so it owes the same
     // superset plus the refusal rule.
-    let doc = read_json(&refused_sarif);
-    let results = doc["runs"][0]["results"].as_array().expect("results array");
+    let doc = refused.sarif_doc();
+    let results = sarif_results(&doc);
     assert!(
         results.iter().any(|r| r["ruleId"] == "cosim/overpower"),
         "the refusal rewrite kept the stress faults in SARIF too:\n{results:?}"
@@ -1612,18 +1501,8 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
         "the boot advisory does not gate without --strict-boot"
     );
     // Escalated: exit 2 AND `fail` in the document that exit was printed beside.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("strict-boot.xml");
-    let sarif = dir.path().join("strict-boot.sarif");
-    let mut args = base.to_vec();
-    args.extend([
-        "--strict-boot",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
-    let out = run_in_actions(&args);
+    let art = Artifacts::new("strict-boot");
+    let out = run_in_actions(&art.with_both(&[&base[..], &["--strict-boot"]].concat()));
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -1635,14 +1514,14 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
         "fail",
         "and the document must not read `pass` beside that exit 2"
     );
-    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    let xml = art.xml();
     assert!(
         junit_failing_testcases(&xml)
             .iter()
             .any(|case| case.contains("boot_control_net") && case.contains("GATE_CTRL")),
         "the strict-boot gate itself must be a failing testcase:\n{xml}"
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
         sarif_levels(&doc).contains(&("cosim/boot_control_net".into(), "error".into())),
         "strict-boot must be an error-level SARIF result: {doc}"
@@ -1662,31 +1541,20 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
 fn a_pre_analysis_refusal_replaces_stale_requested_artifacts() {
     const EMPTY_BOARD_DSL: &str = "# Board-as-Code (hauksbee board DSL v1)\n\
 board version 20241229\n\nfn main {\n}\n";
-    let dir = tempfile::tempdir().expect("tempdir");
-    let board = dir.path().join("empty.board");
-    let junit = dir.path().join("out.xml");
-    let sarif = dir.path().join("out.sarif");
+    let art = Artifacts::new("out");
+    let board = art.dir.path().join("empty.board");
     std::fs::write(&board, EMPTY_BOARD_DSL).expect("empty board fixture");
-    std::fs::write(&junit, "stale green JUnit from a previous run").expect("stale junit");
-    std::fs::write(&sarif, "stale green SARIF from a previous run").expect("stale sarif");
+    std::fs::write(&art.junit, "stale green JUnit from a previous run").expect("stale junit");
+    std::fs::write(&art.sarif, "stale green SARIF from a previous run").expect("stale sarif");
 
-    let out = run_in_actions(&[
-        "run",
-        board.to_str().unwrap(),
-        "--check",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board_in_actions(&board, &art.with_both(&["--check", "--json"]));
     assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
-    let xml = std::fs::read_to_string(&junit).expect("junit replaced");
+    let xml = art.xml();
     assert!(
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("no components"),
         "the refusal must replace the stale artifact:\n{xml}"
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
         sarif_levels(&doc).contains(&("hauksbee/invalid-for-analysis".into(), "error".into())),
         "the refusal must replace stale SARIF: {doc}"
@@ -1710,43 +1578,34 @@ fn missing_processor_refusal_finalizes_every_requested_surface() {
         "required tracked firmware fixture: {}",
         firmware.display()
     );
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("missing-processor.xml");
-    let sarif = dir.path().join("missing-processor.sarif");
-    let out = run_in_actions(&[
-        "run",
-        board.to_str().unwrap(),
-        "--firmware",
-        firmware.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.01",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let art = Artifacts::new("missing-processor");
+    let out = run_board_in_actions(
+        &board,
+        &art.with_both(&[
+            "--firmware",
+            firmware.to_str().unwrap(),
+            "--headless",
+            "--seconds",
+            "0.01",
+            "--json",
+        ]),
+    );
     assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
-    let xml = std::fs::read_to_string(&junit).expect("junit finalized");
+    let xml = art.xml();
     assert!(
         junit_root(&xml).contains("errors=\"1\"")
             && xml.contains("supported MCU")
             && !xml.contains("did not reach its final outcome"),
         "the concrete missing-processor refusal must replace the pending marker:\n{xml}"
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
-        doc["runs"][0]["results"]
-            .as_array()
-            .expect("results")
-            .iter()
-            .any(|result| {
-                result["ruleId"] == "hauksbee/invalid-for-analysis"
-                    && result["message"]["text"]
-                        .as_str()
-                        .is_some_and(|message| message.contains("supported MCU"))
-            }),
+        sarif_results(&doc).iter().any(|result| {
+            result["ruleId"] == "hauksbee/invalid-for-analysis"
+                && result["message"]["text"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("supported MCU"))
+        }),
         "SARIF carries the concrete refusal: {doc}"
     );
     assert!(
@@ -1762,7 +1621,7 @@ fn missing_processor_refusal_finalizes_every_requested_surface() {
 fn artifact_transaction_refuses_to_overwrite_its_board_input() {
     let dir = tempfile::tempdir().expect("tempdir");
     let board = dir.path().join("board.kicad_pcb");
-    let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
+    let original = std::fs::read(bound()).expect("fixture");
     std::fs::write(&board, &original).expect("staged board");
     let out = run_board(&board, &["--check", "--junit", board.to_str().unwrap()]);
     assert!(
@@ -1781,7 +1640,7 @@ fn artifact_transaction_refuses_a_hard_link_to_its_board_input() {
     let dir = tempfile::tempdir().expect("tempdir");
     let board = dir.path().join("board.kicad_pcb");
     let junit = dir.path().join("board-hard-link.xml");
-    let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
+    let original = std::fs::read(bound()).expect("fixture");
     std::fs::write(&board, &original).expect("staged board");
     std::fs::hard_link(&board, &junit).expect("hard link supported for staged files");
 
@@ -1800,30 +1659,19 @@ fn artifact_transaction_refuses_a_hard_link_to_its_board_input() {
 
 #[test]
 fn artifact_transaction_refuses_hard_linked_junit_and_sarif_outputs() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("out.xml");
-    let sarif = dir.path().join("out.sarif");
+    let art = Artifacts::new("out");
     let original = b"existing artifact bytes that must survive validation";
-    std::fs::write(&junit, original).expect("seed junit");
-    std::fs::hard_link(&junit, &sarif).expect("hard link supported for staged files");
+    std::fs::write(&art.junit, original).expect("seed junit");
+    std::fs::hard_link(&art.junit, &art.sarif).expect("hard link supported for staged files");
 
-    let out = run_board(
-        &fixture("verdict_fet_bound.kicad_pcb"),
-        &[
-            "--check",
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-        ],
-    );
+    let out = run_board(&bound(), &art.with_both(&["--check"]));
 
     assert!(
         !out.status.success(),
         "hard-linked artifact outputs need different files"
     );
     assert_eq!(
-        std::fs::read(&junit).expect("seed retained"),
+        std::fs::read(&art.junit).expect("seed retained"),
         original,
         "alias validation must happen before either output is written"
     );
@@ -1831,27 +1679,16 @@ fn artifact_transaction_refuses_hard_linked_junit_and_sarif_outputs() {
 
 #[test]
 fn parse_error_never_writes_through_hard_linked_artifact_outputs() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("usage.xml");
-    let sarif = dir.path().join("usage.sarif");
+    let art = Artifacts::new("usage");
     let original = b"existing linked artifact bytes";
-    std::fs::write(&junit, original).expect("seed junit");
-    std::fs::hard_link(&junit, &sarif).expect("hard link supported for staged files");
+    std::fs::write(&art.junit, original).expect("seed junit");
+    std::fs::hard_link(&art.junit, &art.sarif).expect("hard link supported for staged files");
 
-    let out = run_board(
-        &fixture("verdict_fet_bound.kicad_pcb"),
-        &[
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-            "--not-a-real-run-flag",
-        ],
-    );
+    let out = run_board(&bound(), &art.before_usage_error());
 
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     assert_eq!(
-        std::fs::read(&junit).expect("linked seed retained"),
+        std::fs::read(&art.junit).expect("linked seed retained"),
         original,
         "parse-error invalidation must reject linked outputs before either write"
     );
@@ -1862,7 +1699,7 @@ fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() 
     let dir = tempfile::tempdir().expect("tempdir");
     let board = dir.path().join("board.kicad_pcb");
     let sarif = dir.path().join("out.sarif");
-    let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
+    let original = std::fs::read(bound()).expect("fixture");
     std::fs::write(&board, &original).expect("staged board");
     std::fs::write(&sarif, "stale green sarif").expect("stale sarif");
     let out = run_board(
@@ -1883,9 +1720,7 @@ fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() 
     );
     let doc = read_json(&sarif);
     assert!(
-        doc["runs"][0]["results"]
-            .as_array()
-            .expect("results")
+        sarif_results(&doc)
             .iter()
             .any(|result| result["ruleId"] == "hauksbee/run-error"),
         "the safe requested surface must not retain stale evidence: {doc}"
@@ -1894,37 +1729,22 @@ fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() 
 
 #[test]
 fn clap_usage_error_invalidates_requested_artifacts_before_exiting() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("usage.xml");
-    let sarif = dir.path().join("usage.sarif");
-    std::fs::write(&junit, "stale green junit").expect("stale junit");
-    std::fs::write(&sarif, "stale green sarif").expect("stale sarif");
-    let out = run_board(
-        &fixture("verdict_fet_bound.kicad_pcb"),
-        &[
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-            "--not-a-real-run-flag",
-        ],
-    );
+    let art = Artifacts::new("usage");
+    std::fs::write(&art.junit, "stale green junit").expect("stale junit");
+    std::fs::write(&art.sarif, "stale green sarif").expect("stale sarif");
+    let out = run_board(&bound(), &art.before_usage_error());
     assert!(!out.status.success());
-    let xml = std::fs::read_to_string(&junit).expect("junit replaced");
+    let xml = art.xml();
     assert!(
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("not-a-real-run-flag"),
         "clap failure must replace stale JUnit:\n{xml}"
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
-        doc["runs"][0]["results"]
-            .as_array()
-            .expect("results")
-            .iter()
-            .any(|result| {
-                result["ruleId"] == "hauksbee/run-error"
-                    && result["properties"]["exit_code"] == out.status.code().unwrap()
-            }),
+        sarif_results(&doc).iter().any(|result| {
+            result["ruleId"] == "hauksbee/run-error"
+                && result["properties"]["exit_code"] == out.status.code().unwrap()
+        }),
         "clap failure must replace stale SARIF: {doc}"
     );
 }
@@ -1936,7 +1756,7 @@ fn clap_usage_error_never_invalidates_over_a_declared_run_input() {
     let original = b":020000040000FA\n:00000001FF\n";
     std::fs::write(&firmware, original).expect("firmware fixture");
     let out = run_board(
-        &fixture("verdict_fet_bound.kicad_pcb"),
+        &bound(),
         &[
             "--firmware",
             firmware.to_str().unwrap(),
@@ -1975,61 +1795,40 @@ fn clap_error_for_a_non_run_command_never_mutates_run_artifact_flags() {
 
 #[test]
 fn unknown_embedded_example_replaces_seeded_artifacts() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("unknown-example.xml");
-    let sarif = dir.path().join("unknown-example.sarif");
-    std::fs::write(&junit, "stale green junit").expect("seed junit");
-    std::fs::write(&sarif, "stale green sarif").expect("seed sarif");
+    let art = Artifacts::new("unknown-example");
+    std::fs::write(&art.junit, "stale green junit").expect("seed junit");
+    std::fs::write(&art.sarif, "stale green sarif").expect("seed sarif");
 
-    let out = run(&[
-        "run",
-        "--example",
-        "definitely-not-an-example",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run(&art.with_both(&["run", "--example", "definitely-not-an-example"]));
 
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
-    let xml = std::fs::read_to_string(&junit).expect("junit replaced");
+    let xml = art.xml();
     assert!(
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("definitely-not-an-example"),
         "unknown-example resolution must finalize JUnit:\n{xml}"
     );
-    let doc = read_json(&sarif);
+    let doc = art.sarif_doc();
     assert!(
-        doc["runs"][0]["results"]
-            .as_array()
-            .expect("results")
-            .iter()
-            .any(|result| {
-                result["ruleId"] == "hauksbee/run-error"
-                    && result["properties"]["exit_code"] == 1
-                    && result["message"]["text"]
-                        .as_str()
-                        .is_some_and(|message| message.contains("definitely-not-an-example"))
-            }),
+        sarif_results(&doc).iter().any(|result| {
+            result["ruleId"] == "hauksbee/run-error"
+                && result["properties"]["exit_code"] == 1
+                && result["message"]["text"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("definitely-not-an-example"))
+        }),
         "unknown-example resolution must finalize SARIF: {doc}"
     );
 }
 
 #[test]
 fn static_report_and_headless_are_a_usage_error_without_surface_drift() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let junit = dir.path().join("conflicting-surface.xml");
-    std::fs::write(&junit, "stale green junit").expect("seed junit");
+    let art = Artifacts::new("conflicting-surface");
+    std::fs::write(&art.junit, "stale green junit").expect("seed junit");
 
-    let out = run_in_actions(&[
-        "run",
-        fixture("verdict_fet_unbound.kicad_pcb").to_str().unwrap(),
-        "--drc",
-        "--headless",
-        "--json",
-        "--strict",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board_in_actions(
+        &unbound(),
+        &art.with_junit(&["--drc", "--headless", "--json", "--strict"]),
+    );
 
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     assert!(
@@ -2037,7 +1836,7 @@ fn static_report_and_headless_are_a_usage_error_without_surface_drift() {
         "Clap must reject contradictory selected surfaces: {}",
         stderr(&out)
     );
-    let xml = std::fs::read_to_string(&junit).expect("junit invalidated");
+    let xml = art.xml();
     assert!(
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("cannot be used with"),
         "usage failure must replace the stale artifact:\n{xml}"
@@ -2052,7 +1851,7 @@ fn static_report_and_headless_are_a_usage_error_without_surface_drift() {
 /// code, and the coverage is still partial either way.
 #[test]
 fn thermal_gates_by_default_and_the_opt_out_keeps_the_refusing_document() {
-    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let b = thermal_partial();
     let base = [
         "run",
         b.to_str().unwrap(),
@@ -2091,14 +1890,11 @@ fn thermal_gates_by_default_and_the_opt_out_keeps_the_refusing_document() {
         "invalid",
         "the opt-out must not silence the verdict, only the exit code"
     );
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     assert!(
-        v["notes"]
-            .as_array()
-            .expect("notes")
+        note_messages(&v)
             .iter()
-            .filter_map(|n| n["message"].as_str())
             .any(|m| m.starts_with("INCONCLUSIVE:")),
         "the caveat survives the opt-out:\n{v}"
     );
@@ -2128,7 +1924,7 @@ fn the_placement_free_refusal_envelope_keeps_ok_iff_pass() {
     let (verdict, ok) = json_verdict(&out);
     assert_eq!(verdict, "invalid");
     assert!(!ok, "ok must mirror the verdict word on the envelope too");
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    let v = json_doc(&out);
     assert!(
         v["refusal"]["next_action"].is_string(),
         "the envelope still carries the structured refusal:\n{v}"
