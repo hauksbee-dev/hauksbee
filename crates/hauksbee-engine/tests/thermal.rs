@@ -779,7 +779,8 @@ fn derated_run(
 /// over at 70, and with the ambient left unset the 85 C probe (limit
 /// 4.7 * 65/80 = 3.8 A with Tj,max 150) would flip the verdict, so the
 /// defaulted 25 C is disclosed. Past the hottest row the limit falls to zero at
-/// Tj,max: 2.5 A passes at 70 C but not at 110 C (limit 4.7 * 40/80 = 2.35 A).
+/// Tj,max: 2.5 A passes at 70 C but not at 110 C (limit 4.7 * 40/80 = 2.35 A),
+/// nor at 160 C, past Tj,max, where the limit is zero.
 #[test]
 fn ambient_rows_are_read_at_the_ambient_and_fall_to_zero_past_the_hottest() {
     let rows = [(25.0, 5.7), (70.0, 4.7)];
@@ -795,6 +796,7 @@ fn ambient_rows_are_read_at_the_ambient_and_fall_to_zero_past_the_hottest() {
         (3.5, None, false, false),
         (2.5, Some(70.0), false, false),
         (2.5, Some(110.0), true, false),
+        (2.5, Some(160.0), true, false),
     ];
     for (amps, ambient, trips, defaulted) in cases {
         let drive = (1.0, 1.0 / amps);

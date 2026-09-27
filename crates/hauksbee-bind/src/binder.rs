@@ -936,10 +936,7 @@ fn gather_device_meta(
     for i in 0..metas.len() {
         let (r, units) = (part(&metas[i]), metas.iter().map(|m| (part(m), m.device)));
         let units: Vec<_> = units.filter(|u| u.0 == r).map(|u| u.1).collect();
-        let info = by_ref
-            .get(&r)
-            .filter(|c| c.kind != ComponentKind::AnalogSwitch);
-        if let Some(c) = info {
+        if let Some(c) = by_ref.get(&r) {
             let paths = crate::stress::rated_paths(circuit, &r, &c.derating, &c.roles, &units);
             metas[i].derating.carriers = paths;
         }

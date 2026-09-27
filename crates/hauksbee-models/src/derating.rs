@@ -175,7 +175,9 @@ fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
         }
         if let (Some((at, lo, hi)), Some(v)) = (span, value) {
             let tag = |t: &Option<String>| t.clone().filter(|t| !t.trim().is_empty());
-            let pins = row.pins.clone();
+            let mut pins = row.pins.clone();
+            pins.sort();
+            pins.dedup();
             let points = groups.entry((at, tag(&row.package), tag(&row.mounting), pins));
             points.or_default().extend([(lo, v), (hi, v)]);
         }
@@ -269,8 +271,12 @@ pub struct Derating {
     /// The part's monitored devices carrying each path's current, which the
     /// binder fills (`hauksbee-bind`'s `rated_paths`); the empty path lists
     /// them all, for the whole-part rows (a printed total) to bind their sum.
-    pub carriers: Vec<(Vec<String>, Vec<hauksbee_ir::DeviceId>)>,
+    pub carriers: Vec<(Vec<String>, Vec<Carrier>)>,
 }
+
+/// A device carrying a path's current, with a bit set for each of its first
+/// three terminals (`Device::nodes` order) on the path's nodes.
+pub type Carrier = (hauksbee_ir::DeviceId, u8);
 
 impl Derating {
     #[must_use]
