@@ -6,7 +6,7 @@
 //! model library. [`validate`] collects every violation at once rather than
 //! stopping at the first.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::derating::temp_span;
@@ -1217,15 +1217,33 @@ fn pin_name_keys(name: &str) -> Vec<String> {
     words.map(pin_key).collect()
 }
 
+/// `[[models.source.pinout]]`, one column per package the sheet prints.
+fn pinouts(entry: &ModelEntry) -> &[Pinout] {
+    entry.source.as_ref().map_or(&[], |s| &s.pinout)
+}
+
+/// The package standard a card's sheet, printing lead letters alone, numbers its
+/// pads from (kept on a compiled card): each such pad binds as an assumption.
+#[must_use]
+pub fn pin_standard(entry: &ModelEntry) -> Option<&str> {
+    let declared = pinouts(entry).iter().find_map(|o| o.standard.as_deref());
+    declared.or(entry.pin_standard.as_deref())
+}
+
 /// `[models.pins]` against the pin-table column of the card's own package
 /// (`[models.variant] package`, else the one package the description names,
 /// else a lone column): the same pads, and no pad whose role is the name that
 /// column prints on another pad, the mark of a map read off another package.
 fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
-    let pinouts = entry
-        .source
-        .as_ref()
-        .map_or(&[][..], |s| s.pinout.as_slice());
+    let pinouts = pinouts(entry);
+    let numbered = |m: &BTreeMap<String, String>| m.keys().all(|k| k.parse::<u32>().is_ok());
+    for o in pinouts.iter().filter(|o| o.standard.is_some()) {
+        let (package, standard) = (&o.package, o.standard.as_deref().unwrap_or_default());
+        let view = standard.to_lowercase();
+        p.require(numbered(&o.pins) && numbered(&entry.pins), || format!("[[models.source.pinout]] '{package}' numbers its pads from standard '{standard}', so it and [models.pins] are keyed by pad number: a card keyed by lead letters carries no standard"));
+        p.require(view.contains("top view") || view.contains("bottom view"), || format!("[[models.source.pinout]] '{package}' standard '{standard}' must name the view (\"top view\" or \"bottom view\") its numbering is read from: a pad numbered from the wrong view is a mirrored pinout that binds cleanly"));
+        p.require(!entry.coverage.missing.iter().any(|m| m == "pad_numbers"), || format!("[[models.source.pinout]] '{package}' numbers the pads from standard '{standard}', so `pad_numbers` is not missing from [models.coverage]"));
+    }
     if pinouts.is_empty() || entry.pins.is_empty() {
         return;
     }
@@ -2123,6 +2141,7 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         let (vout, pinouts) = ("vout = 3.3", &LDO_FIXTURE[LDO_FIXTURE.find("[[source.pinout]]").unwrap()..]);
         let unknown = [("\"in\"", "\"unknown_pad_1\""), ("\"gnd\"", "\"unknown_pad_2\""), ("\"en\"", "\"unknown_pad_3\""), ("\"nc\"", "\"unknown_pad_4\""), ("\"out\"", "\"unknown_pad_5\"")];
         let identity = "[params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"";
+        let (sot, standard) = ("package = \"SOT-23-5\"", |s: &str| format!("package = \"SOT-23-5\"\nstandard = \"{s}\""));
         // Case: edits | the refusal's text, or "" for a card that must pass.
         for (edits, needle) in [
             (vec![(vout, row("min = 3.2, typ = 3.3, max = 3.4"))], ""),
@@ -2133,6 +2152,10 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             (vec![("iq_a = 0.0001", "iq_a = 0.0001\nmax_current_a = 0.5".into())], "move max_current_a there"),
             (vec![(unknown[0].0, unknown[0].1.into())], "pinout prints 'VIN' on it: name each pad"),
             (vec![("\"2\" = \"gnd\"", "\"2\" = \"adj\"".into())], "ADJ/GND pin is its ground: map it 'gnd'"),
+            (vec![(sot, standard("JEDEC MO-178 top view: 1 lower-left"))], ""),
+            (vec![(sot, standard("JEDEC MO-178: 1 lower-left"))], "must name the view (\"top view\" or"),
+            (vec![("package = \"DFN-4\"", "package = \"DFN-4\"\nstandard = \"bottom view\"".into())], "a card keyed by lead letters carries no standard"),
+            (vec![(sot, standard("top view")), ("[source]", "[coverage]\nmissing = [\"pad_numbers\"]\n[source]".into())], "`pad_numbers` is not missing"),
         ] {
             let e = card(&edits.iter().map(|(a, b)| (*a, b.as_str())).collect::<Vec<_>>());
             if needle.is_empty() { accepts(&e) } else { rejects(&e, needle) }

@@ -14,8 +14,9 @@
 //! 3. A user-supplied rule overrides the built-in (different pad→role map), and
 //!    its id appears in the guess-warning.
 
+use crate::support::{combined, run};
 use hauksbee_engine::binder::bind_board_with;
-use hauksbee_engine::{bind_board, BoardEvidence};
+use hauksbee_engine::{bind_board, BindOutcome, BoardEvidence};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{Assumption, EvidenceStatus, RunDate};
 use hauksbee_ir::Device;
@@ -192,4 +193,77 @@ fn user_rule_overrides_builtin_and_is_named_in_guess() {
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A layout-only SOT-23 N-MOSFET (value TESTFET1): pads 1/2/3 on N1/N2/N3.
+const LAYOUT_FET_PCB: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0) (net 0 "") (net 1 "N1") (net 2 "N2") (net 3 "N3")
+  (module Package_TO_SOT_SMD:SOT-23 (layer F.Cu)
+    (fp_text reference Q1 (at 0 0) (layer F.SilkS)) (fp_text value TESTFET1 (at 0 0) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu) (net 1 "N1"))
+    (pad 2 smd rect (at 1 0) (size 1 1) (layers F.Cu) (net 2 "N2"))
+    (pad 3 smd rect (at 2 0) (size 1 1) (layers F.Cu) (net 3 "N3"))))
+"#;
+
+/// Its card: gate and source printed at unnumbered leads, numbered `@standard`.
+const FET_CARD: &str = r#"[[models]]
+id = "testfet1"
+kind = "nmos"
+description = "Test N-MOSFET, SOT-23 package"
+match = { value_re = "(?i)^TESTFET1$" }
+params = { vto = 1.5, kp = 0.2 }
+pins = { @pins, "3" = "drain" }
+[models.source]
+tier = "datasheet-derived"
+[[models.source.pinout]]
+package = "SOT-23"
+@standard
+pins = { @pins, "3" = "drain" }
+"#;
+
+/// Standard-numbered pads bind as assumptions on the one evidence path CI, the app
+/// and CLI share; a disagreeing SOT-23 pin rule refuses them, never a printed table.
+#[test]
+fn standard_numbered_pads_are_assumptions_and_a_pin_rule_clash_refuses_them() {
+    let jedec = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top";
+    let (gs, sg) = (
+        r#""1" = "gate", "2" = "source""#,
+        r#""1" = "source", "2" = "gate""#,
+    );
+    let line = format!("standard = \"{jedec}\"");
+    // Case: numbered from the standard, pads 1 and 2 | Q1 binds, pads guessed.
+    for (standard, pins, binds, guessed) in [
+        (line.as_str(), gs, true, 3),
+        (&line, sg, false, 0),
+        ("", sg, true, 0),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let card = dir.path().join("testfet1.toml");
+        let text = FET_CARD.replace("@standard", standard);
+        std::fs::write(&card, text.replace("@pins", pins)).unwrap();
+        let lib = ModelLibrary::builtin_with_user_dirs(&[dir.path()]);
+        let board = ExtractedBoard::from_auto(LAYOUT_FET_PCB).expect("parse pcb");
+        let bound = bind_board_with(&board, &lib, &hauksbee_engine::CustomRegistry::default());
+        let row = bound.report.row("Q1").unwrap();
+        let warning = row.warning.as_deref().unwrap_or_default();
+        let analog = matches!(row.outcome, BindOutcome::Analog { .. });
+        let clash = warning.contains("as pin rule 'nmos_sot23_g1_s2_d3' reads it");
+        let assumed = row.guesses.iter().filter(|g| g.contains(jedec)).count();
+        let got = (analog, clash, assumed);
+        assert_eq!(got, (binds, !binds, guessed), "{row:?}");
+        if guessed > 0 {
+            let today = RunDate::unknown();
+            let evidence = BoardEvidence::from_bound(&board, &bound.report, &[], today).unwrap();
+            let pad1 = |a: &Assumption| a.statement() == "Q1 pin 1 is taken to be its gate pin.";
+            let said = |a: &Assumption| pad1(a) && a.because().contains("the package standard");
+            assert!(evidence.assumptions().iter().any(said), "{row:?}");
+            let map = evidence.ci_assertion_map("q1", &["N1".into()], &[], None, None);
+            assert_eq!(map.unwrap().status(), EvidenceStatus::Qualified);
+            // `models lint` tells an extraction agent which pads it numbered.
+            let checked = combined(&run(&["models", "lint", card.to_str().unwrap()]));
+            assert!(
+                checked.contains("pads are numbered from package"),
+                "{checked}"
+            );
+        }
+    }
 }

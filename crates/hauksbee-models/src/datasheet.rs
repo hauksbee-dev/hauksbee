@@ -1565,15 +1565,13 @@ WHERE TO LOOK AND HOW TO READ IT:
 
 PIN NUMBERING, read this before you fill in [models.pins]:
 
-  The pin map is the one field where being wrong is worse than being absent. A
-  wrong value makes a simulation inaccurate; a wrong pin map makes it a
-  simulation of a different circuit, and it still binds cleanly, so nobody
+  The pin map is the one field where being wrong is worse than being absent: a
+  wrong map simulates a different circuit and still binds cleanly, so nobody
   finds out. Treat it as the hardest part of this job, not the easiest.
 
-  P1. PREFER A NUMBERED TABLE. If the datasheet has a pin-function or terminal
-      table with a "Pin"/"No."/"Terminal" column, that table is the answer. Use
-      it and cite it. Do not re-derive the numbering from a picture when a
-      table exists.
+  P1. PREFER A NUMBERED TABLE. A pin-function or terminal table with a "Pin"/
+      "No."/"Terminal" column is the answer: use it and cite it. Do not
+      re-derive the numbering from a picture when a table exists.
   P2. A PACKAGE DRAWING IS NOT A PIN TABLE. Drawings are routinely rotated 90
       degrees, drawn from the BOTTOM, or drawn as a "front view" with the leads
       pointing sideways. Reading such a figure top-to-bottom and calling the
@@ -1596,9 +1594,8 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       often differ. If the datasheet covers several packages, state which one
       this map is for in the description, and pick the package the value/
       footprint you were given implies.
-  P5. If after all that you are still unsure, say so in a comment on the pins
-      block rather than presenting a guess as read. An honest
-      `# LOW CONFIDENCE: ...` is useful. A confident wrong map is not.
+  P5. Still unsure? Say so in a comment on the pins block, never present a
+      guess as read: `# LOW CONFIDENCE: ...` helps, a confident wrong map hurts.
   P6. ONE COLUMN PER PACKAGE. When the pin table prints a pin-number column per
       package, record every column, names as printed, after [models.source]:
         [[models.source.pinout]]
@@ -1607,6 +1604,11 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       The description names only your package. Read [models.pins] from that
       package's own column and its own figure: a figure labelled with another
       package is not yours, and the checker compares the two.
+  P7. LETTERS ONLY (G/S/D, B/C/E at unnumbered leads) with the view and pin 1
+      drawn: number [models.pins] by the package standard and name it and the
+      view in the P6 block (pins as printed); results mark those pins assumed:
+        standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
+      No view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
 
 IMPORTANT RULES:
 0. Emit this machine-readable source block immediately after the model's description:
@@ -1667,8 +1669,8 @@ IMPORTANT RULES:
    as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
    from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
    card whose cited rows suffice. Key [models.pins] by pad number wherever one is
-   printed (pin table, package drawing, beside the letters); only when the sheet shows
-   letters alone, key by lead letters A/K, G/S/D or B/C/E and list `pad_numbers` in
+   printed (pin table, package drawing, beside the letters) or P7 numbers it; else
+   key by lead letters A/K, G/S/D or B/C/E and list `pad_numbers` in
    [models.coverage] missing. A required param genuinely absent and not derivable or
    fittable is never estimated: one missing param takes an `unknown` record where the
    kind's params above allow one. Only when the kind's behaviour cannot be written
@@ -3594,7 +3596,7 @@ mod tests {
         assert!(comparator.contains("input_common_mode per printed temperature row, each with its"));
         assert!(comparator.contains("(min/max) cell, never typ (typ alone: omit the entry)"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
-        assert!(bjt.contains("letters alone, key by lead letters A/K, G/S/D"));
+        assert!(bjt.contains("P7 numbers it; else\n   key by lead letters A/K, G/S/D"));
         assert!(bjt.contains("one missing"));
         assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
         assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));

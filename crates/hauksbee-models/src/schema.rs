@@ -158,6 +158,9 @@ pub struct ModelEntry {
     /// when the library takes `source` into the resolution's provenance.
     #[serde(skip)]
     pub derating: crate::derating::Derating,
+    /// `source`'s pinout standard, kept likewise (see `validation::pin_standard`).
+    #[serde(skip)]
+    pub pin_standard: Option<String>,
 }
 
 /// Declared executable scope of a model card.
@@ -323,6 +326,9 @@ pub struct ModelSourceSpec {
 pub struct Pinout {
     pub package: String,
     pub pins: BTreeMap<String, String>,
+    /// The standard and view the pads are numbered from when the sheet prints letters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard: Option<String>,
 }
 
 /// One published characteristic row carrying only the min/typ/max columns the

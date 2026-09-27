@@ -190,6 +190,9 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
             entry_warnings += 1;
             println!("model '{}' [models.source]: warning: {w}", entry.id);
         }
+        if let Some(standard) = hauksbee_models::validation::pin_standard(entry) {
+            println!("model '{}' [[models.source.pinout]]: note: [models.pins] pads are numbered from package standard \"{standard}\", not printed on the sheet; every result marks their roles assumed, so recheck the view and the pin-1 corner against the drawing", entry.id);
+        }
         for w in unknown
             .iter()
             .map(hauksbee_models::param_names::UnknownParam::message)

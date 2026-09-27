@@ -105,6 +105,14 @@ from the footprint + part kind + pad count. Every role assigned this way is a
 rule that matched (shown in `hauksbee run --report` and `--lint`). An explicit
 pin-function always wins, so a part with `A`/`K` pins binds with no warning.
 
+A datasheet card whose sheet prints lead letters alone may number its pads from
+the package standard: its `[[models.source.pinout]]` carries, for example,
+`standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"` (the
+view is mandatory, since a mirrored view binds cleanly and wrongly). Each pad
+such a card roles is reported as the same kind of guess, and a pin rule for that
+footprint and kind that reads a pad otherwise refuses the part instead of
+choosing between them.
+
 ```toml
 [[pin_rules]]
 # Stable id, surfaced verbatim in the guess-warning.

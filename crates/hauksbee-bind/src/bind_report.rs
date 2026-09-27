@@ -120,8 +120,8 @@ pub struct BindRow {
     /// Set when a connected analog part failed to resolve (loud warning).
     pub warning: Option<String>,
     /// Pin-role GUESS warnings: one per pad whose role the binder inferred from
-    /// the pin-rule table (not an explicit schematic pin-function). Each names
-    /// the pad, the guessed role, and the rule that matched, so nothing is
+    /// the pin-rule table or a card's package standard (not an explicit pin
+    /// number or pin-function). Each names the pad, role and rule or standard, so nothing is
     /// silently guessed. Empty when every role was explicit.
     pub guesses: Vec<String>,
 }

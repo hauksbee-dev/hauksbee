@@ -2455,6 +2455,8 @@ fn role_node_map(
 /// number and no electrode name, and never re-roles a pad the board or card
 /// names: a rule that names such a pad otherwise is the wrong pinout, so when it
 /// would fill a gap the part is refused (the third element) rather than rewired.
+/// A card numbering its pads from a package standard (its sheet prints lead
+/// letters alone) is a guess too, reported per pad and refused on a clash.
 fn role_node_map_guessed(
     comp: &Component,
     model: &ModelEntry,
@@ -2464,20 +2466,23 @@ fn role_node_map_guessed(
     let (mut m, kind) = (role_node_map(comp, model, node_of), model.kind);
     let (mut guesses, mut clash, pad_count) = (Vec::new(), None, comp.pins.len());
     let canon = |r: &str| role_from_pinfunction(kind, r).unwrap_or_else(|| r.to_ascii_lowercase());
-    let named = |pin: &hauksbee_extract::Pin| {
-        let card = |pad: &str| model.pins.get(pad).cloned();
-        role_from_pinfunction(kind, &pin.function)
-            .or_else(|| card(&pin.number))
-            .or_else(|| role_from_electrode_pad(kind, &pin.number))
-            .or_else(|| ordinal_pad(&pin.number).and_then(|o| card(&o)))
-    };
+    let standard = hauksbee_models::validation::pin_standard(model);
     for pin in &comp.pins {
-        let found = pin_rules.role_for_pad(&comp.footprint, Some(kind), pad_count, &pin.number);
-        let (Some(node), Some(inf)) = (node_of(pin.net), found) else {
+        let (n, node) = (&pin.number, node_of(pin.net));
+        let roles = pad_role_sources(pin, &model.pins, Some(kind));
+        let named = roles.iter().flatten().next().cloned();
+        // The card's pads, not a pin-function, roled this pad, and bound its node.
+        let card = roles[0].is_none() && (named == roles[1] || named == roles[3]);
+        let bound = |r: &&String| card && node.is_some() && m.get(*r) == node.as_ref();
+        if let (Some(convention), Some(role)) = (standard, named.as_ref().filter(bound)) {
+            guesses.push(format!("pad {n} role '{role}' numbered from package standard \"{convention}\" (the datasheet prints lead letters only; footprint \"{}\")", comp.footprint));
+        }
+        let found = pin_rules.role_for_pad(&comp.footprint, Some(kind), pad_count, n);
+        let (Some(node), Some(inf)) = (node, found) else {
             continue;
         };
-        let (n, id, role) = (&pin.number, &inf.rule_id, &inf.role);
-        if let Some(own) = named(pin) {
+        let (id, role) = (&inf.rule_id, &inf.role);
+        if let Some(own) = named {
             let why = format!("pad {n} is named '{own}', not '{role}' as pin rule '{id}' reads it");
             clash = clash.or_else(|| (canon(&own) != canon(role)).then_some(why));
         } else if !m.contains_key(role) {
@@ -2489,7 +2494,7 @@ fn role_node_map_guessed(
             ));
         }
     }
-    // A clash matters only when the rule would supply a role.
+    // A clash matters only when the rule or the package standard supplies a role.
     match clash.filter(|_| !guesses.is_empty()) {
         Some(why) => (m, Vec::new(), Some(why)),
         None => (m, guesses, None),
@@ -2533,26 +2538,32 @@ fn role_node_map_pins(
     let mut m = HashMap::new();
     // Each source visits ALL pads before the next source. Per-pad fallback would
     // let an earlier model pad override a later pinfunction for the same role.
-    let mut fill = |role_of: &dyn Fn(&hauksbee_extract::Pin) -> Option<String>| {
+    for source in 0..4 {
         for pin in &comp.pins {
-            if let (Some(role), Some(node)) = (role_of(pin), node_of(pin.net)) {
+            let role = pad_role_sources(pin, pins, kind)[source].take();
+            if let (Some(role), Some(node)) = (role, node_of(pin.net)) {
                 m.entry(role).or_insert(node);
             }
         }
-    };
-    if let Some(kind) = kind {
-        fill(&|pin| role_from_pinfunction(kind, &pin.function));
     }
-    // Numbered model pads fill gaps in schematic pinfunctions.
-    fill(&|pin| pins.get(&pin.number).cloned());
-    if let Some(kind) = kind {
-        // Electrode letters remain kind-aware: C is cathode on a diode, collector
-        // on a BJT. These recover real junctions from footprint-only extraction.
-        fill(&|pin| role_from_electrode_pad(kind, &pin.number));
-    }
-    // Eagle P$1/P$2 ordinal pads re-consult the numbered model map last.
-    fill(&|pin| ordinal_pad(&pin.number).and_then(|ord| pins.get(&ord).cloned()));
     m
+}
+
+/// Each source's role for a pad, in precedence order: the pin-function, the card's
+/// pads, a kind-aware electrode letter (C: cathode on a diode, collector on a BJT)
+/// and an Eagle P$1/P$2 ordinal re-reading the card's pads.
+fn pad_role_sources(
+    pin: &hauksbee_extract::Pin,
+    pins: &std::collections::BTreeMap<String, String>,
+    kind: Option<ComponentKind>,
+) -> [Option<String>; 4] {
+    let card = |pad: &str| pins.get(pad).cloned();
+    [
+        kind.and_then(|k| role_from_pinfunction(k, &pin.function)),
+        card(&pin.number),
+        kind.and_then(|k| role_from_electrode_pad(k, &pin.number)),
+        ordinal_pad(&pin.number).and_then(|ord| card(&ord)),
+    ]
 }
 
 /// Interpret an electrode-letter pad "number" as a binder role for `kind`.

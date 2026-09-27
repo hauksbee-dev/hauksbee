@@ -1312,8 +1312,8 @@ impl Assumption {
         )
     }
 
-    /// A pin's role was inferred from the pin-rule table rather than read from
-    /// the schematic; `component_subject` is the occurrence-safe causal component id.
+    /// A pin's role was inferred from a package numbering convention (a pin rule
+    /// or the card's package standard) rather than read from the schematic; `component_subject` is the occurrence-safe causal component id.
     #[must_use]
     pub fn inferred_pin_role_for_component(
         component_subject: &str,
@@ -1336,8 +1336,8 @@ impl Assumption {
             &subject,
             part_scope(part_ref),
             format!("{reference} pin {pin} is taken to be its {role} pin."),
-            "The inputs named no role for that pin, so the pin-rule table inferred one from \
-             the part's shape."
+            "The inputs named no role for that pin, so it was inferred from a package \
+             numbering convention (a pin rule or the package standard)."
                 .to_string(),
             format!(
                 "If the inference is wrong, {reference} is wired into the simulation \
