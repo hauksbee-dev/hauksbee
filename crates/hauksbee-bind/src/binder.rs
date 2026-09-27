@@ -4415,7 +4415,8 @@ fn bind_comparator(
 
 /// Stamp one SPDT as two complementary `VSwitch` legs named `{name}_s1` and
 /// `{name}_s0`: select high closes com<->s1; the s0 leg conducts when the
-/// select is LOW by sensing (vcc - select) against the rail voltage `vcc_v`.
+/// select is LOW by sensing (vcc - select) against the rail voltage `vcc_v`
+/// (or, passed vss as `vcc` and 0 as `vcc_v`, (vss - select) against -vth).
 /// Each leg takes its own on-resistance (`[ron_s0, ron_s1]`).
 fn stamp_spdt(
     circuit: &mut Circuit,
@@ -4535,14 +4536,14 @@ fn bind_analog_switch(
     // True SPDT when both throws are wired (com + s0 + s1 + ctrl): two
     // complementary VSwitch legs. select low -> com<->s0, select high ->
     // com<->s1 (the SN74LVC1G3157 convention). The s0 leg senses the
-    // INVERTED control by measuring (vcc - select).
+    // INVERTED control by measuring (vcc - select), or (vss - select) against
+    // -vth on a part with no vcc pin (a power mux, powered from its inputs).
     let com = pick(roles, &["com", "a"]).copied();
     let s0 = pick(roles, &["s0", "b1"]).copied();
     let s1 = pick(roles, &["s1", "b2"]).copied();
     let sel = pick(roles, &["ctrl", "s", "in"]).copied();
-    if let (Some(com), Some(s0), Some(s1), Some(sel), Some(vcc)) =
-        (com, s0, s1, sel, pick(roles, &["vcc"]).copied())
-    {
+    if let (Some(com), Some(s0), Some(s1), Some(sel)) = (com, s0, s1, sel) {
+        let vcc = pick(roles, &["vcc"]).copied();
         // The s0 leg senses (vcc - select), so its thresholds must be
         // referenced to the ACTUAL rail on the vcc net. A hardcoded 5 V rail
         // put von at 3.75 V on a 3.3 V board, unreachable (vcc - select
@@ -4553,8 +4554,8 @@ fn bind_analog_switch(
         // reintroduces the very "com<->s0 permanently open" bug the threshold
         // math above fixes. Fall back to DEFAULT_VCC but SAY SO, matching the
         // passive-array convention warning.
-        let rail = power_nets.get(circuit.node_name(vcc)).copied();
-        let vcc_warning = rail.is_none().then(|| {
+        let rail = vcc.and_then(|vcc| power_nets.get(circuit.node_name(vcc)).copied());
+        let vcc_warning = vcc.filter(|_| rail.is_none()).map(|vcc| {
             format!(
                 "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
                  modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
@@ -4565,12 +4566,13 @@ fn bind_analog_switch(
                 circuit.node_name(vcc),
             )
         });
-        let vcc_v = rail.unwrap_or(DEFAULT_VCC);
+        // No vcc pin: the s0 leg senses (vss - select) against -vth instead.
+        let (rail_node, vcc_v) = vcc.map_or((vss, 0.0), |vcc| (vcc, rail.unwrap_or(DEFAULT_VCC)));
         stamp_spdt(
             circuit,
             &comp.reference,
             [com, s0, s1],
-            [sel, vss, vcc],
+            [sel, vss, rail_node],
             vcc_v,
             (legs, roff, vth),
         );
@@ -4578,7 +4580,7 @@ fn bind_analog_switch(
             BindOutcome::Analog {
                 device: "spdt x2".to_string(),
             },
-            vcc_warning,
+            vcc.map_or_else(|| entry_warning(comp, model), |_| vcc_warning),
         );
     }
 
@@ -7793,6 +7795,38 @@ style = "i2c_pointer"
         assert_eq!(cp, NodeId::GROUND, "s0 throw senses (vss - ctrl)");
         assert_eq!(cn, gate);
         assert!(von < 0.0 && voff < von, "got von={von} voff={voff}");
+    }
+
+    /// A com/s0/s1/ctrl SPDT conducts com<->s0 on a low ctrl and com<->s1 on a
+    /// high one through a DC solve, with a `vcc` pin (the s0 leg senses vcc -
+    /// ctrl) or without one (a power mux: both legs reference vss).
+    #[test]
+    fn spdt_with_or_without_vcc_follows_ctrl_through_a_dc_solve() {
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_testkit::circuits::{res, vdc};
+        let names = ["com", "s0:in1", "s1:in2", "ctrl", "vss:gnd", "vcc:+3v3"];
+        let rails = HashMap::from([("+3V3".to_string(), 3.3)]);
+        for (n, ctrl_v, want) in [(5, 0.0, 5.0), (5, 3.3, 3.0), (6, 0.0, 5.0), (6, 3.3, 3.0)] {
+            let (mut c, model) = (Circuit::new(), analog_switch_entry("SPDT"));
+            let r = roles(&mut c, &names[..n]);
+            let bound = bind_analog_switch(&comp("U9", ""), &model, &mut c, &r, &rails);
+            for (role, v) in [("s0", 5.0), ("s1", 3.0), ("ctrl", ctrl_v), ("vcc", 3.3)] {
+                if let Some(&node) = r.get(role) {
+                    vdc(&mut c, role, node, v);
+                }
+            }
+            res(&mut c, "RLOAD", r["com"], NodeId::GROUND, 1e6);
+            let mut ws = Workspace::new(&c);
+            dc_operating_point(&mut ws, &c, &SolverOptions::default()).unwrap();
+            let got = ws.layout.node(r["com"]).map_or(0.0, |i| ws.x[i]);
+            // Before, the no-vcc card fell to the single-throw path: com floated
+            // at 5 mV (open, loaded through s0's roff) with ctrl high.
+            assert!((got - want).abs() < 1e-3, "{n} roles/{ctrl_v} V: {got}");
+            assert!(
+                matches!(bound, (BindOutcome::Analog { .. }, None)),
+                "{bound:?}"
+            );
+        }
     }
 
     #[test]

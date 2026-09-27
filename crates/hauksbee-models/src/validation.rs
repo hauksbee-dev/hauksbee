@@ -1116,6 +1116,15 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
         return;
     }
     p.0.extend(missing_pin_roles(entry));
+    // Without `ctrl` an SPDT binds one throw or none, whatever its select is called.
+    let spdt = ["com", "s0", "s1", "ctrl"].map(|r| has_role(entry, r));
+    let switch = entry.kind == ComponentKind::AnalogSwitch;
+    p.require(!switch || spdt[..3].contains(&false) || spdt[3], || {
+        "analog_switch maps com/s0/s1 but no 'ctrl': map the select/enable pin (SEL, EN, IN) \
+         as 'ctrl', with s0 the throw joined to com while ctrl is LOW and s1 while it is HIGH \
+         (so an active-low select's selected input is s0)"
+            .into()
+    });
 }
 
 /// Why a card's pin map leaves it OPEN at bind time: one line per role the
@@ -1897,6 +1906,14 @@ mod tests {
             &[("1", "out_a"), ("2", "in_minus_a"), ("3", "in_plus_a")],
         );
         accepts(&op);
+
+        // An SPDT's select must be `ctrl`, whatever the datasheet calls it.
+        let mut sw = entry(ComponentKind::AnalogSwitch, &[("ron", 5.0), ("roff", 1e9)]);
+        pins(&mut sw, &[("1", "com"), ("2", "s0"), ("3", "s1")]);
+        sw.pins.insert("4".into(), "en_n".into());
+        rejects(&sw, "s0 the throw joined to com while ctrl is LOW");
+        sw.pins.insert("4".into(), "ctrl".into());
+        accepts(&sw);
     }
 
     fn programmed_vreg() -> ModelEntry {

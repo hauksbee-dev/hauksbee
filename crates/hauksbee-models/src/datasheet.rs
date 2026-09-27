@@ -2030,7 +2030,11 @@ fn pin_roles_for_kind(kind: &str) -> &'static str {
             "in_plus, in_minus, out, vcc, vee; a dual or quad suffixes each unit's signal roles \
              _a to _d (out_a, in_minus_a, in_plus_a, out_b, in_minus_b, ...), supplies unsuffixed"
         }
-        "analog_switch" => "in_out_a, in_out_b (SPST) or com, s0, s1 (SPDT)",
+        "analog_switch" => {
+            "in_out_a, in_out_b (SPST) or com, s0, s1, ctrl (SPDT). ctrl is the select/enable pin \
+             whatever the datasheet calls it; s0 is the throw joined to com while ctrl is LOW, s1 \
+             while it is HIGH (an active-low EN selecting input 1 makes input 1 s0)"
+        }
         "digital" | "shift_register" => {
             "vcc or vdd; gnd or vss; functional roles copied from the pin/function table, with repeated channels indexed consistently (for example a1, y1, a2, y2) and active-low roles suffixed _n"
         }
@@ -3568,6 +3572,7 @@ mod tests {
         let switch = build_prompt("SWITCH_FIXTURE", "analog_switch", "x");
         assert!(switch.contains("off-state figure: an `unknown` record for roff"));
         assert!(switch.contains("add ron_s0/ron_s1 for the path each leg role names"));
+        assert!(switch.contains("s0 is the throw joined to com while ctrl is LOW, s1"));
     }
 
     #[test]
