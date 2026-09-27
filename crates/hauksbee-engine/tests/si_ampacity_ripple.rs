@@ -23,11 +23,7 @@ fn board_and_text(body: &str) -> (ExtractedBoard, String) {
 }
 
 fn run_si(board: &ExtractedBoard, text: &str) -> SiReport {
-    let lib = ModelLibrary::builtin();
-    let mut report = board.si_checks(Some(text));
-    ampacity::append_ampacity(board, &lib, Some(text), &mut report);
-    ripple::append_ripple(board, &lib, &mut report);
-    report
+    run_si_with_library(board, text, &ModelLibrary::builtin())
 }
 
 fn run_si_with_library(board: &ExtractedBoard, text: &str, lib: &ModelLibrary) -> SiReport {
@@ -75,6 +71,39 @@ k_volts = 10000.0
     ModelLibrary::builtin_with_user_dirs(&[models.path()])
 }
 
+/// The Q1/Q2 half bridge and L1 of a discrete buck, placed from `x`: the
+/// switches run `sw` between `vin` and GND (net 4) and L1 carries `sw` into
+/// `vout`. Each rail is `(net number, name)`; `refs` names Q1, Q2 and L1.
+fn buck_switches(
+    x: i32,
+    [hi, lo, l]: [&str; 3],
+    (vin_n, vin): (u32, &str),
+    (sw_n, sw): (u32, &str),
+    (vout_n, vout): (u32, &str),
+) -> String {
+    let (x_lo, x_l) = (x + 5, x + 10);
+    format!(
+        r#"
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at {x} 0)
+    (property "Reference" "{hi}") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net {vin_n} "{vin}"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net {sw_n} "{sw}")))
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at {x_lo} 0)
+    (property "Reference" "{lo}") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net {sw_n} "{sw}"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at {x_l} 0)
+    (property "Reference" "{l}") (property "Value" "47uH")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net {sw_n} "{sw}"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net {vout_n} "{vout}")))"#
+    )
+}
+
+/// [`buck_switches`] for the first stage: Q1/Q2/L1 at the origin on nets 1-3.
+fn first_buck(vin: &str, vout: &str) -> String {
+    buck_switches(0, ["Q1", "Q2", "L1"], (1, vin), (2, "SW_NODE"), (3, vout))
+}
+
 /// Rails named as a nominal duty's evidence: 5 V in, 2.5 V out.
 const NAMED_RAILS: (&str, &str) = ("VIN_5V", "VOUT_2V5");
 
@@ -84,6 +113,7 @@ fn exact_rated_ripple_fixture(
     extra_input_caps: &str,
     (vin, vout): (&str, &str),
 ) -> (ExtractedBoard, String) {
+    let buck = first_buck(vin, vout);
     board_and_text(&format!(
         r#"
   (net 1 "{vin}")
@@ -92,18 +122,7 @@ fn exact_rated_ripple_fixture(
   (net 4 "GND")
   (net 5 "PROG")
   (net 6 "LOAD_OUT")
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
-    (property "Reference" "Q1") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "{vin}"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
-    (property "Reference" "Q2") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
-    (property "Reference" "L1") (property "Value" "47uH")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "{vout}")))
+  {buck}
   (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
     (property "Reference" "C1") (property "Value" "1200uF")
     (property "MPN" "EKYB630ELL122MLN3S")
@@ -357,34 +376,21 @@ fn si_attributes_no_current_without_an_operating_source() {
 /// netlist.
 #[test]
 fn converter_topology_recovered_from_discrete_buck() {
-    let (board, _text) = board_and_text(
+    let buck = first_buck("VIN", "VOUT");
+    let (board, _text) = board_and_text(&format!(
         r#"
   (net 1 "VIN")
   (net 2 "SW_NODE")
   (net 3 "VOUT")
   (net 4 "GND")
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
-    (property "Reference" "Q1")
-    (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
-    (property "Reference" "Q2")
-    (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
-    (property "Reference" "L1")
-    (property "Value" "47uH")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT")))
+  {buck}
   (footprint "Capacitor_SMD:CP_Elec_10x10" (layer "F.Cu") (at 0 5)
     (property "Reference" "C1")
     (property "Value" "1200uF")
     (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN"))
     (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
-"#,
-    );
+"#
+    ));
     let lib = ModelLibrary::builtin();
     let (stages, abstentions) = converter::detect_converters_with_abstentions(&board, &lib);
     assert_eq!(stages.len(), 1, "one buck stage recovered: {stages:?}");
@@ -412,7 +418,8 @@ fn converter_topology_recovered_from_discrete_buck() {
 /// (`ripple::tests::mppt_1210_c1_overstress_is_1_66x`).
 #[test]
 fn si_ripple_uses_programmed_load_but_not_capability_or_invented_rating() {
-    let (board, text) = board_and_text(
+    let buck = first_buck("VIN", "VOUT");
+    let (board, text) = board_and_text(&format!(
         r#"
   (net 1 "VIN")
   (net 2 "SW_NODE")
@@ -420,21 +427,7 @@ fn si_ripple_uses_programmed_load_but_not_capability_or_invented_rating() {
   (net 4 "GND")
   (net 5 "VBAT")
   (net 6 "PROG")
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
-    (property "Reference" "Q1")
-    (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
-    (property "Reference" "Q2")
-    (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
-    (property "Reference" "L1")
-    (property "Value" "47uH")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT")))
+  {buck}
   (footprint "Capacitor_SMD:CP_Elec_10x10" (layer "F.Cu") (at 0 5)
     (property "Reference" "C1")
     (property "Value" "120uF")
@@ -459,8 +452,8 @@ fn si_ripple_uses_programmed_load_but_not_capability_or_invented_rating() {
     (property "Value" "1.66k")
     (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 6 "PROG"))
     (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-"#,
-    );
+"#
+    ));
     let report = run_si(&board, &text);
     // The AMS1117's 1.0 A rating is capability, not output draw. U3 contributes
     // only its programmed 0.4 A, and C1 has no decision-grade fitted-part rating.
@@ -560,28 +553,26 @@ fn si_ripple_abstains_when_parallel_input_caps_make_current_sharing_unknown() {
 #[test]
 fn si_ripple_abstains_when_two_stages_supply_the_same_output_load() {
     let lib = test_programmed_load_library();
+    let second = buck_switches(
+        30,
+        ["Q3", "Q4", "L2"],
+        (7, "VIN2_5V"),
+        (8, "SW_NODE_2"),
+        (3, "VOUT_2V5"),
+    );
     let (board, text) = exact_rated_ripple_fixture(
-        r#"
+        &format!(
+            r#"
   (net 7 "VIN2_5V")
   (net 8 "SW_NODE_2")
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 30 0)
-    (property "Reference" "Q3") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 7 "VIN2_5V"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 8 "SW_NODE_2")))
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 35 0)
-    (property "Reference" "Q4") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 8 "SW_NODE_2"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 40 0)
-    (property "Reference" "L2") (property "Value" "47uH")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 8 "SW_NODE_2"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5")))
+  {second}
   (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 30 5)
     (property "Reference" "C2") (property "Value" "1200uF")
     (property "MPN" "EKYB630ELL122MLN3S")
     (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 7 "VIN2_5V"))
     (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
-"#,
+"#
+        ),
         NAMED_RAILS,
     );
 
@@ -650,16 +641,8 @@ fn famous_corpus_has_no_ampacity_or_ripple_findings() {
         let mut report = SiReport::default();
         ampacity::append_ampacity(&board, &lib, Some(&text), &mut report);
         ripple::append_ripple(&board, &lib, &mut report);
-        let amp = report
-            .findings
-            .iter()
-            .filter(|f| f.check == SiCheck::TraceAmpacity && f.severity.is_finding())
-            .count();
-        let rip = report
-            .findings
-            .iter()
-            .filter(|f| f.check == SiCheck::InputCapRipple && f.severity.is_finding())
-            .count();
+        let amp = findings_of(&report, SiCheck::TraceAmpacity).len();
+        let rip = findings_of(&report, SiCheck::InputCapRipple).len();
         assert_eq!(
             amp + rip,
             0,
