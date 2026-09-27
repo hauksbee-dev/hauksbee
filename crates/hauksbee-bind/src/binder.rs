@@ -2471,10 +2471,10 @@ fn role_node_map_guessed(
         let (n, node) = (&pin.number, node_of(pin.net));
         let roles = pad_role_sources(pin, &model.pins, Some(kind));
         let named = roles.iter().flatten().next().cloned();
-        // The card's pads, not a pin-function, roled this pad, and bound its node.
-        let card = roles[0].is_none() && (named == roles[1] || named == roles[3]);
-        let bound = |r: &&String| card && node.is_some() && m.get(*r) == node.as_ref();
-        if let (Some(convention), Some(role)) = (standard, named.as_ref().filter(bound)) {
+        // A role the card's pads give this pad bound its node, even beside a pin-function.
+        let own = |r: &&String| roles[0].as_ref() != Some(*r) && m.get(*r) == node.as_ref();
+        let carded = node.and_then(|_| roles[1].iter().chain(&roles[3]).find(own));
+        if let (Some(convention), Some(role)) = (standard, carded) {
             guesses.push(format!("pad {n} role '{role}' numbered from package standard \"{convention}\" (the datasheet prints lead letters only; footprint \"{}\")", comp.footprint));
         }
         let found = pin_rules.role_for_pad(&comp.footprint, Some(kind), pad_count, n);
@@ -7439,6 +7439,26 @@ style = "i2c_pointer"
             let (why, _, _) = bind(ComponentKind::Vreg, "SOT-223", ldo, pins, "");
             assert_eq!(why.contains("return not connected"), open, "{pins}: {why}");
         }
+    }
+
+    /// A standard-numbered card's role is a guess even on a pad a pin-function names otherwise.
+    #[test]
+    fn a_standard_numbered_role_beside_a_pin_function_is_still_a_guess() {
+        let node_of = |net: Option<i64>| net.map(|id| NodeId(u32::try_from(id).unwrap()));
+        let pins = [("1", "gate"), ("2", "source"), ("3", "drain")];
+        let pins = pins.map(|(k, v)| (k.into(), v.into())).into();
+        let (nmos, p) = (ComponentKind::Nmos, hauksbee_models::Params::default());
+        let mut model = make_entry("fixture", nmos, "", p, pins);
+        model.pin_standard = Some("JEDEC TO-236 top view".into());
+        let mut c = comp("Q1", "FIXTURE");
+        (c.footprint, c.pins) = ("SOT-89-3".into(), pins_on(&[("1", 1), ("2", 2), ("3", 3)]));
+        (c.pins[0].function, c.pins[1].function) = ("D".into(), "S".into());
+        let lib = ModelLibrary::builtin();
+        let g = role_node_map_guessed(&c, &model, &node_of, lib.pin_rules()).1;
+        assert!(
+            matches!(&g[..], [s] if s.starts_with("pad 1 role 'gate' numbered from")),
+            "{g:?}"
+        );
     }
 
     #[test]

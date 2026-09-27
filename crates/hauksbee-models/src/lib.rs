@@ -762,11 +762,12 @@ impl ModelLibrary {
                 return Resolution { selection, ..open };
             };
             let (mut model, mut provenance) = (le.compiled.entry.clone(), le.provenance.clone());
-            // A stand-in for an undetermined set runs on the envelope of the members left.
+            // A stand-in for an undetermined set runs on the envelope and pin standard of the members left.
             if let Some(s) = selection.as_mut().filter(|s| s.determined.is_none()) {
                 let left = |e: &&ModelEntry| s.survivors().any(|m| m.id == e.id);
                 let left: Vec<&ModelEntry> = entries.iter().copied().filter(left).collect();
                 s.widened = variants::envelope(&mut model, &mut provenance, &left);
+                model.pin_standard = left.iter().find_map(|e| e.pin_standard.clone());
             }
             let tie = |other: &&LayeredEntry| {
                 rank(other) == top && other.compiled.entry.id != *id && !sibling(other)
