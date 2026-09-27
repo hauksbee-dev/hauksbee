@@ -117,6 +117,27 @@ def filesystem_candidates(root: Path, count: int) -> list[Candidate]:
     return result
 
 
+def reserve(
+    history: Path,
+    candidates: list[Candidate],
+    iteration_id: str,
+    *,
+    entropy: str = "1",
+    hour: int = 12,
+) -> dict:
+    # `reserve_iteration` with the manifest digest, tool commit and planning
+    # day every test shares; only the entropy digit and the hour vary.
+    return reserve_iteration(
+        history,
+        candidates,
+        entropy=entropy * 64,
+        iteration_id=iteration_id,
+        planned_at=f"2026-08-06T{hour}:00:00Z",
+        manifest_sha256="d" * 64,
+        tool_commit="e" * 40,
+    )
+
+
 def manifest_pool(
     base: Path,
     name: str,
@@ -873,24 +894,8 @@ class HistoryTests(unittest.TestCase):
             history = Path(raw) / "iterations.jsonl"
             candidates = filesystem_candidates(Path(raw) / "pool", 12)
 
-            first = reserve_iteration(
-                history,
-                candidates,
-                entropy="1" * 64,
-                iteration_id="2026-08-06-01",
-                planned_at="2026-08-06T12:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
-            second = reserve_iteration(
-                history,
-                candidates,
-                entropy="2" * 64,
-                iteration_id="2026-08-06-02",
-                planned_at="2026-08-06T13:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
+            first = reserve(history, candidates, "2026-08-06-01")
+            second = reserve(history, candidates, "2026-08-06-02", entropy="2", hour=13)
 
             first_ids = {item["board_id"] for item in first["boards"]}
             second_ids = {item["board_id"] for item in second["boards"]}
@@ -938,28 +943,12 @@ class HistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             history = Path(raw) / "iterations.jsonl"
             candidates = filesystem_candidates(Path(raw) / "pool", 12)
-            reserve_iteration(
-                history,
-                candidates,
-                entropy="1" * 64,
-                iteration_id="same-id",
-                planned_at="2026-08-06T12:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
+            reserve(history, candidates, "same-id")
 
             with self.assertRaisesRegex(
                 HistoryError, r"iteration id 'same-id' already exists"
             ):
-                reserve_iteration(
-                    history,
-                    candidates,
-                    entropy="2" * 64,
-                    iteration_id="same-id",
-                    planned_at="2026-08-06T13:00:00Z",
-                    manifest_sha256="d" * 64,
-                    tool_commit="e" * 40,
-                )
+                reserve(history, candidates, "same-id", entropy="2", hour=13)
 
             self.assertEqual(1, len(history.read_text().splitlines()))
 
@@ -1038,15 +1027,8 @@ class HistoryTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 SelectionError, r"candidate changed after discovery"
             ):
-                reserve_iteration(
-                    Path(raw) / "iterations.jsonl",
-                    candidates,
-                    entropy="3" * 64,
-                    iteration_id="mutation",
-                    planned_at="2026-08-06T12:00:00Z",
-                    manifest_sha256="d" * 64,
-                    tool_commit="e" * 40,
-                )
+                history = Path(raw) / "iterations.jsonl"
+                reserve(history, candidates, "mutation", entropy="3")
 
     def test_history_refuses_missing_population_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -1067,15 +1049,7 @@ class HistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             history = Path(raw) / "iterations.jsonl"
             original = filesystem_candidates(Path(raw) / "pool", 5)
-            reserve_iteration(
-                history,
-                original,
-                entropy="1" * 64,
-                iteration_id="first",
-                planned_at="2026-08-06T12:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
+            reserve(history, original, "first")
             relabelled = [
                 Candidate(
                     **{
@@ -1088,15 +1062,7 @@ class HistoryTests(unittest.TestCase):
             ]
 
             with self.assertRaisesRegex(SelectionError, r"only 0 remain"):
-                reserve_iteration(
-                    history,
-                    relabelled,
-                    entropy="2" * 64,
-                    iteration_id="second",
-                    planned_at="2026-08-06T13:00:00Z",
-                    manifest_sha256="d" * 64,
-                    tool_commit="e" * 40,
-                )
+                reserve(history, relabelled, "second", entropy="2", hour=13)
 
     def test_history_detects_a_rewritten_prefix_and_a_tampered_derived_seed(
         self,
@@ -1104,24 +1070,8 @@ class HistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             history = Path(raw) / "iterations.jsonl"
             candidates = filesystem_candidates(Path(raw) / "pool", 12)
-            reserve_iteration(
-                history,
-                candidates,
-                entropy="1" * 64,
-                iteration_id="first",
-                planned_at="2026-08-06T12:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
-            reserve_iteration(
-                history,
-                candidates,
-                entropy="2" * 64,
-                iteration_id="second",
-                planned_at="2026-08-06T13:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
+            reserve(history, candidates, "first")
+            reserve(history, candidates, "second", entropy="2", hour=13)
             records = [json.loads(line) for line in history.read_text().splitlines()]
             records[0]["planned_at"] = "rewritten"
             history.write_text(
@@ -1648,6 +1598,24 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertTrue(audit.call_args.kwargs["require_completed"])
 
+    @staticmethod
+    def _record_completed(history: Path, evidence_dir: Path, **evidence) -> Path:
+        # Write `evidence` as `<iteration_id>.json` and append a "completed"
+        # result bound to its digest, whatever status the evidence itself claims.
+        evidence_dir.mkdir()
+        artifact = evidence_dir / f"{evidence['iteration_id']}.json"
+        artifact.write_text(json.dumps(evidence) + "\n")
+        release_gates.append_iteration_result(
+            history,
+            iteration_id=evidence["iteration_id"],
+            status="completed",
+            recorded_at="2026-08-06T12:01:00Z",
+            evidence_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            evidence_file=artifact.name,
+            tool_commit="e" * 40,
+        )
+        return artifact
+
     def test_release_history_audit_requires_terminal_results_and_matching_evidence(
         self,
     ) -> None:
@@ -1658,42 +1626,20 @@ class CommandTests(unittest.TestCase):
                 )
             history = base / "history.jsonl"
             candidates = filesystem_candidates(base / "pool", 5)
-            reservation = reserve_iteration(
-                history,
-                candidates,
-                entropy="a" * 64,
-                iteration_id="planned-only",
-                planned_at="2026-08-06T12:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
+            reservation = reserve(history, candidates, "planned-only", entropy="a")
             with self.assertRaisesRegex(HistoryError, r"has no terminal result"):
                 release_gates.audit_release_history(history, base / "evidence")
 
             evidence_dir = base / "evidence"
-            evidence_dir.mkdir()
-            artifact = evidence_dir / "planned-only.json"
-            artifact.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "gate": "external-five",
-                        "iteration_id": "planned-only",
-                        "status": "completed",
-                        "tool_commit": "e" * 40,
-                        "boards": reservation["boards"],
-                    }
-                )
-                + "\n"
-            )
-            release_gates.append_iteration_result(
+            artifact = self._record_completed(
                 history,
+                evidence_dir,
+                schema_version=1,
+                gate="external-five",
                 iteration_id="planned-only",
                 status="completed",
-                recorded_at="2026-08-06T12:01:00Z",
-                evidence_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
-                evidence_file=artifact.name,
                 tool_commit="e" * 40,
+                boards=reservation["boards"],
             )
             self.assertEqual(
                 1,
@@ -1709,37 +1655,15 @@ class CommandTests(unittest.TestCase):
         with temp_base() as base:
             history = base / "history.jsonl"
             candidates = filesystem_candidates(base / "pool", 5)
-            reservation = reserve_iteration(
-                history,
-                candidates,
-                entropy="a" * 64,
-                iteration_id="status-mismatch",
-                planned_at="2026-08-06T12:00:00Z",
-                manifest_sha256="d" * 64,
-                tool_commit="e" * 40,
-            )
+            reservation = reserve(history, candidates, "status-mismatch", entropy="a")
             evidence_dir = base / "evidence"
-            evidence_dir.mkdir()
-            artifact = evidence_dir / "status-mismatch.json"
-            artifact.write_text(
-                json.dumps(
-                    {
-                        "gate": "external-five",
-                        "iteration_id": "status-mismatch",
-                        "status": "failed",
-                        "boards": reservation["boards"],
-                    }
-                )
-                + "\n"
-            )
-            release_gates.append_iteration_result(
+            self._record_completed(
                 history,
+                evidence_dir,
+                gate="external-five",
                 iteration_id="status-mismatch",
-                status="completed",
-                recorded_at="2026-08-06T12:01:00Z",
-                evidence_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
-                evidence_file=artifact.name,
-                tool_commit="e" * 40,
+                status="failed",
+                boards=reservation["boards"],
             )
             with self.assertRaisesRegex(HistoryError, r"status does not match"):
                 release_gates.audit_release_history(history, evidence_dir)
@@ -2086,6 +2010,16 @@ def journey_row(
 class ValueContractTests(unittest.TestCase):
     """The gate grades delivered value, not only honesty."""
 
+    def _assert_listed(self, grade, board, input_format, key, degraded) -> None:
+        # One board's unverified dimension is enumerated under `key` in the
+        # summary and named by the `degraded` phrase in the degraded list.
+        summary = value_grading.summarize([(board, grade)])
+        self.assertEqual(
+            [{"board": board, "input_format": input_format}], summary[key]
+        )
+        lines = release_gates.describe_degraded({"value_summary": summary})
+        self.assertTrue(any(degraded in line for line in lines))
+
     def grade(self, row: dict, *, input_format: str = "kicad_pcb", **kwargs):
         facts = kwargs.pop("facts", None)
         if facts is None:
@@ -2408,18 +2342,9 @@ class ValueContractTests(unittest.TestCase):
         )
 
         self.assertIs(False, grade.signals["component_identity_verified"])
-        summary = value_grading.summarize([("no-ids", grade)])
-        self.assertEqual(
-            [{"board": "no-ids", "input_format": "kicad_pcb"}],
-            summary["unverified_identity"],
-        )
-        self.assertTrue(
-            any(
-                "component identity UNVERIFIED" in line
-                for line in release_gates.describe_degraded(
-                    {"value_summary": summary}
-                )
-            )
+        self._assert_listed(
+            grade, "no-ids", "kicad_pcb", "unverified_identity",
+            "component identity UNVERIFIED",
         )
 
     def test_the_summary_surfaces_unverified_extraction_and_lowered_firmware(
@@ -2578,18 +2503,9 @@ class ValueContractTests(unittest.TestCase):
         )
 
         self.assertIs(False, grade.signals["net_recovery_verified"])
-        summary = value_grading.summarize([("netless", grade)])
-        self.assertEqual(
-            [{"board": "netless", "input_format": "kicad_pcb"}],
-            summary["unverified_connectivity"],
-        )
-        self.assertTrue(
-            any(
-                "connectivity coverage UNVERIFIED" in line
-                for line in release_gates.describe_degraded(
-                    {"value_summary": summary}
-                )
-            )
+        self._assert_listed(
+            grade, "netless", "kicad_pcb", "unverified_connectivity",
+            "connectivity coverage UNVERIFIED",
         )
 
     def test_an_unclassified_format_discloses_its_net_names_too(self) -> None:
@@ -2616,18 +2532,9 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(journey_row(), facts=ANCHORED_KICAD)
 
         self.assertIs(False, grade.signals["net_identity_verified"])
-        summary = value_grading.summarize([("counted-only", grade)])
-        self.assertEqual(
-            [{"board": "counted-only", "input_format": "kicad_pcb"}],
-            summary["unverified_net_identity"],
-        )
-        self.assertTrue(
-            any(
-                "net names UNCHECKED" in line
-                for line in release_gates.describe_degraded(
-                    {"value_summary": summary}
-                )
-            )
+        self._assert_listed(
+            grade, "counted-only", "kicad_pcb", "unverified_net_identity",
+            "net names UNCHECKED",
         )
 
     def test_an_unverified_placement_ratio_is_recorded_not_silent(self) -> None:
@@ -3302,23 +3209,41 @@ class GerberValueContractTests(unittest.TestCase):
             axes=axes,
         )
 
+    @staticmethod
+    def _copper_facts(
+        films, copper, flashes, total, *, identified=None, classified=True
+    ):
+        # Readable gerber input facts: `films` layers, `copper` of them copper,
+        # `flashes` apertures counted on copper out of `total` across the package.
+        facts = {
+            "kind": "gerber", "gerber_layers": films, "copper_layers": copper,
+            "copper_classified": classified, "aperture_flashes": flashes,
+            "total_gerber_flashes": total, "input_readable_by_gate": True,
+        }
+        if identified is not None:
+            facts["identified_layers"] = identified
+        return facts
+
+    @staticmethod
+    def _bare_grade(facts, nets, mcu="stm32", **row):
+        # Grade a copper package whose report recovered `nets` nets and no
+        # parts, on a board the manifest tags `gerber-only` plus `mcu`.
+        return value_grading.grade_board(
+            journey_row(components=0, nets=nets, critical=None, **row),
+            input_format="gerber_archive",
+            expects_refusal=False,
+            facts=facts,
+            axes=("gerber-only", mcu),
+        )
+
     def test_a_gerber_package_reconstructing_no_nets_fails_without_a_floor(
         self,
     ) -> None:
         # Below the 500-flash threshold, and on a `no-mcu` board, no derived floor
         # applies. Zero nets is still nothing: a copper package whose whole value
         # is connectivity delivered none of it.
-        facts = {
-            "kind": "gerber", "gerber_layers": 2, "copper_layers": 2,
-            "identified_layers": 2, "copper_classified": True,
-            "aperture_flashes": 120, "total_gerber_flashes": 200,
-            "input_readable_by_gate": True,
-        }
-        grade = value_grading.grade_board(
-            journey_row(components=0, nets=0, critical=None),
-            input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "no-mcu"),
-        )
+        facts = self._copper_facts(2, 2, 120, 200, identified=2)
+        grade = self._bare_grade(facts, 0, "no-mcu")
 
         self.assertEqual(value_grading.FAILED, grade.grade)
         self.assertIsNone(grade.signals.get("expected_min_nets"))
@@ -3331,18 +3256,9 @@ class GerberValueContractTests(unittest.TestCase):
         # clamp is what keeps it there rather than at one. A single-net report on a
         # flashed two-layer package is the collapse this contract exists for, so
         # the floor may never round down to something a collapse satisfies.
-        facts = {
-            "kind": "gerber", "gerber_layers": 2, "copper_layers": 2,
-            "identified_layers": 2, "copper_classified": True,
-            "aperture_flashes": 500, "total_gerber_flashes": 500,
-            "input_readable_by_gate": True,
-        }
+        facts = self._copper_facts(2, 2, 500, 500, identified=2)
         self.assertEqual(2, value_grading.expected_min_nets(facts, ("stm32",)))
-        grade = value_grading.grade_board(
-            journey_row(components=0, nets=1, critical=None),
-            input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "stm32"),
-        )
+        grade = self._bare_grade(facts, 1)
         self.assertEqual(value_grading.FAILED, grade.grade)
 
     def test_applicability_is_judged_on_the_whole_package_not_the_lower_bound(
@@ -3375,11 +3291,7 @@ class GerberValueContractTests(unittest.TestCase):
 
             # A floor applies, derived from the conservative estimate.
             self.assertEqual(2, value_grading.expected_min_nets(facts, ("stm32",)))
-            grade = value_grading.grade_board(
-                journey_row(components=0, nets=1, critical=None),
-                input_format="gerber_archive", expects_refusal=False,
-                facts=facts, axes=("gerber-only", "stm32"),
-            )
+            grade = self._bare_grade(facts, 1)
             self.assertEqual(value_grading.FAILED, grade.grade)
 
     def test_a_dense_package_that_escapes_the_floor_says_so(self) -> None:
@@ -3408,11 +3320,7 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertIs(True, facts["copper_classified"])
             self.assertIsNone(value_grading.expected_min_nets(facts, ("stm32",)))
 
-            grade = value_grading.grade_board(
-                journey_row(components=0, nets=1, critical=None),
-                input_format="gerber_archive", expects_refusal=False,
-                facts=facts, axes=("gerber-only", "stm32"),
-            )
+            grade = self._bare_grade(facts, 1)
             self.assertIs(False, grade.signals["reconstruction_floor_verified"])
             self.assertIn(
                 "5 films carrying 2900 aperture flashes",
@@ -3431,17 +3339,8 @@ class GerberValueContractTests(unittest.TestCase):
         # The fourth reason a floor does not apply is deliberately silent. A small
         # board draws its copper with D01 and flashes a handful of vias, so
         # reporting "no floor applied" on every one of them is noise, not honesty.
-        facts = {
-            "kind": "gerber", "gerber_layers": 2, "copper_layers": 2,
-            "identified_layers": 2, "copper_classified": True,
-            "aperture_flashes": 137, "total_gerber_flashes": 200,
-            "input_readable_by_gate": True,
-        }
-        grade = value_grading.grade_board(
-            journey_row(components=0, nets=9, critical=None),
-            input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "stm32"),
-        )
+        facts = self._copper_facts(2, 2, 137, 200, identified=2)
+        grade = self._bare_grade(facts, 9)
 
         self.assertEqual(value_grading.DEGRADED, grade.grade)
         self.assertNotIn("reconstruction_floor_caveat", grade.signals)
@@ -3455,17 +3354,9 @@ class GerberValueContractTests(unittest.TestCase):
         # `setdefault` reported only the first, so a package whose copper could
         # not be classified AND whose flash count the reader disputes disclosed
         # the dispute and hid the classification.
-        facts = {
-            "kind": "gerber", "gerber_layers": 4, "copper_layers": 0,
-            "identified_layers": 0, "copper_classified": False,
-            "aperture_flashes": 600, "total_gerber_flashes": 2400,
-            "input_readable_by_gate": True,
-        }
-        row = journey_row(components=0, nets=40, critical=None,
-                          coverage_note="12 of 2400 aperture flashes (1%) matched.")
-        grade = value_grading.grade_board(
-            row, input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "stm32"),
+        facts = self._copper_facts(4, 0, 600, 2400, identified=0, classified=False)
+        grade = self._bare_grade(
+            facts, 40, coverage_note="12 of 2400 aperture flashes (1%) matched."
         )
 
         caveat = grade.signals["reconstruction_floor_caveat"]
@@ -3476,17 +3367,8 @@ class GerberValueContractTests(unittest.TestCase):
         # `no-mcu` is a manifest claim and the only switch that turns the sole
         # connectivity check on a copper package off. Honouring it is allowed;
         # honouring it quietly over an ardep-sized package is not.
-        facts = {
-            "kind": "gerber", "gerber_layers": 11, "copper_layers": 4,
-            "identified_layers": 10, "copper_classified": True,
-            "aperture_flashes": 2575, "total_gerber_flashes": 3000,
-            "input_readable_by_gate": True,
-        }
-        grade = value_grading.grade_board(
-            journey_row(components=0, nets=1, critical=None),
-            input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "no-mcu"),
-        )
+        facts = self._copper_facts(11, 4, 2575, 3000, identified=10)
+        grade = self._bare_grade(facts, 1, "no-mcu")
 
         # Passes, because a passive board really can have one net.
         self.assertEqual(value_grading.DEGRADED, grade.grade)
@@ -3507,12 +3389,8 @@ class GerberValueContractTests(unittest.TestCase):
         )
 
         # A package small enough for the exemption to be routine says only that.
-        sparse = value_grading.grade_board(
-            journey_row(components=0, nets=1, critical=None),
-            input_format="gerber_archive", expects_refusal=False,
-            facts={**facts, "aperture_flashes": 120, "copper_layers": 2},
-            axes=("gerber-only", "no-mcu"),
-        )
+        sparse_facts = {**facts, "aperture_flashes": 120, "copper_layers": 2}
+        sparse = self._bare_grade(sparse_facts, 1, "no-mcu")
         self.assertNotIn(
             "aperture flashes", sparse.signals["reconstruction_floor_caveat"]
         )
@@ -3523,17 +3401,8 @@ class GerberValueContractTests(unittest.TestCase):
         # A fabrication package declares no net names, so the count is all the
         # gate has and the reader has to be told. This is the format the contract
         # was written for, and it was the one left out of the disclosure.
-        facts = {
-            "kind": "gerber", "gerber_layers": 4, "copper_layers": 4,
-            "identified_layers": 4, "copper_classified": True,
-            "aperture_flashes": 2575, "total_gerber_flashes": 3000,
-            "input_readable_by_gate": True,
-        }
-        grade = value_grading.grade_board(
-            journey_row(components=0, nets=40, critical=None),
-            input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "stm32"),
-        )
+        facts = self._copper_facts(4, 4, 2575, 3000, identified=4)
+        grade = self._bare_grade(facts, 40)
 
         self.assertIs(False, grade.signals["net_identity_verified"])
         summary = value_grading.summarize([("copper-only", grade)])
@@ -3565,13 +3434,7 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertTrue(from_directory["input_readable_by_gate"])
 
             # And the floor it feeds actually applies, which is the point.
-            grade = value_grading.grade_board(
-                journey_row(components=0, nets=1, critical=None),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=from_directory,
-                axes=("gerber-only", "stm32"),
-            )
+            grade = self._bare_grade(from_directory, 1)
             self.assertEqual(value_grading.FAILED, grade.grade)
             self.assertEqual(4, grade.signals["expected_min_nets"])
 
@@ -3649,18 +3512,12 @@ class GerberValueContractTests(unittest.TestCase):
         # by more than a factor of two they are not describing the same copper,
         # and which is wrong cannot be settled from the report, so the floor is
         # marked as resting on a disputed number rather than trusted silently.
-        facts = {
-            "kind": "gerber", "gerber_layers": 4, "copper_layers": 4,
-            "copper_classified": True, "aperture_flashes": 1924,
-            "total_gerber_flashes": 1924, "input_readable_by_gate": True,
-        }
-        row = journey_row(
-            components=0, nets=40, critical="0/0",
+        facts = self._copper_facts(4, 4, 1924, 1924)
+        grade = self._gerber_grade(
+            facts,
+            nets=40,
+            axes=("gerber-only", "stm32"),
             coverage_note="0 of 200 aperture flashes (0%) were matched.",
-        )
-        grade = value_grading.grade_board(
-            row, input_format="gerber_archive", expects_refusal=False,
-            facts=facts, axes=("gerber-only", "stm32"),
         )
 
         self.assertEqual(200, grade.signals["reader_reported_flashes"])
@@ -3679,15 +3536,7 @@ class GerberValueContractTests(unittest.TestCase):
             ("inkplate6", 1731, 18, 8, value_grading.DEGRADED),
             ("ardep", 1924, 1, 9, value_grading.FAILED),
         ):
-            facts = {
-                "kind": "gerber",
-                "gerber_layers": 8,
-                "copper_layers": 4,
-                "copper_classified": True,
-                "aperture_flashes": flashes,
-                "total_gerber_flashes": flashes,
-                "input_readable_by_gate": True,
-            }
+            facts = self._copper_facts(8, 4, flashes, flashes)
             self.assertEqual(
                 floor, value_grading.expected_min_nets(facts, ("esp32",)), label
             )
@@ -4051,11 +3900,7 @@ class GerberValueContractTests(unittest.TestCase):
         # more nets than it has flashed features; it does NOT catch a report that
         # shades its count just over the floor, which is engine follow-up 2 and is
         # documented as open rather than closed.
-        facts = {
-            "kind": "gerber", "gerber_layers": 4, "copper_layers": 4,
-            "copper_classified": True, "aperture_flashes": 2575,
-            "total_gerber_flashes": 2575, "input_readable_by_gate": True,
-        }
+        facts = self._copper_facts(4, 4, 2575, 2575)
 
         def grade_with(nets: int) -> str:
             row = journey_row(
