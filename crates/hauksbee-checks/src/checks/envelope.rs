@@ -15,6 +15,8 @@ use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
+use hauksbee_ir::evidence::Assumption;
+use hauksbee_models::derating::{temp_span, TempRef};
 use hauksbee_models::{EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope};
 
 use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
@@ -295,6 +297,71 @@ fn unknown_abstention(net_name: &str, knowledge: &RailKnowledge, reference: &str
     }
 }
 
+/// A point row (`TA = 25 °C`) binds within this of its temperature: the bench
+/// tolerance a room-temperature figure is taken at. Further off, it is a guess.
+const POINT_ROW_C: f64 = 5.0;
+
+/// Whether row `e` is guaranteed at `ambient_c`; every row is on a static
+/// surface, which knows no temperature. An untagged row holds everywhere, and a
+/// TC or TJ row covers any temperature from ambient up: the part runs hotter.
+fn covers(e: &OperatingEnvelope, ambient_c: Option<f64>) -> bool {
+    let Some(ta) = ambient_c else { return true };
+    temp_span(e.conditions()).is_none_or(|(at, lo, hi)| {
+        let tol = if lo < hi { 0.0 } else { POINT_ROW_C };
+        (at != TempRef::Ambient || lo - tol <= ta) && ta <= hi + tol
+    })
+}
+
+/// The temperature rows of `e`'s channel.
+fn rows_of<'a>(
+    envelope: &'a [OperatingEnvelope],
+    e: &OperatingEnvelope,
+) -> impl Iterator<Item = &'a OperatingEnvelope> {
+    let (channel, rows) = (e.channel(), envelope.iter());
+    rows.filter(move |o| !o.conditions().is_empty() && o.channel() == channel)
+}
+
+/// The rows judged at `ambient_c`: each one guaranteed there, and every row of
+/// a channel none of whose rows is. Guaranteed windows are SELECTED, never
+/// interpolated, and judging every binding row makes the verdict the strictest.
+pub(crate) fn binding(
+    envelope: &[OperatingEnvelope],
+    ambient_c: Option<f64>,
+) -> impl Iterator<Item = &OperatingEnvelope> {
+    let held =
+        move |e: &&_| covers(e, ambient_c) || !rows_of(envelope, e).any(|o| covers(o, ambient_c));
+    envelope.iter().filter(held)
+}
+
+/// A caveat per channel none of whose rows covers `ambient_c`, as run evidence
+/// that qualifies the answer.
+pub(crate) fn temperature_caveats(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    ambient_c: f64,
+) -> Vec<Assumption> {
+    let fix = "run the part inside the temperature range the card's rows are printed for, or add the row for this temperature";
+    let mut out = Vec::new();
+    for (comp, model) in super::resolved_components(board, lib) {
+        let (r, envelope) = (comp.reference.as_str(), &model.envelope);
+        for e in envelope {
+            let first = rows_of(envelope, e).next() == Some(e);
+            if !first || rows_of(envelope, e).any(|o| covers(o, Some(ambient_c))) {
+                continue;
+            }
+            let channel = e.channel().unwrap_or_default();
+            let printed: Vec<&str> = rows_of(envelope, e)
+                .map(OperatingEnvelope::conditions)
+                .collect();
+            let gap = format!("{r} at {ambient_c:.1} °C ambient is outside its characterised temperature range: its {channel} limit is characterised only at {}, so it is judged against every printed row, none of which the datasheet guarantees there.", printed.join("; "));
+            let id = format!("{r}-envelope-temperature-{channel}").replace(' ', "-");
+            let caveat = Assumption::partial_model_for_component(&id, r, "", &gap, fix);
+            out.push(caveat);
+        }
+    }
+    out
+}
+
 /// Run operating-envelope checks using only rail knowledge carried by the
 /// board and its bound model cards.
 #[must_use]
@@ -312,7 +379,7 @@ pub fn envelope_lint_with_drives(
     let points = drives
         .iter()
         .map(|(net, v)| (net.clone(), RailRange::point(*v)));
-    envelope_lint_with_tolerance(board, lib, &points.collect(), 0.0, 0.0)
+    envelope_lint_with_tolerance(board, lib, &points.collect(), (0.0, 0.0), None)
 }
 
 // One match over envelope kinds sharing the resolver and per-net abstention bookkeeping.
@@ -321,15 +388,15 @@ fn envelope_lint_with_tolerance(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     solved: &BTreeMap<String, RailRange>,
-    reltol: f64,
-    vntol: f64,
+    (reltol, vntol): (f64, f64),
+    ambient_c: Option<f64>,
 ) -> NetLintReport {
     let resolver = RailResolver::new(board, lib, solved);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
 
     for (comp, model) in super::resolved_components(board, lib) {
-        for envelope in &model.envelope {
+        for envelope in binding(&model.envelope, ambient_c) {
             match envelope {
                 OperatingEnvelope::SupplyRange {
                     pin,
@@ -458,11 +525,11 @@ pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     solved: &BTreeMap<String, RailRange>,
-    reltol: f64,
-    vntol: f64,
-) -> Vec<hauksbee_ir::evidence::Assumption> {
-    let found = envelope_lint_with_tolerance(board, lib, solved, reltol, vntol).findings;
-    let judged = found
+    tolerance: (f64, f64),
+    ambient_c: f64,
+) -> Vec<Assumption> {
+    let found = envelope_lint_with_tolerance(board, lib, solved, tolerance, Some(ambient_c));
+    let judged = (found.findings)
         .into_iter()
         .filter(|f| f.nets.iter().all(|net| solved.contains_key(net)))
         .map(|f| {
@@ -470,7 +537,9 @@ pub fn run_assumptions(
             (f, serious)
         });
     let fix = "bring the rail inside the envelope the card quotes, then re-run";
-    super::analog_inputs::as_evidence(judged.collect(), "supply-envelope", fix)
+    let mut out = super::analog_inputs::as_evidence(judged.collect(), "supply-envelope", fix);
+    out.extend(temperature_caveats(board, lib, ambient_c));
+    out
 }
 
 #[cfg(test)]
@@ -561,7 +630,7 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         ] {
             let solved =
                 BTreeMap::from([("UNNAMED_SUPPLY".to_string(), RailRange { min_v, max_v })]);
-            let findings = run_assumptions(&b, &lib, &solved, 1.0e-3, 1.0e-6);
+            let findings = run_assumptions(&b, &lib, &solved, (1.0e-3, 1.0e-6), 25.0);
             assert_eq!(
                 !findings.is_empty(),
                 fires,
@@ -652,6 +721,54 @@ basis = "Recommended Operating Conditions, VCCA <= VCCB note"
             .expect("3.465 V is not <= 2.85 V");
         assert!(finding.message.contains("3.465"));
         assert!(finding.message.contains("2.850"));
+    }
+
+    const ROWS_CARD: &str = r#"
+[[models]]
+id = "rows_part"
+kind = "digital"
+match = { value_re = "^ROWS_PART$" }
+params = { identity_only = true, warning = "identity only", unlocked_by = "validated behavior" }
+pins = { "1" = "vdd", "2" = "inp", "3" = "inm" }
+envelope = [
+  { kind = "supply_range", pin = "vdd", min_v = 3.0, max_v = 3.6, conditions = "TA = −40 °C to 25 °C", basis = "ROC, cold" },
+  { kind = "supply_range", pin = "vdd", min_v = 3.2, max_v = 3.6, conditions = "25 °C ≤ TA ≤ 85 °C", basis = "ROC, hot" },
+  { kind = "input_common_mode", supply = "vdd", inputs = ["inp", "inm"], headroom_v = 1.5, conditions = "TA = 25 °C", basis = "VICR, 25 °C" },
+  { kind = "input_common_mode", supply = "vdd", inputs = ["inp", "inm"], headroom_v = 2.0, conditions = "TA = 70 °C to 85 °C", basis = "VICR, hot" },
+]
+"#;
+
+    // VDD 3.1 V breaks only the hot supply row, inputs at 1.4 V only the hot
+    // 2.0 V headroom. An uncovered ambient, like the static lint, judges every
+    // row, and says so.
+    #[test]
+    fn each_limit_is_the_row_printed_for_the_ambient() {
+        use super::super::analog_inputs;
+        let (nets, pins) = (
+            [(1, "VDD"), (2, "INP"), (3, "INM")],
+            vec![pin("1", 1), pin("2", 2), pin("3", 3)],
+        );
+        let b = board(&nets, vec![part("U1", "ROWS_PART", pins)]);
+        let lib = library("rows", ROWS_CARD);
+        let volts = [("VDD", 3.1), ("INP", 1.4), ("INM", 1.4)];
+        let solved = BTreeMap::from(volts.map(|(n, x)| (n.to_string(), RailRange::point(x))));
+        let v = |net: &str| solved.get(net).map(|r| r.max_v);
+        let lint = envelope_lint_with_drives(&b, &lib, &BTreeMap::new()).findings;
+        let analog = analog_inputs::analog_input_lint(&b, &lib, &v).findings;
+        assert_eq!((lint.len(), analog.len()), (1, 1), "{lint:?} {analog:?}");
+        // (ambient °C, [supply fires, common-mode fires, caveats])
+        let rows = [(0.0, [0, 1, 1]), (25.0, [1, 0, 0]), (29.0, [1, 0, 0])];
+        for (ta, want) in rows
+            .into_iter()
+            .chain([(85.0, [1, 1, 0]), (125.0, [1, 1, 2])])
+        {
+            let mut ids = run_assumptions(&b, &lib, &solved, (0.0, 0.0), ta);
+            ids.extend(analog_inputs::run_assumptions(&b, &lib, &v, ta));
+            let ids: Vec<String> = ids.iter().map(|a| a.id().to_string()).collect();
+            let count = |s: &str| ids.iter().filter(|id| id.contains(s)).count();
+            let got = ["supply-envelope", "analog-input-range", "temperature"].map(count);
+            assert_eq!(got, want, "{ta} °C: {ids:?}");
+        }
     }
 
     #[test]

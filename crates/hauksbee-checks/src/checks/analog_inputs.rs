@@ -144,11 +144,16 @@ fn adc_flags(cx: &Ctx, c: &Component, m: &ModelEntry) -> Vec<Flag> {
 
 /// Comparator channels with every input above the card's supply-relative
 /// ceiling, plus ADC pins fed from too high a source impedance.
-fn flags(board: &ExtractedBoard, lib: &ModelLibrary, v: &dyn Fn(&str) -> Option<f64>) -> Vec<Flag> {
+fn flags(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    v: &dyn Fn(&str) -> Option<f64>,
+    ambient_c: Option<f64>,
+) -> Vec<Flag> {
     let (cx, mut out) = (Ctx { board, v }, Vec::new());
     for (c, m) in super::resolved_components(board, lib) {
         let channel = |e| channel_flag(&cx, c, &m, e);
-        out.extend(m.envelope.iter().filter_map(channel));
+        out.extend(super::envelope::binding(&m.envelope, ambient_c).filter_map(channel));
         out.extend(adc_flags(&cx, c, &m));
     }
     out
@@ -160,7 +165,7 @@ pub fn analog_input_lint(
     lib: &ModelLibrary,
     volts: &dyn Fn(&str) -> Option<f64>,
 ) -> NetLintReport {
-    let findings = flags(board, lib, volts).into_iter().map(|(f, _)| f);
+    let findings = flags(board, lib, volts, None).into_iter().map(|(f, _)| f);
     NetLintReport {
         findings: findings.collect(),
     }
@@ -176,9 +181,11 @@ pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     volts: &dyn Fn(&str) -> Option<f64>,
+    ambient_c: f64,
 ) -> Vec<Assumption> {
     let fix = "bring the input inside the range the card quotes, then re-run";
-    as_evidence(flags(board, lib, volts), "analog-input-range", fix)
+    let found = flags(board, lib, volts, Some(ambient_c));
+    as_evidence(found, "analog-input-range", fix)
 }
 
 /// Findings as run evidence: `true` marks a limit the run MEASURED as violated
@@ -244,7 +251,7 @@ mod tests {
         let lib = ModelLibrary::builtin();
         let report = analog_input_lint(b, &lib, v);
         assert_eq!(report.findings.len(), n, "{label}: {report:?}");
-        let assumptions = run_assumptions(b, &lib, v);
+        let assumptions = run_assumptions(b, &lib, v, 25.0);
         let kinds: Vec<_> = assumptions
             .iter()
             .map(hauksbee_ir::evidence::Assumption::kind)

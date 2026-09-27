@@ -1555,7 +1555,9 @@ fn production_assumptions(
     // channel with every input above its common-mode ceiling (MEASURED, so it
     // undermines), an ADC pin behind too high a source impedance (qualifies).
     let solved = |net: &str| engine.scheduler().net_voltage(net);
-    let analog = hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved);
+    let ambient = engine.scheduler().ambient_c();
+    let analog =
+        hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved, ambient);
     production_assumptions.extend(analog);
     // Supply and rail-order envelopes, on the span each net covered in the run
     // (a sag that recovers is still a violation), or its final level.
@@ -1572,8 +1574,8 @@ fn production_assumptions(
         board,
         lib,
         &levels.collect(),
-        opts.reltol,
-        opts.vntol,
+        (opts.reltol, opts.vntol),
+        ambient,
     );
     production_assumptions.extend(supply);
     let all_nets: Vec<&str> = board

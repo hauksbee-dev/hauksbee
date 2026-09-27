@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 
 use crate::check::{nonneg_finite, positive_finite, Problems};
+use crate::derating::temp_span;
 use crate::schema::{
     AboveDomainBehavior, Characteristic, ComponentKind, CurrentProgramEquation,
     CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec, Pinout,
@@ -350,10 +351,16 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut supplies = vec![0.0];
     supplies.extend(entry.ratings.max_voltage_v);
 
+    let mut rows = HashSet::new();
     for envelope in &entry.envelope {
         p.require(!envelope.basis().trim().is_empty(), || {
             "operating envelope requires a non-empty basis naming the datasheet table and row"
                 .into()
+        });
+        let (text, span) = (envelope.conditions(), temp_span(envelope.conditions()));
+        let row = format!("{:?} {span:?}", envelope.channel());
+        p.require(text.is_empty() || (span.is_some() && rows.insert(row)), || {
+            format!("operating envelope conditions '{text}' must name a temperature (TA = 25 °C), once per channel")
         });
         match envelope {
             OperatingEnvelope::SupplyRange {
@@ -1693,6 +1700,14 @@ mod tests {
             &fixture("pin = \"vcc\"\nmin_v = 3.6\nmax_v = 2.7\nbasis = \"ROC\""),
             "min_v",
         );
+        // A temperature row must name its temperature, once per channel.
+        let row = |at: &str| {
+            format!("pin = \"vcc\"\nmin_v = 2.7\nmax_v = 3.6\nbasis = \"R\"\nconditions = \"{at}\"")
+        };
+        accepts(&fixture(&row("TA = −40 °C to 85 °C")));
+        rejects(&fixture(&row("VCC = 3.3 V")), "must name a temperature");
+        let twice = row("TA = 25 °C") + "\n[[envelope]]\nkind = \"supply_range\"\n";
+        rejects(&fixture(&(twice + &row("TA=25°C"))), "once per channel");
     }
 
     #[test]

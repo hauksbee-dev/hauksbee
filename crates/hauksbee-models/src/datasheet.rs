@@ -1533,20 +1533,19 @@ from one board); Hauksbee reads the row for the scenario's temperature:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
-Maximum Ratings tables. Emit one supply_range entry for every SUPPLY-class pin
-whose recommended minimum and maximum are both published. Emit rail_order for
-each explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
+Maximum Ratings tables. Emit supply_range for every SUPPLY-class pin whose
+recommended minimum and maximum are both published, and rail_order for each
+explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
 VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
-supply, `inputs` that channel's two inputs, and `headroom_v` the test supply
-minus the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+), read
-from the 25 °C row when a full-temperature-range row is also printed, and
-`basis` names that row; the upper end is its guaranteed (min/max) cell, the
-narrower range, never typ (typ alone: omit the entry). Pins, supplies and inputs
-are roles from [models.pins], never pad numbers. Every entry requires `basis`
-naming the exact table and row. Add `abs_max_v` only when the absolute-maximum
-table publishes it. There is no envelope without a table row to cite: omitting
-this section is correct when the datasheet lacks the necessary tables. Never
-infer a bound from a typical value, application schematic, or family convention.
+supply, `inputs` that channel's two inputs, `headroom_v` the test supply minus
+the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Emit one
+supply_range or input_common_mode per printed temperature row, each with its
+`conditions` (TA = 25 °C; TA = −40 °C to 85 °C); the upper end is the guaranteed
+(min/max) cell, never typ (typ alone: omit the entry). Pins, supplies and inputs
+are roles from [models.pins], never pad numbers. Every `basis` names the exact
+table and row; add `abs_max_v` only when the absolute-maximum table publishes
+it. No table row to cite, no envelope: omit this section then, and never infer
+a bound from a typical value, application schematic, or family convention.
 
 WHERE TO LOOK AND HOW TO READ IT:
 - Supply bounds belong in Recommended Operating Conditions.
@@ -3592,8 +3591,8 @@ mod tests {
         assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
         assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
-        assert!(comparator.contains("from the 25 °C row when a full-temperature-range row"));
-        assert!(comparator.contains("narrower range, never typ (typ alone: omit the entry)"));
+        assert!(comparator.contains("input_common_mode per printed temperature row, each with its"));
+        assert!(comparator.contains("(min/max) cell, never typ (typ alone: omit the entry)"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
         assert!(bjt.contains("letters alone, key by lead letters A/K, G/S/D"));
         assert!(bjt.contains("one missing"));

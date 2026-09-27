@@ -1054,6 +1054,10 @@ pub enum OperatingEnvelope {
         basis: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         note: String,
+        /// The printed row's temperature (`TA = 25 °C`, `TA = −40 °C to 85 °C`);
+        /// empty for a row that holds at every temperature.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        conditions: String,
     },
     RailOrder {
         lower: String,
@@ -1080,6 +1084,8 @@ pub enum OperatingEnvelope {
         basis: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         note: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        conditions: String,
     },
 }
 
@@ -1099,6 +1105,27 @@ impl OperatingEnvelope {
             Self::SupplyRange { severity, .. }
             | Self::RailOrder { severity, .. }
             | Self::InputCommonMode { severity, .. } => *severity,
+        }
+    }
+
+    /// The printed temperature row's conditions; empty when it has none.
+    #[must_use]
+    pub fn conditions(&self) -> &str {
+        match self {
+            Self::SupplyRange { conditions: c, .. }
+            | Self::InputCommonMode { conditions: c, .. } => c,
+            Self::RailOrder { .. } => "",
+        }
+    }
+
+    /// The limit every temperature row of one channel shares; `None` for a
+    /// rail order, which has no rows.
+    #[must_use]
+    pub fn channel(&self) -> Option<String> {
+        match self {
+            Self::SupplyRange { pin, .. } => Some(format!("supply range of {pin}")),
+            Self::InputCommonMode { inputs, .. } => Some(format!("{inputs:?} common-mode range")),
+            Self::RailOrder { .. } => None,
         }
     }
 }
