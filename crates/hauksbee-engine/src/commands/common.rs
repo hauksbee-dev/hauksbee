@@ -332,8 +332,9 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
             }
 
             let board_url = format!("/boards/{name}");
-            let mut engine = HauksbeeEngine::from_bound(bound, fw_path.as_deref(), &board_url)
-                .map_err(|e| e.to_string())?;
+            let mut engine =
+                HauksbeeEngine::from_board_and_bound(&board, bound, fw_path.as_deref(), &board_url)
+                    .map_err(|e| e.to_string())?;
             // This engine is a live web session: end a dead solve's step at
             // the abort streak (see `arm_live_abort`).
             engine.arm_live_abort();
@@ -406,7 +407,8 @@ pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLa
         }
 
         let board_url = format!("/boards/{name}");
-        let mut engine = HauksbeeEngine::from_bound(bound, firmware_path.as_deref(), &board_url)
+        let (board, fw) = (&prepared.norm.board, firmware_path.as_deref());
+        let mut engine = HauksbeeEngine::from_board_and_bound(board, bound, fw, &board_url)
             .map_err(|error| error.to_string())?;
         engine.arm_live_abort();
         engine.apply_and_disclose_drc_shorts_with_qualification(&drc, qualification.as_ref());

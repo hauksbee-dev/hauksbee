@@ -727,6 +727,8 @@ pub struct StressMonitor {
     limits: Vec<(Option<f64>, f64, f64)>,
     /// Where each regulator meta's dissipation comes from (see [`RegulatorHeat`]).
     reg_heat: Vec<Option<RegulatorHeat>>,
+    /// What the board, not any one part's run, undermines: a rail nothing powered.
+    pub board_caveats: Vec<Assumption>,
 }
 
 /// How a regulator's dissipation is estimated.
@@ -892,6 +894,7 @@ impl StressMonitor {
             chunk_elapsed_s: 0.0,
             run: vec![RunStats::default(); n],
             reg_heat: vec![None; n],
+            board_caveats: Vec::new(),
         }
     }
 
@@ -1025,10 +1028,11 @@ impl StressMonitor {
     }
 
     /// Every disclosure a verdict with no claims of its own carries: the
-    /// ratings', the run's, and a guessed `theta_JA` wherever it is decisive.
+    /// board's, the ratings', the run's, and a guessed `theta_JA` wherever it is decisive.
     #[must_use]
     pub fn disclosures(&self) -> Vec<Assumption> {
-        let mut said = self.rating_disclosures();
+        let mut said = self.board_caveats.clone();
+        said.extend(self.rating_disclosures());
         said.extend(self.run_disclosures());
         said.extend(self.inferred_theta_ja(|_, d| d.then_some(Scope::Board).into_iter().collect()));
         said

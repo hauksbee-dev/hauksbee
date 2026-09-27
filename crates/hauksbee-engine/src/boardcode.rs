@@ -92,6 +92,8 @@ pub struct CheckOptions {
     /// estimate and temperature-dependent ratings. `None` runs at
     /// [`crate::thermal::DEFAULT_AMBIENT_C`] (25 C), disclosed where it decides a rating.
     pub ambient_c: Option<f64>,
+    /// `--models-dir`: the highest layer over the builtin and user dirs, as `run` loads it.
+    pub models_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for CheckOptions {
@@ -100,6 +102,7 @@ impl Default for CheckOptions {
             seconds: 0.2,
             destructive: false,
             ambient_c: None,
+            models_dir: None,
         }
     }
 }
@@ -240,22 +243,9 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
     }
     // The live session's, `run`'s and hauksbee-ci's library (user dirs too): the bare
     // builtin swapped a user card for a fallback and passed a part the app faulted.
-    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    let extra: Vec<&std::path::Path> = opts.models_dir.as_deref().into_iter().collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
     let bound = bind_board(&board, &lib);
-    // A supply-named rail nothing powers sits at 0 V, so "no faults" around it
-    // is not evidence: the same census hauksbee-ci banners, as an assumption.
-    let dead_rails = crate::binder::unpowered_supply_nets(&board, &bound, &[]).into_iter();
-    let dead_rails = dead_rails.map(|net| {
-        use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
-        Assumption::not_exercised(
-            AssumptionSource::Binder,
-            Subject::new(&net, &format!("supply rail {net}")),
-            Scope::Board,
-            "it names a supply but not a voltage, so nothing powered it and it sat at 0 V",
-            "name the net with its voltage (VDD_3V3) or give it a [[supply]] in a hauksbee-ci spec",
-        )
-    });
-
     let board_name = bound.name.clone();
     let component_count = board.components.len();
     let net_count = bound.net_names.len();
@@ -274,7 +264,9 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
     let gaps = bound.power_coverage_gaps();
     let today = hauksbee_ir::evidence::RunDate::from_system_clock();
     let evidence = crate::evidence::BoardEvidence::from_bound(&board, &bound.report, &gaps, today)?;
-    let mut engine = HauksbeeEngine::from_bound(bound, None, "/boards/check")?;
+    // A supply-named rail nothing powers sits at 0 V, so "no faults" around it
+    // is not evidence: the engine carries the census as the app's note does.
+    let mut engine = HauksbeeEngine::from_board_and_bound(&board, bound, None, "/boards/check")?;
     if opts.destructive {
         let mut controls = engine.controls();
         controls.destructive_faults = true;
@@ -328,7 +320,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         active_nets,
         unresolved,
         // Open parts stay out: `unresolved` names them and `status` counts them.
-        assumptions: (evidence.with_assumptions(dead_rails.chain(sched.stress.disclosures()))?)
+        assumptions: (evidence.with_assumptions(sched.stress.disclosures())?)
             .assumptions()
             .iter()
             .filter(|a| a.kind() != hauksbee_ir::evidence::AssumptionKind::OpenPart)

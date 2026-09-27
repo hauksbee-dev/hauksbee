@@ -29,7 +29,7 @@ use hauksbee_solve::{Integration, SolverOptions, StepControl};
 use crate::peripherals::{CsProvenance, I2cBus, RegisterMapSensor, ResolvedCs, SpiBus};
 use crate::scheduler::Scheduler;
 use hauksbee_bind::bind_report::BindReport;
-use hauksbee_bind::binder::{bind_board, BoundBoard};
+use hauksbee_bind::binder::{bind_board, unpowered_supply_nets, BoundBoard};
 use hauksbee_bind::power_supply::{Chemistry, PowerSupply, UsbSpec};
 
 /// Analog chunk for boards whose MCU runs on an external emulator (Renode or
@@ -107,6 +107,35 @@ impl HauksbeeEngine {
         })
     }
 
+    /// [`Self::from_bound`] with the board still in hand, so every stress
+    /// verdict is qualified by the supply-named rails nothing powered: the
+    /// census ([`unpowered_supply_nets`]) hauksbee-ci banners, in its notes.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::from_bound`] refuses.
+    pub fn from_board_and_bound(
+        board: &ExtractedBoard,
+        bound: BoundBoard,
+        firmware: Option<&Path>,
+        board_url: &str,
+    ) -> anyhow::Result<Self> {
+        use hauksbee_ir::evidence::{AssumptionSource, Scope, Subject};
+        let dead_rails = unpowered_supply_nets(board, &bound, &[]).into_iter().map(|net| {
+            Assumption::not_exercised(
+                AssumptionSource::Binder,
+                Subject::new(&net, &format!("supply rail {net}")),
+                Scope::Board,
+                "it names a supply but not a voltage, so nothing powered it and it sat at 0 V",
+                "name the net with its voltage (VDD_3V3) or give it a [[supply]] in a hauksbee-ci spec",
+            )
+        });
+        let board_caveats = dead_rails.collect();
+        let mut engine = Self::from_bound(bound, firmware, board_url)?;
+        engine.sched.stress.board_caveats = board_caveats;
+        Ok(engine)
+    }
+
     /// Convenience: extract + bind + build in one call.
     ///
     /// # Errors
@@ -121,7 +150,7 @@ impl HauksbeeEngine {
         let board = ExtractedBoard::from_auto(board_text)?;
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&board, &lib);
-        Self::from_bound(bound, firmware, board_url)
+        Self::from_board_and_bound(&board, bound, firmware, board_url)
     }
 
     /// The bind report for this engine's board.

@@ -7007,6 +7007,25 @@ missing = ["measurement_registers"]
         )
     });
 
+    /// A live frame's notes name a supply-named rail nothing powers, the census
+    /// hauksbee-ci banners, and say nothing of it once the rail is powered.
+    #[test]
+    fn a_live_frame_notes_an_unpowered_supply_rail() {
+        use hauksbee_frontdoor_api::engine::Engine;
+        const PADS: &[(u8, u8, usize)] = &[(1, 0, 2), (2, 2, 1)];
+        let refs: Vec<String> = (1..=6).map(|i| format!("R{i}")).collect();
+        for (rail, dead) in [("ANALOG_VDD", true), ("VDD_3V3", false)] {
+            let parts: Vec<FixturePart<'_>> = (refs.iter().zip(100..))
+                .map(|(r, x)| ("Resistor:R", r.as_str(), "10k", x, PADS))
+                .collect();
+            let text = pcb_fixture(&["", "GND", rail], &parts);
+            let engine = crate::engine::HauksbeeEngine::from_board_file(&text, None, "");
+            let (notes, said) = (engine.unwrap().step(1e-3).notes, format!("rail {rail}"));
+            let named = notes.iter().any(|n| n.contains(&said));
+            assert_eq!(named, dead, "{rail}: {notes:?}");
+        }
+    }
+
     /// A board with NO MCU module: two pulled nets (10 k to +5 V, 10 k to
     /// GND) plus a pulled-high net standing in for a responder-owned MISO.
     static PLAIN_INPUT_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {

@@ -499,26 +499,15 @@ fn route_json(stats: &RouteStats, ok: bool, error: Option<&str>) -> String {
     obj.to_string()
 }
 
-/// `hauksbee check-code <code-dir|file> [--seconds N] [--destructive] [--json]`
+/// `hauksbee check-code <code-dir|file> [--seconds N] [--destructive] [--models-dir DIR] [--json]`
 ///
 /// # Errors
 ///
 /// Returns an error if the code cannot be loaded or recompiled, or if the stress
 /// co-simulation fails to run. An unhealthy result exits the process with status 1.
-pub fn check(
-    code_path: &Path,
-    seconds: f64,
-    destructive: bool,
-    ambient: Option<f64>,
-    json: bool,
-) -> anyhow::Result<()> {
-    let opts = CheckOptions {
-        seconds,
-        destructive,
-        ambient_c: ambient,
-    };
+pub fn check(code_path: &Path, opts: &CheckOptions, json: bool) -> anyhow::Result<()> {
     let code = load_code(code_path)?;
-    let mut report = check_code(&code, &opts)?;
+    let mut report = check_code(&code, opts)?;
     // A .board without a name line would print a dangling "Board-as-Code
     // check:" label; fall back to the file name so the header always says WHAT
     // was checked.

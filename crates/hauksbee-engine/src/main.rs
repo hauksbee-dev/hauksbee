@@ -1400,6 +1400,10 @@ struct CheckCodeArgs {
     )]
     ambient: Option<f64>,
 
+    /// Extra model directory (highest priority), layered over the built-in DB.
+    #[arg(long, value_name = "DIR", help_heading = "Advanced / analyses")]
+    models_dir: Option<PathBuf>,
+
     /// Emit the check as one JSON object ({"ok","board","components","nets",
     /// "resolved_fraction","unresolved","simulated_seconds","active_nets",
     /// "faults"}) instead of the human table. The exit code is unchanged
@@ -1611,13 +1615,13 @@ fn main() -> anyhow::Result<()> {
                 );
                 std::process::exit(2);
             }
-            hauksbee_engine::commands::boardcode::check(
-                &args.code,
-                args.seconds,
-                args.destructive,
-                args.ambient,
-                args.json,
-            )
+            let opts = hauksbee_engine::CheckOptions {
+                seconds: args.seconds,
+                destructive: args.destructive,
+                ambient_c: args.ambient,
+                models_dir: args.models_dir,
+            };
+            hauksbee_engine::commands::boardcode::check(&args.code, &opts, args.json)
         }
         Command::Serve(args) => {
             #[cfg(feature = "serve")]

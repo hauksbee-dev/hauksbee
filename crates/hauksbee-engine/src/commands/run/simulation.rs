@@ -96,7 +96,8 @@ pub fn build_live_simulation(
         let backends: Vec<String> = bound.mcus.iter().map(|m| m.backend.clone()).collect();
         crate::commands::install::offer_esp_qemu_install(&backends)?;
     }
-    let mut engine = HauksbeeEngine::from_bound(
+    let mut engine = HauksbeeEngine::from_board_and_bound(
+        board,
         bound,
         cfg.firmware.as_deref(),
         &format!("/boards/{}", crate::commands::common::file_name(&cfg.board)),
