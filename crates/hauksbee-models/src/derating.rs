@@ -358,6 +358,8 @@ impl Derating {
 /// Every problem with the card's `rating`-tagged rows: a key that is no
 /// rating, rows [`curve`] cannot read, and a scalar that is not the least
 /// favourable row, rows the curve skips included.
+///
+/// A path row (`pins`) with no `rating` is one too: the checker never reads it.
 #[must_use]
 pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
     let scalars = toml::Table::try_from(&entry.ratings).unwrap_or_default();
@@ -365,7 +367,8 @@ pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
     let mut keys: Vec<&str> = rows.filter_map(|r| r.rating.as_deref()).collect();
     keys.sort_unstable();
     keys.dedup();
-    let mut out = Vec::new();
+    let untagged = entry.source.iter().flat_map(|s| &s.characteristic);
+    let mut out: Vec<String> = untagged.filter(|r| r.rating.is_none() && !r.pins.is_empty()).map(|r| format!("characteristic '{}' names pins {:?} but no rating: a path row bounds its current only when tagged `rating = \"max_current_a\"` (or the key it is printed for)", r.parameter, r.pins)).collect();
     for key in keys {
         if !is_rating_key(key) {
             out.push(format!("rating = \"{key}\" is not a [models.ratings] key"));
@@ -491,6 +494,9 @@ mod tests {
         let mut odd = card(&[(4.7, "TA = 25 °C")]);
         odd.source.as_mut().expect("source").characteristic[0].rating = Some("max_amps".into());
         assert!(tag_problems(&odd)[0].contains("not a [models.ratings] key"));
+        odd.source.as_mut().expect("source").characteristic[0].rating = None;
+        odd.source.as_mut().expect("source").characteristic[0].pins = vec!["in1".into()];
+        assert!(tag_problems(&odd)[0].contains("names pins [\"in1\"] but no rating"));
     }
 
     /// `(package, mounting, value)` rows printed at TA = 25 °C.
