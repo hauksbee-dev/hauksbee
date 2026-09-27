@@ -82,19 +82,19 @@ export function FaultPanel({ faults, activeRefs, unsupportedReasons, notes, onCl
         </div>
       )}
       {(notes ?? []).length > 0 && (
-        <div className="px-3 py-2 text-[10px] leading-relaxed" data-testid="stress-notes"
-          style={{ color: 'var(--silk-faint)', borderBottom: '1px solid var(--rule)' }}>
+        <div className="px-3 py-2 text-[11px] leading-relaxed" data-testid="stress-notes"
+          style={{ color: 'var(--silk-dim)', borderBottom: '1px solid var(--rule)' }}>
           Qualified: {(notes ?? []).join(' · ')}
         </div>
       )}
       {faults.length === 0 ? (
-        <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+        <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-dim)' }}>
           No faults detected in what is monitored
         </div>
       ) : (
         <div>
           <div className="px-3 pt-2 flex items-center justify-between gap-3">
-            <span className="text-[10px] tnum" data-testid="fault-count-label" style={{ color: 'var(--silk-faint)' }}>
+            <span className="text-[10px] tnum" data-testid="fault-count-label" style={{ color: 'var(--silk-dim)' }}>
               {faults.length} condition{faults.length === 1 ? '' : 's'} on {partCount} part{partCount === 1 ? '' : 's'}
               {' · log holds past faults until cleared'}
             </span>
@@ -160,7 +160,7 @@ export function FaultPanel({ faults, activeRefs, unsupportedReasons, notes, onCl
                         <span
                           className="text-[9px] font-bold uppercase"
                           title="This condition has cleared. The entry stays until you clear the log."
-                          style={{ color: 'var(--silk-faint)' }}
+                          style={{ color: 'var(--silk-dim)' }}
                         >
                           held
                         </span>
@@ -181,7 +181,7 @@ export function FaultPanel({ faults, activeRefs, unsupportedReasons, notes, onCl
                     <span style={{ color: active ? 'var(--err)' : 'var(--silk-dim)' }}>
                       {f.value.toFixed(3)}{unit && ` ${unit}`}
                     </span>
-                    <span style={{ color: 'var(--silk-faint)' }}>
+                    <span style={{ color: 'var(--silk-dim)' }}>
                       {' / lim '}{f.limit.toFixed(3)}{unit && ` ${unit}`} @ {f.t.toFixed(4)}s
                     </span>
                   </div>
@@ -197,7 +197,7 @@ export function FaultPanel({ faults, activeRefs, unsupportedReasons, notes, onCl
           persistently rather than implied. */}
       <div
         className="px-3 pb-2.5 pt-1 text-[10px] leading-relaxed"
-        style={{ color: 'var(--silk-faint)', borderTop: '1px solid var(--rule)' }}
+        style={{ color: 'var(--silk-dim)', borderTop: '1px solid var(--rule)' }}
       >
         Watching datasheet limits on parts the model library rates: current
         (continuous and surge), voltage, power, reverse bias, junction

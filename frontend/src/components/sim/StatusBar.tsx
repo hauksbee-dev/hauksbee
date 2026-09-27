@@ -22,14 +22,15 @@ export function SimStatusBar({ running, sessionLost, simTime, frame, replay, pro
   const stateColor = sessionLost ? 'var(--err)' : running ? 'var(--ok)' : 'var(--silk-faint)'
   return (
     <div
-      className="flex items-center gap-3 px-3 shrink-0 text-[10px] overflow-hidden tnum"
+      className="flex items-center gap-x-3 gap-y-0.5 px-3 py-1 shrink-0 text-[10px] overflow-hidden tnum"
       style={{
         minHeight: 26,
-        height: 26,
         background: 'var(--surface)',
         borderTop: '1px solid var(--hairline)',
         fontFamily: 'var(--font-mono)',
-        flexWrap: 'nowrap',
+        // Wrap rather than clip at narrow widths: every readout here is
+        // information, so none may be silently cut off the right edge.
+        flexWrap: 'wrap',
         color: 'var(--silk-faint)',
       }}
     >
@@ -64,7 +65,7 @@ export function SimStatusBar({ running, sessionLost, simTime, frame, replay, pro
       {probes.length > 0 && (
         <>
           <Bar />
-          <span className="overflow-hidden" style={{ maxWidth: 180, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+          <span className="overflow-hidden" title={`probes: ${probes.join(', ')}`} style={{ maxWidth: 180, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
             probes: <span style={{ color: 'var(--copper)' }}>{probes.join(', ')}</span>
           </span>
         </>
@@ -73,15 +74,20 @@ export function SimStatusBar({ running, sessionLost, simTime, frame, replay, pro
       {faultCount > 0 && (
         <>
           <Bar />
-          <span style={{ color: 'var(--err)' }}>
-            FAULTS: {faultCount} part{faultCount === 1 ? '' : 's'}
+          <span className="overflow-hidden" title={`FAULTS: ${faultCount} part${faultCount === 1 ? '' : 's'}`}
+            style={{ color: 'var(--err)', minWidth: 0, maxWidth: '100%', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            {`FAULTS: ${faultCount} part${faultCount === 1 ? '' : 's'}`}
           </span>
         </>
       )}
 
-      <div className="flex-1" />
-
-      {boardInfo && <span>{boardInfo.num_components} comp · {boardInfo.num_nets} nets</span>}
+      {boardInfo && (
+        <span className="overflow-hidden ml-auto"
+          title={`${boardInfo.num_components} components · ${boardInfo.num_nets} nets`}
+          style={{ minWidth: 0, maxWidth: '100%', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+          {boardInfo.num_components} comp · {boardInfo.num_nets} nets
+        </span>
+      )}
     </div>
   )
 }
