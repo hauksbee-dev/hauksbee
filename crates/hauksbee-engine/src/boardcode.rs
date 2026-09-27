@@ -269,6 +269,11 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         .map(|r| (r.reference.clone(), r.value.clone()))
         .collect();
 
+    // The binding caveats (fallback models, guessed pins, defaults) CI and the app
+    // carry, from their builder, so check-code cannot call clean what they qualify.
+    let gaps = bound.power_coverage_gaps();
+    let today = hauksbee_ir::evidence::RunDate::from_system_clock();
+    let evidence = crate::evidence::BoardEvidence::from_bound(&board, &bound.report, &gaps, today)?;
     let mut engine = HauksbeeEngine::from_bound(bound, None, "/boards/check")?;
     if opts.destructive {
         let mut controls = engine.controls();
@@ -322,7 +327,13 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         faults,
         active_nets,
         unresolved,
-        assumptions: dead_rails.chain(sched.stress.disclosures()).collect(),
+        // Open parts stay out: `unresolved` names them and `status` counts them.
+        assumptions: (evidence.with_assumptions(dead_rails.chain(sched.stress.disclosures()))?)
+            .assumptions()
+            .iter()
+            .filter(|a| a.kind() != hauksbee_ir::evidence::AssumptionKind::OpenPart)
+            .cloned()
+            .collect(),
     })
 }
 
