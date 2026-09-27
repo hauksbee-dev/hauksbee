@@ -33,6 +33,49 @@ fn one_volt_across(name: &str, ohms: f64) -> (Circuit, DeviceId) {
     (circuit, id)
 }
 
+/// A monitor at `ambient_c` over one part, rated `[max_power_w, theta_JA,
+/// max Tj]` with no derating curve.
+fn rated_monitor(
+    reference: &str,
+    device: DeviceId,
+    kind: ComponentKind,
+    footprint: &str,
+    [max_power_w, theta_ja, max_tj]: [f64; 3],
+    ambient_c: f64,
+) -> StressMonitor {
+    let meta = DeviceMeta {
+        derating: Derating::default(),
+        reference: reference.into(),
+        device,
+        kind,
+        footprint: footprint.into(),
+        ratings: Ratings {
+            max_power_w: Some(max_power_w),
+            theta_ja_c_per_w: Some(theta_ja),
+            max_junction_temp_c: Some(max_tj),
+            ..Default::default()
+        },
+    };
+    let mut monitor = StressMonitor::new(vec![meta]);
+    monitor.ambient_c = ambient_c;
+    monitor
+}
+
+/// R1 dissipating 0.5 W (1 V across 2 Ohm) in a 250 C/W package rated to
+/// 175 C, at `ambient_c`.
+fn half_watt_r1(ambient_c: f64) -> (Circuit, StressMonitor) {
+    let (circuit, rid) = one_volt_across("R1", 2.0);
+    let mon = rated_monitor(
+        "R1",
+        rid,
+        ComponentKind::Passive,
+        "X",
+        [2.0, 250.0, 175.0],
+        ambient_c,
+    );
+    (circuit, mon)
+}
+
 /// The canonical hand-check: 0.5 W in a SOT-23 (`theta_JA` = 250 C/W) at 25 C
 /// ambient reaches Tj = 25 + 0.5*250 = 150 C. We drive the `StressMonitor`
 /// directly through a power resistor whose dissipation we control exactly, with
@@ -51,22 +94,15 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
 
     // theta_JA explicit (250) so the test does not depend on footprint parsing
     // of the synthetic device; max Tj 150 so we sit exactly at the limit.
-    let meta = DeviceMeta {
-        derating: Derating::default(),
-        reference: "R1".into(),
-        device: rid,
-        kind: ComponentKind::Passive,
-        footprint: "Package_TO_SOT_SMD:SOT-23".into(),
-        ratings: Ratings {
-            max_power_w: Some(2.0), // generous so power alone does not fault
-            theta_ja_c_per_w: Some(250.0),
-            max_junction_temp_c: Some(150.0),
-            ..Default::default()
-        },
-    };
-
-    let mut mon = StressMonitor::new(vec![meta]);
-    mon.ambient_c = 25.0;
+    // Power rated a generous 2 W so power alone does not fault.
+    let mut mon = rated_monitor(
+        "R1",
+        rid,
+        ComponentKind::Passive,
+        "Package_TO_SOT_SMD:SOT-23",
+        [2.0, 250.0, 150.0],
+        25.0,
+    );
 
     // Node voltages: GND=0, V+=1.
     let volts = [0.0, 1.0];
@@ -111,21 +147,15 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
 fn pwm_fixture(tj_limit_c: f64) -> (Circuit, StressMonitor) {
     let mut circuit = Circuit::new();
     let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
-    let meta = DeviceMeta {
-        derating: Derating::default(),
-        reference: "Q1".into(),
-        device: load,
-        kind: ComponentKind::Nmos,
-        footprint: "Package_TO_SOT_SMD:SOT-23".into(),
-        ratings: Ratings {
-            max_power_w: Some(2.0), // generous: only Overtemperature is under test
-            theta_ja_c_per_w: Some(100.0),
-            max_junction_temp_c: Some(tj_limit_c),
-            ..Default::default()
-        },
-    };
-    let mut monitor = StressMonitor::new(vec![meta]);
-    monitor.ambient_c = 25.0;
+    // Power rated a generous 2 W: only Overtemperature is under test.
+    let monitor = rated_monitor(
+        "Q1",
+        load,
+        ComponentKind::Nmos,
+        "Package_TO_SOT_SMD:SOT-23",
+        [2.0, 100.0, tj_limit_c],
+        25.0,
+    );
     (circuit, monitor)
 }
 
@@ -270,21 +300,15 @@ fn overpower_judges_time_weighted_power_not_the_endpoint() {
     let build = || {
         let mut circuit = Circuit::new();
         let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
-        let meta = DeviceMeta {
-            derating: Derating::default(),
-            reference: "Q1".into(),
-            device: load,
-            kind: ComponentKind::Nmos,
-            footprint: "Package_TO_SOT_SMD:SOT-23".into(),
-            ratings: Ratings {
-                max_power_w: Some(1.0),
-                theta_ja_c_per_w: Some(1.0), // Tj stays cold; only power is under test
-                max_junction_temp_c: Some(500.0),
-                ..Default::default()
-            },
-        };
-        let mut mon = StressMonitor::new(vec![meta]);
-        mon.ambient_c = 25.0;
+        // theta_JA 1 C/W keeps Tj cold; only power is under test.
+        let mon = rated_monitor(
+            "Q1",
+            load,
+            ComponentKind::Nmos,
+            "Package_TO_SOT_SMD:SOT-23",
+            [1.0, 1.0, 500.0],
+            25.0,
+        );
         (circuit, mon)
     };
     let no_branch = |_: hauksbee_ir::DeviceId| None;
@@ -364,22 +388,7 @@ fn reported_temperature_cools_to_ambient_when_dissipation_stops() {
 #[test]
 fn ambient_pushes_part_over_its_limit() {
     let build = |ambient: f64| -> Vec<hauksbee_engine::stress::FaultEvent> {
-        let (mut circuit, rid) = one_volt_across("R1", 2.0); // 0.5 W
-        let meta = DeviceMeta {
-            derating: Derating::default(),
-            reference: "R1".into(),
-            device: rid,
-            kind: ComponentKind::Passive,
-            footprint: "X".into(),
-            ratings: Ratings {
-                max_power_w: Some(2.0),
-                theta_ja_c_per_w: Some(250.0),
-                max_junction_temp_c: Some(175.0),
-                ..Default::default()
-            },
-        };
-        let mut mon = StressMonitor::new(vec![meta]);
-        mon.ambient_c = ambient;
+        let (mut circuit, mut mon) = half_watt_r1(ambient);
         let volts = [0.0, 1.0];
         let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
         let no_branch = |_: hauksbee_ir::DeviceId| None;
@@ -401,22 +410,7 @@ fn ambient_pushes_part_over_its_limit() {
     // 60 C: Tj = 60 + 125 = 185 > 175. Over-temperature must trip. Because the
     // fault latches after the first trip, run a fresh monitor and catch the
     // trip on the chunk it crosses.
-    let (mut circuit, rid) = one_volt_across("R1", 2.0);
-    let meta = DeviceMeta {
-        derating: Derating::default(),
-        reference: "R1".into(),
-        device: rid,
-        kind: ComponentKind::Passive,
-        footprint: "X".into(),
-        ratings: Ratings {
-            max_power_w: Some(2.0),
-            theta_ja_c_per_w: Some(250.0),
-            max_junction_temp_c: Some(175.0),
-            ..Default::default()
-        },
-    };
-    let mut mon = StressMonitor::new(vec![meta]);
-    mon.ambient_c = 60.0;
+    let (mut circuit, mut mon) = half_watt_r1(60.0);
     let volts = [0.0, 1.0];
     let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
     let no_branch = |_: hauksbee_ir::DeviceId| None;
