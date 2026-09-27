@@ -265,8 +265,18 @@ pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
     }
     for (family, siblings) in families {
         let first = &siblings[0].r#match;
-        if siblings.len() < 2 || siblings.iter().any(|e| e.r#match != *first) {
-            out.push(format!("variant_of '{family}': {SET}"));
+        let differ: Vec<&str> = siblings
+            .iter()
+            .filter(|e| e.r#match != *first)
+            .map(|e| e.id.as_str())
+            .collect();
+        if siblings.len() < 2 {
+            out.push(format!(
+                "variant_of '{family}': {SET}; a single card drops variant_of and [models.variant]"
+            ));
+        } else if !differ.is_empty() {
+            let (lead, ids) = (&siblings[0].id, differ.join(", "));
+            out.push(format!("variant_of '{family}': {SET}, and {ids} differ from {lead}'s [models.match]: {SHARE}"));
         }
         let family_re = first.value_re.as_ref().or(first.mpn_re.as_ref());
         let family_re = family_re.and_then(|p| Regex::new(&format!("(?i){p}")).ok());
@@ -280,9 +290,20 @@ pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
                 let hit = |re: &Option<Regex>| re.as_ref().is_some_and(|re| re.is_match(code));
                 let others = (0..siblings.len()).filter(|&j| j != i && hit(&patterns[j]));
                 let others: Vec<&str> = others.map(|j| siblings[j].id.as_str()).collect();
-                if !hit(&patterns[i]) || !hit(&family_re) || !others.is_empty() {
-                    let (id, also) = (&e.id, others.join(", "));
-                    out.push(format!("model '{id}': orderable code {code} {OWN} {also})"));
+                let why = [
+                    (!hit(&patterns[i]), "its own orderable_re misses it"),
+                    (
+                        !hit(&family_re),
+                        "the family's shared [models.match] misses it",
+                    ),
+                    (!others.is_empty(), "a sibling's orderable_re also takes it"),
+                ];
+                let why: Vec<&str> = why.iter().filter(|w| w.0).map(|w| w.1).collect();
+                if !why.is_empty() {
+                    let (id, also, why) = (&e.id, others.join(", "), why.join("; "));
+                    out.push(format!(
+                        "model '{id}': orderable code {code} {OWN} {also}): {why}"
+                    ));
                 }
             }
         }
@@ -292,6 +313,7 @@ pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
 
 const TOGETHER: &str = "variant_of and [models.variant] come together";
 const SET: &str = "a variant set is two or more entries sharing one family match";
+const SHARE: &str = "give every member the identical [models.match] (one value_re taking every member's orderable codes) and tell members apart only by [models.variant] orderable_re, orderable and package";
 const CODES: &str =
     "[models.variant] needs a valid orderable_re and its ordering-table codes in `orderable`";
 const OWN: &str =
@@ -430,11 +452,11 @@ mod tests {
         #[rustfmt::skip]
         let cases = [
             ("no [models.variant]", good.replacen("[models.variant]", "[models.variantx]", 1), "come together"),
-            ("lone member", lone, "two or more entries"),
+            ("lone member", lone, "a single card drops variant_of"),
             ("shared code", good.replacen("^XYZ1234b", "^XYZ1234", 1), "no sibling's (also matches: xyz1234b)"),
-            ("outside the family", good.replacen("XYZ1234aDBVR", "ABC1234aDBVR", 1), "orderable code ABC1234aDBVR"),
+            ("outside the family", good.replacen("XYZ1234aDBVR", "ABC1234aDBVR", 1), "ABC1234aDBVR must match its own orderable_re and the family match and no sibling's (also matches: ): its own orderable_re misses it; the family's shared [models.match] misses it"),
             ("no codes", good.replacen("[\"XYZ1234aDBV\", \"XYZ1234aDBVR\"]", "[]", 1), "ordering-table codes"),
-            ("different match", good.replacen("(?i)^XYZ1234", "(?i)^XYZ12", 1), "one family match"),
+            ("different match", good.replacen("(?i)^XYZ1234", "(?i)^XYZ12", 1), "xyz1234b differ from xyz1234a's [models.match]: give every member the identical"),
             ("a default", good.replacen("basis = ", "default = true\nbasis = ", 1), "unknown field `default`"),
         ];
         for (case, src, want) in cases {
