@@ -916,83 +916,79 @@ fn base_properties(hierarchy: &str, source_unique_id: &str) -> Vec<(String, Stri
     properties
 }
 
-/// Emit one identity per positive-identity component when the records sharing a
-/// designator could not be merged wholesale. A component holding several records
-/// takes a `@records-<key>` suffix and `merged_reason`; a lone record takes
-/// `@record-<key>` and `distinct_reason`. Both stay flagged
-/// [`REFERENCE_AMBIGUOUS_KEY`], because connectivity was inferred from pad nets
-/// rather than proved by an authoritative unique id.
-#[allow(clippy::too_many_arguments)]
-fn assign_ambiguous_components(
-    inputs: &[ComponentIdentityInput],
-    groups: Vec<Vec<usize>>,
-    prefix: &str,
-    merged_reason: &str,
-    distinct_reason: &str,
-    hierarchies: &[String],
-    source_unique_ids: &[String],
-    used: &mut HashSet<String>,
-    output: &mut [Option<ComponentIdentity>],
-) {
-    for group in groups {
-        let key = &inputs[group[0]].record_key;
-        let (candidate, reason) = if group.len() > 1 {
-            (format!("{prefix}@records-{key}"), merged_reason)
-        } else {
-            (format!("{prefix}@record-{key}"), distinct_reason)
-        };
-        assign_shared_identity(
-            inputs,
-            &group,
-            &candidate,
-            Some((REFERENCE_AMBIGUOUS_KEY, reason)),
-            hierarchies,
-            source_unique_ids,
-            used,
-            output,
-        );
-    }
+/// The per-call state every identity decision writes through: the normalized
+/// hierarchy and unique id of each record, the designators already taken, and
+/// the identity chosen for each record so far.
+struct IdentityAssigner<'a> {
+    inputs: &'a [ComponentIdentityInput],
+    hierarchies: Vec<String>,
+    source_unique_ids: Vec<String>,
+    used: HashSet<String>,
+    output: Vec<Option<ComponentIdentity>>,
 }
 
-fn assign_shared_identity(
-    inputs: &[ComponentIdentityInput],
-    indices: &[usize],
-    candidate: &str,
-    note: Option<(&str, &str)>,
-    hierarchies: &[String],
-    source_unique_ids: &[String],
-    used: &mut HashSet<String>,
-    output: &mut [Option<ComponentIdentity>],
-) {
-    let discriminator = &inputs[indices[0]].record_key;
-    let (reference, collided) = allocate_generated_reference(candidate, discriminator, used);
-    for &index in indices {
-        let mut properties = base_properties(&hierarchies[index], &source_unique_ids[index]);
-        if let Some((key, value)) = note {
-            properties.push((key.to_string(), value.to_string()));
-            if key == REFERENCE_AMBIGUOUS_KEY {
-                // Distinct DRC owners are the conservative geometry choice,
-                // not proof that these records are two modelable devices. Feed
-                // the uncertainty into the shared binder refusal contract so
-                // connectivity remains usable without guessed simulation.
+impl IdentityAssigner<'_> {
+    fn base_properties(&self, index: usize) -> Vec<(String, String)> {
+        base_properties(&self.hierarchies[index], &self.source_unique_ids[index])
+    }
+
+    /// Emit one identity per positive-identity component when the records
+    /// sharing a designator could not be merged wholesale. A component holding
+    /// several records takes a `@records-<key>` suffix and `merged_reason`; a
+    /// lone record takes `@record-<key>` and `distinct_reason`. Both stay
+    /// flagged [`REFERENCE_AMBIGUOUS_KEY`], because connectivity was inferred
+    /// from pad nets rather than proved by an authoritative unique id.
+    fn ambiguous(
+        &mut self,
+        groups: Vec<Vec<usize>>,
+        prefix: &str,
+        merged_reason: &str,
+        distinct_reason: &str,
+    ) {
+        for group in groups {
+            let key = &self.inputs[group[0]].record_key;
+            let (candidate, reason) = if group.len() > 1 {
+                (format!("{prefix}@records-{key}"), merged_reason)
+            } else {
+                (format!("{prefix}@record-{key}"), distinct_reason)
+            };
+            self.shared(&group, &candidate, Some((REFERENCE_AMBIGUOUS_KEY, reason)));
+        }
+    }
+
+    fn shared(&mut self, indices: &[usize], candidate: &str, note: Option<(&str, &str)>) {
+        let discriminator = &self.inputs[indices[0]].record_key;
+        let (reference, collided) =
+            allocate_generated_reference(candidate, discriminator, &mut self.used);
+        for &index in indices {
+            let mut properties = self.base_properties(index);
+            if let Some((key, value)) = note {
+                properties.push((key.to_string(), value.to_string()));
+                if key == REFERENCE_AMBIGUOUS_KEY {
+                    // Distinct DRC owners are the conservative geometry choice,
+                    // not proof that these records are two modelable devices.
+                    // Feed the uncertainty into the shared binder refusal
+                    // contract so connectivity remains usable without guessed
+                    // simulation.
+                    properties.push((
+                        crate::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+                        value.to_string(),
+                    ));
+                }
+            }
+            if collided {
                 properties.push((
-                    crate::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
-                    value.to_string(),
+                    REFERENCE_IDENTITY_NOTE_KEY.to_string(),
+                    format!(
+                        "generated identity '{candidate}' collided with a genuine source designator; using '{reference}'"
+                    ),
                 ));
             }
+            self.output[index] = Some(ComponentIdentity {
+                reference: reference.clone(),
+                properties,
+            });
         }
-        if collided {
-            properties.push((
-                REFERENCE_IDENTITY_NOTE_KEY.to_string(),
-                format!(
-                    "generated identity '{candidate}' collided with a genuine source designator; using '{reference}'"
-                ),
-            ));
-        }
-        output[index] = Some(ComponentIdentity {
-            reference: reference.clone(),
-            properties,
-        });
     }
 }
 
@@ -1020,11 +1016,16 @@ pub(crate) fn canonical_component_identities(
         .iter()
         .map(|unique_id| unique_id.to_ascii_uppercase())
         .collect();
-    let mut output: Vec<Option<ComponentIdentity>> = (0..inputs.len()).map(|_| None).collect();
-    let mut used: HashSet<String> = inputs
-        .iter()
-        .filter_map(|input| usable_designator(&input.source_designator).map(str::to_string))
-        .collect();
+    let mut ids = IdentityAssigner {
+        inputs,
+        hierarchies,
+        source_unique_ids,
+        used: inputs
+            .iter()
+            .filter_map(|input| usable_designator(&input.source_designator).map(str::to_string))
+            .collect(),
+        output: (0..inputs.len()).map(|_| None).collect(),
+    };
 
     let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, input) in inputs.iter().enumerate() {
@@ -1035,8 +1036,8 @@ pub(crate) fn canonical_component_identities(
                 format!("UNK{}", input.source_designator.trim())
             };
             let (reference, collided) =
-                allocate_generated_reference(&candidate, &input.record_key, &mut used);
-            let mut properties = base_properties(&hierarchies[index], &source_unique_ids[index]);
+                allocate_generated_reference(&candidate, &input.record_key, &mut ids.used);
+            let mut properties = ids.base_properties(index);
             properties.push((
                 REFERENCE_UNRESOLVED_KEY.to_string(),
                 format!(
@@ -1054,7 +1055,7 @@ pub(crate) fn canonical_component_identities(
                     format!("synthetic candidate '{candidate}' collided with a genuine designator"),
                 ));
             }
-            output[index] = Some(ComponentIdentity {
+            ids.output[index] = Some(ComponentIdentity {
                 reference,
                 properties,
             });
@@ -1066,9 +1067,9 @@ pub(crate) fn canonical_component_identities(
     for (raw_reference, indices) in groups {
         if indices.len() == 1 {
             let index = indices[0];
-            output[index] = Some(ComponentIdentity {
+            ids.output[index] = Some(ComponentIdentity {
                 reference: raw_reference,
-                properties: base_properties(&hierarchies[index], &source_unique_ids[index]),
+                properties: ids.base_properties(index),
             });
             continue;
         }
@@ -1091,7 +1092,10 @@ pub(crate) fn canonical_component_identities(
                     missing_unique_id.push(index);
                 } else {
                     authoritative_groups
-                        .entry((hierarchies[index].clone(), unique_id_keys[index].clone()))
+                        .entry((
+                            ids.hierarchies[index].clone(),
+                            unique_id_keys[index].clone(),
+                        ))
                         .or_default()
                         .push(index);
                 }
@@ -1114,7 +1118,10 @@ pub(crate) fn canonical_component_identities(
                         format!("{raw_reference}@{path}")
                     };
                     if path.is_empty() || groups_per_path[&path] > 1 {
-                        format!("{base}@uid-{}", identity_token(&source_unique_ids[first]))
+                        format!(
+                            "{base}@uid-{}",
+                            identity_token(&ids.source_unique_ids[first])
+                        )
                     } else {
                         base
                     }
@@ -1127,42 +1134,25 @@ pub(crate) fn canonical_component_identities(
                         // so sending it through the generated-name allocator
                         // would create a spurious `@source-*` collision.
                         for &index in &group_indices {
-                            output[index] = Some(ComponentIdentity {
+                            ids.output[index] = Some(ComponentIdentity {
                                 reference: raw_reference.clone(),
-                                properties: base_properties(
-                                    &hierarchies[index],
-                                    &source_unique_ids[index],
-                                ),
+                                properties: ids.base_properties(index),
                             });
                         }
                     } else {
-                        assign_shared_identity(
-                            inputs,
-                            &group_indices,
-                            &candidate,
-                            None,
-                            &hierarchies,
-                            &source_unique_ids,
-                            &mut used,
-                            &mut output,
-                        );
+                        ids.shared(&group_indices, &candidate, None);
                     }
                 } else {
                     for &index in &group_indices {
                         let split_candidate =
                             format!("{candidate}@record-{}", inputs[index].record_key);
-                        assign_shared_identity(
-                            inputs,
+                        ids.shared(
                             &[index],
                             &split_candidate,
                             Some((
                                 REFERENCE_AMBIGUOUS_KEY,
                                 "records share an authoritative source identity but assign the same pin number to different nets; kept distinct",
                             )),
-                            &hierarchies,
-                            &source_unique_ids,
-                            &mut used,
-                            &mut output,
                         );
                     }
                 }
@@ -1176,18 +1166,13 @@ pub(crate) fn canonical_component_identities(
                     "{raw_reference}@unknown-identity-{}",
                     inputs[index].record_key
                 );
-                assign_shared_identity(
-                    inputs,
+                ids.shared(
                     &[index],
                     &candidate,
                     Some((
                         REFERENCE_AMBIGUOUS_KEY,
                         "other records with this designator carry authoritative unique ids, but this record does not; kept distinct",
                     )),
-                    &hierarchies,
-                    &source_unique_ids,
-                    &mut used,
-                    &mut output,
                 );
             }
             continue;
@@ -1196,11 +1181,11 @@ pub(crate) fn canonical_component_identities(
         let mut path_groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut missing_path = Vec::new();
         for &index in &indices {
-            if hierarchies[index].is_empty() {
+            if ids.hierarchies[index].is_empty() {
                 missing_path.push(index);
             } else {
                 path_groups
-                    .entry(hierarchies[index].clone())
+                    .entry(ids.hierarchies[index].clone())
                     .or_default()
                     .push(index);
             }
@@ -1217,7 +1202,7 @@ pub(crate) fn canonical_component_identities(
             let inferred_groups = positive_identity_components(inputs, &indices);
             if inferred_groups.len() == 1 && inferred_groups[0].len() == indices.len() {
                 for &index in &indices {
-                    output[index] = Some(ComponentIdentity {
+                    ids.output[index] = Some(ComponentIdentity {
                         reference: raw_reference.clone(),
                         properties: vec![(
                             REFERENCE_AMBIGUOUS_KEY.to_string(),
@@ -1226,16 +1211,11 @@ pub(crate) fn canonical_component_identities(
                     });
                 }
             } else {
-                assign_ambiguous_components(
-                    inputs,
+                ids.ambiguous(
                     inferred_groups,
                     &raw_reference,
                     "repeated designator has no source hierarchy; only this record group shares identically-netted pads, so it is merged for connectivity but remains identity-ambiguous",
                     "repeated designator has no source hierarchy and no positive pad-identity edge to another record; kept distinct",
-                    &hierarchies,
-                    &source_unique_ids,
-                    &mut used,
-                    &mut output,
                 );
             }
             continue;
@@ -1246,29 +1226,23 @@ pub(crate) fn canonical_component_identities(
             let inferred_groups = positive_identity_components(inputs, path_indices);
             if inferred_groups.len() == 1 && inferred_groups[0].len() == path_indices.len() {
                 for &index in path_indices {
-                    let mut properties =
-                        base_properties(&hierarchies[index], &source_unique_ids[index]);
+                    let mut properties = ids.base_properties(index);
                     properties.push((
                         REFERENCE_AMBIGUOUS_KEY.to_string(),
                         "records share a source hierarchy and an identically-netted pad, but lack an authoritative unique id; merged for connectivity only"
                             .to_string(),
                     ));
-                    output[index] = Some(ComponentIdentity {
+                    ids.output[index] = Some(ComponentIdentity {
                         reference: raw_reference.clone(),
                         properties,
                     });
                 }
             } else {
-                assign_ambiguous_components(
-                    inputs,
+                ids.ambiguous(
                     inferred_groups,
                     &raw_reference,
                     "records share a source hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id",
                     "records share a source hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct",
-                    &hierarchies,
-                    &source_unique_ids,
-                    &mut used,
-                    &mut output,
                 );
             }
             continue;
@@ -1287,49 +1261,30 @@ pub(crate) fn canonical_component_identities(
                         "records share a channel hierarchy and an identically-netted pad, but lack an authoritative unique id; merged for connectivity only",
                     )
                 });
-                assign_shared_identity(
-                    inputs,
-                    group,
-                    &candidate,
-                    inference,
-                    &hierarchies,
-                    &source_unique_ids,
-                    &mut used,
-                    &mut output,
-                );
+                ids.shared(group, &candidate, inference);
             } else {
-                assign_ambiguous_components(
-                    inputs,
+                ids.ambiguous(
                     inferred_groups,
                     &format!("{raw_reference}@{path}"),
                     "records share a channel hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id",
                     "records share a channel hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct",
-                    &hierarchies,
-                    &source_unique_ids,
-                    &mut used,
-                    &mut output,
                 );
             }
         }
         for index in missing_path {
             let candidate = format!("{raw_reference}@unknown-{}", inputs[index].record_key);
-            assign_shared_identity(
-                inputs,
+            ids.shared(
                 &[index],
                 &candidate,
                 Some((
                     REFERENCE_AMBIGUOUS_KEY,
                     "other records with this designator name channel hierarchies, but this record does not; kept distinct",
                 )),
-                &hierarchies,
-                &source_unique_ids,
-                &mut used,
-                &mut output,
             );
         }
     }
 
-    output
+    ids.output
         .into_iter()
         .map(|identity| identity.expect("every component receives an identity"))
         .collect()
@@ -1677,115 +1632,78 @@ mod tests {
         assert_eq!(d.value, None);
     }
 
+    /// A `J1` record with no hierarchy or unique id, keyed `key`, carrying `pins`.
+    fn j1(key: &str, pins: &[(&str, Option<i64>)]) -> ComponentIdentityInput {
+        ComponentIdentityInput {
+            source_designator: "J1".into(),
+            source_hierarchical_path: String::new(),
+            source_unique_id: String::new(),
+            record_key: key.into(),
+            pins: pins.iter().map(|&(pad, net)| (pad.into(), net)).collect(),
+        }
+    }
+
+    fn has(identity: &ComponentIdentity, key: &str) -> bool {
+        identity.properties.iter().any(|(k, _)| k == key)
+    }
+
     #[test]
     fn known_hierarchy_allows_missing_connectivity_to_be_enriched() {
         let identities = canonical_component_identities(&[
             ComponentIdentityInput {
-                source_designator: "J1".into(),
                 source_hierarchical_path: "\\ROOT\\IO".into(),
                 source_unique_id: "ABC123".into(),
-                record_key: "a".into(),
-                pins: vec![("1".into(), None)],
+                ..j1("a", &[("1", None)])
             },
             ComponentIdentityInput {
-                source_designator: "J1".into(),
                 source_hierarchical_path: "\\ROOT\\IO".into(),
                 source_unique_id: "ABC123".into(),
-                record_key: "b".into(),
-                pins: vec![("1".into(), Some(7))],
+                ..j1("b", &[("1", Some(7))])
             },
         ]);
 
         assert!(identities.iter().all(|identity| identity.reference == "J1"));
-        assert!(identities.iter().all(|identity| !identity
-            .properties
+        assert!(identities
             .iter()
-            .any(|(key, _)| key == REFERENCE_AMBIGUOUS_KEY)));
+            .all(|identity| !has(identity, REFERENCE_AMBIGUOUS_KEY)));
     }
 
     #[test]
     fn unknown_connectivity_is_not_positive_split_placement_evidence() {
-        let identities = canonical_component_identities(&[
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "a".into(),
-                pins: vec![("1".into(), None)],
-            },
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "b".into(),
-                pins: vec![("1".into(), Some(7))],
-            },
-        ]);
+        let identities =
+            canonical_component_identities(&[j1("a", &[("1", None)]), j1("b", &[("1", Some(7))])]);
 
         assert_ne!(identities[0].reference, identities[1].reference);
-        assert!(identities.iter().all(|identity| identity
-            .properties
+        assert!(identities
             .iter()
-            .any(|(key, _)| key == REFERENCE_AMBIGUOUS_KEY)));
-        assert!(identities.iter().all(|identity| identity
-            .properties
+            .all(|identity| has(identity, REFERENCE_AMBIGUOUS_KEY)));
+        assert!(identities
             .iter()
-            .any(|(key, _)| key == crate::DUPLICATE_REFERENCE_CONFLICT_KEY)));
+            .all(|identity| has(identity, crate::DUPLICATE_REFERENCE_CONFLICT_KEY)));
     }
 
     #[test]
     fn shared_pad_without_authoritative_identity_remains_ambiguous() {
         let identities = canonical_component_identities(&[
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "a".into(),
-                pins: vec![("1".into(), Some(7))],
-            },
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "b".into(),
-                pins: vec![("1".into(), Some(7)), ("2".into(), Some(9))],
-            },
+            j1("a", &[("1", Some(7))]),
+            j1("b", &[("1", Some(7)), ("2", Some(9))]),
         ]);
 
         assert_eq!(
             identities[0].reference, identities[1].reference,
             "positive pad evidence may merge connectivity ownership"
         );
-        assert!(identities.iter().all(|identity| identity
-            .properties
+        assert!(identities
             .iter()
-            .any(|(key, _)| key == REFERENCE_AMBIGUOUS_KEY)));
+            .all(|identity| has(identity, REFERENCE_AMBIGUOUS_KEY)));
     }
 
     #[test]
     fn one_shared_pair_does_not_absorb_a_disjoint_third_record() {
         let identities = canonical_component_identities(&[
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "a".into(),
-                pins: vec![("1".into(), Some(7))],
-            },
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "b".into(),
-                pins: vec![("1".into(), Some(7))],
-            },
-            ComponentIdentityInput {
-                source_designator: "J1".into(),
-                source_hierarchical_path: String::new(),
-                source_unique_id: String::new(),
-                record_key: "c".into(),
-                pins: vec![("2".into(), Some(9))],
-            },
+            j1("a", &[("1", Some(7))]),
+            j1("b", &[("1", Some(7))]),
+            j1("c", &[("2", Some(9))]),
         ]);
 
         assert_eq!(
@@ -1796,10 +1714,9 @@ mod tests {
             identities[1].reference, identities[2].reference,
             "a disjoint record has no positive edge into that owner"
         );
-        assert!(identities.iter().all(|identity| identity
-            .properties
+        assert!(identities
             .iter()
-            .any(|(key, _)| key == REFERENCE_AMBIGUOUS_KEY)));
+            .all(|identity| has(identity, REFERENCE_AMBIGUOUS_KEY)));
     }
 
     #[test]
