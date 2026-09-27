@@ -1109,35 +1109,18 @@ k_volts = 1000.0
 
     /// The same charger with its programming equation retagged as a
     /// protection threshold.
-    const PROTECTION_TOML: &str = r#"
-[[models]]
-id = "test_protected"
-kind = "vreg"
-description = "test part whose PROG pin sets an OCP threshold, not a load"
-
-[models.match]
-value_re = "(?i)^TESTCHARGER$"
-
-[models.params]
-vout = 4.2
-dropout_v = 0.3
-iq_a = 0.001
-
-[models.pins]
-"1" = "in"
-"2" = "gnd"
-"3" = "prog"
-"4" = "out"
-
-[models.ratings]
-max_current_a = 0.8
-
-[models.current_program]
-pin = "prog"
-semantics = "protection_limit"
-equation = "inverse_resistance"
-k_volts = 1000.0
-"#;
+    fn protection_toml() -> String {
+        let retagged = CHARGER_TOML.replace(
+            "semantics = \"regulated_current\"\ncurrent_in_roles = [\"in\"]\n\
+             current_out_roles = [\"out\"]\nmax_operating_current_a = 0.4\n",
+            "semantics = \"protection_limit\"\n",
+        );
+        assert_ne!(
+            retagged, CHARGER_TOML,
+            "the charger's program must be retagged"
+        );
+        retagged
+    }
 
     const SENSE_REGULATOR_TOML: &str = r#"
 [[models]]
@@ -1212,17 +1195,17 @@ sense_full_scale_v = 0.05
     fn charger_board(prog_network: Vec<Component>) -> ExtractedBoard {
         let mut components = vec![charger("U1", [1, 2, 3, 4])];
         components.extend(prog_network);
-        board(
+        numbered_board(
             "charger",
-            &[
-                (1, "+5V"),
-                (2, "GND"),
-                (3, "PROG"),
-                (4, "VBAT"),
-                (5, "PROG_LINK"),
-            ],
+            &["+5V", "GND", "PROG", "VBAT", "PROG_LINK"],
             components,
         )
+    }
+
+    /// A board named `name` whose nets are `names`, numbered from 1.
+    fn numbered_board(name: &str, names: &[&str], components: Vec<Component>) -> ExtractedBoard {
+        let nets: Vec<(i64, &str)> = (1..).zip(names.iter().copied()).collect();
+        board(name, &nets, components)
     }
 
     fn prog_4k99_via_jumper(jumper: &str) -> Vec<Component> {
@@ -1286,7 +1269,7 @@ sense_full_scale_v = 0.05
     #[test]
     fn a_protection_limit_program_contributes_no_ampacity_load() {
         let board = charger_board(vec![two_pin("R10", "4.99k", 3, 2)]);
-        let got = attribute_currents(&board, &lib_from("protection_limit", PROTECTION_TOML));
+        let got = attribute_currents(&board, &lib_from("protection_limit", &protection_toml()));
         assert!(got.cited.is_empty(), "{:?}", got.cited);
         assert!(got.undetermined.is_empty(), "{:?}", undetermined_refs(&got));
     }
@@ -1423,16 +1406,9 @@ sense_full_scale_v = 0.05
     /// middle rail's through-current once.
     #[test]
     fn regulated_stages_sum_on_shared_rails_and_do_not_double_count_cascades() {
-        let two = board(
+        let two = numbered_board(
             "two_chargers",
-            &[
-                (1, "+5V"),
-                (2, "GND"),
-                (3, "PROG_A"),
-                (4, "BAT_A"),
-                (5, "PROG_B"),
-                (6, "BAT_B"),
-            ],
+            &["+5V", "GND", "PROG_A", "BAT_A", "PROG_B", "BAT_B"],
             vec![
                 charger("U1", [1, 2, 3, 4]),
                 two_pin("R1", "10k", 3, 2),
@@ -1450,16 +1426,9 @@ sense_full_scale_v = 0.05
         assert!((got.cited["BAT_A"].0 - 0.1).abs() < 1e-12);
         assert!((got.cited["BAT_B"].0 - 0.1).abs() < 1e-12);
 
-        let cascaded = board(
+        let cascaded = numbered_board(
             "cascaded_chargers",
-            &[
-                (1, "SOURCE"),
-                (2, "GND"),
-                (3, "PROG_A"),
-                (4, "MIDDLE"),
-                (5, "PROG_B"),
-                (6, "SINK"),
-            ],
+            &["SOURCE", "GND", "PROG_A", "MIDDLE", "PROG_B", "SINK"],
             vec![
                 charger("U1", [1, 2, 3, 4]),
                 two_pin("R1", "10k", 3, 2),
@@ -1483,16 +1452,9 @@ sense_full_scale_v = 0.05
     #[test]
     fn builtin_protection_thresholds_are_not_fictional_loads() {
         let load_switch = |rset: &str| {
-            board(
+            numbered_board(
                 "load_switch",
-                &[
-                    (1, "+5V"),
-                    (2, "GND"),
-                    (3, "ISET"),
-                    (4, "SWITCHED_5V"),
-                    (5, "ENABLE"),
-                    (6, "FAULT_N"),
-                ],
+                &["+5V", "GND", "ISET", "SWITCHED_5V", "ENABLE", "FAULT_N"],
                 vec![
                     comp(
                         "U1",
@@ -1509,16 +1471,9 @@ sense_full_scale_v = 0.05
             assert!(got.cited.is_empty(), "RSET {rset}: {:?}", got.cited);
         }
 
-        let ltc4020 = board(
+        let ltc4020 = numbered_board(
             "ltc4020_program",
-            &[
-                (1, "VIN"),
-                (2, "GND"),
-                (3, "SENSE_TOP"),
-                (4, "SENSE_BOT"),
-                (5, "ILIMIT"),
-                (6, "BAT"),
-            ],
+            &["VIN", "GND", "SENSE_TOP", "SENSE_BOT", "ILIMIT", "BAT"],
             vec![
                 comp(
                     "U2",
@@ -1548,16 +1503,16 @@ sense_full_scale_v = 0.05
             if extra_branch {
                 components.push(two_pin("R4", "0.001", 5, 7));
             }
-            board(
+            numbered_board(
                 "sense_regulator",
                 &[
-                    (1, "VIN"),
-                    (2, "GND"),
-                    (3, "PROG"),
-                    (4, "VOUT"),
-                    (5, "KELVIN_A"),
-                    (6, "KELVIN_B"),
-                    (7, "FILTER_NODE"),
+                    "VIN",
+                    "GND",
+                    "PROG",
+                    "VOUT",
+                    "KELVIN_A",
+                    "KELVIN_B",
+                    "FILTER_NODE",
                 ],
                 components,
             )

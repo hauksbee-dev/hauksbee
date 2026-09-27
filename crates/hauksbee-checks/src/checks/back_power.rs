@@ -287,11 +287,31 @@ mod tests {
         assert!(!is_plain_resistor(&refused));
     }
 
-    /// An ESP-WROOM-32 (3.3 V part: pad 2 = vdd on +3V3) whose GPIO0 net
-    /// carries a 10k pull-up. `rail` picks the pull-up's far side: "+5V"
-    /// back-powers, "+3V3" is the correct same-domain bias.
-    fn esp32_pull_board(rail: &str) -> String {
-        let rail_net = if rail == "+5V" { 2 } else { 5 };
+    /// Nets 1 GND, 2 +5V, 3 `/SENSOR_INT` and 5 +3V3 holding an ESP-WROOM-32
+    /// (3.3 V part: pad 2 = vdd on +3V3) whose GPIO pad 25 sits on net
+    /// `gpio`, plus a 0603 resistor `(reference, value, pad 1 net, pad 2 net)`
+    /// when one is given.
+    fn esp32_board(gpio: i64, resistor: Option<(&str, &str, i64, i64)>) -> String {
+        let name = |net: i64| match net {
+            1 => "GND",
+            2 => "+5V",
+            3 => "/SENSOR_INT",
+            _ => "+3V3",
+        };
+        let resistor = resistor.map_or_else(String::new, |(reference, value, a, b)| {
+            format!(
+                r#"
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 120 100)
+    (fp_text reference {reference} (at 0 0) (layer F.SilkS))
+    (fp_text value {value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net {a} "{}"))
+    (pad 2 smd rect (at 2 0) (net {b} "{}"))
+  )"#,
+                name(a),
+                name(b)
+            )
+        });
         format!(
             r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -305,17 +325,19 @@ mod tests {
     (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
     (pad 1 smd rect (at 0 0) (net 1 "GND"))
     (pad 2 smd rect (at 0 1) (net 5 "+3V3"))
-    (pad 25 smd rect (at 0 5) (net 3 "/SENSOR_INT"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R7 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/SENSOR_INT"))
-    (pad 2 smd rect (at 2 0) (net {rail_net} "{rail}"))
-  )
-)"#
+    (pad 25 smd rect (at 0 5) (net {gpio} "{}"))
+  ){resistor}
+)"#,
+            name(gpio)
         )
+    }
+
+    /// The ESP32 whose GPIO0 net carries a 10k pull-up R7. `rail` picks the
+    /// pull-up's far side: "+5V" back-powers, "+3V3" is the correct
+    /// same-domain bias.
+    fn esp32_pull_board(rail: &str) -> String {
+        let rail_net = if rail == "+5V" { 2 } else { 5 };
+        esp32_board(3, Some(("R7", "10k", 3, rail_net)))
     }
 
     fn run(text: &str) -> NetLintReport {
@@ -378,21 +400,8 @@ mod tests {
     /// bounds the clamp current.
     #[test]
     fn direct_tie_to_higher_rail_is_high() {
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 5 "+3V3")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 1 "GND"))
-    (pad 2 smd rect (at 0 1) (net 5 "+3V3"))
-    (pad 25 smd rect (at 0 5) (net 2 "+5V"))
-  )
-)"#;
-        let r = run(text);
+        let text = esp32_board(2, None);
+        let r = run(&text);
         let f: Vec<_> = r.of_check(LintCheck::BackPower).collect();
         assert_eq!(f.len(), 1, "direct tie fires, got {f:?}");
         assert_eq!(f[0].severity, Severity::High);
@@ -407,28 +416,8 @@ mod tests {
     /// low, which is the part working as designed at address 0x18.
     #[test]
     fn grounded_signal_pin_is_silent_even_with_a_resistor_from_ground_to_a_rail() {
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 5 "+3V3")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 1 "GND"))
-    (pad 2 smd rect (at 0 1) (net 5 "+3V3"))
-    (pad 25 smd rect (at 0 5) (net 1 "GND"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 100k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 2 "+5V"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-)"#;
-        let r = run(text);
+        let text = esp32_board(1, Some(("R2", "100k", 2, 1)));
+        let r = run(&text);
         assert_eq!(
             r.of_check(LintCheck::BackPower).count(),
             0,
@@ -441,29 +430,9 @@ mod tests {
     /// evidence, so the check must stay silent rather than guess.
     #[test]
     fn unresolvable_supply_stays_silent() {
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "/SENSOR_INT")
-  (net 5 "VDD")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 1 "GND"))
-    (pad 2 smd rect (at 0 1) (net 5 "VDD"))
-    (pad 25 smd rect (at 0 5) (net 3 "/SENSOR_INT"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R7 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/SENSOR_INT"))
-    (pad 2 smd rect (at 2 0) (net 2 "+5V"))
-  )
-)"#;
-        let r = run(text);
+        // The +5V pull-up board with its supply renamed to a bare VDD.
+        let text = esp32_pull_board("+5V").replace("\"+3V3\"", "\"VDD\"");
+        let r = run(&text);
         assert_eq!(
             r.of_check(LintCheck::BackPower).count(),
             0,
