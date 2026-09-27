@@ -26,7 +26,7 @@ use hauksbee_extract::{
 use hauksbee_ir::evidence::Assumption;
 use hauksbee_models::OperatingEnvelope::InputCommonMode;
 use hauksbee_models::{ModelEntry, ModelLibrary, OperatingEnvelope};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// A capacitor at the pin this size or larger supplies the sample-and-hold
 /// charge locally, so the series resistance no longer sets settling: ~700x the
@@ -34,7 +34,7 @@ use std::collections::HashSet;
 const ADC_HOLD_CAP_F: f64 = 10.0e-9;
 
 /// One finding, and whether the run MEASURED a datasheet limit violated.
-type Flag = (LintFinding, bool);
+pub(super) type Flag = (LintFinding, bool);
 
 /// The board a part sits on, and the caller's net-voltage oracle.
 ///
@@ -177,24 +177,48 @@ pub fn analog_input_lint(
 /// The subject carries the nets, so two channels of one quad are two gaps and
 /// not one duplicate id the registry rejects; an identical (part, nets) pair IS
 /// one gap, and collapses.
+///
+/// `ambient` is the run's ambient (°C) and whether the scenario stated it.
 pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     volts: &dyn Fn(&str) -> Option<f64>,
-    ambient_c: f64,
+    ambient: (f64, bool),
 ) -> Vec<Assumption> {
     let fix = "bring the input inside the range the card quotes, then re-run";
-    let found = flags(board, lib, volts, Some(ambient_c));
-    as_evidence(found, "analog-input-range", fix)
+    let judge = |at| flags(board, lib, volts, at);
+    at_ambient(ambient, judge, "analog-input-range", fix)
 }
 
-/// Findings as run evidence: `true` marks a limit the run MEASURED as violated
-/// (it undermines), `false` one that only qualifies the answer.
-pub(super) fn as_evidence(
-    found: Vec<(LintFinding, bool)>,
+/// `judge`'s flags at the run's ambient, as evidence. An ambient the scenario
+/// never stated is disclosed, as the stress monitor discloses it, on each part
+/// a row the card prints for any other temperature would flag where the rows
+/// judged at the default do not: every printed row is a superset of any single
+/// probe, so a tighter hot or cold row is never silently passed over.
+pub(super) fn at_ambient(
+    (ambient_c, given): (f64, bool),
+    judge: impl Fn(Option<f64>) -> Vec<Flag>,
     limit: &str,
     fix: &str,
 ) -> Vec<Assumption> {
+    let now = judge(Some(ambient_c));
+    let key = |(f, bad): &Flag| (f.refs.clone(), f.nets.clone(), *bad);
+    let seen: HashSet<_> = now.iter().map(key).collect();
+    let everywhere = if given { Vec::new() } else { judge(None) };
+    let flipped = everywhere.iter().filter(|f| !seen.contains(&key(f)));
+    let refs: BTreeSet<&String> = flipped.filter_map(|(f, _)| f.refs.first()).collect();
+    let at = format!("{ambient_c} C");
+    let default = |r: &String| Assumption::default_parameter_for_component(r, r, "ambient_c", &at);
+    let mut out = as_evidence(now, limit, fix);
+    out.extend(refs.into_iter().map(default));
+    out
+}
+
+/// Findings as run evidence: `true` marks a limit the run MEASURED as violated
+/// (it undermines), `false` one that only qualifies the answer. Of findings
+/// sharing an id the violation is kept, so a lesser row never masks it.
+fn as_evidence(mut found: Vec<Flag>, limit: &str, fix: &str) -> Vec<Assumption> {
+    found.sort_by_key(|(_, bad)| !bad);
     let mut seen = HashSet::new();
     found
         .into_iter()
@@ -251,7 +275,7 @@ mod tests {
         let lib = ModelLibrary::builtin();
         let report = analog_input_lint(b, &lib, v);
         assert_eq!(report.findings.len(), n, "{label}: {report:?}");
-        let assumptions = run_assumptions(b, &lib, v, 25.0);
+        let assumptions = run_assumptions(b, &lib, v, (25.0, true));
         let kinds: Vec<_> = assumptions
             .iter()
             .map(hauksbee_ir::evidence::Assumption::kind)
@@ -282,6 +306,17 @@ mod tests {
                 OperatingLimitViolated,
             );
         }
+    }
+
+    // Two rows of one part on one net share an id: a lesser row printed first
+    // must not mask the other's violation as a mere qualification.
+    #[test]
+    fn a_violation_outlives_a_lesser_finding_with_its_id() {
+        let c = part("U1", "X", &[]);
+        let v = finding(&c, Severity::Low, vec!["VDD".into()], String::new());
+        let got = as_evidence(vec![(v.clone(), false), (v, true)], "supply-envelope", "");
+        let kinds: Vec<_> = got.iter().map(Assumption::kind).collect();
+        assert_eq!(kinds, [OperatingLimitViolated]);
     }
 
     // The net's DC voltage is genuinely what the tool says here, so this one

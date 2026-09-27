@@ -1555,7 +1555,8 @@ fn production_assumptions(
     // channel with every input above its common-mode ceiling (MEASURED, so it
     // undermines), an ADC pin behind too high a source impedance (qualifies).
     let solved = |net: &str| engine.scheduler().net_voltage(net);
-    let ambient = engine.scheduler().ambient_c();
+    let stress = &engine.scheduler().stress;
+    let ambient = (stress.ambient_c, stress.ambient_given);
     let analog =
         hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved, ambient);
     production_assumptions.extend(analog);

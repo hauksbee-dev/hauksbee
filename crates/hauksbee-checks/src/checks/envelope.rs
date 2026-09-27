@@ -301,24 +301,35 @@ fn unknown_abstention(net_name: &str, knowledge: &RailKnowledge, reference: &str
 /// tolerance a room-temperature figure is taken at. Further off, it is a guess.
 const POINT_ROW_C: f64 = 5.0;
 
+/// The temperature span row `e` is printed for. A one-sided bound (`TA ≤ 85
+/// °C`, `25 °C ≤ TA`) reads as a point at its bound, so it is taken as no span:
+/// judged at every temperature, like an unreadable row.
+fn span(e: &OperatingEnvelope) -> Option<(TempRef, f64, f64)> {
+    let text = e.conditions();
+    temp_span(text).filter(|(_, lo, hi)| lo < hi || !text.contains(['≤', '<', '≥', '>']))
+}
+
 /// Whether row `e` is guaranteed at `ambient_c`; every row is on a static
-/// surface, which knows no temperature. An untagged row holds everywhere, and a
-/// TC or TJ row covers any temperature from ambient up: the part runs hotter.
+/// surface, which knows no temperature. An untagged or unreadable row holds
+/// everywhere, and a TC or TJ row covers any temperature from ambient up: the
+/// part runs hotter.
 fn covers(e: &OperatingEnvelope, ambient_c: Option<f64>) -> bool {
     let Some(ta) = ambient_c else { return true };
-    temp_span(e.conditions()).is_none_or(|(at, lo, hi)| {
+    span(e).is_none_or(|(at, lo, hi)| {
         let tol = if lo < hi { 0.0 } else { POINT_ROW_C };
         (at != TempRef::Ambient || lo - tol <= ta) && ta <= hi + tol
     })
 }
 
-/// The temperature rows of `e`'s channel.
+/// The temperature rows of `e`'s channel. A row whose temperature cannot be
+/// read is not one: holding everywhere, it must not stand in for the channel's
+/// rows at an ambient none of them covers.
 fn rows_of<'a>(
     envelope: &'a [OperatingEnvelope],
     e: &OperatingEnvelope,
 ) -> impl Iterator<Item = &'a OperatingEnvelope> {
     let (channel, rows) = (e.channel(), envelope.iter());
-    rows.filter(move |o| !o.conditions().is_empty() && o.channel() == channel)
+    rows.filter(move |o| span(o).is_some() && o.channel() == channel)
 }
 
 /// The rows judged at `ambient_c`: each one guaranteed there, and every row of
@@ -396,6 +407,7 @@ fn envelope_lint_with_tolerance(
     let mut abstained_nets = BTreeSet::new();
 
     for (comp, model) in super::resolved_components(board, lib) {
+        let net_of = |role| role_net_id(comp, &model, role).and_then(|id| board.net(id));
         for envelope in binding(&model.envelope, ambient_c) {
             match envelope {
                 OperatingEnvelope::SupplyRange {
@@ -406,12 +418,8 @@ fn envelope_lint_with_tolerance(
                     basis,
                     ..
                 } => {
-                    let Some(net_id) = role_net_id(comp, &model, pin) else {
-                        continue;
-                    };
-                    let Some(net) = board.net(net_id) else {
-                        continue;
-                    };
+                    let Some(net) = net_of(pin) else { continue };
+                    let net_id = net.id;
                     let range = match resolver.range(net_id) {
                         RailKnowledge::Known(range) => range,
                         knowledge => {
@@ -457,28 +465,17 @@ fn envelope_lint_with_tolerance(
                     basis,
                     ..
                 } => {
-                    let (Some(lower_id), Some(upper_id)) = (
-                        role_net_id(comp, &model, lower),
-                        role_net_id(comp, &model, upper),
-                    ) else {
-                        continue;
-                    };
-                    let Some(lower_net) = board.net(lower_id) else {
-                        continue;
-                    };
-                    let Some(upper_net) = board.net(upper_id) else {
+                    let (Some(lower_net), Some(upper_net)) = (net_of(lower), net_of(upper)) else {
                         continue;
                     };
                     let mut known = Vec::new();
-                    for (net_id, net_name) in
-                        [(lower_id, &lower_net.name), (upper_id, &upper_net.name)]
-                    {
-                        match resolver.range(net_id) {
+                    for net in [lower_net, upper_net] {
+                        match resolver.range(net.id) {
                             RailKnowledge::Known(range) => known.push(range),
                             knowledge => {
-                                if abstained_nets.insert(net_id) {
+                                if abstained_nets.insert(net.id) {
                                     let finding =
-                                        unknown_abstention(net_name, &knowledge, &comp.reference);
+                                        unknown_abstention(&net.name, &knowledge, &comp.reference);
                                     report.findings.push(finding);
                                 }
                             }
@@ -520,25 +517,25 @@ fn envelope_lint_with_tolerance(
 /// it. A rail the run did not solve is an abstention, never a violation. Each
 /// level is the span the net covered over the run, so a rail that sags out of
 /// its envelope and recovers is judged on the sag, not on where it ended.
+/// `ambient` is the run's ambient (°C) and whether the scenario stated it.
 #[must_use]
 pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     solved: &BTreeMap<String, RailRange>,
     tolerance: (f64, f64),
-    ambient_c: f64,
+    ambient: (f64, bool),
 ) -> Vec<Assumption> {
-    let found = envelope_lint_with_tolerance(board, lib, solved, tolerance, Some(ambient_c));
-    let judged = (found.findings)
-        .into_iter()
-        .filter(|f| f.nets.iter().all(|net| solved.contains_key(net)))
-        .map(|f| {
-            let serious = f.severity == Severity::High;
-            (f, serious)
-        });
+    let solved_only = |f: &LintFinding| f.nets.iter().all(|n| solved.contains_key(n));
+    let judge = |at| {
+        let found = envelope_lint_with_tolerance(board, lib, solved, tolerance, at).findings;
+        let serious = |f: LintFinding| (f.severity == Severity::High, f);
+        let found = found.into_iter().filter(&solved_only).map(serious);
+        found.map(|(bad, f)| (f, bad)).collect()
+    };
     let fix = "bring the rail inside the envelope the card quotes, then re-run";
-    let mut out = super::analog_inputs::as_evidence(judged.collect(), "supply-envelope", fix);
-    out.extend(temperature_caveats(board, lib, ambient_c));
+    let mut out = super::analog_inputs::at_ambient(ambient, judge, "supply-envelope", fix);
+    out.extend(temperature_caveats(board, lib, ambient.0));
     out
 }
 
@@ -630,7 +627,7 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         ] {
             let solved =
                 BTreeMap::from([("UNNAMED_SUPPLY".to_string(), RailRange { min_v, max_v })]);
-            let findings = run_assumptions(&b, &lib, &solved, (1.0e-3, 1.0e-6), 25.0);
+            let findings = run_assumptions(&b, &lib, &solved, (1.0e-3, 1.0e-6), (25.0, true));
             assert_eq!(
                 !findings.is_empty(),
                 fires,
@@ -740,7 +737,8 @@ envelope = [
 
     // VDD 3.1 V breaks only the hot supply row, inputs at 1.4 V only the hot
     // 2.0 V headroom. An uncovered ambient, like the static lint, judges every
-    // row, and says so.
+    // row, and says so. A defaulted 25 °C judges its own rows, but discloses
+    // the default the hot common-mode row would have flagged.
     #[test]
     fn each_limit_is_the_row_printed_for_the_ambient() {
         use super::super::analog_inputs;
@@ -756,19 +754,38 @@ envelope = [
         let lint = envelope_lint_with_drives(&b, &lib, &BTreeMap::new()).findings;
         let analog = analog_inputs::analog_input_lint(&b, &lib, &v).findings;
         assert_eq!((lint.len(), analog.len()), (1, 1), "{lint:?} {analog:?}");
-        // (ambient °C, [supply fires, common-mode fires, caveats])
-        let rows = [(0.0, [0, 1, 1]), (25.0, [1, 0, 0]), (29.0, [1, 0, 0])];
-        for (ta, want) in rows
-            .into_iter()
-            .chain([(85.0, [1, 1, 0]), (125.0, [1, 1, 2])])
-        {
-            let mut ids = run_assumptions(&b, &lib, &solved, (0.0, 0.0), ta);
-            ids.extend(analog_inputs::run_assumptions(&b, &lib, &v, ta));
+        // (ambient °C, stated, [supply, common-mode, caveats, default disclosures])
+        for (ta, given, want) in [
+            (0.0, true, [0, 1, 1, 0]),
+            (25.0, true, [1, 0, 0, 0]),
+            (29.0, true, [1, 0, 0, 0]),
+            (85.0, true, [1, 1, 0, 0]),
+            (125.0, true, [1, 1, 2, 0]),
+            (25.0, false, [1, 0, 0, 1]),
+        ] {
+            let mut ids = run_assumptions(&b, &lib, &solved, (0.0, 0.0), (ta, given));
+            ids.extend(analog_inputs::run_assumptions(&b, &lib, &v, (ta, given)));
             let ids: Vec<String> = ids.iter().map(|a| a.id().to_string()).collect();
             let count = |s: &str| ids.iter().filter(|id| id.contains(s)).count();
-            let got = ["supply-envelope", "analog-input-range", "temperature"].map(count);
+            let got = ["supply-env", "analog-input", "temperature", "ambient"].map(count);
             assert_eq!(got, want, "{ta} °C: {ids:?}");
         }
+    }
+
+    // An unreadable row (never valid on a user card, but builtins skip
+    // validation) holds everywhere, yet must not stand in for the hot row no
+    // other row covers at 25 °C; a one-sided `TA ≤ 85 °C` is no point at 85.
+    #[test]
+    fn an_unreadable_row_does_not_cover_for_its_channel() {
+        let row = |at: &str| {
+            let row = serde_json::json!({"kind": "supply_range", "pin": "vdd", "min_v": 3.2,
+                "max_v": 3.6, "conditions": at});
+            serde_json::from_value::<OperatingEnvelope>(row).unwrap()
+        };
+        let rows = [row("TA = 70 °C to 85 °C"), row("over temperature")];
+        assert_eq!(binding(&rows, Some(25.0)).count(), 2);
+        let rows = [row("TA = 25 °C"), row("TA ≤ 85 °C")];
+        assert_eq!(binding(&rows, Some(25.0)).count(), 2);
     }
 
     #[test]
