@@ -33,6 +33,31 @@ HOST_QEMU_TAG = (
 HOST_QEMU_DIR_VERSION = HOST_QEMU_TAG.replace("-", "_")
 
 
+# A root that double-forks a SIGTERM-ignoring daemon into its own session,
+# records "<daemon pid> <daemon pgid>" in the file named by argv[1], and waits
+# for that record; each caller appends what the root does next.
+_DOUBLE_FORK_ROOT = r"""
+import os, signal, sys, time
+state = sys.argv[1]
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    daemon_pid = os.fork()
+    if daemon_pid > 0:
+        os._exit(0)
+    with open(state, 'w') as stream:
+        stream.write(f'{os.getpid()} {os.getpgrp()}')
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    os.close(0)
+    os.close(1)
+    os.close(2)
+    while True:
+        time.sleep(1)
+os.waitpid(pid, 0)
+while not os.path.exists(state):
+    time.sleep(0.01)
+"""
+
 def _passing_gate(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     gate = next(gate for gate in GATES if gate.command == command)
     return subprocess.CompletedProcess(
@@ -1044,11 +1069,15 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertIn("REQUIRED INTEGRATION TIMEOUT", result.stdout)
         self.assertLess(time.monotonic() - started, 2.0)
 
-    def _assert_normal_exit_reaps_detached_child(self, returncode: int) -> None:
-        child_code = r"""
+    def _assert_normal_exit_reaps_child(
+        self, returncode: int, *, detached: bool = True
+    ) -> None:
+        # The root leaves a SIGTERM-ignoring child behind, in its own process
+        # group when `detached`, else in the command's group, and exits.
+        child_code = f"""
 import os, signal, time
-os.setpgrp()
-print(f'NORMAL_EXIT_CHILD_PID={os.getpid()}', flush=True)
+{"os.setpgrp()" if detached else ""}
+print(f'NORMAL_EXIT_CHILD_PID={{os.getpid()}}', flush=True)
 os.close(1)
 os.close(2)
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -1069,50 +1098,25 @@ raise SystemExit({returncode})
         child_match = re.search(r"NORMAL_EXIT_CHILD_PID=(\d+)", result.stdout)
         self.assertIsNotNone(child_match, result.stdout)
         child_pid = int(child_match.group(1))
-        with self._force_killed(child_pid):
+        kind = "detached" if detached else "same-group"
+        with self._force_killed(child_pid, group=detached):
             self.assertEqual(result.returncode, returncode)
             self._assert_pid_exits(
                 child_pid,
-                f"detached child {child_pid} survived normal exit {returncode}",
+                f"{kind} child {child_pid} survived normal exit {returncode}",
             )
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_zero_exit_reaps_detached_child(self) -> None:
-        self._assert_normal_exit_reaps_detached_child(0)
+        self._assert_normal_exit_reaps_child(0)
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_nonzero_exit_reaps_detached_child(self) -> None:
-        self._assert_normal_exit_reaps_detached_child(7)
+        self._assert_normal_exit_reaps_child(7)
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_zero_exit_reaps_child_left_in_command_group(self) -> None:
-        child_code = r"""
-import os, signal, time
-print(f'INHERITED_GROUP_CHILD_PID={os.getpid()}', flush=True)
-os.close(1)
-os.close(2)
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-while True:
-    time.sleep(1)
-"""
-        parent_code = f"""
-import subprocess, sys, time
-subprocess.Popen([sys.executable, '-u', '-c', {child_code!r}])
-time.sleep(0.2)
-"""
-        result = run_command(
-            (sys.executable, "-u", "-c", parent_code),
-            Path.cwd(),
-            timeout_seconds=5,
-        )
-        child_match = re.search(r"INHERITED_GROUP_CHILD_PID=(\d+)", result.stdout)
-        self.assertIsNotNone(child_match, result.stdout)
-        child_pid = int(child_match.group(1))
-        with self._force_killed(child_pid, group=False):
-            self.assertEqual(result.returncode, 0)
-            self._assert_pid_exits(
-                child_pid, f"same-group child {child_pid} survived normal exit"
-            )
+        self._assert_normal_exit_reaps_child(0, detached=False)
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_timeout_kills_sigterm_resistant_descendant_and_keeps_output(self) -> None:
@@ -1214,27 +1218,7 @@ while True:
     def test_timeout_reaps_double_forked_reparented_descendant(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             state = Path(raw_tmp) / "daemon-state"
-            parent_code = r"""
-import os, signal, sys, time
-state = sys.argv[1]
-pid = os.fork()
-if pid == 0:
-    os.setsid()
-    daemon_pid = os.fork()
-    if daemon_pid > 0:
-        os._exit(0)
-    with open(state, 'w') as stream:
-        stream.write(f'{os.getpid()} {os.getpgrp()}')
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    os.close(0)
-    os.close(1)
-    os.close(2)
-    while True:
-        time.sleep(1)
-os.waitpid(pid, 0)
-while not os.path.exists(state):
-    time.sleep(0.01)
-print('ROOT_READY', flush=True)
+            parent_code = _DOUBLE_FORK_ROOT + """print('ROOT_READY', flush=True)
 while True:
     time.sleep(1)
 """
@@ -1253,29 +1237,7 @@ while True:
     def _assert_normal_exit_reaps_double_forked_daemon(self, returncode: int) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             state = Path(raw_tmp) / "daemon-state"
-            parent_code = r"""
-import os, signal, sys, time
-state = sys.argv[1]
-exit_code = int(sys.argv[2])
-pid = os.fork()
-if pid == 0:
-    os.setsid()
-    daemon_pid = os.fork()
-    if daemon_pid > 0:
-        os._exit(0)
-    with open(state, 'w') as stream:
-        stream.write(f'{os.getpid()} {os.getpgrp()}')
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    os.close(0)
-    os.close(1)
-    os.close(2)
-    while True:
-        time.sleep(1)
-os.waitpid(pid, 0)
-while not os.path.exists(state):
-    time.sleep(0.01)
-raise SystemExit(exit_code)
-"""
+            parent_code = _DOUBLE_FORK_ROOT + "raise SystemExit(int(sys.argv[2]))\n"
             result = run_command(
                 (
                     sys.executable,
