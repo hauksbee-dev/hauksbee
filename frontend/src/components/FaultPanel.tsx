@@ -40,6 +40,8 @@ interface FaultPanelProps {
   /** Why part of the circuit was not simulated (`SimFrame.unsupported_reasons`).
    *  "No faults detected" is only reassuring about what was actually solved. */
   unsupportedReasons?: string[]
+  /** What the stress verdicts rest on (`SimFrame.notes`). */
+  notes?: string[]
   /** Clears the accumulated log */
   onClear?: () => void
   /** Callback to highlight a faulted component on the board */
@@ -47,7 +49,7 @@ interface FaultPanelProps {
   selectedFaultRef?: string | null
 }
 
-export function FaultPanel({ faults, activeRefs, unsupportedReasons, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
+export function FaultPanel({ faults, activeRefs, unsupportedReasons, notes, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
   const seenRefs = useRef(new Set<string>())
   const [toasts, setToasts] = useState<{ ref: string; kind: string; id: number }[]>([])
   const toastId = useRef(0)
@@ -77,6 +79,12 @@ export function FaultPanel({ faults, activeRefs, unsupportedReasons, onClear, on
         <div className="px-3 py-2 text-[10px] leading-relaxed" data-testid="unsupported-reasons"
           style={{ color: 'var(--warn)', borderBottom: '1px solid var(--rule)' }}>
           Not simulated, so not monitored: {(unsupportedReasons ?? []).join(' · ')}
+        </div>
+      )}
+      {(notes ?? []).length > 0 && (
+        <div className="px-3 py-2 text-[10px] leading-relaxed" data-testid="stress-notes"
+          style={{ color: 'var(--silk-faint)', borderBottom: '1px solid var(--rule)' }}>
+          Qualified: {(notes ?? []).join(' · ')}
         </div>
       )}
       {faults.length === 0 ? (

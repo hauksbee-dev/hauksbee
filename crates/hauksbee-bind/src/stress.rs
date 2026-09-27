@@ -259,14 +259,13 @@ impl DeviceMeta {
         ))
     }
 
-    /// Effective junction-to-ambient thermal resistance (C/W): explicit
-    /// `theta_ja_c_per_w` from the model, else derived from the footprint
-    /// package class. Always returns a value (the footprint default is the
+    /// Effective junction-to-ambient thermal resistance (C/W): the card's
+    /// `theta_ja_c_per_w` row for this package and mounting, else its scalar,
+    /// else derived from the footprint package class. Always returns a value (the footprint default is the
     /// conservative fallback), so every dissipating device gets a temperature.
     #[must_use]
     pub fn theta_ja_c_per_w(&self) -> f64 {
-        self.ratings
-            .theta_ja_c_per_w
+        (self.derating.theta_ja().or(self.ratings.theta_ja_c_per_w))
             .unwrap_or_else(|| crate::thermal::theta_ja_from_footprint(&self.footprint, self.kind))
     }
 
@@ -902,13 +901,16 @@ impl StressMonitor {
 
     /// What a card's temperature-dependent ratings leave open in this run:
     /// an ambient nobody set, when the part's hottest printed rating
-    /// temperature would have flipped its current or power verdict; and a
-    /// limit read past the hottest row on a card with no Tj,max.
+    /// temperature would have flipped its current or power verdict; a limit
+    /// read past the hottest row on a card with no Tj,max; and the package and
+    /// mounting rows a part was fitted with on no evidence.
     #[must_use]
     pub fn rating_disclosures(&self) -> Vec<Assumption> {
         let (mut out, mut said) = (Vec::new(), std::collections::HashSet::new());
         for ((m, s), limits) in self.metas.iter().zip(&self.run).zip(&self.limits) {
             let r = strip_unit_suffix(&m.reference);
+            let fresh = (m.derating.caveats.iter()).filter(|a| said.insert((r, a.id().as_str())));
+            out.extend(fresh.cloned());
             let Some(hot) = m.derating.hottest() else {
                 continue;
             };
@@ -940,7 +942,8 @@ impl StressMonitor {
     pub fn inferred_theta_ja(&self, claims: impl Fn(&str, bool) -> Vec<Scope>) -> Vec<Assumption> {
         let mut out = Vec::new();
         for (m, s) in self.metas.iter().zip(&self.run) {
-            let Some(peak) = s.peak_tj_c.filter(|_| m.ratings.theta_ja_c_per_w.is_none()) else {
+            let carded = m.ratings.theta_ja_c_per_w.is_some() || m.derating.theta_ja().is_some();
+            let Some(peak) = s.peak_tj_c.filter(|_| !carded) else {
                 continue;
             };
             let (r, theta, limit) = (&m.reference, m.theta_ja_c_per_w(), m.tj_max_c());

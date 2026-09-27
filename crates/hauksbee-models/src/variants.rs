@@ -137,10 +137,7 @@ impl Selection {
 /// The package family a package or footprint name spells (`SOT` for `SOT-23-5`).
 #[must_use]
 pub fn package_family(package: &str) -> Option<&'static str> {
-    let upper = package.to_ascii_uppercase();
-    let squashed = upper.replace(|c: char| !c.is_ascii_alphanumeric(), "");
-    let mut families = "TSSOP SSOP SOIC TQFP LQFP QFN DFN BGA DIP SOT".split(' ');
-    families.find(|f| squashed.contains(f))
+    crate::package::package_body(package)?.family
 }
 
 fn orderable_re(entry: &ModelEntry) -> Option<Regex> {

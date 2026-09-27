@@ -54,6 +54,7 @@
 //! A part whose package is unrecognised falls back to a conservative
 //! [`DEFAULT_THETA_JA`].
 
+use hauksbee_models::package::package_body;
 use hauksbee_models::schema::ComponentKind;
 
 /// Default ambient temperature (C) when none is configured. 25 C is the
@@ -71,40 +72,6 @@ pub const DEFAULT_TJ_MAX_C: f64 = 125.0;
 /// Maximum junction temperature (C) default for power packages (TO-220, DPAK,
 /// D2PAK, SOT-223, SMA/SMB/SMC), which are typically rated to 150 C.
 pub const POWER_TJ_MAX_C: f64 = 150.0;
-
-/// Power / discrete / IC package body tokens, matched anywhere in an uppercased
-/// footprint string (`KiCad` footprints embed the package name, e.g.
-/// "Package_TO_SOT_SMD:SOT-23", "Package_TO_SOT_THT:TO-220-3_Vertical"), each
-/// with its still-air `theta_JA` (C/W).
-///
-/// ORDER MATTERS: the first row whose token is present wins, so the more
-/// specific / larger bodies come before the substrings that would also match a
-/// smaller one (TO-263 before TO-220, SOT-223 before SOT-23, the small diode
-/// bodies before the generic SOD ones, SOIC-16 before SOIC-8).
-const PACKAGE_THETA_JA: &[(&[&str], f64)] = &[
-    (&["TO-263", "TO263", "D2PAK", "DDPAK"], 50.0),
-    (&["TO-252", "TO252", "DPAK"], 70.0),
-    (&["TO-220", "TO220"], 62.0),
-    (&["TO-92", "TO92"], 200.0),
-    (&["SOT-223", "SOT223"], 65.0),
-    (&["SOT-89", "SOT89"], 140.0),
-    (&["SOT-23-5", "SOT-23-6", "SOT23-5", "SOT23-6"], 220.0),
-    (&["SOT-353", "SOT-363"], 220.0),
-    (&["SOT-23", "SOT23"], 250.0),
-    (&["SOD-523", "SOD523", "SOD-323", "SOD323"], 450.0),
-    (&["SOD-123", "SOD123", "SOD-80"], 340.0),
-    (&["DO-214AB", "SMC"], 60.0),
-    (&["DO-214AA", "SMB"], 75.0),
-    (&["DO-214AC", "SMA"], 90.0),
-    // Through-hole axial rectifier / small-signal in free air.
-    (&["DO-41", "DO41", "DO-201", "DO-35"], 100.0),
-    (&["SOIC-16", "SOIC-14", "SO-16", "SO-14"], 90.0),
-    (&["SOIC-8", "SOIC8", "SO-8", "SOIC_8"], 120.0),
-    (&["TSSOP", "MSOP"], 150.0),
-    // Bottom thermal pad to copper; moderate.
-    (&["QFN", "DFN"], 50.0),
-    (&["LQFP", "TQFP", "QFP"], 60.0),
-];
 
 /// Size-derived `theta_JA` for a chip resistor / capacitor footprint, by imperial
 /// size token: still-air with minimal copper, bracketing the power deratings the
@@ -128,20 +95,11 @@ const CHIP_THETA_JA: &[(&str, f64)] = &[
     ("2512", 80.0),
 ];
 
-/// Package bodies that exist to dissipate, so default to [`POWER_TJ_MAX_C`].
-const POWER_BODIES: &[&str] = &[
-    "TO-220", "TO220", "TO-263", "TO263", "D2PAK", "TO-252", "TO252", "DPAK", "SOT-223", "SOT223",
-    "DO-214", "SMA", "SMB", "SMC",
-];
-
-/// The first row of `table` one of whose tokens `f` contains.
-fn body_match<T: Copy>(table: &[(T, f64)], f: &str, has: impl Fn(T, &str) -> bool) -> Option<f64> {
-    table.iter().find(|(k, _)| has(*k, f)).map(|(_, v)| *v)
-}
-
-/// Derive a junction-to-ambient thermal resistance (C/W) from a footprint
-/// string, by matching the package body token. Still-air, no heatsink. See the
-/// module docs for the per-package sources.
+/// Derive a junction-to-ambient thermal resistance (C/W) from a footprint.
+///
+/// Read by its package body ([`package_body`], whose table carries each
+/// body's still-air figure). Still-air, no heatsink. See the module docs for
+/// the per-package sources.
 #[must_use]
 pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
     let f = footprint.to_ascii_uppercase();
@@ -151,15 +109,15 @@ pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
             return t;
         }
     }
-    let any = |tokens: &[&str], f: &str| tokens.iter().any(|t| f.contains(t));
-    body_match(PACKAGE_THETA_JA, &f, any).unwrap_or(DEFAULT_THETA_JA)
+    package_body(&f).map_or(DEFAULT_THETA_JA, |b| b.theta_ja_c_per_w)
 }
 
 /// Size-derived `theta_JA` for a chip resistor / capacitor footprint, from
 /// [`CHIP_THETA_JA`]. `None` if the footprint carries no recognised chip size
 /// (so the caller can fall through to a default).
 fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
-    body_match(CHIP_THETA_JA, f_upper, |t, f| f.contains(t))
+    let row = CHIP_THETA_JA.iter().find(|(t, _)| f_upper.contains(t));
+    row.map(|r| r.1)
 }
 
 /// Default maximum junction temperature (C) for a package class. Power packages
@@ -167,8 +125,7 @@ fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
 /// else to the common 125 C industrial limit.
 #[must_use]
 pub fn default_tj_max(footprint: &str) -> f64 {
-    let f = footprint.to_ascii_uppercase();
-    if POWER_BODIES.iter().any(|b| f.contains(b)) {
+    if package_body(footprint).is_some_and(|b| b.power) {
         POWER_TJ_MAX_C
     } else {
         DEFAULT_TJ_MAX_C

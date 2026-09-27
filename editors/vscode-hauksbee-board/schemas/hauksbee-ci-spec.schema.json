@@ -940,6 +940,14 @@
             "gaussian"
           ]
         },
+        "mounting": {
+          "description": "How the part is mounted, naming one of the mountings its card's rating\nrows are printed for (e.g. `\"1 in2 copper\"`), written to the reserved\n`hauksbee_mounting` property. Unset, each rating is its least favourable\nmounting's row, and the result says so.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "reason": {
           "description": "Why that variant, for the spec's reader.",
           "type": [

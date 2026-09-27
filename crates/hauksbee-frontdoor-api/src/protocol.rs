@@ -176,6 +176,11 @@ pub struct SimFrame {
     pub unsupported_nets: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_reasons: Vec<String>,
+    /// What the live stress verdicts rest on, one sentence each: a defaulted
+    /// ambient or mounting, rows fitted to no package, a guessed `theta_JA`,
+    /// a limit read past its card. They qualify the frame; none is a fault.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     pub net_voltages: HashMap<String, f64>,
     /// Per-net `(min_v, max_v)` over the frame's whole chunk, not just the
     /// instant `net_voltages` sampled.

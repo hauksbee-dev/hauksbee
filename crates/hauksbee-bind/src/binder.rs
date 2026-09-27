@@ -833,12 +833,18 @@ fn gather_device_meta(
         };
         let res = resolve(lib, part);
         if let Some(m) = res.model {
+            let mounting = (comp.properties.iter().rev())
+                .find(|(k, _)| k == hauksbee_models::derating::MOUNTING_PROPERTY)
+                .map(|(_, v)| v.as_str());
+            let derating = m
+                .derating
+                .fitted(&comp.reference, &comp.footprint, mounting);
             by_ref.insert(
                 comp.reference.clone(),
                 CompInfo {
                     kind: m.kind,
                     ratings: m.ratings.clone(),
-                    derating: m.derating.clone(),
+                    derating,
                     footprint: comp.footprint.clone(),
                 },
             );

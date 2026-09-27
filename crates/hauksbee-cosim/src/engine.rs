@@ -22,6 +22,7 @@ use hauksbee_frontdoor_api::protocol::{
     BoardInfo, ChemistryConfig, FaultInfo, LiveRegisterMapSpec, PeripheralInfo, PowerSupplyConfig,
     ShortsDisclosure, SimFrame, SolverControls, SupplyState, UsbSpecConfig,
 };
+use hauksbee_ir::evidence::{Assumption, Scope};
 use hauksbee_models::{Bus, ModelLibrary};
 use hauksbee_solve::{Integration, SolverOptions, StepControl};
 
@@ -368,6 +369,12 @@ impl Engine for HauksbeeEngine {
             })
             .collect();
         let taint = self.sched.regulation_taint();
+        // The rating, run and decisive theta_JA disclosures a CI verdict carries.
+        let decisive = |_: &str, d: bool| d.then_some(Scope::Board).into_iter().collect();
+        let mut said = self.sched.stress.rating_disclosures();
+        said.extend(self.sched.stress.run_disclosures());
+        said.extend(self.sched.stress.inferred_theta_ja(decisive));
+        let note = |a: &Assumption| format!("{} {}", a.statement(), a.because());
         SimFrame {
             t: result.sim_time,
             realtime_factor: if step_wall > 0.0 { dt / step_wall } else { 0.0 },
@@ -385,6 +392,7 @@ impl Engine for HauksbeeEngine {
                 .flat_map(|t| t.nets.clone())
                 .collect(),
             unsupported_reasons: taint.iter().map(|t| t.reason.clone()).collect(),
+            notes: said.iter().map(note).collect(),
             net_voltages: self.sched.net_voltages(),
             // The chunk's envelope, not just the instant above. Without it a
             // strobe narrower than the chunk is gone before the frame is

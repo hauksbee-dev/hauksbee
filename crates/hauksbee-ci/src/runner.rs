@@ -18,6 +18,7 @@ use hauksbee_ir::evidence::{
     ErrorBudget, IgnoredInput, NetScope, RunDate, Scope, Subject, TimeWindow,
 };
 use hauksbee_ir::{Device, NodeId, PwlPoint, SourceKind};
+use hauksbee_models::derating::MOUNTING_PROPERTY;
 use hauksbee_models::variants::{SELECT_PROPERTY, SWEEP_PROPERTY};
 use hauksbee_models::ModelLibrary;
 
@@ -1421,6 +1422,9 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
             comp.value = ov.value.clone().unwrap_or_else(|| comp.value.clone());
             if let Some(id) = &ov.select {
                 comp.properties.push((SELECT_PROPERTY.into(), id.clone()));
+            }
+            if let Some(m) = &ov.mounting {
+                comp.properties.push((MOUNTING_PROPERTY.into(), m.clone()));
             }
         }
     }

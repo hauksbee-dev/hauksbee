@@ -1027,6 +1027,12 @@ pub struct Override {
     /// set, written to the reserved `hauksbee_select` property before binding.
     #[serde(default)]
     pub select: Option<String>,
+    /// How the part is mounted, naming one of the mountings its card's rating
+    /// rows are printed for (e.g. `"1 in2 copper"`), written to the reserved
+    /// `hauksbee_mounting` property. Unset, each rating is its least favourable
+    /// mounting's row, and the result says so.
+    #[serde(default)]
+    pub mounting: Option<String>,
     /// Why that variant, for the spec's reader.
     #[serde(default)]
     pub reason: Option<String>,
@@ -1805,8 +1811,9 @@ impl Spec {
             );
         }
         for ov in &self.overrides {
-            let valued = ov.value.is_some() || (ov.select.is_some() && ov.tolerance.is_none());
-            let why = "give a `value` (a `tolerance` spreads around it), or `select` a variant";
+            let chosen = ov.select.is_some() || ov.mounting.is_some();
+            let valued = ov.value.is_some() || (chosen && ov.tolerance.is_none());
+            let why = "give a `value` (a `tolerance` spreads around it), `select` a variant, or a `mounting`";
             check(valued, format!("override on '{}': {why}", ov.reference));
             if let Some(p) = ov.tolerance {
                 check(

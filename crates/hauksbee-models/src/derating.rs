@@ -9,12 +9,19 @@
 //! read as one continuous, non-rising curve leave the key to its scalar, the
 //! least favourable row.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use regex::Regex;
+use hauksbee_ir::evidence::Assumption;
+use regex::{Match, Regex};
 
+use crate::package::package_body;
 use crate::schema::{Characteristic, ModelEntry, Ratings};
+
+/// Reserved component property naming the mounting (board, copper) a part is
+/// rated for, matched against its card's `mounting`-tagged rows; the CI spec's
+/// `[[override]] mounting` writes it.
+pub const MOUNTING_PROPERTY: &str = "hauksbee_mounting";
 
 /// The temperature a printed rating row is specified at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,7 +35,7 @@ pub enum TempRef {
     Junction,
 }
 
-const NUM: &str = r"([-+]?\d+(?:\.\d+)?)\s*(?:°\s*C|℃|C\b)?";
+const NUM: &str = r"([-+]?\d+(?:\.\d+)?)\s*(?:°\s*C|℃|C\b|(K)\b)?";
 const SYM: &str = r"\bT\s*_?(?i:(amb|a|case|c|mb|l|sp|sb|s|pcb|board|j))\b";
 const OP: &str = r"\s*(≤|<=|<|≥|>=|>)\s*";
 
@@ -42,41 +49,52 @@ static SYMBOL_FIRST: LazyLock<Regex> = LazyLock::new(|| {
 static RANGE_FIRST: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"{NUM}{OP}{SYM}(?:{OP}{NUM})?")).expect("a valid pattern")
 });
-/// A pulsed or time-limited row: `tp = 10 µs`, `t ≤ 10 s`, `duty cycle`, `single pulse`.
-static PULSED: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\btp\b|\bt\s*[≤<=]|(?i:duty|pulse)").expect("a valid pattern"));
+/// A pulsed or time-limited row: `tp = 10 µs`, `T ≤ 10 s`, `duty cycle`,
+/// `single pulse`; a bare `t` only before a time, never a temperature symbol.
+static PULSED: LazyLock<Regex> = LazyLock::new(|| {
+    let time = r"\bt\s*(?:≤|<=?|=)\s*\d+(?:\.\d+)?\s*(?:[mµun]?s|sec|min)\b";
+    Regex::new(&format!(r"(?i)\bt_?p\b|{time}|duty|pulse")).expect("a valid pattern")
+});
 
 /// The reference and signed span (lo <= hi, °C) of the temperature a row's
-/// conditions name; a single temperature is a span of one point.
+/// conditions name; a single temperature is a span of one point, and kelvin
+/// are read as °C.
 ///
-/// TA or TC wins over a junction temperature named beside it, and a junction
-/// inequality (`TJ ≤ 175 °C`) is the part's bound, not the row's temperature.
+/// TA or TC wins over a junction temperature named beside it. A junction
+/// inequality (`TJ ≤ 175 °C`) is the part's bound, and an unpaired upper bound
+/// (`TA < 70 °C`) the conditions' limit, not the row's temperature.
 #[must_use]
 pub fn temp_span(conditions: &str) -> Option<(TempRef, f64, f64)> {
     let text = conditions.replace(['−', '–', '‒'], "-");
-    let range_first =
-        (RANGE_FIRST.captures_iter(&text)).map(|c| [c.get(3), c.get(1), c.get(5), c.get(2)]);
-    let symbol_first =
-        (SYMBOL_FIRST.captures_iter(&text)).map(|c| [c.get(1), c.get(3), c.get(4), c.get(2)]);
-    let spans = range_first
+    let read = |n: Option<Match>, k: Option<Match>| {
+        let v: f64 = n?.as_str().parse().ok()?;
+        Some(if k.is_some() { v - 273.15 } else { v })
+    };
+    let span = |sym: &str, lo: f64, hi: Option<f64>, op: Option<&str>, upper: bool| {
+        let reference = match sym.to_ascii_lowercase().as_str() {
+            "a" | "amb" => TempRef::Ambient,
+            "c" | "case" | "mb" => TempRef::Case,
+            "j" => TempRef::Junction,
+            _ => TempRef::Lead,
+        };
+        let bound = op.is_some_and(|o| !matches!(o, "=" | ":"));
+        let hi = hi.unwrap_or(lo);
+        let kept = !upper && (reference != TempRef::Junction || !bound);
+        kept.then_some((reference, lo.min(hi), lo.max(hi)))
+    };
+    let range_first = RANGE_FIRST.captures_iter(&text).filter_map(|c| {
+        let hi = read(c.get(6), c.get(7));
+        let upper = hi.is_none() && c[3].starts_with(['≥', '>']);
+        span(&c[4], read(c.get(1), c.get(2))?, hi, Some(&c[3]), upper)
+    });
+    let symbol_first = SYMBOL_FIRST.captures_iter(&text).filter_map(|c| {
+        let (op, hi) = (c.get(2).map(|o| o.as_str()), read(c.get(5), c.get(6)));
+        let upper = hi.is_none() && op.is_some_and(|o| o.starts_with(['≤', '<']));
+        span(&c[1], read(c.get(3), c.get(4))?, hi, op, upper)
+    });
+    range_first
         .chain(symbol_first)
-        .filter_map(|[sym, lo, hi, op]| {
-            let reference = match sym?.as_str().to_ascii_lowercase().as_str() {
-                "a" | "amb" => TempRef::Ambient,
-                "c" | "case" | "mb" => TempRef::Case,
-                "j" => TempRef::Junction,
-                _ => TempRef::Lead,
-            };
-            let bound = op.is_some_and(|o| !matches!(o.as_str(), "=" | ":"));
-            let lo: f64 = lo?.as_str().parse().ok()?;
-            let hi: f64 = hi.map_or(Some(lo), |h| h.as_str().parse().ok())?;
-            (reference != TempRef::Junction || !bound).then_some((
-                reference,
-                lo.min(hi),
-                lo.max(hi),
-            ))
-        });
-    spans.min_by_key(|s| s.0 == TempRef::Junction)
+        .min_by_key(|s| s.0 == TempRef::Junction)
 }
 
 /// Whether `key` names a `[models.ratings]` key.
@@ -113,20 +131,26 @@ fn rank(key: &str, v: f64) -> f64 {
     }
 }
 
-/// One rating's printed rows: per (reference, package, mounting) group, the
-/// `(°C, value)` points sorted by temperature. Empty when no row is tagged.
+/// One rating's rows printed at one `(reference, package, mounting)`: their
+/// `(°C, value)` points, sorted by temperature.
+pub type Group = ((TempRef, Option<String>, Option<String>), Vec<(f64, f64)>);
+
+/// One rating's printed rows by [`Group`]. Empty when no row is tagged.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Curve(pub Vec<(TempRef, Vec<(f64, f64)>)>);
+pub struct Curve(pub Vec<Group>);
 
 /// `key`'s rows tagged `rating = key` as a curve, with every reason they cannot
 /// be trusted as one: a row with no readable temperature or value, a pulsed
-/// row, a group that rises with temperature.
+/// row, a group that rises with temperature. A thermal resistance needs no
+/// temperature.
 fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
     let (mut problems, mut groups) = (Vec::new(), BTreeMap::<_, Vec<(f64, f64)>>::new());
     let rows = entry.source.iter().flat_map(|s| &s.characteristic);
     for row in rows.filter(|r| r.rating.as_deref() == Some(key)) {
         let what = format!("characteristic '{}' (rating = \"{key}\")", row.parameter);
-        let (span, value) = (temp_span(&row.conditions), rating_value(key, row));
+        let unheated = (key.starts_with("theta_")).then_some((TempRef::Ambient, 25.0, 25.0));
+        let span = temp_span(&row.conditions).or(unheated);
+        let value = rating_value(key, row);
         if span.is_none() {
             problems.push(format!(
                 "{what}: name its temperature in conditions (TA, TC or TJ = ... °C)"
@@ -143,20 +167,20 @@ fn read_rows(entry: &ModelEntry, key: &str) -> (Curve, Vec<String>) {
             ));
         }
         if let (Some((at, lo, hi)), Some(v)) = (span, value) {
-            let points = groups.entry((at, &row.package, &row.mounting)).or_default();
-            points.extend([(lo, v), (hi, v)]);
+            let points = groups.entry((at, row.package.clone(), row.mounting.clone()));
+            points.or_default().extend([(lo, v), (hi, v)]);
         }
     }
     let curve = Curve(
         (groups.into_iter())
-            .map(|((at, ..), mut points)| {
+            .map(|(tags, mut points)| {
                 // Two rows at one temperature: keep the least favourable.
                 points.sort_by(|a, b| {
                     a.0.total_cmp(&b.0)
                         .then(rank(key, a.1).total_cmp(&rank(key, b.1)))
                 });
                 points.dedup_by(|later, kept| later.0.total_cmp(&kept.0).is_eq());
-                (at, points)
+                (tags, points)
             })
             .collect(),
     );
@@ -200,7 +224,8 @@ impl Curve {
                 (v1 - v0).mul_add((t - t0) / (t1 - t0), v0)
             }
         };
-        self.0.iter().map(|(r, p)| read(p, at(*r))).reduce(f64::min)
+        let reads = self.0.iter().map(|((r, ..), p)| read(p, at(*r)));
+        reads.reduce(f64::min)
     }
 
     /// The hottest temperature (°C) any row is printed at.
@@ -211,11 +236,16 @@ impl Curve {
     }
 }
 
-/// The current and power curves the stress monitor reads a card's limits from.
+/// The current, power and `theta_JA` rows the stress monitor reads a card's
+/// limits from.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Derating {
     pub current: Curve,
     pub power: Curve,
+    /// Read at no temperature: the Tj check takes the highest row left.
+    pub theta_ja: Curve,
+    /// What reading one fitted part's rows rests on ([`Self::fitted`]).
+    pub caveats: Vec<Assumption>,
 }
 
 impl Derating {
@@ -224,7 +254,63 @@ impl Derating {
         Self {
             current: curve(entry, "max_current_a"),
             power: curve(entry, "max_power_w"),
+            theta_ja: curve(entry, "theta_ja_c_per_w"),
+            caveats: Vec::new(),
         }
+    }
+
+    /// The rows that apply to `reference` fitted with `footprint` and, when its
+    /// [`MOUNTING_PROPERTY`] names one, `mounting`.
+    ///
+    /// A row tagged with a package applies only when that package's body is the
+    /// footprint's; untagged rows apply to every package and mounting. When the
+    /// rows name packages and none is the footprint's, or name several
+    /// mountings and none was chosen, every row is kept, so each limit is its
+    /// least favourable row's, and a caveat says so; a chosen mounting no row
+    /// names keeps them all too, and undermines the verdict until it is fixed.
+    #[must_use]
+    pub fn fitted(&self, reference: &str, footprint: &str, mounting: Option<&str>) -> Self {
+        let body = |p: &str| package_body(p).map(|b| b.name);
+        let (r, fits, mut caveats) = (reference, body(footprint), Vec::new());
+        let curves = [&self.current, &self.power, &self.theta_ja];
+        let groups = || curves.into_iter().flat_map(|c| &c.0);
+        let named: BTreeSet<&str> = groups().filter_map(|((_, p, _), _)| p.as_deref()).collect();
+        let matched = fits.is_some() && named.iter().any(|p| body(p) == fits);
+        let on_package =
+            |((_, p, _), _): &Group| !matched || p.as_deref().is_none_or(|p| body(p) == fits);
+        let on_it = groups().filter(|g| on_package(g));
+        let mountings: BTreeSet<&str> = on_it.filter_map(|((.., m), _)| m.as_deref()).collect();
+        if !named.is_empty() && !matched {
+            caveats.push(Assumption::partial_model_for_component(&format!("{r}-package"), r, "",
+                &format!("{r}'s rating rows are printed for packages {named:?} and its footprint '{footprint}' is none of them, so each rating is its least favourable row"),
+                "fit the footprint of the part's package, or tag its rows with that package, then re-run"));
+        }
+        let same = |m: &str| (mountings.iter()).find(|x| x.trim().eq_ignore_ascii_case(m.trim()));
+        let chosen = mounting.map(|m| same(m).copied().ok_or(m));
+        match chosen {
+            Some(Err(m)) => caveats.push(Assumption::operating_limit_violated(&format!("{r}-mounting"), r,
+                &format!("{r}'s {MOUNTING_PROPERTY} '{m}' names no mounting its card rates it for (it rates {mountings:?})"),
+                &format!("set {r}'s mounting to one its card rates, or add that mounting's rows to the card, then re-run"))),
+            None if mountings.len() > 1 => caveats.push(Assumption::default_parameter_for_component(r, r, "mounting",
+                &format!("the least favourable of {mountings:?}"))),
+            _ => {}
+        }
+        let chosen = chosen.and_then(Result::ok);
+        let on_mounting =
+            |((.., m), _): &Group| chosen.is_none_or(|c| m.as_deref().is_none_or(|x| x == c));
+        let mut out = self.clone();
+        out.caveats = caveats;
+        for c in [&mut out.current, &mut out.power, &mut out.theta_ja] {
+            c.0.retain(|g| on_package(g) && on_mounting(g));
+        }
+        out
+    }
+
+    /// The highest `theta_JA` (C/W) row left; `None` when no row is tagged.
+    #[must_use]
+    pub fn theta_ja(&self) -> Option<f64> {
+        let rows = self.theta_ja.0.iter().flat_map(|(_, p)| p);
+        rows.map(|p| p.1).reduce(f64::max)
     }
 
     /// The hottest temperature (°C) either curve is printed at.
@@ -238,7 +324,7 @@ impl Derating {
 
 /// Every problem with the card's `rating`-tagged rows: a key that is no
 /// rating, rows [`curve`] cannot read, and a scalar that is not the least
-/// favourable row.
+/// favourable row, rows the curve skips included.
 #[must_use]
 pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
     let scalars = toml::Table::try_from(&entry.ratings).unwrap_or_default();
@@ -252,9 +338,10 @@ pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
             out.push(format!("rating = \"{key}\" is not a [models.ratings] key"));
             continue;
         }
-        let (curve, problems) = read_rows(entry, key);
-        out.extend(problems);
-        let values = curve.0.iter().flat_map(|(_, p)| p.iter().map(|p| p.1));
+        out.extend(read_rows(entry, key).1);
+        let rows = entry.source.iter().flat_map(|s| &s.characteristic);
+        let tagged = rows.filter(|r| r.rating.as_deref() == Some(key));
+        let values = tagged.filter_map(|r| rating_value(key, r));
         let Some(worst) = values.min_by(|a, b| rank(key, *a).total_cmp(&rank(key, *b))) else {
             continue;
         };
@@ -290,6 +377,9 @@ mod tests {
             ("TJ ≤ 175 °C", None),
             ("−55 °C ≤ TJ ≤ 150 °C", None),
             ("VGS = −10 V, ID = −3 A", None),
+            ("TA < 70 °C", None),
+            ("85 °C ≥ TA", None),
+            ("Tj = 423.15 K", Some((Junction, 150.0, 150.0))),
         ];
         for (text, want) in cases {
             assert_eq!(temp_span(text), want, "{text}");
@@ -330,13 +420,14 @@ mod tests {
 
     #[test]
     fn rows_that_are_not_one_falling_continuous_curve_are_refused() {
-        let cases: [(&[(f64, &str)], &str); 5] = [
+        let cases: [(&[(f64, &str)], &str); 6] = [
             (&[(5.7, "TA = 25 °C")], "must be 5.7"),
             (&[(4.7, "VGS = 10 V")], "name its temperature"),
             (
-                &[(4.7, "TA = 25 °C"), (5.0, "TA = 70 °C, t ≤ 10 s")],
+                &[(4.7, "TA = 25 °C"), (5.0, "TA = 70 °C, T ≤ 10 s")],
                 "pulsed",
             ),
+            (&[(4.7, "TA = 25 °C"), (4.0, "VGS = 4.5 V")], "must be 4,"),
             (
                 &[(4.7, "TA = 25 °C"), (4.9, "TA = 70 °C")],
                 "rise with temperature",
@@ -366,5 +457,18 @@ mod tests {
         let mut odd = card(&[(4.7, "TA = 25 °C")]);
         odd.source.as_mut().expect("source").characteristic[0].rating = Some("max_amps".into());
         assert!(tag_problems(&odd)[0].contains("not a [models.ratings] key"));
+    }
+
+    /// Builtin cards skip `validate`, so a curated row that cannot be read
+    /// would silently leave its key to the scalar: every one must be clean.
+    #[test]
+    fn every_builtin_card_tags_its_rating_rows_readably() {
+        for (name, src) in crate::BUILTIN_TOML_FILES {
+            let db: crate::schema::DbFile = toml::from_str(src).expect(name);
+            for entry in &db.models {
+                let problems = tag_problems(entry);
+                assert!(problems.is_empty(), "{name}: {}: {problems:?}", entry.id);
+            }
+        }
     }
 }

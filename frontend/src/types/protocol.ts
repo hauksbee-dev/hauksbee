@@ -146,6 +146,8 @@ export interface SimFrame {
   /** One reason per unsupported regulator, in the shared wording every other
    *  surface carries. Additive. */
   unsupported_reasons?: string[]
+  /** What the live stress verdicts rest on, one sentence each; none is a fault. */
+  notes?: string[]
   /** net name → voltage in V, sampled at the END of the chunk. A pulse
    *  narrower than the chunk is not in this number; see `net_v_extremes`. */
   net_voltages: Record<string, number>

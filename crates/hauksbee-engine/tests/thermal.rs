@@ -755,7 +755,7 @@ fn derated_run(
     let (mut circuit, device) = one_volt_across("Q1", ohms);
     let meta = DeviceMeta {
         derating: Derating {
-            current: Curve(vec![(at, rows.to_vec())]),
+            current: Curve(vec![((at, None, None), rows.to_vec())]),
             ..Default::default()
         },
         reference: "Q1".into(),
@@ -840,4 +840,41 @@ fn case_rows_are_read_at_the_case_or_at_tj_without_theta_jc() {
     let run = |jc| derated_run(TempRef::Case, &rows, &ratings(jc), drive, Some(25.0)).0;
     assert!(!run(Some(1.0)), "16 A under 16.9 A with the case at 120 C");
     assert!(run(None), "16 A over 15.3 A with the case taken at Tj");
+}
+
+/// `theta_JA` rows printed per package feed the junction temperature: 0.5 W
+/// in a SOT-23 reads its 250 C/W row, in a SOIC-8 its 120 C/W row, and on a
+/// footprint that is neither the higher of the two, and a caveat says so.
+#[test]
+fn theta_ja_rows_are_read_for_the_fitted_package() {
+    let row = |p: &str, t| ((TempRef::Ambient, Some(p.into()), None), vec![(25.0, t)]);
+    let all = Derating {
+        theta_ja: Curve(vec![row("SOT-23", 250.0), row("SOIC-8", 120.0)]),
+        ..Default::default()
+    };
+    for (footprint, theta, caveat) in [
+        ("Package_TO_SOT_SMD:SOT-23", 250.0, false),
+        ("Package_SO:SOIC-8_3.9x4.9mm", 120.0, false),
+        ("Package_DFN_QFN:QFN-16", 250.0, true),
+    ] {
+        let (mut circuit, device) = one_volt_across("Q1", 2.0);
+        let meta = DeviceMeta {
+            derating: all.fitted("Q1", footprint, None),
+            reference: "Q1".into(),
+            device,
+            kind: ComponentKind::Passive,
+            footprint: footprint.into(),
+            ratings: Ratings::default(),
+        };
+        let mut mon = StressMonitor::new(vec![meta]);
+        let node_v = |n: NodeId| f64::from(u8::from(n.0 == 1));
+        mon.evaluate(&mut circuit, &node_v, &|_| None, 0.0);
+        let (tj, want) = (mon.temp_by_ref()["Q1"], 0.5f64.mul_add(theta, 25.0));
+        assert!((tj - want).abs() < 1e-9, "{footprint}: {tj}");
+        let said = mon
+            .rating_disclosures()
+            .iter()
+            .any(|a| a.id().as_str().ends_with(":Q1-package"));
+        assert_eq!(said, caveat, "{footprint}");
+    }
 }
