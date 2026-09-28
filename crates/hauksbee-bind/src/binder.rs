@@ -4413,25 +4413,26 @@ fn bind_comparator(
     )
 }
 
-/// Stamp one SPDT as two complementary `VSwitch` legs named `{name}_s1` and
-/// `{name}_s0`: select high closes com<->s1; the s0 leg conducts when the
+/// Stamp one SPDT as two complementary `VSwitch` legs named `{name}_s{offset+1}`
+/// and `{name}_s{offset}`. Select high closes com<->s1; the s0 leg conducts when the
 /// select is LOW by sensing (vcc - select) against the rail voltage `vcc_v`
 /// (or, passed vss as `vcc` and 0 as `vcc_v`, (vss - select) against -vth).
 /// Each leg takes its own on-resistance (`[ron_s0, ron_s1]`).
 fn stamp_spdt(
     circuit: &mut Circuit,
     name: &str,
+    offset: u8,
     [com, s0, s1]: [NodeId; 3],
     [sel, vss, vcc]: [NodeId; 3],
     vcc_v: f64,
     ([ron_s0, ron_s1], roff, vth): ([f64; 2], f64, f64),
 ) {
     for (leg, b, ctrl_p, ctrl_n, von, ron) in [
-        ("s1", s1, sel, vss, vth, ron_s1),
-        ("s0", s0, vcc, sel, vcc_v - vth, ron_s0),
+        (offset + 1, s1, sel, vss, vth, ron_s1),
+        (offset, s0, vcc, sel, vcc_v - vth, ron_s0),
     ] {
         circuit.add(Device::VSwitch {
-            name: format!("{name}_{leg}"),
+            name: format!("{name}_s{leg}"),
             a: com,
             b,
             ctrl_p,
@@ -4509,11 +4510,13 @@ fn bind_analog_switch(
             )
         });
         let vcc_v = rail.unwrap_or(DEFAULT_VCC);
-        for (lane, com, s0, s1) in [(1, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
-            let name = format!("{}_l{lane}", comp.reference);
+        // Flat `_s<N>` keys keep both lanes in one physical package for stress,
+        // ratings and CI; lane 1 owns s0/s1, lane 2 owns s2/s3.
+        for (offset, com, s0, s1) in [(0, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
             stamp_spdt(
                 circuit,
-                &name,
+                &comp.reference,
+                offset,
                 [com, s0, s1],
                 [sel, vss, vcc],
                 vcc_v,
@@ -4571,6 +4574,7 @@ fn bind_analog_switch(
         stamp_spdt(
             circuit,
             &comp.reference,
+            0,
             [com, s0, s1],
             [sel, vss, rail_node],
             vcc_v,
@@ -7732,6 +7736,92 @@ style = "i2c_pointer"
             matches!(outcome, BindOutcome::Behavioral { ref device } if device == "shared-select dpdt")
         );
         assert_eq!(vswitches(&enabled).len(), 4, "two SPDT lanes are four legs");
+        // The name also has to lead back to its package's metadata; unstamped
+        // metadata is a false-safe even when the four conduction legs work.
+        let lib = ModelLibrary::builtin();
+        let fsusb = resolve_value(&lib, "FSUSB42", "");
+        let mut part = comp("U8", "FSUSB42");
+        part.pins = fsusb
+            .pins
+            .iter()
+            .map(|(pad, role)| pin(pad, i64::from(roles[role].0)))
+            .collect();
+        let board = ExtractedBoard {
+            name: "dpdt-rating".into(),
+            nets: vec![],
+            components: vec![part],
+        };
+        let node_of = |n: Option<i64>| n.map(|n| NodeId(n as u32));
+        let metas = gather_device_meta(&board, &lib, &enabled, &node_of, &[], &[], &[]);
+        let mut names: Vec<_> = metas.iter().map(|m| m.reference.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["U8_s0", "U8_s1", "U8_s2", "U8_s3"]);
+        for meta in &metas {
+            assert_eq!(meta.kind, ComponentKind::AnalogSwitch);
+            assert_eq!(meta.ratings.max_voltage_v, Some(5.6));
+            assert_eq!(
+                enabled.devices[meta.device.0 as usize].name(),
+                meta.reference
+            );
+        }
+        // Synthetic path rows: each throw is measurable on its own lane,
+        // while the whole-package carrier contains all four legs.
+        let row = |lane| {
+            (
+                (
+                    hauksbee_models::derating::TempRef::Ambient,
+                    None,
+                    None,
+                    vec![format!("s0_{lane}")],
+                ),
+                vec![(25.0, 0.1)],
+            )
+        };
+        let mut derating = hauksbee_models::derating::Derating {
+            current: hauksbee_models::derating::Curve(vec![row(1), row(2)]),
+            ..Default::default()
+        };
+        let units: Vec<_> = metas.iter().map(|m| m.device).collect();
+        derating.carriers = crate::stress::rated_paths(&enabled, "U8", &derating, &roles, &units);
+        for lane in [1, 2] {
+            let path = vec![format!("s0_{lane}")];
+            let carriers = &derating
+                .carriers
+                .iter()
+                .find(|(p, _)| *p == path)
+                .unwrap()
+                .1;
+            assert_eq!(carriers.len(), 1, "one s0 leg on lane {lane}");
+            assert_eq!(
+                enabled.devices[carriers[0].0 .0 as usize].name(),
+                format!("U8_s{}", (lane - 1) * 2)
+            );
+        }
+        assert_eq!(
+            derating
+                .carriers
+                .iter()
+                .find(|(p, _)| p.is_empty())
+                .unwrap()
+                .1
+                .len(),
+            4
+        );
+        // A literal U8_l1 reference still owns its own flat-stamped switch legs.
+        let mut literal = Circuit::new();
+        let literal_roles = build_roles(&mut literal, NodeId::GROUND);
+        let _ = bind_analog_switch(
+            &comp("U8_l1", ""),
+            &model,
+            &mut literal,
+            &literal_roles,
+            &power_nets,
+        );
+        assert_eq!(literal.devices.len(), 4);
+        assert!(literal
+            .devices
+            .iter()
+            .all(|d| crate::stress::strip_unit_suffix(d.name()) == "U8_l1"));
         // Each leg takes its own path's ron; a card with only `ron` gives both legs it.
         let per_path = card(&[("ron", 5.0), ("ron_s0", 0.25), ("ron_s1", 1.3)]);
         for (model, s0, s1) in [(&model, 5.0, 5.0), (&per_path, 0.25, 1.3)] {
@@ -7746,8 +7836,11 @@ style = "i2c_pointer"
                     _ => None,
                 })
                 .collect();
-            let want = |l| [(format!("U8_l{l}_s1"), s1), (format!("U8_l{l}_s0"), s0)];
-            assert_eq!(rons, [want(1), want(2)].concat());
+            assert_eq!(
+                rons,
+                [("U8_s1", s1), ("U8_s0", s0), ("U8_s3", s1), ("U8_s2", s0)]
+                    .map(|(name, ron)| (name.to_owned(), ron))
+            );
         }
 
         let mut dynamic_oe = Circuit::new();
