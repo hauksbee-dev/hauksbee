@@ -4721,8 +4721,7 @@ fn bind_analog_switch(
     });
     // An entry's own `warning` reaches the report from here. This path stamps
     // ONE switch, so a multi-channel part (TXS0108E: eight channels, PCA9306:
-    // two) and a two-throw mux whose second throw cannot be modelled (TPS2104)
-    // are all bound with a real gap in them, and that gap has to be disclosed
+    // two) still has a coverage gap that has to be disclosed
     // where a report surface reads it rather than in a TOML comment.
     (
         BindOutcome::Behavioral {
@@ -8429,9 +8428,8 @@ style = "i2c_pointer"
         for (value, terminals, phrase) in [
             ("TXS0108E", ["in_out_a", "in_out_b"], Some("eight")),
             ("PCA9306", ["in_out_a", "in_out_b"], Some("SDA")),
-            // The mux stamps its IN1 throw (OUT `com`, IN1 `s0`) and names IN2 as
-            // the one it leaves out.
-            ("TPS2104", ["com", "s0"], Some("IN2")),
+            // The mux still qualifies typical resistance and omitted transition timing.
+            ("TPS2104", ["com", "s0"], Some("switching timing")),
             ("TPS22916YFP", ["in_out_a", "in_out_b"], Some("active-high")),
             ("MIC94090C6", ["in_out_a", "in_out_b"], None),
         ] {
@@ -8491,37 +8489,61 @@ style = "i2c_pointer"
         }
     }
 
-    /// The TPS2104's stamped throw is IN1, which the part selects with EN LOW:
-    /// the switch bridges OUT and IN1 (never IN2, ground or the control line)
-    /// and senses the INVERTED control, closing below the 0.8 V VIL max.
+    /// The builtin mux selects both sources at guaranteed logic levels and
+    /// predicts each path's voltage drop under load using its own resistance.
     #[test]
-    fn the_power_mux_main_throw_conducts_on_a_low_control() {
+    fn the_power_mux_selects_both_paths_with_their_own_resistance() {
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_testkit::circuits::{res, vdc};
         let lib = ModelLibrary::builtin();
-        // OUT on pad 4, IN1 on pad 5, EN on pad 1, GND on pad 2.
-        let (circuit, [out, in1, ctrl], outcome, _) =
-            bind_load_switch(&lib, "TPS2104", ["4", "5", "1", "2"]);
-        assert!(
-            !matches!(outcome, BindOutcome::Unresolved { .. }),
-            "{outcome:?}"
-        );
-        let switches = vswitches(&circuit);
-        assert_eq!(switches.len(), 1, "one throw is stamped");
-        let (a, b, ctrl_p, ctrl_n, von, voff) = switches[0];
-        let terminals = [a, b];
-        assert!(terminals.contains(&out) && terminals.contains(&in1));
-        assert!(!terminals.contains(&NodeId::GROUND) && !terminals.contains(&ctrl));
-        assert!(
-            ctrl_p == NodeId::GROUND && ctrl_n == ctrl,
-            "the IN1 throw must sense the inverted control"
-        );
-        assert!(
-            von < 0.0 && voff < von,
-            "closes on a LOW control: von={von} voff={voff}"
-        );
-        assert!(
-            (-von - 0.7).abs() < 1e-9,
-            "closes once EN is 0.1 V below the 0.8 V VIL max: von={von}"
-        );
+        let model = resolve_value(&lib, "TPS2104", "");
+        for (ctrl_v, supply, ron) in [
+            (0.0, 5.0, 0.25),
+            (0.8, 5.0, 0.25),
+            (2.0, 3.3, 1.3),
+            (3.3, 3.3, 1.3),
+        ] {
+            let mut part = comp("U1", "TPS2104");
+            part.pins = vec![
+                pin("1", 1),
+                pin("2", 0),
+                pin("3", 2),
+                pin("4", 3),
+                pin("5", 4),
+            ];
+            let mut circuit = Circuit::new();
+            let nodes = ["EN", "IN2", "OUT", "IN1"].map(|name| circuit.node(name));
+            let node_of = |n: Option<i64>| {
+                n.and_then(|n| usize::try_from(n).ok()).map(|n| {
+                    if n == 0 {
+                        NodeId::GROUND
+                    } else {
+                        nodes[n - 1]
+                    }
+                })
+            };
+            let (outcome, warning) =
+                bind_one(&part, &model, &mut circuit, &node_of, &HashMap::new());
+            assert!(matches!(outcome, BindOutcome::Analog { .. }), "{outcome:?}");
+            assert!(warning.unwrap().contains("switching timing"));
+            assert_eq!(vswitches(&circuit).len(), 2);
+            for (name, node, volts) in [
+                ("VEN", nodes[0], ctrl_v),
+                ("VAUX", nodes[1], 3.3),
+                ("VMAIN", nodes[3], 5.0),
+            ] {
+                vdc(&mut circuit, name, node, volts);
+            }
+            res(&mut circuit, "RLOAD", nodes[2], NodeId::GROUND, 100.0);
+            let mut ws = Workspace::new(&circuit);
+            dc_operating_point(&mut ws, &circuit, &SolverOptions::default()).unwrap();
+            let got = ws.x[ws.layout.node(nodes[2]).unwrap()];
+            let want = supply * 100.0 / (100.0 + ron);
+            assert!(
+                (got - want).abs() < 1e-5,
+                "ctrl {ctrl_v} V: {got} != {want}"
+            );
+        }
     }
 
     /// Regulator pin NAMES are portable where pad numbers are not; SHDN is

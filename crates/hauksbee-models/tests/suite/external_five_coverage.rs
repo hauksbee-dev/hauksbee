@@ -769,28 +769,23 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
         );
     }
 
-    // TPS2104: the mux whose modelled throw is IN1, the main (higher-rated)
-    // input. The single-throw binder path closes on a LOW control when its second
-    // terminal is the `s0` role, and IN1 is the throw the real part selects when
-    // EN is low, so IN1 carries `s0` and OUT carries `com`. IN2 is not a switch
-    // terminal: the kind cannot stamp a second throw without a VCC pin.
+    // The power mux models both throws without VCC: LOW selects IN1 (s0),
+    // HIGH selects IN2 (s1), each with its own typical resistance and rating.
     let m = expect_id("TPS2104", "tps2104");
     assert_pins(
         &m,
         &[
             ("1", "ctrl"),
             ("2", "vss"),
-            ("3", "in2"),
+            ("3", "s1"),
             ("4", "com"),
             ("5", "s0"),
         ],
     );
-    assert_eq!(
-        m.params.get_f64("ron"),
-        Some(0.25),
-        "the IN1 (NMOS) path's on-resistance, since that is the throw stamped; \
-         the 1.3 Ohm figure belongs to the unmodelled IN2 path"
-    );
+    for (param, want) in [("ron", 0.25), ("ron_s0", 0.25), ("ron_s1", 1.3)] {
+        assert_eq!(m.params.get_f64(param), Some(want), "{param}");
+    }
+    assert_eq!(m.derating.current.paths().len(), 2);
     assert!(
         resolve("TPS2105").is_none_or(|e| e.id != "tps2104"),
         "the TPS2105 has the opposite enable polarity and would conduct on the \
