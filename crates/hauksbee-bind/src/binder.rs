@@ -7736,77 +7736,8 @@ style = "i2c_pointer"
             matches!(outcome, BindOutcome::Behavioral { ref device } if device == "shared-select dpdt")
         );
         assert_eq!(vswitches(&enabled).len(), 4, "two SPDT lanes are four legs");
-        // The name also has to lead back to its package's metadata; unstamped
-        // metadata is a false-safe even when the four conduction legs work.
-        let lib = ModelLibrary::builtin();
-        let fsusb = resolve_value(&lib, "FSUSB42", "");
-        let mut part = comp("U8", "FSUSB42");
-        part.pins = fsusb
-            .pins
-            .iter()
-            .map(|(pad, role)| pin(pad, i64::from(roles[role].0)))
-            .collect();
-        let board = ExtractedBoard {
-            name: "dpdt-rating".into(),
-            nets: vec![],
-            components: vec![part],
-        };
-        let node_of = |n: Option<i64>| n.map(|n| NodeId(n as u32));
-        let metas = gather_device_meta(&board, &lib, &enabled, &node_of, &[], &[], &[]);
-        let mut names: Vec<_> = metas.iter().map(|m| m.reference.as_str()).collect();
-        names.sort_unstable();
-        assert_eq!(names, ["U8_s0", "U8_s1", "U8_s2", "U8_s3"]);
-        for meta in &metas {
-            assert_eq!(meta.kind, ComponentKind::AnalogSwitch);
-            assert_eq!(meta.ratings.max_voltage_v, Some(5.6));
-            assert_eq!(
-                enabled.devices[meta.device.0 as usize].name(),
-                meta.reference
-            );
-        }
-        // Synthetic path rows: each throw is measurable on its own lane,
-        // while the whole-package carrier contains all four legs.
-        let row = |lane| {
-            (
-                (
-                    hauksbee_models::derating::TempRef::Ambient,
-                    None,
-                    None,
-                    vec![format!("s0_{lane}")],
-                ),
-                vec![(25.0, 0.1)],
-            )
-        };
-        let mut derating = hauksbee_models::derating::Derating {
-            current: hauksbee_models::derating::Curve(vec![row(1), row(2)]),
-            ..Default::default()
-        };
-        let units: Vec<_> = metas.iter().map(|m| m.device).collect();
-        derating.carriers = crate::stress::rated_paths(&enabled, "U8", &derating, &roles, &units);
-        for lane in [1, 2] {
-            let path = vec![format!("s0_{lane}")];
-            let carriers = &derating
-                .carriers
-                .iter()
-                .find(|(p, _)| *p == path)
-                .unwrap()
-                .1;
-            assert_eq!(carriers.len(), 1, "one s0 leg on lane {lane}");
-            assert_eq!(
-                enabled.devices[carriers[0].0 .0 as usize].name(),
-                format!("U8_s{}", (lane - 1) * 2)
-            );
-        }
-        assert_eq!(
-            derating
-                .carriers
-                .iter()
-                .find(|(p, _)| p.is_empty())
-                .unwrap()
-                .1
-                .len(),
-            4
-        );
+        // Package metadata must cover all four legs, including distinct rated paths.
+        assert_dpdt_package_metadata_and_carriers(&enabled, &roles);
         // A literal U8_l1 reference still owns its own flat-stamped switch legs.
         let mut literal = Circuit::new();
         let literal_roles = build_roles(&mut literal, NodeId::GROUND);
@@ -7862,6 +7793,71 @@ style = "i2c_pointer"
             warning.as_deref().is_some_and(|m| m.contains("OE")),
             "{warning:?}"
         );
+    }
+
+    fn assert_dpdt_package_metadata_and_carriers(
+        enabled: &Circuit,
+        roles: &HashMap<String, NodeId>,
+    ) {
+        let lib = ModelLibrary::builtin();
+        let fsusb = resolve_value(&lib, "FSUSB42", "");
+        let mut part = comp("U8", "FSUSB42");
+        part.pins = fsusb
+            .pins
+            .iter()
+            .map(|(pad, role)| pin(pad, i64::from(roles[role].0)))
+            .collect();
+        let board = ExtractedBoard {
+            name: "dpdt-rating".into(),
+            nets: vec![],
+            components: vec![part],
+        };
+        let node_of =
+            |n: Option<i64>| n.map(|n| NodeId(u32::try_from(n).expect("valid synthetic node")));
+        let metas = gather_device_meta(&board, &lib, enabled, &node_of, &[], &[], &[]);
+        let mut names: Vec<_> = metas.iter().map(|m| m.reference.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["U8_s0", "U8_s1", "U8_s2", "U8_s3"]);
+        for meta in &metas {
+            assert_eq!(meta.kind, ComponentKind::AnalogSwitch);
+            assert_eq!(meta.ratings.max_voltage_v, Some(5.6));
+            let stamped = enabled.devices[meta.device.0 as usize].name();
+            assert_eq!(stamped, meta.reference);
+        }
+        // Each throw has its lane's path; the whole package owns all four legs.
+        let row = |lane| {
+            (
+                (
+                    hauksbee_models::derating::TempRef::Ambient,
+                    None,
+                    None,
+                    vec![format!("s0_{lane}")],
+                ),
+                vec![(25.0, 0.1)],
+            )
+        };
+        let mut derating = hauksbee_models::derating::Derating {
+            current: hauksbee_models::derating::Curve(vec![row(1), row(2)]),
+            ..Default::default()
+        };
+        let units: Vec<_> = metas.iter().map(|m| m.device).collect();
+        derating.carriers = crate::stress::rated_paths(enabled, "U8", &derating, roles, &units);
+        for lane in [1, 2] {
+            let path = vec![format!("s0_{lane}")];
+            let carriers = &derating
+                .carriers
+                .iter()
+                .find(|(p, _)| *p == path)
+                .unwrap()
+                .1;
+            assert_eq!(carriers.len(), 1, "one s0 leg on lane {lane}");
+            assert_eq!(
+                enabled.devices[carriers[0].0 .0 as usize].name(),
+                format!("U8_s{}", (lane - 1) * 2)
+            );
+        }
+        let whole_package = derating.carriers.iter().find(|(path, _)| path.is_empty());
+        assert_eq!(whole_package.expect("whole-package carrier").1.len(), 4);
     }
 
     /// The s0 / NC throw conducts when the control is LOW, so a partially
