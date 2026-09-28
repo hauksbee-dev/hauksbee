@@ -469,7 +469,6 @@ mod render_tests {
 
     #[test]
     fn healthy_requires_no_faults_regardless_of_destroyed_flag() {
-        use crate::stress::FaultEvent;
         // No faults => healthy.
         assert!(report(1.0).healthy(), "clean board is healthy");
 

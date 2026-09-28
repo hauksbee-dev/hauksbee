@@ -1272,6 +1272,14 @@ impl StressMonitor {
                 (!self.tracks[i].destroyed).then(|| self.op_of(circuit, i, node_v, branch_current))
             })
             .collect();
+        // Carrier paths ask for the first LIVE meta with an ID. Index that once
+        // per solved snapshot instead of scanning every meta for every path/check.
+        let mut live_meta = HashMap::with_capacity(ops.len());
+        for (i, op) in ops.iter().enumerate() {
+            if op.is_some() {
+                live_meta.entry(self.metas[i].device).or_insert(i);
+            }
+        }
         // Run-cumulative evidence. The lag is stepped with the exact solution
         // of dI/dt = (i - I)/tau over the chunk, so a variable chunk length
         // changes nothing about what it reports: that is what turns the
@@ -1363,8 +1371,7 @@ impl StressMonitor {
             // and one rating paths on the current and power of each.
             let sum = |ids: &[Carrier]| {
                 let unit = |&(d, bits): &Carrier| {
-                    let j =
-                        (0..ops.len()).find(|&j| self.metas[j].device == d && ops[j].is_some())?;
+                    let &j = live_meta.get(&d)?;
                     let on = (self.run[j].lagged_terminals.iter())
                         .zip(0..)
                         .filter(|t| bits & (1 << t.1) != 0);
@@ -2317,6 +2324,69 @@ mod monitor_temp_tests {
             let over = [FaultKind::Overcurrent, FaultKind::PinOvercurrent][usize::from(kind == sw)];
             assert_eq!((raised.contains(&over), said), (fault, disclosed), "{case}");
         }
+    }
+
+    /// Duplicate metas use the first live device sample for path sums; an
+    /// absent or destroyed carrier contributes nothing even when its meta exists.
+    #[test]
+    fn path_carriers_use_first_live_meta_and_skip_missing_devices() {
+        let mut circuit = Circuit::new();
+        let node = circuit.node("A");
+        let first = circuit.add(Device::resistor("R1", node, NodeId::GROUND, 1.0));
+        let second = circuit.add(Device::resistor("R2", node, NodeId::GROUND, 2.0));
+        let pins = vec!["a".to_owned()];
+        let mut derating = Derating {
+            power: Curve(vec![(
+                (TempRef::Ambient, None, None, pins.clone()),
+                vec![(25.0, 1.8)],
+            )]),
+            ..Default::default()
+        };
+        derating.carriers = vec![(pins, vec![(first, 1), (second, 1), (DeviceId(999), 1)])];
+        let mut monitor = StressMonitor::new(
+            [("R1", first), ("R1_copy", first), ("R2", second)]
+                .map(|(reference, device)| DeviceMeta {
+                    device,
+                    derating: derating.clone(),
+                    ..meta(
+                        reference,
+                        ComponentKind::Passive,
+                        "",
+                        Ratings {
+                            max_junction_temp_c: Some(1000.0),
+                            theta_ja_c_per_w: Some(1.0),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .to_vec(),
+        );
+        let node_v = |n| if n == node { 1.0 } else { 0.0 };
+        let mut run = |monitor: &mut StressMonitor| {
+            let mut faults = Vec::new();
+            for _ in 0..SUSTAIN_CHUNKS {
+                monitor.deposit_chunk_energy(&[1.0, 3.0, 0.5], 1.0);
+                faults.extend(monitor.evaluate(&mut circuit, &node_v, &|_| None, 0.0));
+            }
+            faults
+        };
+        assert!(
+            run(&mut monitor).is_empty(),
+            "first live: 1 W + 0.5 W < 1.8 W"
+        );
+        monitor.tracks[0].destroyed = true;
+        assert!(
+            run(&mut monitor)
+                .iter()
+                .any(|f| f.kind == FaultKind::Overpower),
+            "next live duplicate carries 3 W"
+        );
+        monitor.tracks[1].destroyed = true;
+        monitor.tracks[2] = DeviceTrack::default(); // force a fresh verdict, not a latched pass
+        assert!(
+            run(&mut monitor).is_empty(),
+            "destroyed/missing carriers count zero"
+        );
     }
 
     /// A BJT's path rows are each judged on their own terminal's current: at
