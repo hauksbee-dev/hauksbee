@@ -66,10 +66,11 @@ pub struct CheckReport {
 }
 
 impl CheckReport {
-    /// A one-line health verdict for scripts.
+    /// A one-line health verdict for scripts: any fault (rating violation)
+    /// means the circuit is not healthy, regardless of destructive mode.
     #[must_use]
-    pub fn healthy(&self) -> bool {
-        self.faults.iter().all(|f| !f.destroyed)
+    pub const fn healthy(&self) -> bool {
+        self.faults.is_empty()
     }
 
     /// What the assumptions, and every part simulated open, leave the run
@@ -464,6 +465,29 @@ mod render_tests {
         // A genuinely complete board still shows 100%.
         let full = render_check_report(&report(1.0));
         assert!(full.contains("100% resolved"), "1.0 must show 100%: {full}");
+    }
+
+    #[test]
+    fn healthy_requires_no_faults_regardless_of_destroyed_flag() {
+        use crate::stress::FaultEvent;
+        // No faults => healthy.
+        assert!(report(1.0).healthy(), "clean board is healthy");
+
+        // A non-destructive fault (the default mode) must still fail health.
+        let mut r = report(1.0);
+        r.faults.push(FaultEvent {
+            component: "Q7".into(),
+            kind: crate::stress::FaultKind::Overcurrent,
+            value: 2.0,
+            limit: 1.0,
+            t: 0.005,
+            destroyed: false,
+        });
+        assert!(!r.healthy(), "a non-destroyed fault must fail health");
+
+        // A destructive fault also fails (backward compat).
+        r.faults[0].destroyed = true;
+        assert!(!r.healthy(), "a destroyed fault must fail health");
     }
 
     #[test]

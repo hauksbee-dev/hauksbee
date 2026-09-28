@@ -530,8 +530,8 @@ pub fn check(code_path: &Path, opts: &CheckOptions, json: bool) -> anyhow::Resul
 }
 
 /// The `check-code --json` object: the whole [`crate::boardcode::CheckReport`]
-/// as one machine-readable line. `ok` mirrors the exit code (false when a part
-/// was destroyed); `status` is what the assumptions leave the run entitled to
+/// as one machine-readable line. `ok` mirrors the exit code (false when any
+/// fault was raised); `status` is what the assumptions leave the run entitled to
 /// claim, in the evidence maps' wording (`clean`, `qualified`, `undermined`,
 /// every part simulated open counted);
 /// `resolved_fraction` stays the raw fraction so a consumer never re-derives it
@@ -571,4 +571,44 @@ fn check_json(r: &crate::boardcode::CheckReport) -> String {
             .collect::<Vec<_>>(),
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod check_json_tests {
+    use super::*;
+    use crate::boardcode::CheckReport;
+    use crate::stress::{FaultEvent, FaultKind};
+
+    /// The JSON wire contract: `ok` must be false when any fault exists, even
+    /// when the simulation did not destroy the part (the default non-destructive
+    /// mode). Clean boards stay `ok: true`.
+    #[test]
+    fn ok_tracks_faults_not_destroyed_flag() {
+        let clean = CheckReport {
+            board_name: "t".into(),
+            component_count: 4,
+            net_count: 3,
+            resolved_fraction: 1.0,
+            simulated_seconds: 0.1,
+            faults: Vec::new(),
+            active_nets: 0,
+            unresolved: Vec::new(),
+            assumptions: Vec::new(),
+        };
+        let jc: serde_json::Value = serde_json::from_str(&check_json(&clean)).unwrap();
+        assert_eq!(jc["ok"], true, "clean: {jc}");
+
+        let mut faulted = clean;
+        faulted.faults.push(FaultEvent {
+            component: "Q7".into(),
+            kind: FaultKind::Overcurrent,
+            value: 2.0,
+            limit: 1.0,
+            t: 0.005,
+            destroyed: false,
+        });
+        let jf: serde_json::Value = serde_json::from_str(&check_json(&faulted)).unwrap();
+        assert_eq!(jf["ok"], false, "non-destroyed fault: {jf}");
+        assert_eq!(jf["faults"][0]["destroyed"], false);
+    }
 }
