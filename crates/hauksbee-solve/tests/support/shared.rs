@@ -192,3 +192,20 @@ pub fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
         }
     }
 }
+
+/// Tight fixed-step options matching `benches/graded_boards.rs`, so the
+/// partitioned-solve tests drive the engine identically to the benchmark:
+/// fixed step (the partitioned path is fixed-step-only today) with tight
+/// tolerances so the numbers are the converged operating point.
+pub fn tight_opts(partitioning: Partitioning, dt: f64) -> SolverOptions {
+    SolverOptions {
+        integration: Integration::Trapezoidal,
+        step: StepControl::Fixed { dt },
+        reltol: 1e-9,
+        vntol: 1e-9,
+        max_newton: 200,
+        gmin: 1e-9,
+        partitioning,
+        ..SolverOptions::default()
+    }
+}

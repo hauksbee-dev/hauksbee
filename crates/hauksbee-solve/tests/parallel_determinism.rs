@@ -18,12 +18,12 @@
 use crate::shared::{add_capacitor, add_vdc};
 use hauksbee_ir::{Circuit, NodeId};
 use hauksbee_solve::{
-    AssemblyMode, Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl, Transient,
-    Waveforms,
+    AssemblyMode, ParallelPolicy, Partitioning, SolverOptions, Transient, Waveforms,
 };
 use hauksbee_testkit::circuits::res;
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
+use crate::shared::tight_opts;
 
 /// The thread counts the gate pins, per the plan. `Off` (run separately) is
 /// the sequential reference every pooled run must match bit-for-bit.
@@ -31,15 +31,8 @@ const THREAD_COUNTS: [usize; 4] = [1, 2, 4, 8];
 
 fn opts(dt: f64, parallel: ParallelPolicy) -> SolverOptions {
     SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt },
-        reltol: 1e-9,
-        vntol: 1e-9,
-        max_newton: 200,
-        gmin: 1e-9,
-        partitioning: Partitioning::Auto,
         parallel,
-        ..SolverOptions::default()
+        ..tight_opts(Partitioning::Auto, dt)
     }
 }
 

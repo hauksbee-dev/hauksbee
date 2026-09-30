@@ -11,11 +11,10 @@
 //! Run with `--nocapture` to see the measured deviations (the report numbers).
 
 use hauksbee_ir::{Circuit, Device, NodeId};
-use hauksbee_solve::{
-    AssemblyMode, Integration, Partitioning, SolverOptions, StepControl, Transient,
-};
+use hauksbee_solve::{AssemblyMode, Partitioning, SolverOptions, Transient};
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
+use crate::shared::tight_opts;
 use crate::shared::{add_capacitor, add_resistor, add_vdc, max_deviation};
 
 /// The graded-board options from `benches/graded_boards.rs` /
@@ -23,15 +22,8 @@ use crate::shared::{add_capacitor, add_resistor, add_vdc, max_deviation};
 /// benchmark does. Tight reltol/vntol (1e-9): the bound below inherits it.
 fn opts(part: Partitioning, dt: f64, assembly: AssemblyMode) -> SolverOptions {
     SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt },
-        reltol: 1e-9,
-        vntol: 1e-9,
-        max_newton: 200,
-        gmin: 1e-9,
-        partitioning: part,
         assembly,
-        ..SolverOptions::default()
+        ..tight_opts(part, dt)
     }
 }
 

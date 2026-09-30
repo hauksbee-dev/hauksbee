@@ -12,10 +12,11 @@
 
 use crate::shared::add_capacitor;
 use hauksbee_ir::{Circuit, NodeId};
-use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
+use hauksbee_solve::{Partitioning, Transient};
 use std::time::Instant;
 
 use crate::fixtures::build_shunt_array;
+use crate::shared::tight_opts;
 
 fn run(
     c: &Circuit,
@@ -23,18 +24,8 @@ fn run(
     tstop: f64,
     dt: f64,
 ) -> (Transientish, std::time::Duration) {
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt },
-        reltol: 1e-9,
-        vntol: 1e-9,
-        max_newton: 200,
-        gmin: 1e-9,
-        partitioning: part,
-        ..SolverOptions::default()
-    };
     let t0 = Instant::now();
-    let wf = Transient::new(opts).run(c, tstop).unwrap();
+    let wf = Transient::new(tight_opts(part, dt)).run(c, tstop).unwrap();
     let dt_wall = t0.elapsed();
     (Transientish(wf), dt_wall)
 }

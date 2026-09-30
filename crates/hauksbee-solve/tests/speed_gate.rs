@@ -252,14 +252,8 @@ fn faster_than_ngspice_on_the_marketed_cases() {
             c.accuracy_label(),
             c.ngspice_rel,
             c.ngspice_bound,
-            c.self_rel.map_or_else(
-                || "n/a".to_string(),
-                |r| format!("{r:.3e} (bound {:.3e})", c.self_bound)
-            ),
-            c.self_final_rel.map_or_else(
-                || "n/a".to_string(),
-                |r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound)
-            ),
+            drift_cell(c.self_rel, c.self_bound),
+            drift_cell(c.self_final_rel, c.self_final_bound),
             if c.passed() { "PASS" } else { "FAIL" }
         );
     }
@@ -471,6 +465,14 @@ fn solver_time(raw: Duration, startup: Duration) -> Duration {
         .max(Duration::from_micros(1))
 }
 
+/// A self-drift cell: the measured relative error with its bound, or n/a.
+fn drift_cell(rel: Option<f64>, bound: f64) -> String {
+    rel.map_or_else(
+        || "n/a".to_string(),
+        |r| format!("{r:.3e} (bound {bound:.3e})"),
+    )
+}
+
 /// Write the measured table where the docs can cite it.
 fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
     let mut s = String::new();
@@ -516,14 +518,8 @@ fn write_results_table(version: &str, startup: Duration, cases: &[Case]) {
             c.ngspice_rel,
             c.accuracy_label(),
             c.ngspice_bound,
-            c.self_rel.map_or_else(
-                || "n/a".to_string(),
-                |r| format!("{r:.3e} (bound {:.3e})", c.self_bound)
-            ),
-            c.self_final_rel.map_or_else(
-                || "n/a".to_string(),
-                |r| format!("{r:.3e} (bound {:.3e})", c.self_final_bound)
-            ),
+            drift_cell(c.self_rel, c.self_bound),
+            drift_cell(c.self_final_rel, c.self_final_bound),
             if c.passed() { "PASS" } else { "FAIL" }
         );
     }

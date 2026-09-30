@@ -54,10 +54,11 @@
 //! unrelated change; never loosen the gate silently to make a regression pass.
 
 use hauksbee_ir::Circuit;
-use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
+use hauksbee_solve::{Partitioning, Transient};
 use std::time::Instant;
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
+use crate::shared::tight_opts;
 
 // --- workload, identical to benches/graded_boards.rs ------------------------
 
@@ -68,21 +69,6 @@ const RC_TSTOP: f64 = 20e-6;
 const MIRROR_DT: f64 = 1e-6;
 const MIRROR_TSTOP: f64 = 60e-6;
 const MIRROR_SIZES: [usize; 3] = [24, 90, 240];
-
-/// The same tight fixed-step options the benchmark harness uses, so a gate
-/// measurement drives the engine identically to `graded_boards.rs`.
-fn opts(part: Partitioning, dt: f64) -> SolverOptions {
-    SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt },
-        reltol: 1e-9,
-        vntol: 1e-9,
-        max_newton: 200,
-        gmin: 1e-9,
-        partitioning: part,
-        ..SolverOptions::default()
-    }
-}
 
 /// One timed board: a stable id and a closure that runs exactly the workload the
 /// benchmark times. The closure returns nothing; we only care about wall time.
@@ -134,7 +120,7 @@ fn leak(s: String) -> &'static str {
 
 impl Board {
     fn run_once(&self) {
-        let wf = Transient::new(opts(self.part, self.dt))
+        let wf = Transient::new(tight_opts(self.part, self.dt))
             .run(&self.circuit, self.tstop)
             .expect("perf-gate board converged");
         std::hint::black_box(wf.time.len());

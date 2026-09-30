@@ -8,7 +8,7 @@
 //! CONVERGE, to the closed-form operating point, from a cold start on either
 //! rail.
 
-use crate::shared::{add_resistor, add_vdc};
+use crate::shared::add_resistor;
 use hauksbee_ir::{Circuit, Device, NodeId, Rail, SourceKind};
 use hauksbee_solve::{
     dc_operating_point, Integration, SolverOptions, StepControl, Transient, Workspace,
@@ -18,10 +18,15 @@ use hauksbee_solve::{
 /// DC source. LM358-like: gain 1e5, rails 0..32, no pole/slew (the ideal
 /// instantaneous stamp, the exact configuration that limit-cycled).
 fn follower(vin: f64, gain: f64, rail_lo: f64, rail_hi: f64) -> Circuit {
+    follower_driven(SourceKind::Dc(vin), gain, rail_lo, rail_hi)
+}
+
+/// [`follower`] with the + input driven by any source waveform.
+fn follower_driven(vin: SourceKind, gain: f64, rail_lo: f64, rail_hi: f64) -> Circuit {
     let mut c = Circuit::new();
     let inp = c.node("in");
     let out = c.node("out");
-    add_vdc(&mut c, "VIN", inp, NodeId::GROUND, vin);
+    c.add(Device::vsource("VIN", inp, NodeId::GROUND, vin));
     c.add(Device::OpAmp {
         name: "U1".into(),
         out,
@@ -110,36 +115,16 @@ fn follower_driven_past_low_rail_converges_to_rail() {
 #[test]
 fn follower_tracks_square_wave_transient() {
     let gain = 1e5;
-    let mut c = Circuit::new();
-    let inp = c.node("in");
-    let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "VIN".into(),
-        p: inp,
-        n: NodeId::GROUND,
-        kind: SourceKind::Pulse {
-            v1: 0.0,
-            v2: 5.0,
-            delay: 1e-3,
-            rise: 1e-6,
-            fall: 1e-6,
-            width: 2e-3,
-            period: 4e-3,
-        },
-    });
-    c.add(Device::OpAmp {
-        name: "U1".into(),
-        out,
-        inp,
-        inn: out,
-        reference: None,
-        gain,
-        pole_hz: None,
-        slew: None,
-        rail_lo: Rail::fixed(0.0),
-        rail_hi: Rail::fixed(32.0),
-    });
-    add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
+    let pulse = SourceKind::Pulse {
+        v1: 0.0,
+        v2: 5.0,
+        delay: 1e-3,
+        rise: 1e-6,
+        fall: 1e-6,
+        width: 2e-3,
+        period: 4e-3,
+    };
+    let c = follower_driven(pulse, gain, 0.0, 32.0);
     let opts = SolverOptions {
         integration: Integration::Trapezoidal,
         step: StepControl::Fixed { dt: 1e-5 },

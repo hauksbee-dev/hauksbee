@@ -14,24 +14,16 @@
 //! the numbers cannot look like a win.
 
 use hauksbee_ir::Circuit;
-use hauksbee_solve::{
-    Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl, Transient, Waveforms,
-};
+use hauksbee_solve::{ParallelPolicy, Partitioning, SolverOptions, Transient, Waveforms};
 use std::time::Instant;
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
+use crate::shared::tight_opts;
 
 fn opts(dt: f64, part: Partitioning, parallel: ParallelPolicy) -> SolverOptions {
     SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt },
-        reltol: 1e-9,
-        vntol: 1e-9,
-        max_newton: 200,
-        gmin: 1e-9,
-        partitioning: part,
         parallel,
-        ..SolverOptions::default()
+        ..tight_opts(part, dt)
     }
 }
 

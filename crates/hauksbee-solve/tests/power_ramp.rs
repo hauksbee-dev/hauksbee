@@ -41,8 +41,8 @@ fn comparator_astable() -> Circuit {
     let vc = c.node("vc");
     // inverting: reference on +, cap on -
     comparator(&mut c, "CMP", osc, vref, vc, 1.0);
-    crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
-    crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
+    add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
+    add_resistor(&mut c, "Rf", osc, vc, 10e3);
     add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
     c
 }
@@ -146,9 +146,9 @@ fn power_on_settles_to_the_same_steady_state() {
     let base = c.node("base");
     let rc = 2.2e3;
     let cout = 10e-9;
-    crate::shared::add_resistor(&mut c, "Rc", vcc, col, rc);
-    crate::shared::add_resistor(&mut c, "Rb1", vcc, base, 47e3);
-    crate::shared::add_resistor(&mut c, "Rb2", base, NodeId::GROUND, 10e3);
+    add_resistor(&mut c, "Rc", vcc, col, rc);
+    add_resistor(&mut c, "Rb1", vcc, base, 47e3);
+    add_resistor(&mut c, "Rb2", base, NodeId::GROUND, 10e3);
     bjt(&mut c, "Q", col, base, NodeId::GROUND, &BjtModel::default());
     add_capacitor(&mut c, "Cout", col, NodeId::GROUND, cout, None);
 
@@ -203,23 +203,16 @@ fn group_of_node(d: &Decomposition, node: NodeId) -> Option<usize> {
 /// that group; the neighbour is unaffected.
 #[test]
 fn run_staged_power_ramps_the_no_dc_group() {
-    let mut c = Circuit::new();
-    // Group A: the astable (nodes vref, osc, vc). Built inline so we keep the
-    // node handles for routing checks.
-    let vref = c.node("vref");
-    add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.5);
+    // Group A: the astable (nodes vref, osc, vc); `node` looks up the existing
+    // osc handle for the routing checks.
+    let mut c = comparator_astable();
     let osc = c.node("osc");
-    let vc = c.node("vc");
-    comparator(&mut c, "CMP", osc, vref, vc, 1.0);
-    crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
-    crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
-    add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
 
     // Group B: an independent, well-behaved feedforward RC that solves normally.
     let nin = c.node("nin");
     add_vdc(&mut c, "VN", nin, NodeId::GROUND, 3.0);
     let nout = c.node("nout");
-    crate::shared::add_resistor(&mut c, "RN", nin, nout, 1e3);
+    add_resistor(&mut c, "RN", nin, nout, 1e3);
     add_capacitor(&mut c, "CN", nout, NodeId::GROUND, 10e-9, None);
 
     let dt = 1e-7;
@@ -269,7 +262,7 @@ fn run_staged_is_bitwise_deterministic() {
     let sup = c.node("sup");
     add_vdc(&mut c, "VSUP", sup, NodeId::GROUND, 3.3);
     let out = c.node("out"); // shared output couples all switch consumers
-    crate::shared::add_resistor(&mut c, "RLcommon", out, NodeId::GROUND, 2e3);
+    add_resistor(&mut c, "RLcommon", out, NodeId::GROUND, 2e3);
     // Seven asymmetric linear dividers, each SENSED (not conducted) by a switch:
     // the driver pass absorbs each divider into the switch consumer, so the
     // `absorbed` map carries seven entries whose iteration order sets device

@@ -17,9 +17,10 @@
 //! fire, the array must fragment, and the torn transient must match the
 //! monolithic reference at every membrane, reference and rail node.
 
+use crate::shared::tight_opts;
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{BjtModel, Circuit, NodeId, Polarity};
-use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
+use hauksbee_solve::{Partitioning, Transient};
 use hauksbee_testkit::circuits::bjt;
 
 fn series_charge_model() -> BjtModel {
@@ -72,17 +73,7 @@ fn build_array(n: usize) -> (Circuit, Vec<String>) {
 }
 
 fn run(c: &Circuit, part: Partitioning, tstop: f64, dt: f64) -> hauksbee_solve::Waveforms {
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Fixed { dt },
-        reltol: 1e-9,
-        vntol: 1e-9,
-        max_newton: 200,
-        gmin: 1e-9,
-        partitioning: part,
-        ..SolverOptions::default()
-    };
-    Transient::new(opts).run(c, tstop).unwrap()
+    Transient::new(tight_opts(part, dt)).run(c, tstop).unwrap()
 }
 
 /// EXACTNESS GATE (§3.2): the torn solve of a series-R + charge-storing BJT
