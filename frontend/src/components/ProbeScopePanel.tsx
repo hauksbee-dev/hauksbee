@@ -92,7 +92,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         xRange: [tMax - WINDOW_SECS, tMax],
         yFloor: [0, 5],
         hint: probes.length === 0
-          ? 'Attach a probe from the net list below'
+          ? 'Pick a net below to plot its voltage'
           : visible.length === 0 ? 'All traces hidden' : null,
       })
     }
@@ -212,10 +212,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
             <button
               key={net}
               onClick={() => onAddProbe(net)}
-              className="hb-press flex items-center gap-2 px-2 py-1 rounded-md text-left cursor-pointer"
-              style={{ background: 'transparent', border: '1px solid transparent' }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--copper-tint)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+              className="hb-press flex items-center gap-2 px-2 py-1 rounded-md text-left cursor-pointer border border-transparent hover:bg-[var(--copper-tint)]"
             >
               <span
                 className="text-[11px] flex-1 truncate"
@@ -228,11 +225,10 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
               </span>
             </button>
           ))}
-          {nets.length === 0 && (
-            <div className="text-[11px] px-2 py-1" style={{ color: 'var(--silk-faint)' }}>No nets loaded</div>
-          )}
-          {nets.length > 0 && filtered.length === 0 && (
-            <div className="text-[11px] px-2 py-1" style={{ color: 'var(--silk-faint)' }}>No nets match</div>
+          {filtered.length === 0 && (
+            <div className="text-[11px] px-2 py-1" style={{ color: 'var(--silk-faint)' }}>
+              {nets.length === 0 ? 'No nets loaded' : 'No nets match'}
+            </div>
           )}
         </div>
       </div>

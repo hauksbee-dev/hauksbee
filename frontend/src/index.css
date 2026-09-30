@@ -82,7 +82,7 @@
   --scope-grid: rgba(0, 200, 80, 0.15);
   --scope-tick: rgba(0, 200, 80, 0.45);
   --scope-axis: rgba(0, 200, 80, 0.35);
-  --scope-hint: rgba(0, 200, 80, 0.25);
+  --scope-hint: rgba(0, 200, 80, 0.8);
   --scope-scan: rgba(0, 255, 100, 0.012);
   --trace-1: #3b82f6;
   --trace-2: #f59e0b;
@@ -176,7 +176,7 @@
   --scope-grid: rgba(13, 110, 60, 0.22);
   --scope-tick: rgba(13, 110, 60, 0.65);
   --scope-axis: rgba(13, 110, 60, 0.5);
-  --scope-hint: rgba(13, 110, 60, 0.45);
+  --scope-hint: rgb(13, 110, 60);
   --scope-scan: rgba(13, 110, 60, 0);
   --trace-1: #1d4ed8;
   --trace-2: #b45309;
@@ -415,18 +415,20 @@ code.hb-inline {
 }
 .nav-item:disabled { opacity: 0.38; cursor: default; }
 
-/* Narrow windows: the rail collapses to icons so the work surface keeps its
-   width. Everything stays reachable; labels return on hover via title text. */
+/* Narrow windows: the rail narrows to icons with small labels under them, so
+   the work surface keeps its width and every destination is still named. */
 @media (max-width: 1180px) {
-  .sidebar { width: 60px !important; }
+  .sidebar { width: 72px !important; }
   .sidebar .sidebar-label { display: none; }
-  .sidebar .nav-item { justify-content: center; padding: 0; }
+  .sidebar .nav-list { padding-inline: 4px; }
+  .sidebar .nav-item { flex-direction: column; justify-content: center; gap: 3px; padding: 5px 0; }
+  .sidebar .nav-label { flex: none; font-size: 10px; line-height: 1.1; }
 }
 
 /* ── Session switcher ───────────────────────────────────────────────────── */
 
 /* The switcher opens BESIDE the rail, not inside it. The rail is 212px at its
-   widest and 60px collapsed, and neither can hold a list of boards with a name,
+   widest and 72px narrowed, and neither can hold a list of boards with a name,
    a file, three facts and four buttons per row. Fixed positioning takes it out
    of the rail's box entirely, so it keeps its own readable width at every
    window size the app supports.
@@ -460,8 +462,8 @@ code.hb-inline {
 /* The collapsed rail: follow it in. */
 @media (max-width: 1180px) {
   .session-panel {
-    left: 68px;
-    max-width: calc(100vw - 80px);
+    left: 80px;
+    max-width: calc(100vw - 92px);
   }
 }
 

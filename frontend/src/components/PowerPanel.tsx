@@ -10,20 +10,11 @@
  * `supply` is the server's tagged wire shape (see lib/supply-wire.ts).
  */
 
-import { useState, useEffect } from 'react'
-import type { BoardInfoMsg, SimFrame } from '../types/protocol'
-import type { ClientMessage } from '../types/protocol'
-import { toWireSupply, supplyNetNames, appliedVolts } from '../lib/supply-wire'
+import { useState } from 'react'
+import type { BoardInfoMsg, ClientMessage, SimFrame } from '../types/protocol'
+import { toWireSupply, supplyNetNames, appliedVolts, fromWireSupply, SUPPLY_DEFAULTS } from '../lib/supply-wire'
 import type { SupplyConfig, SupplyType } from '../lib/supply-wire'
 import { displayNet } from '../lib/net-name'
-
-const SUPPLY_DEFAULTS: Record<SupplyType, SupplyConfig> = {
-  Ideal:   { type: 'Ideal',   volts: 5.0, currentLimit: 10,   ripple: 0,    capacity: 0 },
-  Bench:   { type: 'Bench',   volts: 5.0, currentLimit: 3.0,  ripple: 0.02, capacity: 0 },
-  Wall:    { type: 'Wall',    volts: 5.0, currentLimit: 2.0,  ripple: 0.1,  capacity: 0 },
-  USB:     { type: 'USB',     volts: 5.0, currentLimit: 0.5,  ripple: 0.05, capacity: 0 },
-  Battery: { type: 'Battery', volts: 3.7, currentLimit: 2.0,  ripple: 0,    capacity: 2.0 },
-}
 
 interface PowerPanelProps {
   boardInfo: BoardInfoMsg | null
@@ -34,35 +25,16 @@ interface PowerPanelProps {
 export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
   // power_supplies is a net -> config map (omitted when the board has none);
   // extract the net names. Treating it as an array crashed the whole view.
-  const supplyNets = supplyNetNames(boardInfo?.power_supplies)
-  const [configs, setConfigs] = useState<Record<string, SupplyConfig>>({})
-
-  // Initialise configs when nets appear
-  useEffect(() => {
-    if (!supplyNets) return
-    setConfigs(prev => {
-      const next = { ...prev }
-      for (const net of supplyNets) {
-        if (!next[net]) next[net] = { ...SUPPLY_DEFAULTS.Ideal }
-      }
-      return next
-    })
-    // supplyNets is derived per render; keying on the joined names keeps this
-    // from looping while still reacting to a genuine change of rails.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supplyNets?.join('\u0000')])
-
-  if (!supplyNets) {
-    return (
-      <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-        Not available for this board
-      </div>
-    )
-  }
+  const supplies = boardInfo?.power_supplies
+  const supplyNets = supplyNetNames(supplies)
+  // Only rails the user has edited live here; an untouched rail reads what the
+  // server says it runs, so VDD_3V3 is not shown (or first edited) at 5 V.
+  const [edited, setEdited] = useState<Record<string, SupplyConfig>>({})
+  const configFor = (net: string, from = edited) => from[net] ?? fromWireSupply(supplies?.[net])
 
   function updateConfig(net: string, patch: Partial<SupplyConfig>) {
-    setConfigs(prev => {
-      const next = { ...prev, [net]: { ...(prev[net] ?? SUPPLY_DEFAULTS.Ideal), ...patch } }
+    setEdited(prev => {
+      const next = { ...prev, [net]: { ...configFor(net, prev), ...patch } }
       // The server deserializes a tagged enum, and the raw UI config fails
       // serde there, leaving the panel silently doing nothing. Map to the wire
       // shape.
@@ -77,8 +49,8 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
 
   return (
     <div className="overflow-y-auto" style={{ maxHeight: 340 }}>
-      {supplyNets.map((net, i) => {
-        const cfg = configs[net] ?? SUPPLY_DEFAULTS.Ideal
+      {(supplyNets ?? []).map((net, i) => {
+        const cfg = configFor(net)
         // What the rail will actually run at: USB and battery set their own
         // voltage, so the box shows that rather than a setpoint nothing reads.
         const applied = appliedVolts(cfg)
@@ -99,12 +71,8 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
                 {displayNet(net)}
               </span>
               <span className="text-[11px] shrink-0 tnum" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-                {liveVolts !== undefined && (
-                  <span style={{ color: 'var(--copper)' }}>{liveVolts.toFixed(3)} V</span>
-                )}
-                {state && (
-                  <span> · {state.current_a.toFixed(3)} A</span>
-                )}
+                {liveVolts !== undefined && <span style={{ color: 'var(--copper)' }}>{liveVolts.toFixed(3)} V</span>}
+                {state && <span> · {state.current_a.toFixed(3)} A</span>}
               </span>
             </div>
             {state && state.soc < 1 && (
@@ -130,7 +98,7 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
               {(Object.keys(SUPPLY_DEFAULTS) as SupplyType[]).map(t => (
                 <button
                   key={t}
-                  onClick={() => updateConfig(net, { ...SUPPLY_DEFAULTS[t] })}
+                  onClick={() => updateConfig(net, { ...SUPPLY_DEFAULTS[t], volts: cfg.volts })}
                   className="hb-press text-[10px] px-2 py-0.5 rounded-md cursor-pointer"
                   style={{
                     background: cfg.type === t ? 'var(--copper-tint-strong)' : 'var(--surface-2)',

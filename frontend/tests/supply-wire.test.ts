@@ -6,7 +6,10 @@
 // Run with: bun test  (from frontend/)
 
 import { test, expect } from 'bun:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { toWireSupply, supplyNetNames, usbSpecFor, appliedVolts } from '../src/lib/supply-wire'
+import { PowerPanel } from '../src/components/PowerPanel'
 import type { SupplyConfig } from '../src/lib/supply-wire'
 
 const base: Omit<SupplyConfig, 'type'> = {
@@ -82,4 +85,20 @@ test('appliedVolts reports what the rail will really run at, per supply type', (
   const batt = appliedVolts({ ...base, type: 'Battery', volts: 12 })
   expect(batt.volts).toBe(4.2)
   expect(batt.fixedBy).toBeTruthy()
+})
+
+test('each rail starts at the voltage the server runs it at, not a blanket 5 V', () => {
+  // Every rail was seeded as "Ideal 5 V": VDD_3V3 read 5 V while the engine ran
+  // it at 3.3 V, and the first edit on that rail sent 5 V to it.
+  const boardInfo = {
+    type: 'BoardInfo' as const, name: 'b', board_url: '/b', num_components: 0, num_nets: 2,
+    nets: ['VDD_3V3', 'VIN'], component_kinds: {}, mcus: [] as [string, string][],
+    power_supplies: {
+      VDD_3V3: { kind: 'ideal' as const, volts: 3.3 },
+      VIN: { kind: 'bench' as const, volts: 12, current_limit_a: 1.5 },
+    },
+  }
+  const html = renderToStaticMarkup(createElement(PowerPanel, { boardInfo, frame: null, send: () => {} }))
+  const values = [...html.matchAll(/value="([^"]*)"/g)].map(m => m[1])
+  expect(values).toEqual(['3.3', '10', '12', '1.5', '0.02'])
 })

@@ -93,7 +93,7 @@ export function Sidebar({
       </div>
 
       {/* Nav */}
-      <div className="flex flex-col gap-1 px-2.5 pt-3">
+      <div className="nav-list flex flex-col gap-1 px-2.5 pt-3">
         {items.map(item => (
           <button
             key={item.id}
@@ -108,7 +108,7 @@ export function Sidebar({
             aria-current={nav.view === item.id ? 'page' : undefined}
           >
             <span style={{ display: 'inline-flex', flexShrink: 0 }}>{item.icon}</span>
-            <span className="sidebar-label flex-1">{item.label}</span>
+            <span className="nav-label flex-1">{item.label}</span>
             {item.id === 'sim' && nav.simRunning && (
               <span
                 className="run-dot sidebar-label"

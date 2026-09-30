@@ -16,6 +16,30 @@ export interface SupplyConfig {
   capacity: number     // Ah (Battery only)
 }
 
+/** Per-type starting parameters when the user picks a supply type. `volts` is
+ *  only a fallback: the panel keeps the rail's own voltage across a switch. */
+export const SUPPLY_DEFAULTS: Record<SupplyType, SupplyConfig> = {
+  Ideal:   { type: 'Ideal',   volts: 5.0, currentLimit: 10,   ripple: 0,    capacity: 0 },
+  Bench:   { type: 'Bench',   volts: 5.0, currentLimit: 3.0,  ripple: 0.02, capacity: 0 },
+  Wall:    { type: 'Wall',    volts: 5.0, currentLimit: 2.0,  ripple: 0.1,  capacity: 0 },
+  USB:     { type: 'USB',     volts: 5.0, currentLimit: 0.5,  ripple: 0.05, capacity: 0 },
+  Battery: { type: 'Battery', volts: 3.7, currentLimit: 2.0,  ripple: 0,    capacity: 2.0 },
+}
+
+const TYPE_OF_KIND = { ideal: 'Ideal', bench: 'Bench', wall: 'Wall', usb: 'USB', battery: 'Battery' } as const
+
+/** The panel config for a rail as the server runs it: BoardInfo.power_supplies
+ *  carries the binder's nominal voltage for each rail. */
+export function fromWireSupply(wire: PowerSupplyWire | undefined): SupplyConfig {
+  if (!wire) return SUPPLY_DEFAULTS.Ideal
+  const cfg = { ...SUPPLY_DEFAULTS[TYPE_OF_KIND[wire.kind]] }
+  if ('volts' in wire) cfg.volts = wire.volts
+  if (wire.kind === 'bench') cfg.currentLimit = wire.current_limit_a
+  if (wire.kind === 'wall') cfg.ripple = wire.ripple_vpp
+  if (wire.kind === 'battery') cfg.capacity = wire.capacity_mah / 1000
+  return cfg
+}
+
 /** The USB spec closest to (but not under, when possible) the requested limit. */
 export function usbSpecFor(currentLimitA: number): UsbSpecWire {
   if (currentLimitA <= 0.5) return 'v5_0_5a'
@@ -93,6 +117,6 @@ export function supplyNetNames(
   powerSupplies: Record<string, unknown> | undefined | null,
 ): string[] | null {
   if (!powerSupplies || typeof powerSupplies !== 'object') return null
-  const names = Object.keys(powerSupplies)
+  const names = Object.keys(powerSupplies).sort() // server map order varies
   return names.length > 0 ? names : null
 }

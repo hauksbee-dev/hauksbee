@@ -290,8 +290,8 @@ test('live input sliders require an explicit engine source, not an input-looking
     num_nets: 1, nets: ['A0'], component_kinds: {}, mcus: [] as [string, string][],
   }
   const guessed = renderToStaticMarkup(<InputSourcesPanel boardInfo={base} send={() => {}} />)
-  expect(guessed).toContain('No input sources detected')
-  expect(guessed).toContain('arbitrary net names are never treated as sources')
+  expect(guessed).toContain('No buttons or signals are attached yet')
+  expect(guessed).toContain('pick a net, and attach it')
   expect(guessed).not.toContain('type="range"')
 
   const declared = renderToStaticMarkup(<InputSourcesPanel
