@@ -105,7 +105,7 @@ export function VariantPicker({ selection: s, onQueue }: {
       <option value="" disabled>Pick the fitted {s.family} variant…</option>
       {s.members.map(m => (
         <option key={m.id} value={m.id} disabled={m.verdict === 'C'}>
-          {m.id} — {m.selector || 'no orderable codes'} · {m.basis}{m.verdict === 'C' ? ` (ruled out: ${m.reason})` : ''}
+          {m.id}: {m.selector || 'no orderable codes'} · {m.basis}{m.verdict === 'C' ? ` (ruled out: ${m.reason})` : ''}
         </option>
       ))}
     </select>

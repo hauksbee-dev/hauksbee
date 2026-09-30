@@ -266,6 +266,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "docs/dev-plans/linux-clean-room-report-2026-08-14.md",
             "docs/dev-plans/public-release-cleanup-plan.md",
             "docs/dev-plans/tasks.md",
+            "docs/ci/RELEASE_RUNBOOK.md",
             "frontend/capture/cards.ts",
             "scripts/build-private-beta-snapshot.sh",
             "scripts/make-public.sh",

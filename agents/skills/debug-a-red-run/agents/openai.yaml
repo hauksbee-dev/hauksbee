@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debug a Red Run"
+  short_description: "Classify a failed or invalid run and pick the next action"
+  default_prompt: "Use $debug-a-red-run to explain why this Hauksbee run failed and what to do next."

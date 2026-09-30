@@ -1,0 +1,4 @@
+interface:
+  display_name: "Check a Hardware Board"
+  short_description: "Import a board, run every static check, and report the verdict"
+  default_prompt: "Use $check-a-board to check this board and explain the verdict, its evidence, and what was not covered."

@@ -151,6 +151,14 @@ The worked formats are:
 
 The full menu is in [`extending/README.md`](extending/README.md).
 
+## Using Hauksbee from an AI agent
+
+[`agents/AGENTS.md`](../agents/AGENTS.md) is the guide for coding agents: the
+orient commands, both exit-code contracts, the JSON shapes, and the
+`hauksbee-mcp` server's tools. Task skills for Claude Code and Codex (check a
+board, write a CI spec, debug a RED run, firmware co-sim, model a board) are in
+[`agents/skills/`](../agents/skills/README.md), with install steps.
+
 ## Going deeper
 
 [`docs/DOCS_MAP.md`](DOCS_MAP.md) maps every doc in the shipped set to the

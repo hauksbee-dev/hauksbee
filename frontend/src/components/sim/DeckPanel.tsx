@@ -39,7 +39,7 @@ function Plot({ plot }: { plot: ScopePlot }) {
       {/* The y quantity in words: the AC plot is dB, the table below it is the
           linear magnitude the CLI printed, and nothing else said so. */}
       <div className="px-2 py-1 text-[10px]" data-testid="plot-y-caption" style={{ color: 'var(--silk-faint)', borderTop: '1px solid var(--scope-edge)' }}>
-        y axis: {plot.yUnit.trim() || 'unitless'}{plot.yUnit === ' dB' && ' — 20·log₁₀ of the magnitude in the table below'}
+        y axis: {plot.yUnit.trim() || 'unitless'}{plot.yUnit === ' dB' && ' (20·log₁₀ of the magnitude in the table below)'}
       </div>
     </div>
   )
@@ -79,7 +79,7 @@ export function DeckPanel({ file }: { file: File }) {
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-[13px] truncate" style={{ fontFamily: 'var(--font-mono)', color: 'var(--silk)' }}>{file.name}</span>
         {result?.analysis && (
-          <span className="hb-chip text-[11px]" data-testid="deck-analysis">{result.analysis.toUpperCase()} — the deck&rsquo;s own card</span>
+          <span className="hb-chip text-[11px]" data-testid="deck-analysis">{result.analysis.toUpperCase()} (the deck&rsquo;s own card)</span>
         )}
         <span className="flex-1" />
         <button type="button" className="hb-btn-primary hb-press px-3 text-[12px]" style={{ height: 32 }} onClick={run} disabled={busy} data-testid="deck-run">

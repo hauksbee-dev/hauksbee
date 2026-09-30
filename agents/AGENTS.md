@@ -24,14 +24,19 @@ Board-as-Code `.board` (bare or zipped). Firmware for co-sim
 `.elf`/`.hex`, a PlatformIO project directory, or a zip of either. Hauksbee
 finds the built image inside automatically, or builds it with your `pio`.
 
-## Exit codes (both binaries)
+## Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | Green: all checks/assertions held. |
-| 1 | Red: an assertion failed and no active waiver covers it (the JSON says which and on which seed). |
-| 2 | Input error: bad spec, missing board, unreadable file, a usage error, or a requested `--junit`/`--sarif` path that could not be written. |
-| 3 | Invalid for analysis: the analog solve aborted, an assertion's window overlapped a failed solve span, or a `--thermal` run had partial coverage (an active power IC open/unresolved; `--no-strict-thermal` opts out), so results are not trustworthy. Never treat as green OR as an ordinary failure. |
+The two binaries number 1 and 2 differently. Each one's `--help` states its
+own contract.
+
+| Code | `hauksbee-ci run` | `hauksbee run` |
+|---|---|---|
+| 0 | Green: every assertion held (or every failure has an active waiver). | Pass, or any report without `--strict`. |
+| 1 | Red: an assertion failed and no active waiver covers it (the JSON says which and on which seed). | Input error: the board could not be read, or a co-sim backend is missing. |
+| 2 | Input error: bad spec, missing board, unknown net, a usage error, or a `--junit`/`--sarif` path that could not be written. | Usage error, or gating findings under `--strict` (`verdict: "fail"`). |
+| 3 | Invalid for analysis: the analog solve aborted, an assertion's window overlapped a failed solve span, or an assertion's evidence is `undermined` (for example an unmodelled active part that can drive the asserted net). | Invalid for analysis: `verdict: "invalid"` under `--strict`, firmware on a board with no bound processor, or a `--thermal` run with partial coverage (`--no-strict-thermal` opts out). |
+
+Never treat exit 3 as green or as an ordinary failure.
 
 Trust the JSON `passed` field only together with `run_valid`. `hauksbee-ci
 run --json` reports `passed` (the process verdict, false on exit 3),
@@ -100,19 +105,42 @@ Launch it as a subprocess, and speak MCP over its stdin/stdout:
 { "command": "hauksbee-mcp" }
 ```
 
-It declares only the `tools` capability. Six tools:
+It declares only the `tools` capability. Relative paths in tool arguments
+resolve against the server's working directory, so pass absolute paths unless
+you control where the client starts it.
+
+### Register it
+
+```bash
+claude mcp add --transport stdio hauksbee -- hauksbee-mcp   # Claude Code
+codex mcp add hauksbee -- hauksbee-mcp                       # Codex
+```
+
+Any client that reads an `mcpServers` block:
+
+```json
+{ "mcpServers": { "hauksbee": { "command": "hauksbee-mcp", "args": [] } } }
+```
+
+Use an absolute path for `command` if `hauksbee-mcp` is not on the client's
+`PATH`. From a checkout, `scripts/install.sh` installs it, or build it with
+`cargo build -p hauksbee-mcp` and point at `target/debug/hauksbee-mcp`.
+
+### Tools
 
 | tool | arguments | returns |
 |---|---|---|
-| `analyze_board` | `board_path`, `firmware_path?` | the front-door report JSON (headline, `serious`/`total`, per-section findings, `bind` coverage, `nets`, `supplies`, `notes`, and `cosim` when firmware ran) |
-| `run_checks` | `board_path`, `spec_toml`, `firmware_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]}` |
+| `analyze_board` | `board_path`, `firmware_path?`, `schematic_path?` | the front-door report JSON (headline, `serious`/`total`, per-section findings, `bind` coverage, `nets`, `supplies`, `notes`, and `cosim` when firmware ran) |
+| `run_checks` | `board_path`, `spec_toml`, `firmware_path?`, `schematic_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]}` |
 | `list_capabilities` | none | the scope table as data: report kinds, assertion kinds, board/firmware formats, and MCU backend availability probed on this machine with the engine's own discovery (doctor-style `builtin/ok/absent/disabled`) |
 | `model_coverage` | `board_path`, `models_dir?` | the same staged per-device identity/executable/declared coverage used by CLI and browser, plus a read-only next action that says model preparation requires approval |
 | `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
 | `run_script` | `source` | `{result, logs}`: code mode, below |
 
-`spec_toml` is the spec body WITHOUT `board`/`firmware` keys. The server
-injects them from the path arguments. Every result arrives both as a
+`spec_toml` is the spec body without `board`, `firmware`, or `schematic`
+keys. The server injects them from the path arguments and rejects a spec that
+sets them. `schematic_path` names an Eagle `.sch` companion to an Eagle
+`.brd`; a same-named sibling is found automatically. Every result arrives both as a
 `content` text block and as `structuredContent`, the same object.
 
 ### The refusal shape
@@ -122,7 +150,10 @@ for (firmware on a board with no runnable MCU, an aborted analog solve, an
 assertion window over a failed span), the tool result is:
 
 ```json
-{ "status": "invalid_for_analysis", "reason": "...", "report": { ... } }
+{ "status": "invalid_for_analysis", "reason": "...",
+  "refusal": { "claim": "...", "missing_prerequisite": "...",
+               "valid_partial_conclusions": ["..."], "next_action": "..." },
+  "report": { ... } }
 ```
 
 (`run_checks` attaches the per-assertion data under `"result"` instead of
@@ -140,8 +171,8 @@ Instead of many tool round-trips, submit one JavaScript program that runs
 server-side in an embedded QuickJS sandbox and returns a composed result.
 The sandbox's only capability is the global `hauksbee` object:
 
-- `hauksbee.analyzeBoard(path, firmwarePath?)`
-- `hauksbee.runChecks(path, specToml, firmwarePath?)`
+- `hauksbee.analyzeBoard(path, firmwarePath?, schematicPath?)`
+- `hauksbee.runChecks(path, specToml, firmwarePath?, schematicPath?)`
 - `hauksbee.listCapabilities()`
 - `hauksbee.modelCoverage(path, modelsDir?)`
 - `hauksbee.boardToCode(path)`
@@ -156,22 +187,36 @@ mistake one for data. Catch it to branch on it. Tool input errors throw
 
 ### Worked example
 
+With the server started from the repository root, one `run_script` call
+analyses a bundled board and, if it is clean, runs a spec against it.
+
 Request:
 
 ```json
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
   "name":"run_script",
-  "arguments":{"source":"const r = hauksbee.analyzeBoard('boards/button_pullup.kicad_pcb');\nconsole.log('findings:', r.total);\nlet checks = null;\nif (r.serious === 0) {\n  checks = hauksbee.runChecks('boards/button_pullup.kicad_pcb',\n    'duration_ms = 10\\n[[assert]]\\nkind = \"no_faults\"\\n');\n}\nreturn {board: r.file_name, serious: r.serious, checksPassed: checks && checks.passed};"}}}
+  "arguments":{"source":"const r = hauksbee.analyzeBoard('testdata/boards/button_pullup.kicad_pcb');\nconsole.log('findings:', r.total);\nlet checks = null;\nif (r.serious === 0) {\n  checks = hauksbee.runChecks('testdata/boards/button_pullup.kicad_pcb',\n    'duration_ms = 10\\n[[assert]]\\nkind = \"no_faults\"\\n');\n}\nreturn {board: r.file_name, serious: r.serious, checksPassed: checks && checks.passed};"}}}
 ```
 
-Response:
+Response (one line on the wire, wrapped here):
 
 ```json
-{"jsonrpc":"2.0","id":7,"result":{
-  "content":[{"type":"text","text":"{\"result\":{\"board\":\"button_pullup.kicad_pcb\",\"serious\":0,\"checksPassed\":true},\"logs\":[\"findings: 0\"]}"}],
-  "structuredContent":{"result":{"board":"button_pullup.kicad_pcb","serious":0,"checksPassed":true},"logs":["findings: 0"]},
-  "isError":false}}
+{"id":7,"jsonrpc":"2.0","result":{
+  "content":[{"text":"{\"logs\":[\"findings: 0\"],\"result\":{\"board\":\"button_pullup.kicad_pcb\",\"checksPassed\":true,\"serious\":0}}","type":"text"}],
+  "isError":false,
+  "structuredContent":{"logs":["findings: 0"],"result":{"board":"button_pullup.kicad_pcb","checksPassed":true,"serious":0}}}}
 ```
+
+Before its first `tools/call`, a client sends `initialize` and then the
+`notifications/initialized` notification, one JSON object per line. MCP
+clients do this for you.
+
+## Skills
+
+`agents/skills/` holds task skills for Claude Code and Codex: checking a
+board, writing a CI spec, debugging a RED run, firmware co-simulation, and
+modelling a board. [`skills/README.md`](skills/README.md) lists them and says
+how to install them.
 
 ## Ground rules for agents
 

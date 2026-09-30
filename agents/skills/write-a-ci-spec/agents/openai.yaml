@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write a Hardware CI Spec"
+  short_description: "Scaffold, validate, and run a hauksbee-ci spec"
+  default_prompt: "Use $write-a-ci-spec to add a hauksbee-ci spec for this board and run it."

@@ -28,7 +28,7 @@ test('an unsupported net reads as unsupported, ahead of unobserved and measured'
 
 test('the unsupported readout never prints a number', () => {
   const text = netReadoutText(readNet(frame, 'VOUT'))
-  expect(text).toBe('unsupported — not a simulated value')
+  expect(text).toBe('unsupported: not a simulated value')
   expect(text).not.toContain('3.3')
 })
 
@@ -36,7 +36,7 @@ test('the unsupported readout never prints a number', () => {
 // a solve that happened, or it is not printed at all.
 test('no surface prints a number for a net nobody simulated', () => {
   const nets = renderToStaticMarkup(createElement(NetPanel, { frame, selectedNet: null, onSelectNet: () => undefined }))
-  expect(nets).toContain('unsupported — not a simulated value')
+  expect(nets).toContain('unsupported: not a simulated value')
   expect(nets).toContain('net-row-unmeasured')
   // VIN is measured and still reads as a number; only VOUT lost its bar.
   expect(nets).toContain('+2.500V')
@@ -47,10 +47,10 @@ test('no surface prints a number for a net nobody simulated', () => {
     boardInfo: null, frame, probes: ['VOUT', 'VIN'],
     onAddProbe: () => undefined, onRemoveProbe: () => undefined,
   }))
-  expect(scope).toContain('unsupported — not a simulated value')
+  expect(scope).toContain('unsupported: not a simulated value')
   expect(scope).not.toContain('3.300')
   // The long status truncates in the probe row; the name and the detach button keep their width.
-  expect(scope).toContain('title="unsupported — not a simulated value"')
+  expect(scope).toContain('title="unsupported: not a simulated value"')
 
   // And a clean fault list says WHY part of the circuit was never watched.
   const faults = renderToStaticMarkup(createElement(FaultPanel, { faults: [], unsupportedReasons: frame.unsupported_reasons }))

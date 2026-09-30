@@ -24,6 +24,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 | [`ingest/BOM.md`](ingest/BOM.md) | BOM and pick-and-place: the dialects, the column mapping, and what a part number changes about binding |
 | [`ingest/DNP.md`](ingest/DNP.md) | Do-not-populate parts: what gets simulated, and how to change it |
 | [`ingest/BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md) | Decompile / edit / recompile a board as editable code |
+| [`ingest/IMPORT_DIAGNOSTICS.md`](ingest/IMPORT_DIAGNOSTICS.md) | The import coverage panel: what each reader recovered per component, before binding |
 
 **"What does it check, and can I trust the findings?"**: [`checks/`](checks/)
 
@@ -41,6 +42,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 | File | Covers |
 |---|---|
 | [`analysis/AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md) | AC / small-signal sweep: Bode, phase margin, gain crossover |
+| [`analysis/ERROR_BUDGETS.md`](analysis/ERROR_BUDGETS.md) | The `error_budget` on every numeric result: solver settings, measured residuals, failed windows |
 | [`analysis/JSON_OUTPUT.md`](analysis/JSON_OUTPUT.md) | The `--json` output schema: top-level verdict + every section |
 | [`analysis/RUN_MANIFESTS.md`](analysis/RUN_MANIFESTS.md) | Immutable input hashes, stable manifest JSON, privacy boundary, and one-command replay |
 
@@ -59,6 +61,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 |---|---|
 | [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
 | [`models/PACKS.md`](models/PACKS.md) | Model-pack format: bundle + share model/sensor/logic data |
+| [`models/SOURCE_LADDER.md`](models/SOURCE_LADDER.md) | Model source tiers, selection order, and how provenance appears in every output |
 | [`models/dynamic-param-audit.md`](models/dynamic-param-audit.md) | Datasheet audit of the BJT/diode/MOSFET cards' capacitance, transit-time and breakdown params |
 
 **"How do I wire it into a pipeline?"**: [`ci/`](ci/)
@@ -87,13 +90,15 @@ own board, firmware, and spec, and the one local command that runs them, and
 | [`about/COMPARISON.md`](about/COMPARISON.md) | Feature matrix and positioning vs the field |
 | [`about/LIMITATIONS.md`](about/LIMITATIONS.md) | Honest limitations, triage and closure |
 | [`about/release-and-licensing.md`](about/release-and-licensing.md) | Release process and the GPL boundary |
+| [`about/PRIVATE_SUITE.md`](about/PRIVATE_SUITE.md) | The tests this public tree omits, and why |
+| [`about/speed-gate-results.md`](about/speed-gate-results.md) | Generated solver speed and accuracy gate results against ngspice |
 
 ## Scoped directories
 
 | Path | Covers |
 |---|---|
-| [`extending/`](extending/) | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack |
-| [`spice-compat/`](spice-compat/) | SPICE compatibility statement and ngspice cross-check results |
+| [`extending/`](extending/README.md) | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, microcontroller, board format, hardware trace, model pack, or device physics |
+| [`spice-compat/`](spice-compat/compatibility.md) | SPICE compatibility statement ([`compatibility.md`](spice-compat/compatibility.md)) and ngspice cross-check results ([`results.md`](spice-compat/results.md)) |
 | [`assets/`](assets/) | Images embedded by docs |
 
 This map covers the public documentation shipped with the repository.
@@ -103,6 +108,12 @@ This map covers the public documentation shipped with the repository.
 | Path | Covers |
 |---|---|
 | [`../COMPLIANCE.md`](../COMPLIANCE.md) | Licence compliance, one row per shipped artifact and what redistributing it obliges |
-| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the six tools, including read-only staged model coverage, install, and registration |
+| [`../agents/AGENTS.md`](../agents/AGENTS.md) | Guide for AI agents: orient commands, exit codes, JSON shapes, the MCP server and its tools |
+| [`../agents/skills/README.md`](../agents/skills/README.md) | Agent skills (check a board, write a CI spec, debug a RED run, firmware co-sim, model a board) and how to install them |
+| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the six tools, install, and registration |
+| [`../integrations/github-action/README.md`](../integrations/github-action/README.md) | The GitHub Action that runs `hauksbee-ci` |
+| [`../integrations/pre-commit/README.md`](../integrations/pre-commit/README.md) | Hooks for the pre-commit framework that block a commit with a broken board |
+| [`../integrations/kicad-plugin/README.md`](../integrations/kicad-plugin/README.md) | pcbnew action plugin that runs `hauksbee-ci` on the open board |
+| [`../editors/vscode-hauksbee-board/README.md`](../editors/vscode-hauksbee-board/README.md) | VS Code extension: spec TOML completion and linting, and running checks from the editor |
 
 Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, `STYLE.md`, and this map.

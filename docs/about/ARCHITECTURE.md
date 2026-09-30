@@ -55,9 +55,33 @@ Each report runs from `hauksbee run <board> --report/--drc/--lint/--si/--resourc
 
 ## Layout
 
-- `vendor/kicad-forge` (vendored in this repo): lossless KiCad parse/produce,
-  typed model, board-to-code with repeat detection.
-- The workspace crates: extraction, models, solver, MCU co-sim, server, UI.
-- The server layer ships as three binaries: `hauksbee` (CLI + web front door),
-  `hauksbee-ci` (the CI gate), and `hauksbee-mcp` (a stdio MCP server exposing
-  the same engine to coding agents).
+The Cargo workspace is split along the pipeline. Each crate depends only on
+the ones above it in this table.
+
+| crate | role |
+|---|---|
+| `hauksbee-ir` | circuit intermediate representation and the SPICE netlist front end |
+| `hauksbee-solve` | sparse MNA solver: DC, transient, and AC small-signal |
+| `hauksbee-models` | device model library and part resolution (`model-extract` binary) |
+| `hauksbee-extract` | reads board files into components, pads, nets, and connectivity |
+| `hauksbee-mcu` | MCU emulation bridge: simavr in-process, Renode and QEMU as external backends |
+| `hauksbee-frontdoor-api` | shared engine, protocol, and callback contracts between the engine and the server |
+| `hauksbee-bind` | binds an extracted board to models and stamps the device library |
+| `hauksbee-checks` | static checks over a bound board: lints, boot/strap/contention, USB-C, decoupling |
+| `hauksbee-cosim` | lockstep scheduler coupling analog, MCU, and digital domains, plus peripherals |
+| `hauksbee-server` | web front door: upload a board, get a plain-language report |
+| `hauksbee-engine` | ties the above together; builds the `hauksbee` binary |
+| `hauksbee-ci` | spec runner and CI gate; builds `hauksbee-ci` |
+| `hauksbee-mcp` | stdio MCP server over the engine and the spec runner; builds `hauksbee-mcp` |
+| `hauksbee-testkit` | locates test assets for the suites |
+
+Outside the workspace:
+
+- `vendor/kicad-forge`: lossless KiCad parse and produce, a typed model, and
+  board-to-code with repeat detection. It is its own workspace and is used
+  through path dependencies.
+- `frontend/`: the React app that `hauksbee serve` hosts.
+- `crates/hauksbee-models/db/`: the built-in device model cards (TOML), and
+  `model-packs/` for optional packs.
+- `testdata/` and `examples/`: boards, decks, and specs used by the tests and
+  the docs.

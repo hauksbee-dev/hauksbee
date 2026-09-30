@@ -59,10 +59,11 @@ From a checkout, `scripts/install.sh` builds and installs the same three.
 
 ## Register it
 
-Claude Code, one line:
+Claude Code or Codex, one line:
 
 ```bash
 claude mcp add --transport stdio hauksbee -- hauksbee-mcp
+codex mcp add hauksbee -- hauksbee-mcp
 ```
 
 Any client that reads an `mcpServers` block:
@@ -79,7 +80,19 @@ Any client that reads an `mcpServers` block:
 ```
 
 Use an absolute path for `command` if `hauksbee-mcp` is not on the `PATH` the
-client inherits.
+client inherits. Relative paths in tool arguments resolve against the server's
+working directory, so absolute paths are safer.
+
+## Arguments and a worked example
+
+`analyze_board` takes `board_path` and optional `firmware_path` and
+`schematic_path`. `run_checks` takes `board_path`, `spec_toml` (the spec
+without `board`, `firmware`, or `schematic` keys) and the same optional paths.
+`model_coverage` takes `board_path` and optional `models_dir`.
+`board_to_code` takes `board_path`. `run_script` takes `source`.
+`list_capabilities` takes nothing. The per-tool argument table, the refusal
+shape, and a full `run_script` request and response are in
+[`agents/AGENTS.md`](../../agents/AGENTS.md#the-mcp-server).
 
 ## The full contract
 

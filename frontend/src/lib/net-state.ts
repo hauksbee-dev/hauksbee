@@ -102,7 +102,7 @@ export function readNet(
  *  measured, and never hides that a net is swinging. */
 export function netReadoutText(r: NetReading): string {
   switch (r.kind) {
-    case 'unsupported': return 'unsupported — not a simulated value'
+    case 'unsupported': return 'unsupported: not a simulated value'
     case 'unobserved': return 'not observed'
     case 'absent': return '—'
     case 'measured':

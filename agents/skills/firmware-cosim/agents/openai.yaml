@@ -1,0 +1,4 @@
+interface:
+  display_name: "Firmware Co-simulation"
+  short_description: "Boot firmware on the emulated board and judge the result"
+  default_prompt: "Use $firmware-cosim to run this firmware on the board and tell me whether the result is a real pass."
