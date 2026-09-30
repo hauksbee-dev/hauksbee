@@ -1668,7 +1668,7 @@ impl BoardEvidence {
         }) {
             let refs = self.assumption_part_refs(assumption);
             let key = (
-                assumption.kind().slug().to_string(),
+                assumption.kind().slug(),
                 normalize_part_statement(assumption.statement(), &refs),
                 normalize_part_statement(assumption.because(), &refs),
                 normalize_part_statement(assumption.consequence(), &refs),

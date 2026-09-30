@@ -382,23 +382,11 @@ impl AssumptionKind {
         }
     }
 
-    /// The id slug for this kind, `kebab-case`. Stable: ids are compared across
-    /// runs and named in acknowledgment files.
+    /// The id slug for this kind: [`Self::as_str`] in `kebab-case`. Stable:
+    /// ids are compared across runs and named in acknowledgment files.
     #[must_use]
-    pub const fn slug(self) -> &'static str {
-        match self {
-            Self::OpenPart => "open-part",
-            Self::SubstituteModel => "substitute-model",
-            Self::InferredPinRole => "inferred-pin-role",
-            Self::DefaultParameter => "default-parameter",
-            Self::FittedByDefault => "fitted-by-default",
-            Self::NotChecked => "not-checked",
-            Self::NotExercised => "not-exercised",
-            Self::ReducedFidelity => "reduced-fidelity",
-            Self::OperatingLimitViolated => "operating-limit-violated",
-            Self::ParserLimitation => "parser-limitation",
-            Self::Waived => "waived",
-        }
+    pub fn slug(self) -> String {
+        self.as_str().replace('_', "-")
     }
 }
 
