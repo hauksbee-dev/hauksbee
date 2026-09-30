@@ -45,7 +45,7 @@
 //!    Non-finding terminal outcomes use a typed refusal testcase/result;
 //!    `--strict-boot` is promoted to a typed co-sim finding when armed.
 
-use crate::support::{bin, read_json, stderr, stdout};
+use crate::support::{bin, expect_err, read_json, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -299,7 +299,7 @@ fn thermal_partial_json_is_refused_by_default_and_valid_under_opt_out() {
     let b = thermal_partial();
     // Default: the JSON document carries the structured refusal and exits 3.
     let out = run_board(&b, &["--thermal", "--seconds", "0.05", "--json"]);
-    assert_eq!(out.status.code(), Some(3));
+    expect_err(&out, 3, &[]);
     let v = json_doc(&out);
     // Validity is #[serde(flatten)]ed into the thermal object.
     assert_eq!(v["thermal"]["valid"], false);
@@ -372,7 +372,7 @@ fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
     // extract body's "net-lint: no findings." must sit under the refusal, or
     // the first thing a reader sees is a clean bill.
     let out = run_board(&b, &["--lint"]);
-    assert_eq!(out.status.code(), Some(0));
+    expect_err(&out, 0, &[]);
     let text = stdout(&out);
     let verdict_at = text.find("INCONCLUSIVE").unwrap_or_else(|| {
         panic!("the default text summary is not a vacuous pass either:\n{text}")
@@ -489,7 +489,7 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
     );
     // Bound side: no such note.
     let out = run_board(&bound(), &["--si", "--json"]);
-    assert_eq!(out.status.code(), Some(0));
+    expect_err(&out, 0, &[]);
     let v = json_doc(&out);
     let empty = Vec::new();
     let notes = v["notes"].as_array().unwrap_or(&empty);
@@ -593,7 +593,7 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
 fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
     let unbound = unbound();
     let out = run_board(&unbound, &["--si", "--json"]);
-    assert_eq!(out.status.code(), Some(0), "exit stays 0 without --strict");
+    expect_err(&out, 0, &[]);
     let v = json_doc(&out);
     assert_eq!(
         v["verdict"], "invalid",
@@ -602,7 +602,7 @@ fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
     assert_eq!(v["ok"], false);
 
     let out = run_board(&unbound, &["--drc", "--json"]);
-    assert_eq!(out.status.code(), Some(0));
+    expect_err(&out, 0, &[]);
     let v = json_doc(&out);
     assert_ne!(
         v["verdict"], "invalid",

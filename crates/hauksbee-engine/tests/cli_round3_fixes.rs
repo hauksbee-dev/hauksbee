@@ -1,7 +1,7 @@
 //! Round-3 audit fixes, engine CLI half: contracts that only the compiled
 //! binary can prove (error-handler routing, exit codes, output envelopes).
 
-use crate::support::{board, run, run_board, stderr, stdout};
+use crate::support::{board, expect_err, run, run_board, stderr, stdout};
 use std::path::PathBuf;
 
 fn blinky_board() -> PathBuf {
@@ -16,22 +16,24 @@ fn clean_board() -> PathBuf {
 // ── B1: --example resolution goes through the normal error handler ──────────
 
 #[test]
-fn run_unknown_example_uses_the_lowercase_error_handler() {
-    let out = run(&["run", "--example", "bogus", "--check"]);
-    let err = stderr(&out);
-    assert!(
-        err.contains("error: no embedded example board named 'bogus'"),
-        "the normal lowercase handler formats it: {err}"
-    );
-    assert!(
-        !err.contains("Error:") && !err.to_lowercase().contains("backtrace"),
-        "anyhow's default Error/backtrace rendering must not leak: {err}"
-    );
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "input errors exit 1, like every other run input error"
-    );
+fn unknown_example_uses_the_lowercase_error_handler() {
+    let rows: [(&[&str], &str); 2] = [
+        (&["run", "--example", "bogus", "--check"], "board"),
+        (&["sim", "--example", "bogus"], "deck"),
+    ];
+    for (args, what) in rows {
+        let out = run(args);
+        let err = stderr(&out);
+        assert!(
+            err.contains(&format!("error: no embedded example {what} named 'bogus'")),
+            "the normal lowercase handler formats it: {err}"
+        );
+        assert!(
+            !err.contains("Error:") && !err.to_lowercase().contains("backtrace"),
+            "anyhow's default rendering must not leak: {err}"
+        );
+        expect_err(&out, 1, &[]);
+    }
 }
 
 #[test]
@@ -48,22 +50,7 @@ fn run_unknown_example_under_json_emits_the_json_envelope() {
             .contains("no embedded example board named 'bogus'"),
         "the error field carries the message: {so}"
     );
-    assert_eq!(out.status.code(), Some(1));
-}
-
-#[test]
-fn sim_unknown_example_uses_the_lowercase_error_handler() {
-    let out = run(&["sim", "--example", "bogus"]);
-    let err = stderr(&out);
-    assert!(
-        err.contains("error: no embedded example deck named 'bogus'"),
-        "the normal handler formats it: {err}"
-    );
-    assert!(
-        !err.contains("Error:") && !err.to_lowercase().contains("backtrace"),
-        "anyhow's default rendering must not leak: {err}"
-    );
-    assert_eq!(out.status.code(), Some(1));
+    expect_err(&out, 1, &[]);
 }
 
 #[test]
@@ -75,7 +62,7 @@ fn bare_run_and_sim_name_the_bundled_example_as_the_next_action() {
         let out = run(&[cmd]);
         let err = stderr(&out);
         assert!(err.contains(next) && !err.contains("required arg"), "{err}");
-        assert_eq!(out.status.code(), Some(1), "input error, not findings");
+        expect_err(&out, 1, &[]);
     }
     // Refused after the artifact transaction opens, so a stale JUnit fails closed.
     let dir = tempfile::tempdir().unwrap();
@@ -98,19 +85,15 @@ fn models_lint_on_a_board_names_the_actual_fix_without_dumping_the_board() {
     let b = blinky_board();
     let out = run(&["models", "lint", b.to_str().unwrap()]);
     let err = stderr(&out);
-    assert!(
-        err.contains("is a board, not a model spec"),
-        "names what happened: {err}"
-    );
-    assert!(
-        err.contains("hauksbee models resolve"),
-        "names the command they meant: {err}"
+    expect_err(
+        &out,
+        1,
+        &["is a board, not a model spec", "hauksbee models resolve"],
     );
     assert!(
         !err.contains("(kicad_pcb"),
         "the board content must not be dumped as error context: {err}"
     );
-    assert_eq!(out.status.code(), Some(1));
 }
 
 #[test]
@@ -137,7 +120,7 @@ fn models_lint_toml_error_context_is_width_capped() {
 fn ambient_out_of_range_is_a_usage_error_naming_the_bound() {
     for bad in ["2000", "-300", "1e308", "nan"] {
         let out = run_board(&blinky_board(), &["--thermal", "--ambient", bad]);
-        assert_eq!(out.status.code(), Some(2), "usage error for {bad}");
+        expect_err(&out, 2, &[]);
         let err = stderr(&out);
         assert!(
             err.contains("[-273.15, 1000]") || err.contains("not a number"),
@@ -163,11 +146,7 @@ fn negative_ambient_parses_instead_of_reading_as_a_flag() {
 fn zero_or_huge_seconds_is_a_usage_error_naming_the_bound() {
     for bad in ["0", "-1", "1e307"] {
         let out = run_board(&blinky_board(), &["--headless", "--seconds", bad]);
-        assert_eq!(
-            out.status.code(),
-            Some(2),
-            "{bad} must be refused before any run"
-        );
+        expect_err(&out, 2, &[]);
         assert!(
             stderr(&out).contains("(0, 1e6]"),
             "{bad}: the bound is named: {}",
@@ -184,15 +163,13 @@ fn kicad_prl_input_points_at_the_sibling_board() {
         &board("../../testdata/boards/button_pullup.kicad_prl"),
         &["--check"],
     );
-    assert_eq!(out.status.code(), Some(1));
-    let err = stderr(&out);
-    assert!(
-        err.contains("KiCad project file, not the board"),
-        "names what the file is: {err}"
-    );
-    assert!(
-        err.contains("button_pullup.kicad_pcb"),
-        "suggests the sibling layout by stem: {err}"
+    expect_err(
+        &out,
+        1,
+        &[
+            "KiCad project file, not the board",
+            "button_pullup.kicad_pcb",
+        ],
     );
 }
 
@@ -203,12 +180,7 @@ fn directory_with_one_board_file_is_used_with_a_note() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(clean_board(), dir.path().join("only.kicad_pcb")).unwrap();
     let out = run_board(dir.path(), &["--drc"]);
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    assert!(
-        stderr(&out).contains("using the board file inside it"),
-        "the substitution is disclosed: {}",
-        stderr(&out)
-    );
+    expect_err(&out, 0, &["using the board file inside it"]);
 }
 
 #[test]
@@ -217,12 +189,7 @@ fn directory_with_several_board_files_asks_which() {
     std::fs::copy(clean_board(), dir.path().join("a.kicad_pcb")).unwrap();
     std::fs::copy(clean_board(), dir.path().join("b.kicad_pcb")).unwrap();
     let out = run_board(dir.path(), &["--drc"]);
-    assert_eq!(out.status.code(), Some(1));
-    let err = stderr(&out);
-    assert!(
-        err.contains("holding 2 board files") && err.contains("a.kicad_pcb"),
-        "lists the candidates: {err}"
-    );
+    expect_err(&out, 1, &["holding 2 board files", "a.kicad_pcb"]);
 }
 
 // ── U13: corrupt file with a recognized extension ────────────────────────────
@@ -233,11 +200,10 @@ fn corrupt_kicad_pcb_says_content_not_format() {
     let p = dir.path().join("broken.kicad_pcb");
     std::fs::write(&p, "this is not an s-expression at all").unwrap();
     let out = run_board(&p, &["--check"]);
-    assert_eq!(out.status.code(), Some(1));
-    let err = stderr(&out);
-    assert!(
-        err.contains("looks like a KiCad board by extension") && err.contains("did not parse"),
-        "names the content problem instead of the generic format list: {err}"
+    expect_err(
+        &out,
+        1,
+        &["looks like a KiCad board by extension", "did not parse"],
     );
 }
 
@@ -246,12 +212,7 @@ fn corrupt_kicad_pcb_says_content_not_format() {
 #[test]
 fn list_nets_with_a_report_flag_warns_which_flag_is_ignored() {
     let out = run_board(&blinky_board(), &["--list-nets", "--drc"]);
-    assert_eq!(out.status.code(), Some(0));
-    assert!(
-        stderr(&out).contains("the report flag is ignored"),
-        "no silent drop: {}",
-        stderr(&out)
-    );
+    expect_err(&out, 0, &["the report flag is ignored"]);
 }
 
 // ── M2: every analysis surface accepts --plain ────────────────────
@@ -313,35 +274,29 @@ fn quiet_keeps_summary_but_suppresses_per_item_evidence_appendix() {
 
 // ── M6: zero-component boards refuse to pass ────────────────────────────────
 
-const EMPTY_BOARD_DSL: &str = "# Board-as-Code (hauksbee board DSL v1)\n\
-                               board version 20241229\n\nfn main {\n}\n";
+/// Write a Board-as-Code file whose `fn main` holds `body`; the tempdir owns it.
+fn write_board(name: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join(name);
+    let dsl = format!(
+        "# Board-as-Code (hauksbee board DSL v1)\nboard version 20241229\n\nfn main {{\n{body}}}\n"
+    );
+    std::fs::write(&p, dsl).unwrap();
+    (dir, p)
+}
 
 #[test]
 fn run_on_an_empty_board_is_invalid_for_analysis() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("empty.board");
-    std::fs::write(&p, EMPTY_BOARD_DSL).unwrap();
+    let (_dir, p) = write_board("empty.board", "");
     let out = run_board(&p, &["--check"]);
-    assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
-    assert!(
-        stderr(&out).contains("this board has no components"),
-        "{}",
-        stderr(&out)
-    );
+    expect_err(&out, 3, &["this board has no components"]);
 }
 
 #[test]
 fn check_code_on_an_empty_board_refuses() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("empty.board");
-    std::fs::write(&p, EMPTY_BOARD_DSL).unwrap();
+    let (_dir, p) = write_board("empty.board", "");
     let out = run(&["check-code", p.to_str().unwrap(), "--seconds", "0.01"]);
-    assert_ne!(out.status.code(), Some(0));
-    assert!(
-        stderr(&out).contains("this board has no components"),
-        "{}",
-        stderr(&out)
-    );
+    expect_err(&out, 1, &["this board has no components"]);
 }
 
 // ── M8: --probe validation ───────────────────────────────────────────────────
@@ -361,12 +316,7 @@ fn empty_probe_is_rejected() {
             "/dev/null",
         ],
     );
-    assert_ne!(out.status.code(), Some(0));
-    assert!(
-        stderr(&out).contains("only empty net name"),
-        "{}",
-        stderr(&out)
-    );
+    expect_err(&out, 1, &["only empty net name"]);
 }
 
 #[cfg(feature = "avr")]
@@ -384,12 +334,7 @@ fn unknown_probe_net_points_at_list_nets() {
             "/dev/null",
         ],
     );
-    assert_ne!(out.status.code(), Some(0));
-    let err = stderr(&out);
-    assert!(
-        err.contains("not found on the board") && err.contains("--list-nets"),
-        "near-match error plus the discovery pointer: {err}"
-    );
+    expect_err(&out, 1, &["not found on the board", "--list-nets"]);
 }
 
 // ── U3: bare --plain means the prose full report ─────────────────────────────
@@ -436,19 +381,14 @@ fn check_ends_with_a_single_verdict_line() {
 
 #[test]
 fn coverage_heads_up_names_the_draft_pack_command_with_the_board_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("mystery.board");
-    std::fs::write(
-        &p,
-        "# Board-as-Code (hauksbee board DSL v1)\n\
-         board version 20241229\n\nfn main {\n\
-         \tnet \"A\"\n\tnet \"B\"\n\
+    let (_dir, p) = write_board(
+        "mystery.board",
+        "\tnet \"A\"\n\tnet \"B\"\n\
          \tcomp U1 lib \"Package_SO:SOIC-8\" val \"TOTALLYUNKNOWN999\" layer \"F.Cu\" at 0 0 rot 0 {\n\
          \t\tpad \"1\" smd rect at 0 0 size 1 1 layers [F.Cu] net \"A\"\n\
          \t\tpad \"2\" smd rect at 1 0 size 1 1 layers [F.Cu] net \"B\"\n\
-         \t}\n}\n",
-    )
-    .unwrap();
+         \t}\n",
+    );
     let out = run_board(&p, &["--headless", "--seconds", "0.01"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
@@ -466,7 +406,7 @@ fn coverage_heads_up_names_the_draft_pack_command_with_the_board_path() {
 #[test]
 fn doctor_piped_output_does_not_interleave_formats() {
     let out = run(&["doctor", "--backends"]);
-    assert_eq!(out.status.code(), Some(0));
+    expect_err(&out, 0, &[]);
     // stdout: pure TSV, three fields per line, no prose.
     for line in stdout(&out).lines() {
         assert!(
@@ -482,19 +422,14 @@ fn doctor_piped_output_does_not_interleave_formats() {
 fn pads_only_board_gets_the_unrouted_copper_note() {
     // A .board with components but no routes compiles to a segment-free
     // layout: the canbus-stepper shape (pads only, nothing routed).
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("unrouted.board");
-    std::fs::write(
-        &p,
-        "# Board-as-Code (hauksbee board DSL v1)\n\
-         board version 20241229\n\nfn main {\n\
-         \tnet \"A\"\n\tnet \"B\"\n\
+    let (_dir, p) = write_board(
+        "unrouted.board",
+        "\tnet \"A\"\n\tnet \"B\"\n\
          \tcomp R1 lib \"Resistor_SMD:R_0402_1005Metric\" val \"10k\" layer \"F.Cu\" at 0 0 rot 0 {\n\
          \t\tpad \"1\" smd rect at 0 0 size 1 1 layers [F.Cu] net \"A\"\n\
          \t\tpad \"2\" smd rect at 1 0 size 1 1 layers [F.Cu] net \"B\"\n\
-         \t}\n}\n",
-    )
-    .unwrap();
+         \t}\n",
+    );
     for flag in ["--drc", "--check"] {
         let out = run_board(&p, &[flag]);
         assert_eq!(
@@ -516,4 +451,44 @@ fn pads_only_board_gets_the_unrouted_copper_note() {
         "--json note: {}",
         stdout(&out)
     );
+}
+
+// ── `check` is `run --check`; a closed stdout ends quietly ───────────────────
+
+#[test]
+fn check_subcommand_matches_run_check() {
+    let (clean, blinky) = (clean_board(), blinky_board());
+    let boards = [clean.to_str().unwrap(), blinky.to_str().unwrap()];
+    for extra in [&[][..], &["--plain"], &["--json"], &["--strict", "--plain"]] {
+        for board in boards {
+            let via_run = run(&[&["run", "--check", board], extra].concat());
+            let via_check = run(&[&["check", board], extra].concat());
+            assert_eq!(
+                via_check.status.code(),
+                via_run.status.code(),
+                "{board} {extra:?}"
+            );
+            assert_eq!(stdout(&via_check), stdout(&via_run), "{board} {extra:?}");
+            assert_eq!(stderr(&via_check), stderr(&via_run), "{board} {extra:?}");
+        }
+    }
+    let out = run(&["--help"]);
+    assert!(stdout(&out).contains("shorthand for `run --check`"));
+    assert!(stdout(&out).contains("3  invalid for analysis"));
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_ends_quietly_with_exit_141() {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(crate::support::bin())
+        .args(["run", "--example", "blinky", "--check", "--plain"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdout.take());
+    let out = child.wait_with_output().expect("wait");
+    assert!(!stderr(&out).contains("panicked"), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(141));
 }

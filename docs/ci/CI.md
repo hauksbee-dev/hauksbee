@@ -1173,7 +1173,21 @@ are never modified; choose distinct files and rerun.
 
 ## Exit codes (the pipeline contract)
 
-Two commands gate, with two deliberately different contracts:
+Two commands gate, with two deliberately different contracts (also printed at
+the end of each binary's `--help`):
+
+| exit | `hauksbee-ci run` / `check` | `hauksbee run` / `check` |
+|---|---|---|
+| 0 | every assertion held; check: every spec valid | clean, or report-only without `--strict` |
+| 1 | an assertion failed (RED) | input error: a board or input could not be read |
+| 2 | spec/board error, usage error, unwritable output; check: any diagnostic | findings under `--strict`, or a usage error |
+| 3 | invalid for analysis | invalid for analysis |
+
+A closed stdout (`... | head`) ends either binary quietly with exit 141
+(128 + SIGPIPE) and no panic message. `hauksbee check <board>` is shorthand for
+`hauksbee run --check <board>`.
+
+The detail for each follows.
 
 `hauksbee-ci run <spec.toml>` is the gate for specs (assertions):
 

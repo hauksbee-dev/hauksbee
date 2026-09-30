@@ -466,6 +466,10 @@ extern "C" fn reap_and_die(sig: libc::c_int) {
 
 /// Install the reaper for SIGTERM, SIGINT and SIGHUP (unix).
 ///
+/// Also ends the process quietly (emulators reaped, exit 141 = 128 + SIGPIPE)
+/// when stdout or stderr is closed mid-print (`hauksbee ... | head`), instead
+/// of a panic message.
+///
 /// Call once, early in `main`, from any binary that can spawn emulators.
 /// Terminal behaviour is unchanged: the handler ends by re-raising the signal
 /// with the default disposition, so exit statuses and shell job control look
@@ -477,6 +481,17 @@ extern "C" fn reap_and_die(sig: libc::c_int) {
 /// [`ProcessTreeGuard`]; the kernel closes it and kills the tree even when a
 /// hard parent termination prevents `Drop` from running.
 pub fn install_signal_reaper() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info.to_string();
+        if msg.contains("failed printing to std")
+            && (msg.contains("Broken pipe") || msg.contains("pipe is being closed"))
+        {
+            let _ = kill_all_registered();
+            std::process::exit(141);
+        }
+        default_hook(info);
+    }));
     #[cfg(unix)]
     unsafe {
         let handler = reap_and_die as extern "C" fn(libc::c_int);

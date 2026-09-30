@@ -10,7 +10,7 @@
 
 #[cfg(feature = "avr")]
 use crate::support::run;
-use crate::support::{board, run_board};
+use crate::support::{board, expect_err, run_board};
 use std::path::PathBuf;
 
 /// A board that contains two real copper shorts (GND <-> +5V on both layers).
@@ -103,10 +103,7 @@ fn strict_on_clean_board_exits_zero() {
 #[test]
 fn plain_drc_prints_verdict_and_what_why_fix() {
     let out = run_board(&shorted_board(), &["--drc", "--plain"]);
-    assert!(
-        out.status.success(),
-        "--plain alone does not change exit code"
-    );
+    expect_err(&out, 0, &[]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Verdict line + the three plain sections, in everyday language.
     assert!(
@@ -435,11 +432,7 @@ fn bare_json_strict_gates_a_shorted_board() {
 
     // Without --strict the same command stays exit 0 (the existing contract).
     let lax = run_board(&b, &["--json"]);
-    assert_eq!(
-        lax.status.code(),
-        Some(0),
-        "bare --json without --strict must stay exit 0"
-    );
+    expect_err(&lax, 0, &[]);
 }
 
 #[test]
@@ -510,11 +503,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
     // Validated (KiCad 7): the short gates the build.
     let validated = crossing_short_board(20_221_018, "validated");
     let out = run_board(&validated, &["--drc", "--strict"]);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "a real short on a validated board must fail --strict"
-    );
+    expect_err(&out, 2, &[]);
     assert!(String::from_utf8_lossy(&out.stdout)
         .to_lowercase()
         .contains("short"));
@@ -522,11 +511,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
     // Unvalidated (KiCad 10): the same short does NOT gate (caveat printed).
     let unvalidated = crossing_short_board(20_260_206, "unvalidated");
     let out = run_board(&unvalidated, &["--drc", "--strict"]);
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "a possibly-phantom short on an unvalidated KiCad-10 board must NOT fail --strict"
-    );
+    expect_err(&out, 0, &[]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("UNRELIABLE"),
@@ -535,11 +520,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 
     // And in --check the same divergence holds (the aggregate gate).
     let out = run_board(&unvalidated, &["--check", "--strict"]);
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "--check --strict must not fail on unvalidated-version shorts"
-    );
+    expect_err(&out, 0, &[]);
 }
 
 /// The boot-safety advisory, end to end through the compiled binary: a board
@@ -578,10 +559,7 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
         stdout.contains("\"boot_control_net\""),
         "expected a boot_control_net note for the held-high GATE_CTRL; got:\n{stdout}"
     );
-    assert!(
-        out.status.success(),
-        "a boot advisory must NOT fail the run without --strict-boot"
-    );
+    expect_err(&out, 0, &[]);
 
     // --strict-boot escalates it to exit 2.
     let strict = run(&[
@@ -594,11 +572,7 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
         "0.05",
         "--strict-boot",
     ]);
-    assert_eq!(
-        strict.status.code(),
-        Some(2),
-        "--strict-boot must exit 2 when a held-high switch net has no bias"
-    );
+    expect_err(&strict, 2, &[]);
 }
 
 /// R25 (HB-01, HIGH): the DEFAULT text headless persona (neither --json nor
@@ -633,10 +607,7 @@ fn default_text_headless_surfaces_the_boot_hazard() {
         stdout.contains("BOOT HAZARD") && stdout.contains("GATE_CTRL"),
         "the default text persona must name the held-high boot hazard net; got:\n{stdout}"
     );
-    assert!(
-        out.status.success(),
-        "the boot hazard is advisory-only without --strict-boot"
-    );
+    expect_err(&out, 0, &[]);
 }
 
 /// A clean board whose firmware only toggles a signal (no switch-driving net
@@ -671,10 +642,7 @@ fn clean_firmware_raises_no_boot_advisory() {
         !stdout.contains("\"boot_control_net\""),
         "a toggling signal must not raise a boot advisory; got:\n{stdout}"
     );
-    assert!(
-        out.status.success(),
-        "--strict-boot must exit 0 when there is no boot advisory"
-    );
+    expect_err(&out, 0, &[]);
 }
 
 /// The informational boot-state panel, end to end: a board with a transistor
@@ -718,10 +686,7 @@ fn boot_state_panel_reports_gate_drive_state() {
         p.contains("GATE_CTRL") && p.contains("driven HIGH"),
         "panel must name the driven-high gate:\n{p}"
     );
-    assert!(
-        plain.status.success(),
-        "the panel is informational and must not gate"
-    );
+    expect_err(&plain, 0, &[]);
 
     let js = run(&[
         "run",
@@ -824,6 +789,6 @@ fn headless_strict_refuses_with_the_shared_regulator_and_open_driver_reasons() {
             json.contains("\"verdict\": \"invalid\""),
             "{fixture}: {json}"
         );
-        assert_eq!(out.status.code(), Some(3), "{fixture}: {json}");
+        expect_err(&out, 3, &[]);
     }
 }

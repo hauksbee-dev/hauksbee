@@ -75,6 +75,15 @@ pub fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
+/// Assert the exit code and that stderr contains every needle.
+pub fn expect_err(out: &Output, code: i32, needles: &[&str]) {
+    let err = stderr(out);
+    assert_eq!(out.status.code(), Some(code), "stderr: {err}");
+    for n in needles {
+        assert!(err.contains(n), "stderr lacks {n:?}: {err}");
+    }
+}
+
 /// Assert a captured run succeeded, surfacing stderr on failure.
 pub fn assert_ok(o: &Output) {
     assert!(o.status.success(), "{}", stderr(o));

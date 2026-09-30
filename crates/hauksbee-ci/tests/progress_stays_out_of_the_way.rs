@@ -94,3 +94,20 @@ fn progress_never_uses_stdout() {
     );
     assert!(src.contains("stderr()"), "progress.rs writes to stderr");
 }
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_ends_quietly_with_exit_141() {
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
+        .args(["run", "--example", "blinky"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    drop(child.stdout.take());
+    let out = child.wait_with_output().expect("wait");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("panicked"), "{err}");
+    assert_eq!(out.status.code(), Some(141));
+}

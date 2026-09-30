@@ -33,7 +33,13 @@ use clap::{Parser, Subcommand};
     // file) and `hauksbee se` start a blocking server. Clap's did-you-mean
     // suggestion on the full names covers the convenience without the traps.
     arg_required_else_help = true,
-    after_help = "try it now: hauksbee run --example blinky --check --plain"
+    after_help = "try it now: hauksbee run --example blinky --check --plain",
+    after_long_help = "try it now: hauksbee run --example blinky --check --plain\n\n\
+Exit codes (hauksbee run / check):\n  \
+0  clean, or a report-only run without --strict\n  \
+1  input error: a board or other input could not be read\n  \
+2  findings under --strict, or a usage error\n  \
+3  invalid for analysis: the result cannot be trusted"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -81,6 +87,11 @@ enum Command {
     ///   hauksbee run board.kicad_pcb --firmware blink.hex --headless --seconds 2   # firmware co-sim
     #[command(verbatim_doc_comment)]
     Run(RunArgs),
+
+    /// Run every static check on a board (shorthand for `run --check`).
+    ///
+    /// Takes the same flags as `run`; `hauksbee check --help` shows them.
+    Check(RunArgs),
 
     /// Verify an immutable run manifest and execute its recorded command.
     ///
@@ -1586,7 +1597,17 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(2);
         }
     }
-    let raw_args: Vec<String> = std::env::args().collect();
+    let mut raw_args: Vec<String> = std::env::args().collect();
+    // `check` is `run --check` rewritten before parsing, so flags, conflicts,
+    // output and exit codes are identical by construction.
+    let at = raw_args
+        .iter()
+        .skip(1)
+        .position(|a| a != "--quiet")
+        .map_or(1, |i| i + 1);
+    if raw_args.get(at).is_some_and(|a| a == "check") {
+        raw_args.splice(at..=at, ["run".into(), "--check".into()]);
+    }
     let cli = match Cli::try_parse_from(&raw_args) {
         Ok(cli) => cli,
         Err(error) => {
@@ -1604,7 +1625,7 @@ fn main() -> anyhow::Result<()> {
     // instead of the plaintext `error:` line so the failure is still valid JSON.
     // Applies to every subcommand that has a `--json` flag.
     let json = match &cli.command {
-        Command::Run(args) => args.json,
+        Command::Run(args) | Command::Check(args) => args.json,
         Command::FromCode(args) => args.json,
         Command::MergeSes(args) => args.json,
         Command::CheckCode(args) => args.json,
@@ -1620,7 +1641,7 @@ fn main() -> anyhow::Result<()> {
         // The run orchestrator owns embedded-example lookup so it can open the
         // requested artifact transaction first. Its Result still flows through
         // the shared JSON/text error envelope below.
-        Command::Run(mut args) => {
+        Command::Run(mut args) | Command::Check(mut args) => {
             let schematic = args.schematic.take();
             let cfg = run_config(args);
             hauksbee_engine::commands::run::run_with_schematic(cfg, quiet, schematic.as_deref())

@@ -6,7 +6,7 @@
 //! the compiled binary, because every one of these is an exit-code or
 //! output-surface contract.
 
-use crate::support::{board, read_json, run, run_board, stderr, stdout};
+use crate::support::{board, expect_err, read_json, run, run_board, stderr, stdout};
 use std::path::PathBuf;
 
 /// A board with two real copper shorts (GND <-> +5V), so --strict gates.
@@ -101,7 +101,7 @@ fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
 fn strict_gate_prints_the_failure_line() {
     let b = shorted_board();
     let out = run_board(&b, &["--drc", "--strict"]);
-    assert_eq!(out.status.code(), Some(2));
+    expect_err(&out, 2, &[]);
     assert!(
         stdout(&out).contains("FAILED under --strict:"),
         "text mode must say why it exits 2:\n{}",
@@ -111,12 +111,12 @@ fn strict_gate_prints_the_failure_line() {
 
     // --plain must also acknowledge the gate on stdout.
     let plain = run_board(&b, &["--drc", "--strict", "--plain"]);
-    assert_eq!(plain.status.code(), Some(2));
+    expect_err(&plain, 2, &[]);
     assert!(stdout(&plain).contains("FAILED under --strict:"));
 
     // --json keeps stdout a single JSON document; the line goes to stderr.
     let json = run_board(&b, &["--drc", "--strict", "--json"]);
-    assert_eq!(json.status.code(), Some(2));
+    expect_err(&json, 2, &[]);
     let doc = stdout(&json);
     serde_json::from_str::<serde_json::Value>(&doc)
         .expect("stdout must stay one valid JSON document under --strict");
@@ -197,12 +197,7 @@ fn sim_refuses_element_free_decks() {
     let deck = tmp("empty.cir");
     std::fs::write(&deck, "* an empty deck\n.op\n.end\n").unwrap();
     let out = run(&["sim", deck.to_str().unwrap()]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(
-        stderr(&out).contains("no circuit elements"),
-        "{}",
-        stderr(&out)
-    );
+    expect_err(&out, 2, &["no circuit elements"]);
     let _ = std::fs::remove_file(&deck);
 }
 
@@ -210,9 +205,8 @@ fn sim_refuses_element_free_decks() {
 fn sim_invalid_probe_is_misuse_not_nonconvergence() {
     let deck = board("../../examples/decks/divider.cir");
     let out = run(&["sim", deck.to_str().unwrap(), "--op", "--print", "V(nope)"]);
-    assert_eq!(out.status.code(), Some(2));
+    expect_err(&out, 2, &["invalid probe"]);
     let err = stderr(&out);
-    assert!(err.contains("invalid probe"), "{err}");
     assert!(
         !err.contains("did not converge"),
         "a typo must not be blamed on the circuit: {err}"
@@ -225,20 +219,14 @@ fn sim_invalid_probe_is_misuse_not_nonconvergence() {
 fn check_code_on_a_board_file_names_the_actual_fix() {
     let b = shorted_board();
     let out = run(&["check-code", b.to_str().unwrap()]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(
-        stderr(&out).contains("hauksbee run") && stderr(&out).contains("--check"),
-        "{}",
-        stderr(&out)
-    );
+    expect_err(&out, 2, &["hauksbee run", "--check"]);
 }
 
 #[test]
 fn bare_board_path_suggests_run_check() {
     let b = shorted_board();
     let out = run(&[b.to_str().unwrap()]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(stderr(&out).contains("hauksbee run"));
+    expect_err(&out, 2, &["hauksbee run"]);
 }
 
 #[test]
@@ -285,7 +273,7 @@ fn ac_node_typo_fails_before_the_sweep_as_an_error() {
             "NO_SUCH_NET_XYZ",
         ],
     );
-    assert_eq!(out.status.code(), Some(3), "invalid-for-analysis exit");
+    expect_err(&out, 3, &[]);
     let err = stderr(&out);
     assert!(
         err.contains("error") && err.contains("NO_SUCH_NET_XYZ"),

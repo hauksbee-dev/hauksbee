@@ -36,7 +36,13 @@ use hauksbee_ci::{run, RunConfig};
     long_about = None,
     propagate_version = true,
     arg_required_else_help = true,
-    after_help = "try it now: hauksbee-ci run --example blinky"
+    after_help = "try it now: hauksbee-ci run --example blinky",
+    after_long_help = "try it now: hauksbee-ci run --example blinky\n\n\
+Exit codes (hauksbee-ci run / check):\n  \
+0  every assertion held (GREEN); check: every spec valid\n  \
+1  an assertion failed (RED)\n  \
+2  spec/board error, usage error, or unwritable output; check: any diagnostic\n  \
+3  invalid for analysis: the result cannot be trusted"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -314,10 +320,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                 }
                 args.specs = vec![spec];
             }
-            Err(e) => {
-                eprintln!("hauksbee-ci: {e}");
-                return ExitCode::from(2);
-            }
+            Err(e) => return fail(e),
         }
     }
 
@@ -325,8 +328,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
         match capture_manifest(&args) {
             Ok(manifest) => {
                 if let Err(e) = manifest.write_new(path) {
-                    eprintln!("hauksbee-ci: {e}");
-                    return ExitCode::from(2);
+                    return fail(e);
                 }
                 eprintln!(
                     "wrote immutable run manifest {} to {}",
@@ -334,10 +336,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                     path.display()
                 );
             }
-            Err(e) => {
-                eprintln!("hauksbee-ci: could not capture run manifest: {e}");
-                return ExitCode::from(2);
-            }
+            Err(e) => return fail(format_args!("could not capture run manifest: {e}")),
         }
     }
 
@@ -369,7 +368,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
             spice_models: args.spice_models.clone(),
             waveforms: args.waveforms.clone(),
         };
-        match run(&cfg) {
+        let code = match run(&cfg) {
             Ok(result) => {
                 if args.json {
                     // One JSON object per spec, one per line (NDJSON): the
@@ -397,9 +396,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                     // second, non-JSON output line.
                     eprint!("{}", result.render_github_annotations());
                 }
-                let code = u8::try_from(result.exit_code()).unwrap_or(u8::MAX);
-                verdicts.push((spec.display().to_string(), code));
-                worst = worst.max(code);
+                result.exit_code()
             }
             Err(e) => {
                 // Spec / board errors: surface as a GitHub error too, count
@@ -432,11 +429,12 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                         hauksbee_ci::report::gh_escape(&e.to_string())
                     );
                 }
-                let code = u8::try_from(e.exit_code()).unwrap_or(u8::MAX);
-                verdicts.push((spec.display().to_string(), code));
-                worst = worst.max(code);
+                e.exit_code()
             }
-        }
+        };
+        let code = u8::try_from(code).unwrap_or(u8::MAX);
+        verdicts.push((spec.display().to_string(), code));
+        worst = worst.max(code);
     }
 
     if let Some(path) = &args.junit {
@@ -472,10 +470,11 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
     // GitHub workflow) is missing, and says nothing when both are in place.
     // RED runs end with the per-kind docs pointer inside the report instead.
     if worst == 0 && !args.quiet && !args.json {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Some(step) = hauksbee_ci::integrate::green_next_step(&cwd) {
-                println!("{step}");
-            }
+        if let Some(step) = cwd()
+            .ok()
+            .and_then(|cwd| hauksbee_ci::integrate::green_next_step(&cwd))
+        {
+            println!("{step}");
         }
     }
 
@@ -509,11 +508,14 @@ fn report(outcome: anyhow::Result<String>) -> ExitCode {
             }
             ExitCode::from(0)
         }
-        Err(e) => {
-            eprintln!("hauksbee-ci: {e}");
-            ExitCode::from(2)
-        }
+        Err(e) => fail(e),
     }
+}
+
+/// Print a spec/usage-class error and return its exit code (2).
+fn fail(e: impl std::fmt::Display) -> ExitCode {
+    eprintln!("hauksbee-ci: {e}");
+    ExitCode::from(2)
 }
 
 fn cwd() -> anyhow::Result<PathBuf> {

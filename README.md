@@ -84,7 +84,7 @@ hauksbee run --example blinky --check --plain
 hauksbee serve
 ```
 
-The second command runs the analysis surface. `hauksbee serve` opens the same engine through the local browser UI (the same page the app opens), with sample boards, a checks composer, live 2D copper, probes, and report export. Captured first-run transcripts are retained under [`examples/sessions/`](examples/sessions/).
+The second command runs the analysis surface (`hauksbee check <board>` is shorthand for `hauksbee run --check <board>`). `hauksbee serve` opens the same engine through the local browser UI (the same page the app opens), with sample boards, a checks composer, live 2D copper, probes, and report export. Captured first-run transcripts are retained under [`examples/sessions/`](examples/sessions/).
 
 ## Every input an authority
 
