@@ -642,10 +642,10 @@ fn cited_rows(entry: &ModelEntry) -> &[Characteristic] {
     entry.source.as_ref().map_or(&[], |s| &s.characteristic)
 }
 
-/// Whether a row is at 25 °C or states no temperature.
+/// Whether a row is at 25 °C or states no temperature (`25 °C`, `25 ℃`, `25C`).
 fn at_25(row: &Characteristic) -> bool {
     static CELSIUS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"([-+]?\d*\.?\d+)\s*°\s*C").expect("a valid pattern")
+        regex::Regex::new(r"([-+]?\d*\.?\d+)\s*(?:°\s*C|℃|C\b)").expect("a valid pattern")
     });
     let mut temperatures = CELSIUS.captures_iter(&row.conditions);
     temperatures.all(|t| t[1].parse() == Ok(25))
@@ -1328,7 +1328,7 @@ mod tests {
             "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VCE(sat) ; max = 0.2 ; V ; IC = 10 mA | ",
             "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VBE sat ; max = 1.2 ; V ; IC = 500 mA | ",
             "nmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 250 uA + RDS(on) ; typ = 40 ; mΩ ; VGS = 10 V | 'RDS(on)', 'VGS(th)'",
-            "pmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 1 mA + RDS(on) ; max = 90 ; mΩ ; VGS = 4.5 V, TJ = 125 °C | ",
+            "pmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 1 mA + RDS(on) ; max = 90 ; mΩ ; VGS = 4.5 V, TJ=125 C | ",
             "opamp | AOL ; typ = 110 ; dB ; RL = 10 kΩ + VOH ; min = 4.8, typ = 4.9 ; V ; RL = 10 kΩ + VOL ; max = 0.1 ; V ; RL = 10 kΩ | 'AOL', 'VOH', 'VOL'",
             "opamp | AOL ; typ = 110 ; dB ; RL = 10 kΩ + VOH ; typ = 4.9 ; V ; RL = 10 kΩ | ",
             "comparator | VOH ; min = 4.9 ; V ; IO = 4 mA + VOL ; max = 0.4 ; V ; IO = 4 mA | ",
