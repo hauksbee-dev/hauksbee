@@ -66,6 +66,31 @@ fn sim_unknown_example_uses_the_lowercase_error_handler() {
     assert_eq!(out.status.code(), Some(1));
 }
 
+#[test]
+fn bare_run_and_sim_name_the_bundled_example_as_the_next_action() {
+    for (cmd, next) in [
+        ("run", "run --example blinky"),
+        ("sim", "sim --example rlc_ringdown"),
+    ] {
+        let out = run(&[cmd]);
+        let err = stderr(&out);
+        assert!(err.contains(next) && !err.contains("required arg"), "{err}");
+        assert_eq!(out.status.code(), Some(1), "input error, not findings");
+    }
+    // Refused after the artifact transaction opens, so a stale JUnit fails closed.
+    let dir = tempfile::tempdir().unwrap();
+    let junit = dir.path().join("j.xml");
+    run(&["run", "--junit", junit.to_str().unwrap()]);
+    assert!(std::fs::read_to_string(&junit)
+        .unwrap()
+        .contains("errors=\"1\""));
+    let json = stdout(&run(&["run", "--json"]));
+    assert!(
+        json.contains(r#""ok":false"#) && json.contains("blinky"),
+        "{json}"
+    );
+}
+
 // ── B2 (engine half): a board file handed to `models lint` ──────────────────
 
 #[test]

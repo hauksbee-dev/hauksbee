@@ -403,6 +403,13 @@ pub fn run_with_schematic(
         if let Some(name) = cfg.example.as_deref() {
             cfg.board = crate::commands::examples::board(name)?;
             crate::reports::ci_artifacts::set_current_board_path(&cfg.board);
+        } else if cfg.board.as_os_str().is_empty() {
+            use super::examples::missing_input;
+            return Err(missing_input(
+                "run",
+                "a board file",
+                "blinky --check --plain",
+            ));
         }
         run_inner(cfg, quiet, surface, schematic)
     })();

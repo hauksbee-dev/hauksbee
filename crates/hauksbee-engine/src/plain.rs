@@ -400,41 +400,38 @@ pub struct OrderTriage {
 }
 
 impl OrderTriage {
+    /// One triage bucket; an empty bucket prints nothing (see `render`).
     fn write_bucket(out: &mut String, heading: &str, entries: &[TriageEntry]) {
-        let _ = writeln!(out, "{heading}:");
-        if entries.is_empty() {
-            let _ = writeln!(out, "  - Empty.");
-        } else {
-            let mut i = 0;
-            while i < entries.len() {
-                let entry = &entries[i];
-                let same_kind = entries[i..]
-                    .iter()
-                    .take_while(|candidate| {
-                        candidate.id == entry.id && candidate.kind == entry.kind
-                    })
-                    .count();
-                let class = match (heading, entry.id.as_str(), entry.kind.as_str()) {
-                    ("DO NOT ORDER", "drc", "short") => Some("oracle-confirmed copper shorts"),
-                    ("INSPECT BEFORE ORDERING", "drc", "short") => {
-                        Some("tool-only potential copper shorts with coordinates")
-                    }
-                    ("INSPECT BEFORE ORDERING", "drc", "clearance") => {
-                        Some("below-rule clearance groups with coordinates")
-                    }
-                    _ => None,
-                };
-                if let Some(class) = class.filter(|_| same_kind >= 4) {
-                    let _ = writeln!(
-                        out,
-                        "  - {same_kind} {}. Example: {} Full list follows below.",
-                        class, entry.statement
-                    );
-                    i += same_kind;
-                } else {
-                    let _ = writeln!(out, "  - {}", entry.statement);
-                    i += 1;
+        if !entries.is_empty() {
+            let _ = writeln!(out, "{heading}:");
+        }
+        let mut i = 0;
+        while i < entries.len() {
+            let entry = &entries[i];
+            let same_kind = entries[i..]
+                .iter()
+                .take_while(|candidate| candidate.id == entry.id && candidate.kind == entry.kind)
+                .count();
+            let class = match (heading, entry.id.as_str(), entry.kind.as_str()) {
+                ("DO NOT ORDER", "drc", "short") => Some("oracle-confirmed copper shorts"),
+                ("INSPECT BEFORE ORDERING", "drc", "short") => {
+                    Some("tool-only potential copper shorts with coordinates")
                 }
+                ("INSPECT BEFORE ORDERING", "drc", "clearance") => {
+                    Some("below-rule clearance groups with coordinates")
+                }
+                _ => None,
+            };
+            if let Some(class) = class.filter(|_| same_kind >= 4) {
+                let _ = writeln!(
+                    out,
+                    "  - {same_kind} {}. Example: {} Full list follows below.",
+                    class, entry.statement
+                );
+                i += same_kind;
+            } else {
+                let _ = writeln!(out, "  - {}", entry.statement);
+                i += 1;
             }
         }
     }
@@ -442,10 +439,20 @@ impl OrderTriage {
     pub(crate) fn render(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "== ORDER / DON'T-ORDER TRIAGE ==");
+        // Three empty lists read as a missing answer, so a clean triage says
+        // so in one line and the empty buckets are left out.
+        if self.do_not_order.is_empty() && self.inspect.is_empty() {
+            let _ = writeln!(
+                out,
+                "OK TO ORDER: nothing found that blocks ordering or needs inspecting first."
+            );
+        }
         Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
         Self::write_bucket(&mut out, "INSPECT BEFORE ORDERING", &self.inspect);
         Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_ok);
-        let _ = writeln!(out, "NOT COVERED: {}", self.not_covered);
+        if !self.not_covered.is_empty() {
+            let _ = writeln!(out, "NOT COVERED: {}", self.not_covered);
+        }
         let _ = writeln!(
             out,
             "DETAIL: Full findings and evidence follow; add --verbose to expand every clearance finding.\n"
@@ -465,7 +472,6 @@ impl OrderTriage {
 /// - explicit abstentions (`UncheckedMcu`, USB-C `Info`, or a nominal USB-C
 ///   result undermined by a model gap on its own CC nets) go to inspect;
 /// - only an unqualified USB-C `Ok` is emitted as a positive result.
-#[allow(clippy::too_many_lines, reason = "one pass per report family")]
 pub(crate) fn order_triage_with_rule_source(
     drc: &crate::result::DrcStructured,
     clearance_rule_source: &crate::result::ClearanceRuleProvenance,
@@ -476,10 +482,10 @@ pub(crate) fn order_triage_with_rule_source(
     unmodelled_parts: usize,
     include_clearance_unlock: bool,
 ) -> OrderTriage {
-    let noun = if unmodelled_parts == 1 {
-        "part lacks"
-    } else {
-        "parts lack"
+    // Nothing to say about models when every part has one.
+    let models = match unmodelled_parts {
+        0 => String::new(),
+        n => format!("{n} {} an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model.", if n == 1 { "part lacks" } else { "parts lack" }),
     };
     let clearance = match clearance_rule_source.source {
         crate::result::ClearanceRuleSource::Defaulted
@@ -492,87 +498,64 @@ pub(crate) fn order_triage_with_rule_source(
         crate::result::ClearanceRuleSource::ToolDefault => " Clearance findings use TOOL DEFAULT rules, not your rules; this importer did not read design rules.",
         _ => "",
     };
+    let custom_rules = clearance_rule_source
+        .custom_rules_not_covered()
+        .unwrap_or_default();
     let mut triage = OrderTriage {
-        not_covered: format!(
-            "{unmodelled_parts} {noun} an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model.{clearance}"
-        ),
+        not_covered: format!("{models}{clearance} {custom_rules}")
+            .trim()
+            .to_string(),
         ..OrderTriage::default()
     };
-    if let Some(custom_rules) = clearance_rule_source.custom_rules_not_covered() {
-        triage.not_covered.push(' ');
-        triage.not_covered.push_str(&custom_rules);
-    }
 
     let drc_plain = plain_drc_structured_with_rule_source(drc, clearance_rule_source);
-    let mut serious_shorts = Vec::new();
-    let mut tool_only_shorts = Vec::new();
     for (short, finding) in drc.shorts.iter().zip(&drc_plain.findings) {
+        let entry = |what| TriageEntry::new("drc", "short", what, finding.loc_mm);
         if finding.level == PlainLevel::Serious {
-            serious_shorts.push(TriageEntry::new(
-                "drc",
-                "short",
-                finding.what.clone(),
-                finding.loc_mm,
-            ));
+            triage.do_not_order.push(entry(finding.what.clone()));
         } else {
-            let evidence = if short.oracle_agreement().is_some() {
-                String::new()
-            } else {
-                " Tool-only: no matching KiCad-oracle confirmation is attached.".to_string()
-            };
-            tool_only_shorts.push(TriageEntry::new(
-                "drc",
-                "short",
-                format!("{}{evidence}", finding.what),
-                finding.loc_mm,
-            ));
+            let tool_only = " Tool-only: no matching KiCad-oracle confirmation is attached.";
+            let evidence = short.oracle_agreement().map_or(tool_only, |_| "");
+            triage
+                .inspect
+                .push(entry(format!("{}{evidence}", finding.what)));
         }
     }
-    triage.do_not_order.extend(serious_shorts);
-    triage.inspect.extend(tool_only_shorts);
     // The structured/plain order is shorts, below-rule violations, then
     // at-limit observations. Only actual below-rule groups belong on the order
     // screen; no-margin observations remain in the detail below.
-    let clearance_findings: Vec<TriageEntry> = drc_plain
-        .findings
-        .iter()
-        .skip(drc.shorts.len())
-        .take(drc.violations.len())
-        .map(|finding| TriageEntry::new("drc", "clearance", finding.what.clone(), finding.loc_mm))
-        .collect();
-    triage.inspect.extend(clearance_findings);
+    let below_rule = drc_plain.findings.iter().skip(drc.shorts.len());
+    triage.inspect.extend(
+        below_rule.take(drc.violations.len()).map(|finding| {
+            TriageEntry::new("drc", "clearance", finding.what.clone(), finding.loc_mm)
+        }),
+    );
 
-    let lint_plain = plain_netlint(lint);
-    for (raw, finding) in lint.findings.iter().zip(&lint_plain.findings) {
-        if finding.level == PlainLevel::Serious
-            || (matches!(
-                raw.check,
-                LintCheck::DeviceDecode | LintCheck::OperatingEnvelope
-            ) && raw.severity != Severity::Low)
-        {
-            triage.do_not_order.push(TriageEntry::new(
-                "lint",
-                raw.check.as_str(),
-                finding.what.clone(),
-                finding.loc_mm,
-            ));
+    for (raw, finding) in lint.findings.iter().zip(&plain_netlint(lint).findings) {
+        let entry = TriageEntry::new(
+            "lint",
+            raw.check.as_str(),
+            finding.what.clone(),
+            finding.loc_mm,
+        );
+        let decoded = matches!(
+            raw.check,
+            LintCheck::DeviceDecode | LintCheck::OperatingEnvelope
+        );
+        if finding.level == PlainLevel::Serious || (decoded && raw.severity != Severity::Low) {
+            triage.do_not_order.push(entry);
         } else if raw.check == LintCheck::UncheckedMcu {
-            triage.inspect.push(TriageEntry::new(
-                "lint",
-                raw.check.as_str(),
-                finding.what.clone(),
-                finding.loc_mm,
-            ));
+            triage.inspect.push(entry);
         }
     }
 
-    let si_plain = plain_si(si);
-    for (raw, finding) in si.findings.iter().zip(&si_plain.findings) {
+    for (raw, finding) in si.findings.iter().zip(&plain_si(si).findings) {
         if finding.level == PlainLevel::Serious {
+            let what = finding.what.clone();
             triage.do_not_order.push(TriageEntry::new(
                 "si",
                 raw.check.as_str(),
-                finding.what.clone(),
+                what,
                 finding.loc_mm,
             ));
         }
@@ -581,25 +564,15 @@ pub(crate) fn order_triage_with_rule_source(
     if let Some(report) = usbc {
         use crate::checks::usb_c::UsbcLevel;
         let item = format!("USB-C CC: {}", report.headline);
-        match report.level {
-            UsbcLevel::Serious => triage.do_not_order.push(TriageEntry::new(
-                "usb_c", "cc_compliance", item, None,
+        let (bucket, item) = match report.level {
+            UsbcLevel::Serious => (&mut triage.do_not_order, item),
+            UsbcLevel::Info => (&mut triage.inspect, item),
+            UsbcLevel::Ok if usbc_reliable => (&mut triage.checked_ok, item),
+            UsbcLevel::Ok => (&mut triage.inspect, format!(
+                "{item} Nominal result only: an unresolved part on the CC nets prevents relying on it."
             )),
-            UsbcLevel::Info => triage.inspect.push(TriageEntry::new(
-                "usb_c", "cc_compliance", item, None,
-            )),
-            UsbcLevel::Ok if usbc_reliable => triage.checked_ok.push(TriageEntry::new(
-                "usb_c", "cc_compliance", item, None,
-            )),
-            UsbcLevel::Ok => triage.inspect.push(TriageEntry::new(
-                "usb_c",
-                "cc_compliance",
-                format!(
-                    "{item} Nominal result only: an unresolved part on the CC nets prevents relying on it."
-                ),
-                None,
-            )),
-        }
+        };
+        bucket.push(TriageEntry::new("usb_c", "cc_compliance", item, None));
     }
 
     triage
@@ -1870,12 +1843,11 @@ mod tests {
         let rendered = triage.render();
         assert!(rendered.starts_with("== ORDER / DON'T-ORDER TRIAGE =="));
         assert!(rendered.contains("NOT COVERED: 7 parts lack"));
-        assert_eq!(
-            OrderTriage::default()
-                .render()
-                .matches("  - Empty.")
-                .count(),
-            3
+        assert!(!rendered.contains("OK TO ORDER"), "{rendered}");
+        let clean = OrderTriage::default().render();
+        assert!(
+            clean.contains("\nOK TO ORDER: ") && !clean.contains(":\n"),
+            "{clean}"
         );
     }
 }

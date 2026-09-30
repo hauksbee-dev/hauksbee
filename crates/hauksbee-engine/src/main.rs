@@ -757,26 +757,42 @@ fn parse_seconds(s: &str) -> Result<f64, String> {
         ])
         .multiple(false)
 ))]
-#[command(after_help = run_after_help())]
+#[command(after_long_help = run_after_help())]
 #[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
 #[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct RunArgs {
     /// Board input: KiCad (.kicad_pcb / .kicad_sch / .net), Eagle (.brd),
     /// Altium (.PcbDoc), IPC-D-356 (.d356), a gerber folder or zip, or
-    /// Board-as-Code (.board). The one format list; every other surface
-    /// accepts the same set.
-    #[arg(value_name = "BOARD", required_unless_present = "example")]
+    /// Board-as-Code (.board).
+    ///
+    /// The one format list; every other surface accepts the same set.
+    // Not `required_unless_present`: the run orchestrator's error names --example.
+    #[arg(value_name = "BOARD")]
     board: Option<PathBuf>,
 
-    /// Bill of materials to reconcile with the board before binding. Common
-    /// KiCad, Altium, LCSC/JLCPCB and hand-maintained CSV/TSV exports are
-    /// detected from their headers.
+    /// Run an embedded example board instead of a file (try `blinky`).
+    ///
+    /// The board is compiled into the binary and materialized under the temp
+    /// directory, so this works with no checkout on disk.
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "board",
+        help_heading = "Start here"
+    )]
+    example: Option<String>,
+
+    /// Bill of materials to reconcile with the board before binding.
+    ///
+    /// Common KiCad, Altium, LCSC/JLCPCB and hand-maintained CSV/TSV exports
+    /// are detected from their headers.
     #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
     bom: Option<PathBuf>,
 
-    /// Confirm an ambiguous BOM column as ROLE=HEADER. Repeat for multiple
-    /// roles; accepted roles are reference, value, mpn, manufacturer,
-    /// quantity, footprint, populate, and distributor_part.
+    /// Confirm an ambiguous BOM column as ROLE=HEADER.
+    ///
+    /// Repeat for multiple roles; accepted roles are reference, value, mpn,
+    /// manufacturer, quantity, footprint, populate, and distributor_part.
     #[arg(
         long = "bom-column",
         value_name = "ROLE=HEADER",
@@ -791,23 +807,14 @@ struct RunArgs {
     placement: Option<PathBuf>,
 
     /// Eagle `.sch` companion to an Eagle `.brd`, read for declared net-pair
-    /// context. A schematic has no board coordinates, so it never authorizes a
-    /// physical join or downgrades a short; board-local layout evidence must do
-    /// that. A same-named valid sibling is used automatically. KiCad and Altium
-    /// layouts declare physical ties in the layout file itself.
+    /// context.
+    ///
+    /// A schematic has no board coordinates, so it never authorizes a physical
+    /// join or downgrades a short; board-local layout evidence must do that. A
+    /// same-named valid sibling is used automatically. KiCad and Altium layouts
+    /// declare physical ties in the layout file itself.
     #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
     schematic: Option<PathBuf>,
-
-    /// Run an embedded example board instead of a file (try `blinky`). The
-    /// board is compiled into the binary and materialized under the temp
-    /// directory, so this works with no checkout on disk.
-    #[arg(
-        long,
-        value_name = "NAME",
-        conflicts_with = "board",
-        help_heading = "Start here"
-    )]
-    example: Option<String>,
 
     /// Firmware to co-simulate on the board's MCU: a compiled .elf/.hex, a
     /// PlatformIO project directory (built with your own `pio run`), or a zip
@@ -821,20 +828,24 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Co-simulation")]
     asbuilt: Option<PathBuf>,
 
-    /// Write this invocation's selected checks as JUnit XML. Gate-grade findings
-    /// become failures; whole-run refusals become errors.
+    /// Write this invocation's selected checks as JUnit XML.
+    ///
+    /// Gate-grade findings become failures; whole-run refusals become errors.
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     junit: Option<PathBuf>,
 
-    /// Write this invocation's selected checks as SARIF 2.1.0. Gate-grade
-    /// findings and invalid/refused outcomes become `error` results.
+    /// Write this invocation's selected checks as SARIF 2.1.0.
+    ///
+    /// Gate-grade findings and invalid/refused outcomes become `error` results.
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     sarif: Option<PathBuf>,
 
-    /// Write a canonical, immutable JSON reproduction manifest. It hashes all
-    /// run inputs and model sources, records exact options/tool/solver versions
-    /// and safe environment selectors, and refuses to overwrite an existing
-    /// file. Replay it with `hauksbee reproduce <FILE>`.
+    /// Write a canonical, immutable JSON reproduction manifest.
+    ///
+    /// It hashes all run inputs and model sources, records exact
+    /// options/tool/solver versions and safe environment selectors, and refuses
+    /// to overwrite an existing file. Replay it with `hauksbee reproduce
+    /// <FILE>`.
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     emit_manifest: Option<PathBuf>,
 
@@ -853,8 +864,10 @@ struct RunArgs {
     #[arg(long, help_heading = "Co-simulation")]
     headless: bool,
 
-    /// Print the bind report table and exit. Bulk passive fallbacks are rolled
-    /// up by default; add --verbose to show every component row.
+    /// Print the bind report table and exit.
+    ///
+    /// Bulk passive fallbacks are rolled up by default; add --verbose to show
+    /// every component row.
     #[arg(long, group = "report_mode", help_heading = "Reports")]
     report: bool,
 
@@ -862,7 +875,9 @@ struct RunArgs {
     #[arg(long, group = "report_mode", help_heading = "Reports")]
     drc: bool,
 
-    /// Print IPC-2221 trace-current capacity for power-like routed nets and exit.
+    /// Print IPC-2221 trace-current capacity for power-like routed nets and
+    /// exit.
+    ///
     /// This is capacity-only unless a future spec supplies per-net current.
     #[arg(long, group = "report_mode", help_heading = "Reports")]
     ampacity: bool,
@@ -881,7 +896,9 @@ struct RunArgs {
 
     /// Print the USB-C CC compliance report (the attach a compliant source sees
     /// from the receptacle's CC termination, and whether it applies VBUS) and
-    /// exit. Flags the Raspberry-Pi-4-class shared-CC-pulldown fault.
+    /// exit.
+    ///
+    /// Flags the Raspberry-Pi-4-class shared-CC-pulldown fault.
     #[arg(long = "usb-c", group = "report_mode", help_heading = "Reports")]
     usb_c: bool,
 
@@ -891,7 +908,9 @@ struct RunArgs {
     thermal: bool,
 
     /// Ambient temperature (C) for the junction-temperature estimate and
-    /// temperature-dependent ratings. Default 25 C.
+    /// temperature-dependent ratings.
+    ///
+    /// Default 25 C.
     #[arg(
         long,
         value_name = "C",
@@ -902,44 +921,54 @@ struct RunArgs {
     ambient: Option<f64>,
 
     /// Translate the report into plain language for a non-engineer: a one-line
-    /// verdict, then each finding as what it is, why it matters, and what to do.
-    /// Applies to --drc/--lint/--si/--resources/--usb-c and to --headless faults.
+    /// verdict, then each finding as what it is, why it matters, and what to
+    /// do.
+    ///
+    /// Applies to --drc/--lint/--si/--resources/--usb-c and to --headless
+    /// faults.
     #[arg(long, visible_alias = "explain", help_heading = "Start here")]
     plain: bool,
 
     /// Print full-detail human output: every clearance finding under --plain
     /// --drc/--check, every bind row under --report/--check text, and the full
-    /// per-item evidence appendix. Defaults condense those repeated records.
+    /// per-item evidence appendix.
+    ///
+    /// Defaults condense those repeated records.
     #[arg(long, help_heading = "Reports")]
     verbose: bool,
 
     /// Emit machine-readable JSON instead of the box-drawing tables, for any of
-    /// --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies
-    /// non-interactive, stable output. `valid:false` +
-    /// `reason` is set on AC/thermal results that are meaningless; the bind
-    /// section reports critical_parts_bound (executable behavioural-model
-    /// coverage, not CAD extraction coverage) + active_path_unresolved by role.
+    /// --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac.
+    ///
+    /// Implies non-interactive, stable output. `valid:false` + `reason` is set
+    /// on AC/thermal results that are meaningless; the bind section reports
+    /// critical_parts_bound (executable behavioural-model coverage, not CAD
+    /// extraction coverage) + active_path_unresolved by role.
     #[arg(long, help_heading = "Start here", long_help = json_flag_long_help())]
     json: bool,
 
-    /// Exit non-zero if a report (--check/--drc/--lint/--si/--resources/--usb-c) finds problems,
-    /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
-    /// only read the text are unaffected). Exit 2 counts shorts, serious/medium
-    /// lint findings, every real SI finding and a serious USB-C CC verdict; DRC
-    /// clearance notes and the lint low-severity notes do not fail the gate.
-    /// Exit 3 is the other half: a board whose findings do not gate (or has
-    /// none at all) still fails the gate when the run could not be judged (an
-    /// unbound current-carrying / active part on a model-dependent surface,
-    /// undermined run-level evidence), which is what that surface's
-    /// `verdict: "invalid"` says in --json.
-    #[arg(long, visible_alias = "fail-on-findings")]
+    /// Exit non-zero if a report
+    /// (--check/--drc/--lint/--si/--resources/--usb-c) finds problems, so it
+    /// can gate a CI pipeline directly.
+    ///
+    /// Default stays exit 0 (scripts that only read the text are unaffected).
+    /// Exit 2 counts shorts, serious/medium lint findings, every real SI
+    /// finding and a serious USB-C CC verdict; DRC clearance notes and the lint
+    /// low-severity notes do not fail the gate. Exit 3 is the other half: a
+    /// board whose findings do not gate (or has none at all) still fails the
+    /// gate when the run could not be judged (an unbound current-carrying /
+    /// active part on a model-dependent surface, undermined run-level
+    /// evidence), which is what that surface's `verdict: "invalid"` says in
+    /// --json.
+    #[arg(long, visible_alias = "fail-on-findings", help_heading = "Start here")]
     strict: bool,
 
-    /// Accepted for compatibility; this is now the DEFAULT. A PARTIAL-coverage
-    /// thermal result (rows exist while an active power IC on the live circuit
-    /// is open/unresolved) escalates to exit 3 (invalid for analysis) whether
-    /// or not this flag is passed, so existing CI invocations that passed it
-    /// keep their behaviour. Use --no-strict-thermal to opt out.
+    /// Accepted for compatibility; this is now the DEFAULT.
+    ///
+    /// A PARTIAL-coverage thermal result (rows exist while an active power IC
+    /// on the live circuit is open/unresolved) escalates to exit 3 (invalid for
+    /// analysis) whether or not this flag is passed, so existing CI invocations
+    /// that passed it keep their behaviour. Use --no-strict-thermal to opt out.
     #[arg(
         long,
         help_heading = "Advanced / analyses",
@@ -949,46 +978,57 @@ struct RunArgs {
 
     /// Opt out of the default strict thermal gate: a PARTIAL-coverage thermal
     /// result exits 0 instead of 3, and undermined thermal evidence does not
-    /// escalate either. The INCONCLUSIVE
-    /// coverage caveat (text stderr + JSON note) still prints; only the exit
-    /// code changes. An empty thermal table over open power ICs stays invalid
-    /// (exit 3) regardless.
+    /// escalate either.
+    ///
+    /// The INCONCLUSIVE coverage caveat (text stderr + JSON note) still prints;
+    /// only the exit code changes. An empty thermal table over open power ICs
+    /// stays invalid (exit 3) regardless.
     #[arg(long, help_heading = "Advanced / analyses")]
     no_strict_thermal: bool,
 
-    /// Opt-in: escalate the co-sim boot-safety advisories to exit 2. By default,
-    /// heads-up notes about MCU control nets driven HIGH at boot, or left
-    /// floating the whole run, with no bias resistor are advisory only and do
-    /// not affect the exit code. Pass --strict-boot to fail CI on any such note.
+    /// Opt-in: escalate the co-sim boot-safety advisories to exit 2.
+    ///
+    /// By default, heads-up notes about MCU control nets driven HIGH at boot,
+    /// or left floating the whole run, with no bias resistor are advisory only
+    /// and do not affect the exit code. Pass --strict-boot to fail CI on any
+    /// such note.
     #[arg(long, help_heading = "Advanced / analyses")]
     strict_boot: bool,
 
-    /// List the board's net names (sorted) and exit. Use it to find the exact net
-    /// to pass to `--ac-node` / `--ac-loop` without grepping the layout file.
+    /// List the board's net names (sorted) and exit.
+    ///
+    /// Use it to find the exact net to pass to `--ac-node` / `--ac-loop`
+    /// without grepping the layout file.
     #[arg(long, help_heading = "Reports")]
     list_nets: bool,
 
     /// Print the extracted netlist (every net with the pins on it) and exit, so
-    /// another tool can ask hauksbee what is connected to what. One
-    /// tab-separated `net<TAB>refdes<TAB>pin<TAB>pin-name` line per connected
-    /// pin, or one JSON document under --json. It answers on a board whose
-    /// parts have no models, because connectivity is settled before binding.
+    /// another tool can ask hauksbee what is connected to what.
+    ///
+    /// One tab-separated `net<TAB>refdes<TAB>pin<TAB>pin-name` line per
+    /// connected pin, or one JSON document under --json. It answers on a board
+    /// whose parts have no models, because connectivity is settled before
+    /// binding.
     #[arg(long, help_heading = "Reports")]
     emit_netlist: bool,
 
-    /// Run ALL the static checks at once in one report, instead of one flag at a
-    /// time: bind coverage, DRC (shorts + clearance), the connectivity lint,
+    /// Run ALL the static checks at once in one report, instead of one flag at
+    /// a time: bind coverage, DRC (shorts + clearance), the connectivity lint,
     /// signal integrity, USB-C CC compliance, and the MCU resource-conflict,
     /// boot strap-pin, config-pin decode and output-contention checks that ride
-    /// with the lint. Honours --plain / --json / --strict.
+    /// with the lint.
+    ///
+    /// Honours --plain / --json / --strict.
     #[arg(long, visible_alias = "all", help_heading = "Start here")]
     check: bool,
 
-    /// Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc` (the
-    /// oracle) and print whether they agree, so a copper finding is self-confirming
-    /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
-    /// in a standard install location (newest version preferred); KiCad is NOT
-    /// bundled. No-op unless paired with `--drc` or `--check`.
+    /// Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc`
+    /// (the oracle) and print whether they agree, so a copper finding is
+    /// self-confirming without running a second tool by hand.
+    ///
+    /// Uses a `kicad-cli` found on PATH or in a standard install location
+    /// (newest version preferred); KiCad is NOT bundled. No-op unless paired
+    /// with `--drc` or `--check`.
     #[arg(
         long,
         help_heading = "Advanced / analyses",
@@ -1005,9 +1045,10 @@ struct RunArgs {
     #[arg(long, help_heading = "Advanced / analyses")]
     serve: bool,
 
-    /// With --serve: open the browser on the served URL once the port is
-    /// bound (the same policy as the `serve` subcommand). A piped/CI launch
-    /// never auto-opens.
+    /// With --serve: open the browser on the served URL once the port is bound
+    /// (the same policy as the `serve` subcommand).
+    ///
+    /// A piped/CI launch never auto-opens.
     #[arg(long, help_heading = "Advanced / analyses")]
     open: bool,
 
@@ -1030,6 +1071,7 @@ struct RunArgs {
     models_dir: Option<PathBuf>,
 
     /// Vendor SPICE model file (`.lib`, `.cir`, `.mod`, `.sp`, `.ckt`).
+    ///
     /// Repeatable. Every `.model` / `.subckt` card in it claims the parts whose
     /// Value or MPN is the card's own name, above every model directory: a
     /// vendor's own card is the most authoritative statement about a part there
@@ -1038,9 +1080,10 @@ struct RunArgs {
     spice_models: Vec<PathBuf>,
 
     /// Small-signal AC sweep: `<fstart>:<fstop>:<points>[:dec|:oct|:lin]` (Hz;
-    /// points per decade by default, per octave with `:oct`, total with `:lin`). Linearises about the DC operating point and prints
-    /// a Bode (magnitude dB + phase) table for `--ac-node`, then exits. Drive is
-    /// a unit AC source on every independent source in the circuit.
+    /// points per decade by default, per octave with `:oct`, total with
+    /// `:lin`). Linearises about the DC operating point and prints a Bode
+    /// (magnitude dB + phase) table for `--ac-node`, then exits. Drive is a
+    /// unit AC source on every independent source in the circuit.
     ///
     /// Example: hauksbee run board.kicad_pcb --ac 10:1e6:20 --ac-node OUT
     #[arg(
@@ -1050,7 +1093,9 @@ struct RunArgs {
     )]
     ac: Option<String>,
 
-    /// Output net(s) to report for `--ac` (repeatable). Defaults to every net.
+    /// Output net(s) to report for `--ac` (repeatable).
+    ///
+    /// Defaults to every net.
     #[arg(
         long = "ac-node",
         value_name = "NET",
@@ -1063,8 +1108,10 @@ struct RunArgs {
     ac_csv: Option<PathBuf>,
 
     /// Measure loop stability at this break/output net: report gain crossover
-    /// and phase margin. Use with `--ac`. The net is the far side of a loop
-    /// broken by an injection `Vsource`.
+    /// and phase margin.
+    ///
+    /// Use with `--ac`. The net is the far side of a loop broken by an
+    /// injection `Vsource`.
     #[arg(
         long = "ac-loop",
         value_name = "NET",
@@ -1073,10 +1120,11 @@ struct RunArgs {
     )]
     ac_loop: Option<String>,
 
-    /// Record these nets' node voltages each chunk of a `--headless` run and write
-    /// them to `--probe-csv`, so waveforms are scriptable with no UI. Comma-
-    /// separated and/or repeatable: `--probe +5V,GATE --probe D13`. An unknown net
-    /// is a loud error (with near-matches) before the run starts.
+    /// Record these nets' node voltages each chunk of a `--headless` run and
+    /// write them to `--probe-csv`, so waveforms are scriptable with no UI.
+    ///
+    /// Comma-separated and/or repeatable: `--probe +5V,GATE --probe D13`. An
+    /// unknown net is a loud error (with near-matches) before the run starts.
     #[arg(
         long,
         value_name = "NET[,NET...]",
@@ -1090,27 +1138,32 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
     probe_csv: Option<PathBuf>,
 
-    /// Solver chunk width for a headless or interactive co-sim, in microseconds. The analog
-    /// solve advances one chunk at a time and tick-evaluated parts are sampled
-    /// once per chunk, so a firmware pulse narrower than a chunk can rise and
-    /// fall unseen. Halve the chunk below the narrowest pulse you care about
-    /// (`--chunk-us 1` for a 2 us strobe); runtime scales inversely.
+    /// Solver chunk width for a headless or interactive co-sim, in
+    /// microseconds.
+    ///
+    /// The analog solve advances one chunk at a time and tick-evaluated parts
+    /// are sampled once per chunk, so a firmware pulse narrower than a chunk
+    /// can rise and fall unseen. Halve the chunk below the narrowest pulse you
+    /// care about (`--chunk-us 1` for a 2 us strobe); runtime scales inversely.
     #[arg(long, value_name = "US", help_heading = "Advanced / analyses")]
     chunk_us: Option<f64>,
 
     /// Open a host serial port onto the emulated MCU's UART and run a live
     /// co-sim, so your own software talks to the simulated board the way it
-    /// talks to real hardware. Prints a device path (e.g. /dev/ttys006) to
-    /// paste into another terminal, and reports when your tool attaches and
-    /// detaches. Needs --firmware. Sim time is paced to wall-clock time so a
-    /// script's timeouts and sleeps mean what they say.
+    /// talks to real hardware.
+    ///
+    /// Prints a device path (e.g. /dev/ttys006) to paste into another terminal,
+    /// and reports when your tool attaches and detaches. Needs --firmware. Sim
+    /// time is paced to wall-clock time so a script's timeouts and sleeps mean
+    /// what they say.
     #[arg(long, help_heading = "Host serial")]
     serial_attach: bool,
 
-    /// How the host attaches under --serial-attach. `pty` gives a real device
-    /// path, so unmodified serial software (pyserial, minicom, a vendor tool)
-    /// works unmodified; `tcp` gives a loopback port for a tool that speaks
-    /// sockets, or for a platform with no pty.
+    /// How the host attaches under --serial-attach.
+    ///
+    /// `pty` gives a real device path, so unmodified serial software (pyserial,
+    /// minicom, a vendor tool) works unmodified; `tcp` gives a loopback port
+    /// for a tool that speaks sockets, or for a platform with no pty.
     #[arg(
         long,
         value_name = "KIND",
@@ -1121,28 +1174,35 @@ struct RunArgs {
 
     /// Hold the co-sim at t=0 until your software opens the port, waiting at
     /// most N seconds (then failing loudly rather than running a session with
-    /// nobody on the far end). Without this the run starts immediately and any
-    /// output before you attach is held and flushed on attach.
+    /// nobody on the far end).
+    ///
+    /// Without this the run starts immediately and any output before you attach
+    /// is held and flushed on attach.
     #[arg(long, value_name = "SECS", help_heading = "Host serial")]
     serial_wait: Option<f64>,
 
     /// Let the co-sim run as fast as it can under --serial-attach until your
-    /// software opens the port. While a peer is attached, its bytes are
-    /// delivered on a fixed compressed schedule (its own wall-clock gaps,
-    /// scaled into sim time) rather than free-running: byte-arrival timing
-    /// against a real process must not depend on machine load, or timing
-    /// verdicts change with load.
+    /// software opens the port.
+    ///
+    /// While a peer is attached, its bytes are delivered on a fixed compressed
+    /// schedule (its own wall-clock gaps, scaled into sim time) rather than
+    /// free-running: byte-arrival timing against a real process must not depend
+    /// on machine load, or timing verdicts change with load.
     #[arg(long, help_heading = "Host serial")]
     serial_no_pace: bool,
 
     /// Which MCU's UART to bridge when the board carries more than one
-    /// (reference designator, e.g. U1). Default: every MCU on the board.
+    /// (reference designator, e.g. U1).
+    ///
+    /// Default: every MCU on the board.
     #[arg(long, value_name = "REF", help_heading = "Host serial")]
     serial_mcu: Option<String>,
 
     /// Simulate these Do-Not-Populate parts as fitted, whatever the DNP policy
-    /// says. Comma-separated and/or repeatable: `--fit A101,R7`. An unknown
-    /// reference is a loud error.
+    /// says.
+    ///
+    /// Comma-separated and/or repeatable: `--fit A101,R7`. An unknown reference
+    /// is a loud error.
     #[arg(
         long,
         value_name = "REF[,REF...]",
@@ -1152,6 +1212,7 @@ struct RunArgs {
     fit: Vec<String>,
 
     /// Leave these Do-Not-Populate parts open, whatever the DNP policy says.
+    ///
     /// The inverse of `--fit`, for a footprint you know will stay empty.
     #[arg(
         long,
@@ -1162,11 +1223,13 @@ struct RunArgs {
     no_fit: Vec<String>,
 
     /// Leave every DNP part out of the simulation, matching what a fab house
-    /// would build from the board file. The default instead simulates DNP
-    /// parts as fitted, because most DNP footprints get placed eventually,
-    /// while keeping near-zero-ohm links (0R bridges, solder jumpers, ferrite
-    /// beads) open, since fitting one of those merges the nets it bridges.
-    /// Every run prints which parts were fitted and which were left open.
+    /// would build from the board file.
+    ///
+    /// The default instead simulates DNP parts as fitted, because most DNP
+    /// footprints get placed eventually, while keeping near-zero-ohm links (0R
+    /// bridges, solder jumpers, ferrite beads) open, since fitting one of those
+    /// merges the nets it bridges. Every run prints which parts were fitted and
+    /// which were left open.
     #[arg(long, conflicts_with = "fit_all_dnp", help_heading = "Do-not-populate")]
     honour_dnp: bool,
 
@@ -1311,7 +1374,7 @@ struct ServeArgs {
 #[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
 struct SimArgs {
     /// SPICE deck to simulate (`.cir`).
-    #[arg(value_name = "DECK", required_unless_present = "example")]
+    #[arg(value_name = "DECK")]
     file: Option<PathBuf>,
 
     /// Simulate an embedded example deck instead of a file (try
@@ -1430,6 +1493,7 @@ fn artifact_flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
 }
 
 fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Error) {
+    use hauksbee_engine::reports::ci_artifacts::paths_alias;
     // The only global option accepted before a top-level subcommand is the
     // value-less --quiet flag. Do not scan arbitrary positional values for the
     // word `run`: e.g. in `to-code run --junit FILE`, `run` is a board name and
@@ -1471,28 +1535,16 @@ fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Err
         .first()
         .cloned()
         .unwrap_or_else(|| PathBuf::from("unparsed-run-input"));
-    let mut junit = artifact_flag_value(args, "--junit");
-    let mut sarif = artifact_flag_value(args, "--sarif");
-    if junit.as_ref().is_some_and(|path| {
-        protected
-            .iter()
-            .any(|input| hauksbee_engine::reports::ci_artifacts::paths_alias(path, input))
-    }) {
-        junit = None;
-    }
-    if sarif.as_ref().is_some_and(|path| {
-        protected
-            .iter()
-            .any(|input| hauksbee_engine::reports::ci_artifacts::paths_alias(path, input))
-    }) {
-        sarif = None;
-    }
+    // An output that aliases a run input is never written.
+    let output = |flag| {
+        artifact_flag_value(args, flag)
+            .filter(|path| !protected.iter().any(|input| paths_alias(path, input)))
+    };
+    let (mut junit, mut sarif) = (output("--junit"), output("--sarif"));
     if junit
         .as_ref()
         .zip(sarif.as_ref())
-        .is_some_and(|(junit, sarif)| {
-            hauksbee_engine::reports::ci_artifacts::paths_alias(junit, sarif)
-        })
+        .is_some_and(|(j, s)| paths_alias(j, s))
     {
         // Neither name is safe: writing one mutates the other. A usage-error
         // invalidator cannot report into an output pair it cannot distinguish.
@@ -1556,15 +1608,11 @@ fn main() -> anyhow::Result<()> {
         Command::FromCode(args) => args.json,
         Command::MergeSes(args) => args.json,
         Command::CheckCode(args) => args.json,
-        Command::Models(args) => {
-            matches!(
-                &args.command,
-                ModelsCommand::Resolve(r) if r.json
-            ) || matches!(
-                &args.command,
-                ModelsCommand::Backend(ModelsBackendCommand::Show(s)) if s.json
-            )
-        }
+        Command::Models(args) => match &args.command {
+            ModelsCommand::Resolve(r) => r.json,
+            ModelsCommand::Backend(ModelsBackendCommand::Show(s)) => s.json,
+            _ => false,
+        },
         _ => false,
     };
     let quiet = cli.quiet;
@@ -1637,12 +1685,15 @@ fn main() -> anyhow::Result<()> {
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
         // Same no-`?` rule as Run above: an unknown `--example` name must
         // reach the shared error handler, not escape through `main`'s return.
-        Command::Sim(mut args) => (|| {
-            if let Some(name) = &args.example {
-                args.file = Some(hauksbee_engine::commands::examples::deck(name)?);
-            }
+        Command::Sim(args) => (|| {
+            use hauksbee_engine::commands::examples::{deck, missing_input};
+            let missing = || missing_input("sim", "a SPICE deck", "rlc_ringdown");
+            let file = args
+                .example
+                .as_deref()
+                .map_or_else(|| args.file.ok_or_else(missing), deck)?;
             hauksbee_engine::commands::sim::run(
-                &args.file.expect("DECK or --example (enforced by clap)"),
+                &file,
                 args.out.as_deref(),
                 args.format,
                 args.op,
@@ -1748,17 +1799,17 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
+fn lowercase_extension(p: &std::path::Path) -> String {
+    let ext = p.extension().and_then(|e| e.to_str());
+    ext.map(str::to_ascii_lowercase).unwrap_or_default()
+}
+
 /// Whether a path carries an extension of a BOARD design format (the inputs
 /// `run` reads). Deliberately does NOT include `.board`: Board-as-Code is the
 /// one format `check-code` legitimately reads.
 fn board_extension(p: &std::path::Path) -> bool {
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
     matches!(
-        ext.as_str(),
+        lowercase_extension(p).as_str(),
         "kicad_pcb" | "kicad_sch" | "brd" | "pcbdoc" | "d356" | "net"
     )
 }
@@ -1769,18 +1820,9 @@ fn board_extension(p: &std::path::Path) -> bool {
 /// never match a real subcommand name (none contain a dot or a path
 /// separator that resolves to a file).
 fn looks_like_board_input(p: &std::path::Path) -> bool {
-    if board_extension(p) {
-        return true;
-    }
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    if ext == "board" || ext == "zip" {
-        return true;
-    }
-    p.is_dir() && p.exists() && p.to_str().is_some_and(|s| s.contains('/'))
+    board_extension(p)
+        || matches!(lowercase_extension(p).as_str(), "board" | "zip")
+        || p.is_dir() && p.exists() && p.to_str().is_some_and(|s| s.contains('/'))
 }
 
 /// Deconstruct the parsed `RunArgs` (clap) into the library's plain
@@ -1789,16 +1831,15 @@ fn looks_like_board_input(p: &std::path::Path) -> bool {
 /// argument parsing stays here.
 fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
     hauksbee_engine::commands::run::RunConfig {
-        // Present by construction unless --example. The run orchestrator
-        // resolves embedded examples only after it has opened the requested
-        // fail-closed artifact transaction.
+        // Empty when neither BOARD nor --example was given. The run
+        // orchestrator resolves examples, and refuses an empty board, only
+        // after it has opened the requested fail-closed artifact transaction.
         board: a.board.unwrap_or_else(|| {
-            PathBuf::from(format!(
-                "embedded-example-{}",
-                a.example
-                    .as_deref()
-                    .expect("BOARD or --example (enforced by clap)")
-            ))
+            let name = a
+                .example
+                .as_deref()
+                .map(|n| format!("embedded-example-{n}"));
+            name.unwrap_or_default().into()
         }),
         example: a.example,
         bom: a.bom,

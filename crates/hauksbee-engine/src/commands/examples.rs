@@ -72,6 +72,13 @@ pub fn deck(name: &str) -> anyhow::Result<PathBuf> {
     materialize(DECKS, "deck", name)
 }
 
+/// What `run`/`sim` with no input says: the one next action is the bundled
+/// example, which works from a bare binary.
+#[must_use]
+pub fn missing_input(cmd: &str, what: &str, example: &str) -> anyhow::Error {
+    anyhow::anyhow!("{cmd} needs {what}, and none was given. Try the bundled example:\n  hauksbee {cmd} --example {example}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
