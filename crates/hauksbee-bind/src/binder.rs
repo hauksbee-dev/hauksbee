@@ -400,6 +400,9 @@ pub fn bind_board_with(
     // catching supply nets whose NAME is non-canonical (e.g. `+5P`) but whose
     // driving pin is tagged `power_out`.
     let power_out_nets = power_out_net_voltages(board);
+    // Nets that are a regulator-shaped part's output: a convention-guessed
+    // magnitude (bare `VCC` = 5 V) must not be stamped on one.
+    let regulator_outputs = regulator_output_nets(board);
     for net in &board.nets {
         if net.id == 0 {
             continue;
@@ -416,7 +419,31 @@ pub fn bind_board_with(
         // pin that drives it at a named voltage (the general case). Ground nets
         // are never rails.
         if !node.is_ground() {
-            if let Some(v) =
+            if let Some(source) = regulator_outputs
+                .get(&net.id)
+                .filter(|_| name_states_no_magnitude(&net.name))
+            {
+                // The name says "a supply" and nothing about how many volts;
+                // the convention (VCC = 5 V) is a guess, and the part driving
+                // the net is the better witness: a 3.3 V LDO's output is not 5 V.
+                // Leave the rail without a magnitude rather than invent one.
+                let mut row = BindRow::without_model(
+                    format!("RAIL:{}", net.name),
+                    String::new(),
+                    Confidence::Exact,
+                    BindOutcome::Skipped {
+                        reason: "rail voltage not stated by its name".to_string(),
+                    },
+                );
+                row.warning = Some(format!(
+                    "'{}' states no voltage and is the output of {source}; its voltage is not \
+                     guessed from the name (a bare VCC is only assumed 5 V when no regulator \
+                     drives it). Name the net with its voltage (+3V3) or supply it with a \
+                     [[supply]]",
+                    net.name
+                ));
+                report.push(row);
+            } else if let Some(v) =
                 power_rail_voltage(&net.name).or_else(|| power_out_nets.get(&net.id).copied())
             {
                 power_nets.insert(net.name.clone(), v);
@@ -3950,8 +3977,12 @@ fn bind_vreg(
     // too: the card states it as a magnitude, the polarity follows `vout`.
     if let Some(amps) = model.params.get_f64("iq_a").filter(|i| i.is_finite()) {
         let name = format!("Iq_{}", comp.reference);
-        let amps = SourceKind::Dc(amps.copysign(vout));
-        helpers.push(circuit.add(Device::isource(name, input, gnd, amps)));
+        helpers.push(supply_draw(
+            circuit,
+            name,
+            (input, gnd),
+            amps.copysign(vout),
+        ));
     }
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
@@ -4028,6 +4059,42 @@ fn join_caveats(comp: &Component, caveats: [Option<String>; 3]) -> Option<String
             "{lead}; also {}",
             c.strip_prefix(prefix.as_str()).unwrap_or(c)
         )
+    })
+}
+
+/// The supply voltage over which a part's quiescent draw fades in.
+const SUPPLY_FADE_V: f64 = 1.0;
+
+/// A linear regulator's quiescent supply current, `hi -> lo`, as a draw that needs a
+/// supply to draw from: `amps` once `hi` stands [`SUPPLY_FADE_V`] above `lo`,
+/// none with no supply, C1 in between. A negative `amps` is a negative rail,
+/// read the other way round.
+///
+/// A plain DC current source here pulls a supply pin nothing feeds to
+/// `amps / gmin`, billions of volts, and the solve is refused. Wherever a
+/// supply is present the draw is the card's figure, unchanged.
+///
+/// Used for regulators only, whose input is the one supply pin a board
+/// routinely leaves unfed. Op-amp and comparator `Iq` stay plain sources: each
+/// behavioural device makes the stamp nonlinear, and on a board with dozens of
+/// them (the Tarski board) that cost the DAC co-sim its convergence and took
+/// 4231 s against 26 s.
+fn supply_draw(
+    circuit: &mut Circuit,
+    name: String,
+    (hi, lo): (NodeId, NodeId),
+    amps: f64,
+) -> DeviceId {
+    let sign = if amps < 0.0 { -1.0 } else { 1.0 };
+    let x = format!("min(max({sign:?}*(__d0-__d1)/{SUPPLY_FADE_V:?},0.0),1.0)");
+    circuit.add(Device::Behavioral {
+        name,
+        p: hi,
+        n: lo,
+        output: BOutput::Current,
+        expr: CompiledExpr::compile(&format!("{amps:?}*{x}*{x}*(3.0-2.0*{x})"))
+            .expect("supply draw expression compiles"),
+        deps: vec![BDep::Volt(hi), BDep::Volt(lo)],
     })
 }
 
@@ -4446,12 +4513,13 @@ fn bind_adj_vreg(
         let Some(amps) = model.params.get_f64(key).filter(|i| on && i.is_finite()) else {
             continue;
         };
-        helpers.push(circuit.add(Device::isource(
-            format!("{prefix}_{}", comp.reference),
-            input,
-            to,
-            SourceKind::Dc(amps.copysign(vref)),
-        )));
+        let name = format!("{prefix}_{}", comp.reference);
+        let amps = amps.copysign(vref);
+        helpers.push(if prefix == "Iq" {
+            supply_draw(circuit, name, (input, to), amps)
+        } else {
+            circuit.add(Device::isource(name, input, to, SourceKind::Dc(amps)))
+        });
     }
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
@@ -6581,6 +6649,53 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
 fn negative_rail_fallback(n: &str) -> Option<f64> {
     // Strip exactly one sign; do not accept -+5V by calling the positive wrapper.
     rail_magnitude(n.strip_prefix('-')?).map(|magnitude| -magnitude)
+}
+
+/// True when a supply net's name carries no magnitude at all (`VCC`, `+VCC`),
+/// so any voltage [`power_rail_voltage`] returns for it is a convention, not a
+/// statement. `VBUS` and the digit-bearing names (`+5V`, `VCC_3V3`) state theirs.
+fn name_states_no_magnitude(name: &str) -> bool {
+    let leaf = name.rsplit('/').next().unwrap_or(name).trim();
+    let leaf = leaf.trim_start_matches('+');
+    leaf.eq_ignore_ascii_case("vcc")
+}
+
+/// Nets driven by the output pin of a regulator-shaped part: one pad that
+/// reads as an output (`OUT`, `VOUT`, `VO`, `OUTPUT`) on a part that also has
+/// an input pad (`IN`, `VIN`, `VI`, `INPUT`). Judged from pin names alone, so
+/// it holds whether or not the part resolved to a model. Maps net id to
+/// `"U5 (LD1086D2T33TR)"` for the warning.
+///
+/// A pad name carries `KiCad`'s `_<pad>` suffix on a layout-only extraction
+/// (`OUT_2`), which is removed before comparing.
+fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
+    fn base(function: &str) -> String {
+        let f = function.trim().to_ascii_uppercase();
+        match f.rsplit_once('_') {
+            Some((head, tail)) if !head.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => {
+                head.to_string()
+            }
+            _ => f,
+        }
+    }
+    let is_out = |p: &hauksbee_extract::Pin| {
+        matches!(base(&p.function).as_str(), "OUT" | "VOUT" | "VO" | "OUTPUT")
+    };
+    let is_in = |p: &hauksbee_extract::Pin| {
+        matches!(base(&p.function).as_str(), "IN" | "VIN" | "VI" | "INPUT")
+    };
+    let mut out = HashMap::new();
+    for comp in &board.components {
+        if !AssemblyState::of(comp).is_present() || !comp.pins.iter().any(is_in) {
+            continue;
+        }
+        for pin in comp.pins.iter().filter(|p| is_out(p)) {
+            if let Some(net_id) = pin.net.filter(|n| *n != 0) {
+                out.insert(net_id, format!("{} ({})", comp.reference, comp.value));
+            }
+        }
+    }
+    out
 }
 
 /// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
@@ -10064,5 +10179,101 @@ style = "i2c_pointer"
         );
         let generic = no_processor_message(&[], &[], FitRemedy::Cli);
         assert!(!generic.contains("recognised"), "{generic}");
+    }
+
+    /// The rows a bind left for one rail net, as (outcome is a stamped rail, warning).
+    fn rail_rows(bound: &BoundBoard, net: &str) -> Vec<(Option<f64>, Option<String>)> {
+        bound
+            .report
+            .rows
+            .iter()
+            .filter(|r| r.reference == format!("RAIL:{net}"))
+            .map(|r| match r.outcome {
+                BindOutcome::PowerRail { volts } => (Some(volts), r.warning.clone()),
+                _ => (None, r.warning.clone()),
+            })
+            .collect()
+    }
+
+    /// A three-pad regulator-shaped IC (named IN / GND / OUT) with a load on OUT.
+    fn regulated_board(value: &str, out_net_name: &str) -> ExtractedBoard {
+        let mut ldo = comp("U5", value);
+        ldo.pins = vec![
+            named_pin("3", "IN", 1),
+            named_pin("1", "ADJ/GND_1", 3),
+            named_pin("2", "OUT_2", 2),
+        ];
+        let mut load = comp("R1", "10k");
+        load.pins = vec![pin("1", 2), pin("2", 3)];
+        ExtractedBoard {
+            name: "ldo".to_string(),
+            nets: vec![net(1, "/DC-IN"), net(2, out_net_name), net(3, "GND")],
+            components: vec![ldo, load],
+        }
+    }
+
+    /// A bare `VCC` is a convention (5 V), not a statement. The net a
+    /// regulator-shaped part's OUT pad drives is not guessed at 5 V, whether or
+    /// not the part resolved: a 3.3 V LDO's output read 5.000 V on a board whose
+    /// 3.3 V rail was only ever called VCC.
+    #[test]
+    fn a_bare_vcc_driven_by_a_regulator_output_is_not_guessed_at_five_volts() {
+        let lib = ModelLibrary::builtin();
+        // Faulty input: an unmodelled LDO drives the bare-named net.
+        let bound = bind_board(&regulated_board("NOSUCH-LDO-33", "/VCC"), &lib);
+        let rows = rail_rows(&bound, "/VCC");
+        assert!(
+            rows.iter().all(|(v, _)| v.is_none()),
+            "no 5 V rail on a regulator output: {rows:?}"
+        );
+        let warning = rows[0].1.as_deref().expect("the skip says why");
+        assert!(
+            warning.contains("U5") && warning.contains("states no voltage"),
+            "{warning}"
+        );
+        // Legal controls: a bare VCC nothing regulates keeps its convention; a
+        // name that states its voltage keeps it under the same regulator.
+        let mut load_only = regulated_board("NOSUCH-LDO-33", "/VCC");
+        load_only.components.remove(0);
+        let bound = bind_board(&load_only, &lib);
+        assert_eq!(rail_rows(&bound, "/VCC")[0].0, Some(5.0));
+        let bound = bind_board(&regulated_board("NOSUCH-LDO-33", "+3V3"), &lib);
+        assert_eq!(rail_rows(&bound, "+3V3")[0].0, Some(3.3));
+    }
+
+    /// A regulator's quiescent draw needs an input to draw from. With nothing
+    /// feeding IN it is an ideal current source into a node held only by gmin,
+    /// which put the input at -4.3e9 V and refused the whole solve; now the
+    /// floating input rests at 0 V, and a fed one still carries `Iq`.
+    #[test]
+    fn a_regulator_with_no_input_supply_does_not_drag_it_below_ground() {
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_testkit::circuits::vdc;
+        let lib = ModelLibrary::builtin();
+        let model = resolve_value(&lib, "LM7805", "");
+        for (fed, want_in) in [(None, 0.0), (Some(9.0), 9.0)] {
+            let mut part = comp("U3", "LM7805");
+            part.pins = vec![pin("1", 1), pin("2", 0), pin("3", 2)];
+            let mut circuit = Circuit::new();
+            let nodes = ["IN", "OUT"].map(|name| circuit.node(name));
+            let node_of = |n: Option<i64>| match n {
+                Some(1) => Some(nodes[0]),
+                Some(2) => Some(nodes[1]),
+                Some(_) => Some(NodeId::GROUND),
+                None => None,
+            };
+            let (outcome, _) = bind_one(&part, &model, &mut circuit, &node_of, &HashMap::new());
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { .. }),
+                "{outcome:?}"
+            );
+            if let Some(v) = fed {
+                vdc(&mut circuit, "VIN", nodes[0], v);
+            }
+            let mut ws = Workspace::new(&circuit);
+            dc_operating_point(&mut ws, &circuit, &SolverOptions::default()).unwrap();
+            let got = ws.x[ws.layout.node(nodes[0]).unwrap()];
+            assert!((got - want_in).abs() < 1e-3, "fed {fed:?}: IN at {got} V");
+        }
     }
 }
