@@ -1800,11 +1800,12 @@ mod tests {
         }
     }
 
-    /// The shipped 74HC595 card's behaviour, so the tests exercise what ships.
-    fn hc595() -> LogicComponent {
-        let q = hauksbee_models::ComponentQuery::new(None, Some("74HC595".into()), None);
-        let card = hauksbee_models::ModelLibrary::builtin().resolve(&q).model;
-        LogicComponent::compile("test", &card.expect("74HC595 card").logic).expect("compiles")
+    /// A shipped card's logic, so these tests pin the behaviour the library
+    /// actually binds.
+    fn card(value: &str) -> LogicComponent {
+        let q = hauksbee_models::ComponentQuery::new(None, Some(value.into()), None);
+        let model = hauksbee_models::ModelLibrary::builtin().resolve(&q).model;
+        LogicComponent::compile(value, &model.expect("builtin card").logic).expect("compiles")
     }
 
     /// Four-word parallel EEPROM with 28C256 bus/control semantics.
@@ -1860,7 +1861,7 @@ disable = [
 
     #[test]
     fn hc595_shifts_and_latches_msb_first() {
-        let mut lc = hc595();
+        let mut lc = card("74HC595");
         shift_out_msb(&mut lc, 0xA6);
         assert_eq!(lc.register("shift"), Some(0xA6));
         assert_eq!(
@@ -1882,7 +1883,7 @@ disable = [
     /// clocks latch the pre-shift value (the storage register lags one clock).
     #[test]
     fn hc595_clear_dominates_and_tied_clocks_latch_one_step_behind() {
-        let mut lc = hc595();
+        let mut lc = card("74HC595");
         shift_out_msb(&mut lc, 0xFF);
         tick(&mut lc, "srclk=0 srclr_n=0 oe_n=0");
         assert_eq!(lc.register("shift"), Some(0x00));
@@ -1893,7 +1894,7 @@ disable = [
             "clock while cleared does not shift"
         );
 
-        let mut lc = hc595();
+        let mut lc = card("74HC595");
         shift_out_msb(&mut lc, 0x01);
         tick(&mut lc, "ser=1 srclk=1 rclk=1 srclr_n=1 oe_n=0");
         assert_eq!(lc.register("shift"), Some(0x03));
@@ -1906,7 +1907,7 @@ disable = [
 
     #[test]
     fn hc595_oe_high_tristates_parallel_outputs_only() {
-        let mut lc = hc595();
+        let mut lc = card("74HC595");
         tick(&mut lc, "oe_n=1 srclr_n=1");
         for q in Q_OUTPUTS {
             assert_eq!(lc.output_enabled(q), Some(false), "{q}");
@@ -1923,7 +1924,7 @@ disable = [
     /// Unwired `SRCLR_n` / `OE_n` read released / enabled.
     #[test]
     fn unwired_controls_read_released() {
-        let mut lc = hc595();
+        let mut lc = card("74HC595");
         tick(&mut lc, "ser=1 srclk=0");
         tick(&mut lc, "ser=1 srclk=1");
         assert_eq!(lc.register("shift"), Some(0x01));
@@ -1932,7 +1933,7 @@ disable = [
 
     #[test]
     fn set_register_plus_refresh_drives_outputs() {
-        let mut lc = hc595();
+        let mut lc = card("74HC595");
         assert!(lc.set_register("store", 0x5A));
         assert!(!lc.set_register("nonexistent", 1));
         lc.refresh_outputs();
@@ -1941,7 +1942,7 @@ disable = [
 
     #[test]
     fn sequential_pins_cover_clock_and_data() {
-        let lc = hc595();
+        let lc = card("74HC595");
         let pins = lc.sequential_pins();
         for p in ["ser", "srclk", "rclk", "srclr_n"] {
             assert!(pins.contains(&p), "{p}");
@@ -1950,28 +1951,9 @@ disable = [
         assert!(lc.is_sequential());
     }
 
-    /// The silicon-correct 74HC165 (shift toward QH: QH shows H, then G, ...).
-    const HC165: &str = r#"
-inputs  = ["pl_n", "clk", "clk_inh", "ser", "a", "b", "c", "d", "e", "f", "g", "h"]
-outputs = ["qh", "qh_n"]
-
-[[register]]
-name = "reg"
-bits = 8
-clock = { pin = "clk", edge = "rising" }
-clock_enable = { pin = "clk_inh", active = "low" }
-op = "shift_left"
-data_in = "ser"
-load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g", "h"] }
-
-[comb]
-"qh" = "reg[7]"
-"qh_n" = "!reg[7]"
-"#;
-
     #[test]
     fn hc165_loads_emits_h_first_and_honours_clock_inhibit() {
-        let mut lc = compile(HC165);
+        let mut lc = card("74HC165");
         tick(&mut lc, "pl_n=0 clk=0 clk_inh=0 ser=0 a=1 f=1 h=1");
         assert_eq!(lc.register("reg"), Some(0b1010_0001));
         assert_eq!(
@@ -1987,7 +1969,7 @@ load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g"
             assert_eq!(lc.output_level("qh"), Some(*want));
         }
 
-        let mut lc = compile(HC165);
+        let mut lc = card("74HC165");
         tick(&mut lc, "pl_n=0 clk=0 clk_inh=0 h=1");
         tick(&mut lc, "pl_n=1 clk=1 clk_inh=1");
         assert_eq!(
