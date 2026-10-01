@@ -77,6 +77,7 @@
 //!     config net are not enumerated; the static (permanent) divider is still
 //!     decoded and the Note-1 check still runs.
 
+use super::{is_ground_name, is_unconnected_net, norm};
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     is_plain_resistor as is_source_classified_resistor, Component, ExtractedBoard, LintCheck,
@@ -184,20 +185,6 @@ fn resistor_ohms(c: &Component) -> Option<f64> {
 
 // ── Net-name helpers (local copies; extract versions are private) ──
 
-fn norm(name: &str) -> String {
-    let n = name.trim();
-    let leaf = n.rsplit('/').next().unwrap_or(n);
-    leaf.trim().to_ascii_uppercase()
-}
-
-fn is_ground_name(name: &str) -> bool {
-    let n = norm(name);
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
-    ) || n.starts_with("GND")
-}
-
 /// Is this the 3.3 V reference rail (VDDD)? The CYPD3177 dividers reference VDDD,
 /// which the board exposes as +3.3V / +3V3 / VDDD.
 fn is_vddd_name(name: &str) -> bool {
@@ -208,10 +195,6 @@ fn is_vddd_name(name: &str) -> bool {
     ) || n.contains("3V3")
         || n.contains("3.3V")
         || n == "VDDD"
-}
-
-fn is_unconnected_net(name: &str) -> bool {
-    name.trim_start_matches('/').starts_with("unconnected-")
 }
 
 /// The net id a U pin carries for a given pin-function role (e.g. "`VBUS_MAX`"),

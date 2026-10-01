@@ -81,6 +81,7 @@
 //! GPIO driver and an enabled modelled push-pull output share a net, using the
 //! same `output_roles`/tri-state classification this check rests on.
 
+use super::is_unconnected_net;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
@@ -170,11 +171,6 @@ fn is_ground_net(name: &str) -> bool {
         n.as_str(),
         "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
     ) || n.starts_with("GND")
-}
-
-/// `KiCad`'s placeholder net for a pin that is on no net at all.
-fn is_unconnected_net(name: &str) -> bool {
-    name.trim_start_matches('/').starts_with("unconnected-")
 }
 
 /// The output roles of `model` that are tri-stateable, i.e. that the part can

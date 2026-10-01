@@ -36,6 +36,7 @@
 //! clock-driver detection still works - it keys on the *component* (an
 //! oscillator), not a pin electrical type - but the reduced visibility is noted.
 
+use super::{is_ground_name, is_unconnected_net, norm};
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
@@ -570,20 +571,6 @@ fn judge_divider(
 
 // ── Small net-name helpers (local copies; the extract versions are private) ──
 
-fn norm(name: &str) -> String {
-    let n = name.trim();
-    let leaf = n.rsplit('/').next().unwrap_or(n);
-    leaf.trim().to_ascii_uppercase()
-}
-
-fn is_ground_name(name: &str) -> bool {
-    let n = norm(name);
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
-    ) || n.starts_with("GND")
-}
-
 /// Is this net name a power rail? Every use in this file is boolean ("is the
 /// far side of this pull / this hop a rail"), so this is a predicate, not a
 /// voltage table. Breadth matches boot.rs's `is_power_or_ground_net`, and for
@@ -607,10 +594,6 @@ fn is_rail_name(name: &str) -> bool {
     let v_named = n.starts_with('V') && n.len() >= 2;
     let voltage_named = n.contains('V') && n.chars().next().is_some_and(|c| c.is_ascii_digit());
     v_named || voltage_named
-}
-
-fn is_unconnected_net(name: &str) -> bool {
-    name.trim_start_matches('/').starts_with("unconnected-")
 }
 
 /// True when the only thing on `net_id` is `mcu` itself, no resistor, no other

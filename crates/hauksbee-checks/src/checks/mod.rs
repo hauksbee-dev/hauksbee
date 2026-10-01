@@ -61,6 +61,26 @@ pub mod usb_c;
 use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
+/// Net-leaf name, upper-cased: strips any sheet path prefix.
+pub(crate) fn norm(name: &str) -> String {
+    let n = name.trim();
+    let leaf = n.rsplit('/').next().unwrap_or(n);
+    leaf.trim().to_ascii_uppercase()
+}
+
+pub(crate) fn is_ground_name(name: &str) -> bool {
+    let n = norm(name);
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
+    ) || n.starts_with("GND")
+}
+
+/// `KiCad`'s placeholder net for a pin that is on no net at all.
+pub(crate) fn is_unconnected_net(name: &str) -> bool {
+    name.trim_start_matches('/').starts_with("unconnected-")
+}
+
 /// Every assembled component paired with the model that resolved it.
 ///
 /// The three-state assembly contract, asked once: only a Present record can be
