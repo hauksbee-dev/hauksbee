@@ -3519,6 +3519,7 @@ fn main {
             "component_assertions",
             "clearance_rule_source",
             "triage",
+            "verdict_reason",
         ] {
             object.remove(key);
         }
@@ -3543,6 +3544,19 @@ fn main {
         drc["title"] = golden_drc["title"].clone();
         drc["verdict"] = golden_drc["verdict"].clone();
         assert_eq!(value, golden_value);
+    }
+
+    #[test]
+    fn a_failing_web_report_states_its_reason_and_next_action() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let reason = value["verdict_reason"]
+            .as_str()
+            .expect("a serious report carries a reason");
+        assert!(
+            reason.starts_with("2 blocking problem(s), first: ") && reason.contains("; next: "),
+            "{reason}"
+        );
     }
 
     #[test]

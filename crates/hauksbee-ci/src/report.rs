@@ -959,19 +959,11 @@ impl CiResult {
                  <error message=\"{msg}\">{msg}</error>\n    </testcase>"
             );
         }
-        if let Some(refusal) = self.refusal() {
-            let _ = writeln!(
-                out,
-                "    <system-out>{}</system-out>",
-                xml_escape(&refusal.render_text())
-            );
-        }
-        if let Some(reason) = self.verdict_reason() {
-            let _ = writeln!(
-                out,
-                "    <system-out>reason: {}</system-out>",
-                xml_escape(&reason)
-            );
+        let suite_notes = (self.refusal().map(|r| r.render_text()))
+            .into_iter()
+            .chain(self.verdict_reason().map(|r| format!("reason: {r}")));
+        for note in suite_notes {
+            let _ = writeln!(out, "    <system-out>{}</system-out>", xml_escape(&note));
         }
         // A dead rail rides the same suite-level channel: a dashboard reader who
         // only ever sees the JUnit tab must not read a fault as a finding when
@@ -1100,18 +1092,16 @@ impl CiResult {
 
         // The rollup: exactly one summary annotation, always emitted.
         if let Some(refusal) = self.refusal() {
+            let text = format!(
+                "{}; reason: {}",
+                refusal.render_text().replace('\n', "; "),
+                self.verdict_reason().unwrap_or_default()
+            );
             let _ = writeln!(
                 out,
                 "::error title=hauksbee-ci refusal::{}",
-                gh_escape(&refusal.render_text().replace('\n', "; "))
+                gh_escape(&text)
             );
-            if let Some(reason) = self.verdict_reason() {
-                let _ = writeln!(
-                    out,
-                    "::error title=hauksbee-ci reason::{}",
-                    gh_escape(&reason)
-                );
-            }
         } else if self.passed() {
             let _ = writeln!(
                 out,

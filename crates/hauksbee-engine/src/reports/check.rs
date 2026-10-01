@@ -448,18 +448,20 @@ fn verdict_line(
             )
         };
     }
-    match cause {
-        None => format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look"),
-        Some(cause) => format!(
-            "VERDICT: {}: {serious} serious, {worth_a_look} worth a look; {}",
-            if cause.is_invalid() {
+    cause.map_or_else(
+        || format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look"),
+        |cause| {
+            let tag = if cause.is_invalid() {
                 "inconclusive"
             } else {
                 "failing"
-            },
-            cause.reason()
-        ),
-    }
+            };
+            format!(
+                "VERDICT: {tag}: {serious} serious, {worth_a_look} worth a look; {}",
+                cause.reason()
+            )
+        },
+    )
 }
 
 /// Every gating subject across the aggregate suite, in report order

@@ -161,8 +161,8 @@ impl<'a> VerdictCause<'a> {
     ) -> Option<Self> {
         failing
             .or(refused)
-            .or((!unmodelled.is_empty()).then_some(Self::Unmodelled(unmodelled)))
-            .or(coverage.then_some(Self::Coverage))
+            .or_else(|| (!unmodelled.is_empty()).then_some(Self::Unmodelled(unmodelled)))
+            .or_else(|| coverage.then_some(Self::Coverage))
     }
 
     /// Whether this cause makes the verdict `invalid` (it could not be judged)
@@ -221,6 +221,14 @@ impl<'a> From<&'a Refusal> for VerdictCause<'a> {
         }
     }
 }
+
+/// [`JsonReport::verdict_with_waivers`]: `(ok, verdict, serious, actionable)`,
+/// the findings a waiver covered, and the reason sentence when not a pass.
+type VerdictParts = (
+    (bool, &'static str, usize, usize),
+    Vec<crate::waiver::WaivedFinding>,
+    Option<String>,
+);
 
 /// The first few references, then a count of the rest.
 fn refs_summary(refs: &[String]) -> String {
@@ -2486,14 +2494,7 @@ impl JsonReport {
     /// Returns the verdict tuple and the waived findings, which the caller
     /// reports. Waived is not hidden: a board carrying overruled findings has
     /// to look like one, or the file rots into a list nobody reads.
-    pub fn verdict_with_waivers(
-        &self,
-        waivers: &mut crate::waiver::WaiverSet,
-    ) -> (
-        (bool, &'static str, usize, usize),
-        Vec<crate::waiver::WaivedFinding>,
-        Option<String>,
-    ) {
+    pub fn verdict_with_waivers(&self, waivers: &mut crate::waiver::WaiverSet) -> VerdictParts {
         let mut serious = 0usize;
         let mut actionable = 0usize;
         let mut waived = Vec::new();
@@ -2516,7 +2517,7 @@ impl JsonReport {
                         continue;
                     }
                     serious += 1;
-                    first.get_or_insert((&f.plain, f.fix.as_deref().unwrap_or_default()));
+                    first.get_or_insert_with(|| (&f.plain, f.fix.as_deref().unwrap_or_default()));
                 }
                 if f.actionable {
                     actionable += 1;
