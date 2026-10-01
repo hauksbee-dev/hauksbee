@@ -601,6 +601,7 @@ pub fn is_capacitor(c: &Component) -> bool {
 }
 
 /// A passive value that names no value: blank, `?`, or the bare letter `R`/`C`/`L`.
+///
 /// `TBD` is not one: shipped boards use it on optional parts, so gating on it would
 /// fail known-good designs. The binder still leaves such a part open and says so.
 #[must_use]
