@@ -355,9 +355,55 @@ impl Derating {
     }
 }
 
-/// Every problem with the card's `rating`-tagged rows: a key that is no
-/// rating, rows [`curve`] cannot read, and a scalar that is not the least
-/// favourable row, rows the curve skips included.
+/// The scalar `key` takes from its tagged rows, picked by code rather than by
+/// the model reading the table: the rows printed at the standard condition.
+///
+/// The datasheet's headline rating is its 25 °C row (TA, else TC; each held
+/// below its coldest row, so a table printed only hot still reads), and of
+/// several references at 25 °C the least favourable, so a TC = 25 °C silicon
+/// limit never stands for the board-mounted TA one. A mounting row naming the
+/// standard test board (JEDEC JESD51) is the one a datasheet's headline
+/// rating assumes; with none named, the least favourable mounting stands, and
+/// so does the least favourable package (the card does not know the
+/// footprint). Whole-part rows rate the part; per-path rows only when there
+/// are no whole-part ones. A thermal resistance has no temperature: its
+/// highest row left. `None` when no row is tagged or [`read_rows`] refuses
+/// them, leaving the scalar as written.
+#[must_use]
+pub fn standard_rating(entry: &ModelEntry, key: &str) -> Option<f64> {
+    let (mut curve, problems) = read_rows(entry, key);
+    if !problems.is_empty() || !is_rating_key(key) {
+        return None;
+    }
+    if curve.0.iter().any(|((.., p), _)| p.is_empty()) {
+        curve.0.retain(|((.., p), _)| p.is_empty());
+    }
+    let standard = |m: &Option<String>| {
+        let m = m
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase()
+            .replace([' ', '-'], "");
+        ["jedec", "jesd51", "standardboard", "standardtestboard"]
+            .iter()
+            .any(|w| m.contains(w))
+    };
+    if curve.0.iter().any(|((.., m, _), _)| standard(m)) {
+        curve.0.retain(|((.., m, _), _)| m.is_none() || standard(m));
+    }
+    if key.starts_with("theta_") {
+        let rows = curve.0.iter().flat_map(|(_, p)| p);
+        return rows.map(|p| p.1).reduce(f64::max);
+    }
+    let tj_max = entry.ratings.max_junction_temp_c.unwrap_or(150.0);
+    curve.limit(|_| 25.0, tj_max)
+}
+
+/// Every problem with the card's `rating`-tagged rows.
+///
+/// A key that is no rating, rows [`curve`] cannot read, and a scalar that is
+/// neither the [`standard_rating`] nor the least favourable row, rows the
+/// curve skips included.
 ///
 /// A path row (`pins`) with no `rating` is one too: the checker never reads it.
 #[must_use]
@@ -382,8 +428,12 @@ pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
             continue;
         };
         let scalar = scalars.get(key).and_then(toml::Value::as_float);
-        if scalar.is_none_or(|s| (s - worst).abs() > 1e-9 * worst.abs()) {
-            out.push(format!("ratings.{key} must be {worst}, the least favourable of its tagged rows: the scalar is the fallback, and Hauksbee reads the tagged rows at the scenario's temperature"));
+        let standard = standard_rating(entry, key);
+        let near = |s: f64, x: f64| (s - x).abs() <= 1e-9 * x.abs();
+        let ok = |s: f64| near(s, worst) || standard.is_some_and(|x| near(s, x));
+        if !scalar.is_some_and(ok) {
+            let want = standard.unwrap_or(worst);
+            out.push(format!("ratings.{key} must be {want}, its tagged row at the standard condition (25 °C, the standard board, else the least favourable): the scalar is the fallback, and Hauksbee reads the tagged rows at the scenario's temperature"));
         }
     }
     out
@@ -544,6 +594,67 @@ mod tests {
         let blank = card(&[(3.0, &at("1 in2 copper")), (1.0, &at(" "))]);
         let fitted = Derating::of(&blank).fitted("Q1", "X", Some("1 in2 copper"));
         assert_eq!(fitted.current.limit(|_| 25.0, 150.0), Some(1.0));
+    }
+
+    /// `(value, conditions)` rows for [`card`].
+    type Temps<'a> = &'a [(f64, &'a str)];
+
+    /// The scalar is the 25 °C row of the standard board, else the least
+    /// favourable mounting; a TC = 25 °C silicon limit never stands for the TA
+    /// one, a hot row never for the 25 °C one; and either the standard or the
+    /// least favourable value validates.
+    #[test]
+    fn the_scalar_is_read_at_the_standard_condition() {
+        let at = |t: &str, m: &str| format!("{t}\"\nmounting = \"{m}");
+        let (jedec, pad) = (
+            at("TA = 25 °C", "JEDEC JESD51-7 board"),
+            at("TA = 25 °C", "minimum pad"),
+        );
+        let cases: [(Temps, Option<f64>); 5] = [
+            (
+                &[
+                    (5.7, "TA = 25 °C"),
+                    (4.7, "TA = 70 °C"),
+                    (40.0, "TC = 25 °C"),
+                ],
+                Some(5.7),
+            ),
+            (&[(4.7, "TA = 70 °C")], Some(4.7)),
+            (&[(3.0, &jedec), (1.0, &pad)], Some(3.0)),
+            (
+                &[(3.0, &at("TA = 25 °C", "1 in2 copper")), (1.0, &pad)],
+                Some(1.0),
+            ),
+            (&[(4.7, "TA = 25 °C"), (4.0, "VGS = 4.5 V")], None),
+        ];
+        for (rows, want) in cases {
+            let mut entry = card(rows);
+            assert_eq!(standard_rating(&entry, "max_current_a"), want, "{rows:?}");
+            let worst = rows.iter().map(|r| r.0).reduce(f64::min).expect("rows");
+            for scalar in want.into_iter().chain([worst]) {
+                entry.ratings.max_current_a = Some(scalar);
+                let problems = tag_problems(&entry);
+                assert!(
+                    want.is_none() || problems.is_empty(),
+                    "{rows:?} at {scalar}: {problems:?}"
+                );
+            }
+            entry.ratings.max_current_a = Some(worst * 0.5);
+            assert!(
+                tag_problems(&entry)
+                    .iter()
+                    .any(|p| p.contains("standard condition")),
+                "{rows:?}"
+            );
+        }
+        let mut theta = card(&[(60.0, &at("TA = 25 °C", "JEDEC 2s2p")), (120.0, &pad)]);
+        for row in &mut theta.source.as_mut().expect("source").characteristic {
+            (row.rating, row.unit) = (Some("theta_ja_c_per_w".into()), "°C/W".into());
+        }
+        assert_eq!(standard_rating(&theta, "theta_ja_c_per_w"), Some(60.0));
+        theta.source.as_mut().expect("source").characteristic[0].mounting =
+            Some("2 in2 copper".into());
+        assert_eq!(standard_rating(&theta, "theta_ja_c_per_w"), Some(120.0));
     }
 
     /// Builtin cards skip `validate`, so a curated row that cannot be read
