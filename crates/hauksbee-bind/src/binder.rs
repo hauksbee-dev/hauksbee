@@ -4671,7 +4671,7 @@ fn bind_opamp(
     };
     // The output stage's current is drawn from the part's supply pins, so a
     // load on the output shows up on the rail that feeds the part.
-    let supply = opamp_supply(roles);
+    let supply = stage_supply(roles);
     for (name, out, inp, inn) in units {
         circuit.add(Device::OpAmp {
             name,
@@ -4700,11 +4700,11 @@ fn bind_opamp(
     (BindOutcome::Behavioral { device }, warning)
 }
 
-/// An op-amp's supply pins as the output stage returns its current through
-/// them: `V+` (`vcc`, `vs`, `vdd`) and `V-` (`vss`, `vee`, `v_minus`, or the
+/// An op-amp's or push-pull comparator's supply pins as the output stage
+/// returns its current through them: `V+` (`vcc`, `vs`, `vdd`) and `V-` (`vss`, `vee`, `v_minus`, or the
 /// `gnd` pin of a single-supply sense amplifier), each only when it sits on a
 /// net. A ground `V-` is no pin to draw into.
-fn opamp_supply(roles: &HashMap<String, NodeId>) -> hauksbee_ir::Supply {
+fn stage_supply(roles: &HashMap<String, NodeId>) -> hauksbee_ir::Supply {
     let pin = |names: &[&str]| pick(roles, names).copied().filter(|n| !n.is_ground());
     hauksbee_ir::Supply {
         hi: pin(&["vcc", "vs", "vdd"]),
@@ -5010,6 +5010,9 @@ fn bind_comparator(
     let gnd = pick(roles, &["vss", "gnd"])
         .copied()
         .unwrap_or(NodeId::GROUND);
+    // A driven output's current is drawn from the part's supply pins, so a
+    // load on it shows on the rail that feeds the part.
+    let supply = stage_supply(roles);
     for (name, out, inp, inn) in &sections {
         if open_collector {
             bind_open_collector(circuit, name, (*out, *inp, *inn, gnd), model);
@@ -5022,6 +5025,7 @@ fn bind_comparator(
                 out_lo,
                 out_hi,
                 hysteresis: hyst,
+                supply,
             });
         }
     }
@@ -5390,13 +5394,14 @@ fn bind_mcp4728_dac(
             continue;
         }
         let net_name = circuit.node_name(net).to_string();
-        let drv = PinDriver::stamp(
-            circuit,
-            net,
-            &net_name,
-            &format!("{}_{role}", comp.reference),
-            rout,
-        );
+        let tag = format!("{}_{role}", comp.reference);
+        let mut drv = PinDriver::stamp(circuit, net, &net_name, &tag, rout);
+        // The output current comes from the part's supply and returns into its
+        // negative pin, so a load shows on the rail that feeds the part.
+        if let Some(&hi) = pick(roles, &["vdd", "vcc"]) {
+            let lo = pick(roles, &["vss", "gnd"]).copied();
+            drv.route_supply(circuit, &tag, hi, lo.unwrap_or(NodeId::GROUND));
+        }
         vout_drivers[ch] = Some(drv);
         stamped += 1;
     }
@@ -5431,7 +5436,23 @@ fn bind_mcp4728_dac(
 /// Draw every output driver's current from its part's supply pins: the pin a
 /// `[models.level_rails]` entry names for that role, else `vcc`/`vdd`, returning
 /// into `gnd`/`vss`. A driver the part gives no positive supply stays as it was.
+/// A sink-only (open-collector) card has nothing to draw from a positive pin: its
+/// sunk current returns into `gnd`/`vss` alone.
 fn route_driver_supplies(circuit: &mut Circuit, model: &ModelEntry, d: &mut DigitalComponent) {
+    if model.params.get_bool("open_collector").unwrap_or(false) {
+        let Some(lo) = pick(&d.roles, &["gnd", "vss"]).copied() else {
+            return;
+        };
+        let mut roles: Vec<String> = d.drivers.keys().cloned().collect();
+        roles.sort_unstable();
+        for role in roles {
+            let tag = format!("{}_{role}", d.reference);
+            if let Some(drv) = d.drivers.get_mut(&role) {
+                drv.route_return(circuit, &tag, lo);
+            }
+        }
+        return;
+    }
     let lo = pick(&d.roles, &["gnd", "vss"]).copied();
     let supply = pick(&d.roles, &["vcc", "vdd"]).copied();
     let mut roles: Vec<String> = d.drivers.keys().cloned().collect();
@@ -5474,6 +5495,9 @@ fn bind_digital(
     // model's declared output resistance (drive strength), `DEFAULT_RO` is the
     // fallback inside `from_params`, not an override of a specified `ro`.
     let ro = crate::digital::LogicLevels::from_params(model).ro;
+    // An open-collector or open-drain card's outputs only sink: they pull the
+    // net to their low level and never source into a load below it.
+    let sink_only = model.params.get_bool("open_collector").unwrap_or(false);
     let mut drivers = HashMap::new();
     for role in output_roles(model) {
         if let Some(&net) = roles.get(&role) {
@@ -5481,13 +5505,12 @@ fn bind_digital(
                 continue;
             }
             let net_name = circuit.node_name(net).to_string();
-            let drv = PinDriver::stamp(
-                circuit,
-                net,
-                &net_name,
-                &format!("{}_{role}", comp.reference),
-                ro,
-            );
+            let tag = format!("{}_{role}", comp.reference);
+            let drv = if sink_only {
+                PinDriver::stamp_sink_only(circuit, net, &net_name, &tag, ro)
+            } else {
+                PinDriver::stamp(circuit, net, &net_name, &tag, ro)
+            };
             drivers.insert(role, drv);
         }
     }

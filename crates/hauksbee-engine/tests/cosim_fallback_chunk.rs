@@ -85,6 +85,7 @@ fn firing_board() -> BoundBoard {
         out_lo: 0.0,
         out_hi: 5.0,
         hysteresis: 0.4,
+        supply: hauksbee_ir::Supply::default(),
     });
     c.add(Device::Comparator {
         name: "K2".into(),
@@ -94,6 +95,7 @@ fn firing_board() -> BoundBoard {
         out_lo: 0.0,
         out_hi: 5.0,
         hysteresis: 0.4,
+        supply: hauksbee_ir::Supply::default(),
     });
     c.add(Device::VSwitch {
         name: "GATE_s1".into(),

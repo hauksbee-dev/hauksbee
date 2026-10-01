@@ -591,16 +591,14 @@ pub fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, si
             out_lo,
             out_hi,
             hysteresis,
+            supply,
             ..
         } => stamp_comparator(
             ctx,
             id,
-            *out,
-            *inp,
-            *inn,
-            *out_lo,
-            *out_hi,
-            *hysteresis,
+            (*out, *inp, *inn),
+            (*out_lo, *out_hi, *hysteresis),
+            *supply,
             sink,
         ),
         Device::Vcvs {
@@ -2899,12 +2897,9 @@ pub fn comparator_trip(high: bool, hysteresis: f64) -> f64 {
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
-    out: NodeId,
-    inp: NodeId,
-    inn: NodeId,
-    out_lo: f64,
-    out_hi: f64,
-    hyst: f64,
+    (out, inp, inn): (NodeId, NodeId, NodeId),
+    (out_lo, out_hi, hyst): (f64, f64, f64),
+    supply: hauksbee_ir::Supply,
     sink: &mut S,
 ) {
     let vp = ctx.v(inp);
@@ -2934,6 +2929,10 @@ fn stamp_comparator<S: StampSink>(
         // root with every output consistent with its own inputs.
         let target = if high { out_hi } else { out_lo };
         if let Some(oi) = ctx.layout.node(out) {
+            // The stage's Norton current returns through the supply pins, not
+            // ground (see `SupplyMirror`).
+            let amps = gout * (target - ctx.v(out));
+            let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
             sink.g(oi, oi, gout);
             sink.i(oi, gout * target);
         }
@@ -2961,6 +2960,8 @@ fn stamp_comparator<S: StampSink>(
         let dsig = k * sig * (1.0 - sig);
         let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
         if let Some(oi) = ctx.layout.node(out) {
+            let amps = gout * (target - ctx.v(out));
+            let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
             sink.g(oi, oi, gout);
             sink.i(oi, gout * target);
             if let Some(pi) = ctx.layout.node(inp) {
@@ -2977,6 +2978,8 @@ fn stamp_comparator<S: StampSink>(
 
     let target = if vp - vn > thresh { out_hi } else { out_lo };
     if let Some(oi) = ctx.layout.node(out) {
+        let amps = gout * (target - ctx.v(out));
+        let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
         sink.g(oi, oi, gout);
         sink.i(oi, gout * target);
     }

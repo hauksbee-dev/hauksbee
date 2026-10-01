@@ -1187,6 +1187,7 @@ impl<'a> Build<'a> {
                         out_lo,
                         out_hi,
                         hysteresis,
+                        supply: crate::Supply::default(),
                     }
                 } else {
                     Device::OpAmp {

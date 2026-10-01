@@ -1303,11 +1303,12 @@ impl Scheduler {
             }
         }
 
-        // Every routed pin driver, MCU or logic part, whether or not a core
+        // Every routed pin driver, MCU, logic part or DAC, whether or not a core
         // runs behind it (a firmware-less run leaves the MCU's drivers disabled
         // but a caller may still enable one).
         let mut driver_draws: Vec<_> = (digital.iter().flat_map(|d| d.drivers.values()))
             .chain(mcus.iter().flat_map(|m| m.gpio_drivers.values()))
+            .chain(dacs.iter().flat_map(|d| d.vout_drivers.iter().flatten()))
             .filter_map(|d| Some((d.vsource, d.supply?)))
             .collect();
         driver_draws.sort_unstable_by_key(|(source, _)| *source);

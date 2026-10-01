@@ -16,13 +16,15 @@
 //!   under 1% of the load current.
 //!
 //! The same board idea covers the active models that deliver current from an
-//! output: every builtin op-amp and every digital part with outputs is bound
-//! on a supply-named rail, its outputs loaded by 1 k to ground, and the
-//! current each output delivers must appear in the part's supply pin within
-//! 1% (see `opamp_output_current_is_drawn_from_the_supply_pins` and
-//! `digital_output_current_is_drawn_from_the_supply_pin`). A control run with
-//! the routing removed must fail the same check, and a buck -> LDO -> op-amp
-//! chain must still power up.
+//! output: every builtin op-amp, push-pull comparator, DAC and digital part
+//! with outputs is bound on a supply-named rail, its outputs loaded by 1 k to
+//! ground, and the current each output delivers must appear in the part's
+//! supply pin within 1% (see `opamp_output_current_is_drawn_from_the_supply_pins`,
+//! `digital_output_current_is_drawn_from_the_supply_pin` and
+//! `dac_output_current_is_drawn_from_the_supply_pin`). A control run with the
+//! routing removed must fail the same check, and a buck -> LDO -> op-amp chain
+//! must still power up. An open-collector array only sinks, into its ground pin
+//! (`open_collector_outputs_only_sink_into_the_ground_pin`).
 //!
 //! A linear charger (a `vreg` card tagged `regulated_current`) is a CC/CV
 //! source, so its rig differs: a PROG resistor sets a limit above the load,
@@ -111,6 +113,15 @@ impl Card {
         let entry: ModelEntry = self.table.clone().try_into().ok()?;
         entry.current_program?.operating_current_a(ohms)
     }
+}
+
+/// Whether the card declares `open_collector = true`: its outputs sink only.
+fn open_collector(card: &Card) -> bool {
+    let flag = card
+        .table
+        .get("params")
+        .and_then(|p| p.get("open_collector"));
+    flag.and_then(toml::Value::as_bool) == Some(true)
 }
 
 fn float(t: &toml::Table, key: &str) -> Option<f64> {
@@ -762,9 +773,21 @@ fn settle(
     lib: &ModelLibrary,
     edit: impl FnOnce(&mut hauksbee_engine::binder::BoundBoard),
 ) -> Option<Scheduler> {
+    settle_with(rig, lib, edit, |_| {})
+}
+
+/// [`settle`] with `prep` run on the built scheduler before it steps (to
+/// program a peripheral over its bus).
+fn settle_with(
+    rig: &Rig,
+    lib: &ModelLibrary,
+    edit: impl FnOnce(&mut hauksbee_engine::binder::BoundBoard),
+    prep: impl FnOnce(&mut Scheduler),
+) -> Option<Scheduler> {
     let mut bound = bind_board_with(&rig.board(), lib, &CustomRegistry::new());
     edit(&mut bound);
     let mut sched = Scheduler::new(bound, None, SolverOptions::default()).ok()?;
+    prep(&mut sched);
     for _ in 0..20 {
         sched.step(1e-4);
     }
@@ -831,7 +854,7 @@ fn opamp_delivered(
     let (rig, outs) = opamp_rig(card, value, run);
     let edit = |bound: &mut hauksbee_engine::binder::BoundBoard| {
         for d in bound.circuit.devices.iter_mut().filter(|_| strip) {
-            if let Device::OpAmp { supply, .. } = d {
+            if let Device::OpAmp { supply, .. } | Device::Comparator { supply, .. } = d {
                 *supply = hauksbee_ir::Supply::default();
             }
         }
@@ -876,20 +899,40 @@ fn opamp_broken(d: &Delivered, iq: f64) -> Vec<String> {
     broken
 }
 
-/// Every builtin op-amp card: driven positive on a single supply and, where
-/// the part has a `V-` pin, negative on split supplies. The positive pin
-/// carries the sourced current, the negative pin the sunk current, and a
-/// control with the routing stripped fails the same check.
+/// A card's own supply current with the outputs unloaded: an op-amp's `iq_a`,
+/// a comparator's `supply_static_ua`.
+fn card_iq(card: &Card) -> f64 {
+    let static_ua = card.param("supply_static_ua").map(|ua| ua * 1e-6);
+    card.param("iq_a").or(static_ua).unwrap_or(0.0)
+}
+
+/// Every builtin op-amp card and every push-pull comparator card (an
+/// open-collector one has no high drive to draw): driven positive on a single
+/// supply and, where the part has a `V-` pin, negative on split supplies. The
+/// positive pin carries the sourced current, the negative pin the sunk current,
+/// and a control with the routing stripped fails the same check.
 #[test]
 fn opamp_output_current_is_drawn_from_the_supply_pins() {
-    let cards = cards_of(|k, _| k == "opamp");
-    assert!(cards.len() >= 30, "only {} op-amp cards", cards.len());
+    let cards = cards_of(|k, t| {
+        let open_collector = (t.get("params")).and_then(|p| p.get("open_collector"));
+        k == "opamp"
+            || (k == "comparator" && open_collector.and_then(toml::Value::as_bool) != Some(true))
+    });
+    assert!(
+        cards.len() >= 33,
+        "only {} op-amp/comparator cards",
+        cards.len()
+    );
+    assert!(
+        cards.iter().filter(|c| c.kind == "comparator").count() >= 3,
+        "the push-pull comparators must be in the matrix"
+    );
     let lib = probe_library(&cards, "opamps");
     let mut failures = Vec::new();
     let mut unexercised = Vec::new();
     for (i, card) in cards.iter().enumerate() {
         let value = format!("PROBE{i}");
-        let iq = card.param("iq_a").unwrap_or(0.0);
+        let iq = card_iq(card);
         let mut exercised = false;
         let mut scenarios = vec![OpampRun {
             vss: None,
@@ -1097,9 +1140,9 @@ fn digital_output_current_is_drawn_from_the_supply_pin() {
     let cards =
         cards_of(|k, t| matches!(k, "digital" | "shift_register") && t.contains_key("logic"));
     // A sink-only open-collector array (no `voh`, no supply pin: ULN2003) has
-    // no positive pin to draw a sourced current from; its outputs are driven
-    // by a Thevenin leg at `vol` that sources into a pull-down load, which is
-    // no legal control for a part that can only sink.
+    // no positive pin to draw a sourced current from, and no high drive to
+    // check one against: `open_collector_outputs_only_sink_into_the_ground_pin`
+    // covers it.
     let (sink_only, cards): (Vec<Card>, Vec<Card>) = cards
         .into_iter()
         .filter(|c| !c.logic("outputs").is_empty())
@@ -1107,8 +1150,8 @@ fn digital_output_current_is_drawn_from_the_supply_pin() {
     assert!(
         sink_only
             .iter()
-            .all(|c| !c.has_role("vcc") && !c.has_role("vdd")),
-        "a sink-only card with a supply pin needs a sink check"
+            .all(|c| open_collector(c) && !c.has_role("vcc") && !c.has_role("vdd")),
+        "a card with no `voh` must say `open_collector = true` and have no supply pin"
     );
     assert!(
         cards.len() >= 30,
@@ -1160,6 +1203,207 @@ fn digital_output_current_is_drawn_from_the_supply_pin() {
         fixed.is_empty(),
         "now exercised, drop from STATIC_INERT: {fixed:?}"
     );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The outputs of an open-collector array on `+5V` pull-ups (or 1 k
+/// pull-downs), the ground pin on net `E` through 1 ohm to ground, every input
+/// high (`on`) or low. Returns the rig and the output nets.
+fn open_collector_rig(card: &Card, value: &str, on: bool, pull_up: bool) -> (Rig, Vec<String>) {
+    let (inputs, outputs) = (card.logic("inputs"), card.logic("outputs"));
+    let mut rig = Rig::default();
+    rig.net("GND");
+    let mut pins = Vec::new();
+    let mut outs = Vec::new();
+    for (pad, role) in card.pins() {
+        let net = match role.as_str() {
+            "gnd" | "vss" => "E".to_string(),
+            r if outputs.iter().any(|o| o == r) => {
+                outs.push(format!("OUT_{r}"));
+                format!("OUT_{r}")
+            }
+            r if inputs.iter().any(|i| i == r) => {
+                if on {
+                    rail(3.3)
+                } else {
+                    "GND".into()
+                }
+            }
+            _ => continue,
+        };
+        let id = rig.net(&net);
+        pins.push(pin(&pad, id));
+    }
+    rig.parts
+        .push(component("U1", value, "Package_SO:SOIC-16", pins));
+    rig.two("RE", "1R", RES, "E", "GND");
+    for (i, net) in outs.iter().enumerate() {
+        if pull_up {
+            rig.two(&format!("RL{i}"), "1k", RES, net, &rail(5.0));
+        } else {
+            rig.load(&format!("RL{i}"), net, LOAD);
+        }
+    }
+    (rig, outs)
+}
+
+/// What an open-collector board settled to: the current its outputs sank
+/// (from the pull-ups), the current the ground pin carried, and the highest
+/// output voltage.
+fn open_collector_measure(
+    card: &Card,
+    lib: &ModelLibrary,
+    value: &str,
+    (on, pull_up, strip): (bool, bool, bool),
+) -> Option<(f64, f64, f64)> {
+    let (rig, outs) = open_collector_rig(card, value, on, pull_up);
+    let edit = |bound: &mut hauksbee_engine::binder::BoundBoard| {
+        for d in bound.digital.iter_mut().filter(|_| strip) {
+            d.drivers.values_mut().for_each(|drv| drv.supply = None);
+        }
+    };
+    let sched = settle(&rig, lib, edit)?;
+    let v = |n: &str| sched.net_voltage(n).unwrap_or(f64::NAN);
+    let sunk: f64 = outs.iter().map(|n| (5.0 - v(n)) / LOAD).sum();
+    let top = outs.iter().map(|n| v(n)).fold(f64::MIN, f64::max);
+    Some((sunk, v("E"), top))
+}
+
+/// An open-collector output sinks into the part's ground (`E`) pin and does
+/// nothing else: on a pull-up the pin carries what the outputs sink (a control
+/// with the routing stripped must fail); on a pull-down a driven output reads
+/// 0 V and the pin carries nothing, because a Darlington has no high drive; and
+/// with every input low the outputs float up to the pull-up and the pin carries
+/// nothing.
+#[test]
+fn open_collector_outputs_only_sink_into_the_ground_pin() {
+    let cards =
+        cards_of(|k, t| matches!(k, "digital" | "shift_register") && t.contains_key("logic"));
+    let cards: Vec<Card> = cards.into_iter().filter(open_collector).collect();
+    assert!(!cards.is_empty(), "no open-collector digital card");
+    let lib = probe_library(&cards, "open_collector");
+    let mut failures = Vec::new();
+    for (i, card) in cards.iter().enumerate() {
+        let value = format!("PROBE{i}");
+        let id = &card.id;
+        let run =
+            |on, pull_up, strip| open_collector_measure(card, &lib, &value, (on, pull_up, strip));
+        let (Some((sunk, ie, _)), Some((_, off_ie, off_top)), Some((_, pd_ie, pd_top))) = (
+            run(true, true, false),
+            run(false, true, false),
+            run(true, false, false),
+        ) else {
+            failures.push(format!("{id}: solve failed"));
+            continue;
+        };
+        // The ground pin is 1 ohm to ground, so its volts are its amps.
+        if sunk < MIN_IOUT || (ie / sunk - 1.0).abs() > TOL {
+            failures.push(format!(
+                "{id}: outputs sink {sunk:.4e} A, ground pin carries {ie:.4e} A"
+            ));
+        }
+        if off_ie.abs() > 1e-6 || off_top < 4.9 {
+            failures.push(format!(
+                "{id}: inputs low: ground pin {off_ie:.2e} A, outputs {off_top} V"
+            ));
+        }
+        if pd_top > 1e-3 || pd_ie.abs() > 1e-6 {
+            failures.push(format!(
+                "{id}: on a pull-down the outputs read {pd_top} V and the ground pin carries \
+                 {pd_ie:.2e} A: an open collector cannot source"
+            ));
+        }
+        match run(true, true, true) {
+            Some((_, bare, _)) if (bare / sunk - 1.0).abs() > TOL => {}
+            other => failures.push(format!("{id}: control with no routing: {other:?}")),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Every DAC card on a supply-named rail, its outputs at full scale into 1 k to
+/// ground: the supply pin carries what the outputs deliver, within 1%, and a
+/// control with the routing stripped must fail.
+#[test]
+fn dac_output_current_is_drawn_from_the_supply_pin() {
+    let cards = cards_of(|k, _| k == "dac");
+    assert!(!cards.is_empty(), "no DAC card");
+    let lib = probe_library(&cards, "dacs");
+    let mut failures = Vec::new();
+    for (i, card) in cards.iter().enumerate() {
+        let measure = |strip: bool| -> Option<(f64, f64)> {
+            let mut rig = Rig::default();
+            rig.net("GND");
+            let (mut pins, mut outs) = (Vec::new(), Vec::new());
+            for (pad, role) in card.pins() {
+                let net = match role.as_str() {
+                    "vdd" | "vcc" => rail(5.0),
+                    "vss" | "gnd" => "GND".into(),
+                    r if r.starts_with("vout") => {
+                        outs.push(format!("OUT_{r}"));
+                        format!("OUT_{r}")
+                    }
+                    _ => continue,
+                };
+                let id = rig.net(&net);
+                pins.push(pin(&pad, id));
+            }
+            rig.parts.push(component(
+                "U1",
+                &format!("PROBE{i}"),
+                "Package_SO:MSOP-10",
+                pins,
+            ));
+            for (k, net) in outs.iter().enumerate() {
+                rig.load(&format!("RL{k}"), net, LOAD);
+            }
+            let edit = |bound: &mut hauksbee_engine::binder::BoundBoard| {
+                for dac in bound.dacs.iter_mut().filter(|_| strip) {
+                    for drv in dac.vout_drivers.iter_mut().flatten() {
+                        drv.supply = None;
+                    }
+                }
+            };
+            // Fast Write of full scale to every channel, as firmware would.
+            let program = |sched: &mut Scheduler| {
+                let bus = sched.i2c_buses()[0].clone();
+                let mut bus = bus
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                bus.dispatch(hauksbee_mcu::I2cEvent::Start {
+                    addr: 0x60,
+                    read: false,
+                });
+                for _ in 0..4 * 2 {
+                    bus.dispatch(hauksbee_mcu::I2cEvent::Write {
+                        addr: 0x60,
+                        data: 0x0F,
+                    });
+                }
+                bus.dispatch(hauksbee_mcu::I2cEvent::Stop { addr: 0x60 });
+            };
+            let sched = settle_with(&rig, &lib, edit, program)?;
+            let iout: f64 = (outs.iter())
+                .map(|n| sched.net_voltage(n).unwrap_or(0.0) / LOAD)
+                .sum();
+            let supply = sched.supply_states().get(&rail(5.0)).map(|s| s.1)?;
+            Some((iout, supply))
+        };
+        let Some((iout, supply)) = measure(false) else {
+            failures.push(format!("{}: solve failed", card.id));
+            continue;
+        };
+        if iout < MIN_IOUT || (supply / iout - 1.0).abs() > TOL {
+            failures.push(format!(
+                "{}: outputs source {iout:.4e} A, the supply pin carries {supply:.4e} A",
+                card.id
+            ));
+        }
+        let bare = measure(true).map_or(f64::NAN, |(_, s)| s);
+        if (bare / iout - 1.0).abs() <= TOL {
+            failures.push(format!("{}: control with no routing still passes", card.id));
+        }
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

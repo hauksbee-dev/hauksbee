@@ -133,6 +133,7 @@ pub fn comparator(
         out_lo: 0.0,
         out_hi: 5.0,
         hysteresis,
+        supply: hauksbee_ir::Supply::default(),
     })
 }
 

@@ -419,6 +419,10 @@ pub enum Device {
         /// the offset: the output rises at `V(inp) - V(inn) > +hysteresis/2`
         /// and falls below `-hysteresis/2`. `0` is a bare zero-crossing.
         hysteresis: f64,
+        /// The supply pins a driven output's current is drawn from (see
+        /// [`Supply`]).
+        #[serde(default)]
+        supply: Supply,
     },
     /// Voltage-controlled voltage source (SPICE `E` card):
     /// `V(p,n) = gain * V(cp,cn)`. Owns a branch-current unknown exactly like
@@ -665,7 +669,18 @@ impl Device {
                 nodes.extend(supply.nodes().into_iter().filter(|n| !held.contains(n)));
                 nodes
             }
-            Self::Comparator { out, inp, inn, .. } => vec![*out, *inp, *inn],
+            Self::Comparator {
+                out,
+                inp,
+                inn,
+                supply,
+                ..
+            } => {
+                let mut nodes = vec![*out, *inp, *inn];
+                let held = nodes.clone();
+                nodes.extend(supply.nodes().into_iter().filter(|n| !held.contains(n)));
+                nodes
+            }
             Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
                 vec![*p, *n, *cp, *cn]
             }
@@ -770,10 +785,22 @@ impl Device {
                     }
                 }
             }
-            Self::Comparator { out, inp, inn, .. } => {
+            Self::Comparator {
+                out,
+                inp,
+                inn,
+                supply,
+                ..
+            } => {
                 *out = f(*out);
                 *inp = f(*inp);
                 *inn = f(*inn);
+                for x in [supply.hi.as_mut(), supply.lo.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    *x = f(*x);
+                }
             }
             Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
                 for x in [p, n, cp, cn] {
@@ -993,7 +1020,12 @@ impl Device {
                 v.extend(supply.nodes().into_iter().filter(|n| n != out));
                 v
             }
-            Self::Comparator { out, .. } => vec![*out],
+            Self::Comparator { out, supply, .. } => {
+                // The supply pins carry the output current (see [`Supply`]).
+                let mut v = vec![*out];
+                v.extend(supply.nodes().into_iter().filter(|n| n != out));
+                v
+            }
             // A coupling has NO terminals: current flows through the WINDINGS,
             // whose own a/b declarations above carry the conduction claim. The
             // stamp cross-check holds this to account trivially (the coupling
@@ -1179,6 +1211,7 @@ impl Device {
                 out_lo: 0.0,
                 out_hi: 5.0,
                 hysteresis: 1e-3,
+                supply: Supply::default(),
             },
             Self::Vcvs {
                 name: "Eex".into(),

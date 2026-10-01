@@ -11,10 +11,13 @@
 //! between multiple drivers on one net resolves naturally through the resistor
 //! network in MNA.
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use hauksbee_ir::{BOutput, Circuit, Device, DeviceId, NodeId, SourceKind};
 
 /// Default output resistance for a logic driver (ohms).
 pub const DEFAULT_RO: f64 = 50.0;
+
+/// Forward conductance (S) of the one-way element in a sink-only driver.
+const SINK_ONLY_S: f64 = 1e3;
 
 /// A handle to one Thevenin driver leg stamped into a circuit.
 #[derive(Debug, Clone)]
@@ -43,15 +46,16 @@ pub struct PinDriver {
 ///
 /// A driver sourcing `I` draws it from `hi` (`I_hi = +I`); one sinking it
 /// returns it into `lo` (`I_lo = -I`, current leaving `lo` negative), and
-/// `lo` is absent when the part's negative pin is ground. The scheduler sets
+/// `lo` is absent when the part's negative pin is ground. A sink-only
+/// (open-collector) driver has no `hi`: nothing is drawn from a supply. The scheduler sets
 /// both once per chunk from the mean current the driver delivered over the
 /// chunk before ([`PinDriver::set_draw`]), never from the live branch: read
 /// live, a load capacitor's `C*dV/dt` Newton residual would be mirrored onto
 /// the rail that feeds an upstream converter.
 #[derive(Debug, Clone, Copy)]
 pub struct DriverSupply {
-    /// `Isource` from the positive supply pin to ground.
-    pub hi: DeviceId,
+    /// `Isource` from the positive supply pin to ground, when the part has one.
+    pub hi: Option<DeviceId>,
     /// `Isource` from the negative supply pin to ground, when it is not ground.
     pub lo: Option<DeviceId>,
 }
@@ -59,7 +63,7 @@ pub struct DriverSupply {
 impl DriverSupply {
     /// Set the legs: `sourced` (>= 0) leaves `hi`, `sunk` (<= 0) leaves `lo`.
     pub fn set(self, circuit: &mut Circuit, sourced: f64, sunk: f64) {
-        for (id, amps) in [(Some(self.hi), sourced), (self.lo, sunk)] {
+        for (id, amps) in [(self.hi, sourced), (self.lo, sunk)] {
             let dev = id.and_then(|id| circuit.devices.get_mut(id.0 as usize));
             if let Some(Device::Isource { kind, .. }) = dev {
                 *kind = SourceKind::Dc(amps);
@@ -92,6 +96,53 @@ impl PinDriver {
         }
     }
 
+    /// Stamp a SINK-ONLY driver (an open collector or open drain) onto `net`:
+    /// the [`PinDriver::stamp`] Thevenin leg, then a one-way element between
+    /// the series resistor and the net that conducts only from the net toward
+    /// the source. The output pulls the net down to its low level through `ro`
+    /// and, whatever the low level, never sources current into a load that sits
+    /// below it (a pull-down), as a bare Thevenin source would.
+    ///
+    /// # Panics
+    /// Never: the element's expression is a fixed, valid string.
+    pub fn stamp_sink_only(
+        circuit: &mut Circuit,
+        net: NodeId,
+        net_name: &str,
+        tag: &str,
+        ro: f64,
+    ) -> Self {
+        let drv = circuit.node(&format!("__drv_{tag}_{net_name}"));
+        let mid = circuit.node(&format!("__drvm_{tag}_{net_name}"));
+        let vsource = circuit.add(Device::vsource(
+            format!("Vdrv_{tag}"),
+            drv,
+            NodeId::GROUND,
+            SourceKind::Dc(0.0),
+        ));
+        let resistor = circuit.add(Device::resistor(format!("Rdrv_{tag}"), drv, mid, ro));
+        // `max` keeps the element one-directional; its conductance is the
+        // series resistance's 1/1000th, so the line is `ro` to within 0.1%.
+        let expr = format!("{SINK_ONLY_S:e}*max(__d0-__d1,0.0)");
+        let diode = Device::behavioral(
+            format!("Bdrv_{tag}"),
+            (net, mid),
+            BOutput::Current,
+            &expr,
+            &[net, mid],
+        );
+        circuit.add(diode.expect("sink-only element expression"));
+        Self {
+            vsource,
+            net,
+            enabled: true,
+            roff: 1e9,
+            resistor,
+            ron: ro,
+            supply: None,
+        }
+    }
+
     /// Draw this driver's output current from supply pins `hi` and `lo`
     /// instead of ground. A ground `hi` leaves the driver as it was; a ground
     /// `lo` is the return the current already takes.
@@ -109,8 +160,22 @@ impl PinDriver {
             ))
         };
         self.supply = Some(DriverSupply {
-            hi: leg(circuit, "Idrh", hi),
+            hi: Some(leg(circuit, "Idrh", hi)),
             lo: (!lo.is_ground()).then(|| leg(circuit, "Idrl", lo)),
+        });
+    }
+
+    /// Return this sink-only driver's current into supply pin `lo` and draw
+    /// nothing from a positive pin. A ground `lo` leaves the driver as it was.
+    pub fn route_return(&mut self, circuit: &mut Circuit, tag: &str, lo: NodeId) {
+        if lo.is_ground() {
+            return;
+        }
+        let name = format!("Idrl_{tag}");
+        let leg = Device::isource(name, lo, NodeId::GROUND, SourceKind::Dc(0.0));
+        self.supply = Some(DriverSupply {
+            hi: None,
+            lo: Some(circuit.add(leg)),
         });
     }
 

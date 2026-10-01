@@ -1254,12 +1254,18 @@ outputs = ["y1", "y2", "y3", "y4", "y5", "y6"]
 # and 2.4 V will be modelled as holding its previous state, which is the
 # engine's hysteresis rule and not a claim about this part.
 #
+# `open_collector = true` makes each output a SINK-ONLY driver: it pulls its net
+# down to `vol` through `ro` and never sources, so a channel that is on into a
+# pull-down load reads 0 V, and an off channel is open. The sunk current returns
+# into pin 8.
+#
 # There is no supply pin, so no `supply_pin` and no `supply_static_ua`: the
 # array is powered entirely through its outputs and its COM clamp rail. Pin 8
 # (E) is mapped `gnd` because the datasheet calls it the "common emitter shared
-# by all channels (typically tied to ground)", and because the engine's output
-# drivers are referenced to circuit ground regardless. A board that lifts E
-# above ground is therefore NOT modelled correctly.
+# by all channels (typically tied to ground)"; the sunk current is returned
+# through it, so a shunt in series with E reads the load. The low level itself
+# is still referenced to circuit ground, so a board that lifts E above ground
+# is NOT modelled correctly.
 #
 # DELIBERATELY NOT MODELLED:
 #   - The COM clamp diodes (VF 1.7 V typ at 350 mA). No diode is stamped, so an
@@ -1295,6 +1301,7 @@ vih       = 2.4      # VI(on) max @ VCE = 2 V, IC = 200 mA
 vil       = 1.35     # NOT a datasheet figure: the engine default, made visible
 tpd_s     = 2.5e-7   # tPLH = tPHL typ (1 us max)
 gnd_pin   = "8"
+open_collector = true  # outputs only sink (into pin 8); no current is sourced into a pull-down
 
 [models.pins]
 # Section 4 Table 4-1 Pin Functions, D/N/NS/PW 16-pin package.
