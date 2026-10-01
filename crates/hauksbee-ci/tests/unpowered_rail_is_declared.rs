@@ -232,3 +232,41 @@ fn the_scaffolds_questions_cover_every_rail_the_first_run_warns_about() {
 }
 
 
+
+#[test]
+fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
+    // ANALOG_VDD names no voltage, but an AMS1117-3.3 makes it from VCC. It is
+    // powered; calling it dead would send the user to declare a supply there,
+    // which the runner refuses as a fight with the regulator.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = two_rail_board(dir.path().join("regulated.net"), "VCC", "ANALOG_VDD");
+    let net = std::fs::read_to_string(&path).expect("read board");
+    let net = net
+        .replace(
+            "  )\n  (nets\n",
+            "    (comp (ref \"U1\") (value \"AMS1117-3.3\") \
+             (footprint \"Package_TO_SOT_SMD:SOT-223-3_TabPin2\") \
+             (libsource (lib \"Regulator_Linear\") (part \"AMS1117-3.3\")))\n  )\n  (nets\n",
+        )
+        .replace(
+            "(name \"VCC\")\n",
+            "(name \"VCC\")\n      (node (ref \"U1\") (pin \"3\"))\n",
+        )
+        .replace(
+            "(name \"ANALOG_VDD\")\n",
+            "(name \"ANALOG_VDD\")\n      (node (ref \"U1\") (pin \"2\"))\n",
+        )
+        .replace(
+            "  ))\n",
+            "    (net (code \"3\") (name \"GND\")\n      (node (ref \"U1\") (pin \"1\")))\n  ))\n",
+        );
+    std::fs::write(&path, net).expect("write board");
+    let result = run(&spec_for(dir.path(), &path, ""));
+    assert!(
+        !result.dead_rails.iter().any(|n| n == "ANALOG_VDD"),
+        "U1 drives ANALOG_VDD: {:?}",
+        result.dead_rails
+    );
+    let toml = hauksbee_ci::init::render_spec(&path).expect("scaffold");
+    assert!(!toml.contains("net = \"ANALOG_VDD\""), "{toml}");
+}

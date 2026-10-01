@@ -282,6 +282,17 @@ pin is resolved against the board, so the same spec runs on a schematic and a
 PCB that spell the unnamed net differently; a `ref` or `pin` the board lacks is
 a load error.
 
+Declare a supply where the board takes power: a connector, a battery terminal,
+or a regulator's input. A net a part on the board already drives (a
+regulator's or converter's output, or a net tied to one through a sense
+resistor, ferrite or inductor) is refused, because an ideal source there would
+fight the part and carry its load, so its input would read low or negative
+current. The refusal names the net to use instead, follows a chain of
+regulators up to the first undriven input, and gives the `ref` + `pin` form
+for an input net KiCad left unnamed. A linear charger carded as a regulator
+(TP4054/TP4056 class) drives its battery pin the same way, so feed such a
+board from the charger's input rather than declaring the cell.
+
 #### Cold power-on: `ramp_ms`
 
 **By default a supply starts already settled.** The transient march begins at
@@ -305,7 +316,7 @@ default frame the same ramp is indistinguishable from no ramp at all.
 net = "V33"
 kind = "ideal"
 volts = 3.3
-ramp_ms = 0.5        # the LDO reaches 3.3 V 0.5 ms after power is applied
+ramp_ms = 0.5        # the external 3.3 V input rises over 0.5 ms
 ```
 
 A ramped rail is driven directly rather than through a behavioural supply leg,

@@ -61,3 +61,33 @@ fn an_input_exactly_on_the_dropout_bound_is_supported() {
     );
     assert_eq!(seen, (0, 3), "equality must pass, a shortfall must refuse");
 }
+
+/// A supply declared on the regulator's own output is refused, and the
+/// refusal names the input to declare instead, by net and by pin, with the
+/// headroom the card needs there, so the spec is fixed in one edit.
+#[test]
+fn a_supply_on_the_regulated_rail_is_pointed_at_the_regulator_input() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.board");
+    let spec = d.path().join("on-output.toml");
+    let body = format!(
+        "name = \"supply on the output\"\nboard = {}\nduration_ms = 3\n\
+         [[supply]]\nnet = \"VOUT\"\nkind = \"ideal\"\nvolts = 3.3\n\
+         [[assert]]\nkind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\nmax = 3.4\n",
+        support::toml_path(&board)
+    );
+    std::fs::write(&spec, body).expect("write spec");
+    let cfg = RunConfig {
+        spec,
+        ..RunConfig::default()
+    };
+    let err = hauksbee_ci::run(&cfg).expect_err("a fight with U1 must refuse");
+    let msg = err.to_string();
+    let fix = format!(
+        "Declare it on 'VIN' (or by pin: ref = \"U1\", pin = \"3\") instead, the input of U1; \
+         U1 needs at least {:.2} V there",
+        minimum_input_v()
+    );
+    assert!(msg.contains("'VOUT' is already driven by U1"), "{msg}");
+    assert!(msg.contains(&fix), "{msg}");
+}

@@ -30,14 +30,6 @@ net = "+5V_USB"                   # detected supply rail
 kind = "usb"                     # the name and the 5 V say this rail is a USB port
 usb = "5v1.5a"               # what the port negotiates: 5v0.5a | 5v1.5a | 5v3a
 
-# These nets name a supply but not a voltage, so nothing can work out
-# what to feed them and they will sit at 0 V. Fill in the voltage and
-# uncomment each one, or every analog result is solved around a dead rail.
-# [[supply]]
-# net = "VBAT"
-# kind = "ideal"
-# volts =                     # what does this rail run at?
-
 # Assertions: at least one must hold for the build to go green.
 
 # no_faults: the stress monitor raised no over-current / over-voltage /

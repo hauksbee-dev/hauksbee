@@ -53,6 +53,17 @@ pub struct Driver {
     pub by: String,
 }
 
+/// Where a driving part takes its power, for pointing a refused supply at it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Feed {
+    /// The part's input node.
+    pub input: NodeId,
+    /// The least voltage the part needs there, when its card says.
+    pub min_v: Option<f64>,
+    /// The input pin's number, so a spec can name an unnamed net by pin.
+    pub pin: Option<String>,
+}
+
 /// The board's nets grouped into rail domains, with the drivers in each.
 #[derive(Debug, Clone, Default)]
 pub struct RailDomains {
@@ -149,9 +160,19 @@ impl RailDomains {
     }
 
     /// Why `net` (on `node`) cannot take a declared supply: the parts already
-    /// driving its domain, in a sentence that says what to do instead.
+    /// driving its domain, and the net to declare it on instead.
+    ///
+    /// `feed_of` gives a driving part's [`Feed`]. The note follows that chain upstream past
+    /// every input another part drives, so it names the one net where the
+    /// board takes power and the user fixes the spec in one edit.
     #[must_use]
-    pub fn owned_note(&self, circuit: &Circuit, net: &str, node: NodeId) -> Option<String> {
+    pub fn owned_note(
+        &self,
+        circuit: &Circuit,
+        net: &str,
+        node: NodeId,
+        feed_of: impl Fn(&str) -> Option<Feed>,
+    ) -> Option<String> {
         let drivers = self.drivers_of(node);
         let first = drivers.first()?;
         let by = drivers.iter().map(|d| d.by.as_str()).collect::<Vec<_>>();
@@ -163,12 +184,54 @@ impl RailDomains {
                 circuit.node_name(first.node)
             )
         };
+        let instead = self.upstream_feed(first, &feed_of).map_or_else(
+            || {
+                " Declare the supply where the board takes power (the driving part's input, \
+                 a battery or a connector) instead"
+                    .to_string()
+            },
+            |(chain, feed)| {
+                let top = &chain[0];
+                let need = feed.min_v.map_or_else(String::new, |v| {
+                    format!("; {top} needs at least {v:.2} V there")
+                });
+                let by_pin = feed.pin.map_or_else(String::new, |p| {
+                    format!(" (or by pin: ref = \"{top}\", pin = \"{p}\")")
+                });
+                format!(
+                    " Declare it on '{}'{by_pin} instead, the input of {}{need}",
+                    circuit.node_name(feed.input),
+                    chain.join(", which feeds ")
+                )
+            },
+        );
         Some(format!(
             "'{net}' is already driven by {}{via}; an ideal source there would fight it and \
-             carry its load, so the input current would read low or negative. Declare the \
-             supply on the regulator's input instead",
+             carry its load, so the input current would read low or negative.{instead}",
             by.join(" and ")
         ))
+    }
+
+    /// The undriven feed at the top of `from`'s chain, with the parts on the
+    /// way (topmost first). `None` when a part's input is unknown or the chain
+    /// loops, so the note never names a net the runner would refuse in turn.
+    fn upstream_feed(
+        &self,
+        from: &Driver,
+        feed_of: &impl Fn(&str) -> Option<Feed>,
+    ) -> Option<(Vec<String>, Feed)> {
+        let mut chain = vec![from.by.clone()];
+        let mut feed = feed_of(&from.by)?;
+        while let Some(next) = self.drivers_of(feed.input).first() {
+            let Some(up) = feed_of(&next.by).filter(|_| !chain.contains(&next.by)) else {
+                break;
+            };
+            chain.insert(0, next.by.clone());
+            feed = up;
+        }
+        self.drivers_of(feed.input)
+            .is_empty()
+            .then_some((chain, feed))
     }
 
     /// Every domain two or more parts drive, naming the parts and the nets
@@ -305,7 +368,66 @@ mod tests {
         assert_eq!(d.drivers_of(out)[0].by, "U1");
         assert!(d.drivers_of(vin).is_empty());
         assert!(d.conflicts(&c).is_empty());
-        assert!(d.owned_note(&c, "+5V_A", ana).unwrap().contains("'SW'"));
+        let feed = Feed {
+            input: vin,
+            min_v: Some(5.6),
+            pin: Some("4".into()),
+        };
+        let note = d
+            .owned_note(&c, "+5V_A", ana, |p| (p == "U1").then(|| feed.clone()))
+            .unwrap();
+        assert!(note.contains("'SW'"), "{note}");
+        let fix = "on '+12V' (or by pin: ref = \"U1\", pin = \"4\") instead, the input of U1; \
+                   U1 needs at least 5.60 V";
+        assert!(note.contains(fix), "{note}");
+        assert!(d
+            .owned_note(&c, "+5V_A", ana, |_| None)
+            .unwrap()
+            .contains("a battery or a connector"));
+    }
+
+    #[test]
+    fn the_note_follows_a_regulator_chain_up_to_the_undriven_input() {
+        let mut c = Circuit::new();
+        let [vin, mid, out] = ["VBAT", "+5V", "+3V3"].map(|n| c.node(n));
+        c.add(Device::vsource(
+            "Vreg_U1",
+            mid,
+            NodeId::GROUND,
+            SourceKind::Dc(5.0),
+        ));
+        c.add(Device::vsource(
+            "Vreg_U2",
+            out,
+            NodeId::GROUND,
+            SourceKind::Dc(3.3),
+        ));
+        let d = RailDomains::new(&c, &[], &[]);
+        let feed = |input, min_v| Feed {
+            input,
+            min_v,
+            pin: None,
+        };
+        let feeds = |p: &str| match p {
+            "U1" => Some(feed(vin, Some(5.3))),
+            "U2" => Some(feed(mid, Some(3.4))),
+            _ => None,
+        };
+        let note = d.owned_note(&c, "+3V3", out, feeds).unwrap();
+        assert!(
+            note.contains(
+                "on 'VBAT' instead, the input of U1, which feeds U2; U1 needs at least 5.30 V"
+            ),
+            "{note}"
+        );
+        // A loop, or a top part with no known input, never names a driven net.
+        let note = d
+            .owned_note(&c, "+3V3", out, |p| (p == "U2").then(|| feed(mid, None)))
+            .unwrap();
+        assert!(
+            !note.contains("'+5V'") && note.contains("a battery or a connector"),
+            "{note}"
+        );
     }
 
     #[test]

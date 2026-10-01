@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
-use hauksbee_engine::rail_owner::RailDomains;
+use hauksbee_engine::rail_owner::{Feed, RailDomains};
 pub use hauksbee_engine::unpowered_supply_nets;
 use hauksbee_engine::{bind_board, BoundBoard, CsProvenance, HauksbeeEngine, ResolvedCs};
 use hauksbee_extract::ExtractedBoard;
@@ -3217,7 +3217,7 @@ fn bias_bound(
         bound.suppress_rail(net);
     }
     for (i, s) in spec.supplies.iter().enumerate() {
-        attach_supply(bound, s, &spec.supplies[..i])?;
+        attach_supply(bound, board, s, &spec.supplies[..i])?;
     }
     let dead = dead_rails(board, bound, spec);
     for (net, volts) in spec
@@ -3327,6 +3327,7 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
 /// series conductor (a ferrite from VBUS to +5V) gives way to it.
 fn attach_supply(
     bound: &mut BoundBoard,
+    board: &ExtractedBoard,
     s: &SupplySpec,
     earlier: &[SupplySpec],
 ) -> Result<(), SpecError> {
@@ -3340,7 +3341,16 @@ fn attach_supply(
     let legs: Vec<_> = bound.supplies.iter().map(|l| l.vsource).collect();
     let domains = RailDomains::new(&bound.circuit, &bound.behavioral, &legs);
     let refuse = |why: String| Err(SpecError::Invalid(format!("supply on '{}': {why}", s.net)));
-    if let Some(why) = domains.owned_note(&bound.circuit, &s.net, node) {
+    let feed_of = |part: &str| {
+        let (input, min_v) = bound.feed_of(part)?;
+        let name = bound.circuit.node_name(input);
+        let net = board.nets.iter().find(|n| n.name == name).map(|n| n.id);
+        let comp = board.components.iter().find(|c| c.reference == part);
+        let pin = comp.and_then(|c| c.pins.iter().find(|p| p.net.is_some() && p.net == net));
+        let pin = pin.map(|p| p.number.clone());
+        Some(Feed { input, min_v, pin })
+    };
+    if let Some(why) = domains.owned_note(&bound.circuit, &s.net, node, feed_of) {
         return refuse(why);
     }
     let joined: Vec<String> = bound

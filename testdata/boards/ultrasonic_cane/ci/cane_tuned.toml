@@ -1,4 +1,4 @@
-# Tuned from the `hauksbee-ci init` scaffold: VBAT powered, firmware attached, boot gate watched.
+# Tuned from the `hauksbee-ci init` scaffold: USB powered, firmware attached, boot gate watched.
 name = "cane power-up (tuned)"
 board = "../ultrasonic_cane.kicad_pcb"
 mcu = "atmega328p"
@@ -10,11 +10,8 @@ net = "+5V_USB"
 kind = "usb"
 usb = "5v1.5a"
 
-[[supply]]
-net = "VBAT"
-kind = "battery"
-chemistry = "liion"
-volts = 3.7
+# No supply on VBAT: the TP4056 charger (U3) is modelled as a 4.2 V source on
+# it, fed from +5V_USB, so a cell declared there would fight U3 and is refused.
 
 [[assert]]
 kind = "no_faults"

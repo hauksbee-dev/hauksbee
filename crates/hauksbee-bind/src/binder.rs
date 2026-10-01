@@ -205,6 +205,27 @@ impl BoundBoard {
         crate::stress::aggregate_power_coverage_gaps(&self.device_meta)
     }
 
+    /// Where `part` takes the power it regulates onto a rail: a simple
+    /// regulator's input (with the least voltage it needs there, when the
+    /// card states a dropout and the rail is a fixed positive one) or a
+    /// converter's input. `None` for any other
+    /// part, including a shunt reference, which is fed through its resistor.
+    #[must_use]
+    pub fn feed_of(&self, part: &str) -> Option<(NodeId, Option<f64>)> {
+        if let Some(r) = self.report.regulators.iter().find(|r| r.reference == part) {
+            // A magnitude: stated as "at least" only for a positive rail.
+            let positive = matches!(
+                self.circuit.devices.get(r.source.0 as usize),
+                Some(Device::Vsource { kind: SourceKind::Dc(v), .. }) if *v > 0.0
+            );
+            let need = r.dropout_v.map(|_| r.min_in_v);
+            let need = need.filter(|v| positive && r.adj_return.is_none() && v.is_finite());
+            return Some((r.input, need));
+        }
+        let b = self.behavioral.iter().find(|b| b.reference == part)?;
+        Some((b.converter_in_node()?, None))
+    }
+
     /// Look up a net node by name.
     #[must_use]
     pub fn node(&self, net: &str) -> Option<NodeId> {
@@ -5929,10 +5950,25 @@ pub fn unpowered_supply_nets(
         }
     }
 
+    // A net a part drives (a regulator's output, a converter's rail, a switched
+    // branch of either) or that a series conductor ties to a powered leg is
+    // powered too: naming it dead would send the user to declare a supply
+    // the runner then refuses as a fight with that part.
+    let legs: Vec<_> = bound.supplies.iter().map(|l| l.vsource).collect();
+    let mut domains = crate::rail_owner::RailDomains::new(&bound.circuit, &bound.behavioral, &legs);
+    let board_nodes: std::collections::HashSet<NodeId> =
+        bound.net_nodes.values().copied().collect();
+    domains.join_switches(&bound.circuit, |n| board_nodes.contains(&n));
+    let fed = |name: &str| {
+        bound.node(name).is_some_and(|n| {
+            domains.fed_by_driver(n) || bound.supplies.iter().any(|l| domains.fed_joined(l.net, n))
+        })
+    };
+
     let mut out: Vec<String> = board
         .nets
         .iter()
-        .filter(|net| !powered.contains(net.name.as_str()))
+        .filter(|net| !powered.contains(net.name.as_str()) && !fed(&net.name))
         .filter(|net| names_a_supply_of_unknown_voltage(&net.name))
         .filter(|net| {
             parts_on

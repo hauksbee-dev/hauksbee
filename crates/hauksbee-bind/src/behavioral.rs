@@ -1184,6 +1184,13 @@ impl BehavioralDevice {
         self.converter.as_ref().map(|c| c.out_node)
     }
 
+    /// The converter's input node: where it takes the power it delivers.
+    #[must_use]
+    pub fn converter_in_node(&self) -> Option<NodeId> {
+        let c = self.converter.as_ref()?;
+        self.role_nodes.get(&c.cfg.in_pin).copied()
+    }
+
     /// Every board node this device holds stiffly: its converter's output and
     /// each voltage law's pin behind a series-conductor resistance. Its other
     /// legs (pulls, open drains, 50 Ω state drives) are weak beside a rail.
