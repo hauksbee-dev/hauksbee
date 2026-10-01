@@ -331,11 +331,7 @@ pub fn read_json(path: impl AsRef<std::path::Path>) -> serde_json::Value {
 
 /// The repo root, two levels up from this crate's manifest dir.
 pub fn repo_root() -> PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
+    hauksbee_testkit::repo_root(env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Return a device without changing the caller's insertion order or `DeviceId`.

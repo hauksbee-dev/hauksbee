@@ -28,9 +28,7 @@ use crate::support::{resistor, vsource};
 // ── Locating models ────────────────────────────────────────────────────────
 
 fn testdata(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata")
-        .join(rel)
+    hauksbee_testkit::testdata(env!("CARGO_MANIFEST_DIR"), rel)
 }
 
 /// Parse the first `[[models]]` entry out of a TOML string.

@@ -147,11 +147,7 @@ pub fn blinky_board() -> PathBuf {
 
 /// The repo root, two levels up from this crate's manifest dir.
 pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
+    hauksbee_testkit::repo_root(env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Decode a captured `Output`'s stdout as UTF-8.

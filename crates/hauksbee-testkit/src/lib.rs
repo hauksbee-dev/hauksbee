@@ -28,6 +28,12 @@ pub fn repo_root(manifest_dir: &str) -> PathBuf {
         .map_or_else(|| PathBuf::from(manifest_dir), Path::to_path_buf)
 }
 
+/// `<repo>/testdata/<rel>`, derived from the calling crate's manifest directory.
+#[must_use]
+pub fn testdata(manifest_dir: &str, rel: &str) -> PathBuf {
+    repo_root(manifest_dir).join("testdata").join(rel)
+}
+
 /// True when a missing asset should fail the run instead of skipping it.
 #[must_use]
 pub fn require_assets() -> bool {

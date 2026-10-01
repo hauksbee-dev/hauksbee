@@ -10,9 +10,7 @@ use std::path::PathBuf;
 
 /// Path to the repo `testdata/` directory, resolved relative to the crate.
 pub fn testdata(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata")
-        .join(rel)
+    hauksbee_testkit::testdata(env!("CARGO_MANIFEST_DIR"), rel)
 }
 
 /// The demo blink/ADC firmware shipped in testdata.

@@ -10,9 +10,7 @@ use hauksbee_ci::{run, RunConfig};
 use crate::support;
 
 fn testdata(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata")
-        .join(rel)
+    hauksbee_testkit::testdata(env!("CARGO_MANIFEST_DIR"), rel)
 }
 
 #[test]
