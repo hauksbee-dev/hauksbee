@@ -797,6 +797,13 @@
           ],
           "description": "Numerical qualification for this exact run. Solver tolerances and\nmethods are inputs, the residual is measured when available, and failed\nwindows are explicitly invalid rather than assigned invented precision."
         },
+        "execution": {
+          "description": "Per-MCU evidence that the firmware executed: entry symbol reached,\ninstructions and PC samples, faults, UART bytes, GPIO toggles per pin,\nand whether reset, supply and clock let it run. An MCU with\n`executed: false` never counts as a firmware pass.",
+          "items": {
+            "$ref": "#/definitions/ExecutionEvidence"
+          },
+          "type": "array"
+        },
         "failed_windows": {
           "description": "Sim-time windows `[start_s, end_s)` where the analog solve failed. Empty\n(and omitted from JSON) on a valid run.",
           "items": {
@@ -1518,6 +1525,149 @@
         }
       ]
     },
+    "ExecutionEvidence": {
+      "description": "Evidence that the firmware executed on one MCU during the run.",
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "blockers": {
+          "description": "Why the run is not eligible, one sentence per reason; empty when it is.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "clock_source": {
+          "description": "Where the core's clock comes from, in words.",
+          "type": "string"
+        },
+        "clock_valid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Observed"
+            }
+          ],
+          "description": "Whether the board supplies the clock the core runs from."
+        },
+        "distinct_pcs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entry_symbol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executed": {
+          "description": "Any positive evidence the firmware ran: entry reached, UART bytes, or a\nGPIO toggle.",
+          "type": "boolean"
+        },
+        "faults": {
+          "description": "Fault or exception handlers entered, or a crashed core.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "firmware_pass_eligible": {
+          "description": "Executed, no fault, not held in reset, and supply not invalid. Only an\neligible MCU's firmware behaviour can count as a pass.",
+          "type": "boolean"
+        },
+        "gpio_toggles": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Output edges per GPIO pin (`\"PA5\"`), firmware-driven.",
+          "type": "object"
+        },
+        "instructions": {
+          "description": "Instructions retired (cycles on simavr), when the backend counts them.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_pc": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "pc_samples": {
+          "description": "Program-counter samples taken at chunk boundaries, and how many\ndistinct values they held (one distinct value: a parked core).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reached_entry": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Observed"
+            }
+          ],
+          "description": "Whether the core reached the firmware's entry symbol (`main`)."
+        },
+        "reset_held": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Observed"
+            }
+          ],
+          "description": "Whether the board held the reset line asserted for the whole run."
+        },
+        "supply_v": {
+          "description": "Lowest supply-pad voltage at the end of the run.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "supply_valid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Observed"
+            }
+          ],
+          "description": "Whether the supply pads sat inside the part's operating range."
+        },
+        "uart_bytes": {
+          "description": "UART bytes the firmware transmitted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "backend",
+        "reached_entry",
+        "pc_samples",
+        "distinct_pcs",
+        "faults",
+        "uart_bytes",
+        "gpio_toggles",
+        "reset_held",
+        "supply_valid",
+        "clock_valid",
+        "clock_source",
+        "executed",
+        "firmware_pass_eligible"
+      ],
+      "type": "object"
+    },
     "IgnoredInput": {
       "description": "One member or section of an artifact that was deliberately not used.",
       "properties": {
@@ -2067,6 +2217,15 @@
         "nets"
       ],
       "type": "object"
+    },
+    "Observed": {
+      "description": "A fact the run either observed, observed false, or could not observe.",
+      "enum": [
+        "yes",
+        "no",
+        "unknown"
+      ],
+      "type": "string"
     },
     "OrderTriage": {
       "properties": {

@@ -343,6 +343,9 @@ pub struct WebFirmwareCoverage {
     pub timing_refusals: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_windows: Vec<crate::result::CosimFallbackWindow>,
+    /// Per-MCU execution evidence, the same rows the CLI `--json` carries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution: Vec<crate::execution::ExecutionEvidence>,
 }
 
 type WebCosimCoverage = WebFirmwareCoverage;
@@ -386,6 +389,12 @@ impl WebFirmwareAnalysis {
                 cosim.insert(
                     "fallback_windows".to_string(),
                     serde_json::to_value(&self.coverage.fallback_windows)?,
+                );
+            }
+            if !self.coverage.execution.is_empty() {
+                cosim.insert(
+                    "execution".to_string(),
+                    serde_json::to_value(&self.coverage.execution)?,
                 );
             }
         }
@@ -2008,6 +2017,7 @@ fn coverage_findings_for_web(
                     | CoverageClass::WatchdogLimitation
                     | CoverageClass::WatchdogReboot
                     | CoverageClass::TimingLimitation
+                    | CoverageClass::ExecutionBlocked
             )
         })
         .map(|c| WebFinding::unplaced("note", c.headline.clone(), c.message.clone(), c.fix.clone()))
@@ -2215,6 +2225,8 @@ fn run_web_cosim_with_bound(
     let plain = plain_faults(&faults);
     let mut findings: Vec<WebFinding> = plain.findings.iter().map(WebFinding::from).collect();
 
+    // Execution evidence, read once after the last frame like `run_headless`.
+    engine.scheduler_mut().refresh_execution_evidence();
     // Per-net activity table (top movers first), mirroring the CLI toggle table.
     let sched = engine.scheduler();
     let seconds_simulated = sched.sim_time;
@@ -2224,9 +2236,10 @@ fn run_web_cosim_with_bound(
     // firmware never executed or ran on a substitute chip. Prepended so they lead.
     let total_toggles: u64 = sched.stats.values().map(|s| s.toggles).sum();
     let uart_empty = last_uart.is_empty();
-    // A pin driven high and HELD shows zero net toggles yet clearly ran, so the
-    // refusal must also consult whether the firmware drove any GPIO at all.
-    let any_gpio_driven = sched.any_gpio_driven();
+    // The one "did the firmware do nothing?" predicate the CLI also asks: a
+    // pin driven high and HELD still counts, and with execution evidence net
+    // toggles alone (analog-side) do not.
+    let firmware_quiet = sched.firmware_quiet(total_toggles, !uart_empty);
     // Say plainly that the shorted copper was simulated as shorted, so the
     // rails/GPIO table below cannot be read as "the shorted board is fine".
     if shorts_applied > 0 {
@@ -2359,15 +2372,17 @@ fn run_web_cosim_with_bound(
         }
     }
     // Zero-activity refusal: a run that drove nothing proves nothing.
-    if total_toggles == 0 && uart_empty && !any_gpio_driven {
+    if firmware_quiet {
         findings.insert(
             0,
             WebFinding::unplaced(
                 "note",
                 "Firmware was not exercised",
-                "Co-sim saw zero net toggles and no UART output; this result \
-                 cannot vouch for firmware behaviour (the MCU may have stalled \
-                 at boot, run no I/O, or the firmware may not match this board).",
+                format!(
+                    "{} (the MCU may have stalled at boot, run no I/O, or the firmware \
+                     may not match this board).",
+                    crate::execution::NO_EXECUTION_MESSAGE
+                ),
                 "Confirm the firmware matches this MCU and actually drives I/O.",
             ),
         );
@@ -2445,7 +2460,7 @@ fn run_web_cosim_with_bound(
     // honesty notes exist to prevent. The advisory is firmware-derived, so it is
     // computed from the finished co-sim's drive sets; `firmware_ran` reuses the
     // same zero-activity gate the notes above use.
-    let firmware_ran = !(total_toggles == 0 && uart_empty && !any_gpio_driven);
+    let firmware_ran = !firmware_quiet;
     let boot_advisory = crate::checks::boot::analyze(
         board,
         &sched.firmware_held_high_nets(),
@@ -2532,6 +2547,7 @@ fn run_web_cosim_with_bound(
             timing_coverage,
             timing_refusals,
             fallback_windows,
+            execution: sched.execution_evidence().to_vec(),
         },
     };
     let substituted = !captured.scoped_substitutions.is_empty();

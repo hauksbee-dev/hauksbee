@@ -430,6 +430,10 @@ pub struct RunOutcome {
     pub regulation: Vec<hauksbee_engine::scheduler::RegulationTaint>,
     /// Measured per-backend edge/pulse capability at the chunk used.
     pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
+    /// Per-MCU evidence that the firmware executed (entry reached, faults,
+    /// UART bytes, GPIO toggles, reset/supply/clock). A row that is not
+    /// `firmware_pass_eligible` makes every assertion INVALID.
+    pub execution: Vec<hauksbee_engine::execution::ExecutionEvidence>,
     /// Timing claims the run could not honor. Any entry invalidates the whole
     /// strict result; these are not advisory warnings.
     pub timing_refusals: Vec<String>,
@@ -1451,6 +1455,33 @@ fn production_assumptions(
             "add the ADC injection recipe to the SoC descriptor, then re-run",
         ));
     }
+    // No evidence the firmware ran (or it ran faulted, held in reset or off its
+    // supply range) is never a firmware pass: every assertion this run judges
+    // rests on that firmware, so each is INVALID rather than green.
+    for e in engine
+        .scheduler()
+        .execution_evidence()
+        .iter()
+        .filter(|e| !e.firmware_pass_eligible)
+    {
+        let because = e.blockers.join("; ");
+        for assertion in &spec.asserts {
+            production_assumptions.push(Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::new(
+                    &format!("firmware/{}", e.mcu_ref),
+                    &format!("the firmware on {} ({})", e.mcu_ref, e.backend),
+                ),
+                Scope::Check {
+                    check: "ci".into(),
+                    kind: Some(assertion.label()),
+                },
+                &because,
+                "check the firmware matches this MCU and boots on this board (reset released, \
+                 supply in range, no fault), then re-run",
+            ));
+        }
+    }
     for bus in engine.scheduler().unexercised_buses() {
         for assertion in spec
             .asserts
@@ -2151,6 +2182,7 @@ fn run_one(
         t += frame_dt;
     }
     tick.done();
+    engine.scheduler_mut().refresh_execution_evidence();
 
     // Analog-validity outcome. The refusal is carried in the outcome and
     // resolved at the `CiResult` layer, so the intermittent case (some failed
@@ -2260,6 +2292,7 @@ fn run_one(
         coverage_warnings: coverage_warnings(&engine, &hollow_warnings),
         regulation: engine.scheduler().regulation_taint().to_vec(),
         timing_coverage: engine.scheduler().timing_coverage(),
+        execution: engine.scheduler().execution_evidence().to_vec(),
         timing_refusals: timing_configuration_refusal
             .into_iter()
             .chain(assertion_timing_refusals(

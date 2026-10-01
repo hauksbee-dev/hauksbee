@@ -21,6 +21,8 @@ pub(super) struct AnalogStatus {
 
 pub(super) struct ActivityStatus {
     pub(super) zero: bool,
+    /// Executing MCUs that still cannot count as a firmware pass, one line each.
+    pub(super) pass_blockers: Vec<String>,
     pub(super) strict_refusal: Option<Refusal>,
     pub(super) boot_advisory: crate::checks::boot::BootAdvisory,
 }
@@ -129,7 +131,10 @@ fn execute_and_collect_observations(
     // has zero net toggles yet clearly ran, so a toggles-only test would cry
     // wolf on it. Determined BEFORE emitting so the refusal reaches every
     // surface, including --json when no MCU was instantiated (cosim is None).
-    let zero = total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
+    // Execution evidence (entry reached, firmware pin edges, UART) decides
+    // when the run gathered it; see `Scheduler::firmware_quiet`.
+    let zero = engine.scheduler().firmware_quiet(total_toggles, uart_seen);
+    let pass_blockers = engine.scheduler().firmware_pass_blockers();
     let strict_refusal = if cfg.strict && abort {
         Some(Refusal::new(
                 "a trustworthy strict co-sim verdict for the firmware and analog circuit",
@@ -142,9 +147,19 @@ fn execute_and_collect_observations(
     } else if cfg.strict && zero {
         Some(Refusal::new(
                 "firmware behavior during this strict co-simulation",
-                "the run observed no GPIO drive, net toggles, or UART output, so it cannot prove the firmware executed meaningfully",
+                "the run observed no entry symbol reached, firmware GPIO drive, or UART output, so it cannot prove the firmware executed meaningfully",
                 vec!["board extraction, binding, and static copper findings remain valid"],
                 "verify the firmware image/MCU match and boot entry, then rerun with a probe or UART-producing fixture",
+            ))
+    } else if cfg.strict && !pass_blockers.is_empty() {
+        Some(Refusal::new(
+                "firmware behavior during this strict co-simulation",
+                format!(
+                    "the firmware executed but cannot count as a pass: {}",
+                    pass_blockers.join(" | ")
+                ),
+                vec!["board extraction, binding, and static copper findings remain valid"],
+                "fix the fault, reset or supply condition named in the execution evidence, then rerun the same strict command",
             ))
     } else {
         None
@@ -181,6 +196,7 @@ fn execute_and_collect_observations(
         },
         activity: ActivityStatus {
             zero,
+            pass_blockers,
             strict_refusal,
             boot_advisory,
         },
@@ -409,11 +425,10 @@ fn emit_report(
             });
         }
         if zero_activity {
-            jr.push_coverage_note(
-                "co-sim saw zero net toggles and no UART output; the \
-                              firmware was not exercised; this result cannot vouch \
-                              for firmware behaviour",
-            );
+            jr.push_coverage_note(crate::execution::NO_EXECUTION_MESSAGE);
+        }
+        for blocker in &observations.activity.pass_blockers {
+            jr.push_coverage_note(format!("firmware executed but is not a pass: {blocker}"));
         }
         // Independent of analog_valid: a run can be fully valid AND contain
         // windows a fallback rung produced. Silence here would let a
@@ -495,9 +510,13 @@ fn emit_report(
         }
         if zero_activity {
             report.heads_up.push(crate::plain::HeadsUp::note(
-                "co-sim saw zero net toggles and no UART output; the firmware was not \
-                     exercised, so this result cannot vouch for firmware behaviour",
+                crate::execution::NO_EXECUTION_MESSAGE,
             ));
+        }
+        for blocker in &observations.activity.pass_blockers {
+            report.heads_up.push(crate::plain::HeadsUp::note(format!(
+                "firmware executed but is not a pass: {blocker}"
+            )));
         }
         if fallback_chunk_count > 0 {
             report.heads_up.push(crate::plain::HeadsUp::note(format!(

@@ -677,6 +677,12 @@ pub struct CosimJson {
     /// live MCU backend at the actual chunk used by this run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
+    /// Per-MCU evidence that the firmware executed: entry symbol reached,
+    /// instructions and PC samples, faults, UART bytes, GPIO toggles per pin,
+    /// and whether reset, supply and clock let it run. An MCU with
+    /// `executed: false` never counts as a firmware pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution: Vec<crate::execution::ExecutionEvidence>,
     /// Runtime timing/replay limits reached. A strict run exits INVALID when
     /// this is non-empty instead of silently trusting a collapsed waveform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

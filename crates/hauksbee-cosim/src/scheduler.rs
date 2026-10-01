@@ -308,6 +308,12 @@ struct LiveMcu {
     /// the decided level differs, so poll backends (Renode/QEMU, one socket
     /// round-trip per call) pay per *transition*, not per chunk.
     digital_in_levels: HashMap<(char, u8), bool>,
+    /// UART bytes this core transmitted over the run (execution evidence).
+    uart_bytes: u64,
+    /// Firmware output edges per pin over the run (execution evidence).
+    pin_toggles: std::collections::BTreeMap<(char, u8), u64>,
+    /// Reset line and supply pads, watched across the run.
+    rails: crate::execution::RailWatch,
 }
 
 /// Scheduler-side analogue projection of one edge-synchronous parallel
@@ -716,6 +722,9 @@ pub struct Scheduler {
     /// Nets already reported by `detect_driver_contention` (once per net per
     /// run).
     contention_nets: std::collections::HashSet<u32>,
+    /// Per-MCU execution evidence, as of the last
+    /// [`Scheduler::refresh_execution_evidence`].
+    execution: Vec<crate::execution::ExecutionEvidence>,
 }
 
 /// A chip-substitution event: the board asked for `requested_part` but the
@@ -1257,7 +1266,7 @@ impl Scheduler {
         // analogue threshold or a claim about an unmodelled reset network.
         if firmware.is_some() {
             for binding in &mcus {
-                if let Some(role) = ["reset", "reset2", "pc6_reset", "run"]
+                if let Some(role) = RESET_ROLES
                     .into_iter()
                     .find(|role| binding.role_nets.get(*role) == Some(&NodeId::GROUND))
                 {
@@ -1284,31 +1293,12 @@ impl Scheduler {
         let mut supply_watches = Vec::new();
         for binding in &mcus {
             if let Some(max_v) = binding.max_supply_v {
-                let mut seen_nodes = std::collections::HashSet::new();
-                for (role, &node) in &binding.role_nets {
-                    // A numbered pad of the same supply domain must be stripped
-                    // to its domain name before the match: dedup is by NODE, but
-                    // `seen_nodes.insert` runs inside the `direct_supply` arm, so
-                    // a pad named `dvdd2` would match nothing and a rail reaching
-                    // ONLY numbered pads would get no watch at all. Stripping a
-                    // trailing digit run makes `vcc2`, `gnd2`, `dvdd3` and
-                    // `iovdd2` read as their domain, and cannot collide with a
-                    // rail whose name legitimately ends in a digit (`5v` is in
-                    // the list verbatim and matches before the strip applies).
-                    let bare = role.trim_end_matches(|c: char| c.is_ascii_digit());
-                    let domain = if is_direct_supply_role(role) {
-                        role.as_str()
-                    } else {
-                        bare
-                    };
-                    let direct_supply = is_direct_supply_role(domain);
-                    if direct_supply && !node.is_ground() && seen_nodes.insert(node) {
-                        supply_watches.push(hauksbee_bind::stress::SupplyWatch {
-                            reference: binding.reference.clone(),
-                            node,
-                            max_v,
-                        });
-                    }
+                for node in direct_supply_nodes(binding) {
+                    supply_watches.push(hauksbee_bind::stress::SupplyWatch {
+                        reference: binding.reference.clone(),
+                        node,
+                        max_v,
+                    });
                 }
             }
         }
@@ -1457,6 +1447,7 @@ impl Scheduler {
             short_pulse_nets: std::collections::HashSet::new(),
             timing_refusals: Vec::new(),
             timing_refusal_nets: std::collections::HashSet::new(),
+            execution: Vec::new(),
             contentions: Vec::new(),
             contention_nets: std::collections::HashSet::new(),
         };
@@ -1497,6 +1488,7 @@ impl Scheduler {
         // Index the non-pin-driver devices touching each net, for the plain
         // digital-input sync's "is this net really driven?" check.
         sched.rebuild_digital_in_evidence();
+        sched.drop_undriven_rail_nodes();
 
         // Index the nets that clock TICK-evaluated sequential parts, for the
         // sub-chunk pulse warning. Built after the 595 chains,
@@ -3294,6 +3286,12 @@ impl Scheduler {
             .map(|d| d.net.0)
             .collect();
 
+        // Execution evidence: the board's reset line and supply pads as the
+        // previous chunk solved them.
+        for m in &mut self.mcus {
+            m.rails.observe(&self.node_volts);
+        }
+
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
         for mi in 0..self.mcus.len() {
             self.inject_mcu_inputs(mi, &mcu_driven_nets);
@@ -3328,6 +3326,10 @@ impl Scheduler {
                     std::mem::take(&mut sh.uart_out),
                 )
             };
+            m.uart_bytes += bytes.len() as u64;
+            for edge in &edge_log {
+                *m.pin_toggles.entry((edge.port, edge.bit)).or_default() += 1;
+            }
             if !bytes.is_empty() {
                 uart.entry(mcu_ref.clone()).or_default().extend(bytes);
             }
@@ -3780,17 +3782,11 @@ impl Scheduler {
                 }
                 let net = drv.net.0;
                 let driven = mcu_driven_nets.contains(&net)
-                    || self.digital_in_evidence.get(&net).is_some_and(|devs| {
-                        devs.iter()
-                            .any(|&di| match self.circuit.devices.get(di as usize) {
-                                Some(Device::Resistor { ohms, .. }) => {
-                                    *ohms < WEAK_DIGITAL_DRIVE_OHMS
-                                }
-                                // A capacitor cannot decide a DC level.
-                                Some(Device::Capacitor { .. }) | None => false,
-                                Some(_) => true,
-                            })
-                    });
+                    || net_has_drive_evidence(
+                        &self.digital_in_evidence,
+                        &self.circuit.devices,
+                        net,
+                    );
                 if !driven {
                     continue;
                 }
@@ -4969,6 +4965,100 @@ impl Scheduler {
             }
         }
         Ok(budget)
+    }
+
+    /// Stop watching reset and supply nodes nothing drives. A floating net (a
+    /// reset pad with only an RC to nothing, a VDDA fed through an unmodelled
+    /// ferrite bead) solves to ~0 V through the pins' own legs and would read
+    /// as "held in reset" or "supply dead": a modelling gap, not a board fact.
+    /// A dropped node leaves its reading unknown rather than wrong.
+    fn drop_undriven_rail_nodes(&mut self) {
+        let (evidence, devices) = (&self.digital_in_evidence, &self.circuit.devices);
+        let driven = |n: &usize| {
+            u32::try_from(*n).is_ok_and(|net| net_has_drive_evidence(evidence, devices, net))
+        };
+        for m in &mut self.mcus {
+            m.rails.reset_nodes.retain(driven);
+            m.rails.supply_nodes.retain(driven);
+        }
+    }
+
+    /// Re-read every live MCU's execution evidence: the backend's probe (a few
+    /// Monitor round trips on Renode, free on simavr) plus the run's UART,
+    /// GPIO, reset, supply and clock observations. Call once after the run and
+    /// before reporting; [`Scheduler::execution_evidence`] returns the result.
+    pub fn refresh_execution_evidence(&mut self) {
+        let volts = &self.node_volts;
+        self.execution = self
+            .mcus
+            .iter_mut()
+            .map(|m| {
+                m.rails.observe(volts);
+                let board = crate::execution::BoardReadings {
+                    reset_held: m.rails.reset_held(m.logic_high_v),
+                    supply_valid: m.rails.supply_valid(
+                        m.binding.min_supply_v,
+                        m.binding.max_supply_v,
+                        m.logic_high_v,
+                    ),
+                    supply_v: m.rails.supply_v(),
+                    external_clock: m.binding.external_clock_present,
+                };
+                crate::execution::ExecutionEvidence::new(
+                    &m.binding.reference,
+                    &m.binding.backend,
+                    m.core.execution_probe(),
+                    m.uart_bytes,
+                    &m.pin_toggles,
+                    board,
+                )
+            })
+            .collect();
+        self.execution.sort_by(|a, b| a.mcu_ref.cmp(&b.mcu_ref));
+    }
+
+    /// Per-MCU execution evidence from the last
+    /// [`Scheduler::refresh_execution_evidence`], ordered by MCU reference.
+    /// Empty when no MCU co-simulated or the evidence was never refreshed.
+    #[must_use]
+    pub fn execution_evidence(&self) -> &[crate::execution::ExecutionEvidence] {
+        &self.execution
+    }
+
+    /// Whether the firmware demonstrably executed: `Some(true)` when at least
+    /// one MCU shows execution evidence, `Some(false)` when none does, `None`
+    /// when there is no evidence to judge (no MCU, or never refreshed).
+    #[must_use]
+    pub fn firmware_executed(&self) -> Option<bool> {
+        (!self.execution.is_empty()).then(|| self.execution.iter().any(|e| e.executed))
+    }
+
+    /// The one "did the firmware do nothing?" predicate every surface asks
+    /// (CLI strict refusal, boot advisory, web front door). UART output or a
+    /// firmware-driven GPIO is always activity. Past that, refreshed execution
+    /// evidence decides: net toggles alone can come from the analog side (an
+    /// oscillator, a responder) and never prove the firmware ran. Without
+    /// evidence (no MCU, never refreshed) the older net-toggle test stands.
+    #[must_use]
+    pub fn firmware_quiet(&self, total_toggles: u64, uart_seen: bool) -> bool {
+        if uart_seen || self.any_gpio_driven() {
+            return false;
+        }
+        self.firmware_executed()
+            .map_or(total_toggles == 0, |ran| !ran)
+    }
+
+    /// Why each MCU that DID execute still cannot count as a firmware pass (a
+    /// fault handler entered, reset held, supply out of range), one line per
+    /// MCU. Empty when every executing MCU is eligible; a core with no
+    /// execution evidence at all is [`Scheduler::firmware_quiet`]'s case.
+    #[must_use]
+    pub fn firmware_pass_blockers(&self) -> Vec<String> {
+        self.execution
+            .iter()
+            .filter(|e| e.executed && !e.firmware_pass_eligible)
+            .map(|e| format!("{}: {}", e.mcu_ref, e.blockers.join("; ")))
+            .collect()
     }
 
     /// False once any chunk this run failed to solve faithfully: either the
@@ -6474,6 +6564,47 @@ fn is_direct_supply_role(role: &str) -> bool {
     )
 }
 
+/// Active-low reset roles an MCU card maps (`reset`, `run` on the RP2040...).
+const RESET_ROLES: [&str; 4] = ["reset", "reset2", "pc6_reset", "run"];
+
+/// The distinct non-ground nodes on an MCU's direct-supply pads.
+///
+/// A numbered pad of the same supply domain is stripped to its domain name
+/// before the match: `vcc2`, `dvdd3` and `iovdd2` read as their domain, so a
+/// rail reaching ONLY numbered pads is still found. A rail whose name
+/// legitimately ends in a digit (`5v`) is in the list verbatim and matches
+/// before the strip applies. `vin` and `raw` feed a module's onboard regulator
+/// and are not the core's supply.
+fn direct_supply_nodes(binding: &McuBinding) -> Vec<NodeId> {
+    let mut nodes: Vec<NodeId> = binding
+        .role_nets
+        .iter()
+        .filter(|(role, _)| {
+            is_direct_supply_role(role)
+                || is_direct_supply_role(role.trim_end_matches(|c: char| c.is_ascii_digit()))
+        })
+        .map(|(_, &node)| node)
+        .filter(|node| !node.is_ground())
+        .collect();
+    nodes.sort_unstable_by_key(|n| n.0);
+    nodes.dedup();
+    nodes
+}
+
+/// Whether `net` has real drive evidence: a non-pin device with live
+/// resistance under [`WEAK_DIGITAL_DRIVE_OHMS`], or any non-R/C device. A
+/// floating net's ~0 V solve is the pins' own 1 GΩ legs talking.
+fn net_has_drive_evidence(evidence: &HashMap<u32, Vec<u32>>, devices: &[Device], net: u32) -> bool {
+    evidence.get(&net).is_some_and(|devs| {
+        devs.iter().any(|&di| match devices.get(di as usize) {
+            Some(Device::Resistor { ohms, .. }) => *ohms < WEAK_DIGITAL_DRIVE_OHMS,
+            // A capacitor cannot decide a DC level.
+            Some(Device::Capacitor { .. }) | None => false,
+            Some(_) => true,
+        })
+    })
+}
+
 /// Whether a backend string names an EXTERNAL co-sim core (Renode, QEMU, or
 /// anything future) rather than the in-process simavr backend.
 ///
@@ -6574,40 +6705,78 @@ fn detect_substitution(binding: &McuBinding) -> Option<McuSubstitution> {
     if requested.is_empty() {
         return None;
     }
-    // The canonical core each renode backend actually loads. The first element
-    // is the normalised identity of the modelled part; the second is the human
-    // label to print.
-    let modelled: (&str, &str) = match binding.backend.as_str() {
+    // What each renode backend actually loads: the normalised part prefixes
+    // its platform stands for (a request starting with one is the modelled
+    // core, possibly with a package/temperature suffix), the label to print,
+    // and the family stem a same-family substitute shares.
+    let (covers, label, stem): (&[&str], &str, &str) = match binding.backend.as_str() {
         // The stm32f4 / stm32f4_discovery backend always loads the F407 Discovery
         // core, regardless of which F4 variant the board specified.
-        "renode:stm32f4" | "renode:stm32f4_discovery" => ("STM32F407", "STM32F407"),
-        "renode:stm32f103" => ("STM32F103", "STM32F103"),
-        "renode:nrf52840" | "renode:nrf52" => ("NRF52840", "nRF52840"),
-        "renode:sifive_fe310" | "renode:fe310" => ("FE310", "SiFive FE310"),
+        "renode:stm32f4" | "renode:stm32f4_discovery" => (&["STM32F407"], "STM32F407", "STM32F4"),
+        "renode:stm32f103" => (&["STM32F103"], "STM32F103", "STM32F1"),
+        // The composed G4 platform is the G474 die, which the G473/G483/G484
+        // share; the G431/G441/G491 are smaller dies with fewer peripherals.
+        "renode:stm32g4" => (
+            &["STM32G473", "STM32G474", "STM32G483", "STM32G484"],
+            "STM32G474",
+            "STM32G4",
+        ),
+        // The F7 platform is the F746 map widened to the F76x/F77x RAM and
+        // UART7/8; the F72x/F73x are a different, smaller die.
+        "renode:stm32f7" => (
+            &[
+                "STM32F745",
+                "STM32F746",
+                "STM32F756",
+                "STM32F765",
+                "STM32F767",
+                "STM32F769",
+                "STM32F777",
+                "STM32F779",
+            ],
+            "STM32F746/F767/F777 class",
+            "STM32F7",
+        ),
+        // The L0 platform is Renode's STM32L071, standing for the L0x1 value
+        // line; the L0x2/L0x3 add USB, LCD and AES it does not model.
+        "renode:stm32l0" => (
+            &[
+                "STM32L011",
+                "STM32L021",
+                "STM32L031",
+                "STM32L041",
+                "STM32L051",
+                "STM32L071",
+                "STM32L081",
+            ],
+            "STM32L071 (L0x1 class)",
+            "STM32L0",
+        ),
+        "renode:nrf52840" | "renode:nrf52" => (&["NRF52840"], "nRF52840", "NRF52"),
+        "renode:sifive_fe310" | "renode:fe310" => (&["FE310"], "SiFive FE310", "FE3"),
         // simavr / qemu backends model the requested part directly; no
         // family-collapse substitution applies.
         _ => return None,
     };
 
     let norm = normalise_part(requested);
-    // The board asked for the exact modelled core (possibly with a package/temp
+    // The board asked for a modelled core (possibly with a package/temp
     // suffix, e.g. STM32F407VGT6): not a substitution.
-    if norm.starts_with(modelled.0) {
+    if covers.iter().any(|c| norm.starts_with(c)) {
         return None;
     }
     // Only warn when the requested part looks like the SAME family but a
     // different member (e.g. STM32F411 vs STM32F407). A requested part that does
     // not share the modelled family's stem is a binding the router should not
     // have produced; do not invent a substitution narrative for it.
-    let family_stem = family_stem(modelled.0);
-    if !norm.starts_with(family_stem) {
+    if !norm.starts_with(stem) {
         return None;
     }
     Some(McuSubstitution {
         reference: binding.reference.clone(),
         backend: binding.backend.clone(),
         requested_part: requested.to_string(),
-        modelled_core: modelled.1.to_string(),
+        modelled_core: label.to_string(),
     })
 }
 
@@ -6618,22 +6787,6 @@ fn normalise_part(s: &str) -> String {
         .filter(char::is_ascii_alphanumeric)
         .map(|c| c.to_ascii_uppercase())
         .collect()
-}
-
-/// The family stem shared by every member of a series: "STM32F407" -> "STM32F4",
-/// "STM32F103" -> "STM32F1", "NRF52840" -> "NRF52", "FE310" -> "FE3".
-fn family_stem(modelled_norm: &str) -> &str {
-    if let Some(rest) = modelled_norm.strip_prefix("STM32F") {
-        // Keep the series digit (the first char after STM32F).
-        return &modelled_norm[..("STM32F".len() + rest.chars().next().map_or(0, |_| 1))];
-    }
-    if modelled_norm.starts_with("NRF52") {
-        return "NRF52";
-    }
-    if modelled_norm.starts_with("FE3") {
-        return "FE3";
-    }
-    modelled_norm
 }
 
 /// Build a Renode-backed core for a `renode:<part>` backend string.
@@ -6964,6 +7117,19 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     active_ports.dedup();
     core.set_active_ports(&active_ports);
     let logic_high_v = logic_high_for_backend(&binding.backend);
+    let node_index = |n: NodeId| usize::try_from(n.0).ok();
+    let rails = crate::execution::RailWatch::new(
+        RESET_ROLES
+            .iter()
+            .filter_map(|role| binding.role_nets.get(*role))
+            .filter(|n| !n.is_ground())
+            .filter_map(|&n| node_index(n))
+            .collect(),
+        direct_supply_nodes(&binding)
+            .into_iter()
+            .filter_map(node_index)
+            .collect(),
+    );
     LiveMcu {
         core,
         binding,
@@ -6973,6 +7139,9 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         logic_high_v,
         responder_input_pins: std::collections::HashSet::new(),
         digital_in_levels: HashMap::new(),
+        uart_bytes: 0,
+        pin_toggles: std::collections::BTreeMap::new(),
+        rails,
     }
 }
 
@@ -7442,6 +7611,7 @@ missing = ["measurement_registers"]
             adc_pin: HashMap::new(),
             module: false,
             max_supply_v: None,
+            min_supply_v: None,
         }
     }
 
@@ -7844,6 +8014,40 @@ missing = ["measurement_registers"]
     }
 
 
+
+    /// The G4/F7/L0 platforms stand for a named set of dies: a covered part
+    /// (with any package suffix) is the modelled core, a same-family part off
+    /// the set is a disclosed substitution, another family is neither.
+    #[test]
+    fn stm32_g4_f7_l0_substitution_follows_the_covered_dies() {
+        let sub = |backend: &str, part: &str| {
+            let mut b = binding("U1", backend, HashMap::new());
+            b.requested_part = part.into();
+            detect_substitution(&b).map(|s| s.modelled_core)
+        };
+        assert_eq!(sub("renode:stm32g4", "STM32G474RET6"), None);
+        assert_eq!(sub("renode:stm32g4", "STM32G473CBT6"), None);
+        assert_eq!(
+            sub("renode:stm32g4", "STM32G431KB").as_deref(),
+            Some("STM32G474")
+        );
+        assert_eq!(sub("renode:stm32f7", "STM32F777VIT6"), None);
+        assert_eq!(sub("renode:stm32f7", "STM32F746NG"), None);
+        assert_eq!(
+            sub("renode:stm32f7", "STM32F722RE").as_deref(),
+            Some("STM32F746/F767/F777 class")
+        );
+        assert_eq!(sub("renode:stm32l0", "STM32L011K4T6"), None);
+        assert_eq!(
+            sub("renode:stm32l0", "STM32L073RZ").as_deref(),
+            Some("STM32L071 (L0x1 class)")
+        );
+        assert_eq!(sub("renode:stm32l0", "STM32F103C8"), None, "another family");
+        assert_eq!(
+            sub("renode:stm32f4", "STM32F411RET6").as_deref(),
+            Some("STM32F407")
+        );
+    }
 
     #[test]
     fn public_mcu_binding_literal_remains_source_compatible() {
@@ -9663,6 +9867,126 @@ data_out = ["io0"]
             "{:?}",
             sched.driver_contentions()
         );
+    }
+
+    /// A board-side MCU on `PLAIN_INPUT_BOARD` whose reset role sits on `reset`
+    /// and whose `vdd` pad sits on `+5V`, with the given operating range.
+    fn sched_with_rails(reset: &str, supply: Option<(f64, f64)>) -> (Scheduler, MockCore) {
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
+        let mut b = binding("U1", "simavr:test", HashMap::new());
+        b.role_nets.insert("reset".into(), sched.net_nodes[reset]);
+        b.role_nets.insert("vdd".into(), sched.net_nodes["+5V"]);
+        b.min_supply_v = supply.map(|(min, _)| min);
+        b.max_supply_v = supply.map(|(_, max)| max);
+        let core = MockCore::default();
+        let handles = core.handles();
+        push_core(&mut sched, core, b);
+        (sched, handles)
+    }
+
+    fn fire_edge(h: &MockCore, port: char, bit: u8, high: bool) {
+        let mut slot = h.pin_cb.lock_or_recover();
+        (slot.as_mut().expect("on_pin_change installed"))(PinId { port, bit }, high, 0);
+    }
+
+    /// Legal control: firmware pin edges are counted per pin, the reset line is
+    /// released and the supply sits in range, so the row is a firmware pass.
+    #[test]
+    fn execution_evidence_counts_firmware_edges_on_a_released_powered_core() {
+        let (mut sched, h) = sched_with_rails("BTN_HI", Some((4.5, 5.5)));
+        sched.step(1e-3);
+        fire_edge(&h, 'B', 5, true);
+        sched.step(1e-3);
+        fire_edge(&h, 'B', 5, false);
+        fire_edge(&h, 'C', 1, true);
+        sched.step(1e-3);
+        sched.refresh_execution_evidence();
+        let rows = sched.execution_evidence();
+        assert_eq!(rows.len(), 1);
+        let e = &rows[0];
+        assert!(e.executed, "{e:?}");
+        assert_eq!(e.gpio_toggles.get("PB5"), Some(&2));
+        assert_eq!(e.gpio_toggles.get("PC1"), Some(&1));
+        assert_eq!(e.reset_held, crate::execution::Observed::No, "{e:?}");
+        assert_eq!(e.supply_valid, crate::execution::Observed::Yes, "{e:?}");
+        assert!(e.firmware_pass_eligible, "{:?}", e.blockers);
+        assert!(!sched.firmware_quiet(0, false));
+        assert!(sched.firmware_pass_blockers().is_empty());
+    }
+
+    /// Faulty input: a core that never reached its entry and drove nothing is
+    /// quiet even when the analog side toggled nets, which never proves the
+    /// firmware ran.
+    #[test]
+    fn analog_toggles_alone_are_not_execution_evidence() {
+        let (mut sched, _h) = sched_with_rails("BTN_HI", Some((4.5, 5.5)));
+        assert!(
+            !sched.firmware_quiet(7, false),
+            "no evidence yet: the old toggle test stands"
+        );
+        sched.step(1e-3);
+        sched.refresh_execution_evidence();
+        let e = &sched.execution_evidence()[0];
+        assert!(!e.executed && !e.firmware_pass_eligible, "{e:?}");
+        assert_eq!(e.reached_entry, crate::execution::Observed::Unknown);
+        assert!(sched.firmware_quiet(7, false));
+        assert!(
+            !sched.firmware_quiet(0, true),
+            "UART output is always activity"
+        );
+        assert!(crate::execution::execution_evidence_line(e).contains("NO EVIDENCE OF EXECUTION"));
+    }
+
+    /// Unsupported input: a supply pad on a net nothing drives (VDDA behind an
+    /// unmodelled bead) and a bare reset pad are dropped from the watch, so
+    /// they read unknown instead of "supply dead" and "held in reset".
+    #[test]
+    fn floating_reset_and_supply_pads_read_unknown_not_failed() {
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
+        let floating = sched.circuit.node("VDDA_FLOAT");
+        let bare_reset = sched.circuit.node("NRST_FLOAT");
+        sched.node_volts.resize(sched.circuit.node_count(), 0.0);
+        let mut b = binding("U1", "simavr:test", HashMap::new());
+        b.role_nets.insert("vdda".into(), floating);
+        b.role_nets.insert("reset".into(), bare_reset);
+        b.min_supply_v = Some(1.8);
+        b.max_supply_v = Some(4.0);
+        push_core(&mut sched, MockCore::default(), b);
+        sched.rebuild_digital_in_evidence();
+        sched.drop_undriven_rail_nodes();
+        sched.refresh_execution_evidence();
+        let e = &sched.execution_evidence()[0];
+        assert_eq!(e.reset_held, crate::execution::Observed::Unknown, "{e:?}");
+        assert_eq!(e.supply_valid, crate::execution::Observed::Unknown, "{e:?}");
+        assert!(
+            e.blockers
+                .iter()
+                .all(|b| !b.contains("supply") && !b.contains("reset")),
+            "{:?}",
+            e.blockers
+        );
+    }
+
+    /// Faulty input: the board holds reset low and feeds the pads above the
+    /// part's range. The mock core still toggles a pin (an emulator runs
+    /// regardless), so the row is executed but never a firmware pass.
+    #[test]
+    fn held_reset_and_overvoltage_block_a_firmware_pass() {
+        let (mut sched, h) = sched_with_rails("BTN_LO", Some((1.8, 3.6)));
+        sched.step(1e-3);
+        fire_edge(&h, 'B', 5, true);
+        sched.step(1e-3);
+        sched.refresh_execution_evidence();
+        let e = &sched.execution_evidence()[0];
+        assert!(e.executed, "{e:?}");
+        assert_eq!(e.reset_held, crate::execution::Observed::Yes, "{e:?}");
+        assert_eq!(e.supply_valid, crate::execution::Observed::No, "{e:?}");
+        assert!(!e.firmware_pass_eligible);
+        assert_eq!(e.blockers.len(), 2, "{:?}", e.blockers);
+        let blockers = sched.firmware_pass_blockers();
+        assert_eq!(blockers.len(), 1);
+        assert!(blockers[0].starts_with("U1: "), "{blockers:?}");
+        assert!(!sched.firmware_quiet(0, false), "it did execute");
     }
 }
 

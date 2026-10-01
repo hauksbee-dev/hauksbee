@@ -672,12 +672,32 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         dead_rails: union_across(&outcomes, |o| &o.dead_rails),
         coverage_warnings: union_across(&outcomes, |o| &o.coverage_warnings),
         timing_coverage,
+        execution: execution_across(&outcomes),
         timing_refusals,
         waiver_notes: notes,
         inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
         evidence: evidence.maps().to_vec(),
     })
+}
+
+/// One execution-evidence row per MCU across the ensemble: the first member's
+/// row, unless some member's row for that MCU is not a firmware pass, in which
+/// case that one (a blocked member must not hide behind a clean one).
+fn execution_across(
+    outcomes: &[runner::RunOutcome],
+) -> Vec<hauksbee_engine::execution::ExecutionEvidence> {
+    let mut rows: Vec<hauksbee_engine::execution::ExecutionEvidence> = Vec::new();
+    for row in outcomes.iter().flat_map(|o| &o.execution) {
+        match rows.iter_mut().find(|r| r.mcu_ref == row.mcu_ref) {
+            Some(kept) if kept.firmware_pass_eligible && !row.firmware_pass_eligible => {
+                *kept = row.clone();
+            }
+            Some(_) => {}
+            None => rows.push(row.clone()),
+        }
+    }
+    rows
 }
 
 fn assertion_has_numeric_result(spec: &Spec, result: &assertions::AssertResult) -> bool {

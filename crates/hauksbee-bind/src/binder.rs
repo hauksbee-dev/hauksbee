@@ -82,6 +82,11 @@ pub struct McuBinding {
     /// a rail driven past the chip's abs-max Vcc raises an overvoltage fault
     /// instead of nothing.
     pub max_supply_v: Option<f64>,
+    /// Lowest recommended operating supply voltage (V) across the model's
+    /// `supply_range` envelope rows, when it carries any. The co-sim's
+    /// execution evidence reads a supply below this as "supply not valid", so
+    /// firmware that "ran" on an under-powered core is not counted as a pass.
+    pub min_supply_v: Option<f64>,
 }
 
 /// One MCP4728 quad DAC discovered on the board.
@@ -5513,6 +5518,14 @@ fn bind_mcu(
         adc_pin,
         module,
         max_supply_v: model.ratings.max_voltage_v,
+        min_supply_v: model
+            .envelope
+            .iter()
+            .filter_map(|e| match e {
+                hauksbee_models::OperatingEnvelope::SupplyRange { min_v, .. } => Some(*min_v),
+                _ => None,
+            })
+            .reduce(f64::min),
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
 }

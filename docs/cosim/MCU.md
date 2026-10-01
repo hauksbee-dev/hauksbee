@@ -328,6 +328,42 @@ synchronous web report does not run
 the external backend that can emit them; it returns an unavailable refusal and
 points to live/CLI co-sim. The per-surface matrix is the next subsection.
 
+#### Execution evidence
+
+Every co-sim run carries one execution-evidence row per MCU
+(`hauksbee_cosim::execution::ExecutionEvidence`): `execution` in `hauksbee run
+--json`, in the web front door's `cosim` object and in the hauksbee-ci JSON
+report, an "Execution evidence:" block in the default text summary, and an
+`EXECUTION EVIDENCE` note in every hauksbee-ci format. The fields:
+
+| Field | Meaning |
+|---|---|
+| `reached_entry`, `entry_symbol` | `yes`/`no`/`unknown`: the core reached the ELF's `main` (`unknown` for an image without symbols) |
+| `instructions` | instructions retired (Renode), cycles (simavr); absent when the backend does not count |
+| `pc_samples`, `distinct_pcs`, `last_pc` | PC sampled at chunk boundaries; one distinct value is a parked core |
+| `faults` | fault handlers entered (Renode hooks the vector table's HardFault/MemManage/BusFault/UsageFault handlers), or a crashed simavr core |
+| `uart_bytes` | bytes the firmware transmitted |
+| `gpio_toggles` | firmware output edges per pin (`"PA5": 12`) |
+| `reset_held` | the board's reset line (when something drives it) stayed asserted the whole run |
+| `supply_valid`, `supply_v` | supply pads inside the card's operating range (`min_v` of its supply envelope to its absolute maximum) |
+| `clock_valid`, `clock_source` | `yes` when a crystal or oscillator is bound, else `unknown` (internal oscillator assumed) |
+| `executed` | entry reached, or any UART byte, or any firmware GPIO edge |
+| `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid; otherwise why not |
+
+No evidence of execution is never a firmware pass. Net toggles alone do not
+count, because an oscillator or a responder toggles nets with the core parked:
+`hauksbee run` reports zero activity and `--strict` refuses (exit 3), and the
+web front door adds its "Firmware was not exercised" note. A row that executed
+but is not eligible is the `ExecutionBlocked` disclosure below: `--strict`
+refuses it, and hauksbee-ci marks every assertion INVALID through a
+`not_exercised` assumption on `firmware/<ref>`. Unknown is its own value and
+never reads as either a pass or a failure.
+
+When an analog chunk fails to converge, the MCU keeps running: the failed
+window holds the last solved voltages, is reported in `failed_windows` with
+`analog_valid: false`, and only strict mode stops, after three consecutive
+failures.
+
 #### Which surface carries a coverage hole
 
 "The four batch report surfaces" above means the `hauksbee run` default text
@@ -345,12 +381,13 @@ matrix below, because they do not read a finished run's caveats:
   `--json`; its output is text for a person.
 - `hauksbee serve`'s live sim streams frames over a websocket
   (`hauksbee-server` `SimFrame`). It drives the same scheduler, including the
-  Renode and QEMU backends, and carries none of the twelve disclosures below. Treat it
+  Renode and QEMU backends, and carries none of the thirteen disclosures below. Treat it
   as a scope, not a report.
 
-Twelve typed per-run co-sim disclosures share one completeness contract. Six
-are limitations (holes), watchdog reboot and drive override are observed
-events, driver contention is an electrical fault, per-core timing coverage is
+Thirteen typed per-run co-sim disclosures share one completeness contract. Six
+are limitations (holes), watchdog reboot, drive override and a blocked
+firmware run (executed under a fault, a held reset or an out-of-range supply)
+are observed events, driver contention is an electrical fault, per-core timing coverage is
 a measured non-hole bound, `TIMING INVALID` is a strict refusal, and fallback
 windows are second-class qualifications. Counted from the emitting call sites
 rather than from intent. The `--plain`
@@ -372,6 +409,7 @@ so only `--json` silences the text block):
 | driver contentions | yes | yes | yes | no | yes |
 | drive conflicts | no | yes | yes | no | yes |
 | heuristic SPI framing | yes | yes | yes | assertion detail | yes (field) |
+| firmware executed but not a pass | yes | yes | yes (field + note) | yes (assertions INVALID) | yes (field + note) |
 
 The synchronous web front door carries every disclosure its
 simavr-only run can emit and refuses any run containing an external backend before the four
@@ -653,7 +691,7 @@ configure.
 | nRF52840 (Cortex-M4) | `renode:nrf52840` | Renode `nrf52840.repl` | **Proven (UART boot)**: Zephyr shell `uart:~$` through the bridge. Bus controllers `twi0`/`twi1`/`spi2` live-verified (bridge registration, `renode_nrf52840_bus.rs`); an end-to-end nRF sensor round-trip awaits an nRF bus firmware fixture. Solved-LED-current proof would need a custom blinky ELF (the GPIO bridge is the STM32-proven ODR-poll). |
 | SiFive FE310 (RISC-V RV32, HiFive1) | `renode:sifive_fe310` | Renode `sifive-fe310.repl` | **Proven (UART boot)**: "BOOTING ZEPHYR OS ... shell>" through the bridge (needs `post_load_setup`: PRCI tags + `cpu PC vinit`). |
 | STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not yet run end-to-end |
-| STM32G473/G474 (Cortex-M4F), 48-pin | `renode:stm32g4` | **composed** in `db/mcu/stm32g4.soc.toml` (no stock G4 platform) | **Reaches main and runs**: the mbed-based moteus 1.1.2 servo firmware boots, reads its PB10/PB11 family straps through the emulated pulls, configures GPIO and loops polling FDCAN. Approximations (RCC, ADC, DMA without transfers, FDCAN without frames, RTC, CCM aliasing) are listed in the descriptor header |
+| STM32G473/G474 (Cortex-M4F), 48-pin | `renode:stm32g4` | **composed** in `db/mcu/stm32g4.soc.toml` (no stock G4 platform) | **Reaches main**: the bare mbed-based moteus 1.1.2 servo ELF reaches `main` and runs about 198k instructions, then stops in `mbed_die`: its family detection reads the PB10/PB11 strap resistors on the moteus PCB, which no on-chip pull model can stand in for. On the moteus c1 board itself (`hauksbee run moteus_c1.kicad_pcb --firmware ...`, straps bound as resistors) it gets past detection: 4.8M instructions in 0.3 s simulated, 27 distinct PC samples, no fault, and 5 GPIO edges on 3 pins. Approximations (RCC, ADC, DMA without transfers, FDCAN without frames, RTC, CCM aliasing) are listed in the descriptor header |
 | STM32F765/767/777/779 (Cortex-M7), LQFP100 | `renode:stm32f7` | Renode `stm32f746.repl` plus UART7/UART8 | **Reaches main**: a TR-9 mainboard firmware configures GPIO and touches UART7; HAL delays run 13.5x slow at the reset clock |
 | STM32L011/L021 K-package (Cortex-M0+) | `renode:stm32l0` | Renode `stm32l071.repl` with SysTick at the MSI rate | **Reaches main**: a TR-9 keypad firmware parks in its main loop while the TIM2 interrupt scans keypad columns PA1-PA3 |
 | ESP32-S3 (Xtensa LX7) | `qemu:esp32s3` | Espressif QEMU `esp32s3` | **Wiring proven (machine boots, channels connect); app proof pending an S3 image.** The builtin `esp32s3` model entry binds to `qemu:esp32s3` (regression: `mcu_family_router.rs`), and `esp32_qemu_cosim.rs` boots the fork's real `esp32s3` machine from a blank flash (the ROM idles), connects QMP + gdbstub + UART, and steps the lockstep. The full app-level proof (UART banner + solved LED current, like the ESP32/C3 rows) needs a merged S3 flash image, which requires esp-idf with the esp32s3 Xtensa toolchain (`idf.py set-target esp32s3`; recipe in `testdata/firmware/esp32_blinky/build.sh`). |

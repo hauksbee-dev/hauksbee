@@ -142,6 +142,7 @@ pub fn build_cosim_json(
         error_budget: sched.error_budget()?,
         activity_summary,
         timing_coverage: sched.timing_coverage(),
+        execution: sched.execution_evidence().to_vec(),
         timing_refusals: sched.timing_refusals().to_vec(),
         analog_valid,
         failed_windows,
@@ -520,6 +521,9 @@ pub fn run_headless(
     }
 
     let wall_s = run_started.elapsed().as_secs_f64();
+    // Read each core's execution evidence once, after the last chunk, so the
+    // text below, `--json` and the strict gates all judge the same rows.
+    engine.scheduler_mut().refresh_execution_evidence();
 
     *uart_seen = !last_uart.is_empty();
     // The activity table + UART dump are human-facing. Under `--json` (quiet) the
@@ -633,6 +637,15 @@ pub fn run_headless(
         }
         for refusal in sched.timing_refusals() {
             println!("TIMING INVALID: {refusal}");
+        }
+        if !sched.execution_evidence().is_empty() {
+            println!("\nExecution evidence:");
+            for e in sched.execution_evidence() {
+                println!("  {}", crate::execution::execution_evidence_line(e));
+                for blocker in &e.blockers {
+                    println!("    WARNING: {blocker}");
+                }
+            }
         }
         // Sub-chunk pulses swallowed by the tick-evaluated digital path
         // (friction 1.16) and runtime driver contention (the model-vs-MCU case

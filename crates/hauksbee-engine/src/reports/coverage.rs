@@ -90,11 +90,14 @@ pub enum CoverageClass {
     DriveConflict,
     /// An SPI bus whose transaction boundaries are guessed at chunk edges.
     HeuristicSpiFraming,
+    /// The firmware executed, but under a fault handler, a held reset or an
+    /// out-of-range supply, so the run cannot count as a firmware pass.
+    ExecutionBlocked,
 }
 
 impl CoverageClass {
     /// Every class, in the order the caveat list emits them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::AdcDropped,
         Self::UnexercisedBus,
         Self::WatchdogLimitation,
@@ -107,6 +110,7 @@ impl CoverageClass {
         Self::DriverContention,
         Self::DriveConflict,
         Self::HeuristicSpiFraming,
+        Self::ExecutionBlocked,
     ];
 
     /// A short label for a cramped surface (the TUI pane is a quarter of a
@@ -126,6 +130,7 @@ impl CoverageClass {
             Self::DriverContention => "driver contention",
             Self::DriveConflict => "drive overridden",
             Self::HeuristicSpiFraming => "SPI framing guessed",
+            Self::ExecutionBlocked => "firmware run not a pass",
         }
     }
 
@@ -145,7 +150,9 @@ impl CoverageClass {
             Self::TimingCoverage => CoverageDisposition::TimingBound,
             Self::TimingRefusal => CoverageDisposition::StrictRefusal,
             Self::FallbackIntegration => CoverageDisposition::FallbackQualification,
-            Self::WatchdogReboot | Self::DriveConflict => CoverageDisposition::ObservedEvent,
+            Self::WatchdogReboot | Self::DriveConflict | Self::ExecutionBlocked => {
+                CoverageDisposition::ObservedEvent
+            }
             Self::DriverContention => CoverageDisposition::ElectricalFault,
             _ => CoverageDisposition::Limitation,
         }
@@ -196,6 +203,7 @@ pub struct CoverageInputs {
     pub driver_contentions: Vec<DriverContention>,
     pub drive_conflicts: Vec<String>,
     pub heuristic_spi_buses: Vec<String>,
+    pub execution: Vec<crate::execution::ExecutionEvidence>,
 }
 
 impl CoverageInputs {
@@ -232,6 +240,7 @@ impl CoverageInputs {
                 .filter(|(_, mode)| mode.as_str() == "heuristic")
                 .map(|(bus, _)| bus)
                 .collect(),
+            execution: sched.execution_evidence().to_vec(),
         }
     }
 
@@ -419,6 +428,29 @@ impl CoverageInputs {
                     .to_string(),
             });
         }
+        for e in self
+            .execution
+            .iter()
+            .filter(|e| e.executed && !e.firmware_pass_eligible)
+        {
+            out.push(CoverageCaveat {
+                class: CoverageClass::ExecutionBlocked,
+                subject: e.mcu_ref.clone(),
+                headline: format!(
+                    "{}: the firmware executed but cannot count as a pass",
+                    e.mcu_ref
+                ),
+                message: format!(
+                    "{} ({})",
+                    crate::execution::execution_evidence_line(e),
+                    e.blockers.join("; ")
+                ),
+                fix: "Fix the fault, reset or supply condition the execution evidence \
+                      names, then rerun; silicon would not run this firmware the way the \
+                      emulated core did."
+                    .to_string(),
+            });
+        }
         out
     }
 }
@@ -466,6 +498,53 @@ mod tests {
         }
     }
 
+    /// An MCU that reached `main`; `faulted` adds a `HardFault` entry.
+    fn execution_row(mcu: &str, faulted: bool) -> crate::execution::ExecutionEvidence {
+        let probe = hauksbee_mcu::ExecutionProbe {
+            reached_entry: Some(true),
+            entry_symbol: Some("main".to_string()),
+            faults: if faulted {
+                vec!["HardFault handler entered".to_string()]
+            } else {
+                Vec::new()
+            },
+            ..hauksbee_mcu::ExecutionProbe::default()
+        };
+        crate::execution::ExecutionEvidence::new(
+            mcu,
+            "renode:stm32f4",
+            probe,
+            0,
+            &std::collections::BTreeMap::new(),
+            crate::execution::BoardReadings {
+                reset_held: crate::execution::Observed::No,
+                supply_valid: crate::execution::Observed::Yes,
+                supply_v: Some(3.3),
+                external_clock: false,
+            },
+        )
+    }
+
+    /// Only an MCU that executed but cannot count as a pass gets a caveat; a
+    /// clean run carries its evidence row and no caveat.
+    #[test]
+    fn only_a_blocked_execution_row_is_a_caveat() {
+        let inputs = CoverageInputs {
+            execution: vec![execution_row("U1", true), execution_row("U2", false)],
+            ..CoverageInputs::default()
+        };
+        let caveats = inputs.caveats();
+        assert_eq!(caveats.len(), 1, "{caveats:?}");
+        assert_eq!(caveats[0].class, CoverageClass::ExecutionBlocked);
+        assert_eq!(caveats[0].subject, "U1");
+        assert!(
+            caveats[0].message.contains("HardFault"),
+            "{}",
+            caveats[0].message
+        );
+        assert!(!caveats[0].is_hole());
+    }
+
     fn timing_row(mcu: &str, cycle_exact: bool) -> TimingCoverage {
         TimingCoverage {
             mcu_ref: mcu.to_string(),
@@ -486,7 +565,7 @@ mod tests {
     /// being recounted, this fails.
     #[test]
     fn class_count_matches_the_matrix() {
-        assert_eq!(CoverageClass::ALL.len(), 12);
+        assert_eq!(CoverageClass::ALL.len(), 13);
         assert_eq!(
             CoverageClass::ALL
                 .into_iter()
@@ -498,6 +577,7 @@ mod tests {
         assert!(!CoverageClass::WatchdogReboot.is_hole());
         assert!(!CoverageClass::DriverContention.is_hole());
         assert!(!CoverageClass::DriveConflict.is_hole());
+        assert!(!CoverageClass::ExecutionBlocked.is_hole());
         assert_eq!(
             CoverageClass::TimingCoverage.disposition(),
             CoverageDisposition::TimingBound
@@ -557,6 +637,7 @@ mod tests {
             }],
             drive_conflicts: vec!["net '/VBUS' is overridden to 20.000 V".to_string()],
             heuristic_spi_buses: vec!["ADC1".to_string()],
+            execution: vec![execution_row("U1", true), execution_row("U2", false)],
         };
         let caveats = inputs.caveats();
         for class in CoverageClass::ALL {
@@ -565,7 +646,7 @@ mod tests {
                 "class {class:?} is never emitted"
             );
         }
-        assert_eq!(caveats.len(), 12, "one caveat per class in this fixture");
+        assert_eq!(caveats.len(), 13, "one caveat per class in this fixture");
         assert_eq!(hole_count(&caveats), 6);
         assert_eq!(classes_present(&caveats), CoverageClass::ALL.to_vec());
         // Every disclosure names a concrete next action.

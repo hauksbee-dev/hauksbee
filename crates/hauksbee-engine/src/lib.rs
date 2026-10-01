@@ -81,7 +81,7 @@ pub use hauksbee_bind::{
     thermal, waiver,
 };
 pub use hauksbee_checks::{checks, dcpath, decoupling};
-pub use hauksbee_cosim::{engine, error_budget, peripherals, responders, scheduler};
+pub use hauksbee_cosim::{engine, error_budget, execution, peripherals, responders, scheduler};
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{

@@ -23,6 +23,7 @@
 
 pub mod engine;
 pub mod error_budget;
+pub mod execution;
 pub mod peripherals;
 pub mod regulation;
 pub mod responders;

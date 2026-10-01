@@ -35,9 +35,9 @@ pub(super) fn enforce_gates(
     // false positives on firmware that is busy on the bus but quiet on GPIO.
     if zero_activity {
         eprintln!(
-            "WARNING: co-sim saw zero net toggles; cannot vouch for firmware \
-                 behaviour (the MCU may have stalled at boot, run no I/O, or the \
-                 firmware may not match this board)."
+            "WARNING: {} (the MCU may have stalled at boot, run no I/O, or the \
+             firmware may not match this board).",
+            crate::execution::NO_EXECUTION_MESSAGE
         );
         if cfg.strict && !analog_abort {
             publish_refusal(cfg.json, strict_refusal.as_ref());
@@ -57,6 +57,8 @@ pub(super) fn enforce_gates(
             }
         }
     }
+
+    enforce_pass_blockers(cfg, observations, faults_gate);
 
     // A waveform that exceeded a concrete replay capability is invalid
     // evidence. Always disclose it; strict mode fails closed with the same
@@ -158,6 +160,26 @@ pub(super) fn enforce_gates(
 }
 
 /// Record the strict refusal for the CI artifacts and, outside `--json`, print it.
+/// The firmware ran, but under a fault handler, a held reset or an
+/// out-of-range supply: silicon would not behave like this run, so it is never
+/// a firmware pass. Warn always; strict refuses (exit 3) unless the fault gate
+/// owns the exit, the same precedence as zero activity.
+fn enforce_pass_blockers(cfg: &RunConfig, observations: &RunObservations, faults_gate: bool) {
+    let activity = &observations.activity;
+    if activity.zero || activity.pass_blockers.is_empty() {
+        return;
+    }
+    for blocker in &activity.pass_blockers {
+        eprintln!("WARNING: firmware executed but is not a pass: {blocker}");
+    }
+    if cfg.strict && !observations.analog.abort && !faults_gate {
+        if let Some(refusal) = activity.strict_refusal.as_ref() {
+            publish_refusal(cfg.json, Some(refusal));
+            crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, refusal);
+        }
+    }
+}
+
 fn publish_refusal(json: bool, refusal: Option<&crate::result::Refusal>) {
     if let Some(refusal) = refusal {
         crate::reports::ci_artifacts::set_current_refusal(refusal.clone());

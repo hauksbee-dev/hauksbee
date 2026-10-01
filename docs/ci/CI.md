@@ -1219,6 +1219,7 @@ because both used to read green:
 | an unmodelled part the circuit shows cannot drive it (the net's DC level is defined through modeled elements) | `qualified` | PASS, exit 0, with the caveat stated |
 | a datasheet operating requirement this run MEASURED as violated (`operating_limit_violated`: a minimum load current, supply envelope, rail order, input range, or source-impedance limit) | `undermined` | INVALID, exit 3 |
 | a documented omission of the model itself (`reduced_fidelity`: "temperature is not modelled", one channel of eight) | `qualified` | PASS, exit 0, with the caveat stated |
+| firmware with no evidence it executed, or executed under a fault handler, a held reset or an out-of-range supply (`not_exercised` on `firmware/<ref>`; see `execution` in the JSON and the `EXECUTION EVIDENCE` note, documented in [MCU.md](../cosim/MCU.md#execution-evidence)) | `undermined` | INVALID, exit 3 |
 
 There is no `--strict` on `hauksbee-ci run`, deliberately: a board used outside
 its datasheet, or an unmodelled part that can move the very net under

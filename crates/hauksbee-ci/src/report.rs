@@ -106,6 +106,9 @@ pub struct CiResult {
     /// actual negotiated chunk. Present even when no strict timing request was
     /// declared, so a green report states what timing it covered.
     pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
+    /// Per-MCU evidence that the firmware executed, the same rows `hauksbee
+    /// run --json` carries under `execution`.
+    pub execution: Vec<hauksbee_engine::execution::ExecutionEvidence>,
     /// Timing claims that could not be honored. Non-empty makes every
     /// assertion INVALID and cannot be waived.
     pub timing_refusals: Vec<String>,
@@ -321,6 +324,9 @@ pub struct CiJsonReport {
     pub coverage_warnings: Vec<String>,
     /// Measured timing coverage per live MCU backend.
     pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
+    /// Per-MCU execution evidence (see `hauksbee_engine::execution`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution: Vec<hauksbee_engine::execution::ExecutionEvidence>,
     /// Explicit reasons timing evidence was invalidated.
     pub timing_refusals: Vec<String>,
     /// Nets that name themselves a supply but that nothing powered. Non-empty
@@ -563,6 +569,7 @@ impl CiResult {
             substitutions: self.substitutions.clone(),
             coverage_warnings: self.coverage_warnings.clone(),
             timing_coverage: self.timing_coverage.clone(),
+            execution: self.execution.clone(),
             timing_refusals: self.timing_refusals.clone(),
             dead_rails: self.dead_rails.clone(),
             waiver_notes: self.waiver_notes.clone(),
@@ -741,6 +748,12 @@ impl CiResult {
                     .iter()
                     .map(|t| ("TIMING COVERAGE", timing_coverage_note(t))),
             )
+            .chain(self.execution.iter().map(|e| {
+                (
+                    "EXECUTION EVIDENCE",
+                    hauksbee_engine::execution::execution_evidence_line(e),
+                )
+            }))
             .chain(tagged("TIMING INVALID", &self.timing_refusals))
             .chain(tagged("waivers", &self.waiver_notes))
             .collect()
@@ -1009,6 +1022,23 @@ impl CiResult {
     /// [`Self::MAX_ERROR_ANNOTATIONS`] `::error`s plus one overflow line and
     /// the rollup, and warnings are capped at
     /// [`Self::MAX_WARNING_ANNOTATIONS`] plus one overflow line.
+    /// One annotation per MCU's execution evidence: a notice when the row is
+    /// a firmware pass, a warning when it is not.
+    fn write_execution_annotations(&self, out: &mut String) {
+        for e in &self.execution {
+            let level = if e.firmware_pass_eligible {
+                "notice"
+            } else {
+                "warning"
+            };
+            let _ = writeln!(
+                out,
+                "::{level} title=hauksbee-ci EXECUTION EVIDENCE::{}",
+                gh_escape(&hauksbee_engine::execution::execution_evidence_line(e))
+            );
+        }
+    }
+
     pub fn render_github_annotations(&self) -> String {
         fn tagged<'m>(tag: &'static str, msgs: &'m [String]) -> impl Iterator<Item = String> + 'm {
             msgs.iter().map(move |m| format!("{tag}::{}", gh_escape(m)))
@@ -1076,6 +1106,7 @@ impl CiResult {
             format!("::warning title=hauksbee-ci::...and {n} more warning(s); see the job log for the full list")
         });
 
+        self.write_execution_annotations(&mut out);
         if !self.timing_coverage.is_empty() {
             let coverage = self
                 .timing_coverage

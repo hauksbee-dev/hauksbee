@@ -1422,7 +1422,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         stderr(&out)
     );
     assert!(
-        stderr(&out).contains("zero net toggles"),
+        stderr(&out).contains("no evidence the firmware executed"),
         "the refusal is not silenced by the fault gate taking the exit:\n{}",
         stderr(&out)
     );
