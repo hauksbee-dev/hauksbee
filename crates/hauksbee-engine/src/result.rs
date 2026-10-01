@@ -193,8 +193,9 @@ impl<'a> VerdictCause<'a> {
             ),
             Self::Unmodelled(refs) => (
                 format!(
-                    "{} key part(s) have no usable model ({}), so the checks cannot vouch for this board",
+                    "{} key {} no usable model ({}), so the checks cannot vouch for this board",
                     refs.len(),
+                    if refs.len() == 1 { "part has" } else { "parts have" },
                     refs_summary(refs)
                 ),
                 "draft a model per part with `hauksbee models extract --pdf <datasheet.pdf> --part <MPN>` or `hauksbee models new`, then rerun".into(),

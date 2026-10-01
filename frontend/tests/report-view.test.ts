@@ -41,7 +41,7 @@ describe('C5.3 refusal contract', () => {
 })
 
 test('the verdict reason is the engine sentence, shown in the card and the export', () => {
-  const reason = '2 key part(s) have no usable model (U1, U2); next: draft a model per part, then rerun.'
+  const reason = '2 key parts have no usable model (U1, U2); next: draft a model per part, then rerun.'
   const base = { ok: true, file_name: 'b.kicad_pcb', num_components: 1, num_nets: 1, headline: 'Not cleared', serious: 0, total: 0 } as WebReport
   expect(reportView({ ...base, verdict_reason: reason }).reason).toBe(reason)
   expect(reportView(base).reason).toBeNull()
