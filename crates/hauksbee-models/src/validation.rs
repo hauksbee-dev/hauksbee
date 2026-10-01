@@ -1315,6 +1315,15 @@ fn switch_node(name: &str) -> bool {
         .any(|k| matches!(k.as_str(), "sw" | "lx" | "ph" | "phase" | "l"))
 }
 
+/// A printed feedback input (`FB`, `VFB`, `ADJ`) that names no output too
+/// (`FB/VOUT` is a fixed part's output): it senses the output through a
+/// divider and is never the regulated output itself.
+fn feedback_node(name: &str) -> bool {
+    let keys = pin_name_keys(name);
+    let output = |k: &String| matches!(k.as_str(), "out" | "output" | "vo" | "os" | "sense");
+    keys.iter().any(|k| matches!(k.as_str(), "fb" | "adj")) && !keys.iter().any(output)
+}
+
 /// `[models.pins]` against the pin-table column of the card's own package
 /// (see [`own_pinout`]): the same pads, and no pad whose role is the name that
 /// column prints on another pad, the mark of a map read off another package.
@@ -1351,6 +1360,9 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
             entry.kind == ComponentKind::Vreg && matches!(key.as_str(), "out" | "output");
         if let Some(name) = printed.filter(|name| regulated && switch_node(name)) {
             p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{name}' on it: that is the converter's switch node, never its regulated output. Map it 'sw'; the regulated rail is past the inductor (and a boost's past its diode), which is no pad of the IC"));
+        }
+        if let Some(name) = printed.filter(|name| regulated && feedback_node(name)) {
+            p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{name}' on it: that is the feedback input, which senses the output through a divider, never the regulated output. Map it 'fb' (or 'adj')"));
         }
         let prints = |name: &str| pin_name_keys(name).contains(&key);
         let Some(here) = printed.filter(|name| !prints(name)) else {
@@ -2322,6 +2334,8 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             // The column prints SW where the map says out.
             (vec![("\"5\" = \"VOUT\" }", "\"5\" = \"SW\" }")], "that is the converter's switch node, never its regulated output"),
             (vec![("\"5\" = \"VOUT\" }", "\"5\" = \"LX\" }")], "Map it 'sw'"),
+            // Nor is the feedback input the output.
+            (vec![("\"5\" = \"VOUT\" }", "\"5\" = \"VFB\" }")], "that is the feedback input"),
         ] {
             rejects(&card(&edits), needle);
         }
@@ -2329,6 +2343,8 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         // pad: its regulated rail is past the diode, no pad of the IC.
         let boost = card(&[("\"5\" = \"out\"", "\"5\" = \"sw\""), ("\"5\" = \"VOUT\" }", "\"5\" = \"SW\" }"), ("[params]", identity)]);
         accepts(&boost);
+        // A fixed part's FB/VOUT pin is its output.
+        accepts(&card(&[("\"5\" = \"VOUT\" }", "\"5\" = \"FB/VOUT\" }")]));
         // A draft must say which package its map is for, read in full.
         assert!(draft_pin_map_problems(&card(&[])).is_empty());
         let no_column = LDO_FIXTURE[..LDO_FIXTURE.find("[[source.pinout]]").unwrap()].replace("SOT-23-5 package", "");

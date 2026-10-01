@@ -1644,13 +1644,14 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       view in the P6 block (pins as printed); results mark those pins assumed:
         standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
       No view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
-  P8. THE SWITCH NODE IS NOT THE OUTPUT. On a switching converter or LED
-      driver (buck, boost, buck-boost), the pin printed SW, LX, PH or L1/L2
-      drives the inductor: map it 'sw', never 'out'. 'out' is only a pin the
-      table calls the regulated output (VOUT, OUT, FB-sensed output pin); a
-      non-synchronous boost, whose output is past an external diode, has no
-      'out' pad at all. The binder finds a buck's regulated rail past its
-      inductor itself.
+  P8. THE SWITCH NODE AND FEEDBACK ARE NOT THE OUTPUT. On a switching
+      converter or LED driver (buck, boost, buck-boost), the pin printed SW,
+      LX, PH or L1/L2 drives the inductor: map it 'sw', never 'out'. FB, VFB
+      or ADJ senses the output through a divider: map it 'fb' or 'adj', never
+      'out'. 'out' is only a pin the table calls the regulated output (VOUT,
+      OUT, or a VOS/SENSE pin tied to it); a non-synchronous boost, whose
+      output is past an external diode, has no 'out' pad at all. The binder
+      finds a buck's regulated rail past its inductor itself.
 
 IMPORTANT RULES:
 0. Emit this machine-readable source block immediately after the model's description:
