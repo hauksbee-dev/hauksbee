@@ -113,16 +113,9 @@ contains = "hello from stm32"
 #[test]
 fn unexercised_bus_sensor_warns_and_fails_its_peripheral_assertion() {
     let _guard = support::descriptor_env_lock();
-    if !hauksbee_mcu::renode::is_available() {
-        eprintln!("SKIP: Renode not installed");
+    let Some((board, fw)) = support::renode_thermostat() else {
         return;
-    }
-    let board = repo("testdata/boards/stm32_i2c_thermostat.kicad_pcb");
-    let fw = repo("testdata/firmware/stm32_i2c_thermostat/thermostat.elf");
-    if !board.exists() || !fw.exists() {
-        eprintln!("SKIP: thermostat board/firmware not present");
-        return;
-    }
+    };
 
     // A platform with NO modeled I2C controller: the shipped stm32f103
     // descriptor, controllers emptied, served via $HAUKSBEE_MCU_DIR. This is

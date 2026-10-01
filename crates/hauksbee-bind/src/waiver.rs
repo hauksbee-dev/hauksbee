@@ -361,59 +361,38 @@ until = "2030-01-01"
         }
     }
 
+    /// A waiver needs a reason, a real expiry, and a net or a ref: without the
+    /// last it silences the rule everywhere, which is switching the check off
+    /// with extra steps.
     #[test]
-    fn a_waiver_without_a_reason_is_refused() {
+    fn an_incomplete_waiver_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let p = write(
-            dir.path(),
-            r#"
-[[waive]]
-check = "si"
-kind = "controlled_impedance"
-nets = ["USB_DP"]
+        for (fields, want) in [
+            (
+                r#"nets = ["USB_DP"]
 reason = "   "
-until = "2030-01-01"
-"#,
-        );
-        let err = WaiverSet::load(&p).unwrap_err().to_string();
-        assert!(err.contains("`reason` is required"), "{err}");
-    }
-
-    #[test]
-    fn a_waiver_without_an_expiry_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = write(
-            dir.path(),
-            r#"
-[[waive]]
-check = "si"
-kind = "controlled_impedance"
-nets = ["USB_DP"]
+until = "2030-01-01""#,
+                "`reason` is required",
+            ),
+            (
+                r#"nets = ["USB_DP"]
 reason = "measured on the fab's stackup"
-until = "forever"
-"#,
-        );
-        let err = WaiverSet::load(&p).unwrap_err().to_string();
-        assert!(err.contains("YYYY-MM-DD"), "{err}");
-    }
-
-    #[test]
-    fn a_rule_wide_waiver_is_refused() {
-        // Without a net or a ref this silences the rule everywhere, which is
-        // switching the check off with extra steps.
-        let dir = tempfile::tempdir().unwrap();
-        let p = write(
-            dir.path(),
-            r#"
-[[waive]]
-check = "si"
-kind = "controlled_impedance"
-reason = "the SI check is noisy"
-until = "2030-01-01"
-"#,
-        );
-        let err = WaiverSet::load(&p).unwrap_err().to_string();
-        assert!(err.contains("needs `nets` or `refs`"), "{err}");
+until = "forever""#,
+                "YYYY-MM-DD",
+            ),
+            (
+                r#"reason = "the SI check is noisy"
+until = "2030-01-01""#,
+                "needs `nets` or `refs`",
+            ),
+        ] {
+            let body =
+                format!("[[waive]]\ncheck = \"si\"\nkind = \"controlled_impedance\"\n{fields}\n");
+            let err = WaiverSet::load(&write(dir.path(), &body))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(want), "{want}: {err}");
+        }
     }
 
     #[test]
@@ -422,13 +401,7 @@ until = "2030-01-01"
         let p = write(dir.path(), GOOD);
         let mut set = WaiverSet::load_at(&p, RunDate::from_epoch_days(20_663)).unwrap();
         assert_eq!(set.stale().len(), 1, "nothing matched it yet");
-        set.take_waiver(
-            "si",
-            "controlled_impedance",
-            &["USB_DP".into()],
-            &[],
-            "USB_DP",
-        );
+        usb_dp(&mut set);
         assert!(
             set.stale().is_empty(),
             "it matched, so it is earning its place"
@@ -485,15 +458,12 @@ until = "2026-01-01"
         // into a believable date. Unknown dates expire every waiver.
         let mut set = WaiverSet::load_at(&p, RunDate::from_epoch_days(18_262)).unwrap();
         assert!(
-            set.take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
-                .is_none(),
+            !usb_dp(&mut set),
             "an untrustworthy clock cannot cover any finding"
         );
         let mut unknown = WaiverSet::load_at(&p, RunDate::unknown()).unwrap();
         assert!(
-            unknown
-                .take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
-                .is_none(),
+            !usb_dp(&mut unknown),
             "an absent clock reading is fail-closed too"
         );
     }

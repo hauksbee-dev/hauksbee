@@ -22,16 +22,9 @@ use crate::support::{self, repo};
 #[test]
 fn a_spec_descriptor_dir_serves_the_overridden_descriptor() {
     let _guard = support::descriptor_env_lock();
-    if !hauksbee_mcu::renode::is_available() {
-        eprintln!("SKIP: Renode not installed");
+    let Some((board, fw)) = support::renode_thermostat() else {
         return;
-    }
-    let board = repo("testdata/boards/stm32_i2c_thermostat.kicad_pcb");
-    let fw = repo("testdata/firmware/stm32_i2c_thermostat/thermostat.elf");
-    if !board.exists() || !fw.exists() {
-        eprintln!("SKIP: thermostat board/firmware not present");
-        return;
-    }
+    };
     assert!(
         std::env::var_os("HAUKSBEE_MCU_DIR").is_none(),
         "this test proves the SPEC field alone plumbs through; the env must be unset"

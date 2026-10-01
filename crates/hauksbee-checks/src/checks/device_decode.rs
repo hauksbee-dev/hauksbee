@@ -1183,6 +1183,27 @@ fn lint(board_text: &str) -> NetLintReport {
 mod tests {
     use super::*;
 
+    const V33: &str = r#"(net 5 "+3.3V")"#;
+    const GND: &str = r#"(net 1 "GND")"#;
+    const VMIN: &str = r#"(net 20 "Net-(U1-VBUS_MIN)")"#;
+    const VMAX: &str = r#"(net 21 "VBUS_max")"#;
+    const R15P: &str = r#"(net 24 "Net-(R15-Pad1)")"#;
+    const R16P: &str = r#"(net 25 "Net-(R16-Pad1)")"#;
+
+    /// A two-pad `R` module at (110, `y`) from net `a` to net `b`; `attr` follows
+    /// the value text (the DNP attribute, or nothing).
+    fn res(reference: &str, value: &str, y: u32, a: &str, b: &str, attr: &str) -> String {
+        format!(
+            r"  (module R (layer F.Cu) (at 110 {y})
+    (fp_text reference {reference} (at 0 0) (layer F.SilkS))
+    (fp_text value {value} (at 0 2) (layer F.Fab)){attr}
+    (pad 1 smd rect (at 0 0) {a})
+    (pad 2 smd rect (at 2 0) {b})
+  )
+"
+        )
+    }
+
     // ── 1. Pure Table-2 decode against the band edges ───────────────────────
     #[test]
     fn table2_band_edges_decode() {
@@ -1268,36 +1289,7 @@ mod tests {
     (pad 1 smd rect (at 0 0) (net 20 "Net-(U1-VBUS_MIN)") (pinfunction "VBUS_MIN"))
     (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
   )
-  (module R (layer F.Cu) (at 110 100)
-    (fp_text reference R9 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab)){dnp}
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 20 "Net-(U1-VBUS_MIN)"))
-  )
-  (module R (layer F.Cu) (at 110 102)
-    (fp_text reference R10 (at 0 0) (layer F.SilkS))
-    (fp_text value {min_pd} (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 20 "Net-(U1-VBUS_MIN)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module R (layer F.Cu) (at 110 104)
-    (fp_text reference R11 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 21 "VBUS_max"))
-  )
-  (module R (layer F.Cu) (at 110 106)
-    (fp_text reference R12 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab)){dnp}
-    (pad 1 smd rect (at 0 0) (net 21 "VBUS_max"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module R (layer F.Cu) (at 110 108)
-    (fp_text reference R15 (at 0 0) (layer F.SilkS))
-    (fp_text value {max_extra_leg_pd} (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 24 "Net-(R15-Pad1)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
+{r9}{r10}{r11}{r12}{r15}
   (module SW (layer F.Cu) (at 120 100)
     (fp_text reference SW1 (at 0 0) (layer F.SilkS))
     (fp_text value SS-10-15SPE (at 0 2) (layer F.Fab))
@@ -1305,7 +1297,12 @@ mod tests {
     (pad 5 smd rect (at 1 0) (net 31 "unconnected-(SW1-Pad5)"))
     (pad 6 smd rect (at 2 0) (net 21 "VBUS_max"))
   )
-)"#
+)"#,
+            r9 = res("R9", "5k1", 100, V33, VMIN, dnp),
+            r10 = res("R10", min_pd, 102, VMIN, GND, ""),
+            r11 = res("R11", "5k1", 104, V33, VMAX, ""),
+            r12 = res("R12", "10k", 106, VMAX, GND, dnp),
+            r15 = res("R15", max_extra_leg_pd, 108, R15P, GND, ""),
         )
     }
 
@@ -1371,7 +1368,8 @@ mod tests {
         // reach both 15 V and 20 V by construction. The "selector cannot reach"
         // reachability gate must NOT fire on it; it applies only to a real
         // multi-detent selector. (This is the primary/correct EZ-PD BCR use.)
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+        let text = &format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
   (net 5 "+3.3V")
@@ -1381,19 +1379,11 @@ mod tests {
     (fp_text value CYPD3177-24LQ (at 0 2) (layer F.Fab))
     (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
   )
-  (module R (layer F.Cu) (at 110 104)
-    (fp_text reference R11 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 21 "VBUS_max"))
-  )
-  (module R (layer F.Cu) (at 110 106)
-    (fp_text reference R12 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 21 "VBUS_max"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-)"#;
+{r11}{r12}
+)"#,
+            r11 = res("R11", "5k1", 104, V33, VMAX, ""),
+            r12 = res("R12", "10k", 106, VMAX, GND, ""),
+        );
         assert_eq!(
             lint(text).of_check(LintCheck::DeviceDecode).count(),
             0,
@@ -1413,7 +1403,8 @@ mod tests {
         // single-pull-down-per-detent correct design: NO permanent R12 (so the
         // open detent gives the full 3.3V = 20V), and a leg that yields the 15V
         // band.
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+        let text = &format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
   (net 5 "+3.3V")
@@ -1427,36 +1418,7 @@ mod tests {
     (pad 1 smd rect (at 0 0) (net 20 "Net-(U1-VBUS_MIN)") (pinfunction "VBUS_MIN"))
     (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
   )
-  (module R (layer F.Cu) (at 110 100)
-    (fp_text reference R9 (at 0 0) (layer F.SilkS))
-    (fp_text value 100k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 20 "Net-(U1-VBUS_MIN)"))
-  )
-  (module R (layer F.Cu) (at 110 102)
-    (fp_text reference R10 (at 0 0) (layer F.SilkS))
-    (fp_text value 1k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 20 "Net-(U1-VBUS_MIN)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module R (layer F.Cu) (at 110 104)
-    (fp_text reference R11 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 21 "VBUS_max"))
-  )
-  (module R (layer F.Cu) (at 110 106)
-    (fp_text reference R15 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 24 "Net-(R15-Pad1)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module R (layer F.Cu) (at 110 110)
-    (fp_text reference R16 (at 0 0) (layer F.SilkS))
-    (fp_text value 1k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 25 "Net-(R16-Pad1)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
+{r9}{r10}{r11}{r15}{r16}
   (module SW (layer F.Cu) (at 120 100)
     (fp_text reference SW1 (at 0 0) (layer F.SilkS))
     (fp_text value ROTARY (at 0 2) (layer F.Fab))
@@ -1465,7 +1427,13 @@ mod tests {
     (pad 4 smd rect (at 2 0) (net 24 "Net-(R15-Pad1)"))
     (pad 6 smd rect (at 3 0) (net 21 "VBUS_max"))
   )
-)"#;
+)"#,
+            r9 = res("R9", "100k", 100, V33, VMIN, ""),
+            r10 = res("R10", "1k", 102, VMIN, GND, ""),
+            r11 = res("R11", "5k1", 104, V33, VMAX, ""),
+            r15 = res("R15", "5k1", 106, R15P, GND, ""),
+            r16 = res("R16", "1k", 110, R16P, GND, ""),
+        );
         // Here VBUS_MAX has NO permanent pull-down (no R12). resolve_fixed_divider
         // finds a pull-up (R11) but NO pull-down -> the check cannot compute the
         // static divider, so per zero-false-positive discipline it stays silent on
