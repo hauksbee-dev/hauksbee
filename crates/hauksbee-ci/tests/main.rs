@@ -11,6 +11,7 @@ mod assembly_inputs_ci;
 // Its cases are all AVR or Espressif QEMU co-sims.
 #[cfg(any(feature = "avr", feature = "qemu"))]
 mod boot_coverage;
+mod charger_cell;
 mod check_cli;
 mod ci_report_schema_drift;
 mod cli_diagnostics;

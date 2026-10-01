@@ -617,12 +617,11 @@ basis = "TI LM5109 SNVS369, Recommended Operating Conditions, VDD 8 V to 14 V; A
 #   VUVLO    = 3.6 V typ (rising)       under-voltage lockout
 #   ITERM    = 0.1 * IBAT               charge terminates at C/10
 #
-# MODEL COVERAGE IS SPLIT AND EXPLICIT. Dynamic circuit binding stamps the 4.2 V
-# CV source and its declared headroom only; it does not implement the CC-to-CV
-# state machine or a solver current limit. Static ampacity may use the PROG law
-# as the worst-case regulated charge current because it is tagged
-# `regulated_current`. Do not read that static attribution as dynamic CC/CV
-# behaviour.
+# MODEL COVERAGE IS EXPLICIT. Because the card is tagged `regulated_current`, the
+# binder stamps a CC/CV source: the output current is the PROG law at the
+# resistance the board's PROG network reads, behind the 4.2 V float (held down to
+# V(in) - dropout_v when the input cannot pass it), and the input draws that
+# current plus iq_a. It does not implement the precharge/termination/recharge state machine.
 #
 # DELIBERATELY NOT MODELLED, because the datasheet's numbers do not support it
 # and a plausible guess would be worse than the gap: the thermal-regulation loop
@@ -633,7 +632,7 @@ basis = "TI LM5109 SNVS369, Recommended Operating Conditions, VDD 8 V to 14 V; A
 [[models]]
 id = "tp4054"
 kind = "vreg"
-description = "TP4054 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
+description = "TP4054 charger (CC/CV source: PROG-programmed current limit, float voltage, input draw)"
 
 [models.match]
 value_re = "(?i)TP4054"
@@ -685,16 +684,16 @@ resistance_scale_ohms = 1000.0
 high_offset = 1.3333333333333333
 
 [models.coverage]
-implements = ["nominal_cv_output", "program_resistor_static_charge_current", "quiescent_current", "absolute_ratings"]
-missing = ["cc_cv_state_machine", "dynamic_current_limit", "input_uvlo", "charge_termination", "recharge_hysteresis", "thermal_regulation", "charge_status_timing"]
+implements = ["nominal_cv_output", "program_resistor_static_charge_current", "dynamic_current_limit", "input_current_draw", "quiescent_current", "absolute_ratings"]
+missing = ["cc_cv_state_machine", "input_uvlo", "charge_termination", "recharge_hysteresis", "thermal_regulation", "charge_status_timing"]
 
 # ── TP4056: 1 A single-cell Li-ion linear charger, SOP-8 ─────────────────────
 #
 # The charger on every red "TP4056 module" a hobbyist has in a drawer. Same
 # family as the TP4054 above. The physical part is a constant-current /
-# constant-voltage charger; the model deliberately splits that into a 4.2 V
-# dynamic CV source and a static PROG-current attribution. It does not claim a
-# dynamic CC/CV state machine.
+# constant-voltage charger and the model is one: the PROG-programmed current
+# limit and the 4.2 V float are a single CC/CV output, with the input drawing
+# the charge current plus iq_a. It does not claim the charge state machine.
 #
 # Source: NanJing Top Power ASIC Corp "TP4056, 1A Standalone Linear Li-Ion
 #   Battery Charger with Thermal Regulation in SOP-8". The copy read carries no
@@ -736,25 +735,21 @@ missing = ["cc_cv_state_machine", "dynamic_current_limit", "input_uvlo", "charge
 # an underestimate of the true headroom at any useful current, and a board check
 # that leans on it is leaning on the wrong thing.
 #
-# DELIBERATELY NOT MODELLED, because the vreg path is an ideal source and the
-# datasheet does not support inventing more:
-#   - The programmed charge current. The engine's vreg binder holds the output
-#     at `vout` with no current limit at all, so the RPROG relationship above
-#     (and with it the whole constant-current phase) is absent. On a module with
-#     the stock 1.2k this is a 1 A phase that simply does not happen.
+# DELIBERATELY NOT MODELLED, because the datasheet does not support inventing
+# more:
 #   - The trickle-charge region below VTRIKL = 2.9 V, its 80 mV hysteresis, and
-#     the C/10 termination. All three are state, and `vreg` has no states.
+#     the C/10 termination. All three are state, and the charger stamp has none.
 #   - The thermal-regulation loop that folds IBAT back at TLIM = 145 C. The
 #     datasheet states it as a behaviour with no transfer function.
 #   - The open-drain CHRG and STDBY status outputs, and the CE chip-enable
-#     input. `bind_vreg` stamps its source unconditionally and never reads an
-#     enable, so a board that sequences CE is not modelled. The pins are mapped
+#     input. The charger stamp never reads an enable, so a board that sequences
+#     CE is not modelled. The pins are mapped
 #     so the roles are at least visible in the bind report.
 #   - The TEMP thermistor input and its 45%/80%-of-VCC suspend window.
 [[models]]
 id = "tp4056"
 kind = "vreg"
-description = "TP4056 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
+description = "TP4056 charger (CC/CV source: PROG-programmed current limit, float voltage, input draw)"
 
 [models.match]
 # TP4056, TP4056-42-SOP8-PP, TP4056-42-ESOP8. The "42" in the order code is the
@@ -852,7 +847,7 @@ k_volts = 1200.0
 [[models]]
 id = "mcp73831"
 kind = "vreg"
-description = "MCP73831 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
+description = "MCP73831 charger (CC/CV source: PROG-programmed current limit, float voltage, input draw)"
 
 [models.match]
 # A bare MCP73831 (assumed -2, see above), an explicit -2, or the full
@@ -979,7 +974,7 @@ k_volts = 1000.0
 [[models]]
 id = "mcp73833"
 kind = "vreg"
-description = "MCP73833 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
+description = "MCP73833 charger (CC/CV source: PROG-programmed current limit, float voltage, input draw)"
 
 [models.match]
 # The Olimex value carries the package in parentheses. The MCP73834 shares this
@@ -1093,7 +1088,7 @@ k_volts = 1000.0
 [[models]]
 id = "bl4054b_42"
 kind = "vreg"
-description = "BL4054B-42 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
+description = "BL4054B-42 charger (CC/CV source: PROG-programmed current limit, float voltage, input draw)"
 
 [models.match]
 # The 42 voltage code is required: -43 and -44 float 100 and 200 mV higher.

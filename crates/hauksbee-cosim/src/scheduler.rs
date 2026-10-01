@@ -1362,6 +1362,9 @@ impl Scheduler {
         for r in &report.regulators {
             stress.watch_regulator_heat(r.source, RegulatorHeat::Linear { input: r.input });
         }
+        for &(source, input) in &report.linear_heat {
+            stress.watch_regulator_heat(source, RegulatorHeat::Linear { input });
+        }
         for (source, heat) in behavioral
             .iter()
             .filter_map(BehavioralDevice::converter_heat)

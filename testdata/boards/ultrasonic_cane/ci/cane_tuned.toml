@@ -10,8 +10,10 @@ net = "+5V_USB"
 kind = "usb"
 usb = "5v1.5a"
 
-# No supply on VBAT: the TP4056 charger (U3) is modelled as a 4.2 V source on
-# it, fed from +5V_USB, so a cell declared there would fight U3 and is refused.
+# No supply on VBAT: with no cell declared, the TP4056 charger (U3) holds it at
+# its 4.2 V float from +5V_USB. A cell could be declared there (kind = "battery"):
+# U3 is a current-limited source, so the cell is its load, charged at the
+# current its PROG resistor sets, and not a rival source.
 
 [[assert]]
 kind = "no_faults"

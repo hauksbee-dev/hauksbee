@@ -80,15 +80,7 @@ pub struct BulkCap {
     pub farads: Option<f64>,
 }
 
-/// True when a net name is ground.
-pub(crate) fn is_ground_net(name: &str) -> bool {
-    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    let leaf = n.rsplit('/').next().unwrap_or(&n);
-    matches!(
-        leaf,
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0" | "GNDPWR"
-    ) || leaf.starts_with("GND")
-}
+pub(crate) use hauksbee_bind::program_resistor::is_ground_net;
 
 /// A component is a power FET when its resolved kind is Nmos/Pmos, or (PCB-only,
 /// no model) its reference is a transistor designator on a power-looking

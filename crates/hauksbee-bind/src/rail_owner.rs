@@ -17,6 +17,14 @@
 //! declared supply on a regulator's output); the binder and the CI runner
 //! report them instead of letting the sources fight.
 //!
+//! A current-limited source (a linear charger's constant-current output, a
+//! `Behavioral` source named with [`LIMITED_SOURCE_PREFIX`]) is the
+//! exception: it forces a current, not a voltage, so a battery or supply
+//! beside it is the charger's load, not a rival. Such a source still counts as
+//! feeding its net (an undriven rail's name-derived ideal source gives way to
+//! it), but it never makes two drivers fight and never refuses a declared
+//! supply.
+//!
 //! A shunt regulator (TL431 class) drives its cathode too: its sink holds the
 //! node in closed loop against whatever feeds it, so an ideal source there
 //! would take the feed current the shunt should sink.
@@ -44,13 +52,20 @@ pub const SERIES_OHMS: f64 = 1.0;
 /// it regulates.
 pub const SHUNT_SINK_PREFIX: &str = "Gka_";
 
-/// An element that sets a node's voltage.
+/// The name prefix of a current-limited source: a `Behavioral` source whose `n`
+/// node it feeds (a linear charger's constant-current output stage).
+pub const LIMITED_SOURCE_PREFIX: &str = "Ichg_";
+
+/// An element that sets a node's voltage, or feeds it a limited current.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Driver {
     /// The node it drives.
     pub node: NodeId,
     /// The part (reference designator) or device that drives it.
     pub by: String,
+    /// True for a current-limited source: it feeds the node without setting
+    /// its voltage, so it never fights another source.
+    pub limited: bool,
 }
 
 /// Where a driving part takes its power, for pointing a refused supply at it.
@@ -95,13 +110,32 @@ impl RailDomains {
                 Some(Driver {
                     node,
                     by: part_of(d.name()).to_string(),
+                    limited: false,
                 })
             })
             .collect();
+        drivers.extend(
+            circuit
+                .iter()
+                .filter(|(id, _)| !skip.contains(id))
+                .filter_map(|(_, d)| match d {
+                    Device::Behavioral { name, n, .. }
+                        if name.starts_with(LIMITED_SOURCE_PREFIX) && !n.is_ground() =>
+                    {
+                        Some(Driver {
+                            node: *n,
+                            by: part_of(name).to_string(),
+                            limited: true,
+                        })
+                    }
+                    _ => None,
+                }),
+        );
         for b in behavioral {
             drivers.extend(b.driven_nodes().into_iter().map(|node| Driver {
                 node,
                 by: b.reference.clone(),
+                limited: false,
             }));
         }
         let fed = root.clone();
@@ -147,11 +181,24 @@ impl RailDomains {
         self.root.get(a.0 as usize) == self.root.get(b.0 as usize)
     }
 
-    /// The drivers of `node`'s domain, one per driving part.
+    /// The drivers of `node`'s domain, one per driving part: the voltage
+    /// setters and the current-limited feeds both.
     #[must_use]
     pub fn drivers_of(&self, node: NodeId) -> Vec<&Driver> {
+        self.collect(node, true)
+    }
+
+    /// The parts that set `node`'s domain voltage: [`Self::drivers_of`] less
+    /// the current-limited feeds, which a source beside them cannot fight.
+    #[must_use]
+    pub fn setters_of(&self, node: NodeId) -> Vec<&Driver> {
+        self.collect(node, false)
+    }
+
+    fn collect(&self, node: NodeId, limited: bool) -> Vec<&Driver> {
         let mut out: Vec<&Driver> = Vec::new();
-        for d in self.drivers.iter().filter(|d| self.joined(d.node, node)) {
+        let mine = |d: &&Driver| self.joined(d.node, node) && (limited || !d.limited);
+        for d in self.drivers.iter().filter(mine) {
             if !out.iter().any(|o| o.by == d.by) {
                 out.push(d);
             }
@@ -160,7 +207,7 @@ impl RailDomains {
     }
 
     /// Why `net` (on `node`) cannot take a declared supply: the parts already
-    /// driving its domain, and the net to declare it on instead.
+    /// setting its domain's voltage, and the net to declare it on instead.
     ///
     /// `feed_of` gives a driving part's [`Feed`]. The note follows that chain upstream past
     /// every input another part drives, so it names the one net where the
@@ -173,7 +220,7 @@ impl RailDomains {
         node: NodeId,
         feed_of: impl Fn(&str) -> Option<Feed>,
     ) -> Option<String> {
-        let drivers = self.drivers_of(node);
+        let drivers = self.setters_of(node);
         let first = drivers.first()?;
         let by = drivers.iter().map(|d| d.by.as_str()).collect::<Vec<_>>();
         let via = if first.node == node {
@@ -226,14 +273,14 @@ impl RailDomains {
     ) -> Option<(Vec<String>, Feed)> {
         let mut chain = vec![from.by.clone()];
         let mut feed = feed_of(&from.by)?;
-        while let Some(next) = self.drivers_of(feed.input).first() {
+        while let Some(next) = self.setters_of(feed.input).first() {
             let Some(up) = feed_of(&next.by).filter(|_| !chain.contains(&next.by)) else {
                 break;
             };
             chain.insert(0, next.by.clone());
             feed = up;
         }
-        self.drivers_of(feed.input)
+        self.setters_of(feed.input)
             .is_empty()
             .then_some((chain, feed))
     }
@@ -244,13 +291,13 @@ impl RailDomains {
     pub fn conflicts(&self, circuit: &Circuit) -> Vec<RailConflict> {
         let mut seen: Vec<usize> = Vec::new();
         let mut out = Vec::new();
-        for d in &self.drivers {
+        for d in self.drivers.iter().filter(|d| !d.limited) {
             let r = self.root[d.node.0 as usize];
             if seen.contains(&r) {
                 continue;
             }
             seen.push(r);
-            let parts = self.drivers_of(d.node);
+            let parts = self.setters_of(d.node);
             if parts.len() < 2 {
                 continue;
             }
@@ -340,6 +387,7 @@ fn part_of(name: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hauksbee_ir::CompiledExpr;
 
     fn circuit(build: impl FnOnce(&mut Circuit, [NodeId; 4])) -> Circuit {
         let mut c = Circuit::new();
@@ -430,6 +478,52 @@ mod tests {
             !note.contains("'+5V'") && note.contains("a battery or a connector"),
             "{note}"
         );
+    }
+
+    /// A charger's limited output (`Ichg_` into a node, a 0 V ammeter to the
+    /// board net) feeds the rail without setting its voltage.
+    fn charger_circuit(c: &mut Circuit, [_, sw, out, _]: [NodeId; 4]) {
+        c.add(Device::Behavioral {
+            name: "Ichg_U1".into(),
+            p: NodeId::GROUND,
+            n: sw,
+            output: BOutput::Current,
+            expr: CompiledExpr::compile("0.1").unwrap(),
+            deps: Vec::new(),
+        });
+        c.add(Device::vsource("Vreg_U1", out, sw, SourceKind::Dc(0.0)));
+    }
+
+    #[test]
+    fn a_limited_source_feeds_a_rail_but_never_owns_it() {
+        let c = circuit(charger_circuit);
+        let d = RailDomains::new(&c, &[], &[]);
+        let out = c.find_node("+5V").unwrap();
+        assert_eq!(d.drivers_of(out).len(), 1);
+        assert!(d.setters_of(out).is_empty());
+        assert!(d.fed_by_driver(out));
+        assert_eq!(d.owned_note(&c, "+5V", out, |_| None), None);
+        assert!(d.conflicts(&c).is_empty());
+    }
+
+    #[test]
+    fn a_hard_source_beside_a_limited_one_is_the_only_setter() {
+        let c = circuit(|c, nodes| {
+            charger_circuit(c, nodes);
+            c.add(Device::vsource(
+                "Vreg_U2",
+                nodes[2],
+                NodeId::GROUND,
+                SourceKind::Dc(5.0),
+            ));
+        });
+        let d = RailDomains::new(&c, &[], &[]);
+        let out = c.find_node("+5V").unwrap();
+        assert_eq!(d.drivers_of(out).len(), 2);
+        assert_eq!(d.setters_of(out).len(), 1);
+        assert_eq!(d.setters_of(out)[0].by, "U2");
+        assert!(d.conflicts(&c).is_empty());
+        assert!(d.owned_note(&c, "+5V", out, |_| None).is_some());
     }
 
     #[test]

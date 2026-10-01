@@ -23,8 +23,9 @@ frame_ms = 8
 # Power enters where the real board takes it: the micro-USB connector J2 on
 # VBUS, through Schottky D4 into the ME6211 LDO (U2), which makes +3V3. U2
 # drives +3V3, so a supply declared there would fight it and is refused. The
-# battery (+BATT) is not used: the TP4054 charger (U5) is modelled as a 4.2 V
-# source on it, which a declared cell would fight as well.
+# battery (+BATT) is not used, since the run is on USB: with no cell declared the
+# TP4054 charger (U5) holds +BATT at its 4.2 V float. A cell could be declared
+# there: U5 is a current-limited source, so the cell is its load, not a rival.
 [[supply]]
 net = "VBUS"
 kind = "ideal"

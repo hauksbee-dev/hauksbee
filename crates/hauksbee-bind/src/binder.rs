@@ -25,6 +25,7 @@ use hauksbee_ir::{
     BDep, BOutput, BjtModel, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, MosLevel,
     MosfetModel, NodeId, Polarity, Rail, SourceKind,
 };
+use hauksbee_models::schema::{CurrentProgram, CurrentProgramSemantics};
 use hauksbee_models::sensor_spec::StrapTie;
 use hauksbee_models::validation::repeatable_role;
 use hauksbee_models::value::parse_value;
@@ -37,6 +38,7 @@ use crate::bind_report::{BindOutcome, BindReport, BindRow, SimpleRegulator};
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
+use crate::program_resistor::{is_ground_net, program_resistance_to_ground};
 use crate::stress::DeviceMeta;
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
@@ -763,6 +765,8 @@ pub fn bind_board_with(
             }
         }
     }
+
+    report.linear_heat = charger_heat(&circuit);
 
     // ── Pass 4: gather fault-monitor metadata ───────────────────────────────
     // Match each monitorable IR device back to its component (device name ==
@@ -3894,6 +3898,25 @@ fn bind_vreg(
             "vreg input, output, and local return must be distinct",
         );
     }
+    // A linear charger is a CC/CV source, not an ideal one.
+    if let Some(program) = linear_charger(model) {
+        let pins = ChargerPins {
+            input,
+            out,
+            gnd,
+            prog: roles.get(&program.pin).copied(),
+            vfloat: vout,
+        };
+        let stamped = stamp_charger(comp, model, program, pins, circuit, components, node_of);
+        let stability = vreg_stability_warning(comp, model, (out, gnd), components, node_of);
+        let caveats = [stamped.assumption, stability, entry_warning(comp, model)];
+        return (
+            BindOutcome::Behavioral {
+                device: stamped.label,
+            },
+            join_caveats(comp, caveats),
+        );
+    }
     let source_id = circuit.add(Device::vsource(
         format!("Vreg_{}", comp.reference),
         out,
@@ -3982,11 +4005,22 @@ fn bind_vreg(
         entry_warning(comp, model),
         enable_warning,
     ];
-    // The follower's own "REF (VALUE): " comes off so the reference is not said
-    // twice in one sentence. The KNOWN prefix is stripped rather than cutting at
-    // the first ": ", which a component value containing a colon would break.
+    (
+        BindOutcome::Behavioral {
+            device: format!("vreg {vout:.1}V source"),
+        },
+        join_caveats(comp, caveats),
+    )
+}
+
+/// Several caveats can apply to one part and there is one channel, so they are
+/// joined rather than one silently winning. The follower's own "REF (VALUE): "
+/// comes off so the reference is not said twice in one sentence. The KNOWN
+/// prefix is stripped rather than cutting at the first ": ", which a component
+/// value containing a colon would break.
+fn join_caveats(comp: &Component, caveats: [Option<String>; 3]) -> Option<String> {
     let prefix = format!("{} ({}): ", comp.reference, comp.value);
-    let warning = caveats.into_iter().flatten().reduce(|lead, c| {
+    caveats.into_iter().flatten().reduce(|lead, c| {
         let c = c
             .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
             .unwrap_or(&c);
@@ -3994,13 +4028,7 @@ fn bind_vreg(
             "{lead}; also {}",
             c.strip_prefix(prefix.as_str()).unwrap_or(c)
         )
-    });
-    (
-        BindOutcome::Behavioral {
-            device: format!("vreg {vout:.1}V source"),
-        },
-        warning,
-    )
+    })
 }
 
 /// Headroom over which a linear regulator's input draw fades out when its card
@@ -4069,6 +4097,262 @@ fn pass_draw(
         ],
     });
     (draw, held)
+}
+
+/// A charger's constant-voltage output droops by this many volts as its output
+/// current rises from zero to the programmed limit, so its output impedance in
+/// regulation is `CV_BAND_V / I_limit` (about 25 mOhm for a 400 mA part).
+const CV_BAND_V: f64 = 0.01;
+
+/// What a charger's output looks like to a cell above its float voltage: the
+/// pass element blocks reverse current, leaving microamps through this much
+/// resistance.
+const REVERSE_OHMS: f64 = 1e6;
+
+/// The pin nodes a charger stamp needs.
+#[derive(Clone, Copy)]
+struct ChargerPins {
+    input: NodeId,
+    out: NodeId,
+    gnd: NodeId,
+    /// The node on the part's programming pin, when it is wired.
+    prog: Option<NodeId>,
+    /// The float voltage, the card's `vout`.
+    vfloat: f64,
+}
+
+/// What a charger stamp tells the bind report.
+struct StampedCharger {
+    label: String,
+    /// Said when the charge-current limit is not read from the board.
+    assumption: Option<String>,
+}
+
+/// The card's programming block when the part is a linear charger: a current
+/// regulated by a resistor, flowing in at one set of roles and out at another.
+/// A protection-limit block (a converter's input limit) is not a charger, and
+/// neither is a power-path part whose programmed current leaves at another
+/// port (a `bat` role) than the `out` this stamp drives: its `out` is a system
+/// rail that carries more than the charge current, so limiting it to
+/// `I_prog` would be wrong.
+fn linear_charger(model: &ModelEntry) -> Option<&CurrentProgram> {
+    let has = |roles: &[String], role: &str| roles.iter().any(|r| r == role);
+    model.current_program.as_ref().filter(|p| {
+        p.semantics == CurrentProgramSemantics::RegulatedCurrent
+            && has(&p.current_in_roles, "in")
+            && has(&p.current_out_roles, "out")
+    })
+}
+
+/// A charger's current limit and, when it is not read from the board, the
+/// assumption for the bind report: the PROG network's resistance through the
+/// card's equation, else the card's operating ceiling.
+fn charge_limit(
+    comp: &Component,
+    program: &CurrentProgram,
+    prog: Option<NodeId>,
+    components: &[Component],
+    is_ground: &dyn Fn(i64) -> Option<bool>,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> (f64, Option<String>) {
+    let reference = &comp.reference;
+    let read = prog
+        .and_then(|node| comp.pins.iter().find(|p| node_of(p.net) == Some(node))?.net)
+        .and_then(|net| {
+            let excluded = components.iter().position(|c| c.reference == *reference);
+            program_resistance_to_ground(components, is_ground, net, 4, excluded)
+        });
+    let ceiling = program.max_operating_current_a;
+    let (amps, assumed) = match read {
+        Some((ohms, path)) => {
+            let amps = program.operating_current_a(ohms);
+            let why = amps.is_none().then(|| {
+                format!(
+                    "the {ohms:.0} ohm programming network {} asks for a current outside this \
+                     card's sourced operating domain",
+                    path.join("+")
+                )
+            });
+            (amps.or(ceiling), why)
+        }
+        None => (
+            ceiling,
+            Some(format!(
+                "its `{}` programming resistor could not be read off the board (no populated \
+                 resistor path to ground, or a part on the net that is not a plain resistor)",
+                program.pin
+            )),
+        ),
+    };
+    let ilim = amps.unwrap_or(0.0).max(1e-6);
+    let assumption = assumed.map(|why| {
+        format!(
+            "{}{reference} ({}): {why}, so the charge-current limit is the card's {ilim:.3} A \
+             normal-operating ceiling, not a value read from this board; the charge current \
+             and the input current it draws are upper bounds",
+            Assumption::PARTIAL_MODEL_MARKER,
+            comp.value
+        )
+    });
+    (ilim, assumption)
+}
+
+/// A linear Li-ion charger's CC/CV output, from primitives the IR already has.
+///
+/// The ideal-source stamp of a plain regulator is wrong for a charger: it has
+/// no current limit, so a battery on the output is a fight between two voltage
+/// sources and the charge current is whatever the solver splits. The real part
+/// is a pass element that forces `I_prog` (set by the board's PROG resistor)
+/// into the cell until the cell reaches the float voltage, then tapers the
+/// current to hold it there. The stamp is that I-V curve as a Thevenin source,
+/// which Newton solves in one pass whatever the load (a flat current-source
+/// plateau does not: from a cold start it overshoots to `I_prog * R_load` and
+/// back):
+///
+/// - `Vchg_<ref>` holds `set` at `Vfloat`, rounded down over [`PASS_FADE_V`]
+///   to `V(in) - dropout` when the input cannot pass it, so a collapsed or
+///   unpowered input delivers nothing (the LDO path's headroom, on the output
+///   rather than the draw);
+/// - `Ichg_<ref>`, between `set` and the ammeter's node, drops `R_cv * I` up to
+///   `I_prog` (`R_cv = CV_BAND_V / I_prog`), then `R_cc * (I - I_prog)` with a
+///   large `R_cc`, which holds the current at the limit into any load, and
+///   [`REVERSE_OHMS`] for current back into the part;
+/// - `Vreg_<ref>` is a 0 V ammeter from there to OUT, the seam the stress
+///   monitor and the draw below read;
+/// - `Bchg_<ref>` draws the output current out of IN, read back off the drop
+///   (the inverse of the expression above) so an output capacitor's `C*dV/dt`
+///   never reaches IN (see [`pass_draw`]), and the card's `iq_a` is added.
+///
+/// `rail_owner` knows `Ichg_` as a current-limited feed, so a battery declared
+/// on OUT is the charger's load, not a rival source.
+///
+/// `I_prog` is [`CurrentProgram::operating_current_a`] of the PROG network's
+/// resistance, read by [`program_resistance_to_ground`] (the same reading the
+/// ampacity check cites). When the network cannot be read, or the equation
+/// declines that resistance, the limit is the card's normal-operating ceiling
+/// and the assumption is returned for the bind report; no value is invented.
+fn stamp_charger(
+    comp: &Component,
+    model: &ModelEntry,
+    program: &CurrentProgram,
+    pins: ChargerPins,
+    circuit: &mut Circuit,
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> StampedCharger {
+    let ChargerPins {
+        input,
+        out,
+        gnd,
+        prog,
+        vfloat,
+    } = pins;
+    let reference = &comp.reference;
+    let (ilim, assumption) = charge_limit(
+        comp,
+        program,
+        prog,
+        components,
+        &|id| node_of(Some(id)).map(|n| n.is_ground() || is_ground_net(circuit.node_name(n))),
+        node_of,
+    );
+    let full = model
+        .params
+        .get_f64("dropout_v")
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(0.0);
+    let (set, cc) = (
+        circuit.node(&format!("{reference}_chg_set")),
+        circuit.node(&format!("{reference}_chg_out")),
+    );
+    // The set voltage: the float, held down to what the input can pass.
+    // `m` is `min(u, 0)` rounded over `PASS_FADE_V`, `u` the input's headroom
+    // above `Vfloat + dropout`.
+    let w = PASS_FADE_V;
+    let u = format!("((__d0-__d1)-{:?})", vfloat + full);
+    let m = format!(
+        "if({u}>=0.0,0.0,if({u}>=-{w:?},-{u}*{u}/{:?},{u}+{:?}))",
+        2.0 * w,
+        w / 2.0
+    );
+    circuit.add(Device::Behavioral {
+        name: format!("Vchg_{reference}"),
+        p: set,
+        n: gnd,
+        output: BOutput::Voltage,
+        expr: CompiledExpr::compile(&format!("{vfloat:?}+{m}"))
+            .expect("charger set voltage compiles"),
+        deps: vec![BDep::Volt(input), BDep::Volt(gnd)],
+    });
+    // The output ammeter: a 0 V source whose branch reads `-Iout`, the seam the
+    // stress monitor and the input draw below both read.
+    let ammeter = circuit.add(Device::vsource(
+        format!("Vreg_{reference}"),
+        out,
+        cc,
+        SourceKind::Dc(0.0),
+    ));
+    let (droop_ohms, hold_ohms) = (CV_BAND_V / ilim, 1e4 * vfloat / ilim);
+    let i_out = "(-__d0)";
+    let drop = format!(
+        "{REVERSE_OHMS:?}*min({i_out},0.0)+{droop_ohms:?}*max(min({i_out},{ilim:?}),0.0)\
+         +{hold_ohms:?}*max({i_out}-{ilim:?},0.0)"
+    );
+    circuit.add(Device::Behavioral {
+        name: format!("{}{reference}", crate::rail_owner::LIMITED_SOURCE_PREFIX),
+        p: set,
+        n: cc,
+        output: BOutput::Voltage,
+        expr: CompiledExpr::compile(&drop).expect("charger drop compiles"),
+        deps: vec![BDep::Branch(ammeter)],
+    });
+    // IN draws what the output delivers, read back off the drop it makes (the
+    // inverse of the expression above) rather than off the ammeter's branch, so
+    // an output capacitor's C*dV/dt never reaches IN (see [`pass_draw`]).
+    let delta = "(__d0-__d1)";
+    let draw = format!(
+        "min(max({delta},0.0)/{droop_ohms:?},{ilim:?})+max({delta}-{:?},0.0)/{hold_ohms:?}",
+        droop_ohms * ilim
+    );
+    circuit.add(Device::Behavioral {
+        name: format!("{CHARGER_DRAW_PREFIX}{reference}"),
+        p: input,
+        n: gnd,
+        output: BOutput::Current,
+        expr: CompiledExpr::compile(&draw).expect("charger draw compiles"),
+        deps: vec![BDep::Volt(set), BDep::Volt(cc)],
+    });
+    if let Some(amps) = model.params.get_f64("iq_a").filter(|i| i.is_finite()) {
+        let name = format!("Iq_{reference}");
+        circuit.add(Device::isource(name, input, gnd, SourceKind::Dc(amps)));
+    }
+    StampedCharger {
+        label: format!("linear charger {vfloat:.1}V CC/CV, {ilim:.3}A limit"),
+        assumption,
+    }
+}
+
+/// The name prefix of a charger's input draw, the copy of its output current
+/// taken out of IN.
+const CHARGER_DRAW_PREFIX: &str = "Bchg_";
+
+/// Each charger's ammeter and input node, for the dissipation watch: the
+/// stress monitor reads `(V(in)*Iin - V(out)*Iout)` off them like a linear
+/// regulator's.
+fn charger_heat(circuit: &Circuit) -> Vec<(DeviceId, NodeId)> {
+    circuit
+        .iter()
+        .filter_map(|(_, d)| match d {
+            Device::Behavioral { name, p, .. } => {
+                let reference = name.strip_prefix(CHARGER_DRAW_PREFIX)?;
+                let ammeter = circuit.iter().find(|(_, a)| {
+                    matches!(a, Device::Vsource { name, .. } if name.strip_prefix("Vreg_") == Some(reference))
+                })?;
+                Some((ammeter.0, *p))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The adjustable vreg stamp, from primitives the IR already has. The LM317

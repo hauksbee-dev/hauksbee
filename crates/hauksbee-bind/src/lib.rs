@@ -12,6 +12,7 @@
 //! * [`drivers`], [`digital`], [`logic`], [`behavioral`], [`power_supply`]:
 //!   the device models the binder instantiates.
 //! * [`rail_owner`]: which supply nets may take an ideal source.
+//! * [`program_resistor`]: the resistance a programming pin sees to ground.
 //! * [`stress`], [`thermal`], [`shorts`]: the per-device envelopes and the
 //!   fault monitor that watches them during a run.
 //! * [`board_input`], [`firmware_input`], [`boardcode`], [`schematic_ties`],
@@ -35,6 +36,7 @@ pub mod logic;
 pub mod occurrence;
 pub mod package_fit;
 pub mod power_supply;
+pub mod program_resistor;
 pub mod rail_owner;
 pub mod schematic_ties;
 pub mod shorts;

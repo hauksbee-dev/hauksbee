@@ -24,6 +24,12 @@
 //! the routing removed must fail the same check, and a buck -> LDO -> op-amp
 //! chain must still power up.
 //!
+//! A linear charger (a `vreg` card tagged `regulated_current`) is a CC/CV
+//! source, so its rig differs: a PROG resistor sets a limit above the load,
+//! and the checks above hold with the limit idle. Further tests drive the limit
+//! itself (a short load holds the PROG current), and put a declared battery on
+//! the charger's output, which is legal and takes the charge current.
+//!
 //! The cards are enumerated from the db and classified by what the binder
 //! stamped, never hand-picked, so a new card joins the matrix by existing.
 //! A path on the known-gap list is asserted to still fail, so a fix landing
@@ -34,11 +40,13 @@ use std::fmt::Write as _;
 
 use hauksbee_engine::binder::bind_board_with;
 use hauksbee_engine::power_rail_voltage;
+use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
+use hauksbee_engine::rail_owner::RailDomains;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_engine::CustomRegistry;
 use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::{Device, SourceKind};
-use hauksbee_models::{ModelLibrary, SourceLayer};
+use hauksbee_models::{ModelEntry, ModelLibrary, SourceLayer};
 use hauksbee_solve::SolverOptions;
 
 use crate::support::passive_pin as pin;
@@ -91,6 +99,17 @@ impl Card {
 
     fn has_role(&self, role: &str) -> bool {
         self.pins().iter().any(|(_, r)| r == role)
+    }
+
+    /// The charge current the card's PROG law gives at `ohms`, for a linear
+    /// charger: a `vreg` tagged `regulated_current`.
+    fn charge_current_at(&self, ohms: f64) -> Option<f64> {
+        let program = self.table.get("current_program")?;
+        if self.kind != "vreg" || text(program.as_table()?, "semantics")? != "regulated_current" {
+            return None;
+        }
+        let entry: ModelEntry = self.table.clone().try_into().ok()?;
+        entry.current_program?.operating_current_a(ohms)
     }
 }
 
@@ -272,6 +291,9 @@ fn vreg_plan(card: &Card, value: &str) -> Option<Plan> {
     if shunt {
         return Some(shunt_plan(card, value));
     }
+    if card.charge_current_at(CHARGER_PROG_OHMS).is_some() {
+        return charger_plan(card, value, &rail(4.2), None);
+    }
     let feedback = conv
         .and_then(|c| c.get("feedback"))
         .and_then(toml::Value::as_table);
@@ -361,6 +383,53 @@ fn vreg_plan(card: &Card, value: &str) -> Option<Plan> {
         output,
         target,
         expect,
+    })
+}
+
+/// The PROG resistor of every charger rig: 5k reads 0.2 A to 0.24 A on every
+/// builtin charger law, inside each card's operating domain.
+const CHARGER_PROG_OHMS: f64 = 5e3;
+
+/// A linear charger on a +6V input, its CE and enables tied to the input and
+/// a PROG resistor to ground, charging the net `output` through a resistive
+/// load of `load_ohms`: `None` draws half the programmed current, `Some(0.0)`
+/// leaves the output open for a declared battery.
+fn charger_plan(card: &Card, value: &str, output: &str, load_ohms: Option<f64>) -> Option<Plan> {
+    let iprog = card.charge_current_at(CHARGER_PROG_OHMS)?;
+    let (input, output) = (rail(6.0), output.to_string());
+    let mut rig = Rig::default();
+    rig.net("GND");
+    let pins = card
+        .pins()
+        .into_iter()
+        .filter_map(|(pad, role)| {
+            let net = match role.as_str() {
+                "in" | "in2" | "ce" | "en" => input.as_str(),
+                "out" | "out2" => output.as_str(),
+                "gnd" => "GND",
+                "prog" => "PROG",
+                _ => return None,
+            };
+            Some(pin(&pad, rig.net(net)))
+        })
+        .collect();
+    rig.parts
+        .push(component("U1", value, "Package_SO:SOIC-8", pins));
+    rig.two("R9", "5k", RES, "PROG", "GND");
+    rig.two("C1", "10uF", CAP, &input, "GND");
+    let ohms = load_ohms.unwrap_or(4.2 / (0.5 * iprog));
+    if ohms > 0.0 {
+        rig.load("R1", &output, ohms);
+    }
+    let iq = card.param("iq_a");
+    Some(Plan {
+        rig,
+        input,
+        output,
+        target: 4.2,
+        expect: Expect::Linear {
+            iq: iq.unwrap_or(0.0),
+        },
     })
 }
 
@@ -493,6 +562,8 @@ fn path_of(devices: &[Device]) -> &'static str {
         "shunt"
     } else if named("Vref_U1") {
         "adjustable"
+    } else if named("Ichg_U1") {
+        "charger"
     } else if let Some(Device::Vsource { kind, .. }) =
         devices.iter().find(|d| d.name() == "Vreg_U1")
     {
@@ -1166,4 +1237,146 @@ fn a_buck_ldo_chain_with_active_loads_powers_up_and_balances() {
         (got / want - 1.0).abs() < 0.03,
         "+12V carries {got:.5e} A, the chain needs {want:.5e} A (i33 {i33:.4e}, i5 {i5:.4e})"
     );
+}
+
+/// A charger board settled for 2 ms, with an ideal 3.7 V cell declared on the
+/// output when `cell` is set. The scheduler and the rail check on that net.
+fn settle_charger(plan: &Plan, lib: &ModelLibrary, cell: bool) -> Scheduler {
+    settle_charger_at(plan, lib, cell, 6.0)
+}
+
+/// [`settle_charger`] with the input rail at `input_volts`.
+fn settle_charger_at(plan: &Plan, lib: &ModelLibrary, cell: bool, input_volts: f64) -> Scheduler {
+    let mut bound = bind_board_with(&plan.rig.board(), lib, &CustomRegistry::new());
+    let wired = |l: &&mut SupplyLeg| l.net_name == plan.input;
+    let leg = bound
+        .supplies
+        .iter_mut()
+        .find(wired)
+        .expect("input rail leg");
+    leg.reconfigure(
+        &mut bound.circuit,
+        PowerSupply::Ideal { volts: input_volts },
+    );
+    if cell {
+        let node = bound.node(&plan.output).expect("output net is bound");
+        let legs: Vec<_> = bound.supplies.iter().map(|l| l.vsource).collect();
+        let domains = RailDomains::new(&bound.circuit, &bound.behavioral, &legs);
+        assert_eq!(
+            domains.owned_note(&bound.circuit, &plan.output, node, |_| None),
+            None,
+            "a charger's output is legal ground for a declared battery"
+        );
+        let supply = PowerSupply::Ideal { volts: 3.7 };
+        let leg = SupplyLeg::stamp(&mut bound.circuit, node, &plan.output, supply);
+        bound.supplies.push(leg);
+    }
+    let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+    for _ in 0..20 {
+        sched.step(1e-4);
+    }
+    assert!(sched.analog_valid(), "{:?}", sched.failed_windows());
+    sched
+}
+
+/// Every builtin charger holds the PROG current into a short load, takes the
+/// same current (plus its Iq) from the input, and charges a declared cell at
+/// that current with the cell legal on the output, on a supply-named net and
+/// on a plain one.
+#[test]
+fn a_linear_charger_limits_to_the_prog_current_and_charges_a_declared_cell() {
+    let cards = power_cards();
+    let lib = probe_library(&cards, "charger_cell");
+    let mut seen = 0;
+    for (i, card) in cards.iter().enumerate() {
+        let Some(iprog) = card.charge_current_at(CHARGER_PROG_OHMS) else {
+            continue;
+        };
+        seen += 1;
+        let value = format!("PROBE{i}");
+        let iq = card.param("iq_a").unwrap_or(0.0);
+        let close = |got: f64, want: f64, what: &str| {
+            assert!(
+                (got / want - 1.0).abs() < 0.02,
+                "{}: {what} {got:.5e} A, want {want:.5e} A",
+                card.id
+            );
+        };
+        // A 1 ohm load asks for more than the limit: the limit holds.
+        let short = charger_plan(card, &value, "VBAT", Some(1.0)).unwrap();
+        let sched = settle_charger(&short, &lib, false);
+        let states = sched.supply_states();
+        let v = |n: &str| sched.net_voltage(n).unwrap_or(f64::NAN);
+        close(v("VBAT"), iprog, "short-load current");
+        close(states[&short.input].1, iprog + iq, "input current");
+        // A declared cell takes the charge: constant current, then the cell
+        // sits above the float only when the limit gives way to it.
+        for net in ["VBAT", "+4.2V"] {
+            let cell = charger_plan(card, &value, net, Some(0.0)).unwrap();
+            let sched = settle_charger(&cell, &lib, true);
+            let states = sched.supply_states();
+            close(-states[net].1, iprog, &format!("{net} charge current"));
+            close(states[&cell.input].1, iprog + iq, &format!("{net} input"));
+            // With the input unplugged the cell is not discharged into it.
+            let dead = settle_charger_at(&cell, &lib, true, 0.0);
+            let leak = dead.supply_states()[net].1;
+            assert!(
+                leak.abs() < 1e-3 * iprog,
+                "{}: {net} leaks {leak:.3e} A with the input off",
+                card.id
+            );
+        }
+    }
+    assert!(seen >= 5, "only {seen} charger cards found");
+}
+
+/// The refusal stays for a part that sets its rail's voltage: a declared
+/// supply on a fixed regulator's output is the fight the rail check exists
+/// to stop, and a charger's allowance does not loosen it.
+#[test]
+fn a_declared_supply_on_a_fixed_regulators_output_is_still_refused() {
+    let cards = power_cards();
+    let lib = probe_library(&cards, "charger_short");
+    let (i, card) = cards
+        .iter()
+        .enumerate()
+        .find(|(_, c)| {
+            c.kind == "vreg" && c.param("dropout_v").is_some() && c.param("vout").is_some()
+        })
+        .filter(|(_, c)| c.charge_current_at(CHARGER_PROG_OHMS).is_none())
+        .expect("a fixed linear regulator card");
+    let plan = vreg_plan(card, &format!("PROBE{i}")).unwrap();
+    let bound = bind_board_with(&plan.rig.board(), &lib, &CustomRegistry::new());
+    let node = bound.node(&plan.output).unwrap();
+    let domains = RailDomains::new(&bound.circuit, &bound.behavioral, &[]);
+    assert!(
+        domains
+            .owned_note(&bound.circuit, &plan.output, node, |_| None)
+            .is_some(),
+        "{} drives {}",
+        card.id,
+        plan.output
+    );
+}
+
+/// A power-path part's programmed current leaves at a `bat` port, not at the
+/// `out` that is its system rail: that `out` must not be limited to the charge
+/// current, so such a card keeps the plain regulator stamp.
+#[test]
+fn a_power_path_charger_keeps_its_system_rail_unlimited() {
+    let mut card = power_cards()
+        .into_iter()
+        .find(|c| c.id == "tp4056")
+        .unwrap();
+    let program = card.table.get_mut("current_program").unwrap();
+    let roles: Vec<toml::Value> = vec!["bat".into()];
+    program
+        .as_table_mut()
+        .unwrap()
+        .insert("current_out_roles".into(), roles.into());
+    let cards = [card];
+    let lib = probe_library(&cards, "charger_roles");
+    let plan = vreg_plan(&cards[0], "PROBE0").unwrap();
+    let bound = bind_board_with(&plan.rig.board(), &lib, &CustomRegistry::new());
+    assert_eq!(path_of(&bound.circuit.devices), "fixed");
 }

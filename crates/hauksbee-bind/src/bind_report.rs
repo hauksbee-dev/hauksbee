@@ -155,6 +155,9 @@ pub struct BindReport {
     pub board_name: String,
     pub regulators: Vec<SimpleRegulator>,
     pub open_parts: Vec<OpenPart>,
+    /// Linear charger pass elements whose dissipation is watched: the 0 V
+    /// ammeter in series with the output and the input node it draws from.
+    pub linear_heat: Vec<(hauksbee_ir::DeviceId, hauksbee_ir::NodeId)>,
     /// Rails more than one source sets the voltage of (see `rail_owner`).
     pub rail_conflicts: Vec<crate::rail_owner::RailConflict>,
     /// Orderable-variant selections, keyed by the index of the row they bound.
