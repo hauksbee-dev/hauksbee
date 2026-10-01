@@ -920,15 +920,15 @@ fn single_channel_comparator_keeps_the_bare_reference() {
 #[test]
 fn quad_bilateral_switch_stamps_one_vswitch_per_gate() {
     // CD74HC4066 pad map (analog_switch.toml): 1=in_out_1a, 2=in_out_1b,
-    // 3=in_out_2a, 4=in_out_2b, 5=ctrl_2, 6=ctrl_1, 7=vss, 8=ctrl_4,
-    // 9=ctrl_3, 10=in_out_3a, 11=in_out_3b, 12=in_out_4a, 13=in_out_4b, 14=vcc.
+    // 3=in_out_2a, 4=in_out_2b, 5=ctrl_2, 6=ctrl_3, 7=vss,
+    // 8=in_out_3a, 9=in_out_3b, 10=in_out_4a, 11=in_out_4b, 12=ctrl_4, 13=ctrl_1, 14=vcc.
     let bound = bind_single_part(
         "SW2",
         "CD74HC4066",
         "Package_SO:TSSOP-14_4.4x5mm_P0.65mm",
         &[
-            "G1A", "G1B", "G2A", "G2B", "CTRL2", "CTRL1", "GND", "CTRL4", "CTRL3", "G3A", "G3B",
-            "G4A", "G4B", "+3V3",
+            "G1A", "G1B", "G2A", "G2B", "CTRL2", "CTRL3", "GND", "G3A", "G3B", "G4A", "G4B",
+            "CTRL4", "CTRL1", "+3V3",
         ],
     );
 

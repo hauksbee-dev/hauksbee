@@ -404,6 +404,20 @@ fn the_74lvc1g66_has_one_pinout_and_pad_three_is_ground() {
     }
 }
 
+/// TI SCHS208E Table 4-1 (p.3): the four control pins sit on pads 13, 5, 6 and 12,
+/// pad 13 being 1E. One table, every pad.
+#[test]
+fn the_cd74hc4066_pad_roles_follow_the_ti_pin_table() {
+    let m = expect_id("CD74HC4066", "cd74hc4066");
+    assert_pins(
+        &m,
+        &pins(
+            "1=in_out_1a 2=in_out_1b 3=in_out_2a 4=in_out_2b 5=ctrl_2 6=ctrl_3 7=vss \
+             8=in_out_3a 9=in_out_3b 10=in_out_4a 11=in_out_4b 12=ctrl_4 13=ctrl_1 14=vcc",
+        ),
+    );
+}
+
 // ── The rest of the list, held to the same bar ───────────────────────────────
 
 /// Every remaining entry the external-five gate added, checked for the two things
