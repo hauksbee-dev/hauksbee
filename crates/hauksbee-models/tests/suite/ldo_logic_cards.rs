@@ -7,7 +7,7 @@ const SOT23_5: &str = "Package_TO_SOT_SMD:SOT-23-5";
 
 /// (value, footprint, id, `pad=role` map, vout). Pin maps: Microne ME6211 V14 p.4
 /// (SOT23-5 column); onsemi NCP1117LP/D Rev.6 Table 1 and NCP1117/D Rev.31 (SOT-223,
-/// tab on pin 2); Torex ETR0305_003a Pin Assignment (SOT-23 column).
+/// tab on pin 2); Torex `ETR0305_003a` Pin Assignment (SOT-23 column).
 #[test]
 fn ldo_pad_roles_and_voltage_codes_follow_the_datasheets() {
     const ME: &str = "1=in 2=gnd 3=en 4=nc 5=out";
