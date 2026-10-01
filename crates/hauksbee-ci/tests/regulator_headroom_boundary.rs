@@ -84,8 +84,8 @@ fn a_supply_on_the_regulated_rail_is_pointed_at_the_regulator_input() {
     let err = hauksbee_ci::run(&cfg).expect_err("a fight with U1 must refuse");
     let msg = err.to_string();
     let fix = format!(
-        "Declare it on 'VIN' (or by pin: ref = \"U1\", pin = \"3\") instead, the input of U1; \
-         U1 needs at least {:.2} V there",
+        "Declare the supply on U1's input instead: net = \"VIN\" (or ref = \"U1\", pin = \"3\"), \
+         at least {:.2} V.",
         minimum_input_v()
     );
     assert!(msg.contains("'VOUT' is already driven by U1"), "{msg}");

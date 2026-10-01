@@ -186,28 +186,32 @@ impl RailDomains {
         };
         let instead = self.upstream_feed(first, &feed_of).map_or_else(
             || {
-                " Declare the supply where the board takes power (the driving part's input, \
-                 a battery or a connector) instead"
+                " Declare the supply where the board takes power instead: the driving part's \
+                 input, a battery or a connector."
                     .to_string()
             },
             |(chain, feed)| {
                 let top = &chain[0];
-                let need = feed.min_v.map_or_else(String::new, |v| {
-                    format!("; {top} needs at least {v:.2} V there")
-                });
+                let feeds = if chain.len() > 1 {
+                    format!(" ({})", chain.join(" feeds "))
+                } else {
+                    String::new()
+                };
                 let by_pin = feed.pin.map_or_else(String::new, |p| {
-                    format!(" (or by pin: ref = \"{top}\", pin = \"{p}\")")
+                    format!(" (or ref = \"{top}\", pin = \"{p}\")")
                 });
+                let need = feed
+                    .min_v
+                    .map_or_else(String::new, |v| format!(", at least {v:.2} V"));
                 format!(
-                    " Declare it on '{}'{by_pin} instead, the input of {}{need}",
+                    " Declare the supply on {top}'s input instead{feeds}: net = \"{}\"{by_pin}{need}.",
                     circuit.node_name(feed.input),
-                    chain.join(", which feeds ")
                 )
             },
         );
         Some(format!(
-            "'{net}' is already driven by {}{via}; an ideal source there would fight it and \
-             carry its load, so the input current would read low or negative.{instead}",
+            "'{net}' is already driven by {}{via}, so a supply there would fight it and hide \
+             its current draw.{instead}",
             by.join(" and ")
         ))
     }
@@ -377,8 +381,8 @@ mod tests {
             .owned_note(&c, "+5V_A", ana, |p| (p == "U1").then(|| feed.clone()))
             .unwrap();
         assert!(note.contains("'SW'"), "{note}");
-        let fix = "on '+12V' (or by pin: ref = \"U1\", pin = \"4\") instead, the input of U1; \
-                   U1 needs at least 5.60 V";
+        let fix = "Declare the supply on U1's input instead: net = \"+12V\" \
+                   (or ref = \"U1\", pin = \"4\"), at least 5.60 V.";
         assert!(note.contains(fix), "{note}");
         assert!(d
             .owned_note(&c, "+5V_A", ana, |_| None)
@@ -415,9 +419,7 @@ mod tests {
         };
         let note = d.owned_note(&c, "+3V3", out, feeds).unwrap();
         assert!(
-            note.contains(
-                "on 'VBAT' instead, the input of U1, which feeds U2; U1 needs at least 5.30 V"
-            ),
+            note.contains("on U1's input instead (U1 feeds U2): net = \"VBAT\", at least 5.30 V."),
             "{note}"
         );
         // A loop, or a top part with no known input, never names a driven net.
