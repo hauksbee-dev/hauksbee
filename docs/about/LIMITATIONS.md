@@ -150,7 +150,7 @@ rate. `simavr:atmega328p`, `renode:rp2040`, `renode:stm32f103`,
 clock-truth regressions in `crates/hauksbee-mcu/tests/clock_truth.rs`.
 Descriptors must declare a core clock consistent with `frequency_hz`.
 
-ESP32 QEMU credits time from measured QMP RESUME/STOP windows, but virtual time
+ESP32 QEMU credits time from the measured QMP cont-to-stop send span, but virtual time
 remains approximate and degrades under host load. Affected runs carry a
 `timing_limitation`. STM32F103 TIMx blocks stay at the post-PLL 72 MHz required
 by stock HAL projects, and those runs disclose that constraint.

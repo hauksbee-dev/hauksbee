@@ -7,8 +7,10 @@
 //! `run_seconds` credited only the SLEPT window while the guest also ran
 //! through the QMP `cont`/`stop` round trips on each side of the sleep. That
 //! uncredited slack is a systematic bias — docs/cosim/MCU.md carried it as
-//! "1.35x to 1.45x slow" — and it is exactly what crediting the measured
-//! RESUME→STOP event window removes.
+//! "1.35x to 1.45x slow" — and it is exactly what crediting the host span
+//! from sending `cont` to sending `stop` removes. (QEMU's RESUME→STOP event
+//! span is NOT that span: it also counts the vCPU-parking wait after the
+//! virtual clock freezes, which over-credits without bound under host load.)
 //!
 //! The measurement: `esp32_blinky` toggles GPIO4 every `vTaskDelay(100 ms)`
 //! of guest time. Edges are collected with their credited-cycle stamps, and
@@ -122,8 +124,8 @@ fn esp32_credited_time_tracks_the_guests_delays() {
     );
     assert!(
         (ratio_measured - 1.0).abs() <= (ratio_requested - 1.0).abs() + 0.05,
-        "measured-window crediting ({ratio_measured:.3}) sits further from 1.0 than the \
-         pre-fix requested-window crediting ({ratio_requested:.3}): the RESUME/STOP \
+        "cont→stop send-span crediting ({ratio_measured:.3}) sits further from 1.0 than \
+         the pre-fix requested-window crediting ({ratio_requested:.3}): the send-span \
          measurement is making the clock WORSE"
     );
 }

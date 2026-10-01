@@ -50,8 +50,8 @@ fn boot_floor_lifts_once_firmware_raises_magic() {
     eprintln!("boot complete after {booted_after} chunks");
 
     // THE REGRESSION: a steady-state 100 µs chunk must advance ~100 µs, not
-    // the 8 ms boot floor. The credit is the MEASURED cont→stop window (QMP
-    // RESUME/STOP event timestamps), which is the requested window plus the
+    // the 8 ms boot floor. The credit is the MEASURED cont→stop window (host
+    // span from sending cont to sending stop), which is the requested window plus the
     // QMP round-trip slack the guest runs through, so the assertion is a
     // bracket: at least the requested window (crediting less would mean the
     // slack went back to being dropped), and strictly under the boot floor

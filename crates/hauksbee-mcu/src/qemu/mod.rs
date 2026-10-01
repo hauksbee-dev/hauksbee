@@ -851,33 +851,16 @@ impl QemuBackend {
         if !self.core.firmware_loaded {
             bail!("no firmware image booted in the QEMU machine");
         }
-        // Forget any RESUME/STOP pair from the previous chunk BEFORE resuming,
-        // so this chunk's measurement can never be a stale one.
-        self.qmp.clear_run_events();
-        checked_control(&mut self.process, "cont", self.qmp.cont())?;
+        // Credit the span the virtual clock actually ran (see `Qmp::run_for`):
+        // not the requested `seconds` or the slept `window` (the guest keeps
+        // running through the control round trips, a ~1.4x-slow bias), and not
+        // QEMU's RESUME→STOP event span, which also counts the post-freeze
+        // vCPU-parking wait and inflates without bound under host load. The
+        // boot floor/cap reshapes the window; the same span brackets it. What
+        // no wall measurement can see is TCG pace itself, which is why
+        // TIMING_LIMITATION below still reaches every report surface.
         let window = run_window(seconds, self.boot_complete);
-        std::thread::sleep(window);
-        checked_control(&mut self.process, "stop", self.qmp.stop())?;
-
-        // Credit cycles from the window the guest ACTUALLY ran, not the
-        // requested `seconds` and not even the slept `window`: QEMU stamps its
-        // RESUME and STOP events with the host time of the state transition, so
-        // the cont->stop span measures the whole run including the QMP
-        // round-trip slack the guest keeps executing through on each side of
-        // the sleep. Leaving that slack uncredited is a systematic ~1.4x-slow
-        // bias. Boot chunks are covered by the same measurement: the floor/cap
-        // reshapes the window, and the event pair brackets whatever ran.
-        //
-        // The measurement is trusted only when it is at least the slept window
-        // (the events bracket the sleep, so a smaller span means a stale or
-        // torn pair); otherwise the slept window is credited, the conservative
-        // side. What no wall measurement can see is TCG pace itself, which is
-        // why TIMING_LIMITATION below still reaches every report surface.
-        let credited = self
-            .qmp
-            .measured_run_window(Duration::from_millis(200))
-            .filter(|m| *m >= window)
-            .unwrap_or(window);
+        let credited = checked_control(&mut self.process, "cont/stop", self.qmp.run_for(window))?;
         self.core
             .credit(credited.as_secs_f64(), self.config.frequency_hz);
 
@@ -1219,9 +1202,10 @@ impl QemuBackend {
 /// A QMP run-control result with a dead child reported as the cause: the
 /// control socket failing almost always means QEMU exited, and its exit
 /// status plus stderr explain far more than a bare socket error.
-fn checked_control(process: &mut QemuProcess, what: &str, result: Result<()>) -> Result<()> {
-    let Err(e) = result else {
-        return Ok(());
+fn checked_control<T>(process: &mut QemuProcess, what: &str, result: Result<T>) -> Result<T> {
+    let e = match result {
+        Ok(value) => return Ok(value),
+        Err(e) => e,
     };
     match process.ensure_running(&format!("servicing QMP {what}")) {
         Err(death) => Err(death).context(format!("QMP {what} failed: {e:#}")),
@@ -1262,9 +1246,9 @@ pub const WATCHDOG_LIMITATION: &str =
 ///
 /// Backend-wide for the same reason as [`WATCHDOG_LIMITATION`]: the cause is
 /// how this co-simulator drives QEMU (no icount, because it breaks esp32 boot),
-/// not anything a descriptor declares. Each chunk's cont->stop window is
-/// measured from QEMU's own RESUME/STOP event timestamps, so the
-/// control-channel slack is credited; what remains systematic is TCG pace
+/// not anything a descriptor declares. Each chunk credits the host span from
+/// sending `cont` to sending `stop` (`Qmp::run_for`), so the control-channel
+/// slack is credited and the post-freeze vCPU-parking wait is not; what remains systematic is TCG pace
 /// itself, which tracks the host wall clock only approximately and degrades
 /// under host load. A `const` so `hauksbee models lint` quotes the same
 /// sentence a run reports.
@@ -1286,7 +1270,7 @@ impl Mcu for QemuBackend {
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let seconds = n as f64 / self.config.frequency_hz as f64;
         // Return what was CREDITED, not what was requested: with the
-        // measured RESUME→STOP crediting the two differ by the control
+        // measured cont→stop crediting the two differ by the control
         // slack (and by the boot floor/cap while booting), and the trait
         // promises "cycles actually executed". The delta is what keeps this
         // return consistent with `current_cycle()` after the call.

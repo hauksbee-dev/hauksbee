@@ -499,7 +499,7 @@ pub trait Mcu {
     /// - `qemu:esp32*` paces virtual time by the host wall clock (no icount;
     ///   it breaks esp32 boot, measured), so virtual time is approximate and
     ///   host-load dependent even though the cont→stop window itself is now
-    ///   measured from QEMU's RESUME/STOP event timestamps.
+    ///   measured as the host span from sending QMP `cont` to sending `stop`.
     /// - `renode:stm32f103` deliberately clocks its `TIMx` blocks at the
     ///   post-PLL 72 MHz against an 8 MHz reset-default core, so a bare-metal
     ///   `TIMx` time base runs 9x fast (stated in the descriptor).

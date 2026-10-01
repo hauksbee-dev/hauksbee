@@ -244,8 +244,9 @@ the simulated time at which a named edge arrives.
   `testdata/firmware/clock_truth/fe310_tick.rs` toggles a pin every 3277 ticks,
   and `tests/clock_truth.rs` holds the rate with a two-sided oracle. The CLINT
   domain is separate from the core clock and is therefore measured directly.
-- **`qemu:esp32*` timing is approximate.** `run_seconds` credits the measured
-  QMP RESUME-to-STOP window, including control round trips. Host load still
+- **`qemu:esp32*` timing is approximate.** `run_seconds` credits the host span from
+  sending QMP `cont` to sending `stop`, including control round trips but not
+  QEMU's post-freeze vCPU-parking wait. Host load still
   affects wall-clock pacing, so affected reports carry a timing limitation.
 
 **What remains open, and how a run says so.** These are systematic, so prose
