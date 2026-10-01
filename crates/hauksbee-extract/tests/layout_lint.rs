@@ -245,11 +245,13 @@ fn a_through_hole_pad_joins_every_copper_layer_whatever_it_lists() {
 }
 
 #[test]
-fn a_layout_with_no_routing_at_all_is_one_note_not_a_finding_per_pad() {
+fn a_layout_with_no_routing_at_all_is_one_blocking_finding_not_one_per_pad() {
     let bare = lint(&two_parts(""));
     assert_eq!(bare.len(), 1, "{bare:?}");
-    assert_eq!(bare[0].severity, Severity::Low);
-    assert!(bare[0].message.contains("no copper routing"));
+    // Blocking: an unrouted board must never read as ready to order.
+    assert_eq!(bare[0].severity, Severity::High);
+    assert!(bare[0].message.contains("not routed yet"));
+    assert!(bare[0].message.contains("cannot be ordered"));
     // Once routing has started, an open pad is a real finding.
     assert_eq!(high(&lint(&two_parts(GND_TRACK))).len(), 1);
 }

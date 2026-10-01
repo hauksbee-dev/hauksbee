@@ -1093,8 +1093,8 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::UnroutedPad if f.severity == Severity::Low => (
                 f.message.clone(),
-                "This is a note about the state of the layout file (zones never filled, leftover copper, or no routing at all yet), not a connection a finished route left open.".to_string(),
-                "Refill the zones, remove the stray copper, or route the board in the layout editor, save, and re-check.".to_string(),
+                "This is a note about the state of the layout file (zones never filled, or leftover copper), not a connection a finished route left open.".to_string(),
+                "Refill the zones or remove the stray copper in the layout editor, save, and re-check.".to_string(),
             ),
             LintCheck::UnroutedPad => (
                 f.message.clone(),

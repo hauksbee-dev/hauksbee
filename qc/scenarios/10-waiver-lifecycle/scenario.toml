@@ -21,6 +21,35 @@ src = "crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb"
 dst = "boot_gate.kicad_pcb"
 
 [[step]]
+# The example ships unrouted, and an unrouted layout blocks ordering on its own.
+# Route it, so the two shorts are the only thing the copper gate is about.
+name = "route the board"
+do = "patch"
+file = "boot_gate.kicad_pcb"
+find = "(net 4 \"LOAD_DRAIN\"))\n  )\n)"
+replace = """(net 4 "LOAD_DRAIN"))
+  )
+  (segment (start 103 100) (end 110 100) (width 0.25) (layer F.Cu) (net 3))
+  (segment (start 111 100) (end 111 95) (width 0.25) (layer F.Cu) (net 4))
+  (segment (start 111 95) (end 114 95) (width 0.25) (layer F.Cu) (net 4))
+  (segment (start 114 95) (end 114 100) (width 0.25) (layer F.Cu) (net 4))
+  (segment (start 97 101) (end 97 108) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 97 108) (end 112 108) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 112 108) (end 112 100) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 103 102) (end 103 108) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 97 100) (end 95 100) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 95 100) (end 95 92) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 95 92) (end 105 92) (width 0.25) (layer F.Cu) (net 2))
+  (via (at 105 92) (size 0.6) (drill 0.3) (layers F.Cu B.Cu) (net 2))
+  (segment (start 105 92) (end 106 92) (width 0.25) (layer B.Cu) (net 2))
+  (segment (start 106 92) (end 112 92) (width 0.25) (layer B.Cu) (net 2))
+  (segment (start 112 92) (end 112 100) (width 0.25) (layer B.Cu) (net 2))
+  (segment (start 103 101) (end 106 101) (width 0.25) (layer F.Cu) (net 2))
+  (via (at 106 101) (size 0.6) (drill 0.3) (layers F.Cu B.Cu) (net 2))
+  (segment (start 106 101) (end 106 92) (width 0.25) (layer B.Cu) (net 2))
+)"""
+
+[[step]]
 name = "and the thermal board"
 do = "copy"
 src = "crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb"

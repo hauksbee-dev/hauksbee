@@ -7,7 +7,9 @@
 //! system that silently fails to apply is a check nobody can trust, and one
 //! that silently keeps applying past its date is a check nobody is running.
 
-use crate::support::{combined, repo_root, run_board, DECLARED_STACKUP, TP4054_CHARGER};
+use crate::support::{
+    combined, repo_root, routed_boot_gate, run_board, DECLARED_STACKUP, TP4054_CHARGER,
+};
 use std::path::{Path, PathBuf};
 
 /// The board ships two deliberate GND/+5V pour shorts, so `--check --strict`
@@ -15,12 +17,13 @@ use std::path::{Path, PathBuf};
 const BOARD: &str = "examples/boards/boot_gate.kicad_pcb";
 
 /// Copy the board into `dir` so a waiver file can sit beside it without
-/// touching the checked-in fixture.
+/// touching the checked-in fixture. The copy is routed, so the shorts are its
+/// only blocking findings: an unrouted layout blocks on its own, waiver or not.
 fn stage_board(dir: &Path) -> PathBuf {
     let src = repo_root().join("crates/hauksbee-ci").join(BOARD);
-    assert!(src.is_file(), "fixture board missing at {}", src.display());
+    let text = std::fs::read_to_string(&src).expect("fixture board readable");
     let dst = dir.join("board.kicad_pcb");
-    std::fs::copy(&src, &dst).expect("copy board");
+    std::fs::write(&dst, routed_boot_gate(&text)).expect("stage board");
     dst
 }
 
@@ -176,7 +179,9 @@ fn stage_lint_board(dir: &Path) -> PathBuf {
     (property "Reference" "U2")
     (property "Value" "BUSDEV-B")
     (pad "1" smd rect (at 10 0) (size 1 1) (layers "F.Cu") (net 1 "SDA"))
-    (pad "2" smd rect (at 10 2) (size 1 1) (layers "F.Cu") (net 2 "GND")))"#,
+    (pad "2" smd rect (at 10 2) (size 1 1) (layers "F.Cu") (net 2 "GND")))
+  (segment (start 0 0) (end 20 0) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 0 2) (end 20 2) (width 0.25) (layer "F.Cu") (net 2))"#,
     )
 }
 
@@ -192,7 +197,7 @@ fn stage_si_board(dir: &Path) -> PathBuf {
         dir,
         &format!(
             "{DECLARED_STACKUP}{TP4054_CHARGER}\n  \
-             (segment (start 0 0) (end 10 0) (width 0.05) (layer \"F.Cu\") (net 1))"
+             (segment (start 0 0) (end 20 0) (width 0.05) (layer \"F.Cu\") (net 1))"
         ),
     )
 }

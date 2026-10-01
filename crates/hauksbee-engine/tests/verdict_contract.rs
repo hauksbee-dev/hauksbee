@@ -45,7 +45,7 @@
 //!    Non-finding terminal outcomes use a typed refusal testcase/result;
 //!    `--strict-boot` is promoted to a typed co-sim finding when armed.
 
-use crate::support::{bin, expect_err, read_json, stderr, stdout};
+use crate::support::{bin, expect_err, read_json, routed_boot_gate, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -1324,7 +1324,11 @@ fn a_medium_finding_that_does_not_gate_stays_a_passing_testcase() {
     );
     std::fs::write(
         &b,
-        format!("{}\n{rest}", first.replace("20171130", "20260206")),
+        // Routed, so the shorts are all that stands between it and a pass.
+        routed_boot_gate(&format!(
+            "{}\n{rest}",
+            first.replace("20171130", "20260206")
+        )),
     )
     .expect("stage the board");
 

@@ -3555,8 +3555,9 @@ fn main {
         let reason = value["verdict_reason"]
             .as_str()
             .expect("a serious report carries a reason");
+        // Two shorts, and the layout is not routed at all.
         assert!(
-            reason.starts_with("2 blocking problem(s), first: ") && reason.contains("; next: "),
+            reason.starts_with("3 blocking problem(s), first: ") && reason.contains("; next: "),
             "{reason}"
         );
     }

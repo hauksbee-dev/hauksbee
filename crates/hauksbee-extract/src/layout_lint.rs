@@ -77,14 +77,15 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
     let (with_pads, stray): (Vec<_>, Vec<_>) =
         conn.islands.iter().partition(|i| !i.pads.is_empty());
     if !conn.routed && !with_pads.is_empty() {
-        // Placed pads and no copper between them: a layout not routed yet,
-        // read as a netlist. One note, not a finding per pad.
+        // Placed pads and no copper between them: a layout not routed yet. The
+        // circuit checks still run on its netlist, but boards made from it would
+        // connect nothing, so this one finding blocks the ordering verdict.
         let nets: BTreeSet<String> = with_pads.iter().map(|i| i.net.clone()).collect();
         let nets: Vec<String> = nets.into_iter().collect();
         out.push(finding(
-            Severity::Low,
+            Severity::High,
             format!(
-                "the layout has no copper routing yet: {} pad group(s) on {} are not joined to their nets. It was checked as a netlist; route it before ordering boards",
+                "the board is not routed yet, so it cannot be ordered as is: no copper joins its {} pad group(s) on {}. The circuit was checked as a netlist",
                 with_pads.len(),
                 sample_list(&nets)
             ),

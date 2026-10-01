@@ -238,6 +238,37 @@ pub const TP4054_CHARGER: &str = r#"
     (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "PROG"))
     (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 3 "GND")))"#;
 
+/// Copper joining every pad of `crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb`
+/// to its net, clear of the other nets. That example ships unrouted, which now
+/// blocks ordering on its own; a test about its shorts that needs the rest of
+/// the board to pass routes it with [`routed_boot_gate`].
+const BOOT_GATE_ROUTES: &str = "
+  (segment (start 103 100) (end 110 100) (width 0.25) (layer F.Cu) (net 3))
+  (segment (start 111 100) (end 111 95) (width 0.25) (layer F.Cu) (net 4))
+  (segment (start 111 95) (end 114 95) (width 0.25) (layer F.Cu) (net 4))
+  (segment (start 114 95) (end 114 100) (width 0.25) (layer F.Cu) (net 4))
+  (segment (start 97 101) (end 97 108) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 97 108) (end 112 108) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 112 108) (end 112 100) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 103 102) (end 103 108) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 97 100) (end 95 100) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 95 100) (end 95 92) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 95 92) (end 105 92) (width 0.25) (layer F.Cu) (net 2))
+  (via (at 105 92) (size 0.6) (drill 0.3) (layers F.Cu B.Cu) (net 2))
+  (segment (start 105 92) (end 106 92) (width 0.25) (layer B.Cu) (net 2))
+  (segment (start 106 92) (end 112 92) (width 0.25) (layer B.Cu) (net 2))
+  (segment (start 112 92) (end 112 100) (width 0.25) (layer B.Cu) (net 2))
+  (segment (start 103 101) (end 106 101) (width 0.25) (layer F.Cu) (net 2))
+  (via (at 106 101) (size 0.6) (drill 0.3) (layers F.Cu B.Cu) (net 2))
+  (segment (start 106 101) (end 106 92) (width 0.25) (layer B.Cu) (net 2))
+";
+
+/// The boot-gate example `text` with [`BOOT_GATE_ROUTES`] added.
+pub fn routed_boot_gate(text: &str) -> String {
+    let end = text.trim_end().strip_suffix(')').expect("a closed board");
+    format!("{end}{BOOT_GATE_ROUTES})\n")
+}
+
 /// A declared 2-layer stackup: 1 oz outer copper, so an ampacity verdict rests
 /// on the board's own copper weight rather than an assumption.
 pub const DECLARED_STACKUP: &str = r#"
