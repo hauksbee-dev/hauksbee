@@ -1,10 +1,7 @@
 //! Board-as-Code: an executable, round-trippable DSL for a PCB.
 //!
-//! The decompiler in the sibling modules produces a *readable* program
-//! ([`crate::decompile`]) and proves structural coverage by rebuilding a board
-//! from the in-memory [`Analysis`] ([`crate::rebuild`]). Neither path is
-//! *executable from text*: the readable program drops net assignments, and the
-//! rebuild reads the analysis struct rather than parsing source.
+//! The decompiler analysis in the sibling modules detects repeated structure
+//! but is not *executable from text*.
 //!
 //! This module closes that loop. It defines a small, line-oriented DSL that
 //! carries everything needed to re-emit a board with full connectivity:
@@ -21,8 +18,7 @@
 //!   [`Program::build`] interprets it into a [`forge_model::Pcb`];
 //! * **round-trippable on connectivity**: board -> [`from_board`] -> text ->
 //!   [`Program::parse`] -> [`Program::build`] -> board' preserves the component
-//!   set and net connectivity (checked with [`crate::semantics`] /
-//!   [`crate::compare`]); byte-exactness is explicitly *not* a goal here;
+//!   set and net connectivity (byte-exactness is explicitly *not* a goal here);
 //! * **editable**: changing a `val "..."`, a `pad N net X`, or a `space`
 //!   distance field in the text and rebuilding is reflected in the board.
 //!

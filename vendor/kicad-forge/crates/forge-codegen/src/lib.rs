@@ -12,8 +12,7 @@
 //! ```text
 //! Pcb ──[netlist]──> Netlist ──[partition]──> blocks
 //!     ──[fingerprint]──> WL colours ──[cluster]──> Analysis
-//!     ──[emit]──> Rust-like source
-//!     ──[rebuild]──> Pcb' (semantically equal to Pcb up to net renaming)
+//!     ──[dsl]──> Board-as-Code text
 //! ```
 //!
 //! ## Algorithm summary
@@ -31,20 +30,17 @@
 //! 4. **Clustering** groups blocks by fingerprint, derives a majority-vote
 //!    template per cluster, aligns each instance by role, computes a rigid
 //!    placement (Kabsch 2D), and diffs each instance for anomalies.
-//! 5. **Emission** writes a `fn block_*` per cluster + a `main` calling them,
-//!    inlining singletons and anomalous instances with `// ANOMALY:` comments.
-//! 6. **Rebuild** interprets the structure back into a `Pcb` and a comparison
-//!    helper checks semantic equivalence up to net renaming.
+//! 5. **Emission** (see [`dsl`]) writes a `fn block_*` per cluster + a `main`
+//!    calling them, inlining singletons and anomalous instances.
+
 
 mod cluster;
 pub mod dsl;
-mod emit;
 mod fingerprint;
 mod fplib;
 mod layout;
 mod netlist;
 mod partition;
-mod rebuild;
 mod report;
 pub mod route_freerouting;
 
@@ -52,11 +48,7 @@ pub use cluster::{analyze, Analysis, Anomaly, Cluster, Instance, Placement, Temp
 pub use fingerprint::{BlockGraph, Fingerprint};
 pub use netlist::{Comp, CompPad, NetId, Netlist};
 pub use partition::{partition, Block, Partition, PartitionConfig};
-pub use rebuild::{
-    compare, compare_connectivity, rebuild, semantics, semantics_of_netlist, BoardSemantics,
-    FpSummary,
-};
-pub use report::{render_anomaly, render_report};
+pub use report::render_anomaly;
 
 pub use dsl::{from_board, to_code, Program};
 pub use fplib::FootprintLib;
@@ -85,12 +77,4 @@ pub fn decompile_analysis_with(pcb: &Pcb, cfg: &PartitionConfig) -> (Netlist, An
     let part = partition(&nl, cfg);
     let analysis = analyze(&nl, &part);
     (nl, analysis)
-}
-
-/// Decompile a board into readable Rust-like source.
-///
-/// Deterministic: calling twice on the same board yields identical text.
-pub fn decompile(pcb: &Pcb) -> String {
-    let (nl, analysis) = decompile_analysis(pcb);
-    emit::emit_program(&nl, &analysis)
 }
