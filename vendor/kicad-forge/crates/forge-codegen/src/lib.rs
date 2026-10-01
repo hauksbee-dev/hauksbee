@@ -33,7 +33,6 @@
 //! 5. **Emission** (see [`dsl`]) writes a `fn block_*` per cluster + a `main`
 //!    calling them, inlining singletons and anomalous instances.
 
-
 mod cluster;
 pub mod dsl;
 mod fingerprint;

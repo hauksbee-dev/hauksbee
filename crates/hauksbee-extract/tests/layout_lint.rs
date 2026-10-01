@@ -92,10 +92,13 @@ fn a_filled_zone_connects_and_an_unfilled_one_is_unknown_not_open() {
     );
     assert!(lint(&two_parts(&filled)).is_empty());
 
-    let unfilled = lint(&two_parts(&format!("{ZONE_OUTLINE})\n{GND_TRACK}")));
-    assert!(high(&unfilled).is_empty(), "{unfilled:?}");
-    assert_eq!(unfilled.len(), 1, "{unfilled:?}");
-    assert!(unfilled[0].message.starts_with("zones not filled"));
+    // Never filled, and `(fill yes)` committed without its saved polygons.
+    for fill in ["", "\n    (fill yes (thermal_gap 0.5))"] {
+        let unfilled = lint(&two_parts(&format!("{ZONE_OUTLINE}{fill})\n{GND_TRACK}")));
+        assert!(high(&unfilled).is_empty(), "{unfilled:?}");
+        assert_eq!(unfilled.len(), 1, "{unfilled:?}");
+        assert!(unfilled[0].message.starts_with("zones not filled"));
+    }
 }
 
 #[test]

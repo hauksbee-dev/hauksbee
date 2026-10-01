@@ -1485,7 +1485,8 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         // its drawn `(polygon ...)` outline only when the zone was never
         // filled: `(fill yes ...)` with no polygon means an empty fill (a
         // lower-priority pour wholly covered by a higher one), not no data.
-        let mut any_fill = zone.find("fill").and_then(|f| f.arg_value(0)).as_deref() == Some("yes");
+        let fill_yes = zone.find("fill").and_then(|f| f.arg_value(0)).as_deref() == Some("yes");
+        let mut any_fill = fill_yes;
         for fp in zone.find_all("filled_polygon") {
             let layer = fp
                 .find_value("layer")
@@ -1500,6 +1501,14 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
                     buckets.begin_item(connectivity::ItemMeta::fill(net, pts[0], zone, root));
                     buckets.push_zone(&layer, pts, net, true, &uuid_of(zone));
                 }
+            }
+        }
+        if fill_yes && zone.find("filled_polygon").is_none() {
+            // `(fill yes)` with no saved polygon is empty for the short test,
+            // but projects often commit boards without their fills, so it is
+            // unknown copper for connectivity: the net is named, not judged.
+            if let Some(poly) = zone.find("polygon").and_then(read_pts) {
+                buckets.begin_item(connectivity::ItemMeta::unfilled(net, &poly, zone));
             }
         }
         if !any_fill {
