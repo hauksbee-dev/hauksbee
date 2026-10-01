@@ -3788,7 +3788,7 @@ reason = "tpd and enable/disable times are not modelled; only the DC function ta
 [models.match]
 # D (SO14), PW (TSSOP14) and BQ (DHVQFN14) share Table 2's numbering. The
 # SOT8014-1 DHXQFN14 (GU) is not matched.
-value_re = "(?i)^(SN)?74LVC125A(D|PW|BQ)?([,-][A-Z0-9]+)?$"
+value_re = "(?i)^(SN)?74LVC125A(D|PW|BQ)?([.,-][A-Z0-9]+)?$"
 
 [models.params]
 voh = 3.1          # VCC - 0.2 V at IO = -100 uA, VCC 3.3 V
@@ -3884,7 +3884,7 @@ reason = "tpd and enable/disable times are not modelled; only the DC function ta
 # 5-lead packages only. The XSON6 parts (GM/GN/GS, TI DRY/DSF) move VCC to pin
 # 6 and are not matched. The bare "74LVC1G125D" seen in the corpus is a
 # library name on a SOT-23-5 footprint, not an ordering code.
-value_re = "(?i)^(SN)?74LVC1G125(GW|GV|DBV|DCK|D)?[RT]?([,-][A-Z0-9]+)?$"
+value_re = "(?i)^(SN)?74LVC1G125(GW|GV|DBV|DCK|D)?[RT]?([.,-][A-Z0-9]+)?$"
 
 [models.params]
 voh = 3.2          # VCC - 0.1 V at IO = -100 uA, VCC 3.3 V

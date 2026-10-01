@@ -102,6 +102,14 @@ fn single_gate_logic_pad_roles_follow_the_five_lead_tables() {
             "{value}: vih must exceed vil"
         );
     }
+    // Values reach the regex with commas as points, so reel suffixes like ",125" must match.
+    for (value, id) in [
+        ("74LVC1G125GW,125", "74lvc1g125"),
+        ("74LVC125AD,118", "74lvc125a"),
+    ] {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_eq!(m.id, id, "{value}");
+    }
 }
 
 /// Six-pad XSON/SON and four-pad X2SON parts move VCC off pad 5, so they must not
