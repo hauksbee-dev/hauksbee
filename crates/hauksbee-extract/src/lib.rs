@@ -88,8 +88,8 @@ pub use kicad_dru::{
     KicadDruRules,
 };
 pub use netlint::{
-    render_netlint, LintCheck, LintFinding, NetLintReport, Severity, DNP_PULLUP_MESSAGE_MARKER,
-    SPI_PULLUP_MESSAGE_MARKER,
+    control_role, is_ground, norm, render_netlint, LintCheck, LintFinding, NetLintReport, Severity,
+    DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 pub use si::{
     cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,
@@ -376,6 +376,35 @@ impl ExtractedBoard {
     /// well-formed KiCad schematic.
     pub fn from_kicad_schematic_path(path: &Path) -> Result<Self, ExtractError> {
         schematic::extract_from_path(path)
+    }
+
+    /// Name the pads of a layout that carries no pin names at all (a scripted
+    /// or converted `.kicad_pcb`) from its same-stem schematic `sch`, so the
+    /// pin-function lints can read them. Only a matching reference and pad
+    /// number is copied, and a layout that names any pad is left untouched.
+    pub fn adopt_schematic_pin_names(&mut self, sch: &Path) {
+        let mut all = self.components.iter().flat_map(|c| &c.pins).peekable();
+        if all.peek().is_none() || all.any(|p| !p.function.is_empty()) {
+            return;
+        }
+        let Some(Ok(named)) = sch.is_file().then(|| Self::from_kicad_schematic_path(sch)) else {
+            return;
+        };
+        for t in &mut self.components {
+            let Some(c) = named.components.iter().find(|c| c.reference == t.reference) else {
+                continue;
+            };
+            for p in &mut t.pins {
+                if let Some(q) = c
+                    .pins
+                    .iter()
+                    .find(|q| q.number == p.number && q.function != "~")
+                {
+                    p.function.clone_from(&q.function);
+                    p.kind.clone_from(&q.kind);
+                }
+            }
+        }
     }
 
     /// Geometric copper short / clearance check on the raw board text.

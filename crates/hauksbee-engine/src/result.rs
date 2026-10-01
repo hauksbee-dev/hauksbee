@@ -2588,6 +2588,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::OutputContention => {
             "Leave one push-pull driver on the net, or switch to open-drain with a single pull-up."
         }
+        LintCheck::PinFunction => "Rewire the named pins as the finding describes, then re-run the lint.",
         LintCheck::StrapPin => {
             "Hold the strap net at the datasheet's required reset level with a pull resistor; keep active signals off it until after boot."
         }

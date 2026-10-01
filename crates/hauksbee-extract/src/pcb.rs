@@ -315,6 +315,7 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
             position: Some(abs),
         });
     }
+    strip_pad_number_suffix(&mut pins);
 
     // Do-Not-Populate: KiCad writes a `dnp` flag inside the footprint's
     // `(attr ...)` list (e.g. `(attr smd exclude_from_bom dnp)`). A DNP footprint
@@ -337,6 +338,28 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
         properties,
         dnp,
         pins,
+    }
+}
+
+/// KiCad 10 writes each pad's `pinfunction` as `<pin name>_<pad number>`
+/// (`TXD_26`, `USB_VDD_48`), which hides the schematic pin name from every
+/// name-keyed check. When every named pad of a footprint carries its own number
+/// as that suffix it is the writer's convention, not the symbol's naming, and
+/// is dropped; a footprint where any named pad lacks it is left untouched.
+fn strip_pad_number_suffix(pins: &mut [Pin]) {
+    let stem = |p: &Pin| {
+        let s = p
+            .function
+            .strip_suffix(p.number.as_str())?
+            .strip_suffix('_')?;
+        (!s.is_empty()).then_some(s.len())
+    };
+    let mut named = pins.iter().filter(|p| !p.function.is_empty()).peekable();
+    if named.peek().is_none() || !named.all(|p| stem(p).is_some()) {
+        return;
+    }
+    for p in pins.iter_mut().filter(|p| !p.function.is_empty()) {
+        p.function.truncate(stem(p).unwrap_or(p.function.len()));
     }
 }
 

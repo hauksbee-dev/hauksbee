@@ -656,3 +656,49 @@ fn floating_active_low_chip_select_fires_high() {
         assert_eq!(r.findings[0].severity, Severity::High);
     }
 }
+
+/// Pin-function ERC: each fault next to its legal twin. A net is `name: node...`
+/// and a node is `ref.pin=function:pintype`.
+#[test]
+fn pin_function_rules_fire_on_faults_and_stay_silent_on_legal_twins() {
+    let ic =
+        "(comp (ref U1) (value A) (footprint P:QFN)) (comp (ref U2) (value B) (footprint P:QFN))";
+    let led = "(comp (ref D1) (value LED) (footprint LED_SMD:LED_0603)) (comp (ref R1) (value 1k) (footprint R_SMD:R_0603))";
+    let rpp = "(comp (ref J1) (value IN) (footprint Conn:Phoenix)) (comp (ref Q1) (value AO3401A) (footprint SOT-23)) (comp (ref R1) (value 1k) (footprint R_SMD:R_0603)) (comp (ref Z1) (value 10V) (footprint D:SOD-323)) (comp (ref C1) (value 100u) (footprint C:CP))";
+    let gate = "GATE: Q1.1=G:input R1.1=~:passive Z1.1=~:passive";
+    let ends = "GND: R1.2=~:passive C1.2=~:passive J1.2=2:passive";
+    let cases = [
+        ("tx to tx", ic, "U: U1.1=TXD:output U2.4=GPIO43/U0TXD:bidirectional", LintCheck::PinFunction, 1),
+        ("tx to rx", ic, "U: U1.1=TXD:output U2.4=RXD:input", LintCheck::PinFunction, 0),
+        ("muxed alternates only", ic, "U: U1.1=PA9/USART1_TX:bidirectional U2.4=GPIO43/U0TXD:bidirectional", LintCheck::PinFunction, 0),
+        ("led anode on fault flag", &format!("{ic} {led}"), "F: U1.3=~{FLT}:open_collector D1.2=A:passive|K: D1.1=K:passive R1.1=~:passive|GND: R1.2=~:passive", LintCheck::PinFunction, 1),
+        ("led cathode on fault flag", &format!("{ic} {led}"), "F: U1.3=~{FLT}:open_collector D1.1=K:passive|A: D1.2=A:passive R1.1=~:passive|+3V3: R1.2=~:passive", LintCheck::PinFunction, 0),
+        ("led on power-good", &format!("{ic} {led}"), "F: U1.3=PG:open_collector D1.2=A:passive|K: D1.1=K:passive R1.1=~:passive|GND: R1.2=~:passive", LintCheck::PinFunction, 0),
+        ("fet source at connector", rpp, &format!("IN: J1.1=1:passive Q1.2=S:passive Z1.2=~:passive|OUT: Q1.3=D:passive C1.1=~:passive|{gate}|{ends}"), LintCheck::PinFunction, 1),
+        ("fet drain at connector", rpp, &format!("IN: J1.1=1:passive Q1.3=D:passive|OUT: Q1.2=S:passive Z1.2=~:passive C1.1=~:passive|{gate}|{ends}"), LintCheck::PinFunction, 0),
+        ("driven gate switch", &format!("{rpp} {ic}"), &format!("IN: J1.1=1:passive Q1.2=S:passive Z1.2=~:passive|OUT: Q1.3=D:passive C1.1=~:passive|{gate} U1.2=PA0:output|{ends}"), LintCheck::PinFunction, 0),
+        ("floating boot strap", ic, "B: U1.9=BOOT0:input", LintCheck::FloatingControlPin, 1),
+    ];
+    for (name, comps, spec, check, want) in cases {
+        let nets = spec
+            .split('|')
+            .enumerate()
+            .map(|(i, net)| {
+                let (net_name, nodes) = net.split_once(": ").unwrap();
+                let nodes = nodes
+                    .split(' ')
+                    .map(|n| {
+                        let (rp, ft) = n.split_once('=').unwrap();
+                        let ((r, p), (f, t)) =
+                            (rp.split_once('.').unwrap(), ft.split_once(':').unwrap());
+                        format!(r#"(node (ref {r}) (pin {p}) (pinfunction "{f}") (pintype "{t}"))"#)
+                    })
+                    .collect::<Vec<_>>()
+                    .concat();
+                format!("(net (code {}) (name \"{net_name}\") {nodes})\n", i + 1)
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        assert_eq!(count(&lint(comps, &nets), check), want, "{name}");
+    }
+}

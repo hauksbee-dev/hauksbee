@@ -663,7 +663,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         ));
     }
 
-    let board = ExtractedBoard::from_auto(&text).map_err(|e| {
+    let mut board = ExtractedBoard::from_auto(&text).map_err(|e| {
         // A `Corrupt` error means the file DID parse as its format and the
         // reader is refusing content it cannot analyse truthfully. Its message
         // already explains what is wrong and what to do, so wrapping it in "did
@@ -691,6 +691,9 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             },
         )
     })?;
+    if ext_lower == "kicad_pcb" {
+        board.adopt_schematic_pin_names(&path.with_extension("kicad_sch"));
+    }
     Ok(normalized(
         path,
         board,

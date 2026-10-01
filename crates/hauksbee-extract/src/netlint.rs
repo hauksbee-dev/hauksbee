@@ -17,7 +17,7 @@
 
 use crate::assembly::AssemblyState;
 use crate::part_class::{self, connected_pads, ref_designator};
-use crate::{Component, ExtractedBoard, Pin};
+use crate::{Component, ExtractedBoard, Net, Pin};
 use std::fmt::Write as _;
 
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
@@ -107,6 +107,13 @@ pub enum LintCheck {
     /// The presence of pull-ups is `MissingI2cPullup`; this is their sizing.
     /// Produced by the engine-layer `bus_loading` check.
     I2cBusLoading,
+    /// A schematic-ERC fault read from pin names and pin electrical types where
+    /// both are specific: two UART transmit pins driving one net (TX wired to
+    /// TX), a `power_in` pin left unconnected, or an LED hung from an
+    /// open-drain status output to ground (it lights when the flag is idle).
+    /// Pins whose role is unknown (passive, generic GPIO) never fire. The
+    /// message names the pins, why it matters, and the likely fix.
+    PinFunction,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -131,7 +138,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -147,6 +154,7 @@ impl LintCheck {
         Self::OperatingEnvelope,
         Self::BackPower,
         Self::I2cBusLoading,
+        Self::PinFunction,
     ];
 
     #[must_use]
@@ -167,6 +175,7 @@ impl LintCheck {
             Self::OperatingEnvelope => "operating_envelope",
             Self::BackPower => "back_power",
             Self::I2cBusLoading => "i2c_bus_loading",
+            Self::PinFunction => "pin_function",
         }
     }
 }
@@ -222,6 +231,7 @@ impl ExtractedBoard {
         check_floating_control_pins(self, &mut report);
         check_led_current(self, &mut report);
         check_output_contention(self, &mut report);
+        check_pin_functions(self, &mut report);
         check_design_file_qc(self, &mut report);
         report
     }
@@ -232,6 +242,7 @@ impl ExtractedBoard {
 // ---------------------------------------------------------------------------
 
 /// Normalise a net name: trim, drop a leading hierarchical path and `/`, upper.
+#[must_use]
 pub fn norm(name: &str) -> String {
     let n = name.trim();
     // Keep only the leaf of a hierarchical net path so "/Power/+3V3" -> "+3V3".
@@ -240,6 +251,7 @@ pub fn norm(name: &str) -> String {
 }
 
 /// Ground net?
+#[must_use]
 pub fn is_ground(name: &str) -> bool {
     let n = norm(name);
     matches!(
@@ -525,6 +537,13 @@ fn is_connector_like(c: &Component) -> bool {
 /// [`crate::gerber::connect`]'s `grid_hint`.
 fn is_pin_array_package(fp: &str) -> bool {
     let bytes: Vec<char> = fp.to_ascii_uppercase().chars().collect();
+    // IPC-7351 land-pattern names give pitch then body ("QFN50P400X400X100").
+    if bytes
+        .windows(3)
+        .any(|w| w[0].is_ascii_digit() && w[1] == 'P' && w[2].is_ascii_digit())
+    {
+        return false;
+    }
     for i in 0..bytes.len() {
         if bytes[i] != 'X' || i == 0 {
             continue;
@@ -1569,7 +1588,8 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
 /// stripping active-low decoration. A name carrying a peripheral/mux prefix
 /// (containing '/', or a known bus/peripheral keyword) is treated as a signal,
 /// not a control pin.
-fn control_role(function: &str) -> Option<&'static str> {
+#[must_use]
+pub fn control_role(function: &str) -> Option<&'static str> {
     // A multiplexed / signal name (Ethernet, SPI, GPIO mux, etc.) is not a
     // dedicated control pin even if a sub-token looks like "EN".
     const SIGNAL_KEYWORDS: [&str; 12] = [
@@ -1606,6 +1626,7 @@ fn control_role(function: &str) -> Option<&'static str> {
         "RST" | "RESET" | "RSTN" | "RESETN" | "MR" | "RESE" => Some("reset"), // RESE = RESET after _N strip
         "CS" | "SS" | "NCS" | "NSS" | "CSB" | "CSN" | "SSN" => Some("chip-select"),
         "OE" | "NOE" => Some("output-enable"),
+        "BOOT" | "BOOT0" | "BOOT1" => Some("boot-mode strap"),
         _ => {
             // Allow a trailing rail-name suffix on EN/RST: "EN_3V3", "RST_MCU".
             let head = c.split('_').next().unwrap_or(c);
@@ -1619,57 +1640,40 @@ fn control_role(function: &str) -> Option<&'static str> {
 }
 
 fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintReport) {
-    for c in &board.components {
-        // An unassembled IC has no pin to float, and a refused record's pin
-        // functions are not evidence.
-        if !AssemblyState::of(c).is_present() {
-            continue;
-        }
-        // Only logic/active parts; skip connectors/passives where "EN" pin
-        // names are meaningless.
-        if is_connector_like(c) {
-            continue;
-        }
+    // Fitted logic/active parts only: an unassembled IC has no pin to float, a
+    // refused record's functions are not evidence, and "EN" means nothing on a
+    // connector or passive.
+    let active = |c: &&Component| {
         let r = c.reference.to_ascii_uppercase();
-        let active = r.starts_with('U') || r.starts_with("IC") || r.starts_with('Q');
-        if !active {
-            continue;
-        }
+        AssemblyState::of(c).is_present()
+            && !is_connector_like(c)
+            && (r.starts_with('U') || r.starts_with("IC") || r.starts_with('Q'))
+    };
+    for c in board.components.iter().filter(active) {
         for p in &c.pins {
-            let Some(role) = control_role(&p.function) else {
+            // A deliberate no-connect (pintype or `unconnected-(...)` net) is the
+            // designer's choice. Floating == a *named* net touching only this pin;
+            // a None net is usually an unrouted pad the layout will fill, too
+            // noisy on PCB-only inputs.
+            let net = p.net.and_then(|id| board.net(id));
+            let (Some(role), false, Some(n)) =
+                (control_role(&p.function), pin_is_no_connect(p), net)
+            else {
                 continue;
             };
-            // A deliberate no-connect (by pintype or by an `unconnected-(...)`
-            // placeholder net) is the designer's explicit choice, not a fault.
-            if pin_is_no_connect(p) {
+            if is_unconnected_net(&n.name) || members(board, n.id).len() != 1 {
                 continue;
             }
-            let net = p.net.and_then(|id| board.net(id));
-            if let Some(n) = net {
-                if is_unconnected_net(&n.name) {
-                    continue;
-                }
-            }
-            // Floating == the pin's net has degree 1 (only this pin). A control
-            // pin tied to a rail, a pull, or any driver has degree >= 2. We
-            // require a *named* net of degree 1 (an explicitly-drawn stub that
-            // goes nowhere), which is the high-confidence floating signature;
-            // a None net is usually an unrouted pad the layout will fill, so we
-            // do not fire on it (too many false positives on PCB-only inputs).
-            let Some(n) = net else { continue };
-            let degree = p.net.map_or(0, |id| members(board, id).len());
-            if degree == 1 {
-                report.findings.push(LintFinding {
-                    check: LintCheck::FloatingControlPin,
-                    severity: Severity::High,
-                    message: format!(
-                        "{} pin {} ({}) is a floating {role} input: net '{}' touches only this pin (no driver or pull)",
-                        c.reference, p.number, p.function, n.name
-                    ),
-                    refs: vec![c.reference.clone()],
-                    nets: vec![n.name.clone()],
-                });
-            }
+            report.findings.push(LintFinding {
+                check: LintCheck::FloatingControlPin,
+                severity: Severity::High,
+                message: format!(
+                    "{} pin {} ({}) is a floating {role} input: net '{}' touches only this pin (no driver or pull)",
+                    c.reference, p.number, p.function, n.name
+                ),
+                refs: vec![c.reference.clone()],
+                nets: vec![n.name.clone()],
+            });
         }
     }
 }
@@ -1857,93 +1861,244 @@ fn is_wired_or_name(name: &str) -> bool {
 
 fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
-        if net.id == 0 || is_unconnected_net(&net.name) || is_ground(&net.name) {
-            continue;
-        }
         // Wired-OR / interrupt nets carry multiple open-drain "outputs" by design.
-        if is_wired_or_name(&net.name) {
+        if net.id == 0
+            || is_unconnected_net(&net.name)
+            || is_ground(&net.name)
+            || is_wired_or_name(&net.name)
+        {
             continue;
         }
-        let mem = members(board, net.id);
-
-        // Collect push-pull output pins on non-connector parts. A connector pin
-        // is an off-board interface, never an on-board push-pull driver.
-        let mut drivers: Vec<(&Component, &Pin)> = Vec::new();
-        let mut any_resolver = false;
-        for (c, p) in &mem {
-            // The contract cuts both ways here: an absent part is neither a
-            // driver (no false fight from a DNP option) nor a resolver (a DNP
-            // series R must not excuse a real one).
-            if !AssemblyState::of(c).is_present() {
-                continue;
-            }
-            if is_pushpull_output(&p.kind) && !is_connector_like(c) {
-                drivers.push((c, p));
-            }
-            if resolves_contention(&p.kind)
-                || c.reference.to_ascii_uppercase().starts_with('R')
-                || is_connector_like(c)
-            {
-                any_resolver = true;
-            }
-        }
-        // Need >= 2 *distinct* driver parts (two pins of one chip on a net is an
-        // internal short the symbol expresses, not an inter-part fight).
-        let distinct: std::collections::HashSet<&str> =
-            drivers.iter().map(|(c, _)| c.reference.as_str()).collect();
-        if distinct.len() < 2 {
-            continue;
-        }
+        // An absent part is neither a driver (no false fight from a DNP option)
+        // nor a resolver (a DNP series R must not excuse a real one).
+        let mem: Vec<_> = members(board, net.id)
+            .into_iter()
+            .filter(|(c, _)| AssemblyState::of(c).is_present())
+            .collect();
+        // A connector pin is an off-board interface, never an on-board driver.
+        let drivers: Vec<_> = mem
+            .iter()
+            .filter(|(c, p)| is_pushpull_output(&p.kind) && !is_connector_like(c))
+            .collect();
         // Any resolver on the net (series R, tri-state, input, connector) means
         // the contention is or can be resolved: do not fire.
-        if any_resolver {
+        let resolved = mem.iter().any(|(c, p)| {
+            resolves_contention(&p.kind)
+                || c.reference.to_ascii_uppercase().starts_with('R')
+                || is_connector_like(c)
+        });
+        // Need >= 2 *distinct* driver parts (two pins of one chip on a net is an
+        // internal short the symbol expresses, not an inter-part fight). Ordered,
+        // so the JSON `refs` array is byte-reproducible.
+        let distinct: std::collections::BTreeSet<String> =
+            drivers.iter().map(|(c, _)| c.reference.clone()).collect();
+        if distinct.len() < 2 || resolved {
             continue;
         }
-
-        // Severity: if two power_out pins of *different* nominal voltage are tied
-        // (a hard rail-vs-rail short), that is High. Otherwise (two signal
-        // outputs) Medium.
-        let pwr_voltages: Vec<f64> = drivers
-            .iter()
-            .filter(|(_, p)| p.kind.eq_ignore_ascii_case("power_out"))
-            .filter_map(|_| rail_voltage(&net.name))
-            .collect();
-        let _ = pwr_voltages; // net name rarely encodes the source rail; kept for clarity
+        // Two power_out pins tied (a rail-vs-rail short) are High; two signal
+        // outputs Medium.
         let power_out = drivers
             .iter()
-            .filter(|(_, p)| p.kind.eq_ignore_ascii_case("power_out"))
-            .count();
-        let sev = if power_out >= 2 {
-            Severity::High
-        } else {
-            Severity::Medium
-        };
-
+            .filter(|(_, p)| p.kind.eq_ignore_ascii_case("power_out"));
         let drv_desc: Vec<String> = drivers
             .iter()
             .map(|(c, p)| format!("{}.{} ({})", c.reference, p.number, p.kind))
             .collect();
         report.findings.push(LintFinding {
             check: LintCheck::OutputContention,
-            severity: sev,
+            severity: if power_out.count() >= 2 { Severity::High } else { Severity::Medium },
             message: format!(
                 "net '{}' is driven by {} push-pull outputs with no series resistor or tri-state to resolve them: {}",
                 net.name,
                 drivers.len(),
                 drv_desc.join(", ")
             ),
-            refs: {
-                // `distinct` is a HashSet with Rust's randomized RandomState, so
-                // its iteration order varies run-to-run. Sort so the JSON `refs`
-                // array is byte-reproducible across runs, matching every sibling
-                // check (which builds refs from an ordered Vec).
-                let mut r: Vec<String> = distinct.iter().map(std::string::ToString::to_string).collect();
-                r.sort();
-                r
-            },
+            refs: distinct.into_iter().collect(),
             nets: vec![net.name.clone()],
         });
     }
+}
+
+/// UART direction of one pin-function token: `Some(true)` for transmit
+/// (`TX`, `TXD`, `TXD0`, `U0TXD`, `UART1_TX`, `USART2_TX`), `Some(false)` for
+/// receive, `None` otherwise. A bus prefix other than a UART one (`EMAC_TXD0`,
+/// `ETH_TXD`, `RMII_TXD1`) is a different interface and stays `None`.
+fn uart_dir(token: &str) -> Option<bool> {
+    let t = token.to_ascii_uppercase();
+    let t = ["LPUART", "USART", "UART", "U"]
+        .iter()
+        .find_map(|p| t.strip_prefix(p))
+        .map_or(t.as_str(), |rest| {
+            rest.trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim_start_matches('_')
+        });
+    match t.trim_end_matches(|c: char| c.is_ascii_digit()) {
+        "TX" | "TXD" => Some(true),
+        "RX" | "RXD" => Some(false),
+        _ => None,
+    }
+}
+
+/// Function-name tokens, split on the separators symbol libraries use for
+/// multiplexed names (`U0TXD/GPIO43/CLK_OUT1`, `PA9 (USART1_TX)`).
+fn function_tokens(function: &str) -> impl Iterator<Item = &str> {
+    function
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
+}
+
+/// The pin's UART role, and whether the pin is a dedicated UART pin (its whole
+/// name is that one token). A pin offering both a TX and an RX alternate is
+/// ambiguous and has no role; a pin typed `input` is never a transmitter.
+fn uart_role(p: &Pin) -> Option<(bool, bool)> {
+    let dirs: Vec<bool> = function_tokens(&p.function).filter_map(uart_dir).collect();
+    let tx = *dirs.first()?;
+    if dirs.iter().any(|d| *d != tx) || (tx && p.kind.eq_ignore_ascii_case("input")) {
+        return None;
+    }
+    Some((tx, function_tokens(&p.function).count() == 1))
+}
+
+/// An active-low fault flag (`FLT`, `~{FAULT}`, `nFLT`) that is not typed as
+/// a push-pull output. Such a pin only sinks, and it sinks on the fault, so an
+/// LED from it to ground is dark on the fault. A power-good flag is excluded:
+/// an LED fed by its pull-up lights on "good", which is the intended reading.
+fn is_fault_flag(p: &Pin) -> bool {
+    !matches!(
+        p.kind.to_ascii_lowercase().as_str(),
+        "output" | "tri_state" | "power_out"
+    ) && function_tokens(&p.function).any(|t| {
+        let t = t.to_ascii_uppercase();
+        let t = t.strip_prefix('N').filter(|r| r.len() > 1).unwrap_or(&t);
+        matches!(t, "FLT" | "FAULT")
+    })
+}
+
+/// Pin-name/pin-type ERC ([`LintCheck::PinFunction`]). Each rule fires only on
+/// pins whose role is specific; passive and generic pins stay silent.
+fn check_pin_functions(board: &ExtractedBoard, report: &mut NetLintReport) {
+    let fitted = |c: &Component| AssemblyState::of(c).is_present() && !is_connector_like(c);
+    let mut push = |severity, message: String, refs: Vec<String>, nets: Vec<String>| {
+        report.findings.push(LintFinding {
+            check: LintCheck::PinFunction,
+            severity,
+            message,
+            refs,
+            nets,
+        });
+    };
+    let signal = |n: &&Net| n.id != 0 && !is_unconnected_net(&n.name) && !is_ground(&n.name);
+    for net in board.nets.iter().filter(signal) {
+        let roles: Vec<_> = members(board, net.id)
+            .into_iter()
+            .filter_map(|(c, p)| Some((c, p, uart_role(p).filter(|_| fitted(c))?)))
+            .collect();
+        let parts: std::collections::BTreeSet<String> =
+            roles.iter().map(|r| r.0.reference.clone()).collect();
+        if parts.len() >= 2 && roles.iter().all(|r| r.2 .0) && roles.iter().any(|r| r.2 .1) {
+            let pins: Vec<String> = roles
+                .iter()
+                .map(|(c, p, _)| format!("{}.{} ({})", c.reference, p.number, p.function))
+                .collect();
+            push(Severity::High, format!(
+                "net '{}' joins {} UART transmit pins and no receive pin: {}. Two transmitters drive the same wire and neither hears the other, so the link cannot work (TX must go to the other side's RX); swap the TX/RX pair between these parts",
+                net.name, pins.len(), pins.join(", ")), parts.into_iter().collect(), vec![net.name.clone()]);
+        }
+    }
+    for led in board
+        .components
+        .iter()
+        .filter(|c| fitted(c) && is_led(c) && c.pins.len() == 2)
+    {
+        let (Some(anode), Some(cathode)) =
+            (named(led, ["A", "ANODE"]), named(led, ["K", "CATHODE"]))
+        else {
+            continue;
+        };
+        let grounded = |id: i64| board.net(id).is_some_and(|n| is_ground(&n.name));
+        let returns = grounded(cathode)
+            || members(board, cathode).iter().any(|(r, _)| {
+                r.reference != led.reference
+                    && is_resistor(r)
+                    && r.pins.iter().filter_map(|q| q.net).any(grounded)
+            });
+        let flag = members(board, anode)
+            .into_iter()
+            .find(|(c, p)| c.reference != led.reference && fitted(c) && is_fault_flag(p));
+        if let (true, Some((c, p))) = (returns, flag) {
+            let net = board.net(anode).map(|n| n.name.clone()).unwrap_or_default();
+            push(Severity::Medium, format!(
+                "{} has its anode on {}.{} ({}), an active-low open-drain fault output, and its cathode returns to ground: the pin sinks on a fault, so the LED is lit while all is well and goes dark on the fault, and it clamps the line seen by anything else on '{net}'; move the LED between a supply rail and the pin (cathode to the pin)",
+                led.reference, c.reference, p.number, p.function), vec![led.reference.clone(), c.reference.clone()], vec![net]);
+        }
+    }
+    for q in board.components.iter().filter(|c| fitted(c)) {
+        let pin = |names| named(q, names);
+        let (Some(g), Some(s), Some(d)) = (
+            pin(["G", "GATE"]),
+            pin(["S", "SOURCE"]),
+            pin(["D", "DRAIN"]),
+        ) else {
+            continue;
+        };
+        let entry = |id| {
+            members(board, id)
+                .iter()
+                .any(|(c, _)| is_connector_like(c) && !is_test_point_or_hole(c))
+        };
+        if s != d && entry(s) && !entry(d) && static_gate(board, q, g, [s, d]) {
+            let name = |id| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
+            push(Severity::Medium, format!(
+                "{} is an always-on FET (its gate is biased only by passives), as used for reverse-polarity protection, but its source is on the connector net '{}' and its drain on '{}': the body diode then points from the load back to the input and a reversed supply is not blocked; swap source and drain so the drain faces the connector",
+                q.reference, name(s), name(d)), vec![q.reference.clone()], vec![name(s), name(d)]);
+        }
+    }
+}
+
+/// The net of `c`'s first pin whose function is one of `names`.
+fn named(c: &Component, names: [&str; 2]) -> Option<i64> {
+    let hit = |p: &&Pin| names.iter().any(|n| p.function.eq_ignore_ascii_case(n));
+    c.pins.iter().find(hit)?.net
+}
+
+/// True when the gate net `g` of `q`, and every net one passive further out, holds
+/// only 2-pin resistors, capacitors and diodes, all ending within two hops on
+/// ground or on `q`'s own source/drain: nothing drives the gate, so the FET
+/// sits permanently on.
+fn static_gate(board: &ExtractedBoard, q: &Component, g: i64, ends: [i64; 2]) -> bool {
+    let passive = |c: &Component| {
+        let r = ref_designator(&c.reference);
+        let tail = r.trim_start_matches(['C', 'D', 'Z']);
+        c.pins.len() == 2
+            && (is_resistor(c)
+                || (tail.len() == r.len() - 1 && tail.starts_with(|d: char| d.is_ascii_digit())))
+    };
+    let stop = |id: i64| ends.contains(&id) || board.net(id).is_some_and(|n| is_ground(&n.name));
+    let mut frontier = vec![(g, q.reference.as_str())];
+    for depth in 0..2 {
+        let mut next = Vec::new();
+        for (net, from) in frontier {
+            let others: Vec<_> = members(board, net)
+                .into_iter()
+                .filter(|(c, _)| c.reference != from && c.reference != q.reference)
+                .collect();
+            if others.is_empty() && depth == 0 || others.iter().any(|(c, _)| !passive(c)) {
+                return false;
+            }
+            for (c, p) in others {
+                next.extend(
+                    c.pins
+                        .iter()
+                        .filter(|o| o.number != p.number)
+                        .filter_map(|o| o.net)
+                        .filter(|id| *id != g && !stop(*id))
+                        .map(|id| (id, c.reference.as_str())),
+                );
+            }
+        }
+        frontier = next;
+    }
+    frontier.is_empty()
 }
 
 /// Render a lint report as a Unicode table.
@@ -1978,6 +2133,7 @@ mod pin_array_tests {
             "Package_QFP:LQFP-64_10x10mm",
             "Package_SO:SOIC-8_3.9x4.9mm",
             "Package_DFN_QFN:QFN-48-1EP_7x7mm",
+            "lib:QFN50P400X400X100-25N-D",
         ] {
             assert!(
                 !is_pin_array_package(fp),

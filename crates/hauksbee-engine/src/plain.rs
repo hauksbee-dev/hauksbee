@@ -1086,6 +1086,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Both pins actively drive the wire. If one drives high while the other drives low, they fight: large current flows through the two chips, voltages land in a bad middle zone, and you can damage the outputs over time.".to_string(),
                 "Only one push-pull output should drive a wire. Remove one driver, add a resistor / buffer / proper bus arrangement, or change one output to open-drain with a single pull-up so they can share the line safely.".to_string(),
             ),
+            LintCheck::PinFunction => (
+                f.message.clone(),
+                "The pin names and pin types on this connection say what each pin does (transmit, fault flag, gate/source/drain). Wired the way they are, those roles do not work together, even though every wire connects.".to_string(),
+                "Rewire the pins the way the finding above describes, then re-check against each part's datasheet.".to_string(),
+            ),
             // Low is the strap lint's abstention (see `straps::examine_strap`):
             // the level was not judged, so it must not read as a failure.
             LintCheck::StrapPin if f.severity == Severity::Low => (
