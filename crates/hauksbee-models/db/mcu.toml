@@ -496,6 +496,185 @@ abs_max_v = 6.0
 basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Features, Operating Voltages 2.7-5.5 V; Section 29.1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bare ATmega32U4 (44-lead TQFP and 44-pad QFN/MLF share one pinout).
+#
+# Source: Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016, page 3, Figure 1-1
+#   "Pinout" (44-pin QFN/TQFP),
+#   https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf
+#   ADC channels per section 1.1 (PF0/PF1/PF4..PF7 = ADC0/1/4..7, PD4 = ADC8,
+#   PD6 = ADC9, PD7 = ADC10, PB4..PB6 = ADC11..13).
+#
+# The pro_micro entry above is the same silicon behind a 24-pin header; this one
+# is the chip itself. The AVR backend runs every core at 16 MHz, so a 3.3 V /
+# 8 MHz board's firmware timing comes out 2x fast (the clock gap noted above).
+# The USB device controller is not modelled.
+[[models]]
+id = "atmega32u4"
+kind = "mcu"
+description = "ATmega32U4 8-bit AVR MCU with USB, TQFP-44 or QFN-44"
+
+[models.match]
+value_re = "(?i)^ATmega32U4([-_]?(AU|MU|AUR|MUR|RC))?$"
+
+[models.params]
+backend = "simavr:atmega32u4"
+
+[models.pins]
+"1"  = "pe6_ain0"
+"2"  = "uvcc"
+"3"  = "d_minus"
+"4"  = "d_plus"
+"5"  = "ugnd"
+"6"  = "ucap"
+"7"  = "vbus"
+"8"  = "pb0_ss"
+"9"  = "pb1_sck"
+"10" = "pb2_mosi"
+"11" = "pb3_miso"
+"12" = "pb7"
+"13" = "reset"
+"14" = "vcc"
+"15" = "gnd"
+"16" = "xtal2"
+"17" = "xtal1"
+"18" = "pd0_scl"
+"19" = "pd1_sda"
+"20" = "pd2_rxd1"
+"21" = "pd3_txd1"
+"22" = "pd5"
+"23" = "gnd2"
+"24" = "avcc"
+"25" = "pd4_adc8"
+"26" = "pd6_adc9"
+"27" = "pd7_adc10"
+"28" = "pb4_adc11"
+"29" = "pb5_adc12"
+"30" = "pb6_adc13"
+"31" = "pc6"
+"32" = "pc7"
+"33" = "pe2_hwb"
+"34" = "vcc2"
+"35" = "gnd3"
+"36" = "pf7_adc7"
+"37" = "pf6_adc6"
+"38" = "pf5_adc5"
+"39" = "pf4_adc4"
+"40" = "pf1_adc1"
+"41" = "pf0_adc0"
+"42" = "aref"
+"43" = "gnd4"
+"44" = "avcc2"
+
+[models.ratings]
+max_pin_current_a = 0.04  # Section 29.1 Absolute Maximum Ratings, DC current per I/O pin 40.0 mA
+max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
+max_voltage_v = 6.0       # Abs max "Maximum Operating Voltage"; NOT the 5.5 V recommended ceiling
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Features, Operating Voltages 2.7-5.5 V; Section 29.1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATtiny85 (and the low-voltage ATtiny85V), simavr core "attiny85".
+#
+# Source: Atmel 2586Q-AVR-08/2013 "ATtiny25/45/85", page 2, Figure 1-1 "Pinout
+#   ATtiny25/45/85" (PDIP/SOIC/TSSOP 8-pin, and QFN/MLF 20-pad),
+#   https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf
+#   and section 21.1 Absolute Maximum Ratings.
+#
+# THE TWO PACKAGES NUMBER THE SAME PORT PINS DIFFERENTLY (PB4 is pin 3 on the
+# SOIC and pad 5 on the MLF), so this follows the ESP32 pattern: a value-only
+# identity entry with no pad map (roles come from the board's own pin names),
+# plus one footprint-gated entry per package whose map was read off Figure 1-1.
+# The footprint match adds specificity, so the package entry wins when it applies.
+#
+# The AVR backend runs the core at 16 MHz. An ATtiny85 on its internal 8 MHz
+# RC (or a Trinket's 16.5 MHz PLL) is therefore timed off by that ratio.
+[[models]]
+id = "attiny85"
+kind = "mcu"
+description = "ATtiny85 8-bit AVR MCU, package not recognised"
+
+[models.match]
+value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|MF|M))?$"
+
+[models.params]
+backend = "simavr:attiny85"
+
+[models.ratings]
+max_pin_current_a = 0.04  # 21.1 Absolute Maximum Ratings, DC current per I/O pin 40.0 mA
+max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
+max_voltage_v = 6.0       # Maximum Operating Voltage 6.0 V
+
+[[models]]
+id = "attiny85_8pin"
+kind = "mcu"
+description = "ATtiny85 8-bit AVR MCU, PDIP-8 / SOIC-8"
+
+[models.match]
+value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|MF|M))?$"
+footprint_re = '(?i)(^|[:_])(P?DIP|DIL|SOIC|SOP|SO)[-_]?0?8([^0-9]|$)'
+
+[models.params]
+backend = "simavr:attiny85"
+
+[models.pins]
+"1" = "pb5_reset_adc0"
+"2" = "pb3_xtal1_adc3"
+"3" = "pb4_xtal2_adc2"
+"4" = "gnd"
+"5" = "pb0_mosi_sda"
+"6" = "pb1_miso"
+"7" = "pb2_sck_scl_adc1"
+"8" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
+# 1.8 V is the ATtiny85V floor; the plain ATtiny85 is rated from 2.7 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel 2586Q ATtiny25/45/85 datasheet, Features, Operating Voltage 1.8-5.5 V (V grade) / 2.7-5.5 V; 21.1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
+
+[[models]]
+id = "attiny85_qfn20"
+kind = "mcu"
+description = "ATtiny85 8-bit AVR MCU, QFN/MLF-20 (4x4 mm)"
+
+[models.match]
+value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|MF|M))?$"
+footprint_re = '(?i)(^|[:_])(V?QFN|MLF|WQFN)[-_]?20([^0-9]|$)'
+
+[models.params]
+backend = "simavr:attiny85"
+
+[models.pins]
+# Pads 3, 4, 6, 7, 9, 10, 13 and 16..20 are DNC.
+"1"  = "pb5_reset_adc0"
+"2"  = "pb3_xtal1_adc3"
+"5"  = "pb4_xtal2_adc2"
+"8"  = "gnd"
+"11" = "pb0_mosi_sda"
+"12" = "pb1_miso"
+"14" = "pb2_sck_scl_adc1"
+"15" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "stm32f072c"
@@ -744,7 +923,7 @@ description = "Espressif ESP32 classic module (WROOM-32 / WROVER)"
 # Olimex EVB rev L) must all match the same strap table, so the suffix is left
 # open after "32". The value names the module, so it fixes the pad map. A bare
 # "ESP32"/"ESP32-D0WD" value is a QFN chip: see esp32 / esp32_qfn48 below.
-value_re = "(?i)^(ESP[- ]?WROOM[- ]?32|ESP32[- ]?WRO(OM|VER)[- ]?32?.*)$"
+value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WRO(OM|VER)[-_ ]?32?.*)$"
 # No mpn_re: match rules are ANDed, so an mpn_re would reject the common case
 # of a board whose ESP32 carries no MPN property (Olimex EVB, most KiCad libs).
 
@@ -901,7 +1080,7 @@ description = "Espressif ESP32-PICO-D4 SiP (Watchy v1.x/v2.x)"
 
 [models.match]
 # One SiP, one package: the value fixes the pad map without a footprint rule.
-value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
+value_re = "(?i)^ESP32[-_ ]?PICO[-_ ]?D4$"
 
 [models.params]
 # Same ESP32 die as esp32_wroom, so the same QEMU machine (esp32) boots it. With
@@ -948,6 +1127,22 @@ role = "gpio2"
 level = "low"
 note = "GPIO2 must be low or floating at reset"
 
+# LilyGO T-Micro32 / T-Micro32 Plus: an ESP32-PICO-V3-02 SiP module sold under
+# the vendor's own "T-" name, so its value never says "ESP32". The castellated
+# pad numbering is LilyGO's, not Espressif's, so there is no pad map here: GPIO
+# roles come from the board's pin names ("IO36/SVP", "IO25"), which the binder
+# reads as gpio<n>. The core is the classic ESP32 die, as on esp32_pico.
+[[models]]
+id = "lilygo_t_micro32"
+kind = "mcu"
+description = "LilyGO T-Micro32 / T-Micro32 Plus module (ESP32-PICO-V3-02)"
+
+[models.match]
+value_re = "(?i)^(LilyGO[-_ ]?)?T[-_ ]?Micro[-_ ]?32([-_ ]?Plus)?$"
+
+[models.params]
+backend = "qemu:esp32"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ESP32-S3, package unknown: identity only (see the family note). The strap
@@ -958,7 +1153,7 @@ kind = "mcu"
 description = "Espressif ESP32-S3, package not recognised (Watchy v3 class)"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
+value_re = "(?i)^ESP32[-_ ]?S3([-_ ]?WROOM.*)?$"
 
 [models.params]
 # hauksbee-mcu backend identifier: the QEMU backend boots the Espressif-QEMU
@@ -979,7 +1174,7 @@ kind = "mcu"
 description = "Espressif ESP32-S3-WROOM-1/-1U/-2 module"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
+value_re = "(?i)^ESP32[-_ ]?S3([-_ ]?WROOM.*)?$"
 # KiCad RF_Module:ESP32-S3-WROOM-1 / -1U / -2 and vendor spellings of the same.
 # WROOM-2 has the WROOM-1 pinout (KiCad symbols agree on every strap pad).
 footprint_re = '(?i)ESP32[-_]?S3[-_]?WROOM[-_]?[12]'
@@ -1034,7 +1229,7 @@ kind = "mcu"
 description = "Espressif ESP32-S3 bare chip, QFN56 7x7 mm (Watchy v3)"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
+value_re = "(?i)^ESP32[-_ ]?S3([-_ ]?WROOM.*)?$"
 footprint_re = '(?i)(^|:)V?QFN[-_]?56([-_]1EP)?[-_]7x7mm[-_]P0\.4mm'
 
 [models.params]
@@ -1086,7 +1281,7 @@ kind = "mcu"
 description = "Espressif ESP32-S2, package not recognised"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
+value_re = "(?i)^ESP32[-_ ]?S2([-_ ]?WROOM.*)?$"
 
 [[models]]
 id = "esp32s2_wroom"
@@ -1094,7 +1289,7 @@ kind = "mcu"
 description = "Espressif ESP32-S2-WROOM/-WROOM-I/-WROVER module"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
+value_re = "(?i)^ESP32[-_ ]?S2([-_ ]?WROOM.*)?$"
 footprint_re = '(?i)ESP32[-_]?S2[-_]?WRO(OM|VER)'
 
 [models.pins]
@@ -1136,7 +1331,7 @@ kind = "mcu"
 description = "Espressif ESP32-S2 bare chip, QFN56 7x7 mm"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
+value_re = "(?i)^ESP32[-_ ]?S2([-_ ]?WROOM.*)?$"
 footprint_re = '(?i)(^|:)V?QFN[-_]?56([-_]1EP)?[-_]7x7mm[-_]P0\.4mm'
 
 [models.pins]
@@ -1177,7 +1372,7 @@ kind = "mcu"
 description = "Espressif ESP32-C3 (RISC-V RV32IMC), package not recognised"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
 
 [models.params]
 backend = "qemu:esp32c3"
@@ -1195,7 +1390,7 @@ kind = "mcu"
 description = "Espressif ESP32-C3-MINI-1/-1U module"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
 footprint_re = '(?i)ESP32[-_]?C3[-_]?MINI[-_]?1'
 
 [models.params]
@@ -1254,7 +1449,7 @@ kind = "mcu"
 description = "Espressif ESP32-C3-WROOM-02/-02U module"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
 footprint_re = '(?i)ESP32[-_]?C3[-_]?WROOM[-_]?02'
 
 [models.params]
@@ -1302,7 +1497,7 @@ kind = "mcu"
 description = "Espressif ESP32-C3 bare chip, QFN32 5x5 mm"
 
 [models.match]
-value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
 footprint_re = '(?i)(^|:)V?QFN[-_]?32([-_]1EP)?[-_]5x5mm[-_]P0\.5mm'
 
 [models.params]
@@ -1386,6 +1581,22 @@ min_v = 1.7
 max_v = 3.6
 abs_max_v = 3.9
 basis = "Nordic nRF52840 Product Specification (docs.nordicsemi.com ps_nrf52840), Recommended operating conditions, VDD supply voltage 1.7 V to 3.6 V; Absolute maximum ratings, VDD -0.3 V to +3.9 V"
+
+# nice!nano (v1/v2): an nRF52840 on the Pro Micro footprint. Its pin names are
+# Nordic port pins ("P0.06", "P1.15-LF"), which the binder reads as p0<bit> /
+# p1<bit>; the header numbering differs between footprint libraries, so no pad
+# map is asserted here. The pro_micro entry deliberately does not match it
+# (different ISA).
+[[models]]
+id = "nice_nano"
+kind = "mcu"
+description = "nice!nano module (nRF52840, Pro Micro footprint)"
+
+[models.match]
+value_re = "(?i)^nice[-_ !]*nano([-_ ]?v?[0-9.]+)?$"
+
+[models.params]
+backend = "renode:nrf52840"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
