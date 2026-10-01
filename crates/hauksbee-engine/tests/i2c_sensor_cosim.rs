@@ -12,10 +12,8 @@
 
 #![cfg(feature = "avr")]
 
-use std::sync::{Arc, Mutex};
-
 use hauksbee_engine::binder::bind_board;
-use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
+use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
@@ -68,10 +66,9 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     let mut engine = HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine");
 
     // Attach the LM75 at its default address and set the swept temperature.
-    let bus = Arc::new(Mutex::new(
-        I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, temp_c))),
-    ));
-    engine.scheduler_mut().attach_i2c_bus(bus);
+    engine
+        .scheduler_mut()
+        .attach_i2c_bus(crate::support::lm75_bus(temp_c));
 
     // Run the co-sim.
     let frame_dt = 1e-3_f64;
@@ -107,22 +104,5 @@ fn gpio_follows_temperature_sweep() {
     let fw = firmware();
     assert!(fw.exists(), "firmware missing: {fw:?}");
 
-    // Sweep across the 30 C threshold and assert the GPIO tracks it.
-    let sweep = [10.0, 25.0, 29.0, 31.0, 35.0, 50.0, 28.0, 15.0];
-    let mut highs = Vec::new();
-    for &t in &sweep {
-        let v = run_at_temp(t, 50);
-        let high = v > 2.5;
-        highs.push((t, high, v));
-    }
-    for (t, high, v) in &highs {
-        let expect = *t >= 30.0;
-        assert_eq!(
-            *high,
-            expect,
-            "at {t} C expected GPIO {}, got {:.3} V",
-            if expect { "HIGH" } else { "LOW" },
-            v
-        );
-    }
+    crate::support::assert_flag_follows_lm75_sweep("AVR", 2.5, |t| run_at_temp(t, 50));
 }

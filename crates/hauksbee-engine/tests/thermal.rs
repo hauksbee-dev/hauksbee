@@ -9,7 +9,7 @@
 use crate::support::{resistor, vsource};
 use std::collections::HashMap;
 
-use hauksbee_engine::stress::{DeviceMeta, FaultKind, StressMonitor};
+use hauksbee_engine::stress::{DeviceMeta, FaultEvent, FaultKind, StressMonitor};
 use hauksbee_engine::thermal::{junction_temp_c, theta_ja_from_footprint};
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_frontdoor_api::engine::Engine;
@@ -178,7 +178,7 @@ fn drive_pwm_chunk(
     chunk_s: f64,
     endpoint_on: bool,
     t_end: f64,
-) -> Vec<hauksbee_engine::stress::FaultEvent> {
+) -> Vec<FaultEvent> {
     let no_branch = |_: hauksbee_ir::DeviceId| None;
     let on_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
     let off_v = |_: NodeId| 0.0;
@@ -387,7 +387,7 @@ fn reported_temperature_cools_to_ambient_when_dissipation_stops() {
 /// (Tj = 60 + 125 = 185 > 175). Demonstrates the ambient knob and the fault.
 #[test]
 fn ambient_pushes_part_over_its_limit() {
-    let build = |ambient: f64| -> Vec<hauksbee_engine::stress::FaultEvent> {
+    let build = |ambient: f64| -> Vec<FaultEvent> {
         let (mut circuit, mut mon) = half_watt_r1(ambient);
         let volts = [0.0, 1.0];
         let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
@@ -539,23 +539,33 @@ fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
     (circuit, metas)
 }
 
+/// Hold the dual package at 1 V across both units for eight evaluations,
+/// returning the monitor and every fault it raised.
+fn steady_dual_package(unit2_ohms: f64) -> (StressMonitor, Vec<FaultEvent>) {
+    let (mut circuit, metas) = dual_package(unit2_ohms);
+    let mut mon = StressMonitor::new(metas);
+    mon.ambient_c = 25.0;
+    let node_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    let all = (0..8)
+        .flat_map(|_| mon.evaluate(&mut circuit, &node_v, &no_branch, 0.0))
+        .collect();
+    (mon, all)
+}
+
+/// Both unit rows' reported junction temperatures.
+fn unit_tjs(mon: &StressMonitor) -> (f64, f64) {
+    let tj = |unit: &str| mon.temp_by_ref().get(unit).copied().expect("unit Tj");
+    (tj("Q1_q1"), tj("Q1_q2"))
+}
+
 /// Both units dissipating: pooled 1.0 W through the shared 250 C/W package is
 /// Tj = 25 + 250 = 275 C > 200 C, overtemperature MUST fire (each unit alone
 /// reads 150 C, which is how the bug hid). Per-unit Overpower must stay quiet
 /// (0.5 W < 0.6 W per unit), and both unit rows must report the shared Tj.
 #[test]
 fn dual_package_pools_sibling_dissipation_for_tj() {
-    let (mut circuit, metas) = dual_package(2.0);
-    let mut mon = StressMonitor::new(metas);
-    mon.ambient_c = 25.0;
-    let volts = [0.0, 1.0];
-    let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-    let no_branch = |_: hauksbee_ir::DeviceId| None;
-
-    let mut all = Vec::new();
-    for _ in 0..8 {
-        all.extend(mon.evaluate(&mut circuit, &node_v, &no_branch, 0.0));
-    }
+    let (mon, all) = steady_dual_package(2.0);
 
     let overtemp: Vec<_> = all
         .iter()
@@ -580,8 +590,7 @@ fn dual_package_pools_sibling_dissipation_for_tj() {
     assert_eq!(comps, vec!["Q1_q1", "Q1_q2"]);
 
     // Per-unit rows both report the shared package temperature.
-    let t1 = mon.temp_by_ref().get("Q1_q1").copied().expect("Q1_q1 Tj");
-    let t2 = mon.temp_by_ref().get("Q1_q2").copied().expect("Q1_q2 Tj");
+    let (t1, t2) = unit_tjs(&mon);
     assert!((t1 - 275.0).abs() < 1e-6 && (t2 - 275.0).abs() < 1e-6);
 
     // max_power_w is per-unit: 0.5 W < 0.6 W each, so pooling must NOT have
@@ -597,59 +606,18 @@ fn dual_package_pools_sibling_dissipation_for_tj() {
 /// whose single active unit is within limits (the false-positive side).
 #[test]
 fn dual_package_single_active_unit_does_not_false_fire() {
-    let (mut circuit, metas) = dual_package(1e12); // unit 2 idle
-    let mut mon = StressMonitor::new(metas);
-    mon.ambient_c = 25.0;
-    let volts = [0.0, 1.0];
-    let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-    let no_branch = |_: hauksbee_ir::DeviceId| None;
-
-    let mut all = Vec::new();
-    for _ in 0..8 {
-        all.extend(mon.evaluate(&mut circuit, &node_v, &no_branch, 0.0));
-    }
+    let (mon, all) = steady_dual_package(1e12); // unit 2 idle
     assert!(
         all.is_empty(),
         "0.5 W pooled (150 C < 200 C) must not fault, got {all:?}"
     );
     // The active unit reads the package Tj; the idle sibling shares the same
     // package and therefore the same reported temperature.
-    let t1 = mon.temp_by_ref().get("Q1_q1").copied().expect("Q1_q1 Tj");
-    let t2 = mon.temp_by_ref().get("Q1_q2").copied().expect("Q1_q2 Tj");
+    let (t1, t2) = unit_tjs(&mon);
     assert!(
         (t1 - 150.0).abs() < 1e-6 && (t2 - 150.0).abs() < 1e-6,
         "both unit rows report the shared package Tj (got {t1:.3}, {t2:.3})"
     );
-}
-
-/// Drive one chunk of simultaneous sub-chunk PWM through BOTH units of the
-/// dual package at accepted-step granularity (unequal step widths, same
-/// reason as the single-package fixture), then evaluate at the endpoint.
-/// Both 2 Ω units share node 1, so 1 V on means 0.5 W per unit, 1.0 W pooled.
-fn drive_dual_pwm_chunk(
-    circuit: &mut Circuit,
-    monitor: &mut StressMonitor,
-    duty: f64,
-    chunk_s: f64,
-    endpoint_on: bool,
-    t_end: f64,
-) -> Vec<hauksbee_engine::stress::FaultEvent> {
-    let no_branch = |_: hauksbee_ir::DeviceId| None;
-    let on_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
-    let off_v = |_: NodeId| 0.0;
-    let on_s = duty * chunk_s;
-    let off_s = (1.0 - duty) * chunk_s;
-    if endpoint_on {
-        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.6);
-        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.4);
-        monitor.accumulate_step(circuit, &on_v, &no_branch, on_s);
-        monitor.evaluate(circuit, &on_v, &no_branch, t_end)
-    } else {
-        monitor.accumulate_step(circuit, &on_v, &no_branch, on_s);
-        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.6);
-        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.4);
-        monitor.evaluate(circuit, &off_v, &no_branch, t_end)
-    }
 }
 
 /// Dual-package + PWM, hot side: both dice switching at 80% duty with the
@@ -672,7 +640,7 @@ fn dual_package_pwm_pools_integrated_not_sampled_dissipation() {
     for chunk in 0..8 {
         let t = f64::from(chunk + 1) * CHUNK_S;
         overtemp.extend(
-            drive_dual_pwm_chunk(&mut circuit, &mut mon, DUTY, CHUNK_S, false, t)
+            drive_pwm_chunk(&mut circuit, &mut mon, DUTY, CHUNK_S, false, t)
                 .into_iter()
                 .filter(|f| f.kind == FaultKind::Overtemperature),
         );
@@ -714,7 +682,7 @@ fn dual_package_pwm_cool_duty_does_not_false_fire() {
     let mut all = Vec::new();
     for chunk in 0..8 {
         let t = f64::from(chunk + 1) * CHUNK_S;
-        all.extend(drive_dual_pwm_chunk(
+        all.extend(drive_pwm_chunk(
             &mut circuit,
             &mut mon,
             DUTY,
@@ -728,8 +696,7 @@ fn dual_package_pwm_cool_duty_does_not_false_fire() {
         "pooled 0.2 W duty (75 C) is far under the 200 C limit; endpoint \
          sampling would false-positive at the pooled 275 C peak, got {all:?}"
     );
-    let t1 = mon.temp_by_ref().get("Q1_q1").copied().expect("Q1_q1 Tj");
-    let t2 = mon.temp_by_ref().get("Q1_q2").copied().expect("Q1_q2 Tj");
+    let (t1, t2) = unit_tjs(&mon);
     assert!(
         (t1 - expected_tj).abs() < 1e-9 && (t2 - expected_tj).abs() < 1e-9,
         "both unit rows report the pooled duty-cycle 75 C (got {t1:.3}, {t2:.3})"

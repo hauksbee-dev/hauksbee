@@ -52,6 +52,11 @@ fn inferred_same_hierarchy_altium_merge_stays_unbound_end_to_end() {
     assert!(matches!(row.outcome, BindOutcome::Unresolved { .. }));
 }
 
+/// The devices `bound` stamped into its circuit.
+fn devices(bound: &BoundBoard) -> std::slice::Iter<'_, Device> {
+    bound.circuit.devices.iter()
+}
+
 fn pin(number: &str, net: i64, function: &str) -> Pin {
     crate::support::pin(number, Some(net), function, "passive")
 }
@@ -243,10 +248,7 @@ fn dnp_component_is_not_stamped() {
     assert!(
         !bound.circuit.devices.iter().any(|d| d.name() == "R1"),
         "DNP R1 must not stamp any device, got: {:?}",
-        bound
-            .circuit
-            .devices
-            .iter()
+        devices(&bound)
             .map(|d| d.name().to_string())
             .collect::<Vec<_>>()
     );
@@ -255,11 +257,7 @@ fn dnp_component_is_not_stamped() {
     let bnode = bound.node("NET_B").expect("NET_B interned");
     assert_ne!(a, bnode);
     assert!(
-        !bound
-            .circuit
-            .devices
-            .iter()
-            .any(|d| d.nodes().contains(&a) && d.nodes().contains(&bnode)),
+        !devices(&bound).any(|d| d.nodes().contains(&a) && d.nodes().contains(&bnode)),
         "no single device may bridge NET_A and NET_B (R1 is DNP)"
     );
     // And the report says so, as a skip, not a bound or unresolved row.
@@ -301,10 +299,7 @@ fn split_grounds_stay_distinct_nodes() {
     assert_ne!(agnd, dgnd, "AGND and DGND are distinct nets");
 
     // The star-point bridge is a real 2-node resistor, not a self-loop.
-    let ends = bound
-        .circuit
-        .devices
-        .iter()
+    let ends = devices(&bound)
         .find_map(|d| match d {
             Device::Resistor { name, a, b, .. } if name == "R1" => Some([*a, *b]),
             _ => None,
@@ -330,10 +325,7 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
     // SN74LVC1G3157 on a 3.3 V rail.
     let bound = bind_spdt("+3V3");
 
-    let (von, voff) = bound
-        .circuit
-        .devices
-        .iter()
+    let (von, voff) = devices(&bound)
         .find_map(|d| match d {
             Device::VSwitch {
                 name, von, voff, ..
@@ -399,18 +391,11 @@ fn cr_designated_diode_is_not_a_capacitor() {
 
     // Specifically NOT a 5.1 F capacitor.
     assert!(
-        !bound
-            .circuit
-            .devices
-            .iter()
-            .any(|d| matches!(d, Device::Capacitor { name, .. } if name == "CR1")),
+        !devices(&bound).any(|d| matches!(d, Device::Capacitor { name, .. } if name == "CR1")),
         "CR1 must not bind as a capacitor"
     );
     // It binds through the diode fallback as a conducting junction.
-    let (a, k) = bound
-        .circuit
-        .devices
-        .iter()
+    let (a, k) = devices(&bound)
         .find_map(|d| match d {
             Device::Diode { name, a, k, .. } if name == "CR1" => Some((*a, *k)),
             _ => None,
@@ -449,10 +434,7 @@ fn repeated_physical_pads_bind_one_logical_two_terminal_resistor() {
     let b = board(&[(1, "NET_A"), (2, "NET_B")], vec![r]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let resistors: Vec<_> = bound
-        .circuit
-        .devices
-        .iter()
+    let resistors: Vec<_> = devices(&bound)
         .filter_map(|device| match device {
             Device::Resistor {
                 name, a, b, ohms, ..
@@ -507,11 +489,7 @@ fn contradictory_duplicate_passive_pad_nets_are_refused() {
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
     assert!(
-        !bound
-            .circuit
-            .devices
-            .iter()
-            .any(|device| device.name() == "R8" || device.name().starts_with("R8_e")),
+        !devices(&bound).any(|device| device.name() == "R8" || device.name().starts_with("R8_e")),
         "a contradictory logical terminal must not stamp guessed connectivity"
     );
     let row = bound.report.row("R8").expect("R8 gets a bind row");
@@ -562,16 +540,10 @@ fn repeated_physical_pads_keep_capacitors_and_inductors_scalar() {
     );
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let capacitors: Vec<_> = bound
-        .circuit
-        .devices
-        .iter()
+    let capacitors: Vec<_> = devices(&bound)
         .filter(|device| matches!(device, Device::Capacitor { name, .. } if name.starts_with("C7")))
         .collect();
-    let inductors: Vec<_> = bound
-        .circuit
-        .devices
-        .iter()
+    let inductors: Vec<_> = devices(&bound)
         .filter(|device| matches!(device, Device::Inductor { name, .. } if name.starts_with("L7")))
         .collect();
     assert_eq!(capacitors.len(), 1, "C7 is one logical capacitor");
@@ -607,10 +579,7 @@ fn reference_ambiguous_merge_without_source_uid_is_left_open() {
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
     assert!(
-        !bound
-            .circuit
-            .devices
-            .iter()
+        !devices(&bound)
             .any(|device| { matches!(device, Device::Capacitor { name, .. } if name == "C9") }),
         "an inferred identity without a UID must not stamp precise physics"
     );
@@ -659,10 +628,7 @@ fn reference_ambiguous_merge_with_source_uid_binds_one_scalar() {
     let b = board(&[(1, "VCC"), (2, "GND")], vec![c]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let capacitors: Vec<_> = bound
-        .circuit
-        .devices
-        .iter()
+    let capacitors: Vec<_> = devices(&bound)
         .filter(
             |device| matches!(device, Device::Capacitor { name, .. } if name.starts_with("C10")),
         )
@@ -693,10 +659,7 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
         &["NET_A", "NET_B", "NET_C", "NET_D"],
     );
 
-    let resistors: Vec<_> = bound
-        .circuit
-        .devices
-        .iter()
+    let resistors: Vec<_> = devices(&bound)
         .filter_map(|d| match d {
             Device::Resistor {
                 name, a, b, ohms, ..
@@ -752,10 +715,7 @@ fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
         &["COM", "N2", "N3", "N4", "N5"],
     );
 
-    let resistors: Vec<_> = bound
-        .circuit
-        .devices
-        .iter()
+    let resistors: Vec<_> = devices(&bound)
         .filter_map(|d| match d {
             Device::Resistor { name, a, b, .. } if name.starts_with("RN2") => {
                 Some((name.clone(), *a, *b))
@@ -862,10 +822,7 @@ fn diode_with_electrode_letter_pads_binds_with_correct_polarity() {
     let b = board(&[(1, "ANODE_NET"), (2, "CATHODE_NET")], vec![d]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let (a, k) = bound
-        .circuit
-        .devices
-        .iter()
+    let (a, k) = devices(&bound)
         .find_map(|dv| match dv {
             Device::Diode { name, a, k, .. } if name == "D1" => Some((*a, *k)),
             _ => None,
@@ -888,10 +845,7 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
     let b = board(&[(1, "CATHODE_NET"), (2, "ANODE_NET")], vec![d]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let (a, k) = bound
-        .circuit
-        .devices
-        .iter()
+    let (a, k) = devices(&bound)
         .find_map(|dv| match dv {
             Device::Diode { name, a, k, .. } if name == "D2" => Some((*a, *k)),
             _ => None,
@@ -923,10 +877,7 @@ fn dual_opamp_stamps_one_device_per_channel() {
     );
 
     let out_of = |unit: &str| {
-        bound
-            .circuit
-            .devices
-            .iter()
+        devices(&bound)
             .find_map(|d| match d {
                 Device::OpAmp { name, out, .. } if name == unit => Some(*out),
                 _ => None,
@@ -937,10 +888,7 @@ fn dual_opamp_stamps_one_device_per_channel() {
     assert_eq!(bound.node("OUT_A"), Some(out_of("U1_q1")));
     assert_eq!(bound.node("OUT_B"), Some(out_of("U1_q2")));
     assert_eq!(
-        bound
-            .circuit
-            .devices
-            .iter()
+        devices(&bound)
             .filter(|d| matches!(d, Device::OpAmp { .. }))
             .count(),
         2,
@@ -965,10 +913,7 @@ fn dual_comparator_stamps_one_device_per_channel() {
         ],
     );
 
-    let outs: Vec<(String, hauksbee_ir::NodeId)> = bound
-        .circuit
-        .devices
-        .iter()
+    let outs: Vec<(String, hauksbee_ir::NodeId)> = devices(&bound)
         .filter_map(|d| match d {
             Device::Behavioral { name, p, .. } => Some((name.clone(), *p)),
             _ => None,
@@ -996,11 +941,7 @@ fn single_channel_comparator_keeps_the_bare_reference() {
         &["OUT", "GND", "INP", "INM", "+5V"],
     );
     assert!(
-        bound
-            .circuit
-            .devices
-            .iter()
-            .any(|d| matches!(d, Device::Comparator { name, .. } if name == "U3")),
+        devices(&bound).any(|d| matches!(d, Device::Comparator { name, .. } if name == "U3")),
         "a single comparator stays under the bare ref"
     );
 }
@@ -1057,10 +998,7 @@ fn quad_bilateral_switch_stamps_one_vswitch_per_gate() {
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
     for n in 1..=4 {
-        let (a, bnode, ctrl) = bound
-            .circuit
-            .devices
-            .iter()
+        let (a, bnode, ctrl) = devices(&bound)
             .find_map(|d| match d {
                 Device::VSwitch {
                     name, a, b, ctrl_p, ..
@@ -1077,10 +1015,7 @@ fn quad_bilateral_switch_stamps_one_vswitch_per_gate() {
         );
     }
     assert_eq!(
-        bound
-            .circuit
-            .devices
-            .iter()
+        devices(&bound)
             .filter(|d| matches!(d, Device::VSwitch { .. }))
             .count(),
         4,

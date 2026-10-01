@@ -19,25 +19,16 @@
 
 #![cfg(feature = "renode")]
 
-use std::sync::{Arc, Mutex};
-
-use hauksbee_engine::binder::bind_board;
-use hauksbee_engine::{HauksbeeEngine, Mcp3008, SpiBus};
-use hauksbee_extract::ExtractedBoard;
-use hauksbee_mcu::renode::is_available;
-use hauksbee_models::ModelLibrary;
 use std::path::PathBuf;
 
-fn board_text() -> String {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/stm32_spi_adc_demo.kicad_pcb");
-    std::fs::read_to_string(&p)
-        .unwrap_or_else(|_| panic!("read stm32 SPI ADC board from {}", p.display()))
-}
+use hauksbee_mcu::renode::is_available;
 
-fn firmware() -> Option<PathBuf> {
-    crate::support::testdata("firmware/stm32_spi_adc/spi_adc.elf")
-}
+use crate::support::{
+    assert_spi_adc_flag_follows_sweep, assert_spi_adc_flag_high_above_threshold,
+    assert_spi_adc_flag_low_below_threshold, spi_adc_flag,
+};
+
+const DEMO: &str = "stm32_spi_adc_demo";
 
 /// Renode + firmware preconditions shared by every test below: `Some(path)`
 /// when both are satisfied, `None` after printing why (SKIP) it did not run.
@@ -46,110 +37,32 @@ fn preconditions() -> Option<PathBuf> {
         eprintln!("SKIP: Renode not installed");
         return None;
     }
-    firmware().or_else(|| {
+    crate::support::testdata("firmware/stm32_spi_adc/spi_adc.elf").or_else(|| {
         eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
         None
     })
 }
 
-/// Run the co-sim for `ms` of virtual time with the MCP3008 channel-0 voltage
-/// fixed at `ch0_volts`. Returns the final "FLAG" net voltage.
-///
-/// The MCP3008 has a 3.3 V Vref. Threshold is counts >= 512, which maps to
-/// voltage >= 1.65 V. Below 1.65 V -> FLAG LOW; at/above 1.65 V -> FLAG HIGH.
-fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
-    let board_str = board_text();
-    let board = ExtractedBoard::from_auto(&board_str).expect("parse STM32 SPI board");
-    let lib = ModelLibrary::builtin();
-    let bound = bind_board(&board, &lib);
-    let fw = firmware().expect("spi_adc.elf present");
-
-    let mut engine =
-        HauksbeeEngine::from_bound(bound, Some(&fw), "/boards/stm32_spi_adc_demo.kicad_pcb")
-            .expect("build STM32 SPI engine");
-
-    // Coarse chunk for Renode (each RunFor is a Monitor TCP round-trip).
-    engine.scheduler_mut().chunk_s = 5e-3;
-
-    // Attach the MCP3008 slave with a 3.3 V reference and the swept channel voltage.
-    let mut adc = Mcp3008::new(3.3);
-    adc.set_channel(0, ch0_volts);
-    let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(adc))));
-    engine.scheduler_mut().attach_spi_bus(bus, None);
-
-    let frame_dt = 5e-3_f64;
-    let n = usize::try_from(ms / 5).expect("frame count fits"); // 5 ms frames
-    crate::support::last_flag(&mut engine, frame_dt, n)
-}
-
 #[test]
 fn stm32_spi_adc_drives_flag_below_threshold() {
-    let Some(_fw) = preconditions() else {
+    let Some(fw) = preconditions() else {
         return;
     };
-
-    // 0.8 V < 1.65 V threshold -> counts < 512 -> FLAG LOW
-    let v = run_at_voltage(0.8, 200);
-    eprintln!("FLAG at 0.8 V input: {v:.3} V");
-    assert!(
-        v < 1.0,
-        "at 0.8 V ADC input (below threshold), FLAG net should be LOW; got {v:.3} V. \
-         If this is ~3.3 V the SPI bridge is working but the threshold logic is wrong. \
-         If this is stuck-LOW the on_spi bridge is not yet wired (expected for now)."
-    );
+    assert_spi_adc_flag_low_below_threshold(|v| spi_adc_flag(DEMO, &fw, v, 200));
 }
 
 #[test]
 fn stm32_spi_adc_drives_flag_above_threshold() {
-    let Some(_fw) = preconditions() else {
+    let Some(fw) = preconditions() else {
         return;
     };
-
-    // 2.5 V > 1.65 V threshold -> counts > 512 -> FLAG HIGH
-    let v = run_at_voltage(2.5, 200);
-    eprintln!("FLAG at 2.5 V input: {v:.3} V");
-    assert!(
-        v > 2.5,
-        "at 2.5 V ADC input (above threshold), FLAG net should be HIGH (~3.3 V); got {v:.3} V. \
-         This test is expected to FAIL until the Renode on_spi bridge is implemented \
-         (currently a no-op in hauksbee-mcu/src/renode/mod.rs). The firmware reads \
-         0x000 from every SPI byte because MISO is never driven, so counts == 0 always, \
-         and FLAG stays LOW regardless of the configured Mcp3008 voltage."
-    );
+    assert_spi_adc_flag_high_above_threshold("Renode", |v| spi_adc_flag(DEMO, &fw, v, 200));
 }
 
 #[test]
 fn stm32_spi_adc_flag_follows_voltage_sweep() {
-    let Some(_fw) = preconditions() else {
+    let Some(fw) = preconditions() else {
         return;
     };
-
-    // Sweep the MCP3008 channel voltage across the 1.65 V (Vref/2) threshold.
-    // With a working SPI bridge: below threshold -> FLAG LOW, at/above -> FLAG HIGH.
-    // With the current no-op bridge: FLAG is always LOW (ADC reads 0 every time).
-    let sweep: &[(f64, bool)] = &[
-        (0.5, false),  // well below threshold
-        (1.0, false),  // below threshold
-        (1.64, false), // just below threshold
-        (1.65, true),  // at threshold (counts == 512)
-        (2.0, true),   // above threshold
-        (3.0, true),   // near Vref
-    ];
-
-    let mut failures = Vec::new();
-    for &(volts, expect_high) in sweep {
-        let v = run_at_voltage(volts, 200);
-        let got_high = v > 2.0;
-        eprintln!(
-            "  {volts:.2} V -> FLAG {v:.3} V ({})",
-            if got_high { "HIGH" } else { "LOW" }
-        );
-        if got_high != expect_high {
-            failures.push((volts, expect_high, v));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for Renode): {failures:?}"
-    );
+    assert_spi_adc_flag_follows_sweep("Renode", |v| spi_adc_flag(DEMO, &fw, v, 200));
 }

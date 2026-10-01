@@ -48,9 +48,7 @@
 
 #![cfg(feature = "qemu")]
 
-use std::sync::{Arc, Mutex};
-
-use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
+use hauksbee_engine::HauksbeeEngine;
 use hauksbee_mcu::qemu::{is_available, QemuArch};
 use std::path::PathBuf;
 
@@ -96,32 +94,24 @@ fn flash_image() -> PathBuf {
         .join("../../testdata/firmware/esp32_i2c_thermostat/flash.bin")
 }
 
-/// Run the firmware for `ms` milliseconds against an LM75 fixed at `temp_c`.
-/// Returns the final "FLAG" net voltage.
-fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
-    let fw = flash_image();
-    let mut engine = HauksbeeEngine::from_board_file(BOARD, Some(&fw), "/ci")
-        .expect("build ESP32 I2C thermostat engine");
-
-    // Coarse chunks for the external QEMU backend (5 ms = ~10 analog frames/s).
-    engine.scheduler_mut().chunk_s = 5e-3;
-
-    // Attach the LM75 at address 0x48.
-    let bus = Arc::new(Mutex::new(
-        I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, temp_c))),
-    ));
-    engine.scheduler_mut().attach_i2c_bus(bus);
-
-    let frame_dt = 5e-3_f64;
-    let n = usize::try_from(ms / 5).expect("frame count fits").max(1); // 5 ms frames
-
-    let last_flag = crate::support::last_flag(&mut engine, frame_dt, n);
+/// Fail when the QEMU/MCU transport broke during the run: a stale FLAG voltage
+/// must not make an integration test green.
+fn assert_transport_valid(engine: &HauksbeeEngine) {
     assert!(
         engine.scheduler().analog_valid(),
         "QEMU/MCU transport failed during the run; stale FLAG voltage must not \
          make this integration test green: {:?}",
         engine.scheduler().failed_window_diagnoses()
     );
+}
+
+/// Run the firmware for `ms` milliseconds against an LM75 fixed at `temp_c`.
+/// Returns the final "FLAG" net voltage.
+fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
+    let (mut engine, _bus) = crate::support::lm75_engine(BOARD, &flash_image(), temp_c);
+    let n = usize::try_from(ms / 5).expect("frame count fits").max(1); // 5 ms frames
+    let last_flag = crate::support::last_flag(&mut engine, 5e-3, n);
+    assert_transport_valid(&engine);
     last_flag
 }
 
@@ -170,38 +160,13 @@ fn esp32_i2c_gpio_follows_temperature_sweep() {
     }
     let fw = flash_image();
     assert!(fw.exists(), "firmware missing: {fw:?}");
-
-    let sweep = [10.0_f64, 25.0, 29.0, 31.0, 35.0, 50.0, 28.0, 15.0];
-    let mut results = Vec::new();
-    for &t in &sweep {
-        let v = run_at_temp(t, 800);
-        let high = v > 1.5;
-        results.push((t, high, v));
-    }
-
-    eprintln!("ESP32 I2C thermostat sweep:");
-    for (t, high, v) in &results {
-        eprintln!(
-            "  {t:.1} C -> FLAG = {:.3} V ({})",
-            v,
-            if *high { "HIGH" } else { "LOW" }
-        );
-    }
-
-    for (t, high, v) in &results {
-        let expect = *t >= 30.0;
-        assert_eq!(
-            *high,
-            expect,
-            "ESP32 at {t} C: expected FLAG {}, got {v:.3} V",
-            if expect { "HIGH" } else { "LOW" }
-        );
-    }
+    crate::support::assert_flag_follows_lm75_sweep("ESP32", 1.5, |t| run_at_temp(t, 800));
 }
 
-/// Live mutation test: raise temperature from cold to hot mid-run and assert
-/// the flag transitions. This probes whether the I2C bridge delivers fresh
-/// bytes on every transaction (not cached from spawn).
+/// Live mutation test: raise temperature from cold to hot mid-run (400 ms each,
+/// enough for multiple I2C poll cycles at the 50 ms rate) and assert the flag
+/// transitions. This probes whether the I2C bridge delivers fresh bytes on
+/// every transaction (not cached from spawn).
 #[test]
 fn esp32_i2c_temperature_change_is_live() {
     if !is_available(QemuArch::Xtensa) {
@@ -210,44 +175,6 @@ fn esp32_i2c_temperature_change_is_live() {
     }
     let fw = flash_image();
     assert!(fw.exists(), "firmware missing: {fw:?}");
-
-    let mut engine =
-        HauksbeeEngine::from_board_file(BOARD, Some(&fw), "/ci").expect("build engine");
-    engine.scheduler_mut().chunk_s = 5e-3;
-
-    let bus = Arc::new(Mutex::new(
-        I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, 20.0))),
-    ));
-    engine.scheduler_mut().attach_i2c_bus(bus.clone());
-
-    let frame_dt = 5e-3_f64;
-
-    // Run 400 ms cold (enough for multiple I2C poll cycles at the 50 ms rate).
-    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 80);
-    assert!(
-        last_flag < 1.0,
-        "after 400 ms at 20 C, FLAG should be LOW; got {last_flag:.3} V"
-    );
-
-    // Raise to 40 C.
-    {
-        let mut b = bus.lock().unwrap();
-        if let Some(lm75) = b.slave_mut_t::<Lm75>(Lm75::DEFAULT_ADDR) {
-            lm75.set_temp_c(40.0);
-        }
-    }
-
-    // Run another 400 ms hot.
-    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 80);
-    assert!(
-        last_flag > 2.0,
-        "after raising to 40 C, FLAG should go HIGH; got {last_flag:.3} V. \
-         This fails if the QEMU I2C bridge does not deliver updated bytes."
-    );
-    assert!(
-        engine.scheduler().analog_valid(),
-        "QEMU/MCU transport failed during the live-temperature run; stale FLAG \
-         voltage must not make this integration test green: {:?}",
-        engine.scheduler().failed_window_diagnoses()
-    );
+    let engine = crate::support::assert_lm75_change_is_live(BOARD, &fw, 80, "QEMU");
+    assert_transport_valid(&engine);
 }

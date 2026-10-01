@@ -24,7 +24,9 @@
 #![cfg(all(unix, feature = "avr"))]
 
 use hauksbee_engine::binder::bind_board;
-use hauksbee_engine::commands::hostserial::{run_session, SerialSessionConfig};
+use hauksbee_engine::commands::hostserial::{
+    run_session, SerialSessionConfig, SerialSessionSummary,
+};
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
@@ -161,30 +163,21 @@ fn write_all_to_board(peer: &mut std::fs::File, bytes: &[u8]) {
 
 /// Read replies until `n` bytes have arrived.
 fn read_from_board(peer: &mut std::fs::File, n: usize) -> Vec<u8> {
-    let mut got = Vec::new();
-    let mut buf = [0u8; 1024];
-    let deadline = std::time::Instant::now() + PATIENCE;
-    while got.len() < n && std::time::Instant::now() < deadline {
-        match peer.read(&mut buf) {
-            Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
-            Ok(k) => got.extend_from_slice(&buf[..k]),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            Err(e) => panic!("host read failed: {e}"),
-        }
-    }
-    got
+    read_until(peer, |got| got.len() >= n)
 }
 
 /// Read until `wanted` appears. A reconnecting peer may
 /// first receive a conservatively retained byte from the peer that just closed,
 /// so a fixed-length read cannot prove that the new command was served.
 fn read_through_byte(peer: &mut std::fs::File, wanted: u8) -> Vec<u8> {
+    read_until(peer, |got| got.contains(&wanted))
+}
+
+fn read_until(peer: &mut std::fs::File, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
     let mut got = Vec::new();
     let mut buf = [0u8; 1024];
     let deadline = std::time::Instant::now() + PATIENCE;
-    while !got.contains(&wanted) && std::time::Instant::now() < deadline {
+    while !done(&got) && std::time::Instant::now() < deadline {
         match peer.read(&mut buf) {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
             Ok(k) => got.extend_from_slice(&buf[..k]),
@@ -210,61 +203,74 @@ fn await_line(lines: &mpsc::Receiver<String>, prefix: &str) -> String {
     }
 }
 
+/// Run a `secs` session on fresh echo firmware while `peer` plays the host
+/// tool on its own thread, given the narration and the printed device path.
+/// The session is held open until `peer` returns, and the peer's endpoint stays
+/// open until the session has flushed and accounted for its final byte: closing
+/// earlier used to race Linux's post-write PTY liveness probe, where the host
+/// had already read the byte but the endpoint conservatively retained and then
+/// counted it as dropped. `wait` makes the run wait for the peer to attach.
+fn session_with_peer<T: Send + 'static>(
+    firmware: &str,
+    secs: f64,
+    wait: bool,
+    peer: impl FnOnce(&mpsc::Receiver<String>, &str) -> T + Send + 'static,
+) -> (SerialSessionSummary, T) {
+    let mut engine = engine_with_echo_firmware(firmware);
+    let (tx, rx) = mpsc::channel::<String>();
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let guard = Arc::new(());
+    let held = Some(Arc::downgrade(&guard));
+    let peer = std::thread::spawn(move || {
+        let path = await_line(&rx, "host serial: pty on ");
+        result_tx
+            .send(peer(&rx, &path))
+            .expect("report the peer's reads");
+        // The exchange is done: the session may end.
+        drop(guard);
+        release_rx
+            .recv_timeout(PATIENCE)
+            .expect("session finalization releases the peer");
+    });
+    let mut say = |line: &str| {
+        eprintln!("{line}");
+        let _ = tx.send(line.to_string());
+    };
+    let cfg = SerialSessionConfig {
+        wait_secs: wait.then(|| PATIENCE.as_secs_f64()),
+        hold: held,
+        ..Default::default()
+    };
+    let summary = run_session(&mut engine, secs, &cfg, &mut say).expect("serial session");
+    let result = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("peer completed its reads");
+    release_tx
+        .send(())
+        .expect("release peer after finalization");
+    peer.join().expect("peer thread");
+    (summary, result)
+}
+
 /// The headline case: 256 distinct bytes in ONE host write, four times simavr's
 /// 64-byte RX fifo, with an embedded NUL and 0x0A. Every byte must come back
 /// echoed by the firmware, in order. Truncation past byte 64 is the historical
 /// defect; a cooked pty or a chunking bridge would corrupt the 0x0A and 0x0D.
 #[test]
 fn host_record_longer_than_the_rx_fifo_round_trips() {
-    let mut engine = engine_with_echo_firmware("echo_record.hex");
-    let (tx, rx) = mpsc::channel::<String>();
-    let (result_tx, result_rx) = mpsc::sync_channel(1);
-    let (release_tx, release_rx) = mpsc::channel::<()>();
     let record: Vec<u8> = (0..=u8::MAX).collect();
     let want = record.clone();
-
-    let guard = Arc::new(());
-    let held = Some(Arc::downgrade(&guard));
-    let peer = std::thread::spawn(move || {
-        let path = await_line(&rx, "host serial: pty on ");
-        let mut peer = open_peer(&path);
-        // The banner lands first; it is not part of the echo stream.
-        let banner = read_from_board(&mut peer, 1);
-        write_all_to_board(&mut peer, &want);
-        let echoed = read_from_board(&mut peer, want.len());
-        result_tx
-            .send((banner, echoed))
-            .expect("report the host's complete read");
-        // The exchange is done: the session may end.
-        drop(guard);
-        // Keep the slave open until the session has flushed and accounted for
-        // its final byte. Closing here used to race Linux's post-write PTY
-        // liveness probe: the host had already read the byte, but the endpoint
-        // conservatively retained and then counted it as dropped.
-        release_rx
-            .recv_timeout(PATIENCE)
-            .expect("session finalization releases the peer");
-    });
-
-    let mut say = |line: &str| {
-        eprintln!("{line}");
-        let _ = tx.send(line.to_string());
-    };
-    let cfg = SerialSessionConfig {
-        // Wait for the peer so the record is sent inside the run; the hold
-        // keeps the run going through the 256-byte round trip, however late.
-        wait_secs: Some(PATIENCE.as_secs_f64()),
-        hold: held,
-        ..Default::default()
-    };
-    let summary = run_session(&mut engine, 2.0, &cfg, &mut say).expect("serial session");
-    let (banner, echoed) = result_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("peer completed the round trip");
-    release_tx
-        .send(())
-        .expect("release peer after finalization");
-    peer.join().expect("peer thread");
+    // Wait for the peer so the record is sent inside the run; the hold keeps
+    // the run going through the 256-byte round trip, however late.
+    let (summary, (banner, echoed)) =
+        session_with_peer("echo_record.hex", 2.0, true, move |_, path| {
+            let mut peer = open_peer(path);
+            // The banner lands first; it is not part of the echo stream.
+            let banner = read_from_board(&mut peer, 1);
+            write_all_to_board(&mut peer, &want);
+            (banner, read_from_board(&mut peer, want.len()))
+        });
 
     assert_eq!(
         banner,
@@ -304,50 +310,17 @@ fn host_record_longer_than_the_rx_fifo_round_trips() {
 /// tool), and losing it would look like dead firmware.
 #[test]
 fn late_peer_still_receives_the_boot_banner() {
-    let mut engine = engine_with_echo_firmware("echo_late.hex");
-    let (tx, rx) = mpsc::channel::<String>();
-    let (result_tx, result_rx) = mpsc::sync_channel(1);
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-
-    let guard = Arc::new(());
-    let held = Some(Arc::downgrade(&guard));
-    let peer = std::thread::spawn(move || {
-        let path = await_line(&rx, "host serial: pty on ");
-        // Long enough that the firmware has booted and sent its banner into a
-        // port nobody is holding.
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        let mut peer = open_peer(&path);
-        let banner = read_from_board(&mut peer, 1);
-        write_all_to_board(&mut peer, b"Z");
-        let echoed = read_from_board(&mut peer, 1);
-        result_tx
-            .send((banner, echoed))
-            .expect("report the late peer's reads");
-        // The exchange is done: the session may end.
-        drop(guard);
-        release_rx
-            .recv_timeout(PATIENCE)
-            .expect("session finalization releases the late peer");
-    });
-
-    let mut say = |line: &str| {
-        eprintln!("{line}");
-        let _ = tx.send(line.to_string());
-    };
     // No --serial-wait: the run starts immediately, which is what makes the peer
     // late.
-    let cfg = SerialSessionConfig {
-        hold: held,
-        ..Default::default()
-    };
-    let summary = run_session(&mut engine, 2.0, &cfg, &mut say).expect("serial session");
-    let (banner, echoed) = result_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("late peer completed its reads");
-    release_tx
-        .send(())
-        .expect("release late peer after finalization");
-    peer.join().expect("peer thread");
+    let (summary, (banner, echoed)) = session_with_peer("echo_late.hex", 2.0, false, |_, path| {
+        // Long enough that the firmware has booted and sent its banner
+        // into a port nobody is holding.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let mut peer = open_peer(path);
+        let banner = read_from_board(&mut peer, 1);
+        write_all_to_board(&mut peer, b"Z");
+        (banner, read_from_board(&mut peer, 1))
+    });
 
     assert_eq!(
         banner,
@@ -364,55 +337,20 @@ fn late_peer_still_receives_the_boot_banner() {
 /// can attach to the same port and be served by the same firmware.
 #[test]
 fn peer_disconnect_mid_run_leaves_the_cosim_running() {
-    let mut engine = engine_with_echo_firmware("echo_detach.hex");
-    let (tx, rx) = mpsc::channel::<String>();
-    let (result_tx, result_rx) = mpsc::sync_channel(1);
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-
-    let guard = Arc::new(());
-    let held = Some(Arc::downgrade(&guard));
-    let peer = std::thread::spawn(move || {
-        let path = await_line(&rx, "host serial: pty on ");
-        let mut first = open_peer(&path);
-        let _banner = read_from_board(&mut first, 1);
-        write_all_to_board(&mut first, b"A");
-        let first_echo = read_from_board(&mut first, 1);
-        drop(first);
-
-        // Come back once the session has noticed the hangup, not after a nap.
-        await_line(&rx, "host serial: peer DETACHED");
-        let mut second = open_peer(&path);
-        write_all_to_board(&mut second, b"B");
-        let second_stream = read_through_byte(&mut second, b'B');
-        result_tx
-            .send((first_echo, second_stream))
-            .expect("report both peers' reads");
-        // The exchange is done: the session may end.
-        drop(guard);
-        // The second peer is the live peer at session teardown. Keep it open
-        // until the endpoint has flushed and credited the final echo.
-        release_rx
-            .recv_timeout(PATIENCE)
-            .expect("session finalization releases the second peer");
-    });
-
-    let mut say = |line: &str| {
-        eprintln!("{line}");
-        let _ = tx.send(line.to_string());
-    };
-    let cfg = SerialSessionConfig {
-        wait_secs: Some(PATIENCE.as_secs_f64()),
-        hold: held,
-        ..Default::default()
-    };
-    let summary = run_session(&mut engine, 3.0, &cfg, &mut say).expect("serial session");
-    let (first_echo, second_stream) = result_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("both peers completed their reads");
-    release_tx
-        .send(())
-        .expect("release second peer after finalization");
-    peer.join().expect("peer thread");
+    let (summary, (first_echo, second_stream)) =
+        session_with_peer("echo_detach.hex", 3.0, true, |rx, path| {
+            let mut first = open_peer(path);
+            let _banner = read_from_board(&mut first, 1);
+            write_all_to_board(&mut first, b"A");
+            let first_echo = read_from_board(&mut first, 1);
+            drop(first);
+            // Come back once the session has noticed the hangup, not after a nap.
+            await_line(rx, "host serial: peer DETACHED");
+            // The second peer is the live peer at session teardown.
+            let mut second = open_peer(path);
+            write_all_to_board(&mut second, b"B");
+            (first_echo, read_through_byte(&mut second, b'B'))
+        });
 
     assert_eq!(first_echo, b"A", "the first tool's byte must be echoed");
     assert!(

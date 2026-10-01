@@ -51,6 +51,170 @@ pub fn last_flag(engine: &mut HauksbeeEngine, frame_dt: f64, n: usize) -> f64 {
     last
 }
 
+/// Boot `fw` on the `testdata/boards/{demo}.kicad_pcb` MCP3008 SPI-ADC demo
+/// with 5 ms co-sim chunks (each one is an emulator control round-trip).
+pub fn spi_adc_engine(demo: &str, fw: &std::path::Path) -> HauksbeeEngine {
+    let path = board(&format!("../../testdata/boards/{demo}.kicad_pcb"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("read SPI ADC board from {}", path.display()));
+    let parsed = hauksbee_extract::ExtractedBoard::from_auto(&text).expect("parse SPI board");
+    let bound =
+        hauksbee_engine::binder::bind_board(&parsed, &hauksbee_models::ModelLibrary::builtin());
+    let mut engine =
+        HauksbeeEngine::from_bound(bound, Some(fw), &format!("/boards/{demo}.kicad_pcb"))
+            .expect("build SPI ADC engine");
+    engine.scheduler_mut().chunk_s = 5e-3;
+    engine
+}
+
+/// Run the SPI-ADC demo for `ms` of virtual time with the MCP3008 channel-0
+/// voltage fixed at `ch0_volts`, and return the final "FLAG" net voltage.
+///
+/// The MCP3008 has a 3.3 V Vref. The firmware's threshold is counts >= 512,
+/// i.e. Vin >= 1.65 V: below it FLAG is LOW, at or above it FLAG is HIGH.
+pub fn spi_adc_flag(demo: &str, fw: &std::path::Path, ch0_volts: f64, ms: u32) -> f64 {
+    let mut engine = spi_adc_engine(demo, fw);
+    let mut adc = hauksbee_engine::Mcp3008::new(3.3);
+    adc.set_channel(0, ch0_volts);
+    let bus = hauksbee_engine::SpiBus::new("U2", Box::new(adc));
+    engine
+        .scheduler_mut()
+        .attach_spi_bus(std::sync::Arc::new(std::sync::Mutex::new(bus)), None);
+    let n = usize::try_from(ms / 5).expect("frame count fits"); // 5 ms frames
+    last_flag(&mut engine, 5e-3, n)
+}
+
+/// 0.8 V is below the 1.65 V threshold, so FLAG must read LOW.
+pub fn assert_spi_adc_flag_low_below_threshold(flag_at: impl Fn(f64) -> f64) {
+    let v = flag_at(0.8);
+    eprintln!("FLAG at 0.8 V input: {v:.3} V");
+    assert!(
+        v < 1.0,
+        "at 0.8 V ADC input (below threshold), FLAG net should be LOW; got {v:.3} V. \
+         If this is ~3.3 V the SPI bridge is working but the threshold logic is wrong. \
+         If this is stuck-LOW the on_spi bridge is not yet wired (expected for now)."
+    );
+}
+
+/// 2.5 V is above the 1.65 V threshold, so FLAG must read HIGH. `backend` names
+/// the emulator whose `on_spi` bridge this waits on.
+pub fn assert_spi_adc_flag_high_above_threshold(backend: &str, flag_at: impl Fn(f64) -> f64) {
+    let v = flag_at(2.5);
+    eprintln!("FLAG at 2.5 V input: {v:.3} V");
+    assert!(
+        v > 2.5,
+        "at 2.5 V ADC input (above threshold), FLAG net should be HIGH (~3.3 V); got {v:.3} V. \
+         This test is expected to FAIL until the {backend} on_spi bridge is implemented \
+         (currently a no-op in hauksbee-mcu/src/{}/mod.rs). The firmware reads 0x000 \
+         from every SPI byte because MISO is never driven, so counts == 0 always, \
+         and FLAG stays LOW regardless of the configured Mcp3008 voltage.",
+        backend.to_lowercase()
+    );
+}
+
+/// Sweep the MCP3008 channel voltage across the 1.65 V (Vref/2) threshold:
+/// with a working SPI bridge FLAG is LOW below it and HIGH at or above it.
+/// With a no-op bridge FLAG is always LOW (the ADC reads 0 every time).
+pub fn assert_spi_adc_flag_follows_sweep(backend: &str, flag_at: impl Fn(f64) -> f64) {
+    let sweep: &[(f64, bool)] = &[
+        (0.5, false),  // well below threshold
+        (1.0, false),  // below threshold
+        (1.64, false), // just below threshold
+        (1.65, true),  // at threshold (counts == 512)
+        (2.0, true),   // above threshold
+        (3.0, true),   // near Vref
+    ];
+    let mut failures = Vec::new();
+    for &(volts, expect_high) in sweep {
+        let v = flag_at(volts);
+        let got_high = v > 2.0;
+        eprintln!(
+            "  {volts:.2} V -> FLAG {v:.3} V ({})",
+            if got_high { "HIGH" } else { "LOW" }
+        );
+        if got_high != expect_high {
+            failures.push((volts, expect_high, v));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for {backend}): {failures:?}"
+    );
+}
+
+/// An I2C bus "U2" carrying one LM75 at its default address, reading `temp_c`.
+pub fn lm75_bus(temp_c: f64) -> std::sync::Arc<std::sync::Mutex<hauksbee_engine::I2cBus>> {
+    use hauksbee_engine::{I2cBus, Lm75};
+    std::sync::Arc::new(std::sync::Mutex::new(
+        I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, temp_c))),
+    ))
+}
+
+/// Boot `fw` on the KiCad `board` text with 5 ms co-sim chunks (each one is an
+/// emulator control round-trip) and an [`lm75_bus`] at `temp_c` attached.
+pub fn lm75_engine(
+    board: &str,
+    fw: &std::path::Path,
+    temp_c: f64,
+) -> (
+    HauksbeeEngine,
+    std::sync::Arc<std::sync::Mutex<hauksbee_engine::I2cBus>>,
+) {
+    let mut engine = HauksbeeEngine::from_board_file(board, Some(fw), "/ci")
+        .expect("build I2C thermostat engine");
+    engine.scheduler_mut().chunk_s = 5e-3;
+    let bus = lm75_bus(temp_c);
+    engine.scheduler_mut().attach_i2c_bus(bus.clone());
+    (engine, bus)
+}
+
+/// Sweep the LM75 across the firmware's 30 C threshold: FLAG (read HIGH above
+/// `high_above` volts) must be HIGH exactly at the temperatures >= 30 C.
+pub fn assert_flag_follows_lm75_sweep(mcu: &str, high_above: f64, flag_at: impl Fn(f64) -> f64) {
+    eprintln!("{mcu} I2C thermostat sweep:");
+    for t in [10.0_f64, 25.0, 29.0, 31.0, 35.0, 50.0, 28.0, 15.0] {
+        let v = flag_at(t);
+        let (high, expect) = (v > high_above, t >= 30.0);
+        let level = |h: bool| if h { "HIGH" } else { "LOW" };
+        eprintln!("  {t:.1} C -> FLAG = {v:.3} V ({})", level(high));
+        assert_eq!(
+            high,
+            expect,
+            "{mcu} at {t} C: expected FLAG {}, got {v:.3} V",
+            level(expect)
+        );
+    }
+}
+
+/// One engine, LM75 at 20 C for `frames` 5 ms frames (FLAG LOW), then raised to
+/// 40 C for as many again (FLAG HIGH): fails when `backend`'s I2C bridge serves
+/// bytes cached from boot instead of fresh ones on every transaction.
+pub fn assert_lm75_change_is_live(
+    board: &str,
+    fw: &std::path::Path,
+    frames: usize,
+    backend: &str,
+) -> HauksbeeEngine {
+    use hauksbee_engine::Lm75;
+    let (mut engine, bus) = lm75_engine(board, fw, 20.0);
+    let ms = frames * 5;
+    let cold = last_flag(&mut engine, 5e-3, frames);
+    assert!(
+        cold < 1.0,
+        "after {ms} ms at 20 C, FLAG should be LOW; got {cold:.3} V"
+    );
+    if let Some(lm75) = bus.lock().unwrap().slave_mut_t::<Lm75>(Lm75::DEFAULT_ADDR) {
+        lm75.set_temp_c(40.0);
+    }
+    let hot = last_flag(&mut engine, 5e-3, frames);
+    assert!(
+        hot > 2.0,
+        "after raising to 40 C, FLAG should go HIGH; got {hot:.3} V. \
+         This fails if the {backend} I2C bridge does not deliver updated bytes."
+    );
+    engine
+}
+
 /// Run the compiled binary and wait for it to exit.
 pub fn run(args: &[&str]) -> Output {
     Command::new(bin())

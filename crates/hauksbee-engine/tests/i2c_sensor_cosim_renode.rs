@@ -44,9 +44,6 @@
 
 #![cfg(feature = "renode")]
 
-use std::sync::{Arc, Mutex};
-
-use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
 use hauksbee_mcu::renode::is_available;
 use std::path::PathBuf;
 
@@ -98,26 +95,12 @@ fn firmware() -> PathBuf {
 }
 
 /// Run the firmware for `ms` milliseconds against an LM75 fixed at `temp_c`.
-/// Returns the final "FLAG" net voltage.
+/// Coarse 5 ms chunks: fine ones (100 us default) would mean thousands of TCP
+/// round-trips to Renode. Returns the final "FLAG" net voltage.
 fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
-    let fw = firmware();
-    let mut engine = HauksbeeEngine::from_board_file(BOARD, Some(&fw), "/ci")
-        .expect("build STM32 I2C thermostat engine");
-
-    // Use coarse chunks for the external Renode backend (5 ms).
-    // Fine chunks (100 us default) would mean thousands of TCP round-trips.
-    engine.scheduler_mut().chunk_s = 5e-3;
-
-    // Attach the LM75 at address 0x48.
-    let bus = Arc::new(Mutex::new(
-        I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, temp_c))),
-    ));
-    engine.scheduler_mut().attach_i2c_bus(bus);
-
-    let frame_dt = 5e-3_f64;
+    let (mut engine, _bus) = crate::support::lm75_engine(BOARD, &firmware(), temp_c);
     let n = usize::try_from(ms / 5).expect("frame count fits").max(1); // 5 ms frames
-
-    crate::support::last_flag(&mut engine, frame_dt, n)
+    crate::support::last_flag(&mut engine, 5e-3, n)
 }
 
 /// The core proof: the firmware reads the LM75 temperature via I2C and drives
@@ -170,38 +153,13 @@ fn stm32_i2c_gpio_follows_temperature_sweep() {
     }
     let fw = firmware();
     assert!(fw.exists(), "firmware missing: {fw:?}");
-
-    let sweep = [10.0_f64, 25.0, 29.0, 31.0, 35.0, 50.0, 28.0, 15.0];
-    let mut results = Vec::new();
-    for &t in &sweep {
-        let v = run_at_temp(t, 400);
-        let high = v > 1.5;
-        results.push((t, high, v));
-    }
-
-    eprintln!("STM32 I2C thermostat sweep:");
-    for (t, high, v) in &results {
-        eprintln!(
-            "  {t:.1} C -> FLAG = {:.3} V ({})",
-            v,
-            if *high { "HIGH" } else { "LOW" }
-        );
-    }
-
-    for (t, high, v) in &results {
-        let expect = *t >= 30.0;
-        assert_eq!(
-            *high,
-            expect,
-            "STM32 at {t} C: expected FLAG {}, got {v:.3} V",
-            if expect { "HIGH" } else { "LOW" }
-        );
-    }
+    crate::support::assert_flag_follows_lm75_sweep("STM32", 1.5, |t| run_at_temp(t, 400));
 }
 
 /// Incremental temperature sweep: single engine, mutate the LM75 temperature
-/// between steps. This test probes whether the I2C bridge delivers fresh bytes
-/// on every transaction (not cached from boot), which is the harder requirement.
+/// between 200 ms steps. This test probes whether the I2C bridge delivers fresh
+/// bytes on every transaction (not cached from boot), which is the harder
+/// requirement.
 #[test]
 fn stm32_i2c_temperature_change_is_live() {
     if !is_available() {
@@ -210,36 +168,5 @@ fn stm32_i2c_temperature_change_is_live() {
     }
     let fw = firmware();
     assert!(fw.exists(), "firmware missing: {fw:?}");
-
-    let mut engine =
-        HauksbeeEngine::from_board_file(BOARD, Some(&fw), "/ci").expect("build engine");
-    engine.scheduler_mut().chunk_s = 5e-3;
-
-    let bus = Arc::new(Mutex::new(
-        I2cBus::new("U2").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, 20.0))),
-    ));
-    engine.scheduler_mut().attach_i2c_bus(bus.clone());
-
-    let frame_dt = 5e-3_f64;
-
-    // Run 200 ms cold.
-    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 40);
-    assert!(
-        last_flag < 1.0,
-        "after 200 ms at 20 C, FLAG should be LOW; got {last_flag:.3} V"
-    );
-
-    // Raise to 40 C and run another 200 ms.
-    {
-        let mut b = bus.lock().unwrap();
-        if let Some(lm75) = b.slave_mut_t::<Lm75>(Lm75::DEFAULT_ADDR) {
-            lm75.set_temp_c(40.0);
-        }
-    }
-    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 40);
-    assert!(
-        last_flag > 2.0,
-        "after raising to 40 C, FLAG should go HIGH; got {last_flag:.3} V. \
-         This fails if the Renode I2C bridge does not deliver updated bytes."
-    );
+    crate::support::assert_lm75_change_is_live(BOARD, &fw, 40, "Renode");
 }
