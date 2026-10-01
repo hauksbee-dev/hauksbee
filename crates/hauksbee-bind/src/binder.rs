@@ -3530,7 +3530,7 @@ fn with_tie_warning(
 }
 
 /// The open outcome for a passive whose value text does not parse. A blank or
-/// placeholder value (`""`, `?`, `TBD`) is the `placeholder_value` lint's finding and is
+/// placeholder value (`""`, `?`) is the `placeholder_value` lint's finding and is
 /// named so, not called unparseable.
 fn unparseable(comp: &Component) -> (BindOutcome, Option<String>) {
     let what = if is_placeholder_value(&comp.value) {

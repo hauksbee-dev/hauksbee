@@ -600,10 +600,12 @@ pub fn is_capacitor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_capacitor()
 }
 
-/// A passive value that names no value: blank, `?`, the bare letter `R`/`C`/`L`, or `TBD`.
+/// A passive value that names no value: blank, `?`, or the bare letter `R`/`C`/`L`.
+/// `TBD` is not one: shipped boards use it on optional parts, so gating on it would
+/// fail known-good designs. The binder still leaves such a part open and says so.
 #[must_use]
 pub fn is_placeholder_value(value: &str) -> bool {
-    ["", "?", "R", "C", "L", "TBD"]
+    ["", "?", "R", "C", "L"]
         .iter()
         .any(|p| value.trim().eq_ignore_ascii_case(p))
 }
