@@ -104,17 +104,27 @@ pub(crate) fn emit_quiet(
             );
         }
     }
-    super::note_ungated_findings(strict, lint_fails(&report));
-    if strict && lint_fails(&report) {
-        super::strict_gate_exit(mode, &super::lint_gate_items(&report));
-    }
-    // Mirror of the JSON verdict's rule: binding completeness gates through
-    // the verdict-critical set only, never through any open passive's per-net
-    // map, so --strict cannot exit 3 where the verdict field says pass.
-    if strict && !blockers.is_empty() {
-        super::exit_invalid_for_analysis(&blockers);
-    }
+    strict_lint_exit(mode, strict, &report, &blockers);
     Ok(())
+}
+
+/// Under `strict`, exit on a gating finding, then on an unmodelled critical
+/// part. The blocker rule mirrors the JSON verdict's: binding completeness
+/// gates through the verdict-critical set only, never through any open
+/// passive's per-net map, so --strict cannot exit 3 where the verdict says pass.
+fn strict_lint_exit(
+    mode: OutputMode,
+    strict: bool,
+    report: &hauksbee_extract::NetLintReport,
+    blockers: &[String],
+) {
+    super::note_ungated_findings(strict, lint_fails(report));
+    if strict && lint_fails(report) {
+        super::strict_gate_exit(mode, &super::lint_gate_items(report));
+    }
+    if strict && !blockers.is_empty() {
+        super::exit_invalid_for_analysis(blockers);
+    }
 }
 
 /// Guesses beyond this many collapse to a per-pattern summary. A correct guess
@@ -283,16 +293,7 @@ pub(crate) fn emit_resources_quiet(
             super::check::render_waivers_scoped(&waived, &waivers, &["lint"], false)
         );
     }
-    super::note_ungated_findings(strict, lint_fails(&report));
-    if strict && lint_fails(&report) {
-        super::strict_gate_exit(mode, &super::lint_gate_items(&report));
-    }
-    // Mirror of the JSON verdict's rule: binding completeness gates through
-    // the verdict-critical set only, never through any open passive's per-net
-    // map, so --strict cannot exit 3 where the verdict field says pass.
-    if strict && !blockers.is_empty() {
-        super::exit_invalid_for_analysis(&blockers);
-    }
+    strict_lint_exit(mode, strict, &report, &blockers);
     Ok(())
 }
 

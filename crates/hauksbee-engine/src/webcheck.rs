@@ -816,20 +816,17 @@ kind = "no_faults"
         assert_eq!(validate_web_limits("this = = not toml ]["), Ok(()));
     }
 
-    /// A timed-out child must get SIGTERM (so its signal
-    /// reaper can kill the emulators it spawned), not a blind SIGKILL. A child
-    /// that exits on TERM must NOT be `SIGKILLed`; verified by its exit status
-    /// carrying the clean trap exit, not a signal death.
+    /// Spawn a shell child that traps TERM with `on_term` and touches a flag
+    /// file once the trap is installed; return it after the flag appears.
     #[cfg(unix)]
-    #[test]
-    fn stop_child_terms_gracefully_so_the_childs_reaper_can_run() {
-        use std::os::unix::process::ExitStatusExt;
-        let flag = std::env::temp_dir().join(format!("hauksbee-stopchild-{}", std::process::id()));
+    fn ready_trap_child(name: &str, on_term: &str) -> (std::process::Child, std::path::PathBuf) {
+        let pid = std::process::id();
+        let flag = std::env::temp_dir().join(format!("hauksbee-stopchild-{name}-{pid}"));
         let _ = std::fs::remove_file(&flag);
-        let mut child = std::process::Command::new("sh")
+        let child = std::process::Command::new("sh")
             .arg("-c")
             .arg(format!(
-                "trap 'exit 0' TERM; : > '{}'; while :; do sleep 0.05; done",
+                "trap '{on_term}' TERM; : > '{}'; while :; do sleep 0.05; done",
                 flag.display()
             ))
             .spawn()
@@ -840,6 +837,18 @@ kind = "no_faults"
             assert!(t0.elapsed() < CHECK_TIMEOUT, "child never became ready");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+        (child, flag)
+    }
+
+    /// A timed-out child must get SIGTERM (so its signal
+    /// reaper can kill the emulators it spawned), not a blind SIGKILL. A child
+    /// that exits on TERM must NOT be `SIGKILLed`; verified by its exit status
+    /// carrying the clean trap exit, not a signal death.
+    #[cfg(unix)]
+    #[test]
+    fn stop_child_terms_gracefully_so_the_childs_reaper_can_run() {
+        use std::os::unix::process::ExitStatusExt;
+        let (mut child, flag) = ready_trap_child("graceful", "exit 0");
         stop_child(&mut child);
         let status = child.wait().expect("child reaped");
         assert_eq!(
@@ -857,24 +866,7 @@ kind = "no_faults"
     #[test]
     fn stop_child_kills_a_term_ignoring_child_after_the_grace() {
         use std::os::unix::process::ExitStatusExt;
-        let flag = std::env::temp_dir().join(format!(
-            "hauksbee-stopchild-stubborn-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&flag);
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                "trap '' TERM; : > '{}'; while :; do sleep 0.05; done",
-                flag.display()
-            ))
-            .spawn()
-            .expect("spawn stubborn child");
-        let t0 = std::time::Instant::now();
-        while !flag.exists() {
-            assert!(t0.elapsed() < CHECK_TIMEOUT, "child never became ready");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        let (mut child, flag) = ready_trap_child("stubborn", "");
         stop_child(&mut child);
         let status = child.wait().expect("child reaped");
         assert_eq!(

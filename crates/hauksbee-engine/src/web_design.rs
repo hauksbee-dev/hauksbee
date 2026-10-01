@@ -100,6 +100,43 @@ fn stage_models(models: &[NamedUpload]) -> Result<Option<tempfile::TempDir>, Str
     Ok(Some(dir))
 }
 
+/// The evidence record for an uploaded BOM or placement: the reader's own
+/// provenance (`path`, `format`, `sha256`, what it contributed and dropped)
+/// plus every line of the binder's identity reconciliation.
+fn assembly_artifact(
+    (kind, role): (ArtifactKind, ArtifactRole),
+    (path, format, sha256): (&str, &str, &str),
+    contributed: &[hauksbee_extract::bom::Contribution],
+    ignored: &[hauksbee_extract::bom::IgnoredInput],
+    identity: &crate::binder::IdentityReport,
+) -> Result<ArtifactProvenance, String> {
+    let contributions = contributed
+        .iter()
+        .map(|item| Contribution {
+            what: item.what.clone(),
+            detail: item.detail.clone(),
+        })
+        .chain(identity.lines().into_iter().map(|detail| Contribution {
+            what: "identity_reconciliation".into(),
+            detail,
+        }))
+        .collect();
+    let ignored = ignored
+        .iter()
+        .map(|item| IgnoredInput {
+            what: item.what.clone(),
+            why: item.why.clone(),
+        })
+        .collect();
+    Ok(
+        ArtifactProvenance::new(path, kind, role, sha256, Vec::new())
+            .map_err(|error| error.to_string())?
+            .with_format(format.to_string())
+            .with_contributions(contributions)
+            .with_ignored(ignored),
+    )
+}
+
 /// Normalize a browser upload into a design ready to bind and analyse.
 ///
 /// Reads the board, resolves a companion schematic, stages uploaded model files,
@@ -150,40 +187,14 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
         .map_err(|error| error.to_string())?;
         let identity = crate::binder::apply_bom_identity(&mut norm.board, &bom, &lib)
             .map_err(|error| error.to_string())?;
-        let mut contributions: Vec<Contribution> = bom
-            .provenance
-            .contributed
-            .iter()
-            .map(|item| Contribution {
-                what: item.what.clone(),
-                detail: item.detail.clone(),
-            })
-            .collect();
-        contributions.extend(identity.lines().into_iter().map(|detail| Contribution {
-            what: "identity_reconciliation".into(),
-            detail,
-        }));
-        let artifact = ArtifactProvenance::new(
-            &bom.provenance.path,
-            ArtifactKind::Bom,
-            ArtifactRole::Bom,
-            &bom.provenance.sha256,
-            Vec::new(),
-        )
-        .map_err(|error| error.to_string())?
-        .with_format(bom.provenance.kind.clone())
-        .with_contributions(contributions)
-        .with_ignored(
-            bom.provenance
-                .ignored
-                .iter()
-                .map(|item| IgnoredInput {
-                    what: item.what.clone(),
-                    why: item.why.clone(),
-                })
-                .collect(),
-        );
-        supporting_artifacts.push(artifact);
+        let p = &bom.provenance;
+        supporting_artifacts.push(assembly_artifact(
+            (ArtifactKind::Bom, ArtifactRole::Bom),
+            (&p.path, &p.kind, &p.sha256),
+            &p.contributed,
+            &p.ignored,
+            &identity,
+        )?);
     }
     if let Some(file) = &upload.placement {
         let placement =
@@ -191,41 +202,14 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
                 .map_err(|error| error.to_string())?;
         let identity = crate::binder::apply_placement_identity(&mut norm.board, &placement, &lib)
             .map_err(|error| error.to_string())?;
-        let mut contributions: Vec<Contribution> = placement
-            .provenance
-            .contributed
-            .iter()
-            .map(|item| Contribution {
-                what: item.what.clone(),
-                detail: item.detail.clone(),
-            })
-            .collect();
-        contributions.extend(identity.lines().into_iter().map(|detail| Contribution {
-            what: "identity_reconciliation".into(),
-            detail,
-        }));
-        let artifact = ArtifactProvenance::new(
-            &placement.provenance.path,
-            ArtifactKind::Placement,
-            ArtifactRole::Placement,
-            &placement.provenance.sha256,
-            Vec::new(),
-        )
-        .map_err(|error| error.to_string())?
-        .with_format(placement.provenance.kind.clone())
-        .with_contributions(contributions)
-        .with_ignored(
-            placement
-                .provenance
-                .ignored
-                .iter()
-                .map(|item| IgnoredInput {
-                    what: item.what.clone(),
-                    why: item.why.clone(),
-                })
-                .collect(),
-        );
-        supporting_artifacts.push(artifact);
+        let p = &placement.provenance;
+        supporting_artifacts.push(assembly_artifact(
+            (ArtifactKind::Placement, ArtifactRole::Placement),
+            (&p.path, &p.kind, &p.sha256),
+            &p.contributed,
+            &p.ignored,
+            &identity,
+        )?);
     }
     let variant = upload
         .variant

@@ -1380,12 +1380,22 @@ impl BoardEvidence {
             });
         }
         let nets: Vec<String> = scoped_nets.into_iter().collect();
-        let mut map = self.map_for_nets_with_check(assertion.into(), &nets, check_scope)?;
+        let map = self.map_for_nets_with_check(assertion.into(), &nets, check_scope)?;
+        self.with_run_artifacts(map, budget)
+    }
+
+    /// Attach this run's board, firmware and supporting artifacts, and the
+    /// error budget when there is one.
+    fn with_run_artifacts(
+        &self,
+        map: EvidenceMap,
+        budget: Option<ErrorBudget>,
+    ) -> Result<EvidenceMap, EvidenceError> {
         let artifacts = [self.board_artifact, self.firmware_artifact]
             .into_iter()
             .flatten()
             .chain(self.supporting_artifacts.iter().copied());
-        map = map.with_artifacts(&self.registry, artifacts)?;
+        let mut map = map.with_artifacts(&self.registry, artifacts)?;
         if let Some(budget) = budget {
             map = map.with_error_budget(budget);
         }
@@ -1416,19 +1426,12 @@ impl BoardEvidence {
         if scoped_nets.is_empty() {
             scoped_nets.extend(self.refs_by_net.keys().cloned());
         }
-        let mut map = self.map_for_nets_with_check(
+        let map = self.map_for_nets_with_check(
             assertion.clone(),
             &scoped_nets.into_iter().collect::<Vec<_>>(),
             Some(("ci", assertion.as_str())),
         )?;
-        let artifacts = [self.board_artifact, self.firmware_artifact]
-            .into_iter()
-            .flatten()
-            .chain(self.supporting_artifacts.iter().copied());
-        map = map.with_artifacts(&self.registry, artifacts)?;
-        if let Some(budget) = budget {
-            map = map.with_error_budget(budget);
-        }
+        let mut map = self.with_run_artifacts(map, budget)?;
         if let Some(coverage) = coverage {
             map = map.with_coverage(coverage);
         }

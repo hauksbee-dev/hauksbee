@@ -35,6 +35,30 @@ const fn cosim_substituted(subs: &[crate::scheduler::McuSubstitution], _first_re
     !subs.is_empty()
 }
 
+/// Nets ordered most active first: by toggles, then voltage range, then name.
+/// The JSON activity summary and the text table both use this order, so they
+/// agree on "most active"; the name tiebreak keeps equal nets from ordering by
+/// `HashMap` iteration, which made the summary nondeterministic across runs.
+fn nets_by_activity<'a>(
+    stats: &'a std::collections::HashMap<String, crate::scheduler::NetStat>,
+    toggle_counts: &std::collections::HashMap<String, u64>,
+) -> Vec<(&'a String, &'a crate::scheduler::NetStat, u64)> {
+    let mut rows: Vec<_> = stats
+        .iter()
+        .map(|(name, stat)| (name, stat, toggle_counts.get(name).copied().unwrap_or(0)))
+        .collect();
+    rows.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then(
+                (b.1.max_v - b.1.min_v)
+                    .partial_cmp(&(a.1.max_v - a.1.min_v))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then_with(|| a.0.cmp(b.0))
+    });
+    rows
+}
+
 /// Build the structured co-sim summary, or `None` when no MCU ran.
 ///
 /// # Errors
@@ -60,23 +84,7 @@ pub fn build_cosim_json(
 
     // Top-N nets by activity (toggles, then voltage range), mirroring the text
     // table's ordering so JSON and text agree on "most active".
-    let mut rows: Vec<_> = sched
-        .stats
-        .iter()
-        .map(|(name, stat)| (name, stat, toggle_counts.get(name).copied().unwrap_or(0)))
-        .collect();
-    rows.sort_by(|a, b| {
-        b.2.cmp(&a.2)
-            .then(
-                (b.1.max_v - b.1.min_v)
-                    .partial_cmp(&(a.1.max_v - a.1.min_v))
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-            // Total-order tiebreak on net name: without it two nets with equal
-            // toggles and equal voltage range order by HashMap iteration, so the
-            // JSON activity summary was nondeterministic across runs.
-            .then_with(|| a.0.cmp(b.0))
-    });
+    let rows = nets_by_activity(&sched.stats, &toggle_counts);
     let activity_summary: Vec<NetActivity> = rows
         .iter()
         .take(10)
@@ -542,24 +550,7 @@ pub fn run_headless(
             factor,
             sched.stats.len()
         );
-        // Sort nets by activity (toggle count then range).
-        let mut rows: Vec<_> = sched
-            .stats
-            .iter()
-            .map(|(name, stat)| (name, stat, toggle_counts.get(name).copied().unwrap_or(0)))
-            .collect();
-        rows.sort_by(|a, b| {
-            b.2.cmp(&a.2)
-                .then(
-                    (b.1.max_v - b.1.min_v)
-                        .partial_cmp(&(a.1.max_v - a.1.min_v))
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-                // Total-order tiebreak on net name so the text table agrees with
-                // the JSON activity summary (line 54); without it equal-toggle,
-                // equal-range nets order by HashMap iteration and disagree.
-                .then_with(|| a.0.cmp(b.0))
-        });
+        let rows = nets_by_activity(&sched.stats, &toggle_counts);
         println!("\nmost active nets:");
         println!(
             "┌────────────────────────────┬──────────┬──────────┬──────────┐\n\
