@@ -377,6 +377,28 @@ fn check_ends_with_a_single_verdict_line() {
     );
 }
 
+/// An invalid verdict says why and what to do next, with the SAME sentence in
+/// the `--check` closing line and the `--json` document.
+#[test]
+fn invalid_verdict_states_one_reason_on_text_and_json() {
+    let (_dir, p) = write_board(
+        "mystery.board",
+        "\tnet \"A\"\n\tnet \"B\"\n\
+         \tcomp U1 lib \"Package_SO:SOIC-8\" val \"TOTALLYUNKNOWN999\" layer \"F.Cu\" at 0 0 rot 0 {\n\
+         \t\tpad \"1\" smd rect at 0 0 size 1 1 layers [F.Cu] net \"A\"\n\
+         \t\tpad \"2\" smd rect at 1 0 size 1 1 layers [F.Cu] net \"B\"\n\
+         \t}\n",
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&run_board(&p, &["--check", "--json"]))).expect("json");
+    assert_eq!(json["verdict"], "invalid");
+    let reason = json["verdict_reason"].as_str().expect("invalid carries a reason");
+    assert!(reason.contains("U1") && reason.contains("; next: "), "{reason}");
+    let text = stdout(&run_board(&p, &["--check"]));
+    let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+    assert!(last.starts_with("VERDICT: inconclusive") && last.ends_with(reason), "{last}");
+}
+
 // ── U5: the unresolved-parts heads-up names the scaffolding command ──────────
 
 #[test]

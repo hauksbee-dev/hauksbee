@@ -426,25 +426,29 @@ fn verdict_line(
     coverage_undermined: bool,
     copper_unvalidated: Option<&str>,
 ) -> String {
+    let failing = (serious > 0).then_some(VerdictCause::Failing {
+        count: serious,
+        first,
+    });
+    let cause = VerdictCause::pick(failing, None, blockers, coverage_undermined);
     if let Some(reason) = copper_unvalidated {
+        // The copper caveat leads; a blocking cause still gets its sentence, so
+        // this line never hides the reason `--json` gives.
+        let also = cause.map_or_else(String::new, |c| format!(" Also: {}", c.reason()));
         return if serious == 0 {
             format!(
                 "VERDICT: copper UNVALIDATED: {worth_a_look} potential issue(s); unmatched \
-                 copper findings remain tool-only and none counted as serious. Reason: {reason}"
+                 copper findings remain tool-only and none counted as serious. Reason: {reason}{also}"
             )
         } else {
             format!(
                 "VERDICT: failing: {serious} serious issue(s); pair-specific oracle-confirmed \
                  shorts count as serious, while unmatched copper findings remain UNVALIDATED \
-                 among {worth_a_look} worth-a-look issue(s). Reason: {reason}"
+                 among {worth_a_look} worth-a-look issue(s). Reason: {reason}{also}"
             )
         };
     }
-    let failing = (serious > 0).then_some(VerdictCause::Failing {
-        count: serious,
-        first,
-    });
-    match VerdictCause::pick(failing, None, blockers, coverage_undermined) {
+    match cause {
         None => format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look"),
         Some(cause) => format!(
             "VERDICT: {}: {serious} serious, {worth_a_look} worth a look; {}",
