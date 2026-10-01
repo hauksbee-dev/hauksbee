@@ -13,8 +13,14 @@ use std::path::{Path, PathBuf};
 /// and `ANALOG_VDD` (a supply with no readable magnitude). Enough parts hang off
 /// `ANALOG_VDD` for it to read as a rail rather than a signal.
 fn board_with_a_nameless_rail(dir: &Path) -> PathBuf {
-    let mut nodes_vcc = String::new();
-    let mut nodes_avdd = String::new();
+    two_rail_board(dir.join("nameless_rail.net"), "VCC", "ANALOG_VDD")
+}
+
+/// A KiCad netlist of eight 10k resistors, each from `rail` (pin 2) to
+/// `unpriced` (pin 1), written to `path`.
+fn two_rail_board(path: PathBuf, rail: &str, unpriced: &str) -> PathBuf {
+    let mut nodes_rail = String::new();
+    let mut nodes_unpriced = String::new();
     let mut comps = String::new();
     for i in 1..=8 {
         let _ = writeln!(
@@ -23,15 +29,14 @@ fn board_with_a_nameless_rail(dir: &Path) -> PathBuf {
              (footprint \"Resistor_SMD:R_0603_1608Metric\") \
              (libsource (lib \"Device\") (part \"R\")))"
         );
-        let _ = writeln!(nodes_avdd, "      (node (ref \"R{i}\") (pin \"1\"))");
-        let _ = writeln!(nodes_vcc, "      (node (ref \"R{i}\") (pin \"2\"))");
+        let _ = writeln!(nodes_unpriced, "      (node (ref \"R{i}\") (pin \"1\"))");
+        let _ = writeln!(nodes_rail, "      (node (ref \"R{i}\") (pin \"2\"))");
     }
     let net = format!(
         "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\
-         \x20   (net (code \"1\") (name \"VCC\")\n{nodes_vcc})\n\
-         \x20   (net (code \"2\") (name \"ANALOG_VDD\")\n{nodes_avdd})\n  ))\n"
+         \x20   (net (code \"1\") (name \"{rail}\")\n{nodes_rail})\n\
+         \x20   (net (code \"2\") (name \"{unpriced}\")\n{nodes_unpriced})\n  ))\n"
     );
-    let path = dir.join("nameless_rail.net");
     std::fs::write(&path, net).expect("write board");
     path
 }
@@ -182,27 +187,7 @@ fn the_scaffold_asks_about_the_rail_it_cannot_resolve() {
 /// battery rail it cannot (`VBAT`, in the engine's supply-token list but with
 /// no readable magnitude). Enough parts on VBAT for it to read as a rail.
 fn board_with_a_battery_rail(dir: &Path) -> PathBuf {
-    let mut nodes_3v3 = String::new();
-    let mut nodes_vbat = String::new();
-    let mut comps = String::new();
-    for i in 1..=8 {
-        let _ = writeln!(
-            comps,
-            "    (comp (ref \"R{i}\") (value \"10k\") \
-             (footprint \"Resistor_SMD:R_0603_1608Metric\") \
-             (libsource (lib \"Device\") (part \"R\")))"
-        );
-        let _ = writeln!(nodes_vbat, "      (node (ref \"R{i}\") (pin \"1\"))");
-        let _ = writeln!(nodes_3v3, "      (node (ref \"R{i}\") (pin \"2\"))");
-    }
-    let net = format!(
-        "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\
-         \x20   (net (code \"1\") (name \"+3V3\")\n{nodes_3v3})\n\
-         \x20   (net (code \"2\") (name \"VBAT\")\n{nodes_vbat})\n  ))\n"
-    );
-    let path = dir.join("battery_rail.net");
-    std::fs::write(&path, net).expect("write board");
-    path
+    two_rail_board(dir.join("battery_rail.net"), "+3V3", "VBAT")
 }
 
 #[test]

@@ -190,57 +190,37 @@ trace = "trace.toml"
 
 // ── honesty rules, no sim required ───────────────────────────────────────────
 
-fn load_trace_str(body: &str) -> Result<hauksbee_ci::hwtrace::Trace, hauksbee_ci::SpecError> {
-    hauksbee_ci::hwtrace::Trace::load(&support::write_tmp("trace.toml", body))
+/// Load a one-channel trace on D13, expecting a refusal: `provenance` is the
+/// `[trace]` table's provenance line (or nothing), `file` the channel's data
+/// file and `feature` the body of its one `[[channel.feature]]`.
+fn refusal(provenance: &str, file: &str, feature: &str) -> String {
+    let body = format!(
+        "[trace]\nboard = \"b\"\nscenario = \"s\"\n{provenance}instrument = \"i\"\n\n\
+         [[channel]]\nnet = \"D13\"\nfile = \"{file}\"\n\n[[channel.feature]]\n{feature}\n"
+    );
+    let path = support::write_tmp("trace.toml", &body);
+    hauksbee_ci::hwtrace::Trace::load(&path)
+        .unwrap_err()
+        .to_string()
 }
 
 /// The provenance rule is mandatory: a trace that does not say whether it is
 /// real or synthetic must not load.
 #[test]
 fn trace_without_provenance_is_refused() {
-    let err = load_trace_str(
-        r#"
-[trace]
-board = "b"
-scenario = "s"
-instrument = "i"
-
-[[channel]]
-net = "D13"
-file = "d13.csv"
-
-[[channel.feature]]
-kind = "period"
-reltol = 0.1
-"#,
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("provenance"), "got: {err}");
+    let err = refusal("", "d13.csv", "kind = \"period\"\nreltol = 0.1");
+    assert!(err.contains("provenance"), "got: {err}");
 }
 
 /// A voltage feature on a VCD channel is refused by name: a logic analyzer
 /// records bits, not volts.
 #[test]
 fn voltage_feature_on_vcd_is_refused() {
-    let err = load_trace_str(
-        r#"
-[trace]
-board = "b"
-scenario = "s"
-provenance = "synthetic"
-instrument = "i"
-
-[[channel]]
-net = "D13"
-file = "d13.vcd"
-
-[[channel.feature]]
-kind = "max"
-abstol = 0.3
-"#,
-    )
-    .unwrap_err();
-    let msg = err.to_string();
+    let msg = refusal(
+        "provenance = \"synthetic\"\n",
+        "d13.vcd",
+        "kind = \"max\"\nabstol = 0.3",
+    );
     assert!(msg.contains("bits, not volts"), "got: {msg}");
     assert!(msg.contains("max"), "got: {msg}");
 }
@@ -249,22 +229,6 @@ abstol = 0.3
 /// own error bars and must state them.
 #[test]
 fn feature_without_tolerance_is_refused() {
-    let err = load_trace_str(
-        r#"
-[trace]
-board = "b"
-scenario = "s"
-provenance = "real"
-instrument = "scope"
-
-[[channel]]
-net = "D13"
-file = "d13.csv"
-
-[[channel.feature]]
-kind = "period"
-"#,
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("error bars"), "got: {err}");
+    let err = refusal("provenance = \"real\"\n", "d13.csv", "kind = \"period\"");
+    assert!(err.contains("error bars"), "got: {err}");
 }

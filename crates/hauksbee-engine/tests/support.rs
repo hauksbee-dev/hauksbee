@@ -215,6 +215,38 @@ pub fn assert_lm75_change_is_live(
     engine
 }
 
+/// A TP4054 in its 400 mA constant-current operating phase, programmed by the
+/// published 1.66 kOhm application value: the nets and parts of a `kicad_pcb`,
+/// VBAT unrouted. Unlike a regulator rating or current limit, this is an
+/// explicit operating-current assertion.
+pub const TP4054_CHARGER: &str = r#"
+  (net 1 "VBAT")
+  (net 2 "VIN")
+  (net 3 "GND")
+  (net 4 "PROG")
+  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (property "Value" "TP4054")
+    (pad "1" smd rect (at 0 3) (size 1 1) (layers "F.Cu"))
+    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
+    (pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VBAT"))
+    (pad "4" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN"))
+    (pad "5" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "PROG")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 4 0)
+    (property "Reference" "R1")
+    (property "Value" "1.66k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "PROG"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 3 "GND")))"#;
+
+/// A declared 2-layer stackup: 1 oz outer copper, so an ampacity verdict rests
+/// on the board's own copper weight rather than an assumption.
+pub const DECLARED_STACKUP: &str = r#"
+  (setup (stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+  ))"#;
+
 /// Run the compiled binary and wait for it to exit.
 pub fn run(args: &[&str]) -> Output {
     Command::new(bin())

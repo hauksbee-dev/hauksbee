@@ -7,7 +7,7 @@
 //! system that silently fails to apply is a check nobody can trust, and one
 //! that silently keeps applying past its date is a check nobody is running.
 
-use crate::support::{combined, repo_root, run_board};
+use crate::support::{combined, repo_root, run_board, DECLARED_STACKUP, TP4054_CHARGER};
 use std::path::{Path, PathBuf};
 
 /// The board ships two deliberate GND/+5V pour shorts, so `--check --strict`
@@ -24,21 +24,37 @@ fn stage_board(dir: &Path) -> PathBuf {
     dst
 }
 
-fn write_waivers(dir: &Path, until: &str, nets: &str) {
+/// Write a one-entry waiver file beside the board. `reason: None` leaves the
+/// required reason out, which the loader refuses: every command must then warn
+/// and gate.
+fn write_waiver(
+    dir: &Path,
+    check: &str,
+    kind: &str,
+    nets: &str,
+    until: &str,
+    reason: Option<&str>,
+) {
+    let reason = reason
+        .map(|r| format!("reason = \"fixture: {r}\"\n"))
+        .unwrap_or_default();
     std::fs::write(
         dir.join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE),
-        format!(
-            r#"
-[[waive]]
-check = "drc"
-kind = "short"
-nets = {nets}
-reason = "fixture: the pour bridges these on purpose"
-until = "{until}"
-"#
-        ),
+        format!("[[waive]]\ncheck = \"{check}\"\nkind = \"{kind}\"\nnets = {nets}\n{reason}until = \"{until}\"\n"),
     )
     .expect("write waivers");
+}
+
+/// A DRC short waiver for the shipped board's pours.
+fn write_waivers(dir: &Path, until: &str, nets: &str) {
+    write_waiver(
+        dir,
+        "drc",
+        "short",
+        nets,
+        until,
+        Some("the pour bridges these on purpose"),
+    );
 }
 
 /// `--check --strict` on the board, returning (exit code, stdout+stderr).
@@ -134,16 +150,22 @@ fn single_check_strict(board: &Path, flag: &str) -> (i32, String) {
     (out.status.code().unwrap_or(-1), combined(&out))
 }
 
+/// Write `body` (the elements after the null net) as `dir`'s board.
+fn stage_text(dir: &Path, body: &str) -> PathBuf {
+    let p = dir.join("board.kicad_pcb");
+    let text =
+        format!("(kicad_pcb (version 20240101) (generator pcbnew)\n  (net 0 \"\")\n{body}\n)");
+    std::fs::write(&p, text).expect("write board");
+    p
+}
+
 /// A tiny board whose only lint finding is a Medium `missing_i2c_pullup`: an
 /// entirely on-board SDA bus (two ICs, no resistor, no connector), which is the
 /// high-confidence regime the lint gates on.
 fn stage_lint_board(dir: &Path) -> PathBuf {
-    let p = dir.join("board.kicad_pcb");
-    std::fs::write(
-        &p,
-        r#"(kicad_pcb (version 20240101) (generator pcbnew)
-  (net 0 "")
-  (net 1 "SDA")
+    stage_text(
+        dir,
+        r#"  (net 1 "SDA")
   (net 2 "GND")
   (footprint "Package_SO:SOIC-8" (layer "F.Cu") (at 0 0)
     (property "Reference" "U1")
@@ -154,96 +176,42 @@ fn stage_lint_board(dir: &Path) -> PathBuf {
     (property "Reference" "U2")
     (property "Value" "BUSDEV-B")
     (pad "1" smd rect (at 10 0) (size 1 1) (layers "F.Cu") (net 1 "SDA"))
-    (pad "2" smd rect (at 10 2) (size 1 1) (layers "F.Cu") (net 2 "GND")))
-)"#,
+    (pad "2" smd rect (at 10 2) (size 1 1) (layers "F.Cu") (net 2 "GND")))"#,
     )
-    .expect("write lint board");
-    p
 }
 
-/// A board whose only SI finding is the IPC-2221 trace-ampacity one: a TP4054
-/// in its 400 mA constant-current phase, programmed by the published 1.66 kOhm
-/// application value, whose VBAT rail is a 0.05 mm hair of a trace. This is an
-/// operating-current assertion, not a device capability rating. Same recipe as
-/// `tests/si_ampacity_ripple.rs`.
+/// A board whose only SI finding is the IPC-2221 trace-ampacity one: the
+/// [`TP4054_CHARGER`] whose VBAT rail is a 0.05 mm hair of a trace. Same
+/// recipe as `tests/si_ampacity_ripple.rs`.
 ///
 /// The stackup is declared on purpose: ampacity only convicts on a copper weight
 /// it read off the board, so a stackup-less version of this fixture would produce
 /// an info note and there would be no gating finding for the waiver to gate.
 fn stage_si_board(dir: &Path) -> PathBuf {
-    let p = dir.join("board.kicad_pcb");
-    std::fs::write(
-        &p,
-        r#"(kicad_pcb (version 20240101) (generator pcbnew)
-  (net 0 "")
-  (setup (stackup
-    (layer "F.Cu" (type "copper") (thickness 0.035))
-    (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
-    (layer "B.Cu" (type "copper") (thickness 0.035))
-  ))
-  (net 1 "VBAT")
-  (net 2 "VIN")
-  (net 3 "GND")
-  (net 4 "PROG")
-  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U1")
-    (property "Value" "TP4054")
-    (pad "1" smd rect (at 0 3) (size 1 1) (layers "F.Cu"))
-    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
-    (pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VBAT"))
-    (pad "4" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN"))
-    (pad "5" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "PROG")))
-  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 4 0)
-    (property "Reference" "R1")
-    (property "Value" "1.66k")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "PROG"))
-    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 3 "GND")))
-  (segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))
-)"#,
-    )
-    .expect("write si board");
-    p
-}
-
-/// Write a one-entry waiver file beside the board.
-fn write_waiver(dir: &Path, check: &str, kind: &str, nets: &str, until: &str) {
-    std::fs::write(
-        dir.join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE),
-        format!(
-            r#"
-[[waive]]
-check = "{check}"
-kind = "{kind}"
-nets = {nets}
-reason = "fixture: judged wrong on this board on purpose"
-until = "{until}"
-"#
+    stage_text(
+        dir,
+        &format!(
+            "{DECLARED_STACKUP}{TP4054_CHARGER}\n  \
+             (segment (start 0 0) (end 10 0) (width 0.05) (layer \"F.Cu\") (net 1))"
         ),
     )
-    .expect("write waivers");
-}
-
-/// A waiver file with no `reason`, which the loader refuses. Every single-check
-/// command must warn and gate, exactly like `--check` does.
-fn write_malformed_waiver(dir: &Path, check: &str, kind: &str, nets: &str) {
-    std::fs::write(
-        dir.join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE),
-        format!("[[waive]]\ncheck = \"{check}\"\nkind = \"{kind}\"\nnets = {nets}\nuntil = \"2099-01-01\"\n"),
-    )
-    .expect("write malformed waivers");
 }
 
 /// The whole life-cycle for one single-check command: red bare, green under an
 /// active waiver (with the reason on the report), red again expired (named as
 /// lapsed), and red with a warning when the file is malformed.
-fn assert_waiver_parity(dir: &Path, board: &Path, flag: &str, check: &str, kind: &str, nets: &str) {
+fn assert_waiver_parity(stage: fn(&Path) -> PathBuf, flag: &str, kind: &str, nets: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (dir, board) = (dir.path(), &stage(dir.path()));
+    let check = flag.trim_start_matches('-');
     // (a) The premise: without a waiver the finding gates, otherwise the rest
     // of this proves nothing.
     let (code, out) = single_check_strict(board, flag);
     assert_eq!(code, 2, "{flag} --strict must gate bare:\n{out}");
 
     // (b) An active waiver takes the finding out of the gate, out loud.
-    write_waiver(dir, check, kind, nets, "2099-01-01");
+    let reason = Some("judged wrong on this board on purpose");
+    write_waiver(dir, check, kind, nets, "2099-01-01", reason);
     let (code, out) = single_check_strict(board, flag);
     let expected_code = if flag == "--lint" { 3 } else { 0 };
     assert_eq!(
@@ -260,7 +228,7 @@ fn assert_waiver_parity(dir: &Path, board: &Path, flag: &str, check: &str, kind:
     );
 
     // (c) Expiry puts it back.
-    write_waiver(dir, check, kind, nets, "2020-01-01");
+    write_waiver(dir, check, kind, nets, "2020-01-01", reason);
     let (code, out) = single_check_strict(board, flag);
     assert_eq!(
         code, 2,
@@ -272,7 +240,7 @@ fn assert_waiver_parity(dir: &Path, board: &Path, flag: &str, check: &str, kind:
     );
 
     // (d) A malformed file warns and fails closed.
-    write_malformed_waiver(dir, check, kind, nets);
+    write_waiver(dir, check, kind, nets, "2099-01-01", None);
     let (code, out) = single_check_strict(board, flag);
     assert_eq!(
         code, 2,
@@ -286,27 +254,14 @@ fn assert_waiver_parity(dir: &Path, board: &Path, flag: &str, check: &str, kind:
 
 #[test]
 fn drc_single_check_honours_the_same_waivers_as_check() {
-    let dir = tempfile::tempdir().unwrap();
-    let board = stage_board(dir.path());
-    assert_waiver_parity(
-        dir.path(),
-        &board,
-        "--drc",
-        "drc",
-        "short",
-        r#"["GND", "+5V"]"#,
-    );
+    assert_waiver_parity(stage_board, "--drc", "short", r#"["GND", "+5V"]"#);
 }
 
 #[test]
 fn lint_single_check_honours_the_same_waivers_as_check() {
-    let dir = tempfile::tempdir().unwrap();
-    let board = stage_lint_board(dir.path());
     assert_waiver_parity(
-        dir.path(),
-        &board,
+        stage_lint_board,
         "--lint",
-        "lint",
         "missing_i2c_pullup",
         r#"["SDA"]"#,
     );
@@ -314,16 +269,7 @@ fn lint_single_check_honours_the_same_waivers_as_check() {
 
 #[test]
 fn si_single_check_honours_the_same_waivers_as_check() {
-    let dir = tempfile::tempdir().unwrap();
-    let board = stage_si_board(dir.path());
-    assert_waiver_parity(
-        dir.path(),
-        &board,
-        "--si",
-        "si",
-        "trace_ampacity",
-        r#"["VBAT"]"#,
-    );
+    assert_waiver_parity(stage_si_board, "--si", "trace_ampacity", r#"["VBAT"]"#);
 }
 
 /// The machine surface must carry the waived list too: a `--drc --json` whose
@@ -363,12 +309,14 @@ fn a_foreign_checks_waiver_is_not_reported_stale_by_a_narrower_command() {
     let dir = tempfile::tempdir().unwrap();
     let board = stage_board(dir.path());
     // An SI waiver beside a board being run under --drc: out of scope there.
+    let reason = Some("judged wrong on this board on purpose");
     write_waiver(
         dir.path(),
         "si",
         "trace_ampacity",
         r#"["+3V3"]"#,
         "2099-01-01",
+        reason,
     );
 
     let (code, out) = single_check_strict(&board, "--drc");
@@ -385,12 +333,7 @@ fn a_malformed_waiver_file_fails_closed() {
     // reason is on stderr.
     let dir = tempfile::tempdir().unwrap();
     let board = stage_board(dir.path());
-    std::fs::write(
-        dir.path()
-            .join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE),
-        "[[waive]]\ncheck = \"drc\"\nkind = \"short\"\nnets = [\"GND\"]\nuntil = \"2099-01-01\"\n",
-    )
-    .unwrap();
+    write_waiver(dir.path(), "drc", "short", r#"["GND"]"#, "2099-01-01", None);
 
     let (code, out) = check_strict(&board);
     assert_eq!(

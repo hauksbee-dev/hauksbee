@@ -71,6 +71,12 @@ fn comp(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Compon
     )
 }
 
+/// A two-pad 0402 resistor from net `a` to net `b`.
+fn resistor_0402(reference: &str, value: &str, a: i64, b: i64) -> Component {
+    let pins = vec![pin("1", a, ""), pin("2", b, "")];
+    comp(reference, value, "Resistor_SMD:R_0402_1005Metric", pins)
+}
+
 fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
     ExtractedBoard {
         name: "binder_correctness_test".to_string(),
@@ -218,26 +224,11 @@ fn duplicate_programming_reference_never_uses_last_record_wins() {
 /// joining nets that are open on the real board.
 #[test]
 fn dnp_component_is_not_stamped() {
-    let mut r_dnp = comp(
-        "R1",
-        "0R",
-        "Resistor_SMD:R_0402_1005Metric",
-        vec![pin("1", 1, ""), pin("2", 2, "")],
-    );
+    let mut r_dnp = resistor_0402("R1", "0R", 1, 2);
     r_dnp.dnp = true;
     // A populated resistor from each net to a third, so the nets are real.
-    let r2 = comp(
-        "R2",
-        "10k",
-        "Resistor_SMD:R_0402_1005Metric",
-        vec![pin("1", 1, ""), pin("2", 3, "")],
-    );
-    let r3 = comp(
-        "R3",
-        "10k",
-        "Resistor_SMD:R_0402_1005Metric",
-        vec![pin("1", 2, ""), pin("2", 3, "")],
-    );
+    let r2 = resistor_0402("R2", "10k", 1, 3);
+    let r3 = resistor_0402("R3", "10k", 2, 3);
     let b = board(
         &[(1, "NET_A"), (2, "NET_B"), (3, "NET_C")],
         vec![r_dnp, r2, r3],
@@ -395,18 +386,20 @@ fn cr_designated_diode_is_not_a_capacitor() {
         "CR1 must not bind as a capacitor"
     );
     // It binds through the diode fallback as a conducting junction.
-    let (a, k) = devices(&bound)
+    assert_diode_polarity(&bound, "CR1");
+}
+
+/// `reference` bound as a `Device::Diode` (not OPEN, not a passive) with its
+/// anode on `ANODE_NET` and its cathode on `CATHODE_NET`.
+fn assert_diode_polarity(bound: &BoundBoard, reference: &str) {
+    let (a, k) = devices(bound)
         .find_map(|d| match d {
-            Device::Diode { name, a, k, .. } if name == "CR1" => Some((*a, *k)),
+            Device::Diode { name, a, k, .. } if name == reference => Some((*a, *k)),
             _ => None,
         })
-        .expect("CR1 must bind as a Device::Diode via the diode fallback");
-    assert_eq!(bound.node("ANODE_NET"), Some(a), "anode on the A-pin net");
-    assert_eq!(
-        bound.node("CATHODE_NET"),
-        Some(k),
-        "cathode on the K-pin net"
-    );
+        .unwrap_or_else(|| panic!("{reference} must bind as a Device::Diode"));
+    assert_eq!(bound.node("ANODE_NET"), Some(a), "{reference} anode");
+    assert_eq!(bound.node("CATHODE_NET"), Some(k), "{reference} cathode");
 }
 
 /// Some PCB formats preserve one physical pad record per copper primitive or
@@ -753,18 +746,8 @@ fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
 fn negative_rails_get_supply_legs_at_negative_voltage() {
     // An op-amp-style split supply: R1 from -5V to GND, R2 from -12V to GND
     // (loads so the nets are real).
-    let r1 = comp(
-        "R1",
-        "10k",
-        "Resistor_SMD:R_0402_1005Metric",
-        vec![pin("1", 1, ""), pin("2", 3, "")],
-    );
-    let r2 = comp(
-        "R2",
-        "10k",
-        "Resistor_SMD:R_0402_1005Metric",
-        vec![pin("1", 2, ""), pin("2", 3, "")],
-    );
+    let r1 = resistor_0402("R1", "10k", 1, 3);
+    let r2 = resistor_0402("R2", "10k", 2, 3);
     let b = board(&[(1, "-5V"), (2, "-12V"), (3, "GND")], vec![r1, r2]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
@@ -822,14 +805,8 @@ fn diode_with_electrode_letter_pads_binds_with_correct_polarity() {
     let b = board(&[(1, "ANODE_NET"), (2, "CATHODE_NET")], vec![d]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let (a, k) = devices(&bound)
-        .find_map(|dv| match dv {
-            Device::Diode { name, a, k, .. } if name == "D1" => Some((*a, *k)),
-            _ => None,
-        })
-        .expect("A/K-padded diode must bind as a Device::Diode, not OPEN");
-    assert_eq!(bound.node("ANODE_NET"), Some(a), "pad A is the anode");
-    assert_eq!(bound.node("CATHODE_NET"), Some(k), "pad K is the cathode");
+    // Pad A is the anode, pad K the cathode.
+    assert_diode_polarity(&bound, "D1");
 }
 
 /// Eagle "P$1"/"P$2" ordinal pads reach the model's numeric pad map after
@@ -845,18 +822,8 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
     let b = board(&[(1, "CATHODE_NET"), (2, "ANODE_NET")], vec![d]);
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
-    let (a, k) = devices(&bound)
-        .find_map(|dv| match dv {
-            Device::Diode { name, a, k, .. } if name == "D2" => Some((*a, *k)),
-            _ => None,
-        })
-        .expect("P$-padded diode must bind as a Device::Diode, not OPEN");
-    assert_eq!(
-        bound.node("ANODE_NET"),
-        Some(a),
-        "P$2 is the anode (1=K 2=A)"
-    );
-    assert_eq!(bound.node("CATHODE_NET"), Some(k), "P$1 is the cathode");
+    // P$2 is the anode, P$1 the cathode (1=K 2=A).
+    assert_diode_polarity(&bound, "D2");
 }
 
 /// Bug #12: a dual op-amp (LM358) defines `out_a/in_plus_a/in_minus_a` AND the
@@ -955,47 +922,15 @@ fn quad_bilateral_switch_stamps_one_vswitch_per_gate() {
     // CD74HC4066 pad map (analog_switch.toml): 1=in_out_1a, 2=in_out_1b,
     // 3=in_out_2a, 4=in_out_2b, 5=ctrl_2, 6=ctrl_1, 7=vss, 8=ctrl_4,
     // 9=ctrl_3, 10=in_out_3a, 11=in_out_3b, 12=in_out_4a, 13=in_out_4b, 14=vcc.
-    let u = comp(
+    let bound = bind_single_part(
         "SW2",
         "CD74HC4066",
         "Package_SO:TSSOP-14_4.4x5mm_P0.65mm",
-        vec![
-            pin("1", 1, ""),
-            pin("2", 2, ""),
-            pin("3", 3, ""),
-            pin("4", 4, ""),
-            pin("5", 12, ""),
-            pin("6", 11, ""),
-            pin("7", 9, ""),
-            pin("8", 14, ""),
-            pin("9", 13, ""),
-            pin("10", 5, ""),
-            pin("11", 6, ""),
-            pin("12", 7, ""),
-            pin("13", 8, ""),
-            pin("14", 10, ""),
-        ],
-    );
-    let b = board(
         &[
-            (1, "G1A"),
-            (2, "G1B"),
-            (3, "G2A"),
-            (4, "G2B"),
-            (5, "G3A"),
-            (6, "G3B"),
-            (7, "G4A"),
-            (8, "G4B"),
-            (9, "GND"),
-            (10, "+3V3"),
-            (11, "CTRL1"),
-            (12, "CTRL2"),
-            (13, "CTRL3"),
-            (14, "CTRL4"),
+            "G1A", "G1B", "G2A", "G2B", "CTRL2", "CTRL1", "GND", "CTRL4", "CTRL3", "G3A", "G3B",
+            "G4A", "G4B", "+3V3",
         ],
-        vec![u],
     );
-    let bound = bind_board(&b, &ModelLibrary::builtin());
 
     for n in 1..=4 {
         let (a, bnode, ctrl) = devices(&bound)

@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::support::{DECLARED_STACKUP, TP4054_CHARGER};
 use hauksbee_engine::checks::{ampacity, converter, ripple};
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiReport, SiSeverity};
 use hauksbee_models::ModelLibrary;
@@ -143,43 +144,10 @@ fn exact_rated_ripple_fixture(
     ))
 }
 
-/// A TP4054 in its 400 mA constant-current operating phase, programmed by the
-/// published 1.66 kOhm application value. Unlike a regulator rating or current
-/// limit, this is an explicit operating-current assertion.
+/// [`TP4054_CHARGER`] with `copper` routed on it.
 fn programmed_charger_and_text(copper: &str) -> (ExtractedBoard, String) {
-    board_and_text(&format!(
-        r#"
-  (net 1 "VBAT")
-  (net 2 "VIN")
-  (net 3 "GND")
-  (net 4 "PROG")
-  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U1")
-    (property "Value" "TP4054")
-    (pad "1" smd rect (at 0 3) (size 1 1) (layers "F.Cu"))
-    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
-    (pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VBAT"))
-    (pad "4" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN"))
-    (pad "5" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "PROG")))
-  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 4 0)
-    (property "Reference" "R1")
-    (property "Value" "1.66k")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "PROG"))
-    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 3 "GND")))
-  {copper}
-"#,
-    ))
+    board_and_text(&format!("{TP4054_CHARGER}\n  {copper}\n"))
 }
-
-/// A declared 2-layer stackup: 1 oz outer copper, so the ampacity verdict rests
-/// on the board's own copper weight rather than an assumption.
-const DECLARED_STACKUP: &str = r#"
-  (setup (stackup
-    (layer "F.Cu" (type "copper") (thickness 0.035))
-    (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
-    (layer "B.Cu" (type "copper") (thickness 0.035))
-  ))
-"#;
 
 /// The same charger, with the board declaring its copper weight.
 fn programmed_charger_with_stackup(copper: &str) -> (ExtractedBoard, String) {
