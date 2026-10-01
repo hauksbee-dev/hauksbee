@@ -516,13 +516,17 @@ fn the_pass_gate_translators_are_switches_and_not_logic() {
         );
     }
 
-    // The NTS0104 belongs in the same group and is deliberately absent: its
+    // The NTS0104 belongs in the same group but has no switch entry: its
     // datasheet publishes no on-resistance at all, and `ron` is the one number
-    // the kind cannot do without. This asserts the gap stays honest rather than
-    // being filled with a guess.
+    // the kind cannot do without. It is named by an IDENTITY-ONLY card, so it
+    // binds unresolved; this asserts the gap stays honest rather than being
+    // filled with a guess.
+    let nts = resolve("NTS0104GU12");
     assert!(
-        by_value("NTS0104GU12").is_none(),
-        "NTS0104GU12 must stay unresolved: no vendor on-resistance exists to model"
+        nts.kind != ComponentKind::AnalogSwitch
+            && nts.logic.is_empty()
+            && nts.params.get_bool("identity_only") == Some(true),
+        "NTS0104GU12 must stay identity-only: no vendor on-resistance exists to model"
     );
 }
 

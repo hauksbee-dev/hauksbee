@@ -121,6 +121,16 @@ The pieces, and where each is specified:
 - **Tri-state**: `[models.logic.tristate]` maps an output (or an `a..b` range
   over the outputs declaration order) to an enable pin + polarity. See the
   74HC125 entry for per-gate independent enables.
+- **Bidirectional pins**: `[models.logic.sense]` maps an extra input name
+  to a declared output whose pin it reads, so one pad can be driven while
+  enabled and sampled while high impedance. The SN74AVC1T45 entry uses it for
+  A and B, with DIR choosing the driving side through `tristate`.
+- **Dual-supply levels**: `[models.level_rails]` (beside `[models.levels]`)
+  maps a supply role to the pin roles whose thresholds and output high level
+  come from that rail rather than from `vcc`. While any named rail is
+  unpowered, every output is high impedance (the xT45 VCC-isolation feature).
+  Parts that sense direction automatically (TXB/TXS/NTS) are not expressible
+  this way and stay identity-only.
 - **Latches**: cross-coupled `comb` expressions are legal (the SR latch).
   Give cycle participants a power-on level via `[models.logic.init]`.
 

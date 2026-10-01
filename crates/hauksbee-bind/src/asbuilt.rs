@@ -1099,6 +1099,7 @@ mod tests {
             drivers: HashMap::from([("y0".to_string(), drv(n))]),
             logic: None,
             supply: None,
+            rails: crate::digital::RailLevels::default(),
         };
 
         let mut bound = BoundBoard {

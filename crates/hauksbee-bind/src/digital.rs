@@ -82,8 +82,15 @@ impl LogicLevels {
     /// Read the card's `[models.levels]` tables at the part's `vcc` (else
     /// `vdd`) net; a part with no tables or no such net keeps its fixed levels.
     #[must_use]
-    pub fn on_supply(mut self, m: &ModelEntry, roles: &HashMap<String, NodeId>) -> Self {
+    pub fn on_supply(self, m: &ModelEntry, roles: &HashMap<String, NodeId>) -> Self {
         let rail = roles.get("vcc").or_else(|| roles.get("vdd")).copied();
+        self.on_rail(m, rail)
+    }
+
+    /// Read the card's `[models.levels]` tables at `rail` (no rail, or no
+    /// tables: the fixed levels).
+    #[must_use]
+    pub fn on_rail(mut self, m: &ModelEntry, rail: Option<NodeId>) -> Self {
         self.supply = rail
             .filter(|n| !n.is_ground() && !m.levels.is_empty())
             .map(|n| (n, Arc::new(m.levels.clone())));
@@ -276,11 +283,11 @@ pub fn replay_components_on_edges<S: std::hash::BuildHasher>(
                     continue;
                 };
                 for (name, level, enabled) in logic.outputs() {
-                    if !enabled {
+                    if !enabled || d.rails.isolated {
                         continue;
                     }
                     if let Some(&net) = d.roles.get(name) {
-                        overlay.insert(net, d.levels.drive_volts(level));
+                        overlay.insert(net, d.drive_volts(name, level));
                     }
                 }
             }
@@ -388,6 +395,22 @@ pub struct DigitalComponent {
     /// VCC supply draw (`None` for models without supply params: no leg is
     /// stamped and the package draws no rail current).
     pub supply: Option<SupplyDraw>,
+    /// The `[models.level_rails]` wiring, empty for a single-supply part.
+    pub rails: RailLevels,
+}
+
+/// A dual-supply part's per-pin levels (`[models.level_rails]`) and the logic
+/// inputs that sample a bidirectional pin (`[models.logic] sense`).
+#[derive(Default)]
+pub struct RailLevels {
+    /// Pin role -> its levels, read at that pin's own rail.
+    pins: HashMap<String, LogicLevels>,
+    /// Logic input -> the pin role whose net it samples.
+    sense: HashMap<String, String>,
+    /// Each declared rail's net (`None`: unwired).
+    nets: Vec<Option<NodeId>>,
+    /// A declared rail is unpowered, so every output is high impedance.
+    isolated: bool,
 }
 
 /// Synthesize the transparent-passthrough spec for a digital model WITHOUT a
@@ -452,13 +475,27 @@ impl DigitalComponent {
         } else {
             Some(LogicComponent::compile(&model.id, &model.logic)?)
         };
+        let fixed = LogicLevels::from_params(model);
+        let mut rails = RailLevels {
+            sense: model.logic.sense.clone().into_iter().collect(),
+            ..RailLevels::default()
+        };
+        for (rail, pins) in &model.level_rails {
+            let net = roles.get(rail).copied();
+            rails.nets.push(net);
+            for pin in pins {
+                let at_rail = fixed.clone().on_rail(model, net);
+                rails.pins.insert(pin.clone(), at_rail);
+            }
+        }
         Ok(Self {
             reference,
-            levels: LogicLevels::from_params(model).on_supply(model, &roles),
+            levels: fixed.on_supply(model, &roles),
             roles,
             drivers,
             logic,
             supply: None,
+            rails,
         })
     }
 
@@ -489,19 +526,44 @@ impl DigitalComponent {
             drivers,
             logic: Some(logic),
             supply: None,
+            rails: RailLevels::default(),
         }
+    }
+
+    /// Re-read every supply-referenced level at its rail's present voltage.
+    fn refresh_levels(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
+        self.levels = self.levels.at(node_v);
+        for l in self.rails.pins.values_mut() {
+            *l = l.at(node_v);
+        }
+        let down =
+            |n: &Option<NodeId>| n.is_none_or(|n| node_v(n) < SupplyDraw::POWERED_THRESHOLD_V);
+        self.rails.isolated = self.rails.nets.iter().any(down);
+    }
+
+    /// The volts pin `role` drives for `high`: its own rail's level.
+    #[must_use]
+    pub fn drive_volts(&self, role: &str, high: bool) -> f64 {
+        self.rails
+            .pins
+            .get(role)
+            .unwrap_or(&self.levels)
+            .drive_volts(high)
     }
 
     /// Process one scheduler tick: sample inputs (with hysteresis), advance
     /// the spec evaluator, drive outputs.
     pub fn tick(&mut self, circuit: &mut Circuit, node_v: &dyn Fn(NodeId) -> f64) {
-        self.levels = self.levels.at(node_v);
+        self.refresh_levels(node_v);
         let Some(logic) = self.logic.as_mut() else {
             return;
         };
-        let roles = &self.roles;
-        let levels = &self.levels;
-        logic.tick(&mut |name, prev| roles.get(name).map(|&n| levels.decide(node_v(n), prev)));
+        let (roles, levels, rails) = (&self.roles, &self.levels, &self.rails);
+        logic.tick(&mut |name, prev| {
+            let role = rails.sense.get(name).map_or(name, String::as_str);
+            let l = rails.pins.get(role).unwrap_or(levels);
+            roles.get(role).map(|&n| l.decide(node_v(n), prev))
+        });
         self.drive_outputs(circuit);
     }
 
@@ -543,9 +605,11 @@ impl DigitalComponent {
                         }
                     }
                 }
+                let enabled = enabled && !self.rails.isolated;
                 drv.set_enabled(circuit, enabled);
                 if enabled {
-                    drv.set_volts(circuit, self.levels.drive_volts(level));
+                    let l = self.rails.pins.get(name).unwrap_or(&self.levels);
+                    drv.set_volts(circuit, l.drive_volts(level));
                 }
             }
         }
@@ -564,7 +628,7 @@ impl DigitalComponent {
         dt: f64,
         node_v: &dyn Fn(NodeId) -> f64,
     ) {
-        self.levels = self.levels.at(node_v);
+        self.refresh_levels(node_v);
         let Some(s) = self.supply.as_mut() else {
             return;
         };
@@ -1910,6 +1974,87 @@ mod tests {
             // 3.3 V logic on every net but the rail.
             gate.tick(&mut circuit, &|n| if n == rail { vcc } else { 3.3 });
             assert_eq!(gate.output_level("y1"), Some(y_high), "{vcc} V rail");
+        }
+    }
+
+    /// SN74AVC1T45 (TI SCES530L): DIR picks the driving port (Table 7-1), each
+    /// port reads and drives at its own rail (5.3, 5.5), DIR reads at VCCA, and
+    /// an unpowered rail leaves both ports high impedance (VCC isolation).
+    #[test]
+    fn xt45_translator_follows_dir_and_its_own_rails() {
+        // (VCCA, VCCB, DIR, A, B volts; an earlier tick's A, B) -> driven A, B
+        // (None: high impedance).
+        type Row = (
+            f64,
+            f64,
+            f64,
+            f64,
+            f64,
+            Option<(f64, f64)>,
+            Option<f64>,
+            Option<f64>,
+        );
+        let rows: [Row; 7] = [
+            (1.8, 3.3, 1.8, 1.8, 0.0, None, None, Some(3.1)), // 1.8 V DIR is high at VCCA
+            (1.8, 3.3, 1.8, 0.0, 3.3, None, None, Some(0.2)),
+            (1.8, 3.3, 0.0, 0.0, 3.3, None, Some(1.6), None), // down-translation
+            (1.8, 3.3, 0.0, 0.0, 1.8, Some((0.0, 0.0)), Some(0.2), None), // 1.8 V is no high at VCCB
+            (3.3, 1.8, 0.0, 0.0, 1.8, None, Some(3.1), None),             // but is at a 1.8 V VCCB
+            (1.8, 0.0, 1.8, 1.8, 0.0, None, None, None),                  // VCCB off: isolated
+            (0.0, 3.3, 0.0, 0.0, 3.3, None, None, None),                  // VCCA off: isolated
+        ];
+        for (vcca, vccb, dir, a, b, before, want_a, want_b) in rows {
+            let mut circuit = Circuit::new();
+            let [na, nb, nd, ra, rb] = ["A", "B", "DIR", "VCCA", "VCCB"].map(|n| circuit.node(n));
+            let mut drivers = HashMap::new();
+            for (role, net) in [("a1", na), ("b1", nb)] {
+                drivers.insert(
+                    role.to_string(),
+                    PinDriver::stamp(&mut circuit, net, role, role, 42.0),
+                );
+            }
+            let r = roles(&[
+                ("a1", na),
+                ("b1", nb),
+                ("dir", nd),
+                ("vcca", ra),
+                ("vccb", rb),
+            ]);
+            let mut u = DigitalComponent::new("U28".into(), &model("SN74AVC1T45"), r, drivers)
+                .expect("SN74AVC1T45 logic compiles");
+            let at = |a: f64, b: f64| {
+                move |n: NodeId| {
+                    [(na, a), (nb, b), (nd, dir), (ra, vcca), (rb, vccb)]
+                        .into_iter()
+                        .find_map(|(k, v)| (k == n).then_some(v))
+                        .unwrap_or(0.0)
+                }
+            };
+            if let Some((a0, b0)) = before {
+                u.tick(&mut circuit, &at(a0, b0));
+            }
+            u.tick(&mut circuit, &at(a, b));
+            let driven = |role: &str| {
+                let d = &u.drivers[role];
+                d.enabled
+                    .then(|| match &circuit.devices[d.vsource.0 as usize] {
+                        Device::Vsource {
+                            kind: SourceKind::Dc(v),
+                            ..
+                        } => *v,
+                        _ => f64::NAN,
+                    })
+            };
+            let row = format!("VCCA {vcca} VCCB {vccb} DIR {dir} A {a} B {b}");
+            for (got, want) in [(driven("a1"), want_a), (driven("b1"), want_b)] {
+                assert!(
+                    match (got, want) {
+                        (Some(g), Some(w)) => (g - w).abs() < 1e-9,
+                        (g, w) => g.is_none() && w.is_none(),
+                    },
+                    "{row}: {got:?} vs {want:?}"
+                );
+            }
         }
     }
 }

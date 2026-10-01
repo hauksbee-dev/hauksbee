@@ -524,6 +524,12 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             format!("[models.levels] '{key}' must be vih, vil, voh or vol, with two or more ascending [vcc, volts] points")
         });
     }
+    for (rail, roles) in &entry.level_rails {
+        let unmapped = std::iter::once(rail)
+            .chain(roles)
+            .find(|r| !entry.pins.values().any(|v| v == *r));
+        p.require(unmapped.is_none(), || format!("[models.level_rails] '{rail}' names role '{}', which no pad in [models.pins] carries", unmapped.map_or("", String::as_str)));
+    }
     if params.0.contains_key("must_not_float_roles") {
         match params.get_str("must_not_float_roles") {
             None => p.push(
@@ -1591,6 +1597,22 @@ mod tests {
             .levels
             .insert("vih".into(), vec![[4.5, 3.15], [2.0, 1.5]]);
         rejects(&levels, "ascending [vcc, volts] points");
+        let mut rails = entry(ComponentKind::Digital, &[]);
+        pins(&mut rails, &roles("1:vcca 3:a1 5:dir 6:vccb"));
+        rails
+            .level_rails
+            .insert("vcca".into(), vec!["a1".into(), "dir".into()]);
+        let rail_errors = |e: &ModelEntry| {
+            validate(e)
+                .err()
+                .into_iter()
+                .flatten()
+                .filter(|x| x.message.contains("level_rails"))
+                .count()
+        };
+        assert_eq!(rail_errors(&rails), 0);
+        rails.level_rails.insert("vccb".into(), vec!["b1".into()]);
+        rejects(&rails, "names role 'b1'");
     }
 
     #[test]

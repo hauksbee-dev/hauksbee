@@ -3350,7 +3350,7 @@ missing = ["pin_roles", "rail_load_profile", "startup_sequence", "firmware_execu
 [[models]]
 id = "74ahct1g32se_7"
 kind = "digital"
-description = "Diodes 74AHCT1G32SE-7 single 2-input positive OR gate, SOT25/SOT353"
+description = "Diodes 74AHCT1G32 (W5-7 / SE-7) single 2-input positive OR gate, SOT25/SOT353"
 
 [models.source]
 tier = "curated-library"
@@ -3370,7 +3370,9 @@ kind = "specification-limits"
 basis = "74AHCT1G32 DS35184 recommended VIL/VIH at 4.5 V to 5.5 V"
 
 [models.match]
-value_re = "(?i)^74AHCT1G32SE-7$"
+# DS35184 Ordering Information: W5 (SOT25) and SE (SOT353) share the 5-pin
+# assignment below, so the bare part number is matched too.
+value_re = "(?i)^74AHCT1G32((W5|SE)(-7)?)?$"
 
 [models.params]
 voh = 4.4
@@ -3630,3 +3632,521 @@ min_v = 4.5
 max_v = 5.5
 abs_max_v = 7.0
 basis = "Table 6.3 Recommended Operating Conditions, SN74AHCT14 VCC supply-voltage row; Table 6.1 Absolute Maximum Ratings, VCC supply-voltage row"
+# ═════════════════════════════════════════════════════════════════════════════
+# Direction-controlled dual-supply translators (the xT45 family).
+#
+# These are CMOS buffers, not pass gates: DIR picks which port drives, and the
+# function table is boolean, so the generic `[models.logic]` evaluator models
+# them as data. Three pieces of the schema carry the translator:
+#   - each port is one pad whose role is a declared OUTPUT (`a1`, `b1`), tri-stated
+#     by DIR (and OE where fitted), and `[models.logic] sense` names the input
+#     (`a1_in`, `b1_in`) that samples the same pad while its driver is off;
+#   - `[models.level_rails]` reads the A port and the control pins at VCCA and the
+#     B port at VCCB, using the card's `[models.levels]` tables, which these
+#     datasheets give against VCCI (input port's rail) and VCCO (output port's
+#     rail), so one table serves both ports;
+#   - while either rail is unpowered every output is high impedance, which is
+#     the family's documented VCC-isolation feature.
+# NOT MODELLED: propagation delay and data-rate limits, output drive beyond the
+# light-load VOH/VOL plus `ro`, Ioff leakage and the weak input pull-downs, and
+# bus contention when both sides drive. The same note applies to every xT45
+# card added below this banner.
+
+# ── SN74AVC1T45: single-bit dual-supply transceiver (MNT Reform) ─────────────
+# Source: Texas Instruments SN74AVC1T45 datasheet SCES530L, December 2003,
+#   revised January 2026: Table 4-1 Pin Functions (p.4), Section 5.1 Absolute
+#   Maximum Ratings (p.6), Section 5.3 Recommended Operating Conditions (p.7),
+#   Section 5.4 Thermal Information and 5.5 Electrical Characteristics (p.8),
+#   Table 7-1 Function Table (p.15).
+[[models]]
+id = "sn74avc1t45"
+kind = "digital"
+description = "SN74AVC1T45 single-bit dual-supply bus transceiver, DIR-controlled, SOT-23-6 / SC70-6 / SOT-5X3"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74avc1t45.pdf"
+title = "Texas Instruments SN74AVC1T45 datasheet, SCES530L, revised January 2026"
+locator = "Table 4-1 Pin Functions p.4; 5.1 Absolute Maximum Ratings p.6; 5.3 Recommended Operating Conditions p.7; 5.4 Thermal Information and 5.5 Electrical Characteristics p.8; Table 7-1 Function Table p.15"
+sha256 = "de9ae63b763d0829fef536a3ddcdbfa15e853a98e5ec371cdb976047d7d7a8e8"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "propagation delay, data rate, output edge rate and Ioff leakage are not modelled; only the DC function table, the supply-referenced levels and VCC isolation are"
+
+[models.match]
+# DBV, DCK and DRL share the 6-pin numbering below. The YZP DSBGA balls are
+# lettered (A1..C2) and are deliberately not matched.
+value_re = "(?i)^(SN)?74AVC1T45(DBV|DCK|DRL)?[RT]?$"
+
+[models.params]
+# Light-load output levels (IOH = -100 uA: VOH = VCCO - 0.2 V; IOL = 100 uA:
+# VOL = 0.2 V), 5.5 Electrical Characteristics. VOH tracks VCCO via the table.
+voh = 3.1
+vol = 0.2
+vih = 2.0
+vil = 0.8
+# Output resistance from the same table at 3 V: VOH 2.3 V min at -12 mA against
+# the 2.8 V light-load level, and VOL 0.7 V max at 12 mA against 0.2 V, both
+# (0.5 V / 12 mA) = 42 Ohm worst case.
+ro = 42.0
+supply_pin = "1"
+gnd_pin = "2"
+
+[models.levels]
+# Section 5.3, data inputs against VCCI and control inputs against VCCA (the
+# same numbers): 0.65 x VCC / 0.35 x VCC for 1.2 to 1.95 V, then 1.6 / 0.7 V for
+# 1.95 to 2.7 V, then 2.0 / 0.8 V for 2.7 to 3.6 V. Where two bands share an
+# edge the stricter band is taken (higher VIH, lower VIL), so each step sits
+# 10 mV inside the looser band.
+vih = [[1.2, 0.78], [1.94, 1.261], [1.95, 1.6], [2.69, 1.6], [2.7, 2.0], [3.6, 2.0]]
+vil = [[1.2, 0.42], [1.95, 0.6825], [1.96, 0.7], [2.7, 0.7], [2.71, 0.8], [3.6, 0.8]]
+# VOH = VCCO - 0.2 V at IOH = -100 uA, 1.2 V to 3.6 V.
+voh = [[1.2, 1.0], [3.6, 3.4]]
+
+[models.level_rails]
+vcca = ["a1", "dir"]   # Table 4-1: A referenced to VCCA; DIR "referenced to VCCA"
+vccb = ["b1"]          # Table 4-1: B referenced to VCCB
+
+[models.pins]
+# Table 4-1, DBV / DCK / DRL.
+"1" = "vcca"
+"2" = "gnd"
+"3" = "a1"
+"4" = "b1"
+"5" = "dir"
+"6" = "vccb"
+
+[models.ratings]
+max_pin_current_a = 0.05      # IO continuous output current, abs max
+max_voltage_v = 4.6           # VCCA / VCCB abs max
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 183.4      # DBV (SOT-23-6); DCK 211.4, DRL 236.2
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AVC1T45 SCES530L, 5.3 Recommended Operating Conditions, VCCA 1.2 V to 3.6 V; 5.1 Absolute Maximum Ratings, VCCA -0.5 V to 4.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AVC1T45 SCES530L, 5.3 Recommended Operating Conditions, VCCB 1.2 V to 3.6 V; 5.1 Absolute Maximum Ratings, VCCB -0.5 V to 4.6 V"
+
+[models.logic]
+# Table 7-1: DIR low, B data to the A bus; DIR high, A data to the B bus.
+inputs = ["dir", "a1_in", "b1_in"]
+outputs = ["a1", "b1"]
+[models.logic.sense]
+a1_in = "a1"
+b1_in = "b1"
+[models.logic.comb]
+a1 = "b1_in"
+b1 = "a1_in"
+[models.logic.tristate]
+a1 = { enable = "dir", active = "low" }
+b1 = { enable = "dir", active = "high" }
+
+[models.coverage]
+implements = ["direction_control", "dual_supply_levels", "vcc_isolation"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage", "input_pulldowns"]
+
+# ── 74LVC single-supply buffers (Nexperia / TI), 2026-10-01 ─────────────────
+# Levels come from each datasheet's static-characteristics table, read per VCC
+# band. Where two bands share an edge the stricter band is taken (higher VIH,
+# lower VIL), stepping 10 mV inside the looser band; where the datasheet leaves
+# a gap between bands (e.g. 1.95 to 2.3 V) the table interpolates linearly.
+# VOH is the light-load (100 uA / 20 uA) VCC - x figure; ro is the worst
+# full-load slope at the 3 V row, stated per card.
+
+[[models]]
+id = "74lvc125a"
+kind = "digital"
+description = "Nexperia 74LVC125A quad buffer/line driver, 3-state, 5 V tolerant, SO14/TSSOP14/DHVQFN14"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC125A.pdf"
+title = "Nexperia 74LVC125A product data sheet, Rev. 12, 2 May 2025"
+locator = "Table 2 Pin description p.3; Table 3 Function selection and Table 4 Limiting values p.4; Table 5 Recommended operating conditions and Table 6 Static characteristics p.5"
+sha256 = "49d64a9b9d253b9587093dbcb8b93f1cb4033686e52957842dd347920cf87930"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd and enable/disable times are not modelled; only the DC function table and supply-referenced levels are"
+
+[models.match]
+# D (SO14), PW (TSSOP14) and BQ (DHVQFN14) share Table 2's numbering. The
+# SOT8014-1 DHXQFN14 (GU) is not matched.
+value_re = "(?i)^(SN)?74LVC125A(D|PW|BQ)?([,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.1          # VCC - 0.2 V at IO = -100 uA, VCC 3.3 V
+vol = 0.2          # IO = 100 uA
+vih = 2.0          # VCC 2.7 V to 3.6 V
+vil = 0.8
+# VCC = 3.0 V, IO = -24 mA: VOH 2.2 V min against the 2.8 V light-load level,
+# 0.6 V / 24 mA = 25 Ohm (VOL side: 0.35 V / 24 mA = 15 Ohm).
+ro = 25.0
+tpd_s = 4.8e-9     # nA to nY max, VCC 3.0 V to 3.6 V, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VCC 3.6 V, -40 to 85 C
+supply_pin = "14"
+gnd_pin = "7"
+
+[models.levels]
+vih = [[1.2, 1.08], [1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.69, 1.7], [2.7, 2.0], [3.6, 2.0]]
+vil = [[1.2, 0.12], [1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [2.71, 0.8], [3.6, 0.8]]
+# VCC - 0.2 V at -100 uA is specified for 1.65 V to 3.6 V; the 1.2 V point
+# carries the same offset and is an extrapolation.
+voh = [[1.2, 1.0], [3.6, 3.4]]
+
+[models.pins]
+"1" = "oe_n_1"
+"2" = "a1"
+"3" = "y1"
+"4" = "oe_n_2"
+"5" = "a2"
+"6" = "y2"
+"7" = "gnd"
+"8" = "y3"
+"9" = "a3"
+"10" = "oe_n_3"
+"11" = "y4"
+"12" = "a4"
+"13" = "oe_n_4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO abs max
+max_voltage_v = 6.5        # VCC and VI abs max
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 6.5
+basis = "Nexperia 74LVC125A Rev. 12, Table 5 VCC 1.65 V to 3.6 V (functional from 1.2 V); Table 4 VCC -0.5 V to +6.5 V"
+
+[models.logic]
+# Table 3: nOE low passes nA to nY; nOE high puts nY in high impedance.
+inputs = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+outputs = ["y1", "y2", "y3", "y4"]
+[models.logic.comb]
+y1 = "a1"
+y2 = "a2"
+y3 = "a3"
+y4 = "a4"
+[models.logic.tristate]
+y1 = { enable = "oe_n_1", active = "low" }
+y2 = { enable = "oe_n_2", active = "low" }
+y3 = { enable = "oe_n_3", active = "low" }
+y4 = { enable = "oe_n_4", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74lvc1g125"
+kind = "digital"
+description = "74LVC1G125 single bus buffer/line driver, 3-state, 5-lead TSSOP5/SC-74A/SOT-23-5 (Nexperia GW/GV, TI DBV/DCK)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC1G125.pdf"
+title = "Nexperia 74LVC1G125 product data sheet, Rev. 17.1, 3 September 2024"
+locator = "Table 3 Pin description and Table 4 Function table p.3; Table 5 Limiting values p.4; Table 6 Recommended operating conditions and Table 7 Static characteristics p.5"
+sha256 = "328e3f53aaae3de57667cef293810b15dc2259fbeeaab8ff8886580a80cf1e3f"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g125.pdf"
+title = "Texas Instruments SN74LVC1G125 datasheet, SCES223U"
+locator = "Pin Configuration and Functions, DBV / DCK 5-pin: 1 OE, 2 A, 3 GND, 4 Y, 5 VCC (same numbering as Nexperia)"
+sha256 = "1098d46e4565695e9823a08309bc581e2c9ead26b19e99a43a011a38642b27ca"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd and enable/disable times are not modelled; only the DC function table and supply-referenced levels are"
+
+[models.match]
+# 5-lead packages only. The XSON6 parts (GM/GN/GS, TI DRY/DSF) move VCC to pin
+# 6 and are not matched. The bare "74LVC1G125D" seen in the corpus is a
+# library name on a SOT-23-5 footprint, not an ordering code.
+value_re = "(?i)^(SN)?74LVC1G125(GW|GV|DBV|DCK|D)?[RT]?([,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IO = -100 uA, VCC 3.3 V
+vol = 0.1
+vih = 2.0
+vil = 0.8
+# VCC = 3.0 V, IO = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-9     # A to Y max, VCC 3.0 V to 3.6 V, -40 to 85 C
+supply_static_ua = 4.0
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.69, 1.7], [2.7, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [2.71, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+"1" = "oe_n"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G125 Rev. 17.1, Table 6 VCC 1.65 V to 5.5 V; Table 5 VCC -0.5 V to +6.5 V"
+
+[models.logic]
+inputs = ["a", "oe_n"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+[models.logic.tristate]
+y = { enable = "oe_n", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "sn74lvc2g34"
+kind = "digital"
+description = "TI SN74LVC2G34 dual buffer gate, 6-pin SOT-23 / SC70 / SOT-563"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc2g34.pdf"
+title = "Texas Instruments SN74LVC2G34 datasheet, SCES359J, revised October 2015"
+locator = "5 Pin Configuration and Functions p.3; 6.1 Absolute Maximum Ratings p.3; 6.3 Recommended Operating Conditions and 6.4 Thermal Information p.4; 6.5 Electrical Characteristics p.5"
+sha256 = "faa5171ab00e49fc087355ba26b361574800272ba730c6b8f9dc88225a8d0bb7"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is not modelled; only the DC buffer function and supply-referenced levels are"
+
+[models.match]
+# DBV, DCK and DRL share the numbering below; the YZP DSBGA is not matched.
+value_re = "(?i)^(SN)?74LVC2G34(DBV|DCK|DRL)?[RT]?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA
+vol = 0.1
+vih = 2.0
+vil = 0.8
+# VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.1e-9     # VCC 3.3 V +/- 0.3 V, -40 to 85 C
+supply_static_ua = 10.0
+supply_pin = "5"
+gnd_pin = "2"
+
+[models.levels]
+# 6.3: 0.65/0.35 x VCC at 1.65 to 1.95 V, 1.7/0.7 at 2.3 to 2.7 V, 2.0/0.8 at
+# 3 to 3.6 V, 0.7/0.3 x VCC at 4.5 to 5.5 V.
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+"1" = "a1"
+"2" = "gnd"
+"3" = "a2"
+"4" = "y2"
+"5" = "vcc"
+"6" = "y1"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+theta_ja_c_per_w = 165.0   # DBV; DCK 259, DRL 142
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC2G34 SCES359J, 6.3 VCC 1.65 V to 5.5 V; 6.1 VCC -0.5 V to 6.5 V"
+
+[models.logic]
+inputs = ["a1", "a2"]
+outputs = ["y1", "y2"]
+[models.logic.comb]
+y1 = "a1"
+y2 = "a2"
+
+[models.coverage]
+implements = ["buffer", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "sn74lv1t34"
+kind = "digital"
+description = "TI SN74LV1T34 single-supply buffer with level-shifting (reduced-threshold, 5.5 V tolerant) input, SOT-23-5 / SC70-5"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lv1t34.pdf"
+title = "Texas Instruments SN74LV1T34 datasheet, SCLS743E, revised February 2024"
+locator = "Table 5-1 Pin Functions p.4; 6.1 Absolute Maximum Ratings, 6.3 Recommended Operating Conditions p.5; 6.4 Thermal Information and 6.5 Electrical Characteristics p.6"
+sha256 = "512f47938da1eaf50eb0191790db592b2bef4f31dd5f986f1843ce6e92de7df8"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is not modelled; only the DC buffer function and the reduced input thresholds are"
+
+[models.match]
+value_re = "(?i)^(SN)?74LV1T34(DBV|DCK)?[RT]?$"
+
+[models.params]
+voh = 4.9          # VCC - 0.1 V at IOH = -20 uA, VCC 5 V
+vol = 0.1
+vih = 2.03         # VCC 4.5 to 5.0 V, -40 to 125 C
+vil = 0.8
+# VCC = 3.3 V, IOH = -5.5 mA: VOH 2.8 V min (-40 to 125 C) against 3.2 V,
+# 0.4 V / 5.5 mA = 73 Ohm, the worst row (5 V: 0.4 V / 8 mA = 50 Ohm).
+ro = 73.0
+supply_static_ua = 10.0
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 6.5, -40 to 125 C columns (the guaranteed full-range figures). VIL dips from
+# 0.71 V at 2.75 V to 0.65 V at 3 V exactly as the table states.
+vih = [[1.65, 1.0], [1.8, 1.0], [2.0, 1.03], [2.25, 1.18], [2.5, 1.18], [2.75, 1.25], [3.0, 1.39], [3.3, 1.39], [3.6, 1.48], [4.5, 2.03], [5.0, 2.03], [5.5, 2.11]]
+vil = [[1.65, 0.55], [2.0, 0.55], [2.25, 0.71], [2.75, 0.71], [3.0, 0.65], [3.6, 0.65], [4.5, 0.8], [5.5, 0.8]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+# Pin 1 is NC (Table 5-1) and is left unmapped.
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025   # IO continuous abs max
+max_voltage_v = 7.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 278.0    # DBV; DCK 289.2
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.6
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74LV1T34 SCLS743E, 6.3 VCC 1.6 V to 5.5 V; 6.1 VCC -0.5 V to 7.0 V"
+
+[models.logic]
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+
+[models.coverage]
+implements = ["buffer", "logic_levels", "reduced_input_threshold"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ── NTS0104GU12: 4-bit auto-direction translator, IDENTITY ONLY ─────────────
+# Pass-gate plus one-shot edge accelerators (datasheet section 14.2), the same
+# architecture as the TXS0108E, and the sheet publishes no pass-gate
+# on-resistance, so no existing primitive can model it honestly (see the
+# NTS0104 note in analog_switch.toml). This card names the part, maps its pins
+# and checks its supply envelopes; it binds as identity-only and every verdict
+# that depends on translation stays unresolved.
+[[models]]
+id = "nts0104gu12_identity"
+kind = "digital"
+description = "NXP/Nexperia NTS0104GU12 4-bit auto-direction level translator, XQFN-12 (identity, pin map and operating envelopes only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.nxp.com/docs/en/data-sheet/NTS0104.pdf"
+title = "NXP NTS0104 dual supply translating transceiver; open drain; auto direction sensing, Rev. 3, 3 January 2012"
+locator = "Pinning (GU12 / XQFN12); Limiting values; Recommended operating conditions (VCC(A) <= VCC(B)); section 14.2 architecture"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "level_translation_behavior"
+reason = "auto-direction sensing, one-shot edge acceleration, pass-gate resistance (not published), 10 kOhm port pull-ups and OE timing are not modelled; the sha256 is not recorded because every vendor and distributor URL returned a bot-check page on 2026-10-01, and the pin map and limits are the transcription of Rev. 3 kept in analog_switch.toml"
+
+[models.match]
+# GU12 only: the DHVQFN14 (BQ) and TSSOP14 (PW) packages number their pins differently.
+value_re = "(?i)^NTS0104GU12(,115)?$"
+
+[models.params]
+identity_only = true
+warning = "NTS0104 is an auto-direction level translator; only identity, the XQFN-12 pin map and the sourced supply envelopes are modelled, not translation behaviour or timing"
+unlocked_by = "a validated pass-gate translator model with a sourced on-resistance, direction sensing, one-shot acceleration and the OE-gated 10 kOhm pull-ups"
+
+[models.pins]
+"1" = "vcca"
+"2" = "a1"
+"3" = "a2"
+"4" = "a3"
+"5" = "a4"
+"6" = "gnd"
+"7" = "b4"
+"8" = "b3"
+"9" = "b2"
+"10" = "b1"
+"11" = "vccb"
+"12" = "oe"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 6.5
+basis = "NXP NTS0104 Rev. 3, Recommended operating conditions VCC(A) 1.65 V to 3.6 V; Limiting values -0.5 V to +6.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 6.5
+basis = "NXP NTS0104 Rev. 3, Recommended operating conditions VCC(B) 2.3 V to 5.5 V; Limiting values -0.5 V to +6.5 V"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vcca"
+upper = "vccb"
+basis = "NXP NTS0104 Rev. 3, Recommended operating conditions: VCC(A) must be less than or equal to VCC(B)"

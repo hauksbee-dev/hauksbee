@@ -375,6 +375,12 @@ pub struct Logic {
     /// [`Logic::validate_with_features`] with [`Logic::FEATURE_MEMORY`].
     #[serde(default, rename = "memory", skip_serializing_if = "Vec::is_empty")]
     pub memories: Vec<MemorySpec>,
+    /// Bidirectional pins: input name -> the declared output whose pin net it
+    /// samples. A direction-controlled transceiver (the xT45 translators) reads
+    /// `a1_in` off pin A1 while its own A1 driver is tri-stated, and drives A1
+    /// from B1 when the direction flips.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sense: BTreeMap<String, String>,
 }
 
 impl Logic {
@@ -388,6 +394,7 @@ impl Logic {
             && self.tristate.is_empty()
             && self.init.is_empty()
             && self.memories.is_empty()
+            && self.sense.is_empty()
     }
 }
 
@@ -999,6 +1006,17 @@ impl Logic {
                 })
             }
         };
+
+        for (input, pin) in &self.sense {
+            need_input("sense".into(), input)?;
+            if !outputs.contains(pin.as_str()) {
+                let context = format!("sense '{input}' (which must name an output)");
+                return Err(LogicSpecError::UndeclaredName {
+                    context,
+                    name: pin.clone(),
+                });
+            }
+        }
 
         // ── Registers ──
         for r in &self.registers {
@@ -1624,6 +1642,17 @@ disable = [
         logic
             .validate_with_features(&[Logic::FEATURE_MEMORY])
             .unwrap();
+    }
+
+    /// A bidirectional pin's sense input must name a declared input and an output.
+    #[test]
+    fn sense_names_an_input_and_a_declared_output() {
+        let src = |pin: &str| {
+            format!("inputs = [\"dir\", \"a_in\"]\noutputs = [\"a\", \"b\"]\n[sense]\na_in = \"{pin}\"\n[comb]\na = \"dir\"\nb = \"a_in\"\n")
+        };
+        assert!(parse_logic(&src("a")).validate().is_ok());
+        let err = parse_logic(&src("y")).validate().unwrap_err();
+        assert!(err.to_string().contains("sense 'a_in'"), "{err}");
     }
 
     #[test]

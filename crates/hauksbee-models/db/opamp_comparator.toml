@@ -1120,7 +1120,9 @@ description = "TL072/TL082 dual JFET-input op-amp (original die), 8-pin, split o
 # recommended supply, different GBW, and the U/FK packages it alone comes in
 # have different pin maps). Both fall out of requiring the optional grade
 # letter to be A or B and the optional temperature letter to be C or I.
-value_re = "(?i)^TL0[78]2[AB]?([CI][A-Z0-9]*)?$"
+# A trailing " OP AMP" is a schematic library's description glued onto the
+# value (eurorack-pmod writes "TL072 OP AMP"); it names the same part.
+value_re = "(?i)^TL0[78]2[AB]?([CI][A-Z0-9]*)?( OP ?AMP)?$"
 
 # VICR, one entry per channel, in the shape the lm358 entry above documents:
 # it fires only when BOTH inputs of a channel sit above V(VCC+) - 4 V.
@@ -1213,7 +1215,9 @@ description = "TL074/TL084 quad JFET-input op-amp (original die), 14-pin, split 
 [models.match]
 # The quad. H and M excluded as on the dual: the M grade is the only one in the
 # 20-pin FK (LCCC) package, whose map is not this one.
-value_re = "(?i)^TL0[78]4[AB]?([CI][A-Z0-9]*)?$"
+# A trailing " OP AMP" is a schematic library's description glued onto the
+# value (eurorack-pmod writes "TL074 OP AMP"); it names the same part.
+value_re = "(?i)^TL0[78]4[AB]?([CI][A-Z0-9]*)?( OP ?AMP)?$"
 
 [[models.envelope]]
 kind = "input_common_mode"
@@ -2511,3 +2515,169 @@ max_pin_current_a = 0.002     # analog input pins, +/-2 mA
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 120.0      # Thermal Resistance, 14-Lead SOIC (PDIP 70,
                               # TSSOP 100)
+
+# ── INA199 zero-drift current-shunt monitors, SC70-6 (DCK), 2026-10-01 ───────
+# Source: TI INA199 datasheet SBOS469H (October 2023). Same `opamp` shape as the
+# INA186 entries above (difference amplifier around REF), but this datasheet
+# publishes the output swing relative to the rails (6.5: V+ - 0.2 V max and
+# GND + 0.05 V max into 10 kOhm, -40 to 125 C), so these cards use the
+# supply-referenced `swing_hi`/`swing_lo` instead of a fixed ceiling.
+
+[[models]]
+id = "ina199x1_dck"
+kind = "opamp"
+description = "INA199x1 current-shunt monitor, gain 50 V/V, SC70-6 (DCK)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ina199.pdf"
+title = "Texas Instruments INA199 datasheet, SBOS469H, revised October 2023"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings p.4; 6.4 Thermal Information p.5; 6.5 Electrical Characteristics (gain, swing, bandwidth, slew, VS) p.6"
+sha256 = "80b0656c179849042489eb447679e03adb2a2cd7c16caa79382a6e6d6d3b9aae"
+
+[models.match]
+# A, B and C share the DCK pinout and gain; they differ in input common-mode
+# floor and gain-error limit. The RSW (UQFN-10) numbering differs and is not matched.
+value_re = "(?i)^INA199[ABC]1(DCK[RT]?)?$"
+
+[models.params]
+gain = 50.0
+pole_hz = 80000.0       # 6.5 bandwidth, CLOAD = 10 pF, typical
+slew = 0.4            # V/us typical
+swing_hi = 0.2        # V+ - 0.2 V max, RL = 10 kOhm, -40 to 125 C
+swing_lo = 0.05       # GND + 0.05 V max
+warning = "the input common-mode range (-0.3 V to 26 V), the 28 uA input bias current, input offset (150 uV max) and the output current limit are not modelled; gain error is up to +/-1.5% (6.5, -40 to 125 C) and bandwidth is the datasheet typical"
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[models.ratings]
+max_voltage_v = 26.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 227.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 26.0
+abs_max_v = 26.0
+basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 125 C); 6.1 supply voltage 26 V abs max"
+
+[models.coverage]
+implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
+missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
+           "input_bias_current", "parameter_spread"]
+
+[[models]]
+id = "ina199x2_dck"
+kind = "opamp"
+description = "INA199x2 current-shunt monitor, gain 100 V/V, SC70-6 (DCK)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ina199.pdf"
+title = "Texas Instruments INA199 datasheet, SBOS469H, revised October 2023"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings p.4; 6.4 Thermal Information p.5; 6.5 Electrical Characteristics (gain, swing, bandwidth, slew, VS) p.6"
+sha256 = "80b0656c179849042489eb447679e03adb2a2cd7c16caa79382a6e6d6d3b9aae"
+
+[models.match]
+# A, B and C share the DCK pinout and gain; they differ in input common-mode
+# floor and gain-error limit. The RSW (UQFN-10) numbering differs and is not matched.
+value_re = "(?i)^INA199[ABC]2(DCK[RT]?)?$"
+
+[models.params]
+gain = 100.0
+pole_hz = 30000.0       # 6.5 bandwidth, CLOAD = 10 pF, typical
+slew = 0.4            # V/us typical
+swing_hi = 0.2        # V+ - 0.2 V max, RL = 10 kOhm, -40 to 125 C
+swing_lo = 0.05       # GND + 0.05 V max
+warning = "the input common-mode range (-0.3 V to 26 V), the 28 uA input bias current, input offset (150 uV max) and the output current limit are not modelled; gain error is up to +/-1.5% (6.5, -40 to 125 C) and bandwidth is the datasheet typical"
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[models.ratings]
+max_voltage_v = 26.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 227.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 26.0
+abs_max_v = 26.0
+basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 125 C); 6.1 supply voltage 26 V abs max"
+
+[models.coverage]
+implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
+missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
+           "input_bias_current", "parameter_spread"]
+
+[[models]]
+id = "ina199x3_dck"
+kind = "opamp"
+description = "INA199x3 current-shunt monitor, gain 200 V/V, SC70-6 (DCK)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ina199.pdf"
+title = "Texas Instruments INA199 datasheet, SBOS469H, revised October 2023"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings p.4; 6.4 Thermal Information p.5; 6.5 Electrical Characteristics (gain, swing, bandwidth, slew, VS) p.6"
+sha256 = "80b0656c179849042489eb447679e03adb2a2cd7c16caa79382a6e6d6d3b9aae"
+
+[models.match]
+# A, B and C share the DCK pinout and gain; they differ in input common-mode
+# floor and gain-error limit. The RSW (UQFN-10) numbering differs and is not matched.
+value_re = "(?i)^INA199[ABC]3(DCK[RT]?)?$"
+
+[models.params]
+gain = 200.0
+pole_hz = 14000.0       # 6.5 bandwidth, CLOAD = 10 pF, typical
+slew = 0.4            # V/us typical
+swing_hi = 0.2        # V+ - 0.2 V max, RL = 10 kOhm, -40 to 125 C
+swing_lo = 0.05       # GND + 0.05 V max
+warning = "the input common-mode range (-0.3 V to 26 V), the 28 uA input bias current, input offset (150 uV max) and the output current limit are not modelled; gain error is up to +/-1.5% (6.5, -40 to 125 C) and bandwidth is the datasheet typical"
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[models.ratings]
+max_voltage_v = 26.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 227.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 26.0
+abs_max_v = 26.0
+basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 125 C); 6.1 supply voltage 26 V abs max"
+
+[models.coverage]
+implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
+missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
+           "input_bias_current", "parameter_spread"]

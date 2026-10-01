@@ -8104,6 +8104,7 @@ missing = ["measurement_registers"]
             drivers: HashMap::new(),
             logic: Some(logic),
             supply: None,
+            rails: hauksbee_bind::digital::RailLevels::default(),
         };
         let net_nodes = role_names
             .iter()
@@ -8267,6 +8268,7 @@ data_out = ["io0"]
                 drivers: HashMap::from([("qa".to_string(), output)]),
                 logic: None,
                 supply: None,
+                rails: hauksbee_bind::digital::RailLevels::default(),
             });
         m.sched.build_and_install_parallel_memories();
         assert!(m.sched.parallel_memory_chips.is_empty());

@@ -76,6 +76,13 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub levels: BTreeMap<String, Vec<[f64; 2]>>,
 
+    /// Dual-supply parts: supply role -> the pin roles whose levels are read at
+    /// that rail instead of `vcc`/`vdd` (a translator's A port at `vcca`, its B
+    /// port at `vccb`). While any rail named here is unpowered every output is
+    /// high impedance, the xT45 family's VCC-isolation behaviour.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub level_rails: BTreeMap<String, Vec<String>>,
+
     /// Pad-number to role mapping.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,

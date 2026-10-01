@@ -3595,3 +3595,282 @@ max_voltage_v=20.0
 max_junction_temp_c=125.0
 theta_ja_c_per_w=73.3
 theta_jc_c_per_w=90.6
+
+# ── Fixed LDOs added 2026-10-01 (corpus: Duet2, BMS/MPPT, Feather M0, GB) ────
+# Every card below is a FIXED-output order code. Each family also ships an
+# adjustable member whose ADJ/FB reference (0.8 V AP7361C, 1.235 V SPX3819,
+# ADJ AP2210) is NOT an output voltage and is not recorded as one: the voltage
+# code in the match rule is required. Where a family's pin map changes with
+# package, the package is pinned by the order-code letter or by `footprint_re`.
+
+[[models]]
+id = "ap7361c_33e"
+kind = "vreg"
+description = "Diodes AP7361C-33E 1A LDO, 3.3V fixed, SOT223 (no enable)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP7361C.pdf"
+title = "Diodes Incorporated AP7361C 1A low dropout adjustable and fixed-mode regulator with enable, DS37274 Rev. 5-2, October 2020"
+locator = "Pin Descriptions p.2 (SOT223 column); Absolute Maximum Ratings and Recommended Operating Conditions p.4; Electrical Characteristics p.5-6; Ordering Information"
+sha256 = "9b64f49c5975b2baf2360248a75212599bde8bf083d315d936e4f1c93b2e1f92"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.267
+high = 3.333
+unit = "V"
+kind = "specification-limits"
+basis = "AP7361C DS37274 Electrical Characteristics, output voltage accuracy VOUT(s) x 0.99 to x 1.01 for 1.5 V to 3.3 V, IOUT = 100 mA, TA = 25 C"
+
+[models.match]
+# Ordering Information: "33" = 3.3 V, "E" = SOT223 (pin 1 IN, 2 GND, 3 OUT,
+# tab GND). "ER" is the reversed SOT223R (1 GND, 2 OUT, 3 IN) and must not match.
+value_re = "(?i)^AP7361C-33E(-13|-7)?$"
+
+[models.params]
+vout = 3.3
+dropout_v = 0.34     # 2.6 V <= VOUT <= 3.3 V at IOUT = 1 A, TYPICAL (no max is
+                     # printed at 1 A; 140 mV max at 300 mA)
+iq_a = 60.0e-6       # IQ typ, enabled, IOUT = 0 (80 uA max)
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+"4" = "gnd"          # SOT223 tab, the GND pin's tab
+
+[models.ratings]
+max_current_a = 1.0          # IOUT max, recommended operating conditions
+max_voltage_v = 6.5          # VIN abs max (2.2 V to 6.0 V recommended)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 110.0     # SOT223, minimum recommended pad (Note 9)
+
+[[models]]
+id = "ap2210_3v3_sot23_5"
+kind = "vreg"
+description = "Diodes AP2210-3.3 300mA ULDO, 3.3V fixed, SOT-23-5 (EN, BYP)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2210.pdf"
+title = "Diodes Incorporated AP2210 300mA RF ULDO regulator, DS37517 Rev. 4-2, March 2021"
+locator = "Pin Descriptions p.2 (SOT23-5 column); Absolute Maximum Ratings and Recommended Operating Conditions p.4; AP2210-3.3 Electrical Characteristics p.11-12; Ordering Information (K = SOT-23-5, N = SOT-23-3)"
+sha256 = "8d83ef61593fff5ef0ad0f0d767fa53f7e459b6bf64acd48fbfea8165dc81e22"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.234
+high = 3.366
+unit = "V"
+kind = "specification-limits"
+basis = "AP2210-3.3 Electrical Characteristics, output voltage accuracy +/-2% over -40 to 125 C (+/-1% at 25 C)"
+
+[models.match]
+# AP2210K-3.3 is SOT-23-5; AP2210N-3.3 is SOT-23-3 with a different pin map
+# (1 GND, 2 VOUT, 3 VIN). The bare "AP2210-3.3" on the corpus boards names no
+# package, so the footprint gates it to the five-lead map below.
+value_re = "(?i)^AP2210K?-3[._]3(TR[EG]1)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+vout = 3.3
+dropout_v = 0.5      # VDROP max at IOUT = 300 mA, -40 to 125 C (400 mV at 25 C)
+iq_a = 100.0e-6      # IGND typ at IOUT = 100 uA (180 uA max over temperature)
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "byp"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.3
+max_voltage_v = 15.0         # VIN abs max (2.5 V to 13.2 V recommended)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 200.0     # SOT-23-5, no heatsink
+
+[[models]]
+id = "spx3819_3v3_sot23_5"
+kind = "vreg"
+description = "MaxLinear (Exar/Sipex) SPX3819-3.3 500mA low-noise LDO, 3.3V fixed, SOT-23-5 (EN, BYP)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.maxlinear.com/ds/spx3819.pdf"
+title = "MaxLinear SPX3819 500mA low-noise LDO voltage regulator, Rev. 2.0.5, December 2019"
+locator = "Absolute Maximum Ratings and Operating Ratings p.2; Electrical Specifications p.2-3; Pin Description p.3 (SOT-23 column); Ordering Information p.4"
+sha256 = "43b63129331150a20339623920ea9f7be758d93e700a3459beb190d483ad35a2"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.234
+high = 3.366
+unit = "V"
+kind = "specification-limits"
+basis = "SPX3819 Electrical Specifications, output voltage tolerance +/-2% over the operating junction range (+/-1% at 25 C)"
+
+[models.match]
+# SPX3819M5-L-3-3 is the SOT-23-5 order code; the NSOIC-8 and DFN-8 parts
+# number their pins differently, so a bare "SPX3819-3.3" is gated by footprint.
+value_re = "(?i)^SPX3819(M5)?(-L)?[- ]?3[._-]3(/TR)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+vout = 3.3
+dropout_v = 0.7      # max at IL = 500 mA over the junction range (550 mV at 25 C)
+iq_a = 90.0e-6       # IGND typ at IL = 100 uA (190 uA max over temperature)
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "byp"          # fixed versions; ADJ on the adjustable part
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.5
+max_voltage_v = 20.0         # VIN, EN abs max (2.5 V to 16 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 191.0     # SOT23-5
+
+[[models]]
+id = "mcp1703a_18_sot89"
+kind = "vreg"
+description = "Microchip MCP1703A-1802 250mA LDO, 1.8V fixed, SOT-89-3 (/MB)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/20005122B.pdf"
+title = "Microchip MCP1703A 250 mA, 16V, low quiescent current LDO regulator, DS20005122B"
+locator = "Package Types p.1; Absolute Maximum Ratings and DC Characteristics p.2-3; Temperature Specifications p.4; Table 3-1 p.11 (SOT-89 column: 1 GND, 2/tab VIN, 3 VOUT); Product Identification System"
+sha256 = "ee4e9c3b0b2c09bb94a5b8f4a54017d4c4a535df67e0abe93495077013afc780"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.746
+high = 1.854
+unit = "V"
+kind = "specification-limits"
+basis = "MCP1703A DC Characteristics, output voltage regulation VR-3.0% to VR+3.0% (the widest printed band; the standard order code is the 2.0% tolerance grade)"
+
+[models.match]
+# Product Identification: 18 = 1.8 V, 0 = fixed, 2 = 2% tolerance, E = -40
+# to 125 C, MB = SOT-89-3. Other packages (CB SOT-23A, DB SOT-223, MC DFN) use
+# different pin maps and are not matched.
+value_re = "(?i)^MCP1703AT?-1802E?/MB$"
+
+[models.params]
+vout = 1.8
+dropout_v = 0.9     # NOT a dropout figure: none is printed below VR = 2.5 V. The
+                    # datasheet instead requires VIN >= 2.7 V (DC Characteristics
+                    # Note 1), and 2.7 V - 1.8 V is the headroom that rule implies.
+iq_a = 2.0e-6       # Iq typ, IL = 0 (5 uA max)
+
+[models.pins]
+"1" = "gnd"
+"2" = "in"           # pin 2 and the tab
+"3" = "out"
+
+[models.ratings]
+max_current_a = 0.2        # VR < 2.5 V: 200 mA min only with VIN >= 3.45 V (50 mA at 2.7 V)
+max_voltage_v = 18.0         # VDD abs max (2.7 V to 16 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 180.0     # 3LD SOT-89, EIA/JEDEC JESD51-7
+
+[[models]]
+id = "mcp1703a_33_sot89"
+kind = "vreg"
+description = "Microchip MCP1703A-3302 250mA LDO, 3.3V fixed, SOT-89-3 (/MB)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/20005122B.pdf"
+title = "Microchip MCP1703A 250 mA, 16V, low quiescent current LDO regulator, DS20005122B"
+locator = "Package Types p.1; Absolute Maximum Ratings and DC Characteristics p.2-3; Temperature Specifications p.4; Table 3-1 p.11 (SOT-89 column: 1 GND, 2/tab VIN, 3 VOUT); Product Identification System"
+sha256 = "ee4e9c3b0b2c09bb94a5b8f4a54017d4c4a535df67e0abe93495077013afc780"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.201
+high = 3.399
+unit = "V"
+kind = "specification-limits"
+basis = "MCP1703A DC Characteristics, output voltage regulation VR-3.0% to VR+3.0% (the widest printed band; the standard order code is the 2.0% tolerance grade)"
+
+[models.match]
+# Product Identification: 33 = 3.3 V, 0 = fixed, 2 = 2% tolerance, E = -40
+# to 125 C, MB = SOT-89-3. Other packages (CB SOT-23A, DB SOT-223, MC DFN) use
+# different pin maps and are not matched.
+value_re = "(?i)^MCP1703AT?-3302E?/MB$"
+
+[models.params]
+vout = 3.3
+dropout_v = 0.725    # VDROPOUT max at IL = 250 mA for this VR band
+iq_a = 2.0e-6       # Iq typ, IL = 0 (5 uA max)
+
+[models.pins]
+"1" = "gnd"
+"2" = "in"           # pin 2 and the tab
+"3" = "out"
+
+[models.ratings]
+max_current_a = 0.25        # 250 mA for VR >= 2.5 V
+max_voltage_v = 18.0         # VDD abs max (2.7 V to 16 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 180.0     # 3LD SOT-89, EIA/JEDEC JESD51-7
+
+[[models]]
+id = "mcp1703a_50_sot89"
+kind = "vreg"
+description = "Microchip MCP1703A-5002 250mA LDO, 5.0V fixed, SOT-89-3 (/MB)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/20005122B.pdf"
+title = "Microchip MCP1703A 250 mA, 16V, low quiescent current LDO regulator, DS20005122B"
+locator = "Package Types p.1; Absolute Maximum Ratings and DC Characteristics p.2-3; Temperature Specifications p.4; Table 3-1 p.11 (SOT-89 column: 1 GND, 2/tab VIN, 3 VOUT); Product Identification System"
+sha256 = "ee4e9c3b0b2c09bb94a5b8f4a54017d4c4a535df67e0abe93495077013afc780"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.85
+high = 5.15
+unit = "V"
+kind = "specification-limits"
+basis = "MCP1703A DC Characteristics, output voltage regulation VR-3.0% to VR+3.0% (the widest printed band; the standard order code is the 2.0% tolerance grade)"
+
+[models.match]
+# Product Identification: 50 = 5.0 V, 0 = fixed, 2 = 2% tolerance, E = -40
+# to 125 C, MB = SOT-89-3. Other packages (CB SOT-23A, DB SOT-223, MC DFN) use
+# different pin maps and are not matched.
+value_re = "(?i)^MCP1703AT?-5002E?/MB$"
+
+[models.params]
+vout = 5.0
+dropout_v = 0.65    # VDROPOUT max at IL = 250 mA for this VR band
+iq_a = 2.0e-6       # Iq typ, IL = 0 (5 uA max)
+
+[models.pins]
+"1" = "gnd"
+"2" = "in"           # pin 2 and the tab
+"3" = "out"
+
+[models.ratings]
+max_current_a = 0.25        # 250 mA for VR >= 2.5 V
+max_voltage_v = 18.0         # VDD abs max (2.7 V to 16 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 180.0     # 3LD SOT-89, EIA/JEDEC JESD51-7
