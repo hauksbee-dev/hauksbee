@@ -4150,3 +4150,602 @@ kind = "rail_order"
 lower = "vcca"
 upper = "vccb"
 basis = "NXP NTS0104 Rev. 3, Recommended operating conditions: VCC(A) must be less than or equal to VCC(B)"
+
+# ── Single-gate 5-lead logic added 2026-10-01 ─────────────────────────────────
+# 74LVC1G04/08/14/17, 74AHC1G04/08 and 74AUP1G04. Every card is the FIVE-LEAD
+# map only: TSSOP5 / SC-74A / SOT-23-5 / SC70-5 / SOT-5X3 / X2SON5 (Nexperia GW,
+# GV, GX; TI DBV, DCK, DRL). The six-pad XSON/SON parts (Nexperia GM/GN/GS, TI
+# DRY/DSF) move VCC to pad 6 and add a second NC, and the DSBGA balls are
+# numbered differently; none of them is matched, so such an order code resolves
+# to nothing rather than to a wrong map. The bare "74LVC1G04D"-style library
+# names seen on boards are accepted, as the 74LVC1G125 card does.
+#
+# Inverters, buffers and the 74LVC1G14/17 Schmitt parts have no B input: pad 1
+# is NC (a pad the datasheet marks "no internal connection"). The two-input AND
+# gates use pad 1 = A, pad 2 = B as TI prints them. Nexperia's 74LVC1G08 and
+# 74AHC1G08 tables print pad 1 = B and pad 2 = A; the two names are swapped but
+# the function is a symmetric two-input AND, so the swap changes nothing.
+
+[[models]]
+id = "74lvc1g04"
+kind = "digital"
+description = "74LVC1G04 single inverter, 5-lead SOT-23-5 / SC70-5 / TSSOP5 (TI DBV/DCK/DRL, Nexperia GW/GV/GX)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g04.pdf"
+title = "Texas Instruments SN74LVC1G04 Single Inverter Gate datasheet, SCES214AF, revised October 2025"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL: 1 NC, 2 A, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions and 5.4 Thermal Information p.5; 5.5 Electrical Characteristics and 5.7 Switching Characteristics p.6"
+sha256 = "ac04a53de979125799e57ea5a6dff4138fe53e0eceebe45c31f57523669887d5"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC1G04.pdf"
+title = "Nexperia 74LVC1G04 Single inverter product data sheet, Rev. 18.1, 2 September 2024"
+locator = "Table 3 Pin description p.3 (TSSOP5, SC-74A, XSON5, X2SON5: 1 n.c., 2 A, 3 GND, 4 Y, 5 VCC; XSON6 and X2SON4 differ and are not matched)"
+sha256 = "32ce3e30a62bfef35e0fef8fdf579ac7c657ee4e7d46d7dce023652d682242f2"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G04(GW|GV|GX|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.2e-9     # A to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3: 0.65/0.35 x VCC at 1.65 to 1.95 V, 1.7/0.7 at 2.3 to 2.7 V, 2.0/0.8 at
+# 3 to 3.6 V, 0.7/0.3 x VCC at 4.5 to 5.5 V. VOH is VCC - 0.1 V at -100 uA.
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO abs max
+max_voltage_v = 6.5        # VCC and VI abs max
+theta_ja_c_per_w = 357.1   # DBV; DCK 371.0, DRL 243
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G04 SCES214AF, 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: SN74LVC1G04 SCES214AF, 3 Description: the device performs the Boolean function Y = A with the output inverted (inverter).
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!a"
+
+[models.coverage]
+implements = ["inverter", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74lvc1g08"
+kind = "digital"
+description = "74LVC1G08 single 2-input AND gate, 5-lead SOT-23-5 / SC70-5 / TSSOP5 (TI DBV/DCK/DRL, Nexperia GW/GV/GX)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g08.pdf"
+title = "Texas Instruments SN74LVC1G08 Single 2-Input Positive-AND Gate datasheet, SCES217AA, revised August 2026"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL, YZP: 1 A, 2 B, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions and 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.6; 5.8 Switching Characteristics p.7"
+sha256 = "30b963cc44233cf3ca35c891ff987c8323a2244ecc765e23296ec96ca4b42666"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC1G08.pdf"
+title = "Nexperia 74LVC1G08 2-input AND gate product data sheet, Rev. 16.1, 3 September 2024"
+locator = "Table 3 Pin description p.3 (TSSOP5, SC-74A, XSON5, X2SON5: 1 B, 2 A, 3 GND, 4 Y, 5 VCC; XSON6 differs and is not matched)"
+sha256 = "4bd4bb56862630b252b2d09cf8c47354802cc525f952a8bfecc820f7984a00bc"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G08(GW|GV|GX|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-9     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3: 0.65/0.35 x VCC at 1.65 to 1.95 V, 1.7/0.7 at 2.3 to 2.7 V, 2.0/0.8 at
+# 3 to 3.6 V, 0.7/0.3 x VCC at 4.5 to 5.5 V. VOH is VCC - 0.1 V at -100 uA.
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO abs max
+max_voltage_v = 6.5        # VCC and VI abs max
+theta_ja_c_per_w = 357.1   # DBV; DCK 371, DRL 364.1
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G08 SCES217AA, 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: SN74LVC1G08 SCES217AA, 3 Description: positive-AND gate, Y = A . B.
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a & b"
+
+[models.coverage]
+implements = ["combinational_and", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74lvc1g14"
+kind = "digital"
+description = "74LVC1G14 single Schmitt-trigger inverter, 5-lead SOT-23-5 / SC70-5 / TSSOP5 (TI DBV/DCK/DRL, Nexperia GW/GV/GX)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC1G14.pdf"
+title = "Nexperia 74LVC1G14 Single Schmitt-trigger inverter product data sheet, Rev. 19.1, 3 September 2024"
+locator = "Table 3 Pin description p.3 (TSSOP5, SC-74A, XSON5, X2SON5: 1 n.c., 2 A, 3 GND, 4 Y, 5 VCC); Table 5 Limiting values p.4; Table 6 Recommended operating conditions and Table 7 Static characteristics p.5; Table 8 Transfer characteristics p.6; Table 9 Dynamic characteristics p.7"
+sha256 = "34e87b6f9efd59875076add0a0ccec9cf9ec25c981cbf3ce9d91b37bc25594e2"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g14.pdf"
+title = "Texas Instruments SN74LVC1G14 Single Schmitt-Trigger Inverter datasheet, SCES218AA, revised October 2025"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL: 1 NC, 2 A, 3 GND, 4 Y, 5 VCC); 5.4 Thermal Information p.6; 5.5 Electrical Characteristics VT+ / VT-"
+sha256 = "d64e41f0a267e8c5f73873058561642c57e093a2b7ecb4715d7ab62f0ef31a4f"
+# The `vih`/`vil` params below are the Nexperia TYPICALS at VCC = 3.0 V (VT+ 1.5 V,
+# VT- 1.0 V, hysteresis 0.5 V), and the `[models.levels]` tables follow the
+# typicals across the VCC columns; the guaranteed window is what a board with a
+# precise trip point must be judged against. The table starts at 1.8 V because
+# that is the lowest supply Nexperia tabulates (the part runs from 1.65 V); the
+# value is held flat below it.
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vih"
+low = 1.29
+high = 1.71
+unit = "V"
+kind = "specification-limits"
+basis = "74LVC1G14 VT+ positive-going threshold, Nexperia Table 8 at VCC = 3.0 V, -40 to 85 C"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vil"
+low = 0.88
+high = 1.24
+unit = "V"
+kind = "specification-limits"
+basis = "74LVC1G14 VT- negative-going threshold, Nexperia Table 8 at VCC = 3.0 V, -40 to 85 C"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vendor_spread"
+reason = "Vendor spread is a second axis the supply tables do not cover: TI SN74LVC1G14 SCES218AA 5.5 gives VT+ 1.5 min / 1.87 max and VT- 0.84 min / 1.14 max at VCC = 3 V (no typicals are printed)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G14(GW|GV|GX|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+# Source: Nexperia 74LVC1G14 Table 7 and Table 8, VCC = 3.0 V column. See above.
+voh = 2.9          # VCC - 0.1 V at IO = -100 uA, VCC = 3.0 V
+vol = 0.1
+vih = 1.5          # VT+ typ (1.29 min, 1.71 max); VT+ - VT- = 0.5 V typ
+vil = 1.0          # VT- typ (0.88 min, 1.24 max)
+# VCC = 3.0 V, IO = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 5.5e-9     # A to Y max, VCC 3.0 V to 3.6 V, -40 to 85 C (3.0 ns typ)
+supply_static_ua = 4.0    # ICC max, VI = 5.5 V or GND (0.1 uA typ)
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# Source: Nexperia Table 8 Transfer characteristics, typical VT+ and VT- at VCC =
+# 1.8 V, 2.3 V, 3.0 V, 4.5 V and 5.5 V, read linearly between the columns.
+vih = [[1.8, 1.0], [2.3, 1.2], [3.0, 1.5], [4.5, 2.1], [5.5, 2.5]]
+vil = [[1.8, 0.6], [2.3, 0.8], [3.0, 1.0], [4.5, 1.5], [5.5, 1.8]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO abs max (Nexperia Table 5)
+max_voltage_v = 6.5        # VCC and VI abs max
+theta_ja_c_per_w = 357.1   # TI SCES218AA 5.4, DBV (SOT-23); DCK 371.0
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G14, Table 6 Recommended operating conditions VCC 1.65 V to 5.5 V; Table 5 Limiting values VCC -0.5 V to +6.5 V"
+
+[models.logic]
+# Behaviour source: Nexperia 74LVC1G14, 'Functional description': inverting Schmitt-trigger stage. The Schmitt behaviour is in the vih/vil thresholds above (the engine retains the prior input state between vil and vih), not here.
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!a"
+
+[models.coverage]
+implements = ["inverter", "schmitt_hysteresis", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74lvc1g17"
+kind = "digital"
+description = "74LVC1G17 single Schmitt-trigger buffer, 5-lead SOT-23-5 / SC70-5 / TSSOP5 (TI DBV/DCK/DRL, Nexperia GW/GV/GX)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC1G17.pdf"
+title = "Nexperia 74LVC1G17 Single Schmitt trigger buffer product data sheet, Rev. 16.1, 3 September 2024"
+locator = "Table 3 Pin description p.3 (TSSOP5, SC-74A, XSON5, X2SON5: 1 n.c., 2 A, 3 GND, 4 Y, 5 VCC); Table 5 Limiting values; Table 6 Recommended operating conditions and Table 7 Static characteristics; Table 8 Transfer characteristics; Table 9 Dynamic characteristics"
+sha256 = "cff7c8e80360d22a9df013821325e4d1ddd03022ea0aa1e4ebd296434604c5e9"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g17.pdf"
+title = "Texas Instruments SN74LVC1G17 Single Schmitt-Trigger Buffer datasheet, SCES351Y, revised October 2025"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL: 1 NC, 2 A, 3 GND, 4 Y, 5 VCC); 5.4 Thermal Information p.5; 5.5 Electrical Characteristics, DC Limit Changes (VT+ / VT-)"
+sha256 = "c76fa723fac4502423967a1aa087dd669106b52b8de620c024b26e56f5d59309"
+# The `vih`/`vil` params below are the Nexperia TYPICALS at VCC = 3.0 V (VT+ 1.5 V,
+# VT- 1.0 V, hysteresis 0.5 V), and the `[models.levels]` tables follow the
+# typicals across the VCC columns; the guaranteed window is what a board with a
+# precise trip point must be judged against. The table starts at 1.8 V because
+# that is the lowest supply Nexperia tabulates (the part runs from 1.65 V); the
+# value is held flat below it.
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vih"
+low = 1.29
+high = 1.71
+unit = "V"
+kind = "specification-limits"
+basis = "74LVC1G17 VT+ positive-going threshold, Nexperia Table 8 at VCC = 3.0 V, -40 to 85 C"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vil"
+low = 0.88
+high = 1.24
+unit = "V"
+kind = "specification-limits"
+basis = "74LVC1G17 VT- negative-going threshold, Nexperia Table 8 at VCC = 3.0 V, -40 to 85 C"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vendor_spread"
+reason = "Vendor spread is a second axis the supply tables do not cover: TI SN74LVC1G17 SCES351Y 5.5 gives VT+ 1.48 min / 1.92 max and VT- 0.89 min / 1.2 max at VCC = 3 V (no typicals are printed)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G17(GW|GV|GX|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+# Source: Nexperia 74LVC1G17 Table 7 and Table 8, VCC = 3.0 V column. See above.
+voh = 2.9          # VCC - 0.1 V at IO = -100 uA, VCC = 3.0 V
+vol = 0.1
+vih = 1.5          # VT+ typ (1.29 min, 1.71 max); VT+ - VT- = 0.5 V typ
+vil = 1.0          # VT- typ (0.88 min, 1.24 max)
+# VCC = 3.0 V, IO = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 5.5e-9     # A to Y max, VCC 3.0 V to 3.6 V, -40 to 85 C (3.0 ns typ)
+supply_static_ua = 4.0    # ICC max, VI = 5.5 V or GND (0.1 uA typ)
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# Source: Nexperia Table 8 Transfer characteristics, typical VT+ and VT- at VCC =
+# 1.8 V, 2.3 V, 3.0 V, 4.5 V and 5.5 V, read linearly between the columns.
+vih = [[1.8, 1.0], [2.3, 1.2], [3.0, 1.5], [4.5, 2.1], [5.5, 2.5]]
+vil = [[1.8, 0.6], [2.3, 0.8], [3.0, 1.0], [4.5, 1.5], [5.5, 1.8]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO abs max (Nexperia Table 5)
+max_voltage_v = 6.5        # VCC and VI abs max
+theta_ja_c_per_w = 357.1   # TI SCES351Y 5.4, DBV (SOT-23); DCK 371.0
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G17, Table 6 Recommended operating conditions VCC 1.65 V to 5.5 V; Table 5 Limiting values VCC -0.5 V to +6.5 V"
+
+[models.logic]
+# Behaviour source: Nexperia 74LVC1G17, 'Functional description': non-inverting Schmitt-trigger stage. The Schmitt behaviour is in the vih/vil thresholds above (the engine retains the prior input state between vil and vih), not here.
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+
+[models.coverage]
+implements = ["buffer", "schmitt_hysteresis", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74ahc1g04"
+kind = "digital"
+description = "74AHC1G04 single inverter, 5-lead SOT-23-5 / SC70-5 (TI DBV/DCK/DRL, Nexperia GW/GV)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74ahc1g04.pdf"
+title = "Texas Instruments SN74AHC1G04 Single Inverter Gate datasheet, SCLS318V, revised February 2024"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL: 1 NC, 2 A, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information and 5.5 Electrical Characteristics p.5; 5.6 Switching Characteristics p.6"
+sha256 = "880e5b3989b61227f74cd60e621aeee851648e34e701fb012a0ff97983ed4bb8"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74AHC_AHCT1G04.pdf"
+title = "Nexperia 74AHC1G04; 74AHCT1G04 Inverter product data sheet, Rev. 14, 12 November 2024"
+locator = "Table 3 Pin description p.3 (SOT353-1, SOT753, SOT8065-1: 1 n.c., 2 A, 3 GND, 4 Y, 5 VCC; SOT886 differs and is not matched)"
+sha256 = "8ed99a8d3f9a2679bc445c1509540df119721f26872deb21293bdd419e8a9eea"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74AHC1G04(GW|GV|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 2.9          # VOH min at IOH = -50 uA, VCC 3 V
+vol = 0.1          # IOL = 50 uA
+vih = 2.1          # VCC = 3 V
+vil = 0.9
+# VCC = 3 V, IOH = -4 mA: VOH 2.48 V min (-40 to 85 C) against 2.9 V, 0.42 V / 4 mA = 105 Ohm.
+ro = 105.0
+tpd_s = 1.2e-8     # A to Y max, VCC 3.3 V +/- 0.3 V, CL = 50 pF, -40 to 85 C (7.5 ns typ)
+supply_static_ua = 10.0   # ICC max, VI = VCC or GND, IO = 0, VCC = 5.5 V, -40 to 85 C (1 uA at 25 C)
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# Source: TI SN74AHC1G04 SCLS318V, 5.3 Recommended Operating Conditions (VIH min / VIL max at
+# VCC = 2 V, 3 V and 5.5 V) and 5.5 Electrical Characteristics (VOH min at
+# IOH = -50 uA at VCC = 2 V, 3 V and 4.5 V), read linearly between the columns;
+# VOH is held flat above 4.5 V, where the datasheet prints no higher column.
+vih = [[2.0, 1.5], [3.0, 2.1], [5.5, 3.85]]
+vil = [[2.0, 0.5], [3.0, 0.9], [5.5, 1.65]]
+voh = [[2.0, 1.9], [3.0, 2.9], [4.5, 4.4]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025   # IO abs max
+max_voltage_v = 7.0          # VCC and VI abs max
+theta_ja_c_per_w = 278   # DBV; DCK 289.2, DRL 328.7
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHC1G04 SCLS318V, 5.3 Recommended Operating Conditions VCC 2 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: SN74AHC1G04 SCLS318V, 3 Description: inverter, Y = !A.
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!a"
+
+[models.coverage]
+implements = ["inverter", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74ahc1g08"
+kind = "digital"
+description = "74AHC1G08 single 2-input AND gate, 5-lead SOT-23-5 / SC70-5 (TI DBV/DCK/DRL, Nexperia GW/GV)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74ahc1g08.pdf"
+title = "Texas Instruments SN74AHC1G08 Single 2-Input Positive-AND Gate datasheet, SCLS314R, revised January 2024"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL: 1 A, 2 B, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings; 5.3 Recommended Operating Conditions; 5.4 Thermal Information; 5.5 Electrical Characteristics and 5.6 Switching Characteristics p.5"
+sha256 = "fdefdf1be0436a7d7bacfb4769980599f84d9041080e1337d0c89104e0f683fc"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74AHC_AHCT1G08.pdf"
+title = "Nexperia 74AHC1G08; 74AHCT1G08 2-input AND gate product data sheet, Rev. 10.1, 28 August 2024"
+locator = "Table 3 Pin description p.2 (1 B, 2 A, 3 GND, 4 Y, 5 VCC)"
+sha256 = "5f9588aba8e0ba9d54fe92760d3f944be7a5f155f1be79983ef1c8d309068201"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74AHC1G08(GW|GV|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 2.9          # VOH min at IOH = -50 uA, VCC 3 V
+vol = 0.1          # IOL = 50 uA
+vih = 2.1          # VCC = 3 V
+vil = 0.9
+# VCC = 3 V, IOH = -4 mA: VOH 2.48 V min (-40 to 85 C) against 2.9 V, 0.42 V / 4 mA = 105 Ohm.
+ro = 105.0
+tpd_s = 1.4e-8     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 50 pF, -40 to 85 C (8.7 ns typ at 25 C)
+supply_static_ua = 10.0   # ICC max, VI = VCC or GND, IO = 0, VCC = 5.5 V, -40 to 85 C (1 uA at 25 C)
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# Source: TI SN74AHC1G08 SCLS314R, 5.3 Recommended Operating Conditions (VIH min / VIL max at
+# VCC = 2 V, 3 V and 5.5 V) and 5.5 Electrical Characteristics (VOH min at
+# IOH = -50 uA at VCC = 2 V, 3 V and 4.5 V), read linearly between the columns;
+# VOH is held flat above 4.5 V, where the datasheet prints no higher column.
+vih = [[2.0, 1.5], [3.0, 2.1], [5.5, 3.85]]
+vil = [[2.0, 0.5], [3.0, 0.9], [5.5, 1.65]]
+voh = [[2.0, 1.9], [3.0, 2.9], [4.5, 4.4]]
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025   # IO abs max
+max_voltage_v = 7.0          # VCC and VI abs max
+theta_ja_c_per_w = 278   # DBV; DCK 289.2, DRL 142
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHC1G08 SCLS314R, 5.3 Recommended Operating Conditions VCC 2 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: SN74AHC1G08 SCLS314R, 3 Description: positive-AND gate, Y = A . B.
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a & b"
+
+[models.coverage]
+implements = ["combinational_and", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+[[models]]
+id = "74aup1g04"
+kind = "digital"
+description = "74AUP1G04 low-power single inverter, 0.8-3.6 V, 5-lead SOT-23-5 / SC70-5 (TI DBV/DCK/DRL, Nexperia GW/GV)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74aup1g04.pdf"
+title = "Texas Instruments SN74AUP1G04 Low-Power Single Inverter Gate datasheet, SCES571K, revised June 2014"
+locator = "6 Pin Configuration and Functions p.3 (DBV, DCK, DRL: 1 NC, 2 A, 3 GND, 4 Y, 5 VCC); 7.1 Absolute Maximum Ratings p.4; 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.5; 7.5 Electrical Characteristics p.6; 7.8 Switching Characteristics, CL = 15 pF p.7"
+sha256 = "a80e0053cc51a13d5635f0012248104d52da1efeb65916cc2e0388b927d824e1"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at a single supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[models.match]
+value_re = "(?i)^(SN)?74AUP1G04(GW|GV|DBV|DCK|DRL|D)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+# Source: TI SN74AUP1G04 SCES571K, VCC = 3 V rows. The family's supply range tops
+# out at 3.6 V (abs max 4.6 V): it is NOT a 5 V tolerant-supply part.
+voh = 2.9          # VCC - 0.1 V at IOH = -20 uA, VCC 3 V
+vol = 0.1          # IOL = 20 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.9
+# VCC = 3 V, IOH = -4 mA: VOH 2.55 V min (-40 to 85 C) against 2.9 V, 0.35 V / 4 mA = 87.5 Ohm.
+ro = 87.5
+tpd_s = 5.0e-9     # A to Y max, VCC 3.3 V +/- 0.3 V, CL = 15 pF, -40 to 85 C (2.9 ns typ)
+supply_static_ua = 0.9    # ICC max, VI = GND, VCC 0.8 V to 3.6 V, -40 to 85 C
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# Source: TI SN74AUP1G04 SCES571K, 7.3 Recommended Operating Conditions: VIH min
+# 0.65 x VCC at 1.1 V to 1.95 V, 1.6 V at 2.3 V to 2.7 V, 2.0 V at 3 V to 3.6 V;
+# VIL max 0.35 x VCC, 0.7 V, 0.9 V. At VCC = 0.8 V the datasheet gives only
+# VIH = VCC and VIL = 0 (a degenerate point), so the tables start at 1.1 V and
+# hold flat below it. VOH is VCC - 0.1 V at -20 uA across 0.8 V to 3.6 V.
+vih = [[1.1, 0.715], [1.95, 1.2675], [2.3, 1.6], [2.7, 1.6], [3.0, 2.0], [3.6, 2.0]]
+vil = [[1.1, 0.385], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.9], [3.6, 0.9]]
+voh = [[0.8, 0.7], [3.6, 3.5]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.02   # IO abs max
+max_voltage_v = 4.6        # VCC and VI abs max
+theta_ja_c_per_w = 298.6   # DBV; DCK 314.4, DRL 291.8
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 0.8
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AUP1G04 SCES571K, 7.3 Recommended Operating Conditions VCC 0.8 V to 3.6 V; 7.1 Absolute Maximum Ratings VCC -0.5 V to 4.6 V"
+
+[models.logic]
+# Behaviour source: SN74AUP1G04 SCES571K, Description: inverter, Y = !A.
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!a"
+
+[models.coverage]
+implements = ["inverter", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+

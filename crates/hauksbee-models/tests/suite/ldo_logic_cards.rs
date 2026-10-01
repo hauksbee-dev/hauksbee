@@ -74,3 +74,53 @@ fn ldo_cards_do_not_bind_other_packages_or_adjustable_members() {
         );
     }
 }
+
+/// (value, id, `pad=role` map). TI SCES214AF / SCES217AA / SCES218AA / SCES351Y /
+/// SCLS318V / SCLS314R / SCES571K and the matching Nexperia Table 3 five-lead
+/// column: inverting and buffer parts leave pad 1 NC, the AND gates put A and B on
+/// pads 1 and 2 (Nexperia prints them swapped, which a symmetric AND cannot see).
+#[test]
+fn single_gate_logic_pad_roles_follow_the_five_lead_tables() {
+    const NOT: &str = "1=nc 2=a 3=gnd 4=y 5=vcc";
+    const AND: &str = "1=a 2=b 3=gnd 4=y 5=vcc";
+    let rows = [
+        ("SN74LVC1G04DBVR", "74lvc1g04", NOT),
+        ("74LVC1G04GW,125", "74lvc1g04", NOT),
+        ("74LVC1G08DCKR", "74lvc1g08", AND),
+        ("SN74LVC1G14DBVR", "74lvc1g14", NOT),
+        ("74LVC1G14GV", "74lvc1g14", NOT),
+        ("SN74LVC1G17DCKR", "74lvc1g17", NOT),
+        ("SN74AHC1G04DBVR", "74ahc1g04", NOT),
+        ("SN74AHC1G08DBVR", "74ahc1g08", AND),
+        ("SN74AUP1G04DRLR", "74aup1g04", NOT),
+    ];
+    for (value, id, map) in rows {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_pin_map(&m, id, &pins(map));
+        assert!(
+            param(&m, "vih") > param(&m, "vil"),
+            "{value}: vih must exceed vil"
+        );
+    }
+}
+
+/// Six-pad XSON/SON and four-pad X2SON parts move VCC off pad 5, so they must not
+/// bind the five-lead map; neither may a neighbouring family or function.
+#[test]
+fn single_gate_logic_does_not_bind_other_packages_or_families() {
+    let none = [
+        "74LVC1G04GM",
+        "74LVC1G04GX4",
+        "SN74LVC1G04DRYR",
+        "SN74LVC1G08DSFR",
+        "74LVC1G14GN",
+        "SN74AHC1G04DRYR",
+        "74AHCT1G04GW",
+        "SN74AUP1G04DSFR",
+        "74LVC1G18GW",
+        "74LVC1G00GW",
+    ];
+    for value in none {
+        assert_eq!(query_id(Some(value), Some(value), None), None, "{value}");
+    }
+}
