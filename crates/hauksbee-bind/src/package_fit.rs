@@ -6,7 +6,8 @@
 //! and the binder and the coverage report then leave the part unmodelled:
 //!
 //! * the package the card's map is for (`validation::pin_package`) against the
-//!   footprint: its outline (a leadless quad is no leaded quad) and its pin
+//!   footprint: its outline (a leadless quad is no leaded quad; a DIP and a
+//!   small-outline body share a part's pinout) and its pin
 //!   count against the footprint's numbered pads, one exposed pad allowed;
 //! * the board's ground against the card's ground roles: when no pad the card
 //!   calls ground sits on a ground-named net, yet the board grounds a pad the
@@ -16,7 +17,7 @@
 //! is named, with the supply and ground nets those pads sit on.
 
 use hauksbee_extract::Component;
-use hauksbee_models::package::{outline, pin_count};
+use hauksbee_models::package::{outline, pin_count, Outline};
 use hauksbee_models::{ComponentKind, ModelEntry};
 
 /// A connected pin's net as the check sees it: on the ground node, and its name.
@@ -77,7 +78,7 @@ pub fn misfit(comp: &Component, model: &ModelEntry, net: NetView) -> Option<Stri
     let id = &model.id;
     if let Some(package) = hauksbee_models::validation::pin_package(model) {
         if let (Some(want), Some(got)) = (outline(package), outline(footprint)) {
-            if want != got {
+            if !same_numbering(want, got) {
                 return Some(format!("card '{id}' maps the pins of a {package} ({want:?}), but footprint '{footprint}' is {got:?}"));
             }
         }
@@ -90,6 +91,15 @@ pub fn misfit(comp: &Component, model: &ModelEntry, net: NetView) -> Option<Stri
         }
     }
     ground_misfit(comp, model, net)
+}
+
+/// Whether a map read for one outline numbers the other's pads alike. A DIP and
+/// a small-outline body (SOIC, SSOP, TSSOP) of one part share its pinout, so a
+/// map read off the DIP column fits the SOIC; the pin count and ground checks
+/// still apply.
+fn same_numbering(card: Outline, footprint: Outline) -> bool {
+    use Outline::{Dip, SmallOutline};
+    card == footprint || matches!((card, footprint), (Dip, SmallOutline) | (SmallOutline, Dip))
 }
 
 /// The card's ground pads off every ground-named net while the board grounds
@@ -218,6 +228,9 @@ mod tests {
             // (card package, card gnd pad, card vdd pad, footprint, pads, refusal)
             ("QFN-8", "8", "1", qfn, 9, None),
             ("SOP-10", "9", "2", qfn, 9, Some("SOP-10 (SmallOutline), but footprint")),
+            // A DIP column fits the same part's SOIC: dual-row bodies share a pinout.
+            ("DIP-8", "8", "1", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", 8, None),
+            ("DIP-8", "8", "1", qfn, 9, Some("DIP-8 (Dip), but footprint")),
             ("QFN-10", "9", "2", qfn, 9, Some("10-pin QFN-10, but footprint")),
             // Same outline and count, wrong column: ground lands on a GPIO.
             ("QFN-8", "3", "2", qfn, 9, Some("ground on pad(s) 3 (/N13), none on a ground net, while the board grounds pad(s) 9")),

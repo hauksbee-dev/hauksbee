@@ -107,8 +107,11 @@ pub fn package_body(name: &str) -> Option<Body> {
     })
 }
 
-/// The outline a package or footprint name spells: two names with different
-/// outlines never share a pin map, whatever their pin counts.
+/// The outline a package or footprint name spells.
+///
+/// Two names with different outlines do not share a pin map, whatever their
+/// pin counts, except a DIP and a small-outline body of one part, which number
+/// their pads alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outline {
     /// QFN, UFQFPN, VQFN, MLF, MLP, LFCSP.
