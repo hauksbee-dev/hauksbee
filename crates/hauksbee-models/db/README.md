@@ -80,7 +80,7 @@ tf    = 3.0e-10   # forward transit time (s)
 | bjt_npn/pnp     | is, bf, nf, vaf                                                  |
 | nmos/pmos       | vto, kp                                                          |
 | vreg            | vout, dropout_v, iq_a                                            |
-| opamp           | gain, rail_lo, rail_hi                                           |
+| opamp           | gain, rail_lo, rail_hi (optional iq_a)                           |
 | comparator      | out_lo, out_hi, hysteresis                                       |
 | analog_switch   | ron, roff, vth                                                   |
 | digital         | voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin                  |
@@ -167,7 +167,7 @@ These bounds are the single source of truth in `crates/hauksbee-models/src/valid
 | lambda      | 0.0    | 1.0    | MOSFET channel-length modulation      |
 | vout        | 0.5    | 30.0   | LDO output voltage (V)                |
 | dropout_v   | 0.0    | 10.0   | LDO dropout (V)                       |
-| iq_a        | 0.0    | 1.0    | LDO quiescent current (A)             |
+| iq_a        | 0.0    | 1.0    | LDO / op-amp quiescent current (A)    |
 | gain        | 1.0    | 1e9    | op-amp open-loop gain                 |
 | rail_lo/hi  | -60.0  | 60.0   | op-amp output rails (V, lo < hi)      |
 | out_lo/hi   | -60.0  | 60.0   | comparator output levels (V, lo < hi) |

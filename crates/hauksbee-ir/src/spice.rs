@@ -1200,6 +1200,7 @@ impl<'a> Build<'a> {
                         slew: m.get("slew"),
                         rail_lo: crate::Rail::fixed(lo),
                         rail_hi: crate::Rail::fixed(hi),
+                        supply: crate::Supply::default(),
                     }
                 }
             }

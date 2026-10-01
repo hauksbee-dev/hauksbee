@@ -85,6 +85,7 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
         slew: None,
         rail_lo: Rail::fixed(-1e9),
         rail_hi: Rail::fixed(1e9),
+        supply: hauksbee_ir::Supply::default(),
     });
     ckt.add(Device::resistor("RP", oa, out, r));
     ckt.add(Device::capacitor("CP", out, NodeId::GROUND, c));

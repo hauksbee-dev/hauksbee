@@ -4212,6 +4212,7 @@ fn bind_shunt_ref(
         slew: None,
         rail_lo: Rail::fixed(0.0),
         rail_hi: Rail::fixed(1.0),
+        supply: hauksbee_ir::Supply::default(),
     });
     let kint = circuit.node(&format!("{r}_shunt_ik"));
     circuit.add(Device::Vccs {
@@ -4342,6 +4343,9 @@ fn bind_opamp(
             .collect();
         (units, format!("opamp x{}", channels.len()))
     };
+    // The output stage's current is drawn from the part's supply pins, so a
+    // load on the output shows up on the rail that feeds the part.
+    let supply = opamp_supply(roles);
     for (name, out, inp, inn) in units {
         circuit.add(Device::OpAmp {
             name,
@@ -4354,9 +4358,32 @@ fn bind_opamp(
             slew,
             rail_lo,
             rail_hi,
+            supply,
         });
     }
+    // The card's `iq_a` is the whole package's supply current with the outputs
+    // unloaded (what datasheets print as ICC); a card without one draws none.
+    if let (Some(hi), Some(amps)) = (
+        supply.hi,
+        model.params.get_f64("iq_a").filter(|i| i.is_finite()),
+    ) {
+        let name = format!("Iq_{}", comp.reference);
+        let lo = supply.lo.unwrap_or(NodeId::GROUND);
+        circuit.add(Device::isource(name, hi, lo, SourceKind::Dc(amps)));
+    }
     (BindOutcome::Behavioral { device }, warning)
+}
+
+/// An op-amp's supply pins as the output stage returns its current through
+/// them: `V+` (`vcc`, `vs`, `vdd`) and `V-` (`vss`, `vee`, `v_minus`, or the
+/// `gnd` pin of a single-supply sense amplifier), each only when it sits on a
+/// net. A ground `V-` is no pin to draw into.
+fn opamp_supply(roles: &HashMap<String, NodeId>) -> hauksbee_ir::Supply {
+    let pin = |names: &[&str]| pick(roles, names).copied().filter(|n| !n.is_ground());
+    hauksbee_ir::Supply {
+        hi: pin(&["vcc", "vs", "vdd"]),
+        lo: pin(&["vss", "vee", "v_minus", "gnd"]),
+    }
 }
 
 /// One smoothed comparator, as a canonical B-source sub-expression: 0 while
@@ -4567,6 +4594,7 @@ fn bind_open_collector(
         slew: None,
         rail_lo: Rail::fixed(0.0),
         rail_hi: Rail::fixed(1.0),
+        supply: hauksbee_ir::Supply::default(),
     });
     // `max(V(out), 0)` keeps the sink one-directional: the DC homotopy walks
     // the output node below ground on its way in, and an unclamped V(out)/RON
@@ -5074,6 +5102,25 @@ fn bind_mcp4728_dac(
     )
 }
 
+/// Draw every output driver's current from its part's supply pins: the pin a
+/// `[models.level_rails]` entry names for that role, else `vcc`/`vdd`, returning
+/// into `gnd`/`vss`. A driver the part gives no positive supply stays as it was.
+fn route_driver_supplies(circuit: &mut Circuit, model: &ModelEntry, d: &mut DigitalComponent) {
+    let lo = pick(&d.roles, &["gnd", "vss"]).copied();
+    let supply = pick(&d.roles, &["vcc", "vdd"]).copied();
+    let mut roles: Vec<String> = d.drivers.keys().cloned().collect();
+    roles.sort_unstable();
+    for role in roles {
+        let rail = (model.level_rails.iter())
+            .find(|(_, pins)| pins.contains(&role))
+            .and_then(|(rail, _)| d.roles.get(rail).copied());
+        let tag = format!("{}_{role}", d.reference);
+        if let (Some(hi), Some(drv)) = (rail.or(supply), d.drivers.get_mut(&role)) {
+            drv.route_supply(circuit, &tag, hi, lo.unwrap_or(NodeId::GROUND));
+        }
+    }
+}
+
 /// Bind a digital part's [models.logic] spec. `Err` carries the logic-compile
 /// failure: the part is NOT modeled (its stamped legs are tri-stated so the
 /// output nets genuinely float) and the caller MUST record it as unresolved.
@@ -5163,6 +5210,7 @@ fn bind_digital(
                     ),
                 }
             }
+            route_driver_supplies(circuit, model, &mut d);
             digital.push(d);
             Ok(())
         }
@@ -5268,13 +5316,12 @@ fn bind_nor_latches(
             }
             // Stamp the Q output driver and build the latch component.
             let q_name = circuit.node_name(q_net).to_string();
-            let drv = PinDriver::stamp(
-                circuit,
-                q_net,
-                &q_name,
-                &format!("{}_latch{}_q", comp.reference, gates[q_gate].idx),
-                levels.ro,
-            );
+            let tag = format!("{}_latch{}_q", comp.reference, gates[q_gate].idx);
+            let mut drv = PinDriver::stamp(circuit, q_net, &q_name, &tag, levels.ro);
+            if let Some(&hi) = pick(roles, &["vcc", "vdd"]) {
+                let lo = pick(roles, &["gnd", "vss"]).copied();
+                drv.route_supply(circuit, &tag, hi, lo.unwrap_or(NodeId::GROUND));
+            }
             let mut lroles: HashMap<String, NodeId> = HashMap::new();
             lroles.insert("set".to_string(), set_node);
             lroles.insert("reset".to_string(), reset_node);
@@ -5398,6 +5445,21 @@ fn bind_mcu(
         }
     }
     let _ = pad_nodes;
+
+    // A pin's output current comes from the chip's I/O supply and returns to
+    // its ground pin, so a load on a GPIO shows on the rail that feeds the chip.
+    let roles_net = |names: &[&str]| pick(&role_nets, names).copied();
+    // A module's logic supply is its `5v` (Nano) or `3v3`/`3v3d` pin.
+    let io_supply = roles_net(&["vddio", "iovdd", "vdd", "vcc", "dvdd", "5v", "3v3d", "3v3"]);
+    let io_return = roles_net(&["vss", "gnd"]).unwrap_or(NodeId::GROUND);
+    let mut pins: Vec<(char, u8)> = gpio_drivers.keys().copied().collect();
+    pins.sort_unstable();
+    for (port, bit) in pins {
+        if let (Some(hi), Some(drv)) = (io_supply, gpio_drivers.get_mut(&(port, bit))) {
+            let tag = format!("{}_{port}{bit}", comp.reference);
+            drv.route_supply(circuit, &tag, hi, io_return);
+        }
+    }
 
     mcus.push(McuBinding {
         reference: comp.reference.clone(),

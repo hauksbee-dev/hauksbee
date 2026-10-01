@@ -58,7 +58,8 @@ warning = "the output swing is bounded by the supply pins (V(V-)+20 mV to V(V+)-
 implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "dual_channel", "split_or_single_supply"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
-           "input_bias_current", "input_offset_current", "parameter_spread"]
+           "input_bias_current", "input_offset_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # Pin numbers for DIP-8 / SOIC-8 LM358 (unit A, pin numbers vary by schematic)
@@ -94,7 +95,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 "1" = "ref"
@@ -124,7 +126,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 "1" = "ref"
@@ -154,7 +157,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 "1" = "ref"
@@ -184,7 +188,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 "1" = "ref"
@@ -214,7 +219,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 "1" = "ref"
@@ -244,7 +250,8 @@ warning = "[auto-bind] generic INA186 value has no A1/A2/A3/A4/A5 gain suffix; a
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 "1" = "ref"
@@ -570,7 +577,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SOT-23-5 pinout. Source: INA180 datasheet SBOS774D, Section 7.1 Pin Configuration.
@@ -616,7 +624,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SOT-23-5 pinout. Source: INA181 datasheet SBOS744C, Section 7.1.
@@ -663,7 +672,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SOT-23-5 pinout. Source: INA186 datasheet SBOS791A, Section 7.1.
@@ -724,7 +734,8 @@ warning = "the output swing on this card is a FIXED level, not a headroom from t
 implements = ["fixed_gain", "finite_output_swing"]
 missing = ["supply_referenced_output_swing", "output_current_limit",
            "input_common_mode_range", "input_offset_voltage", "input_bias_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # Table 5-2 "Pin Functions: INA2181 (Dual Channel)", SBOS793H; identical for
@@ -778,7 +789,8 @@ warning = "the output swing is bounded by the supply pins (V(V-)+20 mV to V(V+)-
 implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "quad_channel", "split_or_single_supply"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
-           "input_bias_current", "input_offset_current", "parameter_spread"]
+           "input_bias_current", "input_offset_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # Table 5-1 "Pin Functions", the 14-pin D/DB/J/N/NS/PW/W packages. Note the
@@ -1002,7 +1014,8 @@ warning = "rail-to-rail output within 15 mV typ of each supply pin at RL = 10 kO
 implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "rail_to_rail_output", "quad_channel"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
-           "input_bias_current", "input_offset_current", "parameter_spread"]
+           "input_bias_current", "input_offset_current", "parameter_spread",
+           "quiescent_supply_current"]
 # NO supply leg: `hauksbee models lint` reports `supply_static_ua` as unread for
 # the opamp kind, so the datasheet's 0.8 mA typ / 1.1 mA max per amplifier at
 # VCC = 3.3 V lives in the note above rather than as a field nothing consumes.
@@ -1175,7 +1188,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["output_phase_reversal", "negative_input_common_mode_limit",
            "output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread", "supply_voltage_envelope"]
+           "parameter_spread", "supply_voltage_envelope",
+           "quiescent_supply_current"]
 # NO supply envelope: SLOS080W Section 5.3 bounds only the TOTAL supply
 # (4.5 V to 40 V), and the `supply_range` envelope kind is PER PIN against
 # ground. Restating a total as a per-pin limit would be a number the datasheet
@@ -1268,7 +1282,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["output_phase_reversal", "negative_input_common_mode_limit",
            "output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread", "supply_voltage_envelope"]
+           "parameter_spread", "supply_voltage_envelope",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS080W Table 4-6 / SLOS081O Table 4-5, the 14-pin D, DYY, J, N, NS, PW and W
@@ -1337,7 +1352,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["output_phase_reversal", "negative_input_common_mode_limit",
            "output_current_limit", "load_dependent_output_swing",
            "offset_null_trim", "input_offset_voltage", "input_bias_current",
-           "input_offset_current", "parameter_spread", "supply_voltage_envelope"]
+           "input_offset_current", "parameter_spread", "supply_voltage_envelope",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS080W Table 4-1 (D and P columns) / SLOS081O Table 4-1. Pins 1, 5 and 8 are
@@ -1440,7 +1456,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["dominant_pole", "gain_bandwidth_product", "output_current_limit",
            "load_dependent_output_swing", "offset_null_trim",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SNOSC25D Section 5 Pin Functions, the NAB (8-pin CDIP/PDIP) and LMC (8-pin
@@ -1518,7 +1535,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["dominant_pole", "gain_bandwidth_product", "output_current_limit",
            "load_dependent_output_swing", "offset_null_trim",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS094H Section 4, the D (SOIC), P (PDIP) and PS (SO) 8-pin packages: OFFSET
@@ -1643,7 +1661,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "split_supply_envelope", "input_common_mode_range"]
 missing = ["output_current_limit", "load_dependent_output_swing",
            "load_dependent_open_loop_gain", "input_offset_voltage",
-           "input_bias_current", "input_offset_current", "parameter_spread"]
+           "input_bias_current", "input_offset_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS075K Section 4 Pin Functions, the D (SOIC), P (PDIP) and PS (SO) 8-pin
@@ -1736,7 +1755,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["negative_input_common_mode_limit", "output_current_limit",
            "load_dependent_output_swing", "input_offset_voltage",
            "input_bias_current", "input_offset_current", "parameter_spread",
-           "supply_voltage_envelope"]
+           "supply_voltage_envelope",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SBOS058B Table 4-1 Pin Functions: OPA2134, the D (SOIC) and P (PDIP) 8-pin
@@ -1794,7 +1814,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["negative_input_common_mode_limit", "output_current_limit",
            "load_dependent_output_swing", "offset_null_trim",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread", "supply_voltage_envelope"]
+           "parameter_spread", "supply_voltage_envelope",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SBOS058B Section 4, OPA134 D (SOIC) / P (PDIP) 8-pin: the standard single-
@@ -1871,7 +1892,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["negative_input_common_mode_limit", "output_current_limit",
            "load_dependent_output_swing", "input_offset_voltage",
            "input_bias_current", "input_offset_current", "parameter_spread",
-           "supply_voltage_envelope"]
+           "supply_voltage_envelope",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SBOS058B Table 4-2 Pin Functions: OPA4134, the D (SOIC) 14-pin package. Same
@@ -1990,7 +2012,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["rail_to_rail_input", "output_current_limit",
            "load_dependent_output_swing", "temperature_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS263Y Table 5-1 Pin Functions: LMV358, the D, DDU, DGK and PW 8-pin
@@ -2060,7 +2083,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["rail_to_rail_input", "output_current_limit",
            "load_dependent_output_swing", "temperature_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS263Y Table 5-2 Pin Functions: LMV321, the DBV (SOT-23) and DCK (SC-70)
@@ -2152,7 +2176,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
 missing = ["rail_to_rail_input", "output_current_limit",
            "load_dependent_output_swing", "temperature_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # SLOS263Y Table 5-3 Pin Functions: LMV324, the D (SOIC) and PW (TSSOP) 14-pin
@@ -2258,7 +2283,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "slew_rate_limit", "dual_channel", "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # DS20001733L Table 3-1 Pin Function Table, the MCP6002 8-lead PDIP/SOIC/MSOP
@@ -2329,7 +2355,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "slew_rate_limit", "single_channel", "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # DS20001733L Table 3-1, the "MCP6001 5-Lead SC70, SOT-23" column.
@@ -2384,7 +2411,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "slew_rate_limit", "single_channel", "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # DS20001733L Table 3-1, the "MCP6001R 5-Lead SOT-23" column. Note pins 2 and 5
@@ -2438,7 +2466,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "slew_rate_limit", "single_channel", "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # DS20001733L Table 3-1, the "MCP6001U 5-Lead SOT-23" column.
@@ -2489,7 +2518,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
               "slew_rate_limit", "quad_channel", "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing",
            "input_offset_voltage", "input_bias_current", "input_offset_current",
-           "parameter_spread"]
+           "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # DS20001733L Table 3-1, the "MCP6004 14-Lead PDIP, SOIC, TSSOP" column. VDD on
@@ -2574,7 +2604,8 @@ basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 1
 [models.coverage]
 implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
-           "input_bias_current", "parameter_spread"]
+           "input_bias_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [[models]]
 id = "ina199x2_dck"
@@ -2627,7 +2658,8 @@ basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 1
 [models.coverage]
 implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
-           "input_bias_current", "parameter_spread"]
+           "input_bias_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [[models]]
 id = "ina199x3_dck"
@@ -2680,7 +2712,8 @@ basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 1
 [models.coverage]
 implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
-           "input_bias_current", "parameter_spread"]
+           "input_bias_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TLV3601: TI 325 MHz push-pull high-speed comparator, SC70-5 (DCK) / SOT-23-5
@@ -2791,7 +2824,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing", "rail_t
               "rail_to_rail_input", "dominant_pole", "slew_rate_limit", "single_channel",
               "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing", "input_offset_voltage",
-           "input_bias_current", "parameter_spread"]
+           "input_bias_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # Pin Functions: TLV6001, DBV (SOT-23) column.
@@ -2849,7 +2883,8 @@ implements = ["finite_open_loop_gain", "supply_referenced_output_swing", "rail_t
               "rail_to_rail_input", "dominant_pole", "slew_rate_limit", "single_channel",
               "supply_voltage_envelope"]
 missing = ["output_current_limit", "load_dependent_output_swing", "input_offset_voltage",
-           "input_bias_current", "parameter_spread"]
+           "input_bias_current", "parameter_spread",
+           "quiescent_supply_current"]
 
 [models.pins]
 # Pin Functions: TLV6001, DCK (SC70) column.

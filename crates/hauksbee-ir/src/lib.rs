@@ -122,6 +122,46 @@ impl Rail {
     }
 }
 
+/// The supply pins a behavioral output stage draws its output current from.
+///
+/// The stage drives its output node from an ideal EMF behind a 1 ohm
+/// conductance whose return is ground, so without this a load current would
+/// close through ground and the part's supply pins would never see it. With
+/// `hi`/`lo` set, the current the stage delivers is instead drawn from `hi`
+/// (sourcing) or returned into `lo` (sinking), blended smoothly through zero
+/// ([`Supply::share_hi`]). A `None` side is not a pin the part has on a net:
+/// that share returns through ground as before. Both are CONDUCTION terminals.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supply {
+    /// The positive supply pin (`V+`, `VCC`, `VS`).
+    pub hi: Option<NodeId>,
+    /// The negative supply pin (`V-`, `VEE`), or `None` when it is ground.
+    pub lo: Option<NodeId>,
+}
+
+impl Supply {
+    /// The output current (A) over which the draw changes sides: below it the
+    /// part draws from both pins, above it from one.
+    pub const BLEND_A: f64 = 1e-6;
+
+    /// The fraction of a delivered output current `amps` that is drawn from
+    /// `hi`; the rest returns into `lo`. A smooth step through 1/2 at no load.
+    #[must_use]
+    pub fn share_hi(amps: f64) -> f64 {
+        0.5 * (1.0 + (amps / Self::BLEND_A).tanh())
+    }
+
+    /// The supply nodes that are not ground, `hi` then `lo`.
+    #[must_use]
+    pub fn nodes(self) -> Vec<NodeId> {
+        [self.hi, self.lo]
+            .into_iter()
+            .flatten()
+            .filter(|n| !n.is_ground())
+            .collect()
+    }
+}
+
 /// A circuit: interned node names, devices, and a global temperature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Circuit {
@@ -363,6 +403,9 @@ pub enum Device {
         slew: Option<f64>,
         rail_lo: Rail,
         rail_hi: Rail,
+        /// The supply pins the output current is drawn from (see [`Supply`]).
+        #[serde(default)]
+        supply: Supply,
     },
     /// Behavioral comparator: output snaps to a rail at the threshold.
     Comparator {
@@ -612,11 +655,14 @@ impl Device {
                 reference,
                 rail_lo,
                 rail_hi,
+                supply,
                 ..
             } => {
                 let mut nodes = vec![*out, *inp, *inn];
                 nodes.extend(*reference);
                 nodes.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
+                let held = nodes.clone();
+                nodes.extend(supply.nodes().into_iter().filter(|n| !held.contains(n)));
                 nodes
             }
             Self::Comparator { out, inp, inn, .. } => vec![*out, *inp, *inn],
@@ -703,9 +749,16 @@ impl Device {
                 reference,
                 rail_lo,
                 rail_hi,
+                supply,
                 ..
             } => {
                 for x in [out, inp, inn].into_iter().chain(reference.as_mut()) {
+                    *x = f(*x);
+                }
+                for x in [supply.hi.as_mut(), supply.lo.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
                     *x = f(*x);
                 }
                 // A fixed rail's ground sentinel is not a terminal, so it is
@@ -934,7 +987,13 @@ impl Device {
             // Thevenin; the inputs are ideal (infinite input impedance) and the
             // opamp reference only offsets the target voltage (its own row gets
             // nothing; it appears as a column of the out row).
-            Self::OpAmp { out, .. } | Self::Comparator { out, .. } => vec![*out],
+            Self::OpAmp { out, supply, .. } => {
+                // The supply pins carry the output current (see [`Supply`]).
+                let mut v = vec![*out];
+                v.extend(supply.nodes().into_iter().filter(|n| n != out));
+                v
+            }
+            Self::Comparator { out, .. } => vec![*out],
             // A coupling has NO terminals: current flows through the WINDINGS,
             // whose own a/b declarations above carry the conduction claim. The
             // stamp cross-check holds this to account trivially (the coupling
@@ -977,11 +1036,19 @@ impl Device {
                 reference,
                 rail_lo,
                 rail_hi,
+                supply,
                 ..
             } => {
                 let mut v = vec![*inp, *inn];
                 v.extend(*reference);
-                v.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
+                // A rail pin that is also a supply pin conducts, not senses.
+                let conducts = supply.nodes();
+                let rails = [rail_lo.pin, rail_hi.pin];
+                v.extend(
+                    rails
+                        .iter()
+                        .filter(|n| !n.is_ground() && !conducts.contains(n)),
+                );
                 v
             }
             Self::Comparator { inp, inn, .. } => vec![*inp, *inn],
@@ -1102,6 +1169,7 @@ impl Device {
                 slew: None,
                 rail_lo: Rail::fixed(-5.0),
                 rail_hi: Rail::fixed(5.0),
+                supply: Supply::default(),
             },
             Self::Comparator {
                 name: "Kex".into(),

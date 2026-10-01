@@ -174,6 +174,20 @@ fn binder_analog_pin_promoted_when_driven() {
         v > 4.5,
         "promoted A2 must DRIVE OE_S to ~5 V, got {v:.3} V (net {oe_s:?})"
     );
+
+    // The pin's current is the chip's, so it is drawn from the chip's supply
+    // pin: the +5V rail carries the 20 k divider's plus the pulldown's. (The
+    // draw follows the chunk-mean delivered current, one chunk behind.)
+    engine.scheduler_mut().step(1e-3);
+    let sched = engine.scheduler();
+    let v5 = sched.net_voltage("+5V").expect("+5V solved");
+    let v_oe = sched.net_voltage("OE_S").expect("OE_S solved");
+    let want = v5 / 20e3 + v_oe / 10e3;
+    let got = sched.supply_states()["+5V"].1;
+    assert!(
+        (got / want - 1.0).abs() < 0.01,
+        "+5V carries {got:.4e} A, the divider and the driven pin need {want:.4e} A"
+    );
 }
 
 /// (c) Regression: an A-pin used as ADC only (never driven) still presents its

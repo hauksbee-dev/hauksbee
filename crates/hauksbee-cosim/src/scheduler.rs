@@ -133,6 +133,13 @@ struct ChunkThermalAccum {
     pass_charge: Vec<f64>,
     /// Simulated seconds `pass_charge` covers.
     pass_s: f64,
+    /// Charge each routed pin driver sourced and sunk (C), in
+    /// `Scheduler::driver_draws` order: `(positive part, negative part)` of
+    /// its delivered current, integrated separately so an alternating output
+    /// still draws from the supply.
+    drive_charge: Vec<(f64, f64)>,
+    /// Simulated seconds `drive_charge` covers.
+    drive_s: f64,
 }
 
 impl ChunkThermalAccum {
@@ -142,6 +149,8 @@ impl ChunkThermalAccum {
         self.elapsed_s = 0.0;
         self.pass_charge.clear();
         self.pass_s = 0.0;
+        self.drive_charge.clear();
+        self.drive_s = 0.0;
     }
 }
 
@@ -430,6 +439,10 @@ pub struct Scheduler {
     /// Simple regulators, whether each currently has independent input headroom
     /// (never again once tainted), and whether that must be re-established.
     regulators: Vec<SimpleRegulator>,
+    /// Every pin driver whose output current is drawn from its part's supply
+    /// pins: its `Vsource` (the current it delivers is read there) and the legs
+    /// set once per chunk (see `hauksbee_bind::drivers::DriverSupply`).
+    driver_draws: Vec<(DeviceId, hauksbee_bind::drivers::DriverSupply)>,
     open_parts: Vec<hauksbee_bind::bind_report::OpenPart>,
     reg_supported: Vec<bool>,
     reg_dirty: bool,
@@ -1300,6 +1313,14 @@ impl Scheduler {
             }
         }
 
+        // Every routed pin driver, MCU or logic part, whether or not a core
+        // runs behind it (a firmware-less run leaves the MCU's drivers disabled
+        // but a caller may still enable one).
+        let mut driver_draws: Vec<_> = (digital.iter().flat_map(|d| d.drivers.values()))
+            .chain(mcus.iter().flat_map(|m| m.gpio_drivers.values()))
+            .filter_map(|d| Some((d.vsource, d.supply?)))
+            .collect();
+        driver_draws.sort_unstable_by_key(|(source, _)| *source);
         let mut live = Vec::new();
         let mut substitutions = Vec::new();
         let mut scoped_substitutions = Vec::new();
@@ -1375,6 +1396,7 @@ impl Scheduler {
             node_volts: vec![0.0; n_nodes],
             reg_supported: vec![false; report.regulators.len()],
             regulators: report.regulators,
+            driver_draws,
             open_parts: report.open_parts,
             reg_dirty: true,
             regulation: Vec::new(),
@@ -4022,9 +4044,32 @@ impl Scheduler {
             .map(|r| r.pass_level.and_then(|_| layout.branch(r.source)))
             .collect();
         let mut pass_prev: Option<(f64, Vec<f64>)> = None;
+        // The same for each routed pin driver's `Vsource`.
+        let drive: Vec<Option<usize>> = (self.driver_draws.iter())
+            .map(|(source, _)| layout.branch(*source))
+            .collect();
+        let mut drive_prev: Option<(f64, Vec<f64>)> = None;
         let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
             final_x.clear();
             final_x.extend_from_slice(s.x);
+            if !drive.is_empty() {
+                let now: Vec<f64> = (drive.iter())
+                    .map(|b| b.and_then(|b| s.x.get(b)).map_or(0.0, |i| -i))
+                    .collect();
+                if let Some((t0, i0)) = drive_prev.take() {
+                    let dt = s.time - t0;
+                    if dt > 0.0 {
+                        thermal.drive_charge.resize(now.len(), (0.0, 0.0));
+                        for (q, (a, b)) in thermal.drive_charge.iter_mut().zip(i0.iter().zip(&now))
+                        {
+                            q.0 += 0.5 * (a.max(0.0) + b.max(0.0)) * dt;
+                            q.1 += 0.5 * (a.min(0.0) + b.min(0.0)) * dt;
+                        }
+                        thermal.drive_s += dt;
+                    }
+                }
+                drive_prev = Some((s.time, now));
+            }
             if pass.iter().any(Option::is_some) {
                 let now: Vec<f64> = (pass.iter())
                     .map(|b| b.and_then(|b| s.x.get(b)).map_or(0.0, |i| -i))
@@ -4472,6 +4517,24 @@ impl Scheduler {
         }
     }
 
+    /// Point every routed pin driver's supply legs at the mean current it
+    /// delivered over the chunk just adopted, positive part from `hi` and
+    /// negative part into `lo`, or at the end state's when no step was
+    /// integrated. One chunk of lag, no `C*dV/dt` noise (see `pass_draw`).
+    fn set_driver_draws(&mut self, chunk: &ChunkThermalAccum) {
+        for (i, (source, supply)) in self.driver_draws.iter().enumerate() {
+            let (sourced, sunk) = match chunk.drive_charge.get(i) {
+                Some((qp, qn)) if chunk.drive_s > 0.0 => (qp / chunk.drive_s, qn / chunk.drive_s),
+                _ => {
+                    let i =
+                        -branch_current_of(&self.layout, &self.branch_x, *source).unwrap_or(0.0);
+                    (i.max(0.0), i.min(0.0))
+                }
+            };
+            supply.set(&mut self.circuit, sourced, sunk);
+        }
+    }
+
     /// Before the first chunk, point every pass draw at its regulator's
     /// operating-point output current, so the first chunk's march starts from
     /// the draw its DC solve (which reads the branch live) already settled.
@@ -4554,6 +4617,7 @@ impl Scheduler {
             Ok((x, diagnostics)) => {
                 self.adopt_chunk_state(x);
                 self.set_pass_draws(&thermal);
+                self.set_driver_draws(&thermal);
                 self.record_residual(diagnostics);
                 self.stress
                     .deposit_chunk_energy(&thermal.energy_j, thermal.elapsed_s);
@@ -4575,6 +4639,7 @@ impl Scheduler {
                 {
                     self.adopt_chunk_state(x);
                     self.set_pass_draws(&thermal);
+                    self.set_driver_draws(&thermal);
                     self.record_residual(diagnostics);
                     // Only the adopted rung's accepted-step thermal integral is
                     // real; the ladder cleared every failed attempt's partial.
@@ -7542,8 +7607,10 @@ missing = ["measurement_registers"]
             };
             assert_eq!(tainted, want, "{volts}");
             assert!(taint.iter().all(|t| t.since_s == 0.0) && taint[0].reason.contains(says));
+            // 10 uV: the part's 1 mA quiescent current now flows through the
+            // 1 mOhm of the rail that holds NEG, about 1 uV.
             assert!(
-                (sched.net_voltage("NEG").unwrap() + 2.0).abs() < 1e-6,
+                (sched.net_voltage("NEG").unwrap() + 2.0).abs() < 1e-5,
                 "{volts}"
             );
             let kinds = sched.forced_voltage_assumptions().unwrap();
@@ -7852,6 +7919,7 @@ missing = ["measurement_registers"]
             roff: 1e9,
             resistor: DeviceId(1),
             ron: 100.0,
+            supply: None,
         };
         let mut b = binding(
             "U1",

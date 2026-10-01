@@ -333,6 +333,7 @@ fn opamp_unity_buffer_phase_margin_about_90() {
         slew: None,
         rail_lo: Rail::fixed(-1e9),
         rail_hi: Rail::fixed(1e9),
+        supply: hauksbee_ir::Supply::default(),
     });
     // Dominant pole: R from oa to out, C from out to ground.
     add_resistor(&mut ckt, "RP", oa, out, r);
@@ -392,6 +393,7 @@ fn opamp_reference_feedthrough_rolls_off_with_the_bandwidth_pole() {
         slew: None,
         rail_lo: Rail::fixed(-1e9),
         rail_hi: Rail::fixed(1e9),
+        supply: hauksbee_ir::Supply::default(),
     });
 
     let spec = AcSpec {

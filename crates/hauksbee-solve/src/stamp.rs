@@ -573,9 +573,16 @@ pub fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, si
             slew,
             rail_lo,
             rail_hi,
+            supply,
             ..
         } => stamp_opamp(
-            ctx, id, *out, *inp, *inn, *reference, *gain, *pole_hz, *slew, *rail_lo, *rail_hi, sink,
+            ctx,
+            id,
+            (*out, *inp, *inn, *reference),
+            (*gain, *pole_hz, *slew),
+            (*rail_lo, *rail_hi),
+            *supply,
+            sink,
         ),
         Device::Comparator {
             out,
@@ -2723,15 +2730,10 @@ pub fn opamp_transient_output(
 fn stamp_opamp<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
-    out: NodeId,
-    inp: NodeId,
-    inn: NodeId,
-    reference: Option<NodeId>,
-    gain: f64,
-    pole_hz: Option<f64>,
-    slew: Option<f64>,
-    rail_lo: hauksbee_ir::Rail,
-    rail_hi: hauksbee_ir::Rail,
+    (out, inp, inn, reference): (NodeId, NodeId, NodeId, Option<NodeId>),
+    (gain, pole_hz, slew): (f64, Option<f64>, Option<f64>),
+    (rail_lo, rail_hi): (hauksbee_ir::Rail, hauksbee_ir::Rail),
+    supply: hauksbee_ir::Supply,
     sink: &mut S,
 ) {
     // Behavioral: drive `out` toward clamp(gain*(vp-vn)) through a stiff
@@ -2802,6 +2804,10 @@ fn stamp_opamp<S: StampSink>(
     let flat = if in_rail || crossed { 1.0 } else { 0.0 };
     let (emf, dscale) = dynamics.unwrap_or_else(|| (raw.clamp(rails.0, rails.1), flat));
     let oi = ctx.layout.node(out);
+    // The stage's Norton current `gout * (emf - V(out))` returns through the
+    // supply pins, not ground: its `out` row is mirrored into theirs.
+    let mut sink = SupplyMirror::new(sink, ctx, oi, supply, gout * (emf - ctx.v(out)));
+    let sink = &mut sink;
     if let Some(oi) = oi {
         sink.g(oi, oi, gout);
         sink.i(oi, gout * emf);
@@ -2818,6 +2824,66 @@ fn stamp_opamp<S: StampSink>(
             if let Some(ni) = ctx.layout.node(inn) {
                 sink.g(oi, ni, gout * dscale * gain);
                 sink.i(oi, gout * dscale * gain * vn);
+            }
+        }
+    }
+}
+
+/// A sink that mirrors every write to an output stage's `out` row into the
+/// rows of its supply pins, negated and split by [`hauksbee_ir::Supply::share_hi`].
+///
+/// The `out` row reads `sum(G*V) - rhs`, the current the stage draws OUT of the
+/// node, which is minus the current it delivers; the supply rows read what
+/// leaves the supply pins, which is that delivered current, so their entries
+/// are the `out` row's negated. Row sums then vanish, and ground, which the
+/// stage's EMF is referenced to and which is not an unknown, carries nothing.
+/// The share is held at the iterate (explicit, like the rail band), so it adds
+/// no Jacobian entries and is exact where Newton converges.
+struct SupplyMirror<'a, S: StampSink> {
+    inner: &'a mut S,
+    row: usize,
+    /// `(row, share)` of each supply pin that is an unknown.
+    legs: [Option<(usize, f64)>; 2],
+}
+
+impl<'a, S: StampSink> SupplyMirror<'a, S> {
+    /// Mirror row `out` for a stage delivering `amps` at this iterate.
+    fn new(
+        inner: &'a mut S,
+        ctx: &StampCtx,
+        out: Option<usize>,
+        supply: hauksbee_ir::Supply,
+        amps: f64,
+    ) -> Self {
+        let hi = hauksbee_ir::Supply::share_hi(amps);
+        let leg = |node: Option<NodeId>, share: f64| {
+            let row = ctx.layout.node(node?).filter(|r| Some(*r) != out)?;
+            Some((row, share))
+        };
+        Self {
+            inner,
+            row: out.unwrap_or(usize::MAX),
+            legs: [leg(supply.hi, hi), leg(supply.lo, 1.0 - hi)],
+        }
+    }
+}
+
+impl<S: StampSink> StampSink for SupplyMirror<'_, S> {
+    #[inline]
+    fn g(&mut self, row: usize, col: usize, v: f64) {
+        self.inner.g(row, col, v);
+        if row == self.row {
+            for (r, share) in self.legs.into_iter().flatten() {
+                self.inner.g(r, col, -share * v);
+            }
+        }
+    }
+    #[inline]
+    fn i(&mut self, row: usize, v: f64) {
+        self.inner.i(row, v);
+        if row == self.row {
+            for (r, share) in self.legs.into_iter().flatten() {
+                self.inner.i(r, -share * v);
             }
         }
     }

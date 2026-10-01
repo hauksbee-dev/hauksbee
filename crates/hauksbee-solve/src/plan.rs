@@ -614,6 +614,7 @@ mod tests {
             slew: None,
             rail_lo: hauksbee_ir::Rail::fixed(0.0),
             rail_hi: hauksbee_ir::Rail::fixed(5.0),
+            supply: hauksbee_ir::Supply::default(),
         });
         comparator(&mut c, "K1", n[5], n[0], n[1], 0.05);
 

@@ -38,6 +38,7 @@ fn follower_driven(vin: SourceKind, gain: f64, rail_lo: f64, rail_hi: f64) -> Ci
         slew: None,
         rail_lo: Rail::fixed(rail_lo),
         rail_hi: Rail::fixed(rail_hi),
+        supply: hauksbee_ir::Supply::default(),
     });
     add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
     c

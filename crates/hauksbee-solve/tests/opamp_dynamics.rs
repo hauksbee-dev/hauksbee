@@ -51,6 +51,7 @@ fn step_circuit(
         slew,
         rail_lo: Rail::fixed(0.0),
         rail_hi: Rail::fixed(rail_hi),
+        supply: hauksbee_ir::Supply::default(),
     });
     add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1e6);
     ckt
@@ -194,6 +195,7 @@ fn ac_margins_unchanged_by_slew() {
             slew,
             rail_lo: Rail::fixed(-1e9),
             rail_hi: Rail::fixed(1e9),
+            supply: hauksbee_ir::Supply::default(),
         });
         add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1e6);
         ckt
@@ -249,6 +251,7 @@ fn partitioned_opamp_output_matches_monolith() {
             slew: None,
             rail_lo: Rail::fixed(0.0),
             rail_hi: Rail::fixed(5.0),
+            supply: hauksbee_ir::Supply::default(),
         });
         add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
         // Independent RC legs so the partition heuristics fragment and the

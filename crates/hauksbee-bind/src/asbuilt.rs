@@ -1062,6 +1062,7 @@ mod tests {
             roff: 1e9,
             resistor: DeviceId(1),
             ron: 25.0,
+            supply: None,
         };
 
         let mcu = McuBinding {

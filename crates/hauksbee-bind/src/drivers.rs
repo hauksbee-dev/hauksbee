@@ -31,6 +31,41 @@ pub struct PinDriver {
     pub resistor: DeviceId,
     /// The active (enabled) output resistance.
     pub ron: f64,
+    /// The legs that draw this driver's output current from its part's supply
+    /// pins (`None` until [`PinDriver::route_supply`]: the current then closes
+    /// through ground and the part's supply never sees the load).
+    pub supply: Option<DriverSupply>,
+}
+
+/// The two `Isource` legs that move a [`PinDriver`]'s output current onto its
+/// part's supply pins, each from the pin to ground (the Thevenin source's own
+/// return), so ground nets nothing.
+///
+/// A driver sourcing `I` draws it from `hi` (`I_hi = +I`); one sinking it
+/// returns it into `lo` (`I_lo = -I`, current leaving `lo` negative), and
+/// `lo` is absent when the part's negative pin is ground. The scheduler sets
+/// both once per chunk from the mean current the driver delivered over the
+/// chunk before ([`PinDriver::set_draw`]), never from the live branch: read
+/// live, a load capacitor's `C*dV/dt` Newton residual would be mirrored onto
+/// the rail that feeds an upstream converter.
+#[derive(Debug, Clone, Copy)]
+pub struct DriverSupply {
+    /// `Isource` from the positive supply pin to ground.
+    pub hi: DeviceId,
+    /// `Isource` from the negative supply pin to ground, when it is not ground.
+    pub lo: Option<DeviceId>,
+}
+
+impl DriverSupply {
+    /// Set the legs: `sourced` (>= 0) leaves `hi`, `sunk` (<= 0) leaves `lo`.
+    pub fn set(self, circuit: &mut Circuit, sourced: f64, sunk: f64) {
+        for (id, amps) in [(Some(self.hi), sourced), (self.lo, sunk)] {
+            let dev = id.and_then(|id| circuit.devices.get_mut(id.0 as usize));
+            if let Some(Device::Isource { kind, .. }) = dev {
+                *kind = SourceKind::Dc(amps);
+            }
+        }
+    }
 }
 
 impl PinDriver {
@@ -53,6 +88,38 @@ impl PinDriver {
             roff: 1e9,
             resistor,
             ron: ro,
+            supply: None,
+        }
+    }
+
+    /// Draw this driver's output current from supply pins `hi` and `lo`
+    /// instead of ground. A ground `hi` leaves the driver as it was; a ground
+    /// `lo` is the return the current already takes.
+    pub fn route_supply(&mut self, circuit: &mut Circuit, tag: &str, hi: NodeId, lo: NodeId) {
+        if hi.is_ground() {
+            return;
+        }
+        let leg = |circuit: &mut Circuit, name: &str, pin: NodeId| {
+            let name = format!("{name}_{tag}");
+            circuit.add(Device::isource(
+                name,
+                pin,
+                NodeId::GROUND,
+                SourceKind::Dc(0.0),
+            ))
+        };
+        self.supply = Some(DriverSupply {
+            hi: leg(circuit, "Idrh", hi),
+            lo: (!lo.is_ground()).then(|| leg(circuit, "Idrl", lo)),
+        });
+    }
+
+    /// Set the supply legs to the output current delivered: `sourced` (>= 0)
+    /// from `hi`, `sunk` (<= 0) into `lo`. A no-op without
+    /// [`PinDriver::route_supply`].
+    pub fn set_draw(&self, circuit: &mut Circuit, sourced: f64, sunk: f64) {
+        if let Some(supply) = self.supply {
+            supply.set(circuit, sourced, sunk);
         }
     }
 
