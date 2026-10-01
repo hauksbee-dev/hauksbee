@@ -38,11 +38,6 @@ use crate::support::passive_pin as pin;
 /// this list when its fix lands, and the test says so.
 const KNOWN_GAP_PATHS: &[(&str, &str)] = &[
     (
-        "fixed-negative",
-        "a negative fixed regulator's Iq_ isource runs IN -> GND with a positive iq_a, so on a \
-         negative input it returns Iq to IN instead of drawing it: |Iin| = Iout - Iq",
-    ),
-    (
         "no-output",
         "an identity-only card (bq24075_identity) states no output voltage, reference or \
          converter, so no power stage is stamped and the part's rail is the board's to supply",

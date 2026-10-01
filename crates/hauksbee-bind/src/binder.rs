@@ -3880,9 +3880,13 @@ fn bind_vreg(
     let (draw, pass_level) =
         pass_draw(circuit, &comp.reference, ends, (source_id, vout), dropout_v);
     let mut helpers = vec![draw];
+    // Iq leaves the part's GND pin and returns through IN for a negative
+    // regulator (its input is the negative rail), so it is drawn from that rail
+    // too: the card states it as a magnitude, the polarity follows `vout`.
     if let Some(amps) = model.params.get_f64("iq_a").filter(|i| i.is_finite()) {
         let name = format!("Iq_{}", comp.reference);
-        helpers.push(circuit.add(Device::isource(name, input, gnd, SourceKind::Dc(amps))));
+        let amps = SourceKind::Dc(amps.copysign(vout));
+        helpers.push(circuit.add(Device::isource(name, input, gnd, amps)));
     }
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
@@ -4110,6 +4114,8 @@ fn bind_adj_vreg(
     let (draw, pass_level) = pass_draw(circuit, &comp.reference, ends, (source, vref), dropout_v);
     let mut helpers = vec![draw];
     // IADJ leaves the ADJ pin; a grounded part's quiescent current runs IN -> GND.
+    // Both are magnitudes on the card; a negative regulator (`vref` < 0) draws
+    // them the other way, as `bind_vreg`'s Iq does.
     for (prefix, key, to, on) in [("Iadj", "iadj_a", adj, true), ("Iq", "iq_a", gnd, grounded)] {
         let Some(amps) = model.params.get_f64(key).filter(|i| on && i.is_finite()) else {
             continue;
@@ -4118,7 +4124,7 @@ fn bind_adj_vreg(
             format!("{prefix}_{}", comp.reference),
             input,
             to,
-            SourceKind::Dc(amps),
+            SourceKind::Dc(amps.copysign(vref)),
         )));
     }
     regulators.push(SimpleRegulator {
