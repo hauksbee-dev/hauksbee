@@ -24,7 +24,7 @@ describe('variant selection overrides', () => {
     })
     const open = renderToStaticMarkup(<OpenSelectionsBanner selections={[selection(false)]} onQueue={() => {}} />)
     expect(open).toContain('selection required')
-    expect(open).toContain('xyz1234b — XYZ1234BDBV · p. 4')
+    expect(open).toContain('xyz1234b: XYZ1234BDBV · p. 4')
     const same = renderToStaticMarkup(<OpenSelectionsBanner selections={[selection(true)]} />)
     expect(same).toContain('simulated as xyz1234a; CI checks every variant')
   })
