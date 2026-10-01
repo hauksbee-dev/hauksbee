@@ -399,6 +399,68 @@ pub fn standard_rating(entry: &ModelEntry, key: &str) -> Option<f64> {
     curve.limit(|_| 25.0, tj_max)
 }
 
+/// The rating key an untagged row's own text names.
+///
+/// A continuous drain current (`ID`), a power dissipation (`PD`, `Ptot`) or a
+/// junction-to-ambient thermal resistance. A pulsed, peak, surge or avalanche row and a row the key's unit
+/// cannot read (a power-dissipation capacitance) name none.
+#[must_use]
+pub fn implied_rating(row: &Characteristic) -> Option<&'static str> {
+    use crate::param_names::symbol;
+    if row.rating.is_some() {
+        return None;
+    }
+    let flat: String = (row.parameter.to_lowercase().chars())
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    let other = [
+        "pulse",
+        "peak",
+        "surge",
+        "repetitive",
+        "avalanche",
+        "capacit",
+    ];
+    if other.iter().any(|w| flat.contains(w))
+        || ["IDM", "IAS", "IAR"].iter().any(|s| symbol(row, s))
+    {
+        return None;
+    }
+    let key = if ["θja", "thetaja", "rthja", "junctiontoambient"]
+        .iter()
+        .any(|w| flat.contains(w))
+    {
+        "theta_ja_c_per_w"
+    } else if symbol(row, "PD") || symbol(row, "Ptot") {
+        "max_power_w"
+    } else if symbol(row, "ID") {
+        "max_current_a"
+    } else {
+        return None;
+    };
+    rating_value(key, row).map(|_| key)
+}
+
+/// `entry` with each untagged row [`implied_rating`] names tagged.
+///
+/// Only a key the model tagged no row of; returns the keys so tagged. Read in memory only, for the
+/// scalar [`standard_rating`] picks; the card keeps its rows as written.
+#[must_use]
+pub fn with_implied_tags(entry: &ModelEntry) -> (ModelEntry, Vec<&'static str>) {
+    let mut out = entry.clone();
+    let tagged: BTreeSet<&str> = (entry.source.iter().flat_map(|s| &s.characteristic))
+        .filter_map(|r| r.rating.as_deref())
+        .collect();
+    let mut keys = BTreeSet::new();
+    for row in out.source.iter_mut().flat_map(|s| &mut s.characteristic) {
+        if let Some(key) = implied_rating(row).filter(|k| !tagged.contains(k)) {
+            row.rating = Some(key.to_string());
+            keys.insert(key);
+        }
+    }
+    (out, keys.into_iter().collect())
+}
+
 /// Every problem with the card's `rating`-tagged rows.
 ///
 /// A key that is no rating, rows [`curve`] cannot read, and a scalar that is
@@ -655,6 +717,51 @@ mod tests {
         theta.source.as_mut().expect("source").characteristic[0].mounting =
             Some("2 in2 copper".into());
         assert_eq!(standard_rating(&theta, "theta_ja_c_per_w"), Some(120.0));
+    }
+
+    /// A row's own text tags it: an ID row (not a pulsed or avalanche one), a PD row
+    /// (not a power-dissipation capacitance), a junction-to-ambient resistance;
+    /// a key the model tagged a row of keeps only its rows.
+    #[test]
+    fn untagged_rows_are_tagged_by_their_own_text() {
+        let row = |parameter: &str, unit: &str, tag: &str| {
+            format!("[[models.source.characteristic]]\nparameter = \"{parameter}\"\nmax = 5.0\nunit = \"{unit}\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\n{tag}")
+        };
+        let rows = [
+            row("ID continuous drain current", "A", ""),
+            row("IDM pulsed drain current", "A", ""),
+            row("Cpd power dissipation capacitance", "pF", ""),
+            row("PD power dissipation", "W", ""),
+            row("RθJA junction-to-ambient", "°C/W", ""),
+            row("RθJC junction-to-case", "°C/W", ""),
+        ]
+        .concat();
+        let text = format!("[[models]]\nid = \"q\"\nkind = \"nmos\"\ndescription = \"d\"\n[models.source]\ntier = \"datasheet-derived\"\n{rows}");
+        let db: crate::schema::DbFile = toml::from_str(&text).expect("fixture parses");
+        let (tagged, keys) = with_implied_tags(&db.models[0]);
+        assert_eq!(keys, ["max_current_a", "max_power_w", "theta_ja_c_per_w"]);
+        let tags: Vec<_> = tagged
+            .source
+            .iter()
+            .flat_map(|s| &s.characteristic)
+            .map(|r| r.rating.as_deref())
+            .collect();
+        assert_eq!(
+            tags,
+            [
+                Some("max_current_a"),
+                None,
+                None,
+                Some("max_power_w"),
+                Some("theta_ja_c_per_w"),
+                None
+            ]
+        );
+        assert_eq!(standard_rating(&tagged, "max_power_w"), Some(5.0));
+        // The model's own tag on a key leaves that key's other rows untagged.
+        let own = text.replacen("max = 5.0", "max = 5.0\nrating = \"max_power_w\"", 4);
+        let db: crate::schema::DbFile = toml::from_str(&own).expect("fixture parses");
+        assert!(!with_implied_tags(&db.models[0]).1.contains(&"max_power_w"));
     }
 
     /// Builtin cards skip `validate`, so a curated row that cannot be read

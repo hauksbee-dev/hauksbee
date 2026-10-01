@@ -426,6 +426,38 @@ fn regulator(entry: &ModelEntry) -> Vec<Derived> {
     out
 }
 
+/// `ratings.max_junction_temp_c` when the card omits it: the highest maximum a
+/// row naming the junction temperature (`TJ`, "junction temperature") prints in
+/// °C. A part is rated to the hottest junction its datasheet allows anywhere
+/// (the key's definition), so a lower operating-range row does not cap it.
+pub fn junction_limit(entry: &ModelEntry) -> Option<(f64, String)> {
+    if entry.ratings.max_junction_temp_c.is_some() {
+        return None;
+    }
+    let named = |r: &Characteristic| {
+        let flat: String = (r.parameter.to_lowercase().chars())
+            .filter(|c| c.is_alphanumeric())
+            .collect();
+        let celsius = matches!(r.unit.replace(['°', ' ', '℃'], "").as_str(), "C" | "");
+        celsius
+            && !flat.contains("storage")
+            && !flat.contains("stg")
+            && (flat.contains("junctiontemp") || symbol(r, "TJ") || symbol(r, "TJmax"))
+    };
+    let rows = cited_rows(entry).iter().filter(|r| named(r));
+    let best = rows
+        .filter_map(|r| Some((r.max?, r)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))?;
+    let (v, r) = best;
+    (30.0..=400.0).contains(&v).then(|| {
+        let how = format!(
+            "the hottest printed junction temperature, '{}' max {v} ({})",
+            r.parameter, r.conditions
+        );
+        (v, how)
+    })
+}
+
 /// A load or analog switch's ron, roff and vth.
 ///
 /// roff: an off switch passing leakage I at voltage V across it is V/I; V is
@@ -629,6 +661,29 @@ mod tests {
             }
         }
         assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+
+    /// The junction limit is the hottest maximum a junction-temperature row
+    /// prints, never a storage row, a stated one, or a row without a max.
+    #[test]
+    fn junction_limit_is_the_hottest_printed_junction_maximum() {
+        let rows = "Junction temperature TJ ; max = 150 ; °C ; absolute maximum + Operating junction temperature ; min = -40, max = 125 ; °C ; - + Storage temperature ; max = 175 ; °C ; -";
+        let e = card("opamp", "", rows, "");
+        assert_eq!(junction_limit(&e).map(|j| j.0), Some(150.0));
+        let stated = card(
+            "opamp",
+            "",
+            rows,
+            "[models.ratings]\nmax_junction_temp_c = 125.0",
+        );
+        assert!(junction_limit(&stated).is_none());
+        let none = card(
+            "opamp",
+            "",
+            "TJ ; typ = 25 ; °C ; - + Storage temperature ; max = 175 ; °C ; -",
+            "",
+        );
+        assert!(junction_limit(&none).is_none());
     }
 
     #[test]

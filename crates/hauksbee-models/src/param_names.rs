@@ -854,7 +854,26 @@ pub(crate) fn diode_fit(points: &[Point]) -> Option<[f64; 3]> {
     let (a, b) = line(&ln, &drop);
     let law = [(-b / a).exp(), a / hauksbee_ir::thermal_voltage_c(27.0), rs];
     let physical = (1e-30..=1e-3).contains(&law[0]) && (0.5..=3.0).contains(&law[1]);
-    (points.len() >= 2 && physical && worst_miss(law, points).0 <= 0.1).then_some(law)
+    let main = (points.len() >= 2 && physical && worst_miss(law, points).0 <= 0.1).then_some(law);
+    main.or_else(|| ideal_diode_fit(points))
+}
+
+/// The ideal-junction law (n = 1) through the lowest and highest printed `(IF, VF)`
+/// when the free fit is unphysical, as two maxima over one decade give: the junction
+/// slope `VT·ln(IF)` is the ideal one and the extra drop is series resistance, the
+/// least assumption that reproduces both rows. `None` unless physical and within 10%.
+fn ideal_diode_fit(points: &[Point]) -> Option<[f64; 3]> {
+    let by_current = |a: &&Point, b: &&Point| a.0.total_cmp(&b.0);
+    let (lo, hi) = (
+        points.iter().min_by(by_current)?,
+        points.iter().max_by(by_current)?,
+    );
+    let vt = hauksbee_ir::thermal_voltage_c(27.0);
+    let rs = (hi.1 - lo.1 - vt * (hi.0 / lo.0).ln()) / (hi.0 - lo.0);
+    let is = lo.0 * (-lo.0.mul_add(-rs, lo.1) / vt).exp();
+    let law = [is, 1.0, rs];
+    let physical = hi.0 > lo.0 && rs >= 0.0 && (1e-30..=1e-3).contains(&is);
+    (physical && worst_miss(law, points).0 <= 0.1).then_some(law)
 }
 
 /// The fit an executable diode card must take: its law is absent or over 10% off
@@ -1336,6 +1355,23 @@ mod tests {
             let found = source_warnings(&e);
             assert!(found.len() == usize::from(!want.is_empty()) && found.iter().all(|w| w.contains(want)), "{case}: {found:?}");
         }
+    }
+
+    /// Two VF maxima that no physical free fit passes through take the ideal
+    /// junction plus a series resistance; two that no non-negative resistance
+    /// reproduces (a flatter rise than the junction gives) take no law.
+    #[test]
+    fn two_vf_maxima_fit_an_ideal_junction_with_series_resistance() {
+        let fit = |rows: &str| {
+            let e = entry("diode", "", &cited(rows));
+            diode_fit(&vf_points(cited_rows(&e)))
+        };
+        let [is, n, rs] =
+            fit("VF ; max = 0.45 ; V ; IF = 1 A + VF ; max = 0.75 ; V ; IF = 3 A").expect("fits");
+        assert!((n - 1.0).abs() < 1e-9 && rs > 0.0 && is > 0.0);
+        assert!((diode_vf([is, n, rs], 1.0) - 0.45).abs() < 1e-3);
+        assert!((diode_vf([is, n, rs], 3.0) - 0.75).abs() < 1e-3);
+        assert!(fit("VF ; max = 0.30 ; V ; IF = 1 A + VF ; max = 0.31 ; V ; IF = 3 A").is_none());
     }
 
     /// An identity-only card whose own cited rows cover every param its checker

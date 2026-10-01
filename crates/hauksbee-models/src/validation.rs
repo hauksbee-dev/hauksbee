@@ -167,6 +167,13 @@ fn abstains(entry: &ModelEntry, key: &str) -> bool {
         })
 }
 
+/// Whether an identity-only card's own cited rows give every param its kind
+/// requires, or a convention derives it, so the abstention is refused.
+pub(crate) fn needless_identity_only(entry: &ModelEntry) -> bool {
+    let required = kind_rules(entry).required;
+    crate::param_names::needless_abstention(entry, required, |k| abstains(entry, k)).is_some()
+}
+
 /// Whether a cited row prints `v`, in `key`'s unit, in any column (a row in
 /// another SI unit, such as a time row for a resistance, never counts).
 fn printed(entry: &ModelEntry, key: &str, v: f64) -> bool {

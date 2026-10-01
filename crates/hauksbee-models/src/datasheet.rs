@@ -2347,6 +2347,19 @@ impl Reply<'_> {
     /// The reply with the conservative unknown model-error record added where
     /// one is missing (never replaced): it only qualifies results; a retry costs a run.
     fn complete(self, raw: String) -> String {
+        let done = self.complete_with(raw.clone(), true);
+        // An identity-only card converted to a model that still fails its check
+        // stays as written, to be refused by the abstention rule as before.
+        if done != raw && self.check(&done).is_err() {
+            return self.complete_with(raw, false);
+        }
+        done
+    }
+
+    /// [`Self::complete`], converting an identity-only card its own rows make
+    /// needless into the model they give when `convert`.
+    #[allow(clippy::too_many_lines)] // one pass over each entry's table
+    fn complete_with(self, raw: String, convert: bool) -> String {
         use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
         let (path, validation) = match self {
             Reply::Model { .. } => ("models", "physical-bounds-only"),
@@ -2385,26 +2398,61 @@ impl Reply<'_> {
         let db = toml::from_str::<crate::schema::DbFile>(&raw).map_or(vec![], |d| d.models);
         let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
         let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
-        for (entry, table) in db.iter().zip(tables) {
+        for (original, table) in db.iter().zip(tables) {
+            // An identity-only abstention the card's own cited rows make needless
+            // (they fix every required param) becomes the model those rows give:
+            // the params are derived below rather than the reply refused.
+            let mut converted = original.clone();
+            let needless = convert
+                && original.params.get_bool("identity_only") == Some(true)
+                && crate::validation::needless_identity_only(original);
+            if needless {
+                for key in ["identity_only", "warning", "unlocked_by"] {
+                    converted.params.0.remove(key);
+                    let params = table.get_mut("params").and_then(Item::as_table_like_mut);
+                    params.map(|p| p.remove(key));
+                }
+                say!("[model-extract] {}: identity-only abstention refused by its own rows; writing the model they give", original.id);
+                inserted = true;
+            }
+            let entry = &converted;
             // A rating's scalar is its tagged row at the standard condition, which
             // code picks from the rows rather than the model from the table.
-            let rows = entry.source.iter().flat_map(|s| &s.characteristic);
+            // A row the model left untagged but its own text names (an ID, PD or
+            // θJA row) counts, read in memory, for a key it tagged no row of.
+            let (tagged, implied) = crate::derating::with_implied_tags(entry);
+            let rows = tagged.source.iter().flat_map(|s| &s.characteristic);
             let mut keys: Vec<&str> = rows.filter_map(|r| r.rating.as_deref()).collect();
             keys.sort_unstable();
             keys.dedup();
             let ratings = toml::Table::try_from(&entry.ratings).unwrap_or_default();
             for key in keys {
-                let Some(v) = crate::derating::standard_rating(entry, key) else {
+                let Some(v) = crate::derating::standard_rating(&tagged, key) else {
                     continue;
                 };
                 let had = ratings.get(key).and_then(toml::Value::as_float);
                 if had.is_some_and(|h| (h - v).abs() <= 1e-9 * v.abs()) {
                     continue;
                 }
+                // A key read from a row the model left untagged only fills a scalar it omits.
+                if implied.contains(&key) && had.is_some() {
+                    continue;
+                }
                 let ratings = table.entry("ratings").or_insert(Item::Table(Table::new()));
                 if let Some(ratings) = ratings.as_table_like_mut() {
                     say!("[model-extract] {}: ratings.{key} = {v}, its tagged row at the standard condition (was {had:?})", entry.id);
                     ratings.insert(key, toml_edit::value(v));
+                    inserted = true;
+                }
+            }
+            if let Some((v, how)) = crate::conventions::junction_limit(entry) {
+                let ratings = table.entry("ratings").or_insert(Item::Table(Table::new()));
+                if let Some(ratings) = ratings.as_table_like_mut() {
+                    say!(
+                        "[model-extract] {}: ratings.max_junction_temp_c = {v}, {how}",
+                        entry.id
+                    );
+                    ratings.insert("max_junction_temp_c", toml_edit::value(v));
                     inserted = true;
                 }
             }
@@ -4208,6 +4256,43 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
             );
         }
         assert_eq!(model.complete(card(5.7)), card(5.7));
+    }
+
+    /// An identity-only diode whose one cited VF row fixes its law becomes that
+    /// model (a convention, not a refusal); one with no row stays identity-only,
+    /// and a junction maximum a row prints fills the omitted rating.
+    #[test]
+    fn completion_converts_a_needless_abstention_and_fills_the_junction_limit() {
+        let row = |p: &str, v: &str, unit: &str, at: &str| {
+            format!("[[models.source.characteristic]]\nparameter = \"{p}\"\nmax = {v}\nunit = \"{unit}\"\nconditions = \"{at}\"\nbasis = \"b\"\n")
+        };
+        let card = |rows: &str| {
+            format!("[[models]]\nid = \"q\"\nkind = \"diode\"\ndescription = \"d\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[models.pins]\n\"1\" = \"anode\"\n\"2\" = \"cathode\"\n{MODEL_SOURCE}{rows}")
+        };
+        let model = Reply::Model {
+            part: "Q",
+            kind: "diode",
+        };
+        let rows = row("VF forward voltage", "0.9", "V", "IF = 10 mA")
+            + &row("TJ junction temperature", "150", "°C", "absolute maximum");
+        let done = model.complete(card(&rows));
+        let db: crate::schema::DbFile = toml::from_str(&done).expect("completed card parses");
+        let entry = &db.models[0];
+        assert!(entry.params.get_bool("identity_only").is_none(), "{done}");
+        assert!(entry.params.get_f64("is").is_some() && entry.params.get_f64("n") == Some(1.0));
+        assert_eq!(entry.ratings.max_junction_temp_c, Some(150.0));
+        assert!(model.check(&done).is_ok(), "{done}");
+        // No VF row: the abstention stands, nothing is derived.
+        let bare = card(&row(
+            "TJ junction temperature",
+            "150",
+            "°C",
+            "absolute maximum",
+        ));
+        let kept = model.complete(bare);
+        let db: crate::schema::DbFile = toml::from_str(&kept).expect("card parses");
+        assert_eq!(db.models[0].params.get_bool("identity_only"), Some(true));
+        assert!(db.models[0].params.get_f64("is").is_none());
     }
 
     #[test]
