@@ -148,6 +148,8 @@ mod no_firmware_no_avr;
 mod packaged_asset_sync;
 #[path = "pin_role_rules.rs"]
 mod pin_role_rules;
+#[path = "power_invariants.rs"]
+mod power_invariants;
 #[path = "power_supply.rs"]
 mod power_supply;
 #[path = "rail_suppression_and_cc_floor.rs"]
