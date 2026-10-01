@@ -609,6 +609,15 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
 #[error("{0} timed out after {1}s{tail}", tail = timeout_tail(.2.as_deref()))]
 pub struct TimedOut(pub String, pub u64, pub Option<PathBuf>);
 
+/// A streaming agent run killed because no event arrived for the idle period.
+///
+/// Distinct from [`TimedOut`]: the run had not used its time budget, it had
+/// gone silent (measured: codex calls stalling about 310 s with no event).
+/// [`validated_attempts`] retries it once and discloses that it did.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0} emitted no event for {1}s and was killed")]
+pub struct IdleStalled(pub String, pub u64);
+
 /// What a timeout leaves the user: nothing, or a kept draft to review.
 fn timeout_tail(kept: Option<&Path>) -> String {
     kept.map_or_else(
@@ -2408,6 +2417,12 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
         // that says "here is the TOML" twice yields two candidates.
+        // Codex's stdout is a JSONL event stream, so its prose lives in last-message.txt.
+        let stdout = if chosen == Backend::Codex {
+            std::fs::read_to_string(ws.path().join("last-message.txt")).unwrap_or_default()
+        } else {
+            stdout
+        };
         let text = std::fs::read_to_string(ws.answer_path())
             .ok()
             .filter(|t| !t.trim().is_empty())
@@ -2433,6 +2448,7 @@ fn validated_attempts(
     mut fetch: impl FnMut(&str) -> Result<String>,
 ) -> Result<String> {
     let mut prompt = base_prompt.to_string();
+    let mut idle_retried = false;
     for attempt in 1..=retries + 1 {
         let started = Instant::now();
         let doing = match (attempt, reply) {
@@ -2441,7 +2457,22 @@ fn validated_attempts(
             _ => "redrafting with the checker's feedback",
         };
         progress::phase(format!("{doing} (attempt {attempt} of {})", retries + 1));
-        let raw = reply.complete(fetch(&prompt)?);
+        let fetched = match fetch(&prompt) {
+            // One idle kill per extraction call is retried, on the same prompt,
+            // spending an attempt like any other retry; a second stall fails.
+            Err(e) if e.is::<IdleStalled>() && !idle_retried && attempt <= retries => {
+                idle_retried = true;
+                say!(
+                    "[model-extract] attempt {attempt} stalled: {e}; retrying once \
+                     (attempt {} of {})",
+                    attempt + 1,
+                    retries + 1
+                );
+                continue;
+            }
+            fetched => fetched?,
+        };
+        let raw = reply.complete(fetched);
         progress::phase("checking the answer");
         say!(
             "[model-extract] {tool} attempt {attempt} returned {} chars in {:.0}s",
@@ -2928,7 +2959,8 @@ pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Resu
     let mut cmd = Command::new(std::path::absolute(executable)?);
     match backend {
         Backend::Codex => {
-            cmd.arg("exec");
+            // `--json` streams one JSONL event per step; the idle watchdog reads that stream.
+            cmd.args(["exec", "--json"]);
             if let Some(profile) = &a.profile {
                 cmd.args(["-p", profile]);
             }
@@ -2996,6 +3028,10 @@ pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Resu
         prompt,
         &ws.path().join(format!("{}-stderr.log", backend.name())),
         Duration::from_secs(resolved.timeout_secs),
+        // Only codex streams events; claude and agy print once at the end, so
+        // their silence is normal and a watchdog would kill every healthy run.
+        (backend == Backend::Codex && resolved.idle_secs > 0)
+            .then(|| Duration::from_secs(resolved.idle_secs)),
     )
 }
 
@@ -3080,6 +3116,7 @@ fn run_cli_agent(
     prompt: &str,
     log: &Path,
     timeout: Duration,
+    idle: Option<Duration>,
 ) -> Result<String> {
     std::fs::write(ws.path().join("prompt.md"), prompt)
         .context("writing the prompt into the sandbox")?;
@@ -3102,7 +3139,7 @@ fn run_cli_agent(
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(AGENT_POINTER);
     }
-    wait_for_cli_backend(child, tool, log, timeout)
+    wait_for_cli_backend(child, tool, log, timeout, idle)
 }
 
 /// The stdin instruction every agent run receives. The pages are on disk
@@ -3114,34 +3151,73 @@ const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and foll
     Read values off the rendered page images (page-*.png) for anything that lives in a table \
     or pinout, with datasheet.pdf available in the same directory. Write your answer to model.toml.";
 
-/// Poll a spawned CLI agent to completion, killing it at `CLI_BACKEND_TIMEOUT`,
-/// and return its stdout. On a non-zero exit the error quotes the last few
+/// Poll a spawned CLI agent to completion, killing its process tree at
+/// `timeout` (or, when `idle` is set, after that long with no stdout), and
+/// return its stdout. On a non-zero exit the error quotes the last few
 /// non-empty lines of BOTH stdout and the captured stderr log: a CLI agent puts
 /// the reason it gave up (a refused model, a rate limit, a bad config key) on
 /// stderr, so a failure with an empty stdout would otherwise read as "exited
 /// with status 1: " and nothing after the colon.
+///
+/// Stdout is drained by a reader thread while polling, which stamps the time of
+/// every read: that stamp is the stream's heartbeat, and draining also keeps a
+/// chatty agent from filling the pipe and blocking in write(2).
 fn wait_for_cli_backend(
     mut child: Child,
     tool: &str,
     log_path: &Path,
     timeout: Duration,
+    idle: Option<Duration>,
 ) -> Result<String> {
-    let deadline = Instant::now() + timeout;
-    while child
-        .try_wait()
-        .with_context(|| format!("polling {tool}"))?
-        .is_none()
-    {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    let start = Instant::now();
+    let beat = Arc::new(AtomicU64::new(0));
+    let mut pipe = child.stdout.take().context("capturing agent stdout")?;
+    let reader = {
+        let beat = Arc::clone(&beat);
+        std::thread::spawn(move || {
+            let (mut out, mut buf) = (Vec::new(), [0u8; 8192]);
+            while let Ok(n) = pipe.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+                let millis = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                beat.store(millis, Ordering::Relaxed);
+            }
+            out
+        })
+    };
+    let deadline = start + timeout;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("polling {tool}"))?
+        {
+            break status;
+        }
+        let silent = start
+            .elapsed()
+            .saturating_sub(Duration::from_millis(beat.load(Ordering::Relaxed)));
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_process_tree(&mut child);
             return Err(TimedOut(tool.to_string(), timeout.as_secs(), None).into());
         }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    let output = child
-        .wait_with_output()
-        .with_context(|| format!("collecting {tool} output"))?;
+        if idle.is_some_and(|limit| silent >= limit) {
+            kill_process_tree(&mut child);
+            let secs = idle.map_or(0, |d| d.as_secs());
+            return Err(IdleStalled(tool.to_string(), secs).into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let stdout = reader.join().unwrap_or_default();
+    let output = std::process::Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    };
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
@@ -3166,6 +3242,51 @@ fn wait_for_cli_backend(
         );
     }
     bail!("{tool} exited with status {}: {detail}", output.status)
+}
+
+/// Every descendant pid of `root`, from one `ps` snapshot (empty where `ps` is absent).
+fn descendants(root: u32) -> Vec<u32> {
+    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid="]).output() else {
+        return Vec::new();
+    };
+    let pairs: Vec<(u32, u32)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace().map(|n| n.parse::<u32>().ok());
+            Some((f.next()??, f.next()??))
+        })
+        .collect();
+    let mut found = vec![root];
+    let mut i = 0;
+    while i < found.len() {
+        let parent = found[i];
+        found.extend(pairs.iter().filter(|p| p.1 == parent).map(|p| p.0));
+        i += 1;
+    }
+    found.split_off(1)
+}
+
+/// Stop an agent and everything it spawned: SIGTERM the tree, give it two
+/// seconds to leave, then SIGKILL what remains. Killing only the direct child
+/// leaves its helpers holding the stdout pipe and burning quota.
+fn kill_process_tree(child: &mut Child) {
+    let mut pids = descendants(child.id());
+    pids.push(child.id());
+    let signal = |sig: &str, pids: &[u32]| {
+        let _ = Command::new("kill")
+            .arg(sig)
+            .args(pids.iter().map(u32::to_string))
+            .stderr(Stdio::null())
+            .status();
+    };
+    signal("-TERM", &pids);
+    let grace = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < grace && child.try_wait().ok().flatten().is_none() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    signal("-KILL", &pids);
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// One prepared OpenAI-compatible chat-completions request: everything but
@@ -4298,6 +4419,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
             let mut expected = vec![
                 "exec".to_string(),
+                "--json".into(),
                 "-p".into(),
                 "trial-profile".into(),
                 "--model".into(),
@@ -4327,7 +4449,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
         assert!(output.contains("--ephemeral\n--ignore-user-config\n--ignore-rules\n-c\n"));
         assert!(output.contains("--disable\nskill_search\n") && output.contains("shell_snapshot"));
-        assert!(output.starts_with("exec\n--model\n"), "{output}");
+        assert!(output.starts_with("exec\n--json\n--model\n"), "{output}");
         resolved.backend = Backend::Agy;
         resolved.agy.command = command.to_str().unwrap().into();
         let a = &resolved.agy;
@@ -4419,6 +4541,94 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(clean.to_string().contains("INCOMPLETE"), "{clean}");
         assert!(kept.is_some_and(|k| k.contains("datasheet-derived") && k.contains("sha256")));
         assert!(bad.2.is_none() && dropped.is_none(), "{bad}");
+    }
+
+    /// Fake codex for the idle watchdog: attempt 1 stalls (with a helper
+    /// process that must die with it), attempt 2 answers. `chatty` instead
+    /// streams slowly for longer than the idle limit, then answers once.
+    #[cfg(unix)]
+    fn run_idle_fake(chatty: bool) -> (Result<(), anyhow::Error>, usize, bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let (dir, ex) = (tempfile::tempdir().unwrap(), FORMAT_EXAMPLES[0]);
+        let [pdf, agent, draft, cfg, count, helper] =
+            ["a.pdf", "agent", "draft", "c", "count", "helper.pid"].map(|f| dir.path().join(f));
+        std::fs::write(&draft, ex.card).unwrap();
+        let body = if chatty {
+            "for i in 1 2 3 4 5 6 7 8; do echo '{\"type\":\"tick\"}'; sleep 0.4; done\n\
+             cp DRAFT model.toml\n"
+        } else {
+            "if [ \"$n\" = 1 ]; then sleep 60 & echo $! > HELPER; wait; fi\n\
+             echo '{\"type\":\"done\"}'; cp DRAFT model.toml\n"
+        };
+        let script = format!(
+            "#!/bin/sh\ncat >/dev/null\necho x >> {count:?}\nn=$(wc -l < {count:?} | tr -d ' ')\n{}",
+            body.replace("DRAFT", &format!("{draft:?}")).replace("HELPER", &format!("{helper:?}"))
+        );
+        for (path, text) in [(&pdf, "%PDF-1.4\n"), (&cfg, ""), (&agent, script.as_str())] {
+            std::fs::write(path, text).unwrap();
+        }
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [
+            (extract_config::ENV_CONFIG_PATH, cfg.to_str().unwrap()),
+            ("HAUKSBEE_CODEX_COMMAND", agent.to_str().unwrap()),
+            ("HAUKSBEE_EXTRACT_IDLE_SECS", "1"),
+        ];
+        for (k, v) in env {
+            std::env::set_var(k, v);
+        }
+        let out = tempfile::tempdir_in(dir.path()).unwrap();
+        let args = Args::new(pdf, ex.part.into(), ex.kind.into());
+        let args = args.backend(Some(Backend::Codex));
+        let result = run(args.out_dir(Some(out.path().into()))).map(|_| ());
+        for (k, _) in env {
+            std::env::remove_var(k);
+        }
+        let runs = std::fs::read_to_string(&count).unwrap().lines().count();
+        let helper_alive = std::fs::read_to_string(&helper)
+            .ok()
+            .and_then(|p| p.trim().parse::<u32>().ok())
+            .is_some_and(|pid| {
+                std::process::Command::new("kill")
+                    .args(["-0", &pid.to_string()])
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            });
+        (result, runs, helper_alive)
+    }
+
+    /// A codex run silent past the idle limit is killed with its helper and
+    /// retried once, and the retried run's answer is the result.
+    #[cfg(unix)]
+    #[test]
+    fn idle_codex_is_killed_with_its_children_and_retried_once() {
+        let (result, runs, helper_alive) = run_idle_fake(false);
+        result.unwrap();
+        assert_eq!(runs, 2, "one stalled run plus one retry");
+        assert!(!helper_alive, "the stalled run's process tree must be gone");
+    }
+
+    /// Slow output is not silence: a stream that keeps emitting events past
+    /// the idle limit runs to completion with no retry.
+    #[cfg(unix)]
+    #[test]
+    fn slow_but_chatty_codex_is_not_killed() {
+        let (result, runs, _) = run_idle_fake(true);
+        result.unwrap();
+        assert_eq!(runs, 1);
+    }
+
+    #[test]
+    fn a_second_stall_is_not_retried_again() {
+        let mut calls = 0;
+        let err = validated_attempts(5, "p", Reply::Word, "codex", |_| {
+            calls += 1;
+            Err(IdleStalled("codex".into(), 1).into())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 2, "{err:#}");
+        assert!(err.is::<IdleStalled>());
     }
 
     #[test]

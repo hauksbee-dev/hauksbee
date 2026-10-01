@@ -53,6 +53,8 @@ pub const ENV_BACKEND: &str = "HAUKSBEE_EXTRACT_BACKEND";
 
 pub const DEFAULT_RETRIES: usize = 2;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
+/// Silence on a streaming agent run (codex `--json`) before it is killed and retried.
+pub const DEFAULT_IDLE_SECS: u64 = 150;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const DEFAULT_API_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -190,6 +192,10 @@ pub struct ExtractConfig {
     /// How long one agent-CLI run may take before it is killed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+    /// How long a streaming agent run may emit no event before it is killed
+    /// and retried once. `0` turns the watchdog off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_secs: Option<u64>,
     #[serde(rename = "claude-code", skip_serializing_if = "is_default")]
     pub claude_code: AgentConfig,
     #[serde(skip_serializing_if = "is_default")]
@@ -331,6 +337,9 @@ impl ExtractConfig {
         if let Some(t) = self.timeout_secs.filter(|t| !(30..=7200).contains(t)) {
             bail!("timeout_secs must be between 30 and 7200, not {t}");
         }
+        if let Some(i) = self.idle_secs.filter(|i| *i > 7200) {
+            bail!("idle_secs must be 0 (off) to 7200, not {i}");
+        }
         for a in AGENTS {
             let (name, s) = (a.backend.name(), self.agent(a.backend).expect("agent"));
             let control = s
@@ -383,6 +392,11 @@ impl ExtractConfig {
             ),
             KeyInfo::new("retries", "validation retries per extraction", "2"),
             KeyInfo::new("timeout_secs", "seconds one agent run may take", "900"),
+            KeyInfo::new(
+                "idle_secs",
+                "silent seconds on a streaming run before kill + one retry (0 = off)",
+                "150",
+            ),
         ];
         for a in AGENTS {
             for (field, help, default) in [
@@ -477,6 +491,7 @@ impl ExtractConfig {
                 }
                 "retries" => self.retries = number("retries")?.and_then(|n| n.try_into().ok()),
                 "timeout_secs" => self.timeout_secs = number("timeout_secs")?,
+                "idle_secs" => self.idle_secs = number("idle_secs")?,
                 _ => return Err(unknown()),
             }
             return Ok(());
@@ -630,6 +645,10 @@ impl ExtractConfig {
                 .and_then(|v| v.parse().ok())
                 .or(self.timeout_secs)
                 .unwrap_or(DEFAULT_TIMEOUT_SECS),
+            idle_secs: env("HAUKSBEE_EXTRACT_IDLE_SECS")
+                .and_then(|v| v.parse().ok())
+                .or(self.idle_secs)
+                .unwrap_or(DEFAULT_IDLE_SECS),
             claude_code,
             agy,
             codex,
@@ -695,6 +714,7 @@ pub const KNOWN_ENV_VARS: &[&str] = &[
     "HAUKSBEE_LLM_BASE_URL",
     "HAUKSBEE_API_KEY_ENV",
     "HAUKSBEE_EXTRACT_TIMEOUT_SECS",
+    "HAUKSBEE_EXTRACT_IDLE_SECS",
     ENV_CONFIG_PATH,
 ];
 
@@ -955,6 +975,7 @@ pub struct Resolved {
     pub backend_source: BackendSource,
     pub retries: usize,
     pub timeout_secs: u64,
+    pub idle_secs: u64,
     pub claude_code: ResolvedAgent,
     pub agy: ResolvedAgent,
     pub codex: ResolvedAgent,

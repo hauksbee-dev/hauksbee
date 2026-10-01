@@ -254,7 +254,7 @@ CI job's way of overriding a saved developer choice): `HAUKSBEE_EXTRACT_BACKEND`
 `HAUKSBEE_LLM_API_KEY`, `HAUKSBEE_CLAUDE_MODEL`, `HAUKSBEE_CLAUDE_EFFORT`,
 `HAUKSBEE_AGY_MODEL`, `HAUKSBEE_AGY_EFFORT`, `HAUKSBEE_CODEX_MODEL`,
 `HAUKSBEE_CODEX_EFFORT`, `HAUKSBEE_CODEX_PROFILE`, `HAUKSBEE_LLM_MODEL`,
-`HAUKSBEE_LLM_BASE_URL`, `HAUKSBEE_API_KEY_ENV`, `HAUKSBEE_EXTRACT_TIMEOUT_SECS`,
+`HAUKSBEE_LLM_BASE_URL`, `HAUKSBEE_API_KEY_ENV`, `HAUKSBEE_EXTRACT_TIMEOUT_SECS`, `HAUKSBEE_EXTRACT_IDLE_SECS`,
 `HAUKSBEE_EXTRACT_CONFIG`. No secret is ever written to the config file: the
 `api` backend records the NAME of the environment variable holding its key,
 never the key itself.
@@ -639,6 +639,15 @@ The extractor fails loudly and usefully:
 - **CLI timeout**: an agent-backend run is killed after 10 minutes (configurable via
   `hauksbee models backend set timeout_secs=...`) with a
   message to tighten the prompt or switch backend.
+- **Idle stall**: codex runs stream JSONL events (`codex exec --json`). If no
+  event arrives for `idle_secs` (default 150; `hauksbee models backend set
+  idle_secs=...`, `0` turns it off), the run's whole process tree is killed and
+  the call is retried once on the same prompt, spending one of the extraction's
+  `retries` attempts. The retry is announced on stderr like any other retry
+  (`attempt N stalled: ... retrying once`); a second stall fails the
+  extraction. Never a different provider. claude-code and agy print only at the
+  end of a run, so they have no event stream to watch and are not covered;
+  `timeout_secs` still bounds them.
 - **Empty / prose reply**: rejected with "empty reply" or "no [[models]]
   table" rather than a confusing TOML parse error.
 - **Wrong kind**: a diode card returned for a `bjt_npn` request is rejected
