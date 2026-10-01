@@ -582,52 +582,98 @@ pub fn bind_board_with(
     let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of, custom);
 
     // ── Pass 3b: attach configurable power supplies ──────────────────────────
-    // Every detected supply net gets a behavioral supply (default Ideal at the
-    // rail's nominal voltage, electrically an ideal Vsource), unless a
-    // vreg already sources that exact net (we keep the regulator chain). The
-    // supply is stamped as a controllable Vsource behind a tiny series resistor
-    // so the scheduler can read rail current and update the supply per chunk.
+    // A supply net takes an ideal source (default Ideal at the rail's nominal
+    // voltage) only when nothing on the board already sets its rail: see
+    // `rail_owner`. A regulator's or converter's rail, including nets a series
+    // conductor joins to it (a buck's rail past its inductor, a ferrite-fed
+    // analog rail), keeps the regulator as its only source; an undriven rail
+    // takes one source, on a net a connector feeds when it has one. The supply
+    // is a controllable Vsource behind a tiny series resistor, so the
+    // scheduler can read rail current and update the supply per chunk.
+    let mut domains = crate::rail_owner::RailDomains::new(&circuit, &behavioral, &[]);
+    let board_nodes: std::collections::HashSet<NodeId> = net_nodes.values().copied().collect();
+    domains.join_switches(&circuit, |n| board_nodes.contains(&n));
+    let entry = |node: NodeId| {
+        board.components.iter().any(|c| {
+            let port = component_kinds
+                .get(&c.reference)
+                .is_some_and(|k| k == "connector")
+                || is_port_class(&ref_prefix(&c.reference));
+            port && c.pins.iter().any(|p| node_of(p.net) == Some(node))
+        })
+    };
     let mut supplies: Vec<SupplyLeg> = Vec::new();
     // Deterministic order so supply indices are stable across runs.
-    let mut supply_names: Vec<(&String, &f64)> = power_nets.iter().collect();
-    supply_names.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, volts) in supply_names {
-        let node = match net_nodes.get(name) {
-            Some(&n) if !n.is_ground() => n,
-            _ => continue,
+    let mut supply_names: Vec<(&String, f64, NodeId, bool)> = power_nets
+        .iter()
+        .filter_map(|(name, &volts)| {
+            let node = net_nodes.get(name).copied().filter(|n| !n.is_ground())?;
+            Some((name, volts, node, entry(node)))
+        })
+        .collect();
+    // A connector's rail first, then the shorter name (+5V before +5V_USB,
+    // the rail before its branches), so the source a branch is fed from
+    // takes the supply.
+    supply_names.sort_by(|a, b| {
+        let len = |s: &String| s.len();
+        b.3.cmp(&a.3)
+            .then_with(|| len(a.0).cmp(&len(b.0)))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    let mut conflicts = domains.conflicts(&circuit);
+    for &(name, volts, node, _) in &supply_names {
+        if !domains.drivers_of(node).is_empty() {
+            continue;
+        }
+        if let Some(leg) = supplies.iter().find(|l| domains.joined(l.net, node)) {
+            let held = leg.supply.nominal_volts();
+            if (held - volts).abs() > 0.01 * held.abs().max(volts.abs()) {
+                conflicts.push(crate::rail_owner::RailConflict {
+                    parts: Vec::new(),
+                    nets: vec![leg.net_name.clone(), name.clone()],
+                    message: format!(
+                        "'{name}' ({volts:.2} V by name) and '{}' ({held:.2} V) are one rail \
+                         through a series conductor; only '{}' takes a supply, so '{name}' \
+                         reads {held:.2} V",
+                        leg.net_name, leg.net_name
+                    ),
+                });
+            }
+            continue;
+        }
+        // A switched branch of a driven rail, or of a rail already supplied at
+        // this voltage, is fed through its switch.
+        let same = |l: &SupplyLeg| {
+            let held = l.supply.nominal_volts();
+            (held - volts).abs() <= 0.01 * held.abs().max(volts.abs())
         };
-        // Skip if a vreg already drives this exact net (handled in bind).
-        if circuit.devices.iter().any(|d| {
-            matches!(d, Device::Vsource { p, name: dn, .. }
-                if *p == node && dn.starts_with("Vreg_"))
-        }) {
+        let switched = |l: &&SupplyLeg| domains.fed_joined(l.net, node) && same(l);
+        if domains.fed_by_driver(node) || supplies.iter().any(|l| switched(&l)) {
             continue;
         }
-        // Skip a net a behavioural converter drives or regulates (a buck's
-        // rail past its inductor): the converter IS this net's supply. An
-        // ideal auto-rail on top would out-stiffen the converter leg, so the
-        // rail reads ideal-stiff and the reflected input current reads low,
-        // zero or even negative.
-        if behavioral
-            .iter()
-            .any(|d| d.converter_out_node() == Some(node) || d.converter_rail_node() == Some(node))
-        {
-            continue;
-        }
-        let leg = SupplyLeg::stamp(
-            &mut circuit,
-            node,
-            name,
-            PowerSupply::Ideal { volts: *volts },
-        );
+        let leg = SupplyLeg::stamp(&mut circuit, node, name, PowerSupply::Ideal { volts });
         supplies.push(leg);
         report.push(BindRow::without_model(
             format!("RAIL:{name}"),
             format!("{volts:.2}V"),
             Confidence::Exact,
-            BindOutcome::PowerRail { volts: *volts },
+            BindOutcome::PowerRail { volts },
         ));
     }
+    // Said on a row too, so every surface that lists bind warnings shows it.
+    for c in &conflicts {
+        let mut row = BindRow::without_model(
+            format!("RAIL:{}", c.nets.join("/")),
+            String::new(),
+            Confidence::Exact,
+            BindOutcome::Skipped {
+                reason: "rail driven by more than one source".to_string(),
+            },
+        );
+        row.warning = Some(c.message.clone());
+        report.push(row);
+    }
+    report.rail_conflicts = conflicts;
 
     // A board whose only processor was skipped for DNP still analyses fine as
     // copper, but it can no longer run firmware, and a silent zero-MCU board is
@@ -4095,8 +4141,9 @@ fn bind_adj_vreg(
 /// it is specified at. The hard clamp is deliberate: its 20 mV input band is
 /// far wider than the op-amp rail-crossing limiter needs. The ammeter is named
 /// `Vreg_<ref>` because that is the seam `gather_device_meta` scores against the
-/// card's `max_current_a`; it sits ANODE-side so its `p` stays private (a
-/// `Vreg_` whose `p` were the cathode net would kill that net's auto-rail).
+/// card's `max_current_a`; it sits ANODE-side so its `p` stays private. The
+/// cathode sink is what `rail_owner` counts as driving the cathode net, so a
+/// supply-named cathode takes no ideal source to fight the shunt.
 fn bind_shunt_ref(
     comp: &Component,
     model: &ModelEntry,
@@ -4141,7 +4188,7 @@ fn bind_shunt_ref(
     });
     let kint = circuit.node(&format!("{r}_shunt_ik"));
     circuit.add(Device::Vccs {
-        name: format!("Gka_{r}"),
+        name: format!("{}{r}", crate::rail_owner::SHUNT_SINK_PREFIX),
         p: cathode,
         n: kint,
         cp: gate,

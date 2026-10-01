@@ -77,8 +77,8 @@ pub fn version_string() -> &'static str {
 // Lower layers, under their pre-split paths.
 pub use hauksbee_bind::{
     asbuilt, behavioral, bind_report, binder, board_input, component_evidence, digital, drivers,
-    firmware_input, logic, occurrence, power_supply, schematic_ties, shorts, stress, thermal,
-    waiver,
+    firmware_input, logic, occurrence, power_supply, rail_owner, schematic_ties, shorts, stress,
+    thermal, waiver,
 };
 pub use hauksbee_checks::{checks, dcpath, decoupling};
 pub use hauksbee_cosim::{engine, error_budget, peripherals, responders, scheduler};

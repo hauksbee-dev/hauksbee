@@ -365,8 +365,6 @@ struct ConverterLeg {
     /// monitoring seam stress and dissipation read.
     out_vsource: DeviceId,
     out_node: NodeId,
-    /// The node it regulates: past a buck's output inductor, else `out_node`.
-    rail_node: NodeId,
     /// Optional enable input.  A low level disables both converter legs.
     enable_node: Option<NodeId>,
     /// False when a feedback pin the card needs is unconnected: never delivers.
@@ -647,7 +645,6 @@ impl BehavioralDevice {
         }
         if let Some(c) = self.converter.as_mut() {
             c.out_node = map(c.out_node);
-            c.rail_node = map(c.rail_node);
             c.enable_node = c.enable_node.map(&map);
         }
         for path in &mut self.series_paths {
@@ -1056,7 +1053,6 @@ impl BehavioralDevice {
             cfg: c.clone(),
             out_vsource,
             out_node: out,
-            rail_node: reg,
             enable_node: c
                 .enable
                 .as_ref()
@@ -1183,19 +1179,24 @@ impl BehavioralDevice {
     }
 
     /// The node the converter's output source drives, or None (no converter).
-    /// The binder consults this to suppress the ideal auto-rail on a
-    /// converter-driven supply net: two stiff sources on one net, and the
-    /// ideal one wins.
     #[must_use]
     pub fn converter_out_node(&self) -> Option<NodeId> {
         self.converter.as_ref().map(|c| c.out_node)
     }
 
-    /// The rail the converter regulates: a buck's is past its output
-    /// inductor, not its switch pin (see `regulated_node`).
+    /// Every board node this device holds stiffly: its converter's output and
+    /// each voltage law's pin behind a series-conductor resistance. Its other
+    /// legs (pulls, open drains, 50 Ω state drives) are weak beside a rail.
+    /// The rail-ownership pass reads this, so no ideal rail lands beside them.
     #[must_use]
-    pub fn converter_rail_node(&self) -> Option<NodeId> {
-        self.converter.as_ref().map(|c| c.rail_node)
+    pub fn driven_nodes(&self) -> Vec<NodeId> {
+        let stiff = |l: &&LawLeg| {
+            let r = l.law.r_ohms.unwrap_or(STIFF_R_OHMS);
+            matches!(l.law.kind, LawKind::Voltage) && r <= crate::rail_owner::SERIES_OHMS
+        };
+        let laws = self.laws.iter().filter(stiff);
+        let pins = laws.filter_map(|l| self.role_nodes.get(&l.law.a).copied());
+        self.converter_out_node().into_iter().chain(pins).collect()
     }
 
     /// The converter's output source and how its dissipation is estimated.

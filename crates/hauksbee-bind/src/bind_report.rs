@@ -155,6 +155,8 @@ pub struct BindReport {
     pub board_name: String,
     pub regulators: Vec<SimpleRegulator>,
     pub open_parts: Vec<OpenPart>,
+    /// Rails more than one source sets the voltage of (see `rail_owner`).
+    pub rail_conflicts: Vec<crate::rail_owner::RailConflict>,
     /// Orderable-variant selections, keyed by the index of the row they bound.
     pub selections: std::collections::BTreeMap<usize, hauksbee_models::variants::Selection>,
 }

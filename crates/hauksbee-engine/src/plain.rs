@@ -1173,6 +1173,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Chip inputs have a small protection diode from the pin to the chip's supply. Pull the pin above that supply and the diode conducts: current flows from the higher rail through the chip into the lower rail. With the chip's supply off, the higher rail keeps the \"off\" domain half-powered (parts misbehave instead of resetting cleanly); powered on, the pin sits past its absolute-maximum rating unless it is specifically rated tolerant.".to_string(),
                 "Pull the signal up to the chip's own supply rail instead, or level-shift between the domains. If the pin is documented as tolerant of the higher rail (some are), record that so the warning is a verified exception.".to_string(),
             ),
+            LintCheck::RailConflict => (
+                format!("More than one source sets the voltage of one rail (net \"{net}\"). {}", f.message),
+                "A regulator output holds its rail at a fixed voltage. Tie two of them together, or join two differently named rails through a jumper, ferrite or sense resistor, and they fight: current flows between them according to tiny internal differences, one may back-drive the other, and the rail's real voltage and load are not what either part assumes.".to_string(),
+                "Leave one source on the rail: remove or leave unfitted the extra regulator or jumper, or split the rail so each source feeds its own net.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),

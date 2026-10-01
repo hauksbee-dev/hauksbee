@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
+use hauksbee_engine::rail_owner::RailDomains;
 pub use hauksbee_engine::unpowered_supply_nets;
 use hauksbee_engine::{bind_board, BoundBoard, CsProvenance, HauksbeeEngine, ResolvedCs};
 use hauksbee_extract::ExtractedBoard;
@@ -3215,8 +3216,8 @@ fn bias_bound(
     for net in spec.suppress_rail.iter().chain(stimulated) {
         bound.suppress_rail(net);
     }
-    for s in &spec.supplies {
-        attach_supply(bound, s)?;
+    for (i, s) in spec.supplies.iter().enumerate() {
+        attach_supply(bound, s, &spec.supplies[..i])?;
     }
     let dead = dead_rails(board, bound, spec);
     for (net, volts) in spec
@@ -3317,13 +3318,45 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
 }
 
 /// Attach (or reconfigure) a power-supply leg on a supply net.
-fn attach_supply(bound: &mut BoundBoard, s: &SupplySpec) -> Result<(), SpecError> {
+///
+/// A declared supply is the source of its whole rail (see
+/// `hauksbee_bind::rail_owner`), so it has one meaning only where nothing on
+/// the board sets that rail: on a regulator's output, or beside a supply
+/// declared `earlier` on the same rail, it would fight the other source, and
+/// the run refuses instead. An auto-rail on a net joined to this one through a
+/// series conductor (a ferrite from VBUS to +5V) gives way to it.
+fn attach_supply(
+    bound: &mut BoundBoard,
+    s: &SupplySpec,
+    earlier: &[SupplySpec],
+) -> Result<(), SpecError> {
     let supply = build_supply(s)?;
     let Some(node) = bound.node(&s.net) else {
         return Ok(()); // net validation already ran; node absence means ground
     };
     if node.is_ground() {
         return Ok(());
+    }
+    let legs: Vec<_> = bound.supplies.iter().map(|l| l.vsource).collect();
+    let domains = RailDomains::new(&bound.circuit, &bound.behavioral, &legs);
+    let refuse = |why: String| Err(SpecError::Invalid(format!("supply on '{}': {why}", s.net)));
+    if let Some(why) = domains.owned_note(&bound.circuit, &s.net, node) {
+        return refuse(why);
+    }
+    let joined: Vec<String> = bound
+        .supplies
+        .iter()
+        .filter(|l| l.net != node && domains.joined(l.net, node))
+        .map(|l| l.net_name.clone())
+        .collect();
+    if let Some(other) = joined.iter().find(|n| earlier.iter().any(|e| &e.net == *n)) {
+        return refuse(format!(
+            "'{other}' is the same rail through a series conductor and already has a \
+             declared supply; two supplies on one rail fight, so declare only one"
+        ));
+    }
+    for net in &joined {
+        bound.suppress_rail(net);
     }
     // Reconfigure if a leg already exists for this net; else stamp a new one.
     if let Some(leg) = bound.supplies.iter_mut().find(|l| l.net == node) {

@@ -121,6 +121,11 @@ pub enum LintCheck {
     /// A pin wired to a different set of pins on the layout than in its
     /// same-stem schematic: the PCB is out of date with the schematic.
     PcbSchematicMismatch,
+    /// One rail set by more than one source: two regulator outputs tied, or
+    /// named rails of different voltages joined by a series conductor. The
+    /// sources fight, so the rail's voltage and the input currents upstream
+    /// of it mean nothing. Produced by the engine-layer `rail_conflicts` check.
+    RailConflict,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -145,7 +150,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -164,6 +169,7 @@ impl LintCheck {
         Self::PinFunction,
         Self::UnroutedPad,
         Self::PcbSchematicMismatch,
+        Self::RailConflict,
     ];
 
     #[must_use]
@@ -187,6 +193,7 @@ impl LintCheck {
             Self::PinFunction => "pin_function",
             Self::UnroutedPad => "unrouted_pad",
             Self::PcbSchematicMismatch => "pcb_schematic_mismatch",
+            Self::RailConflict => "rail_conflict",
         }
     }
 }
