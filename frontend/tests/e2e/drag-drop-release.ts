@@ -597,6 +597,28 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     ])
     const exportPath = join(output, `${String(index + 1).padStart(2, '0')}-${file}.json`)
     await download.saveAs(exportPath)
+    // The toast auto-hides after 4 s, so observe it before the slow independent analysis.
+    const confirmation = page.locator('[data-testid="export-done"]')
+    await confirmation.waitFor({ state: 'visible' })
+    // Export feedback must remain readable without obscuring the next report
+    // section. This caught an absolute-positioned toast overlapping the first
+    // line of the "Parts with no model" panel on a real 1440 x 900 journey.
+    const nextSection = page.locator('[data-testid="datasheet-extract"]')
+    if (await nextSection.count() === 1) {
+      const [confirmationBox, sectionBox] = await Promise.all([
+        confirmation.boundingBox(),
+        nextSection.boundingBox(),
+      ])
+      if (!confirmationBox || !sectionBox) {
+        failures.push('could not measure export confirmation layout')
+      } else {
+        const overlaps = confirmationBox.x < sectionBox.x + sectionBox.width
+          && confirmationBox.x + confirmationBox.width > sectionBox.x
+          && confirmationBox.y < sectionBox.y + sectionBox.height
+          && confirmationBox.y + confirmationBox.height > sectionBox.y
+        if (overlaps) failures.push('export confirmation overlaps the next report section')
+      }
+    }
     const exportedReport = await Bun.file(exportPath).json() as WebReport
     const independentReport = await independentAnalysis(path, plan)
     if (report !== null && canonicalJson(exportedReport) !== canonicalJson(report)) {
@@ -616,28 +638,6 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     exported = canonicalJson(exportedReport) === canonicalJson(independentReport)
       && inventory.trim() === expectedInventory
       && verdict.includes(exportedReport.headline)
-
-    // Export feedback must remain readable without obscuring the next report
-    // section. This caught an absolute-positioned toast overlapping the first
-    // line of the "Parts with no model" panel on a real 1440 x 900 journey.
-    const confirmation = page.locator('[data-testid="export-done"]')
-    await confirmation.waitFor({ state: 'visible' })
-    const nextSection = page.locator('[data-testid="datasheet-extract"]')
-    if (await nextSection.count() === 1) {
-      const [confirmationBox, sectionBox] = await Promise.all([
-        confirmation.boundingBox(),
-        nextSection.boundingBox(),
-      ])
-      if (!confirmationBox || !sectionBox) {
-        failures.push('could not measure export confirmation layout')
-      } else {
-        const overlaps = confirmationBox.x < sectionBox.x + sectionBox.width
-          && confirmationBox.x + confirmationBox.width > sectionBox.x
-          && confirmationBox.y < sectionBox.y + sectionBox.height
-          && confirmationBox.y + confirmationBox.height > sectionBox.y
-        if (overlaps) failures.push('export confirmation overlaps the next report section')
-      }
-    }
   } else {
     failures.push('JSON export is unavailable after a successful drop')
   }

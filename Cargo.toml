@@ -99,12 +99,9 @@ strip = true
 debug = false
 
 [profile.dev]
-# Unoptimised workspace crates build in half the time of opt-level 1, and the
-# engine suite runs no slower because its wall-clock is emulator process time.
-# The exception is the arithmetic-bound solve path (8x slower unoptimised), so
-# the solver and the IR its inner loop runs on keep opt-level 1 below;
-# `speed_gate` measures against ngspice and fails if either drops back to 0.
-# Dependencies stay at 2.
+# Unoptimised crates build in half the time of opt-level 1. Solve and IR (8x slower
+# at 0; `speed_gate` enforces it) and extract (R-tree DRC, 10x slower per upload)
+# keep opt-level 1 below. Dependencies stay at 2.
 opt-level = 0
 debug = "line-tables-only"
 
@@ -112,6 +109,9 @@ debug = "line-tables-only"
 opt-level = 1
 
 [profile.dev.package.hauksbee-ir]
+opt-level = 1
+
+[profile.dev.package.hauksbee-extract]
 opt-level = 1
 
 [profile.dev.package."*"]
