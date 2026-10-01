@@ -216,6 +216,19 @@ impl StampPlan {
                 ops.push((s.0, s.1, v));
             }
         };
+        // Constant ±1 KCL and branch-row incidence of branch `br` between
+        // nodes `p` (+) and `n` (-).
+        let push_incidence = |ops: &mut Vec<(usize, usize, f64)>,
+                              p: hauksbee_ir::NodeId,
+                              n: hauksbee_ir::NodeId,
+                              br: usize| {
+            for (node, sign) in [(p, 1.0), (n, -1.0)] {
+                if let Some(i) = layout.node(node) {
+                    push_at(ops, i, br, sign);
+                    push_at(ops, br, i, sign);
+                }
+            }
+        };
         // Slot table over a device's deduped, non-ground node unknowns, plus
         // any device-private internal unknowns (a series-resistance BJT's
         // intrinsic nodes); the relocated core and the
@@ -253,15 +266,7 @@ impl StampPlan {
                 }
                 Device::Inductor { a, b, henries, .. } => {
                     let br = layout.branch(id).expect("inductor has a branch");
-                    // KCL and branch-row incidence: constant ±1.
-                    if let Some(ai) = layout.node(*a) {
-                        push_at(&mut cond_ops, ai, br, 1.0);
-                        push_at(&mut cond_ops, br, ai, 1.0);
-                    }
-                    if let Some(bi) = layout.node(*b) {
-                        push_at(&mut cond_ops, bi, br, -1.0);
-                        push_at(&mut cond_ops, br, bi, -1.0);
-                    }
+                    push_incidence(&mut cond_ops, *a, *b, br);
                     // Branch self-term -req = -(L * coeffs.g).
                     push_at(&mut reactive_ops, br, br, -*henries);
                     // Mutual terms: −M·coeffs.g at (this
@@ -285,14 +290,7 @@ impl StampPlan {
                 }
                 Device::Vsource { p, n, .. } => {
                     let br = layout.branch(id).expect("vsource has a branch");
-                    if let Some(pi) = layout.node(*p) {
-                        push_at(&mut cond_ops, pi, br, 1.0);
-                        push_at(&mut cond_ops, br, pi, 1.0);
-                    }
-                    if let Some(ni) = layout.node(*n) {
-                        push_at(&mut cond_ops, ni, br, -1.0);
-                        push_at(&mut cond_ops, br, ni, -1.0);
-                    }
+                    push_incidence(&mut cond_ops, *p, *n, br);
                     // Source value (time-varying, src_scale) is RHS-only.
                     restamp.push(Restamp::RhsOnly { id });
                 }
@@ -307,14 +305,7 @@ impl StampPlan {
                     // terms in the branch row. Nothing varies per step or per
                     // Newton iterate (RHS is zero), so no restamp entry at all.
                     let br = layout.branch(id).expect("vcvs has a branch");
-                    if let Some(pi) = layout.node(*p) {
-                        push_at(&mut cond_ops, pi, br, 1.0);
-                        push_at(&mut cond_ops, br, pi, 1.0);
-                    }
-                    if let Some(ni) = layout.node(*n) {
-                        push_at(&mut cond_ops, ni, br, -1.0);
-                        push_at(&mut cond_ops, br, ni, -1.0);
-                    }
+                    push_incidence(&mut cond_ops, *p, *n, br);
                     if let Some(cpi) = layout.node(*cp) {
                         push_at(&mut cond_ops, br, cpi, -*gain);
                     }
@@ -385,14 +376,7 @@ impl StampPlan {
                     let cbr = layout
                         .branch(*ctrl_src)
                         .expect("ccvs control source owns a branch");
-                    if let Some(pi) = layout.node(*p) {
-                        push_at(&mut cond_ops, pi, br, 1.0);
-                        push_at(&mut cond_ops, br, pi, 1.0);
-                    }
-                    if let Some(ni) = layout.node(*n) {
-                        push_at(&mut cond_ops, ni, br, -1.0);
-                        push_at(&mut cond_ops, br, ni, -1.0);
-                    }
+                    push_incidence(&mut cond_ops, *p, *n, br);
                     push_at(&mut cond_ops, br, cbr, -*transres);
                 }
                 Device::Diode { .. }
@@ -537,6 +521,24 @@ mod tests {
     };
     use hauksbee_ir::{BjtModel, Device, DiodeModel, MosfetModel, NodeId, SourceKind};
 
+    /// Stamp `ctx` interpreted into a cleared clone of `m` and planned into
+    /// `m` itself: `(interpreted matrix, interpreted rhs, planned rhs)`.
+    fn stamp_both_ways(
+        ctx: &StampCtx,
+        plan: &StampPlan,
+        m: &mut SparseMatrix,
+    ) -> (SparseMatrix, Vec<f64>, Vec<f64>) {
+        let size = ctx.layout.size;
+        let mut m_ref = m.clone();
+        m_ref.clear_values();
+        let mut rhs_ref = vec![0.0f64; size];
+        stamp_all(ctx, &mut m_ref, &mut rhs_ref);
+        m.clear_values();
+        let mut rhs = vec![0.0f64; size];
+        stamp_all_planned(ctx, plan, m, &mut rhs);
+        (m_ref, rhs_ref, rhs)
+    }
+
     fn compiled(c: &Circuit) -> (Layout, SparseMatrix, StampPlan) {
         let layout = Layout::new(c);
         let mut m = SparseMatrix::new(layout.size);
@@ -632,13 +634,7 @@ mod tests {
         ctx.time = 1e-6;
         ctx.gmin = 1e-12;
 
-        let mut m_ref = m.clone();
-        m_ref.clear_values();
-        let mut rhs_ref = vec![0.0f64; size];
-        stamp_all(&ctx, &mut m_ref, &mut rhs_ref);
-        m.clear_values();
-        let mut rhs = vec![0.0f64; size];
-        stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
+        let (m_ref, rhs_ref, rhs) = stamp_both_ways(&ctx, &plan, &mut m);
 
         for i in 0..size {
             let (row, row_ref) = (m.row(i), m_ref.row(i));
@@ -683,13 +679,7 @@ mod tests {
         ctx.dc = true;
         ctx.use_ic = true;
         ctx.gmin = 1e-12;
-        let mut m_ref = m.clone();
-        m_ref.clear_values();
-        let mut rhs_ref = vec![0.0f64; size];
-        stamp_all(&ctx, &mut m_ref, &mut rhs_ref);
-        m.clear_values();
-        let mut rhs = vec![0.0f64; size];
-        stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
+        let (m_ref, rhs_ref, rhs) = stamp_both_ways(&ctx, &plan, &mut m);
         for i in 0..size {
             assert_eq!(m.row(i), m_ref.row(i), "dc fallback row {i}");
             assert_eq!(

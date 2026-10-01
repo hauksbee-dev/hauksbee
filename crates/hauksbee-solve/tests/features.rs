@@ -172,14 +172,15 @@ fn temperature_toggle_changes_diode_drop() {
     );
 }
 
-/// The §3.4 `DeviceEffects` toggle contract: on the `net_charge` deck, flipping
-/// `toggle` must move the waveform at `node` by more than `min_diff`; on the
-/// `net_plain` deck (a model without the gated fields) the two runs must be
-/// BIT-IDENTICAL (the existing-deck compatibility bar).
+/// The §3.4 `DeviceEffects` toggle contract: `deck` has one `@` in its model
+/// card. With the gated `fields` spliced in there, flipping `toggle` must move
+/// the waveform at `node` by more than `min_diff`; with nothing there (a model
+/// without the gated fields) the two runs must be BIT-IDENTICAL (the
+/// existing-deck compatibility bar).
 fn assert_toggle_contract(
     what: &str,
-    net_charge: &str,
-    net_plain: &str,
+    deck: &str,
+    fields: &str,
     node: &str,
     min_diff: f64,
     toggle: fn(&mut DeviceEffects, bool),
@@ -195,8 +196,9 @@ fn assert_toggle_contract(
         let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
         out.node(&circuit, node).unwrap().to_vec()
     };
-    let w_on = run(net_charge, true);
-    let w_off = run(net_charge, false);
+    let (net_charge, net_plain) = (deck.replace('@', fields), deck.replace('@', ""));
+    let w_on = run(&net_charge, true);
+    let w_off = run(&net_charge, false);
     let max_diff = w_on
         .iter()
         .zip(&w_off)
@@ -206,8 +208,8 @@ fn assert_toggle_contract(
         max_diff > min_diff,
         "{what}: toggle on must change the waveform (max diff {max_diff:e})"
     );
-    let p_on = run(net_plain, true);
-    let p_off = run(net_plain, false);
+    let p_on = run(&net_plain, true);
+    let p_off = run(&net_plain, false);
     assert_eq!(p_on.len(), p_off.len());
     for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
         assert_eq!(
@@ -227,14 +229,11 @@ fn assert_toggle_contract(
 fn junction_caps_toggle_is_honored_for_diodes() {
     // A pulse through R into a charge-heavy diode: the depletion+diffusion
     // charge visibly slows the cathode node's edges.
-    let net_charge = "d\nV1 in 0 PULSE(0 5 1u 100n 100n 4u 10u)\nR1 in n 1k\nD1 n 0 DMOD\n\
-                      .model DMOD D(IS=1e-14 N=1 CJO=100p TT=100n)\n.end\n";
-    let net_plain = "d\nV1 in 0 PULSE(0 5 1u 100n 100n 4u 10u)\nR1 in n 1k\nD1 n 0 DMOD\n\
-                     .model DMOD D(IS=1e-14 N=1)\n.end\n";
     assert_toggle_contract(
         "diode junction_caps",
-        net_charge,
-        net_plain,
+        "d\nV1 in 0 PULSE(0 5 1u 100n 100n 4u 10u)\nR1 in n 1k\nD1 n 0 DMOD\n\
+         .model DMOD D(IS=1e-14 N=1@)\n.end\n",
+        " CJO=100p TT=100n",
         "n",
         1e-3,
         |e, on| e.junction_caps = on,
@@ -249,16 +248,11 @@ fn junction_caps_toggle_is_honored_for_diodes() {
 fn junction_caps_toggle_is_honored_for_bjts() {
     // A saturated switching transistor driven off: the stored base charge
     // (tf + cje/cjc) visibly delays and slows the collector's rising edge.
-    let net_charge = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(5 0 1u 50n 50n 4u 10u)\n\
-                      RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QSW\n\
-                      .model QSW NPN(IS=1e-15 BF=100 CJE=20p CJC=8p TF=500n)\n.end\n";
-    let net_plain = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(5 0 1u 50n 50n 4u 10u)\n\
-                     RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QSW\n\
-                     .model QSW NPN(IS=1e-15 BF=100)\n.end\n";
     assert_toggle_contract(
         "BJT junction_caps",
-        net_charge,
-        net_plain,
+        "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(5 0 1u 50n 50n 4u 10u)\n\
+         RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QSW\n.model QSW NPN(IS=1e-15 BF=100@)\n.end\n",
+        " CJE=20p CJC=8p TF=500n",
         "c",
         1e-2,
         |e, on| e.junction_caps = on,
@@ -276,17 +270,12 @@ fn junction_caps_toggle_is_honored_for_mosfets() {
     // The §3.3 load-switch shape: gate driven through RG so the gate charge
     // sets the switching timing; without the charge companions the drain
     // would snap with the (RG-free) gate voltage.
-    let net_charge = "m\nVDD vdd 0 DC 5\nVG in 0 PULSE(0 5 1u 100n 100n 4u 10u)\n\
-                      RG in g 10k\nRL vdd d 100\nM1 d g 0 0 MSW\n\
-                      .model MSW NMOS(VTO=2 KP=1e-2 W=1m L=10u TOX=50n CGSO=2e-9 CGDO=2e-9)\n\
-                      .end\n";
-    let net_plain = "m\nVDD vdd 0 DC 5\nVG in 0 PULSE(0 5 1u 100n 100n 4u 10u)\n\
-                     RG in g 10k\nRL vdd d 100\nM1 d g 0 0 MSW\n\
-                     .model MSW NMOS(VTO=2 KP=1e-2 W=1m L=10u)\n.end\n";
     assert_toggle_contract(
         "MOSFET junction_caps",
-        net_charge,
-        net_plain,
+        "m\nVDD vdd 0 DC 5\nVG in 0 PULSE(0 5 1u 100n 100n 4u 10u)\n\
+         RG in g 10k\nRL vdd d 100\nM1 d g 0 0 MSW\n\
+         .model MSW NMOS(VTO=2 KP=1e-2 W=1m L=10u@)\n.end\n",
+        " TOX=50n CGSO=2e-9 CGDO=2e-9",
         "d",
         1e-2,
         |e, on| e.junction_caps = on,
@@ -348,16 +337,11 @@ fn series_resistance_toggle_is_honored_for_bjts() {
     // legacy approximate Jacobian (B13 promoted the exact tangent, which
     // converges those edges), and the gentler drive keeps this fixture's
     // contrast independent of that story.
-    let net_r = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
-                 RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n\
-                 .model QR NPN(IS=1e-15 BF=100 RB=500 RC=50 RE=5)\n.end\n";
-    let net_plain = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
-                     RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n\
-                     .model QR NPN(IS=1e-15 BF=100)\n.end\n";
     assert_toggle_contract(
         "BJT series_resistance",
-        net_r,
-        net_plain,
+        "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
+         RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n.model QR NPN(IS=1e-15 BF=100@)\n.end\n",
+        " RB=500 RC=50 RE=5",
         "c",
         1e-2,
         |e, on| e.series_resistance = on,
