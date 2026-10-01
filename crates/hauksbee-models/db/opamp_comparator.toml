@@ -2681,3 +2681,195 @@ basis = "TI INA199 SBOS469H, 6.5 operating voltage range 2.7 V to 26 V (-40 to 1
 implements = ["fixed_gain", "reference_offset", "supply_referenced_output_swing", "slew_rate"]
 missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
            "input_bias_current", "parameter_spread"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TLV3601: TI 325 MHz push-pull high-speed comparator, SC70-5 (DCK) / SOT-23-5
+# (DBV). Source: TI TLV3601/2/3/3E datasheet SNOSDB1E, June 2021, revised April
+# 2023: Table 5-1 Pin Functions (p.3), 6.1 Absolute Maximum Ratings and 6.3
+# Recommended Operating Conditions (p.5), 6.4 Thermal Information (p.6), 6.5
+# Electrical Characteristics (p.7).
+#
+# THE OUTPUT LEVELS ARE FIXED AT A 3.3 V RAIL, as on the TLV3691 and LMV7219
+# cards above: the comparator stamp takes constant out_hi/out_lo. The datasheet
+# gives the swing as a DROP FROM EACH RAIL (VOH = VCC - 80 mV max, VOL = VEE +
+# 80 mV max, ISOURCE/ISINK = 1 mA, VCC = 2.5, 3.3 and 5 V), so 3.3 V - 0.080 V is
+# the guaranteed high level at the middle of the three tested rails.
+[[models]]
+id = "tlv3601"
+kind = "comparator"
+description = "TI TLV3601 325 MHz push-pull comparator, 2.4 V to 5.5 V, SC70-5 / SOT-23-5, 3.3 V rails"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv3601.pdf"
+title = "Texas Instruments TLV3601/2/3/3E datasheet, SNOSDB1E, revised April 2023"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings and 6.3 Recommended Operating Conditions p.5; 6.4 Thermal Information p.6; 6.5 Electrical Characteristics p.7"
+sha256 = "4cc4248683737d1a6539a01ef67db29b8300dcf7806f7b14b3f49cdbb294ca2d"
+
+[models.match]
+# TLV3601 only: the TLV3602 (8-pin dual) and TLV3603 (6-pin, LE/HYS) have other
+# maps. DCK and DBV share Table 5-1's TLV3601 column.
+value_re = "(?i)^TLV3601(I?(DBV|DCK))?[RT]?$"
+
+[models.params]
+out_lo     = 0.08    # VOL = VEE + 80 mV max, ISINK = 1 mA
+out_hi     = 3.22    # VOH = VCC - 80 mV max, ISOURCE = 1 mA, at a 3.3 V rail
+hysteresis = 0.003   # VHYST typ 3 mV (1.5 mV min, 5 mV max), TLV3601/2
+tpd_s      = 2.5e-9  # tPD typ, 50 mV overdrive (3.5 ns max at 25 C, 4.5 ns over temperature)
+supply_static_ua = 4900.0   # ICC typ, output high (7 mA max), TLV3601
+warning = "the output levels on this card are fixed at a 3.3 V rail (VCC - 80 mV high, VEE + 80 mV low, the datasheet's 1 mA drops) and do NOT follow the board's supply: the binder hard-codes them, so this part on a 2.5 V or 5 V rail is still answered as swinging to 3.22 V. Treat any result that turns on the output level of a TLV3601 on a rail other than 3.3 V as unanswered. Propagation delay (2.5 ns typ, recorded as tpd_s for reference only) is not modelled; input offset (+/-5 mV max), input bias current (1 uA typ, 5 uA max) and the short-circuit currents are not modelled."
+
+[models.pins]
+# Table 5-1, TLV3601 column (DCK and DBV).
+"1" = "out"
+"2" = "vss"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.0              # VCC - VEE, 6.1
+max_pin_current_a = 0.01         # input pins +/-10 mA, 6.1
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 176.5         # DBV (SOT-23); DCK 187.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.4
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TLV3601 SNOSDB1E, 6.3 Input supply voltage VCC - VEE 2.4 V to 5.5 V; 6.1 Absolute Maximum Ratings 6 V"
+
+[models.coverage]
+implements = ["push_pull_output", "fixed_hysteresis", "supply_voltage_envelope"]
+missing = ["rail_following_output", "input_offset_voltage", "input_bias_current", "output_current_limit"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TLV6001: TI 1 MHz rail-to-rail op-amp, single channel. THE TWO FIVE-PIN
+# PACKAGES HAVE DIFFERENT MAPS (the sheet's Pin Functions: TLV6001 table), so
+# each is its own entry gated by footprint, and the TLV6001R (V+ and V- swapped
+# on SOT-23) and TLV6001U (SOT-23 with the DCK numbering) variants are not
+# matched. Source: TI TLV6001/2/4 datasheet SBOS779D, June 2016, revised May
+# 2017: 6 Pin Configuration and Functions (p.3-4), 7.1 Absolute Maximum
+# Ratings and 7.3 Recommended Operating Conditions (p.7), 7.4 Thermal
+# Information (p.8), 7.7 Electrical Characteristics (p.9).
+[[models]]
+id = "tlv6001_dbv"
+kind = "opamp"
+description = "TI TLV6001 single rail-to-rail op-amp, 5-pin SOT-23 (DBV), 1.8 to 5.5 V"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv6001.pdf"
+title = "Texas Instruments TLV6001/2/4 datasheet, SBOS779D, revised May 2017"
+locator = "Pin Functions: TLV6001 p.3; 7.1 Absolute Maximum Ratings and 7.3 Recommended Operating Conditions p.7; 7.4 Thermal Information p.8; 7.7 Electrical Characteristics p.9"
+sha256 = "7cf20f436f0f2d90d60458e4dc4b93509d3153fa58ec4f64182d9ff00e92cda4"
+
+[models.match]
+# "TLV6001R" alone is the reversed-supply variant, so the reel letter is only
+# accepted after a package code.
+value_re = "(?i)^TLV6001(I?DBV[RT]?)?$"
+footprint_re = "(?i)(TSOT|SOT)[-_]?23[-_]?5"
+
+[models.params]
+gain    = 316228.0  # AOL typ 110 dB, 0.3 V < VO < (V+) - 0.3 V, RL = 2 kOhm
+pole_hz = 3.162     # DERIVED: GBW 1 MHz typ / AOL 316228 typ
+slew    = 0.5       # SR typ 0.5 V/us
+swing_lo = 0.1      # VO swing from either rail: 100 mV max at RL = 2 kOhm
+swing_hi = 0.1      # (75 mV typ; 5 mV typ at RL = 100 kOhm)
+rail_lo = 0.1       # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 5.4
+warning = "rail-to-rail input and output; the output reaches within 100 mV of each supply pin at RL = 2 kOhm (the guaranteed row), and the guaranteed common-mode range runs from V- - 0.2 V to V+ + 0.2 V, so there is no input_common_mode envelope. The output current limit (+/-15 mA typ), input offset (4.5 mV max) and the 2.3 kOhm open-loop output impedance are not modelled. The 3.162 Hz pole is DERIVED from the typical 1 MHz GBW and typical 110 dB gain, not printed. THIS IS THE SOT-23 MAP: the SC70 (DCK) package has its own entry."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing", "rail_to_rail_output",
+              "rail_to_rail_input", "dominant_pole", "slew_rate_limit", "single_channel",
+              "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing", "input_offset_voltage",
+           "input_bias_current", "parameter_spread"]
+
+[models.pins]
+# Pin Functions: TLV6001, DBV (SOT-23) column.
+"1" = "out"
+"2" = "vss"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.01      # signal input pins +/-10 mA
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 228.5      # DBV (SOT-23); DCK 281.4
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 7.0
+severity = "serious"
+basis = "TI TLV6001 SBOS779D, 7.3 Recommended Operating Conditions VS 1.8 V to 5.5 V; 7.1 Absolute Maximum Ratings supply voltage 7 V"
+
+[[models]]
+id = "tlv6001_dck"
+kind = "opamp"
+description = "TI TLV6001 single rail-to-rail op-amp, 5-pin SC70 (DCK), 1.8 to 5.5 V"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv6001.pdf"
+title = "Texas Instruments TLV6001/2/4 datasheet, SBOS779D, revised May 2017"
+locator = "Pin Functions: TLV6001 p.3; 7.1 Absolute Maximum Ratings and 7.3 Recommended Operating Conditions p.7; 7.4 Thermal Information p.8; 7.7 Electrical Characteristics p.9"
+sha256 = "7cf20f436f0f2d90d60458e4dc4b93509d3153fa58ec4f64182d9ff00e92cda4"
+
+[models.match]
+value_re = "(?i)^TLV6001(I?DCK[RT]?)?$"
+footprint_re = "(?i)(SC-?70-?5|SOT-?353)([^0-9]|$)"
+
+[models.params]
+gain    = 316228.0  # AOL typ 110 dB, 0.3 V < VO < (V+) - 0.3 V, RL = 2 kOhm
+pole_hz = 3.162     # DERIVED: GBW 1 MHz typ / AOL 316228 typ
+slew    = 0.5       # SR typ 0.5 V/us
+swing_lo = 0.1      # VO swing from either rail: 100 mV max at RL = 2 kOhm
+swing_hi = 0.1
+rail_lo = 0.1       # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 5.4
+warning = "rail-to-rail input and output; the output reaches within 100 mV of each supply pin at RL = 2 kOhm (the guaranteed row), and the guaranteed common-mode range runs from V- - 0.2 V to V+ + 0.2 V, so there is no input_common_mode envelope. The output current limit (+/-15 mA typ), input offset (4.5 mV max) and the 2.3 kOhm open-loop output impedance are not modelled. The 3.162 Hz pole is DERIVED from the typical 1 MHz GBW and typical 110 dB gain, not printed. THIS IS THE SC70 MAP: noninverting input on pin 1 and the output on pin 4, unlike the SOT-23 package, which has its own entry."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing", "rail_to_rail_output",
+              "rail_to_rail_input", "dominant_pole", "slew_rate_limit", "single_channel",
+              "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing", "input_offset_voltage",
+           "input_bias_current", "parameter_spread"]
+
+[models.pins]
+# Pin Functions: TLV6001, DCK (SC70) column.
+"1" = "in_plus"
+"2" = "vss"
+"3" = "in_minus"
+"4" = "out"
+"5" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.01
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 281.4      # DCK (SC70)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 7.0
+severity = "serious"
+basis = "TI TLV6001 SBOS779D, 7.3 Recommended Operating Conditions VS 1.8 V to 5.5 V; 7.1 Absolute Maximum Ratings supply voltage 7 V"

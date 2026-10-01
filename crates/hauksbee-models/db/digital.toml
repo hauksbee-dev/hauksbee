@@ -4749,3 +4749,293 @@ y = "!a"
 implements = ["inverter", "logic_levels"]
 missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
 
+
+# ── SN74LVC1T45: single-bit dual-supply transceiver, 3-state ────────────────
+# Same DIR-controlled translator shape as SN74AVC1T45 above (see its banner
+# for the schema pieces and the NOT MODELLED list). Same pin table.
+# Source: Texas Instruments SN74LVC1T45 datasheet SCES515N, December 2003,
+#   revised June 2024: Table 4-1 Pin Functions (p.2), 5.1 Absolute Maximum
+#   Ratings (p.4), 5.3 Recommended Operating Conditions (p.4-5), 5.4 Thermal
+#   Information (p.5), 5.5 Electrical Characteristics (p.6), Table 7-1
+#   Function Table (p.14).
+[[models]]
+id = "sn74lvc1t45"
+kind = "digital"
+description = "SN74LVC1T45 single-bit dual-supply bus transceiver, DIR-controlled, 1.65 V to 5.5 V, SOT-23-6 / SC70-6 / SOT-6 / USON-6"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1t45.pdf"
+title = "Texas Instruments SN74LVC1T45 datasheet, SCES515N, revised June 2024"
+locator = "Table 4-1 Pin Functions p.2; 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4-5; 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.6; Table 7-1 Function Table p.14"
+sha256 = "e6fbd8400161399554fe905326e73236e74bb3af0b546ea1942deed14310536e"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "propagation delay, data rate, output edge rate and Ioff leakage are not modelled; only the DC function table, the supply-referenced levels and VCC isolation are"
+
+[models.match]
+# DBV, DCK, DRL and DPK share Table 4-1's 6-pin numbering. The YZP DSBGA balls
+# are lettered (Table 4-2) and are deliberately not matched.
+value_re = "(?i)^(SN)?74LVC1T45(DBV|DCK|DRL|DPK)?[RT]?$"
+
+[models.params]
+voh = 3.2          # VCCO - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # 3 V to 3.6 V
+vil = 0.8
+# VCC = 3 V, IOH = -24 mA: VOH 2.4 V min against the 2.9 V light-load level,
+# 0.5 V / 24 mA = 21 Ohm (VOL side: 0.45 V / 24 mA = 19 Ohm).
+ro = 21.0
+supply_pin = "1"
+gnd_pin = "2"
+
+[models.levels]
+# 5.3, data inputs against VCCI and DIR against VCCA (same numbers): 0.65/0.35 x
+# VCC at 1.65 to 1.95 V, 1.7/0.7 V at 2.3 to 2.7 V, 2.0/0.8 V at 3 to 3.6 V,
+# 0.7/0.3 x VCC at 4.5 to 5.5 V; the gaps between bands interpolate linearly.
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+# VOH = VCCO - 0.1 V at IOH = -100 uA, 1.65 V to 4.5 V (carried to 5.5 V).
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.level_rails]
+vcca = ["a1", "dir"]   # Table 4-1: DIR input circuit referenced to VCCA
+vccb = ["b1"]
+
+[models.pins]
+# Table 4-1, DBV / DCK / DRL / DPK.
+"1" = "vcca"
+"2" = "gnd"
+"3" = "a1"
+"4" = "b1"
+"5" = "dir"
+"6" = "vccb"
+
+[models.ratings]
+max_pin_current_a = 0.05      # IO continuous output current, 5.1
+max_voltage_v = 6.5           # VCCA / VCCB abs max
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 215.1      # DBV (SOT-23); DCK 210.9, DRL 223.7, DPK 278.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1T45 SCES515N, 5.3 Recommended Operating Conditions, VCCA 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings, VCCA -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1T45 SCES515N, 5.3 Recommended Operating Conditions, VCCB 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings, VCCB -0.5 V to 6.5 V"
+
+[models.logic]
+# Table 7-1: DIR low, B data to the A bus; DIR high, A data to the B bus.
+inputs = ["dir", "a1_in", "b1_in"]
+outputs = ["a1", "b1"]
+[models.logic.sense]
+a1_in = "a1"
+b1_in = "b1"
+[models.logic.comb]
+a1 = "b1_in"
+b1 = "a1_in"
+[models.logic.tristate]
+a1 = { enable = "dir", active = "low" }
+b1 = { enable = "dir", active = "high" }
+
+[models.coverage]
+implements = ["direction_control", "dual_supply_levels", "vcc_isolation"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ── 74AXP1T45: single-bit dual-supply transceiver, 0.9 V to 5.5 V ───────────
+# Same shape as SN74AVC1T45 above. Source: Nexperia 74AXP1T45 product data
+#   sheet Rev. 2.1, 25 July 2024: 6.1 Pinning and Table 3 Pin description
+#   (p.2-3), Table 4 Function table (p.3), Table 5 Limiting values (p.3),
+#   Table 6 Recommended operating conditions (p.4), Table 7 Static
+#   characteristics (p.5-6).
+[[models]]
+id = "74axp1t45"
+kind = "digital"
+description = "Nexperia 74AXP1T45 single-bit dual-supply translating transceiver, 3-state, 0.9 V to 5.5 V, TSSOP6 (GW) / X2SON6 (GX)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74AXP1T45.pdf"
+title = "Nexperia 74AXP1T45 product data sheet, Rev. 2.1, 25 July 2024"
+locator = "6.1 Pinning and Table 3 Pin description p.2-3; Table 4 Function table and Table 5 Limiting values p.3; Table 6 Recommended operating conditions p.4; Table 7 Static characteristics p.5-6"
+sha256 = "405f5c390da21ea32a4486d8b7b5e2c05063beeca5fa604f1a0f257e3e7213d1"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "propagation delay, data rate, output edge rate and Ioff leakage are not modelled; only the DC function table, the supply-referenced levels and suspend-mode isolation are"
+
+[models.match]
+# GW (SOT363-2 TSSOP6) and GX (SOT1255-2 X2SON6) share Table 3's numbering.
+value_re = "(?i)^(74AXP1T45)(GW|GX)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCCO - 0.1 V at IO = -0.1 mA, VCCO 3.3 V
+vol = 0.1          # IO = 0.1 mA
+vih = 2.0          # VCCI 3.0 V to 3.6 V
+vil = 0.8
+# VCCO = 3.0 V, IO = -10 mA: VOH 2.2 V min against the 2.9 V light-load level,
+# 0.7 V / 10 mA = 70 Ohm (VOL side: 0.8 V max at 10 mA, 0.7 V / 10 mA = 70 Ohm).
+ro = 70.0
+supply_pin = "1"
+gnd_pin = "2"
+
+[models.levels]
+# Table 7, VIH/VIL for A, B and DIR against VCCI: 0.7/0.3 x VCC at 0.9 V,
+# 0.65/0.35 x VCC at 1.1 to 1.95 V, 1.6/0.7 V at 2.3 to 2.7 V, 2.0/0.8 V at 3.0
+# to 3.6 V, 0.7/0.3 x VCC at 4.5 to 5.5 V; gaps between bands interpolate.
+vih = [[0.9, 0.63], [1.1, 0.715], [1.95, 1.2675], [2.3, 1.6], [2.7, 1.6], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[0.9, 0.27], [1.1, 0.385], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+# VOH = VCCO - 0.1 V at IO = -0.1 mA, VCCO 0.9 V to 5.5 V.
+voh = [[0.9, 0.8], [5.5, 5.4]]
+
+[models.level_rails]
+vcca = ["a1", "dir"]   # Table 3: A and DIR referenced to VCC(A)
+vccb = ["b1"]          # Table 3: B referenced to VCC(B)
+
+[models.pins]
+# Table 3, GW and GX.
+"1" = "vcca"
+"2" = "gnd"
+"3" = "a1"
+"4" = "b1"
+"5" = "dir"
+"6" = "vccb"
+
+[models.ratings]
+max_pin_current_a = 0.025     # IO, Table 5
+max_voltage_v = 6.5           # VCC(A) / VCC(B), Table 5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 0.9
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74AXP1T45 Rev. 2.1, Table 6 VCC(A) 0.9 V to 5.5 V; Table 5 VCC(A) -0.5 V to +6.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 0.9
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74AXP1T45 Rev. 2.1, Table 6 VCC(B) 0.9 V to 5.5 V; Table 5 VCC(B) -0.5 V to +6.5 V"
+
+[models.logic]
+# Table 4: DIR low, B data to A; DIR high, A data to B.
+inputs = ["dir", "a1_in", "b1_in"]
+outputs = ["a1", "b1"]
+[models.logic.sense]
+a1_in = "a1"
+b1_in = "b1"
+[models.logic.comb]
+a1 = "b1_in"
+b1 = "a1_in"
+[models.logic.tristate]
+a1 = { enable = "dir", active = "low" }
+b1 = { enable = "dir", active = "high" }
+
+[models.coverage]
+implements = ["direction_control", "dual_supply_levels", "vcc_isolation"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ── SN74LVC2G126: dual bus buffer, 3-state, active-HIGH enables ─────────────
+# Source: Texas Instruments SN74LVC2G126 datasheet SCES205N, April 1999,
+#   revised September 2020: 5 Pin Configuration and Functions (p.3), 6.1
+#   Absolute Maximum Ratings (p.4), 6.3 Recommended Operating Conditions and
+#   6.4 Thermal Information (p.5), 6.5 Electrical Characteristics (p.6), Table
+#   8-1 Function Table (p.9). The outputs are DISABLED when nOE is LOW.
+[[models]]
+id = "sn74lvc2g126"
+kind = "digital"
+description = "TI SN74LVC2G126 dual bus buffer gate, 3-state, active-high enables, 8-pin SM8 (DCT) / VSSOP (DCU)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc2g126.pdf"
+title = "Texas Instruments SN74LVC2G126 datasheet, SCES205N, revised September 2020"
+locator = "5 Pin Configuration and Functions p.3; 6.1 Absolute Maximum Ratings p.4; 6.3 Recommended Operating Conditions and 6.4 Thermal Information p.5; 6.5 Electrical Characteristics p.6; Table 8-1 Function Table p.9"
+sha256 = "50fb3f5898ccc58f7039c66365fddda1199b1569fb80b0a6adeebc56659a6451"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd and enable/disable times are not modelled; only the DC function table and supply-referenced levels are"
+
+[models.match]
+# DCT and DCU share the 8-pin numbering below. The YZP DSBGA balls are lettered
+# and not matched. Nexperia's 74LVC2G126 has Schmitt-trigger inputs with other
+# thresholds, so only the TI ordering code is matched.
+value_re = "(?i)^SN74LVC2G126(DCT|DCU)?[RT]?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA
+vol = 0.1
+vih = 2.0
+vil = 0.8
+# VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V, 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+supply_pin = "8"
+gnd_pin = "4"
+
+[models.levels]
+# 6.3: 0.65/0.35 x VCC at 1.65 to 1.95 V, 1.7/0.7 V at 2.3 to 2.7 V, 2.0/0.8 V
+# at 3 to 3.6 V, 0.7/0.3 x VCC at 4.5 to 5.5 V; gaps interpolate linearly.
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+# Pin Functions table, SM8 / VSSOP columns: 2Y sits on pin 3, 1Y on pin 6.
+"1" = "oe_1"
+"2" = "a1"
+"3" = "y2"
+"4" = "gnd"
+"5" = "a2"
+"6" = "y1"
+"7" = "oe_2"
+"8" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 220.0   # DCT (SM8); DCU 227
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC2G126 SCES205N, 6.3 VCC 1.65 V to 5.5 V; 6.1 VCC -0.5 V to 6.5 V"
+
+[models.logic]
+# Table 8-1: nOE high passes nA to nY; nOE low puts nY in high impedance.
+inputs = ["a1", "a2", "oe_1", "oe_2"]
+outputs = ["y1", "y2"]
+[models.logic.comb]
+y1 = "a1"
+y2 = "a2"
+[models.logic.tristate]
+y1 = { enable = "oe_1", active = "high" }
+y2 = { enable = "oe_2", active = "high" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
