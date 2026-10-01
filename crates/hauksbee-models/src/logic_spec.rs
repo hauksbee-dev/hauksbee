@@ -1526,39 +1526,15 @@ mod tests {
         toml::from_str(toml_src).expect("logic TOML parses")
     }
 
-    const HC595: &str = r#"
-inputs  = ["ser", "srclk", "rclk", "srclr_n", "oe_n"]
-outputs = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial"]
-
-[[register]]
-name = "shift"
-bits = 8
-clock = { pin = "srclk", edge = "rising" }
-reset = { pin = "srclr_n", active = "low", value = 0 }
-op = "shift_left"
-data_in = "ser"
-
-[[register]]
-name = "store"
-bits = 8
-clock = { pin = "rclk", edge = "rising" }
-op = "load"
-data_in = "shift"
-
-[comb]
-"qa" = "store[0]"
-"qb" = "store[1]"
-"qc" = "store[2]"
-"qd" = "store[3]"
-"qe" = "store[4]"
-"qf" = "store[5]"
-"qg" = "store[6]"
-"qh" = "store[7]"
-"qh_serial" = "shift[7]"
-
-[tristate]
-"qa..qh" = { enable = "oe_n", active = "low" }
-"#;
+    /// The shipped 74HC595 card's logic.
+    fn hc595() -> Logic {
+        let q = crate::ComponentQuery::new(None, Some("74HC595".into()), None);
+        crate::ModelLibrary::builtin()
+            .resolve(&q)
+            .model
+            .expect("74HC595")
+            .logic
+    }
 
     const NOR_LATCH: &str = r#"
 inputs  = ["set", "reset"]
@@ -1616,8 +1592,7 @@ disable = [
 "#;
 
     /// Mutate a parsed spec and return the validation error it produces.
-    fn err_after(src: &str, edit: impl FnOnce(&mut Logic)) -> LogicSpecError {
-        let mut logic = parse_logic(src);
+    fn err_after(mut logic: Logic, edit: impl FnOnce(&mut Logic)) -> LogicSpecError {
         edit(&mut logic);
         logic.validate().unwrap_err()
     }
@@ -1636,7 +1611,7 @@ disable = [
 
     #[test]
     fn hc595_spec_validates_with_and_without_the_memory_feature() {
-        let logic = parse_logic(HC595);
+        let logic = hc595();
         let v = logic.validate().unwrap();
         assert!(v.warnings.is_empty());
         assert_eq!(v.comb.len(), 9);
@@ -1685,7 +1660,7 @@ disable = [
     #[test]
     fn structural_rules_reject_the_right_defect() {
         use LogicSpecError::*;
-        let e = err_after(NOR_LATCH, |l| {
+        let e = err_after(parse_logic(NOR_LATCH), |l| {
             l.comb.insert("q".into(), "!(set | qb | phantom)".into());
         });
         assert!(
@@ -1693,7 +1668,7 @@ disable = [
             "{e}"
         );
 
-        let e = err_after(HC595, |l| {
+        let e = err_after(hc595(), |l| {
             l.comb.insert("qa".into(), "store".into());
         });
         assert!(
@@ -1701,7 +1676,7 @@ disable = [
             "{e}"
         );
 
-        let e = err_after(HC595, |l| {
+        let e = err_after(hc595(), |l| {
             l.comb.insert("qa".into(), "store[8]".into());
         });
         assert!(
@@ -1716,7 +1691,7 @@ disable = [
             "{e}"
         );
 
-        let e = err_after(HC595, |l| {
+        let e = err_after(hc595(), |l| {
             l.comb.insert("qh_serial".into(), "srclk & shift[7]".into());
         });
         assert!(
@@ -1724,19 +1699,19 @@ disable = [
             "{e}"
         );
 
-        let e = err_after(NOR_LATCH, |l| l.outputs.push("q_extra".into()));
+        let e = err_after(parse_logic(NOR_LATCH), |l| l.outputs.push("q_extra".into()));
         assert!(
             matches!(e, UnassignedOutput { ref name } if name == "q_extra"),
             "{e}"
         );
 
-        let e = err_after(HC595, |l| l.inputs.push("store".into()));
+        let e = err_after(hc595(), |l| l.inputs.push("store".into()));
         assert!(matches!(e, DuplicateName { .. }), "{e}");
 
-        let e = err_after(HC595, |l| l.registers[0].bits = 65);
+        let e = err_after(hc595(), |l| l.registers[0].bits = 65);
         assert!(matches!(e, RegisterTooWide { bits: 65, .. }), "{e}");
 
-        let e = err_after(HC595, |l| {
+        let e = err_after(hc595(), |l| {
             l.registers[1].bits = 4;
             for k in ["qe", "qf", "qg", "qh"] {
                 l.comb.insert(k.into(), "store[0]".into());
@@ -1758,7 +1733,7 @@ disable = [
     #[test]
     fn tristate_rules() {
         use LogicSpecError::*;
-        let e = err_after(HC595, |l| {
+        let e = err_after(hc595(), |l| {
             l.tristate.insert(
                 "qa".into(),
                 TristateSpec {
@@ -1772,7 +1747,7 @@ disable = [
             "{e}"
         );
 
-        let e = err_after(HC595, |l| {
+        let e = err_after(hc595(), |l| {
             l.tristate.insert(
                 "qh..qa".into(),
                 TristateSpec {
@@ -1862,7 +1837,7 @@ data_in = "d"
         assert_eq!((sdp.enable.len(), sdp.disable.len()), (3, 6));
         assert!(v.comb.is_empty());
 
-        let e = err_after(EEPROM_28C256, |l| {
+        let e = err_after(parse_logic(EEPROM_28C256), |l| {
             l.memories[0].address.pop();
         });
         assert!(
