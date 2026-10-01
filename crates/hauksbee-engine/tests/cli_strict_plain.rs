@@ -143,12 +143,16 @@ fn plain_clean_board_reads_healthy() {
         "a clean board should read as healthy"
     );
     // The first-run command: a clean triage is one verdict line, not empty lists.
-    let first = run(&["run", "--example", "blinky", "--check", "--plain"]).stdout;
-    let text = String::from_utf8_lossy(&first);
-    assert!(
-        text.contains("\nOK TO ORDER: ") && !text.contains("parts lack"),
-        "{text}"
-    );
+    // The blinky example needs the avr backend.
+    #[cfg(feature = "avr")]
+    {
+        let first = run(&["run", "--example", "blinky", "--check", "--plain"]).stdout;
+        let text = String::from_utf8_lossy(&first);
+        assert!(
+            text.contains("\nOK TO ORDER: ") && !text.contains("parts lack"),
+            "{text}"
+        );
+    }
 }
 
 #[test]
