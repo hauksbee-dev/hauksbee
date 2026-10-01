@@ -691,8 +691,10 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             },
         )
     })?;
-    if ext_lower == "kicad_pcb" {
-        board.adopt_schematic_pin_names(&path.with_extension("kicad_sch"));
+    match ext_lower.as_str() {
+        "kicad_pcb" => board.adopt_schematic_pin_names(&path.with_extension("kicad_sch")),
+        "brd" => board.adopt_schematic_pin_names(&path.with_extension("sch")),
+        _ => {}
     }
     Ok(normalized(
         path,

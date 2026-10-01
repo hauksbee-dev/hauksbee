@@ -183,6 +183,35 @@ pub fn schematic_pin_net_identities(
     Ok(incidences)
 }
 
+/// Every physical part's package-pad pin names, as (reference, pad, pin name),
+/// sorted.
+///
+/// An Eagle `.brd` carries pads but no pin names; the schematic's
+/// `<connect>` map is where "pad 25 is IO0" lives. Eagle's `@n` suffix for
+/// repeated pins ("GND@2") is dropped.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
+pub fn schematic_pad_names(text: &str) -> Result<Vec<(String, String, String)>, ExtractError> {
+    let parsed = parse(text)?;
+    let mut out = Vec::new();
+    for (part, (library, deviceset, device)) in &parsed.part_devices {
+        for ((l, d, v, _gate, pin), pads) in &parsed.device_pin_maps {
+            if (l, d, v) == (library, deviceset, device) {
+                let name = pin.split('@').next().unwrap_or(pin);
+                out.extend(
+                    pads.iter()
+                        .map(|pad| (part.clone(), pad.clone(), name.to_string())),
+                );
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 /// One `<segment>` of one `<net>`: which net it belongs to and which of its
 /// `<pinref>`s name a part this file defines as a supply symbol.
 struct Segment {
@@ -242,7 +271,12 @@ struct Parsed {
     segments: Vec<Segment>,
     physical_parts: Vec<SchematicPartIdentity>,
     physical_pin_nets: Vec<SchematicPinNetIdentity>,
+    part_devices: HashMap<String, (LibraryId, String, String)>,
+    device_pin_maps: DevicePinMaps,
 }
+
+/// (library, deviceset, device, gate, schematic pin) -> package pad(s).
+type DevicePinMaps = HashMap<(LibraryId, String, String, String, String), Vec<String>>;
 
 /// A single streaming pass, in the order Eagle writes the file: `<libraries>`
 /// (symbols, then devicesets) precede `<parts>`, which precede `<sheets>`. That
@@ -262,9 +296,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut physical_parts = Vec::new();
     let mut physical_pin_nets = Vec::new();
-    // (library, deviceset, device, gate, schematic pin) -> package pad(s).
-    let mut device_pin_maps: HashMap<(LibraryId, String, String, String, String), Vec<String>> =
-        HashMap::new();
+    let mut device_pin_maps: DevicePinMaps = HashMap::new();
     // Physical part -> its selected library/deviceset/device mapping.
     let mut physical_part_devices: HashMap<String, (LibraryId, String, String)> = HashMap::new();
 
@@ -608,6 +640,8 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         segments,
         physical_parts,
         physical_pin_nets,
+        part_devices: physical_part_devices,
+        device_pin_maps,
     })
 }
 
@@ -993,6 +1027,43 @@ mod tests {
                 .expect("managed-library schematic parses")
                 .is_empty(),
             "the ordinary packaged part in library URN 2 must not inherit URN 1's supply symbol"
+        );
+    }
+
+    /// Pad names come from each part's own device variant's `<connect>` map:
+    /// `@n` duplicates collapse to the pin name, a multi-pad pin names every
+    /// pad, and a sibling variant of the same deviceset does not leak in.
+    #[test]
+    fn pad_names_come_from_the_parts_own_device_connects() {
+        let text = r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries><library name="mods">
+  <symbols><symbol name="M"><pin name="GND@1"/><pin name="GND@2"/><pin name="IO2"/></symbol></symbols>
+  <devicesets><deviceset name="WROOM"><gates><gate name="G$1" symbol="M"/></gates><devices>
+    <device name="SKINNY" package="P38"><connects>
+      <connect gate="G$1" pin="GND@1" pad="1"/><connect gate="G$1" pin="GND@2" pad="38 39"/>
+      <connect gate="G$1" pin="IO2" pad="24"/></connects></device>
+    <device name="WIDE" package="P40"><connects>
+      <connect gate="G$1" pin="IO2" pad="99"/></connects></device>
+  </devices></deviceset></devicesets>
+</library></libraries>
+<parts><part name="X2" library="mods" deviceset="WROOM" device="SKINNY"/></parts>
+<sheets/>
+</schematic></drawing></eagle>"#;
+        let names = schematic_pad_names(text).expect("parses");
+        let own = |pad: &str, name: &str| ("X2".to_string(), pad.to_string(), name.to_string());
+        assert_eq!(
+            names,
+            [
+                own("1", "GND"),
+                own("24", "IO2"),
+                own("38", "GND"),
+                own("39", "GND")
+            ]
+        );
+        assert!(
+            schematic_pad_names("<eagle><drawing><board/></drawing></eagle>")
+                .map_or(true, |v| v.is_empty())
         );
     }
 }

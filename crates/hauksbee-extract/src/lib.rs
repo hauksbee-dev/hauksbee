@@ -81,7 +81,7 @@ pub use drc::{
     SHORT_TOUCH_EPS_MM,
 };
 pub use eagle_sch::{
-    declared_net_ties, looks_like_eagle_schematic, schematic_part_identities,
+    declared_net_ties, looks_like_eagle_schematic, schematic_pad_names, schematic_part_identities,
     schematic_pin_net_identities, DeclaredNetTie, SchematicPartIdentity, SchematicPinNetIdentity,
 };
 pub use kicad_dru::{
@@ -379,30 +379,50 @@ impl ExtractedBoard {
         schematic::extract_from_path(path)
     }
 
-    /// Name the pads of a layout that carries no pin names at all (a scripted
-    /// or converted `.kicad_pcb`) from its same-stem schematic `sch`, so the
-    /// pin-function lints can read them. Only a matching reference and pad
-    /// number is copied, and a layout that names any pad is left untouched.
+    /// Name the pads of layout components that carry no pin names (a scripted,
+    /// converted or KiCad 5 `.kicad_pcb`, or any Eagle `.brd`) from the
+    /// same-stem schematic `sch` (`.kicad_sch`, or an Eagle `.sch`), so the
+    /// pin-function lints and MCU GPIO derivation can read them. Only a
+    /// matching reference and pad number is copied, and a component whose
+    /// layout names any of its pads is left untouched.
     pub fn adopt_schematic_pin_names(&mut self, sch: &Path) {
-        let mut all = self.components.iter().flat_map(|c| &c.pins).peekable();
-        if all.peek().is_none() || all.any(|p| !p.function.is_empty()) {
+        let unnamed =
+            |c: &Component| !c.pins.is_empty() && c.pins.iter().all(|p| p.function.is_empty());
+        if !self.components.iter().any(unnamed) || !sch.is_file() {
             return;
         }
-        let Some(Ok(named)) = sch.is_file().then(|| Self::from_kicad_schematic_path(sch)) else {
-            return;
-        };
-        for t in &mut self.components {
-            let Some(c) = named.components.iter().find(|c| c.reference == t.reference) else {
-                continue;
+        // (reference, pad) -> (pin name, electrical kind)
+        let mut names: std::collections::HashMap<(String, String), (String, String)> =
+            std::collections::HashMap::new();
+        if sch
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("sch"))
+        {
+            let Ok(text) = std::fs::read_to_string(sch) else {
+                return;
             };
+            let Ok(pads) = eagle_sch::schematic_pad_names(&text) else {
+                return;
+            };
+            for (reference, pad, name) in pads {
+                names.insert((reference, pad), (name, String::new()));
+            }
+        } else {
+            let Ok(sheet) = Self::from_kicad_schematic_path(sch) else {
+                return;
+            };
+            for c in sheet.components {
+                for q in c.pins.into_iter().filter(|q| q.function != "~") {
+                    names.insert((c.reference.clone(), q.number), (q.function, q.kind));
+                }
+            }
+        }
+        for t in self.components.iter_mut().filter(|c| unnamed(c)) {
             for p in &mut t.pins {
-                if let Some(q) = c
-                    .pins
-                    .iter()
-                    .find(|q| q.number == p.number && q.function != "~")
+                if let Some((function, kind)) = names.get(&(t.reference.clone(), p.number.clone()))
                 {
-                    p.function.clone_from(&q.function);
-                    p.kind.clone_from(&q.kind);
+                    p.function.clone_from(function);
+                    p.kind.clone_from(kind);
                 }
             }
         }
@@ -1227,5 +1247,57 @@ impl Lint {
     #[must_use]
     pub const fn is_clean(&self) -> bool {
         self.undeclared_nets.is_empty() && self.floating_components.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod schematic_pin_name_tests {
+    use crate::testutil::{part, pin};
+    use crate::ExtractedBoard;
+
+    /// Only a component whose layout pads are all unnamed takes names from
+    /// the sibling schematic; one the layout already names keeps them.
+    #[test]
+    fn unnamed_components_adopt_eagle_schematic_pin_names() {
+        let sch = r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries><library name="l">
+  <symbols><symbol name="S"><pin name="IO2"/><pin name="GND"/></symbol></symbols>
+  <devicesets><deviceset name="D"><gates><gate name="G" symbol="S"/></gates><devices>
+    <device name="" package="P"><connects>
+      <connect gate="G" pin="IO2" pad="24"/><connect gate="G" pin="GND" pad="1"/>
+    </connects></device></devices></deviceset></devicesets>
+</library></libraries>
+<parts><part name="X2" library="l" deviceset="D" device=""/>
+<part name="U1" library="l" deviceset="D" device=""/></parts>
+<sheets/>
+</schematic></drawing></eagle>"#;
+        let path = std::env::temp_dir().join(format!("hauksbee-adopt-{}.sch", std::process::id()));
+        std::fs::write(&path, sch).unwrap();
+        let module = part(
+            "X2",
+            "WROOM",
+            "P",
+            "P",
+            vec![pin("1", Some(1)), pin("24", Some(2))],
+        );
+        let mut named = part("U1", "WROOM", "P", "P", vec![pin("24", Some(2))]);
+        named.pins[0].function = "LAYOUT_NAME".into();
+        let mut board = ExtractedBoard {
+            name: "adopt".into(),
+            nets: Vec::new(),
+            components: vec![module, named],
+        };
+        board.adopt_schematic_pin_names(&path);
+        std::fs::remove_file(&path).ok();
+        let functions = |i: usize| -> Vec<&str> {
+            board.components[i]
+                .pins
+                .iter()
+                .map(|p| p.function.as_str())
+                .collect()
+        };
+        assert_eq!(functions(0), ["GND", "IO2"]);
+        assert_eq!(functions(1), ["LAYOUT_NAME"]);
     }
 }
