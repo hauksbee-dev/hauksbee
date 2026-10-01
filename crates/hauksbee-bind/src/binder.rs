@@ -9736,23 +9736,23 @@ style = "i2c_pointer"
     /// with no processor at all keeps the generic message.
     #[test]
     fn an_unemulated_family_is_named_when_nothing_binds() {
-        let mut g4 = comp("U3", "STM32G474CEU6");
-        g4.footprint = "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm".to_string();
-        g4.pins = vec![pin("1", 8), pin("2", 9)];
+        let mut h7 = comp("U3", "STM32H743VIT6");
+        h7.footprint = "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm".to_string();
+        h7.pins = vec![pin("1", 8), pin("2", 9)];
         let board = ExtractedBoard {
-            name: "g4".to_string(),
+            name: "h7".to_string(),
             nets: vec![net(8, "+3V3"), net(9, "GND")],
-            components: vec![g4],
+            components: vec![h7],
         };
         let bound = bind_board(&board, &ModelLibrary::builtin());
         assert!(bound.mcus.is_empty());
         assert_eq!(
             bound.unsupported_mcus,
-            [("U3".to_string(), "STM32G4".to_string())]
+            [("U3".to_string(), "STM32H7".to_string())]
         );
         let msg = no_processor_message(&bound.dnp_mcus, &bound.unsupported_mcus, FitRemedy::Cli);
         assert!(
-            msg.contains("STM32G4 (U3) is recognised but has no emulator backend yet"),
+            msg.contains("STM32H7 (U3) is recognised but has no emulator backend yet"),
             "{msg}"
         );
         let generic = no_processor_message(&[], &[], FitRemedy::Cli);
