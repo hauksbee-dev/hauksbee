@@ -1521,7 +1521,7 @@ PIN ROLE NAMES for kind="{entry_kind}": {pin_roles}
 {pin_role_guidance}
 
 For kind="{entry_kind}", the required params are:
-{required_params}
+{required_params}{conventions}
 {optional_params}
 {digital_hint}
 [models.ratings]: these are the ONLY valid keys (any other key fails
@@ -1539,9 +1539,9 @@ is one characteristic per printed row with `rating = "<key>"`, its temperature i
 `conditions` and any `package` or `mounting` as printed. A current or power limit
 printed per path, channel or output is one row per path, `pins` naming its
 [models.pins] roles (IN1 to OUT: `pins = ["in1"]`), and a printed total a row
-without `pins`. The key holds the least favourable row (lowest current and
-power, highest thermal resistance, all three from one board); Hauksbee reads the
-row for the scenario's temperature:
+without `pins`. Hauksbee sets each tagged key itself to its row at the standard
+condition (25 °C, the standard test board, else the least favourable), so write
+any tagged row there; it reads the rows at the scenario's temperature:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -1724,6 +1724,7 @@ OUTPUT (TOML only, starting with [[models]]):
         ),
         datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
+        conventions = conventions_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
         ratings_hint = crate::schema::Ratings::KEY_GUIDE,
@@ -2125,7 +2126,8 @@ use the identity-only abstention and name the unresolved package.
 
 fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode" => "is, n, rs, fitted to the cited VF-at-IF rows (25 C; typ, else max)",
+        "diode" => "is, n, rs, fitted to the cited VF-at-IF rows (25 C; typ, else max; a VF \
+             curve read at several currents fits n and rs)",
         "bjt_npn" | "bjt_pnp" => "is, bf, nf (no VBE(on) row or curve: an `unknown` record each)",
         // Never the word "is" here: optional_params_for_kind would drop the `is` param.
         "nmos" | "pmos" => {
@@ -2167,7 +2169,8 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              and ron_ohms/leak_s otherwise"
         }
         "analog_switch" => {
-            "ron, roff, vth (no printed off-state figure: an `unknown` record for roff). ron is \
+            "ron, roff, vth (no off-state leakage, shutdown-current or off-resistance row at \
+             all: an `unknown` record for roff). ron is \
              the typ column at 25 C, as for RDS(on). With on-resistance printed per path, add \
              ron_s0/ron_s1 for the path each leg role names; ron keeps the main or first path"
         }
@@ -2193,13 +2196,55 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "mcu" => "backend (e.g. simavr:atmega328p)",
         "charger" | "pmic" => {
             "vout, dropout_v, iq_a (the behaviour is in [models.behavioral] or \
-             [models.current_program]). A dropout_v or iq_a printed as no single value (no \
-             dropout row; only a limit or several supply-current rows) is omitted with an \
-             `unknown` record for it naming why, its rows staying characteristic records: never \
-             a reason for identity-only"
+             [models.current_program]). Only a dropout_v or iq_a the conventions below cannot \
+             read (no dropout, RDS(on) or supply-current row) is omitted with an `unknown` \
+             record for it naming why, its rows staying characteristic records: never a reason \
+             for identity-only"
         }
         "balancer" => "(the leak law is in [models.behavioral]; no required numeric params)",
         _ => "(see db/README.md for kind-specific requirements)",
+    }
+}
+
+/// The derivation conventions Hauksbee applies to the kind's cited rows
+/// ([`crate::conventions`]), so the model cites the row instead of abstaining
+/// on a param it does not know how to read, or restating the arithmetic.
+const fn conventions_for_kind(kind: &str) -> &'static str {
+    match kind.as_bytes() {
+        b"diode" => {
+            "\nConventions (cite the row; Hauksbee computes the param): a single VF row \
+             gives is at the ideal n = 1, rs = 0 (one point fixes no slope); with no V(BR) row, \
+             bv is the rated VRRM/VR and ibv the IR row at it."
+        }
+        b"opamp" => {
+            "\nConventions (cite the row; Hauksbee computes the param): a VOH/VOL row \
+             printed below 1 V is headroom from the supply, swing_hi/swing_lo."
+        }
+        b"comparator" => {
+            "\nConventions (cite the row; Hauksbee computes the param): out_lo is \
+             VOL max, out_hi VOH min (a VOH printed as headroom below 1 V is the test supply \
+             minus it); tpd_s is the slower edge at the largest printed overdrive; \
+             supply_static_ua the operating-mode supply current."
+        }
+        b"digital" | b"shift_register" => {
+            "\nConventions (cite the row; Hauksbee computes the \
+             param): a level printed as a fraction of a supply (0.7 × VDD, 70 % VDDIO) or an \
+             offset (VDD − 0.4 V) is that fraction of the supply's printed value; tpd_s is the \
+             slower edge (tPLH/tPHL); supply_static_ua the operating-mode supply current."
+        }
+        b"analog_switch" => {
+            "\nConventions (cite the row; Hauksbee computes the param): roff is \
+             the off-state leakage's test voltage over its max current (5.5 V / 1 uA = 5.5 MΩ; \
+             a load switch with only a shutdown current uses that row); vth is the EN or \
+             control threshold row (typ), else the control input's VIH min."
+        }
+        b"vreg" | b"charger" | b"pmic" => {
+            "\nConventions (cite the row; Hauksbee computes the \
+             param): iq_a is the supply current while charging (a charger), else the no-load \
+             ground current; dropout_v is the dropout row at the rated load, else the pass \
+             FET's RDS(on) max times the current limit (a FET in dropout is fully on)."
+        }
+        _ => "",
     }
 }
 
@@ -2301,6 +2346,28 @@ impl Reply<'_> {
         let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
         let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
         for (entry, table) in db.iter().zip(tables) {
+            // A rating's scalar is its tagged row at the standard condition, which
+            // code picks from the rows rather than the model from the table.
+            let rows = entry.source.iter().flat_map(|s| &s.characteristic);
+            let mut keys: Vec<&str> = rows.filter_map(|r| r.rating.as_deref()).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            let ratings = toml::Table::try_from(&entry.ratings).unwrap_or_default();
+            for key in keys {
+                let Some(v) = crate::derating::standard_rating(entry, key) else {
+                    continue;
+                };
+                let had = ratings.get(key).and_then(toml::Value::as_float);
+                if had.is_some_and(|h| (h - v).abs() <= 1e-9 * v.abs()) {
+                    continue;
+                }
+                let ratings = table.entry("ratings").or_insert(Item::Table(Table::new()));
+                if let Some(ratings) = ratings.as_table_like_mut() {
+                    say!("[model-extract] {}: ratings.{key} = {v}, its tagged row at the standard condition (was {had:?})", entry.id);
+                    ratings.insert(key, toml_edit::value(v));
+                    inserted = true;
+                }
+            }
             let mut derived = crate::param_names::derivations(entry);
             derived.retain(|d| !entry.params.0.contains_key(d.0));
             derived.extend(crate::param_names::diode_refit_params(entry));
@@ -2728,7 +2795,9 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         |c| {
             format!(
                 "Check model.toml by running exactly `'{}' models lint model.toml` and fix \
-                 what it reports. Never run any other `hauksbee`.",
+                 what it reports, except its `is omitted but its cited row gives` lines: \
+                 Hauksbee writes those params, and a tagged rating's key, itself from the \
+                 cited rows. Never run any other `hauksbee`.",
                 c.display()
             )
         },
@@ -3691,7 +3760,7 @@ mod tests {
         assert!(bjt.contains("takes no tt: its trr is capacitive recovery"));
         assert!(bjt.contains("is, bf, nf (no VBE(on) row or curve: an `unknown` record each)"));
         let switch = build_prompt("SWITCH_FIXTURE", "analog_switch", "x");
-        assert!(switch.contains("off-state figure: an `unknown` record for roff"));
+        assert!(switch.contains("off-resistance row at all: an `unknown` record for roff"));
         assert!(switch.contains("add ron_s0/ron_s1 for the path each leg role names"));
         assert!(switch.contains("s0 is the throw joined to com while ctrl is LOW, s1"));
     }
@@ -3718,7 +3787,20 @@ mod tests {
         assert!(bjt.contains("derives tf, cjc"));
         assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
         assert!(bjt.contains("one characteristic per printed row with `rating = \"<key>\"`"));
-        assert!(bjt.contains("The key holds the least favourable row"));
+        assert!(bjt.contains("Hauksbee sets each tagged key itself to its row at the standard"));
+        // Each convention the code applies is named in its kind's prompt, no other's.
+        for (kind, rule) in [
+            ("diode", "a single VF row"),
+            ("analog_switch", "(5.5 V / 1 uA = 5.5 MΩ"),
+            ("digital", "70 % VDDIO"),
+            ("comparator", "largest printed overdrive"),
+            ("charger", "supply current while charging"),
+            ("opamp", "headroom from the supply, swing_hi/swing_lo"),
+        ] {
+            let prompt = build_prompt("X_FIXTURE", kind, "x");
+            assert!(prompt.contains(rule), "{kind}");
+        }
+        assert!(!bjt.contains("Conventions (cite the row"));
         assert!(bjt.contains("one row per path, `pins` naming its\n[models.pins] roles"));
         assert!(vreg.contains("at the rated output current when several loads are printed"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
@@ -3794,6 +3876,7 @@ mod tests {
         ws.checker = Some("/opt/x/hauksbee".into());
         let footer = verification_clause(&ws, "[[models]]");
         assert!(footer.contains("`'/opt/x/hauksbee' models lint model.toml`"));
+        assert!(footer.contains("except its `is omitted but its cited row gives` lines"));
         assert!(footer.contains("Never run any other `hauksbee`"));
         assert!(!footer.contains("bipolar transistor with a gain of 5"));
         assert!(!footer.contains("`notes`"));
@@ -4048,6 +4131,33 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 
     const MODEL_SOURCE: &str = "[models.source]\ntier = \"datasheet-derived\"\n\
         uncertainty = [{ status = \"unknown\", parameter = \"model\", reason = \"none\" }]\n";
+
+    /// Completion writes a tagged rating's scalar from its 25 °C row, whatever
+    /// cell the model picked, and leaves a scalar already there as it was.
+    #[test]
+    fn completion_sets_a_tagged_rating_to_its_standard_row() {
+        let row = |v: f64, at: &str| {
+            format!("[[models.source.characteristic]]\nparameter = \"ID\"\nrating = \"max_current_a\"\nmax = {v}\nunit = \"A\"\nconditions = \"{at}\"\nbasis = \"b\"\n")
+        };
+        let rows = row(5.7, "TA = 25 °C") + &row(4.7, "TA = 70 °C") + &row(40.0, "TC = 25 °C");
+        let card = |scalar: f64| {
+            format!("[[models]]\nid = \"q\"\nkind = \"nmos\"\n[models.ratings]\nmax_current_a = {scalar}\n{MODEL_SOURCE}{rows}")
+        };
+        let model = Reply::Model {
+            part: "Q",
+            kind: "nmos",
+        };
+        for picked in [4.7, 40.0, 5.7] {
+            let done = model.complete(card(picked));
+            let db: crate::schema::DbFile = toml::from_str(&done).expect("completed card parses");
+            assert_eq!(
+                db.models[0].ratings.max_current_a,
+                Some(5.7),
+                "{picked}: {done}"
+            );
+        }
+        assert_eq!(model.complete(card(5.7)), card(5.7));
+    }
 
     #[test]
     // One table of reply fixtures, each beside the verdict it must get.

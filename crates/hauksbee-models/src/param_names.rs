@@ -605,11 +605,27 @@ fn channel_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
 }
 
 /// Whether a row's parameter text has the word `sym` (`HFE` in "hFE gain",
-/// `VBRR` in "V(BR)R breakdown").
-fn symbol(row: &Characteristic, sym: &str) -> bool {
-    let text = row.parameter.replace(['(', ')'], "");
+/// `VBRR` in "V(BR)R breakdown"); `sym*` is any word it starts (`VZ*`: `VZnom`).
+pub(crate) fn symbol(row: &Characteristic, sym: &str) -> bool {
+    has_symbol(&row.parameter, sym)
+}
+
+/// [`symbol`] over any text.
+pub(crate) fn has_symbol(text: &str, sym: &str) -> bool {
+    let text = text.replace(['(', ')'], "");
+    let (sym, prefix) = sym.strip_suffix('*').map_or((sym, false), |s| (s, true));
+    let starts = |w: &str| {
+        w.get(..sym.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(sym))
+    };
     let mut words = text.split(|c: char| !c.is_alphanumeric());
-    words.any(|w| w.eq_ignore_ascii_case(sym))
+    words.any(|w| {
+        if prefix {
+            starts(w)
+        } else {
+            w.eq_ignore_ascii_case(sym)
+        }
+    })
 }
 
 /// A diode its description names Schottky: it stores no charge, so trr gives no tt.
@@ -638,12 +654,12 @@ pub(crate) fn is_from_sat(entry: &ModelEntry) -> Option<String> {
     Some(format!("is = {is:e} reproduces the saturation row '{}' ({}): fit is only to a forward-active VBE(on) row or curve at the lowest IC, else omit it with an `unknown` record", row.parameter, row.conditions))
 }
 
-fn cited_rows(entry: &ModelEntry) -> &[Characteristic] {
+pub(crate) fn cited_rows(entry: &ModelEntry) -> &[Characteristic] {
     entry.source.as_ref().map_or(&[], |s| &s.characteristic)
 }
 
 /// Whether a row is at 25 °C or states no temperature (`25 °C`, `25 ℃`, `25C`).
-fn at_25(row: &Characteristic) -> bool {
+pub(crate) fn at_25(row: &Characteristic) -> bool {
     static CELSIUS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"([-+]?\d*\.?\d+)\s*(?:°\s*C|℃|C\b)").expect("a valid pattern")
     });
@@ -732,7 +748,7 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
             let junction = |k, default| p.get_f64(k).unwrap_or(default);
             let vj_m = (junction("vj", d.vj), junction("m", d.m));
             out.extend(zero_bias("cjo", "CT CJ CD CTOT", "V_?R", vj_m));
-            if let Some((bv, how, r)) = first("VBR VBRR BV VZ", "V") {
+            if let Some((bv, how, r)) = first("VBR VBRR BV VZ*", "V") {
                 let ibv = quantity(&r.conditions, "I_?(?:R|Z|ZT|T|BR)", "A");
                 out.extend(ibv.map(|i| ("ibv", i, format!("the test current of {how}"))));
                 out.push(("bv", bv, format!("V(BR) or VZ, {how}")));
@@ -747,6 +763,7 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
         }
         _ => {}
     }
+    out.extend(crate::conventions::conventions(entry));
     let round = |v: f64| format!("{v:.4e}").parse().unwrap_or(v);
     let derived = |(n, v, how): Derived| (n, round(v), format!("derived: {n} = {how}"));
     out.into_iter().map(derived).collect()
@@ -758,7 +775,7 @@ fn diode_law(entry: &ModelEntry) -> Option<[f64; 3]> {
 }
 
 /// VF of `[is, n, rs]` at `i` amperes and the solver's nominal 27 °C.
-fn diode_vf([is, n, rs]: [f64; 3], i: f64) -> f64 {
+pub(crate) fn diode_vf([is, n, rs]: [f64; 3], i: f64) -> f64 {
     (n * hauksbee_ir::thermal_voltage_c(27.0)).mul_add((i / is).ln_1p(), i * rs)
 }
 
@@ -769,10 +786,10 @@ fn worst_miss(law: [f64; 3], points: &[Point]) -> (f64, f64, f64) {
 }
 
 /// A printed row as a law checks it: `(bias, value, row)` in base units.
-type Point<'a> = (f64, f64, &'a Characteristic);
+pub(crate) type Point<'a> = (f64, f64, &'a Characteristic);
 
 /// Cited `(IF, VF)` in A and V, as [`at_bias`] reads VF rows.
-fn vf_points(rows: &[Characteristic]) -> Vec<Point<'_>> {
+pub(crate) fn vf_points(rows: &[Characteristic]) -> Vec<Point<'_>> {
     at_bias(rows, ["VF", "I_?F", "A", "V"])
 }
 
@@ -821,7 +838,7 @@ fn line(x: &[f64], y: &[f64]) -> (f64, f64) {
 /// `VF = n·VT·ln(IF/is) + IF·rs` is linear in `ln IF` and `IF`: `rs` is the `IF`
 /// coefficient by Frisch-Waugh (3+ points over two decades, ln 100 = 4.6, else 0),
 /// then `VF - IF·rs` gives n and is. `None` unless physical and within 10%.
-fn diode_fit(points: &[Point]) -> Option<[f64; 3]> {
+pub(crate) fn diode_fit(points: &[Point]) -> Option<[f64; 3]> {
     let (i, v): (Vec<f64>, Vec<f64>) = points.iter().map(|p| (p.0, p.1)).unzip();
     let ln: Vec<f64> = i.iter().map(|x| x.ln()).collect();
     let residual = |y: &[f64]| -> Vec<f64> {
@@ -881,7 +898,15 @@ pub(crate) fn needless_abstention(
 ) -> Option<String> {
     use ComponentKind::{BjtNpn, BjtPnp, Comparator, Diode, Nmos, Opamp, Pmos};
     let rows = cited_rows(entry);
-    let fits = entry.kind == Diode && diode_fit(&vf_points(rows)).is_some();
+    // One VF row fixes `is` at the ideal n = 1, rs = 0 (`conventions`).
+    let points = vf_points(rows);
+    let fits = entry.kind == Diode && (points.len() == 1 || diode_fit(&points).is_some());
+    // A required param a convention derives from the cited rows is covered too.
+    let derived = derivations(entry);
+    let derive = |key: &str| {
+        let d = derived.iter().find(|d| key.split('|').any(|k| k == d.0))?;
+        Some(format!("({})", d.2))
+    };
     // Each need is `|`-separated alternatives `SYMBOLS@bias:unit`, the bias a
     // quantity the row's conditions must print.
     let need = |key: &str| match (entry.kind, key) {
@@ -915,7 +940,7 @@ pub(crate) fn needless_abstention(
     };
     let mut cited = Vec::new();
     for key in required {
-        match need(key).and_then(cite) {
+        match need(key).and_then(cite).or_else(|| derive(key)) {
             Some(row) => cited.push(row),
             None if key.split('|').any(&may_abstain) => {}
             None => return None,
@@ -1323,7 +1348,9 @@ mod tests {
         let diode = format!("diode | {} | 'VF'", [1.0, 10.0, 100.0].map(vf).join(" + "));
         for case in [
             diode.as_str(),
-            "diode | VF ; max = 1 ; V ; IF = 10 mA + IR ; max = 5 ; uA ; VR = 50 V | ",
+            "diode | VF ; max = 1 ; V ; IF = 10 mA + IR ; max = 5 ; uA ; VR = 50 V | 'VF'",
+            "analog_switch | RON ; typ = 80 ; mΩ ; - + IOFF off-state leakage ; max = 1 ; uA ; VIN = 5.5 V | (derived: roff = off-state leakage: 5.5 V (its test voltage) / 'IOFF off-state leakage' max 1 uA (VIN = 5.5 V)), (derived: ron = 'RON' typ 80 mΩ (-))",
+            "analog_switch | RON ; typ = 80 ; mΩ ; - | ",
             "bjt_pnp | hFE ; min = 100 ; - ; IC = -2 mA + VBE(on) ; max = -0.75 ; V ; IC = -2 mA | 'VBE(on)', 'hFE'",
             "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VCE(sat) ; max = 0.2 ; V ; IC = 10 mA | ",
             "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VBE sat ; max = 1.2 ; V ; IC = 500 mA | ",

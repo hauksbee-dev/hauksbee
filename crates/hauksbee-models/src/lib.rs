@@ -41,6 +41,7 @@
 
 pub mod behavioral;
 mod check;
+mod conventions;
 pub mod datasheet;
 pub mod derating;
 pub mod extract_config;
