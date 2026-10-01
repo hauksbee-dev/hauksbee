@@ -572,13 +572,14 @@ pub fn bind_board_with(
         }) {
             continue;
         }
-        // Skip a net a behavioural converter drives: the converter IS this
-        // net's supply. An ideal auto-rail on top would out-stiffen the
-        // converter leg, so the rail reads ideal-stiff and the converter's
-        // reflected input current reads zero.
+        // Skip a net a behavioural converter drives or regulates (a buck's
+        // rail past its inductor): the converter IS this net's supply. An
+        // ideal auto-rail on top would out-stiffen the converter leg, so the
+        // rail reads ideal-stiff and the reflected input current reads low,
+        // zero or even negative.
         if behavioral
             .iter()
-            .any(|d| d.converter_out_node() == Some(node))
+            .any(|d| d.converter_out_node() == Some(node) || d.converter_rail_node() == Some(node))
         {
             continue;
         }

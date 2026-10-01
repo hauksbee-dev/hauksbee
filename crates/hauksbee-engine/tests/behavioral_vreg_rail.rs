@@ -479,3 +479,86 @@ fn reverse_current_returns_to_a_diode_fed_input() {
         assert!(apart < 0.05, "{apart} V apart: {trace:?}");
     }
 }
+
+/// A generic fixed 5 V boost card, `in` pin "1", `out` "2", `gnd` "3".
+fn lib_with_boost() -> ModelLibrary {
+    let dir = hauksbee_testkit::fresh_scratch_dir("behavioral_vreg_rail", "boost");
+    let card =
+        "[[models]]\nid = \"test_boost_5v\"\nkind = \"vreg\"\ndescription = \"test boost\"\n\
+         [models.match]\nvalue_re = \"(?i)^TESTBOOST$\"\n[models.params]\nvout = 5.0\n\
+         [models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\"3\" = \"gnd\"\n\
+         [models.behavioral.converter]\ntopology = \"boost\"\nout_pin = \"out\"\nin_pin = \"in\"\n\
+         vout_setpoint = 5.0\niout_limit_a = 2.0\nefficiency = 0.92\nout_r_ohms = 0.01\n";
+    std::fs::write(dir.join("testboost.toml"), card).unwrap();
+    ModelLibrary::builtin_with_user_dirs(&[dir.as_path()])
+}
+
+/// Input current against output power at two loads, read off the input rail:
+/// `Vout*Iout / (eff*Vin)` for an averaged converter (`Iout + Iq` for an LDO).
+/// The buck's rail past its inductor is supply-named (+5V): an ideal auto-rail
+/// used to land there too and fight it (the draw read -1.8 A).
+#[test]
+fn regulator_input_current_balances_output_power() {
+    let (builtin, boost) = (ModelLibrary::builtin(), lib_with_boost());
+    let pins = |spec: &str| {
+        let pad = |p: &str| p.split_once(':').map(|(a, n)| pin(a, n.parse().unwrap()));
+        spec.split(' ').filter_map(pad).collect()
+    };
+    let soic = "Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm";
+    let fixed = |value, spec| {
+        vec![
+            comp("U1", value, "SOT-223", pins(spec)),
+            two("C1", "10uF", CAP, 2, 3),
+        ]
+    };
+    for ohms in [33.0, 100.0] {
+        let buck = vec![
+            comp(
+                "U1",
+                "AP64501SP-13",
+                soic,
+                pins("1:6 2:1 3:1 5:5 7:3 8:4 9:3"),
+            ),
+            two("L1", "10uH", "Inductor_SMD:L_1210_3225Metric", 4, 2),
+            two("C1", "22uF", CAP, 2, 3),
+            two("C2", "100nF", CAP, 6, 4),
+            two("R2", "52.3k", RES, 2, 5),
+            two("R3", "10k", RES, 5, 3),
+        ];
+        let cases = [
+            ("+12V", "+5V", buck, &builtin, Some(0.90)),
+            (
+                "+3.3V",
+                "+5V",
+                fixed("TESTBOOST", "1:1 2:2 3:3"),
+                &boost,
+                Some(0.92),
+            ),
+        ];
+        for (input, output, mut parts, lib, eff) in cases {
+            parts.push(two("R1", &format!("{ohms}R"), RES, 2, 3));
+            let names: Vec<_> = (1..)
+                .zip([input, output, "GND", "SW", "FB", "BST"])
+                .collect();
+            let bound = bind_board_with(&board(&names, parts), lib, &CustomRegistry::new());
+            let mut sched = Scheduler::new(bound, None, SolverOptions::default()).unwrap();
+            for _ in 0..30 {
+                sched.step(1e-4);
+            }
+            assert!(
+                sched.analog_valid(),
+                "{output}: {:?}",
+                sched.failed_windows()
+            );
+            let [vin, vo, vfb] = [input, output, "FB"].map(|n| sched.net_voltage(n).unwrap_or(0.0));
+            let iout = vo / ohms + vfb / 10e3;
+            // The AMS1117-3.3 card's `iq_a` is 5 mA.
+            let want = eff.map_or(iout + 5e-3, |e| vo * iout / (e * vin));
+            let iin = sched.supply_states()[input].1;
+            assert!(
+                (iin / want - 1.0).abs() < 0.01,
+                "{input} -> {output}, {ohms} R: {iin} A, want {want} A"
+            );
+        }
+    }
+}

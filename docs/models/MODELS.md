@@ -12,6 +12,8 @@ selection deterministic inside one tier.
 
 Simple `vreg` cards may set non-negative `cout_min_f` and an optional positive `cout_esr_min_ohm`/`cout_esr_max_ohm` pair. `cout_min_f = 0` records a sourced statement that no output capacitor is required for stability; omitting the field means the requirement is unknown. For positive minima, fitted OUT-to-ground capacitance is summed and shortfalls violate an operating limit. ESR remains a caveat because board files do not carry it and Hauksbee never guesses it.
 
+A behavioural converter card draws `Vsw*Iout / efficiency` of input power; it owns its regulated rail (past a buck's output inductor), so no ideal auto-rail is stamped there.
+
 An adjustable `vreg` card carries `vref` instead of `vout`, and the board's divider sets the rail. Its `[models.pins]` decides the law: with no `gnd` pin it is the LM317 class (`VOUT - VADJ = vref`, so `VOUT = vref*(1 + R2/R1) + iadj_a*R2` with R1 on OUT-ADJ; requires `iadj_a`), and with a `gnd` pin it is ground-referenced like most modern LDOs (`VFB - VGND = vref`, so `VOUT = vref*(1 + R1/R2)` with R1 on OUT-FB; requires `iq_a`, drawn from IN to GND). Both require `dropout_v`, checked against the solved rail.
 
 The four authoring routes:

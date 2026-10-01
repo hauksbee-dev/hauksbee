@@ -365,6 +365,8 @@ struct ConverterLeg {
     /// monitoring seam stress and dissipation read.
     out_vsource: DeviceId,
     out_node: NodeId,
+    /// The node it regulates: past a buck's output inductor, else `out_node`.
+    rail_node: NodeId,
     /// Optional enable input.  A low level disables both converter legs.
     enable_node: Option<NodeId>,
     /// False when a feedback pin the card needs is unconnected: never delivers.
@@ -645,6 +647,7 @@ impl BehavioralDevice {
         }
         if let Some(c) = self.converter.as_mut() {
             c.out_node = map(c.out_node);
+            c.rail_node = map(c.rail_node);
             c.enable_node = c.enable_node.map(&map);
         }
         for path in &mut self.series_paths {
@@ -1053,6 +1056,7 @@ impl BehavioralDevice {
             cfg: c.clone(),
             out_vsource,
             out_node: out,
+            rail_node: reg,
             enable_node: c
                 .enable
                 .as_ref()
@@ -1185,6 +1189,13 @@ impl BehavioralDevice {
     #[must_use]
     pub fn converter_out_node(&self) -> Option<NodeId> {
         self.converter.as_ref().map(|c| c.out_node)
+    }
+
+    /// The rail the converter regulates: a buck's is past its output
+    /// inductor, not its switch pin (see `regulated_node`).
+    #[must_use]
+    pub fn converter_rail_node(&self) -> Option<NodeId> {
+        self.converter.as_ref().map(|c| c.rail_node)
     }
 
     /// The converter's output source and how its dissipation is estimated.
