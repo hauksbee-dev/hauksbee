@@ -310,6 +310,7 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
                 if bound.mcus.is_empty() {
                     return Err(crate::binder::no_processor_message(
                         &bound.dnp_mcus,
+                        &bound.unsupported_mcus,
                         crate::binder::FitRemedy::Cli,
                     ));
                 }
@@ -384,6 +385,7 @@ pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLa
             if bound.mcus.is_empty() {
                 return Err(crate::binder::no_processor_message(
                     &bound.dnp_mcus,
+                    &bound.unsupported_mcus,
                     crate::binder::FitRemedy::Cli,
                 ));
             }

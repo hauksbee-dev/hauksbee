@@ -1772,6 +1772,7 @@ fn run_one(
         return Err(SpecError::Invalid(
             hauksbee_engine::binder::no_processor_message(
                 &bound.dnp_mcus,
+                &bound.unsupported_mcus,
                 hauksbee_engine::binder::FitRemedy::Spec,
             ),
         ));

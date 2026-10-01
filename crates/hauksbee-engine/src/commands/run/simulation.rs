@@ -72,8 +72,7 @@ pub fn build_live_simulation(
         // That is invalid-for-analysis, not a warning, so it exits 3 like the
         // other unanswerable runs rather than reporting a vacuous success.
         if bound.mcus.is_empty() {
-            let missing =
-                crate::binder::no_processor_message(&bound.dnp_mcus, crate::binder::FitRemedy::Cli);
+            let missing = bound.no_processor_message(crate::binder::FitRemedy::Cli);
             let refusal = Refusal::new(
                 "firmware behavior on this board",
                 missing.clone(),

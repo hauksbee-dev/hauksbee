@@ -157,6 +157,11 @@ pub struct BoundBoard {
     /// no simulable processor for a reason the user can undo (`--fit`), which
     /// is what the firmware gates report instead of running vacuously.
     pub dnp_mcus: Vec<(String, String)>,
+    /// Fitted parts recognised as a processor family that no emulator models,
+    /// as (reference, family). Lets a zero-processor refusal name the family
+    /// ("STM32G4 is recognised but has no emulator backend yet") instead of
+    /// implying the part went unrecognised.
+    pub unsupported_mcus: Vec<(String, String)>,
     /// reference -> resolved model kind string (for `board_info` coloring).
     pub component_kinds: HashMap<String, String>,
     /// Named controllable input sources: reference -> `DeviceId` of a Vsource /
@@ -264,6 +269,14 @@ pub enum FitRemedy {
     Spec,
 }
 
+impl BoundBoard {
+    /// [`no_processor_message`] for this board's unfitted and unemulated MCUs.
+    #[must_use]
+    pub fn no_processor_message(&self, remedy: FitRemedy) -> String {
+        no_processor_message(&self.dnp_mcus, &self.unsupported_mcus, remedy)
+    }
+}
+
 /// Why a run that needs firmware cannot proceed, and what to do about it.
 ///
 /// Firmware on a board with zero processors is unanswerable rather than
@@ -272,7 +285,25 @@ pub enum FitRemedy {
 /// [`EXIT_INVALID_FOR_ANALYSIS`](crate::EXIT_INVALID_FOR_ANALYSIS)
 /// (or their spec-error equivalent) so a vacuous green is impossible.
 #[must_use]
-pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) -> String {
+pub fn no_processor_message(
+    dnp_mcus: &[(String, String)],
+    unsupported_mcus: &[(String, String)],
+    remedy: FitRemedy,
+) -> String {
+    if dnp_mcus.is_empty() && !unsupported_mcus.is_empty() {
+        let named = unsupported_mcus
+            .iter()
+            .map(|(r, family)| {
+                format!("{family} ({r}) is recognised but has no emulator backend yet")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return format!(
+            "cannot run firmware: {named}, so this board bound zero processors. \
+             Firmware-less analyses (lint, report, DRC) still work; to force a backend, \
+             override the part with a --models-dir entry that sets `backend` explicitly."
+        );
+    }
     if dnp_mcus.is_empty() {
         return "cannot run firmware: this board bound zero processors, and none were \
                 skipped for DNP. Check that the board's processor is a part the model \
@@ -631,6 +662,18 @@ pub fn bind_board_with(
 
     // Computed before the move: see `BoundBoard::latching_switches`.
     let latching_switches = component_kinds.values().any(|k| k == "timer");
+    let unsupported_mcus = board
+        .components
+        .iter()
+        .filter(|c| AssemblyState::of(c).fitted().is_some())
+        .filter(|c| !mcus.iter().any(|m| m.reference == c.reference))
+        .filter_map(|c| match route_mcu_family(c) {
+            Some(McuFamilyRoute::NoPlatform { family }) => {
+                Some((c.reference.clone(), family.to_string()))
+            }
+            _ => None,
+        })
+        .collect();
 
     BoundBoard {
         name: board.name.clone(),
@@ -640,6 +683,7 @@ pub fn bind_board_with(
         digital,
         mcus,
         dnp_mcus,
+        unsupported_mcus,
         component_kinds,
         input_sources,
         supplies,
@@ -1577,6 +1621,23 @@ const MCU_ROUTES: &[(&[&str], &str, Option<&str>)] = &[
     (&["STM32F0"], "STM32F0", None),
     (&["STM32F4"], "STM32F4", Some("renode:stm32f4")),
     (&["STM32F1"], "STM32F1", Some("renode:stm32f103")),
+    // Recognised STM32 lines with no emulator platform yet: named so a refusal
+    // can say which family it was rather than "bound zero processors".
+    (&["STM32F2"], "STM32F2", None),
+    (&["STM32F3"], "STM32F3", None),
+    (&["STM32F7"], "STM32F7", None),
+    (&["STM32G0"], "STM32G0", None),
+    (&["STM32G4"], "STM32G4", None),
+    (&["STM32H7"], "STM32H7", None),
+    (&["STM32L0"], "STM32L0", None),
+    (&["STM32L1"], "STM32L1", None),
+    (&["STM32L4"], "STM32L4", None),
+    (&["STM32L5"], "STM32L5", None),
+    (&["STM32U5"], "STM32U5", None),
+    (&["STM32WB"], "STM32WB", None),
+    (&["STM32WL"], "STM32WL", None),
+    (&["STM32C0"], "STM32C0", None),
+    (&["CY7C6801", "CY7C6811"], "Cypress FX2 (8051)", None),
     (&["ESP32C3"], "ESP32-C3", Some("qemu:esp32c3")),
     (&["ESP32S3"], "ESP32-S3", Some("qemu:esp32s3")),
     (&["ESP32S2"], "ESP32-S2", None),
@@ -1610,6 +1671,15 @@ fn looks_like_mcu_candidate(comp: &Component) -> bool {
     let prefix = ref_prefix(&comp.reference);
     if matches!(prefix.as_str(), "U" | "IC" | "MCU") {
         return true;
+    }
+    // `X` is a module/socket designator as often as a connector one (Eagle's
+    // microbuilder library places WROOM modules as X2). It is a candidate only
+    // when its own value or footprint names an MCU family; a plain header stays
+    // a connector.
+    if prefix == "X" {
+        return [&comp.value, &comp.footprint]
+            .iter()
+            .any(|s| route_mcu_family_str(s).is_some());
     }
     let lib = comp.lib_id.to_ascii_uppercase();
     lib.contains("MCU") || lib.contains("MICROCONTROLLER") || lib.contains("RF_MODULE")
@@ -1713,6 +1783,25 @@ fn pinfunction_tokens(upper: &str) -> Vec<String> {
 }
 
 fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
+    let bit_of = |digits: &str, max: u8| {
+        let ok = (1..=2).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit());
+        ok.then(|| digits.parse::<u8>().ok())
+            .flatten()
+            .filter(|&n| n < max)
+    };
+    // Nordic "P0.13" / "P1.15-LF": numeric port, dotted bit -> "p013" / "p115".
+    if let Some((port, rest)) = token.strip_prefix('P').and_then(|r| r.split_once('.')) {
+        if matches!(port, "0" | "1") {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            if let Some(bit) = bit_of(&digits, 32) {
+                return Some(format!("p{port}{bit:02}"));
+            }
+        }
+    }
+    // Espressif module pin names spell GPIOn as "IOn" ("IO36/SVP").
+    if let Some(bit) = token.strip_prefix("IO").and_then(|d| bit_of(d, 64)) {
+        return Some(format!("gpio{bit}"));
+    }
     if token == "BOOT0" {
         return Some("boot0".to_string());
     }
@@ -9313,5 +9402,156 @@ style = "i2c_pointer"
         no_cs_role.components[0].value = "74HC595".to_string();
         no_cs_role.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
         assert_eq!(cs_net(&no_cs_role, "U5"), None, "no `cs` role");
+    }
+
+    #[test]
+    fn module_pin_functions_name_esp_and_nordic_gpios() {
+        for (token, want) in [
+            ("IO0", Some("gpio0")),
+            ("IO39", Some("gpio39")),
+            ("P0.13", Some("p013")),
+            ("P1.15-LF", Some("p115")),
+            ("P0.04/AIN2", Some("p004")),
+        ] {
+            assert_eq!(
+                role_from_mcu_pinfunction_token(token).as_deref(),
+                want,
+                "{token}"
+            );
+        }
+        for token in ["IO64", "IOREF", "P2.01", "P0.32"] {
+            assert_eq!(role_from_mcu_pinfunction_token(token), None, "{token}");
+        }
+    }
+
+    /// Value strings as real libraries spell them resolve to the module and
+    /// part cards; package-gated AVR cards carry the datasheet pad numbering.
+    #[test]
+    fn module_and_avr_values_resolve_to_cards_with_backends() {
+        let lib = ModelLibrary::builtin();
+        for (value, footprint, id, backend) in [
+            ("ESP32_WROOM32_SKINNY", "", "esp32_wroom", "qemu:esp32"),
+            ("T-Micro32_Plus", "", "lilygo_t_micro32", "qemu:esp32"),
+            ("nice_nano", "", "nice_nano", "renode:nrf52840"),
+            (
+                "ATTINY85-20S",
+                "Package_SO:SOIC-8_5.3x5.3mm_P1.27mm",
+                "attiny85_8pin",
+                "simavr:attiny85",
+            ),
+            (
+                "ATtiny85-MU",
+                "Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm",
+                "attiny85_qfn20",
+                "simavr:attiny85",
+            ),
+            (
+                "ATMEGA32U4-MU",
+                "Package_DFN_QFN:QFN-44-1EP_7x7mm_P0.5mm",
+                "atmega32u4",
+                "simavr:atmega32u4",
+            ),
+        ] {
+            let m = resolve_value(&lib, value, footprint);
+            assert_eq!(m.id, id, "{value}");
+            assert_eq!(m.params.get_str("backend"), Some(backend), "{value}");
+        }
+        let pins = |value: &str, fp: &str| resolve_value(&lib, value, fp).pins;
+        let pb0 = |p: &std::collections::BTreeMap<String, String>, pad: &str| {
+            p.get(pad)
+                .map(String::as_str)
+                .and_then(|r| gpio_of_role(r, false))
+        };
+        assert_eq!(
+            pb0(&pins("ATtiny85-20PU", "Package_DIP:DIP-8_W7.62mm"), "5"),
+            Some(('B', 0))
+        );
+        assert_eq!(
+            pb0(
+                &pins("ATtiny85-MU", "Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm"),
+                "11"
+            ),
+            Some(('B', 0))
+        );
+        assert_eq!(
+            pb0(
+                &pins("ATMEGA32U4-AU", "Package_QFP:TQFP-44_10x10mm_P0.8mm"),
+                "8"
+            ),
+            Some(('B', 0))
+        );
+        // Legal control: a part only one character away is not an ATtiny85.
+        let mut q = ComponentQuery::new(None, Some("ATtiny84".to_string()), None);
+        q.mpn = q.value.clone();
+        assert_ne!(
+            lib.resolve(&q).model.map(|m| m.id),
+            Some("attiny85".to_string())
+        );
+    }
+
+    fn named_pin(number: &str, function: &str, net: i64) -> Pin {
+        Pin {
+            function: function.to_string(),
+            ..pin(number, net)
+        }
+    }
+
+    /// An `X` refdes is a processor only when its value or footprint names
+    /// one; an `X` connector stays a connector.
+    #[test]
+    fn an_x_module_binds_as_a_processor_and_an_x_connector_does_not() {
+        let mut module = comp("X2", "ESP32_WROOM32_SKINNY");
+        module.pins = vec![
+            named_pin("1", "GND", 9),
+            named_pin("2", "3V3", 8),
+            named_pin("24", "IO2", 1),
+        ];
+        let mut usb = comp("X1", "USB_C_RECEPTACLE");
+        usb.footprint = "Connector_USB:USB_C_Receptacle_GCT_USB4085".to_string();
+        usb.pins = vec![pin("A4", 8), pin("A1", 9)];
+        let board = ExtractedBoard {
+            name: "x-module".to_string(),
+            nets: vec![net(1, "LED"), net(8, "+3V3"), net(9, "GND")],
+            components: vec![module, usb],
+        };
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        let refs: Vec<_> = bound
+            .mcus
+            .iter()
+            .map(|m| (m.reference.as_str(), m.backend.as_str()))
+            .collect();
+        assert_eq!(refs, [("X2", "qemu:esp32")]);
+        assert_eq!(
+            bound.mcus[0].pad_roles.get("24").map(String::as_str),
+            Some("gpio2")
+        );
+        assert!(bound.unsupported_mcus.is_empty());
+    }
+
+    /// A recognised family with no emulator is named in the refusal; a board
+    /// with no processor at all keeps the generic message.
+    #[test]
+    fn an_unemulated_family_is_named_when_nothing_binds() {
+        let mut g4 = comp("U3", "STM32G474CEU6");
+        g4.footprint = "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm".to_string();
+        g4.pins = vec![pin("1", 8), pin("2", 9)];
+        let board = ExtractedBoard {
+            name: "g4".to_string(),
+            nets: vec![net(8, "+3V3"), net(9, "GND")],
+            components: vec![g4],
+        };
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        assert!(bound.mcus.is_empty());
+        assert_eq!(
+            bound.unsupported_mcus,
+            [("U3".to_string(), "STM32G4".to_string())]
+        );
+        let msg = no_processor_message(&bound.dnp_mcus, &bound.unsupported_mcus, FitRemedy::Cli);
+        assert!(
+            msg.contains("STM32G4 (U3) is recognised but has no emulator backend yet"),
+            "{msg}"
+        );
+        let generic = no_processor_message(&[], &[], FitRemedy::Cli);
+        assert!(!generic.contains("recognised"), "{generic}");
     }
 }

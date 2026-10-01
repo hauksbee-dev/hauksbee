@@ -258,16 +258,16 @@ fn link_detection_covers_the_shapes_that_merge_nets() {
 fn the_no_processor_message_tells_each_surface_its_own_fix() {
     let dnp = vec![("A101".to_string(), "Arduino_Nano_v3.x".to_string())];
 
-    let cli = no_processor_message(&dnp, FitRemedy::Cli);
+    let cli = no_processor_message(&dnp, &[], FitRemedy::Cli);
     assert!(cli.contains("A101 (Arduino_Nano_v3.x)"), "{cli}");
     assert!(cli.contains("--fit A101"), "{cli}");
 
-    let spec = no_processor_message(&dnp, FitRemedy::Spec);
+    let spec = no_processor_message(&dnp, &[], FitRemedy::Spec);
     assert!(spec.contains("fit = [\"A101\"]"), "{spec}");
 
     // No processor at all is a different problem, and must not advise a fit
     // that would fix nothing.
-    let none = no_processor_message(&[], FitRemedy::Cli);
+    let none = no_processor_message(&[], &[], FitRemedy::Cli);
     assert!(!none.contains("--fit"), "{none}");
     assert!(none.contains("models resolve"), "{none}");
 }

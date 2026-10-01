@@ -7402,6 +7402,7 @@ missing = ["measurement_registers"]
             digital,
             mcus: Vec::new(),
             dnp_mcus: Vec::new(),
+            unsupported_mcus: Vec::new(),
             component_kinds: HashMap::new(),
             input_sources: HashMap::new(),
             supplies: Vec::new(),
@@ -7820,7 +7821,13 @@ missing = ["measurement_registers"]
     #[cfg(feature = "avr")]
     #[test]
     fn the_avr_backend_builds_the_part_the_board_asked_for_or_refuses() {
-        for part in ["atmega328p", "atmega1284p", "atmega1284", "atmega32u4"] {
+        for part in [
+            "atmega328p",
+            "atmega1284p",
+            "atmega1284",
+            "atmega32u4",
+            "attiny85",
+        ] {
             assert!(
                 instantiate_avr(&format!("simavr:{part}")).is_ok(),
                 "simavr knows {part}"
