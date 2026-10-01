@@ -250,6 +250,8 @@ export interface ReportView {
   tone: ReportVerdictTone
   palette: { border: string; background: string }
   headline: string
+  /** The engine's one sentence: why this is not a pass, and the next action. */
+  reason: string | null
   /** `board_name`, else the file name. */
   title: string
   /** "3 parts, 4 nets" */
@@ -286,6 +288,7 @@ export function reportView(r: WebReport): ReportView {
     tone: reportVerdictTone(r),
     palette: reportVerdictPalette(r),
     headline: reportVerdictHeadline(r),
+    reason: r.verdict_reason ?? null,
     title: r.board_name || r.file_name,
     sizeLine: `${plural(r.num_components, 'part')}, ${plural(r.num_nets, 'net')}`,
     unresolved,

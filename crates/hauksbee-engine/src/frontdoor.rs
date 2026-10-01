@@ -27,7 +27,7 @@ use crate::plain::{
     plain_drc_structured_with_rule_source, plain_netlint, plain_si, HeadsUp, PlainFinding,
     PlainLevel, PlainReport,
 };
-use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal};
+use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal, VerdictCause};
 
 /// A finding, in the shape the browser renders.
 #[derive(Debug, Clone, Serialize)]
@@ -624,6 +624,33 @@ pub struct WebReport {
     /// next action in the same shape as terminal and CI output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
+    /// Why the verdict is not a pass, and what to do next, in one plain
+    /// sentence: the SAME [`VerdictCause::reason`] text `--json`, `--check` and
+    /// the CI report carry. Absent when nothing blocks the verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_reason: Option<String>,
+}
+
+impl WebReport {
+    /// Derive [`Self::verdict_reason`] from the finished report. Called after
+    /// the last mutation of the verdict inputs (findings, bind, refusal).
+    fn explain_verdict(&mut self) {
+        let findings = self.sections.iter().flat_map(|s| &s.findings);
+        let cosim = self.cosim.iter().flat_map(|c| &c.findings);
+        let first = findings.chain(cosim).find(|f| f.level == "serious");
+        let failing = (self.serious > 0).then(|| VerdictCause::Failing {
+            count: self.serious,
+            first: first.map(|f| (f.what.as_str(), f.fix.as_str())),
+        });
+        let refused = self.refusal.as_ref().map(VerdictCause::from);
+        let blockers = self
+            .bind
+            .as_ref()
+            .map_or(&[][..], |b| &b.active_path_unresolved);
+        self.verdict_reason =
+            VerdictCause::pick(failing, refused, blockers, self.run_level_undermined)
+                .map(VerdictCause::reason);
+    }
 }
 
 /// A binder-detected power supply, as the checks builder consumes it.
@@ -1316,7 +1343,7 @@ fn analyze_normalized_with_context(
     supplies.sort_by(|a, b| a.net.cmp(&b.net));
     supplies.dedup_by(|a, b| a.net == b.net);
 
-    let report = WebReport {
+    let mut report = WebReport {
         ok: true,
         board_name: board.name.clone(),
         file_name: file_name.to_string(),
@@ -1347,6 +1374,7 @@ fn analyze_normalized_with_context(
         supplies,
         ..WebReport::default()
     };
+    report.explain_verdict();
     (report, drc)
 }
 
@@ -1531,6 +1559,7 @@ fn analyze_with_firmware_context(
             report.refusal = refusal_for_cosim(&cosim, &coverage);
             apply_refusal_headline(&mut report);
             report.cosim = Some(cosim);
+            report.explain_verdict();
             return (report, coverage);
         }
     };
@@ -1699,6 +1728,7 @@ fn analyze_with_firmware_context(
     report.refusal = refusal_for_cosim(&cosim, &coverage);
     apply_refusal_headline(&mut report);
     report.cosim = Some(cosim);
+    report.explain_verdict();
     (report, coverage)
 }
 

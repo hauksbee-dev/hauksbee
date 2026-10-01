@@ -74,6 +74,11 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
                 </div>
               )}
             </div>
+            {overall !== 'passed' && overall !== 'measured' && result.verdict_reason && (
+              <div className="mt-2 text-[13px]" data-testid="checks-verdict-reason" style={{ color: 'var(--silk)' }}>
+                {result.verdict_reason}
+              </div>
+            )}
             {overall === 'invalid' && result.refusal && (
               <div
                 className="mt-2 rounded-lg px-3 py-2.5 text-[12px]"

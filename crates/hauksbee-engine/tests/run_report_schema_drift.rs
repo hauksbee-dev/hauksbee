@@ -54,6 +54,10 @@ fn generated_schema() -> String {
         json!({ "type": "string", "enum": ["pass", "fail", "invalid"] }),
     );
     props.insert(
+        "verdict_reason".into(),
+        json!({ "type": "string", "description": "Present when verdict is not pass: the main reason and the next action, in one plain sentence." }),
+    );
+    props.insert(
         "serious_count".into(),
         json!({ "type": "integer", "minimum": 0 }),
     );

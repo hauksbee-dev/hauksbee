@@ -486,6 +486,7 @@ footer code{font-family:var(--font-mono)}
   <h1>${esc(v.title)}</h1>
   <div class="verdict">
     ${esc(v.headline)}
+    ${v.reason ? `<div class="counts">${esc(v.reason)}</div>` : ''}
     <div class="counts">
       ${r.serious} serious &middot; ${plural(r.total, 'finding')} total
       ${checksLine ? `&middot; checks: ${esc(checksLine)}` : ''}

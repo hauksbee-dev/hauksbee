@@ -588,6 +588,13 @@
           },
           "type": "array"
         },
+        "verdict_reason": {
+          "description": "Why the run is not green and what to do next, in one plain sentence;\nthe same text `run --json`, `--check` and the web report carry. Absent\nwhen every assertion held.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "waiver_notes": {
           "description": "Waiver-file housekeeping: a lapsed waiver, an active waiver that matched\nnothing, a malformed file that was ignored.",
           "items": {

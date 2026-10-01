@@ -358,6 +358,9 @@ export interface WebReport {
   cosim?: WebCosimSection | null
   /** Why a requested conclusion could not be made, when co-sim was invalid. */
   refusal?: RefusalContract | null
+  /** Why the verdict is not a pass, and what to do next: one sentence, the
+   *  same text the CLI, `--json` and the CI report carry. */
+  verdict_reason?: string
 }
 
 export interface WebSupply {
@@ -690,6 +693,8 @@ export interface RunResponse {
   exit_code?: number
   analog_abort?: boolean
   refusal?: RefusalContract
+  /** The one-sentence reason the run is not green, shared with the CLI. */
+  verdict_reason?: string
   coverage?: string | null
   substitutions?: string[]
   coverage_warnings?: string[]

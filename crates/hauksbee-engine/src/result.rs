@@ -125,6 +125,114 @@ impl Refusal {
     }
 }
 
+/// The main reason a run is not a pass, in the order a verdict weighs them.
+///
+/// [`Self::reason`] is the ONE plain sentence (what is wrong, then what to do
+/// next) that `--json`, the `--check` closing line, the CI renderers and the web
+/// report all carry, so no surface can word the same verdict differently.
+#[derive(Debug, Clone, Copy)]
+pub enum VerdictCause<'a> {
+    /// Gating findings: how many, then the first one's plain words and its fix.
+    Failing {
+        count: usize,
+        first: Option<(&'a str, &'a str)>,
+    },
+    /// A claim the run declined to make, the prerequisite it lacks, and the action.
+    Refused {
+        claim: &'a str,
+        missing: &'a str,
+        next: &'a str,
+    },
+    /// Active or current-carrying parts with no usable model.
+    Unmodelled(&'a [String]),
+    /// An input the checks rest on is missing or unreadable.
+    Coverage,
+}
+
+impl<'a> VerdictCause<'a> {
+    /// The cause of a non-pass verdict: failing beats refused beats unmodelled
+    /// beats coverage, exactly the order the verdict itself uses.
+    #[must_use]
+    pub fn pick(
+        failing: Option<Self>,
+        refused: Option<Self>,
+        unmodelled: &'a [String],
+        coverage: bool,
+    ) -> Option<Self> {
+        failing
+            .or(refused)
+            .or((!unmodelled.is_empty()).then_some(Self::Unmodelled(unmodelled)))
+            .or(coverage.then_some(Self::Coverage))
+    }
+
+    /// Whether this cause makes the verdict `invalid` (it could not be judged)
+    /// rather than `fail` (it was judged and found wanting).
+    #[must_use]
+    pub const fn is_invalid(self) -> bool {
+        !matches!(self, Self::Failing { .. })
+    }
+
+    /// One plain sentence: the main reason, then the next action.
+    #[must_use]
+    pub fn reason(self) -> String {
+        let (why, next) = match self {
+            Self::Failing { count, first } => (
+                format!(
+                    "{count} blocking problem(s){}",
+                    first.map_or_else(String::new, |(what, _)| format!(", first: {what}"))
+                ),
+                first
+                    .map(|(_, fix)| fix)
+                    .filter(|fix| !fix.is_empty())
+                    .unwrap_or("fix the first listed finding and rerun")
+                    .to_string(),
+            ),
+            Self::Refused { claim, missing, next } => (
+                format!("cannot give {claim}: {missing}"),
+                next.to_string(),
+            ),
+            Self::Unmodelled(refs) => (
+                format!(
+                    "{} key part(s) have no usable model ({}), so the checks cannot vouch for this board",
+                    refs.len(),
+                    refs_summary(refs)
+                ),
+                "draft a model per part with `hauksbee models extract --pdf <datasheet.pdf> --part <MPN>` or `hauksbee models new`, then rerun".into(),
+            ),
+            Self::Coverage => (
+                "an input the checks rest on is missing or unreadable, so a clean result would not be trustworthy".into(),
+                "read the undermined items under Evidence, supply the input they name, then rerun".into(),
+            ),
+        };
+        format!(
+            "{}; next: {}.",
+            why.trim_end_matches('.'),
+            next.trim_end_matches('.')
+        )
+    }
+}
+
+impl<'a> From<&'a Refusal> for VerdictCause<'a> {
+    fn from(r: &'a Refusal) -> Self {
+        Self::Refused {
+            claim: &r.claim,
+            missing: &r.missing_prerequisite,
+            next: &r.next_action,
+        }
+    }
+}
+
+/// The first few references, then a count of the rest.
+fn refs_summary(refs: &[String]) -> String {
+    const SHOWN: usize = 6;
+    match refs.split_at_checked(SHOWN) {
+        Some((head, rest)) if !rest.is_empty() => {
+            format!("{} and {} more", head.join(", "), rest.len())
+        }
+        _ => refs.join(", "),
+    }
+}
+
 /// Version of the `run --json` document contract.
 ///
 /// Covers `JsonReport` plus the `ok`/`verdict`/`serious_count`/`actionable_count`
@@ -2369,8 +2477,8 @@ impl JsonReport {
     /// same carve-out the CI gate makes.
     #[must_use]
     pub fn verdict(&self) -> (bool, &'static str, usize, usize) {
-        let (v, _) = self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
-        v
+        self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default())
+            .0
     }
 
     /// As [`Self::verdict`], but findings an active waiver covers do not gate.
@@ -2384,10 +2492,13 @@ impl JsonReport {
     ) -> (
         (bool, &'static str, usize, usize),
         Vec<crate::waiver::WaivedFinding>,
+        Option<String>,
     ) {
         let mut serious = 0usize;
         let mut actionable = 0usize;
         let mut waived = Vec::new();
+        // The first gating finding's plain words and fix, for the reason sentence.
+        let mut first: Option<(&str, &str)> = None;
         if let Some(findings) = &self.findings {
             for f in findings {
                 // Waiving a note would suppress information without changing
@@ -2405,6 +2516,7 @@ impl JsonReport {
                         continue;
                     }
                     serious += 1;
+                    first.get_or_insert((&f.plain, f.fix.as_deref().unwrap_or_default()));
                 }
                 if f.actionable {
                     actionable += 1;
@@ -2429,6 +2541,7 @@ impl JsonReport {
                     }
                     serious += 1;
                     actionable += 1;
+                    first.get_or_insert((&s.plain, &s.fix));
                 }
             }
             actionable += drc.violations.len();
@@ -2459,25 +2572,62 @@ impl JsonReport {
         // than reading "pass" beside an INCONCLUSIVE coverage note. Gated by
         // `bind_gates_verdict`: the copper-only and descriptive surfaces
         // deliberately do not refuse (see the field's doc).
-        let bind_blockers =
-            self.bind_gates_verdict && !unmodelled_critical_refs(&self.bind).is_empty();
-        let invalid = self.refusal.is_some()
-            || bind_blockers
-            || self.ac.as_ref().is_some_and(|a| !a.validity.valid)
-            || self.thermal.as_ref().is_some_and(|t| !t.validity.valid)
-            || evidence_undermined;
+        let blockers = if self.bind_gates_verdict {
+            unmodelled_critical_refs(&self.bind)
+        } else {
+            Vec::new()
+        };
+        // The run-level refusal comes first, then an AC or thermal result that
+        // could not be judged (with its own refusal when it carries one).
+        let refused = self.refusal.as_ref().map(VerdictCause::from).or_else(|| {
+            let validities = [
+                self.ac.as_ref().map(|a| &a.validity),
+                self.thermal.as_ref().map(|t| &t.validity),
+            ];
+            let invalid = validities.into_iter().flatten().find(|v| !v.valid)?;
+            Some(invalid.refusal.as_ref().map_or_else(
+                || {
+                    VerdictCause::Refused {
+                        claim: "a trustworthy analysis result",
+                        missing: invalid
+                            .reason
+                            .as_deref()
+                            .unwrap_or("its inputs were not valid"),
+                        next: "read the reason in that analysis section",
+                    }
+                },
+                VerdictCause::from,
+            ))
+        });
         // `fail` covers both routes to a failing gate: a serious finding, and a
         // finding this surface's own (wider) strict gate fails on. The second
         // route is what keeps the verdict field from reading `pass` in the very
         // document a `--strict` exit 2 was printed beside.
-        let verdict = if serious > 0 || self.surface_gate_fails {
-            "fail"
-        } else if invalid {
-            "invalid"
-        } else {
-            "pass"
+        let gating = || self.findings.iter().flatten().filter(|f| f.gates());
+        let failing = (serious > 0 || self.surface_gate_fails).then(|| {
+            let count = if serious > 0 {
+                serious
+            } else {
+                gating().count().max(1)
+            };
+            let first = first.or_else(|| {
+                gating()
+                    .next()
+                    .map(|f| (f.plain.as_str(), f.fix.as_deref().unwrap_or_default()))
+            });
+            VerdictCause::Failing { count, first }
+        });
+        let cause = VerdictCause::pick(failing, refused, &blockers, evidence_undermined);
+        let verdict = match cause {
+            None => "pass",
+            Some(c) if c.is_invalid() => "invalid",
+            Some(_) => "fail",
         };
-        ((verdict == "pass", verdict, serious, actionable), waived)
+        (
+            (verdict == "pass", verdict, serious, actionable),
+            waived,
+            cause.map(VerdictCause::reason),
+        )
     }
 
     /// Serialize to a pretty JSON string (stable, non-interactive output). The
@@ -2487,7 +2637,8 @@ impl JsonReport {
     /// envelope and a CI consumer never has to re-derive pass/fail.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let (ok, verdict, serious, actionable) = self.verdict();
+        let ((ok, verdict, serious, actionable), _, reason) =
+            self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
             return serde_json::to_string_pretty(self)
                 .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"));
@@ -2498,6 +2649,9 @@ impl JsonReport {
         let mut out = serde_json::Map::new();
         out.insert("ok".into(), serde_json::json!(ok));
         out.insert("verdict".into(), serde_json::json!(verdict));
+        if let Some(reason) = reason {
+            out.insert("verdict_reason".into(), serde_json::json!(reason));
+        }
         out.insert("serious_count".into(), serde_json::json!(serious));
         out.insert("actionable_count".into(), serde_json::json!(actionable));
         out.append(&mut value);
@@ -2847,6 +3001,52 @@ mod tests {
             coverage: None,
         });
         assert_eq!(invalid.verdict().1, "invalid");
+    }
+
+    #[test]
+    fn every_non_pass_verdict_states_its_reason_and_next_action() {
+        let sentence = |report: &JsonReport| {
+            let json: serde_json::Value = serde_json::from_str(&report.to_json()).unwrap();
+            json["verdict_reason"].as_str().map(str::to_string)
+        };
+        let clean = JsonReport::new("b", summary_with(Vec::new(), Vec::new()));
+        assert_eq!(sentence(&clean), None, "a pass has nothing to explain");
+
+        let unmodelled = JsonReport::new("b", summary_with(Vec::new(), vec![active_ic("U1")]))
+            .with_bind_verdict_gate();
+        assert_eq!(unmodelled.verdict().1, "invalid");
+        let why = sentence(&unmodelled).expect("invalid carries a reason");
+        assert!(why.contains("U1") && why.contains("; next: "), "{why}");
+
+        let mut failed = JsonReport::new("b", summary_with(Vec::new(), Vec::new()));
+        failed.findings = Some(fault_findings_json(&[fault(
+            "Q1",
+            crate::stress::FaultKind::Overcurrent,
+            true,
+        )]));
+        let why = sentence(&failed).expect("fail carries a reason");
+        assert!(
+            why.starts_with("1 blocking problem(s)") && why.contains("; next: "),
+            "{why}"
+        );
+
+        let refused = Refusal::new(
+            "an AC response",
+            "a driving source",
+            vec!["the board loaded"],
+            "add a source",
+        );
+        assert_eq!(
+            VerdictCause::from(&refused).reason(),
+            "cannot give an AC response: a driving source; next: add a source."
+        );
+        let mut order = JsonReport::new("b", summary_with(Vec::new(), vec![active_ic("U1")]))
+            .with_bind_verdict_gate();
+        order.refusal = Some(refused);
+        assert!(
+            sentence(&order).unwrap().starts_with("cannot give"),
+            "a refusal outranks unmodelled parts"
+        );
     }
 
     #[test]

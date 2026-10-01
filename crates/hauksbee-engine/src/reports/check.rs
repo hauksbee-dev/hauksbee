@@ -9,7 +9,8 @@ use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
 use crate::result::{
-    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured, JsonReport,
+    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured,
+    JsonReport, VerdictCause,
 };
 
 use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode, StaticInputs};
@@ -328,7 +329,7 @@ impl CheckReport<'_> {
             actual_findings.iter().any(|f| f.message == a)
         });
         if !matches!(mode, OutputMode::Json) {
-            let (serious, worth_a_look) =
+            let (serious, worth_a_look, first) =
                 verdict_counts(&drc_structured, &lint, &si, usbc.as_ref());
             print!(
                 "{}",
@@ -342,8 +343,10 @@ impl CheckReport<'_> {
             println!(
                 "\n{}",
                 verdict_line(
-                    serious,
-                    worth_a_look,
+                    (serious, worth_a_look),
+                    first
+                        .as_ref()
+                        .map(|(what, fix)| (what.as_str(), fix.as_str())),
                     &blockers,
                     coverage_undermined,
                     drc_structured.version_warning.as_deref(),
@@ -371,19 +374,21 @@ impl CheckReport<'_> {
 
 /// Serious / worth-a-look counts across the whole `--check` suite, classified
 /// with the SAME plain-language templates the web and `--plain` surfaces use,
-/// so the closing verdict can never disagree with the section renderings.
+/// so the closing verdict can never disagree with the section renderings. Also
+/// the first serious finding's words and fix, for the verdict's reason sentence.
 fn verdict_counts(
     drc_structured: &DrcStructured,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
     usbc: Option<&crate::checks::usb_c::UsbcReport>,
-) -> (usize, usize) {
+) -> (usize, usize, Option<(String, String)>) {
     use crate::plain::PlainLevel;
     let drc_plain = crate::plain::plain_drc_structured(drc_structured);
     let lint_plain = crate::plain_netlint(lint);
     let si_plain = crate::plain_si(si);
     let mut serious = 0usize;
     let mut worth_a_look = 0usize;
+    let mut first = None;
     for f in drc_plain
         .findings
         .iter()
@@ -391,7 +396,10 @@ fn verdict_counts(
         .chain(&si_plain.findings)
     {
         match f.level {
-            PlainLevel::Serious => serious += 1,
+            PlainLevel::Serious => {
+                serious += 1;
+                first.get_or_insert_with(|| (f.what.clone(), f.fix.clone()));
+            }
             _ => worth_a_look += 1,
         }
     }
@@ -401,34 +409,23 @@ fn verdict_counts(
     if usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious) {
         serious += 1;
     }
-    (serious, worth_a_look)
+    (serious, worth_a_look, first)
 }
 
 /// The single closing verdict line for `--check` (U4).
 ///
 /// "clean" is only claimable when nothing serious was found AND no
 /// current-carrying / active part is unmodelled: over unmodelled critical
-/// parts a zero-serious suite is INCONCLUSIVE, and the closing line says so
-/// with the same shared sentence the sections use. A failing verdict stays
-/// "failing" (real findings are not vacuous), but the closing line still
-/// names the coverage hole: fixing the listed findings must not flip the
-/// board straight to a vacuous clean.
+/// parts a zero-serious suite is INCONCLUSIVE. Either way the line ends on the
+/// shared [`VerdictCause::reason`] sentence, the same one `--json`, the CI
+/// renderers and the web report carry.
 fn verdict_line(
-    serious: usize,
-    worth_a_look: usize,
+    (serious, worth_a_look): (usize, usize),
+    first: Option<(&str, &str)>,
     blockers: &[String],
     coverage_undermined: bool,
     copper_unvalidated: Option<&str>,
 ) -> String {
-    const COVERAGE: &str = "an input-coverage claim is undermined, so a clean result here \
-                            is not a clean bill (see the evidence section)";
-    // The shared sentence, minus its leading tag where the line carries its
-    // own, so the vocabulary stays single-sourced without stuttering
-    // "inconclusive ... INCONCLUSIVE".
-    let sentence = (!blockers.is_empty()).then(|| {
-        let s = crate::result::inconclusive_verdict(blockers);
-        s.strip_prefix("INCONCLUSIVE: ").unwrap_or(&s).to_string()
-    });
     if let Some(reason) = copper_unvalidated {
         return if serious == 0 {
             format!(
@@ -443,24 +440,21 @@ fn verdict_line(
             )
         };
     }
-    if serious == 0 {
-        if let Some(sentence) = sentence {
-            return format!(
-                "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {sentence}"
-            );
-        }
-        if coverage_undermined {
-            return format!(
-                "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {COVERAGE}"
-            );
-        }
-        format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
-    } else if let Some(sentence) = sentence {
-        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look; also {sentence}")
-    } else if coverage_undermined {
-        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look; also {COVERAGE}")
-    } else {
-        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look")
+    let failing = (serious > 0).then_some(VerdictCause::Failing {
+        count: serious,
+        first,
+    });
+    match VerdictCause::pick(failing, None, blockers, coverage_undermined) {
+        None => format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look"),
+        Some(cause) => format!(
+            "VERDICT: {}: {serious} serious, {worth_a_look} worth a look; {}",
+            if cause.is_invalid() {
+                "inconclusive"
+            } else {
+                "failing"
+            },
+            cause.reason()
+        ),
     }
 }
 

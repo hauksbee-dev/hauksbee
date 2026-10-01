@@ -195,6 +195,11 @@ export function BoardView({
             style={{ border: `1px solid ${v.palette.border}`, background: v.palette.background, fontSize: 15.5 }}
           >
             {v.headline}
+            {v.reason && (
+              <div className="text-[13px] mt-1.5" data-testid="report-verdict-reason" style={{ color: 'var(--silk)' }}>
+                {v.reason}
+              </div>
+            )}
             <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
               {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}
             </div>

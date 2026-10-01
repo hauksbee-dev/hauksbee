@@ -2818,6 +2818,10 @@
       ],
       "type": "string"
     },
+    "verdict_reason": {
+      "description": "Present when verdict is not pass: the main reason and the next action, in one plain sentence.",
+      "type": "string"
+    },
     "waived": {
       "description": "Findings that fired and were overruled by an active waiver, with the\nreason and the expiry date.\n\nA green verdict that quietly dropped findings would be the worst of both\nworlds, so the machine surface carries them exactly as the text report\nprints them. A pipeline can watch this array grow.",
       "items": {

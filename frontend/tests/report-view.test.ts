@@ -5,9 +5,9 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  assumptionsForEvidence, describeModelSource, overallVerdict, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
+  assumptionsForEvidence, describeModelSource, overallVerdict, reportView, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
 } from '../src/lib/report-view'
-import type { CheckResult, ErrorBudget, ModelOnPath, ModelUncertainty, RefusalContract, RunResponse } from '../src/types/report'
+import type { WebReport, CheckResult, ErrorBudget, ModelOnPath, ModelUncertainty, RefusalContract, RunResponse } from '../src/types/report'
 
 describe('C5.3 refusal contract', () => {
   test('the browser preserves all four answers from the CI result', () => {
@@ -38,6 +38,17 @@ describe('C5.3 refusal contract', () => {
     expect(boardView).toContain('data-testid="analysis-refusal-contract"')
     expect(checksRun).toContain('refusalLines(result.refusal)')
   })
+})
+
+test('the verdict reason is the engine sentence, shown in the card and the export', () => {
+  const reason = '2 key part(s) have no usable model (U1, U2); next: draft a model per part, then rerun.'
+  const base = { ok: true, file_name: 'b.kicad_pcb', num_components: 1, num_nets: 1, headline: 'Not cleared', serious: 0, total: 0 } as WebReport
+  expect(reportView({ ...base, verdict_reason: reason }).reason).toBe(reason)
+  expect(reportView(base).reason).toBeNull()
+  const boardView = readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')
+  const checksRun = readFileSync(new URL('../src/components/checks/RunResults.tsx', import.meta.url), 'utf8')
+  expect(boardView).toContain('data-testid="report-verdict-reason"')
+  expect(checksRun).toContain('result.verdict_reason')
 })
 
 test('repeated caveats preserve their id but not their explanation', () => {

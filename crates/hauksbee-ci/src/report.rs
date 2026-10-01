@@ -9,7 +9,10 @@
 use std::{collections::HashSet, fmt::Write as _, time::Duration};
 
 use crate::assertions::AssertResult;
-use hauksbee_engine::{reports::ci_artifacts::xml_escape, result::Refusal};
+use hauksbee_engine::{
+    reports::ci_artifacts::xml_escape,
+    result::{Refusal, VerdictCause},
+};
 
 type ExplainedAssumptions = HashSet<hauksbee_ir::evidence::AssumptionId>;
 
@@ -296,6 +299,11 @@ pub struct CiJsonReport {
     /// Useful-refusal contract, present exactly when `exit_code == 3`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
+    /// Why the run is not green and what to do next, in one plain sentence;
+    /// the same text `run --json`, `--check` and the web report carry. Absent
+    /// when every assertion held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_reason: Option<String>,
     /// How many ensemble members ran (fuzz seeds, or tolerance members).
     pub seeds: u32,
     /// Wall-clock duration of the run, in seconds.
@@ -478,6 +486,27 @@ impl CiResult {
         ))
     }
 
+    /// The one-sentence reason this run is not green, via the shared
+    /// [`VerdictCause`]: the refusal when the run is INVALID, else the first
+    /// gating failure and its fix.
+    #[must_use]
+    pub fn verdict_reason(&self) -> Option<String> {
+        let refusal = self.refusal();
+        let first = self.gating_failures().next();
+        let (what, fix) = first.map_or_else(Default::default, |r| {
+            (
+                format!("{}: {}", r.label, r.detail),
+                why_line(r).unwrap_or_default(),
+            )
+        });
+        let failing = first.map(|_| VerdictCause::Failing {
+            count: self.gating_failures().count(),
+            first: Some((&what, &fix)),
+        });
+        let refused = refusal.as_ref().map(VerdictCause::from);
+        refused.or(failing).map(VerdictCause::reason)
+    }
+
     /// True if every assertion passed or was waived. An INVALID assertion has
     /// `passed == false` and can never be waived, so it is not counted here.
     /// A waived failure is visible-but-not-gating (the whole point of a
@@ -527,6 +556,7 @@ impl CiResult {
             exit_code: self.exit_code(),
             analog_abort: self.analog_abort,
             refusal: self.refusal(),
+            verdict_reason: self.verdict_reason(),
             seeds: self.seeds,
             elapsed_s: self.elapsed.as_secs_f64(),
             coverage: self.coverage.as_ref().map(EnsembleCoverage::describe),
@@ -813,6 +843,9 @@ impl CiResult {
                 self.elapsed.as_secs_f64(),
             );
         }
+        if let Some(reason) = self.verdict_reason() {
+            let _ = writeln!(out, "reason: {reason}");
+        }
         // A RED report ends with where to read about the failing check: the
         // assertion catalog's section for the first gating failure's kind.
         if verdict == "RED" {
@@ -931,6 +964,13 @@ impl CiResult {
                 out,
                 "    <system-out>{}</system-out>",
                 xml_escape(&refusal.render_text())
+            );
+        }
+        if let Some(reason) = self.verdict_reason() {
+            let _ = writeln!(
+                out,
+                "    <system-out>reason: {}</system-out>",
+                xml_escape(&reason)
             );
         }
         // A dead rail rides the same suite-level channel: a dashboard reader who
@@ -1065,6 +1105,13 @@ impl CiResult {
                 "::error title=hauksbee-ci refusal::{}",
                 gh_escape(&refusal.render_text().replace('\n', "; "))
             );
+            if let Some(reason) = self.verdict_reason() {
+                let _ = writeln!(
+                    out,
+                    "::error title=hauksbee-ci reason::{}",
+                    gh_escape(&reason)
+                );
+            }
         } else if self.passed() {
             let _ = writeln!(
                 out,
@@ -1075,9 +1122,10 @@ impl CiResult {
         } else {
             let _ = writeln!(
                 out,
-                "::error title=hauksbee-ci::{}/{} assertions passed - hardware check RED",
+                "::error title=hauksbee-ci::{}/{} assertions passed - hardware check RED; {}",
                 self.pass_count(),
-                self.results.len()
+                self.results.len(),
+                gh_escape(&self.verdict_reason().unwrap_or_default())
             );
         }
         out
@@ -1500,6 +1548,51 @@ mod tests {
         );
         assert!(junit.contains("message=\"+5V: min=3.100V"), "{junit}");
         assert!(result.render_human().contains("why: +5V settled 1.650 V"));
+    }
+
+    /// A red or invalid run states ONE reason sentence, and the terminal,
+    /// `--json`, `JUnit` and annotations all carry the same text.
+    #[test]
+    fn red_and_invalid_runs_share_one_reason_sentence() {
+        assert_eq!(
+            ci_result(vec![result("a", "voltage", true, "ok")]).verdict_reason(),
+            None
+        );
+
+        let red = ci_result(vec![failing("voltage", "+5V: min=3.100V < required 4.75V")]);
+        let reason = red.verdict_reason().expect("red states why");
+        assert!(
+            reason.starts_with("1 blocking problem(s), first: voltage check"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("; next: ") && reason.contains("supply"),
+            "{reason}"
+        );
+
+        let mut invalid = ci_result(vec![AssertResult {
+            invalid: true,
+            ..failing("voltage", "INVALID evidence: U1 has no model")
+        }]);
+        invalid.analog_abort = true;
+        let reason = invalid.verdict_reason().expect("invalid states why");
+        assert!(
+            reason.starts_with("cannot give an overall CI verdict"),
+            "{reason}"
+        );
+
+        for result in [&red, &invalid] {
+            let reason = result.verdict_reason().unwrap();
+            assert_eq!(
+                result.json_report().verdict_reason.as_deref(),
+                Some(reason.as_str())
+            );
+            assert!(result.render_human().contains(&format!("reason: {reason}")));
+            assert!(result.render_junit().contains(&xml_escape(&reason)));
+            assert!(result
+                .render_github_annotations()
+                .contains(&gh_escape(&reason)));
+        }
     }
 
     /// Honesty notes (an MCU substitution, a co-sim coverage hole, measured
