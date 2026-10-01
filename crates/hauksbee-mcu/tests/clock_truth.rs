@@ -192,6 +192,42 @@ fn stm32f4_runs_at_the_parts_clock() {
     );
 }
 
+/// STM32F7 on its reset-default 16 MHz HSI. The F4 image runs unchanged: the
+/// F7 keeps the F4's `RCC_AHB1ENR` and `GPIOD` addresses.
+#[test]
+fn stm32f7_runs_at_the_parts_clock() {
+    gate(
+        "renode:stm32f7",
+        RenodeConfig::stm32f7(),
+        "stm32f4_tick.elf",
+        PinId { port: 'D', bit: 12 },
+    );
+}
+
+/// STM32G474 on its reset-default 16 MHz HSI16, on the composed platform.
+#[test]
+fn stm32g4_runs_at_the_parts_clock() {
+    gate(
+        "renode:stm32g4",
+        RenodeConfig::stm32g4(),
+        "stm32g4_tick.elf",
+        PinId { port: 'A', bit: 5 },
+    );
+}
+
+/// STM32L0 at 2 MHz against the 2.097 MHz MSI reset default: the stated 4.6%
+/// deviation, inside the gate's 5% tolerance. A regression to the stock
+/// RCC-retuned `SysTick` reads 16x or more.
+#[test]
+fn stm32l0_runs_at_the_parts_clock() {
+    gate(
+        "renode:stm32l0",
+        RenodeConfig::stm32l0(),
+        "stm32l0_tick.elf",
+        PinId { port: 'A', bit: 5 },
+    );
+}
+
 /// nRF52840 at its fixed 64 MHz HFCLK. Was 6.54x fast: the stock platform
 /// declares no `systickFrequency` at all, so `SysTick` ran at a Renode default
 /// with no relation to the part.

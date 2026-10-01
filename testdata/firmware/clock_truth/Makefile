@@ -20,7 +20,9 @@ CFLAGS = -mthumb -O2 -ffreestanding -nostdlib -Wall -Wextra -fno-builtin \
 LDFLAGS = -nostdlib -Wl,--gc-sections
 
 SRCS = startup.c tick.c
-TARGETS = stm32f103_tick.elf stm32f4_tick.elf nrf52840_tick.elf fe310_tick.elf
+TARGETS = stm32f103_tick.elf stm32f4_tick.elf stm32g4_tick.elf stm32l0_tick.elf \
+          stm32g4_fault.elf stm32g4_pull_mirror.elf \
+          nrf52840_tick.elf fe310_tick.elf
 
 all: $(TARGETS)
 
@@ -29,6 +31,21 @@ stm32f103_tick.elf: $(SRCS) stm32f103.ld
 
 stm32f4_tick.elf: $(SRCS) stm32f4.ld
 	$(CC) $(CFLAGS) -mcpu=cortex-m4 -DPART_STM32F4 $(LDFLAGS) -T stm32f4.ld $(SRCS) -o $@
+
+stm32g4_tick.elf: $(SRCS) stm32g4.ld
+	$(CC) $(CFLAGS) -mcpu=cortex-m4 -DPART_STM32G4 $(LDFLAGS) -T stm32g4.ld $(SRCS) -o $@
+
+# Execution-evidence fixture: the G4 tick image that traps right after main()
+# configures its pin, so the fault hook fires and no edge ever appears.
+stm32g4_fault.elf: $(SRCS) stm32g4.ld
+	$(CC) $(CFLAGS) -mcpu=cortex-m4 -DPART_STM32G4 -DFAULT_AFTER_INIT $(LDFLAGS) -T stm32g4.ld $(SRCS) -o $@
+
+# Internal-pull fixture: PA5 mirrors PB11, an undriven input with its pull-up on.
+stm32g4_pull_mirror.elf: startup.c pull_mirror.c stm32g4.ld
+	$(CC) $(CFLAGS) -mcpu=cortex-m4 $(LDFLAGS) -T stm32g4.ld startup.c pull_mirror.c -o $@
+
+stm32l0_tick.elf: $(SRCS) stm32l0.ld
+	$(CC) $(CFLAGS) -mcpu=cortex-m0plus -DPART_STM32L0 $(LDFLAGS) -T stm32l0.ld $(SRCS) -o $@
 
 nrf52840_tick.elf: $(SRCS) nrf52840.ld
 	$(CC) $(CFLAGS) -mcpu=cortex-m4 -DPART_NRF52840 $(LDFLAGS) -T nrf52840.ld $(SRCS) -o $@

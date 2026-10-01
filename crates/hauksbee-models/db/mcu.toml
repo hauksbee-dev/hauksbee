@@ -890,6 +890,319 @@ internal_pull = "none"
 note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STM32G474 (UFQFPN48 / LQFP48). Co-simulates on the COMPOSED Renode platform
+# in hauksbee-mcu db/mcu/stm32g4.soc.toml, which states what is exact and what
+# is approximated (RCC, ADC, DMA without transfers, FDCAN without frames).
+# Pad map: ST DS12288 LQFP48/UFQFPN48 column, cross-checked pad-by-pad against
+# the moteus c1 board (U3, STM32G474CEU6): pad 7 NRST, 20/21 VREF+/VDDA,
+# 22 PB10 family strap, 24 PB11 unconnected, 36/37 SWDIO/SWCLK, 43/44 CAN
+# RX/TX (FDCAN2 on PB5/PB6), 49 exposed pad to GND.
+#
+# ADC roles. `_adcN` is the descriptor's engine channel: the ADC1 input number
+# for a pin ADC1 reads, 32 + the ADC2 input number for a pin only ADC2 reads.
+[[models]]
+id = "stm32g474c"
+kind = "mcu"
+description = "STM32G474C Cortex-M4F MCU, UFQFPN48 or LQFP48"
+
+[models.match]
+value_re = "(?i)^STM32G47[34]C[BCE](U|T)[36]?$"
+mpn_re   = "(?i)^STM32G47[34]C[BCE]"
+
+[models.params]
+backend = "renode:stm32g4"
+
+[models.pins]
+"1" = "vbat"
+"2" = "pc13"
+"3" = "pc14_osc32_in"
+"4" = "pc15_osc32_out"
+"5" = "pf0_osc_in_adc10"  # PF0-OSC_IN, ADC1_IN10
+"6" = "pf1_osc_out_adc42"  # PF1-OSC_OUT, ADC2_IN10 (engine channel 32+10)
+"7" = "reset"  # PG10-NRST
+"8" = "pa0_adc1"  # ADC12_IN1
+"9" = "pa1_adc2"  # ADC12_IN2
+"10" = "pa2_adc3"  # ADC1_IN3
+"11" = "pa3_adc4"  # ADC1_IN4
+"12" = "pa4_adc49"  # ADC2_IN17 (engine channel 32+17)
+"13" = "pa5_adc45"  # ADC2_IN13
+"14" = "pa6_adc35"  # ADC2_IN3
+"15" = "pa7_adc36"  # ADC2_IN4
+"16" = "pc4_adc37"  # ADC2_IN5
+"17" = "pb0_adc15"  # ADC1_IN15
+"18" = "pb1_adc12"  # ADC1_IN12
+"19" = "pb2_adc44"  # ADC2_IN12
+"20" = "vref"
+"21" = "vdda"
+"22" = "pb10"
+"23" = "vdd"
+"24" = "pb11_adc14"  # ADC12_IN14
+"25" = "pb12_adc11"  # ADC1_IN11
+"26" = "pb13"
+"27" = "pb14_adc5"  # ADC1_IN5
+"28" = "pb15_adc47"  # ADC2_IN15
+"29" = "pc6"
+"30" = "pa8"
+"31" = "pa9"
+"32" = "pa10"
+"33" = "pa11"
+"34" = "pa12"
+"35" = "vdd2"
+"36" = "pa13_swdio"
+"37" = "pa14_swclk"
+"38" = "pa15"
+"39" = "pc10"
+"40" = "pc11"
+"41" = "pb3"
+"42" = "pb4"
+"43" = "pb5"
+"44" = "pb6"
+"45" = "pb7"
+"46" = "pb8_boot0"  # PB8-BOOT0; see the strap note below
+"47" = "pb9"
+"48" = "vdd3"
+"49" = "vss"  # exposed pad
+
+[models.ratings]
+max_pin_current_a = 0.02
+max_current_a = 0.15
+max_voltage_v = 4.0   # DS12288: VDD-VSS -0.3 to 4.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.0
+basis = "ST STM32G474xB/xC/xE DS12288, general operating conditions VDD 1.71 V to 3.6 V; voltage characteristics VDD-VSS -0.3 V to 4.0 V"
+
+# BOOT0 is shared with PB8 and is only sampled when the nSWBOOT0 option bit
+# selects the pin, so no strap row is claimed here: whether a floating PB8
+# changes the boot source depends on option bytes this card cannot see.
+
+[models.coverage]
+implements = ["cortex_m4_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "gpio_internal_pulls", "uart_tx", "virtual_clock_and_systick", "adc_injection"]
+missing = ["dma_transfers", "fdcan_frames", "i2c_controller_bridge", "spi_controller_bridge", "clock_tree", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F767/F777/F779 (LQFP100). Co-simulates on the stock Renode F746 platform
+# widened to 512 KB SRAM with UART7/UART8 (db/mcu/stm32f7.soc.toml). Pad map
+# derived from the TR-9 mainboard (U1, STM32F777VIT, a symbol with unnamed
+# pads) by its pad nets: 12 crystal oscillator, 14 NRST, 20/21 VREF/VDDA,
+# 22/23/25 ADC nets on PA0/PA1/PA3, 28 DAC (PA4), 37/38 UART7 RX/TX (PE7/PE8),
+# 46/47 USART3 (PB10/PB11), 48/73 VCAP, 52-54 SPI2 (PB13-15), 68/69 USART1
+# (PA9/PA10), 70/71 USB (PA11/PA12), 72/76 SWDIO/SWCLK, 83 SD_CMD (PD2),
+# 86/87 USART2 (PD5/PD6), 92/93 I2C1 (PB6/PB7), 94 BOOT0.
+[[models]]
+id = "stm32f77xv"
+kind = "mcu"
+description = "STM32F767/F777/F779 Cortex-M7 MCU, LQFP100"
+
+[models.match]
+value_re = "(?i)^STM32F7(6[57]|7[79])V[GI]T[67]?$"
+mpn_re   = "(?i)^STM32F7(6[57]|7[79])V[GI]"
+
+[models.params]
+backend = "renode:stm32f7"
+
+[models.pins]
+"1" = "pe2"
+"2" = "pe3"
+"3" = "pe4"
+"4" = "pe5"
+"5" = "pe6"
+"6" = "vbat"
+"7" = "pc13"
+"8" = "pc14_osc32_in"
+"9" = "pc15_osc32_out"
+"10" = "vss"
+"11" = "vdd"
+"12" = "osc_in"  # PH0-OSC_IN
+"13" = "osc_out"  # PH1-OSC_OUT
+"14" = "reset"  # NRST
+"15" = "pc0_adc10"
+"16" = "pc1_adc11"
+"17" = "pc2_adc12"
+"18" = "pc3_adc13"
+"19" = "vssa"
+"20" = "vref"
+"21" = "vdda"
+"22" = "pa0_adc0"
+"23" = "pa1_adc1"
+"24" = "pa2_adc2"
+"25" = "pa3_adc3"
+"26" = "vss2"
+"27" = "vdd2"
+"28" = "pa4_adc4"
+"29" = "pa5_adc5"
+"30" = "pa6_adc6"
+"31" = "pa7_adc7"
+"32" = "pc4_adc14"
+"33" = "pc5_adc15"
+"34" = "pb0_adc8"
+"35" = "pb1_adc9"
+"36" = "pb2"
+"37" = "pe7"
+"38" = "pe8"
+"39" = "pe9"
+"40" = "pe10"
+"41" = "pe11"
+"42" = "pe12"
+"43" = "pe13"
+"44" = "pe14"
+"45" = "pe15"
+"46" = "pb10"
+"47" = "pb11"
+"48" = "vcap1"
+"49" = "vss3"
+"50" = "vdd3"
+"51" = "pb12"
+"52" = "pb13"
+"53" = "pb14"
+"54" = "pb15"
+"55" = "pd8"
+"56" = "pd9"
+"57" = "pd10"
+"58" = "pd11"
+"59" = "pd12"
+"60" = "pd13"
+"61" = "pd14"
+"62" = "pd15"
+"63" = "pc6"
+"64" = "pc7"
+"65" = "pc8"
+"66" = "pc9"
+"67" = "pa8"
+"68" = "pa9"
+"69" = "pa10"
+"70" = "pa11"
+"71" = "pa12"
+"72" = "pa13_swdio"
+"73" = "vcap2"
+"74" = "vss4"
+"75" = "vdd4"
+"76" = "pa14_swclk"
+"77" = "pa15"
+"78" = "pc10"
+"79" = "pc11"
+"80" = "pc12"
+"81" = "pd0"
+"82" = "pd1"
+"83" = "pd2"
+"84" = "pd3"
+"85" = "pd4"
+"86" = "pd5"
+"87" = "pd6"
+"88" = "pd7"
+"89" = "pb3"
+"90" = "pb4"
+"91" = "pb5"
+"92" = "pb6"
+"93" = "pb7"
+"94" = "boot0"
+"95" = "pb8"
+"96" = "pb9"
+"97" = "pe0"
+"98" = "pe1"
+"99" = "vss5"
+"100" = "vdd5"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_current_a = 0.32
+max_voltage_v = 4.0   # DS11532: VDD-VSS -0.3 to 4.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "ST STM32F777xx DS11532, general operating conditions VDD 1.7 V to 3.6 V; voltage characteristics VDD-VSS -0.3 V to 4.0 V"
+
+# BOOT0 is a dedicated input with no internal bias: low boots the address in
+# BOOT_ADD0 (main flash by default), high boots BOOT_ADD1 (system memory by
+# default). RM0410 section 2.5.
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+note = "BOOT0 low boots BOOT_ADD0 (main flash by default); high boots BOOT_ADD1"
+
+[models.coverage]
+implements = ["cortex_m7_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "gpio_internal_pulls", "uart_tx", "virtual_clock_and_systick"]
+missing = ["adc_injection", "i2c_controller_bridge", "spi_controller_bridge", "clock_tree", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32L011/L021 K (LQFP32). Co-simulates on the stock Renode L071 platform
+# with SysTick unlinked from its RCC model (db/mcu/stm32l0.soc.toml). Pad map:
+# KiCad MCU_ST_STM32L0:STM32L011K4Tx, cross-checked against the TR-9 HMI board
+# (U1): pad 4 NRST, 6 external clock input (PA0), 7-13 keypad (PA1-PA7),
+# 23/24 SWDIO/SWCLK, 29 USART2 TX (PB6).
+[[models]]
+id = "stm32l0x1k_lqfp32"
+kind = "mcu"
+description = "STM32L011/L021 K Cortex-M0+ MCU, LQFP32"
+
+[models.match]
+value_re = "(?i)^STM32L0[12]1K[34]T[67X]?$"
+mpn_re   = "(?i)^STM32L0[12]1K[34]"
+
+[models.params]
+backend = "renode:stm32l0"
+
+[models.pins]
+"1" = "vdd"
+"2" = "pc14_osc32_in"
+"3" = "pc15_osc32_out"
+"4" = "reset"  # NRST
+"5" = "vdda"
+"6" = "pa0_adc0"
+"7" = "pa1_adc1"
+"8" = "pa2_adc2"
+"9" = "pa3_adc3"
+"10" = "pa4_adc4"
+"11" = "pa5_adc5"
+"12" = "pa6_adc6"
+"13" = "pa7_adc7"
+"14" = "pb0_adc8"
+"15" = "pb1_adc9"
+"16" = "vss"
+"17" = "vdd2"
+"18" = "pa8"
+"19" = "pa9"
+"20" = "pa10"
+"21" = "pa11"
+"22" = "pa12"
+"23" = "pa13_swdio"
+"24" = "pa14_swclk"
+"25" = "pa15"
+"26" = "pb3"
+"27" = "pb4"
+"28" = "pb5"
+"29" = "pb6"
+"30" = "pb7"
+"31" = "pb9"
+"32" = "vss2"
+
+[models.ratings]
+max_pin_current_a = 0.016
+max_current_a = 0.105
+max_voltage_v = 4.0   # DS11152: VDD-VSS -0.3 to 4.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 4.0
+basis = "ST STM32L011x3/x4 DS11152, general operating conditions VDD 1.65 V to 3.6 V; voltage characteristics VDD-VSS -0.3 V to 4.0 V"
+
+[models.coverage]
+implements = ["cortex_m0plus_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "gpio_internal_pulls", "uart_tx", "virtual_clock_and_systick"]
+missing = ["adc_injection", "i2c_controller_bridge", "spi_controller_bridge", "clock_tree", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+# ─────────────────────────────────────────────────────────────────────────────
 # ESP32 family. The classic ESP32, ESP32-S3 and ESP32-C3 co-simulate through
 # the Espressif-QEMU backend (`backend = "qemu:..."`, see docs/cosim/MCU.md);
 # with no firmware given the scheduler leaves the MCU out and the board solves

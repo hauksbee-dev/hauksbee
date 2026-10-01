@@ -70,7 +70,9 @@ pub mod qemu;
 pub mod soc;
 
 pub use hostserial::{HostSerial, HostSerialStats, HostSerialTransport, PeerEvent};
-pub use traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};
+pub use traits::{
+    ExecutionProbe, I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent, PC_SAMPLE_DISTINCT_CAP,
+};
 
 use std::path::{Path, PathBuf};
 
@@ -165,7 +167,7 @@ pub fn validate_firmware_format(path: &Path) -> anyhow::Result<()> {
 pub use avr::AvrMcu;
 
 #[cfg(feature = "renode")]
-pub use renode::{AdcChannelMap, AdcInject, ClockControl, RenodeBackend, RenodeConfig};
+pub use renode::{AdcChannelMap, AdcInject, ClockControl, PullMap, RenodeBackend, RenodeConfig};
 
 #[cfg(feature = "qemu")]
 pub use qemu::{QemuBackend, QemuConfig};

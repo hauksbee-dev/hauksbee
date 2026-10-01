@@ -1,0 +1,766 @@
+# STM32G474 (Cortex-M4F): PA-PG, USART2 bridge, 16 MHz HSI16 reset default.
+#
+# COMPOSED PLATFORM. Renode 1.16.1 ships no STM32G4 platform, so the inline
+# platform below is assembled from Renode's own peripheral models placed at the
+# G474 memory map (RM0440), plus small Python register models where Renode has
+# no model that matches the G4 register layout. Proven live against the
+# moteus-fw 1.1.2 ELF (an mbed-based G474 servo firmware): it reaches main(),
+# configures its GPIO and runs its main loop polling FDCAN status.
+#
+# WHAT IS EXACT (Renode's own model of the same IP, at the G4 address):
+#   core      Cortex-M4F, NVIC, SysTick
+#   GPIO A-G  STM32_GPIOPort (same MODER/OTYPER/OSPEEDR/PUPDR/IDR/ODR layout as
+#             the F4; ODR at 0x14), reset modes from RM0440 (PA13-15/PB3-4 debug)
+#   EXTI      STM32F4_EXTI lines 0-15 to the G4 NVIC lines
+#   USART1-3, UART4-5, LPUART1  STM32F7_USART (the G4 USART is the F7/L4 IP)
+#   I2C1-3    STM32F7_I2C (same IP)
+#   SPI1-3    STM32SPI
+#   TIM1-8, TIM15-17  STM32_Timer, clocked at the 16 MHz reset-default rate
+#   LPTIM1    STM32L0_LpTimer (same IP; firmware polls ARROK, which it models)
+#   IWDG      STM32_IndependentWatchdog at the 32 kHz LSI
+#   CRC       STM32_CRC
+#
+# WHAT IS APPROXIMATED (stated, not hidden):
+#   RCC       Python model: HSI16 always ready, HSE ready 2 ms after enable only
+#             when the board supplies a clock (clock_control below), PLL lock
+#             after 40 us, SWS mirrors SW, LSE/LSI/HSI48 ready mirror their
+#             enables. No clock tree: no bus or kernel clock reaches any model.
+#   ADC1-5    Python register model: ADEN/ADRDY, ADCAL, ADSTART/EOC/EOS and
+#             JADSTART/JEOC/JEOS handshake instantly; DR returns the injected
+#             count for the regular-sequence channel (SQR1/SQR2) in turn. No
+#             sample timing, no DMA, no oversampling, no injected-channel data.
+#   DMA1/2    register storage only (IFCR clears ISR). NO TRANSFERS: DMA-driven
+#             UART/SPI/ADC traffic never moves. (Renode's STM32G0DMA, register
+#             compatible, crashes the whole Renode process on the G4 HAL's
+#             peripheral-to-memory setup with "Request size is not aligned
+#             properly", so it is not used.)
+#   FDCAN1-3  register model: version/endian registers, INIT/CCE handshake,
+#             IR write-to-clear, message RAM as plain memory. No frame ever
+#             goes on or comes off a bus.
+#   RTC       register model: INIT/INITF handshake and storage. Time never
+#             advances.
+#   SRAM      SRAM1+SRAM2+CCM as one 128 KB block at 0x20000000, and CCM again
+#             as separate memory at 0x10000000. On silicon the two CCM views
+#             alias; here a write through one is not seen through the other.
+#   PWR, SYSCFG, DMAMUX, FLASH ACR  plain storage.
+#   DAC, COMP/OPAMP/VREFBUF, WWDG, CORDIC, FMAC, HRTIM, USB, CRS, TAMP
+#             tagged (reads 0, writes ignored).
+#
+# PULLS. STM32_GPIOPort stores PUPDR but never applies it to an undriven input
+# (measured: pull-up enabled, IDR reads 0). moteus reads its family straps PB10
+# and PB11 through the internal pulls, so every port carries a `pull` map and
+# the backend applies the pull level on each firmware IDR read to input pins
+# nothing external drives (renode::PortMap::pull).
+[soc]
+backend = "renode"
+machine = "g474"
+platform_repl = """
+// STM32G474 platform, composed from Renode models at the RM0440 memory map.
+// See the header of stm32g4.soc.toml for what is exact and what is
+// approximated.
+//
+// CLOCK TRUTH (tests/clock_truth.rs): core and SysTick at 16 MHz, the HSI16
+// reset default (RM0440 section 7.2). Firmware that brings up the PLL for
+// 170 MHz sees its SysTick-timed delays run 10.6x slow; stated in
+// timing_limitation.
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+    PerformanceInMips: 16
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 16000000
+    IRQ -> cpu@0
+
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x80000
+
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x20000
+
+ccmsram: Memory.MappedMemory @ sysbus 0x10000000
+    size: 0x8000
+
+systemMemory: Memory.MappedMemory @ sysbus 0x1FFF0000
+    size: 0x8000
+
+exti: IRQControllers.STM32F4_EXTI @ sysbus 0x40010400
+    numberOfOutputLines: 32
+    [0-4] -> nvic@[6-10]
+    [5-9] -> nvicInput23@[0-4]
+    [10-15] -> nvicInput40@[0-5]
+
+nvicInput23: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 5
+    -> nvic@23
+
+nvicInput40: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 6
+    -> nvic@40
+
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x48000000, +0x400>
+    modeResetValue: 0xABFFFFFF
+    pullUpPullDownResetValue: 0x64000000
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x48000400, +0x400>
+    modeResetValue: 0xFFFFFEBF
+    pullUpPullDownResetValue: 0x00000100
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x48000800, +0x400>
+    modeResetValue: 0xFFFFFFFF
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x48000C00, +0x400>
+    modeResetValue: 0xFFFFFFFF
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortE: GPIOPort.STM32_GPIOPort @ sysbus <0x48001000, +0x400>
+    modeResetValue: 0xFFFFFFFF
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortF: GPIOPort.STM32_GPIOPort @ sysbus <0x48001400, +0x400>
+    modeResetValue: 0xFFFFFFFF
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortG: GPIOPort.STM32_GPIOPort @ sysbus <0x48001800, +0x400>
+    modeResetValue: 0xFFFFFFFF
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+usart1: UART.STM32F7_USART @ sysbus 0x40013800
+    frequency: 16000000
+    IRQ -> nvic@37
+
+usart2: UART.STM32F7_USART @ sysbus 0x40004400
+    frequency: 16000000
+    IRQ -> nvic@38
+
+usart3: UART.STM32F7_USART @ sysbus 0x40004800
+    frequency: 16000000
+    IRQ -> nvic@39
+
+uart4: UART.STM32F7_USART @ sysbus 0x40004C00
+    frequency: 16000000
+    IRQ -> nvic@52
+
+uart5: UART.STM32F7_USART @ sysbus 0x40005000
+    frequency: 16000000
+    IRQ -> nvic@53
+
+lpuart1: UART.STM32F7_USART @ sysbus 0x40008000
+    frequency: 16000000
+    lowPowerMode: true
+    IRQ -> nvic@91
+
+i2c1: I2C.STM32F7_I2C @ sysbus 0x40005400
+    EventInterrupt -> nvic@31
+    ErrorInterrupt -> nvic@32
+
+i2c2: I2C.STM32F7_I2C @ sysbus 0x40005800
+    EventInterrupt -> nvic@33
+    ErrorInterrupt -> nvic@34
+
+i2c3: I2C.STM32F7_I2C @ sysbus 0x40007800
+    EventInterrupt -> nvic@92
+    ErrorInterrupt -> nvic@93
+
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+    IRQ -> nvic@35
+
+spi2: SPI.STM32SPI @ sysbus 0x40003800
+    IRQ -> nvic@36
+
+spi3: SPI.STM32SPI @ sysbus 0x40003C00
+    IRQ -> nvic@51
+
+timer1: Timers.STM32_Timer @ sysbus 0x40012C00
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@25
+
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 16000000
+    initialLimit: 0xFFFFFFFF
+    -> nvic@28
+
+timer3: Timers.STM32_Timer @ sysbus 0x40000400
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@29
+
+timer4: Timers.STM32_Timer @ sysbus 0x40000800
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@30
+
+timer5: Timers.STM32_Timer @ sysbus 0x40000C00
+    frequency: 16000000
+    initialLimit: 0xFFFFFFFF
+    -> nvic@50
+
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@54
+
+timer7: Timers.STM32_Timer @ sysbus 0x40001400
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@55
+
+timer8: Timers.STM32_Timer @ sysbus 0x40013400
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@44
+
+timer15: Timers.STM32_Timer @ sysbus 0x40014000
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@24
+
+timer16: Timers.STM32_Timer @ sysbus 0x40014400
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@25
+
+timer17: Timers.STM32_Timer @ sysbus 0x40014800
+    frequency: 16000000
+    initialLimit: 0xFFFF
+    -> nvic@26
+
+dma: Python.PythonPeripheral @ sysbus <0x40020000, +0x800>
+    size: 0x800
+    initable: true
+    script: '''
+if request.IsInit:
+    dmaregs = [0] * (size / 4)
+elif request.IsRead:
+    request.Value = dmaregs[request.Offset >> 2]
+elif request.IsWrite:
+    dmaoff = request.Offset >> 2
+    if (request.Offset & 0x3FF) == 0x04:
+        dmaregs[dmaoff - 1] = dmaregs[dmaoff - 1] & ~request.Value
+    else:
+        dmaregs[dmaoff] = request.Value
+'''
+
+lptim1: Timers.STM32L0_LpTimer @ sysbus 0x40007C00
+    frequency: 16000000
+    -> nvic@49
+
+iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
+    frequency: 32000
+
+crc: CRC.STM32_CRC @ sysbus 0x40023000
+    series: STM32Series.F0
+    configurablePoly: true
+
+rcc: Python.PythonPeripheral @ sysbus <0x40021000, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    rccregs = [0] * (size / 4)
+    rccregs[0] = 0x500
+    rccregs[1] = 0x40000000
+    rccregs[2] = 0x5
+    rccregs[3] = 0x1000
+    rccregs[0x94 >> 2] = 0x0C000000
+    hse_present = False
+    hse_elapsed_us = 0
+    pll_elapsed_us = 0
+elif request.IsRead:
+    request.Value = rccregs[request.Offset >> 2]
+elif request.IsWrite:
+    rccoff = request.Offset >> 2
+    rccval = request.Value
+    if rccoff == 0xFF:
+        hse_present = bool(rccval & 0x1)
+        if not hse_present:
+            rccregs[0] = rccregs[0] & ~0x20000
+            hse_elapsed_us = 0
+            if (rccregs[3] & 0x3) == 0x3:
+                rccregs[0] = rccregs[0] & ~0x2000000
+                pll_elapsed_us = 0
+    elif rccoff == 0xFE:
+        delta_us = rccval
+        hse_was_ready = bool(rccregs[0] & 0x20000)
+        if hse_present and (rccregs[0] & 0x10000):
+            hse_elapsed_us = hse_elapsed_us + delta_us
+            if hse_elapsed_us >= 2000:
+                rccregs[0] = rccregs[0] | 0x20000
+        else:
+            hse_elapsed_us = 0
+            rccregs[0] = rccregs[0] & ~0x20000
+        pll_source_ready = bool(rccregs[0] & 0x400)
+        if (rccregs[3] & 0x3) == 0x3:
+            pll_source_ready = hse_was_ready
+        if (rccregs[0] & 0x1000000) and pll_source_ready:
+            pll_elapsed_us = pll_elapsed_us + delta_us
+            if pll_elapsed_us >= 40:
+                rccregs[0] = rccregs[0] | 0x2000000
+        else:
+            pll_elapsed_us = 0
+            rccregs[0] = rccregs[0] & ~0x2000000
+    elif rccoff == 0:
+        ready = rccregs[0] & 0x2020400
+        rccval = (rccval & ~0x2020400) | ready
+        if rccval & 0x100:
+            rccval = rccval | 0x400
+        else:
+            rccval = rccval & ~0x400
+        if not (rccval & 0x10000):
+            rccval = rccval & ~0x20000
+            hse_elapsed_us = 0
+        if not (rccval & 0x1000000):
+            rccval = rccval & ~0x2000000
+            pll_elapsed_us = 0
+        rccregs[rccoff] = rccval
+    elif rccoff == 2:
+        rccval = (rccval & 0xFFFFFFF3) | ((rccval & 0x3) << 2)
+        rccregs[rccoff] = rccval
+    elif rccoff == (0x90 >> 2) or rccoff == (0x94 >> 2) or rccoff == (0x98 >> 2):
+        if rccval & 0x1: rccval = rccval | 0x2
+        else: rccval = rccval & ~0x2
+        rccregs[rccoff] = rccval
+    else:
+        rccregs[rccoff] = rccval
+'''
+
+pwr: Memory.MappedMemory @ sysbus 0x40007000
+    size: 0x400
+
+flashCtrl: Python.PythonPeripheral @ sysbus <0x40022000, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    facregs = [0] * (size / 4)
+    facregs[0] = 0x600
+elif request.IsRead:
+    request.Value = facregs[request.Offset >> 2]
+elif request.IsWrite:
+    facregs[request.Offset >> 2] = request.Value
+'''
+
+syscfg: Memory.MappedMemory @ sysbus 0x40010000
+    size: 0x400
+
+dmamux: Memory.MappedMemory @ sysbus 0x40020800
+    size: 0x400
+
+adc12: Python.PythonPeripheral @ sysbus <0x50000000, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    import __builtin__
+    adcfirst = 1
+    adcregs = [0] * (size / 4)
+    adcseq = [0, 0, 0]
+    for adcinst in range(3):
+        adcregs[(adcinst * 0x100 + 0x08) >> 2] = 0x20000000
+elif request.IsRead:
+    adcoff = request.Offset >> 2
+    adcinst = request.Offset >> 8
+    if adcinst < 3 and (request.Offset & 0xFF) == 0x40:
+        sqr = adcregs[(adcinst * 0x100 + 0x30) >> 2]
+        adclen = (sqr & 0xF) + 1
+        adcpos = adcseq[adcinst] % adclen
+        if adcpos < 4:
+            adcch = (sqr >> (6 + 6 * adcpos)) & 0x1F
+        else:
+            adcch = (adcregs[(adcinst * 0x100 + 0x34 + 4 * ((adcpos - 4) / 5)) >> 2] >> (6 * ((adcpos - 4) % 5))) & 0x1F
+        adcvals = __builtin__.__dict__.get('hkb_g4_adc', {})
+        request.Value = adcvals.get('%d:%d' % (adcfirst + adcinst, adcch), 0) & 0xFFF
+        adcseq[adcinst] = adcseq[adcinst] + 1
+    else:
+        request.Value = adcregs[adcoff]
+elif request.IsWrite:
+    adcoff = request.Offset >> 2
+    adcval = request.Value
+    adcinst = request.Offset >> 8
+    adcreg = request.Offset & 0xFF
+    if adcinst < 3 and adcreg == 0x00:
+        adcregs[adcoff] = adcregs[adcoff] & ~adcval
+    elif adcinst < 3 and adcreg == 0x08:
+        adcisr = (adcinst * 0x100) >> 2
+        adcval = adcval & ~0x80000000
+        if adcval & 0x1:
+            adcregs[adcisr] = adcregs[adcisr] | 0x1
+        if adcval & 0x2:
+            adcval = adcval & ~0x3
+            adcregs[adcisr] = adcregs[adcisr] & ~0x1
+        if adcval & 0x4:
+            adcval = adcval & ~0x4
+            adcseq[adcinst] = 0
+            adcregs[adcisr] = adcregs[adcisr] | 0xC
+        if adcval & 0x8:
+            adcval = adcval & ~0x8
+            adcregs[adcisr] = adcregs[adcisr] | 0x60
+        adcval = adcval & ~0x30
+        adcregs[adcoff] = adcval
+    else:
+        adcregs[adcoff] = adcval
+'''
+
+adc345: Python.PythonPeripheral @ sysbus <0x50000400, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    import __builtin__
+    adcfirst = 3
+    adcregs = [0] * (size / 4)
+    adcseq = [0, 0, 0]
+    for adcinst in range(3):
+        adcregs[(adcinst * 0x100 + 0x08) >> 2] = 0x20000000
+elif request.IsRead:
+    adcoff = request.Offset >> 2
+    adcinst = request.Offset >> 8
+    if adcinst < 3 and (request.Offset & 0xFF) == 0x40:
+        sqr = adcregs[(adcinst * 0x100 + 0x30) >> 2]
+        adclen = (sqr & 0xF) + 1
+        adcpos = adcseq[adcinst] % adclen
+        if adcpos < 4:
+            adcch = (sqr >> (6 + 6 * adcpos)) & 0x1F
+        else:
+            adcch = (adcregs[(adcinst * 0x100 + 0x34 + 4 * ((adcpos - 4) / 5)) >> 2] >> (6 * ((adcpos - 4) % 5))) & 0x1F
+        adcvals = __builtin__.__dict__.get('hkb_g4_adc', {})
+        request.Value = adcvals.get('%d:%d' % (adcfirst + adcinst, adcch), 0) & 0xFFF
+        adcseq[adcinst] = adcseq[adcinst] + 1
+    else:
+        request.Value = adcregs[adcoff]
+elif request.IsWrite:
+    adcoff = request.Offset >> 2
+    adcval = request.Value
+    adcinst = request.Offset >> 8
+    adcreg = request.Offset & 0xFF
+    if adcinst < 3 and adcreg == 0x00:
+        adcregs[adcoff] = adcregs[adcoff] & ~adcval
+    elif adcinst < 3 and adcreg == 0x08:
+        adcisr = (adcinst * 0x100) >> 2
+        adcval = adcval & ~0x80000000
+        if adcval & 0x1:
+            adcregs[adcisr] = adcregs[adcisr] | 0x1
+        if adcval & 0x2:
+            adcval = adcval & ~0x3
+            adcregs[adcisr] = adcregs[adcisr] & ~0x1
+        if adcval & 0x4:
+            adcval = adcval & ~0x4
+            adcseq[adcinst] = 0
+            adcregs[adcisr] = adcregs[adcisr] | 0xC
+        if adcval & 0x8:
+            adcval = adcval & ~0x8
+            adcregs[adcisr] = adcregs[adcisr] | 0x60
+        adcval = adcval & ~0x30
+        adcregs[adcoff] = adcval
+    else:
+        adcregs[adcoff] = adcval
+'''
+
+rtc: Python.PythonPeripheral @ sysbus <0x40002800, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    rtcregs = [0] * (size / 4)
+    rtcregs[0x04 >> 2] = 0x2101
+    rtcregs[0x0C >> 2] = 0x27
+    rtcregs[0x10 >> 2] = 0x7F00FF
+    rtcregs[0x14 >> 2] = 0xFFFF
+elif request.IsRead:
+    request.Value = rtcregs[request.Offset >> 2]
+elif request.IsWrite:
+    rtcoff = request.Offset >> 2
+    rtcval = request.Value
+    if rtcoff == (0x0C >> 2):
+        keep = rtcregs[rtcoff] & 0x37
+        if rtcval & 0x80:
+            rtcregs[rtcoff] = keep | 0xC0
+        else:
+            rtcregs[rtcoff] = keep & ~0x40
+    elif rtcoff == (0x5C >> 2):
+        rtcregs[0x50 >> 2] = rtcregs[0x50 >> 2] & ~rtcval
+    else:
+        rtcregs[rtcoff] = rtcval
+'''
+
+fdcan1: Python.PythonPeripheral @ sysbus <0x40006400, +0xC00>
+    size: 0xC00
+    initable: true
+    script: '''
+if request.IsInit:
+    canregs = [0] * (size / 4)
+    for canbase in (0x000, 0x400, 0x800):
+        canregs[(canbase + 0x00) >> 2] = 0x32141218
+        canregs[(canbase + 0x04) >> 2] = 0x87654321
+        canregs[(canbase + 0x18) >> 2] = 0x1
+elif request.IsRead:
+    request.Value = canregs[request.Offset >> 2]
+elif request.IsWrite:
+    canoff = request.Offset >> 2
+    canval = request.Value
+    if (request.Offset & 0x3FF) == 0x18:
+        if not (canval & 0x1):
+            canval = canval & ~0x2
+        canregs[canoff] = canval
+    elif (request.Offset & 0x3FF) == 0x50:
+        canregs[canoff] = canregs[canoff] & ~canval
+    else:
+        canregs[canoff] = canval
+'''
+
+fdcanMessageRam: Memory.ArrayMemory @ sysbus <0x4000A400, +0xA00>
+    size: 0xA00
+
+sysbus:
+    init:
+        Tag <0x50000800, 0x50000FFF> "DAC"
+        Tag <0x40010200, 0x400103FF> "COMP_OPAMP_VREFBUF"
+        Tag <0x40002C00, 0x40002FFF> "WWDG"
+        Tag <0x40024000, 0x400243FF> "CORDIC"
+        Tag <0x40021400, 0x400217FF> "FMAC"
+        Tag <0x40016800, 0x40016BFF> "HRTIM"
+        Tag <0x40005C00, 0x40005FFF> "USB"
+        Tag <0x40002000, 0x400023FF> "CRS"
+        Tag <0x40021800, 0x40021BFF> "RTC_TAMP"
+"""
+cpu_path = "sysbus.cpu"
+uart = "sysbus.usart2"
+frequency_hz = 16_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "STM32G474 (ARM Cortex-M4F)"
+
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on the STM32G474 in this co-simulator: \
+nobody has measured whether an unserviced watchdog resets the core on this \
+composed platform, so a firmware recovery path that depends on it is untested \
+on this run.\
+"""
+
+timing_limitation = """\
+The STM32G474 core, SysTick and TIMx blocks run at the 16 MHz HSI16 reset \
+default in this co-simulator and no clock tree follows the firmware's PLL \
+setup, so firmware that clocks itself at 170 MHz sees its delays and timer \
+periods run up to 10.6x slow; its DMA moves no data and its FDCAN carries no \
+frames on this run.\
+"""
+
+# Board clock evidence into the RCC model, as on the F103: presence once before
+# boot, elapsed virtual microseconds after every slice.
+[soc.clock_control]
+presence_command = "sysbus.rcc WriteDoubleWord 0x3FC {present}"
+tick_command = "sysbus.rcc WriteDoubleWord 0x3F8 {micros}"
+
+[[soc.ports]]
+letter = "A"
+peripheral = "gpioPortA"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "B"
+peripheral = "gpioPortB"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "C"
+peripheral = "gpioPortC"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "D"
+peripheral = "gpioPortD"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "E"
+peripheral = "gpioPortE"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "F"
+peripheral = "gpioPortF"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "G"
+peripheral = "gpioPortG"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+
+# ADC INJECTION. The engine channel number is the ADC1 input number for a pin
+# ADC1 can read, and 32 + the ADC2 input number for a pin only ADC2 can read
+# (PA4 = ADC2_IN17 is engine channel 49). A pin both ADC1 and ADC2 read
+# (ADC12_INx) feeds both converters. The routing card's `_adcN` pin suffix
+# carries this number. Counts land in the ADC register model's per-converter
+# table, which DR returns for the matching sequence entry.
+[[soc.adc]]
+channel = 1
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:1'] = {count}; d['2:1'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 2
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:2'] = {count}; d['2:2'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 3
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:3'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 4
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:4'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 5
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:5'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 6
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:6'] = {count}; d['2:6'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 7
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:7'] = {count}; d['2:7'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 8
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:8'] = {count}; d['2:8'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 9
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:9'] = {count}; d['2:9'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 10
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:10'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 11
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:11'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 12
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:12'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 14
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:14'] = {count}; d['2:14'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 15
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['1:15'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 35
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:3'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 36
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:4'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 37
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:5'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 42
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:10'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 43
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:11'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 44
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:12'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 45
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:13'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 47
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:15'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[[soc.adc]]
+channel = 49
+monitor_command = "python \"import __builtin__; d = __builtin__.__dict__.setdefault('hkb_g4_adc', dict()); d['2:17'] = {count}\""
+full_scale_volts = 3.3
+max_count = 4095
+
+[soc.i2c]
+# Not bridged: the STM32F7_I2C bridge registration is unverified on this
+# composed platform, so a bound I2C device is reported as never exercised.
+controllers = []
+
+[soc.spi]
+controllers = []

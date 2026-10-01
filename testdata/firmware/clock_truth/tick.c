@@ -85,12 +85,41 @@ static void pin_toggle(void) { REG(0x40020C14UL) ^= (1UL << 12); } /* GPIOD_ODR 
 static void pin_init(void) { REG(0x50000514UL) |= (1UL << 13); } /* P0.DIR */
 static void pin_toggle(void) { REG(0x50000504UL) ^= (1UL << 13); } /* P0.OUT */
 
+#elif defined(PART_STM32G4)
+/* STM32G474 reset default: HSI16, 16 MHz, no PLL (RM0440 section 7.2).
+ * db/mcu/stm32g4.soc.toml declares 16 MHz. PA5 is the Nucleo-G474RE LED. */
+#define CORE_HZ 16000000UL
+static void pin_init(void) {
+    REG(0x4002104CUL) |= (1UL << 0); /* RCC_AHB2ENR: GPIOAEN */
+    /* GPIOA_MODER pin 5 = 0b01: general-purpose output. */
+    REG(0x48000000UL) = (REG(0x48000000UL) & ~(0x3UL << 10)) | (0x1UL << 10);
+}
+static void pin_toggle(void) { REG(0x48000014UL) ^= (1UL << 5); } /* GPIOA_ODR */
+
+#elif defined(PART_STM32L0)
+/* STM32L0 reset default: MSI range 5, 2.097 MHz, no PLL (RM0377 section 7.2).
+ * db/mcu/stm32l0.soc.toml declares 2 MHz because Renode's clock declarations
+ * are whole MHz here, so the gate reads 2.000 / 2.097 = 0.954: the stated
+ * 4.6% deviation, inside the 5% tolerance. PA5 is the Nucleo-L0 LED. */
+#define CORE_HZ 2097000UL
+static void pin_init(void) {
+    REG(0x4002102CUL) |= (1UL << 0); /* RCC_IOPENR: IOPAEN */
+    /* GPIOA_MODER pin 5 = 0b01: general-purpose output. */
+    REG(0x50000000UL) = (REG(0x50000000UL) & ~(0x3UL << 10)) | (0x1UL << 10);
+}
+static void pin_toggle(void) { REG(0x50000014UL) ^= (1UL << 5); } /* GPIOA_ODR */
+
 #else
-#error "define one of PART_STM32F103 / PART_STM32F4 / PART_NRF52840"
+#error "define one of PART_STM32F103 / PART_STM32F4 / PART_STM32G4 / PART_STM32L0 / PART_NRF52840"
 #endif
 
 int main(void) {
     pin_init();
+#if defined(FAULT_AFTER_INIT)
+    /* Execution-evidence fixture: reach main, then take an undefined
+     * instruction so the core enters its fault handler and never toggles. */
+    __builtin_trap();
+#endif
 
     /* One millisecond of SysTick at the part's reset-default core clock. */
     STK_LOAD = (CORE_HZ / 1000UL) - 1UL;

@@ -1,0 +1,111 @@
+# STM32L0 (STM32L0x1 class, Cortex-M0+): PA-PE, PH, USART2 bridge, 2 MHz.
+#
+# PLATFORM. Renode's stock `platforms/cpus/stm32l071.repl` with the clock
+# declarations below. Proven live against the TR-9 keypad firmware
+# (STM32L011K4, CubeMX HAL): it reaches main(), parks in its `while (1)` and
+# scans the keypad columns on PA1-PA3 from its TIM2 interrupt.
+#
+# SYSTICK. The stock STM32L0_RCC retunes the NVIC's SysTick from the RCC
+# configuration the firmware writes (it reported 128 MHz after a HAL PLL
+# setup), which breaks the clock-truth cross-check and runs SysTick delays
+# 16x fast. Unlinking it (`rcc: systick: empty`) holds SysTick at the declared
+# rate.
+#
+# NOT MODELLED: the stock `adc1` is Renode's STM32_ADC, whose feed method has
+# not been verified on this layout, so [[soc.adc]] is empty and ADC injection
+# is a loud drop. L011/L021 parts have fewer ports than this map; pins that
+# do not exist on the package are simply never bound.
+#
+# PULLS. The stock GPIO model ignores PUPDR, so every port carries a `pull`
+# map and the backend applies the pull on each firmware IDR read.
+[soc]
+backend = "renode"
+machine = "l0"
+platform_repl = """
+// STM32L0 platform: the stock L071 file with SysTick unlinked from the RCC
+// model and the core held at a whole-MHz rate.
+//
+// CLOCK TRUTH (tests/clock_truth.rs). The reset default is the 2.097 MHz MSI
+// (RM0377 section 7.2). Renode's clock declarations are whole MHz here, so
+// core and SysTick are declared at 2 MHz, 4.6% below the part; stated in
+// timing_limitation.
+
+using "platforms/cpus/stm32l071.repl"
+
+rcc:
+    systick: empty
+
+nvic:
+    systickFrequency: 2000000
+
+cpu:
+    PerformanceInMips: 2
+"""
+cpu_path = "sysbus.cpu"
+uart = "sysbus.usart2"
+frequency_hz = 2_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "STM32L0 (ARM Cortex-M0+)"
+
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on the STM32L0 in this co-simulator: nobody \
+has measured whether an unserviced watchdog resets the core here, so a \
+firmware recovery path that depends on it is untested on this run.\
+"""
+
+timing_limitation = """\
+The STM32L0 core and SysTick run at 2 MHz in this co-simulator (the 2.097 MHz \
+MSI reset default rounded to whole MHz, 4.6% slow) and its TIMx blocks at \
+Renode's fixed 10 MHz; no clock tree follows the firmware's clock setup, so \
+firmware that clocks itself at 32 MHz sees SysTick-timed delays run 16x slow \
+on this run.\
+"""
+
+[[soc.ports]]
+letter = "A"
+peripheral = "gpioPortA"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "B"
+peripheral = "gpioPortB"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "C"
+peripheral = "gpioPortC"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "D"
+peripheral = "gpioPortD"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "E"
+peripheral = "gpioPortE"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "H"
+peripheral = "gpioPortH"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+
+[soc.i2c]
+controllers = []
+
+[soc.spi]
+controllers = []

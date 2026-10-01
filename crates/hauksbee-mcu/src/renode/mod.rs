@@ -90,6 +90,56 @@ pub struct PortMap {
     /// against a live machine, see the per-part notes in `db/mcu/*.soc.toml`.
     #[serde(default)]
     pub dir: Option<DirMap>,
+    /// STM32-style internal pulls, when the part has them.
+    ///
+    /// Renode's `STM32_GPIOPort` stores `PUPDR` but never applies it: an input
+    /// with its pull-up enabled and nothing driving it reads 0 (measured on
+    /// Renode 1.16.1). Firmware that reads a floating strap through its
+    /// internal pull therefore takes the wrong branch. With this set the
+    /// backend hooks every firmware read of the input data register and
+    /// applies the pull level, at that instruction, to pins that are inputs
+    /// in the mode register and that the engine is not driving. Requires a
+    /// `moder` [`Self::dir`] map. `None` leaves undriven inputs at whatever
+    /// level Renode holds.
+    #[serde(default)]
+    pub pull: Option<PullMap>,
+}
+
+/// Where an STM32-style port keeps its pull configuration and input level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PullMap {
+    /// `PUPDR`: two bits per pin, `0b01` pull-up, `0b10` pull-down.
+    pub pupdr_offset: u32,
+    /// `IDR`, the register whose firmware reads get the pull applied.
+    pub idr_offset: u32,
+}
+
+/// Python body of the read hook that applies a port's internal pulls.
+///
+/// On a firmware read of `IDR`, every pin that `MODER` says is an input
+/// (`0b00`) and the engine is not driving (`__builtin__.hkb_ext_<letter>`)
+/// reads its `PUPDR` level: high for `0b01`, low for `0b10`, unchanged
+/// otherwise. One line, because the Monitor takes the script as one string.
+fn pull_hook_script(pull: PullMap, moder_offset: u32, letter: char) -> String {
+    format!(
+        "if offset == 0x{idr:X}: import __builtin__; \
+         e = getattr(__builtin__, '{key}', 0); \
+         pu = self.ReadDoubleWord(0x{pupdr:X}); md = self.ReadDoubleWord(0x{moder:X}); \
+         c = lambda x: sum(((x >> (2 * b)) & 1) << b for b in range(16)); \
+         i = c(~(md | (md >> 1)) & 0x55555555) & ~e; \
+         value = (value | (c(pu & ~(pu >> 1) & 0x55555555) & i)) \
+         & ~(c((pu >> 1) & ~pu & 0x55555555) & i)",
+        idr = pull.idr_offset,
+        pupdr = pull.pupdr_offset,
+        moder = moder_offset,
+        key = external_mask_key(letter),
+    )
+}
+
+/// `__builtin__` key holding the pins of port `letter` the engine drives.
+fn external_mask_key(letter: char) -> String {
+    format!("hkb_ext_{letter}")
 }
 
 /// How a port's direction/mode register is read and decoded to a per-pin
@@ -358,6 +408,13 @@ impl RenodeConfig {
         /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml`, that file
         /// carries the full SIO-footgun and verification-status notes.
         rp2040 => "renode:rp2040";
+        /// STM32G474, a platform composed from Renode models. See
+        /// `db/mcu/stm32g4.soc.toml` for what is exact and what is approximated.
+        stm32g4 => "renode:stm32g4";
+        /// STM32F7 (F746/F767/F777 class). See `db/mcu/stm32f7.soc.toml`.
+        stm32f7 => "renode:stm32f7";
+        /// STM32L0 (L0x1 class). See `db/mcu/stm32l0.soc.toml`.
+        stm32l0 => "renode:stm32l0";
     }
 
     /// Add one ADC channel injection recipe. Chainable.
@@ -877,6 +934,85 @@ pub struct RenodeBackend {
     /// Channels already warned about as un-mapped for ADC injection, so the
     /// loud drop prints once per channel instead of once per chunk.
     adc_unmapped_warned: std::collections::HashSet<u8>,
+    /// Per-port mask of pins the engine has driven through `set_digital_in`,
+    /// mirrored into Renode for the pull hook: an internal pull never
+    /// overrides an external drive.
+    external_inputs: HashMap<char, u32>,
+    /// Execution-evidence hooks and PC samples (see [`Mcu::execution_probe`]).
+    probe: RenodeProbe,
+}
+
+/// Execution-evidence state for one Renode machine: which symbols are hooked
+/// and the program counters sampled at chunk boundaries.
+#[derive(Debug, Default)]
+struct RenodeProbe {
+    /// The entry symbol hooked after load (`main`), when the ELF has one.
+    entry_symbol: Option<String>,
+    /// Counting hooks: `(label, address)`. The entry hook is labelled `main`;
+    /// the rest are fault vectors, where several vectors that share one
+    /// handler collapse into one entry with a joined label.
+    hooks: Vec<(String, u32)>,
+    /// Program counters sampled at chunk boundaries.
+    pcs: crate::traits::PcSampler,
+}
+
+/// Python counter key for a hook at `addr`, shared through `__builtin__`
+/// between the CPU hook and the Monitor's `python` command.
+fn hook_counter_key(addr: u32) -> String {
+    format!("hkb_hook_{addr:08x}")
+}
+
+/// Monitor command that installs a counting hook at `addr`.
+fn hook_install_command(cpu: &str, addr: u32) -> String {
+    let key = hook_counter_key(addr);
+    format!(
+        "{cpu} AddHook 0x{addr:X} \"import __builtin__; \
+         __builtin__.{key} = getattr(__builtin__, '{key}', 0) + 1\""
+    )
+}
+
+/// Monitor command that prints the hook counter at `addr`.
+fn hook_read_command(addr: u32) -> String {
+    let key = hook_counter_key(addr);
+    format!("python \"import __builtin__; print getattr(__builtin__, '{key}', 0)\"")
+}
+
+/// Parse a Monitor integer answer that may exceed 32 bits
+/// (`ExecutedInstructions` is reported as a 64-bit hex value).
+fn parse_u64(s: &str) -> Option<u64> {
+    let tok = s.split_whitespace().next()?.trim();
+    tok.strip_prefix("0x")
+        .or_else(|| tok.strip_prefix("0X"))
+        .map_or_else(|| tok.parse().ok(), |hex| u64::from_str_radix(hex, 16).ok())
+}
+
+/// Cortex-M fault vectors watched for [`ExecutionProbe::faults`], as
+/// `(vector-table byte offset, name)`.
+const CORTEX_M_FAULT_VECTORS: [(u32, &str); 4] = [
+    (0x0C, "HardFault"),
+    (0x10, "MemManage"),
+    (0x14, "BusFault"),
+    (0x18, "UsageFault"),
+];
+
+/// Group fault vectors by handler address so a shared default handler is one
+/// hook named after every vector that lands on it. Zero (unset) vectors are
+/// skipped; the Thumb bit is cleared.
+fn group_fault_handlers(vectors: &[(&str, u32)]) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = Vec::new();
+    for &(name, raw) in vectors {
+        let addr = raw & !1;
+        if addr == 0 {
+            continue;
+        }
+        if let Some(entry) = out.iter_mut().find(|(_, a)| *a == addr) {
+            entry.0.push('/');
+            entry.0.push_str(name);
+        } else {
+            out.push((name.to_string(), addr));
+        }
+    }
+    out
 }
 
 impl RenodeBackend {
@@ -984,6 +1120,8 @@ impl RenodeBackend {
             spi_cycle: Arc::new(AtomicU64::new(0)),
             trace_log_path: None,
             adc_unmapped_warned: std::collections::HashSet::new(),
+            external_inputs: HashMap::new(),
+            probe: RenodeProbe::default(),
         })
     }
 
@@ -1064,6 +1202,118 @@ impl RenodeBackend {
                     .publish_edges(port.letter, port.width, new ^ prev, new);
                 self.last_odr.insert(port.letter, new);
             }
+        }
+    }
+
+    /// Install the read hook that applies each pulled port's internal pulls
+    /// (see [`PortMap::pull`]). A port without a `moder` dir map has no input
+    /// mask to honour, so it gets no hook; the loader refuses that shape.
+    fn install_pull_hooks(&mut self) -> Result<()> {
+        let ports = self.config.ports.clone();
+        for port in &ports {
+            let (Some(pull), Some(dir)) = (port.pull, port.dir) else {
+                continue;
+            };
+            let script = pull_hook_script(pull, dir.offset, port.letter);
+            self.monitor.run(&format!(
+                "sysbus SetHookAfterPeripheralRead sysbus.{} \"{script}\"",
+                port.peripheral
+            ))?;
+        }
+        Ok(())
+    }
+
+    /// Hook the ELF's `main` and, on a Cortex-M part, the fault vectors, so
+    /// [`Mcu::execution_probe`] can say whether the firmware ran. Best effort:
+    /// a missing symbol leaves "reached main" unknown rather than failing the
+    /// load.
+    fn install_execution_hooks(&mut self) {
+        let cpu = self.config.cpu.clone();
+        if let Some(addr) = self
+            .monitor
+            .run("sysbus GetSymbolAddress \"main\"")
+            .ok()
+            .and_then(|r| parse_u64(&r))
+            .and_then(|a| u32::try_from(a & !1).ok())
+            .filter(|&a| a != 0)
+        {
+            if self.monitor.run(&hook_install_command(&cpu, addr)).is_ok() {
+                self.probe.entry_symbol = Some("main".to_string());
+                self.probe.hooks.clear();
+                self.probe.hooks.push(("main".to_string(), addr));
+            }
+        }
+        if self.config.expected_e_machine != crate::elf::EM_ARM {
+            return;
+        }
+        let Some(mut vtor) = self.vector_table_offset() else {
+            return;
+        };
+        // Before the machine first starts, Renode has not yet guessed the
+        // vector table (it reads 0, often unmapped). A zero-length run makes
+        // it guess from the loaded image without retiring an instruction.
+        if self.read_word_abs(vtor.wrapping_add(4)).unwrap_or(0) == 0 {
+            if self.monitor.run("emulation RunFor \"0\"").is_err() {
+                return;
+            }
+            let Some(guessed) = self.vector_table_offset() else {
+                return;
+            };
+            vtor = guessed;
+        }
+        let vectors: Vec<(&str, u32)> = CORTEX_M_FAULT_VECTORS
+            .iter()
+            .filter_map(|&(off, name)| {
+                let word = self.read_word_abs(vtor.wrapping_add(off))?;
+                Some((name, word))
+            })
+            .collect();
+        for (label, addr) in group_fault_handlers(&vectors) {
+            if self.monitor.run(&hook_install_command(&cpu, addr)).is_ok() {
+                self.probe.hooks.push((label, addr));
+            }
+        }
+    }
+
+    /// The core's current vector table offset, if the Monitor answers.
+    fn vector_table_offset(&mut self) -> Option<u32> {
+        let cpu = self.config.cpu.clone();
+        self.monitor
+            .run(&format!("{cpu} VectorTableOffset"))
+            .ok()
+            .and_then(|r| parse_hex_or_dec(&r))
+    }
+
+    /// Read one word at an absolute bus address.
+    fn read_word_abs(&mut self, addr: u32) -> Option<u32> {
+        self.monitor
+            .command(&format!("sysbus ReadDoubleWord 0x{addr:X}"))
+            .ok()
+            .and_then(|r| parse_hex_or_dec(&r))
+    }
+
+    /// Read one hook counter; `None` when the Monitor could not answer.
+    fn hook_count(&mut self, addr: u32) -> Option<u64> {
+        self.monitor
+            .command(&hook_read_command(addr))
+            .ok()
+            .and_then(|r| parse_u64(&r))
+    }
+
+    /// Sample the program counter at a chunk boundary: every chunk for the
+    /// first 64, then every 64th, so a long run pays almost nothing for it.
+    fn sample_pc(&mut self) {
+        if !self.probe.pcs.due() {
+            return;
+        }
+        let cpu = self.config.cpu.clone();
+        if let Some(pc) = self
+            .monitor
+            .command(&format!("{cpu} PC"))
+            .ok()
+            .and_then(|r| parse_hex_or_dec(&r))
+        {
+            self.probe.pcs.record(pc);
         }
     }
 
@@ -1640,6 +1890,8 @@ impl Mcu for RenodeBackend {
             self.monitor.run(&cmd.replace("{cpu}", &cpu))?;
         }
         self.core.firmware_loaded = true;
+        self.install_execution_hooks();
+        self.install_pull_hooks()?;
 
         // Execution-trace introspection: opt-in via HAUKSBEE_RENODE_TRACE=1.
         // When set, redirect Renode's log to a temp file and enable
@@ -1708,6 +1960,20 @@ impl Mcu for RenodeBackend {
             // this backend: silently discarding the result let a rejected/failed
             // OnGPIO masquerade as "input never changed", diverging the co-sim
             // from the analog solve with zero diagnostic.
+            if port.pull.is_some() && pin.bit < 32 {
+                let mask = self.external_inputs.entry(port.letter).or_insert(0);
+                if *mask & (1 << pin.bit) == 0 {
+                    *mask |= 1 << pin.bit;
+                    let cmd = format!(
+                        "python \"import __builtin__; __builtin__.{} = {}\"",
+                        external_mask_key(port.letter),
+                        *mask
+                    );
+                    if let Err(e) = self.monitor.run(&cmd) {
+                        panic!("Renode external-drive mask update failed: {e:#}");
+                    }
+                }
+            }
             let input_peripheral = port.input_peripheral.as_deref().unwrap_or(&port.peripheral);
             let cmd = format!("sysbus.{} OnGPIO {} {}", input_peripheral, pin.bit, high);
             if let Err(e) = self.monitor.run(&cmd) {
@@ -1848,6 +2114,35 @@ impl Mcu for RenodeBackend {
         self.config.timing_limitation.clone()
     }
 
+    fn execution_probe(&mut self) -> crate::traits::ExecutionProbe {
+        let hooks = self.probe.hooks.clone();
+        let mut reached_entry = None;
+        let mut faults = Vec::new();
+        for (label, addr) in hooks {
+            let count = self.hook_count(addr);
+            if label == "main" {
+                reached_entry = count.map(|n| n > 0);
+            } else if let Some(n) = count.filter(|&n| n > 0) {
+                faults.push(format!("{label} handler entered x{n}"));
+            }
+        }
+        let cpu = self.config.cpu.clone();
+        let instructions = self
+            .monitor
+            .command(&format!("{cpu} ExecutedInstructions"))
+            .ok()
+            .and_then(|r| parse_u64(&r));
+        let mut probe = crate::traits::ExecutionProbe {
+            reached_entry,
+            entry_symbol: self.probe.entry_symbol.clone(),
+            instructions,
+            faults,
+            ..crate::traits::ExecutionProbe::default()
+        };
+        self.probe.pcs.fill(&mut probe);
+        probe
+    }
+
     fn i2c_bus_modeled(&self) -> bool {
         // Mirrors `install_i2c_bridge`'s early return exactly: with no
         // configured controller the bridge is never installed and a bound I2C
@@ -1917,6 +2212,7 @@ impl RenodeBackend {
 
         // Exchange state after the chunk, matching the simavr backend's timing.
         self.poll_gpio_edges();
+        self.sample_pc();
         let trace = std::env::var_os("HAUKSBEE_RENODE_I2C_TRACE").is_some()
             || std::env::var_os("HAUKSBEE_RENODE_SPI_TRACE").is_some();
         self.core.pump_uart_out(trace)?;
@@ -1978,6 +2274,42 @@ fn parse_hex_or_dec(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pull_hook_is_one_line_naming_its_registers_and_mask() {
+        let pull = PullMap {
+            pupdr_offset: 0x0C,
+            idr_offset: 0x10,
+        };
+        let script = pull_hook_script(pull, 0x00, 'B');
+        assert!(
+            !script.contains('\n'),
+            "the Monitor takes one line: {script}"
+        );
+        assert!(!script.contains('"'), "the script is passed inside quotes");
+        assert!(script.starts_with("if offset == 0x10:"));
+        assert!(script.contains("self.ReadDoubleWord(0xC)"));
+        assert!(script.contains("self.ReadDoubleWord(0x0)"));
+        assert!(script.contains("'hkb_ext_B'"));
+    }
+
+    #[test]
+    fn fault_vectors_group_by_handler_and_skip_unset() {
+        let grouped = group_fault_handlers(&[
+            ("HardFault", 0x0800_001D),
+            ("MemManage", 0x0800_001D),
+            ("BusFault", 0),
+            ("UsageFault", 0x0800_0041),
+        ]);
+        assert_eq!(
+            grouped,
+            vec![
+                ("HardFault/MemManage".to_string(), 0x0800_001C),
+                ("UsageFault".to_string(), 0x0800_0040),
+            ]
+        );
+        assert!(group_fault_handlers(&[("HardFault", 0)]).is_empty());
+    }
 
     #[test]
     fn parses_renode_values() {

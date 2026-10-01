@@ -473,7 +473,10 @@ fn resolve_embedded_builtins() {
     assert!(specs.contains(&"renode:rp2040"));
     assert!(specs.contains(&"renode:stm32f072"));
     assert!(specs.contains(&"qemu:esp32"));
-    assert_eq!(specs.len(), 9);
+    for added in ["renode:stm32g4", "renode:stm32f7", "renode:stm32l0"] {
+        assert!(specs.contains(&added), "{added} missing from {specs:?}");
+    }
+    assert_eq!(specs.len(), 12);
 }
 
 #[test]

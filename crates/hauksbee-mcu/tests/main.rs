@@ -4,6 +4,8 @@
 #[path = "support.rs"]
 mod support;
 
+#[path = "avr_execution_probe.rs"]
+mod avr_execution_probe;
 #[path = "avr_hex_flash_bounds.rs"]
 mod avr_hex_flash_bounds;
 #[path = "avr_mcu_tests.rs"]
@@ -50,6 +52,8 @@ mod renode_rp2040_adc;
 mod renode_rp2040_bus;
 #[path = "renode_stm32.rs"]
 mod renode_stm32;
+#[path = "renode_stm32_families.rs"]
+mod renode_stm32_families;
 #[path = "renode_stm32f072.rs"]
 mod renode_stm32f072;
 #[path = "soc_descriptors.rs"]

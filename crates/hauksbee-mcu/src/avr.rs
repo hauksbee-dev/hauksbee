@@ -739,6 +739,14 @@ pub struct AvrMcu {
     /// one instruction forever. `cycle_carry` still owns the sub-cycle
     /// fraction; this owns the instruction-boundary remainder on top of it.
     run_target: u64,
+
+    /// Byte address of the ELF's `main`, watched after every instruction for
+    /// the execution evidence. `None` for a `.hex` image (no symbol table).
+    entry_pc: Option<u32>,
+    /// Whether the PC has equalled [`Self::entry_pc`] since the last load.
+    entry_reached: bool,
+    /// Program counters sampled at chunk ends.
+    pcs: crate::traits::PcSampler,
 }
 
 // SAFETY: We never share AvrMcu across threads simultaneously; it is Send
@@ -877,6 +885,9 @@ impl AvrMcu {
             firmware_loaded: false,
             cycle_carry: 0,
             run_target: 0,
+            entry_pc: None,
+            entry_reached: false,
+            pcs: crate::traits::PcSampler::default(),
         })
     }
 
@@ -1106,6 +1117,11 @@ impl Mcu for AvrMcu {
         }
 
         self.firmware_loaded = true;
+        self.entry_pc = (ext == "elf")
+            .then(|| crate::elf::symbol_address(path, "main"))
+            .flatten();
+        self.entry_reached = false;
+        self.pcs = crate::traits::PcSampler::default();
         // Re-anchor the absolute run target (and drop any pending sub-cycle
         // carry) at the counter the freshly loaded image starts from, so a
         // reload doesn't inherit the previous image's timing remainders.
@@ -1182,6 +1198,11 @@ impl Mcu for AvrMcu {
                 // state stays readable via `state().done` / `state().crashed`.
                 break;
             }
+            if !self.entry_reached {
+                // One compare per instruction until `main` is seen, then none.
+                let pc = unsafe { (*self.avr).pc };
+                self.entry_reached = self.entry_pc == Some(pc);
+            }
             let now = self.raw_cycle();
             if now < prev {
                 // THE CYCLE COUNTER WENT BACKWARDS, so the core rebooted
@@ -1205,6 +1226,9 @@ impl Mcu for AvrMcu {
             }
             stepped += now - prev;
             prev = now;
+        }
+        if self.pcs.due() {
+            self.pcs.record(unsafe { (*self.avr).pc });
         }
 
         Ok(stepped)
@@ -1331,6 +1355,27 @@ impl Mcu for AvrMcu {
 
     fn watchdog_resets(&self) -> u64 {
         self.shared().watchdog_resets
+    }
+
+    /// `main` is watched against the PC after every instruction (exact, from
+    /// the ELF symbol table); simavr has no instruction counter, so the count
+    /// is the cycle counter. A crashed core (simavr `cpu_Crashed`: a bad
+    /// opcode, a jump past flash) is the fault.
+    fn execution_probe(&mut self) -> crate::traits::ExecutionProbe {
+        let state = self.state();
+        let mut probe = crate::traits::ExecutionProbe {
+            reached_entry: self.entry_pc.map(|_| self.entry_reached),
+            entry_symbol: self.entry_pc.map(|_| "main".to_string()),
+            instructions: Some(state.cycles),
+            faults: if state.crashed {
+                vec![format!("core crashed at pc 0x{:x}", state.pc)]
+            } else {
+                Vec::new()
+            },
+            ..crate::traits::ExecutionProbe::default()
+        };
+        self.pcs.fill(&mut probe);
+        probe
     }
 
     /// simavr's watchdog is the one that behaves: it times out at the right

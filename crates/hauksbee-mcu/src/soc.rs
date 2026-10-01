@@ -202,6 +202,12 @@ pub enum SocError {
         encoding: &'static str,
     },
 
+    /// A port declares `pull` on a shape the pull hook cannot honour: wider
+    /// than the 16 pins a 2-bit `PUPDR` encodes, or without a `moder` dir map
+    /// to say which pins are inputs.
+    #[error("port {letter:?} declares pull but {reason}; drop pull or fix the port")]
+    PullUnsupported { letter: char, reason: &'static str },
+
     /// Two `[[soc.adc]]` entries claim the same channel. The backend keys
     /// injection on the channel index, so the second recipe shadows the first.
     #[error("duplicate ADC channel {channel}: the second recipe would shadow the first")]
@@ -546,6 +552,21 @@ mod renode_schema {
     /// it is refused at load for the same reason a duplicate port letter is.
     fn validate_port_dir_widths(ports: &[PortMap]) -> Result<(), SocError> {
         for port in ports {
+            if port.pull.is_some() {
+                let reason = if port.width > 16 {
+                    Some("is wider than the 16 pins PUPDR encodes")
+                } else if port.dir.map(|d| d.encoding) != Some(DirEncoding::Moder) {
+                    Some("has no moder dir map to say which pins are inputs")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    return Err(SocError::PullUnsupported {
+                        letter: port.letter,
+                        reason,
+                    });
+                }
+            }
             let Some(dir) = port.dir else { continue };
             let (encoding, reach) = dir_encoding_reach(dir.encoding);
             if port.width > reach {
@@ -997,6 +1018,9 @@ const EMBEDDED: &[(&str, &str)] = &{
         "renode:nrf52840" => "nrf52840",
         "renode:sifive_fe310" => "sifive_fe310",
         "renode:rp2040" => "rp2040",
+        "renode:stm32g4" => "stm32g4",
+        "renode:stm32f7" => "stm32f7",
+        "renode:stm32l0" => "stm32l0",
         "qemu:esp32" => "esp32",
         "qemu:esp32s3" => "esp32s3",
         "qemu:esp32c3" => "esp32c3",
@@ -1684,6 +1708,43 @@ mcu_label = "test part"
                 }
             ),
             "an unsubstitutable post_load_setup token must be refused"
+        );
+    }
+
+    #[test]
+    fn a_pull_map_needs_a_16_pin_moder_port() {
+        const PULL: &str = "pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }";
+        let wide = err(&format!(
+            "[[soc.ports]]\nletter = \"0\"\nperipheral = \"sio\"\nodr_offset = 0x10\n\
+             width = 32\ndir = {{ offset = 0x20, encoding = \"dir_bits\" }}\n{PULL}"
+        ));
+        assert!(
+            matches!(wide, SocError::PullUnsupported { letter: '0', reason } if reason.contains("16 pins")),
+            "{wide}"
+        );
+        let no_moder = err(&format!(
+            "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x14\n\
+             width = 16\n{PULL}"
+        ));
+        assert!(
+            matches!(no_moder, SocError::PullUnsupported { letter: 'A', reason } if reason.contains("moder")),
+            "{no_moder}"
+        );
+        // Irrefutable in the renode-only feature shape, refutable otherwise.
+        #[allow(irrefutable_let_patterns)]
+        let SocConfig::Renode(c) = SocConfig::from_soc_toml(&descriptor(&format!(
+            "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x14\n\
+             width = 16\ndir = {{ offset = 0x00, encoding = \"moder\" }}\n{PULL}"
+        )))
+        .expect("a 16-pin MODER port carries a pull map") else {
+            panic!("expected Renode");
+        };
+        assert_eq!(
+            c.ports[0].pull,
+            Some(crate::renode::PullMap {
+                pupdr_offset: 0x0C,
+                idr_offset: 0x10
+            })
         );
     }
 

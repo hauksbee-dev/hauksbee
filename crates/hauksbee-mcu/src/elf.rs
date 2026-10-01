@@ -171,10 +171,67 @@ pub fn validate_arch(path: &Path, expected: u16, mcu_label: &str) -> Result<()> 
     );
 }
 
+/// Look up a symbol's value in a little-endian ELF32 image's `.symtab`.
+///
+/// Used for execution evidence: the backend hooks (or compares its program
+/// counter against) the firmware's entry symbol to say whether `main` was
+/// reached. Returns `None`, not an error, for anything that is not a
+/// little-endian ELF32 with a symbol table carrying `name` (a stripped image,
+/// a raw `.bin`, an ELF64): the evidence then reads "unknown".
+#[must_use]
+pub fn symbol_address(path: &Path, name: &str) -> Option<u32> {
+    symbol_in_image(&std::fs::read(path).ok()?, name)
+}
+
+fn symbol_in_image(image: &[u8], name: &str) -> Option<u32> {
+    let u16_at = |at: usize| Some(u16::from_le_bytes(image.get(at..at + 2)?.try_into().ok()?));
+    let u32_at = |at: usize| Some(u32::from_le_bytes(image.get(at..at + 4)?.try_into().ok()?));
+    let usize_at = |at: usize| u32_at(at).and_then(|v| usize::try_from(v).ok());
+    // ELFCLASS32 + ELFDATA2LSB only.
+    if image.get(..4)? != ELF_MAGIC || image.get(4) != Some(&1) || image.get(5) != Some(&1) {
+        return None;
+    }
+    let shoff = usize_at(0x20)?;
+    let shentsize = usize::from(u16_at(0x2E)?);
+    let shnum = usize::from(u16_at(0x30)?);
+    let section = |i: usize| shoff.checked_add(i.checked_mul(shentsize)?);
+    for i in 0..shnum {
+        let sh = section(i)?;
+        if u32_at(sh + 4)? != 2 {
+            continue; // SHT_SYMTAB only
+        }
+        let (sym_off, sym_size, link) =
+            (usize_at(sh + 16)?, usize_at(sh + 20)?, usize_at(sh + 24)?);
+        let str_off = usize_at(section(link)? + 16)?;
+        for sym in (sym_off..sym_off.checked_add(sym_size)?).step_by(16) {
+            let name_at = str_off.checked_add(usize_at(sym)?)?;
+            let rest = image.get(name_at..)?;
+            let end = rest.iter().position(|&b| b == 0)?;
+            if &rest[..end] == name.as_bytes() {
+                return u32_at(sym + 4);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn symbol_lookup_finds_main_and_refuses_non_elf() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware");
+        let arm = root.join("clock_truth/stm32g4_fault.elf");
+        if arm.exists() {
+            // Thumb function symbols carry the low bit.
+            assert_eq!(symbol_address(&arm, "main"), Some(0x0800_007D));
+            assert_eq!(symbol_address(&arm, "no_such_symbol"), None);
+        }
+        assert_eq!(symbol_in_image(b"not an elf at all", "main"), None);
+        assert_eq!(symbol_in_image(&[], "main"), None);
+    }
 
     /// Write a minimal fake ELF header with the given `e_machine` (little-endian)
     /// and return its temp path. The filename carries a per-process counter as

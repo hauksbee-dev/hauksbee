@@ -88,6 +88,74 @@ pub struct McuState {
     pub crashed: bool,
 }
 
+/// What a backend observed about whether the loaded firmware actually ran.
+///
+/// Every field is optional or countable because backends differ in what they
+/// can see: Renode can hook the ELF's `main` and the Cortex-M fault vectors and
+/// count retired instructions, simavr watches its PC against the ELF symbol
+/// table, and QEMU reports nothing here. "Unknown" is a value, never a pass:
+/// the co-sim layer combines this with the I/O it saw (UART bytes, GPIO
+/// toggles) before calling a run executed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecutionProbe {
+    /// Whether the core reached [`Self::entry_symbol`]. `None` when the backend
+    /// could not watch for it (no symbol table, no hook support).
+    pub reached_entry: Option<bool>,
+    /// The symbol watched, normally `main`.
+    pub entry_symbol: Option<String>,
+    /// Instructions (or cycles, on a backend without an instruction counter)
+    /// retired since reset, when the backend counts them.
+    pub instructions: Option<u64>,
+    /// Program-counter samples taken at chunk boundaries.
+    pub pc_samples: u64,
+    /// Distinct program-counter values among the samples (capped at
+    /// [`PC_SAMPLE_DISTINCT_CAP`]).
+    pub distinct_pcs: u64,
+    /// The most recent sampled program counter.
+    pub last_pc: Option<u32>,
+    /// Faults or exception handlers entered, one human-readable entry per kind
+    /// (for example `"HardFault x1"` or `"core crashed at pc 0x1a2"`).
+    pub faults: Vec<String>,
+}
+
+/// Cap on distinct program counters a backend remembers for
+/// [`ExecutionProbe::distinct_pcs`]; enough to tell a loop from a stuck core.
+pub const PC_SAMPLE_DISTINCT_CAP: usize = 256;
+
+/// Chunk-boundary program-counter sampling shared by the backends: every
+/// chunk for the first 64, then every 64th, so a long run pays almost nothing.
+#[derive(Debug, Default, Clone)]
+pub struct PcSampler {
+    chunks: u64,
+    samples: u64,
+    distinct: std::collections::BTreeSet<u32>,
+    last: Option<u32>,
+}
+
+impl PcSampler {
+    /// Count one chunk and say whether this one should be sampled.
+    pub const fn due(&mut self) -> bool {
+        self.chunks += 1;
+        self.chunks <= 64 || self.chunks.is_multiple_of(64)
+    }
+
+    /// Record one sampled program counter.
+    pub fn record(&mut self, pc: u32) {
+        self.samples += 1;
+        self.last = Some(pc);
+        if self.distinct.len() < PC_SAMPLE_DISTINCT_CAP {
+            self.distinct.insert(pc);
+        }
+    }
+
+    /// Copy the sample counts into `probe`.
+    pub fn fill(&self, probe: &mut ExecutionProbe) {
+        probe.pc_samples = self.samples;
+        probe.distinct_pcs = self.distinct.len() as u64;
+        probe.last_pc = self.last;
+    }
+}
+
 /// An event on the I2C (TWI) bus, as seen from the perspective of an
 /// external peripheral intercepting firmware writes.
 #[derive(Debug, Clone)]
@@ -521,6 +589,15 @@ pub trait Mcu {
     /// and neither means anything alone.
     fn watchdog_resets(&self) -> u64 {
         0
+    }
+
+    /// What this backend saw of the firmware executing: entry reached,
+    /// instruction count, PC samples and faults. Default: nothing known.
+    ///
+    /// `&mut` because a poll backend may need to query its emulator. Called at
+    /// report time, not per chunk.
+    fn execution_probe(&mut self) -> ExecutionProbe {
+        ExecutionProbe::default()
     }
 
     /// Whether this backend can actually host engine-provided I2C slave models,

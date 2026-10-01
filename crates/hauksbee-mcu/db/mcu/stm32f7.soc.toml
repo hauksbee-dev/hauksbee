@@ -1,0 +1,159 @@
+# STM32F7 (STM32F746/F767/F777 class, Cortex-M7): PA-PK, USART2 bridge, 16 MHz
+# HSI reset default.
+#
+# PLATFORM. Renode's stock `platforms/cpus/stm32f746.repl` with three changes:
+#   - SRAM widened to 512 KB (0x80000). The stock file declares the F746's
+#     320 KB; the F767/F777 carry 512 KB (DTCM + SRAM1 + SRAM2), and an F777
+#     firmware's stack at the top of RAM faulted on the narrower map.
+#   - UART7 (0x40007800) and UART8 (0x40007C00), which the F76x/F77x have and
+#     the stock file lacks; the TR-9 mainboard firmware touches UART7 at boot.
+#   - the clock declarations below (clock truth).
+# Proven live against the TR-9 mainboard firmware (STM32F777VI, CubeMX HAL):
+# reaches main(), configures its GPIO, pulses the display reset with HAL
+# delays and runs its init sequence.
+#
+# NOT MODELLED by the stock platform: ADC (so [[soc.adc]] is empty and ADC
+# injection is a loud drop), the F76x/F77x-only peripherals (DFSDM, JPEG,
+# MDIOS, CAN3), and no clock tree follows the firmware's PLL setup.
+#
+# PULLS. The stock GPIO model ignores PUPDR (an enabled pull-up on an undriven
+# input reads 0), so every port carries a `pull` map and the backend applies
+# the pull on each firmware IDR read (renode::PortMap::pull).
+[soc]
+backend = "renode"
+machine = "f7"
+platform_repl = """
+// STM32F7 platform: the stock F746 file plus 512 KB SRAM, UART7/UART8 and the
+// part's reset-default clock.
+//
+// CLOCK TRUTH (tests/clock_truth.rs). The stock file declares a 216 MHz
+// SysTick and 462 MIPS. 16 MHz is the HSI reset default (RM0410 section 5.2)
+// and the rate the part runs at before firmware configures anything, so core
+// and SysTick are declared at 16 MHz and cross-checked against frequency_hz.
+// Firmware that brings up the PLL for 216 MHz sees SysTick-timed delays run
+// 13.5x slow (measured on the TR-9 firmware's HAL_Delay); stated in
+// timing_limitation.
+
+using "platforms/cpus/stm32f746.repl"
+
+sram:
+    size: 0x80000
+
+uart7: UART.STM32F7_USART @ sysbus 0x40007800
+    frequency: 200000000
+    IRQ -> nvic@82
+
+uart8: UART.STM32F7_USART @ sysbus 0x40007C00
+    frequency: 200000000
+    IRQ -> nvic@83
+
+nvic:
+    systickFrequency: 16000000
+
+cpu:
+    PerformanceInMips: 16
+"""
+cpu_path = "sysbus.cpu"
+uart = "sysbus.usart2"
+frequency_hz = 16_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "STM32F7 (ARM Cortex-M7)"
+
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on the STM32F7 in this co-simulator: nobody \
+has measured whether an unserviced watchdog resets the core here, so a \
+firmware recovery path that depends on it is untested on this run.\
+"""
+
+timing_limitation = """\
+The STM32F7 core and SysTick run at the 16 MHz HSI reset default in this \
+co-simulator and its TIMx blocks at Renode's fixed 10 MHz; no clock tree \
+follows the firmware's PLL setup, so firmware that clocks itself at 216 MHz \
+sees SysTick-timed delays run 13.5x slow on this run.\
+"""
+
+[[soc.ports]]
+letter = "A"
+peripheral = "gpioPortA"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "B"
+peripheral = "gpioPortB"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "C"
+peripheral = "gpioPortC"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "D"
+peripheral = "gpioPortD"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "E"
+peripheral = "gpioPortE"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "F"
+peripheral = "gpioPortF"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "G"
+peripheral = "gpioPortG"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "H"
+peripheral = "gpioPortH"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "I"
+peripheral = "gpioPortI"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "J"
+peripheral = "gpioPortJ"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+[[soc.ports]]
+letter = "K"
+peripheral = "gpioPortK"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+pull = { pupdr_offset = 0x0C, idr_offset = 0x10 }
+
+[soc.i2c]
+# Not bridged on this part yet: the STM32F7_I2C bridge registration has not
+# been verified here, so a bound I2C device is reported as never exercised.
+controllers = []
+
+[soc.spi]
+controllers = []

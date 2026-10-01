@@ -219,6 +219,8 @@ limitation rather than as a silicon-equivalent clock.
 | `renode:rp2040` | clock-truth gate passes | stock pico-sdk timing fixture |
 | `renode:stm32f103` / `stm32f4_discovery` / `nrf52840` | clock-truth gate passes | SysTick timing fixture in `tests/clock_truth.rs` |
 | `renode:sifive_fe310` | `mtime` gate passes; instruction timing is not silicon-gated | `tests/clock_truth.rs` |
+| `renode:stm32g4` / `stm32f7` | clock-truth gate passes at the 16 MHz HSI reset default | SysTick fixture in `tests/clock_truth.rs`; firmware that raises the PLL (170 / 216 MHz) runs its SysTick delays 10.6x / 13.5x slow, stated as a timing limitation |
+| `renode:stm32l0` | clock-truth gate passes at 2 MHz, within 5% of the 2.097 MHz MSI default | SysTick fixture in `tests/clock_truth.rs`; 16x slow against a 32 MHz PLL, stated as a timing limitation |
 | `qemu:esp32` / `-s3` / `-c3` | approximate and host-load dependent | `tests/qemu_clock_truth.rs`; reports carry a timing limitation |
 
 The descriptor loader cross-checks each declared clock against its platform and
@@ -301,7 +303,7 @@ full watchdog fidelity and therefore emits neither disclosure when healthy.
 | `renode:stm32f103` | **resets once, then the core does not resume** | watchdog limitation is reported after the reset |
 | `renode:nrf52840` | **never fires** | watchdog limitation is reported; no reset is inferred |
 | `qemu:esp32` / `-s3` / `-c3` | **disabled on purpose** | the backend passes `wdt_disable=true` for the timer groups at launch |
-| `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | no starvation fixture establishes reset behavior for these parts |
+| `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:stm32g4`, `renode:stm32f7`, `renode:stm32l0`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | no starvation fixture establishes reset behavior for these parts |
 
 ESP32 watchdogs are disabled during co-simulation because chunk boundaries pause
 the guest while the analog side solves. The backend reports this limitation on
@@ -427,6 +429,8 @@ that command rather than to the report surfaces.
 | `renode:stm32f072` | inputs 0..7 through the stock `STM32F0_ADC` `SetDefaultValue` feed, proven end-to-end against firmware ADC reads on channels 0 and 3; package inputs 8/9 remain unmapped and drop + warn | none (unverified `STM32F7_I2C` bridge) | none (unverified `STM32SPI` bridge) |
 | `renode:stm32f103` | **none**: stock `stm32f103.repl` models no ADC (verified live); injections drop + warn | `i2c1` | `spi1` (via `extra_repl`) |
 | `renode:stm32f4_discovery` | **none**: same reason | `i2c1` | `spi2`, `spi3` (see below) |
+| `renode:stm32g4` | 23 package inputs through a composed register model (engine channel = ADC1 input N, or 32 + ADC2 input N): the regular-sequence handshake is instant and DR returns the injected count; no sample timing, DMA, oversampling or injected-channel data | none (unverified) | none (unverified) |
+| `renode:stm32f7` / `renode:stm32l0` | **none**: the stock `stm32f746.repl` / `stm32l071.repl` model no usable ADC; injections drop + warn | none (unverified) | none (unverified) |
 | `renode:nrf52840` | **none**: the live repl models no ADC/SAADC | `twi0`, `twi1` (live-verified: bridge registers on both) | `spi2` (live-verified registration) |
 | `renode:sifive_fe310` | none | none (unverified peripherals, a bound slave warns + fails CI assertions) | none |
 | `renode:rp2040` | inputs 0..3 (proven end-to-end against stock `adc_read()`); input 4 is the on-die temperature sensor, not an external node, so it drops + warns | `i2c0`, `i2c1` (proven end-to-end, both directions) | **none**: the vendored PL022 bit-bangs onto GPIO and never dispatches to a registered slave, so a bound slave warns + fails CI assertions (see below) |
@@ -609,6 +613,15 @@ the backend-specific contracts and limitations are listed below.
 - **GPIO in (push)**: `sysbus.<port> OnGPIO <bit> <bool>` drives an input
   pin.
 
+- **Internal pulls**: Renode's `STM32_GPIOPort` stores `PUPDR` but never
+  applies it, so an undriven input with its pull-up enabled reads 0. A port
+  with a `pull` map gets a Renode read hook on its `IDR`: at the instruction
+  that reads it, every pin `MODER` marks as an input and the engine is not
+  driving reads its `PUPDR` level; an engine drive always wins
+  (`tests/renode_stm32_families.rs`, two-sided). The G4, F7 and L0
+  descriptors carry it; a pull map on a port wider than 16 pins or without a
+  `moder` dir map is refused at load.
+
 - **UART (bidirectional)**: `emulation CreateServerSocketTerminal <port>
   "t" false` + `connector Connect sysbus.<usart> t` exposes the UART as a
   raw TCP socket. Bytes the firmware transmits arrive on the socket, and
@@ -640,6 +653,9 @@ configure.
 | nRF52840 (Cortex-M4) | `renode:nrf52840` | Renode `nrf52840.repl` | **Proven (UART boot)**: Zephyr shell `uart:~$` through the bridge. Bus controllers `twi0`/`twi1`/`spi2` live-verified (bridge registration, `renode_nrf52840_bus.rs`); an end-to-end nRF sensor round-trip awaits an nRF bus firmware fixture. Solved-LED-current proof would need a custom blinky ELF (the GPIO bridge is the STM32-proven ODR-poll). |
 | SiFive FE310 (RISC-V RV32, HiFive1) | `renode:sifive_fe310` | Renode `sifive-fe310.repl` | **Proven (UART boot)**: "BOOTING ZEPHYR OS ... shell>" through the bridge (needs `post_load_setup`: PRCI tags + `cpu PC vinit`). |
 | STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not yet run end-to-end |
+| STM32G473/G474 (Cortex-M4F), 48-pin | `renode:stm32g4` | **composed** in `db/mcu/stm32g4.soc.toml` (no stock G4 platform) | **Reaches main and runs**: the mbed-based moteus 1.1.2 servo firmware boots, reads its PB10/PB11 family straps through the emulated pulls, configures GPIO and loops polling FDCAN. Approximations (RCC, ADC, DMA without transfers, FDCAN without frames, RTC, CCM aliasing) are listed in the descriptor header |
+| STM32F765/767/777/779 (Cortex-M7), LQFP100 | `renode:stm32f7` | Renode `stm32f746.repl` plus UART7/UART8 | **Reaches main**: a TR-9 mainboard firmware configures GPIO and touches UART7; HAL delays run 13.5x slow at the reset clock |
+| STM32L011/L021 K-package (Cortex-M0+) | `renode:stm32l0` | Renode `stm32l071.repl` with SysTick at the MSI rate | **Reaches main**: a TR-9 keypad firmware parks in its main loop while the TIM2 interrupt scans keypad columns PA1-PA3 |
 | ESP32-S3 (Xtensa LX7) | `qemu:esp32s3` | Espressif QEMU `esp32s3` | **Wiring proven (machine boots, channels connect); app proof pending an S3 image.** The builtin `esp32s3` model entry binds to `qemu:esp32s3` (regression: `mcu_family_router.rs`), and `esp32_qemu_cosim.rs` boots the fork's real `esp32s3` machine from a blank flash (the ROM idles), connects QMP + gdbstub + UART, and steps the lockstep. The full app-level proof (UART banner + solved LED current, like the ESP32/C3 rows) needs a merged S3 flash image, which requires esp-idf with the esp32s3 Xtensa toolchain (`idf.py set-target esp32s3`; recipe in `testdata/firmware/esp32_blinky/build.sh`). |
 | RP2040 (dual Cortex-M0+, Raspberry Pi Pico) | `renode:rp2040` | hauksbee's own `rp2040.repl` + vendored peripheral models, compiled by Renode at run time (support bundle) | **Proven**: stock pico-sdk firmware boots through the real boot ROM into `main`, UART0 banner + GP25 toggling at 3.300 V through the solver on a corpus board. GPIO out/dir via SIO, UART0 TX, ADC inputs 0..3 and the I2C bridge on `i2c0`/`i2c1` are each proven end-to-end. SPI bridge unavailable, PIO absent, core 1 unproven (see note below) |
 | ESP32-C6, ESP32-H2 |, |, | Not in the Espressif QEMU fork's machine list; out of scope |
