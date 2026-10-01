@@ -2374,7 +2374,10 @@ basis = "onsemi NCP1117/D Rev.31 fixed-output accuracy +/-1.0% at the stated tes
 
 [models.match]
 # NCP1117ST33T3G is the onsemi 3.3 V SOT-223 order code (ST suffix, CASE 318H).
-value_re = "(?i)^(NCP1117-3[._]?3[_-]?SOT223|NCP1117ST33T3G)$"
+# The NCP1117I and NCV1117 variants share the datasheet, pin map and 3.3 V rows,
+# so every ST33 order code is accepted, as for the 5.0 V card. The NCP1117LP
+# order code carries LP before ST and is a different card (ncp1117lp_33).
+value_re = "(?i)^(NCP1117-3[._]?3[_-]?SOT223|NC[PV]1117I?ST33[A-Z0-9]*)$"
 
 [models.params]
 vout = 3.3
@@ -3874,3 +3877,1024 @@ max_current_a = 0.25        # 250 mA for VR >= 2.5 V
 max_voltage_v = 18.0         # VDD abs max (2.7 V to 16 V operating)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 180.0     # 3LD SOT-89, EIA/JEDEC JESD51-7
+
+# ── Fixed LDOs added 2026-10-01 (ME6211C, NCP1117LP, NCP1117, XC6206) ────────
+# Every card below is a FIXED-output order code with its voltage code required in
+# the match rule. No adjustable member of any family is carded here, and no
+# adjustable reference voltage (NCP1117 Vref 1.25 V) is recorded as an output.
+
+# ── ME6211C: Microne (Nanjing Micro One) 300-500 mA CMOS LDO, SOT-23-5 ────────
+# Source: Microne "ME6211 High Speed LDO Regulators, High PSRR, Low noise",
+#   document footer V14 (www.microne.com.cn), copy read from
+#   stm32-base.org/assets/pdf/regulators/ME6211.pdf. Pin Assignment p.4
+#   (ME6211CXXG / ME6211HXXG table), Absolute Maximum Ratings p.5, Electrical
+#   Characteristics p.6-9 (one table per voltage, Ta = 25 C, VIN = VOUT + 1 V,
+#   CIN = CL = 1 uF).
+#
+# PINOUT, SOT23-5/SOT353 column: 1 = VIN, 2 = VSS, 3 = CE, 4 = NC, 5 = VOUT.
+# This is NOT the XC6206 order and it is not the DFN2x2-6L order either (there
+# VIN is pad 3, VSS 2, CE 1, VOUT 4, NC 5/6), so the match rule is gated to the
+# five-lead footprints. A bare "ME6211C33" with a DFN or three-lead footprint
+# resolves to nothing, which is the honest outcome. The ME6211A (no CE pin,
+# SOT23-3/SOT89-3) and ME6211H (CE active LOW, only an H15 table is printed)
+# are different parts on different pinouts and are not matched.
+#
+# FIGURES THE DATASHEET PRINTS ONLY AS TYPICALS. The dropout, supply-current and
+# maximum-output-current rows sit in the Typ column with no Min/Max, so this
+# card's `dropout_v`, `iq_a` and `max_current_a` are typicals, not guaranteed
+# limits. Dropout is tabulated at 100 mA (VDIF1) and 200 mA (VDIF2) only; the
+# card carries VDIF2 and states the 200 mA condition. Output voltage is
+# x0.98 .. x1.02 of nominal at IOUT = 30 mA. Absolute maximum VIN is 6.5 V
+# (2.0 V to 6.0 V operating); Pd is 300 mW for SOT23 and 250 mW for SOT353.
+# CE: VCEH 1.0 V min starts the part, VCEL 0.5 V max (0.7 V for the C50) shuts
+# it down; the pad is named `en` for the report and NOT gated, as on the other
+# enable-pin cards here.
+# DELIBERATELY NOT MODELLED: foldback current limit (ISHORT 110-150 mA typ),
+# load and line regulation, PSRR, output noise, standby current, thermal limits.
+
+[[models]]
+id = "me6211c12"
+kind = "vreg"
+description = "Microne ME6211C12 300 mA CMOS LDO, 1.2 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C12 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.176
+high = 1.224
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C12 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C12M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C12" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C12(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 1.2      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.5     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 280 mV typ @ 100 mA)
+iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.3   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+[[models]]
+id = "me6211c18"
+kind = "vreg"
+description = "Microne ME6211C18 300 mA CMOS LDO, 1.8 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C18 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.764
+high = 1.836
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C18 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C18M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C18" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C18(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 1.8      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.4     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 200 mV typ @ 100 mA)
+iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.3   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+[[models]]
+id = "me6211c25"
+kind = "vreg"
+description = "Microne ME6211C25 400 mA CMOS LDO, 2.5 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C25 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.45
+high = 2.55
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C25 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C25M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C25" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C25(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 2.5      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.22     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 110 mV typ @ 100 mA)
+iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.4   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+[[models]]
+id = "me6211c28"
+kind = "vreg"
+description = "Microne ME6211C28 450 mA CMOS LDO, 2.8 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C28 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.744
+high = 2.856
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C28 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C28M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C28" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C28(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 2.8      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.22     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 110 mV typ @ 100 mA)
+iq_a      = 50.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.45   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+[[models]]
+id = "me6211c30"
+kind = "vreg"
+description = "Microne ME6211C30 500 mA CMOS LDO, 3.0 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C30 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.94
+high = 3.06
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C30 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C30M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C30" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C30(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 3.0      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.21     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 100 mV typ @ 100 mA)
+iq_a      = 60.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.5   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+[[models]]
+id = "me6211c33"
+kind = "vreg"
+description = "Microne ME6211C33 500 mA CMOS LDO, 3.3 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C33 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.234
+high = 3.366
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C33 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C33M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C33" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C33(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 3.3      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.26     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 120 mV typ @ 100 mA)
+iq_a      = 60.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.5   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+[[models]]
+id = "me6211c50"
+kind = "vreg"
+description = "Microne ME6211C50 500 mA CMOS LDO, 5.0 V fixed, SOT-23-5 / SOT-353, active-high CE"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://stm32-base.org/assets/pdf/regulators/ME6211.pdf"
+title = "Microne ME6211 High Speed LDO Regulators, High PSRR, Low noise, V14 (mirror of the www.microne.com.cn datasheet)"
+locator = "Pin Assignment p.4 (ME6211CXXG/ME6211HXXG, SOT23-5/SOT353 column); Absolute Maximum Ratings p.5; Electrical Characteristics ME6211C50 p.6-9"
+sha256 = "7e33d6651f019782b16169a5b26b7cad43e9d462b5e25dc54815b458f88fd59b"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.9
+high = 5.1
+unit = "V"
+kind = "specification-limits"
+basis = "ME6211C50 Electrical Characteristics, VOUT(E) = x0.98 to x1.02 of VOUT(T), IOUT = 30 mA, VIN = VOUT + 1 V, Ta = 25 C"
+
+[models.match]
+# Order code ME6211C50M5G-N (M5 = SOT23-5, G = green, -N as sold). The bare
+# "ME6211C50" is accepted only on a five-lead footprint (see the pinout note).
+value_re = "(?i)^ME6211C50(M5G?)?(-N)?$"
+footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$)"
+
+[models.params]
+vout      = 5.0      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.2     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 100 mV typ @ 100 mA)
+iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+
+[models.pins]
+# SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
+"1" = "in"     # VIN
+"2" = "gnd"    # VSS
+"3" = "en"     # CE, active high; named for the report, NOT gated
+"4" = "nc"
+"5" = "out"    # VOUT
+
+[models.ratings]
+max_current_a = 0.5   # IOUTMAX, typ column (VIN = VOUT + 1 V); Absolute Maximum IOUT is 0.6 A
+max_voltage_v = 6.5    # VIN abs max (2.0 V to 6.0 V operating)
+max_power_w = 0.25     # SOT353 Pd; SOT23 is 0.3 W. The footprint rule binds both, so the lower is used.
+                       # No temperature is printed for the Absolute Maximum table, so no tagged
+                       # [[characteristic]] rows are carried and the scalar is the fallback.
+
+# ── NCP1117LP: onsemi 1 A low-quiescent-current LDO, SOT-223 ──────────────────
+# Source: onsemi NCP1117LP datasheet, publication NCP1117LP/D, January 2024,
+#   Rev. 6 (onsemi.com/pdf/datasheet/ncp1117lp-d.pdf). Page 1 pin list and case
+#   318H, Table 1 Pin Function Description p.2, Table 2 Maximum Ratings p.2,
+#   Table 3 Electrical Characteristics p.3, Device Ordering Information p.12.
+#
+# PINOUT, SOT-223 (ST suffix, case 318H): 1 = Adj/GND (ground only on the fixed
+# parts), 2 = Vout, 3 = Vin; the heatsink tab is connected to pin 2 (OUTPUT), not
+# to ground. The DPAK orderable codes (DT18, DT33) are not matched: the datasheet
+# prints one pin list for both cases and states the tab connection only for the
+# SOT-223.
+#
+# The LP is NOT the standard NCP1117: it has 550 uA typ quiescent current
+# (fixed, Vin = 12 V, Io = 10 mA), Vin abs max 18 V (not 20 V), 1.4 V max
+# dropout at 1 A, and a +/-2% fixed-output window at 25 C (1.470-1.530 V for
+# 1.5 V, 1.760-1.840 for 1.8 V, 2.450-2.550 for 2.5 V, 3.235-3.365 for 3.3 V,
+# 4.900-5.100 for 5.0 V). The datasheet is inconsistent on output capacitance:
+# Table 1 and Figures 1-2 say 10 uF with 20 mOhm <= ESR <= 20 Ohm, the
+# Applications text says a minimum of 4.7 uF with the same ESR window; the
+# larger figure is carried. The ADJ member's Vref (1.250 V) is not recorded.
+# DELIBERATELY NOT MODELLED: current limit (1.1 A min), minimum load current
+# (printed 1 typ / 5 max mA for the family although the features list "no minimum
+# load" for fixed parts), thermal shutdown (165 C), ripple rejection (60 dB).
+
+[[models]]
+id = "ncp1117lp_15"
+kind = "vreg"
+description = "onsemi NCP1117LPST15T3G 1 A low-IQ LDO, 1.5 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/ncp1117lp-d.pdf"
+title = "onsemi NCP1117LP Voltage Regulators, 1.0 A Low-Dropout Positive, Fixed and Adjustable, NCP1117LP/D Rev. 6, January 2024"
+locator = "Page 1 pin list (SOT-223 ST suffix, case 318H); Table 1 Pin Function Description p.2; Table 2 Maximum Ratings p.2; Table 3 Electrical Characteristics p.3; Device Ordering Information p.12"
+sha256 = "d26363b7d72e7c1edae5adaf9325e9f8572665bb6e217c4804a7af7c1dc775a9"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.47
+high = 1.53
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117LP Table 3 Output Voltage, Fixed Output Devices NCP1117-1.5, TJ = 25 C, Io = 10 mA"
+
+[models.match]
+# ST = SOT-223 and 15 = 1.5 V; both required. The DPAK (DT) orderable codes are not matched.
+value_re = "(?i)^NCP1117LPST15[A-Z0-9]*$"
+
+[models.params]
+vout      = 1.5      # 1.47 to 1.53 V @ TJ = 25 C, Io = 10 mA
+dropout_v = 1.4      # max @ Iout = 1 A, TA = 25 C, DVout = Vout - 100 mV (1.3 V typ), Table 3
+# Source: onsemi NCP1117LP/D Rev. 6, Table 1 Vout pin: a minimum of 10 uF with 20 mOhm <= ESR <= 20 Ohm.
+cout_min_f = 1.0e-5
+cout_esr_min_ohm = 0.02
+cout_esr_max_ohm = 20.0
+iq_a      = 5.5e-4   # IQFIX typ @ Vin = 12 V, Io = 10 mA (700 uA max)
+
+[models.pins]
+# SOT-223, ST suffix, case 318H. Tab is internally tied to pin 2 (Vout).
+"1" = "gnd"    # Adj/GND; ground only on the fixed-mode parts
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # "output current in excess of 1.0 A"; current limit 1.1 A min
+max_voltage_v = 18.0         # DC Input Voltage Vin abs max, Table 2
+max_junction_temp_c = 150.0  # TJ(max), Table 2
+theta_ja_c_per_w = 108.0     # RqJA on a 100 x 100 mm PCB, 1 oz Cu, TA = 25 C (Table 2 note 2)
+theta_jc_c_per_w = 15.0
+
+[[models]]
+id = "ncp1117lp_18"
+kind = "vreg"
+description = "onsemi NCP1117LPST18T3G 1 A low-IQ LDO, 1.8 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/ncp1117lp-d.pdf"
+title = "onsemi NCP1117LP Voltage Regulators, 1.0 A Low-Dropout Positive, Fixed and Adjustable, NCP1117LP/D Rev. 6, January 2024"
+locator = "Page 1 pin list (SOT-223 ST suffix, case 318H); Table 1 Pin Function Description p.2; Table 2 Maximum Ratings p.2; Table 3 Electrical Characteristics p.3; Device Ordering Information p.12"
+sha256 = "d26363b7d72e7c1edae5adaf9325e9f8572665bb6e217c4804a7af7c1dc775a9"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.76
+high = 1.84
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117LP Table 3 Output Voltage, Fixed Output Devices NCP1117-1.8, TJ = 25 C, Io = 10 mA"
+
+[models.match]
+# ST = SOT-223 and 18 = 1.8 V; both required. The DPAK (DT) orderable codes are not matched.
+value_re = "(?i)^NCP1117LPST18[A-Z0-9]*$"
+
+[models.params]
+vout      = 1.8      # 1.76 to 1.84 V @ TJ = 25 C, Io = 10 mA
+dropout_v = 1.4      # max @ Iout = 1 A, TA = 25 C, DVout = Vout - 100 mV (1.3 V typ), Table 3
+# Source: onsemi NCP1117LP/D Rev. 6, Table 1 Vout pin: a minimum of 10 uF with 20 mOhm <= ESR <= 20 Ohm.
+cout_min_f = 1.0e-5
+cout_esr_min_ohm = 0.02
+cout_esr_max_ohm = 20.0
+iq_a      = 5.5e-4   # IQFIX typ @ Vin = 12 V, Io = 10 mA (700 uA max)
+
+[models.pins]
+# SOT-223, ST suffix, case 318H. Tab is internally tied to pin 2 (Vout).
+"1" = "gnd"    # Adj/GND; ground only on the fixed-mode parts
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # "output current in excess of 1.0 A"; current limit 1.1 A min
+max_voltage_v = 18.0         # DC Input Voltage Vin abs max, Table 2
+max_junction_temp_c = 150.0  # TJ(max), Table 2
+theta_ja_c_per_w = 108.0     # RqJA on a 100 x 100 mm PCB, 1 oz Cu, TA = 25 C (Table 2 note 2)
+theta_jc_c_per_w = 15.0
+
+[[models]]
+id = "ncp1117lp_25"
+kind = "vreg"
+description = "onsemi NCP1117LPST25T3G 1 A low-IQ LDO, 2.5 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/ncp1117lp-d.pdf"
+title = "onsemi NCP1117LP Voltage Regulators, 1.0 A Low-Dropout Positive, Fixed and Adjustable, NCP1117LP/D Rev. 6, January 2024"
+locator = "Page 1 pin list (SOT-223 ST suffix, case 318H); Table 1 Pin Function Description p.2; Table 2 Maximum Ratings p.2; Table 3 Electrical Characteristics p.3; Device Ordering Information p.12"
+sha256 = "d26363b7d72e7c1edae5adaf9325e9f8572665bb6e217c4804a7af7c1dc775a9"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.45
+high = 2.55
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117LP Table 3 Output Voltage, Fixed Output Devices NCP1117-2.5, TJ = 25 C, Io = 10 mA"
+
+[models.match]
+# ST = SOT-223 and 25 = 2.5 V; both required. The DPAK (DT) orderable codes are not matched.
+value_re = "(?i)^NCP1117LPST25[A-Z0-9]*$"
+
+[models.params]
+vout      = 2.5      # 2.45 to 2.55 V @ TJ = 25 C, Io = 10 mA
+dropout_v = 1.4      # max @ Iout = 1 A, TA = 25 C, DVout = Vout - 100 mV (1.3 V typ), Table 3
+# Source: onsemi NCP1117LP/D Rev. 6, Table 1 Vout pin: a minimum of 10 uF with 20 mOhm <= ESR <= 20 Ohm.
+cout_min_f = 1.0e-5
+cout_esr_min_ohm = 0.02
+cout_esr_max_ohm = 20.0
+iq_a      = 5.5e-4   # IQFIX typ @ Vin = 12 V, Io = 10 mA (700 uA max)
+
+[models.pins]
+# SOT-223, ST suffix, case 318H. Tab is internally tied to pin 2 (Vout).
+"1" = "gnd"    # Adj/GND; ground only on the fixed-mode parts
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # "output current in excess of 1.0 A"; current limit 1.1 A min
+max_voltage_v = 18.0         # DC Input Voltage Vin abs max, Table 2
+max_junction_temp_c = 150.0  # TJ(max), Table 2
+theta_ja_c_per_w = 108.0     # RqJA on a 100 x 100 mm PCB, 1 oz Cu, TA = 25 C (Table 2 note 2)
+theta_jc_c_per_w = 15.0
+
+[[models]]
+id = "ncp1117lp_33"
+kind = "vreg"
+description = "onsemi NCP1117LPST33T3G 1 A low-IQ LDO, 3.3 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/ncp1117lp-d.pdf"
+title = "onsemi NCP1117LP Voltage Regulators, 1.0 A Low-Dropout Positive, Fixed and Adjustable, NCP1117LP/D Rev. 6, January 2024"
+locator = "Page 1 pin list (SOT-223 ST suffix, case 318H); Table 1 Pin Function Description p.2; Table 2 Maximum Ratings p.2; Table 3 Electrical Characteristics p.3; Device Ordering Information p.12"
+sha256 = "d26363b7d72e7c1edae5adaf9325e9f8572665bb6e217c4804a7af7c1dc775a9"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.235
+high = 3.365
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117LP Table 3 Output Voltage, Fixed Output Devices NCP1117-3.3, TJ = 25 C, Io = 10 mA"
+
+[models.match]
+# ST = SOT-223 and 33 = 3.3 V; both required. The DPAK (DT) orderable codes are not matched.
+value_re = "(?i)^NCP1117LPST33[A-Z0-9]*$"
+
+[models.params]
+vout      = 3.3      # 3.235 to 3.365 V @ TJ = 25 C, Io = 10 mA
+dropout_v = 1.4      # max @ Iout = 1 A, TA = 25 C, DVout = Vout - 100 mV (1.3 V typ), Table 3
+# Source: onsemi NCP1117LP/D Rev. 6, Table 1 Vout pin: a minimum of 10 uF with 20 mOhm <= ESR <= 20 Ohm.
+cout_min_f = 1.0e-5
+cout_esr_min_ohm = 0.02
+cout_esr_max_ohm = 20.0
+iq_a      = 5.5e-4   # IQFIX typ @ Vin = 12 V, Io = 10 mA (700 uA max)
+
+[models.pins]
+# SOT-223, ST suffix, case 318H. Tab is internally tied to pin 2 (Vout).
+"1" = "gnd"    # Adj/GND; ground only on the fixed-mode parts
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # "output current in excess of 1.0 A"; current limit 1.1 A min
+max_voltage_v = 18.0         # DC Input Voltage Vin abs max, Table 2
+max_junction_temp_c = 150.0  # TJ(max), Table 2
+theta_ja_c_per_w = 108.0     # RqJA on a 100 x 100 mm PCB, 1 oz Cu, TA = 25 C (Table 2 note 2)
+theta_jc_c_per_w = 15.0
+
+[[models]]
+id = "ncp1117lp_50"
+kind = "vreg"
+description = "onsemi NCP1117LPST50T3G 1 A low-IQ LDO, 5.0 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/ncp1117lp-d.pdf"
+title = "onsemi NCP1117LP Voltage Regulators, 1.0 A Low-Dropout Positive, Fixed and Adjustable, NCP1117LP/D Rev. 6, January 2024"
+locator = "Page 1 pin list (SOT-223 ST suffix, case 318H); Table 1 Pin Function Description p.2; Table 2 Maximum Ratings p.2; Table 3 Electrical Characteristics p.3; Device Ordering Information p.12"
+sha256 = "d26363b7d72e7c1edae5adaf9325e9f8572665bb6e217c4804a7af7c1dc775a9"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.9
+high = 5.1
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117LP Table 3 Output Voltage, Fixed Output Devices NCP1117-5.0, TJ = 25 C, Io = 10 mA"
+
+[models.match]
+# ST = SOT-223 and 50 = 5.0 V; both required. The DPAK (DT) orderable codes are not matched.
+value_re = "(?i)^NCP1117LPST50[A-Z0-9]*$"
+
+[models.params]
+vout      = 5.0      # 4.9 to 5.1 V @ TJ = 25 C, Io = 10 mA
+dropout_v = 1.4      # max @ Iout = 1 A, TA = 25 C, DVout = Vout - 100 mV (1.3 V typ), Table 3
+# Source: onsemi NCP1117LP/D Rev. 6, Table 1 Vout pin: a minimum of 10 uF with 20 mOhm <= ESR <= 20 Ohm.
+cout_min_f = 1.0e-5
+cout_esr_min_ohm = 0.02
+cout_esr_max_ohm = 20.0
+iq_a      = 5.5e-4   # IQFIX typ @ Vin = 12 V, Io = 10 mA (700 uA max)
+
+[models.pins]
+# SOT-223, ST suffix, case 318H. Tab is internally tied to pin 2 (Vout).
+"1" = "gnd"    # Adj/GND; ground only on the fixed-mode parts
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # "output current in excess of 1.0 A"; current limit 1.1 A min
+max_voltage_v = 18.0         # DC Input Voltage Vin abs max, Table 2
+max_junction_temp_c = 150.0  # TJ(max), Table 2
+theta_ja_c_per_w = 108.0     # RqJA on a 100 x 100 mm PCB, 1 oz Cu, TA = 25 C (Table 2 note 2)
+theta_jc_c_per_w = 15.0
+
+# ── NCP1117 (standard): onsemi 1 A LDO, SOT-223, 1.8 / 2.5 V ──────────────────
+# Source: onsemi NCP1117/NCP1117I/NCV1117 datasheet, NCP1117/D Rev. 31, August
+#   2021 (the revision the 5.0 V card above cites): Maximum Ratings p.2,
+#   Electrical Characteristics p.3-4, Ordering Information (NCP1117) p.12.
+# Same SOT-223 map as the 5.0 V card (1 = Adj/GND, 2 = Vout, 3 = Vin, tab =
+# Vout). The vout interval is the datasheet's Note 4 row (Vin and Iout over
+# their ranges, over the operating ambient range); the 25 C / 10 mA row is
+# narrower (1.782-1.818 V for 1.8 V, 2.475-2.525 V for 2.5 V). The 3.3 V code is
+# carried by ncp1117_3v3_sot223 above, whose match rule is widened to every
+# NCP1117/NCP1117I/NCV1117 ST33 order code. The ST15, ST19, ST20, ST285 and
+# ST12 codes and the DPAK codes are not carded.
+
+[[models]]
+id = "ncp1117_18"
+kind = "vreg"
+description = "onsemi NCP1117ST18T3G 1 A LDO, 1.8 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/download/data-sheet/pdf/ncp1117-d.pdf"
+title = "onsemi NCP1117, NCP1117I, NCV1117 1.0 A Low-Dropout Positive Fixed and Adjustable Voltage Regulators, NCP1117/D Rev. 31, August 2021"
+locator = "Maximum Ratings p.2 (Case 318H); Electrical Characteristics p.3-4 (1.8 V rows); ORDERING INFORMATION - (NCP1117) p.12"
+sha256 = "84a660ccc5aac7d94cb78470ce368810f4142ef79cbd8bf5ce5c53ae4a432551"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.755
+high = 1.845
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117 Electrical Characteristics, Output Voltage 1.8 V, Note 4 row (Vin and Iout over the specified range, over the operating ambient range)"
+
+[models.match]
+# ST = SOT-223 and 18 = 1.8 V; both required. The LP family is a different
+# part (NCP1117LP above); its codes carry "LP" before ST and do not match here.
+value_re = "(?i)^NC[PV]1117I?ST18[A-Z0-9]*$"
+
+[models.params]
+vout      = 1.8      # 1.755 to 1.845 V over line, load and temperature (Note 4)
+dropout_v = 1.2      # max @ rated 800 mA, NCP1117/D Rev.31 electrical table
+# Source: onsemi NCP1117/D Rev.31, Applications Information: COUT >= 4.7 uF, ESR 33 mOhm..2.2 Ohm.
+cout_min_f = 4.7e-6
+cout_esr_min_ohm = 0.033
+cout_esr_max_ohm = 2.2
+iq_a      = 0.0042   # Quiescent Current typ, 1.8 V row (10 mA max)
+
+[models.pins]
+# SOT-223, ST suffix, Case 318H. Tab is internally tied to pin 2.
+"1" = "gnd"    # Adjust/Ground; tied internally on the fixed devices
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # Note 3 caps regulator current at 1.0 A when Vin > 12 V
+max_voltage_v = 20.0         # VIN abs max
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 160.0     # SOT-223, minimum-size pad
+theta_jc_c_per_w = 15.0
+
+[[models]]
+id = "ncp1117_25"
+kind = "vreg"
+description = "onsemi NCP1117ST25T3G 1 A LDO, 2.5 V fixed, SOT-223"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.onsemi.com/download/data-sheet/pdf/ncp1117-d.pdf"
+title = "onsemi NCP1117, NCP1117I, NCV1117 1.0 A Low-Dropout Positive Fixed and Adjustable Voltage Regulators, NCP1117/D Rev. 31, August 2021"
+locator = "Maximum Ratings p.2 (Case 318H); Electrical Characteristics p.3-4 (2.5 V rows); ORDERING INFORMATION - (NCP1117) p.12"
+sha256 = "84a660ccc5aac7d94cb78470ce368810f4142ef79cbd8bf5ce5c53ae4a432551"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.45
+high = 2.55
+unit = "V"
+kind = "specification-limits"
+basis = "NCP1117 Electrical Characteristics, Output Voltage 2.5 V, Note 4 row (Vin and Iout over the specified range, over the operating ambient range)"
+
+[models.match]
+# ST = SOT-223 and 25 = 2.5 V; both required. The LP family is a different
+# part (NCP1117LP above); its codes carry "LP" before ST and do not match here.
+value_re = "(?i)^NC[PV]1117I?ST25[A-Z0-9]*$"
+
+[models.params]
+vout      = 2.5      # 2.45 to 2.55 V over line, load and temperature (Note 4)
+dropout_v = 1.2      # max @ rated 800 mA, NCP1117/D Rev.31 electrical table
+# Source: onsemi NCP1117/D Rev.31, Applications Information: COUT >= 4.7 uF, ESR 33 mOhm..2.2 Ohm.
+cout_min_f = 4.7e-6
+cout_esr_min_ohm = 0.033
+cout_esr_max_ohm = 2.2
+iq_a      = 0.0052   # Quiescent Current typ, 2.5 V row (10 mA max)
+
+[models.pins]
+# SOT-223, ST suffix, Case 318H. Tab is internally tied to pin 2.
+"1" = "gnd"    # Adjust/Ground; tied internally on the fixed devices
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # Note 3 caps regulator current at 1.0 A when Vin > 12 V
+max_voltage_v = 20.0         # VIN abs max
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 160.0     # SOT-223, minimum-size pad
+theta_jc_c_per_w = 15.0
+
+# ── XC6206 other voltages (1.8 / 2.5 / 2.8 / 3.0 / 5.0 V), SOT-23 ────────────
+# Source: Torex "XC6206 Series" datasheet ETR0305_003a, the copy Farnell hosts
+#   (farnell.com/datasheets/578820.pdf); the manufacturer's own PDF returns 403
+#   to scripted fetches. Pin Assignment p.2, Absolute Maximum Ratings p.3,
+#   Electrical Characteristics and Electrical Characteristics Chart p.4-5. The
+#   3.3 V row of that chart (Vdif1 75/350 mV, Vdif2 250/680 mV, IOUTMAX 200 mA,
+#   2% window 3.234-3.366 V) agrees with the ETR03005-009 figures the xc6206_3v3
+#   card above uses, so the two revisions are read as consistent.
+#
+# Every card here is the SOT-23 (MR) map: 1 = VSS, 2 = VOUT, 3 = VIN. SOT-89
+# (1 VSS, 2 VIN, 3 VOUT) and USP-6B differ and are not matched (see the 3.3 V
+# card's package hazard note). Order code XC6206P + two voltage digits + accuracy
+# digit (2 = +/-2%; 1 = +/-1% is tabulated from 2.0 V up) + MR (-G).
+#
+# `dropout_v` is the Vdif2 MAXIMUM @ IOUT = 100 mA for VOUT(T) > 1.8 V. The 1.8 V
+# row is the boundary of the datasheet's own condition split (100 mA above 1.8 V,
+# 60 mA below), so the 1.8 V card carries Vdif1 max @ 30 mA (390 mV) instead.
+# `max_current_a` is the chart's IOUTMAX minimum for the voltage band. The
+# foldback ISHORT (130 mA typ at 1.8 V, 100 mA typ at 2.5 V and up) sits below
+# the part's own rating and is not modelled. VIN is 1.8 V min to 6.0 V max.
+
+[[models]]
+id = "xc6206_1v8"
+kind = "vreg"
+description = "XC6206-1.8 Torex 80 mA LDO, 1.8 V fixed, 1 uA IQ, SOT-23"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/578820.pdf"
+title = "Torex XC6206 Series, Low ESR Cap. Compatible Positive Voltage Regulators, ETR0305_003a (Farnell copy)"
+locator = "Pin Assignment p.2 (SOT-23 column); Absolute Maximum Ratings p.3; Electrical Characteristics p.4; Electrical Characteristics Chart p.5, VOUT(T) = 1.8 row"
+sha256 = "cc8f707196493a699ee3b377f991b54445cde808336f6dd768a355f75df2944f"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.764
+high = 1.836
+unit = "V"
+kind = "specification-limits"
+basis = "XC6206 Electrical Characteristics Chart E-1, 2% accuracy VOUT(E) at VOUT(T) = 1.8, IOUT = 30 mA, VIN = VOUT(T) + 1.0 V, Ta = 25 C"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex XC6206 ETR0305_003a, ABSOLUTE MAXIMUM RATINGS (Ta = 25 C), Pd, SOT-23, 250 mW"
+
+[models.match]
+# Accepts XC6206P182MR(-G), the package-less forms and XC6206-1.8; rejects
+# the SOT-89 (PR) and USP-6B (DR) order codes and every other voltage code.
+value_re = "(?i)^XC6206(P182?(MR-?G?)?|[-_ ]?1[._]8V?)$"
+
+[models.params]
+vout      = 1.8      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.39     # Vdif1 max @ IOUT = 30 mA (150 mV typ); Vdif2 is 350 typ / 780 max but its test current is not defined at exactly 1.8 V. ETR0305_003a chart, p.5.
+iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
+
+[models.pins]
+# SOT-23, datasheet PIN ASSIGNMENT. SOT-89 and USP-6B differ; see the 3.3 V card.
+"1" = "gnd"   # VSS
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
+
+[models.ratings]
+max_current_a = 0.08   # IOUTMAX min, chart E-2, VOUT >= VOUT(E) x 0.9
+max_voltage_v = 7.0   # VIN abs max (1.8 V to 6.0 V operating)
+max_power_w = 0.25    # SOT-23 Pd as a bare IC; the datasheet publishes no theta_JA
+
+[[models]]
+id = "xc6206_2v5"
+kind = "vreg"
+description = "XC6206-2.5 Torex 150 mA LDO, 2.5 V fixed, 1 uA IQ, SOT-23"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/578820.pdf"
+title = "Torex XC6206 Series, Low ESR Cap. Compatible Positive Voltage Regulators, ETR0305_003a (Farnell copy)"
+locator = "Pin Assignment p.2 (SOT-23 column); Absolute Maximum Ratings p.3; Electrical Characteristics p.4; Electrical Characteristics Chart p.5, VOUT(T) = 2.5 row"
+sha256 = "cc8f707196493a699ee3b377f991b54445cde808336f6dd768a355f75df2944f"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.45
+high = 2.55
+unit = "V"
+kind = "specification-limits"
+basis = "XC6206 Electrical Characteristics Chart E-1, 2% accuracy VOUT(E) at VOUT(T) = 2.5, IOUT = 30 mA, VIN = VOUT(T) + 1.0 V, Ta = 25 C"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex XC6206 ETR0305_003a, ABSOLUTE MAXIMUM RATINGS (Ta = 25 C), Pd, SOT-23, 250 mW"
+
+[models.match]
+# Accepts XC6206P252MR(-G) and the +/-1% grade P251MR, the package-less forms and XC6206-2.5; rejects
+# the SOT-89 (PR) and USP-6B (DR) order codes and every other voltage code.
+value_re = "(?i)^XC6206(P25[12]?(MR-?G?)?|[-_ ]?2[._]5V?)$"
+
+[models.params]
+vout      = 2.5      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.71     # Vdif2 max @ IOUT = 100 mA (350 mV typ). ETR0305_003a chart, p.5.
+iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
+
+[models.pins]
+# SOT-23, datasheet PIN ASSIGNMENT. SOT-89 and USP-6B differ; see the 3.3 V card.
+"1" = "gnd"   # VSS
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
+
+[models.ratings]
+max_current_a = 0.15   # IOUTMAX min, chart E-2, VOUT >= VOUT(E) x 0.9
+max_voltage_v = 7.0   # VIN abs max (1.8 V to 6.0 V operating)
+max_power_w = 0.25    # SOT-23 Pd as a bare IC; the datasheet publishes no theta_JA
+
+[[models]]
+id = "xc6206_2v8"
+kind = "vreg"
+description = "XC6206-2.8 Torex 150 mA LDO, 2.8 V fixed, 1 uA IQ, SOT-23"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/578820.pdf"
+title = "Torex XC6206 Series, Low ESR Cap. Compatible Positive Voltage Regulators, ETR0305_003a (Farnell copy)"
+locator = "Pin Assignment p.2 (SOT-23 column); Absolute Maximum Ratings p.3; Electrical Characteristics p.4; Electrical Characteristics Chart p.5, VOUT(T) = 2.8 row"
+sha256 = "cc8f707196493a699ee3b377f991b54445cde808336f6dd768a355f75df2944f"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.744
+high = 2.856
+unit = "V"
+kind = "specification-limits"
+basis = "XC6206 Electrical Characteristics Chart E-1, 2% accuracy VOUT(E) at VOUT(T) = 2.8, IOUT = 30 mA, VIN = VOUT(T) + 1.0 V, Ta = 25 C"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex XC6206 ETR0305_003a, ABSOLUTE MAXIMUM RATINGS (Ta = 25 C), Pd, SOT-23, 250 mW"
+
+[models.match]
+# Accepts XC6206P282MR(-G) and the +/-1% grade P281MR, the package-less forms and XC6206-2.8; rejects
+# the SOT-89 (PR) and USP-6B (DR) order codes and every other voltage code.
+value_re = "(?i)^XC6206(P28[12]?(MR-?G?)?|[-_ ]?2[._]8V?)$"
+
+[models.params]
+vout      = 2.8      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.71     # Vdif2 max @ IOUT = 100 mA (350 mV typ). ETR0305_003a chart, p.5.
+iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
+
+[models.pins]
+# SOT-23, datasheet PIN ASSIGNMENT. SOT-89 and USP-6B differ; see the 3.3 V card.
+"1" = "gnd"   # VSS
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
+
+[models.ratings]
+max_current_a = 0.15   # IOUTMAX min, chart E-2, VOUT >= VOUT(E) x 0.9
+max_voltage_v = 7.0   # VIN abs max (1.8 V to 6.0 V operating)
+max_power_w = 0.25    # SOT-23 Pd as a bare IC; the datasheet publishes no theta_JA
+
+[[models]]
+id = "xc6206_3v0"
+kind = "vreg"
+description = "XC6206-3.0 Torex 200 mA LDO, 3.0 V fixed, 1 uA IQ, SOT-23"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/578820.pdf"
+title = "Torex XC6206 Series, Low ESR Cap. Compatible Positive Voltage Regulators, ETR0305_003a (Farnell copy)"
+locator = "Pin Assignment p.2 (SOT-23 column); Absolute Maximum Ratings p.3; Electrical Characteristics p.4; Electrical Characteristics Chart p.5, VOUT(T) = 3.0 row"
+sha256 = "cc8f707196493a699ee3b377f991b54445cde808336f6dd768a355f75df2944f"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.94
+high = 3.06
+unit = "V"
+kind = "specification-limits"
+basis = "XC6206 Electrical Characteristics Chart E-1, 2% accuracy VOUT(E) at VOUT(T) = 3.0, IOUT = 30 mA, VIN = VOUT(T) + 1.0 V, Ta = 25 C"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex XC6206 ETR0305_003a, ABSOLUTE MAXIMUM RATINGS (Ta = 25 C), Pd, SOT-23, 250 mW"
+
+[models.match]
+# Accepts XC6206P302MR(-G) and the +/-1% grade P301MR, the package-less forms and XC6206-3.0; rejects
+# the SOT-89 (PR) and USP-6B (DR) order codes and every other voltage code.
+value_re = "(?i)^XC6206(P30[12]?(MR-?G?)?|[-_ ]?3[._]0V?)$"
+
+[models.params]
+vout      = 3.0      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.68     # Vdif2 max @ IOUT = 100 mA (250 mV typ). ETR0305_003a chart, p.5.
+iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
+
+[models.pins]
+# SOT-23, datasheet PIN ASSIGNMENT. SOT-89 and USP-6B differ; see the 3.3 V card.
+"1" = "gnd"   # VSS
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
+
+[models.ratings]
+max_current_a = 0.2   # IOUTMAX min, chart E-2, VOUT >= VOUT(E) x 0.9
+max_voltage_v = 7.0   # VIN abs max (1.8 V to 6.0 V operating)
+max_power_w = 0.25    # SOT-23 Pd as a bare IC; the datasheet publishes no theta_JA
+
+[[models]]
+id = "xc6206_5v0"
+kind = "vreg"
+description = "XC6206-5.0 Torex 250 mA LDO, 5.0 V fixed, 1 uA IQ, SOT-23"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/578820.pdf"
+title = "Torex XC6206 Series, Low ESR Cap. Compatible Positive Voltage Regulators, ETR0305_003a (Farnell copy)"
+locator = "Pin Assignment p.2 (SOT-23 column); Absolute Maximum Ratings p.3; Electrical Characteristics p.4; Electrical Characteristics Chart p.5, VOUT(T) = 5.0 row"
+sha256 = "cc8f707196493a699ee3b377f991b54445cde808336f6dd768a355f75df2944f"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.9
+high = 5.1
+unit = "V"
+kind = "specification-limits"
+basis = "XC6206 Electrical Characteristics Chart E-1, 2% accuracy VOUT(E) at VOUT(T) = 5.0, IOUT = 30 mA, VIN = VOUT(T) + 1.0 V, Ta = 25 C"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex XC6206 ETR0305_003a, ABSOLUTE MAXIMUM RATINGS (Ta = 25 C), Pd, SOT-23, 250 mW"
+
+[models.match]
+# Accepts XC6206P502MR(-G) and the +/-1% grade P501MR, the package-less forms and XC6206-5.0; rejects
+# the SOT-89 (PR) and USP-6B (DR) order codes and every other voltage code.
+value_re = "(?i)^XC6206(P50[12]?(MR-?G?)?|[-_ ]?5([._]0)?V?)$"
+
+[models.params]
+vout      = 5.0      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.6     # Vdif2 max @ IOUT = 100 mA (175 mV typ). ETR0305_003a chart, p.5.
+iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
+
+[models.pins]
+# SOT-23, datasheet PIN ASSIGNMENT. SOT-89 and USP-6B differ; see the 3.3 V card.
+"1" = "gnd"   # VSS
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
+
+[models.ratings]
+max_current_a = 0.25   # IOUTMAX min, chart E-2, VOUT >= VOUT(E) x 0.9
+max_voltage_v = 7.0   # VIN abs max (1.8 V to 6.0 V operating)
+max_power_w = 0.25    # SOT-23 Pd as a bare IC; the datasheet publishes no theta_JA
+
