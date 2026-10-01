@@ -28,11 +28,11 @@
 //! ## Why not `-icount`
 //!
 //! `-icount shift=N` would make virtual time a deterministic function of
-//! executed instructions, but it BREAKS boot on the Espressif fork's `esp32`
-//! machine: at any shift (4/6/8/auto), with or without `sleep=off`, the Xtensa
-//! esp32 machine produces zero UART output in a 15 s wall window, against ~1 s
-//! to the "hello from esp32" banner without it. icount on these Xtensa machines
-//! is undocumented by Espressif and empirically broken, so it stays off.
+//! executed instructions, but on the Espressif fork's Xtensa `esp32` machine it
+//! slows boot about 2.6x (3 s to 8-10 s to the "hello from esp32" banner; an
+//! earlier 15 s probe saw no UART output at all), and QMP exposes only the raw
+//! instruction count, not the virtual-clock offset the guest timers run on, so
+//! crediting from it is wrong. icount is undocumented by Espressif; it stays off.
 //!
 //! Two other exact primitives are also unusable here. qtest `clock_step` gives
 //! exact virtual-time advance and clean `readl`/`writel`, but it replaces the
@@ -466,8 +466,8 @@ const BOOT_WINDOW_CAP_S: f64 = 50e-3;
 
 /// Wall-clock run window for a requested virtual interval of `seconds`.
 ///
-/// The guest's virtual clock runs at roughly wall rate (no icount; it breaks
-/// esp32 boot, measured; see the module notes), so the window IS the intended
+/// The guest's virtual clock runs at roughly wall rate (no icount; see the
+/// module notes), so the window IS the intended
 /// virtual-time advance. Two regimes:
 ///
 /// - **Booting** (`boot_complete == false`): clamp to
@@ -1245,7 +1245,7 @@ pub const WATCHDOG_LIMITATION: &str =
 /// Why ESP32 virtual time is approximate here, stated once.
 ///
 /// Backend-wide for the same reason as [`WATCHDOG_LIMITATION`]: the cause is
-/// how this co-simulator drives QEMU (no icount, because it breaks esp32 boot),
+/// how this co-simulator drives QEMU (no icount; see the module notes),
 /// not anything a descriptor declares. Each chunk credits the host span from
 /// sending `cont` to sending `stop` (`Qmp::run_for`), so the control-channel
 /// slack is credited and the post-freeze vCPU-parking wait is not; what remains systematic is TCG pace
@@ -1254,7 +1254,7 @@ pub const WATCHDOG_LIMITATION: &str =
 /// sentence a run reports.
 pub const TIMING_LIMITATION: &str =
     "ESP32 virtual time is paced by the host wall clock in this co-simulator \
-     (QEMU icount breaks esp32 boot), so simulated time is approximate and \
+     (QEMU icount is unusable for ESP32 timing), so simulated time is approximate and \
      host-load dependent: treat time-based results on this core as correct to \
      within a few percent on an idle host, not as a clock.";
 

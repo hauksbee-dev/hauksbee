@@ -209,10 +209,9 @@ impl QemuProcess {
     ///   - the main timer-group watchdog disabled (`-global ... wdt_disable`) so
     ///     a paused guest is not reset out from under us.
     ///
-    /// NOTE: deliberately NO `-icount`. Measured: `-icount` (any shift, with or
-    /// without `sleep=off`) prevents the Espressif esp32 / esp32s3 Xtensa
-    /// machines from booting at all (15 s wall: zero UART output, vs ~1 s to
-    /// "hello" without it). The lockstep uses QMP stop/cont over the
+    /// NOTE: deliberately NO `-icount`. Measured: it slows Xtensa esp32 boot
+    /// about 2.6x, and QMP gives no virtual-clock offset to credit time from
+    /// (see the module notes). The lockstep uses QMP stop/cont over the
     /// free-running virtual clock instead; `_icount_shift` is retained in the
     /// signature for forward compatibility but not passed to QEMU.
     ///

@@ -497,7 +497,7 @@ pub trait Mcu {
     /// rather than left to find the caveat in a doc. Two shipped cases:
     ///
     /// - `qemu:esp32*` paces virtual time by the host wall clock (no icount;
-    ///   it breaks esp32 boot, measured), so virtual time is approximate and
+    ///   see the QEMU module notes), so virtual time is approximate and
     ///   host-load dependent even though the cont→stop window itself is now
     ///   measured as the host span from sending QMP `cont` to sending `stop`.
     /// - `renode:stm32f103` deliberately clocks its `TIMx` blocks at the

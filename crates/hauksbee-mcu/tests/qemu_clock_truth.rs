@@ -3,7 +3,7 @@
 //!
 //! The Renode parts answer this with `clock_truth.rs`. The QEMU backend's
 //! version of the defect was different: virtual time is wall-paced (no
-//! icount; it breaks esp32 boot, measured in `src/qemu/mod.rs`), and the old
+//! icount; see `src/qemu/mod.rs`), and the old
 //! `run_seconds` credited only the SLEPT window while the guest also ran
 //! through the QMP `cont`/`stop` round trips on each side of the sleep. That
 //! uncredited slack is a systematic bias — docs/cosim/MCU.md carried it as
