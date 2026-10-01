@@ -188,9 +188,9 @@ impl KicadClearanceInput {
             let text = std::fs::read_to_string(&custom_path).with_context(|| {
                 format!("failed to read custom rules file {}", custom_path.display())
             })?;
-            let parsed = hauksbee_extract::parse_kicad_dru(&text).with_context(|| {
-                format!(
-                    "failed to parse custom rules file {}",
+            let parsed = hauksbee_extract::parse_kicad_dru(&text).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to parse custom rules file {}: {error}",
                     custom_path.display()
                 )
             })?;
@@ -323,7 +323,7 @@ pub(crate) fn run_drc(
     let clearance_input = (!altium_present)
         .then(|| KicadClearanceInput::load(board_path, board))
         .transpose()?;
-    let report = if altium_present {
+    let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
         // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
@@ -336,6 +336,23 @@ pub(crate) fn run_drc(
                 .and_then(|input| input.rules.clone()),
         )?
     };
+    if !altium_present {
+        let pro = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok();
+        let exclusions: Vec<String> = pro
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| {
+                value
+                    .pointer("/board/design_settings/drc_exclusions")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|e| e.as_str().map(String::from))
+                            .collect()
+                    })
+            })
+            .unwrap_or_default();
+        report.apply_kicad_exclusions(exclusions.iter().map(String::as_str));
+    }
     Ok((clearance_input, report))
 }
 
@@ -787,5 +804,76 @@ mod tests {
         assert!(!super::si_fails(&report));
         assert!(super::si_gate_items(&report).is_empty());
         assert_eq!(crate::result::si_findings_json(&report).len(), 1);
+    }
+
+    const CROSSING_BOARD: &str = r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "") (net 1 "A") (net 2 "B")
+  (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "aaaaaaaa-0000-4000-8000-000000000001"))
+  (segment (start 5 -5) (end 5 5) (width 0.5) (layer "F.Cu") (net 2) (uuid "bbbbbbbb-0000-4000-8000-000000000002"))
+)
+"#;
+
+    #[test]
+    fn valid_rules_without_a_check_load_and_are_listed_as_recognised_not_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let board_path = dir.path().join("board.kicad_pcb");
+        let board = hauksbee_extract::ExtractedBoard::from_kicad_pcb(CROSSING_BOARD).unwrap();
+        std::fs::write(
+            board_path.with_extension("kicad_dru"),
+            "(version 1)\n(rule \"holes\" (condition \"A.Net != B.Net\") (constraint hole_to_hole (min 0.5mm)))",
+        )
+        .unwrap();
+        let input = super::KicadClearanceInput::load(&board_path, &board).unwrap();
+        let notice = input
+            .custom_coverage()
+            .unwrap()
+            .unevaluated_notice()
+            .unwrap();
+        assert!(notice.contains("recognised, not checked"), "{notice}");
+        assert!(notice.contains("holes"), "{notice}");
+
+        std::fs::write(
+            board_path.with_extension("kicad_dru"),
+            "(version 1)\n(rule \"ok\" (constraint clearance (min 0.1mm)))\n(rule \"bad\" (constraint copper_magic (min 1mm)))",
+        )
+        .unwrap();
+        let error = super::KicadClearanceInput::load(&board_path, &board).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("board.kicad_dru"), "{message}");
+        assert!(message.contains("line 3"), "{message}");
+        assert!(message.contains("copper_magic"), "{message}");
+    }
+
+    #[test]
+    fn project_drc_exclusion_is_waived_but_listed_and_does_not_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let board_path = dir.path().join("board.kicad_pcb");
+        let board = hauksbee_extract::ExtractedBoard::from_kicad_pcb(CROSSING_BOARD).unwrap();
+        let run = |path: &std::path::Path| {
+            super::run_drc(
+                path,
+                &board,
+                CROSSING_BOARD,
+                CROSSING_BOARD.as_bytes(),
+                false,
+            )
+            .unwrap()
+            .1
+        };
+        assert_eq!(run(&board_path).short_count(), 1);
+
+        std::fs::write(
+            board_path.with_extension("kicad_pro"),
+            r#"{"board":{"design_settings":{"drc_exclusions":[
+              "shorting_items|5000000|0|aaaaaaaa-0000-4000-8000-000000000001|bbbbbbbb-0000-4000-8000-000000000002"]}}}"#,
+        )
+        .unwrap();
+        let mut report = run(&board_path);
+        assert!(report.is_clean());
+        let mut waivers = crate::waiver::WaiverSet::default();
+        let waived = super::check::waive_drc(&mut waivers, &mut report);
+        assert_eq!(waived.len(), 1);
+        assert!(waived[0].reason.contains("design's own DRC exclusions"));
     }
 }

@@ -172,3 +172,31 @@ fn a_restrictive_last_rule_tightens_clearance_and_produces_more_findings() {
     assert_eq!(custom_count, 1);
     assert!(custom_count > project_count);
 }
+
+#[test]
+fn valid_kicad_constraints_without_a_check_are_recognised_not_rejected() {
+    let parsed = parse_kicad_dru(
+        r#"(version 1)
+        (rule "holes" (constraint hole_to_hole (min 0.5mm)))
+        (rule "creep" (constraint creepage (min 2mm)))
+        (rule "vias" (constraint via_count (max 1)))
+        (rule "angle" (constraint track_angle (min 45deg)))
+        (rule "time" (constraint skew (max 10ps)))
+        (rule "ban" (constraint disallow buried_via) (condition "A.Type == 'via'"))
+        (rule "spokes" (constraint min_resolved_spokes (min 2)))"#,
+    )
+    .expect("valid KiCad constraints must parse");
+    assert_eq!(parsed.rules.len(), 7);
+    assert_eq!(parsed.unsupported_constraint_counts["hole_to_hole"], 1);
+    assert!(
+        !parsed.has_bare_values(),
+        "a count is not a unitless distance"
+    );
+}
+
+#[test]
+fn malformed_rule_error_names_its_line() {
+    let error = parse_kicad_dru("(version 1)\n\n(rule \"ok\" (constraint clearance (min 0.1mm)))\n(rule \"bad\" (constraint clearance (min nonsense)))")
+        .expect_err("a non-numeric distance must fail");
+    assert!(error.to_string().contains("line 4"), "{error}");
+}

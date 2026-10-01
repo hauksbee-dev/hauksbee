@@ -513,6 +513,9 @@ pub struct Item {
     pub net: i64,
     /// Owning component reference for pads (e.g. "U3"), empty otherwise.
     pub owner: String,
+    /// The `KiCad` item UUID this copper came from, empty when the format has none.
+    #[serde(default)]
+    pub uuid: String,
 }
 
 /// A schematic's declaration that the two nets of a finding are joined on
@@ -747,6 +750,62 @@ pub struct DrcReport {
     /// `None` means "never measured", which is not the same claim as `Some(0)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_pad_overlaps_suppressed: Option<usize>,
+    /// Findings the design's own `drc_exclusions` waive. They are removed from
+    /// `findings` (so they do not gate) but kept here so surfaces can show them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<DrcFinding>,
+}
+
+/// How far a native finding's location may sit from a `KiCad` exclusion's
+/// marker position. `KiCad` records its own marker point to the nanometre; the
+/// native closest-approach point lands within a quarter millimetre of it on the
+/// real boards compared (a short is marked at a different point of the overlap),
+/// and the two item UUIDs must also match, so this cannot merge distinct
+/// violations between different copper.
+const EXCLUSION_POSITION_TOLERANCE_MM: f64 = 0.5;
+
+/// One `drc_exclusions` entry: `type|x_nm|y_nm|uuid|uuid`.
+struct KicadExclusion {
+    kind: String,
+    x_mm: f64,
+    y_mm: f64,
+    uuids: Vec<String>,
+}
+
+impl KicadExclusion {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "nanometre coordinates are far below 2^53"
+    )]
+    fn parse(entry: &str) -> Option<Self> {
+        let mut parts = entry.split('|');
+        let kind = parts.next()?.to_string();
+        let x_mm = parts.next()?.parse::<i64>().ok()? as f64 / 1e6;
+        let y_mm = parts.next()?.parse::<i64>().ok()? as f64 / 1e6;
+        let mut uuids: Vec<String> = parts.filter(|u| !u.is_empty()).map(String::from).collect();
+        uuids.sort();
+        Some(Self {
+            kind,
+            x_mm,
+            y_mm,
+            uuids,
+        })
+    }
+
+    /// `KiCad` matches on violation type, the two item UUIDs and the marker
+    /// position; item order is not significant to the native finding.
+    fn matches(&self, finding: &DrcFinding) -> bool {
+        let kind = match finding.kind {
+            ViolationKind::Short => "shorting_items",
+            ViolationKind::Clearance => "clearance",
+        };
+        let mut uuids = vec![finding.item_a.uuid.clone(), finding.item_b.uuid.clone()];
+        uuids.sort();
+        kind == self.kind
+            && uuids == self.uuids
+            && (finding.x - self.x_mm).hypot(finding.y - self.y_mm)
+                <= EXCLUSION_POSITION_TOLERANCE_MM
+    }
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
@@ -787,6 +846,21 @@ pub fn unvalidated_version_warning(text: &str) -> Option<String> {
 }
 
 impl DrcReport {
+    /// Move the findings a `KiCad` project's `drc_exclusions` waive from
+    /// `findings` into `excluded`. Nothing is dropped: an excluded violation
+    /// stays reported, it just no longer counts toward a fail.
+    pub fn apply_kicad_exclusions<'a>(&mut self, entries: impl IntoIterator<Item = &'a str>) {
+        let exclusions: Vec<_> = entries
+            .into_iter()
+            .filter_map(KicadExclusion::parse)
+            .collect();
+        let (excluded, kept) = std::mem::take(&mut self.findings)
+            .into_iter()
+            .partition(|f| exclusions.iter().any(|e| e.matches(f)));
+        self.findings = kept;
+        self.excluded.extend(excluded);
+    }
+
     /// Only the true overlaps (electrical shorts).
     pub fn shorts(&self) -> impl Iterator<Item = &DrcFinding> {
         self.findings
@@ -950,6 +1024,7 @@ struct Primitive {
     net: i64,
     kind: ItemKind,
     owner: String,
+    uuid: String,
     /// Axis-aligned bounds (minx, miny, maxx, maxy), already inflated by the
     /// primitive's own radius so a box-overlap query within `clearance` of two
     /// boxes is a superset of the real close pairs.
@@ -964,7 +1039,13 @@ impl Primitive {
             kind: self.kind,
             net: self.net,
             owner: self.owner.clone(),
+            uuid: self.uuid.clone(),
         }
+    }
+
+    fn with_uuid(mut self, uuid: String) -> Self {
+        self.uuid = uuid;
+        self
     }
 }
 
@@ -1067,6 +1148,7 @@ struct ZonePoly {
     /// clearance checks, but the containment short-test is skipped because the
     /// solid outline would falsely engulf every pad of other nets.
     filled: bool,
+    uuid: String,
 }
 
 /// Per-layer accumulator of copper primitives.
@@ -1091,8 +1173,8 @@ impl LayerBuckets {
     /// polygon is stashed for the containment pass. `filled` marks whether this
     /// is real fill copper (eligible for the containment short-test) or only a
     /// drawn outline.
-    fn push_zone(&mut self, layer: &str, pts: Vec<(f64, f64)>, net: i64, filled: bool) {
-        self.push_zone_opts(layer, pts, net, filled, true);
+    fn push_zone(&mut self, layer: &str, pts: Vec<(f64, f64)>, net: i64, filled: bool, uuid: &str) {
+        self.push_zone_opts(layer, pts, net, filled, true, uuid);
     }
 
     /// As [`Self::push_zone`], but `edges` controls whether the boundary edges
@@ -1110,6 +1192,7 @@ impl LayerBuckets {
         net: i64,
         filled: bool,
         edges: bool,
+        uuid: &str,
     ) {
         if pts.len() < 3 {
             return;
@@ -1121,7 +1204,8 @@ impl LayerBuckets {
                 let cap = Capsule::new(pts[j].0, pts[j].1, pts[i].0, pts[i].1, 0.0);
                 self.push(
                     layer,
-                    make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()),
+                    make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new())
+                        .with_uuid(uuid.to_string()),
                 );
                 j = i;
             }
@@ -1135,6 +1219,7 @@ impl LayerBuckets {
                 net,
                 bounds,
                 filled,
+                uuid: uuid.to_string(),
             });
     }
 }
@@ -1145,6 +1230,13 @@ fn xy_pair(list: &List, name: &str) -> Option<(f64, f64)> {
     Some((l.arg_f64(0)?, l.arg_f64(1)?))
 }
 
+/// The item's `KiCad` identity: `(uuid ..)`, or `(tstamp ..)` before KiCad 7.
+fn uuid_of(list: &List) -> String {
+    list.find_value("uuid")
+        .or_else(|| list.find_value("tstamp"))
+        .unwrap_or_default()
+}
+
 fn make_prim(shape: Shape, net: i64, kind: ItemKind, owner: String) -> Primitive {
     let bounds = shape.bounds();
     Primitive {
@@ -1152,6 +1244,7 @@ fn make_prim(shape: Shape, net: i64, kind: ItemKind, owner: String) -> Primitive
         net,
         kind,
         owner,
+        uuid: String::new(),
         bounds,
         idx: 0,
     }
@@ -1228,7 +1321,8 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         let cap = Capsule::new(start.0, start.1, end.0, end.1, width / 2.0);
         buckets.push(
             &layer,
-            make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new()),
+            make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new())
+                .with_uuid(uuid_of(seg)),
         );
     }
 
@@ -1249,7 +1343,8 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         for cap in flatten_arc(start, mid, end, width) {
             buckets.push(
                 &layer,
-                make_prim(Shape::Capsule(cap), net, ItemKind::Arc, String::new()),
+                make_prim(Shape::Capsule(cap), net, ItemKind::Arc, String::new())
+                    .with_uuid(uuid_of(arc)),
             );
         }
     }
@@ -1349,7 +1444,8 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             let disc = Capsule::new(at.0, at.1, at.0, at.1, r);
             buckets.push(
                 layer,
-                make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new()),
+                make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new())
+                    .with_uuid(uuid_of(via)),
             );
         }
     }
@@ -1376,7 +1472,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             if let Some(pts) = read_pts(fp) {
                 if pts.len() >= 3 {
                     any_fill = true;
-                    buckets.push_zone(&layer, pts, net, true);
+                    buckets.push_zone(&layer, pts, net, true, &uuid_of(zone));
                 }
             }
         }
@@ -1405,7 +1501,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
                 layers.sort();
                 layers.dedup();
                 for layer in layers {
-                    buckets.push_zone(&layer, poly.clone(), net, false);
+                    buckets.push_zone(&layer, poly.clone(), net, false, &uuid_of(zone));
                 }
             }
         }
@@ -1577,7 +1673,8 @@ fn collect_pad(
         for shape in &shapes {
             buckets.push(
                 layer,
-                make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string()),
+                make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string())
+                    .with_uuid(uuid_of(pad)),
             );
         }
     }
@@ -2430,6 +2527,7 @@ fn sweep_buckets(
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
         version_warning: None,
         zone_pad_overlaps_suppressed: Some(0),
+        excluded: Vec::new(),
     };
 
     // De-dup findings on the same net pair + layer + rounded location, so a
@@ -2614,6 +2712,7 @@ fn sweep_buckets(
                                 kind: ItemKind::Zone,
                                 net: z.net,
                                 owner: String::new(),
+                                uuid: z.uuid.clone(),
                             },
                             layer,
                             rx,
@@ -3928,6 +4027,7 @@ pub mod eagle_drc {
                         if p.thermals { "on" } else { "off" },
                         if p.orphans { "on" } else { "off" },
                     ),
+                    uuid: String::new(),
                 };
                 let (na, nb) = (a.net.min(b.net), a.net.max(b.net));
                 let (item_a, item_b) = if a.net <= b.net {
@@ -4223,7 +4323,7 @@ pub mod altium_drc {
                     .map_or(NONE_U16, |v| u16::try_from(v).unwrap_or(NONE_U16));
                 let layer = layer_name(layer);
                 copper.insert(layer.clone());
-                buckets.push_zone_opts(&layer, pts, net_id(net, n_nets), false, false);
+                buckets.push_zone_opts(&layer, pts, net_id(net, n_nets), false, false, "");
             }
         }
 

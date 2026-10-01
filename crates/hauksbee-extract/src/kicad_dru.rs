@@ -25,25 +25,45 @@ use forge_sexpr::{Document, List, Sexpr};
 
 const SUPPORTED_VERSION: u64 = 1;
 
-const KNOWN_UNIMPLEMENTED_CONSTRAINTS: &[&str] = &[
+/// Valid KiCad constraints whose bounds are distances. Hauksbee does not check
+/// them; they are recognised and disclosed.
+const KNOWN_DISTANCE_CONSTRAINTS: &[&str] = &[
     "track_width",
     "via_diameter",
     "annular_width",
     "silk_clearance",
     "physical_clearance",
+    "physical_hole_clearance",
     "courtyard_clearance",
+    "creepage",
     "hole_size",
+    "hole_to_hole",
     "text_height",
     "text_thickness",
-    "disallow",
+    "track_segment_length",
+    "connection_width",
     "length",
-    "skew",
     "diff_pair_gap",
     "diff_pair_uncoupled",
-    "via_count",
-    "zone_connection",
     "thermal_relief_gap",
+    "thermal_spoke_width",
+    "solder_mask_expansion",
+    "solder_paste_abs_margin",
+];
+
+/// Valid KiCad constraints whose arguments are not distances: keywords, counts,
+/// angles, times, ratios or expressions. Their values are not interpreted, and a
+/// bare number in one is not a unitless distance.
+const KNOWN_NON_DISTANCE_CONSTRAINTS: &[&str] = &[
+    "disallow",
     "assertion",
+    "zone_connection",
+    "via_count",
+    "skew",
+    "track_angle",
+    "min_resolved_spokes",
+    "solder_paste_rel_margin",
+    "bridged_mask",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,7 +199,7 @@ pub enum KicadDruError {
 /// version, or holds a rule this reader cannot interpret.
 pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
     let stripped = strip_line_comments(text)?;
-    let wrapped = format!("(kicad_dru\n{stripped}\n)");
+    let wrapped = format!("(kicad_dru {stripped}\n)");
     let document =
         forge_sexpr::parse(&wrapped).map_err(|error| KicadDruError::Parse(error.to_string()))?;
     let root = document
@@ -208,11 +228,16 @@ pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
             }
             Some("rule") => {
                 let line_number = original_line_number(&document, item)?;
-                rules.push(parse_rule(
-                    item,
-                    line_number,
-                    &mut unsupported_constraint_counts,
-                )?);
+                rules.push(
+                    parse_rule(item, line_number, &mut unsupported_constraint_counts).map_err(
+                        |error| match error {
+                            KicadDruError::Malformed(why) => {
+                                KicadDruError::Malformed(format!("line {line_number}: {why}"))
+                            }
+                            other => other,
+                        },
+                    )?,
+                );
             }
             Some(name) => {
                 return Err(KicadDruError::Malformed(format!(
@@ -316,7 +341,10 @@ fn parse_constraint(constraint: &List) -> Result<KicadDruConstraint, KicadDruErr
         "clearance" => KicadDruConstraintKind::Clearance,
         "hole_clearance" => KicadDruConstraintKind::HoleClearance,
         "edge_clearance" => KicadDruConstraintKind::EdgeClearance,
-        known if KNOWN_UNIMPLEMENTED_CONSTRAINTS.contains(&known) => {
+        known
+            if KNOWN_DISTANCE_CONSTRAINTS.contains(&known)
+                || KNOWN_NON_DISTANCE_CONSTRAINTS.contains(&known) =>
+        {
             KicadDruConstraintKind::Unimplemented(known.to_string())
         }
         unknown => {
@@ -330,6 +358,7 @@ fn parse_constraint(constraint: &List) -> Result<KicadDruConstraint, KicadDruErr
     let mut max_mm = None;
     let mut opt_mm = None;
     let mut has_bare_value = false;
+    let distances = !KNOWN_NON_DISTANCE_CONSTRAINTS.contains(&kind_name.as_str());
     for bound in constraint.lists() {
         let target = match bound.name() {
             Some("min") => &mut min_mm,
@@ -352,9 +381,12 @@ fn parse_constraint(constraint: &List) -> Result<KicadDruConstraint, KicadDruErr
                 bound.name().unwrap_or("unknown")
             )));
         }
-        let distance = parse_distance(&one_argument(bound, bound.name().unwrap_or("bound"))?)?;
-        *target = Some(distance.millimetres);
-        has_bare_value |= !distance.has_explicit_unit;
+        let value = one_argument(bound, bound.name().unwrap_or("bound"))?;
+        if distances {
+            let distance = parse_distance(&value)?;
+            *target = Some(distance.millimetres);
+            has_bare_value |= !distance.has_explicit_unit;
+        }
     }
     if matches!(
         kind,
@@ -404,34 +436,17 @@ fn parse_distance(value: &str) -> Result<ParsedDistance, KicadDruError> {
 }
 
 fn original_line_number(document: &Document, list: &List) -> Result<usize, KicadDruError> {
-    let source = document
-        .src
-        .as_deref()
-        .ok_or_else(|| KicadDruError::Malformed("parsed document has no source buffer".into()))?;
-    let keyword = match list.children.first() {
-        Some(Sexpr::Token(token)) => token.raw.as_str(),
-        _ => {
-            return Err(KicadDruError::Malformed(
-                "rule form has no keyword token".into(),
-            ));
-        }
+    let outside = || KicadDruError::Malformed("rule keyword is outside the parsed source".into());
+    let source = document.src.as_deref().ok_or_else(outside)?;
+    let Some(Sexpr::Token(keyword)) = list.children.first() else {
+        return Err(outside());
     };
-    let source_start = source.as_ptr() as usize;
-    let keyword_start = keyword.as_ptr() as usize;
-    let offset = keyword_start.checked_sub(source_start).ok_or_else(|| {
-        KicadDruError::Malformed("rule keyword is outside the parsed source buffer".into())
-    })?;
-    if offset > source.len() {
-        return Err(KicadDruError::Malformed(
-            "rule keyword is outside the parsed source buffer".into(),
-        ));
-    }
-    // parse_kicad_dru wraps the original text in one synthetic root line.
-    let wrapped_line = 1 + source[..offset]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count();
-    Ok(wrapped_line.saturating_sub(1).max(1))
+    let offset = (keyword.raw.as_ptr() as usize)
+        .checked_sub(source.as_ptr() as usize)
+        .filter(|offset| *offset <= source.len())
+        .ok_or_else(outside)?;
+    // parse_kicad_dru wraps the text without adding a line, so lines match the file.
+    Ok(1 + source[..offset].matches('\n').count())
 }
 
 fn one_argument(list: &List, form: &str) -> Result<String, KicadDruError> {

@@ -634,3 +634,44 @@ fn net_tie_exempts_an_item_only_inside_its_own_groups_pad() {
         assert_eq!(drc(&items).short_count() > 0, shorts, "{why}");
     }
 }
+
+const UUID_A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+const UUID_B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
+
+fn crossing_tracks() -> hauksbee_extract::DrcReport {
+    drc(&format!(
+        r#"
+  (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "{UUID_A}"))
+  (segment (start 5 -5) (end 5 5) (width 0.5) (layer "F.Cu") (net 2) (uuid "{UUID_B}"))
+"#
+    ))
+}
+
+#[test]
+fn project_exclusion_waives_a_matching_short_but_keeps_it_visible() {
+    let mut report = crossing_tracks();
+    assert_eq!(report.short_count(), 1, "the fixture has one short");
+    // KiCad writes `type|x_nm|y_nm|main_uuid|aux_uuid`; the order of the two
+    // items is not significant to the native finding.
+    let entry = format!("shorting_items|5000000|0|{UUID_B}|{UUID_A}");
+    report.apply_kicad_exclusions([entry.as_str()]);
+    assert!(report.is_clean(), "an excluded short must not count");
+    assert_eq!(report.excluded.len(), 1, "an excluded short stays visible");
+    assert_eq!(report.excluded[0].kind, ViolationKind::Short);
+}
+
+#[test]
+fn project_exclusion_needs_the_same_type_items_and_position() {
+    let other = "cccccccc-0000-4000-8000-000000000003";
+    for entry in [
+        format!("clearance|5000000|0|{UUID_A}|{UUID_B}"),
+        format!("shorting_items|5000000|0|{UUID_A}|{other}"),
+        format!("shorting_items|9000000|3000000|{UUID_A}|{UUID_B}"),
+        "not an exclusion".to_string(),
+    ] {
+        let mut report = crossing_tracks();
+        report.apply_kicad_exclusions([entry.as_str()]);
+        assert_eq!(report.short_count(), 1, "{entry} must not waive the short");
+        assert!(report.excluded.is_empty(), "{entry}");
+    }
+}

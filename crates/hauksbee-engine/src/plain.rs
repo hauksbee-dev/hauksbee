@@ -1454,28 +1454,19 @@ mod tests {
     use hauksbee_extract::{DrcFinding, Item, ItemKind, LintFinding, SiFinding, ViolationKind};
 
     fn drc_short() -> DrcFinding {
-        DrcFinding {
-            kind: ViolationKind::Short,
-            net_a: 1,
-            net_b: 2,
-            net_a_name: "+5V".to_string(),
-            net_b_name: "GND".to_string(),
-            layer: "F.Cu".to_string(),
-            x: 12.3,
-            y: 45.6,
-            gap_mm: -0.05,
-            required_clearance_mm: 0.2,
-            item_a: Item {
-                kind: ItemKind::Track,
-                net: 1,
-                owner: String::new(),
-            },
-            item_b: Item {
-                kind: ItemKind::Pad,
-                net: 2,
-                owner: "U1".to_string(),
-            },
-        }
+        let mut f = crate::result::test_finding(
+            ViolationKind::Short,
+            ("+5V", "GND"),
+            (12.3, 45.6),
+            (-0.05, 0.2),
+        );
+        f.item_b = Item {
+            kind: ItemKind::Pad,
+            net: 2,
+            owner: "U1".to_string(),
+            uuid: String::new(),
+        };
+        f
     }
 
     fn clearance(net_a: &str, net_b: &str, gap_mm: f64) -> DrcFinding {
@@ -1494,6 +1485,7 @@ mod tests {
             findings,
             version_warning: None,
             zone_pad_overlaps_suppressed: Some(0),
+            excluded: Vec::new(),
         }
     }
 

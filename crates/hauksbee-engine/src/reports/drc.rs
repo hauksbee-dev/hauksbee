@@ -502,6 +502,7 @@ mod tests {
             primitive_count: 4,
             version_warning: Some("board format 20260206 is UNVALIDATED".into()),
             zone_pad_overlaps_suppressed: Some(0),
+            excluded: Vec::new(),
             findings: vec![
                 short("GND", "+3V3", 1.0, 2.0),
                 short("GND", "PYRO4_FIRE", 3.0, 4.0),
@@ -530,28 +531,7 @@ mod tests {
     }
 
     fn short(net_a: &str, net_b: &str, x: f64, y: f64) -> hauksbee_extract::DrcFinding {
-        use hauksbee_extract::{DrcFinding, Item, ItemKind, ViolationKind};
-        DrcFinding {
-            kind: ViolationKind::Short,
-            net_a: 1,
-            net_b: 2,
-            net_a_name: net_a.into(),
-            net_b_name: net_b.into(),
-            layer: "F.Cu".into(),
-            x,
-            y,
-            gap_mm: 0.0,
-            required_clearance_mm: 0.2,
-            item_a: Item {
-                kind: ItemKind::Track,
-                net: 1,
-                owner: String::new(),
-            },
-            item_b: Item {
-                kind: ItemKind::Track,
-                net: 2,
-                owner: String::new(),
-            },
-        }
+        let kind = hauksbee_extract::ViolationKind::Short;
+        crate::result::test_finding(kind, (net_a, net_b), (x, y), (0.0, 0.2))
     }
 }

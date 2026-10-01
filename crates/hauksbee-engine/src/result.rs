@@ -956,7 +956,7 @@ impl CustomRulesCoverage {
             if conditional {
                 let _ = writeln!(
                     notice,
-                    "CUSTOM RULES NOT EVALUATED: {count} rule{} in {} {} conditional and hauksbee cannot evaluate {} condition{}:",
+                    "CUSTOM RULES NOT EVALUATED: {count} rule{} in {} {} conditional and hauksbee cannot evaluate {} condition{} (recognised, not checked):",
                     if count == 1 { "" } else { "s" },
                     self.file_name,
                     if count == 1 { "is" } else { "are" },
@@ -966,7 +966,7 @@ impl CustomRulesCoverage {
             } else {
                 let _ = writeln!(
                     notice,
-                    "CUSTOM RULES NOT EVALUATED: {count} scoped rule{} in {} cannot be applied report-wide:",
+                    "CUSTOM RULES NOT EVALUATED: {count} scoped rule{} in {} cannot be applied report-wide (recognised, not checked):",
                     if count == 1 { "" } else { "s" },
                     self.file_name,
                 );
@@ -1026,7 +1026,7 @@ impl CustomRulesCoverage {
             .collect::<Vec<_>>()
             .join(", ");
         Some(format!(
-            "Custom rules not covered in {}: {}{}{} Hauksbee has no hole-clearance, board-edge-clearance, or other listed custom-constraint checks; these rules are parsed and disclosed but do not qualify reported copper-clearance findings.",
+            "Custom rules recognised, not checked in {}: {}{}{} Hauksbee has no hole-clearance, board-edge-clearance, or other listed custom-constraint checks; these valid rules are listed here, were not evaluated, and do not qualify reported copper-clearance findings.",
             self.file_name,
             rules,
             if rules.is_empty() || unsupported.is_empty() { "" } else { "; " },
@@ -2622,11 +2622,42 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
     })
 }
 
+/// A copper finding between two track items on `F.Cu`, shared by the engine's
+/// report tests; callers adjust the fields a case cares about.
+#[cfg(test)]
+pub(crate) fn test_finding(
+    kind: hauksbee_extract::ViolationKind,
+    (net_a, net_b): (&str, &str),
+    (x, y): (f64, f64),
+    (gap_mm, required_clearance_mm): (f64, f64),
+) -> hauksbee_extract::DrcFinding {
+    let item = |net| hauksbee_extract::Item {
+        kind: hauksbee_extract::ItemKind::Track,
+        net,
+        owner: String::new(),
+        uuid: String::new(),
+    };
+    hauksbee_extract::DrcFinding {
+        kind,
+        net_a: 1,
+        net_b: 2,
+        net_a_name: net_a.to_string(),
+        net_b_name: net_b.to_string(),
+        layer: "F.Cu".to_string(),
+        x,
+        y,
+        gap_mm,
+        required_clearance_mm,
+        item_a: item(1),
+        item_b: item(2),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::reports::bind::{BindOutcome, BindReport, BindRow};
-    use hauksbee_extract::{DrcFinding, Item, ItemKind};
+    use hauksbee_extract::DrcFinding;
     use hauksbee_ir::evidence::Assumption;
     use hauksbee_models::Confidence;
 
@@ -2892,28 +2923,12 @@ mod tests {
     }
 
     fn clearance(net_a: &str, net_b: &str, gap: f64, rule: f64) -> DrcFinding {
-        DrcFinding {
-            kind: ViolationKind::Clearance,
-            net_a: 1,
-            net_b: 2,
-            net_a_name: net_a.to_string(),
-            net_b_name: net_b.to_string(),
-            layer: "F.Cu".to_string(),
-            x: 10.0,
-            y: 20.0,
-            gap_mm: gap,
-            required_clearance_mm: rule,
-            item_a: Item {
-                kind: ItemKind::Track,
-                net: 1,
-                owner: String::new(),
-            },
-            item_b: Item {
-                kind: ItemKind::Track,
-                net: 2,
-                owner: String::new(),
-            },
-        }
+        super::test_finding(
+            ViolationKind::Clearance,
+            (net_a, net_b),
+            (10.0, 20.0),
+            (gap, rule),
+        )
     }
 
     fn short(net_a: &str, net_b: &str) -> DrcFinding {
@@ -2929,6 +2944,7 @@ mod tests {
             primitive_count: 2,
             version_warning: None,
             zone_pad_overlaps_suppressed: Some(0),
+            excluded: Vec::new(),
         }
     }
 

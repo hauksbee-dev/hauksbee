@@ -598,6 +598,26 @@ pub(crate) fn waive_drc(
     waivers: &mut crate::waiver::WaiverSet,
     report: &mut hauksbee_extract::DrcReport,
 ) -> Vec<crate::waiver::WaivedFinding> {
+    // The design's own `drc_exclusions` come first: already out of the gate, listed
+    // here so they stay visible.
+    let mut excluded: Vec<_> = report
+        .excluded
+        .iter()
+        .map(|f| crate::waiver::WaivedFinding {
+            check: "drc".to_string(),
+            kind: match f.kind {
+                hauksbee_extract::ViolationKind::Short => "short",
+                hauksbee_extract::ViolationKind::Clearance => "clearance",
+            }
+            .to_string(),
+            subject: format!(
+                "{} to {} on {} at ({:.3}, {:.3}) mm",
+                f.net_a_name, f.net_b_name, f.layer, f.x, f.y
+            ),
+            reason: "excluded by the design's own DRC exclusions (.kicad_pro)".to_string(),
+            until: "no expiry".to_string(),
+        })
+        .collect();
     let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
         let kind = match f.kind {
             hauksbee_extract::ViolationKind::Short => "short",
@@ -611,7 +631,8 @@ pub(crate) fn waive_drc(
         )
     });
     report.findings = kept;
-    waived
+    excluded.extend(waived);
+    excluded
 }
 
 /// The copper shorts as machine findings.
