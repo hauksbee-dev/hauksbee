@@ -45,6 +45,8 @@ use rstar::{RTree, AABB};
 
 use crate::gerber::geo::{point_in_polygon, polygon_bounds, shape_gap_at, Capsule, Shape};
 use crate::pcb::at_of;
+
+pub mod connectivity;
 use serde::{Deserialize, Serialize};
 
 /// Default copper-to-copper clearance (mm) when the board states no rule.
@@ -1031,6 +1033,9 @@ struct Primitive {
     bounds: [f64; 4],
     /// Index back into the per-layer primitive vector (set after build).
     idx: usize,
+    /// The board item (pad, track, via, fill polygon) this shape belongs to,
+    /// an index into [`LayerBuckets::items`]; 0 where items are not tracked.
+    item: usize,
 }
 
 impl Primitive {
@@ -1149,6 +1154,7 @@ struct ZonePoly {
     /// solid outline would falsely engulf every pad of other nets.
     filled: bool,
     uuid: String,
+    item: usize,
 }
 
 /// Per-layer accumulator of copper primitives.
@@ -1158,10 +1164,23 @@ struct LayerBuckets {
     by_layer: HashMap<String, Vec<Primitive>>,
     /// layer name -> full zone polygons (for containment only).
     zones: HashMap<String, Vec<ZonePoly>>,
+    /// One entry per board item, for copper connectivity (KiCad path only).
+    items: Vec<connectivity::ItemMeta>,
 }
 
 impl LayerBuckets {
-    fn push(&mut self, layer: &str, prim: Primitive) {
+    /// Start a new board item: every shape pushed until the next call belongs
+    /// to it, on whichever layers it lands.
+    fn begin_item(&mut self, meta: connectivity::ItemMeta) {
+        self.items.push(meta);
+    }
+
+    const fn current_item(&self) -> usize {
+        self.items.len().saturating_sub(1)
+    }
+
+    fn push(&mut self, layer: &str, mut prim: Primitive) {
+        prim.item = self.current_item();
         self.by_layer
             .entry(layer.to_string())
             .or_default()
@@ -1211,6 +1230,7 @@ impl LayerBuckets {
             }
         }
         let bounds = polygon_bounds(&pts);
+        let item = self.current_item();
         self.zones
             .entry(layer.to_string())
             .or_default()
@@ -1220,6 +1240,7 @@ impl LayerBuckets {
                 bounds,
                 filled,
                 uuid: uuid.to_string(),
+                item,
             });
     }
 }
@@ -1247,6 +1268,7 @@ fn make_prim(shape: Shape, net: i64, kind: ItemKind, owner: String) -> Primitive
         uuid: String::new(),
         bounds,
         idx: 0,
+        item: 0,
     }
 }
 
@@ -1319,6 +1341,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             continue;
         };
         let cap = Capsule::new(start.0, start.1, end.0, end.1, width / 2.0);
+        buckets.begin_item(connectivity::ItemMeta::wire(ItemKind::Track, net, start));
         buckets.push(
             &layer,
             make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new())
@@ -1340,6 +1363,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         let Some(net) = nets.net_ref(arc) else {
             continue;
         };
+        buckets.begin_item(connectivity::ItemMeta::wire(ItemKind::Arc, net, start));
         for cap in flatten_arc(start, mid, end, width) {
             buckets.push(
                 &layer,
@@ -1435,6 +1459,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
                     .any(|(x, y)| (x - at.0).hypot(y - at.1) <= reach)
             })
         };
+        buckets.begin_item(connectivity::ItemMeta::wire(ItemKind::Via, net, at));
         for layer in &layer_token {
             let r = if ring_present(layer) {
                 size / 2.0
@@ -1472,6 +1497,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             if let Some(pts) = read_pts(fp) {
                 if pts.len() >= 3 {
                     any_fill = true;
+                    buckets.begin_item(connectivity::ItemMeta::fill(net, pts[0], zone, root));
                     buckets.push_zone(&layer, pts, net, true, &uuid_of(zone));
                 }
             }
@@ -1500,6 +1526,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
                 }
                 layers.sort();
                 layers.dedup();
+                buckets.begin_item(connectivity::ItemMeta::unfilled(net, &poly, zone));
                 for layer in layers {
                     buckets.push_zone(&layer, poly.clone(), net, false, &uuid_of(zone));
                 }
@@ -1559,6 +1586,7 @@ fn collect_pad(
         )
     };
     let pad_origin = to_world(0.0, 0.0);
+    buckets.begin_item(connectivity::ItemMeta::pad(pad, net, owner, pad_origin));
 
     // A through-hole pad can carry `(drill ... (offset x y))`: the pad's `(at)`
     // is the HOLE position and the copper shape is displaced by the offset,

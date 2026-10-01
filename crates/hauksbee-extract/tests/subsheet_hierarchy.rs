@@ -250,3 +250,27 @@ fn a_sub_sheet_placed_twice_yields_both_placements() {
         board.nets.iter().map(|n| &n.name).collect::<Vec<_>>()
     );
 }
+
+/// A reused sheet can draw a different gate of one shared part in each
+/// placement: the instances block gives each placement its own `(unit N)`.
+/// Taking the template's unit for both placements put the same pin in both
+/// channels, shorting them, and dropped the other gate's pins.
+#[test]
+fn a_reused_sheet_takes_each_placements_unit() {
+    let board = ExtractedBoard::from_kicad_schematic_path(&fixture("reused_unit_top.kicad_sch"))
+        .expect("extract the reused-unit hierarchy");
+    let u1 = board
+        .components
+        .iter()
+        .find(|c| c.reference == "U1")
+        .expect("U1");
+    let net = |number: &str| {
+        u1.pins
+            .iter()
+            .find(|p| p.number == number)
+            .and_then(|p| p.net)
+    };
+    let (gate_a, gate_b) = (net("1"), net("3"));
+    assert!(gate_a.is_some() && gate_b.is_some(), "{:?}", u1.pins);
+    assert_ne!(gate_a, gate_b, "each placement's gate is on its own CHAN");
+}

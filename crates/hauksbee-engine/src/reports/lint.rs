@@ -27,6 +27,9 @@ pub(crate) fn emit_quiet(
     // get it too), so it must not be spliced in here as well: that
     // double-counts every decode finding.
     let mut report = crate::checks::engine_lint(board, lib);
+    report.findings.extend(
+        crate::checks::layout_lint(board, input.geo_text(), Some(input.board_path)).findings,
+    );
     // Without this, a lint finding the board's owner overruled turns
     // `--lint --strict` red on a board that `--check --strict` passes, and the
     // narrower command looks like it lost the waiver.

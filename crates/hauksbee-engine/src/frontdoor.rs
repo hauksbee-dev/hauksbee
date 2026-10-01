@@ -1152,7 +1152,9 @@ fn analyze_normalized_with_context(
     // `engine_lint` chokepoint (connectivity + strap lint + MCU resource conflicts
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
-    let lint = crate::checks::engine_lint(board, lib);
+    let mut lint = crate::checks::engine_lint(board, lib);
+    lint.findings
+        .extend(crate::checks::layout_lint(board, text_view, None).findings);
     let mut lint_plain = plain_netlint(&lint);
     lint_plain.unmodelled_critical.clone_from(&verdict_blockers);
 

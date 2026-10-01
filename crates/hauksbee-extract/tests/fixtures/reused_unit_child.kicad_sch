@@ -1,0 +1,41 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-0000000000d0")
+	(paper "A4")
+	(lib_symbols
+		(symbol "T:Dual"
+			(symbol "Dual_1_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+			)
+			(symbol "Dual_2_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "3"))
+			)
+		)
+	)
+	(symbol
+		(lib_id "T:Dual")
+		(at 100 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-0000000000d1")
+		(property "Reference" "U1" (at 102 100 90))
+		(instances
+			(project "reused_unit_top"
+				(path "/00000000-0000-0000-0000-0000000000b0/00000000-0000-0000-0000-0000000000b1"
+					(reference "U1")
+					(unit 1)
+				)
+				(path "/00000000-0000-0000-0000-0000000000b0/00000000-0000-0000-0000-0000000000b2"
+					(reference "U1")
+					(unit 2)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 100 96.19) (xy 100 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-0000000000d4")
+	)
+	(hierarchical_label "CHAN" input (at 100 90 0))
+)

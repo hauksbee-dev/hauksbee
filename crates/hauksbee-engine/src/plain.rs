@@ -1091,6 +1091,21 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The pin names and pin types on this connection say what each pin does (transmit, fault flag, gate/source/drain). Wired the way they are, those roles do not work together, even though every wire connects.".to_string(),
                 "Rewire the pins the way the finding above describes, then re-check against each part's datasheet.".to_string(),
             ),
+            LintCheck::UnroutedPad if f.severity == Severity::Low => (
+                f.message.clone(),
+                "This is a note about the state of the layout file (zones never filled, leftover copper, or no routing at all yet), not a connection a finished route left open.".to_string(),
+                "Refill the zones, remove the stray copper, or route the board in the layout editor, save, and re-check.".to_string(),
+            ),
+            LintCheck::UnroutedPad => (
+                f.message.clone(),
+                "The pads are on the right net, but no track, via or copper pour actually reaches them. A board made from these files would leave the connection open: the ratsnest line the layout editor shows here was never routed.".to_string(),
+                "Route the missing connection (or extend the pour to it), refill the zones, and run the layout editor's DRC until it reports no unconnected items.".to_string(),
+            ),
+            LintCheck::PcbSchematicMismatch => (
+                f.message.clone(),
+                "The layout is what gets manufactured. When it wires a pin differently from the schematic, the board does not match the design that was reviewed: a pin that should reach ground or a signal is left off it, or joined to the wrong one.".to_string(),
+                "In the layout editor, update the PCB from the schematic (KiCad: Tools > Update PCB from Schematic), re-route the changed connections, and re-check.".to_string(),
+            ),
             // Low is the strap lint's abstention (see `straps::examine_strap`):
             // the level was not judged, so it must not read as a failure.
             LintCheck::StrapPin if f.severity == Severity::Low => (

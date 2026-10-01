@@ -357,3 +357,34 @@ fn olimex_evb_rev_l_resistor_arrays_do_not_short_gnd_to_3v3lan() {
     assert_eq!(net_of(&b, "U1", "2"), Some(gnd), "TP4054 GND pin");
     assert_ne!(b.net_by_name("+3.3VLAN").map(|n| n.id), Some(gnd));
 }
+
+#[test]
+fn a_wire_ending_on_another_wire_needs_a_junction() {
+    // R1.2 sits at (105.08, 100); a wire drops from it onto the middle of a
+    // labelled wire at y=110. eeschema joins the tee only with a junction,
+    // while a pin placed alone on a wire's interior joins it outright.
+    let sch = |extra: &str| {
+        format!(
+            "(kicad_sch (version 20230121) (uuid \"u\") (lib_symbols (symbol \"T:R\" (symbol \"R_1_1\" \
+             (pin passive line (at -5.08 0 0) (length 1) (number \"1\")) \
+             (pin passive line (at 5.08 0 0) (length 1) (number \"2\"))))) \
+             (symbol (lib_id \"T:R\") (at 100 100 0) (unit 1) (property \"Reference\" \"R1\" (at 0 0 0))) \
+             (wire (pts (xy 80 110) (xy 130 110))) (label \"BUS\" (at 80 110 0)) {extra})"
+        )
+    };
+    let on_bus = |extra: &str, reference: &str, pin: &str| {
+        let b = ExtractedBoard::from_kicad_schematic(&sch(extra)).expect("extract");
+        let id = net_of(&b, reference, pin);
+        id.and_then(|id| b.nets.iter().find(|n| n.id == id))
+            .is_some_and(|n| n.name == "BUS")
+    };
+    let tee = "(wire (pts (xy 105.08 100) (xy 105.08 110)))";
+    assert!(!on_bus(tee, "R1", "2"));
+    assert!(on_bus(
+        &format!("{tee} (junction (at 105.08 110))"),
+        "R1",
+        "2"
+    ));
+    let lone_pin = "(symbol (lib_id \"T:R\") (at 120 110 0) (unit 1) (property \"Reference\" \"R2\" (at 0 0 0)))";
+    assert!(on_bus(lone_pin, "R2", "1"));
+}

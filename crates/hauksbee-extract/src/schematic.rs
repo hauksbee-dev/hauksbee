@@ -27,7 +27,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/schematic.md.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use forge_sexpr::{Document, List};
@@ -298,6 +298,15 @@ struct NetlistBuilder {
     /// Wire endpoints / junctions / no-connects, keyed by coordinate, so any
     /// two things at the same coordinate end up unioned.
     point_node: HashMap<(SheetId, Pt), usize>,
+    /// How many things claim each point (pins, labels, wire ends, ...), the
+    /// points wires end at, and the junctions. A point on a wire's interior
+    /// joins that wire when a junction marks it, or when a single pin or
+    /// label sits there alone; a wire end there does not join, nor do two
+    /// things sharing the point. This is eeschema's behaviour as its netlist
+    /// export shows it.
+    claims: HashMap<(SheetId, Pt), u32>,
+    wire_ends: HashSet<(SheetId, Pt)>,
+    junctions: HashSet<(SheetId, Pt)>,
     /// Every wire / bus segment, per sheet, as an (a, b) endpoint pair tagged
     /// with whether it is a bus (thick) segment. KiCad connects anything lying
     /// *along* a segment, not only at its two endpoints: a label or pin placed
@@ -386,6 +395,9 @@ impl NetlistBuilder {
             anchors: Vec::new(),
             anchor_sheet: Vec::new(),
             point_node: HashMap::new(),
+            claims: HashMap::new(),
+            wire_ends: HashSet::new(),
+            junctions: HashSet::new(),
             segments: Vec::new(),
             bus_aliases: HashMap::new(),
             hier_parent: Vec::new(),
@@ -403,12 +415,19 @@ impl NetlistBuilder {
     /// thing to claim a coordinate creates the node; later things at the same
     /// coordinate union into it.
     fn node_at(&mut self, sheet: SheetId, at: Pt) -> usize {
+        *self.claims.entry((sheet, at)).or_default() += 1;
         if let Some(&n) = self.point_node.get(&(sheet, at)) {
             return n;
         }
         let n = self.uf.make();
         self.point_node.insert((sheet, at), n);
         n
+    }
+
+    /// [`Self::node_at`] for a wire's own end point.
+    fn wire_end_at(&mut self, sheet: SheetId, at: Pt) -> usize {
+        self.wire_ends.insert((sheet, at));
+        self.node_at(sheet, at)
     }
 
     /// Record a named anchor, keeping `anchor_sheet` parallel to `anchors`.
@@ -483,8 +502,8 @@ impl NetlistBuilder {
                 }
             }
             for win in pts.windows(2) {
-                let a = self.node_at(sheet, win[0]);
-                let b = self.node_at(sheet, win[1]);
+                let a = self.wire_end_at(sheet, win[0]);
+                let b = self.wire_end_at(sheet, win[1]);
                 self.uf.union(a, b);
                 self.segments.push((sheet, win[0], win[1], false));
             }
@@ -556,6 +575,7 @@ impl NetlistBuilder {
         //    materialise the node.
         for j in root.find_all("junction") {
             if let Some(at) = at_xy(j) {
+                self.junctions.insert((sheet, at));
                 self.node_at(sheet, at);
             }
         }
@@ -649,7 +669,12 @@ impl NetlistBuilder {
         // instance must contribute *only* its own unit's pins plus the unit-0
         // pins common to every gate (power pins usually live there). All
         // instances sharing a reference are merged into one component later.
-        let inst_unit = u32::try_from(sym.find_i64("unit").unwrap_or(1).max(0)).unwrap_or(u32::MAX);
+        // A reused sheet picks the unit per placement, in its instances entry.
+        let instance = instance_path(sym, inst_path);
+        let unit = instance
+            .and_then(|p| p.find_i64("unit"))
+            .or_else(|| sym.find_i64("unit"));
+        let inst_unit = u32::try_from(unit.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
         // Likewise a De Morgan part draws each unit in two body styles, and
         // only the placed style's pins exist: `(convert N)` through KiCad 8,
         // `(body_style N)` from KiCad 9. The alternate style can carry other
@@ -664,7 +689,8 @@ impl NetlistBuilder {
         // The static `(property "Reference")` is only a template, so we prefer
         // the instances entry whose path matches the sheet instance we are
         // currently expanding. Falls back to the template for flat designs.
-        let reference = instance_reference(sym, inst_path)
+        let reference = instance
+            .and_then(|p| p.find_value("reference"))
             .or_else(|| property(sym, "Reference"))
             .unwrap_or_default();
         let value = property(sym, "Value").unwrap_or_default();
@@ -983,7 +1009,10 @@ impl NetlistBuilder {
             // Only axis-aligned segments occur in KiCad schematics; handle the
             // general collinear case anyway for robustness.
             for &(p, node) in points {
-                if p == a || p == b {
+                let key = (sheet, p);
+                let joins = self.junctions.contains(&key)
+                    || (!self.wire_ends.contains(&key) && self.claims.get(&key) == Some(&1));
+                if p == a || p == b || !joins {
                     continue;
                 }
                 if point_strictly_inside(p, a, b) {
@@ -1773,20 +1802,15 @@ fn normalize_label(name: &str) -> String {
     crate::netname::unescape_net_name(name)
 }
 
-/// The reference designator for this symbol *in the sheet instance we are
-/// expanding*. A reused sheet lists one `(path .. (reference ..))` per
-/// instantiation; we pick the one whose path equals the current instance path.
-/// Returns None when the symbol has no instances block (older/flat files).
-fn instance_reference(sym: &List, inst_path: &str) -> Option<String> {
-    let instances = sym.find("instances")?;
-    for project in instances.find_all("project") {
-        for path in project.find_all("path") {
-            if path.arg_value(0).as_deref() == Some(inst_path) {
-                return path.find_value("reference");
-            }
-        }
-    }
-    None
+/// This symbol's `(path .. (reference ..) (unit ..))` entry *in the sheet
+/// instance we are expanding*. A reused sheet lists one per instantiation; we
+/// pick the one whose path equals the current instance path. Returns None when
+/// the symbol has no instances block (older/flat files).
+fn instance_path<'a>(sym: &'a List, inst_path: &str) -> Option<&'a List> {
+    sym.find("instances")?
+        .find_all("project")
+        .flat_map(|project| project.find_all("path"))
+        .find(|path| path.arg_value(0).as_deref() == Some(inst_path))
 }
 
 /// A symbol-instance property value by key.

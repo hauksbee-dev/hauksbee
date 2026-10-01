@@ -486,7 +486,8 @@ fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
              \x20   (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net 1 \"GND\"))\n\
              \x20 )\n\
              \x20 (segment (start 0 5) (end 10 5) (width 1.0) (layer \"F.Cu\") (net 1))\n\
-             \x20 (segment (start 5 0) (end 5 10) (width 1.0) (layer \"F.Cu\") (net 2))\n)"
+             \x20 (segment (start 5 0) (end 5 10) (width 1.0) (layer \"F.Cu\") (net 2))\n\
+             \x20 (segment (start 22 20) (end 20 25) (width 0.25) (layer \"F.Cu\") (net 3))\n)"
         ),
     )
     .expect("write temp board");

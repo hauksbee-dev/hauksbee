@@ -131,6 +131,24 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
 }
 
+/// Layout wiring checks on a `KiCad` layout (empty for anything else).
+///
+/// Reports pads copper never joins to their net and, when `board_path` has a
+/// same-stem `.kicad_sch` beside it, pins the layout wires differently from
+/// that schematic.
+#[must_use]
+pub fn layout_lint(
+    board: &ExtractedBoard,
+    text: Option<&str>,
+    board_path: Option<&std::path::Path>,
+) -> NetLintReport {
+    let Some(text) = text.filter(|t| t.contains("(kicad_pcb")) else {
+        return NetLintReport::default();
+    };
+    let schematic = board_path.and_then(ExtractedBoard::companion_schematic);
+    board.layout_lint(text, schematic.as_ref())
+}
+
 /// The full engine-level signal-integrity report.
 ///
 /// It is the extract-layer SI checks

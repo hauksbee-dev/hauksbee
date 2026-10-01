@@ -60,6 +60,8 @@ mod ingest_robustness;
 mod kicad_dru;
 #[path = "known_faults.rs"]
 mod known_faults;
+#[path = "layout_lint.rs"]
+mod layout_lint;
 #[path = "netlint.rs"]
 mod netlint;
 #[path = "netlist_code_missing.rs"]

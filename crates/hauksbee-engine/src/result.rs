@@ -2745,6 +2745,12 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
             "Leave one push-pull driver on the net, or switch to open-drain with a single pull-up."
         }
         LintCheck::PinFunction => "Rewire the named pins as the finding describes, then re-run the lint.",
+        LintCheck::UnroutedPad => {
+            "Route the unconnected pads to their net (or refill the zones) until KiCad DRC reports no unconnected items."
+        }
+        LintCheck::PcbSchematicMismatch => {
+            "Update the PCB from the schematic, re-route the changed pins, and re-check."
+        }
         LintCheck::StrapPin => {
             "Hold the strap net at the datasheet's required reset level with a pull resistor; keep active signals off it until after boot."
         }

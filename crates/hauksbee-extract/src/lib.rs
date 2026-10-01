@@ -52,6 +52,7 @@ pub mod gerber;
 pub mod ipc2581;
 mod ipc356;
 pub mod kicad_dru;
+mod layout_lint;
 mod netlint;
 mod netlist;
 pub mod netname;

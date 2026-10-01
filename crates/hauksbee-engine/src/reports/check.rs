@@ -101,7 +101,9 @@ impl CheckReport<'_> {
         let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
         let evidence =
             super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
-        let lint = crate::checks::engine_lint(board, lib);
+        let mut lint = crate::checks::engine_lint(board, lib);
+        lint.findings
+            .extend(crate::checks::layout_lint(board, input.geo_text(), Some(board_path)).findings);
         // Route through the single SI chokepoint so this aggregate surface carries
         // the same trace-ampacity + input-cap-ripple findings as the dedicated
         // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
@@ -114,7 +116,6 @@ impl CheckReport<'_> {
         // switching the check off for everyone. Findings an active waiver covers
         // come out of the gate and go into their own section, never out of sight.
         let mut waivers = load_waivers(board_path);
-        let mut lint = lint;
         let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
         let provenance = super::clearance_provenance(
             clearance_input.as_ref(),
@@ -511,6 +512,8 @@ pub fn gather_findings_with_schematic(
     let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
     let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
+    lint.findings
+        .extend(crate::checks::layout_lint(board, geo_text, Some(board_path)).findings);
     let mut si = crate::checks::engine_si(board, lib, geo_text);
     let usbc = crate::usb_c_report(board);
 

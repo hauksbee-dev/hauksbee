@@ -114,6 +114,13 @@ pub enum LintCheck {
     /// Pins whose role is unknown (passive, generic GPIO) never fire. The
     /// message names the pins, why it matters, and the likely fix.
     PinFunction,
+    /// A pad, or group of pads, that copper on the layout never joins to the
+    /// rest of its net (KiCad's "unconnected items"). Also carries the
+    /// one-line notes for stray track/via copper and for zones saved unfilled.
+    UnroutedPad,
+    /// A pin wired to a different set of pins on the layout than in its
+    /// same-stem schematic: the PCB is out of date with the schematic.
+    PcbSchematicMismatch,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -138,7 +145,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -155,6 +162,8 @@ impl LintCheck {
         Self::BackPower,
         Self::I2cBusLoading,
         Self::PinFunction,
+        Self::UnroutedPad,
+        Self::PcbSchematicMismatch,
     ];
 
     #[must_use]
@@ -176,6 +185,8 @@ impl LintCheck {
             Self::BackPower => "back_power",
             Self::I2cBusLoading => "i2c_bus_loading",
             Self::PinFunction => "pin_function",
+            Self::UnroutedPad => "unrouted_pad",
+            Self::PcbSchematicMismatch => "pcb_schematic_mismatch",
         }
     }
 }
