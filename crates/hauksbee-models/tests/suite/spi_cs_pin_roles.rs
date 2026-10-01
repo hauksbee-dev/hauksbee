@@ -58,24 +58,10 @@ fn the_mcp3008_map_is_the_ds21295d_pinout() {
         "MCP3008",
         "Package_DIP:DIP-16_W7.62mm",
         "mcp3008",
-        &[
-            ("1", "ch0"),
-            ("2", "ch1"),
-            ("3", "ch2"),
-            ("4", "ch3"),
-            ("5", "ch4"),
-            ("6", "ch5"),
-            ("7", "ch6"),
-            ("8", "ch7"),
-            ("9", "dgnd"),
-            ("10", "cs"),
-            ("11", "mosi"),
-            ("12", "miso"),
-            ("13", "sck"),
-            ("14", "agnd"),
-            ("15", "vref"),
-            ("16", "vdd"),
-        ],
+        &super::pins(
+            "1=ch0 2=ch1 3=ch2 4=ch3 5=ch4 6=ch5 7=ch6 8=ch7 9=dgnd 10=cs 11=mosi 12=miso 13=sck \
+         14=agnd 15=vref 16=vdd",
+        ),
     );
 }
 
@@ -87,16 +73,7 @@ fn the_25xx_eeprom_map_is_the_ds22065_pinout() {
         "25LC256",
         "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
         "eeprom_25xx_spi",
-        &[
-            ("1", "cs"),
-            ("2", "miso"),
-            ("3", "wp_n"),
-            ("4", "vss"),
-            ("5", "mosi"),
-            ("6", "sck"),
-            ("7", "hold_n"),
-            ("8", "vcc"),
-        ],
+        &super::pins("1=cs 2=miso 3=wp_n 4=vss 5=mosi 6=sck 7=hold_n 8=vcc"),
     );
 }
 

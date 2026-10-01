@@ -12,15 +12,13 @@
 
 use super::{assert_pin_map, expect_model, resolve_value};
 
-/// [`assert_pin_map`] for a package numbered 1..=N in order: `roles[i]` is the
-/// role the datasheet gives pin `i + 1`, so the list reads down the package.
-fn assert_sequential_pin_map(value: &str, id: &str, roles: &[&str]) {
+/// [`assert_pin_map`] for a package numbered 1..=N in order: the `i`-th
+/// whitespace-separated role is the one the datasheet gives pin `i + 1`, so
+/// the list reads down the package.
+fn assert_sequential_pin_map(value: &str, id: &str, roles: &str) {
+    let roles: Vec<&str> = roles.split_whitespace().collect();
     let pins: Vec<String> = (1..=roles.len()).map(|n| n.to_string()).collect();
-    let expected: Vec<(&str, &str)> = pins
-        .iter()
-        .map(String::as_str)
-        .zip(roles.iter().copied())
-        .collect();
+    let expected: Vec<(&str, &str)> = pins.iter().map(String::as_str).zip(roles).collect();
     assert_pin_map(&expect_model(value), id, &expected);
 }
 
@@ -40,14 +38,7 @@ fn quad_gate_00_family_pin_maps() {
         ("74HC32", "74hc32"),
         ("74HC86", "74hc86"),
     ] {
-        assert_sequential_pin_map(
-            value,
-            id,
-            &[
-                "a1", "b1", "y1", "a2", "b2", "y2", "gnd", "y3", "a3", "b3", "y4", "a4", "b4",
-                "vcc",
-            ],
-        );
+        assert_sequential_pin_map(value, id, "a1 b1 y1 a2 b2 y2 gnd y3 a3 b3 y4 a4 b4 vcc");
     }
 }
 
@@ -60,10 +51,7 @@ fn hc02_quad_nor_pin_map() {
     assert_sequential_pin_map(
         "74HC02",
         "74hc02",
-        &[
-            "g1y", "g1a", "g1b", "g2y", "g2a", "g2b", "gnd", "g3a", "g3b", "g3y", "g4a", "g4b",
-            "g4y", "vcc",
-        ],
+        "g1y g1a g1b g2y g2a g2b gnd g3a g3b g3y g4a g4b g4y vcc",
     );
 }
 
@@ -75,9 +63,7 @@ fn hc04_hex_inverter_pin_map() {
     assert_sequential_pin_map(
         "74HC04",
         "74hc04",
-        &[
-            "a1", "y1", "a2", "y2", "a3", "y3", "gnd", "y4", "a4", "y5", "a5", "y6", "a6", "vcc",
-        ],
+        "a1 y1 a2 y2 a3 y3 gnd y4 a4 y5 a5 y6 a6 vcc",
     );
 }
 
@@ -89,9 +75,7 @@ fn hc27_triple_nor_pin_map() {
     assert_sequential_pin_map(
         "74HC27",
         "74hc27",
-        &[
-            "a1", "b1", "a2", "b2", "c2", "y2", "gnd", "y3", "a3", "b3", "c3", "c1", "y1", "vcc",
-        ],
+        "a1 b1 a2 b2 c2 y2 gnd y3 a3 b3 c3 c1 y1 vcc",
     );
 }
 
@@ -102,10 +86,7 @@ fn hc125_quad_tristate_buffer_pin_map() {
     assert_sequential_pin_map(
         "74HC125",
         "74hc125",
-        &[
-            "oe_n_1", "a1", "y1", "oe_n_2", "a2", "y2", "gnd", "y3", "a3", "oe_n_3", "y4", "a4",
-            "oe_n_4", "vcc",
-        ],
+        "oe_n_1 a1 y1 oe_n_2 a2 y2 gnd y3 a3 oe_n_3 y4 a4 oe_n_4 vcc",
     );
 }
 
@@ -116,10 +97,7 @@ fn hc74_dual_dff_pin_map() {
     assert_sequential_pin_map(
         "74HC74",
         "74hc74",
-        &[
-            "clr_n1", "d1", "clk1", "pre_n1", "q1", "q_n1", "gnd", "q_n2", "q2", "pre_n2", "clk2",
-            "d2", "clr_n2", "vcc",
-        ],
+        "clr_n1 d1 clk1 pre_n1 q1 q_n1 gnd q_n2 q2 pre_n2 clk2 d2 clr_n2 vcc",
     );
 }
 
@@ -130,24 +108,7 @@ fn hc595_shift_register_pin_map() {
     assert_sequential_pin_map(
         "74HC595",
         "74hc595",
-        &[
-            "qb",
-            "qc",
-            "qd",
-            "qe",
-            "qf",
-            "qg",
-            "qh",
-            "gnd",
-            "qh_serial",
-            "srclr_n",
-            "srclk",
-            "rclk",
-            "oe_n",
-            "ser",
-            "qa",
-            "vcc",
-        ],
+        "qb qc qd qe qf qg qh gnd qh_serial srclr_n srclk rclk oe_n ser qa vcc",
     );
 }
 
@@ -158,10 +119,7 @@ fn hc165_shift_register_pin_map() {
     assert_sequential_pin_map(
         "74HC165",
         "74hc165",
-        &[
-            "pl_n", "clk", "e", "f", "g", "h", "qh_n", "gnd", "qh", "ser", "a", "b", "c", "d",
-            "clk_inh", "vcc",
-        ],
+        "pl_n clk e f g h qh_n gnd qh ser a b c d clk_inh vcc",
     );
 }
 
@@ -175,10 +133,7 @@ fn bma423_accelerometer_pin_map() {
     assert_sequential_pin_map(
         "BMA423",
         "bma423",
-        &[
-            "sdo", "sda", "vddio", "asda", "int1", "int2", "vdd", "gndio", "gnd", "csb", "ascl",
-            "scl",
-        ],
+        "sdo sda vddio asda int1 int2 vdd gndio gnd csb ascl scl",
     );
 }
 

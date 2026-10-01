@@ -1,7 +1,7 @@
 //! The behavioural power-IC models resolve and carry their behavioural blocks.
 
 use super::{
-    assert_pin_map, assert_pins, expect_model, expect_query, has_supply_range, resolve_value,
+    assert_pin_map, assert_pins, expect_model, expect_query, has_supply_range, pins, resolve_value,
 };
 use hauksbee_models::schema::CurrentProgramSemantics;
 
@@ -14,10 +14,7 @@ fn bq24075_identity_card_carries_the_sourced_battery_and_pin_contracts() {
         assert_eq!(model.params.get_str("battery_chemistry"), Some("liion"));
         assert_eq!(model.params.get_f64("vout_setpoint_low"), Some(4.16));
         assert_eq!(model.params.get_f64("vout_setpoint_high"), Some(4.23));
-        assert_pins(
-            &model,
-            &[("1", "ts"), ("2", "bat"), ("3", "bat"), ("13", "vbus")],
-        );
+        assert_pins(&model, &pins("1=ts 2=bat 3=bat 13=vbus"));
         assert!(model.params.get_str("unlocked_by").is_some());
         let rec = "Section 8.3 Recommended Operating Conditions";
         assert!(has_supply_range(
@@ -284,14 +281,7 @@ fn the_sr2_family_binds_every_ordering_option_to_one_udfn6_map() {
     // Table 1 Signal names. Pad 3 is the reset OUTPUT and pads 2/5 are the two
     // push-button inputs; swapping them would make the model read the ESP32's
     // EN net as a button press.
-    let udfn6 = [
-        ("1", "vss"),
-        ("2", "sr1_n"),
-        ("3", "rst_n"),
-        ("4", "nc"),
-        ("5", "sr0_n"),
-        ("6", "vcc"),
-    ];
+    let udfn6 = pins("1=vss 2=sr1_n 3=rst_n 4=nc 5=sr0_n 6=vcc");
     assert_pin_map(&m, "sr2", &udfn6);
 
     // Table 4. The SR inputs have FIXED thresholds, not VCC fractions: 0.85 V

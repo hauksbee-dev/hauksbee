@@ -1,4 +1,4 @@
-use super::assert_pins;
+use super::{assert_pins, pins};
 use hauksbee_models::ModelEntry;
 
 fn resolve(value: &str, footprint: &str) -> ModelEntry {
@@ -50,7 +50,7 @@ fn dual_variants_are_excluded_from_bat54_cards() {
 #[test]
 fn two_pin_card_reverses_the_sod_body_pad_roles() {
     let model = resolve("BAT54XV2T1G", "Diode_SMD:D_SOD-523");
-    assert_pins(&model, &[("1", "cathode"), ("2", "anode")]);
+    assert_pins(&model, &pins("1=cathode 2=anode"));
 }
 
 #[test]

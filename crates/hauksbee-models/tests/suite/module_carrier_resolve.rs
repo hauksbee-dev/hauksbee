@@ -8,7 +8,7 @@
 //! descriptor exists. Either way, never a silent fall-through to the wrong-ISA
 //! simavr default and never an invented emulator string.
 
-use super::{assert_pins, expect_query, resolve_query};
+use super::{assert_pins, expect_query, pins, resolve_query};
 use hauksbee_models::ComponentKind;
 
 fn resolve_value(value: &str) -> Option<hauksbee_models::ModelEntry> {
@@ -220,12 +220,7 @@ fn daisy_seed_binds_with_honest_no_cosim_backend() {
 #[test]
 fn daisy_seed_header_pin_map_matches_datasheet() {
     let model = resolve_value("Daisy_Seed").expect("Daisy_Seed should resolve");
-    let header = [
-        ("1", "pb12"),
-        ("14", "pb6_usart1_tx"),
-        ("39", "vin"),
-        ("40", "gnd"),
-    ];
+    let header = pins("1=pb12 14=pb6_usart1_tx 39=vin 40=gnd");
     assert_pins(&model, &header);
     assert!(
         model.straps.is_empty(),
@@ -265,8 +260,7 @@ fn esp_strap_maps_follow_the_package() {
         };
         let model = expect_query(Some(value), None, Some(footprint));
         assert_eq!(model.id, id, "{row}");
-        let pairs: Vec<_> = pins.split(' ').filter_map(|p| p.split_once('=')).collect();
-        assert_pins(&model, &pairs);
+        assert_pins(&model, &super::pins(pins));
         assert!(!model.straps.is_empty(), "{row}");
     }
     for (value, backend) in [

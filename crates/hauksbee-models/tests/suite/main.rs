@@ -105,6 +105,14 @@ fn vf_at(m: &ModelEntry, i: f64, vt: f64) -> f64 {
     (param(m, "n") * vt).mul_add((i / param(m, "is")).ln(), i * param(m, "rs"))
 }
 
+/// `pad=role` pairs from one whitespace-separated spec, for [`assert_pins`]
+/// and [`assert_pin_map`]: `"1=gnd 2=in 3=out"`.
+fn pins(spec: &str) -> Vec<(&str, &str)> {
+    spec.split_whitespace()
+        .map(|pair| pair.split_once('=').expect("pad=role"))
+        .collect()
+}
+
 /// Assert each listed pad carries its role (other pads are not checked).
 fn assert_pins(m: &ModelEntry, pairs: &[(&str, &str)]) {
     for (pad, role) in pairs {

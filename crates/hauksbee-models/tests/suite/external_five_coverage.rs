@@ -21,7 +21,7 @@
 //! be WRONG rather than merely absent, because absent is the safe failure and
 //! this library's job is to avoid the other one.
 
-use super::{assert_pins, resolve_part as resolve};
+use super::{assert_pins, pins, resolve_part as resolve};
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 /// Resolve the layout-only way (value doubled into `mpn`), or panic.
@@ -84,26 +84,10 @@ fn the_eagle_mlf44_spelling_of_the_atmega1284p_binds_to_its_own_pinout() {
     // Atmel-42719C section 5.1.2, the four corners of the 44-pad map plus every
     // supply and the crystal pair. Cross-checked against the margay datalogger's
     // own net names, which agree pad for pad.
-    assert_pins(
-        &m,
-        &[
-            ("1", "pb5_mosi"),
-            ("2", "pb6_miso"),
-            ("3", "pb7_sck"),
-            ("4", "reset"),
-            ("5", "vcc"),
-            ("6", "gnd"),
-            ("7", "xtal2"),
-            ("8", "xtal1"),
-            ("19", "pc0_scl"),
-            ("20", "pc1_sda"),
-            ("27", "avcc"),
-            ("29", "aref"),
-            ("37", "pa0_adc0"),
-            ("44", "pb4_ss_oc0b"),
-            ("TH", "gnd5"),
-        ],
-    );
+    assert_pins(&m, &pins(
+        "1=pb5_mosi 2=pb6_miso 3=pb7_sck 4=reset 5=vcc 6=gnd 7=xtal2 8=xtal1 19=pc0_scl 20=pc1_sda \
+         27=avcc 29=aref 37=pa0_adc0 44=pb4_ss_oc0b TH=gnd5",
+    ));
     assert_eq!(m.pins.len(), 45, "44 leads plus the exposed pad");
 
     // Table 29-1: the same 6 V / 40 mA / 200 mA envelope as the 328P, which is
@@ -159,32 +143,11 @@ fn the_pro_micro_header_names_port_pins_not_arduino_numbers() {
     // keyboard's own symbol, which spells the port on every pin.
     assert_pins(
         &m,
-        &[
-            ("1", "pd3_txd1"),
-            ("2", "pd2_rxd1"),
-            ("3", "gnd"),
-            ("4", "gnd2"),
-            ("5", "pd1_sda"),
-            ("6", "pd0_scl"),
-            ("7", "pd4_adc8"),
-            ("8", "pc6"),
-            ("9", "pd7_adc10"),
-            ("10", "pe6"),
-            ("11", "pb4_adc11"),
-            ("12", "pb5_adc12"),
-            ("13", "pb6_adc13"),
-            ("14", "pb2_mosi"),
-            ("15", "pb3_miso"),
-            ("16", "pb1_sck"),
-            ("17", "pf7_adc7"),
-            ("18", "pf6_adc6"),
-            ("19", "pf5_adc5"),
-            ("20", "pf4_adc4"),
-            ("21", "vcc"),
-            ("22", "reset"),
-            ("23", "gnd3"),
-            ("24", "raw"),
-        ],
+        &pins(
+            "1=pd3_txd1 2=pd2_rxd1 3=gnd 4=gnd2 5=pd1_sda 6=pd0_scl 7=pd4_adc8 8=pc6 9=pd7_adc10 \
+         10=pe6 11=pb4_adc11 12=pb5_adc12 13=pb6_adc13 14=pb2_mosi 15=pb3_miso 16=pb1_sck \
+         17=pf7_adc7 18=pf6_adc6 19=pf5_adc5 20=pf4_adc4 21=vcc 22=reset 23=gnd3 24=raw",
+        ),
     );
     assert_eq!(m.pins.len(), 24, "24 header positions");
 
@@ -304,17 +267,7 @@ fn the_voltage_references_carry_their_own_rail() {
     assert_eq!(m.params.get_f64("vout"), Some(1.8));
     // 19-6355 Rev 18 Pin Description, MAX6070 column. OUTF is the pin the ideal
     // source is stamped on; OUTS is a sense leg that carries no device.
-    assert_pins(
-        &m,
-        &[
-            ("1", "filter"),
-            ("2", "gnd"),
-            ("3", "en"),
-            ("4", "in"),
-            ("5", "outs"),
-            ("6", "out"),
-        ],
-    );
+    assert_pins(&m, &pins("1=filter 2=gnd 3=en 4=in 5=outs 6=out"));
     // The MAX6071 is the same reference with a Kelvin GROUND pair where the
     // MAX6070 has GND and FILTER, so pads 1 and 2 mean different things on it.
     for value in ["MAX6071AAUT18", "MAX6070AAUT25", "MAX6070AAUT50"] {
@@ -331,10 +284,7 @@ fn the_voltage_references_carry_their_own_rail() {
     }
     // SHDN is active LOW. Naming it `en` would invert its sense the moment
     // anything gates on the role.
-    assert_pins(
-        &m,
-        &[("3", "shdn"), ("2", "in"), ("4", "gnd"), ("6", "out")],
-    );
+    assert_pins(&m, &pins("3=shdn 2=in 4=gnd 6=out"));
     for value in ["LT1461AIS8-2.5", "LT1461AIS8-5", "LT1461AIS8-4.096"] {
         assert!(
             resolve(value).is_none_or(|m| m.id != "lt1461a_3v3"),
@@ -435,16 +385,7 @@ fn the_74lvc1g66_has_one_pinout_and_pad_three_is_ground() {
     // two transposed, which stamped a ~7 Ohm switch from pad 1 onto the ground
     // plane and read a live bidirectional I/O as ground, on every board carrying
     // the part. Both directions are asserted so neither can drift back.
-    assert_pins(
-        &m,
-        &[
-            ("1", "in_out_a"),
-            ("2", "in_out_b"),
-            ("3", "vss"),
-            ("4", "ctrl"),
-            ("5", "vcc"),
-        ],
-    );
+    assert_pins(&m, &pins("1=in_out_a 2=in_out_b 3=vss 4=ctrl 5=vcc"));
     assert_ne!(
         m.pins.get("2").map(String::as_str),
         Some("vss"),
@@ -459,7 +400,7 @@ fn the_74lvc1g66_has_one_pinout_and_pad_three_is_ground() {
     // their own entry rather than the five-lead map.
     for value in ["SN74LVC1G66DRYR", "SN74LVC1G66DSFR", "74LVC1G66GS"] {
         let m = expect_id(value, "lvc1g66_6pin");
-        assert_pins(&m, &[("3", "vss"), ("5", "nc"), ("6", "vcc")]);
+        assert_pins(&m, &pins("3=vss 5=nc 6=vcc"));
     }
 }
 
@@ -481,15 +422,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     assert_eq!(m.kind, ComponentKind::Digital);
     assert_pins(
         &m,
-        &[
-            ("3", "gnd"),
-            ("12", "vcc"),
-            ("17", "txd"),
-            ("18", "dtr_n"),
-            ("19", "rts_n"),
-            ("20", "vccio"),
-            ("EP", "gnd3"),
-        ],
+        &pins("3=gnd 12=vcc 17=txd 18=dtr_n 19=rts_n 20=vccio EP=gnd3"),
     );
     assert_eq!(m.params.get_str("supply_pin"), Some("12"));
     assert_eq!(m.params.get_str("gnd_pin"), Some("3"));
@@ -504,16 +437,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     let m = expect_id("BME280", "bme280");
     assert_pins(
         &m,
-        &[
-            ("1", "gnd"),
-            ("2", "csb"),
-            ("3", "sda"),
-            ("4", "scl"),
-            ("5", "sdo"),
-            ("6", "vddio"),
-            ("7", "gnd2"),
-            ("8", "vdd"),
-        ],
+        &pins("1=gnd 2=csb 3=sda 4=scl 5=sdo 6=vddio 7=gnd2 8=vdd"),
     );
     for value in ["BMP280", "BME680"] {
         assert!(
@@ -527,17 +451,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     let m = expect_id("MCP3421A1", "mcp3421");
     assert_eq!(m.kind, ComponentKind::Adc);
     assert_eq!(m.params.get_f64("bits"), Some(18.0));
-    assert_pins(
-        &m,
-        &[
-            ("1", "vin_plus"),
-            ("2", "vss"),
-            ("3", "scl"),
-            ("4", "sda"),
-            ("5", "vdd"),
-            ("6", "vin_minus"),
-        ],
-    );
+    assert_pins(&m, &pins("1=vin_plus 2=vss 3=scl 4=sda 5=vdd 6=vin_minus"));
     for value in ["MCP3421A0", "MCP3421A7"] {
         expect_id(value, "mcp3421");
     }
@@ -552,17 +466,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     // borrow. The `y` prefix on WAKE is what makes the binder stamp a driver, and
     // its absence on RSTn is what stops one being invented.
     let m = expect_id("TPL5010DDC", "tpl5010");
-    assert_pins(
-        &m,
-        &[
-            ("1", "vdd"),
-            ("2", "gnd"),
-            ("3", "delay"),
-            ("4", "done"),
-            ("5", "wake"),
-            ("6", "rst_n"),
-        ],
-    );
+    assert_pins(&m, &pins("1=vdd 2=gnd 3=delay 4=done 5=wake 6=rst_n"));
     assert!(
         resolve("TPL5110").is_none_or(|e| e.id != "tpl5010"),
         "the TPL5110 switches a load rail instead of asserting a reset"
@@ -579,35 +483,13 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
             "{value} does not name the DCU/DQE pin order this map is"
         );
     }
-    assert_pins(
-        &m,
-        &[
-            ("1", "a1"),
-            ("2", "y3"),
-            ("3", "a2"),
-            ("4", "gnd"),
-            ("5", "y2"),
-            ("6", "a3"),
-            ("7", "y1"),
-            ("8", "vcc"),
-        ],
-    );
+    assert_pins(&m, &pins("1=a1 2=y3 3=a2 4=gnd 5=y2 6=a3 7=y1 8=vcc"));
 
     // SN75176A: A and B are a DIFFERENTIAL pair. Neither may be `y`-prefixed,
     // because that would stamp two independent single-ended push-pull drivers
     // where the silicon has one differential driver.
     let m = expect_id("SN75176AD", "sn75176a");
-    assert_pins(
-        &m,
-        &[
-            ("1", "r"),
-            ("4", "d"),
-            ("5", "gnd"),
-            ("6", "bus_a"),
-            ("7", "bus_b"),
-            ("8", "vcc"),
-        ],
-    );
+    assert_pins(&m, &pins("1=r 4=d 5=gnd 6=bus_a 7=bus_b 8=vcc"));
     // voh/vol are the RECEIVER output's, not the driver's. The datasheet gives both
     // and they are a volt apart: driver VOH 3.7 V typ on the bus pins, receiver
     // VOH 2.7 V min on pad 1, which is the only pin this entry describes.
@@ -628,17 +510,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
             "{value} does not name the QFN pin order this map is"
         );
     }
-    assert_pins(
-        &m,
-        &[
-            ("9", "gnd"),
-            ("19", "scl"),
-            ("20", "sda"),
-            ("21", "vcc"),
-            ("22", "int_n"),
-            ("25", "gnd2"),
-        ],
-    );
+    assert_pins(&m, &pins("9=gnd 19=scl 20=sda 21=vcc 22=int_n 25=gnd2"));
     assert_eq!(m.pins.len(), 25, "24 leads plus the exposed pad");
     for (pad, role) in &m.pins {
         assert!(
@@ -659,17 +531,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
         Some(0.003),
         "0.003 is VOS, the input offset; VHYS is 17 mV"
     );
-    assert_pins(
-        &m,
-        &[
-            ("1", "in_plus"),
-            ("2", "vss"),
-            ("3", "in_minus"),
-            ("4", "out"),
-            ("5", "nc"),
-            ("6", "vcc"),
-        ],
-    );
+    assert_pins(&m, &pins("1=in_plus 2=vss 3=in_minus 4=out 5=nc 6=vcc"));
     // out_hi is the rail minus the UPPER-rail drop (70 mV), out_lo the LOWER-rail
     // one (35 mV). The two differ by a factor of two and swapping them is the easy
     // mistake, so both are pinned.
@@ -692,14 +554,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     assert_eq!(m.kind, ComponentKind::Opamp);
     assert_pins(
         &m,
-        &[
-            ("1", "out_a"),
-            ("2", "in_minus_a"),
-            ("3", "in_plus_a"),
-            ("4", "vcc"),
-            ("11", "vss"),
-            ("14", "out_d"),
-        ],
+        &pins("1=out_a 2=in_minus_a 3=in_plus_a 4=vcc 11=vss 14=out_d"),
     );
     assert_eq!(m.pins.len(), 14);
     // Channel A MUST be suffixed. `bind_opamp` looks for out_a..out_d, stamps every
@@ -731,15 +586,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     // `com` and `s0` are the two terminals that decide where current can flow.
     let m = expect_id("TPS22916YFP", "tps22916");
     assert_eq!(m.kind, ComponentKind::AnalogSwitch);
-    assert_pins(
-        &m,
-        &[
-            ("A1", "in_out_a"),
-            ("A2", "in_out_b"),
-            ("B1", "vss"),
-            ("B2", "ctrl"),
-        ],
-    );
+    assert_pins(&m, &pins("A1=in_out_a A2=in_out_b B1=vss B2=ctrl"));
     // The ACTIVE-LOW ordering options must not bind: no single `vth` serves both
     // senses, and an L part bound here would conduct on the half of the control
     // range where it is off.
@@ -751,17 +598,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     }
 
     let m = expect_id("MIC94090C6", "mic94090");
-    assert_pins(
-        &m,
-        &[
-            ("1", "in_out_a"),
-            ("2", "vss"),
-            ("3", "nc"),
-            ("4", "in_out_b"),
-            ("5", "gnd"),
-            ("6", "ctrl"),
-        ],
-    );
+    assert_pins(&m, &pins("1=in_out_a 2=vss 3=nc 4=in_out_b 5=gnd 6=ctrl"));
     for value in ["MIC94091C6", "MIC94093C6", "MIC94090MT"] {
         assert!(
             resolve(value).is_none_or(|e| e.id != "mic94090"),
@@ -772,16 +609,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     // The power mux models both throws without VCC: LOW selects IN1 (s0),
     // HIGH selects IN2 (s1), each with its own typical resistance and rating.
     let m = expect_id("TPS2104", "tps2104");
-    assert_pins(
-        &m,
-        &[
-            ("1", "ctrl"),
-            ("2", "vss"),
-            ("3", "s1"),
-            ("4", "com"),
-            ("5", "s0"),
-        ],
-    );
+    assert_pins(&m, &pins("1=ctrl 2=vss 3=s1 4=com 5=s0"));
     for (param, want) in [("ron", 0.25), ("ron_s0", 0.25), ("ron_s1", 1.3)] {
         assert_eq!(m.params.get_f64(param), Some(want), "{param}");
     }
@@ -818,7 +646,7 @@ fn the_remaining_external_five_entries_resolve_with_the_right_supply_pads() {
     ] {
         let m = expect_id(value, id);
         assert_eq!(m.kind, kind, "{value} polarity");
-        assert_pins(&m, &[("1", "gate"), ("2", "source"), ("3", "drain")]);
+        assert_pins(&m, &pins("1=gate 2=source 3=drain"));
 
         // THE THRESHOLD SIGN, which is the difference between a switch and a
         // short. `bind_mosfet` folds `vto` by the polarity sign, so a P-channel
@@ -877,22 +705,10 @@ fn an_mcu_with_no_cosim_platform_binds_but_cannot_run_firmware() {
     // ratio of.
     assert_pins(
         &m,
-        &[
-            ("1", "pc00"),
-            ("9", "hfxtal_i"),
-            ("10", "hfxtal_o"),
-            ("11", "reset"),
-            ("12", "dvdd"),
-            ("13", "vss"),
-            ("14", "nc"),
-            ("21", "pa00"),
-            ("30", "decouple"),
-            ("32", "vregvdd"),
-            ("35", "avdd"),
-            ("36", "iovdd"),
-            ("40", "pd00"),
-            ("41", "vss4"),
-        ],
+        &pins(
+            "1=pc00 9=hfxtal_i 10=hfxtal_o 11=reset 12=dvdd 13=vss 14=nc 21=pa00 30=decouple \
+         32=vregvdd 35=avdd 36=iovdd 40=pd00 41=vss4",
+        ),
     );
     assert_eq!(m.pins.len(), 41, "40 leads plus the exposed pad");
 

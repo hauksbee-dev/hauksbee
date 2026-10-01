@@ -7,7 +7,7 @@
 //! or a DC short. Each case pins the classification that clears (or honestly
 //! declines to clear) it.
 
-use super::{assert_pins, expect_model, expect_query, has_supply_range, resolve_query};
+use super::{assert_pins, expect_model, expect_query, has_supply_range, pins, resolve_query};
 use hauksbee_models::{schema::PassiveClass, ComponentKind, ModelLibrary, OperatingEnvelope};
 
 #[test]
@@ -17,7 +17,7 @@ fn txb0101_card_has_sourced_pin_roles_and_operating_envelopes() {
         assert_eq!(model.id, "txb0101_identity", "{value}");
         assert_eq!(model.kind, ComponentKind::Digital, "{value}");
         assert_eq!(model.params.get_bool("identity_only"), Some(true));
-        assert_pins(&model, &[("1", "vcca"), ("6", "vccb")]);
+        assert_pins(&model, &pins("1=vcca 6=vccb"));
         assert_eq!(model.envelope.len(), 3);
 
         let rec = "Section 5.3 Recommended Operating Conditions";

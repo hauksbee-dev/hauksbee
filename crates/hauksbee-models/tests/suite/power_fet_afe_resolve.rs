@@ -11,7 +11,7 @@
 //! The generic power-FET fallback is also checked: an unknown FET value in a
 //! DPAK footprint should bind by footprint when no value match exists.
 
-use super::{assert_pins, expect_model, expect_query};
+use super::{assert_pins, expect_model, expect_query, pins};
 use hauksbee_models::ComponentKind::{self, Digital, Nmos, Opamp, Pmos};
 
 /// A datasheet-derived sanity bound on one rating, `None` when unchecked.
@@ -135,7 +135,7 @@ fn fds4435bz_resolves_exact_grouped_so8_and_reproduces_datasheet_dc_points() {
     let m = expect_query(Some("FDS4435BZ"), None, Some("Pedalboard Library:SO08-E3"));
     assert_eq!(m.id, "fds4435bz");
     assert_eq!(m.kind, Pmos);
-    assert_pins(&m, &[("1-3", "source"), ("4", "gate"), ("5-8", "drain")]);
+    assert_pins(&m, &pins("1-3=source 4=gate 5-8=drain"));
 
     // The card's recorded derivation uses the level-1 channel resistance plus
     // the sourced ohmic residue. Pin the two fit rows and the independent gFS

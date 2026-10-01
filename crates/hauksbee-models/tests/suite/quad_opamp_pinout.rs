@@ -5,13 +5,13 @@
 //! middle of each side. A map copied from the dual would bind both supplies to
 //! signal pins and simulate a different circuit while binding cleanly.
 
-use super::{assert_pins, expect_model as resolve};
+use super::{assert_pins, expect_model as resolve, pins};
 
 #[test]
 fn the_supplies_sit_mid_side_not_at_the_corners() {
     // TI SLOS066AE, Table 5-1 "Pin Functions", 14-pin packages.
     let m = resolve("LM324");
-    assert_pins(&m, &[("4", "vcc"), ("11", "vss")]);
+    assert_pins(&m, &pins("4=vcc 11=vss"));
     // And nothing else claims to be a supply.
     let supplies: Vec<&String> = m
         .pins
