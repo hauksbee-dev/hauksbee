@@ -1522,85 +1522,43 @@ fn mcu_backend_string(comp: &Component, model: &ModelEntry) -> String {
     }
 }
 
+/// (name prefixes, family, backend); `None` is a family with no co-sim
+/// platform. Order is load-bearing: the F072 descriptor models only that
+/// silicon, so an F030/F091 stays unresolved rather than running on it; and the
+/// RISC-V ESP32 variants (C6/C2/H2, P4) must be caught before the generic
+/// "ESP32" catch-all, which would run their firmware on the Xtensa core.
+const MCU_ROUTES: &[(&[&str], &str, Option<&str>)] = &[
+    (&["STM32F072"], "STM32F072", Some("renode:stm32f072")),
+    (&["STM32F0"], "STM32F0", None),
+    (&["STM32F4"], "STM32F4", Some("renode:stm32f4")),
+    (&["STM32F1"], "STM32F1", Some("renode:stm32f103")),
+    (&["ESP32C3"], "ESP32-C3", Some("qemu:esp32c3")),
+    (&["ESP32S3"], "ESP32-S3", Some("qemu:esp32s3")),
+    (&["ESP32S2"], "ESP32-S2", None),
+    (&["ESP32C6"], "ESP32-C6", None),
+    (&["ESP32C2"], "ESP32-C2", None),
+    (&["ESP32H2"], "ESP32-H2", None),
+    (&["ESP32P4"], "ESP32-P4", None),
+    (
+        &["ESP32", "ESPWROOM32", "ESP32WROOM32", "ESP32WROVER"],
+        "ESP32",
+        Some("qemu:esp32"),
+    ),
+    (&["NRF52"], "nRF52", Some("renode:nrf52840")),
+];
+
 fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
-    for token in family_tokens(s) {
+    family_tokens(s).into_iter().find_map(|token| {
         let compact = token.replace(['-', '_', ' '], "");
-        // The F072 descriptor is package-independent, but it is not a generic
-        // STM32F0 core. Route only the silicon family it actually models; an
-        // F030/F091 must remain unresolved instead of silently running on the
-        // F072 machine. Exact-before-family ordering is load-bearing.
-        if compact.starts_with("STM32F072") {
-            return Some(McuFamilyRoute::Backend {
-                family: "STM32F072",
-                backend: "renode:stm32f072",
-            });
-        }
-        if compact.starts_with("STM32F0") {
-            return Some(McuFamilyRoute::NoPlatform { family: "STM32F0" });
-        }
-        if compact.starts_with("STM32F4") {
-            return Some(McuFamilyRoute::Backend {
-                family: "STM32F4",
-                backend: "renode:stm32f4",
-            });
-        }
-        if compact.starts_with("STM32F1") {
-            return Some(McuFamilyRoute::Backend {
-                family: "STM32F1",
-                backend: "renode:stm32f103",
-            });
-        }
-        if compact.starts_with("ESP32C3") {
-            return Some(McuFamilyRoute::Backend {
-                family: "ESP32-C3",
-                backend: "qemu:esp32c3",
-            });
-        }
-        if compact.starts_with("ESP32S3") {
-            return Some(McuFamilyRoute::Backend {
-                family: "ESP32-S3",
-                backend: "qemu:esp32s3",
-            });
-        }
-        if compact.starts_with("ESP32S2") {
-            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-S2" });
-        }
-        // The RISC-V ESP32 variants (C6/C2/H2 and the P4 app processor) are a
-        // different ISA from the original Xtensa ESP32. They MUST be caught
-        // before the generic "ESP32" catch-all below, which would otherwise
-        // mis-route them onto the Xtensa `qemu:esp32` core and silently execute
-        // RISC-V firmware on the wrong machine. No platform is wired for them
-        // yet, so they route to NoPlatform (the same honest treatment as S2).
-        if compact.starts_with("ESP32C6") {
-            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-C6" });
-        }
-        if compact.starts_with("ESP32C2") {
-            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-C2" });
-        }
-        if compact.starts_with("ESP32H2") {
-            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-H2" });
-        }
-        if compact.starts_with("ESP32P4") {
-            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-P4" });
-        }
-        if compact.starts_with("ESP32")
-            || compact.starts_with("ESPWROOM32")
-            || compact.starts_with("ESP32WROOM32")
-            || compact.starts_with("ESP32WROVER")
-        {
-            return Some(McuFamilyRoute::Backend {
-                family: "ESP32",
-                backend: "qemu:esp32",
-            });
-        }
-        if compact.starts_with("NRF52") {
-            return Some(McuFamilyRoute::Backend {
-                family: "nRF52",
-                backend: "renode:nrf52840",
-            });
-        }
-    }
-    None
+        let &(_, family, backend) = MCU_ROUTES
+            .iter()
+            .find(|(prefixes, ..)| prefixes.iter().any(|p| compact.starts_with(p)))?;
+        Some(
+            backend.map_or(McuFamilyRoute::NoPlatform { family }, |backend| {
+                McuFamilyRoute::Backend { family, backend }
+            }),
+        )
+    })
 }
 
 fn looks_like_mcu_candidate(comp: &Component) -> bool {
@@ -4952,7 +4910,7 @@ fn bind_nor_latches(
             gates.push(Gate { idx: n, y, ins });
         }
     }
-    let levels = LogicLevels::from_params(model);
+    let levels = LogicLevels::from_params(model).on_supply(model, roles);
     let mut bound = 0usize;
     let mut used: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for i in 0..gates.len() {
@@ -5011,7 +4969,7 @@ fn bind_nor_latches(
             lroles.insert("q".to_string(), q_net);
             digital.push(DigitalComponent::new_nor_latch(
                 format!("{}_L{}", comp.reference, gates[q_gate].idx),
-                levels,
+                levels.clone(),
                 lroles,
                 HashMap::from([("q".to_string(), drv)]),
             ));

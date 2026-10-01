@@ -13,35 +13,11 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use hauksbee_bind::digital::LogicLevels;
 use hauksbee_ir::NodeId;
+use hauksbee_models::ModelEntry;
 
 use super::{Peripheral, TickCtx};
-
-/// Logic-threshold pair for deciding a net's level with hysteresis.
-#[derive(Debug, Clone, Copy)]
-pub struct Thresholds {
-    pub vih: f64,
-    pub vil: f64,
-}
-
-impl Default for Thresholds {
-    fn default() -> Self {
-        // 5 V CMOS-ish midpoint with wide hysteresis; works for 3.3 V too.
-        Self { vih: 2.0, vil: 0.8 }
-    }
-}
-
-impl Thresholds {
-    fn decide(&self, v: f64, prev: bool) -> bool {
-        if v >= self.vih {
-            true
-        } else if v <= self.vil {
-            false
-        } else {
-            prev
-        }
-    }
-}
 
 /// One logged net: its node, VCD identifier code, and last decided level.
 struct LoggedNet {
@@ -86,7 +62,7 @@ fn vcd_code(index: usize) -> String {
 pub struct VcdSink {
     id: String,
     nets: Vec<LoggedNet>,
-    thresholds: Thresholds,
+    thresholds: LogicLevels,
     changes: Vec<Change>,
     /// VCD timescale denominator: we record in picoseconds.
     last_t_ps: u64,
@@ -112,7 +88,12 @@ impl VcdSink {
         Self {
             id: id.to_string(),
             nets: logged,
-            thresholds: Thresholds::default(),
+            // 5 V CMOS-ish midpoint with wide hysteresis; works for 3.3 V too.
+            thresholds: LogicLevels {
+                vih: 2.0,
+                vil: 0.8,
+                ..LogicLevels::from_params(&ModelEntry::default())
+            },
             changes: Vec::new(),
             last_t_ps: 0,
             path,

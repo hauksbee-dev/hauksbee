@@ -1800,39 +1800,12 @@ mod tests {
         }
     }
 
-    const HC595: &str = r#"
-inputs  = ["ser", "srclk", "rclk", "srclr_n", "oe_n"]
-outputs = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial"]
-
-[[register]]
-name = "shift"
-bits = 8
-clock = { pin = "srclk", edge = "rising" }
-reset = { pin = "srclr_n", active = "low", value = 0 }
-op = "shift_left"
-data_in = "ser"
-
-[[register]]
-name = "store"
-bits = 8
-clock = { pin = "rclk", edge = "rising" }
-op = "load"
-data_in = "shift"
-
-[comb]
-"qa" = "store[0]"
-"qb" = "store[1]"
-"qc" = "store[2]"
-"qd" = "store[3]"
-"qe" = "store[4]"
-"qf" = "store[5]"
-"qg" = "store[6]"
-"qh" = "store[7]"
-"qh_serial" = "shift[7]"
-
-[tristate]
-"qa..qh" = { enable = "oe_n", active = "low" }
-"#;
+    /// The shipped 74HC595 card's behaviour, so the tests exercise what ships.
+    fn hc595() -> LogicComponent {
+        let q = hauksbee_models::ComponentQuery::new(None, Some("74HC595".into()), None);
+        let card = hauksbee_models::ModelLibrary::builtin().resolve(&q).model;
+        LogicComponent::compile("test", &card.expect("74HC595 card").logic).expect("compiles")
+    }
 
     /// Four-word parallel EEPROM with 28C256 bus/control semantics.
     const PARALLEL_EEPROM: &str = r#"
@@ -1887,7 +1860,7 @@ disable = [
 
     #[test]
     fn hc595_shifts_and_latches_msb_first() {
-        let mut lc = compile(HC595);
+        let mut lc = hc595();
         shift_out_msb(&mut lc, 0xA6);
         assert_eq!(lc.register("shift"), Some(0xA6));
         assert_eq!(
@@ -1909,7 +1882,7 @@ disable = [
     /// clocks latch the pre-shift value (the storage register lags one clock).
     #[test]
     fn hc595_clear_dominates_and_tied_clocks_latch_one_step_behind() {
-        let mut lc = compile(HC595);
+        let mut lc = hc595();
         shift_out_msb(&mut lc, 0xFF);
         tick(&mut lc, "srclk=0 srclr_n=0 oe_n=0");
         assert_eq!(lc.register("shift"), Some(0x00));
@@ -1920,7 +1893,7 @@ disable = [
             "clock while cleared does not shift"
         );
 
-        let mut lc = compile(HC595);
+        let mut lc = hc595();
         shift_out_msb(&mut lc, 0x01);
         tick(&mut lc, "ser=1 srclk=1 rclk=1 srclr_n=1 oe_n=0");
         assert_eq!(lc.register("shift"), Some(0x03));
@@ -1933,7 +1906,7 @@ disable = [
 
     #[test]
     fn hc595_oe_high_tristates_parallel_outputs_only() {
-        let mut lc = compile(HC595);
+        let mut lc = hc595();
         tick(&mut lc, "oe_n=1 srclr_n=1");
         for q in Q_OUTPUTS {
             assert_eq!(lc.output_enabled(q), Some(false), "{q}");
@@ -1950,7 +1923,7 @@ disable = [
     /// Unwired `SRCLR_n` / `OE_n` read released / enabled.
     #[test]
     fn unwired_controls_read_released() {
-        let mut lc = compile(HC595);
+        let mut lc = hc595();
         tick(&mut lc, "ser=1 srclk=0");
         tick(&mut lc, "ser=1 srclk=1");
         assert_eq!(lc.register("shift"), Some(0x01));
@@ -1959,7 +1932,7 @@ disable = [
 
     #[test]
     fn set_register_plus_refresh_drives_outputs() {
-        let mut lc = compile(HC595);
+        let mut lc = hc595();
         assert!(lc.set_register("store", 0x5A));
         assert!(!lc.set_register("nonexistent", 1));
         lc.refresh_outputs();
@@ -1968,7 +1941,7 @@ disable = [
 
     #[test]
     fn sequential_pins_cover_clock_and_data() {
-        let lc = compile(HC595);
+        let lc = hc595();
         let pins = lc.sequential_pins();
         for p in ["ser", "srclk", "rclk", "srclr_n"] {
             assert!(pins.contains(&p), "{p}");

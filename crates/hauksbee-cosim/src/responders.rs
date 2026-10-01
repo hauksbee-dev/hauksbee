@@ -462,8 +462,8 @@ impl ParallelMemoryResponder {
                 .and_then(|c| c.latched.get(chip))
                 .map(|byte| byte & (1 << bit) != 0),
             ParallelSignal::Node(node) => {
-                let v = volts.get(node.0 as usize).copied().unwrap_or(0.0);
-                Some(self.levels.decide(v, false))
+                let v = |n: hauksbee_ir::NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+                Some(self.levels.at(&v).decide(v(node), false))
             }
         }
     }
@@ -734,7 +734,7 @@ impl InputResponder for Hc165Responder {
         let v = self.volts.lock_or_recover();
         let node_v = |n: hauksbee_ir::NodeId| v.get(n.0 as usize).copied().unwrap_or(0.0);
         let mut ch = self.chain.lock_or_recover();
-        match ch.on_edge(pin, high, &node_v, &self.levels) {
+        match ch.on_edge(pin, high, &node_v, &self.levels.at(&node_v)) {
             Some((miso, level)) => vec![InputDrive::drive(miso, level)],
             None => Vec::new(),
         }
@@ -1551,6 +1551,7 @@ pub(crate) mod tests {
         vih: 2.0,
         vil: 0.8,
         ro: 50.0,
+        supply: None,
     };
 
     fn mcu(pin: (char, u8)) -> ParallelSignal {

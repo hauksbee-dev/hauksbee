@@ -518,6 +518,12 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         }
     }
 
+    for (key, table) in &entry.levels {
+        let ok = ["vih", "vil", "voh", "vol"].contains(&key.as_str()) && table.len() >= 2;
+        p.require(ok && table.windows(2).all(|w| w[0][0] < w[1][0]), || {
+            format!("[models.levels] '{key}' must be vih, vil, voh or vol, with two or more ascending [vcc, volts] points")
+        });
+    }
     if params.0.contains_key("must_not_float_roles") {
         match params.get_str("must_not_float_roles") {
             None => p.push(
@@ -1580,6 +1586,11 @@ mod tests {
             &entry(ComponentKind::Digital, &[("vil", 2.5), ("vih", 1.5)]),
             "'vil' = 2.5 must be strictly less",
         );
+        let mut levels = entry(ComponentKind::Digital, &[]);
+        levels
+            .levels
+            .insert("vih".into(), vec![[4.5, 3.15], [2.0, 1.5]]);
+        rejects(&levels, "ascending [vcc, volts] points");
     }
 
     #[test]

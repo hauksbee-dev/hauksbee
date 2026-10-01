@@ -1092,11 +1092,8 @@ mod tests {
         let digital = DigitalComponent {
             reference: "U7".to_string(),
             levels: LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 3.15,
-                vil: 1.35,
                 ro: 25.0,
+                ..LogicLevels::from_params(&hauksbee_models::ModelEntry::default())
             },
             roles: HashMap::from([("a0".to_string(), n)]),
             drivers: HashMap::from([("y0".to_string(), drv(n))]),

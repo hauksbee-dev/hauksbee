@@ -67,6 +67,15 @@ pub struct ModelEntry {
     #[serde(default)]
     pub params: Params,
 
+    /// Digital logic levels that move with the part's supply, keyed `vih`,
+    /// `vil`, `voh` or `vol`: ascending `[vcc, volts]` points copied from the
+    /// datasheet's per-supply columns (or the edges of its supply bands). The
+    /// level at a rail between two points is linear between them and holds at
+    /// the first or last point beyond them. A level without a table stays the
+    /// plain `params` value, taken at the cited corner.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub levels: BTreeMap<String, Vec<[f64; 2]>>,
+
     /// Pad-number to role mapping.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,

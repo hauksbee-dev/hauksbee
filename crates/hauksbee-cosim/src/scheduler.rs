@@ -2032,7 +2032,6 @@ impl Scheduler {
                 })
             }))
             .collect();
-        let levels = self.digital[component].levels;
         let mut fixed_volts = HashMap::from([(NodeId::GROUND, 0.0)]);
         for supply in &self.supplies {
             fixed_volts.insert(supply.net, supply.supply.nominal_volts());
@@ -2050,6 +2049,9 @@ impl Scheduler {
                 }
             }
         }
+        let levels = self.digital[component]
+            .levels
+            .at(&|n| fixed_volts.get(&n).copied().unwrap_or(0.0));
         let mut pull_candidates: HashMap<NodeId, Vec<(DeviceId, bool)>> = HashMap::new();
         for (index, device) in (0u32..).zip(&self.circuit.devices) {
             if permitted_driver_resistors.contains(&DeviceId(index)) {
@@ -2261,7 +2263,7 @@ impl Scheduler {
         let responder = ParallelMemoryResponder::new(
             format!("{}.{}", self.digital[component].reference, port.name),
             port.clone(),
-            self.digital[component].levels,
+            self.digital[component].levels.clone(),
             self.mcus[mcu].core.frequency(),
             self.input_volts.clone(),
             address,
@@ -8096,6 +8098,7 @@ missing = ["measurement_registers"]
                 vih: 2.0,
                 vil: 0.8,
                 ro: 50.0,
+                supply: None,
             },
             roles,
             drivers: HashMap::new(),
@@ -8259,7 +8262,7 @@ data_out = ["io0"]
             .digital
             .push(hauksbee_bind::digital::DigitalComponent {
                 reference: "U595".into(),
-                levels: m.sched.digital[0].levels,
+                levels: m.sched.digital[0].levels.clone(),
                 roles: HashMap::from([("qa".to_string(), we_node)]),
                 drivers: HashMap::from([("qa".to_string(), output)]),
                 logic: None,

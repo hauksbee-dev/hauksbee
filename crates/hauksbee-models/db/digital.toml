@@ -89,6 +89,15 @@ supply_cpd_pf    = 40.0
 supply_pin = "16"
 gnd_pin    = "8"
 
+[models.levels]
+# Source: TI SN74HC595 datasheet SCLS041J, https://www.ti.com/lit/ds/symlink/sn74hc595.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "qb"
 "2"  = "qc"
@@ -177,6 +186,15 @@ supply_cpd_pf    = 40.0
 supply_pin = "16"
 gnd_pin    = "8"
 
+[models.levels]
+# Source: TI SN74HC165 datasheet SCLS116H, https://www.ti.com/lit/ds/symlink/sn74hc165.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "pl_n"
 "2"  = "clk"
@@ -250,6 +268,15 @@ supply_cpd_pf    = 25.0
 supply_pin = "14"
 gnd_pin    = "7"
 
+[models.levels]
+# Source: TI SN74HC125 datasheet SCLS104F, https://www.ti.com/lit/ds/symlink/sn74hc125.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "oe_n_1"
 "2"  = "a1"
@@ -313,6 +340,15 @@ supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
+[models.levels]
+# Source: TI SN74HC27 datasheet SCLS088E, https://www.ti.com/lit/ds/symlink/sn74hc27.pdf,
+# Section 6.2 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.4 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "a1"
 "2"  = "b1"
@@ -375,6 +411,15 @@ supply_static_ua = 10.0
 supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
+
+[models.levels]
+# Source: TI SN74HC02 datasheet SCLS076G, https://www.ti.com/lit/ds/symlink/sn74hc02.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
 
 [models.pins]
 # Gate pinout as wired on the Tarski board (verified against the netlist):
@@ -578,6 +623,15 @@ supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
+[models.levels]
+# Source: TI SN74HC00 datasheet SCLS181H, https://www.ti.com/lit/ds/symlink/sn74hc00.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "a1"
 "2"  = "b1"
@@ -638,6 +692,15 @@ supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
+[models.levels]
+# Source: TI SN74HC04 datasheet SCLS078H, https://www.ti.com/lit/ds/symlink/sn74hc04.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "a1"
 "2"  = "y1"
@@ -696,6 +759,15 @@ supply_static_ua = 10.0
 supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
+
+[models.levels]
+# Source: TI SN74HC08 datasheet SCLS081J, https://www.ti.com/lit/ds/symlink/sn74hc08.pdf,
+# Section 5.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 5.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
 
 [models.pins]
 "1"  = "a1"
@@ -756,6 +828,15 @@ supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
+[models.levels]
+# Source: TI SN74HC32 datasheet SCLS200F, https://www.ti.com/lit/ds/symlink/sn74hc32.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.6 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
 [models.pins]
 "1"  = "a1"
 "2"  = "b1"
@@ -814,6 +895,15 @@ supply_static_ua = 10.0
 supply_cpd_pf    = 30.0
 supply_pin = "14"
 gnd_pin    = "7"
+
+[models.levels]
+# Source: TI SN74HC86 datasheet SCLS100F, https://www.ti.com/lit/ds/symlink/sn74hc86.pdf,
+# Section 6.2 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.4 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
 
 [models.pins]
 "1"  = "a1"
@@ -874,6 +964,15 @@ supply_static_ua = 10.0
 supply_cpd_pf    = 24.0
 supply_pin = "14"
 gnd_pin    = "7"
+
+[models.levels]
+# Source: TI SN74HC74 datasheet SCLS094F, https://www.ti.com/lit/ds/symlink/sn74hc74.pdf,
+# Section 6.3 Recommended Operating Conditions, p.4 (VIH min, VIL max), and
+# Section 6.5 Electrical Characteristics, p.5 (VOH min, IOH = -20 uA): the
+# 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
 
 [models.pins]
 "1"  = "clr_n1"
@@ -1003,8 +1102,9 @@ url = "https://www.ti.com/lit/ds/symlink/sn74hc14.pdf"
 title = "Texas Instruments SNx4HC14 datasheet, SCLS085L, revised February 2025"
 locator = "Section 5.5 Electrical Characteristics - 74, VCC = 4.5 V rows (VT+, VT-)"
 sha256 = "777ed9379ae69f81079324697c5685ddc7eddb3fdf285b70f419d347f9d132a1"
-# The `vih`/`vil` params below are the TYPICALS of these rows; the guaranteed
-# window is what a board with a precise trip point must be judged against.
+# The `vih`/`vil` params below are the TYPICALS of these rows, and the
+# `[models.levels]` tables follow the typicals across the VCC columns; the
+# guaranteed window is what a board with a precise trip point must be judged against.
 [[models.source.uncertainty]]
 status = "interval"
 parameter = "vih"
@@ -1023,8 +1123,8 @@ kind = "specification-limits"
 basis = "VT- negative-going threshold, SCLS085L Section 5.5 at VCC = 4.5 V, TA = 25 C"
 [[models.source.uncertainty]]
 status = "unknown"
-parameter = "threshold_vcc_scaling"
-reason = "vih/vil are the VCC = 4.5 V rows and are NOT scaled with the modelled supply, so a board run off 3.3 V or 5 V is judged against 4.5 V thresholds; the same table's VT+ typ is 1.2 V at VCC = 2 V and 3.3 V at VCC = 6 V, which is how far that moves. Vendor spread is a second, unmodelled axis: Nexperia 74HC14 (Rev. 10, 29 February 2024, Table 10) gives VT+ 1.7 min / 2.38 typ / 3.15 max and VT- 0.9 / 1.4 / 2.0 at VCC = 4.5 V"
+parameter = "vendor_spread"
+reason = "Vendor spread is a second axis the supply tables do not cover: Nexperia 74HC14 (Rev. 10, 29 February 2024, Table 10) gives VT+ 1.7 min / 2.38 typ / 3.15 max and VT- 0.9 / 1.4 / 2.0 at VCC = 4.5 V"
 
 [models.match]
 value_re = "(?i)^(SN)?74HC14"
@@ -1040,6 +1140,15 @@ supply_static_ua = 2.0    # ICC typ @ VI = VCC or 0, IO = 0, VCC = 6 V (20 uA ma
 supply_cpd_pf    = 20.0   # Cpd per gate typ, no load, VCC = 2 V to 6 V
 supply_pin = "14"
 gnd_pin    = "7"
+
+[models.levels]
+# Source: TI SN74HC14 datasheet SCLS085L, Section 5.5 Electrical Characteristics
+# - 74, p.5: VT+ and VT- typ at VCC = 2 V, 4.5 V and 6 V, and VOH min at
+# IOH = -20 uA, read linearly between the columns (the params above are the
+# 4.5 V column).
+vih = [[2.0, 1.2], [4.5, 2.5], [6.0, 3.3]]
+vil = [[2.0, 0.6], [4.5, 1.6], [6.0, 2.0]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
 
 [models.pins]
 # Section 4 Pin Functions, D/DB/N/NS/PW/J/W 14-pin package.

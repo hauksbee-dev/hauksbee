@@ -27,7 +27,8 @@
 //! part declaring a `ser` input and a `qh_serial`/`qh` output participates),
 //! so the contract is data-visible role names, not a Rust enum.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::logic_spec::Logic;
@@ -37,13 +38,32 @@ use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::logic::{LogicCompileError, LogicComponent};
 
 /// Logic thresholds and drive levels pulled from a model entry's params.
-#[derive(Debug, Clone, Copy)]
+///
+/// The four levels are volts. A card with `[models.levels]` tables also names
+/// the rail it is read at in `supply`, and [`Self::at`] re-evaluates the tabled
+/// levels at that rail's present voltage (while the rail reads as powered);
+/// everything else stays as written.
+#[derive(Debug, Clone)]
 pub struct LogicLevels {
     pub voh: f64,
     pub vol: f64,
     pub vih: f64,
     pub vil: f64,
     pub ro: f64,
+    pub supply: Option<(NodeId, Arc<LevelTables>)>,
+}
+
+/// A card's `[models.levels]`: level name to ascending `[vcc, volts]` points.
+pub type LevelTables = BTreeMap<String, Vec<[f64; 2]>>;
+
+/// A `[models.levels]` table (two or more points) read at `vcc`: linear between
+/// points, flat beyond the first and last.
+fn level_at(table: &[[f64; 2]], vcc: f64) -> f64 {
+    let i = table
+        .partition_point(|p| p[0] < vcc)
+        .clamp(1, table.len() - 1);
+    let (a, b) = (table[i - 1], table[i]);
+    (b[1] - a[1]).mul_add(((vcc - a[0]) / (b[0] - a[0])).clamp(0.0, 1.0), a[1])
 }
 
 impl LogicLevels {
@@ -55,6 +75,38 @@ impl LogicLevels {
             vih: m.params.get_f64("vih").unwrap_or(3.15),
             vil: m.params.get_f64("vil").unwrap_or(1.35),
             ro: m.params.get_f64("ro").unwrap_or(DEFAULT_RO),
+            supply: None,
+        }
+    }
+
+    /// Read the card's `[models.levels]` tables at the part's `vcc` (else
+    /// `vdd`) net; a part with no tables or no such net keeps its fixed levels.
+    #[must_use]
+    pub fn on_supply(mut self, m: &ModelEntry, roles: &HashMap<String, NodeId>) -> Self {
+        let rail = roles.get("vcc").or_else(|| roles.get("vdd")).copied();
+        self.supply = rail
+            .filter(|n| !n.is_ground() && !m.levels.is_empty())
+            .map(|n| (n, Arc::new(m.levels.clone())));
+        self
+    }
+
+    /// These levels with each tabled one evaluated at the rail's voltage.
+    #[must_use]
+    pub fn at(&self, node_v: &dyn Fn(NodeId) -> f64) -> Self {
+        let Some((rail, tables)) = &self.supply else {
+            return self.clone();
+        };
+        let vcc = node_v(*rail);
+        if vcc < SupplyDraw::POWERED_THRESHOLD_V {
+            return self.clone();
+        }
+        let get = |key: &str, fixed: f64| tables.get(key).map_or(fixed, |t| level_at(t, vcc));
+        Self {
+            voh: get("voh", self.voh),
+            vol: get("vol", self.vol),
+            vih: get("vih", self.vih),
+            vil: get("vil", self.vil),
+            ..self.clone()
         }
     }
 
@@ -402,7 +454,7 @@ impl DigitalComponent {
         };
         Ok(Self {
             reference,
-            levels: LogicLevels::from_params(model),
+            levels: LogicLevels::from_params(model).on_supply(model, &roles),
             roles,
             drivers,
             logic,
@@ -443,11 +495,12 @@ impl DigitalComponent {
     /// Process one scheduler tick: sample inputs (with hysteresis), advance
     /// the spec evaluator, drive outputs.
     pub fn tick(&mut self, circuit: &mut Circuit, node_v: &dyn Fn(NodeId) -> f64) {
+        self.levels = self.levels.at(node_v);
         let Some(logic) = self.logic.as_mut() else {
             return;
         };
         let roles = &self.roles;
-        let levels = self.levels;
+        let levels = &self.levels;
         logic.tick(&mut |name, prev| roles.get(name).map(|&n| levels.decide(node_v(n), prev)));
         self.drive_outputs(circuit);
     }
@@ -511,6 +564,7 @@ impl DigitalComponent {
         dt: f64,
         node_v: &dyn Fn(NodeId) -> f64,
     ) {
+        self.levels = self.levels.at(node_v);
         let Some(s) = self.supply.as_mut() else {
             return;
         };
@@ -552,6 +606,11 @@ impl DigitalComponent {
     #[must_use]
     pub fn output_level(&self, name: &str) -> Option<bool> {
         self.logic.as_ref().and_then(|l| l.output_level(name))
+    }
+
+    /// The MCU GPIO whose net this part's `role` pin sits on, if any.
+    fn role_gpio(&self, role: &str, gpio_node: &HashMap<i64, (char, u8)>) -> Option<(char, u8)> {
+        gpio_node.get(&i64::from(self.roles.get(role)?.0)).copied()
     }
 
     /// Structural chain candidacy: a part declaring a `ser` serial input and
@@ -793,20 +852,14 @@ impl Hc595Chain {
         gpio_node: &HashMap<i64, (char, u8)>,
     ) -> Option<Self> {
         let head = *order.first()?;
-        let chip = |i: usize| &digital[i];
-
         // Broadcast control nets are shared, so read them off the head chip.
-        let role_gpio = |i: usize, role: &str| -> Option<(char, u8)> {
-            let node = chip(i).roles.get(role)?;
-            gpio_node.get(&i64::from(node.0)).copied()
-        };
-
-        let srclk = role_gpio(head, "srclk")?;
-        let rclk = role_gpio(head, "rclk")?;
-        let ser = role_gpio(head, "ser")?;
+        let hc = &digital[head];
+        let srclk = hc.role_gpio("srclk", gpio_node)?;
+        let rclk = hc.role_gpio("rclk", gpio_node)?;
+        let ser = hc.role_gpio("ser", gpio_node)?;
         // SRCLR_n and OE_n are optional: some boards tie them in hardware.
-        let srclr_n = role_gpio(head, "srclr_n");
-        let oe_n = role_gpio(head, "oe_n");
+        let srclr_n = hc.role_gpio("srclr_n", gpio_node);
+        let oe_n = hc.role_gpio("oe_n", gpio_node);
 
         // The chain controller mirrors its per-chip bytes into the chips' spec
         // registers by NAME ("shift"/"store", 8 bits); the documented contract
@@ -859,35 +912,13 @@ impl Hc595Chain {
     pub fn replay(&mut self, edges: &[(char, u8, bool)]) {
         for &(port, bit, high) in edges {
             let pin = (port, bit);
-            if pin == self.ser {
-                self.lvl_ser = high;
+            let (srclk_was, rclk_was) = (self.lvl_srclk, self.lvl_rclk);
+            self.establish_control(pin, high);
+            if pin == self.srclk && high && !srclk_was && self.lvl_srclr_n {
+                self.shift_once();
             }
-            if Some(pin) == self.srclr_n {
-                self.lvl_srclr_n = high;
-                if !high {
-                    // Active-low clear: wipe the shift registers (not storage).
-                    for s in &mut self.shift {
-                        *s = 0;
-                    }
-                }
-            }
-            if Some(pin) == self.oe_n {
-                // Active-low output-enable: tracked here, applied in `apply`.
-                self.lvl_oe_n = high;
-            }
-            if pin == self.srclk {
-                let rising = high && !self.lvl_srclk;
-                self.lvl_srclk = high;
-                if rising && self.lvl_srclr_n {
-                    self.shift_once();
-                }
-            }
-            if pin == self.rclk {
-                let rising = high && !self.lvl_rclk;
-                self.lvl_rclk = high;
-                if rising {
-                    self.latched.copy_from_slice(&self.shift);
-                }
+            if pin == self.rclk && high && !rclk_was {
+                self.latched.copy_from_slice(&self.shift);
             }
         }
     }
@@ -1033,16 +1064,11 @@ impl Hc165Chain {
         input_node: &HashMap<i64, (char, u8)>,
     ) -> Option<Self> {
         let head = *order.first()?;
-        let chip = |i: usize| &digital[i];
-        let role_gpio = |i: usize, role: &str| -> Option<(char, u8)> {
-            let node = chip(i).roles.get(role)?;
-            gpio_node.get(&i64::from(node.0)).copied()
-        };
-
-        let pl_n = role_gpio(head, "pl_n")?;
-        let clk = role_gpio(head, "clk")?;
+        let hc = &digital[head];
+        let pl_n = hc.role_gpio("pl_n", gpio_node)?;
+        let clk = hc.role_gpio("clk", gpio_node)?;
         // The head chip's QH must be wired to an MCU input pin (MISO).
-        let qh_node = chip(head).roles.get("qh")?;
+        let qh_node = hc.roles.get("qh")?;
         let miso = input_node.get(&i64::from(qh_node.0)).copied()?;
 
         // Capture each chip's parallel-input nodes (a..h) for sampling on load.
@@ -1134,15 +1160,9 @@ impl Hc165Chain {
     /// family, so any chip's levels serve.
     #[must_use]
     pub fn levels(&self, digital: &[DigitalComponent]) -> LogicLevels {
-        self.order.first().map_or(
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 3.15,
-                vil: 1.35,
-                ro: DEFAULT_RO,
-            },
-            |&i| digital[i].levels,
+        self.order.first().map_or_else(
+            || LogicLevels::from_params(&ModelEntry::default()),
+            |&i| digital[i].levels.clone(),
         )
     }
 
@@ -1699,13 +1719,7 @@ mod tests {
         let set_n = circuit.node("SPIKE1");
         let reset_n = circuit.node("RESET_SR");
         let q_n = circuit.node("L1");
-        let levels = LogicLevels {
-            voh: 4.4,
-            vol: 0.1,
-            vih: 3.15,
-            vil: 1.35,
-            ro: crate::drivers::DEFAULT_RO,
-        };
+        let levels = LogicLevels::from_params(&ModelEntry::default());
         let r = roles(&[("set", set_n), ("reset", reset_n), ("q", q_n)]);
         let mut latch =
             DigitalComponent::new_nor_latch("U_L1".to_string(), levels, r, HashMap::new());
@@ -1821,5 +1835,81 @@ mod tests {
             drawn_amps(&circuit).abs() < 1e-18,
             "unpowered rail: no draw"
         );
+    }
+
+    /// Input levels follow the rail. 74HC: TI SN74HC00 (SCLS181H) Section 6.3
+    /// p.4 columns, 74HCT: SN74HCT00 (SCLS062F) Section 5.2 p.4 (VIH 2 V,
+    /// VIL 0.8 V over 4.5 V to 5.5 V), 74LVC: SN74LVC1G08 (SCES217AA) Section
+    /// 5.3 p.5 bands, written at their edge points.
+    #[test]
+    fn input_levels_follow_the_supply() {
+        let t = |v: [f64; 8]| -> Vec<[f64; 2]> {
+            let vcc = [1.65, 1.95, 2.3, 2.7, 3.0, 3.6, 4.5, 5.5];
+            vcc.into_iter().zip(v).map(<[f64; 2]>::from).collect()
+        };
+        let lvc = ModelEntry {
+            levels: BTreeMap::from([
+                (
+                    "vih".into(),
+                    t([1.0725, 1.2675, 1.7, 1.7, 2.0, 2.0, 3.15, 3.85]),
+                ),
+                (
+                    "vil".into(),
+                    t([0.5775, 0.6825, 0.7, 0.7, 0.8, 0.8, 1.35, 1.65]),
+                ),
+            ]),
+            ..ModelEntry::default()
+        };
+        let at = |m: &ModelEntry, vcc| {
+            LogicLevels::from_params(m)
+                .on_supply(m, &roles(&[("vcc", NodeId(1))]))
+                .at(&|_| vcc)
+        };
+        let [hc00, hc14, ahct] = ["74HC00", "74HC14", "74AHCT1G32SE-7"].map(model);
+        // (part, rail, input volts, how the input reads): a valid high, a valid
+        // low, or undefined (between VIL and VIH, so the pin holds).
+        for (m, vcc, v, want) in [
+            (&hc00, 3.3, 3.3, "high"),
+            (&hc00, 3.3, 2.0, "undefined"),
+            (&hc00, 3.3, 0.5, "low"),
+            (&hc00, 5.0, 5.0, "high"),
+            (&hc00, 5.0, 3.3, "undefined"),
+            (&hc14, 3.3, 3.3, "high"),
+            (&hc14, 5.0, 1.0, "low"),
+            (&ahct, 5.0, 3.3, "high"),
+            (&ahct, 5.0, 1.5, "undefined"),
+            (&lvc, 1.8, 1.2, "high"),
+            (&lvc, 2.5, 1.7, "high"),
+            (&lvc, 3.3, 2.0, "high"),
+            (&lvc, 3.3, 1.7, "undefined"),
+            (&lvc, 5.0, 3.3, "undefined"),
+        ] {
+            let l = at(m, vcc);
+            let got = match (l.decide(v, false), l.decide(v, true)) {
+                (true, _) => "high",
+                (_, false) => "low",
+                _ => "undefined",
+            };
+            assert_eq!(got, want, "{v} V into a {vcc} V part");
+        }
+        // An HC output swings to its own rail, not the 4.5 V column's 4.4 V.
+        assert!((at(&hc00, 3.3).drive_volts(true) - 3.2).abs() < 1e-9);
+    }
+
+    /// A gate reads its inputs against its own rail: 3.3 V logic is a valid
+    /// high into a 3.3 V 74HC00 (the NAND output falls) and no valid high into
+    /// a 5 V one (the inputs stay low, so the output stays high).
+    #[test]
+    fn gate_reads_its_inputs_against_its_own_rail() {
+        for (vcc, y_high) in [(3.3, false), (5.0, true)] {
+            let mut circuit = Circuit::new();
+            let [a, b, y, rail] = ["A", "B", "Y1", "VCC"].map(|n| circuit.node(n));
+            let r = roles(&[("a1", a), ("b1", b), ("y1", y), ("vcc", rail)]);
+            let mut gate = DigitalComponent::new("U1".into(), &model("74HC00"), r, HashMap::new())
+                .expect("74HC00 logic compiles");
+            // 3.3 V logic on every net but the rail.
+            gate.tick(&mut circuit, &|n| if n == rail { vcc } else { 3.3 });
+            assert_eq!(gate.output_level("y1"), Some(y_high), "{vcc} V rail");
+        }
     }
 }

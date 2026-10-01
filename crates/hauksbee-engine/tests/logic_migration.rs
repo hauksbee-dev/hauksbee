@@ -81,7 +81,7 @@ impl Rig {
     fn edge(&mut self, pin: &str, high: bool) {
         self.levels.insert(pin.to_string(), high);
         let levels = self.levels.clone();
-        let ll = self.ll;
+        let ll = &self.ll;
         self.lc.tick(&mut |name, prev| {
             levels
                 .get(name)

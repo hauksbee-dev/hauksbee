@@ -54,6 +54,16 @@ gnd_pin    = "7"
 "14" = "vcc"
 ```
 
+The `voh`/`vol`/`vih`/`vil` numbers are the levels at the corner you cite. A
+family whose levels move with the supply (74HC and its VCC columns, 74LVC and
+its supply bands) also carries `[models.levels]`: ascending `[vcc, volts]`
+points copied from the datasheet for any of `vih`, `vil`, `voh`, `vol`, e.g.
+`vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]`. The simulator reads the table at
+the part's `vcc` (else `vdd`) net voltage, linearly between points and flat
+beyond the ends; a level with no table stays the fixed number. A band table
+lists each band's edge points, so a flat band is two points with equal volts.
+TTL-level families (74HCT) have one band and need no table.
+
 The `[models.pins]` role names are the vocabulary the logic block speaks.
 You must map every pin the logic references here. Cite the datasheet next
 to the electrical numbers. The db convention is that every constant carries
