@@ -333,7 +333,8 @@ enum ModelsCommand {
     List(ModelsListArgs),
     /// Show, per board component, which model entry won and from which layer.
     Resolve(ModelsResolveArgs),
-    /// Draft a device model from a PDF datasheet. Asks first: this sends the
+    /// Draft a device model from a PDF datasheet (or, with --unmodelled, one per
+    /// unmodelled part on a board). Asks first: this sends the
     /// datasheet, and whatever the agent reads, to an LLM backend.
     Extract(ModelsExtractArgs),
     /// Scaffold a model entry for one board component, pre-seeded only from
@@ -499,11 +500,21 @@ struct ModelsCoverageArgs {
 #[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct ModelsExtractArgs {
     /// The datasheet PDF to read.
-    #[arg(long)]
-    pdf: PathBuf,
+    #[arg(long, required_unless_present = "unmodelled")]
+    pdf: Option<PathBuf>,
     /// The part number the model is for (e.g. BC847B).
-    #[arg(long)]
-    part: String,
+    #[arg(long, required_unless_present = "unmodelled")]
+    part: Option<String>,
+    /// Draft a model for every connected active part this board leaves
+    /// unmodelled, from the datasheet its Datasheet field names (a URL is
+    /// fetched) or --datasheet. Lists them, asks once, then extracts each.
+    #[arg(long, value_name = "BOARD", conflicts_with_all = ["pdf", "part", "kind"])]
+    unmodelled: Option<PathBuf>,
+    /// With --unmodelled: the datasheet for one part, as PART=PDF-OR-URL (a
+    /// part number, board value or reference). Repeatable; wins over the
+    /// board's own Datasheet field.
+    #[arg(long, value_name = "PART=PDF-OR-URL", requires = "unmodelled")]
+    datasheet: Vec<String>,
     /// What kind of device it is (bjt_npn, vreg, opamp, i2c_sensor, ...).
     /// Omit it and the model works it out from the datasheet, which is usually
     /// what you want: it is about to read the page that says so.
@@ -1761,19 +1772,31 @@ fn main() -> anyhow::Result<()> {
                 args.models_dir.as_deref(),
                 args.yes,
             ),
-            ModelsCommand::Extract(args) => hauksbee_engine::commands::models::extract(
-                &args.pdf,
-                &args.part,
-                &args.kind,
-                args.out_dir.as_deref(),
-                args.yes,
-                args.backend.map(Into::into),
-                args.model,
-                args.effort,
-                args.api_base,
-                args.api_key_env,
-                args.force,
-            ),
+            ModelsCommand::Extract(args) => {
+                use hauksbee_models::datasheet::Args;
+                let pdf = args.pdf.unwrap_or_default();
+                let template = Args::new(pdf, args.part.unwrap_or_default(), args.kind)
+                    .out_dir(args.out_dir)
+                    .model(args.model)
+                    .effort(args.effort)
+                    .backend(args.backend.map(Into::into))
+                    .api_base(args.api_base)
+                    .api_key_env(args.api_key_env)
+                    .checker(std::env::current_exe().ok());
+                let template = Args {
+                    force: args.force,
+                    ..template
+                };
+                match &args.unmodelled {
+                    Some(board) => hauksbee_engine::commands::models::extract_unmodelled(
+                        board,
+                        &args.datasheet,
+                        &template,
+                        args.yes,
+                    ),
+                    None => hauksbee_engine::commands::models::extract(template, args.yes),
+                }
+            }
             ModelsCommand::Backend(cmd) => match cmd {
                 ModelsBackendCommand::Show(args) => {
                     hauksbee_engine::commands::backend::show(args.json)

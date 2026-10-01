@@ -1256,35 +1256,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
     if matches!(AssemblyState::of(comp), AssemblyState::IdentityUnknown(_)) {
         return hauksbee_models::Resolution::unresolved(q);
     }
-    // Pull a likely manufacturer part-number out of properties for mpn match.
-    // Prefer a dedicated manufacturer-PN field; distributor part numbers
-    // (e.g. "Mouser Part Number" = "621-BCM857BS-7-F") carry a distributor
-    // prefix that breaks anchored mpn regexes, so avoid them. Fall back to the
-    // value field, which is what most mpn_re rules are actually written for.
-    //
-    // A part number a BOM supplied sits under the reserved
-    // [`hauksbee_extract::bom::MPN_PROPERTY`] key and is preferred over the
-    // heuristic scan below, because the scan cannot tell a manufacturer part
-    // number from a distributor code and a board carrying both would lose the
-    // bind to the one that does not match.
-    q.mpn = comp
-        .properties
-        .iter()
-        .find(|(k, _)| k == hauksbee_extract::bom::MPN_PROPERTY)
-        .map(|(_, v)| v.clone())
-        .or_else(|| {
-            comp.properties
-                .iter()
-                .find(|(k, _)| {
-                    let k = k.to_ascii_lowercase().replace([' ', '-'], "_");
-                    k.contains("mpn")
-                        || k.contains("manufacturer_part")
-                        || k == "part_number"
-                        || k == "mfr_part"
-                })
-                .map(|(_, v)| v.clone())
-        })
-        .or_else(|| non_empty(&comp.value));
+    q.mpn = component_mpn(comp);
     let mut res = lib.resolve(&q);
     // `led_generic` is a two-pad guess from the footprint: WS2812B/RGB parts are not it.
     if res.model.as_ref().is_some_and(|m| m.id == "led_generic")
@@ -1995,6 +1967,32 @@ fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect()
+}
+
+/// A component's likely manufacturer part number, as model matching uses it.
+///
+/// Prefer a dedicated manufacturer-PN field; distributor part numbers (e.g.
+/// "Mouser Part Number" = "621-BCM857BS-7-F") carry a distributor prefix that
+/// breaks anchored mpn regexes, so avoid them. Fall back to the value field,
+/// which is what most `mpn_re` rules are actually written for. A part number a
+/// BOM supplied sits under the reserved [`hauksbee_extract::bom::MPN_PROPERTY`]
+/// key and is preferred over the heuristic scan, because the scan cannot tell a
+/// manufacturer part number from a distributor code and a board carrying both
+/// would lose the bind to the one that does not match.
+#[must_use]
+pub fn component_mpn(comp: &Component) -> Option<String> {
+    let mpn_key = |k: &str| {
+        let k = k.to_ascii_lowercase().replace([' ', '-'], "_");
+        k.contains("mpn")
+            || k.contains("manufacturer_part")
+            || k == "part_number"
+            || k == "mfr_part"
+    };
+    (comp.properties.iter())
+        .find(|(k, _)| k == hauksbee_extract::bom::MPN_PROPERTY)
+        .or_else(|| comp.properties.iter().find(|(k, _)| mpn_key(k)))
+        .and_then(|(_, v)| non_empty(v.trim()))
+        .or_else(|| non_empty(&comp.value))
 }
 
 fn non_empty(s: &str) -> Option<String> {

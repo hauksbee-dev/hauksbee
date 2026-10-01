@@ -80,12 +80,14 @@ pub fn part_rule(part: &str, codes: &[&str]) -> String {
 /// That is the machine-draft tier, a reference pinning the exact PDF bytes,
 /// and, where the match rule is the literal part name, the normalised rule over
 /// the part and the ordering codes the draft lists. (A `[sensor]` spec has no
-/// source.)
+/// source.) `aliases` are the board values the draft was requested for: one
+/// the value rule does not already match becomes one more exact arm, so the
+/// card binds to the part it was drafted for.
 ///
 /// # Errors
 ///
 /// Fails when the PDF cannot be read or `raw` is not valid TOML.
-pub fn finalise(raw: &str, part: &str, pdf: &Path) -> anyhow::Result<String> {
+pub fn finalise(raw: &str, part: &str, aliases: &[String], pdf: &Path) -> anyhow::Result<String> {
     let sha = Sha256::digest(std::fs::read(pdf)?);
     // 32 bytes once per extraction: a string per byte costs nothing here.
     #[allow(clippy::format_collect)]
@@ -100,11 +102,23 @@ pub fn finalise(raw: &str, part: &str, pdf: &Path) -> anyhow::Result<String> {
         let same = |s: &String| !s.is_ascii() || fold(s) == fold(part);
         if let Some(found) = table.get_mut("match").and_then(Item::as_table_like_mut) {
             let set = found.get("value_re").and_then(Item::as_str);
-            if set
+            let literal = set
                 .and_then(literal_set)
-                .is_some_and(|s| s.iter().all(same))
-            {
-                found.insert("value_re", value(rule));
+                .is_some_and(|s| s.iter().all(same));
+            let base = if literal {
+                Some(rule)
+            } else {
+                set.map(str::to_owned)
+            };
+            let re = base
+                .as_ref()
+                .and_then(|b| regex::Regex::new(&format!("(?i){b}")).ok());
+            let unmatched = aliases
+                .iter()
+                .filter(|a| re.as_ref().is_some_and(|r| !r.is_match(a)));
+            let arms: Vec<String> = unmatched.map(|a| part_rule(a, &[])).collect();
+            if let Some(base) = base.filter(|_| literal || !arms.is_empty()) {
+                found.insert("value_re", value([vec![base], arms].concat().join("|")));
             }
         }
         let source = table.entry("source").or_insert(Item::Table(Table::new()));
@@ -152,7 +166,7 @@ mod tests {
         std::fs::write(&pdf, b"%PDF-1.4 x").unwrap();
         let raw = "[[models]]\nid = \"abc\"\n[models.match]\nvalue_re = '(?i)^ABC123\\-002DD$'\n\
                    [models.source]\ntier = \"curated-library\"\n";
-        let out = finalise(raw, "ABC123-002DD", &pdf).unwrap();
+        let out = finalise(raw, "ABC123-002DD", &[], &pdf).unwrap();
         let model = &toml::from_str::<toml::Value>(&out).unwrap()["models"][0];
         assert_eq!(model["source"]["tier"].as_str(), Some("datasheet-derived"));
         let cite = model["source"]["references"][0].clone();
@@ -162,8 +176,26 @@ mod tests {
         assert!(rule.is_match("abc123_002dd"), "{rule}");
         // A family rule the draft chose is left alone.
         let family = raw.replace("ABC123\\-002DD$", "ABC12[0-9]");
-        let kept = finalise(&family, "ABC123-002DD", &pdf).unwrap();
+        let kept = finalise(&family, "ABC123-002DD", &[], &pdf).unwrap();
         assert!(kept.contains("ABC12[0-9]"), "{kept}");
+        // A board value the rule misses becomes one more exact arm, on a literal
+        // or a family rule alike; one it already matches adds nothing.
+        let aliases = ["IC_ABC123-002DD/ALT".to_string(), "abc120".to_string()];
+        for draft in [raw.to_string(), family] {
+            let out = finalise(&draft, "ABC123-002DD", &aliases, &pdf).unwrap();
+            let model = &toml::from_str::<toml::Value>(&out).unwrap()["models"][0];
+            let rule = model["match"]["value_re"].as_str().unwrap();
+            let re = regex::Regex::new(rule).unwrap();
+            assert!(
+                re.is_match("ic_abc123_002dd/alt") && re.is_match("ABC123-002DD"),
+                "{rule}"
+            );
+            assert!(
+                !re.is_match("IC_ABC123-002DD/ALTX") && !re.is_match("XABC120"),
+                "{rule}"
+            );
+            assert_eq!(rule.matches("ALT").count(), 1, "{rule}");
+        }
 
         let target = dir.path().join("abc.toml");
         publish(&target, "one", false).unwrap();

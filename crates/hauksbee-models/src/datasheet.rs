@@ -328,11 +328,7 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
     // shipped to the LLM, producing a confidently wrong model; a downloaded
     // datasheet with no extension still passes.
-    let mut head = [0u8; 5];
-    let is_pdf = std::fs::File::open(&args.pdf)
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
-        .is_ok_and(|()| &head == b"%PDF-");
-    if !is_pdf {
+    if !is_pdf(&args.pdf) {
         bail!(
             "'{}' is not a PDF (no %PDF header); the extractor reads PDF datasheets only. \
              Nothing was sent.",
@@ -398,7 +394,11 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         let prompt = build_prompt(part, kind, &pdf_text);
         let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })?;
         let id = parse_and_validate_reply(&raw, part, kind)?.id;
-        (output::finalise(&raw, part, &args.pdf)?, id, timed_out)
+        (
+            output::finalise(&raw, part, &args.aliases, &args.pdf)?,
+            id,
+            timed_out,
+        )
     };
 
     std::fs::create_dir_all(&out_dir)
@@ -413,6 +413,15 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         out_path.display()
     ));
     Ok(out_path)
+}
+
+/// Whether `path` starts with the `%PDF-` magic, whatever its extension says.
+#[must_use]
+pub fn is_pdf(path: &Path) -> bool {
+    let mut head = [0u8; 5];
+    std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .is_ok_and(|()| &head == b"%PDF-")
 }
 
 // ── Declarative register-map sensor extraction (i2c_sensor / spi_sensor) ──────
@@ -747,11 +756,14 @@ impl<'de> serde::Deserialize<'de> for Backend {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Args {
     pub pdf: PathBuf,
     pub part: String,
     pub kind_str: String,
+    /// Board values the draft is for; the card's value rule is widened to
+    /// match each one exactly (see [`output::finalise`]).
+    pub aliases: Vec<String>,
     pub out_dir: Option<PathBuf>,
     /// Retry count for LLM calls (default 2, for at most three attempts)
     pub retries: usize,
@@ -790,6 +802,7 @@ impl Args {
             pdf,
             part,
             kind_str,
+            aliases: Vec::new(),
             out_dir: None,
             retries: 2,
             model: None,
@@ -3600,7 +3613,9 @@ pub fn sanitise_filename(s: &str) -> String {
     s.replace(|c: char| !(c.is_alphanumeric() || "-_".contains(c)), "_")
 }
 
-fn default_out_dir() -> PathBuf {
+/// Where a draft lands without `--out-dir`: the user model directory.
+#[must_use]
+pub fn default_out_dir() -> PathBuf {
     dirs_next().join(".hauksbee").join("models")
 }
 

@@ -1319,50 +1319,30 @@ fn run_tool(tool: &str, args: &[&str], doing: &str) -> anyhow::Result<()> {
 /// Returns an error if `api_key_env` is not a valid variable name, if `pdf` is not a
 /// file, if the extraction settings or config file are invalid, if consent is needed
 /// but stdin is not a terminal, or if the extraction backend run fails.
-pub fn extract(
-    pdf: &std::path::Path,
-    part: &str,
-    kind: &str,
-    out_dir: Option<&std::path::Path>,
-    assume_yes: bool,
-    backend: Option<hauksbee_models::datasheet::Backend>,
-    model: Option<String>,
-    effort: Option<String>,
-    api_base: Option<String>,
-    api_key_env: Option<String>,
-    force: bool,
-) -> anyhow::Result<()> {
+pub fn extract(args: hauksbee_models::datasheet::Args, assume_yes: bool) -> anyhow::Result<()> {
     use hauksbee_models::datasheet;
 
     // Flag sanity before file checks: a pasted key must be refused before
     // anything else happens, whatever else is wrong with the invocation.
-    if let Some(name) = &api_key_env {
+    if let Some(name) = &args.api_key_env {
         datasheet::validate_api_key_env_name(name)?;
     }
+    let (pdf, part) = (&args.pdf, &args.part);
     if !pdf.is_file() {
         // Dead end -> next move: where to find the datasheet, and the flow
         // that fetches it for you.
-        let query: String = part
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                    c.to_string()
-                } else {
-                    format!("%{:02X}", c as u32)
-                }
-            })
-            .collect();
         anyhow::bail!(
-            "no datasheet at '{}'. Search for one:\n  \
-             https://duckduckgo.com/?q={query}+datasheet+pdf\n\
+            "no datasheet at '{}'. Search for one:\n  {}\n\
              or use the guided flow: `hauksbee serve` fetches the datasheet and \
              extracts the model for you (Extract a part).",
-            pdf.display()
+            pdf.display(),
+            datasheet_search(part)
         );
     }
 
     // An empty --kind means the extractor identifies the part from the
     // datasheet itself; never print it as bare empty parens.
+    let kind = &args.kind_str;
     if kind.trim().is_empty() {
         println!(
             "Extract a model for {part} (kind read from the datasheet) from {}",
@@ -1372,42 +1352,10 @@ pub fn extract(
         println!("Extract a model for {part} ({kind}) from {}", pdf.display());
     }
     println!();
-
-    let args = datasheet::Args::new(pdf.to_path_buf(), part.to_string(), kind.to_string())
-        .out_dir(out_dir.map(std::path::Path::to_path_buf))
-        .model(model)
-        .effort(effort)
-        .backend(backend)
-        .api_base(api_base)
-        .api_key_env(api_key_env)
-        .checker(std::env::current_exe().ok());
-    let args = datasheet::Args { force, ..args };
-
-    // Resolve (and therefore any bad config file) before consent, not after:
-    // the user is told exactly what is about to read their datasheet, and a
-    // broken config surfaces before they have said yes to anything.
-    let resolved = datasheet::resolve_settings(&args)?;
-    println!(
-        "Backend: {} ({})",
-        resolved.summary(),
-        resolved.backend_source.describe()
-    );
-    println!();
-    println!("{}", datasheet::CONSENT_NOTICE);
-    println!();
-
-    if !assume_yes
-        && !datasheet::confirm(
-            &mut std::io::stdout(),
-            "Send the datasheet and draft a model?",
-            "refusing to send anything without consent. This is not a terminal, so \
-             there is nobody to ask: pass --yes if you meant it.",
-        )?
-    {
-        println!("Nothing was sent.");
+    if !extract_consent(&args, assume_yes, "Send the datasheet and draft a model?")? {
         return Ok(());
     }
-
+    let out_dir = args.out_dir.clone();
     let written = hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args))?;
 
     println!();
@@ -1434,6 +1382,281 @@ pub fn extract(
                 |p| p.display().to_string()
             )
         ),
+    }
+    Ok(())
+}
+
+/// A web search for a part's datasheet, the next move when there is none.
+fn datasheet_search(part: &str) -> String {
+    let query: String = part
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect();
+    format!("https://duckduckgo.com/?q={query}+datasheet+pdf")
+}
+
+/// Name the backend, show the consent notice, and ask. Settings are resolved
+/// (and therefore any bad config file reported) before consent, not after: the
+/// user is told exactly what is about to read their datasheet.
+fn extract_consent(
+    args: &hauksbee_models::datasheet::Args,
+    assume_yes: bool,
+    question: &str,
+) -> anyhow::Result<bool> {
+    use hauksbee_models::datasheet;
+    let resolved = datasheet::resolve_settings(args)?;
+    println!(
+        "Backend: {} ({})",
+        resolved.summary(),
+        resolved.backend_source.describe()
+    );
+    println!("\n{}\n", datasheet::CONSENT_NOTICE);
+    let refusal = "refusing to send anything without consent. This is not a terminal, so \
+                   there is nobody to ask: pass --yes if you meant it.";
+    let yes = assume_yes || datasheet::confirm(&mut std::io::stdout(), question, refusal)?;
+    if !yes {
+        println!("Nothing was sent.");
+    }
+    Ok(yes)
+}
+
+/// One board identity `models extract --unmodelled` drafts a card for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmodelledPart {
+    /// The part number the extraction is asked for (MPN, else the value).
+    pub part: String,
+    /// Every board value it appears under, so the card binds to each.
+    pub aliases: Vec<String>,
+    pub references: Vec<String>,
+    /// A local PDF path or an http(s) URL; `None` when the board names none.
+    pub datasheet: Option<String>,
+}
+
+/// A usable datasheet locator from a board property: a URL or an existing file
+/// (relative to the board's directory). `~` and blanks are KiCad's "none".
+fn datasheet_locator(text: &str, board_dir: &Path) -> Option<String> {
+    let text = text.trim();
+    if text.starts_with("http://") || text.starts_with("https://") {
+        return Some(text.to_string());
+    }
+    let path = board_dir.join(text);
+    (!text.is_empty() && text != "~" && path.is_file()).then(|| path.display().to_string())
+}
+
+/// Connected active parts the library leaves unresolved, by part number.
+///
+/// Each carries the datasheet it names; `overrides` are `PART=SOURCE` pairs
+/// (a part number, board value or reference) that win over the board's field.
+///
+/// # Errors
+///
+/// Returns an error if an override is not `KEY=SOURCE`.
+pub fn unmodelled_parts(
+    board: &hauksbee_extract::ExtractedBoard,
+    lib: &ModelLibrary,
+    board_dir: &Path,
+    overrides: &[String],
+) -> anyhow::Result<Vec<UnmodelledPart>> {
+    let mut chosen: Vec<(&str, &str)> = Vec::new();
+    for pair in overrides {
+        let Some((key, source)) = pair
+            .split_once('=')
+            .filter(|(k, v)| !k.is_empty() && !v.is_empty())
+        else {
+            anyhow::bail!("--datasheet takes PART=PDF-OR-URL, got '{pair}'");
+        };
+        chosen.push((key.trim(), source.trim()));
+    }
+    let stages = coverage_snapshot(board, lib).components;
+    let mut parts: Vec<UnmodelledPart> = Vec::new();
+    for comp in &board.components {
+        let unresolved = stages.iter().any(|row| {
+            row.reference == comp.reference && matches!(row.stage, CoverageStage::Unresolved)
+        });
+        let Some(part) = crate::binder::component_mpn(comp).filter(|_| unresolved) else {
+            continue;
+        };
+        let named = |key: &str| {
+            [&part, &comp.value, &comp.reference]
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(key))
+        };
+        let datasheet = (chosen.iter().find(|(key, _)| named(key)))
+            .map(|(_, source)| {
+                datasheet_locator(source, Path::new("")).unwrap_or_else(|| (*source).to_string())
+            })
+            .or_else(|| {
+                let field = comp
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("datasheet"));
+                field.and_then(|(_, v)| datasheet_locator(v, board_dir))
+            });
+        let at = (parts
+            .iter()
+            .position(|p| p.part.eq_ignore_ascii_case(&part)))
+        .unwrap_or_else(|| {
+            parts.push(UnmodelledPart {
+                part: part.clone(),
+                aliases: Vec::new(),
+                references: Vec::new(),
+                datasheet: None,
+            });
+            parts.len() - 1
+        });
+        let entry = &mut parts[at];
+        entry.references.push(comp.reference.clone());
+        entry.datasheet = entry.datasheet.take().or(datasheet);
+        if !comp.value.trim().is_empty() && !entry.aliases.contains(&comp.value) {
+            entry.aliases.push(comp.value.clone());
+        }
+    }
+    for entry in &mut parts {
+        entry.references.sort_by_key(|r| natural_ref_key(r));
+    }
+    Ok(parts)
+}
+
+/// Download a datasheet URL into `dir` with `curl` (no shell), refusing
+/// anything that is not a PDF: a landing page would otherwise be read as one.
+fn fetch_datasheet(url: &str, dir: &Path, part: &str) -> anyhow::Result<PathBuf> {
+    use hauksbee_models::datasheet;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| anyhow::anyhow!("creating '{}': {e}", dir.display()))?;
+    let path = dir.join(format!("{}.pdf", datasheet::sanitise_filename(part)));
+    if !datasheet::is_pdf(&path) {
+        let target = path.display().to_string();
+        let args = ["-fsSL", "--max-time", "180", "-o", target.as_str(), url];
+        run_tool("curl", &args, &format!("fetching the {part} datasheet"))?;
+    }
+    if !datasheet::is_pdf(&path) {
+        let _ = std::fs::remove_file(&path);
+        anyhow::bail!(
+            "{url} did not serve a PDF (a landing page?). Download the datasheet and pass \
+             --datasheet '{part}=<file.pdf>'"
+        );
+    }
+    Ok(path)
+}
+
+/// `hauksbee models extract --unmodelled <board>`: draft every unmodelled part.
+///
+/// Covers each connected active part the board leaves unmodelled, from the
+/// datasheet it names (or `--datasheet PART=SOURCE`), after one consent for the
+/// batch. A part that fails is reported and the batch carries on; the command fails at
+/// the end if any did, so a script never mistakes a partial batch for a whole.
+///
+/// # Errors
+///
+/// Returns an error if the board cannot be read, an override is malformed, the
+/// settings are invalid, consent is needed but stdin is not a terminal, or any
+/// part's extraction failed.
+pub fn extract_unmodelled(
+    board_path: &Path,
+    overrides: &[String],
+    template: &hauksbee_models::datasheet::Args,
+    assume_yes: bool,
+) -> anyhow::Result<()> {
+    use hauksbee_models::datasheet;
+    if let Some(name) = &template.api_key_env {
+        datasheet::validate_api_key_env_name(name)?;
+    }
+    let out_dir = template
+        .out_dir
+        .clone()
+        .unwrap_or_else(datasheet::default_out_dir);
+    let normalized = crate::board_input::from_path(board_path)?;
+    let extra: Vec<&Path> = template
+        .out_dir
+        .as_deref()
+        .filter(|d| d.is_dir())
+        .into_iter()
+        .collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+    let board_dir = board_path.parent().unwrap_or_else(|| Path::new("."));
+    let parts = unmodelled_parts(&normalized.board, &lib, board_dir, overrides)?;
+    if parts.is_empty() {
+        println!(
+            "No connected active part on {} is unmodelled; nothing to extract.",
+            board_path.display()
+        );
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = (parts.iter())
+        .map(|p| {
+            vec![
+                p.part.clone(),
+                p.references.join(" "),
+                p.datasheet.clone().unwrap_or_else(|| "none".into()),
+            ]
+        })
+        .collect();
+    println!("Unmodelled active parts on {}:", board_path.display());
+    println!("{}", box_table(&["part", "references", "datasheet"], &rows));
+    let (ready, missing): (Vec<_>, Vec<_>) = parts.iter().partition(|p| p.datasheet.is_some());
+    for p in &missing {
+        println!(
+            "no datasheet for {}: pass --datasheet '{}=<file.pdf or URL>' ({})",
+            p.part,
+            p.part,
+            datasheet_search(&p.part)
+        );
+    }
+    if ready.is_empty() {
+        return Ok(());
+    }
+    let question = format!(
+        "Fetch and send {} datasheet(s) and draft a model for each?",
+        ready.len()
+    );
+    if !extract_consent(template, assume_yes, &question)? {
+        return Ok(());
+    }
+    let mut failed = Vec::new();
+    for p in ready {
+        let source = p.datasheet.as_deref().unwrap_or_default();
+        let pdf = if source.starts_with("http") {
+            fetch_datasheet(source, &out_dir.join("datasheets"), &p.part)
+        } else {
+            Ok(PathBuf::from(source))
+        };
+        let run = pdf.and_then(|pdf| {
+            let args = datasheet::Args {
+                pdf,
+                part: p.part.clone(),
+                aliases: p.aliases.clone(),
+                ..template.clone()
+            };
+            hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args))
+        });
+        match run {
+            Ok(path) => println!("{}: drafted {}", p.part, path.display()),
+            Err(e) => {
+                eprintln!("{}: {e:#}", p.part);
+                failed.push(p.part.as_str());
+            }
+        }
+    }
+    let models_dir = (template.out_dir.as_deref())
+        .map(|d| format!(" --models-dir {}", shell_quote(&d.display().to_string())));
+    println!(
+        "\nThese models are drafts (tier \"datasheet-derived\"): read each pin map against its \
+         datasheet before trusting a result.\nre-check:  hauksbee run {} --check{}",
+        shell_quote(&board_path.display().to_string()),
+        models_dir.unwrap_or_default()
+    );
+    if !failed.is_empty() {
+        anyhow::bail!(
+            "{} of the extractions failed: {}",
+            failed.len(),
+            failed.join(", ")
+        );
     }
     Ok(())
 }

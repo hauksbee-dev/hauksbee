@@ -198,7 +198,7 @@ impl<'a> VerdictCause<'a> {
                     if refs.len() == 1 { "part has" } else { "parts have" },
                     refs_summary(refs)
                 ),
-                "draft a model per part with `hauksbee models extract --pdf <datasheet.pdf> --part <MPN>` or `hauksbee models new`, then rerun".into(),
+                "draft their models with `hauksbee models extract --unmodelled <board>` (one part: `--pdf <datasheet.pdf> --part <MPN>`) or `hauksbee models new`, then rerun".into(),
             ),
             Self::Coverage => (
                 "an input the checks rest on is missing or unreadable, so a clean result would not be trustworthy".into(),
@@ -552,7 +552,7 @@ pub fn inconclusive_verdict(refs: &[String]) -> String {
     format!(
         "INCONCLUSIVE: {} current-carrying / active part(s) have no model ({list}), \
          so a clean result here is not a clean bill. Draft models from their \
-         datasheets (`hauksbee models extract --pdf <datasheet.pdf> --part <MPN>`, \
+         datasheets (`hauksbee models extract --unmodelled <board>`, \
          or the Extend button in `hauksbee serve`), scaffold one by hand \
          (`hauksbee models new`, then --models-dir), or supply BOM identity \
          (--bom) to make this verdict conclusive.",
