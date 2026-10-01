@@ -2267,9 +2267,8 @@ basis = "Diodes Inc. 1N5819HW DS30217 Rev. 22-2 (April 2026), Thermal Characteri
 #   limit that then predicted MORE than the limit would be wrong twice over.
 # rs = 2.72 Ohm is high for a diode and that is expected on a 215 mA die in
 #   SOT23; it is where the 50 mA and 150 mA rows' curvature actually lives.
-# NOT MODELLED: the two diodes are stamped as one two-terminal device per pin
-#   pair by whichever role the binder assigns. A board that uses both diodes
-#   independently gets both, but nothing couples them, so shared-cathode thermal
+# NOT MODELLED: the two diodes are stamped as two independent two-terminal
+#   devices (D_e1, D_e2) sharing the cathode net, but nothing couples them, so shared-cathode thermal
 #   interaction and the 125 mA per-DEVICE limit (against 215 mA per DIODE) are
 #   not enforced across the pair.
 [[models]]
@@ -2293,9 +2292,10 @@ tt  = 5.771e-9    # trr max 4 ns at IF = IR = 10 mA, Table 7: tt = 4 ns / ln(1 +
 bv  = 100.0       # VRRM, Table 5 Limiting values; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
-# Table 2 Pinning, SOT23 (TO-236AB). COMMON CATHODE on pin 3.
-"1" = "anode"
-"2" = "anode"
+# Table 2 Pinning, SOT23 (TO-236AB). COMMON CATHODE on pin 3: one numbered
+# anode per diode, the shared cathode unnumbered (the binder stamps each unit).
+"1" = "anode1"
+"2" = "anode2"
 "3" = "cathode"
 
 [models.ratings]
@@ -2308,7 +2308,7 @@ theta_ja_c_per_w = 500.0       # Rth(j-a) max, free air, FR4 standard footprint
 
 # Printed rating rows (Nexperia BAV70 v.9, 1 July 2022, SOT23, fetched 2026-09-28).
 # IF and Ptot are per diode; the per-device IF (125 mA) is kept as data because the
-# card's pin roles cannot name one diode's path (both anodes are role `anode`).
+# rating cannot name one diode's path.
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -2341,3 +2341,306 @@ max = 0.125
 unit = "A"
 conditions = "Tamb = 25 °C"
 basis = "Nexperia BAV70 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per device, IF @ Tamb ≤ 25 °C"
+
+[[models]]
+id = "bat54a"
+kind = "diode"
+description = "BAT54A dual common-anode Schottky diode, 30 V, 200 mA/diode, SOT23"
+
+[models.match]
+# One of the BAT54 series (same Nexperia sheet and die as the single BAT54 card above).
+# The value pattern takes the A suffix and the usual W/T1G/-7-F continuations; the
+# 3-pin bodies only, so no footprint condition is needed.
+value_re = "(?i)^(?:S|SB|NSV|T)?BAT54A(?:[-/,WJHLTX][A-Z0-9,/-]*)?$"
+
+[models.params]
+# Source: Nexperia BAT54 datasheet, 1 July 2022, Table 7 "Characteristics".
+#
+# Fitted, not quoted: that datasheet publishes no SPICE model. `is`, `n` and
+# `rs` are a least-squares fit to the whole VF column, five points spanning
+# 0.1 mA to 100 mA (240, 320, 400, 500 and 800 mV), and they reproduce it to
+# 11 mV rms. Those are MAX figures with no typ column, so this models a
+# worst-case part: it will read a little pessimistic against a typical one,
+# which is the right direction for a checker.
+is  = 4.834e-9
+n   = 1.0
+rs  = 3.6
+# Dynamic params: vj/m are left to the binder defaults (vj = 1.0, m = 0.5).
+# A free fit to Fig. 3 "Diode capacitance as a function of reverse voltage;
+# typical values" is degenerate (vj -> 0; the curve runs 8.0 pF near 0 V,
+# 4.5 pF at 1 V, flattening to 1.4 pF at 30 V). Table 7 prints only a MAX, so
+# cjo is a worst-case figure, well above the ~8 pF typical at 0 V in Fig. 3.
+# tt is left at the default (0): a Schottky's trr (5 ns max) is not stored
+# charge; same choice on every Schottky card in this file.
+cjo = 1.414e-11 # Cd max 10 pF at VR = 1 V, f = 1 MHz, Table 7: 10p * (1 + 1/1.0)^0.5
+bv  = 30.0      # VR, Table 5 "Limiting values"; no V(BR) row printed; VR is a guaranteed lower bound on breakdown
+
+[models.pins]
+# Table 2 "Pinning information", SOT23: numbered electrodes are one diode each;
+# an unnumbered electrode is shared by both.
+"1" = "cathode1"
+"2" = "cathode2"
+"3" = "anode"
+
+[models.ratings]
+max_current_a = 0.2             # IF at Tamb = 25 C, Table 5
+max_surge_current_a = 0.6       # IFSM, tp < 10 ms, Table 5
+max_power_w = 0.25              # Ptot at Tamb <= 25 C, Table 5
+max_voltage_v = 30.0            # VR, Table 5
+max_junction_temp_c = 150.0     # Tj, Table 5
+theta_ja_c_per_w = 500.0        # Rth(j-a) in free air, Table 6
+
+# Printed rating rows (Nexperia BAT54 v.6, 1 July 2022, fetched 2026-09-28): SOT23
+# only.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1]"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 6 Thermal characteristics, Rth(j-a) max, note [2]"
+
+[[models]]
+id = "bat54c"
+kind = "diode"
+description = "BAT54C dual common-cathode Schottky diode, 30 V, 200 mA/diode, SOT23"
+
+[models.match]
+# One of the BAT54 series (same Nexperia sheet and die as the single BAT54 card above).
+# The value pattern takes the C suffix and the usual W/T1G/-7-F continuations; the
+# 3-pin bodies only, so no footprint condition is needed.
+value_re = "(?i)^(?:S|SB|NSV|T)?BAT54C(?:[-/,WJHLTX][A-Z0-9,/-]*)?$"
+
+[models.params]
+# Source: Nexperia BAT54 datasheet, 1 July 2022, Table 7 "Characteristics".
+#
+# Fitted, not quoted: that datasheet publishes no SPICE model. `is`, `n` and
+# `rs` are a least-squares fit to the whole VF column, five points spanning
+# 0.1 mA to 100 mA (240, 320, 400, 500 and 800 mV), and they reproduce it to
+# 11 mV rms. Those are MAX figures with no typ column, so this models a
+# worst-case part: it will read a little pessimistic against a typical one,
+# which is the right direction for a checker.
+is  = 4.834e-9
+n   = 1.0
+rs  = 3.6
+# Dynamic params: vj/m are left to the binder defaults (vj = 1.0, m = 0.5).
+# A free fit to Fig. 3 "Diode capacitance as a function of reverse voltage;
+# typical values" is degenerate (vj -> 0; the curve runs 8.0 pF near 0 V,
+# 4.5 pF at 1 V, flattening to 1.4 pF at 30 V). Table 7 prints only a MAX, so
+# cjo is a worst-case figure, well above the ~8 pF typical at 0 V in Fig. 3.
+# tt is left at the default (0): a Schottky's trr (5 ns max) is not stored
+# charge; same choice on every Schottky card in this file.
+cjo = 1.414e-11 # Cd max 10 pF at VR = 1 V, f = 1 MHz, Table 7: 10p * (1 + 1/1.0)^0.5
+bv  = 30.0      # VR, Table 5 "Limiting values"; no V(BR) row printed; VR is a guaranteed lower bound on breakdown
+
+[models.pins]
+# Table 2 "Pinning information", SOT23: numbered electrodes are one diode each;
+# an unnumbered electrode is shared by both.
+"1" = "anode1"
+"2" = "anode2"
+"3" = "cathode"
+
+[models.ratings]
+max_current_a = 0.2             # IF at Tamb = 25 C, Table 5
+max_surge_current_a = 0.6       # IFSM, tp < 10 ms, Table 5
+max_power_w = 0.25              # Ptot at Tamb <= 25 C, Table 5
+max_voltage_v = 30.0            # VR, Table 5
+max_junction_temp_c = 150.0     # Tj, Table 5
+theta_ja_c_per_w = 500.0        # Rth(j-a) in free air, Table 6
+
+# Printed rating rows (Nexperia BAT54 v.6, 1 July 2022, fetched 2026-09-28): SOT23
+# only.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1]"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 6 Thermal characteristics, Rth(j-a) max, note [2]"
+
+[[models]]
+id = "bat54s"
+kind = "diode"
+description = "BAT54S dual series Schottky diode, 30 V, 200 mA/diode, SOT23"
+
+[models.match]
+# One of the BAT54 series (same Nexperia sheet and die as the single BAT54 card above).
+# The value pattern takes the S suffix and the usual W/T1G/-7-F continuations; the
+# 3-pin bodies only, so no footprint condition is needed.
+value_re = "(?i)^(?:S|SB|NSV|T)?BAT54S(?:[-/,WJHLTX][A-Z0-9,/-]*)?$"
+
+[models.params]
+# Source: Nexperia BAT54 datasheet, 1 July 2022, Table 7 "Characteristics".
+#
+# Fitted, not quoted: that datasheet publishes no SPICE model. `is`, `n` and
+# `rs` are a least-squares fit to the whole VF column, five points spanning
+# 0.1 mA to 100 mA (240, 320, 400, 500 and 800 mV), and they reproduce it to
+# 11 mV rms. Those are MAX figures with no typ column, so this models a
+# worst-case part: it will read a little pessimistic against a typical one,
+# which is the right direction for a checker.
+is  = 4.834e-9
+n   = 1.0
+rs  = 3.6
+# Dynamic params: vj/m are left to the binder defaults (vj = 1.0, m = 0.5).
+# A free fit to Fig. 3 "Diode capacitance as a function of reverse voltage;
+# typical values" is degenerate (vj -> 0; the curve runs 8.0 pF near 0 V,
+# 4.5 pF at 1 V, flattening to 1.4 pF at 30 V). Table 7 prints only a MAX, so
+# cjo is a worst-case figure, well above the ~8 pF typical at 0 V in Fig. 3.
+# tt is left at the default (0): a Schottky's trr (5 ns max) is not stored
+# charge; same choice on every Schottky card in this file.
+cjo = 1.414e-11 # Cd max 10 pF at VR = 1 V, f = 1 MHz, Table 7: 10p * (1 + 1/1.0)^0.5
+bv  = 30.0      # VR, Table 5 "Limiting values"; no V(BR) row printed; VR is a guaranteed lower bound on breakdown
+
+[models.pins]
+# Table 2 "Pinning information", SOT23: numbered electrodes are one diode each;
+# an unnumbered electrode is shared by both.
+"1" = "anode1"
+"2" = "cathode2"
+"3" = "common"  # D1 cathode and D2 anode
+
+[models.ratings]
+max_current_a = 0.2             # IF at Tamb = 25 C, Table 5
+max_surge_current_a = 0.6       # IFSM, tp < 10 ms, Table 5
+max_power_w = 0.25              # Ptot at Tamb <= 25 C, Table 5
+max_voltage_v = 30.0            # VR, Table 5
+max_junction_temp_c = 150.0     # Tj, Table 5
+theta_ja_c_per_w = 500.0        # Rth(j-a) in free air, Table 6
+
+# Printed rating rows (Nexperia BAT54 v.6, 1 July 2022, fetched 2026-09-28): SOT23
+# only.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 5 Limiting values, Ptot @ Tamb ≤ 25 °C, note [1]"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAT54 product data sheet v.6 (1 July 2022), Table 6 Thermal characteristics, Rth(j-a) max, note [2]"
+
+[[models]]
+id = "bav99"
+kind = "diode"
+description = "BAV99 dual series switching diode, 100 V, 215 mA/diode, SOT23"
+
+[models.match]
+value_re = "(?i)^BAV99[A-Z0-9,]*$"
+
+[models.params]
+is  = 1.0812e-15  # fitted with rs to the 1 mA and 150 mA VF maxima
+n   = 1.0         # pinned: an ordinary silicon junction, see the note above
+rs  = 2.72125     # fitted; carries the 1 mA to 150 mA rise
+cjo = 1.5e-12     # Cd max 1.5 pF at VR = 0 V, 1 MHz, Table 7. Genuinely zero-bias.
+# vj/m left to the binder defaults: a free fit to Fig. 4 (typical Cd 0.60 pF at
+# 0 V, 0.52 at 1 V, 0.46 at 16 V) is degenerate (vj -> 0, m = 0.05), the
+# nearly flat curve being package capacitance rather than a depletion law.
+tt  = 5.771e-9    # trr max 4 ns at IF = IR = 10 mA, Table 7: tt = 4 ns / ln(1 + 10/10).
+                  # A minority-carrier device, so stored charge is real here.
+bv  = 100.0       # VRRM, Table 5 Limiting values; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+# SOT23 SERIES pair: pin 1 = A1, pin 2 = K2, pin 3 = K1/A2 (the shared midpoint).
+"1" = "anode1"
+"2" = "cathode2"
+"3" = "common"
+
+[models.ratings]
+max_current_a = 0.215          # IF per diode, Tamb <= 25 C (125 mA per device)
+max_surge_current_a = 1.0      # IFSM at tp = 1 ms (4 A at 1 us, 0.5 A at 1 s)
+max_power_w = 0.25             # Ptot
+max_voltage_v = 100.0          # VR = VRRM
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 500.0       # Rth(j-a) max, free air, FR4 standard footprint
+
+# NOTE: the BAV99 sheet could not be fetched here; the die figures are the BAV70 ones (same Nexperia
+# BAV70/BAV99 switching-diode family and ratings), so re-read them against the BAV99 sheet.
+# Printed rating rows (Nexperia BAV99 v.9, 1 July 2022, SOT23, fetched 2026-09-28).
+# IF and Ptot are per diode; the per-device IF (125 mA) is kept as data because the
+# rating cannot name one diode's path.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current, per diode"
+rating = "max_current_a"
+max = 0.215
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAV99 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per diode, IF @ Tamb ≤ 25 °C"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation, per diode"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "Tamb = 25 °C"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAV99 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per diode, Ptot @ Tamb ≤ 25 °C, note [2]"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 500.0
+unit = "K/W"
+conditions = "in free air"
+mounting = "FR4 single-sided Cu, standard footprint"
+basis = "Nexperia BAV99 product data sheet v.9 (1 July 2022), Table 6 Thermal characteristics, Rth(j-a) max, note [1]"
+[[models.source.characteristic]]
+parameter = "IF forward current, per device"
+max = 0.125
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Nexperia BAV99 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per device, IF @ Tamb ≤ 25 °C"

@@ -68,3 +68,20 @@ fn both_cards_share_the_die_parameters_but_two_pin_has_lower_tj_max() {
     assert_eq!(three_pin.ratings.max_junction_temp_c, Some(150.0));
     assert_eq!(two_pin.ratings.max_junction_temp_c, Some(125.0));
 }
+
+#[test]
+fn dual_cards_number_each_diode_and_share_the_common_pad() {
+    // Pad 3 is the common cathode, the common anode, or a series pair's K1/A2 midpoint.
+    for (value, expected, pad_map) in [
+        ("BAV70", "bav70", "1=anode1 2=anode2 3=cathode"),
+        ("BAT54C", "bat54c", "1=anode1 2=anode2 3=cathode"),
+        ("BAT54A", "bat54a", "1=cathode1 2=cathode2 3=anode"),
+        ("BAT54SW", "bat54s", "1=anode1 2=cathode2 3=common"),
+        ("BAV99", "bav99", "1=anode1 2=cathode2 3=common"),
+        ("BAT54", "bat54", "1=anode 2=nc 3=cathode"),
+    ] {
+        let model = resolve(value, "Package_TO_SOT_SMD:SOT-23");
+        assert_eq!(model.id, expected, "{value}");
+        assert_pins(&model, &pins(pad_map));
+    }
+}

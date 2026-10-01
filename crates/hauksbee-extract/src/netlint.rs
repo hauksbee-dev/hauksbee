@@ -600,6 +600,14 @@ pub fn is_capacitor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_capacitor()
 }
 
+/// A passive value that names no value: blank, `?`, the bare letter `R`/`C`/`L`, or `TBD`.
+#[must_use]
+pub fn is_placeholder_value(value: &str) -> bool {
+    ["", "?", "R", "C", "L", "TBD"]
+        .iter()
+        .any(|p| value.trim().eq_ignore_ascii_case(p))
+}
+
 fn passive_prefix(reference: &str) -> Option<char> {
     let r = ref_designator(reference);
     let first = r.chars().next()?;
@@ -736,7 +744,6 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
             continue;
         };
         let value_trimmed = c.value.trim();
-        let value_upper = value_trimmed.to_ascii_uppercase();
         // A solder jumper / solder bridge / net tie has no electrical value BY
         // DESIGN, and its reference can look passive (the Arduino Uno's
         // RESET-EN solder jumper starts with 'R'). Demanding a value be "set"
@@ -744,9 +751,7 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
         // the DNP policy already recognises is exempt from the placeholder
         // check. (Verified fire before this guard: Arduino Uno R3 RESET-EN,
         // library "jumper", package "SJ", value "".)
-        if (value_trimmed.is_empty()
-            || value_upper == "?"
-            || (value_upper.len() == 1 && matches!(value_upper.as_str(), "R" | "C" | "L")))
+        if is_placeholder_value(value_trimmed)
             && !crate::dnp::is_jumper_or_net_tie(c)
             && !crate::dnp::unbought(c)
         {

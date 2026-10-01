@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use hauksbee_extract::{Component, ExtractedBoard};
+use hauksbee_extract::{is_placeholder_value, Component, ExtractedBoard};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
     BOutput, BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, Rail,
@@ -1173,7 +1173,27 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
                 .map(|(_, v)| v.clone())
         })
         .or_else(|| non_empty(&comp.value));
-    let res = lib.resolve(&q);
+    let mut res = lib.resolve(&q);
+    // `led_generic` is a two-pad guess from the footprint: WS2812B/RGB parts are not it.
+    if res.model.as_ref().is_some_and(|m| m.id == "led_generic")
+        && logical_passive_pins(comp).map_or(0, |pins| pins.len()) > 2
+    {
+        res = hauksbee_models::Resolution::unresolved(q.clone());
+    }
+    // A colour-only value ("RED") is no part number: it takes that colour's LED card.
+    let named =
+        res.model.as_ref().is_some_and(|m| m.id != "led_generic") || res.selection.is_some();
+    if let Some(card) = led_colour(comp).filter(|_| !named) {
+        let mut by_colour = q.clone();
+        (by_colour.value, by_colour.mpn) = (Some(format!("{card} LED")), None);
+        let mut coloured = lib.resolve(&by_colour);
+        if let Some(model) = coloured.model.as_mut() {
+            let note = format!("value '{}' names only a colour: assumed a typical {card} LED, forward voltage included ({})", comp.value, model.id);
+            model.params.set_str("warning", note);
+            (coloured.confidence, coloured.query) = (Confidence::Guessed, q);
+            return coloured;
+        }
+    }
     // An open variant set is the library's answer too: no fallback may guess past it.
     if res.confidence != Confidence::Unresolved || res.selection.is_some() {
         return res;
@@ -1209,6 +1229,30 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
         };
     }
     res
+}
+
+/// The colour a bare-colour value ("RED", "MF-LED-0603-RED") names on a plain two-pad LED
+/// (a `D*`/`LED*` designator with an LED symbol or footprint), and the card word it binds
+/// to: orange and amber read as yellow, white as blue.
+fn led_colour(comp: &Component) -> Option<&'static str> {
+    let led = [&comp.lib_id, &comp.footprint]
+        .iter()
+        .any(|id| id.to_ascii_uppercase().contains("LED"));
+    let pads = logical_passive_pins(comp).map_or(0, |pins| pins.len());
+    if !matches!(ref_prefix(&comp.reference).as_str(), "D" | "LED") || !led || pads > 2 {
+        return None;
+    }
+    let value = comp.value.to_ascii_uppercase();
+    let mut named = value
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(|t| match t {
+            "RED" => Some("RED"),
+            "GREEN" => Some("GREEN"),
+            "BLUE" | "WHITE" => Some("BLUE"),
+            "YELLOW" | "ORANGE" | "AMBER" => Some("YELLOW"),
+            _ => None,
+        });
+    named.next().filter(|_| named.next().is_none())
 }
 
 /// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP").
@@ -3158,35 +3202,61 @@ fn two_terminal_nodes(
     (a, b)
 }
 
+/// One diode, or several in one package. A package's units number their electrodes
+/// (`anode1`, `cathode2`); an electrode a unit does not number falls back to the
+/// unnumbered `anode`/`cathode` (a shared common cathode or anode), and `common`, the
+/// pad a series pair's first cathode and second anode share, fills the one it still lacks.
 fn bind_diode(
     comp: &Component,
     model: &ModelEntry,
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
-    let a = roles
-        .get("anode")
-        .or_else(|| pick(roles, &["a", "p"]))
-        .copied();
-    let k = roles
-        .get("cathode")
-        .or_else(|| pick(roles, &["k", "n"]))
-        .copied();
-    let (Some(a), Some(k)) = (a, k) else {
-        return open_warning(comp, "diode pins not both connected");
+    let mut units: std::collections::BTreeSet<&str> = (roles.keys())
+        .filter_map(|r| {
+            r.strip_prefix("anode")
+                .or_else(|| r.strip_prefix("cathode"))
+        })
+        .filter(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        .collect();
+    if units.is_empty() {
+        units.insert("");
+    }
+    let own = |name: &str, alias: &[&str], n: &str| {
+        let get = |role: &str| roles.get(role).copied();
+        get(&format!("{name}{n}"))
+            .or_else(|| get(name))
+            .or_else(|| pick(roles, alias).copied())
     };
-    let m = diode_model_from(model);
-    circuit.add(Device::Diode {
-        name: comp.reference.clone(),
-        a,
-        k,
-        model: m,
-    });
+    let (model_d, common) = (diode_model_from(model), roles.get("common").copied());
+    let diode = |n: &&str| {
+        let (a, k) = match (own("anode", &["a", "p"], n), own("cathode", &["k", "n"], n)) {
+            (Some(a), k) => (Some(a), k.or(common)),
+            (None, k) => (common, k),
+        };
+        let name = match n {
+            &"" => comp.reference.clone(),
+            _ => format!("{}_e{n}", comp.reference),
+        };
+        Some(Device::Diode {
+            name,
+            a: a?,
+            k: k?,
+            model: model_d,
+        })
+    };
+    let found: Vec<Device> = units.iter().filter_map(diode).collect();
+    if found.is_empty() {
+        return open_warning(comp, "diode pins not both connected");
+    }
+    for d in found {
+        circuit.add(d);
+    }
     (
         BindOutcome::Analog {
             device: "diode".to_string(),
         },
-        None,
+        entry_warning(comp, model),
     )
 }
 
@@ -3459,13 +3529,17 @@ fn with_tie_warning(
     ))
 }
 
-/// The open outcome for a passive whose value text does not parse.
+/// The open outcome for a passive whose value text does not parse. A blank or
+/// placeholder value (`""`, `?`, `TBD`) is the `placeholder_value` lint's finding and is
+/// named so, not called unparseable.
 fn unparseable(comp: &Component) -> (BindOutcome, Option<String>) {
-    let reason = format!("unparseable value '{}'", comp.value);
-    let warning = format!(
-        "{}: value '{}' not parseable, left open",
-        comp.reference, comp.value
-    );
+    let what = if is_placeholder_value(&comp.value) {
+        "placeholder"
+    } else {
+        "unparseable"
+    };
+    let reason = format!("{what} value '{}'", comp.value);
+    let warning = format!("{}: {reason}, left open", comp.reference);
     (BindOutcome::Unresolved { reason }, Some(warning))
 }
 
@@ -8371,6 +8445,125 @@ style = "i2c_pointer"
                 refused,
                 "{outcome:?}"
             );
+        }
+    }
+
+    /// A part with its pads on nets `nets` (-1: pad unwired), numbered from 1.
+    fn part(r: &str, v: &str, lib: &str, fp: &str, nets: &[i64]) -> Component {
+        let pin = |(&net, i): (&i64, i32)| Pin {
+            number: i.to_string(),
+            net: (net >= 0).then_some(net),
+            ..Default::default()
+        };
+        let pins = nets.iter().zip(1..).map(pin).collect();
+        let mut c = comp(r, v);
+        (c.lib_id, c.footprint, c.pins) = (lib.into(), fp.into(), pins);
+        c
+    }
+
+    /// Bind `c` to what the builtin library resolves it to, net `n` on node "N<n>":
+    /// the circuit, the bind outcome (`None`: no model) and its warning.
+    fn bind_resolved(c: &Component) -> (Circuit, Option<BindOutcome>, Option<String>) {
+        let model = library_resolution(&ModelLibrary::builtin(), c).model;
+        let mut circuit = Circuit::new();
+        let nodes: Vec<_> = (0..4).map(|i| circuit.node(&format!("N{i}"))).collect();
+        let node_of = move |n: Option<i64>| Some(nodes[usize::try_from(n?).ok()?]);
+        let bound = model.map(|m| bind_one(c, &m, &mut circuit, &node_of, &HashMap::new()));
+        let (outcome, warning) = bound.unzip();
+        (circuit, outcome, warning.flatten())
+    }
+
+    fn analog(outcome: Option<&BindOutcome>) -> bool {
+        matches!(outcome, Some(BindOutcome::Analog { .. }))
+    }
+
+    /// Each diode stamped, as "name anode>cathode".
+    fn diodes(circuit: &Circuit) -> String {
+        let name = |n: NodeId| circuit.node_name(n).to_string();
+        let found = circuit.devices.iter().filter_map(|d| match d {
+            Device::Diode { name: d, a, k, .. } => Some(format!("{d} {}>{}", name(*a), name(*k))),
+            _ => None,
+        });
+        found.collect::<Vec<_>>().join(" ")
+    }
+
+    /// Two diodes in one package bind one device each, whichever pads they share; with
+    /// the shared pad unwired the part stays open, and one wired unit binds alone.
+    #[test]
+    fn dual_diode_packages_bind_each_unit() {
+        for (value, nets, want) in [
+            ("BAV70", [1, 2, 3], "D1_e1 N1>N3 D1_e2 N2>N3"),
+            ("BAT54C", [1, 2, 3], "D1_e1 N1>N3 D1_e2 N2>N3"),
+            ("BAT54A", [1, 2, 3], "D1_e1 N3>N1 D1_e2 N3>N2"),
+            ("BAT54S", [1, 2, 3], "D1_e1 N1>N3 D1_e2 N3>N2"),
+            ("BAV99W", [1, 2, 3], "D1_e1 N1>N3 D1_e2 N3>N2"),
+            ("BAT54", [1, 2, 3], "D1 N1>N3"),
+            ("BAV70", [1, 2, -1], ""),
+            ("BAV99", [1, -1, 3], "D1_e1 N1>N3"),
+        ] {
+            let c = part("D1", value, "Device:D", "Package_TO_SOT_SMD:SOT-23", &nets);
+            let (circuit, outcome, _) = bind_resolved(&c);
+            assert_eq!(diodes(&circuit), want, "{value} {nets:?}");
+            assert_eq!(
+                analog(outcome.as_ref()),
+                !want.is_empty(),
+                "{value} {outcome:?}"
+            );
+        }
+    }
+
+    /// A net tie of any pad count is a milliohm link, never an open part; a blank or
+    /// placeholder passive value is called a placeholder, a malformed one unparseable.
+    #[test]
+    fn net_ties_bind_as_links_and_placeholders_are_named() {
+        for (value, fp, nets, links) in [
+            ("NetTie_2", "", &[1, 2][..], 1),
+            ("NetTie_3", "", &[1, 2, 3], 2),
+            ("", "NetTie:NetTie-2_SMD_Pad0.5mm", &[1, 2], 1),
+        ] {
+            let (circuit, outcome, _) = bind_resolved(&part("NT1", value, "", fp, nets));
+            let bound = analog(outcome.as_ref()) && circuit.devices.len() == links;
+            assert!(bound, "{value} {nets:?} {outcome:?}");
+        }
+        for (value, want) in [("", "placeholder"), ("banana", "unparseable")] {
+            let (_, _, warning) = bind_resolved(&part("R1", value, "Device:R", "", &[1, 2]));
+            let named = warning.is_some_and(|w| w.contains(&format!("{want} value")));
+            assert!(named, "{value:?}");
+        }
+        let (_, outcome, warning) = bind_resolved(&part("R1", "10k", "Device:R", "", &[1, 2]));
+        assert!(analog(outcome.as_ref()) && warning.is_none());
+    }
+
+    /// A colour-only LED value takes that colour's card and records the assumption; an
+    /// addressable LED, a resistor or an RGB part valued with a colour never does.
+    #[test]
+    fn colour_only_led_values_bind_the_colour_card() {
+        let (led, custom) = ("Device:LED", "Custom:LED_0603");
+        for (value, lib, fp, want) in [
+            ("red", led, custom, "led_red"),
+            ("GREEN", led, custom, "led_green"),
+            ("BLUE", led, custom, "led_blue"),
+            ("ORANGE", led, custom, "led_yellow"),
+            ("WHITE", led, custom, "led_blue"),
+            ("MF-LED-0603-RED", led, custom, "led_red"),
+            ("RED", "Device:D", "LED_SMD:LED_0603_1608Metric", "led_red"),
+        ] {
+            let (ckt, out, warn) = bind_resolved(&part("D1", value, lib, fp, &[1, 0]));
+            assert!(
+                analog(out.as_ref()) && !diodes(&ckt).is_empty(),
+                "{value} {out:?}"
+            );
+            assert!(warn.is_some_and(|w| w.contains("assumed a typical") && w.contains(want)));
+        }
+        for (value, lib, fp, nets) in [
+            ("WS2812B", led, "LED_SMD:LED_WS2812B-PLCC4", &[1; 4][..]),
+            ("RED", "LED:RGB", "", &[1; 4]),
+            ("RED", "Device:R", "", &[1, 0]),
+            ("RED", "Device:D", "", &[1, 0]),
+        ] {
+            let (_, _, warn) = bind_resolved(&part("D2", value, lib, fp, nets));
+            let plain = warn.is_none_or(|w| !w.contains("names only a colour"));
+            assert!(plain, "{value} {lib}");
         }
     }
 

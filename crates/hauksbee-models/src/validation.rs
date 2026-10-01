@@ -1165,7 +1165,10 @@ pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     let conv_required: Vec<&[&str]> = conv_roles.iter().flatten().map(|r| &r[..]).collect();
     let required: &[&[&str]] = match entry.kind {
         ComponentKind::Vreg if conv.is_some() => &conv_required,
-        ComponentKind::Diode => &[&["anode", "a", "p"], &["cathode", "k", "n"]],
+        ComponentKind::Diode => &[
+            &["anode", "a", "p", "common"],
+            &["cathode", "k", "n", "common"],
+        ],
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
             &[&["collector", "c"], &["base", "b"], &["emitter", "e"]]
         }

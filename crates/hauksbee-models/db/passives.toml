@@ -911,6 +911,26 @@ footprint_re = "(?i)^NetTie:|NetTie-[0-9]|Net_?Tie"
 
 [models.params]
 ohms = 0.001
+value_override = "1m" # a net tie has no value field: the passive path reads this
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# The same part named only by its value ("NetTie_2", "NET_TIE_3"), for a footprint the
+# pattern above does not know.
+[[models]]
+id = "net_tie_value"
+kind = "passive"
+passive_class = "net_tie"
+description = "Net tie named by value: a deliberate copper short between nets (1 mOhm)"
+
+[models.match]
+value_re = "(?i)^Net_?Tie(?:[-_ ]?[0-9]+)?$"
+
+[models.params]
+ohms = 0.001
+value_override = "1m" # a net tie has no value field: the passive path reads this
 
 [models.pins]
 "1" = "a"

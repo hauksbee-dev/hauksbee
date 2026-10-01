@@ -2022,7 +2022,7 @@ Only include the blocks the datasheet supports, each number cited (rule 1).
 /// the cheap half of the same guarantee.
 fn pin_roles_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode" => "anode, cathode; an array indexes each diode's own pad: cathode1, cathode2",
+        "diode" => "anode, cathode; a multi-diode package numbers each diode's own electrode (anode1, cathode2), an unnumbered one is shared (common cathode: anode1, anode2, cathode), and a series pair's shared pad is common",
         "bjt_npn" | "bjt_pnp" => "collector, base, emitter; a dual: collector_q1, base_q1, ..._q2",
         "nmos" | "pmos" => "drain, gate, source",
         "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them; a fixed-output part's ADJ/GND pin is gnd)",
