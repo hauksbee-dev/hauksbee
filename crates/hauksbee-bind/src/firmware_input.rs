@@ -57,6 +57,94 @@ pub struct ResolvedFirmwareFile {
 }
 
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
+/// First word of every UF2 block ("UF2\n", little-endian 0x0A324655).
+const UF2_MAGIC: &[u8] = b"UF2\n";
+
+/// Convert a UF2 image to the Intel HEX the loaders take.
+///
+/// Layout per the UF2 specification (github.com/microsoft/uf2, MIT): 512-byte
+/// blocks, each with magics 0x0A324655 / 0x9E5D5157 at 0 and 4, flags at 8,
+/// target address at 12, payload size at 16 (payload from byte 32, at most
+/// 476 bytes) and the end magic 0x0AB16F30 at 508. Blocks flagged "not main
+/// flash" (0x1) carry no image bytes and are skipped.
+///
+/// # Errors
+///
+/// A truncated block, a bad magic, an oversized payload, or no flash payload.
+pub fn uf2_to_ihex(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use std::fmt::Write as _;
+    let word = |b: &[u8], at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+    if !bytes.len().is_multiple_of(512) {
+        return Err(format!(
+            "UF2 image is {} bytes, not a whole number of 512-byte blocks",
+            bytes.len()
+        ));
+    }
+    let mut chunks: Vec<(u32, &[u8])> = Vec::new();
+    for (i, block) in bytes.chunks_exact(512).enumerate() {
+        if word(block, 0) != 0x0A32_4655
+            || word(block, 4) != 0x9E5D_5157
+            || word(block, 508) != 0x0AB1_6F30
+        {
+            return Err(format!("UF2 block {i} has a bad magic number"));
+        }
+        if word(block, 8) & 1 != 0 {
+            continue;
+        }
+        let len = word(block, 16) as usize;
+        if len > 476 {
+            return Err(format!(
+                "UF2 block {i} declares a {len}-byte payload (max 476)"
+            ));
+        }
+        chunks.push((word(block, 12), &block[32..32 + len]));
+    }
+    if chunks.is_empty() {
+        return Err("UF2 image carries no main-flash payload".to_string());
+    }
+    chunks.sort_by_key(|c| c.0);
+    let mut out = String::new();
+    let mut record = |kind: u8, addr: u16, data: &[u8]| {
+        let [hi, lo] = addr.to_be_bytes();
+        #[allow(clippy::cast_possible_truncation)] // data is at most 16 bytes
+        let mut sum = (data.len() as u8)
+            .wrapping_add(hi)
+            .wrapping_add(lo)
+            .wrapping_add(kind);
+        let _ = write!(out, ":{:02X}{addr:04X}{kind:02X}", data.len());
+        for b in data {
+            sum = sum.wrapping_add(*b);
+            let _ = write!(out, "{b:02X}");
+        }
+        let _ = writeln!(out, "{:02X}", sum.wrapping_neg());
+    };
+    let mut upper = None;
+    for (base, data) in chunks {
+        for (k, line) in data.chunks(16).enumerate() {
+            #[allow(clippy::cast_possible_truncation)] // k < 30
+            let addr = base.wrapping_add(16 * k as u32);
+            let (hi, lo) = ((addr >> 16) as u16, (addr & 0xFFFF) as u16);
+            // A line that crosses a 64 KiB boundary is split across two segments.
+            let split = usize::from(lo)
+                .saturating_add(line.len())
+                .saturating_sub(0x1_0000);
+            let (first, rest) = line.split_at(line.len() - split);
+            if upper != Some(hi) {
+                record(0x04, 0, &hi.to_be_bytes());
+                upper = Some(hi);
+            }
+            record(0x00, lo, first);
+            if !rest.is_empty() {
+                let hi2 = hi.wrapping_add(1);
+                record(0x04, 0, &hi2.to_be_bytes());
+                upper = Some(hi2);
+                record(0x00, 0, rest);
+            }
+        }
+    }
+    record(0x01, 0, &[]);
+    Ok(out.into_bytes())
+}
 
 /// Quotas on an uploaded archive, enforced before and during extraction so a
 /// zip bomb (a tiny archive that inflates enormously) cannot exhaust memory
@@ -100,11 +188,29 @@ pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<Resolved
     resolve_firmware_bytes_limited(fw_name, fw_bytes, &ZIP_LIMITS)
 }
 
+/// A UF2 upload staged as the Intel HEX it is equivalent to.
+fn uf2_as_hex(fw_name: &str, fw_bytes: &[u8]) -> Result<ResolvedFirmware, String> {
+    let stem = Path::new(fw_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("firmware");
+    Ok(ResolvedFirmware {
+        name: format!("{stem}.hex"),
+        bytes: uf2_to_ihex(fw_bytes)?,
+        note: Some(format!(
+            "Converted the UF2 image '{fw_name}' to the equivalent Intel HEX."
+        )),
+    })
+}
+
 fn resolve_firmware_bytes_limited(
     fw_name: &str,
     fw_bytes: &[u8],
     limits: &ZipLimits,
 ) -> Result<ResolvedFirmware, String> {
+    if fw_bytes.starts_with(UF2_MAGIC) {
+        return uf2_as_hex(fw_name, fw_bytes);
+    }
     if !fw_bytes.starts_with(ZIP_MAGIC) {
         return Ok(ResolvedFirmware {
             name: fw_name.to_string(),
@@ -248,11 +354,11 @@ pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwa
             path.display()
         );
     }
-    let is_zip = path
+    let is_zip_or_uf2 = path
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
-    if is_zip {
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("uf2"));
+    if is_zip_or_uf2 {
         let bytes = std::fs::read(path)?;
         let name = path
             .file_name()
@@ -656,6 +762,70 @@ fn default_env(project: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn uf2_block(addr: u32, payload: &[u8], flags: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 512];
+        for (at, w) in [
+            (0, 0x0A32_4655),
+            (4, 0x9E5D_5157),
+            (8, flags),
+            (12, addr),
+            (508, 0x0AB1_6F30),
+        ] {
+            b[at..at + 4].copy_from_slice(&u32::to_le_bytes(w));
+        }
+        b[16..20].copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        b[32..32 + payload.len()].copy_from_slice(payload);
+        b
+    }
+
+    #[test]
+    fn uf2_converts_to_the_equivalent_intel_hex() {
+        let payload: Vec<u8> = (0u8..=255).collect();
+        let mut uf2 = uf2_block(0x1000_0100, &payload[..32], 0);
+        uf2.extend(uf2_block(0x1000_0000, &payload[32..64], 0));
+        uf2.extend(uf2_block(0x2000_0000, &[0xAA; 8], 1)); // not main flash: skipped
+        let r = resolve_firmware_bytes("cpy.uf2", &uf2).unwrap();
+        assert_eq!(r.name, "cpy.hex");
+        let hex = String::from_utf8(r.bytes).unwrap();
+        let lines: Vec<&str> = hex.lines().collect();
+        assert_eq!(lines[0], ":020000041000EA", "upper address 0x1000");
+        assert!(
+            lines[1].starts_with(":10000000202122"),
+            "lowest address first: {}",
+            lines[1]
+        );
+        assert!(lines.iter().any(|l| l.starts_with(":10010000000102")));
+        assert_eq!(*lines.last().unwrap(), ":00000001FF");
+        assert!(!hex.contains("AAAAAAAA"), "flagged block dropped");
+    }
+
+    #[test]
+    fn uf2_with_a_bad_block_is_refused() {
+        let mut uf2 = uf2_block(0, &[1, 2, 3], 0);
+        uf2[508] = 0;
+        assert!(uf2_to_ihex(&uf2).unwrap_err().contains("bad magic"));
+        assert!(uf2_to_ihex(&uf2[..500]).unwrap_err().contains("512-byte"));
+        let only_meta = uf2_block(0, &[1], 1);
+        assert!(uf2_to_ihex(&only_meta)
+            .unwrap_err()
+            .contains("no main-flash"));
+    }
+
+    #[test]
+    fn cli_uf2_is_staged_as_hex() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join("fw.uf2");
+        std::fs::write(&p, uf2_block(0, &[0xFF, 0xCF], 0)).unwrap();
+        let r = resolve_firmware_cli(&p).unwrap().expect("a uf2 resolves");
+        assert_eq!(r.path.extension().unwrap(), "hex");
+        assert!(std::fs::read_to_string(&r.path)
+            .unwrap()
+            .contains(":02000000FFCF30"));
+        if let Some(parent) = r.path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 

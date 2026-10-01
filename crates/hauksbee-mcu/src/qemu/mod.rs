@@ -614,12 +614,19 @@ impl QemuBackend {
             (tmp.path().to_path_buf(), Some(tmp))
         } else {
             validate_flash_image_arch(flash_image, config.expected_e_machine, &config.mcu_label)?;
+            // An app-only .bin is merged with its build's bootloader and
+            // partition table, and a short merged image is padded to the flash
+            // size QEMU boots from (see `flashimage::prepare_raw_image`).
+            let staged = flashimage::prepare_raw_image(flash_image, &config.machine)?;
+            let image = staged
+                .as_ref()
+                .map_or(flash_image, tempfile::NamedTempFile::path);
             // Refuse an image whose bootloader is not where this chip's ROM
             // will look, BEFORE spawning: booted anyway, the ROM loops on
             // "invalid header: 0xffffffff" forever and the failure would
             // surface much later as an opaque control-channel error.
-            validate_bootloader_magic(flash_image, &config.machine)?;
-            (flash_image.to_path_buf(), None)
+            validate_bootloader_magic(image, &config.machine)?;
+            (image.to_path_buf(), staged)
         };
 
         let [qmp_port, gdb_port, uart_port] = free_ports()?;

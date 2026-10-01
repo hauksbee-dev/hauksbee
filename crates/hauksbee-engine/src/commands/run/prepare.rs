@@ -266,7 +266,11 @@ pub fn prepare_run_inputs(
             }
             cfg.firmware = Some(resolved.path);
         }
-        hauksbee_mcu::validate_firmware_path(cfg.firmware.as_deref().expect("just set"))?;
+        let fw = cfg.firmware.as_deref().expect("just set");
+        hauksbee_mcu::validate_firmware_path(fw)?;
+        // Before the board analysis, which can take tens of seconds: a format
+        // no backend loads must not wait for the bind to be refused.
+        hauksbee_mcu::validate_firmware_format(fw)?;
     }
     // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
     // product), say so, a clean verdict on one file is misleading if the user

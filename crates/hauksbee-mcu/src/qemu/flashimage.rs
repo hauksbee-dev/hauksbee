@@ -27,9 +27,16 @@ use espflash::target::{Chip, XtalFrequency};
 use std::io::Write;
 use std::path::Path;
 
-/// Merged image size. QEMU's ESP32-family flash model accepts only 2/4/8/16 MB
-/// images; 4 MB matches the repo's fixture images and every devkit default.
-const FLASH_SIZE_BYTES: usize = 4 * 1024 * 1024;
+/// Size of the flash file handed to QEMU. Its flash model accepts 2/4/8/16 MB
+/// files, but an image whose file is only as large as its header declares
+/// (4 or 8 MB) fails IDF flash init and boot-loops; the same image padded with
+/// erased 0xFF to 16 MB boots (dev-set firmware sweep, 2026-10-01). The image
+/// header keeps declaring 4 MB, which is what the partition table is sized for.
+const FLASH_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Offsets of the esptool `merge_bin` layout: partition table and factory app.
+const PARTITION_TABLE_OFFSET: usize = 0x8000;
+const APP_OFFSET: usize = 0x1_0000;
 
 /// The espflash target chip for a QEMU `-machine` name, `None` when the
 /// machine is not one this converter knows how to lay an image out for.
@@ -143,7 +150,7 @@ pub fn merged_image_from_elf(elf_path: &Path, machine: &str) -> Result<tempfile:
         let Some(end) = end else {
             bail!(
                 "firmware image segment at {:#x} ({} bytes) does not fit the \
-                 4 MB flash the emulator models",
+                 16 MB flash the emulator models",
                 seg.addr,
                 seg.data.len()
             );
@@ -151,15 +158,99 @@ pub fn merged_image_from_elf(elf_path: &Path, machine: &str) -> Result<tempfile:
         flash[start..end].copy_from_slice(&seg.data);
     }
 
+    write_temp(&flash)
+}
+
+fn write_temp(flash: &[u8]) -> Result<tempfile::NamedTempFile> {
     let mut tmp = tempfile::Builder::new()
         .prefix("hauksbee-esp-flash-")
         .suffix(".bin")
         .tempfile()
         .context("creating temp file for the merged flash image")?;
-    tmp.write_all(&flash)
+    tmp.write_all(flash)
         .and_then(|()| tmp.flush())
         .context("writing the merged flash image")?;
     Ok(tmp)
+}
+
+/// Make a raw `.bin` bootable: an app-only image (esp image magic at 0, no
+/// partition table at 0x8000) is merged with the build's own bootloader and
+/// partition table found beside it, in the esptool `merge_bin` layout; a
+/// merged image smaller than the flash file QEMU needs is padded with 0xFF.
+/// `None` means the file is already a full-size image and boots as is.
+///
+/// # Errors
+///
+/// When the file cannot be read, is larger than the emulated flash, or is an
+/// app-only image with no bootloader / partition table beside it.
+pub fn prepare_raw_image(image: &Path, machine: &str) -> Result<Option<tempfile::NamedTempFile>> {
+    let bytes =
+        std::fs::read(image).with_context(|| format!("reading flash image {}", image.display()))?;
+    if bytes.len() > FLASH_SIZE_BYTES {
+        bail!(
+            "flash image {} is {} bytes, larger than the 16 MB flash the emulator models",
+            image.display(),
+            bytes.len()
+        );
+    }
+    let has_table =
+        bytes.get(PARTITION_TABLE_OFFSET..PARTITION_TABLE_OFFSET + 2) == Some(&[0xAA, 0x50]);
+    // An app image's first segment opens with `esp_app_desc_t`, whose magic
+    // word 0xABCD5432 sits at 0x20 (24-byte image header + 8-byte segment
+    // header). A bootloader at offset 0 (S2/S3/C3) also starts with 0xE9, so
+    // the descriptor, not the image magic, is what marks an app-only file.
+    let app_desc = bytes.get(0x20..0x24) == Some(&0xABCD_5432u32.to_le_bytes());
+    if !has_table && bytes.first() == Some(&0xE9) && app_desc {
+        let dir = image.parent().unwrap_or_else(|| Path::new("."));
+        let find = |names: &[&str]| names.iter().map(|n| dir.join(n)).find(|p| p.is_file());
+        let boot = find(&["bootloader.bin", "bootloader/bootloader.bin"]);
+        let table = find(&[
+            "partitions.bin",
+            "partition-table.bin",
+            "partition_table/partition-table.bin",
+        ]);
+        let (Some(boot), Some(table)) = (boot, table) else {
+            bail!(
+                "{} is an ESP app image without a bootloader or partition table, and \
+                 no bootloader.bin + partitions.bin (or partition-table.bin) sits beside \
+                 it to merge with. Pass the app .elf instead (hauksbee builds the full \
+                 image from it), or a merged image (esptool merge_bin).",
+                image.display()
+            );
+        };
+        let mut flash = vec![0xFFu8; FLASH_SIZE_BYTES];
+        let boot_at = usize::try_from(bootloader_offset(machine)).unwrap_or(0);
+        for (at, path) in [
+            (boot_at, boot.as_path()),
+            (PARTITION_TABLE_OFFSET, table.as_path()),
+        ] {
+            let part =
+                std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+            let limit = if at == PARTITION_TABLE_OFFSET {
+                APP_OFFSET
+            } else {
+                PARTITION_TABLE_OFFSET
+            };
+            if at + part.len() > limit {
+                bail!(
+                    "{} overruns the next region of the flash layout",
+                    path.display()
+                );
+            }
+            flash[at..at + part.len()].copy_from_slice(&part);
+        }
+        if APP_OFFSET + bytes.len() > FLASH_SIZE_BYTES {
+            bail!("app image {} does not fit the 16 MB flash", image.display());
+        }
+        flash[APP_OFFSET..APP_OFFSET + bytes.len()].copy_from_slice(&bytes);
+        return write_temp(&flash).map(Some);
+    }
+    if bytes.len() == FLASH_SIZE_BYTES {
+        return Ok(None);
+    }
+    let mut flash = bytes;
+    flash.resize(FLASH_SIZE_BYTES, 0xFF);
+    write_temp(&flash).map(Some)
 }
 
 #[cfg(test)]
@@ -219,5 +310,62 @@ mod tests {
             "bootloader magic at the esp32 ROM offset"
         );
         assert_eq!(img[0x10000], 0xE9, "app image magic at the app offset");
+    }
+
+    #[test]
+    fn short_merged_images_are_padded_and_full_ones_pass_through() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let merged = dir.path().join("merged.bin");
+        let mut img = vec![0xFFu8; 0x2_0000];
+        img[0x1000] = 0xE9;
+        img[PARTITION_TABLE_OFFSET..PARTITION_TABLE_OFFSET + 2].copy_from_slice(&[0xAA, 0x50]);
+        std::fs::write(&merged, &img).unwrap();
+        let padded = prepare_raw_image(&merged, "esp32")
+            .unwrap()
+            .expect("padded copy");
+        let out = std::fs::read(padded.path()).unwrap();
+        assert_eq!(out.len(), FLASH_SIZE_BYTES);
+        assert_eq!(&out[..img.len()], &img[..]);
+        assert!(out[img.len()..].iter().all(|&b| b == 0xFF));
+        // Legal control: already 16 MB, used in place.
+        std::fs::write(&merged, &out).unwrap();
+        assert!(prepare_raw_image(&merged, "esp32").unwrap().is_none());
+        // Larger than the flash: refused.
+        let big = dir.path().join("big.bin");
+        std::fs::write(&big, vec![0u8; FLASH_SIZE_BYTES + 1]).unwrap();
+        assert!(prepare_raw_image(&big, "esp32").is_err());
+    }
+
+    #[test]
+    fn app_only_bin_merges_with_its_build_siblings_or_refuses() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let app = dir.path().join("firmware.bin");
+        let mut app_bytes = vec![0xE9, 0x03, 0x02, 0x20];
+        app_bytes.resize(0x20, 0);
+        app_bytes.extend_from_slice(&0xABCD_5432u32.to_le_bytes());
+        std::fs::write(&app, &app_bytes).unwrap();
+        // Control: the same bytes without the app descriptor are a merged
+        // image whose bootloader is at 0 (S3), padded rather than merged.
+        let boot_only = dir.path().join("s3-merged.bin");
+        std::fs::write(&boot_only, &app_bytes[..0x20]).unwrap();
+        assert!(prepare_raw_image(&boot_only, "esp32s3").unwrap().is_some());
+        let err = prepare_raw_image(&app, "esp32s3").unwrap_err().to_string();
+        assert!(err.contains("bootloader.bin"), "{err}");
+        std::fs::write(dir.path().join("bootloader.bin"), [0xE9, 0x01]).unwrap();
+        std::fs::write(dir.path().join("partitions.bin"), [0xAA, 0x50, 0x01]).unwrap();
+        for (machine, boot_at) in [("esp32s3", 0x0), ("esp32", 0x1000)] {
+            let merged = prepare_raw_image(&app, machine).unwrap().expect("merged");
+            let img = std::fs::read(merged.path()).unwrap();
+            assert_eq!(img.len(), FLASH_SIZE_BYTES);
+            assert_eq!(&img[boot_at..boot_at + 2], &[0xE9, 0x01]);
+            assert_eq!(
+                &img[PARTITION_TABLE_OFFSET..PARTITION_TABLE_OFFSET + 3],
+                &[0xAA, 0x50, 0x01]
+            );
+            assert_eq!(
+                &img[APP_OFFSET..APP_OFFSET + app_bytes.len()],
+                &app_bytes[..]
+            );
+        }
     }
 }

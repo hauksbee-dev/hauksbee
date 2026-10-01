@@ -113,6 +113,54 @@ pub fn validate_firmware_path(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+/// Check a firmware file's extension and leading bytes BEFORE any board
+/// analysis.
+///
+/// A format no backend loads is then refused in milliseconds rather than
+/// after a long bind. `.uf2` and `.zip` are expected to have been
+/// converted by the firmware-input layer already; a raw `.bin` is accepted
+/// here (the Espressif backend boots merged flash images) and checked by the
+/// backend that loads it.
+///
+/// # Errors
+///
+/// When the extension is not one any backend loads, or the content does not
+/// match the format its extension claims.
+pub fn validate_firmware_format(path: &Path) -> anyhow::Result<()> {
+    use std::io::Read;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mut head = [0u8; 4];
+    let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut head))?;
+    let head = &head[..n];
+    let is_elf = head == b"\x7fELF";
+    let ok = match ext.as_str() {
+        "elf" | "" => is_elf,
+        "hex" | "ihex" => head.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b':'),
+        "bin" => true,
+        _ => anyhow::bail!(
+            "unsupported firmware extension '.{ext}' ({}); use .elf, .hex, .uf2, \
+             or a merged ESP flash .bin",
+            path.display()
+        ),
+    };
+    if !ok {
+        let want = if ext == "hex" || ext == "ihex" {
+            "an Intel HEX file (lines starting ':')"
+        } else {
+            "an ELF image"
+        };
+        anyhow::bail!(
+            "firmware {} is not {want}; its contents do not match its extension",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "avr")]
 pub use avr::AvrMcu;
 
@@ -162,6 +210,34 @@ mod firmware_guard_tests {
             Path::new(msg.rsplit(' ').next().unwrap_or("")).is_absolute() || msg.contains('/'),
             "message names an absolute path: {msg}"
         );
+    }
+
+    #[test]
+    fn format_is_checked_from_extension_and_content() {
+        use super::validate_firmware_format;
+        let dir = std::env::temp_dir().join(format!("hauksbee-fw-fmt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        // Legal controls.
+        validate_firmware_format(&write("a.hex", b":00000001FF\n")).unwrap();
+        validate_firmware_format(&write("a.elf", b"\x7fELF\x01\x01")).unwrap();
+        validate_firmware_format(&write("a.bin", &[0xE9, 0, 0, 0])).unwrap();
+        // Failing inputs.
+        let err = validate_firmware_format(&write("a.srec", b"S0")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unsupported firmware extension '.srec'"),
+            "{err}"
+        );
+        let err = validate_firmware_format(&write("b.hex", b"\x7fELF")).unwrap_err();
+        assert!(err.to_string().contains("Intel HEX"), "{err}");
+        let err = validate_firmware_format(&write("b.elf", b":0000")).unwrap_err();
+        assert!(err.to_string().contains("ELF"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
