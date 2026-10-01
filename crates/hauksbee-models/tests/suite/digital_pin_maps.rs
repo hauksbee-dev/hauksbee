@@ -42,85 +42,41 @@ fn quad_gate_00_family_pin_maps() {
     }
 }
 
+/// The single-package logic parts (`part: roles down the package`), each
+/// against its datasheet pinout under the entry id that is its lowercased part
+/// number. A failure names the part and the pin.
 #[test]
-fn hc02_quad_nor_pin_map() {
-    // 74HC02 is the one quad gate with a genuinely different arrangement:
-    // outputs come FIRST on the left (1Y 1A 1B on 1-3, 2Y 2A 2B on 4-6) and
-    // LAST on the right (3A 3B 3Y on 8-10, 4A 4B 4Y on 11-13). Outputs land
-    // on 1, 4, 10, 13. Copying the '00 template in either direction is wrong.
-    assert_sequential_pin_map(
-        "74HC02",
-        "74hc02",
-        "g1y g1a g1b g2y g2a g2b gnd g3a g3b g3y g4a g4b g4y vcc",
-    );
-}
-
-#[test]
-fn hc04_hex_inverter_pin_map() {
-    // Standard '04: left side alternates A,Y ascending (1=1A 2=1Y ... 6=3Y),
-    // GND 7; the right side mirrors, so outputs sit on the EVEN pins 8/10/12
-    // (4Y 5Y 6Y) with their inputs on 9/11/13, VCC 14.
-    assert_sequential_pin_map(
-        "74HC04",
-        "74hc04",
-        "a1 y1 a2 y2 a3 y3 gnd y4 a4 y5 a5 y6 a6 vcc",
-    );
-}
-
-#[test]
-fn hc27_triple_nor_pin_map() {
-    // TI '27 triple 3-input NOR: gate 1 is SPLIT across the package
-    // (1A/1B on 1/2, 1C on 12, 1Y on 13); gate 2 sits on 3-6 (2A 2B 2C 2Y);
-    // gate 3 is output-first on the right (3Y=8, 3A/3B/3C on 9-11).
-    assert_sequential_pin_map(
-        "74HC27",
-        "74hc27",
-        "a1 b1 a2 b2 c2 y2 gnd y3 a3 b3 c3 c1 y1 vcc",
-    );
-}
-
-#[test]
-fn hc125_quad_tristate_buffer_pin_map() {
-    // '125: each buffer is OE,A,Y ascending on the left (1-3, 4-6); the right
-    // side mirrors to Y,A,OE (8-10, 11-13). Outputs on 3, 6, 8, 11.
-    assert_sequential_pin_map(
-        "74HC125",
-        "74hc125",
-        "oe_n_1 a1 y1 oe_n_2 a2 y2 gnd y3 a3 oe_n_3 y4 a4 oe_n_4 vcc",
-    );
-}
-
-#[test]
-fn hc74_dual_dff_pin_map() {
-    // TI '74 dual D flip-flop: FF1 on 1-6 (CLR, D, CLK, PRE, Q, Qbar),
-    // GND 7; FF2 mirrors on 8-13 (Qbar, Q, PRE, CLK, D, CLR), VCC 14.
-    assert_sequential_pin_map(
-        "74HC74",
-        "74hc74",
-        "clr_n1 d1 clk1 pre_n1 q1 q_n1 gnd q_n2 q2 pre_n2 clk2 d2 clr_n2 vcc",
-    );
-}
-
-#[test]
-fn hc595_shift_register_pin_map() {
-    // TI '595 (SCLS041): QB..QH on 1-7, GND 8, QH' cascade on 9, SRCLR 10,
-    // SRCLK 11, RCLK 12, OE 13, SER 14, QA 15, VCC 16.
-    assert_sequential_pin_map(
-        "74HC595",
-        "74hc595",
-        "qb qc qd qe qf qg qh gnd qh_serial srclr_n srclk rclk oe_n ser qa vcc",
-    );
-}
-
-#[test]
-fn hc165_shift_register_pin_map() {
-    // TI '165 (SCLS052): SH/LD 1, CLK 2, parallel E..H on 3-6, QHbar 7,
-    // GND 8, QH 9, SER 10, parallel A..D on 11-14, CLK INH 15, VCC 16.
-    assert_sequential_pin_map(
-        "74HC165",
-        "74hc165",
-        "pl_n clk e f g h qh_n gnd qh ser a b c d clk_inh vcc",
-    );
+fn single_package_logic_pin_maps() {
+    for row in [
+        // 74HC02 is the one quad gate with a genuinely different arrangement:
+        // outputs come FIRST on the left (1Y 1A 1B on 1-3, 2Y 2A 2B on 4-6) and
+        // LAST on the right (3A 3B 3Y on 8-10, 4A 4B 4Y on 11-13). Outputs land
+        // on 1, 4, 10, 13. Copying the '00 template in either direction is wrong.
+        "74HC02: g1y g1a g1b g2y g2a g2b gnd g3a g3b g3y g4a g4b g4y vcc",
+        // Standard '04: left side alternates A,Y ascending (1=1A 2=1Y ... 6=3Y),
+        // GND 7; the right side mirrors, so outputs sit on the EVEN pins 8/10/12
+        // (4Y 5Y 6Y) with their inputs on 9/11/13, VCC 14.
+        "74HC04: a1 y1 a2 y2 a3 y3 gnd y4 a4 y5 a5 y6 a6 vcc",
+        // TI '27 triple 3-input NOR: gate 1 is SPLIT across the package
+        // (1A/1B on 1/2, 1C on 12, 1Y on 13); gate 2 sits on 3-6 (2A 2B 2C 2Y);
+        // gate 3 is output-first on the right (3Y=8, 3A/3B/3C on 9-11).
+        "74HC27: a1 b1 a2 b2 c2 y2 gnd y3 a3 b3 c3 c1 y1 vcc",
+        // '125: each buffer is OE,A,Y ascending on the left (1-3, 4-6); the right
+        // side mirrors to Y,A,OE (8-10, 11-13). Outputs on 3, 6, 8, 11.
+        "74HC125: oe_n_1 a1 y1 oe_n_2 a2 y2 gnd y3 a3 oe_n_3 y4 a4 oe_n_4 vcc",
+        // TI '74 dual D flip-flop: FF1 on 1-6 (CLR, D, CLK, PRE, Q, Qbar),
+        // GND 7; FF2 mirrors on 8-13 (Qbar, Q, PRE, CLK, D, CLR), VCC 14.
+        "74HC74: clr_n1 d1 clk1 pre_n1 q1 q_n1 gnd q_n2 q2 pre_n2 clk2 d2 clr_n2 vcc",
+        // TI '595 (SCLS041): QB..QH on 1-7, GND 8, QH' cascade on 9, SRCLR 10,
+        // SRCLK 11, RCLK 12, OE 13, SER 14, QA 15, VCC 16.
+        "74HC595: qb qc qd qe qf qg qh gnd qh_serial srclr_n srclk rclk oe_n ser qa vcc",
+        // TI '165 (SCLS052): SH/LD 1, CLK 2, parallel E..H on 3-6, QHbar 7,
+        // GND 8, QH 9, SER 10, parallel A..D on 11-14, CLK INH 15, VCC 16.
+        "74HC165: pl_n clk e f g h qh_n gnd qh ser a b c d clk_inh vcc",
+    ] {
+        let (value, roles) = row.split_once(": ").expect("part: roles");
+        assert_sequential_pin_map(value, &value.to_lowercase(), roles);
+    }
 }
 
 /// BMA423: Bosch Sensortec BST-BMA423-DS000-01 Rev 1.1, Section 7.1 Pin

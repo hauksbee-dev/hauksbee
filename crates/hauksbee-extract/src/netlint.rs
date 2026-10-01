@@ -2388,6 +2388,14 @@ mod sd_pullup_tests {
         assert_eq!(cmd_findings(&named).len(), 0);
     }
 
+    /// How many `missing_sd_pullup` findings the lint raises on `board`.
+    fn sd_pullup_findings(board: &ExtractedBoard) -> usize {
+        board
+            .net_lint()
+            .of_check(LintCheck::MissingSdPullup)
+            .count()
+    }
+
     /// SD buses routinely interpose a small series damper between host and
     /// socket; a pull-up on the far side of it is a real pull-up.
     #[test]
@@ -2425,39 +2433,31 @@ mod sd_pullup_tests {
             ],
         );
         assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
+            sd_pullup_findings(&board),
             0,
             "the 10k behind the 33R damper is the pull-up"
         );
     }
 
-    /// A pass-gate card mux or integrated-pull-up translator puts the bias
-    /// topology beyond one-net reasoning: abstain.
+    /// A pass-gate card mux (FSA2567) or a TXS-class translator with integrated
+    /// pull-ups on the bus puts the bias topology beyond one-net reasoning: a
+    /// discrete resistor is not the whole story, so abstain.
     #[test]
-    fn bus_switch_on_the_net_abstains() {
-        let board = board(
-            &[(1, "sd_cmd")],
-            vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part(
-                    "U7",
-                    "FSA2567",
-                    "QFN-16",
-                    vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
-                ),
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-            ],
-        );
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
+    fn bus_switch_or_integrated_pullup_translator_abstains() {
+        for (reference, value, package) in
+            [("U7", "FSA2567", "QFN-16"), ("U9", "TXS0108E", "TSSOP-20")]
+        {
+            let between = vec![pin("2", Some(1)), pin("3", None), pin("4", None)];
+            let board = board(
+                &[(1, "sd_cmd")],
+                vec![
+                    part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
+                    part(reference, value, package, between),
+                    part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
+                ],
+            );
+            assert_eq!(sd_pullup_findings(&board), 0, "{value}");
+        }
     }
 
     /// A soldered-down eMMC is the card; the JEDEC pull-up requirement is the
@@ -2478,32 +2478,6 @@ mod sd_pullup_tests {
                 .collect()
         };
         assert_eq!(f, vec![Severity::Medium]);
-    }
-
-    /// A TXS-class translator with integrated pull-ups on the bus means a
-    /// discrete resistor is not the whole story: abstain.
-    #[test]
-    fn integrated_pullup_translator_abstains() {
-        let board = board(
-            &[(1, "sd_cmd")],
-            vec![
-                part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
-                part(
-                    "U9",
-                    "TXS0108E",
-                    "TSSOP-20",
-                    vec![pin("2", Some(1)), pin("3", None), pin("4", None)],
-                ),
-                part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
-            ],
-        );
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            0
-        );
     }
 
     /// A socket wired for SPI mode (DAT1/DAT2 unused) still deserves the
@@ -2563,13 +2537,7 @@ mod sd_pullup_tests {
                 ),
             ],
         );
-        assert_eq!(
-            board
-                .net_lint()
-                .of_check(LintCheck::MissingSdPullup)
-                .count(),
-            1
-        );
+        assert_eq!(sd_pullup_findings(&board), 1);
     }
 }
 

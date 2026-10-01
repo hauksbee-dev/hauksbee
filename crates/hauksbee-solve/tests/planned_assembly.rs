@@ -27,28 +27,30 @@ fn opts(part: Partitioning, dt: f64, assembly: AssemblyMode) -> SolverOptions {
     }
 }
 
+/// Run `c` to `tstop` interpreted and planned under `part`, and require the
+/// two waveforms to agree within the solver's own tolerance.
+fn assert_planned_matches(label: &str, c: &Circuit, part: Partitioning, dt: f64, tstop: f64) {
+    let run = |assembly| {
+        Transient::new(opts(part, dt, assembly))
+            .run(c, tstop)
+            .unwrap_or_else(|e| panic!("{label} {assembly:?} did not converge: {e:?}"))
+    };
+    let (interp, planned) = (run(AssemblyMode::Interpreted), run(AssemblyMode::Planned));
+    let (max_abs, ratio) = max_deviation(&interp, &planned, 1e-9, 1e-9);
+    println!("{label} planned-vs-interpreted: max|dV|={max_abs:.3e} worst tol ratio={ratio:.3e}");
+    assert!(
+        ratio <= 1.0,
+        "planned assembly out of solver tolerance on {label}: ratio {ratio}"
+    );
+}
+
 /// RC ladder (linear backbone board): monolithic `Off`, planned vs
 /// interpreted. Exercises the resistor cond-ops, the capacitor reactive tier,
 /// the Vsource incidence constants, and the RHS-only history re-stamp.
 #[test]
 fn planned_matches_interpreted_rc_ladder() {
     let c = build_rc_ladder(300);
-    let dt = 1e-7;
-    let tstop = 20e-6;
-    let interp = Transient::new(opts(Partitioning::Off, dt, AssemblyMode::Interpreted))
-        .run(&c, tstop)
-        .expect("interpreted rc ladder converged");
-    let planned = Transient::new(opts(Partitioning::Off, dt, AssemblyMode::Planned))
-        .run(&c, tstop)
-        .expect("planned rc ladder converged");
-    let (max_abs, ratio) = max_deviation(&interp, &planned, 1e-9, 1e-9);
-    println!(
-        "rc_ladder_300 planned-vs-interpreted: max|dV|={max_abs:.3e} worst tol ratio={ratio:.3e}"
-    );
-    assert!(
-        ratio <= 1.0,
-        "planned assembly out of solver tolerance on the RC ladder: ratio {ratio}"
-    );
+    assert_planned_matches("rc_ladder_300", &c, Partitioning::Off, 1e-7, 20e-6);
 }
 
 /// 24-block shunt-fed mirror array (nonlinear board): monolithic `Off`,
@@ -57,22 +59,7 @@ fn planned_matches_interpreted_rc_ladder() {
 #[test]
 fn planned_matches_interpreted_mirror_array() {
     let (c, _membranes) = build_shunt_array(24);
-    let dt = 1e-6;
-    let tstop = 60e-6;
-    let interp = Transient::new(opts(Partitioning::Off, dt, AssemblyMode::Interpreted))
-        .run(&c, tstop)
-        .expect("interpreted mirror converged");
-    let planned = Transient::new(opts(Partitioning::Off, dt, AssemblyMode::Planned))
-        .run(&c, tstop)
-        .expect("planned mirror converged");
-    let (max_abs, ratio) = max_deviation(&interp, &planned, 1e-9, 1e-9);
-    println!(
-        "mirror_24/mono planned-vs-interpreted: max|dV|={max_abs:.3e} worst tol ratio={ratio:.3e}"
-    );
-    assert!(
-        ratio <= 1.0,
-        "planned assembly out of solver tolerance on the mirror array: ratio {ratio}"
-    );
+    assert_planned_matches("mirror_24/mono", &c, Partitioning::Off, 1e-6, 60e-6);
 }
 
 /// Same mirror array through the PARTITIONED path (`Auto`): every nonlinear
@@ -82,22 +69,7 @@ fn planned_matches_interpreted_mirror_array() {
 #[test]
 fn planned_matches_interpreted_partitioned_islands() {
     let (c, _membranes) = build_shunt_array(24);
-    let dt = 1e-6;
-    let tstop = 60e-6;
-    let interp = Transient::new(opts(Partitioning::Auto, dt, AssemblyMode::Interpreted))
-        .run(&c, tstop)
-        .expect("interpreted torn mirror converged");
-    let planned = Transient::new(opts(Partitioning::Auto, dt, AssemblyMode::Planned))
-        .run(&c, tstop)
-        .expect("planned torn mirror converged");
-    let (max_abs, ratio) = max_deviation(&interp, &planned, 1e-9, 1e-9);
-    println!(
-        "mirror_24/torn planned-vs-interpreted: max|dV|={max_abs:.3e} worst tol ratio={ratio:.3e}"
-    );
-    assert!(
-        ratio <= 1.0,
-        "planned island assembly out of solver tolerance: ratio {ratio}"
-    );
+    assert_planned_matches("mirror_24/torn", &c, Partitioning::Auto, 1e-6, 60e-6);
 }
 
 /// Adaptive-step series RLC: exercises the first-step backward-Euler
