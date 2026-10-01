@@ -16,8 +16,8 @@
 //! every one of them resolved nothing at all until that was caught. The test
 //! below is what keeps it caught.
 
-use super::{expect_model as resolve, expect_query, param as p, vf_at};
-use hauksbee_models::{ComponentKind, ModelEntry};
+use super::{assert_pins, expect_model as resolve, expect_query, param as p, vf_at};
+use hauksbee_models::{ComponentKind, ComponentQuery, ModelEntry, ModelLibrary};
 
 /// Resolve by value alone, the way a layout-only board queries the library.
 fn by_value(value: &str) -> Option<ModelEntry> {
@@ -62,6 +62,15 @@ fn value_strings_from_the_corpus_bind_to_the_right_entry() {
         ("NCP1117ST50T3G", "ncp1117_5v"),
         ("MCP73831", "mcp73831"),
         ("6V 0.5A", "polyfuse_0805l050"),
+        // C0 spellings: Adafruit, RPi minimal, Olimex, Duet, Lily58, a bare RP2040 value
+        ("RT9080-3.3", "rt9080_3v3"),
+        ("NCP1117ST33T3G", "ncp1117_3v3_sot223"),
+        ("W25Q128JVSIQ", "w25q128jv_soic8"),
+        ("W25Q128JVPIQ", "w25q128jv_soic8"),
+        ("MCP73831-2-OT", "mcp73831"),
+        ("74HCT02", "74hct02"),
+        ("74HCT08", "74hct08"),
+        ("RP2040_QFN56", "rp2040"),
         ("6V/0.5A", "polyfuse_0805l050"),
         // KiCad demos / Hunt / LumenPnP / ZSWatch
         ("FDV301N", "fdv301n"),
@@ -136,6 +145,20 @@ fn polarity_and_die_boundaries_are_not_crossed() {
         assert!(
             by_value(other_bin).is_none_or(|m| m.id != "bc817_40" && m.id != "bc807_40"),
             "{other_bin} must not bind to a -40 card: different bin, different BF"
+        );
+    }
+
+    // The C0 widenings stop at the datasheet's package, voltage and die edges.
+    for (value, not) in [
+        ("NCP1117LPST33T3G", "ncp1117_3v3_sot223"),
+        ("W25Q128JVFIQ", "w25q128jv_soic8"),
+        ("RT9080-0.8", "rt9080_3v3"),
+        ("MCP73831-3-OT", "mcp73831"),
+        ("74HCT02", "74hc02"),
+    ] {
+        assert!(
+            by_value(value).is_none_or(|m| m.id != not),
+            "{value} bound {not}"
         );
     }
 
@@ -523,4 +546,39 @@ fn the_addressable_leds_stay_unresolved() {
              datasheet in the family publishes an output level"
         );
     }
+}
+
+#[test]
+fn c0_cards_carry_their_datasheet_pins_and_levels() {
+    // nPM1300 Table 35: VOUT1 = 1, PVDD = 4. NCP1117/D page 1, SOT-223: 1 gnd, 2 out, 3 in.
+    assert_pins(&resolve("nPM1300-QEXX"), &[("1", "out"), ("4", "in")]);
+    assert_pins(
+        &resolve("NCP1117ST33T3G"),
+        &[("1", "gnd"), ("2", "out"), ("3", "in")],
+    );
+    // SN74HCT02/08 tables: the HC pad maps with TTL input thresholds.
+    for (value, pad, role) in [("74HCT02", "10", "g3y"), ("74HCT08", "11", "y4")] {
+        let m = resolve(value);
+        assert_pins(&m, &[(pad, role)]);
+        assert_eq!((p(&m, "vih"), p(&m, "vil")), (2.0, 0.8));
+    }
+}
+
+#[test]
+fn footprint_only_cards_never_speak_for_a_u_or_ic_reference() {
+    // MNT Reform U7: a switching regulator in a power package is not a MOSFET.
+    let id = |reference: &str| {
+        let q = ComponentQuery {
+            reference: Some(reference.into()),
+            value: Some("Si7850DP".into()),
+            footprint: Some("Package_SO:PowerPAK_SO-8_Single".into()),
+            ..Default::default()
+        };
+        ModelLibrary::builtin_shared()
+            .resolve(&q)
+            .model
+            .map(|m| m.id)
+    };
+    assert_eq!((id("U7"), id("IC3")), (None, None));
+    assert_eq!(id("Q1").as_deref(), Some("generic_nmos_power_pkg"));
 }

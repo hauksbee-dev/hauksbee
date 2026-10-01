@@ -1231,11 +1231,12 @@ description = "RT9080-33 Richtek 600mA LDO, 3.3V fixed, 2uA IQ, TSOT-23-5"
 
 [models.match]
 # Covers the datasheet's ordering codes for the 3.3 V option (RT9080-33GJ5,
-# RT9080-33GQZ, RT9080N-33GJ5) and the bare board value "RT908033" that Watchy
-# writes with no separator. The "33" is required, so RT9080-08 (0.8 V) or any
-# other output-voltage code cannot bind here and silently regulate to 3.3 V.
-value_re = "(?i)^RT9080N?-?33([A-Z0-9-]*)?$"
-mpn_re   = "(?i)^RT9080N?-?33"
+# RT9080-33GQZ, RT9080N-33GJ5), the bare board value "RT908033" that Watchy
+# writes with no separator, and the "RT9080-3.3" spelling Adafruit writes. The
+# "33" or "3.3" is required, so RT9080-08 (0.8 V) or any other output-voltage
+# code cannot bind here and silently regulate to 3.3 V. No `mpn_re`: it would
+# make the card unbindable by value alone.
+value_re = "(?i)^RT9080N?-?3\\.?3([A-Z0-9-]*)?$"
 
 [models.params]
 # Source: Richtek RT9080 datasheet DS9080-09 December 2024 (see above).
@@ -1272,6 +1273,11 @@ theta_ja_c_per_w = 291.4     # ZQFN-4L 1x1, JEDEC standard, the least favourable
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.richtek.com/assets/product_file/RT9080/DS9080-09.pdf"
+title = "Richtek RT9080 datasheet DS9080-09 (December 2024)"
+locator = "Section 7 Pin Configuration and Section 8 Functional Pin Description, TSOT-23-5 column (page 4)"
+sha256 = "52d09967ef32672003df93d1382bc249715365406f59d110d9ebad6d618017d4"
 [[models.source.characteristic]]
 parameter = "θJA junction-to-ambient thermal resistance (JEDEC standard)"
 rating = "theta_ja_c_per_w"
@@ -2352,6 +2358,11 @@ url = "https://www.onsemi.com/pdf/datasheet/ncp1117-d.pdf"
 title = "onsemi NCP1117/NCP1117I/NCV1117 1.0 A Low-Dropout Positive Fixed and Adjustable Voltage Regulators"
 locator = "SOT-223 pin connections; 3.3 V electrical-characteristics rows; absolute maximum ratings"
 sha256 = "c4989ad7fef42829443273b0c87067450e66a78c68bb6c6fd73aa6ec80a36051"
+[[models.source.references]]
+url = "https://www.onsemi.cn/pdf/datasheet/ncp1117-d.pdf"
+title = "onsemi NCP1117/D Rev. 31 (August 2021), mirror copy re-read for the NCP1117ST33T3G order code"
+locator = "page 1: SOT-223 pin configuration (1 Adjust/Ground, 2 Output, 3 Input; tab = pin 2) and ordering table (NCP1117ST33T3G, 3.3 V, SOT-223)"
+sha256 = "75d3935d1c6e286b18501f40046ee5c0eda5501b82b4eac5fece4569ea331cb3"
 [[models.source.uncertainty]]
 status = "interval"
 parameter = "vout"
@@ -2362,7 +2373,8 @@ kind = "specification-limits"
 basis = "onsemi NCP1117/D Rev.31 fixed-output accuracy +/-1.0% at the stated test conditions"
 
 [models.match]
-value_re = "(?i)^NCP1117-3[._]?3[_-]?SOT223$"
+# NCP1117ST33T3G is the onsemi 3.3 V SOT-223 order code (ST suffix, CASE 318H).
+value_re = "(?i)^(NCP1117-3[._]?3[_-]?SOT223|NCP1117ST33T3G)$"
 
 [models.params]
 vout = 3.3

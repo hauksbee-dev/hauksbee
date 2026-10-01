@@ -315,21 +315,24 @@ description = "Nordic nPM1300 PMIC (behavioural: SHPHLD internal pull-up to VSYS
 value_re = "(?i)nPM1300"
 
 [models.params]
-# KNOWN GAP: this seeds the vreg path for BUCK1, but no BUCK1 pin is mapped
-# below, so the binder finds no output net and the part reports "vreg output
-# not connected" on any board carrying it. The seven mapped pins are the ones
-# the ship-hold behaviour needs. Filling it means the real BUCK1 output pin
-# number from the Nordic nPM1300 datasheet; guessing one would regulate
-# whatever net happened to sit on that pin. Exempted by name in
-# tests/pin_roles.rs so that test still guards every other model.
-vout = 1.8          # liveness seed for the vreg path (BUCK1)
+# BUCK1 is the modelled regulator: input PVDD (pin 4), output VOUT1 (pin 1),
+# return PVSS1 (pin 2), all from Product Specification v1.1 (4490_483) Table 35, page 151 of the PDF
+# (https://download.mikroe.com/documents/datasheets/nPM1300_datasheet.pdf,
+# sha256 570eb58d0768692434a804c1d25192c30caf87ce7b2f1743b8784d202272c53d).
+# The 1.8 V is NOT fixed by the part: VSET1 (Table 18) and TWI choose the start-up
+# voltage. 1.8 V is the VSET1 = 47 kohm value (Table 18, Table 39 reference
+# configuration), the one the ZSWatch boards fit. BUCK2, the load switches and
+# the charger are not modelled.
+vout = 1.8          # BUCK1 start-up voltage at VSET1 = 47 kohm
 dropout_v = 0.2
 iq_a = 0.001
 
 [models.pins]
-# QFN-32 (+EP). Source: nPM1300 datasheet pin functions; ZSWatch DevKit Power
-# schematic symbol pin list.
-"4"  = "vdd_core"  # V_DD, PMIC core supply (from VSYS)
+# QFN-32 (+EP). Source: nPM1300 Product Specification v1.1, Table 35 QFN32 pin
+# assignments (PDF page 151); every pin number below was re-read against it.
+"1"  = "out"       # VOUT1, BUCK1 output
+"2"  = "gnd"       # PVSS1, BUCK1 power ground (the exposed pad AVSS is not mapped)
+"4"  = "in"        # PVDD, BUCK[n] power input (from VSYS)
 "13" = "sda"       # I2C SDA
 "14" = "scl"       # I2C SCL
 "15" = "shphld"    # SHPHLD, ship-hold (internal pull-up to VSYS) -- the fault pin
@@ -344,6 +347,11 @@ theta_ja_c_per_w = 24.2   # Table 8, QFN32, JESD51-7 (PS v1.1); the WLCSP is 48.
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://download.mikroe.com/documents/datasheets/nPM1300_datasheet.pdf"
+title = "Nordic nPM1300 Product Specification v1.1 (4490_483, 2024-06-16)"
+locator = "Table 35 QFN32 pin assignments (PDF page 151); Table 18 default VOUT1 by RVSET1 (page 47)"
+sha256 = "570eb58d0768692434a804c1d25192c30caf87ce7b2f1743b8784d202272c53d"
 
 [[models.source.characteristic]]
 parameter = "RθJA junction-to-ambient thermal resistance"
@@ -849,8 +857,10 @@ description = "MCP73831 charger (dynamic model: 4.2 V CV source; static model: P
 [models.match]
 # A bare MCP73831 (assumed -2, see above), an explicit -2, or the full
 # -2ACI/OT order code. The -3/-4/-5 codes are NOT matched: they float higher and
-# would need their own entries rather than this one's 4.2 V.
-value_re = "(?i)^MCP73831T?([- ]?2([A-Z]{3}/OT)?)?$"
+# would need their own entries rather than this one's 4.2 V. "-2-OT" is the short
+# board spelling of the same -2 code in the SOT-23-5 ("OT") package this pin map
+# is for.
+value_re = "(?i)^MCP73831T?([- ]?2([A-Z]{3}/OT|-OT)?)?$"
 
 [models.params]
 vout      = 4.2       # VREG, the -2 code; the regulated cell voltage
@@ -862,7 +872,10 @@ dropout_v = 0.35      # the pass element's own drop. At the 500 mA ceiling and
 iq_a      = 0.00051   # ISS typ while charging (53 uA typ once complete)
 
 [models.pins]
-# Table 3-1, SOT-23-5. As with the TP4054 above the role names are the BINDER's
+# Table 3-1, SOT-23-5 (re-read 2026-10-01 against Microchip DS20001984H, page 11,
+# https://ww1.microchip.com/downloads/en/DeviceDoc/MCP73831-Family-Data-Sheet-DS20001984H.pdf,
+# sha256 75297f2a5235599368381adfb63df2652cc22d757f171f388147b2ab3d32776f).
+# As with the TP4054 above the role names are the BINDER's
 # vocabulary: the vreg path looks for `out` and `in`, so pin 3 is `out` rather
 # than the datasheet's "VBAT".
 "1" = "stat"     # charge status output
@@ -880,6 +893,11 @@ theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/MCP73831-Family-Data-Sheet-DS20001984H.pdf"
+title = "Microchip MCP73831/2 Family Data Sheet DS20001984H"
+locator = "Table 3-1 pin function tables, SOT-23-5 column (page 11)"
+sha256 = "75297f2a5235599368381adfb63df2652cc22d757f171f388147b2ab3d32776f"
 
 [[models.source.characteristic]]
 parameter = "θJA thermal package resistance, 5-lead SOT-23"

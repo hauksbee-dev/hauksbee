@@ -936,39 +936,7 @@ fn grouped_refs(parts: &[UnresolvedActive]) -> String {
         .join(", ")
 }
 
-/// Whether a reference designator names an active IC (prefix U / IC / MCU),
-/// matching the binder's MCU-candidate convention.
-#[must_use]
-pub fn is_active_ic_ref(reference: &str) -> bool {
-    // Eagle names any element the designer left unnamed `U$12`, and that covers
-    // mounting holes, fiducials, logos, frames and test points. They take the
-    // `U` prefix without being parts at all, so counting them inflated the
-    // active-IC denominator by 17x on a real SparkFun board (69 "active ICs"
-    // where the board has four). Any `<letters>$<digits>` reference is
-    // machine-generated, never a designator someone chose.
-    if is_tool_generated_ref(reference) {
-        return false;
-    }
-    let prefix: String = reference
-        .chars()
-        .take_while(char::is_ascii_alphabetic)
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    matches!(prefix.as_str(), "U" | "IC" | "MCU")
-}
-
-/// Whether a reference is a CAD tool's placeholder for an unnamed element
-/// (Eagle's `U$12` form) rather than a designator a person assigned.
-#[must_use]
-pub fn is_tool_generated_ref(reference: &str) -> bool {
-    let Some((head, tail)) = reference.split_once('$') else {
-        return false;
-    };
-    !head.is_empty()
-        && head.chars().all(|c| c.is_ascii_alphabetic())
-        && !tail.is_empty()
-        && tail.chars().all(|c| c.is_ascii_digit())
-}
+pub use hauksbee_models::matcher::{is_active_ic_ref, is_tool_generated_ref};
 
 /// Whether a resolved row's `warning` indicates a GENUINE open/undriven-pin
 /// condition (which makes thermal/AC over its nets untrustworthy) as opposed to
@@ -1176,16 +1144,6 @@ mod tests {
         let mut refs = vec!["R10", "R2", "C1", "U1", "R2B", "R2A"];
         refs.sort_by_key(|r| natural_ref_key(r));
         assert_eq!(refs, vec!["C1", "R2", "R2A", "R2B", "R10", "U1"]);
-    }
-
-    #[test]
-    fn eagle_auto_named_elements_are_not_active_ics() {
-        for auto in ["U$1", "U$12", "IC$3", "R$7", "R1"] {
-            assert!(!is_active_ic_ref(auto), "{auto}");
-        }
-        for real in ["U1", "U12", "IC3", "MCU1", "U$"] {
-            assert!(is_active_ic_ref(real), "{real}");
-        }
     }
 
     #[test]

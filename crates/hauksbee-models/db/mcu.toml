@@ -1424,7 +1424,7 @@ kind = "mcu"
 description = "Raspberry Pi RP2040 (Cortex-M0+ dual). QSPI_SS is the BOOTSEL strap."
 
 [models.match]
-value_re = "(?i)^RP2040$"
+value_re = "(?i)^RP2040(?:[-_ ]?QFN[-_ ]?56)?$"
 
 [models.params]
 # RP2040 co-sim runs on the renode:rp2040 descriptor in hauksbee-mcu. Renode
@@ -1477,7 +1477,7 @@ kind = "mcu"
 description = "Raspberry Pi RP2040, QFN-56 with exposed ground pad"
 
 [models.match]
-value_re = "(?i)^RP2040$"
+value_re = "(?i)^RP2040(?:[-_ ]?QFN[-_ ]?56)?$"
 footprint_re = '(?i)(^|:)QFN[-_]?56(?:[-_]1EP)?(?:_7x7mm(?:_P0\.4mm)?(?:_EP3\.2x3\.2mm)?)?$'
 
 [models.params]

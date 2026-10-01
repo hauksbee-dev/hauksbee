@@ -1907,7 +1907,7 @@ fn input_sha256(path: &Path) -> (Option<String>, Option<String>) {
 
 fn active_connected_component(comp: &hauksbee_extract::Component) -> bool {
     !comp.dnp
-        && is_active_model_reference(&comp.reference)
+        && hauksbee_models::matcher::is_active_ic_ref(&comp.reference)
         && comp
             .pins
             .iter()
@@ -2790,15 +2790,6 @@ fn editable_model_upgrade(
         },
         toml
     ))
-}
-
-fn is_active_model_reference(reference: &str) -> bool {
-    let prefix: String = reference
-        .chars()
-        .take_while(|c| !c.is_ascii_digit())
-        .collect::<String>()
-        .to_ascii_uppercase();
-    matches!(prefix.as_str(), "U" | "IC" | "MCU")
 }
 
 fn request_prepare_approval(assume_yes: bool) -> anyhow::Result<bool> {

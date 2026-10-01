@@ -415,6 +415,144 @@ outputs = ["g1y", "g2y", "g3y", "g4y"]
 "g4y" = "!(g4a | g4b)"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 74HCT02: the TTL-input sibling of the 74HC02 card above. Same logic and the same
+# 14-pin pad map, but the thresholds are the 4.5-5.5 V TTL levels, not CMOS ones, so
+# an HC card would misjudge a 3.3 V logic high driving it.
+# Source: TI SN54HCT02, SN74HCT02 quadruple 2-input positive-NOR gates (SCLS065G), revised October 2022, https://www.ti.com/lit/ds/symlink/sn74hct02.pdf
+# (sha256 560059e5008535daac9365fd0142fd05ea6f273cb1aba9b514c7c6d0b3bbc1b2). Pin map: pin configuration, page 3 (D/N/NS/PW 14-pin: 1Y 1A 1B 2Y 2A 2B GND | 3A 3B 3Y 4A 4B 4Y VCC).
+# Levels: Recommended Operating Conditions (page 4) VIH min 2 V, VIL max 0.8 V at
+# VCC = 4.5 to 5.5 V; Electrical Characteristics (page 5) VOH min 4.4 V at
+# IOH = -20 uA and VOL max 0.1 V at IOL = 20 uA, VCC = 4.5 V; ICC typ 2 uA at
+# 5.5 V; Switching Characteristics tpd typ 11 ns at 4.5 V, CL = 50 pF; Cpd 20 pF; Absolute Maximum
+# Ratings VCC 7 V, continuous output current +/-25 mA. Function table: Y = NOR(A, B).
+[[models]]
+id = "74hct02"
+kind = "digital"
+description = "74HCT02 quad 2-input NOR gate, TTL input levels"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hct02.pdf"
+title = "TI SN54HCT02, SN74HCT02 quadruple 2-input positive-NOR gates (SCLS065G)"
+locator = "pin configuration (p.3); recommended operating conditions (p.4); electrical and switching characteristics (p.5)"
+sha256 = "560059e5008535daac9365fd0142fd05ea6f273cb1aba9b514c7c6d0b3bbc1b2"
+
+[models.match]
+value_re = "(?i)^(SN)?74HCT02"
+
+[models.params]
+voh       = 4.4
+vol       = 0.1
+vih       = 2.0
+vil       = 0.8
+tpd_s     = 11.0e-9
+supply_static_ua = 2.0
+supply_cpd_pf    = 20.0
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "g1y"
+"2"  = "g1a"
+"3"  = "g1b"
+"4"  = "g2y"
+"5"  = "g2a"
+"6"  = "g2b"
+"7"  = "gnd"
+"8"  = "g3a"
+"9"  = "g3b"
+"10" = "g3y"
+"11" = "g4a"
+"12" = "g4b"
+"13" = "g4y"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+inputs  = ["g1a", "g1b", "g2a", "g2b", "g3a", "g3b", "g4a", "g4b"]
+outputs = ["g1y", "g2y", "g3y", "g4y"]
+
+[models.logic.comb]
+"g1y" = "!(g1a | g1b)"
+"g2y" = "!(g2a | g2b)"
+"g3y" = "!(g3a | g3b)"
+"g4y" = "!(g4a | g4b)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 74HCT08: the TTL-input sibling of the 74HC08 card above. Same logic and the same
+# 14-pin pad map, but the thresholds are the 4.5-5.5 V TTL levels, not CMOS ones, so
+# an HC card would misjudge a 3.3 V logic high driving it.
+# Source: TI SN74HCT08 quadruple 2-input positive-AND gates (SCLS063G), revised August 2024, https://www.ti.com/lit/ds/symlink/sn74hct08.pdf
+# (sha256 3adc75237d6fc34eb152334eb89ac18b329d102631912fe4d76b73a34ae6b772). Pin map: pin configuration, page 3 (D/DB/N/NS/PW 14-pin: 1A 1B 1Y 2A 2B 2Y GND | 3Y 3A 3B 4Y 4A 4B VCC).
+# Levels: Recommended Operating Conditions (page 4) VIH min 2 V, VIL max 0.8 V at
+# VCC = 4.5 to 5.5 V; Electrical Characteristics (page 5) VOH min 4.4 V at
+# IOH = -20 uA and VOL max 0.1 V at IOL = 20 uA, VCC = 4.5 V; ICC typ 2 uA at
+# 5.5 V; Switching Characteristics tpd typ 15 ns at 4.5 V, CL = 50 pF; Cpd 20 pF; Absolute Maximum
+# Ratings VCC 7 V, continuous output current +/-25 mA. Function: Y = A AND B.
+[[models]]
+id = "74hct08"
+kind = "digital"
+description = "74HCT08 quad 2-input AND gate, TTL input levels"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hct08.pdf"
+title = "TI SN74HCT08 quadruple 2-input positive-AND gates (SCLS063G)"
+locator = "pin configuration (p.3); recommended operating conditions (p.4); electrical and switching characteristics (p.5)"
+sha256 = "3adc75237d6fc34eb152334eb89ac18b329d102631912fe4d76b73a34ae6b772"
+
+[models.match]
+value_re = "(?i)^(SN)?74HCT08"
+
+[models.params]
+voh       = 4.4
+vol       = 0.1
+vih       = 2.0
+vil       = 0.8
+tpd_s     = 15.0e-9
+supply_static_ua = 2.0
+supply_cpd_pf    = 20.0
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "b1"
+"3"  = "y1"
+"4"  = "a2"
+"5"  = "b2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "b3"
+"11" = "y4"
+"12" = "a4"
+"13" = "b4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+inputs  = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "a1 & b1"
+"y2" = "a2 & b2"
+"y3" = "a3 & b3"
+"y4" = "a4 & b4"
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "74hc00"
@@ -1868,8 +2006,11 @@ kind = "specification-limits"
 basis = "Winbond W25Q128JV Revision F Table 9 ICC4 through ICC7 maximum"
 
 [models.match]
-value_re = "(?i)^W25Q128JVS(?:IQ|JQ|Q)?(?:-TR)?$"
-footprint_re = "(?i)(SOIC|SO|SOP)[-_ ]?0?8([^0-9]|$)"
+# S = SOIC-208 mil, P = WSON 6x5 and E = WSON 8x6 share one pad map (Section 3.1
+# to 3.3, page 5), so the package letter in the value decides, not the board's
+# footprint name: a vendor footprint such as "generic_soic127p790x195-8" is the
+# same SOIC-8. The 16-pin F package has a different pinout and is excluded.
+value_re = "(?i)^W25Q128JV[SPE](?:IQ|JQ|Q)?(?:-TR)?$"
 
 [models.params]
 warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"

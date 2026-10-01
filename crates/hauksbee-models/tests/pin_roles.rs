@@ -25,9 +25,7 @@ fn every_builtin_card_declares_the_roles_its_binder_reads() {
         let Ok(file) = toml::from_str::<hauksbee_models::schema::DbFile>(&text) else {
             continue;
         };
-        // KNOWN GAP: npm1300 seeds `vout` for BUCK1 but maps no BUCK1 pin (see
-        // its card); guessing the pad would regulate whatever net sits there.
-        for entry in file.models.iter().filter(|e| e.id != "npm1300") {
+        for entry in &file.models {
             checked += 1;
             let missing = hauksbee_models::validation::missing_pin_roles(entry);
             offenders.extend(missing.into_iter().map(|m| format!("{}: {m}", entry.id)));
