@@ -8,6 +8,7 @@
 //! live circuit is open/unresolved) escalates to exit 3 BY DEFAULT;
 //! `--no-strict-thermal` opts out of the escalation but never of the caveat.
 
+use super::truncate;
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     coverage_open_active_refs, thermal_coverage, thermal_validity, BindSummary, CheckCoverage,
@@ -349,15 +350,6 @@ fn render_thermal_text(
         );
     }
     out
-}
-
-/// Truncate to at most `max` chars (byte-for-byte the binary's helper).
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max).collect()
-    }
 }
 
 #[cfg(test)]

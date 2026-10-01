@@ -7,17 +7,9 @@
 
 use std::{fmt::Write as _, path::Path};
 
+use super::truncate;
 use crate::engine::HauksbeeEngine;
 use crate::result::{CosimFailedWindow, CosimFallbackWindow, CosimJson, NetActivity};
-
-/// Truncate to at most `max` chars (byte-for-byte the binary's helper).
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max).collect()
-    }
-}
 
 /// Build the machine-readable co-sim summary (Track B) from a finished run.
 /// Returns `None` when no MCU core ran (no co-sim happened, so there is nothing

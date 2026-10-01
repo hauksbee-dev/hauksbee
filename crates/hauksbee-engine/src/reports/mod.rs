@@ -31,6 +31,15 @@ use std::path::Path;
 use anyhow::Context;
 use hauksbee_extract::ExtractedBoard;
 
+/// Truncate to at most `max` chars (byte-for-byte the binary's helper).
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect()
+    }
+}
+
 /// The output surface a report renders into, resolved once from the CLI flags so
 /// each report matches it a single time instead of re-checking `--json`/`--plain`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
