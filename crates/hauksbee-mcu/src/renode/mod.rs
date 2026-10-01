@@ -962,12 +962,16 @@ fn hook_counter_key(addr: u32) -> String {
     format!("hkb_hook_{addr:08x}")
 }
 
-/// Monitor command that installs a counting hook at `addr`.
+/// Monitor command that installs a one-shot hook at `addr`: the first entry
+/// sets its flag and removes the hook. A hook that stayed armed would run
+/// Python on every pass through the address, and a `main` that is `b .`
+/// (`while (1);` at -O2) or a default fault handler's `b .` loop passes it
+/// once per instruction, stalling the emulation.
 fn hook_install_command(cpu: &str, addr: u32) -> String {
     let key = hook_counter_key(addr);
     format!(
         "{cpu} AddHook 0x{addr:X} \"import __builtin__; \
-         __builtin__.{key} = getattr(__builtin__, '{key}', 0) + 1\""
+         __builtin__.{key} = 1; self.RemoveHooksAt(0x{addr:X})\""
     )
 }
 
