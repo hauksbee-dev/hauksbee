@@ -51,7 +51,9 @@ fn exit_code_at(dir: &Path, volts: f64) -> i32 {
 #[test]
 fn an_input_exactly_on_the_dropout_bound_is_supported() {
     let d = tempfile::tempdir().expect("tempdir");
-    let min_in_v = minimum_input_v();
+    // The bound is at the pin: the ideal supply's 1 mOhm sense resistor drops
+    // the 10 mA load plus the card's 5 mA quiescent current the LDO now draws.
+    let min_in_v = (3.3_f64 / 330.0 + 5e-3).mul_add(1e-3, minimum_input_v());
     // The slack admits float noise, not a real shortfall: 100 uV under refuses.
     let seen = (
         exit_code_at(d.path(), min_in_v),

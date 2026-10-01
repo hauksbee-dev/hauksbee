@@ -128,6 +128,11 @@ struct ChunkThermalAccum {
     energy_j: Vec<f64>,
     /// Simulated seconds the integral covers.
     elapsed_s: f64,
+    /// Charge each regulator's source delivered into its output (C), in
+    /// `Scheduler::regulators` order, for its pass draw's next level.
+    pass_charge: Vec<f64>,
+    /// Simulated seconds `pass_charge` covers.
+    pass_s: f64,
 }
 
 impl ChunkThermalAccum {
@@ -135,6 +140,8 @@ impl ChunkThermalAccum {
     fn clear(&mut self) {
         self.energy_j.clear();
         self.elapsed_s = 0.0;
+        self.pass_charge.clear();
+        self.pass_s = 0.0;
     }
 }
 
@@ -3215,6 +3222,7 @@ impl Scheduler {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // micros is floored, >= 0
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
         self.settle_converters();
+        self.settle_pass_draws();
         // Before any MCU advances: firmware must never run unflagged on a rail
         // whose regulation is unsupported.
         self.establish_regulation();
@@ -4008,9 +4016,31 @@ impl Scheduler {
         let layout = &self.layout;
         let circuit = &self.circuit;
         let stress = &self.stress;
+        // Each pass draw's source branch, and the previous step's (time,
+        // delivered currents) for its trapezoid, chunk-local like `prev`.
+        let pass: Vec<Option<usize>> = (self.regulators.iter())
+            .map(|r| r.pass_level.and_then(|_| layout.branch(r.source)))
+            .collect();
+        let mut pass_prev: Option<(f64, Vec<f64>)> = None;
         let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
             final_x.clear();
             final_x.extend_from_slice(s.x);
+            if pass.iter().any(Option::is_some) {
+                let now: Vec<f64> = (pass.iter())
+                    .map(|b| b.and_then(|b| s.x.get(b)).map_or(0.0, |i| -i))
+                    .collect();
+                if let Some((t0, i0)) = pass_prev.take() {
+                    let dt = s.time - t0;
+                    if dt > 0.0 {
+                        thermal.pass_charge.resize(now.len(), 0.0);
+                        for (q, (a, b)) in thermal.pass_charge.iter_mut().zip(i0.iter().zip(&now)) {
+                            *q += 0.5 * (a + b) * dt;
+                        }
+                        thermal.pass_s += dt;
+                    }
+                }
+                pass_prev = Some((s.time, now));
+            }
             if !integrate {
                 return;
             }
@@ -4426,6 +4456,44 @@ impl Scheduler {
         )
     }
 
+    /// Point every regulator's pass draw at the mean current its source
+    /// delivered over the chunk just adopted (see the binder's `pass_draw`),
+    /// or at the end state's when no step was integrated.
+    fn set_pass_draws(&mut self, chunk: &ChunkThermalAccum) {
+        for (i, reg) in self.regulators.iter().enumerate() {
+            let Some(level) = reg.pass_level else {
+                continue;
+            };
+            let amps = match chunk.pass_charge.get(i) {
+                Some(q) if chunk.pass_s > 0.0 => q / chunk.pass_s,
+                _ => -branch_current_of(&self.layout, &self.branch_x, reg.source).unwrap_or(0.0),
+            };
+            set_vsource_dc(&mut self.circuit, level, amps);
+        }
+    }
+
+    /// Before the first chunk, point every pass draw at its regulator's
+    /// operating-point output current, so the first chunk's march starts from
+    /// the draw its DC solve (which reads the branch live) already settled.
+    fn settle_pass_draws(&mut self) {
+        let drawn = self.regulators.iter().any(|r| r.pass_level.is_some());
+        if self.sim_time > 0.0 || self.last_dc_seed.is_some() || !drawn {
+            return;
+        }
+        self.circuit.temp_c = self.opts.temperature_c;
+        let mut ws = Workspace::new(&self.circuit);
+        if dc_operating_point_seeded(&mut ws, &self.circuit, &self.opts, None).is_err() {
+            return;
+        }
+        for reg in &self.regulators {
+            let (Some(level), Some(b)) = (reg.pass_level, ws.layout.branch(reg.source)) else {
+                continue;
+            };
+            let amps = ws.x.get(b).map_or(0.0, |i| -i);
+            set_vsource_dc(&mut self.circuit, level, amps);
+        }
+    }
+
     /// Adopt a converged end state: publish node voltages and branch currents,
     /// and seed the next chunk's DC solve from it.
     fn adopt_chunk_state(&mut self, final_x: Vec<f64>) {
@@ -4485,6 +4553,7 @@ impl Scheduler {
         let converged = match primary {
             Ok((x, diagnostics)) => {
                 self.adopt_chunk_state(x);
+                self.set_pass_draws(&thermal);
                 self.record_residual(diagnostics);
                 self.stress
                     .deposit_chunk_energy(&thermal.energy_j, thermal.elapsed_s);
@@ -4505,6 +4574,7 @@ impl Scheduler {
                     self.fallback_ladder(chunk, &mut thermal)
                 {
                     self.adopt_chunk_state(x);
+                    self.set_pass_draws(&thermal);
                     self.record_residual(diagnostics);
                     // Only the adopted rung's accepted-step thermal integral is
                     // real; the ladder cleared every failed attempt's partial.
@@ -6149,6 +6219,14 @@ fn branch_current_of(layout: &Layout, branch_x: &[f64], id: DeviceId) -> Option<
     layout
         .branch(id)
         .and_then(|b| branch_x.get(b.saturating_sub(layout.n_nodes)).copied())
+}
+
+/// Point a regulator's hidden pass-level source at `amps` (1 V per A).
+fn set_vsource_dc(circuit: &mut Circuit, id: DeviceId, amps: f64) {
+    match circuit.devices.get_mut(id.0 as usize) {
+        Some(Device::Vsource { kind, .. }) => *kind = SourceKind::Dc(amps),
+        other => panic!("pass level {id:?} is not a voltage source: {other:?}"),
+    }
 }
 
 /// Point one model-peripheral supply leg's Isource at `amps`.

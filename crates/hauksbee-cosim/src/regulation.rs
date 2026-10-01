@@ -103,7 +103,7 @@ pub fn evaluate(
         if p != n {
             probe.devices[id] = Device::Isource { name, p, n, kind };
         }
-        // The CCCS reads the branch this swap just removed, and IADJ would keep
+        // The pass draw reads the branch this swap just removed, and IADJ would keep
         // pushing into a divider the part no longer drives: both go with it,
         // onto ground, where a 0 A source connects nothing at all.
         for h in reg.helpers.iter().map(|h| h.0 as usize) {
@@ -112,8 +112,8 @@ pub fn evaluate(
             probe.devices[h] = Device::Isource { name, p, n, kind };
         }
     }
-    // The swap would orphan a branch-current reader (F/H/B/K). An adjustable
-    // regulator's own CCCS is one BY CONSTRUCTION and is neutralised with the
+    // The swap would orphan a branch-current reader (F/H/B/K). A regulator's
+    // own pass draw is one BY CONSTRUCTION and is neutralised with the
     // source above; any other reader is unaccounted for, and nothing is granted.
     let helper = |id| regs.iter().any(|r| r.helpers.contains(&id));
     let mut readers = circuit
@@ -240,13 +240,15 @@ impl Walk {
                 .zip(supported)
                 .any(|(r, ok)| !ok && r.source == id)
         };
+        // A regulator's pass draw is a source, not a path: read as one IN <->
+        // ADJ (or IN <-> its return) it would leak the regulator's taint onto
+        // its own input net.
+        let helper = |id| regs.iter().any(|r| r.helpers.contains(&id));
         let mut next: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         for (id, dev) in circuit.iter() {
             match dev {
                 Device::Vsource { p, n, .. } if !distrusted(id) => stop.extend([*p, *n]),
-                // A CCCS conducts nothing of its own: an adjustable regulator's
-                // pass current would otherwise read as a path IN <-> ADJ and
-                // leak that regulator's taint onto its own input net.
+                _ if helper(id) => {}
                 Device::Vsource { .. } | Device::Isource { .. } | Device::Cccs { .. } => {}
                 _ => {
                     let nodes = dev.conduction_nodes();
@@ -335,6 +337,7 @@ mod tests {
             dropout_v: Some(0.35),
             adj_return: None,
             helpers: Vec::new(),
+            pass_level: None,
         };
         let ok = |v| super::headroom_ok(&reg, v);
         assert_eq!([3.6, 18.0, 21.0].map(ok), [false, true, false]);

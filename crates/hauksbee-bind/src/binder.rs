@@ -22,8 +22,8 @@ use std::collections::HashMap;
 use hauksbee_extract::{is_placeholder_value, Component, ExtractedBoard};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
-    BOutput, BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, Rail,
-    SourceKind,
+    BDep, BOutput, BjtModel, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, MosLevel,
+    MosfetModel, NodeId, Polarity, Rail, SourceKind,
 };
 use hauksbee_models::sensor_spec::StrapTie;
 use hauksbee_models::validation::repeatable_role;
@@ -3717,7 +3717,17 @@ fn bind_vreg(
             _ => None,
         })
         .unwrap_or_else(|| vout.abs());
+    // IN draws `Iout + Iq` (the pass draw as in `bind_adj_vreg`, then `iq_a`):
+    // the ideal source alone drew nothing there, hiding the load upstream.
     let dropout_v = model.params.get_f64("dropout_v");
+    let ends = (input, out, gnd);
+    let (draw, pass_level) =
+        pass_draw(circuit, &comp.reference, ends, (source_id, vout), dropout_v);
+    let mut helpers = vec![draw];
+    if let Some(amps) = model.params.get_f64("iq_a").filter(|i| i.is_finite()) {
+        let name = format!("Iq_{}", comp.reference);
+        helpers.push(circuit.add(Device::isource(name, input, gnd, SourceKind::Dc(amps))));
+    }
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
         source: source_id,
@@ -3726,7 +3736,8 @@ fn bind_vreg(
         max_in_v: model.ratings.max_voltage_v.unwrap_or(f64::INFINITY),
         dropout_v,
         adj_return: None,
-        helpers: Vec::new(),
+        helpers,
+        pass_level: Some(pass_level),
     });
     // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
     // rather than making each entry repeat the sentence.
@@ -3790,10 +3801,78 @@ fn bind_vreg(
     )
 }
 
+/// Headroom over which a linear regulator's input draw fades out when its card
+/// states no dropout: the draw is whole from `V(in) = V(out)` and gone 0.1 V
+/// below it.
+const PASS_FADE_V: f64 = 0.1;
+
+/// A linear regulator's pass draw, `IN -> ret`: the current `source` delivers
+/// into OUT (`stamp_vsource` counts it as LEAVING `p`, hence the sign), drawn
+/// out of IN and returned where `source` took it from, so `Iin = Iout`.
+/// Returns the draw and the hidden source holding its transient level.
+///
+/// At DC the draw reads the branch directly, so every operating point is
+/// exact. In a transient it reads that hidden source instead (1 V per A),
+/// which the co-sim scheduler sets each chunk to the mean current `source`
+/// delivered over the chunk before (its charge over the chunk's time). Read
+/// live, the branch carries an output capacitor's `C*dV/dt` of Newton's
+/// residual on OUT: at a picosecond step a 22 uF capacitor turns 1e-11 V into
+/// 0.2 A, and mirrored onto IN that noise stalled an upstream converter's
+/// loop. The charge is noise-free (the trapezoid sums the capacitor's share
+/// to `C*dV`); the price is one chunk of lag on load steps.
+///
+/// The ideal source holds OUT whatever IN does, so the draw is also weighted by
+/// a smoothstep of the pass element's headroom `h = V(in) - V(out)` (in the
+/// regulator's polarity, `setpoint`'s sign): whole for `h >= dropout`, none for
+/// `h <= dropout - max(dropout, PASS_FADE_V)`, C1 in between. A collapsed or
+/// unpowered input is then not dragged below ground by a load it cannot carry.
+/// Every faded state has `h` below the declared dropout, where `regulation`
+/// already refuses the rail, so wherever the rail is a result IN draws `Iout`.
+fn pass_draw(
+    circuit: &mut Circuit,
+    reference: &str,
+    (input, out, ret): (NodeId, NodeId, NodeId),
+    (source, setpoint): (DeviceId, f64),
+    dropout_v: Option<f64>,
+) -> (DeviceId, DeviceId) {
+    let level = circuit.node(&format!("{reference}_vreg_pass"));
+    let name = format!("Vpass_{reference}");
+    let held = circuit.add(Device::vsource(
+        name,
+        level,
+        NodeId::GROUND,
+        SourceKind::Dc(0.0),
+    ));
+    let full = dropout_v
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(0.0);
+    let width = full.max(PASS_FADE_V);
+    let sign = if setpoint < 0.0 { -1.0 } else { 1.0 };
+    let x = format!(
+        "min(max(({sign:?}*(__d2-__d3)-{:?})/{width:?},0.0),1.0)",
+        full - width
+    );
+    let draw = circuit.add(Device::Behavioral {
+        name: format!("Bpass_{reference}"),
+        p: input,
+        n: ret,
+        output: BOutput::Current,
+        expr: CompiledExpr::compile(&format!("if(time>0.0,__d0,-__d1)*{x}*{x}*(3.0-2.0*{x})"))
+            .expect("pass draw expression compiles"),
+        deps: vec![
+            BDep::Volt(level),
+            BDep::Branch(source),
+            BDep::Volt(input),
+            BDep::Volt(out),
+        ],
+    });
+    (draw, held)
+}
+
 /// The adjustable vreg stamp, from primitives the IR already has. The LM317
 /// class (no `gnd` in the card's `[models.pins]`) holds `Vref` between OUT and
-/// ADJ; a CCCS moves that branch current onto IN (what the pass element does,
-/// so the input draw is honest and ADJ carries only divider current), and IADJ
+/// ADJ; [`pass_draw`] moves that branch current onto IN (what the pass element
+/// does, so the input draw is honest and ADJ carries only divider current), and IADJ
 /// leaves the ADJ pin. KCL at ADJ then gives `Vout = Vref*(1 + R2/R1) + Iadj*R2`
 /// from the BOARD's own divider, solved by MNA rather than parsed out of the
 /// netlist. A card that maps a `gnd` pin is GROUND-referenced (the common LDO
@@ -3869,16 +3948,11 @@ fn bind_adj_vreg(
             gain: 1.0,
         });
     }
-    // `stamp_vsource` counts the branch current as LEAVING `p`, so delivering
-    // I into OUT reads as -I on this branch; the gain is -1 so that the same I
-    // is drawn out of IN and returned where `source` took it from.
-    let mut helpers = vec![circuit.add(Device::Cccs {
-        name: format!("Fpass_{}", comp.reference),
-        p: input,
-        n: ret,
-        ctrl_src: source,
-        gain: -1.0,
-    })];
+    // The same I is drawn out of IN and returned where `source` took it from.
+    let dropout_v = model.params.get_f64("dropout_v");
+    let ends = (input, out, ret);
+    let (draw, pass_level) = pass_draw(circuit, &comp.reference, ends, (source, vref), dropout_v);
+    let mut helpers = vec![draw];
     // IADJ leaves the ADJ pin; a grounded part's quiescent current runs IN -> GND.
     for (prefix, key, to, on) in [("Iadj", "iadj_a", adj, true), ("Iq", "iq_a", gnd, grounded)] {
         let Some(amps) = model.params.get_f64(key).filter(|i| on && i.is_finite()) else {
@@ -3891,7 +3965,6 @@ fn bind_adj_vreg(
             SourceKind::Dc(amps),
         )));
     }
-    let dropout_v = model.params.get_f64("dropout_v");
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
         source,
@@ -3904,6 +3977,7 @@ fn bind_adj_vreg(
         // The part's own GND, or board ground for a three-terminal part with none.
         adj_return: Some(gnd),
         helpers,
+        pass_level: Some(pass_level),
     });
     (
         BindOutcome::Analog {
@@ -7625,12 +7699,39 @@ style = "i2c_pointer"
                 "{case}"
             );
             assert!(
-                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && (*v - vout).abs() < 1e-12),
+                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }, ..] if *p == roles["out"] && *n == roles["gnd"] && (*v - vout).abs() < 1e-12),
                 "{case}"
             );
             let [reg] = regs.as_slice() else {
                 panic!("{case}: exactly one regulator is recorded");
             };
+            // IN draws the pass current, whole above dropout and none with IN
+            // at OUT, plus any card `iq_a`, both IN -> GND. The draw reads the
+            // branch at DC and the hidden level source in a transient.
+            let iq = model.params.get_f64("iq_a");
+            let names: Vec<_> = circuit.devices[1..].iter().map(Device::name).collect();
+            let mut want = vec!["Vpass_U9", "Bpass_U9"];
+            want.extend(iq.map(|_| "Iq_U9"));
+            assert_eq!(names, want, "{case}");
+            let helpers: Vec<u32> = reg.helpers.iter().map(|h| h.0).collect();
+            assert_eq!((helpers[0], reg.pass_level.map(|l| l.0)), (2, Some(1)), "{case}");
+            let into_ret = |d: &Device| d.conduction_nodes() == [roles["in"], roles["gnd"]];
+            assert!(circuit.devices[2..].iter().all(into_ret), "{case}");
+            let Device::Behavioral { expr, .. } = &circuit.devices[2] else {
+                panic!("{case}: the draw is a B-source");
+            };
+            let (amps, sign) = (0.25, vout.signum());
+            let draw = |h: f64, time: f64| {
+                let level = if time > 0.0 { amps } else { 0.0 };
+                let branch = if time > 0.0 { 0.0 } else { -amps };
+                expr.eval(&[level, branch, sign.mul_add(h, vout), vout], time).unwrap()
+            };
+            let full = dropout_v.unwrap_or(0.0);
+            for time in [0.0, 1e-3] {
+                assert!((draw(full, time) - amps).abs() < 1e-12, "{case} at {time}");
+                assert!(draw(0.1f64.mul_add(-full.max(0.1), full), time) < amps, "{case} at {time}");
+                assert!(draw(full - full.max(PASS_FADE_V), time).abs() < 1e-12, "{case}");
+            }
             assert_eq!((reg.reference.as_str(), reg.input), ("U9", roles["in"]));
             assert_eq!((reg.source.0, reg.dropout_v), (0, dropout_v));
             assert!((reg.min_in_v - min_in_v).abs() < 1e-12, "{case}: {reg:?}");

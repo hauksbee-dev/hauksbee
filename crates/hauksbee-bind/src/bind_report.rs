@@ -189,10 +189,14 @@ pub struct SimpleRegulator {
     /// the return the rail and the headroom are measured against. The
     /// rail is then a SOLVED value, so `min_in_v` is not knowable at bind time.
     pub adj_return: Option<hauksbee_ir::NodeId>,
-    /// The CCCS, IADJ and IQ sources an adjustable stamp adds beside `source`: any
+    /// The pass draw, IADJ and IQ sources the stamp adds beside `source`: any
     /// pass that neutralises `source` must neutralise these with it, or the
-    /// controlled source is left reading a branch that no longer exists.
+    /// pass draw is left reading a branch that no longer exists.
     pub helpers: Vec<hauksbee_ir::DeviceId>,
+    /// The hidden DC source (1 V per A) the pass draw reads in a transient:
+    /// the scheduler sets it each chunk to the mean current `source` delivered
+    /// over the previous one. `None` when nothing draws on the input.
+    pub pass_level: Option<hauksbee_ir::DeviceId>,
 }
 
 impl BindReport {

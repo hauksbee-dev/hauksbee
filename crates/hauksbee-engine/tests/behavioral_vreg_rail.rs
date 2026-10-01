@@ -494,9 +494,10 @@ fn lib_with_boost() -> ModelLibrary {
 }
 
 /// Input current against output power at two loads, read off the input rail:
-/// `Vout*Iout / (eff*Vin)` for an averaged converter (`Iout + Iq` for an LDO).
+/// `Vout*Iout / (eff*Vin)` for an averaged converter, `Iout + Iq` for an LDO.
 /// The buck's rail past its inductor is supply-named (+5V): an ideal auto-rail
-/// used to land there too and fight it (the draw read -1.8 A).
+/// used to land there too and fight it (the draw read -1.8 A), and a fixed
+/// LDO's input drew nothing at all.
 #[test]
 fn regulator_input_current_balances_output_power() {
     let (builtin, boost) = (ModelLibrary::builtin(), lib_with_boost());
@@ -533,6 +534,13 @@ fn regulator_input_current_balances_output_power() {
                 fixed("TESTBOOST", "1:1 2:2 3:3"),
                 &boost,
                 Some(0.92),
+            ),
+            (
+                "+5V",
+                "+3.3V",
+                fixed("AMS1117-3.3", "3:1 2:2 1:3"),
+                &builtin,
+                None,
             ),
         ];
         for (input, output, mut parts, lib, eff) in cases {
