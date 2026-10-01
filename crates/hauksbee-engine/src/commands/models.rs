@@ -160,6 +160,7 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         println!("'{}': [[models]] parse ERROR: {e}{note}", file.display());
         hauksbee_models::schema::DbFile { models: Vec::new() }
     });
+    let shipped = hauksbee_models::is_builtin_db(text);
     for entry in &db.models {
         let mut entry_findings = 0usize;
         let mut entry_warnings = 0usize;
@@ -189,6 +190,19 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         if let Some(w) = model_error_warning(entry.source.as_ref()) {
             entry_warnings += 1;
             println!("model '{}' [models.source]: warning: {w}", entry.id);
+        }
+        // A machine draft must also say which package its map is for; a
+        // shipped card's map was checked by a person against the footprint.
+        let drafted = !shipped
+            && entry.source.as_ref().is_some_and(|s| {
+                s.tier == hauksbee_ir::evidence::ModelSourceTier::DatasheetDerived
+            });
+        let draft_rules =
+            drafted.then(|| hauksbee_models::validation::draft_pin_map_problems(entry));
+        let pin_map = hauksbee_models::validation::unknown_pads_warning(entry).into_iter();
+        for w in pin_map.chain(draft_rules.into_iter().flatten()) {
+            entry_warnings += 1;
+            println!("model '{}' [models.pins]: warning: {w}", entry.id);
         }
         if let Some(standard) = hauksbee_models::validation::pin_standard(entry) {
             println!("model '{}' [[models.source.pinout]]: note: [models.pins] pads are numbered from package standard \"{standard}\", not printed on the sheet; every result marks their roles assumed, so recheck the view and the pin-1 corner against the drawing", entry.id);
@@ -1530,19 +1544,121 @@ fn fetch_datasheet(url: &str, dir: &Path, part: &str) -> anyhow::Result<PathBuf>
     std::fs::create_dir_all(dir)
         .map_err(|e| anyhow::anyhow!("creating '{}': {e}", dir.display()))?;
     let path = dir.join(format!("{}.pdf", datasheet::sanitise_filename(part)));
-    if !datasheet::is_pdf(&path) {
+    let status = if datasheet::is_pdf(&path) {
+        None
+    } else {
         let target = path.display().to_string();
-        let args = ["-fsSL", "--max-time", "180", "-o", target.as_str(), url];
-        run_tool("curl", &args, &format!("fetching the {part} datasheet"))?;
-    }
+        let doing = format!("fetching the {part} datasheet");
+        let out = std::process::Command::new("curl")
+            .args(curl_fetch_args(url, &target))
+            .output()
+            .map_err(|e| anyhow::anyhow!("{doing}: cannot run `curl`: {e}"))?;
+        if !out.status.success() {
+            let _ = std::fs::remove_file(&path);
+            anyhow::bail!(
+                "{doing}: curl failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u16>()
+            .ok()
+    };
     if !datasheet::is_pdf(&path) {
         let _ = std::fs::remove_file(&path);
-        anyhow::bail!(
-            "{url} did not serve a PDF (a landing page?). Download the datasheet and pass \
-             --datasheet '{part}=<file.pdf>'"
-        );
+        anyhow::bail!("{}", fetch_refusal(url, part, status));
     }
     Ok(path)
+}
+
+/// The `curl` arguments for a datasheet fetch: a browser's `User-Agent` and
+/// `Accept` (vendor sites refuse curl's own), redirects followed (most
+/// datasheet links redirect to a CDN), and the final HTTP status on stdout.
+/// Nothing here answers a CAPTCHA or works around bot protection: a site that
+/// asks for a person gets one, via `--datasheet`.
+fn curl_fetch_args(url: &str, target: &str) -> Vec<String> {
+    const BROWSER: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 \
+                           (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+    let args = [
+        "-sSL",
+        "--max-redirs",
+        "10",
+        "--max-time",
+        "180",
+        "-A",
+        BROWSER,
+        "-H",
+        "Accept: application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+        "-w",
+        "%{http_code}",
+        "-o",
+        target,
+        url,
+    ];
+    args.map(str::to_owned).to_vec()
+}
+
+/// Why a datasheet fetch produced no PDF, and what to do instead.
+fn fetch_refusal(url: &str, part: &str, status: Option<u16>) -> String {
+    let instead =
+        format!("Download the datasheet yourself and pass --datasheet '{part}=<file.pdf>'");
+    match status {
+        Some(code @ (401 | 403 | 429)) => format!(
+            "{url} refused the download (HTTP {code}): the site blocks automated fetches or asks for a person. {instead}"
+        ),
+        Some(code) if code >= 400 => format!("{url} answered HTTP {code}. {instead}"),
+        _ => format!("{url} did not serve a PDF (a landing page?). {instead}"),
+    }
+}
+
+/// `--kind PART=KIND` pairs for a batch: each kind checked against what the
+/// extractor can draft (schema kinds, sensor specs and the behavioural families
+/// such as charger) before anything is fetched or sent.
+fn kind_overrides(pairs: &[String]) -> anyhow::Result<Vec<(String, String)>> {
+    let known = hauksbee_models::datasheet::supported_kinds();
+    pairs
+        .iter()
+        .map(|pair| {
+            let Some((part, kind)) = pair.split_once('=').map(|(p, k)| (p.trim(), k.trim())) else {
+                anyhow::bail!(
+                    "with --unmodelled, --kind takes PART=KIND (one per part), got '{pair}'"
+                );
+            };
+            if part.is_empty() || !known.contains(&kind) {
+                anyhow::bail!(
+                    "--kind '{pair}': unknown kind '{kind}'. Pick one of: {}",
+                    known.join(", ")
+                );
+            }
+            Ok((part.to_string(), kind.to_string()))
+        })
+        .collect()
+}
+
+/// Which `--kind` each part gets: the first `PART=KIND` naming its part, an
+/// alias or a reference, else the batch default. Unmatched keys are reported.
+fn part_kinds<'a>(
+    parts: &[UnmodelledPart],
+    kinds: &'a [(String, String)],
+    default: &'a str,
+) -> impl Fn(&UnmodelledPart) -> String + 'a {
+    let names = |p: &UnmodelledPart, key: &str| {
+        let mut names = std::iter::once(&p.part)
+            .chain(&p.aliases)
+            .chain(&p.references);
+        names.any(|n| n.eq_ignore_ascii_case(key))
+    };
+    for (key, _) in kinds
+        .iter()
+        .filter(|(key, _)| !parts.iter().any(|p| names(p, key)))
+    {
+        println!("--kind {key}=...: no unmodelled part on this board is named '{key}'; ignored");
+    }
+    move |p| {
+        let kind = kinds.iter().find(|(key, _)| names(p, key));
+        kind.map_or_else(|| default.to_owned(), |(_, kind)| kind.clone())
+    }
 }
 
 /// `hauksbee models extract --unmodelled <board>`: draft every unmodelled part.
@@ -1560,6 +1676,7 @@ fn fetch_datasheet(url: &str, dir: &Path, part: &str) -> anyhow::Result<PathBuf>
 pub fn extract_unmodelled(
     board_path: &Path,
     overrides: &[String],
+    kinds: &[String],
     template: &hauksbee_models::datasheet::Args,
     assume_yes: bool,
 ) -> anyhow::Result<()> {
@@ -1567,6 +1684,7 @@ pub fn extract_unmodelled(
     if let Some(name) = &template.api_key_env {
         datasheet::validate_api_key_env_name(name)?;
     }
+    let kinds = kind_overrides(kinds)?;
     let out_dir = template
         .out_dir
         .clone()
@@ -1575,12 +1693,13 @@ pub fn extract_unmodelled(
     let extra: Vec<&Path> = template
         .out_dir
         .as_deref()
-        .filter(|d| d.is_dir())
+        .filter(|d| hauksbee_models::holds_cards(d))
         .into_iter()
         .collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
     let board_dir = board_path.parent().unwrap_or_else(|| Path::new("."));
     let parts = unmodelled_parts(&normalized.board, &lib, board_dir, overrides)?;
+    let kind_of = part_kinds(&parts, &kinds, &template.kind_str);
     if parts.is_empty() {
         println!(
             "No connected active part on {} is unmodelled; nothing to extract.",
@@ -1631,6 +1750,7 @@ pub fn extract_unmodelled(
                 pdf,
                 part: p.part.clone(),
                 aliases: p.aliases.clone(),
+                kind_str: kind_of(p),
                 ..template.clone()
             };
             hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args))
@@ -2007,6 +2127,10 @@ pub struct CoverageComponent {
     pub lib_id: String,
     pub footprint: String,
     pub stage: CoverageStage,
+    /// Why the matched card was refused for this footprint (its pin map was
+    /// read for another package): the part stays unmodelled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
     pub actionable_behavior_gap: bool,
     pub model_id: Option<String>,
     pub model_kind: Option<String>,
@@ -2145,6 +2269,20 @@ fn connected_component(comp: &hauksbee_extract::Component) -> bool {
             .any(|pin| pin.net.is_some_and(|net| net != 0))
 }
 
+/// Why a resolved card is refused on this footprint (see the binder), if it is.
+fn coverage_refusal(
+    comp: &hauksbee_extract::Component,
+    entry: &hauksbee_models::ModelEntry,
+    net_names: &std::collections::HashMap<i64, String>,
+) -> Option<String> {
+    let net = |id: Option<i64>| {
+        let name = net_names.get(&id?)?;
+        Some((crate::binder::is_canonical_ground(name), name.clone()))
+    };
+    hauksbee_bind::package_fit::misfit(comp, entry, &net)
+        .map(|why| format!("package mismatch: {why}"))
+}
+
 fn coverage_component(
     comp: &hauksbee_extract::Component,
     net_names: &std::collections::HashMap<i64, String>,
@@ -2159,8 +2297,10 @@ fn coverage_component(
     let identity_only = model
         .and_then(|entry| entry.params.get_bool("identity_only"))
         .unwrap_or(false);
+    let refused = model.and_then(|entry| coverage_refusal(comp, entry, net_names));
     let stage = match model {
         None => CoverageStage::Unresolved,
+        Some(_) if refused.is_some() => CoverageStage::Unresolved,
         Some(entry) if entry.kind == hauksbee_models::ComponentKind::Ignore => {
             CoverageStage::Ignored
         }
@@ -2211,6 +2351,7 @@ fn coverage_component(
         lib_id: comp.lib_id.clone(),
         footprint: comp.footprint.clone(),
         stage,
+        refused,
         actionable_behavior_gap,
         model_id: model.map(|entry| entry.id.clone()),
         model_kind: model.map(|entry| model_kind_name(entry.kind)),
@@ -2558,6 +2699,13 @@ fn print_coverage_text(board_path: &Path, report: &CoverageReport) {
             &rows,
         )
     );
+    for row in report.components.iter().filter(|row| row.refused.is_some()) {
+        let why = row.refused.as_deref().unwrap_or_default();
+        println!(
+            "{} ({}): card refused, {why}; the part stays unmodelled",
+            row.reference, row.value
+        );
+    }
     if !report.requirements.is_empty() {
         let requirements = report
             .requirements
@@ -3439,5 +3587,59 @@ mcu_label = "test part"
                 toml::from_str(&format!("value = {encoded}")).expect("quoted string is TOML");
             assert_eq!(parsed["value"].as_str(), Some(value));
         }
+    }
+
+    /// A datasheet fetch looks like a browser, follows redirects, and a site
+    /// that refuses it is named with the way round: the user downloads it.
+    #[test]
+    fn a_datasheet_fetch_sends_browser_headers_and_a_refusal_says_download_it() {
+        let args = super::curl_fetch_args("https://vendor.example/x.pdf", "/tmp/x.pdf");
+        let at = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .map(|i| args[i + 1].as_str())
+        };
+        assert!(args[0].contains('L'), "follows redirects: {args:?}");
+        assert!(at("-A").is_some_and(|ua| ua.starts_with("Mozilla/5.0")));
+        assert!(at("-H").is_some_and(|h| h.starts_with("Accept: application/pdf")));
+        assert_eq!(at("-w"), Some("%{http_code}"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("https://vendor.example/x.pdf")
+        );
+        let refused = super::fetch_refusal("https://vendor.example/x.pdf", "ABC1", Some(403));
+        assert!(
+            refused.contains("HTTP 403") && refused.contains("--datasheet 'ABC1=<file.pdf>'"),
+            "{refused}"
+        );
+        let landing = super::fetch_refusal("https://vendor.example/x", "ABC1", Some(200));
+        assert!(landing.contains("did not serve a PDF") && landing.contains("--datasheet 'ABC1="));
+    }
+
+    #[test]
+    fn per_part_kinds_are_checked_before_anything_is_sent() {
+        let pairs = ["ABC1=opamp".to_string(), " U7 = vreg ".to_string()];
+        let kinds = super::kind_overrides(&pairs).unwrap();
+        assert_eq!(
+            kinds,
+            [
+                ("ABC1".into(), "opamp".into()),
+                ("U7".into(), "vreg".into())
+            ]
+        );
+        // A behavioural family is a kind the extractor drafts (on vreg).
+        let family = super::kind_overrides(&["CHG1=charger".into()]).unwrap();
+        assert_eq!(family, [("CHG1".into(), "charger".into())]);
+        let bare = super::kind_overrides(&["opamp".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(bare.contains("takes PART=KIND"), "{bare}");
+        let unknown = super::kind_overrides(&["ABC1=widget".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            unknown.contains("unknown kind 'widget'") && unknown.contains("opamp"),
+            "{unknown}"
+        );
     }
 }

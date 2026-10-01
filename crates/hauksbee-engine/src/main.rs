@@ -508,7 +508,7 @@ struct ModelsExtractArgs {
     /// Draft a model for every connected active part this board leaves
     /// unmodelled, from the datasheet its Datasheet field names (a URL is
     /// fetched) or --datasheet. Lists them, asks once, then extracts each.
-    #[arg(long, value_name = "BOARD", conflicts_with_all = ["pdf", "part", "kind"])]
+    #[arg(long, value_name = "BOARD", conflicts_with_all = ["pdf", "part"])]
     unmodelled: Option<PathBuf>,
     /// With --unmodelled: the datasheet for one part, as PART=PDF-OR-URL (a
     /// part number, board value or reference). Repeatable; wins over the
@@ -517,9 +517,10 @@ struct ModelsExtractArgs {
     datasheet: Vec<String>,
     /// What kind of device it is (bjt_npn, vreg, opamp, i2c_sensor, ...).
     /// Omit it and the model works it out from the datasheet, which is usually
-    /// what you want: it is about to read the page that says so.
-    #[arg(long, default_value = "")]
-    kind: String,
+    /// what you want: it is about to read the page that says so. With
+    /// --unmodelled, give it per part as PART=KIND (repeatable).
+    #[arg(long, value_name = "KIND or PART=KIND")]
+    kind: Vec<String>,
     /// Where to write the model card. Defaults to the user model directory
     /// (~/.hauksbee/models), which every run already reads.
     #[arg(long)]
@@ -1775,7 +1776,12 @@ fn main() -> anyhow::Result<()> {
             ModelsCommand::Extract(args) => {
                 use hauksbee_models::datasheet::Args;
                 let pdf = args.pdf.unwrap_or_default();
-                let template = Args::new(pdf, args.part.unwrap_or_default(), args.kind)
+                let kind = match (&args.unmodelled, &args.kind[..]) {
+                    (Some(_), _) | (None, []) => String::new(),
+                    (None, [kind]) => kind.clone(),
+                    (None, _) => anyhow::bail!("--kind is given once for a single part; per-part PART=KIND is for --unmodelled"),
+                };
+                let template = Args::new(pdf, args.part.unwrap_or_default(), kind)
                     .out_dir(args.out_dir)
                     .model(args.model)
                     .effort(args.effort)
@@ -1791,6 +1797,7 @@ fn main() -> anyhow::Result<()> {
                     Some(board) => hauksbee_engine::commands::models::extract_unmodelled(
                         board,
                         &args.datasheet,
+                        &args.kind,
                         &template,
                         args.yes,
                     ),

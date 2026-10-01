@@ -144,6 +144,8 @@ mod nep_private_acceptance;
 mod netlist_drc_honesty;
 #[path = "no_firmware_no_avr.rs"]
 mod no_firmware_no_avr;
+#[path = "package_fit_binding.rs"]
+mod package_fit_binding;
 #[path = "packaged_asset_sync.rs"]
 mod packaged_asset_sync;
 #[path = "pin_role_rules.rs"]

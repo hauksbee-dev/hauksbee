@@ -511,21 +511,60 @@ pub fn bind_board_with(
             }
             (Some(m), _) => {
                 let kind_str = format!("{:?}", m.kind).to_ascii_lowercase();
-                let (outcome, warning, guesses) = bind_component(
-                    comp,
-                    m,
-                    source.as_ref(),
-                    &mut circuit,
-                    &node_of,
-                    &mut digital,
-                    &mut mcus,
-                    &mut dacs,
-                    &mut peripherals,
-                    &mut report.regulators,
-                    (&board.components, &power_nets),
-                    lib.pin_rules(),
-                );
-                (Some(kind_str), outcome, warning, guesses)
+                // A pin map read off another package's column binds cleanly
+                // and simulates a different circuit: refuse it before binding.
+                let misfit = {
+                    let circuit = &circuit;
+                    let net = |n: Option<i64>| {
+                        node_of(n)
+                            .map(|id| (id == NodeId::GROUND, circuit.node_name(id).to_string()))
+                    };
+                    crate::package_fit::misfit(comp, m, &net)
+                };
+                if let Some(why) = misfit {
+                    let reason = format!("package mismatch: {why}; the part stays unmodelled");
+                    let warning = format!(
+                        "cannot bind '{}' ({}): {reason}",
+                        comp.reference, comp.value
+                    );
+                    (
+                        Some(kind_str),
+                        BindOutcome::Unresolved { reason },
+                        Some(warning),
+                        Vec::new(),
+                    )
+                } else {
+                    let (outcome, warning, guesses) = bind_component(
+                        comp,
+                        m,
+                        source.as_ref(),
+                        &mut circuit,
+                        &node_of,
+                        &mut digital,
+                        &mut mcus,
+                        &mut dacs,
+                        &mut peripherals,
+                        &mut report.regulators,
+                        (&board.components, &power_nets),
+                        lib.pin_rules(),
+                    );
+                    let rail = |n: Option<i64>| {
+                        let id = node_of(n)?;
+                        let name = circuit.node_name(id);
+                        if id == NodeId::GROUND {
+                            Some("GND".to_string())
+                        } else {
+                            power_nets.contains_key(name).then(|| name.to_string())
+                        }
+                    };
+                    let unknown = crate::package_fit::unknown_pads(comp, m, &rail);
+                    (
+                        Some(kind_str),
+                        outcome,
+                        merge_bind_warnings(warning, unknown),
+                        guesses,
+                    )
+                }
             }
         };
 
@@ -5818,8 +5857,10 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 
 // ── Power-net detection ──────────────────────────────────────────────────────
 
-/// True only for the canonical ground net itself: `"GND"` or `"0"`, optionally
-/// behind a hierarchical sheet path (`"/Power/GND"`). Matches
+/// True only for the canonical ground net itself.
+///
+/// That is `"GND"` or `"0"`, optionally behind a hierarchical sheet path
+/// (`"/Power/GND"`). Matches
 /// [`Circuit::node`]'s own ground rule so pass-1 interning and later
 /// `circuit.node(name)` calls agree on which net is node 0.
 ///
@@ -5838,7 +5879,8 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// the reference node floats and the whole MNA solve is singular / offset. `VEE`
 /// is intentionally NOT included: on bipolar-supply analog boards it is a
 /// negative rail (e.g. -15 V), and pinning that to 0 V would be a hard fault.
-fn is_canonical_ground(name: &str) -> bool {
+#[must_use]
+pub fn is_canonical_ground(name: &str) -> bool {
     let n = name.trim();
     // Hierarchical labels export as "/sheet/GND"; the leaf name decides.
     let leaf = n.rsplit('/').next().unwrap_or(n).trim();

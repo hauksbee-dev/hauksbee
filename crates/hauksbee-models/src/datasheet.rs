@@ -393,7 +393,11 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         }
         let prompt = build_prompt(part, kind, &pdf_text);
         let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })?;
-        let id = parse_and_validate_reply(&raw, part, kind)?.id;
+        let entry = parse_and_validate_reply(&raw, part, kind)?;
+        if let Some(warning) = crate::validation::unknown_pads_warning(&entry) {
+            say!("[model-extract] warning: {warning}");
+        }
+        let id = entry.id;
         (
             output::finalise(&raw, part, &args.aliases, &args.pdf)?,
             id,
@@ -1616,13 +1620,19 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       lines.
   P4. NEAR-IDENTICAL PARTS OFTEN DIFFER. A negative regulator does not share
       its positive sibling's pinout; a SOT-23 and a SOT-89 of the same part
-      often differ. If the datasheet covers several packages, state which one
+      often differ, and an MCU's 48-pin QFN and 64-pin QFP columns share
+      nothing. If the datasheet covers several packages, state which one
       this map is for in the description, and pick the package the value/
-      footprint you were given implies.
+      footprint you were given implies (an ordering code's package letters
+      name it). Every numbered map records its package (P6): the checker
+      holds the map against that package's pin count, and the board binds it
+      only to a footprint of that package.
   P5. Still unsure? Say so in a comment on the pins block, never present a
       guess as read: `# LOW CONFIDENCE: ...` helps, a confident wrong map hurts.
-  P6. ONE COLUMN PER PACKAGE. When the pin table prints a pin-number column per
-      package, record every column, names as printed, after [models.source]:
+  P6. ONE COLUMN PER PACKAGE. Record the pin table's column for your package,
+      every pad's name as printed (NC included; never unknown_pad_ in a
+      column), and when it prints a column per package record every column,
+      after [models.source]:
         [[models.source.pinout]]
         package = "<package as printed>"
         pins = {{ "1" = "<printed name>", "2" = "<printed name>" }}
@@ -1634,6 +1644,13 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       view in the P6 block (pins as printed); results mark those pins assumed:
         standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
       No view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
+  P8. THE SWITCH NODE IS NOT THE OUTPUT. On a switching converter or LED
+      driver (buck, boost, buck-boost), the pin printed SW, LX, PH or L1/L2
+      drives the inductor: map it 'sw', never 'out'. 'out' is only a pin the
+      table calls the regulated output (VOUT, OUT, FB-sensed output pin); a
+      non-synchronous boost, whose output is past an external diode, has no
+      'out' pad at all. The binder finds a buck's regulated rail past its
+      inductor itself.
 
 IMPORTANT RULES:
 0. Emit this machine-readable source block immediately after the model's description:
@@ -1806,6 +1823,9 @@ reason = "ABSTAIN: datasheet does not state this fact"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "SOT-23-5 (DBV)"
+pins = { "1" = "OUT", "2" = "V-", "3" = "IN+", "4" = "IN-", "5" = "V+" }
 [models.match]
 value_re = "(?i)^TLV9001"
 [models.params]
@@ -1852,6 +1872,9 @@ reason = "ABSTAIN: datasheet does not state this fact"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "SOT-23-5 (DBV)"
+pins = { "1" = "OUT", "2" = "V-", "3" = "IN+", "4" = "IN-", "5" = "V+" }
 [models.match]
 value_re = "(?i)^TLV3201"
 [models.params]
@@ -1904,6 +1927,9 @@ max = 5.0
 unit = "uA"
 conditions = "VI = 5 V, EN = 0 V"
 basis = "Electrical Characteristics, IIH row, max column only"
+[[models.source.pinout]]
+package = "VSSOP-8 (DCU)"
+pins = { "1" = "GND", "2" = "VREF1", "3" = "SCL1", "4" = "SDA1", "5" = "SDA2", "6" = "SCL2", "7" = "VREF2", "8" = "EN" }
 [models.match]
 value_re = "(?i)^PCA9306"
 [models.params]
@@ -1974,7 +2000,7 @@ captures the part's internal behaviour the SPICE kinds cannot. The schema:
 
   [models.behavioral.converter]     # for a switching converter / charger
   topology = "buck" | "boost" | "buck_boost"
-  out_pin = "<role>"                # the regulated output pin role
+  out_pin = "<role>"                # the regulated output pin role ("sw" for a buck: never call SW 'out')
   in_pin  = "<role>"                # the input pin role
   vout_setpoint = <volts>           # regulated output voltage
   efficiency = <0..1>
@@ -3590,7 +3616,12 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
     crate::validation::validate(entry).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
         anyhow::anyhow!("validation failed: {}", msg.join("; "))
-    })
+    })?;
+    let problems = crate::validation::draft_pin_map_problems(entry);
+    if !problems.is_empty() {
+        bail!("pin map: {}", problems.join("; "));
+    }
+    Ok(())
 }
 
 fn supply_relative_rows(source: Option<&crate::schema::ModelSourceSpec>) -> Result<()> {
@@ -3967,6 +3998,9 @@ max_voltage_v = 55.0
 "36" = "pvin"
 "20" = "bat"
 "25" = "ilimit"
+[[models.source.pinout]]
+package = "UHF"
+pins = { "36" = "PVIN", "20" = "BAT", "25" = "ILIMIT" }
 [models.behavioral.converter]
 topology = "buck_boost"
 out_pin = "bat"
@@ -4001,7 +4035,8 @@ v_sense_full = 0.0463
             .replace("<typical K in volts>", "1000.0");
         let pins =
             "[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\"3\" = \"prog\"\n\"4\" = \"gnd\"\n";
-        let linear = format!("{plain}{pins}{snippet}{MODEL_SOURCE}");
+        let column = "[[models.source.pinout]]\npackage = \"DFN-4\"\npins = { \"1\" = \"IN\", \"2\" = \"OUT\", \"3\" = \"PROG\", \"4\" = \"GND\" }\n";
+        let linear = format!("{plain}{pins}{snippet}{MODEL_SOURCE}{column}");
         let entry = parse_and_validate_reply(&linear, "X", "charger").unwrap();
         assert!(entry.behavioral.is_empty() && entry.current_program.is_some());
         // Absent dropout/Iq rows abstain by record, never identity-only; lint agrees.
@@ -4195,6 +4230,7 @@ vaf = 80.0
 "6" = "collector"
 [models.source]
 tier = "datasheet-derived"
+pinout = [{ package = "SOT-363", pins = { "1" = "B1", "2" = "E1", "6" = "C1" } }]
 references = [{ url = "https://vendor.example/bcm847bs.pdf", title = "BCM847BS", locator = "p.3" }]
 uncertainty = [
   { status = "unknown", parameter = "model", reason = "none published" },
@@ -4218,8 +4254,13 @@ uncertainty = [
         // Completion adds the record to every entry lacking one, keeps the rest.
         let (part, kind) = ("X", "bjt_npn");
         let model = Reply::Model { part, kind };
-        let second = no_source.replace("\"bcm847bs\"", "\"b\"");
-        let filled = model.complete(format!("{no_source}{second}"));
+        // (Lead-lettered pads: a numbered map would also need its package column.)
+        let lettered = no_source.replace(
+            "\"1\" = \"base\"\n\"2\" = \"emitter\"\n\"6\" = \"collector\"",
+            "b = \"base\"\ne = \"emitter\"\nc = \"collector\"",
+        );
+        let second = lettered.replace("\"bcm847bs\"", "\"b\"");
+        let filled = model.complete(format!("{lettered}{second}"));
         assert!(parse_and_validate_reply(&filled, part, kind).is_ok());
         assert_eq!(filled.matches("\"model\"").count(), 2);
         assert_eq!(model.complete(good.to_string()), good);

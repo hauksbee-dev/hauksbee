@@ -165,6 +165,26 @@ fn child_packs(dir: &Path) -> Vec<PathBuf> {
     packs
 }
 
+/// Whether `text` is one of the shipped builtin db files, verbatim.
+///
+/// Its cards were reviewed against their footprints when they were curated, so the
+/// machine-draft rules (`validation::draft_pin_map_problems`) do not apply.
+#[must_use]
+pub fn is_builtin_db(text: &str) -> bool {
+    BUILTIN_TOML_FILES.iter().any(|(_, src)| *src == text)
+}
+
+/// Whether [`ModelLibrary::load_models_dir`] would find anything to load in `dir`.
+///
+/// That is a pack, child packs, or a card file. An empty output directory (a
+/// first `models extract --out-dir`) holds none and is no models dir yet.
+#[must_use]
+pub fn holds_cards(dir: &Path) -> bool {
+    (dir.join("pack.toml").is_file() && dir.join("models").is_dir())
+        || holds_toml(dir)
+        || !child_packs(dir).is_empty()
+}
+
 /// Whether `dir` holds at least one `*.toml` file directly.
 fn holds_toml(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|entries| {
@@ -770,6 +790,13 @@ impl ModelLibrary {
                 let left: Vec<&ModelEntry> = entries.iter().copied().filter(left).collect();
                 s.widened = variants::envelope(&mut model, &mut provenance, &left);
                 model.pin_standard = left.iter().find_map(|e| e.pin_standard.clone());
+                // Members printed for different packages leave the stand-in's undetermined.
+                let packages: std::collections::BTreeSet<_> =
+                    left.iter().map(|e| &e.pin_package).collect();
+                model.pin_package = match Vec::from_iter(packages)[..] {
+                    [one] => one.clone(),
+                    _ => None,
+                };
             }
             let tie = |other: &&LayeredEntry| {
                 rank(other) == top && other.compiled.entry.id != *id && !sibling(other)
@@ -870,6 +897,7 @@ impl ModelLibrary {
             // skip `validate` above, so their source is checked here too.
             entry.derating = derating::Derating::of(&entry);
             entry.pin_standard = validation::pin_standard(&entry).map(str::to_owned);
+            entry.pin_package = validation::pin_package(&entry).map(str::to_owned);
             let mut declaration = entry.source.take();
             if let Some(Err(e)) = declaration.as_ref().map(schema::ModelSourceSpec::validate) {
                 return Err(invalid(format!("[models.source]: {e}")));

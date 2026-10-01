@@ -33,6 +33,7 @@ pub mod drivers;
 pub mod firmware_input;
 pub mod logic;
 pub mod occurrence;
+pub mod package_fit;
 pub mod power_supply;
 pub mod rail_owner;
 pub mod schematic_ties;

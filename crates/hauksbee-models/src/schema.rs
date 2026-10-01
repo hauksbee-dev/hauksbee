@@ -177,6 +177,9 @@ pub struct ModelEntry {
     /// `source`'s pinout standard, kept likewise (see `validation::pin_standard`).
     #[serde(skip)]
     pub pin_standard: Option<String>,
+    /// The package `[models.pins]` is read for, kept likewise (see `validation::pin_package`).
+    #[serde(skip)]
+    pub pin_package: Option<String>,
 }
 
 /// Declared executable scope of a model card.

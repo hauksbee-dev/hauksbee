@@ -1162,6 +1162,13 @@ pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     // binder's accepted aliases. analog_switch is deliberately EXCLUDED: it
     // binds SPST (`in_out_a`/`in_out_b`) and SPDT (`com`/`s0`/`s1`) forms with
     // too varied a vocabulary to anchor-check without false positives.
+    // An identity-only switching converter names its switch node 'sw' and no
+    // 'out': a non-synchronous boost has no output pad, and the switch node is
+    // never one (`check_pinout`).
+    let identity = entry.params.get_bool("identity_only").unwrap_or(false);
+    if vreg && conv.is_none() && identity && entry.pins.values().any(|r| switch_node(r)) {
+        return Vec::new();
+    }
     let conv_required: Vec<&[&str]> = conv_roles.iter().flatten().map(|r| &r[..]).collect();
     let required: &[&[&str]] = match entry.kind {
         ComponentKind::Vreg if conv.is_some() => &conv_required,
@@ -1259,22 +1266,13 @@ pub fn pin_standard(entry: &ModelEntry) -> Option<&str> {
     declared.or(entry.pin_standard.as_deref())
 }
 
-/// `[models.pins]` against the pin-table column of the card's own package
-/// (`[models.variant] package`, else the one package the description names,
-/// else a lone column): the same pads, and no pad whose role is the name that
-/// column prints on another pad, the mark of a map read off another package.
-fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
+/// The pin-table column of the card's own package: `[models.variant] package`,
+/// else the one package the description names, else a lone column. `Ok(None)`
+/// with no column; `Err` naming the columns when none or several are the card's.
+fn own_pinout(entry: &ModelEntry) -> Result<Option<&Pinout>, String> {
     let pinouts = pinouts(entry);
-    let numbered = |m: &BTreeMap<String, String>| m.keys().all(|k| k.parse::<u32>().is_ok());
-    for o in pinouts.iter().filter(|o| o.standard.is_some()) {
-        let (package, standard) = (&o.package, o.standard.as_deref().unwrap_or_default());
-        let view = standard.to_lowercase();
-        p.require(numbered(&o.pins) && numbered(&entry.pins), || format!("[[models.source.pinout]] '{package}' numbers its pads from standard '{standard}', so it and [models.pins] are keyed by pad number: a card keyed by lead letters carries no standard"));
-        p.require(view.contains("top view") || view.contains("bottom view"), || format!("[[models.source.pinout]] '{package}' standard '{standard}' must name the view (\"top view\" or \"bottom view\") its numbering is read from: a pad numbered from the wrong view is a mirrored pinout that binds cleanly"));
-        p.require(!entry.coverage.missing.iter().any(|m| m == "pad_numbers"), || format!("[[models.source.pinout]] '{package}' numbers the pads from standard '{standard}', so `pad_numbers` is not missing from [models.coverage]"));
-    }
-    if pinouts.is_empty() || entry.pins.is_empty() {
-        return;
+    if pinouts.is_empty() {
+        return Ok(None);
     }
     let plain = |s: &str| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
     let description = plain(&entry.description);
@@ -1294,8 +1292,50 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
     let named: Vec<&Pinout> = named.iter().copied().filter(outer).collect();
     let [own] = named[..] else {
         let all: Vec<&str> = pinouts.iter().map(|o| o.package.as_str()).collect();
-        p.push(format!("[[models.source.pinout]] records {}, but neither [models.variant] package nor the description names exactly one of them: name the one package [models.pins] is for", all.join(", ")));
+        return Err(format!("[[models.source.pinout]] records {}, but neither [models.variant] package nor the description names exactly one of them: name the one package [models.pins] is for", all.join(", ")));
+    };
+    Ok(Some(own))
+}
+
+/// The package a card's `[models.pins]` is read for.
+///
+/// That is `[models.variant] package`, else its own `[[models.source.pinout]]` column's package. Kept on
+/// a compiled card so the binder can hold it against the footprint.
+#[must_use]
+pub fn pin_package(entry: &ModelEntry) -> Option<&str> {
+    let declared = entry.variant.as_ref().and_then(|v| v.package.as_deref());
+    let own = || own_pinout(entry).ok().flatten().map(|o| o.package.as_str());
+    declared.or_else(own).or(entry.pin_package.as_deref())
+}
+
+/// Printed names of a switching converter's switch node (`SW`, `LX`, `PH`, `L1`).
+fn switch_node(name: &str) -> bool {
+    pin_name_keys(name)
+        .iter()
+        .any(|k| matches!(k.as_str(), "sw" | "lx" | "ph" | "phase" | "l"))
+}
+
+/// `[models.pins]` against the pin-table column of the card's own package
+/// (see [`own_pinout`]): the same pads, and no pad whose role is the name that
+/// column prints on another pad, the mark of a map read off another package.
+fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
+    let pinouts = pinouts(entry);
+    let numbered = |m: &BTreeMap<String, String>| m.keys().all(|k| k.parse::<u32>().is_ok());
+    for o in pinouts.iter().filter(|o| o.standard.is_some()) {
+        let (package, standard) = (&o.package, o.standard.as_deref().unwrap_or_default());
+        let view = standard.to_lowercase();
+        p.require(numbered(&o.pins) && numbered(&entry.pins), || format!("[[models.source.pinout]] '{package}' numbers its pads from standard '{standard}', so it and [models.pins] are keyed by pad number: a card keyed by lead letters carries no standard"));
+        p.require(view.contains("top view") || view.contains("bottom view"), || format!("[[models.source.pinout]] '{package}' standard '{standard}' must name the view (\"top view\" or \"bottom view\") its numbering is read from: a pad numbered from the wrong view is a mirrored pinout that binds cleanly"));
+        p.require(!entry.coverage.missing.iter().any(|m| m == "pad_numbers"), || format!("[[models.source.pinout]] '{package}' numbers the pads from standard '{standard}', so `pad_numbers` is not missing from [models.coverage]"));
+    }
+    check_package_fit(entry, p);
+    if entry.pins.is_empty() {
         return;
+    }
+    let own = match own_pinout(entry) {
+        Ok(Some(own)) => own,
+        Ok(None) => return,
+        Err(why) => return p.push(why),
     };
     let package = &own.package;
     if !own.pins.keys().eq(entry.pins.keys()) {
@@ -1306,8 +1346,14 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
     }
     for (pad, role) in &entry.pins {
         let key = pin_key(role);
+        let printed = own.pins.get(pad);
+        let regulated =
+            entry.kind == ComponentKind::Vreg && matches!(key.as_str(), "out" | "output");
+        if let Some(name) = printed.filter(|name| regulated && switch_node(name)) {
+            p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{name}' on it: that is the converter's switch node, never its regulated output. Map it 'sw'; the regulated rail is past the inductor (and a boost's past its diode), which is no pad of the IC"));
+        }
         let prints = |name: &str| pin_name_keys(name).contains(&key);
-        let Some(here) = own.pins.get(pad).filter(|name| !prints(name)) else {
+        let Some(here) = printed.filter(|name| !prints(name)) else {
             continue;
         };
         if role.starts_with("unknown_pad_") {
@@ -1317,6 +1363,82 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
             p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{here}' on pad {pad} and '{name}' on pad {other}: read [models.pins] from the declared package's own column and figure; a figure labelled with another package is not this card's"));
         }
     }
+}
+
+/// A numbered pin map against the pin count its declared package spells: no
+/// pad past it (one more for an exposed pad), and an own column recording at
+/// least that many pads. A map that does not fit was read for another package.
+fn check_package_fit(entry: &ModelEntry, p: &mut Problems) {
+    let Some(package) = pin_package(entry) else {
+        return;
+    };
+    let Some(count) = crate::package::pin_count(package) else {
+        return;
+    };
+    let pads = |m: &BTreeMap<String, String>| -> Vec<u32> {
+        m.keys().filter_map(|k| k.parse().ok()).collect()
+    };
+    let past: Vec<String> = pads(&entry.pins)
+        .into_iter()
+        .filter(|&n| n == 0 || n > count + 1)
+        .map(|n| n.to_string())
+        .collect();
+    p.require(past.is_empty(), || format!("[models.pins] maps pads {} but a {package} has {count} pins (and at most one exposed pad): the map was read for another package's column", past.join(", ")));
+    let own = own_pinout(entry).ok().flatten();
+    let short = own
+        .map(|o| (o.pins.len(), pads(&o.pins).len()))
+        .filter(|&(all, n)| all == n && n < count as usize);
+    if let Some((n, _)) = short {
+        p.push(format!("[[models.source.pinout]] '{package}' records {n} pads but a {package} has {count}: record every pad the column prints (NC included), or name the package this column is really for"));
+    }
+}
+
+/// A warning when the card leaves many pads `unknown_pad_`.
+///
+/// A supply or ground pin among them goes unchecked, so the card cannot be
+/// trusted for supply checks. Advisory (the
+/// lint, the draft and the binder say it); the threshold is a quarter of the
+/// mapped pads and at least two.
+#[must_use]
+pub fn unknown_pads_warning(entry: &ModelEntry) -> Option<String> {
+    let unknown = entry
+        .pins
+        .values()
+        .filter(|r| r.starts_with("unknown_pad_"))
+        .count();
+    let total = entry.pins.len();
+    (unknown >= 2 && unknown * 4 >= total).then(|| {
+        format!("{unknown} of {total} pads in [models.pins] are unknown_pad_: any supply or ground pin among them goes unchecked, so this card cannot be trusted for supply checks")
+    })
+}
+
+/// What a machine draft must carry beyond [`validate`].
+///
+/// A numbered pin map of three or more pads on an IC or discrete records the package it was read
+/// for, as that package's `[[models.source.pinout]]` column, so the checker can
+/// hold the map against it and the binder against the footprint.
+#[must_use]
+pub fn draft_pin_map_problems(entry: &ModelEntry) -> Vec<String> {
+    use ComponentKind::{Connector, Ignore, Passive};
+    let numbered = entry
+        .pins
+        .keys()
+        .filter(|k| k.parse::<u32>().is_ok())
+        .count();
+    let exempt = matches!(entry.kind, Passive | Connector | Ignore) || numbered < 3;
+    if exempt {
+        return Vec::new();
+    }
+    let Ok(Some(own)) = own_pinout(entry) else {
+        return vec!["[models.pins] numbers its pads but records no [[models.source.pinout]] column it is read from: add the column for the package this map is for (package = as printed, pins = the names it prints), so the map can be checked against that package and the board's footprint".into()];
+    };
+    let unread: Vec<&str> = (own.pins.iter())
+        .filter(|(_, name)| name.starts_with("unknown_pad_"))
+        .map(|(pad, _)| pad.as_str())
+        .collect();
+    let package = &own.package;
+    let why = format!("[[models.source.pinout]] '{package}' records pads {} as unknown_pad_: a column records the names its pin table prints for this package; a pad left unread means the map was not read from this package's column", unread.join(", "));
+    (!unread.is_empty()).then_some(why).into_iter().collect()
 }
 
 // ── Kind vocabulary help ──────────────────────────────────────────────────────
@@ -2178,6 +2300,47 @@ pins = { "1" = "VIN", "2" = "GND", "3" = "EN", "4" = "NC", "5" = "VOUT" }
 package = "DFN-4"
 pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
 "#;
+
+    /// The package a map is for bounds it: no pad past the package's count
+    /// (one exposed pad allowed), a numbered column records every pad; and a
+    /// converter's switch node is never its regulated output.
+    #[test]
+    #[rustfmt::skip]
+    fn a_pin_map_fits_its_package_and_a_switch_node_is_never_the_output() {
+        let card = |edits: &[(&str, &str)]| -> ModelEntry {
+            let text = edits.iter().fold(LDO_FIXTURE.to_string(), |s, (a, b)| s.replacen(a, b, 1));
+            toml::from_str(&text).unwrap()
+        };
+        assert_eq!(pin_package(&card(&[])), Some("SOT-23-5"));
+        let sot_pins = "pins = { \"1\" = \"VIN\", \"2\" = \"GND\", \"3\" = \"EN\", \"4\" = \"NC\", \"5\" = \"VOUT\" }";
+        let identity = "[params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"";
+        for (edits, needle) in [
+            // A pad a SOT-23-5 does not have: read off a bigger package.
+            (vec![("\"5\" = \"out\"", "\"5\" = \"out\"\n\"8\" = \"nc\"")], "maps pads 8 but a SOT-23-5 has 5 pins"),
+            // A numbered column short of the package's pads.
+            (vec![("\"4\" = \"NC\", ", ""), ("\"4\" = \"nc\"\n", "")], "records 4 pads but a SOT-23-5 has 5"),
+            // The column prints SW where the map says out.
+            (vec![("\"5\" = \"VOUT\" }", "\"5\" = \"SW\" }")], "that is the converter's switch node, never its regulated output"),
+            (vec![("\"5\" = \"VOUT\" }", "\"5\" = \"LX\" }")], "Map it 'sw'"),
+        ] {
+            rejects(&card(&edits), needle);
+        }
+        // An identity-only boost names its switch node 'sw' and needs no 'out'
+        // pad: its regulated rail is past the diode, no pad of the IC.
+        let boost = card(&[("\"5\" = \"out\"", "\"5\" = \"sw\""), ("\"5\" = \"VOUT\" }", "\"5\" = \"SW\" }"), ("[params]", identity)]);
+        accepts(&boost);
+        // A draft must say which package its map is for, read in full.
+        assert!(draft_pin_map_problems(&card(&[])).is_empty());
+        let no_column = LDO_FIXTURE[..LDO_FIXTURE.find("[[source.pinout]]").unwrap()].replace("SOT-23-5 package", "");
+        let no_column: ModelEntry = toml::from_str(&no_column).unwrap();
+        assert!(draft_pin_map_problems(&no_column)[0].contains("records no [[models.source.pinout]] column"));
+        let unread = card(&[(sot_pins, &sot_pins.replace("\"EN\"", "\"unknown_pad_3\"").replace("\"NC\"", "\"unknown_pad_4\""))]);
+        assert!(draft_pin_map_problems(&unread)[0].contains("records pads 3, 4 as unknown_pad_"));
+        // Many unknown pads: advisory, naming why it matters.
+        let vague = card(&[("\"3\" = \"en\"", "\"3\" = \"unknown_pad_3\""), ("\"4\" = \"nc\"", "\"4\" = \"unknown_pad_4\"")]);
+        assert!(unknown_pads_warning(&vague).is_some_and(|w| w.contains("2 of 5 pads") && w.contains("supply checks")));
+        assert!(unknown_pads_warning(&card(&[])).is_none());
+    }
 
     /// Also: a vout row wider than an accuracy band (either sign), a rating
     /// written as a param, and a pin table left wholly `unknown_pad_`.

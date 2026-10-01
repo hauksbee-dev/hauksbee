@@ -150,14 +150,72 @@ fn unmodelled_batch_lists_each_part_and_its_datasheet_then_asks_once() {
 }
 
 /// The whole user flow, offline: a fake agent drafts the card, it is stamped
-/// with the board value it was asked for, and the next resolve binds it.
+/// with the board value it was asked for, and the next resolve binds it. The
+/// output directory exists but is empty, as on a first batch.
 #[cfg(unix)]
 #[test]
 fn unmodelled_batch_drafts_a_card_the_next_run_binds() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
-    let board = unmodelled_board(dir.path());
-    let card = dir.path().join("card.toml");
+    let (run, out) = draft_batch(dir.path(), &[], "echo opamp");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(run.status.success(), "{all}");
+    assert!(
+        !all.contains("no model cards"),
+        "an empty --out-dir is no models dir yet:\n{all}"
+    );
+    assert!(
+        all.contains("--models-dir"),
+        "ends with the re-check command:\n{all}"
+    );
+    let drafted = std::fs::read_to_string(out.join("XOPAMP1-TR.toml")).unwrap();
+    assert!(
+        drafted.contains("OPAMP[-_ ]?XOPAMP1"),
+        "the board value binds:\n{drafted}"
+    );
+    let resolve = run_resolve(&dir.path().join("board.kicad_pcb"), &out);
+    assert!(resolve.contains("xopamp1"), "{resolve}");
+}
+
+/// `--kind PART=KIND` sets one part's kind, so the backend is never asked to
+/// identify it; a kind the schema does not know stops the batch before consent.
+#[cfg(unix)]
+#[test]
+fn a_per_part_kind_skips_identification_and_a_bad_one_stops_the_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let kind = ["--kind", "XOPAMP1-TR=opamp"];
+    let (run, out) = draft_batch(dir.path(), &kind, "exit 3");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(run.status.success(), "{all}");
+    assert!(out.join("XOPAMP1-TR.toml").is_file(), "{all}");
+    let bad = tempfile::tempdir().unwrap();
+    let (run, out) = draft_batch(bad.path(), &["--kind", "XOPAMP1-TR=widget"], "echo opamp");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !run.status.success() && err.contains("unknown kind 'widget'"),
+        "{err}"
+    );
+    assert!(!out.join("XOPAMP1-TR.toml").exists());
+}
+
+/// Run `models extract --unmodelled` on [`unmodelled_board`] with a fake agent
+/// that answers the kind question with `on_kind` and drafts the card.
+#[cfg(unix)]
+fn draft_batch(
+    dir: &std::path::Path,
+    extra: &[&str],
+    on_kind: &str,
+) -> (std::process::Output, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let board = unmodelled_board(dir);
+    let card = dir.join("card.toml");
     std::fs::write(
         &card,
         r#"[[models]]
@@ -171,6 +229,9 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "SOT-23-5"
+pins = { "1" = "OUT", "2" = "V-", "3" = "IN+", "4" = "IN-", "5" = "V+" }
 [models.match]
 value_re = "(?i)^XOPAMP1-TR$"
 [models.params]
@@ -188,13 +249,14 @@ max_voltage_v = 6.0 # Source: Absolute Maximum Ratings
 "#,
     )
     .unwrap();
-    let agent = dir.path().join("agent");
-    let script = format!("#!/bin/sh\ncat >/dev/null\nif grep -q 'EXACTLY ONE identifier' prompt.md; then echo opamp; else cp {card:?} model.toml; echo done; fi\n");
+    let agent = dir.join("agent");
+    let script = format!("#!/bin/sh\ncat >/dev/null\nif grep -q 'EXACTLY ONE identifier' prompt.md; then {on_kind}; else cp '{}' model.toml; echo done; fi\n", card.display());
     std::fs::write(&agent, script).unwrap();
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let config = dir.path().join("extract.toml");
+    let config = dir.join("extract.toml");
     std::fs::write(&config, "").unwrap();
-    let out = dir.path().join("drafts");
+    let out = dir.join("drafts");
+    std::fs::create_dir_all(&out).unwrap();
     let run = Command::new(hauksbee())
         .args([
             "models",
@@ -207,28 +269,13 @@ max_voltage_v = 6.0 # Source: Absolute Maximum Ratings
         .arg(&board)
         .arg("--out-dir")
         .arg(&out)
+        .args(extra)
         .env("HAUKSBEE_EXTRACT_CONFIG", &config)
         .env("HAUKSBEE_CLAUDE_COMMAND", &agent)
         .stdin(Stdio::null())
         .output()
         .expect("run hauksbee");
-    let all = format!(
-        "{}{}",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(run.status.success(), "{all}");
-    assert!(
-        all.contains("--models-dir"),
-        "ends with the re-check command:\n{all}"
-    );
-    let drafted = std::fs::read_to_string(out.join("XOPAMP1-TR.toml")).unwrap();
-    assert!(
-        drafted.contains("OPAMP[-_ ]?XOPAMP1"),
-        "the board value binds:\n{drafted}"
-    );
-    let resolve = run_resolve(&board, &out);
-    assert!(resolve.contains("xopamp1"), "{resolve}");
+    (run, out)
 }
 
 fn run_resolve(board: &std::path::Path, models: &std::path::Path) -> String {

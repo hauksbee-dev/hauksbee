@@ -106,3 +106,187 @@ pub fn package_body(name: &str) -> Option<Body> {
         exposed_pad: EXPOSED_PAD.is_match(name),
     })
 }
+
+/// The outline a package or footprint name spells: two names with different
+/// outlines never share a pin map, whatever their pin counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outline {
+    /// QFN, UFQFPN, VQFN, MLF, MLP, LFCSP.
+    QuadLeadless,
+    /// QFP, LQFP, TQFP.
+    QuadLeaded,
+    /// DFN, SON, WSON.
+    DualLeadless,
+    /// SOIC, SO, SOP, SSOP, TSSOP, MSOP.
+    SmallOutline,
+    /// SOT, TSOT, SC-70.
+    Sot,
+    Dip,
+    /// BGA, WLCSP, LGA.
+    Grid,
+}
+
+/// `(spellings, outline)`, first match per name token wins: a leadless quad
+/// spelling before the `QFP` it contains (`UFQFPN`), `SOT` before `SO`.
+const OUTLINES: &[(&[&str], Outline)] = &[
+    (
+        &["LFCSP", "QFN", "QFPN", "MLF", "MLP"],
+        Outline::QuadLeadless,
+    ),
+    (&["BGA", "CSP", "LGA"], Outline::Grid),
+    (&["QFP"], Outline::QuadLeaded),
+    (&["DFN", "SON"], Outline::DualLeadless),
+    (&["SOT"], Outline::Sot),
+    (&["SOIC", "SOP", "SO"], Outline::SmallOutline),
+    (&["DIP"], Outline::Dip),
+];
+
+/// The name less a `KiCad`/Eagle library prefix, as alphanumeric tokens with
+/// `SC-70` kept whole.
+fn tokens(name: &str) -> Vec<String> {
+    let bare = name.rsplit(':').next().unwrap_or(name).to_ascii_uppercase();
+    let bare = bare.replace("SC-", "SC");
+    bare.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The one outline a package or footprint name spells; `None` when it spells
+/// none or two (`LQFP48/UFQFPN48`, a column printed for both).
+#[must_use]
+pub fn outline(name: &str) -> Option<Outline> {
+    let of = |token: &String| {
+        let letters: String = token
+            .chars()
+            .take_while(char::is_ascii_alphabetic)
+            .collect();
+        let hit = |s: &&str| letters.contains(s) && (*s != "SO" || letters.ends_with("SO"));
+        let sc = sc_body(token)
+            .is_some_and(|body| matches!(body, 70 | 88))
+            .then_some(Outline::Sot);
+        sc.or_else(|| {
+            OUTLINES
+                .iter()
+                .find(|(names, _)| names.iter().any(hit))
+                .map(|r| r.1)
+        })
+    };
+    let mut found: Vec<Outline> = tokens(name).iter().filter_map(of).collect();
+    found.dedup();
+    match found[..] {
+        [one] => Some(one),
+        _ => None,
+    }
+}
+
+static IPC: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Z]+\d+P\d+X\d+.*-(\d+)[A-Z]?$").expect("a valid pattern")
+});
+static COUNTED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    let family = "QFN|QFPN|DFN|QFP|SOIC|SOP|DIP|BGA|LGA|CSP|SON|MLF|MLP|LCC|SO";
+    regex::Regex::new(&format!(r"(?:{family})(\d{{1,3}})$")).expect("a valid pattern")
+});
+
+/// `SC70` spelled as one token: its body number.
+fn sc_body(token: &str) -> Option<u32> {
+    token.strip_prefix("SC")?.parse().ok()
+}
+
+/// How many pins a package or footprint name says it has.
+///
+/// Read only where the spelling is unambiguous: an IPC-7351 name's `-49N`, `N pins`, a SOT/SC/TO
+/// body's count suffix (`SOT-23-5`; a bare `SOT-23` is 3), or a counted family
+/// (`QFN-48`, `UFQFPN48`, `SOIC-8`). `None` when two readings disagree.
+#[must_use]
+pub fn pin_count(name: &str) -> Option<u32> {
+    let tokens = tokens(name);
+    if let Some(c) = IPC.captures(&tokens.join("-")) {
+        return c[1].parse().ok();
+    }
+    let mut counts = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let next = tokens.get(i + 1).and_then(|t| t.parse::<u32>().ok());
+        let after = tokens.get(i + 2).and_then(|t| t.parse::<u32>().ok());
+        if token == "PINS" || token == "PIN" {
+            counts.push(i.checked_sub(1).and_then(|j| tokens[j].parse().ok()));
+        } else if ["SOT", "TSOT", "TO", "SC"].contains(&token.as_str()) || sc_body(token).is_some()
+        {
+            let body = sc_body(token).or(next);
+            let suffix = if body == next { after } else { next };
+            counts.push(suffix.or_else(|| (token == "SOT" && body == Some(23)).then_some(3)));
+        } else if let Some(c) = COUNTED
+            .captures(token)
+            .filter(|_| !token.starts_with("SOT"))
+        {
+            counts.push(c[1].parse().ok());
+        } else if COUNTED.is_match(&format!("{token}0"))
+            && token.chars().all(|c| c.is_ascii_alphabetic())
+        {
+            counts.push(next);
+        }
+    }
+    let mut counts: Vec<u32> = counts.into_iter().flatten().collect();
+    counts.sort_unstable();
+    counts.dedup();
+    match counts[..] {
+        [one] => Some(one),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{outline, pin_count, Outline};
+
+    #[test]
+    fn outlines_and_pin_counts_read_off_package_and_footprint_names() {
+        let cases: &[(&str, Option<Outline>, Option<u32>)] = &[
+            ("UFQFPN48", Some(Outline::QuadLeadless), Some(48)),
+            (
+                "moteus:UFQFPN-48_7X7X0P55MM",
+                Some(Outline::QuadLeadless),
+                Some(48),
+            ),
+            (
+                "QFN50P700X700X60-49N",
+                Some(Outline::QuadLeadless),
+                Some(49),
+            ),
+            (
+                "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm",
+                Some(Outline::QuadLeadless),
+                Some(48),
+            ),
+            (
+                "LQFP-64_10x10mm_P0.5mm",
+                Some(Outline::QuadLeaded),
+                Some(64),
+            ),
+            (
+                "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+                Some(Outline::SmallOutline),
+                Some(8),
+            ),
+            ("TSSOP-20", Some(Outline::SmallOutline), Some(20)),
+            ("SO-8", Some(Outline::SmallOutline), Some(8)),
+            ("Package_TO_SOT_SMD:SOT-23-5", Some(Outline::Sot), Some(5)),
+            ("SOT-23", Some(Outline::Sot), Some(3)),
+            ("SC-70-6", Some(Outline::Sot), Some(6)),
+            ("SC70-5", Some(Outline::Sot), Some(5)),
+            ("DCK (SC70), 5 pins", Some(Outline::Sot), Some(5)),
+            ("WSON-8", Some(Outline::DualLeadless), Some(8)),
+            ("LQFP48/UFQFPN48", None, Some(48)),
+            ("LQFP48/LQFP64", Some(Outline::QuadLeaded), None),
+            ("TO-220-3", None, Some(3)),
+            ("Resistor_SMD:R_0603_1608Metric", None, None),
+        ];
+        for &(name, want_outline, want_count) in cases {
+            assert_eq!(
+                (outline(name), pin_count(name)),
+                (want_outline, want_count),
+                "{name}"
+            );
+        }
+    }
+}

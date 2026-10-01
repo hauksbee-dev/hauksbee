@@ -65,14 +65,21 @@ fn fold(name: &str) -> String {
 /// nothing else, so a sibling with other digits never matches.
 #[must_use]
 pub fn part_rule(part: &str, codes: &[&str]) -> String {
-    let arm = |name: &&str| {
+    format!(
+        "(?i)^(?:{})$",
+        rule_arms(std::iter::once(part).chain(codes.iter().copied()))
+    )
+}
+
+/// The `|`-joined, separator-insensitive arms of [`part_rule`], unflagged.
+fn rule_arms<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let arm = |name: &str| {
         let tokens = name.split(['-', '_', ' ']).filter(|t| !t.is_empty());
         let escaped: Vec<_> = tokens.map(|t| regex::escape(&t.to_uppercase())).collect();
         escaped.join("[-_ ]?")
     };
-    let mut arms: Vec<String> = std::iter::once(&part).chain(codes).map(arm).collect();
-    arms.retain(|a| !a.is_empty());
-    format!("(?i)^(?:{})$", arms.join("|"))
+    let arms: Vec<String> = names.map(arm).filter(|a| !a.is_empty()).collect();
+    arms.join("|")
 }
 
 /// Stamp a validated `[[models]]` draft with what the tool knows for certain.
@@ -98,7 +105,9 @@ pub fn finalise(raw: &str, part: &str, aliases: &[String], pdf: &Path) -> anyhow
     for table in tables.into_iter().flat_map(ArrayOfTables::iter_mut) {
         let orderable = table.get("variant").and_then(|v| v.get("orderable"));
         let codes = orderable.and_then(Item::as_array).into_iter().flatten();
-        let rule = part_rule(part, &codes.filter_map(Value::as_str).collect::<Vec<_>>());
+        let codes: Vec<String> = codes.filter_map(Value::as_str).map(str::to_owned).collect();
+        let codes: Vec<&str> = codes.iter().map(String::as_str).collect();
+        let rule = part_rule(part, &codes);
         let same = |s: &String| !s.is_ascii() || fold(s) == fold(part);
         if let Some(found) = table.get_mut("match").and_then(Item::as_table_like_mut) {
             let set = found.get("value_re").and_then(Item::as_str);
@@ -113,12 +122,25 @@ pub fn finalise(raw: &str, part: &str, aliases: &[String], pdf: &Path) -> anyhow
             let re = base
                 .as_ref()
                 .and_then(|b| regex::Regex::new(&format!("(?i){b}")).ok());
-            let unmatched = aliases
-                .iter()
-                .filter(|a| re.as_ref().is_some_and(|r| !r.is_match(a)));
-            let arms: Vec<String> = unmatched.map(|a| part_rule(a, &[])).collect();
-            if let Some(base) = base.filter(|_| literal || !arms.is_empty()) {
-                found.insert("value_re", value([vec![base], arms].concat().join("|")));
+            let unmatched: Vec<&str> = (aliases.iter())
+                .filter(|a| re.as_ref().is_some_and(|r| !r.is_match(a)))
+                .map(String::as_str)
+                .collect();
+            // One case flag for the whole rule: a literal rule takes the board
+            // values as more arms, a family rule gains one anchored group.
+            let rule = match base {
+                Some(_) if literal => Some(part_rule(part, &[&codes[..], &unmatched[..]].concat())),
+                Some(base) if !unmatched.is_empty() => {
+                    let family = base.strip_prefix("(?i)").unwrap_or(&base);
+                    Some(format!(
+                        "(?i)(?:{family}|^(?:{})$)",
+                        rule_arms(unmatched.into_iter())
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(rule) = rule {
+                found.insert("value_re", value(rule));
             }
         }
         let source = table.entry("source").or_insert(Item::Table(Table::new()));
@@ -195,6 +217,7 @@ mod tests {
                 "{rule}"
             );
             assert_eq!(rule.matches("ALT").count(), 1, "{rule}");
+            assert_eq!(rule.matches("(?i)").count(), 1, "one case flag: {rule}");
         }
 
         let target = dir.path().join("abc.toml");

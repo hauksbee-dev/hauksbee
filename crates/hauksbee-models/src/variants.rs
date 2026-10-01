@@ -431,8 +431,8 @@ mod tests {
     /// A stand-in may be the member whose pads a package standard numbers, so its pads stay assumed.
     #[test]
     fn a_stand_in_keeps_a_survivors_pin_standard() {
-        let source = "[models.source]\ntier = \"datasheet-derived\"\n[[models.source.pinout]]\npackage = \"SOIC-8\"\nstandard = \"JEDEC top view\"\npins = { \"1\" = \"IN\", \"2\" = \"GND\", \"3\" = \"OUT\" }\n";
-        let lib = load(&(family(SAME, "SOIC-8") + source)).unwrap();
+        let source = "[models.source]\ntier = \"datasheet-derived\"\n[[models.source.pinout]]\npackage = \"SOT-23\"\nstandard = \"JEDEC top view\"\npins = { \"1\" = \"IN\", \"2\" = \"GND\", \"3\" = \"OUT\" }\n";
+        let lib = load(&(family(SAME, "SOT-23") + source)).unwrap();
         let q = ComponentQuery::new(None, "XYZ1234".to_string(), None);
         let model = lib.resolve(&q).model.unwrap();
         let got = Some((&*model.id, crate::validation::pin_standard(&model)));
