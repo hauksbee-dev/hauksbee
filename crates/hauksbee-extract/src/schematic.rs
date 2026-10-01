@@ -299,18 +299,19 @@ struct NetlistBuilder {
     /// two things at the same coordinate end up unioned.
     point_node: HashMap<(SheetId, Pt), usize>,
     /// How many things claim each point (pins, labels, wire ends, ...), the
-    /// points wires end at, and the junctions. A point on a wire's interior
-    /// joins that wire when a junction marks it, or when a single pin or
-    /// label sits there alone; a wire end there does not join, nor do two
-    /// things sharing the point. This is eeschema's behaviour as its netlist
-    /// export shows it.
+    /// points wires end at, the junctions, and the symbol and sheet pins. A
+    /// point on a wire's interior joins that wire when a junction marks it,
+    /// or when a single label sits there alone; a wire end or a pin there
+    /// does not join, nor do two things sharing the point. This is
+    /// eeschema's behaviour as its netlist export shows it.
     claims: HashMap<(SheetId, Pt), u32>,
     wire_ends: HashSet<(SheetId, Pt)>,
     junctions: HashSet<(SheetId, Pt)>,
+    pin_points: HashSet<(SheetId, Pt)>,
     /// Every wire / bus segment, per sheet, as an (a, b) endpoint pair tagged
-    /// with whether it is a bus (thick) segment. KiCad connects anything lying
-    /// *along* a segment, not only at its two endpoints: a label or pin placed
-    /// mid-span on a wire joins that wire. We record the segments and run an
+    /// with whether it is a bus (thick) segment. KiCad connects a label lying
+    /// *along* a segment, not only at its two endpoints: a label placed
+    /// mid-span on a wire joins that wire (a pin there needs a junction). We record the segments and run an
     /// incidence pass in `finish` that unions every point sitting on a
     /// segment's interior into it. (Most net labels in real boards sit
     /// mid-span, so without this almost every label floats free of its wire.)
@@ -398,6 +399,7 @@ impl NetlistBuilder {
             claims: HashMap::new(),
             wire_ends: HashSet::new(),
             junctions: HashSet::new(),
+            pin_points: HashSet::new(),
             segments: Vec::new(),
             bus_aliases: HashMap::new(),
             hier_parent: Vec::new(),
@@ -697,14 +699,13 @@ impl NetlistBuilder {
         let footprint = property(sym, "Footprint").unwrap_or_default();
 
         let def = lib.get(lib_id);
-        // A symbol is a power-net source when KiCad would treat it as one:
-        // either its library symbol carries the `(power)` flag, or its
-        // reference is the canonical power prefix `#PWR`. Some older library
-        // symbols (e.g. a hand-drawn VPP) omit the `(power)` flag yet are still
-        // power symbols, so the reference test is what catches them. The
-        // power_in/power_out distinction (handled per pin below) then decides
-        // whether it actually *names* the net or merely flags it.
-        let is_power = def.is_some_and(|d| d.is_power) || reference.starts_with("#PWR");
+        // A symbol is a power-net source only when its library symbol carries
+        // the `(power)` flag; a `#PWR` reference alone is not one (kicad-cli
+        // leaves its visible `power_in` pin unnamed, and a hidden one is caught
+        // as an implicit pin below). The power_in/power_out distinction
+        // (handled per pin below) then decides whether it *names* the net.
+        let is_power = def.is_some_and(|d| d.is_power);
+        let power_scope = def.map_or(NameScope::Global, |d| d.power_scope);
 
         // Power symbols and other "#"-referenced symbols (PWR_FLAG, mounting
         // holes are real refs) are not simulation components in the usual
@@ -733,6 +734,7 @@ impl NetlistBuilder {
                 }
                 let abs = place_pin(lp.at, (sx, sy, srot), mirror.as_deref());
                 let node = self.node_at(sheet, abs);
+                self.pin_points.insert((sheet, abs));
                 let pin_idx = pins.len();
                 #[allow(clippy::cast_precision_loss, reason = "um coords fit f64 exactly")]
                 pins.push(Pin {
@@ -758,7 +760,7 @@ impl NetlistBuilder {
                         sheet,
                         NamedAnchor {
                             name: normalize_label(&value),
-                            scope: NameScope::Global,
+                            scope: power_scope,
                             kind: AnchorKind::Power,
                             node,
                         },
@@ -923,6 +925,7 @@ impl NetlistBuilder {
         for pin in sub.find_all("pin") {
             if let (Some(name), Some(at)) = (pin.arg_value(0), at_xy(pin)) {
                 let node = self.node_at(sheet, at);
+                self.pin_points.insert((sheet, at));
                 let name = normalize_label(&name);
                 if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
                     // A bus sheet pin connects member-wise to the child's
@@ -1011,7 +1014,9 @@ impl NetlistBuilder {
             for &(p, node) in points {
                 let key = (sheet, p);
                 let joins = self.junctions.contains(&key)
-                    || (!self.wire_ends.contains(&key) && self.claims.get(&key) == Some(&1));
+                    || (!self.wire_ends.contains(&key)
+                        && !self.pin_points.contains(&key)
+                        && self.claims.get(&key) == Some(&1));
                 if p == a || p == b || !joins {
                     continue;
                 }
@@ -1141,9 +1146,9 @@ impl NetlistBuilder {
     /// ids to component pins.
     #[allow(clippy::too_many_lines, reason = "sequential netlist phases")]
     fn finish(mut self, name: String) -> ExtractedBoard {
-        // 0. Mid-span incidence. KiCad joins anything lying *on* a wire (or
-        //    bus) segment, not only at its endpoints: a net label or a pin
-        //    placed mid-span on a wire is electrically on that wire. Almost
+        // 0. Mid-span incidence. KiCad joins a label lying *on* a wire (or
+        //    bus) segment, not only at its endpoints: a net label placed
+        //    mid-span on a wire is electrically on that wire. Almost
         //    every net label in a real board sits mid-span, so without this
         //    nearly all labels float free of their wire and the netlist
         //    shatters. For each *wire* segment, union every same-sheet anchored
@@ -1202,18 +1207,17 @@ impl NetlistBuilder {
                 }
             }
         }
-        // Local labels: unify by name *within a sheet*. We recorded the sheet
-        // in `local_scope` alongside the anchor index.
+        // Within one sheet instance every name joins, whatever its kind: a
+        // local label meets a same-named global label, power symbol or
+        // hierarchical label on its own sheet (kicad-cli netlists), though
+        // never a local label on another sheet.
         let mut local_by_key: HashMap<(SheetId, String), usize> = HashMap::new();
         for (i, a) in self.anchors.iter().enumerate() {
-            if a.scope == NameScope::Local {
-                let sid = self.anchor_sheet[i];
-                let key = (sid, a.name.clone());
-                match local_by_key.get(&key) {
-                    Some(&first) => self.uf.union(first, a.node),
-                    None => {
-                        local_by_key.insert(key, a.node);
-                    }
+            let key = (self.anchor_sheet[i], a.name.clone());
+            match local_by_key.get(&key) {
+                Some(&first) => self.uf.union(first, a.node),
+                None => {
+                    local_by_key.insert(key, a.node);
                 }
             }
         }
@@ -1525,6 +1529,9 @@ struct LibPin {
 struct LibDef {
     pins: Vec<LibPin>,
     is_power: bool,
+    /// Reach of the net a power symbol names: `(power local)` (KiCad 9+) is
+    /// scoped to its sheet, any other power symbol is global.
+    power_scope: NameScope,
 }
 
 /// All lib symbol definitions embedded in one schematic, indexed by `lib_id`.
@@ -1540,7 +1547,12 @@ impl LibSymbols {
                 let Some(lib_id) = sym.arg_value(0) else {
                     continue;
                 };
-                let is_power = sym.find("power").is_some();
+                let power = sym.find("power");
+                let is_power = power.is_some();
+                let power_scope = match power.and_then(|p| p.arg_value(0)).as_deref() {
+                    Some("local") => NameScope::Local,
+                    _ => NameScope::Global,
+                };
                 let mut pins = Vec::new();
                 // Pins live in sub-symbol units named "<base>_<unit>_<style>".
                 // The top-level symbol can also directly hold pins (rare).
@@ -1559,7 +1571,14 @@ impl LibSymbols {
                         }
                     }
                 }
-                defs.insert(lib_id, LibDef { pins, is_power });
+                defs.insert(
+                    lib_id,
+                    LibDef {
+                        pins,
+                        is_power,
+                        power_scope,
+                    },
+                );
             }
         }
         Self { defs }

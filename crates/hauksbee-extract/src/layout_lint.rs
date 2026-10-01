@@ -160,17 +160,20 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
     }
 }
 
-/// A pin's net on one side: a named net, or (no net) a set of its own.
+/// A pin's net on one side: a named net, or (no net) a set of its own. A net
+/// is told apart by its id, not its name: a schematic read can carry two nets
+/// of one name (a sheet-local label and a global label of the same text), and
+/// keyed by name they would read as one net the layout keeps split.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Side {
-    Net(bool, String),
+    Net(bool, i64, String),
     Alone(String),
 }
 
 impl Side {
     fn label(&self) -> String {
         match self {
-            Self::Net(_, n) => format!("'{n}'"),
+            Self::Net(_, _, n) => format!("'{n}'"),
             Self::Alone(_) => "no net".to_string(),
         }
     }
@@ -201,7 +204,7 @@ fn pin_sides(
             .filter(|n| n.id != 0 && !n.name.is_empty())
             .map_or_else(
                 || Side::Alone(pin.to_string()),
-                |n| Side::Net(layout, n.name.clone()),
+                |n| Side::Net(layout, n.id, n.name.clone()),
             )
     };
     let mut pins: BTreeMap<String, (Side, Side)> = BTreeMap::new();
@@ -281,7 +284,7 @@ fn schematic_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<Li
     // judged. A pin with no net on the schematic side needs no name.
     let layout_names: BTreeSet<&str> = pcb.nets.iter().map(|n| n.name.as_str()).collect();
     let known = |side: &Side| match side {
-        Side::Net(_, name) => layout_names.contains(name.as_str()),
+        Side::Net(_, _, name) => layout_names.contains(name.as_str()),
         Side::Alone(_) => true,
     };
     let mut first = true;
@@ -345,7 +348,7 @@ fn schematic_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<Li
         let nets: Vec<String> = pcb_nets
             .iter()
             .filter_map(|n| match n {
-                Side::Net(_, name) => Some(name.clone()),
+                Side::Net(_, _, name) => Some(name.clone()),
                 Side::Alone(_) => None,
             })
             .collect::<BTreeSet<_>>()

@@ -1,0 +1,38 @@
+(kicad_sch (version 20250114) (generator "eeschema") (uuid "00000000-0000-0000-0000-0000005c0001") (paper "A4")
+ (lib_symbols
+  (symbol "Device:R" (pin_names (offset 0))
+    (property "Reference" "R" (at 2 0 90)) (property "Value" "R" (at 0 0 90))
+    (symbol "R_1_1"
+      (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+      (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))))
+  (symbol "Custom:U" (pin_names (offset 0))
+    (property "Reference" "U" (at 0 0 0)) (property "Value" "U" (at 0 0 0))
+    (symbol "U_1_1"
+      (pin passive line (at 0 3.81 270) (length 1.27) (name "A") (number "1"))
+      (pin power_in line (at 0 -3.81 90) (length 1.27) (hide yes) (name "GND") (number "2"))
+      (pin power_in line (at 2.54 -3.81 90) (length 1.27) (hide yes) (name "+3V3") (number "3"))))
+  (symbol "Custom:VPP" (pin_names (offset 0))
+    (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "VPP" (at 0 0 0))
+    (symbol "VPP_1_1"
+      (pin power_in line (at 0 0 90) (length 0) (name "VPP") (number "1"))))
+  (symbol "power:GND" (power) (pin_names (offset 0))
+    (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "GND" (at 0 0 0))
+    (symbol "GND_1_1"
+      (pin power_in line (at 0 0 90) (length 0) (hide yes) (name "GND") (number "1"))))
+  (symbol "power:VCC" (power) (pin_names (offset 0))
+    (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "VCC" (at 0 0 0))
+    (symbol "VCC_1_1"
+      (pin power_in line (at 0 0 90) (length 0) (hide yes) (name "VCC") (number "1"))))
+  (symbol "power:+5V" (power) (pin_names (offset 0))
+    (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "+5V" (at 0 0 0))
+    (symbol "+5V_1_1"
+      (pin power_in line (at 0 0 90) (length 0) (hide yes) (name "+5V") (number "1"))))
+  (symbol "power:VLOC" (power local) (pin_names (offset 0))
+    (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "VLOC" (at 0 0 0))
+    (symbol "VLOC_1_1"
+      (pin power_in line (at 0 0 90) (length 0) (hide yes) (name "VLOC") (number "1"))))
+ )
+  (symbol (lib_id "Device:R") (at 40 140 0) (unit 1) (uuid "00000000-0000-0000-0000-0000005c0053") (property "Reference" "R18" (at 40 140 0)) (property "Value" "R18" (at 40 140 0)) (property "Footprint" "R:R" (at 40 140 0)) (pin "1" (uuid "00000000-0000-0000-0000-0000005c0054")) (pin "2" (uuid "00000000-0000-0000-0000-0000005c0055")) (instances (project "proj" (path "/00000000-0000-0000-0000-00000052b000/00000000-0000-0000-0000-00000052b001" (reference "R18") (unit 1)))))
+  (symbol (lib_id "power:VLOC") (at 40 136.19 0) (unit 1) (uuid "00000000-0000-0000-0000-0000005c0056") (property "Reference" "#PWR012" (at 40 136.19 0)) (property "Value" "VLOC" (at 40 136.19 0)) (property "Footprint" "R:R" (at 40 136.19 0)) (pin "1" (uuid "00000000-0000-0000-0000-0000005c0057")) (pin "2" (uuid "00000000-0000-0000-0000-0000005c0058")) (instances (project "proj" (path "/00000000-0000-0000-0000-00000052b000/00000000-0000-0000-0000-00000052b001" (reference "#PWR012") (unit 1)))))
+  (symbol (lib_id "power:GND") (at 40 143.81 0) (unit 1) (uuid "00000000-0000-0000-0000-0000005c0059") (property "Reference" "#PWR013" (at 40 143.81 0)) (property "Value" "+3V3" (at 40 143.81 0)) (property "Footprint" "R:R" (at 40 143.81 0)) (pin "1" (uuid "00000000-0000-0000-0000-0000005c005a")) (pin "2" (uuid "00000000-0000-0000-0000-0000005c005b")) (instances (project "proj" (path "/00000000-0000-0000-0000-00000052b000/00000000-0000-0000-0000-00000052b001" (reference "#PWR013") (unit 1)))))
+ )

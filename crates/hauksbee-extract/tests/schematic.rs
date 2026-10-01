@@ -362,7 +362,8 @@ fn olimex_evb_rev_l_resistor_arrays_do_not_short_gnd_to_3v3lan() {
 fn a_wire_ending_on_another_wire_needs_a_junction() {
     // R1.2 sits at (105.08, 100); a wire drops from it onto the middle of a
     // labelled wire at y=110. eeschema joins the tee only with a junction,
-    // while a pin placed alone on a wire's interior joins it outright.
+    // and a pin placed alone on a wire's interior does not join it either
+    // (kicad-cli 10.0.6; only a label joins mid-span).
     let sch = |extra: &str| {
         format!(
             "(kicad_sch (version 20230121) (uuid \"u\") (lib_symbols (symbol \"T:R\" (symbol \"R_1_1\" \
@@ -386,5 +387,83 @@ fn a_wire_ending_on_another_wire_needs_a_junction() {
         "2"
     ));
     let lone_pin = "(symbol (lib_id \"T:R\") (at 120 110 0) (unit 1) (property \"Reference\" \"R2\" (at 0 0 0)))";
-    assert!(on_bus(lone_pin, "R2", "1"));
+    assert!(!on_bus(lone_pin, "R2", "1"));
+}
+
+/// Every pin's net-mates, as a set of `REF.PIN` groups.
+fn partition(b: &ExtractedBoard) -> BTreeSet<BTreeSet<String>> {
+    let mut by_net = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
+    for c in &b.components {
+        for p in &c.pins {
+            let key = format!("{}.{}", c.reference, p.number);
+            let id = p.net.map_or_else(|| key.clone(), |id| id.to_string());
+            by_net.entry(id).or_default().insert(key);
+        }
+    }
+    by_net.into_values().collect()
+}
+
+/// The schematic reader's net partition equals `kicad-cli sch export netlist
+/// --format kicadsexpr` (KiCad 10.0.6) on each fixture, kept as `<name>.net`:
+/// a local label meets same-named labels and power symbols on its own sheet
+/// only, a `(power local)` symbol is sheet-scoped, a `#PWR` symbol without the
+/// power flag names nothing, and a pin on a wire's interior does not join it.
+#[test]
+fn net_partition_matches_kicad_cli() {
+    let mut diffs = Vec::new();
+    for (sch, net) in [
+        ("label_scope_top.kicad_sch", "label_scope.net"),
+        ("power_rails_top.kicad_sch", "power_rails.net"),
+        ("wire_interior_pins.kicad_sch", "wire_interior_pins.net"),
+    ] {
+        let ours = fixture(sch).expect("extract");
+        let text = std::fs::read_to_string(fixtures_dir().join(net)).expect("oracle");
+        let oracle = ExtractedBoard::from_kicad_netlist(&text).expect("parse oracle");
+        let (a, b) = (partition(&ours), partition(&oracle));
+        let only = |x: &BTreeSet<_>, y: &BTreeSet<_>| x.difference(y).cloned().collect::<Vec<_>>();
+        if a != b {
+            diffs.push(format!(
+                "{sch}: ours only {:?}, kicad only {:?}",
+                only(&a, &b),
+                only(&b, &a)
+            ));
+        }
+        // KiCad's netlist standing in for an up-to-date layout: no mismatch.
+        let lint = oracle.layout_lint("", Some(&ours)).findings;
+        let check = hauksbee_extract::LintCheck::PcbSchematicMismatch;
+        diffs.extend(
+            lint.into_iter()
+                .filter(|f| f.check == check)
+                .map(|f| f.message),
+        );
+    }
+    assert!(diffs.is_empty(), "{diffs:#?}");
+}
+
+/// The PCB/schematic parity check, fed this reader's view of a hierarchy and
+/// KiCad's own netlist standing in for the layout, finds nothing: a local
+/// `SIG` on the root and a global `SIG` on the sub-sheet share a name but not
+/// a net. Moving one pin on the layout side is still a mismatch.
+#[test]
+fn parity_against_kicad_netlist_is_clean_and_still_flags_a_moved_pin() {
+    use hauksbee_extract::LintCheck;
+    let sch = fixture("label_scope_top.kicad_sch").expect("extract");
+    let text = std::fs::read_to_string(fixtures_dir().join("label_scope.net")).expect("oracle");
+    let mut layout = ExtractedBoard::from_kicad_netlist(&text).expect("parse oracle");
+    let mismatches = |layout: &ExtractedBoard| -> Vec<String> {
+        let report = layout.layout_lint("", Some(&sch));
+        let found = report.findings.into_iter();
+        found
+            .filter(|f| f.check == LintCheck::PcbSchematicMismatch)
+            .map(|f| f.message)
+            .collect()
+    };
+    assert_eq!(mismatches(&layout), Vec::<String>::new());
+    let gsig = layout.net_by_name("GSIG").expect("GSIG").id;
+    let r11 = layout.components.iter_mut().find(|c| c.reference == "R11");
+    let pin = r11.and_then(|c| c.pins.iter_mut().find(|p| p.number == "2"));
+    pin.expect("R11.2").net = Some(gsig);
+    let found = mismatches(&layout);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(found[0].contains("R11.2"), "{}", found[0]);
 }
