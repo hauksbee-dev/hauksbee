@@ -718,6 +718,7 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
             || value_upper == "?"
             || (value_upper.len() == 1 && matches!(value_upper.as_str(), "R" | "C" | "L")))
             && !crate::dnp::is_jumper_or_net_tie(c)
+            && !crate::dnp::unbought(c)
         {
             report.findings.push(LintFinding {
                 check: LintCheck::PlaceholderValue,
@@ -2739,6 +2740,23 @@ mod placeholder_jumper_exemption_tests {
             0,
             "KiCad solder jumpers / net ties are not placeholder-valued passives"
         );
+    }
+
+    #[test]
+    fn unbought_parts_with_unset_values_are_not_placeholders() {
+        // A DNP part, a DNP-policy-fitted one, and a part excluded from the
+        // BOM are never purchased, so an unset value on them is not a defect.
+        let mut dnp = comp("R1", "", "Device:R", "Resistor_SMD:R_0603_1608Metric");
+        dnp.dnp = true;
+        let mut fitted = comp("R2", "", "Device:R", "Resistor_SMD:R_0603_1608Metric");
+        fitted
+            .properties
+            .push((crate::dnp::DNP_FITTED_KEY.to_string(), String::new()));
+        let mut no_bom = comp("C3", "?", "Device:C", "Capacitor_SMD:C_0402_1005Metric");
+        no_bom
+            .properties
+            .push((crate::dnp::EXCLUDED_FROM_BOM_KEY.to_string(), String::new()));
+        assert_eq!(placeholder_count(vec![dnp, fitted, no_bom]), 0);
     }
 
     #[test]

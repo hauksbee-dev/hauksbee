@@ -320,6 +320,12 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
     // `(attr ...)` list (e.g. `(attr smd exclude_from_bom dnp)`). A DNP footprint
     // is on the layout but not assembled, so it is electrically absent.
     let dnp = fp.find("attr").is_some_and(|a| a.has_flag("dnp"));
+    if fp
+        .find("attr")
+        .is_some_and(|a| a.has_flag("exclude_from_bom"))
+    {
+        properties.push((crate::dnp::EXCLUDED_FROM_BOM_KEY.to_string(), String::new()));
+    }
 
     Component {
         reference,

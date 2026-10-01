@@ -232,14 +232,22 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 continue; // a rail net has no pull-ups to judge
             }
 
-            // Pull-up to a higher rail.
+            // Pull-up to a higher rail. A family-router model derives its pad
+            // roles from CAD pin names and carries no per-pin tolerance, so the
+            // "unless tolerant" exception is unverifiable and the finding is
+            // only a note (STM32 FT pins such as PA9 are 5 V tolerant).
+            let severity = if model.params.get_str("auto_bind") == Some("family_router") {
+                Severity::Low
+            } else {
+                Severity::Medium
+            };
             for (r_ref, rail_net, rail_v) in pullups_to_rails(board, id) {
                 if rail_v > supply_v + CLAMP_MARGIN_V
                     && seen.insert((comp.reference.clone(), id, rail_net.clone()))
                 {
                     report.findings.push(LintFinding {
                         check: LintCheck::BackPower,
-                        severity: Severity::Medium,
+                        severity,
                         message: format!(
                             "{} pad {pad} ({role}) on \"{}\" is pulled up through {r_ref} \
                              to {rail_net} ({rail_v:.1} V) while {}'s supply {} is \
@@ -361,6 +369,34 @@ mod tests {
             "finding must carry both domain voltages: {}",
             f[0].message
         );
+    }
+
+    /// An MCU with no model-DB entry binds through the family router, whose
+    /// pad roles come from CAD pin names and carry no per-pin tolerance. The
+    /// same 5 V pull-up that is a Medium fault on a DB-modelled part is then
+    /// only a Low note (an STM32 FT pin such as PA9 tolerates 5 V).
+    #[test]
+    fn family_router_binding_downgrades_the_pullup_finding_to_low() {
+        let board = r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (net 0 "") (net 1 "GND") (net 2 "+5V") (net 3 "/SIG") (net 4 "+3V3")
+  (footprint "Package_QFP:LQFP-100" (layer "F.Cu") (at 100 100)
+    (property "Reference" "U9" (at 0 0)) (property "Value" "STM32F407VGT6" (at 0 2))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "+3V3") (pinfunction "VDD"))
+    (pad "2" smd rect (at 0 1) (size 1 1) (layers "F.Cu") (net 1 "GND") (pinfunction "VSS"))
+    (pad "3" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "/SIG") (pinfunction "PA9")))
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 120 100)
+    (property "Reference" "R7" (at 0 0)) (property "Value" "10k" (at 0 2))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "/SIG"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 2 "+5V"))))"#;
+        let r = run(board);
+        let f: Vec<_> = r.of_check(LintCheck::BackPower).collect();
+        assert_eq!(
+            f.len(),
+            1,
+            "the pull-up is still reported: {:?}",
+            r.findings
+        );
+        assert_eq!(f[0].severity, Severity::Low);
     }
 
     /// Clean side: the same pull-up to the part's OWN +3V3 rail is the

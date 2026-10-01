@@ -588,25 +588,15 @@ fn find_at<'a>(
 impl DrcTieQualification {
     #[must_use]
     pub fn tie_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
-        self.tie_at(
-            &finding.net_a_name,
-            &finding.net_b_name,
-            &finding.layer,
-            finding.x,
-            finding.y,
-        )
-    }
-
-    #[must_use]
-    pub fn tie_at(
-        &self,
-        net_a: &str,
-        net_b: &str,
-        layer: &str,
-        x: f64,
-        y: f64,
-    ) -> Option<&DeclaredTie> {
-        find_at(&self.qualified, net_a, net_b, layer, x, y)
+        let DrcFinding {
+            net_a_name,
+            net_b_name,
+            layer,
+            x,
+            y,
+            ..
+        } = finding;
+        find_at(&self.qualified, net_a_name, net_b_name, layer, *x, *y)
     }
 
     #[must_use]
@@ -1128,13 +1118,7 @@ impl LayerBuckets {
             let n = pts.len();
             let mut j = n - 1;
             for i in 0..n {
-                let cap = Capsule {
-                    ax: pts[j].0,
-                    ay: pts[j].1,
-                    bx: pts[i].0,
-                    by: pts[i].1,
-                    r: 0.0,
-                };
+                let cap = Capsule::new(pts[j].0, pts[j].1, pts[i].0, pts[i].1, 0.0);
                 self.push(
                     layer,
                     make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()),
@@ -1241,13 +1225,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         let Some(net) = nets.net_ref(seg) else {
             continue;
         };
-        let cap = Capsule {
-            ax: start.0,
-            ay: start.1,
-            bx: end.0,
-            by: end.1,
-            r: width / 2.0,
-        };
+        let cap = Capsule::new(start.0, start.1, end.0, end.1, width / 2.0);
         buckets.push(
             &layer,
             make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new()),
@@ -1368,13 +1346,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             } else {
                 drill / 2.0
             };
-            let disc = Capsule {
-                ax: at.0,
-                ay: at.1,
-                bx: at.0,
-                by: at.1,
-                r,
-            };
+            let disc = Capsule::new(at.0, at.1, at.0, at.1, r);
             buckets.push(
                 layer,
                 make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new()),
@@ -1389,8 +1361,10 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         };
         // A zone can fill several layers; each `(filled_polygon (layer ...))`
         // is the actual copper. Fall back to the zone's own `(layer ...)` and
-        // its drawn `(polygon ...)` outline when no fill is present.
-        let mut any_fill = false;
+        // its drawn `(polygon ...)` outline only when the zone was never
+        // filled: `(fill yes ...)` with no polygon means an empty fill (a
+        // lower-priority pour wholly covered by a higher one), not no data.
+        let mut any_fill = zone.find("fill").and_then(|f| f.arg_value(0)).as_deref() == Some("yes");
         for fp in zone.find_all("filled_polygon") {
             let layer = fp
                 .find_value("layer")
@@ -1534,13 +1508,7 @@ fn collect_pad(
         "circle" => vec![{
             // Through outline_to_world so a drill offset displaces the disc too.
             let c = outline_to_world(0.0, 0.0);
-            Shape::Capsule(Capsule {
-                ax: c.0,
-                ay: c.1,
-                bx: c.0,
-                by: c.1,
-                r: sx.max(sy) / 2.0,
-            })
+            Shape::Capsule(Capsule::new(c.0, c.1, c.0, c.1, sx.max(sy) / 2.0))
         }],
         "oval" => vec![{
             // A stadium: a capsule whose segment runs along the longer axis,
@@ -1556,13 +1524,7 @@ fn collect_pad(
             } else {
                 (outline_to_world(0.0, -half), outline_to_world(0.0, half))
             };
-            Shape::Capsule(Capsule {
-                ax: a.0,
-                ay: a.1,
-                bx: b.0,
-                by: b.1,
-                r: short / 2.0,
-            })
+            Shape::Capsule(Capsule::new(a.0, a.1, b.0, b.1, short / 2.0))
         }],
         // Trapezoid: `(rect_delta dx dy)` skews the rectangle. KiCad's
         // outline (legacy `PAD::BuildPadPolygon`): `size` is the average of
@@ -1831,13 +1793,13 @@ fn custom_pad_shapes(
         } else {
             (to_world(0.0, -half), to_world(0.0, half))
         };
-        out.push(Shape::Capsule(Capsule {
-            ax: a.0,
-            ay: a.1,
-            bx: b.0,
-            by: b.1,
-            r: short / 2.0,
-        }));
+        out.push(Shape::Capsule(Capsule::new(
+            a.0,
+            a.1,
+            b.0,
+            b.1,
+            short / 2.0,
+        )));
     }
 
     let Some(prims) = pad.find("primitives") else {
@@ -1884,13 +1846,7 @@ fn custom_pad_shapes(
                 if let (Some(a), Some(b)) = (xy_pair(prim, "start"), xy_pair(prim, "end")) {
                     let a = to_world(a.0, a.1);
                     let b = to_world(b.0, b.1);
-                    out.push(Shape::Capsule(Capsule {
-                        ax: a.0,
-                        ay: a.1,
-                        bx: b.0,
-                        by: b.1,
-                        r: stroke_r,
-                    }));
+                    out.push(Shape::Capsule(Capsule::new(a.0, a.1, b.0, b.1, stroke_r)));
                 }
             }
             Some("gr_arc") => {
@@ -1913,13 +1869,13 @@ fn custom_pad_shapes(
                 let radius = (e.0 - c.0).hypot(e.1 - c.1);
                 let c = to_world(c.0, c.1);
                 if filled(prim) {
-                    out.push(Shape::Capsule(Capsule {
-                        ax: c.0,
-                        ay: c.1,
-                        bx: c.0,
-                        by: c.1,
-                        r: radius + stroke_r,
-                    }));
+                    out.push(Shape::Capsule(Capsule::new(
+                        c.0,
+                        c.1,
+                        c.0,
+                        c.1,
+                        radius + stroke_r,
+                    )));
                 } else {
                     // Stroke-only ring: the interior is NOT copper. Flatten the
                     // circumference into capsule links of the stroke radius so
@@ -1943,13 +1899,7 @@ fn custom_pad_shapes(
                     for i in 0..4 {
                         let p = to_world(corners[i].0, corners[i].1);
                         let q = to_world(corners[(i + 1) % 4].0, corners[(i + 1) % 4].1);
-                        out.push(Shape::Capsule(Capsule {
-                            ax: p.0,
-                            ay: p.1,
-                            bx: q.0,
-                            by: q.1,
-                            r: stroke_r,
-                        }));
+                        out.push(Shape::Capsule(Capsule::new(p.0, p.1, q.0, q.1, stroke_r)));
                     }
                 }
             }
@@ -2014,13 +1964,7 @@ fn covering_arc_capsules(
     let mut prev = at(a0);
     for i in 1..=n {
         let p = at(a0 + sweep * i as f64 / n as f64);
-        caps.push(Capsule {
-            ax: prev.0,
-            ay: prev.1,
-            bx: p.0,
-            by: p.1,
-            r: r + s / 2.0,
-        });
+        caps.push(Capsule::new(prev.0, prev.1, p.0, p.1, r + s / 2.0));
         prev = p;
     }
     caps
@@ -2069,23 +2013,11 @@ fn flatten_arc(
 ) -> Vec<Capsule> {
     let r = width / 2.0;
     let Some(mid) = mid else {
-        return vec![Capsule {
-            ax: start.0,
-            ay: start.1,
-            bx: end.0,
-            by: end.1,
-            r,
-        }];
+        return vec![Capsule::new(start.0, start.1, end.0, end.1, r)];
     };
     // Circumcircle of the three points.
     let Some((cx, cy, radius)) = circle_from_3(start, mid, end) else {
-        return vec![Capsule {
-            ax: start.0,
-            ay: start.1,
-            bx: end.0,
-            by: end.1,
-            r,
-        }];
+        return vec![Capsule::new(start.0, start.1, end.0, end.1, r)];
     };
     let ang = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx);
     let a0 = ang(start);
@@ -2101,13 +2033,7 @@ fn flatten_arc(
         let t = i as f64 / ARC_SEGMENTS as f64;
         let a = sweep.mul_add(t, a0);
         let p = (radius.mul_add(a.cos(), cx), radius.mul_add(a.sin(), cy));
-        caps.push(Capsule {
-            ax: prev.0,
-            ay: prev.1,
-            bx: p.0,
-            by: p.1,
-            r,
-        });
+        caps.push(Capsule::new(prev.0, prev.1, p.0, p.1, r));
         prev = p;
     }
     caps
@@ -2124,13 +2050,7 @@ fn covering_arc_from_3(
     width: f64,
 ) -> Vec<Capsule> {
     let r = width / 2.0;
-    let chord = vec![Capsule {
-        ax: start.0,
-        ay: start.1,
-        bx: end.0,
-        by: end.1,
-        r,
-    }];
+    let chord = vec![Capsule::new(start.0, start.1, end.0, end.1, r)];
     let Some(mid) = mid else {
         return chord;
     };
@@ -2295,9 +2215,17 @@ impl NetTieOwners {
             group.nets.contains(&a.net)
                 && group.nets.contains(&b.net)
                 && group.geometry_by_layer.get(layer).is_some_and(|geometry| {
-                    Self::owned_or_endpoint_attached(group, a, geometry)
-                        && Self::owned_or_endpoint_attached(group, b, geometry)
-                        && Self::touches_geometry_at(geometry, None, contact)
+                    // KiCad's rule: copper meeting a tie footprint is legal
+                    // where it meets the tie's pad of that copper's own net.
+                    let enters_own_pad = |tie: &Primitive, other: &Primitive| {
+                        tie.owner == group.owner
+                            && Self::touches_geometry_at(geometry, Some(other.net), contact)
+                    };
+                    enters_own_pad(a, b)
+                        || enters_own_pad(b, a)
+                        || (Self::owned_or_endpoint_attached(group, a, geometry)
+                            && Self::owned_or_endpoint_attached(group, b, geometry)
+                            && Self::touches_geometry_at(geometry, None, contact))
                 })
         })
     }
@@ -3419,13 +3347,7 @@ pub mod eagle_drc {
         n: usize,
     ) -> Vec<Capsule> {
         if curve_deg.abs() < 1e-6 {
-            return vec![Capsule {
-                ax: x1,
-                ay: y1,
-                bx: x2,
-                by: y2,
-                r,
-            }];
+            return vec![Capsule::new(x1, y1, x2, y2, r)];
         }
         // The included angle is `curve_deg`; the chord subtends it. Centre lies
         // off the chord midpoint by the sagitta direction.
@@ -3436,13 +3358,7 @@ pub mod eagle_drc {
         let dy = y2 - y1;
         let chord = dx.hypot(dy);
         if chord < 1e-9 {
-            return vec![Capsule {
-                ax: x1,
-                ay: y1,
-                bx: x2,
-                by: y2,
-                r,
-            }];
+            return vec![Capsule::new(x1, y1, x2, y2, r)];
         }
         let radius = (chord / 2.0) / (theta / 2.0).sin().abs();
         // Distance from chord midpoint to centre.
@@ -3481,13 +3397,7 @@ pub mod eagle_drc {
             let frac = i as f64 / n as f64;
             let a = theta.mul_add(frac, a0);
             let p = (cx + radius * a.cos(), cy + radius * a.sin());
-            caps.push(Capsule {
-                ax: prev.0,
-                ay: prev.1,
-                bx: p.0,
-                by: p.1,
-                r,
-            });
+            caps.push(Capsule::new(prev.0, prev.1, p.0, p.1, r));
             prev = p;
         }
         caps
@@ -3589,13 +3499,7 @@ pub mod eagle_drc {
                         let ay = cy - half * rs;
                         let bx = cx + half * rc;
                         let by = cy + half * rs;
-                        Shape::Capsule(Capsule {
-                            ax,
-                            ay,
-                            bx,
-                            by,
-                            r: d / 2.0,
-                        })
+                        Shape::Capsule(Capsule::new(ax, ay, bx, by, d / 2.0))
                     }
                     "offset" => {
                         // Offset: like "long" but the hole sits at one end, so the
@@ -3604,13 +3508,7 @@ pub mod eagle_drc {
                         let extension = d * offset_elongation_pct / 100.0;
                         let bx = cx + extension * rc;
                         let by = cy + extension * rs;
-                        Shape::Capsule(Capsule {
-                            ax: cx,
-                            ay: cy,
-                            bx,
-                            by,
-                            r: d / 2.0,
-                        })
+                        Shape::Capsule(Capsule::new(cx, cy, bx, by, d / 2.0))
                     }
                     // round (default): a disc.
                     _ => Shape::disc(cx, cy, d / 2.0),
@@ -4210,13 +4108,13 @@ pub mod altium_drc {
                 }
                 let layer = layer_name(layer);
                 copper.insert(layer.clone());
-                let cap = Capsule {
-                    ax: coord_mm(s, 13),
-                    ay: coord_mm(s, 17),
-                    bx: coord_mm(s, 21),
-                    by: coord_mm(s, 25),
-                    r: coord_mm(s, 29) / 2.0,
-                };
+                let cap = Capsule::new(
+                    coord_mm(s, 13),
+                    coord_mm(s, 17),
+                    coord_mm(s, 21),
+                    coord_mm(s, 25),
+                    coord_mm(s, 29) / 2.0,
+                );
                 let prim = make_prim(
                     Shape::Capsule(cap),
                     net_id(net, n_nets),
@@ -4358,13 +4256,7 @@ pub mod altium_drc {
                     at((i - 1) as f64 / ARC_SEGMENTS as f64),
                     at(i as f64 / ARC_SEGMENTS as f64),
                 );
-                Capsule {
-                    ax: a.0,
-                    ay: a.1,
-                    bx: b.0,
-                    by: b.1,
-                    r,
-                }
+                Capsule::new(a.0, a.1, b.0, b.1, r)
             })
             .collect()
     }
@@ -4397,13 +4289,13 @@ pub mod altium_drc {
                 // Circle, or a stadium along the long axis.
                 let half = (w - h).abs() / 2.0;
                 let (dx, dy) = if w >= h { (rc, rs) } else { (-rs, rc) };
-                Shape::Capsule(Capsule {
-                    ax: cx - half * dx,
-                    ay: cy - half * dy,
-                    bx: cx + half * dx,
-                    by: cy + half * dy,
-                    r: w.min(h) / 2.0,
-                })
+                Shape::Capsule(Capsule::new(
+                    cx - half * dx,
+                    cy - half * dy,
+                    cx + half * dx,
+                    cy + half * dy,
+                    w.min(h) / 2.0,
+                ))
             }
             3 => {
                 let c = OCTAGON_CHAMFER_RATIO * w.min(h);

@@ -576,3 +576,61 @@ fn ring_removed_inner_layer_via_is_silent_at_real_kicad_spacing() {
          would be the phantom-ring bug"
     );
 }
+
+/// A GND pour outline over a net-A track: `fill` is the zone's fill clause
+/// and `filled` its fill polygons. KiCad writes `(fill yes ...)` with no
+/// `filled_polygon` when the fill came out empty (a lower-priority pour wholly
+/// covered by a higher one), so the drawn outline must not stand in for it.
+#[test]
+fn zone_with_an_empty_fill_has_no_copper_but_an_unfilled_zone_falls_back_to_its_outline() {
+    let outline = "(polygon (pts (xy 0 -5) (xy 10 -5) (xy 10 5) (xy 0 5)))";
+    let track = r#"(segment (start 8 0) (end 14 0) (width 0.3) (layer "F.Cu") (net 1))"#;
+    let cases = [
+        ("(fill yes)", "", false, "filled, empty result: no copper"),
+        (
+            "(fill yes)",
+            "(filled_polygon (layer \"F.Cu\") (pts (xy 0 2) (xy 10 2) (xy 10 5) (xy 0 5)))",
+            false,
+            "fill clear of the track",
+        ),
+        (
+            "",
+            "",
+            true,
+            "never filled: outline is the best known copper",
+        ),
+    ];
+    for (fill, filled, reported, why) in cases {
+        let items = format!(
+            r#"(zone (net 3) (net_name "GND") (layer "F.Cu") {fill} {outline} {filled}) {track}"#
+        );
+        assert_eq!(!drc(&items).findings.is_empty(), reported, "{why}");
+    }
+}
+
+/// KiCad's net-tie rule: a foreign item may overlap the tie footprint only
+/// where the item's own net has a tie-group pad and the contact lies inside
+/// that pad. The pads here are 1 mm squares at x 0 (net A) and 0.9 (net B).
+#[test]
+fn net_tie_exempts_an_item_only_inside_its_own_groups_pad() {
+    let tie = r#"
+  (footprint "Acme:Tie" (layer "F.Cu") (at 20 20)
+    (property "Reference" "NT1" (at 0 0))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2)))"#;
+    // A vertical track at x=20.45, clear of both ends of the tie: it grazes pad 1
+    // (net A, x 19.5..20.5) inside pad 2's span (net B, x 20.4..21.4). No end of
+    // it touches the tie, so only the own-pad rule can waive the contact.
+    let cases = [
+        (2, false, "B grazes pad 1 where it overlaps B's own pad"),
+        (3, true, "GND has no pad in the group to stand on"),
+    ];
+    for (net, shorts, why) in cases {
+        let items = format!(
+            r#"{tie}(segment (start 20.45 17) (end 20.45 23) (width 0.1) (layer "F.Cu") (net {net}))"#
+        );
+        assert_eq!(drc(&items).short_count() > 0, shorts, "{why}");
+    }
+}

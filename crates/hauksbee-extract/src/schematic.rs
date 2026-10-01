@@ -767,6 +767,12 @@ impl NetlistBuilder {
             .find_value("dnp")
             .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v == "true");
 
+        if sym
+            .find_value("in_bom")
+            .is_some_and(|v| v.eq_ignore_ascii_case("no"))
+        {
+            properties.push((crate::dnp::EXCLUDED_FROM_BOM_KEY.to_string(), String::new()));
+        }
         self.components.push(Component {
             reference,
             value,

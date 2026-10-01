@@ -115,13 +115,7 @@ impl PlatedHole {
         let r = (self.diameter / 2.0).max(0.0);
         match self.to {
             None => Shape::disc(self.x, self.y, r),
-            Some((tx, ty)) => Shape::Capsule(super::geo::Capsule {
-                ax: self.x,
-                ay: self.y,
-                bx: tx,
-                by: ty,
-                r,
-            }),
+            Some((tx, ty)) => Shape::Capsule(super::geo::Capsule::new(self.x, self.y, tx, ty, r)),
         }
     }
 

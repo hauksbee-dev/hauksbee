@@ -15,6 +15,13 @@ pub struct Capsule {
     pub r: f64,
 }
 
+impl Capsule {
+    #[must_use]
+    pub const fn new(ax: f64, ay: f64, bx: f64, by: f64, r: f64) -> Self {
+        Self { ax, ay, bx, by, r }
+    }
+}
+
 /// A solid primitive's outline.
 #[derive(Debug, Clone)]
 pub enum Shape {
@@ -44,13 +51,7 @@ pub enum Shape {
 impl Shape {
     #[must_use]
     pub const fn disc(x: f64, y: f64, r: f64) -> Self {
-        Self::Capsule(Capsule {
-            ax: x,
-            ay: y,
-            bx: x,
-            by: y,
-            r,
-        })
+        Self::Capsule(Capsule::new(x, y, x, y, r))
     }
 
     /// This shape shifted by `(dx, dy)` board millimetres. Used to tile a
@@ -59,13 +60,13 @@ impl Shape {
     pub fn translated(&self, dx: f64, dy: f64) -> Self {
         let shift = |pts: &[(f64, f64)]| pts.iter().map(|(x, y)| (x + dx, y + dy)).collect();
         match self {
-            Self::Capsule(c) => Self::Capsule(Capsule {
-                ax: c.ax + dx,
-                ay: c.ay + dy,
-                bx: c.bx + dx,
-                by: c.by + dy,
-                r: c.r,
-            }),
+            Self::Capsule(c) => Self::Capsule(Capsule::new(
+                c.ax + dx,
+                c.ay + dy,
+                c.bx + dx,
+                c.by + dy,
+                c.r,
+            )),
             Self::Polygon { pts, r } => Self::Polygon {
                 pts: shift(pts),
                 r: *r,
@@ -1067,13 +1068,7 @@ mod tests {
             };
             let (x, y) = (next(14.0) - 2.0, next(14.0) - 2.0);
             let other = if round % 2 == 0 {
-                Shape::Capsule(Capsule {
-                    ax: x,
-                    ay: y,
-                    bx: x + next(1.0),
-                    by: y,
-                    r: next(0.3),
-                })
+                Shape::Capsule(Capsule::new(x, y, x + next(1.0), y, next(0.3)))
             } else {
                 Shape::Polygon {
                     pts: square(x, y, next(0.8)),
@@ -1192,24 +1187,12 @@ mod tests {
             ],
             weights: vec![1, -1, -1],
         };
-        let isolated = Shape::Capsule(Capsule {
-            ax: 5.9,
-            ay: 5.0,
-            bx: 5.9,
-            by: 5.0,
-            r: 0.15,
-        });
+        let isolated = Shape::Capsule(Capsule::new(5.9, 5.0, 5.9, 5.0, 0.15));
         assert!(
             shape_gap(&isolated, &pour) > 0.0,
             "crossing x=6 only crosses a bookkeeping contour buried in the other void"
         );
-        let touching_copper = Shape::Capsule(Capsule {
-            ax: 6.95,
-            ay: 5.0,
-            bx: 6.95,
-            by: 5.0,
-            r: 0.1,
-        });
+        let touching_copper = Shape::Capsule(Capsule::new(6.95, 5.0, 6.95, 5.0, 0.1));
         assert!(
             shape_gap(&touching_copper, &pour) < 0.0,
             "the exposed x=7 void edge still connects to the surrounding pour"
@@ -1305,13 +1288,7 @@ mod tests {
             r: 0.0,
         };
         // Track ending inside the pad.
-        let track = Shape::Capsule(Capsule {
-            ax: 0.5,
-            ay: 0.5,
-            bx: 3.0,
-            by: 0.5,
-            r: 0.1,
-        });
+        let track = Shape::Capsule(Capsule::new(0.5, 0.5, 3.0, 0.5, 0.1));
         assert!(shape_gap(&pad, &track) < 0.0);
     }
 }

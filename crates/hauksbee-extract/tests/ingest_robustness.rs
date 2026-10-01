@@ -75,51 +75,58 @@ fn mutually_referencing_sheets_do_not_overflow_the_stack() {
     }
 }
 
-#[test]
-fn non_finite_coordinate_is_refused_not_silently_passed() {
+type Reader = fn(&str) -> Result<ExtractedBoard, hauksbee_extract::ExtractError>;
+
+/// (fixture, reader, phrases the refusal must carry)
+const CORRUPT_INPUT_REFUSALS: &[(&str, Reader, &[&str])] = &[
     // The one corruption shape that produced a CONFIDENT WRONG ANSWER: a pad at
     // NaN compares false against every distance, so the clearance check walked
     // the board and reported "no shorts or clearance violations". A green
     // verdict on geometry that does not exist is worse than any error.
-    let err = ExtractedBoard::from_kicad_pcb(&read("non_finite_coordinate.kicad_pcb"))
-        .expect_err("a NaN coordinate must be refused");
-    message_says(
-        &err.to_string(),
+    (
+        "non_finite_coordinate.kicad_pcb",
+        ExtractedBoard::from_kicad_pcb,
         &["geometry is corrupt", "nan", "Re-save the board"],
-    );
-}
-
-#[test]
-fn exponent_overflowing_to_infinity_is_refused() {
+    ),
     // `1e400` parses as `inf`, which is how a mangled unit conversion arrives.
-    let err = ExtractedBoard::from_kicad_pcb(&read("exponent_overflow_coordinate.kicad_pcb"))
-        .expect_err("an infinite coordinate must be refused");
-    message_says(&err.to_string(), &["geometry is corrupt"]);
-}
-
-#[test]
-fn eagle_non_finite_coordinate_is_refused() {
+    (
+        "exponent_overflow_coordinate.kicad_pcb",
+        ExtractedBoard::from_kicad_pcb,
+        &["geometry is corrupt"],
+    ),
     // Same hazard through the Eagle reader, whose `f64` parse also accepts
     // "NaN"; falling back would place the element at the origin.
-    let err = ExtractedBoard::from_eagle_brd(&read("eagle_non_finite_coordinate.brd"))
-        .expect_err("a NaN element coordinate must be refused");
-    message_says(
-        &err.to_string(),
+    (
+        "eagle_non_finite_coordinate.brd",
+        ExtractedBoard::from_eagle_brd,
         &["geometry is corrupt", "not a finite number"],
-    );
-}
-
-#[test]
-fn merge_conflict_markers_are_refused_not_parsed() {
+    ),
     // `<<<<<<<` and `>>>>>>>` are legal bare atoms, so a conflicted board
     // parsed happily with BOTH sides of the conflict in the netlist, and every
     // number in the report described a board that never existed.
-    let err = ExtractedBoard::from_kicad_pcb(&read("merge_conflict.kicad_pcb"))
-        .expect_err("a conflicted file must be refused");
-    message_says(
-        &err.to_string(),
+    (
+        "merge_conflict.kicad_pcb",
+        ExtractedBoard::from_kicad_pcb,
         &["merge conflict", "Resolve the conflict"],
-    );
+    ),
+    // A netlist whose every designator-bearing record is N/C names parts but
+    // wires nothing. Read as a board it would be 50 components and zero nets,
+    // and every connectivity check would pass over nothing.
+    (
+        "all_no_connect.d356",
+        ExtractedBoard::from_ipc_d356,
+        &["N/C (no-connect)", "no connectivity at all", "Re-export"],
+    ),
+];
+
+#[test]
+fn corrupt_or_unbindable_input_is_refused_not_silently_passed() {
+    for &(name, reader, phrases) in CORRUPT_INPUT_REFUSALS {
+        let err = reader(&read(name))
+            .err()
+            .unwrap_or_else(|| panic!("{name} must be refused"));
+        message_says(&err.to_string(), phrases);
+    }
 }
 
 #[test]
@@ -145,19 +152,6 @@ fn ipc_356_without_designators_says_what_is_missing() {
     assert!(
         msg.contains("GND") && msg.contains("named net"),
         "must name the nets it did read: {msg}"
-    );
-}
-
-#[test]
-fn ipc_356_with_no_connectivity_at_all_is_refused() {
-    // A netlist whose every designator-bearing record is N/C names parts but
-    // wires nothing. Read as a board it would be 50 components and zero nets,
-    // and every connectivity check would pass over nothing.
-    let err = ExtractedBoard::from_ipc_d356(&read("all_no_connect.d356"))
-        .expect_err("a netlist with no nets cannot be checked");
-    message_says(
-        &err.to_string(),
-        &["N/C (no-connect)", "no connectivity at all", "Re-export"],
     );
 }
 
@@ -229,34 +223,25 @@ fn bare_role_name_fab_folder_is_recognised_as_copper() {
 
     // The films that carry the SAME role word must NOT become copper: reading an
     // assembly drawing as a copper layer invents nets out of silkscreen.
-    for f in [
+    let lookalikes = [
         "TopMask.gbr",
         "TopSilk.gbr",
         "TopAssy.gbr",
         "TopDimension.gbr",
-    ] {
-        let role = classify(&dir.join(f));
+    ];
+    // `top` sits inside `stopmask` and `bot` inside `robot`: substring matching
+    // would read either bare name as a copper layer.
+    let embedded = ["robotics-project.gbr", "photoplot.gbr"];
+    let not_copper = lookalikes.map(|f| dir.join(f));
+    for f in not_copper.iter().chain(&embedded.map(PathBuf::from)) {
+        let role = classify(f);
         assert!(
             !role.is_copper(),
-            "{f} must not be read as copper, got {role:?}"
+            "{f:?} must not be read as copper, got {role:?}"
         );
     }
     assert_eq!(classify(&dir.join("BoardOutline.gbr")), LayerRole::Outline);
     assert_eq!(classify(&dir.join("Through.drl")), LayerRole::Drill);
-}
-
-#[test]
-fn bare_role_words_do_not_match_inside_other_words() {
-    // `top` sits inside `stopmask` and `bot` inside `robot`. Substring matching
-    // would read either as a copper layer.
-    use hauksbee_extract::gerber::layers::classify;
-    for name in ["robotics-project.gbr", "photoplot.gbr"] {
-        let role = classify(Path::new(name));
-        assert!(
-            !role.is_copper(),
-            "{name} must not be read as copper, got {role:?}"
-        );
-    }
 }
 
 #[test]

@@ -660,45 +660,39 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
     }
 
     #[test]
-    fn pnp_header_unit_scales_bare_values() {
-        // Coordinates are in mil per the column header; suffix-less cells must be
-        // scaled to mm (PNP-2). 1000 mil = 25.4 mm.
-        let csv = "Ref,PosX (mil),PosY (mil),Rot\nU1,1000,2000,0\n";
-        let p = parse_pnp(csv);
-        assert_eq!(p.len(), 1);
-        assert!(
-            (p[0].x - 25.4).abs() < 1e-6,
-            "1000 mil = 25.4 mm, got {}",
-            p[0].x
-        );
-        assert!((p[0].y - 50.8).abs() < 1e-6);
-    }
-
-    #[test]
-    fn pnp_cell_unit_beats_header_unit() {
-        // A cell that names its own unit wins over the header unit, no
-        // double-scaling (PNP-2 guard).
-        let csv = "Ref,PosX (mil),PosY (mil)\nU1,5.0mm,5.0mm\n";
-        let p = parse_pnp(csv);
-        assert!((p[0].x - 5.0).abs() < 1e-6, "explicit mm not re-scaled");
-    }
-
-    #[test]
-    fn pnp_bare_xy_alias_does_not_match_unrelated_column() {
-        // The X/Y columns are named just "X (mm)"/"Y (mm)" (norm "xmm"/"ymm"),
-        // which no alias matches exactly, so resolution falls to the fuzzy pass.
-        // A bare "x" alias must not `contains`-match the earlier "Index" column
-        // (PNP-3); it must prefix-match "xmm". Were col 0 chosen for X, U1's X
-        // would parse as 1, not 12.5.
-        let csv = "Index,Ref,X (mm),Y (mm)\n1,U1,12.5,7.5\n";
-        let p = parse_pnp(csv);
-        assert_eq!(p.len(), 1);
-        assert!(
-            (p[0].x - 12.5).abs() < 1e-6,
-            "X column chosen, not Index: got {}",
-            p[0].x
-        );
-        assert!((p[0].y - 7.5).abs() < 1e-6);
+    fn pnp_coordinate_columns_resolve_to_millimetres() {
+        let cases = [
+            // Coordinates are in mil per the column header; suffix-less cells
+            // must be scaled to mm (PNP-2). 1000 mil = 25.4 mm.
+            (
+                "Ref,PosX (mil),PosY (mil),Rot\nU1,1000,2000,0\n",
+                25.4,
+                50.8,
+            ),
+            // A cell that names its own unit wins over the header unit, no
+            // double-scaling (PNP-2 guard): explicit mm is not re-scaled.
+            ("Ref,PosX (mil),PosY (mil)\nU1,5.0mm,5.0mm\n", 5.0, 5.0),
+            // The X/Y columns are named just "X (mm)"/"Y (mm)" (norm "xmm"/"ymm"),
+            // which no alias matches exactly, so resolution falls to the fuzzy
+            // pass. A bare "x" alias must not `contains`-match the earlier
+            // "Index" column (PNP-3); it must prefix-match "xmm". Were col 0
+            // chosen for X, U1's X would parse as 1, not 12.5.
+            ("Index,Ref,X (mm),Y (mm)\n1,U1,12.5,7.5\n", 12.5, 7.5),
+            // End-to-end: a "(millimeters)" column with bare cell values must stay
+            // in mm, not collapse ~39x. Before the fix the whole board clustered
+            // at ~0.25 mm.
+            (
+                "Ref,PosX (millimeters),PosY (millimeters),Rot\nU1,10.0,20.0,0\n",
+                10.0,
+                20.0,
+            ),
+        ];
+        for (csv, x, y) in cases {
+            let p = parse_pnp(csv);
+            assert_eq!(p.len(), 1, "{csv}");
+            assert!((p[0].x - x).abs() < 1e-6, "{csv}: x {x} mm, got {}", p[0].x);
+            assert!((p[0].y - y).abs() < 1e-6, "{csv}: y {y} mm, got {}", p[0].y);
+        }
     }
 
     #[test]
@@ -725,56 +719,29 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
     }
 
     #[test]
-    fn pnp_millimeter_labeled_header_is_not_rescaled_as_mils() {
-        // End-to-end: a "(millimeters)" column with bare cell values must stay in
-        // mm, not collapse ~39x. Before the fix the whole board clustered at ~0.25 mm.
-        let csv = "Ref,PosX (millimeters),PosY (millimeters),Rot\nU1,10.0,20.0,0\n";
-        let p = parse_pnp(csv);
-        assert_eq!(p.len(), 1);
-        assert!(
-            (p[0].x - 10.0).abs() < 1e-6,
-            "x stays 10 mm, got {}",
-            p[0].x
-        );
-        assert!(
-            (p[0].y - 20.0).abs() < 1e-6,
-            "y stays 20 mm, got {}",
-            p[0].y
-        );
-    }
-
-    #[test]
     fn parse_len_recognizes_spelled_out_and_plural_units() {
         // The spelled-out "inch" and plural "mils" must convert like their
         // abbreviations and report had_unit=true, or they fall through as
         // unitless and are re-scaled by the header (25.4x / 39x error).
-        let (v, had) = parse_len("0.5inch").unwrap();
-        assert!(
-            (v - 12.7).abs() < 1e-9 && had,
-            "0.5inch -> 12.7 mm, unit named"
-        );
-        let (v, had) = parse_len("10mils").unwrap();
-        assert!(
-            (v - 0.254).abs() < 1e-9 && had,
-            "10mils -> 0.254 mm, unit named"
-        );
-        // R33: the plural "inches" spelling ends in 'e'+'s'. The numeric cleaner
-        // keeps 'e' (for scientific notation), so "4.25inches" cleaned to "4.25e"
-        // and failed to parse, parse_len returned None and the whole placement
-        // row was silently dropped. It must convert like "inch".
-        let (v, had) = parse_len("4.25inches").unwrap();
-        assert!(
-            (v - 107.95).abs() < 1e-9 && had,
-            "4.25inches -> 107.95 mm, unit named"
-        );
-        let (v, had) = parse_len("1.5inches").unwrap();
-        assert!((v - 38.1).abs() < 1e-9 && had, "1.5inches -> 38.1 mm");
-        // A real scientific-notation exponent's 'e' is untouched (not trailing).
-        let (v, _) = parse_len("1.5e1").unwrap();
-        assert!(
-            (v - 15.0).abs() < 1e-9,
-            "1.5e1 -> 15 (sci-notation survives)"
-        );
+        let cases = [
+            ("0.5inch", 12.7, true),
+            ("10mils", 0.254, true),
+            // R33: the plural "inches" spelling ends in 'e'+'s'. The numeric
+            // cleaner keeps 'e' (for scientific notation), so "4.25inches"
+            // cleaned to "4.25e" and failed to parse, parse_len returned None
+            // and the whole placement row was silently dropped. It must convert
+            // like "inch".
+            ("4.25inches", 107.95, true),
+            ("1.5inches", 38.1, true),
+            // A real scientific-notation exponent's 'e' is untouched (not
+            // trailing).
+            ("1.5e1", 15.0, false),
+        ];
+        for (text, mm, unit) in cases {
+            let (v, had) = parse_len(text).unwrap();
+            assert!((v - mm).abs() < 1e-9, "{text} -> {mm} mm, got {v}");
+            assert_eq!(had, unit, "{text}: unit named?");
+        }
         // The abbreviations still behave.
         assert_eq!(parse_len("0.5in").unwrap(), (12.7, true));
         assert_eq!(parse_len("10mil").unwrap(), (0.254, true));

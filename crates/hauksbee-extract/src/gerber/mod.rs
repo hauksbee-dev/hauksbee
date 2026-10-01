@@ -1624,13 +1624,7 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
             let r = (h.diameter / 2.0).max(0.0);
             let barrel = match h.to {
                 None => geo::Shape::disc(h.x, h.y, r),
-                Some((tx, ty)) => geo::Shape::Capsule(geo::Capsule {
-                    ax: h.x,
-                    ay: h.y,
-                    bx: tx,
-                    by: ty,
-                    r,
-                }),
+                Some((tx, ty)) => geo::Shape::Capsule(geo::Capsule::new(h.x, h.y, tx, ty, r)),
             };
             let b = barrel.bounds();
             tree.locate_in_envelope_intersecting(AABB::from_corners([b[0], b[1]], [b[2], b[3]]))

@@ -238,6 +238,23 @@ fn crystal_missing_both_caps_fires() {
 }
 
 #[test]
+fn crystal_caps_with_unset_values_are_present_not_missing() {
+    // A load cap whose value is still a placeholder exists; its size is only
+    // unknown, so the crystal gets a no-judgement note, never "no load caps".
+    for (c1, c2) in [("TBD", "TBD"), ("?", "18p"), ("", "")] {
+        let b = xtal_board("16MHz", c1, c2);
+        let r = run_board(&b, check_crystal_load_cap);
+        assert_eq!(
+            r.finding_count(),
+            0,
+            "unvalued caps ({c1:?}, {c2:?}) must not fire"
+        );
+        let f = r.of_check(SiCheck::CrystalLoadCap).next().unwrap();
+        assert!(f.message.contains("unset or unreadable"), "{}", f.message);
+    }
+}
+
+#[test]
 fn rtc_with_integrated_caps_no_cap_is_silent() {
     // A 32.768 kHz crystal on a PCF8523 RTC (integrated load caps): no external
     // caps is CORRECT, must not fire. (The MNT Reform Y4 topology.)
@@ -515,6 +532,27 @@ fn antenna_keepout_ground_pour_inside_fires_high() {
     let r = run_keepout(&wroom_text(intruder));
     assert_eq!(r.finding_count(), 1, "ground pour in keepout must fire");
     assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
+}
+
+#[test]
+fn antenna_keepout_applies_to_pcb_antenna_variants_only() {
+    // The same GND pour inside the keepout: fires for a PCB-antenna module,
+    // and stays silent for the u.FL (`-<n>U[E]`) variants that have no trace
+    // antenna.
+    let pour = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
+        (filled_polygon (layer "F.Cu")
+          (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35))))"#;
+    let cases = [
+        ("ESP32-WROOM-32E-N4", 1),
+        ("ESP32-S3-WROOM-1-N8", 1),
+        ("ESP32-WROOM-32U", 0),
+        ("ESP32-S3-WROOM-1U-N8", 0),
+        ("ESP32-WROOM-32UE-N4", 0),
+    ];
+    for (value, findings) in cases {
+        let text = wroom_text(pour).replace("ESP32-WROOM-32E-N4", value);
+        assert_eq!(run_keepout(&text).finding_count(), findings, "{value}");
+    }
 }
 
 #[test]

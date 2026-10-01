@@ -671,11 +671,16 @@ mod tests {
         )
     }
 
+    /// The ties [`declared_net_ties`] reads from `text`, which must parse.
+    fn ties_in(text: &str) -> Vec<DeclaredNetTie> {
+        declared_net_ties(text).expect("parses")
+    }
+
     #[test]
     fn a_foreign_supply_symbol_on_a_net_declares_a_tie() {
         // The emonTx construct, distilled: an AGND supply symbol wired to a GND
         // supply symbol inside one segment of net GND.
-        let ties = declared_net_ties(&schematic(
+        let ties = ties_in(&schematic(
             r#"<net name="GND" class="0">
 <segment>
 <pinref part="SUPPLY6" gate="GND" pin="GND"/>
@@ -683,8 +688,7 @@ mod tests {
 <junction x="-31.75" y="365.76"/>
 </segment>
 </net>"#,
-        ))
-        .expect("parses");
+        ));
         assert_eq!(ties.len(), 1, "one declaration, got {ties:?}");
         assert_eq!(ties[0].net, "GND");
         assert_eq!(ties[0].tied_net, "AGND");
@@ -697,35 +701,18 @@ mod tests {
     }
 
     #[test]
-    fn supply_symbols_on_their_own_nets_declare_nothing() {
-        // The overwhelmingly common case, and the false-negative guard: a board
-        // whose grounds are separate must produce no exemption whatsoever.
-        let ties = declared_net_ties(&schematic(
-            r#"<net name="GND" class="0">
-<segment><pinref part="SUPPLY6" gate="GND" pin="GND"/><pinref part="R1" gate="G$1" pin="1"/></segment>
-</net>
-<net name="AGND" class="0">
-<segment><pinref part="AGND7" gate="VR1" pin="AGND"/><pinref part="R1" gate="G$1" pin="2"/></segment>
-</net>"#,
-        ))
-        .expect("parses");
-        assert!(ties.is_empty(), "no tie is declared, got {ties:?}");
-    }
-
-    #[test]
     fn a_tie_in_one_segment_does_not_travel_to_another_net() {
         // Two nets each carrying their own supply symbol, plus a third net that
         // ties nothing: the declaration is per segment, so only the segment
         // that actually holds the foreign symbol declares anything.
-        let ties = declared_net_ties(&schematic(
+        let ties = ties_in(&schematic(
             r#"<net name="AGND" class="0">
 <segment><pinref part="AGND7" gate="VR1" pin="AGND"/><pinref part="SUPPLY6" gate="GND" pin="GND"/></segment>
 </net>
 <net name="GND" class="0">
 <segment><pinref part="R1" gate="G$1" pin="1"/></segment>
 </net>"#,
-        ))
-        .expect("parses");
+        ));
         assert_eq!(ties.len(), 1);
         // Declared from AGND's side this time: net AGND, foreign symbol SUPPLY6.
         assert_eq!(ties[0].net, "AGND");
@@ -771,35 +758,8 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_pin_component_with_supply_pins_declares_nothing() {
-        // THE false-negative guard on the recogniser itself. An SD socket sitting
-        // on a signal net must not "declare" that signal tied to GND: doing so
-        // would attach false intent context to a genuine rail-to-ground short.
-        // Measured on the real files this fixture is modelled on, the earlier
-        // any-`sup`-pin rule invented 6 ties on Margay and 19 on emonTx V3.2,
-        // including 3.3V/GND.
-        let ties = declared_net_ties(&schematic_with_powered_component(
-            // J1's own GND pin on a signal net, with only an ordinary component
-            // beside it. Nothing here is a supply symbol, so nothing is declared.
-            r#"<net name="MISO" class="0">
-<segment><pinref part="J1" gate="G$1" pin="GND"/><pinref part="R1" gate="G$1" pin="1"/></segment>
-</net>"#,
-        ))
-        .expect("parses");
-        assert!(
-            ties.is_empty(),
-            "an SD socket is a component, not a supply symbol: {ties:?}"
-        );
-    }
-
-    #[test]
-    fn a_packaged_deviceset_is_never_a_supply_symbol() {
-        // The second, independent test. Even a ONE-pin symbol whose single pin is
-        // `sup` is not a supply marker if a physical package sits behind it: a
-        // supply symbol is schematic-only. Eagle writes a real part's variants as
-        // `<device name=".." package="..">` and a supply symbol's as a bare
-        // `<device name="">`, which is the discriminator used here.
-        let text = schematic(
+    fn schematics_without_a_supply_symbol_joining_two_nets_declare_nothing() {
+        let packaged_testpoint = schematic(
             r#"<net name="GND" class="0">
 <segment><pinref part="TP1" gate="G$1" pin="AGND"/><pinref part="SUPPLY6" gate="GND" pin="GND"/></segment>
 </net>"#,
@@ -816,18 +776,65 @@ mod tests {
             "</parts>",
             "<part name=\"TP1\" library=\"supply1\" deviceset=\"TESTPOINT\" device=\"\"/>\n</parts>",
         );
-        let ties = declared_net_ties(&text).expect("parses");
-        assert!(
-            ties.is_empty(),
-            "a packaged testpoint declares nothing: {ties:?}"
-        );
+        let cases = [
+            // The overwhelmingly common case, and the false-negative guard: a
+            // board whose grounds are separate must produce no exemption.
+            (
+                "supply symbols on their own nets",
+                schematic(
+                    r#"<net name="GND" class="0">
+<segment><pinref part="SUPPLY6" gate="GND" pin="GND"/><pinref part="R1" gate="G$1" pin="1"/></segment>
+</net>
+<net name="AGND" class="0">
+<segment><pinref part="AGND7" gate="VR1" pin="AGND"/><pinref part="R1" gate="G$1" pin="2"/></segment>
+</net>"#,
+                ),
+            ),
+            // THE false-negative guard on the recogniser itself. An SD socket
+            // sitting on a signal net must not "declare" that signal tied to GND:
+            // doing so would attach false intent context to a genuine
+            // rail-to-ground short. Measured on the real files this fixture is
+            // modelled on, the earlier any-`sup`-pin rule invented 6 ties on
+            // Margay and 19 on emonTx V3.2, including 3.3V/GND. J1's own GND pin
+            // sits on a signal net beside only an ordinary component.
+            (
+                "an SD socket is a component, not a supply symbol",
+                schematic_with_powered_component(
+                    r#"<net name="MISO" class="0">
+<segment><pinref part="J1" gate="G$1" pin="GND"/><pinref part="R1" gate="G$1" pin="1"/></segment>
+</net>"#,
+                ),
+            ),
+            // Even a ONE-pin symbol whose single pin is `sup` is not a supply
+            // marker if a physical package sits behind it: a supply symbol is
+            // schematic-only. Eagle writes a real part's variants as
+            // `<device name=".." package="..">` and a supply symbol's as a bare
+            // `<device name="">`, which is the discriminator used here.
+            ("a packaged testpoint declares nothing", packaged_testpoint),
+            // R1's pins carry no `direction="sup"`, so two nets bridged by a
+            // resistor symbol are NOT declared tied. A resistor really joining
+            // two nets is a component, and the DRC must keep reporting copper
+            // that bypasses it.
+            (
+                "an ordinary component is not a supply symbol",
+                schematic(
+                    r#"<net name="GND" class="0">
+<segment><pinref part="R1" gate="G$1" pin="1"/><pinref part="R1" gate="G$1" pin="2"/></segment>
+</net>"#,
+                ),
+            ),
+        ];
+        for (why, text) in cases {
+            let ties = ties_in(&text);
+            assert!(ties.is_empty(), "{why}: {ties:?}");
+        }
     }
 
     #[test]
     fn a_real_supply_symbol_still_declares_beside_a_powered_component() {
         // And the recogniser is not merely off: with the SD socket present in the
         // same library, the genuine AGND-on-GND declaration is still found.
-        let ties = declared_net_ties(&schematic_with_powered_component(
+        let ties = ties_in(&schematic_with_powered_component(
             r#"<net name="GND" class="0">
 <segment>
 <pinref part="SUPPLY6" gate="GND" pin="GND"/>
@@ -835,8 +842,7 @@ mod tests {
 <pinref part="J1" gate="G$1" pin="GND"/>
 </segment>
 </net>"#,
-        ))
-        .expect("parses");
+        ));
         assert_eq!(ties.len(), 1, "got {ties:?}");
         assert_eq!(ties[0].describe(), "AGND7 wired to SUPPLY6 in net GND");
         assert_eq!(
@@ -847,30 +853,14 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_component_is_not_a_supply_symbol() {
-        // R1's pins carry no `direction="sup"`, so two nets bridged by a
-        // resistor symbol are NOT declared tied. A resistor really joining two
-        // nets is a component, and the DRC must keep reporting copper that
-        // bypasses it.
-        let ties = declared_net_ties(&schematic(
-            r#"<net name="GND" class="0">
-<segment><pinref part="R1" gate="G$1" pin="1"/><pinref part="R1" gate="G$1" pin="2"/></segment>
-</net>"#,
-        ))
-        .expect("parses");
-        assert!(ties.is_empty(), "got {ties:?}");
-    }
-
-    #[test]
     fn a_supply_symbol_alone_on_a_named_net_still_declares_the_tie() {
         // The label form: net named by a <label>, not by a second supply
         // symbol, so there is nothing to report as "wired to".
-        let ties = declared_net_ties(&schematic(
+        let ties = ties_in(&schematic(
             r#"<net name="VBUS" class="0">
 <segment><pinref part="SUPPLY6" gate="GND" pin="GND"/><label x="0" y="0" size="1.778" layer="95"/></segment>
 </net>"#,
-        ))
-        .expect("parses");
+        ));
         assert_eq!(ties.len(), 1);
         assert_eq!(ties[0].tied_to, Vec::<String>::new());
         assert_eq!(ties[0].describe(), "SUPPLY6 placed on net VBUS");
@@ -913,15 +903,13 @@ mod tests {
         assert!(looks_like_eagle_schematic(&text));
 
         // And the parse still finds the parts and nets behind that preamble.
-        let ties = declared_net_ties(
+        let ties = ties_in(
             &schematic(
                 r#"<net name="GND" class="0">
 <segment><pinref part="SUPPLY6" gate="GND" pin="GND"/><pinref part="AGND7" gate="VR1" pin="AGND"/></segment>
 </net>"#,
             )
-            .replace("<schematic>", &format!("{preamble}<schematic>")),
-        )
-        .expect("parses");
+            .replace("<schematic>", &format!("{preamble}<schematic>")));
         assert_eq!(ties.len(), 1);
         assert_eq!(ties[0].describe(), "AGND7 wired to SUPPLY6 in net GND");
     }
@@ -948,23 +936,19 @@ mod tests {
     }
 
     #[test]
-    fn a_schematic_substring_is_not_a_schematic_element() {
-        let comment = r#"<?xml version="1.0"?><eagle><drawing><board><!-- <schematic> --></board></drawing></eagle>"#;
-        assert!(!looks_like_eagle_schematic(comment));
-        assert!(declared_net_ties(comment).is_err());
-
-        let lookalike =
-            r#"<?xml version="1.0"?><eagle><drawing><schematic_backup/></drawing></eagle>"#;
-        assert!(!looks_like_eagle_schematic(lookalike));
-        assert!(declared_net_ties(lookalike).is_err());
-    }
-
-    #[test]
-    fn a_schematic_element_outside_the_eagle_drawing_path_is_refused() {
-        let nested = r#"<?xml version="1.0"?>
-<eagle><compatibility><schematic><libraries/><parts/><sheets/></schematic></compatibility></eagle>"#;
-        assert!(!looks_like_eagle_schematic(nested));
-        assert!(declared_net_ties(nested).is_err());
+    fn a_schematic_tag_that_is_not_the_drawing_schematic_is_refused() {
+        for text in [
+            // A `<schematic>` inside a comment is text, not an element.
+            r#"<?xml version="1.0"?><eagle><drawing><board><!-- <schematic> --></board></drawing></eagle>"#,
+            // A lookalike element name sharing the prefix.
+            r#"<?xml version="1.0"?><eagle><drawing><schematic_backup/></drawing></eagle>"#,
+            // A real `<schematic>` element outside the eagle/drawing path.
+            r#"<?xml version="1.0"?>
+<eagle><compatibility><schematic><libraries/><parts/><sheets/></schematic></compatibility></eagle>"#,
+        ] {
+            assert!(!looks_like_eagle_schematic(text), "{text}");
+            assert!(declared_net_ties(text).is_err(), "{text}");
+        }
     }
 
     #[test]

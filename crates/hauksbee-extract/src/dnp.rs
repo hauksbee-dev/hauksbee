@@ -81,6 +81,24 @@ pub fn fitted_from_dnp_policy(c: &crate::Component) -> bool {
     c.properties.iter().any(|(key, _)| key == DNP_FITTED_KEY)
 }
 
+/// Property key set by the KiCad readers on a part the source excludes from the
+/// BOM (`(in_bom no)` / `(attr exclude_from_bom)`).
+pub const EXCLUDED_FROM_BOM_KEY: &str = "hauksbee.excluded_from_bom";
+
+/// True when the part is not on the bill of materials as built.
+///
+/// Either the source marks it DNP (and the fit policy only assumed it) or it
+/// excludes it from the BOM. Such a part carries no ordering value, so value
+/// checks skip it.
+#[must_use]
+pub fn unbought(c: &crate::Component) -> bool {
+    c.dnp
+        || fitted_from_dnp_policy(c)
+        || c.properties
+            .iter()
+            .any(|(key, _)| key == EXCLUDED_FROM_BOM_KEY)
+}
+
 /// Why one DNP part ended up fitted or open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnpReason {

@@ -449,32 +449,27 @@ fn designrules_clearance_is_respected() {
         r#"<wire x1="0" y1="0" x2="10" y2="0" width="0.2" layer="1"/>"#,
         r#"<wire x1="0" y1="0.5" x2="10" y2="0.5" width="0.2" layer="1"/>"#,
     );
-    let loose =
-        r#"<designrules name="loose"><param name="mdWireWire" value="6mil"/></designrules>"#;
-    let r_loose = drc_rules("", "", &signals, loose);
-    assert!(
-        (r_loose.clearance_mm - 0.1524).abs() < 1e-3,
-        "6 mil rule read as ~0.1524 mm, got {}",
-        r_loose.clearance_mm
-    );
-    assert!(
-        r_loose.findings.is_empty(),
-        "0.15 mm rule: the 0.3 mm gap is clean"
-    );
-
-    let strict =
-        r#"<designrules name="strict"><param name="mdWireWire" value="20mil"/></designrules>"#;
-    let r_strict = drc_rules("", "", &signals, strict);
-    assert!(
-        (r_strict.clearance_mm - 0.508).abs() < 1e-3,
-        "20 mil rule read as ~0.508 mm, got {}",
-        r_strict.clearance_mm
-    );
-    assert_eq!(r_strict.short_count(), 0);
-    assert!(
-        r_strict.clearance_violations().count() >= 1,
-        "0.508 mm rule flags the 0.3 mm gap"
-    );
+    for (rule, mm, violates) in [("6mil", 0.1524, false), ("20mil", 0.508, true)] {
+        let rules = format!(
+            r#"<designrules name="r"><param name="mdWireWire" value="{rule}"/></designrules>"#
+        );
+        let r = drc_rules("", "", &signals, &rules);
+        assert!(
+            (r.clearance_mm - mm).abs() < 1e-3,
+            "{rule} rule read as ~{mm} mm, got {}",
+            r.clearance_mm
+        );
+        assert_eq!(r.short_count(), 0, "{rule}: the wires never touch");
+        if violates {
+            let n = r.clearance_violations().count();
+            assert!(n >= 1, "{mm} mm rule flags the 0.3 mm gap");
+        } else {
+            assert!(
+                r.findings.is_empty(),
+                "{mm} mm rule: the 0.3 mm gap is clean"
+            );
+        }
+    }
 }
 
 #[test]
@@ -526,50 +521,8 @@ const TWO_CLASSES: &str = r#"
 </class>
 </classes>"#;
 
-#[test]
-fn same_class_clearance_rule_is_applied() {
-    // Both wires in class 1 (0.4 mm): the 0.3 mm gap violates the class rule
-    // even though the design rules alone would pass it.
-    let rules = format!("{TWO_CLASSES}{}", default_rules());
-    let report = drc_rules("", "", &two_wire_signals("1", "1"), &rules);
-    assert_eq!(report.short_count(), 0, "not touching, so never a short");
-    let f = report
-        .clearance_violations()
-        .next()
-        .expect("0.3 mm gap violates the 0.4 mm class rule");
-    assert!(
-        (f.required_clearance_mm - 0.4).abs() < 1e-9,
-        "class rule drives the requirement, got {}",
-        f.required_clearance_mm
-    );
-}
-
-#[test]
-fn cross_class_pair_without_matrix_entry_uses_the_larger_class_clearance() {
-    // P1 in class 1 (0.4), P2 in class 0 (0.15), no explicit 1-0 matrix cell:
-    // Eagle's rule for nets of different classes is that the larger of the
-    // two class clearances governs, so the 0.3 mm gap violates the 0.4 mm
-    // power-class rule. A design-rules-only fallback (0.1524 mm) would
-    // silently under-report every power-to-signal pair.
-    let rules = format!("{TWO_CLASSES}{}", default_rules());
-    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
-    assert_eq!(report.short_count(), 0, "not touching, so never a short");
-    let f = report
-        .clearance_violations()
-        .next()
-        .expect("0.3 mm gap violates the larger (0.4 mm) class clearance");
-    assert!(
-        (f.required_clearance_mm - 0.4).abs() < 1e-9,
-        "the larger class clearance drives the requirement, got {}",
-        f.required_clearance_mm
-    );
-}
-
-#[test]
-fn explicit_cross_class_matrix_entry_is_applied() {
-    // Same pair, but class 1 declares a 0.5 mm clearance to class 0: the
-    // 0.3 mm gap now violates it.
-    let classes = r#"
+/// The explicit 1-0 pair entry (0.5 mm) on top of [`TWO_CLASSES`].
+const CROSS_ENTRY_CLASSES: &str = r#"
 <classes>
 <class number="0" name="default" width="0" drill="0">
 <clearance class="0" value="0.15"/>
@@ -579,17 +532,37 @@ fn explicit_cross_class_matrix_entry_is_applied() {
 <clearance class="1" value="0.4"/>
 </class>
 </classes>"#;
-    let rules = format!("{classes}{}", default_rules());
-    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
-    let f = report
-        .clearance_violations()
-        .next()
-        .expect("0.3 mm gap violates the explicit 0.5 mm pair entry");
-    assert!(
-        (f.required_clearance_mm - 0.5).abs() < 1e-9,
-        "pair entry drives the requirement, got {}",
-        f.required_clearance_mm
-    );
+
+/// (case, classes, class of P1, class of P2, required clearance in mm)
+#[rustfmt::skip]
+const CLASS_CASES: &[(&str, &str, &str, &str, f64)] = &[
+    // Both wires in class 1 (0.4 mm): the 0.3 mm gap violates the class rule
+    // even though the design rules alone would pass it.
+    ("same-class rule", TWO_CLASSES, "1", "1", 0.4),
+    // Class 1 (0.4) vs class 0 (0.15), no explicit 1-0 cell: Eagle's rule is
+    // that the larger class clearance governs. A design-rules-only fallback
+    // (0.1524 mm) would silently under-report every power-to-signal pair.
+    ("cross-class pair, no matrix entry", TWO_CLASSES, "1", "0", 0.4),
+    // Same pair, but class 1 declares 0.5 mm to class 0: that entry governs.
+    ("explicit cross-class entry", CROSS_ENTRY_CLASSES, "1", "0", 0.5),
+];
+
+#[test]
+fn class_clearance_matrix_drives_the_required_clearance() {
+    for &(name, classes, class_a, class_b, required) in CLASS_CASES {
+        let rules = format!("{classes}{}", default_rules());
+        let report = drc_rules("", "", &two_wire_signals(class_a, class_b), &rules);
+        assert_eq!(report.short_count(), 0, "{name}: never a short");
+        let f = report
+            .clearance_violations()
+            .next()
+            .unwrap_or_else(|| panic!("{name}: 0.3 mm gap violates the {required} mm rule"));
+        assert!(
+            (f.required_clearance_mm - required).abs() < 1e-9,
+            "{name}: the class rule drives the requirement, got {}",
+            f.required_clearance_mm
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -637,43 +610,31 @@ fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
 }
 
 #[test]
-fn overlapping_pours_with_different_ranks_are_arbitrated_not_shorted() {
-    // rank 1 vs rank 2: the higher-numbered pour carves around the lower, so
-    // the overlap is legal and must stay silent.
-    let signals = ab(
-        &pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
-        &pour(r#" rank="2""#, 5.0, 5.0, 15.0, 15.0),
-    );
-    let report = drc("", "", &signals);
-    assert!(
-        report.findings.is_empty(),
-        "rank arbitration makes the overlap legal: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn a_cutout_polygon_is_not_copper() {
-    // pour="cutout" carves other pours and pours nothing itself: overlapping a
-    // same-rank foreign pour is not a short.
-    let signals = ab(
-        &pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
-        &pour(r#" rank="1" pour="cutout""#, 5.0, 5.0, 15.0, 15.0),
-    );
-    let report = drc("", "", &signals);
-    assert!(
-        report.findings.is_empty(),
-        "a cutout pours no copper: {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
-            .collect::<Vec<_>>()
-    );
+fn arbitrated_or_cutout_pour_overlaps_are_silent() {
+    let cases = [
+        // rank 1 vs rank 2: the higher-numbered pour carves around the lower, so
+        // the overlap is legal and must stay silent.
+        ("rank arbitration makes the overlap legal", r#" rank="2""#),
+        // pour="cutout" carves other pours and pours nothing itself: overlapping
+        // a same-rank foreign pour is not a short.
+        ("a cutout pours no copper", r#" rank="1" pour="cutout""#),
+    ];
+    for (name, b_attrs) in cases {
+        let signals = ab(
+            &pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
+            &pour(b_attrs, 5.0, 5.0, 15.0, 15.0),
+        );
+        let report = drc("", "", &signals);
+        assert!(
+            report.findings.is_empty(),
+            "{name}: {:?}",
+            report
+                .findings
+                .iter()
+                .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

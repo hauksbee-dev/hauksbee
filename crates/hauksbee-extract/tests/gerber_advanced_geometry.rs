@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hauksbee_extract::gerber::from_gerber_dir;
+use hauksbee_extract::gerber::{from_gerber_dir, GerberExtraction};
 
 const EXPECTED_COPPER_LAYERS: usize = 4;
 const EXPECTED_PLATED_HOLES: usize = 2;
@@ -20,6 +20,15 @@ fn job(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
+}
+
+/// Assert some note mentions every one of `needles`; `what` says why it must.
+fn assert_note(e: &GerberExtraction, needles: &[&str], what: &str) {
+    let notes = &e.stats.notes;
+    assert!(
+        notes.iter().any(|n| needles.iter().all(|s| n.contains(s))),
+        "{what}: {notes:?}"
+    );
 }
 
 fn fixture() -> PathBuf {
@@ -132,13 +141,10 @@ fn a_drill_film_that_never_says_whether_it_is_plated_abstains_out_loud() {
     assert_eq!(e.stats.n_holes, 0);
     assert_eq!(e.stats.refused_plating_files, 1);
     assert_eq!(e.stats.n_nets, 2, "nothing may be joined on a guess");
-    assert!(
-        e.stats
-            .notes
-            .iter()
-            .any(|n| n.contains("unk-drill.gbr") && n.contains("plated")),
-        "the abstention must name the file: {:?}",
-        e.stats.notes
+    assert_note(
+        &e,
+        &["unk-drill.gbr", "plated"],
+        "the abstention must name the file",
     );
 }
 
@@ -185,13 +191,10 @@ fn a_drill_file_with_no_readable_span_in_a_multi_span_job_refuses() {
         e.stats.n_nets, 3,
         "L1+L2 join; L3 and L4 stay apart because the second span is unknown"
     );
-    assert!(
-        e.stats
-            .notes
-            .iter()
-            .any(|n| n.contains("refuse-PTH-extra.drl")),
-        "the refusal must name the file it applies to: {:?}",
-        e.stats.notes
+    assert_note(
+        &e,
+        &["refuse-PTH-extra.drl"],
+        "the refusal must name the file it applies to",
     );
 }
 
@@ -285,11 +288,7 @@ fn a_blind_via_on_a_gapped_stack_is_refused_rather_than_placed_by_position() {
         e.stats.n_nets, 2,
         "a blind via to a missing layer must not join the outer films"
     );
-    assert!(
-        e.stats.notes.iter().any(|n| n.contains("gap-PTH.drl")),
-        "the refusal must name the file: {:?}",
-        e.stats.notes
-    );
+    assert_note(&e, &["gap-PTH.drl"], "the refusal must name the file");
 }
 
 #[test]
@@ -315,21 +314,14 @@ fn a_declared_span_naming_a_layer_this_job_lacks_refuses_end_to_end() {
         e.stats.n_nets, 2,
         "an unusable declaration must not be widened into a through-hole"
     );
-    assert!(
-        e.stats.notes.iter().any(|n| n.contains("oor-PTH.drl")),
-        "the refusal must name the file: {:?}",
-        e.stats.notes
-    );
+    assert_note(&e, &["oor-PTH.drl"], "the refusal must name the file");
     // The job also has to say that it is looking at a 6-layer board through
     // two films, because that missing copper is the underlying problem and it
     // costs more than the one refused hit.
-    assert!(
-        e.stats
-            .notes
-            .iter()
-            .any(|n| n.contains("6-layer board") && n.contains("2 copper layer")),
-        "the missing copper layers must be reported: {:?}",
-        e.stats.notes
+    assert_note(
+        &e,
+        &["6-layer board", "2 copper layer"],
+        "the missing copper layers must be reported",
     );
 }
 
@@ -355,12 +347,9 @@ fn a_full_depth_span_survives_a_job_whose_inner_films_did_not_classify() {
         e.stats.n_nets, 1,
         "the through-hole joins the two films this job does carry"
     );
-    assert!(
-        e.stats
-            .notes
-            .iter()
-            .any(|n| n.contains("6-layer board") && n.contains("2 copper layer")),
-        "the missing copper layers must still be reported: {:?}",
-        e.stats.notes
+    assert_note(
+        &e,
+        &["6-layer board", "2 copper layer"],
+        "the missing copper layers must still be reported",
     );
 }

@@ -81,6 +81,13 @@ fn read_placement(rel: &str) -> PlacementFile {
     PlacementFile::read(&fixture(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
+/// Assert `msg` carries every phrase, naming the missing one.
+fn assert_says(msg: &str, phrases: &[&str]) {
+    for p in phrases {
+        assert!(msg.contains(p), "missing {p:?} in {msg}");
+    }
+}
+
 // ── Dialect detection over every real fixture ───────────────────────────────
 
 #[test]
@@ -288,8 +295,8 @@ fn rendering_public_provenance_never_panics_on_a_short_digest() {
 fn a_distributor_cart_export_with_no_designators_refuses_and_says_why() {
     let err = Bom::read(&fixture("bom/digikey_no_refdes.csv")).expect_err("must refuse");
     assert_eq!(err.exit_code(), 3);
-    let msg = err.to_string();
     // The message has to name the column, the scale of the problem, and the fix.
+    let msg = err.to_string();
     assert!(msg.contains("Reference Designator"), "{msg}");
     assert!(msg.contains("purchase list"), "{msg}");
     assert!(
@@ -320,17 +327,52 @@ fn a_reference_column_that_is_only_a_guess_refuses_with_the_flag_that_fixes_it()
     );
 }
 
+/// (what the refusal guards, file name, text, phrases the message must carry).
+/// Every one exits 3.
+const BOM_REFUSALS: &[(&str, &str, &str, &[&str])] = &[
+    (
+        "a file that is not a BOM must not have columns invented for it",
+        "reddit.csv",
+        "created_utc,score,domain,id,title\n1274985703.0,740,self.gnu,c8rrk,RMS\n",
+        &["does not read as a bill of materials", "--bom-column reference="],
+    ),
+    (
+        "manufacturer feeds the hard board/BOM identity check: no first-win",
+        "two-manufacturers.csv",
+        "Designator,Value,Manufacturer,Manufacturer Name\nU1,MCP4728,Microchip,Texas Instruments\n",
+        &["two columns", "manufacturer", "Manufacturer Name"],
+    ),
+    (
+        "a physical-line parser must not accept half of a logical CSV row",
+        "multiline.csv",
+        "Designator,Description,Value,MPN\nR1,\"precision resistor\nAEC-Q200 qualified\",10k,RC0402FR-0710KL\n",
+        &["multiline quoted field", "line 2", "re-export"],
+    ),
+    // An empty file names the two reasons it is usually empty.
+    ("an empty file", "bom.csv", "   \n\n", &["git lfs pull"]),
+    (
+        "one designator cannot acquire two identities",
+        "duplicate-row.csv",
+        "Designator,Value,MPN\nU1,regulator,TPS62130\nU1,regulator,TPS62135\n",
+        &["U1", "lines 2 and 3"],
+    ),
+    (
+        "every accepted designator is component identity, not prose",
+        "duplicate-nonnumeric.csv",
+        "Designator,Value,MPN\nRX,receiver,SN65HVD230\n,an empty reference row is ignored,\nRX,receiver,MCP2562\n",
+        &["RX", "lines 2 and 4"],
+    ),
+];
+
 #[test]
-fn a_file_that_is_not_a_bom_refuses_rather_than_inventing_columns() {
-    let text = "created_utc,score,domain,id,title\n1274985703.0,740,self.gnu,c8rrk,RMS\n";
-    let err = Bom::from_text(text, "reddit.csv", &ColumnOverrides::new()).expect_err("must refuse");
-    assert_eq!(err.exit_code(), 3);
-    let msg = err.to_string();
-    assert!(
-        msg.contains("does not read as a bill of materials"),
-        "{msg}"
-    );
-    assert!(msg.contains("--bom-column reference="), "{msg}");
+fn bom_text_that_cannot_be_read_honestly_refuses_and_says_why() {
+    for &(why, name, text, phrases) in BOM_REFUSALS {
+        let err = Bom::from_text(text, name, &ColumnOverrides::new())
+            .err()
+            .unwrap_or_else(|| panic!("{why}: must refuse"));
+        assert_eq!(err.exit_code(), 3, "{why}");
+        assert_says(&format!("{why}: {err}"), phrases);
+    }
 }
 
 #[test]
@@ -388,31 +430,6 @@ fn identically_named_identity_columns_refuse_when_their_cells_disagree() {
 }
 
 #[test]
-fn two_manufacturer_columns_refuse_instead_of_first_winning_identity() {
-    let text = "Designator,Value,Manufacturer,Manufacturer Name\n\
-                U1,MCP4728,Microchip,Texas Instruments\n";
-    let err = Bom::from_text(text, "two-manufacturers.csv", &ColumnOverrides::new())
-        .expect_err("manufacturer feeds the hard board/BOM identity check");
-
-    assert_eq!(err.exit_code(), 3);
-    let message = err.to_string();
-    assert!(message.contains("two columns"), "{message}");
-    assert!(message.contains("manufacturer"), "{message}");
-    assert!(message.contains("Manufacturer Name"), "{message}");
-}
-
-#[test]
-fn a_multiline_quoted_csv_cell_refuses_instead_of_truncating_the_row() {
-    let text = "Designator,Description,Value,MPN\nR1,\"precision resistor\nAEC-Q200 qualified\",10k,RC0402FR-0710KL\n";
-    let err = Bom::from_text(text, "multiline.csv", &ColumnOverrides::new())
-        .expect_err("a physical-line parser must not accept half of a logical CSV row");
-    let message = err.to_string();
-    assert!(message.contains("multiline quoted field"), "{message}");
-    assert!(message.contains("line 2"), "{message}");
-    assert!(message.contains("re-export"), "{message}");
-}
-
-#[test]
 fn windows_1252_bytes_decode_as_windows_1252_not_latin1_controls() {
     let mut bytes = b"Designator,Value,MPN\nU1,regulator,ABC".to_vec();
     bytes.push(0x96); // Windows-1252 EN DASH; Latin-1 would produce U+0096.
@@ -435,13 +452,6 @@ fn an_override_naming_a_column_that_is_not_there_says_which_columns_are() {
     let msg = err.to_string();
     assert!(msg.contains("has no column called \"PartNo\""), "{msg}");
     assert!(msg.contains("\"Designator\""), "{msg}");
-}
-
-#[test]
-fn an_empty_file_refuses_with_the_two_reasons_it_is_usually_empty() {
-    let err = Bom::from_text("   \n\n", "bom.csv", &ColumnOverrides::new()).expect_err("refuse");
-    assert_eq!(err.exit_code(), 3);
-    assert!(err.to_string().contains("git lfs pull"), "{err}");
 }
 
 #[test]
@@ -488,45 +498,40 @@ fn a_quantity_that_disagrees_with_its_own_reference_list_is_reported() {
     assert_eq!((row.value.as_str(), stated, enumerated), ("10k", 4, 3));
 }
 
-#[test]
-fn a_reference_appearing_in_two_bom_rows_refuses_instead_of_first_winning() {
-    let text = "Designator,Value,MPN\nU1,regulator,TPS62130\nU1,regulator,TPS62135\n";
-    let err = Bom::from_text(text, "duplicate-row.csv", &ColumnOverrides::new())
-        .expect_err("one designator cannot acquire two identities");
-    let message = err.to_string();
-    assert!(message.contains("U1"), "{message}");
-    assert!(message.contains("lines 2 and 3"), "{message}");
-}
-
-#[test]
-fn a_nonnumeric_reference_appearing_in_two_rows_also_refuses() {
-    let text = "Designator,Value,MPN\n\
-                RX,receiver,SN65HVD230\n\
-                ,an empty reference row is ignored,\n\
-                RX,receiver,MCP2562\n";
-    let err = Bom::from_text(text, "duplicate-nonnumeric.csv", &ColumnOverrides::new())
-        .expect_err("every accepted designator is component identity, not prose");
-
-    assert_eq!(err.exit_code(), 3);
-    let message = err.to_string();
-    assert!(message.contains("RX"), "{message}");
-    assert!(message.contains("lines 2 and 4"), "{message}");
-}
-
 // ── Placement files ─────────────────────────────────────────────────────────
 
-#[test]
-fn duplicate_placement_coordinate_columns_refuse_instead_of_first_winning() {
-    let text = "Designator,Mid X,X,Mid Y,Rotation,Layer\n\
-                R1,10.0,99.0,20.0,0,Top\n";
-    let err = PlacementFile::from_text(text, "ambiguous-cpl.csv")
-        .expect_err("two placement X claims cannot be resolved by column order");
+/// (what the refusal guards, file name, text, phrases the message must carry).
+/// Every one exits 3.
+const PLACEMENT_REFUSALS: &[(&str, &str, &str, &[&str])] = &[
+    (
+        "two placement X claims cannot be resolved by column order",
+        "ambiguous-cpl.csv",
+        "Designator,Mid X,X,Mid Y,Rotation,Layer\nR1,10.0,99.0,20.0,0,Top\n",
+        &["X position", "columns 2 and 3", "Re-export"],
+    ),
+    (
+        "a file with no coordinates is not a placement file",
+        "bom.csv",
+        "Designator,Value\nR1,10k\n",
+        &["no X and Y"],
+    ),
+    (
+        "a part cannot be placed twice without an explicit panel model",
+        "duplicate-cpl.csv",
+        "Designator,Mid X,Mid Y,Layer,Rotation\nU1,1,2,Top,0\nU1,3,4,Bottom,180\n",
+        &["U1", "lines 2 and 3"],
+    ),
+];
 
-    assert_eq!(err.exit_code(), 3);
-    let message = err.to_string();
-    assert!(message.contains("X position"), "{message}");
-    assert!(message.contains("columns 2 and 3"), "{message}");
-    assert!(message.contains("Re-export"), "{message}");
+#[test]
+fn placement_text_that_cannot_be_read_honestly_refuses_and_says_why() {
+    for &(why, name, text, phrases) in PLACEMENT_REFUSALS {
+        let err = PlacementFile::from_text(text, name)
+            .err()
+            .unwrap_or_else(|| panic!("{why}: must refuse"));
+        assert_eq!(err.exit_code(), 3, "{why}");
+        assert_says(&format!("{why}: {err}"), phrases);
+    }
 }
 
 #[test]
@@ -649,23 +654,4 @@ fn a_placement_file_supplies_identity_only_as_a_value_never_as_a_part_number() {
         "a placement file's Val column is a value string, not a part number"
     );
     assert!(hints.iter().any(|h| h.value.as_deref() == Some("4.7uF")));
-}
-
-#[test]
-fn a_placement_file_that_is_not_one_refuses() {
-    let err =
-        PlacementFile::from_text("Designator,Value\nR1,10k\n", "bom.csv").expect_err("refuse");
-    assert_eq!(err.exit_code(), 3);
-    let msg = err.to_string();
-    assert!(msg.contains("no X and Y"), "{msg}");
-}
-
-#[test]
-fn a_reference_appearing_twice_in_a_placement_file_refuses() {
-    let text = "Designator,Mid X,Mid Y,Layer,Rotation\nU1,1,2,Top,0\nU1,3,4,Bottom,180\n";
-    let err = PlacementFile::from_text(text, "duplicate-cpl.csv")
-        .expect_err("a part cannot be placed twice without an explicit panel model");
-    let message = err.to_string();
-    assert!(message.contains("U1"), "{message}");
-    assert!(message.contains("lines 2 and 3"), "{message}");
 }

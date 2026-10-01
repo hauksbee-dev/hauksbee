@@ -2056,13 +2056,7 @@ impl<'a> Plotter<'a> {
                     // fabricates an open in a conductor that is really whole.
                     // Refusing leaves the copper standing, the same direction
                     // every other limit in `apply_clears` fails in.
-                    self.add_clear(&Shape::Capsule(Capsule {
-                        ax: sx,
-                        ay: sy,
-                        bx: ex,
-                        by: ey,
-                        r: width / 2.0,
-                    }));
+                    self.add_clear(&Shape::Capsule(Capsule::new(sx, sy, ex, ey, width / 2.0)));
                 }
                 self.x = ex;
                 self.y = ey;
@@ -2277,22 +2271,10 @@ impl<'a> Plotter<'a> {
                 let (w, h) = (x * s, y * s);
                 let capsule = if w >= h {
                     let r = h / 2.0;
-                    Capsule {
-                        ax: cx - (w - h) / 2.0,
-                        ay: cy,
-                        bx: cx + (w - h) / 2.0,
-                        by: cy,
-                        r,
-                    }
+                    Capsule::new(cx - (w - h) / 2.0, cy, cx + (w - h) / 2.0, cy, r)
                 } else {
                     let r = w / 2.0;
-                    Capsule {
-                        ax: cx,
-                        ay: cy - (h - w) / 2.0,
-                        bx: cx,
-                        by: cy + (h - w) / 2.0,
-                        r,
-                    }
+                    Capsule::new(cx, cy - (h - w) / 2.0, cx, cy + (h - w) / 2.0, r)
                 };
                 match hole_mm {
                     None => Shape::Capsule(capsule),

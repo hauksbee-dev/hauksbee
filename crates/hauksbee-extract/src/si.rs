@@ -450,28 +450,32 @@ pub fn cl_board_pf(c1_pf: f64, c2_pf: f64, cstray_pf: f64) -> f64 {
     cl_series(c1_pf, c2_pf) + cstray_pf
 }
 
+/// A load cap found on a crystal terminal. `Unvalued` is a cap wired to ground
+/// whose value field is unset or not a capacitance ("TBD"): it exists, only its
+/// size is unknown, so it must not read as a missing cap.
+#[derive(Clone, Copy)]
+enum LoadCap {
+    Pf(f64),
+    Unvalued,
+}
+
 /// On a crystal terminal net, find the load cap to ground: a capacitor with one
-/// pad on `net` and the other on a ground net. Returns its capacitance in pF.
-fn load_cap_on_net(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
-    for (c, _p) in board.net_members(net_id) {
+/// pad on `net` and the other on a ground net.
+fn load_cap_on_net(board: &ExtractedBoard, net_id: i64) -> Option<LoadCap> {
+    board.net_members(net_id).iter().find_map(|(c, _p)| {
         // A DNP or identity-refused cap loads nothing: crediting it would
         // silence a genuine missing-load-cap finding.
-        if !AssemblyState::of(c).is_present() || !is_capacitor(c) {
-            continue;
-        }
-        let to_ground = c.pins.iter().any(|op| {
-            op.net
-                .filter(|id| *id != net_id)
-                .and_then(|id| board.net(id))
-                .is_some_and(|on| is_ground(&on.name))
-        });
-        if to_ground {
-            if let Some(f) = parse_farads(&c.value) {
-                return Some(f * 1e12);
-            }
-        }
-    }
-    None
+        let to_ground = AssemblyState::of(c).is_present()
+            && is_capacitor(c)
+            && c.pins.iter().any(|op| {
+                op.net
+                    .filter(|id| *id != net_id)
+                    .and_then(|id| board.net(id))
+                    .is_some_and(|on| is_ground(&on.name))
+            });
+        to_ground
+            .then(|| parse_farads(&c.value).map_or(LoadCap::Unvalued, |f| LoadCap::Pf(f * 1e12)))
+    })
 }
 
 /// The two signal nets of a crystal: its non-ground pads. A 2-pin crystal has
@@ -531,7 +535,16 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
             .filter_map(|id| board.net(*id).map(|n| n.name.clone()))
             .collect();
 
-        if let (Some(c1), Some(c2)) = (c1, c2) {
+        let mut push = |severity, message: String| {
+            report.findings.push(SiFinding {
+                check: SiCheck::CrystalLoadCap,
+                severity,
+                message: format!("{} ({}): {message}", xtal.reference, xtal.value),
+                refs: vec![xtal.reference.clone()],
+                nets: net_names.clone(),
+            });
+        };
+        if let (Some(LoadCap::Pf(c1)), Some(LoadCap::Pf(c2))) = (c1, c2) {
             let cl = cl_board_pf(c1, c2, CSTRAY_PF);
             if let Some((spec, cite)) = known_crystal_cl(&xtal.value) {
                 let dev = (cl - spec).abs();
@@ -541,78 +554,55 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
                     } else {
                         SiSeverity::Medium
                     };
-                    report.findings.push(SiFinding {
-                        check: SiCheck::CrystalLoadCap,
-                        severity: sev,
-                        message: format!(
-                            "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray) \
-                             but the crystal specs CL = {:.0} pF [{}]; deviation {:.2} pF exceeds {:.0} pF",
-                            xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF, spec, cite, dev,
-                            CL_TOLERANCE_PF
+                    push(
+                        sev,
+                        format!(
+                            "board presents CL ~ {cl:.1} pF (C1={c1:.0}p, C2={c2:.0}p, +{CSTRAY_PF:.0}p stray) \
+                             but the crystal specs CL = {spec:.0} pF [{cite}]; deviation {dev:.2} pF exceeds {CL_TOLERANCE_PF:.0} pF"
                         ),
-                        refs: vec![xtal.reference.clone()],
-                        nets: net_names.clone(),
-                    });
+                    );
                 } else {
-                    report.findings.push(SiFinding {
-                        check: SiCheck::CrystalLoadCap,
-                        severity: SiSeverity::Info,
-                        message: format!(
-                            "{} ({}): board CL ~ {:.1} pF vs spec {:.0} pF (within {:.0} pF) - ok",
-                            xtal.reference, xtal.value, cl, spec, CL_TOLERANCE_PF
-                        ),
-                        refs: vec![xtal.reference.clone()],
-                        nets: net_names.clone(),
-                    });
+                    push(
+                        SiSeverity::Info,
+                        format!("board CL ~ {cl:.1} pF vs spec {spec:.0} pF (within {CL_TOLERANCE_PF:.0} pF) - ok"),
+                    );
                 }
             } else {
                 // CL spec unknown: report the computed load as info only.
-                report.findings.push(SiFinding {
-                    check: SiCheck::CrystalLoadCap,
-                    severity: SiSeverity::Info,
-                    message: format!(
-                        "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray); \
-                         crystal CL spec unknown from value, no judgement",
-                        xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF
+                push(
+                    SiSeverity::Info,
+                    format!(
+                        "board presents CL ~ {cl:.1} pF (C1={c1:.0}p, C2={c2:.0}p, +{CSTRAY_PF:.0}p stray); \
+                         crystal CL spec unknown from value, no judgement"
                     ),
-                    refs: vec![xtal.reference.clone()],
-                    nets: net_names.clone(),
-                });
+                );
             }
-        } else {
-            // One or both load caps missing.
-            if driver_integrates {
-                continue; // RTC integrates caps: correct, not a finding.
-            }
+        } else if !driver_integrates {
             // A discrete MHz crystal with no load caps either way is a real
             // omission, but only fire when BOTH are absent (a single missing
             // cap is often the series-R topology we failed to trace, so stay
-            // conservative and emit info).
+            // conservative and emit info). An RTC that integrates its caps is
+            // correct without them.
             if c1.is_none() && c2.is_none() {
-                report.findings.push(SiFinding {
-                    check: SiCheck::CrystalLoadCap,
-                    severity: SiSeverity::Medium,
-                    message: format!(
-                        "{} ({}): discrete crystal with no load capacitors to ground on either \
-                         terminal; a parallel-resonant crystal needs two load caps to start on \
-                         frequency (unless the driver integrates them)",
-                        xtal.reference, xtal.value
-                    ),
-                    refs: vec![xtal.reference.clone()],
-                    nets: net_names,
-                });
+                push(
+                    SiSeverity::Medium,
+                    "discrete crystal with no load capacitors to ground on either \
+                     terminal; a parallel-resonant crystal needs two load caps to start on \
+                     frequency (unless the driver integrates them)"
+                        .into(),
+                );
+            } else if c1.is_some() && c2.is_some() {
+                push(
+                    SiSeverity::Info,
+                    "load caps present but a value is unset or unreadable; no judgement".into(),
+                );
             } else {
-                report.findings.push(SiFinding {
-                    check: SiCheck::CrystalLoadCap,
-                    severity: SiSeverity::Info,
-                    message: format!(
-                        "{} ({}): only one load cap traced (other terminal cap not found, \
-                         possibly behind a series resistor); no judgement",
-                        xtal.reference, xtal.value
-                    ),
-                    refs: vec![xtal.reference.clone()],
-                    nets: net_names,
-                });
+                push(
+                    SiSeverity::Info,
+                    "only one load cap traced (other terminal cap not found, \
+                     possibly behind a series resistor); no judgement"
+                        .into(),
+                );
             }
         }
     }
@@ -621,7 +611,7 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
 /// Walk one resistor hop from a crystal terminal net to find a load cap (the
 /// RP2040 series-damping-resistor topology: XOUT -> R(1k) -> node carrying the
 /// second load cap and the crystal's far pad).
-fn load_cap_through_resistor(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
+fn load_cap_through_resistor(board: &ExtractedBoard, net_id: i64) -> Option<LoadCap> {
     for (c, _p) in board.net_members(net_id) {
         // An absent damping resistor bridges to nothing.
         if !AssemblyState::of(c).is_present() || !is_resistor(c) {
@@ -1089,7 +1079,7 @@ struct KeepoutRect {
 /// `(match-substring, KeepoutRect, citation)`.
 fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
     let hay = format!("{} {}", c.value, c.footprint).to_ascii_uppercase();
-    // ESP32-WROOM-32 / 32E / 32D / 32U: the module is 18 x 25.5 mm; the PCB
+    // ESP32-WROOM-32 / 32E / 32D: the module is 18 x 25.5 mm; the PCB
     // antenna occupies the top ~6 mm, and Espressif's hardware design guidelines
     // require a keepout of >= 15 mm beyond the antenna edge, spanning the module
     // width, with NO copper or ground on any layer. We model the footprint origin
@@ -1097,7 +1087,17 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
     // the -y (top) edge, and the keepout as the band just beyond the antenna.
     // (Espressif ESP32-WROOM-32 datasheet, "Peripheral Schematic / Keepout
     // zone"; ESP-WROOM hardware design guidelines: 15 mm keepout.)
-    if hay.contains("WROOM") || hay.contains("ESP-WROOM") || hay.contains("ESP32-WROOM") {
+    // A `-<n>U[E]` variant (WROOM-32U, WROOM-1U, WROOM-32UE) swaps the PCB
+    // antenna for a u.FL connector, so there is no trace antenna to keep clear.
+    let external_antenna = hay
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| {
+            let token = token.strip_suffix('E').unwrap_or(token);
+            token
+                .strip_suffix('U')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        });
+    if hay.contains("WROOM") && !external_antenna {
         // The ESP32-WROOM-32 is 18 x 25.5 mm. The PCB antenna is at the "top"
         // end (the edge with no castellated pads); the module's pads occupy the
         // body and stop ~5.3 mm short of the footprint origin on the antenna
