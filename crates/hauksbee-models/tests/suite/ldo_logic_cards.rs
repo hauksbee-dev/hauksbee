@@ -2,6 +2,7 @@
 //! single-gate logic cards, against the manufacturer pin tables.
 
 use super::*;
+use hauksbee_models::behavioral::Topology;
 
 const SOT23_5: &str = "Package_TO_SOT_SMD:SOT-23-5";
 
@@ -130,5 +131,135 @@ fn single_gate_logic_does_not_bind_other_packages_or_families() {
     ];
     for value in none {
         assert_eq!(query_id(Some(value), Some(value), None), None, "{value}");
+    }
+}
+
+/// (value, footprint, id, `pad=role` map). TI SCES515N Table 4-1 and Nexperia
+/// 74AXP1T45 Rev. 2.1 Table 3 (six-lead); TI SCES205N Table 5 (2G126, 1Y on pad 6);
+/// TI SNOSDB1E Table 5-1 (TLV3601), SBOS779D Pin Functions (TLV6001 DBV and DCK
+/// columns differ); Micrel M9999-072908-A p.2; TI SBVS034P Table 4-1; TI SNVS124G
+/// Table 6-1; TI SLUSEA4D Table 7-1; TI SLVSGK6B Table 4-1.
+#[test]
+fn translator_gate_opamp_and_regulator_pad_roles_follow_the_datasheets() {
+    const T45: &str = "1=vcca 2=gnd 3=a1 4=b1 5=dir 6=vccb";
+    const OPAMP_DBV: &str = "1=out 2=vss 3=in_plus 4=in_minus 5=vcc";
+    const OPAMP_DCK: &str = "1=in_plus 2=vss 3=in_minus 4=out 5=vcc";
+    const MIC: &str = "1=in 2=gnd 3=en 4=nc 5=out";
+    let sc70 = Some("Package_TO_SOT_SMD:SC-70-5");
+    let rows = [
+        ("SN74LVC1T45DBVR", None, "sn74lvc1t45", T45),
+        ("SN74LVC1T45DCKR", None, "sn74lvc1t45", T45),
+        ("74AXP1T45GW,125", None, "74axp1t45", T45),
+        (
+            "SN74LVC2G126DCUR",
+            None,
+            "sn74lvc2g126",
+            "1=oe_1 2=a1 3=y2 4=gnd 5=a2 6=y1 7=oe_2 8=vcc",
+        ),
+        ("TLV3601IDBVR", None, "tlv3601", OPAMP_DBV),
+        ("TLV6001IDBVR", Some(SOT23_5), "tlv6001_dbv", OPAMP_DBV),
+        ("TLV6001", Some(SOT23_5), "tlv6001_dbv", OPAMP_DBV),
+        ("TLV6001IDCKR", sc70, "tlv6001_dck", OPAMP_DCK),
+        ("MIC5225-3.3YM5", None, "mic5225_3v3", MIC),
+        ("MIC5225-5.0YM5-TR", None, "mic5225_5v0", MIC),
+        (
+            "TPS73101DBVR",
+            None,
+            "tps73101_dbv",
+            "1=in 2=gnd 3=en 4=fb 5=out",
+        ),
+        (
+            "LM2596S-5.0",
+            None,
+            "lm2596_5v0",
+            "1=in 2=sw 3=gnd 4=fb 5=on_off",
+        ),
+        (
+            "TPS62933DRLR",
+            None,
+            "tps62933_drl",
+            "1=rt 2=en 3=in 4=gnd 5=sw 6=bst 7=ss 8=fb",
+        ),
+        (
+            "TLV61070ADBVR",
+            None,
+            "tlv61070a",
+            "1=sw 2=gnd 3=en 4=fb 5=out 6=in",
+        ),
+    ];
+    for (value, footprint, id, map) in rows {
+        let m = expect_query(Some(value), Some(value), footprint);
+        assert_pin_map(&m, id, &pins(map));
+    }
+    // The family card that already covers AP2112K-3.3 still resolves on the five-lead map.
+    let ap = expect_query(Some("AP2112K-3.3TRG1"), None, None);
+    assert_pin_map(&ap, "ap2112k_3v3", &pins(MIC));
+}
+
+/// Translator levels follow the datasheet bands, the fixed LDOs carry their voltage
+/// code, and adjustable or switching parts carry the reference and loop the datasheet
+/// states instead of an output voltage.
+#[test]
+fn new_cards_carry_the_datasheet_electricals() {
+    let tr = expect_query(Some("SN74LVC1T45DBVR"), None, None);
+    assert!(!tr.levels.is_empty() && !tr.level_rails.is_empty());
+    for (value, vout) in [("MIC5225-3.3YM5", 3.3), ("MIC5225-5.0YM5", 5.0)] {
+        assert!((param(&expect_query(Some(value), None, None), "vout") - vout).abs() < 1e-9);
+    }
+    let adj = expect_query(Some("TPS73101DBVR"), None, None);
+    assert!((param(&adj, "vref") - 1.204).abs() < 1e-9);
+    assert!(
+        adj.params.get_f64("vout").is_none(),
+        "an adjustable LDO has no vout"
+    );
+    for (value, topology, vref, enable) in [
+        ("TPS62933DRLR", Topology::Buck, 0.8, Some(1.28)),
+        ("LM2596S-5.0", Topology::Buck, 5.0, None),
+        ("TLV61070ADBVR", Topology::Boost, 0.5, Some(1.2)),
+    ] {
+        let c = expect_query(Some(value), None, None)
+            .behavioral
+            .converter
+            .unwrap_or_else(|| panic!("{value} has no converter block"));
+        assert_eq!(c.topology, topology, "{value}");
+        assert!(
+            (c.feedback.expect("feedback").vref_v - vref).abs() < 1e-9,
+            "{value}"
+        );
+        assert_eq!(c.enable.map(|e| e.high_threshold_v), enable, "{value}");
+    }
+}
+
+/// Other packages, other family members and other voltage codes must not bind:
+/// the DSBGA translators and Nexperia's Schmitt-input 2G126, the TLV6001R and
+/// TLV6001U reversed or single-sourced variants, the adjustable MIC5225, the
+/// fixed `TPS731xx`, other LM2596 outputs, the 2 A and PG variants of the TPS62933.
+#[test]
+fn new_cards_do_not_bind_other_packages_or_family_members() {
+    let none = [
+        ("SN74LVC1T45YZPR", None),
+        ("SN74LVC2T45DCUR", None),
+        ("74LVC2G126GT", None),
+        ("SN74LVC2G126YZPR", None),
+        ("TLV6001RIDBVR", None),
+        ("TLV6001UIDCKR", None),
+        ("TLV6001IDBVR", Some("Package_TO_SOT_SMD:SC-70-5")),
+        ("TLV6001IDCKR", Some(SOT23_5)),
+        ("MIC5225YM5", None),
+        ("MIC5225-2.8YM5", None),
+        ("TPS73125DBVR", None),
+        ("LM2596S-ADJ", None),
+        ("LM2596S-12", None),
+        ("TPS62932DRLR", None),
+        ("TPS62933PDRLR", None),
+        ("TPS62933FDRLR", None),
+        ("TLV61070DBVR", None),
+    ];
+    for (value, footprint) in none {
+        assert_eq!(
+            query_id(Some(value), Some(value), footprint),
+            None,
+            "{value}"
+        );
     }
 }

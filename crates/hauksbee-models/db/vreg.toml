@@ -4898,3 +4898,405 @@ max_current_a = 0.25   # IOUTMAX min, chart E-2, VOUT >= VOUT(E) x 0.9
 max_voltage_v = 7.0   # VIN abs max (1.8 V to 6.0 V operating)
 max_power_w = 0.25    # SOT-23 Pd as a bare IC; the datasheet publishes no theta_JA
 
+
+# ── MIC5225-3.3 / MIC5225-5.0 ────────────────────────────────────────────────
+# Micrel (now Microchip) 150 mA, 29 uA ground-current uCap LDO, SOT23-5 (YM5).
+# Source: Micrel MIC5225 datasheet M9999-072908-A (July 2008), Pin Configuration
+# p.2, Ordering Information p.2, Operating Ratings and Electrical
+# Characteristics p.3. The Microchip host refuses automated fetches; the PDF is
+# the Adafruit-hosted copy of the Micrel original, hashed below.
+# The voltage code is REQUIRED: a bare "MIC5225" is the adjustable part, whose
+# pin 4 is ADJ, not NC. Per Table of ordering codes the fixed parts are -3.3 and
+# -5.0 (and others) on the same SOT23-5 map.
+[[models]]
+id = "mic5225_3v3"
+kind = "vreg"
+description = "Micrel MIC5225-3.3 150mA uCap LDO, 3.3V fixed, SOT23-5"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn-shop.adafruit.com/datasheets/mic5225.pdf"
+title = "Micrel MIC5225 150mA Ultra-Low Quiescent Current uCap LDO, M9999-072908-A, July 2008"
+locator = "Pin Configuration and Pin Description p.2; Ordering Information p.2; Absolute Maximum Ratings and Operating Ratings p.3; Electrical Characteristics p.3; Output Capacitor p.7"
+sha256 = "88f7031171a8d79f88594d386afd74e99d0b0d0bac62b0b45a653b6de1217c21"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.234
+high = 3.366
+unit = "V"
+kind = "specification-limits"
+basis = "MIC5225 Electrical Characteristics, output voltage accuracy +/-2% over -40 to 125 C (+/-1% at 25 C)"
+
+[models.match]
+value_re = "(?i)^MIC5225[- ]?3[._]3([A-Z0-9-]*)?$"
+
+[models.params]
+vout       = 3.3
+dropout_v  = 0.45      # max at 150 mA over temperature (310 mV typ)
+iq_a       = 29.0e-6   # Ground Current typ at 100 uA load (50 uA max)
+cout_min_f = 1.0e-6    # Output Capacitor: 1.0 uF or greater for stability
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"    # ADJ on the adjustable part
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.15
+max_voltage_v = 18.0         # Absolute Maximum Ratings, VIN -20 V to 18 V (2.3 V to 16 V operating)
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 235.0     # SOT23-5, minimum footprint
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.3
+max_v = 16.0
+abs_max_v = 18.0
+basis = "Micrel MIC5225 M9999-072908-A, Operating Ratings, VIN 2.3 V to 16 V; Absolute Maximum Ratings, VIN 18 V"
+
+[[models]]
+id = "mic5225_5v0"
+kind = "vreg"
+description = "Micrel MIC5225-5.0 150mA uCap LDO, 5.0V fixed, SOT23-5"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn-shop.adafruit.com/datasheets/mic5225.pdf"
+title = "Micrel MIC5225 150mA Ultra-Low Quiescent Current uCap LDO, M9999-072908-A, July 2008"
+locator = "Pin Configuration and Pin Description p.2; Ordering Information p.2; Absolute Maximum Ratings and Operating Ratings p.3; Electrical Characteristics p.3; Output Capacitor p.7"
+sha256 = "88f7031171a8d79f88594d386afd74e99d0b0d0bac62b0b45a653b6de1217c21"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.9
+high = 5.1
+unit = "V"
+kind = "specification-limits"
+basis = "MIC5225 Electrical Characteristics, output voltage accuracy +/-2% over -40 to 125 C (+/-1% at 25 C)"
+
+[models.match]
+value_re = "(?i)^MIC5225[- ]?5[._]0([A-Z0-9-]*)?$"
+
+[models.params]
+vout       = 5.0
+dropout_v  = 0.45
+iq_a       = 29.0e-6
+cout_min_f = 1.0e-6
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.15
+max_voltage_v = 18.0
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 235.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.3
+max_v = 16.0
+abs_max_v = 18.0
+basis = "Micrel MIC5225 M9999-072908-A, Operating Ratings, VIN 2.3 V to 16 V; Absolute Maximum Ratings, VIN 18 V"
+
+# ── TPS73101 (adjustable) ────────────────────────────────────────────────────
+# TI 150 mA low-dropout LDO, DBV (SOT-23-5). Source: TI SBVS034P (September
+# 2003, revised April 2026): Pin Functions Table 4-1 p.3, Absolute Maximum
+# Ratings 5.1 p.4, Recommended Operating Conditions 5.3 p.4, Thermal 5.4 p.4,
+# Electrical Characteristics 5.5 p.5. Pin 4 is FB on the adjustable TPS73101
+# (NR on the fixed TPS731xx), so only the adjustable part is matched. The
+# reference is `vref`, never a `vout`: the board's divider sets the rail,
+# VOUT = (R1 + R2) / R2 x 1.204 V. No zero-load quiescent current is printed
+# (IGND is 400 uA typ at 10 mA), so `iq_a` is left out.
+[[models]]
+id = "tps73101_dbv"
+kind = "vreg"
+description = "TI TPS73101 150mA adjustable LDO, VFB 1.204V, DBV SOT-23-5 (the only package)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps73101.pdf"
+title = "TI TPS731 150-mA, low-dropout regulator, SBVS034P, September 2003, revised April 2026"
+locator = "Pin Functions Table 4-1 p.3; Absolute Maximum Ratings 5.1 p.4; Recommended Operating Conditions 5.3 p.4; Thermal Information 5.4 p.4; Electrical Characteristics 5.5 p.5"
+sha256 = "4dc6ddd5864d84c6906a5262205235c088d48a1aa684fb170e3f098cc8bd2204"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vref"
+low = 1.198
+high = 1.210
+unit = "V"
+kind = "specification-limits"
+basis = "TPS73101 Electrical Characteristics, feedback voltage VFB, 1.198 V min to 1.210 V max at 25 C"
+
+[models.match]
+value_re = "(?i)^TPS73101(DBV[RT]?)?$"
+
+[models.params]
+vref      = 1.204
+dropout_v = 0.1       # max at 150 mA (30 mV typ)
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "fb"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.15
+max_voltage_v = 6.0          # Absolute Maximum Ratings, VIN (1.7 V to 5.5 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 185.2     # DBV, current silicon (207.2 legacy)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TPS731 SBVS034P, Recommended Operating Conditions, VIN 1.7 V to 5.5 V; Absolute Maximum Ratings, VIN 6 V"
+
+# ── LM2596-5.0 (fixed-output buck) ───────────────────────────────────────────
+# TI 3 A, 150 kHz SIMPLE SWITCHER, KTT (TO-263-5) or NDH (TO-220-5); both
+# numbers the five leads identically. Source: TI SNVS124G (November 1999,
+# revised March 2023): Pin Functions Table 6-1 p.4, Absolute Maximum Ratings
+# 7.1 and Operating Conditions 7.3 p.5, 5-V Electrical Characteristics 7.6 and
+# All-Versions 7.9 p.6-7. The converter is stamped on the feedback pin (the
+# internal divider is not exposed, so FB sits on the 5 V output and the loop
+# holds 5.0 V there). ON/OFF is ACTIVE-LOW (below 1.3 V = on, open = on), which
+# the converter enable (high-threshold only) cannot express, so it is left out
+# and the card warns.
+[[models]]
+id = "lm2596_5v0"
+kind = "vreg"
+description = "TI LM2596-5.0 3A 150kHz step-down switching regulator (averaged buck model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm2596.pdf"
+title = "TI LM2596 SIMPLE SWITCHER 150-kHz 3-A step-down voltage regulator, SNVS124G, November 1999, revised March 2023"
+locator = "Pin Functions Table 6-1 p.4; Absolute Maximum Ratings 7.1 and Operating Conditions 7.3 p.5; 5-V Version 7.6 p.6; All Output Voltage Versions 7.9 p.7"
+sha256 = "2eec90879908cf711b84d4f0c5d534c3cd12c576d25254b7019247435af4ab0f"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.75
+high = 5.25
+unit = "V"
+kind = "specification-limits"
+basis = "LM2596-5.0 Electrical Characteristics, VOUT over -40 to 125 C, 7 V <= VIN <= 40 V, 0.2 A <= ILOAD <= 3 A (4.8 to 5.2 V at 25 C)"
+
+[models.match]
+value_re = "(?i)^LM2596(S|SX|T)?-5(\\.0)?(/NOPB)?$"
+
+[models.params]
+warning = "averaged buck model: ON/OFF (active low, shutdown above 1.3 V) is not gated, so a board that shuts the part down still reads as running; 150 kHz ripple, soft-start, thermal shutdown and the 4.5 A peak current limit are not modelled"
+
+[models.pins]
+"1" = "in"
+"2" = "sw"
+"3" = "gnd"
+"4" = "fb"
+"5" = "on_off"
+
+[models.ratings]
+max_current_a = 3.0
+max_voltage_v = 45.0         # Absolute Maximum Ratings, VIN (4.5 V to 40 V operating)
+max_junction_temp_c = 150.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.5
+max_v = 40.0
+abs_max_v = 45.0
+basis = "TI LM2596 SNVS124G, Operating Conditions, supply voltage 4.5 V to 40 V; Absolute Maximum Ratings, VIN 45 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0
+iout_limit_a = 3.0
+efficiency = 0.80            # VIN = 12 V, ILOAD = 3 A
+switching_hz = 150e3
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 5.0
+
+[models.coverage]
+implements = ["averaged_buck_dc", "output_current_ceiling", "reflected_input_power"]
+missing = ["on_off_gating", "switching_ripple", "soft_start", "peak_current_limit", "thermal_shutdown", "temperature_curves"]
+
+# ── TPS62933 (adjustable buck) ───────────────────────────────────────────────
+# TI 3 A, 3.8-30 V synchronous buck, DRL (SOT583-8). Source: TI SLUSEA4D (June
+# 2021, revised August 2022): Pin Functions Table 7-1 p.3-4, Absolute Maximum
+# Ratings 8.1 and Recommended Operating Conditions 8.3 p.5, Thermal 8.4 p.6,
+# Electrical Characteristics 8.5 p.6-7, maximum 98% duty in the Features. Only
+# the plain TPS62933 is matched: TPS62932 is a 2 A part, and the P and O
+# variants carry PG on pin 7 where this map has SS. Frequency is set by the RT
+# pin (float 500 kHz, GND 1.2 MHz, or a resistor), so no switching_hz is stated.
+[[models]]
+id = "tps62933_drl"
+kind = "vreg"
+description = "TI TPS62933 3A 30V synchronous buck, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps62933.pdf"
+title = "TI TPS62932, TPS62933 3.8-V to 30-V, 2-A and 3-A synchronous buck converters, SLUSEA4D, June 2021, revised August 2022"
+locator = "Pin Functions Table 7-1 p.3-4; Absolute Maximum Ratings 8.1 and Recommended Operating Conditions 8.3 p.5; Electrical Characteristics 8.5 p.6-7"
+sha256 = "16ec2eac43c7374eb9e7edd7df7bdb24de6862f695e1582c68716ced4820e5f6"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.792
+high = 0.808
+unit = "V"
+kind = "specification-limits"
+basis = "TPS62933 Electrical Characteristics, feedback voltage, 792 mV min to 808 mV max at 25 C"
+
+[models.match]
+value_re = "(?i)^TPS62933(DRL[RT]?)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, loop stability, soft-start, light-load modes and protection transients are not modeled"
+
+[models.pins]
+"1" = "rt"
+"2" = "en"
+"3" = "in"
+"4" = "gnd"
+"5" = "sw"
+"6" = "bst"
+"7" = "ss"
+"8" = "fb"
+
+[models.ratings]
+max_current_a = 3.0
+max_voltage_v = 32.0         # Absolute Maximum Ratings, VIN (3.8 V to 30 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 112.2     # DRL JEDEC (60.2 on the EVM)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.8
+max_v = 30.0
+abs_max_v = 32.0
+basis = "TI TPS62933 SLUSEA4D, Recommended Operating Conditions, VIN 3.8 V to 30 V; Absolute Maximum Ratings, VIN 32 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 22.0         # top of the 0.8-22 V setting range; only used with no FB divider
+iout_limit_a = 3.0
+max_duty = 0.98
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.800
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.28      # EN rising threshold max (1.21 V typ)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_modes", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ── TLV61070A (adjustable boost) ─────────────────────────────────────────────
+# TI 2.5 A synchronous boost, DBV and DDC (SOT23-6; the pin tables are the same).
+# Source: TI SLVSGK6B (September 2022, revised July 2026): Pin Functions Table
+# 4-1 p.3, Absolute Maximum Ratings 5.1 and Recommended Operating Conditions 5.3
+# p.4, Thermal 5.4 p.4, Electrical Characteristics 5.5 p.5. Pass-through (VIN
+# above the set VOUT) is NOT modelled: the averaged source holds the setpoint.
+[[models]]
+id = "tlv61070a"
+kind = "vreg"
+description = "TI TLV61070A 2.5A synchronous boost, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv61070a.pdf"
+title = "TI TLV61070A 2.5A boost converter with 0.5V ultra-low input voltage, SLVSGK6B, September 2022, revised July 2026"
+locator = "Pin Functions Table 4-1 p.3; Absolute Maximum Ratings 5.1 and Recommended Operating Conditions 5.3 p.4; Electrical Characteristics 5.5 p.5"
+sha256 = "1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.485
+high = 0.515
+unit = "V"
+kind = "specification-limits"
+basis = "TLV61070A Electrical Characteristics, VREF at the FB pin in PWM mode, 485 mV min to 515 mV max"
+
+[models.match]
+value_re = "(?i)^TLV61070A(DBV|DDC)?[RT]?$"
+
+[models.params]
+warning = "averaged boost model: board feedback and EN are executable; pass-through when VIN exceeds the set VOUT, PFM light-load mode, soft-start, the 2.45 A valley current limit and protection are not modeled"
+
+[models.pins]
+"1" = "sw"
+"2" = "gnd"
+"3" = "en"
+"4" = "fb"
+"5" = "out"
+"6" = "in"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VIN/EN/FB/SW/VOUT (VIN 0.5 V to 5.5 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 139.1     # DBV
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI TLV61070A SLVSGK6B, Recommended Operating Conditions, VIN 0.5 V to 5.5 V; Absolute Maximum Ratings 7 V"
+
+[models.behavioral.converter]
+topology = "boost"
+out_pin = "out"
+in_pin = "in"
+vout_setpoint = 5.5          # top of the 2.2-5.5 V setting range; only used with no FB divider
+efficiency = 0.923           # VIN = 3.6 V, VOUT = 5 V, IOUT = 1 A
+switching_hz = 1.0e6         # VIN above 1.5 V
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.500
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.2       # VEN_H max
+
+[models.coverage]
+implements = ["averaged_boost_dc", "board_feedback_divider", "enable_gating", "reflected_input_power"]
+missing = ["pass_through", "pfm_mode", "switching_ripple", "soft_start", "valley_current_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
