@@ -520,7 +520,7 @@ mod tests {
                 reset_held: crate::execution::Observed::No,
                 supply_valid: crate::execution::Observed::Yes,
                 supply_v: Some(3.3),
-                external_clock: false,
+                clock: hauksbee_bind::mcu_clock::McuClock::default(),
             },
         )
     }

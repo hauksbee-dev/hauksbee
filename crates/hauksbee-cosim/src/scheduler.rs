@@ -5006,7 +5006,7 @@ impl Scheduler {
                         m.logic_high_v,
                     ),
                     supply_v: m.rails.supply_v(),
-                    external_clock: m.binding.external_clock_present,
+                    clock: m.binding.clock.clone(),
                 };
                 crate::execution::ExecutionEvidence::new(
                     &m.binding.reference,
@@ -6471,7 +6471,7 @@ fn instantiate_mcu(
     }
 
     let mut core: Box<dyn Mcu + Send> = if let Some(part) = backend.strip_prefix("renode:") {
-        instantiate_renode(part, binding.external_clock_present)?
+        instantiate_renode(part, binding.clock.external_present())?
     } else if let Some(part) = backend.strip_prefix("qemu:") {
         instantiate_qemu(part, firmware)?
     } else if let Some(family) = backend.strip_prefix("none:") {
@@ -6641,7 +6641,7 @@ pub fn backend_is_external(backend: &str) -> bool {
 ///
 /// NOT handled here: the clock. Every core is instantiated at 16 MHz regardless
 /// of the crystal the board fits, which is a pre-existing simplification (the
-/// binder records `external_clock_present` but no frequency), and it makes
+/// binder records `clock.external_present()` but no frequency), and it makes
 /// firmware-timed results wrong by the ratio of the two clocks on any board that
 /// is not a 16 MHz one. Carrying the crystal frequency through `McuBinding` is
 /// the fix; it is not this function's to make up.
@@ -7607,7 +7607,8 @@ missing = ["measurement_registers"]
             reference: reference.into(),
             backend: backend.into(),
             requested_part: String::new(),
-            external_clock_present: false,
+            clock: hauksbee_bind::mcu_clock::McuClock::default(),
+            internal_clock: None,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,

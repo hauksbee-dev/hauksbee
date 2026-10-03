@@ -1573,7 +1573,7 @@
           "type": "array"
         },
         "firmware_pass_eligible": {
-          "description": "Executed, no fault, not held in reset, and supply not invalid. Only an\neligible MCU's firmware behaviour can count as a pass.",
+          "description": "Executed, no fault, not held in reset, supply not invalid and clock not\nbroken. Only an eligible MCU's firmware behaviour can count as a pass.",
           "type": "boolean"
         },
         "gpio_toggles": {

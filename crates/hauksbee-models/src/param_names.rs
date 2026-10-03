@@ -237,7 +237,12 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::ShiftRegister => &CONVERTER_AND_DIGITAL[SHIFT_REGISTER_FROM..],
         ComponentKind::Dac => &CONVERTER_AND_DIGITAL[..DAC_TO],
         ComponentKind::Adc => &CONVERTER_AND_DIGITAL[..ADC_TO],
-        ComponentKind::Mcu => &["backend", "module", "max_adc_source_impedance_ohms"],
+        ComponentKind::Mcu => &[
+            "backend",
+            "module",
+            "max_adc_source_impedance_ohms",
+            "internal_clock",
+        ],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }
 }

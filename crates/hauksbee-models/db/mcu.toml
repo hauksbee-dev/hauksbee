@@ -13,6 +13,9 @@ mpn_re     = "(?i)^ATmega328P"
 # hauksbee-mcu backend identifier, tells the co-sim layer which emulator core
 # to instantiate.
 backend = "simavr:atmega328p"
+# Oscillator the part boots from with no external clock parts; hauksbee-bind
+# mcu_clock reads it when the oscillator pins carry nothing.
+internal_clock = "internal 8 MHz RC oscillator"
 # Microchip ATmega328P DS40001984, "ADC Noise Canceler / Analog Input Circuitry":
 # the ADC is optimized for analog signals with an output impedance of
 # approximately 10 kOhm or less, because the 14 pF sample-and-hold capacitor is
@@ -156,6 +159,7 @@ value_re = "(?i)^ATmega1284(P([-_]?(AU|MU|AUR|MUR))?|M|A)$"
 # hauksbee-mcu backend identifier. simavr models `atmega1284` and `atmega1284p` as
 # distinct cores and this entry names the P.
 backend = "simavr:atmega1284p"
+internal_clock = "internal 8 MHz RC oscillator"
 
 [models.pins]
 # Section 5.1.2, 44-pad TQFP/VQFN. Cross-checked against the margay
@@ -262,6 +266,7 @@ value_re = "(?i)^ATmega1284(-(AU|MU|AUR|MUR))?$"
 [models.params]
 # The non-P core, which simavr models separately from the P.
 backend = "simavr:atmega1284"
+internal_clock = "internal 8 MHz RC oscillator"
 
 [models.pins]
 # Identical to the ATmega1284P entry above: one datasheet, one pinout figure.
@@ -518,6 +523,7 @@ value_re = "(?i)^ATmega32U4([-_]?(AU|MU|AUR|MUR|RC))?$"
 
 [models.params]
 backend = "simavr:atmega32u4"
+internal_clock = "internal 8 MHz RC oscillator"
 
 [models.pins]
 "1"  = "pe6_ain0"
@@ -604,6 +610,7 @@ value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|M
 
 [models.params]
 backend = "simavr:attiny85"
+internal_clock = "internal 8 MHz RC oscillator"
 
 [models.ratings]
 max_pin_current_a = 0.04  # 21.1 Absolute Maximum Ratings, DC current per I/O pin 40.0 mA
@@ -621,6 +628,7 @@ footprint_re = '(?i)(^|[:_])(P?DIP|DIL|SOIC|SOP|SO)[-_]?0?8([^0-9]|$)'
 
 [models.params]
 backend = "simavr:attiny85"
+internal_clock = "internal 8 MHz RC oscillator"
 
 [models.pins]
 "1" = "pb5_reset_adc0"
@@ -657,6 +665,7 @@ footprint_re = '(?i)(^|[:_])(V?QFN|MLF|WQFN)[-_]?20([^0-9]|$)'
 
 [models.params]
 backend = "simavr:attiny85"
+internal_clock = "internal 8 MHz RC oscillator"
 
 [models.pins]
 # Pads 3, 4, 6, 7, 9, 10, 13 and 16..20 are DNC.
@@ -690,6 +699,7 @@ mpn_re   = "(?i)^STM32F072C(8|B)(T[67]|U[67])?"
 
 [models.params]
 backend = "renode:stm32f072"
+internal_clock = "internal HSI RC oscillator"
 
 [models.pins]
 # STMicroelectronics DS9826 Rev 6, Table 14, LQFP48/UFQFPN48 column. The
@@ -786,6 +796,7 @@ mpn_re   = "(?i)^STM32F103C[8B]"
 # hauksbee-mcu backend identifier: the Renode backend brings up the matching
 # Renode platform (stm32f103.repl) and bridges GPIO/UART through its monitor.
 backend = "renode:stm32f103"
+internal_clock = "internal 8 MHz HSI RC oscillator"
 
 [models.pins]
 # LQFP-48 pin map (KiCad MCU_ST_STM32F1:STM32F103C8Tx default symbol). Only the
@@ -872,6 +883,7 @@ mpn_re   = "(?i)^STM32F401C[BCDE]"
 
 [models.params]
 backend = "renode:stm32f4"
+internal_clock = "internal 16 MHz HSI RC oscillator"
 
 [models.pins]
 "44" = "boot0"   # BOOT0 strapping pin, UFQFPN48 pad 44 (verified vs the footprint)
@@ -911,6 +923,7 @@ mpn_re   = "(?i)^STM32G47[34]C[BCE]"
 
 [models.params]
 backend = "renode:stm32g4"
+internal_clock = "internal 16 MHz HSI RC oscillator"
 
 [models.pins]
 "1" = "vbat"
@@ -1004,6 +1017,7 @@ mpn_re   = "(?i)^STM32F7(6[57]|7[79])V[GI]"
 
 [models.params]
 backend = "renode:stm32f7"
+internal_clock = "internal 16 MHz HSI RC oscillator"
 
 [models.pins]
 "1" = "pe2"
@@ -1151,6 +1165,7 @@ mpn_re   = "(?i)^STM32L0[12]1K[34]"
 
 [models.params]
 backend = "renode:stm32l0"
+internal_clock = "internal MSI/HSI16 RC oscillator"
 
 [models.pins]
 "1" = "vdd"
@@ -1870,6 +1885,7 @@ mpn_re   = "(?i)^nRF52840"
 # Renode backend: brings up nrf52840.repl. nRF GPIO is two 32-bit ports
 # (gpio0/gpio1); roles "p0<bit>" map port '0', "p1<bit>" map port '1'.
 backend = "renode:nrf52840"
+internal_clock = "internal 64 MHz HFINT RC oscillator"
 
 [models.pins]
 # Minimal demo map; only the wired pads carry roles. P0.13 is the nRF52840-DK
@@ -1926,6 +1942,7 @@ mpn_re   = "(?i)^FE310"
 # Renode backend: brings up sifive-fe310.repl. One 32-bit gpio0 port; roles
 # "p0<bit>".
 backend = "renode:sifive_fe310"
+internal_clock = "internal HFROSC oscillator"
 
 [models.pins]
 "1"  = "vss"
@@ -1969,6 +1986,7 @@ value_re = "(?i)^RP2040(?:[-_ ]?QFN[-_ ]?56)?$"
 # second core is declared and un-halted with the SIO genuinely shared, but no
 # two-core firmware has been run. Full tier list: db/mcu/rp2040.soc.toml.
 backend = "renode:rp2040"
+internal_clock = "internal ring oscillator (ROSC)"
 
 [models.pins]
 # RP2040 QFN-56 (KiCad MCU_RaspberryPi_and_Boards:RP2040). The boot strap is
@@ -2006,6 +2024,7 @@ footprint_re = '(?i)(^|:)QFN[-_]?56(?:[-_]1EP)?(?:_7x7mm(?:_P0\.4mm)?(?:_EP3\.2x
 
 [models.params]
 backend = "renode:rp2040"
+internal_clock = "internal ring oscillator (ROSC)"
 
 [models.pins]
 # RP2040 datasheet build 3184e62-clean (2025-02-20), Tables 615–621, pp. 612–614.

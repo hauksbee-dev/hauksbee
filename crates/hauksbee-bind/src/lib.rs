@@ -33,6 +33,7 @@ pub mod digital;
 pub mod drivers;
 pub mod firmware_input;
 pub mod logic;
+pub mod mcu_clock;
 pub mod occurrence;
 pub mod package_fit;
 pub mod power_supply;

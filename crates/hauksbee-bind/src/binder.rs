@@ -37,6 +37,7 @@ use hauksbee_models::{
 use crate::bind_report::{BindOutcome, BindReport, BindRow, SimpleRegulator};
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
+use crate::mcu_clock::{classify as classify_clock, ClockBoard, ClockKind, McuClock};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::program_resistor::{is_ground_net, program_resistance_to_ground};
 use crate::stress::DeviceMeta;
@@ -56,10 +57,13 @@ pub struct McuBinding {
     /// warning when the modelled core is less specific than the requested part
     ///. May be empty when the board gives no value string.
     pub requested_part: String,
-    /// True when an assembled crystal/resonator physically bridges this MCU's
-    /// `osc_in` and `osc_out` nets. The Renode descriptor consumes this as
-    /// external-clock presence; a missing or DNP crystal must not make HSERDY.
-    pub external_clock_present: bool,
+    /// The clock the board gives the core, read off its oscillator pins. The
+    /// Renode descriptor consumes [`McuClock::external_present`] (a missing or
+    /// DNP crystal must not make HSERDY); the execution evidence reports it.
+    pub clock: McuClock,
+    /// The card's `internal_clock`: the oscillator the part can run from with no
+    /// external parts (unset when the card does not say).
+    pub internal_clock: Option<String>,
     /// Pad number -> role string from the model pin map (e.g. "19"->"pb5_sck").
     pub pad_roles: HashMap<String, String>,
     /// Role string -> net node it is wired to (only connected pins).
@@ -636,18 +640,48 @@ pub fn bind_board_with(
         });
     }
 
-    // Board truth for clock-ready emulation. The MCU pin map provides the
-    // semantic oscillator roles; the board provides population and
+    // Board truth for clock-ready emulation and the execution evidence. The MCU
+    // pin roles/names give the oscillator pins; the board gives population and
     // connectivity. No reference-name or board-name special case is involved.
+    let is_rail = |n: NodeId| n.is_ground() || power_nets.contains_key(circuit.node_name(n));
+    let net_name = |n: NodeId| circuit.node_name(n).to_string();
+    let fitted = |c: &Component| AssemblyState::of(c).is_present();
+    let is_crystal = |c: &Component| fitted_crystal(c, lib);
+    let clock_board = ClockBoard {
+        board,
+        node_of: &node_of,
+        is_rail: &is_rail,
+        net_name: &net_name,
+        fitted: &fitted,
+        is_crystal: &is_crystal,
+    };
     for mcu in &mut mcus {
-        let Some(&osc_in) = mcu.role_nets.get("osc_in") else {
+        let Some(comp) = board
+            .components
+            .iter()
+            .find(|c| c.reference == mcu.reference)
+        else {
             continue;
         };
-        let Some(&osc_out) = mcu.role_nets.get("osc_out") else {
-            continue;
-        };
-        mcu.external_clock_present =
-            assembled_crystal_bridges(board, lib, osc_in, osc_out, &node_of);
+        mcu.clock = classify_clock(
+            &clock_board,
+            comp,
+            &mcu.pad_roles,
+            mcu.internal_clock.as_deref(),
+        );
+        if mcu.clock.kind == ClockKind::Broken {
+            let note = format!("clock source broken: {}", mcu.clock.detail);
+            if let Some(row) = report
+                .rows
+                .iter_mut()
+                .find(|r| r.reference == mcu.reference)
+            {
+                row.warning = Some(match row.warning.take() {
+                    Some(w) => format!("{w}; {note}"),
+                    None => note,
+                });
+            }
+        }
     }
 
     // ── Assign MCP4728 I2C addresses deterministically by reference order ────
@@ -5885,7 +5919,8 @@ fn bind_mcu(
         // e.g. STM32F411RET6 -> the stm32f4 backend. Empty when the board gives no
         // value (we still bind, but cannot name what was asked for).
         requested_part: comp.value.trim().to_string(),
-        external_clock_present: false,
+        clock: McuClock::default(),
+        internal_clock: model.params.get_str("internal_clock").map(str::to_string),
         pad_roles,
         role_nets,
         gpio_drivers,
@@ -5905,48 +5940,19 @@ fn bind_mcu(
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
 }
 
-/// Whether a populated crystal/resonator bridges two MCU oscillator nodes.
-///
-/// Recognition reuses the binder's existing crystal evidence and the model
-/// library's footprint rules. Connectivity requires both oscillator nodes on
-/// the same component, so unrelated crystals elsewhere on the board do not
-/// enable this MCU's clock.
-fn assembled_crystal_bridges(
-    board: &ExtractedBoard,
-    lib: &ModelLibrary,
-    osc_in: NodeId,
-    osc_out: NodeId,
-    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
-) -> bool {
-    if osc_in == osc_out {
+/// Whether `comp` is an assembled crystal or resonator: recognised by its
+/// designator or frequency value, or by the model library's footprint rules.
+fn fitted_crystal(comp: &Component, lib: &ModelLibrary) -> bool {
+    // Only an assembled part with an established identity can supply the MCU's
+    // external clock: DNP and identity-refused records are absent or unprovable.
+    let Some(part) = AssemblyState::of(comp).fitted() else {
         return false;
-    }
-    board.components.iter().any(|comp| {
-        // Only an assembled part with an established identity can supply the
-        // MCU's external clock: DNP and identity-refused records are absent
-        // or unprovable, and must not enable HSE.
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            return false;
-        };
-        let prefix = ref_prefix(&comp.reference);
-        let model_is_crystal = resolve(lib, part)
+    };
+    is_crystal_like(&ref_prefix(&comp.reference), &comp.value)
+        || resolve(lib, part)
             .model
             .as_ref()
-            .is_some_and(|m| m.id.starts_with("crystal"));
-        if !is_crystal_like(&prefix, &comp.value) && !model_is_crystal {
-            return false;
-        }
-        let mut has_in = false;
-        let mut has_out = false;
-        for pin in &comp.pins {
-            match node_of(pin.net) {
-                Some(node) if node == osc_in => has_in = true,
-                Some(node) if node == osc_out => has_out = true,
-                _ => {}
-            }
-        }
-        has_in && has_out
-    })
+            .is_some_and(|m| m.id.starts_with("crystal"))
 }
 
 // The pin counts were written by the family router as small non-negative integers.
@@ -9651,9 +9657,119 @@ style = "i2c_pointer"
         assert_eq!(bound.mcus.len(), 1);
         assert!(bound.mcus[0].role_nets.contains_key("osc_in"));
         assert!(bound.mcus[0].role_nets.contains_key("osc_out"));
-        assert!(bound.mcus[0].external_clock_present);
+        assert!(bound.mcus[0].clock.external_present());
         let bound = bind_board(&stm32_clock_board(true), &lib);
-        assert!(!bound.mcus[0].external_clock_present);
+        assert!(!bound.mcus[0].clock.external_present());
+    }
+
+    /// STM32F103 on `OSC_IN`/`OSC_OUT` (nets 1/2) with `extra` parts, ground net 3.
+    fn clock_case(extra: Vec<Component>) -> BoundBoard {
+        let mut board = stm32_clock_board(false);
+        board.components.truncate(1);
+        board.components.extend(extra);
+        board.nets.push(net(4, "XO_FLOAT"));
+        board.nets.push(net(5, "+3V3"));
+        bind_board(&board, &ModelLibrary::builtin())
+    }
+
+    fn crystal(pins: Vec<Pin>) -> Component {
+        let mut y = comp("Y1", "8MHz");
+        y.pins = pins;
+        y
+    }
+
+    fn clock_of(bound: &BoundBoard) -> (ClockKind, String) {
+        let c = &bound.mcus[0].clock;
+        (c.kind, c.detail.clone())
+    }
+
+    #[test]
+    fn crystal_across_the_oscillator_pins_is_a_valid_clock() {
+        let bound = clock_case(vec![crystal(vec![pin("1", 1), pin("2", 2), pin("3", 3)])]);
+        let (kind, detail) = clock_of(&bound);
+        assert_eq!(kind, ClockKind::Crystal, "{detail}");
+        assert!(detail.contains("Y1"), "{detail}");
+        assert!(bound.mcus[0].clock.external_present());
+    }
+
+    #[test]
+    fn an_mcu_with_nothing_on_its_oscillator_pins_runs_from_its_internal_oscillator() {
+        let bound = clock_case(vec![]);
+        let (kind, detail) = clock_of(&bound);
+        assert_eq!(kind, ClockKind::Internal, "{detail}");
+        assert!(detail.contains("HSI"), "{detail}");
+        assert!(!bound.mcus[0].clock.external_present());
+        // A DNP crystal is absent: the same internal-only verdict.
+        let mut y = crystal(vec![pin("1", 1), pin("2", 2)]);
+        y.dnp = true;
+        assert_eq!(clock_of(&clock_case(vec![y])).0, ClockKind::Internal);
+    }
+
+    #[test]
+    fn an_oscillator_driving_the_input_pin_is_a_valid_external_clock() {
+        let mut osc = comp("X1", "8MHz");
+        let mut out = pin("3", 1);
+        out.kind = "output".to_string();
+        osc.pins = vec![pin("2", 3), out, pin("4", 5)];
+        let (kind, detail) = clock_of(&clock_case(vec![osc]));
+        assert_eq!(kind, ClockKind::External, "{detail}");
+    }
+
+    #[test]
+    fn a_crystal_with_an_open_leg_is_a_broken_clock_and_is_disclosed() {
+        let bound = clock_case(vec![crystal(vec![pin("1", 1), pin("2", 4), pin("3", 3)])]);
+        let (kind, detail) = clock_of(&bound);
+        assert_eq!(kind, ClockKind::Broken, "{detail}");
+        assert!(detail.contains("Y1 reaches only"), "{detail}");
+        assert!(!bound.mcus[0].clock.external_present());
+        let row = bound
+            .report
+            .rows
+            .iter()
+            .find(|r| r.reference == "U1")
+            .unwrap();
+        assert!(row
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("clock source broken"));
+    }
+
+    #[test]
+    fn a_clock_pin_tied_to_a_rail_is_a_broken_clock() {
+        let mut board = stm32_clock_board(false);
+        board.components[0].pins = vec![pin("5", 3), pin("6", 2)];
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        let (kind, detail) = clock_of(&bound);
+        assert_eq!(kind, ClockKind::Broken, "{detail}");
+        assert!(detail.contains("tied to"), "{detail}");
+        // The same pin shorted to the output pin is also a fault.
+        board.components[0].pins = vec![pin("5", 1), pin("6", 1)];
+        assert_eq!(
+            clock_of(&bind_board(&board, &ModelLibrary::builtin())).0,
+            ClockKind::Broken
+        );
+    }
+
+    #[test]
+    fn load_capacitors_without_a_recognised_source_leave_the_clock_unknown() {
+        let mut c1 = comp("C1", "22pF");
+        c1.pins = vec![pin("1", 1), pin("2", 3)];
+        let (kind, _) = clock_of(&clock_case(vec![c1]));
+        assert_eq!(kind, ClockKind::Unknown);
+    }
+
+    #[test]
+    fn oscillator_pins_are_found_from_schematic_names_on_a_part_without_a_card_pin_map() {
+        let mut board = stm32_clock_board(false);
+        let mcu = &mut board.components[0];
+        mcu.value = "STM32F411RET6".to_string();
+        mcu.pins = vec![pin("5", 1), pin("6", 2)];
+        mcu.pins[0].function = "PH0-OSC_IN".to_string();
+        mcu.pins[1].function = "PH1-OSC_OUT".to_string();
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        assert_eq!(bound.mcus.len(), 1);
+        assert_eq!(clock_of(&bound).0, ClockKind::Crystal);
     }
 
     #[test]

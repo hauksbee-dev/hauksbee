@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 
+use hauksbee_bind::mcu_clock::{ClockKind, McuClock};
 use hauksbee_mcu::ExecutionProbe;
 
 /// The sentence every surface (CLI text, `--plain`, `--json` notes, stderr,
@@ -94,8 +95,8 @@ pub struct ExecutionEvidence {
     /// Any positive evidence the firmware ran: entry reached, UART bytes, or a
     /// GPIO toggle.
     pub executed: bool,
-    /// Executed, no fault, not held in reset, and supply not invalid. Only an
-    /// eligible MCU's firmware behaviour can count as a pass.
+    /// Executed, no fault, not held in reset, supply not invalid and clock not
+    /// broken. Only an eligible MCU's firmware behaviour can count as a pass.
     pub firmware_pass_eligible: bool,
     /// Why the run is not eligible, one sentence per reason; empty when it is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -103,14 +104,14 @@ pub struct ExecutionEvidence {
 }
 
 /// Board-side readings for one MCU, gathered by the scheduler.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BoardReadings {
     /// Reset held for the whole run (see [`RailWatch::reset_held`]).
     pub reset_held: Observed,
     pub supply_valid: Observed,
     pub supply_v: Option<f64>,
-    /// A crystal or oscillator is bound to the MCU's clock pins.
-    pub external_clock: bool,
+    /// The clock the board gives the core, from the binder.
+    pub clock: McuClock,
 }
 
 impl ExecutionEvidence {
@@ -164,6 +165,15 @@ impl ExecutionEvidence {
                 },
             ));
         }
+        let clock = board.clock;
+        let (clock_valid, clock_source) = clock_reading(&clock);
+        if clock_valid == Observed::No {
+            blockers.push(format!(
+                "the board's clock source is broken ({}); the emulated core ran anyway, \
+                 which silicon would not",
+                clock.detail
+            ));
+        }
         Self {
             mcu_ref: mcu_ref.to_string(),
             backend: backend.to_string(),
@@ -179,20 +189,31 @@ impl ExecutionEvidence {
             reset_held: board.reset_held,
             supply_valid: board.supply_valid,
             supply_v: board.supply_v,
-            clock_valid: if board.external_clock {
-                Observed::Yes
-            } else {
-                Observed::Unknown
-            },
-            clock_source: if board.external_clock {
-                "external crystal or oscillator bound".to_string()
-            } else {
-                "internal oscillator assumed; firmware that waits on an external clock stalls"
-                    .to_string()
-            },
+            clock_valid,
+            clock_source,
             executed,
             firmware_pass_eligible: blockers.is_empty(),
             blockers,
+        }
+    }
+}
+
+/// Whether the board supplies the core's clock, and where it comes from, in words.
+fn clock_reading(clock: &McuClock) -> (Observed, String) {
+    let d = &clock.detail;
+    match clock.kind {
+        ClockKind::Crystal => (Observed::Yes, format!("external crystal or resonator: {d}")),
+        ClockKind::External => (Observed::Yes, format!("external oscillator: {d}")),
+        ClockKind::Internal => (Observed::Yes, format!("internal oscillator: {d}")),
+        ClockKind::Broken => (Observed::No, format!("clock source broken: {d}")),
+        ClockKind::Unknown => {
+            (
+                Observed::Unknown,
+                format!(
+                "{}internal oscillator assumed; firmware that waits on an external clock stalls",
+                if d.is_empty() { String::new() } else { format!("{d}; ") }
+            ),
+            )
         }
     }
 }
@@ -341,7 +362,7 @@ mod tests {
             reset_held,
             supply_valid,
             supply_v: Some(3.3),
-            external_clock: false,
+            clock: McuClock::default(),
         }
     }
 
@@ -421,6 +442,45 @@ mod tests {
             assert!(e.executed && !e.firmware_pass_eligible, "{e:?}");
             assert!(e.blockers.iter().any(|r| r.contains(needle)), "{e:?}");
         }
+    }
+
+    #[test]
+    fn clock_verdict_sets_clock_valid_and_only_a_broken_clock_blocks() {
+        let run = |kind, detail: &str| {
+            let mut b = board(Observed::No, Observed::Yes);
+            b.clock = McuClock {
+                kind,
+                detail: detail.to_string(),
+            };
+            ExecutionEvidence::new(
+                "U1",
+                "renode:stm32f103",
+                probe(Some(true), &[]),
+                0,
+                &BTreeMap::new(),
+                b,
+            )
+        };
+        for (kind, valid, word) in [
+            (ClockKind::Crystal, Observed::Yes, "crystal"),
+            (ClockKind::External, Observed::Yes, "oscillator"),
+            (
+                ClockKind::Internal,
+                Observed::Yes,
+                "internal oscillator: RC",
+            ),
+            (ClockKind::Unknown, Observed::Unknown, "assumed"),
+        ] {
+            let e = run(kind, "RC");
+            assert_eq!(e.clock_valid, valid, "{kind:?}");
+            assert!(e.clock_source.contains(word), "{}", e.clock_source);
+            assert!(e.firmware_pass_eligible, "{kind:?}: {e:?}");
+        }
+        let e = run(ClockKind::Broken, "XIN is tied to GND");
+        assert_eq!(e.clock_valid, Observed::No);
+        assert!(e.executed && !e.firmware_pass_eligible, "{e:?}");
+        assert!(e.blockers.iter().any(|r| r.contains("XIN is tied to GND")));
+        assert!(execution_evidence_line(&e).contains("clock valid: no"));
     }
 
     #[test]

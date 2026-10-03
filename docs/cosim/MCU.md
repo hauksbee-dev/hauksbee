@@ -346,9 +346,9 @@ report, an "Execution evidence:" block in the default text summary, and an
 | `gpio_toggles` | firmware output edges per pin (`"PA5": 12`) |
 | `reset_held` | the board's reset line (when something drives it) stayed asserted the whole run |
 | `supply_valid`, `supply_v` | supply pads inside the card's operating range (`min_v` of its supply envelope to its absolute maximum) |
-| `clock_valid`, `clock_source` | `yes` when a crystal or oscillator is bound, else `unknown` (internal oscillator assumed) |
+| `clock_valid`, `clock_source` | read off the MCU's core oscillator pins (found by pin role/name, e.g. `XTAL1`/`XTAL2`, `OSC_IN`/`OSC_OUT`, `XIN`/`XOUT`): `yes` for a fitted crystal across the pair, a fitted oscillator or driver on the input, or no external part on a card that declares an `internal_clock`; `no` for a broken clock (pin tied to a rail, pins shorted, a crystal leg off the pin pair), which blocks eligibility; otherwise `unknown` |
 | `executed` | entry reached, or any UART byte, or any firmware GPIO edge |
-| `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid; otherwise why not |
+| `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid, clock not broken; otherwise why not |
 
 No evidence of execution is never a firmware pass. Net toggles alone do not
 count, because an oscillator or a responder toggles nets with the core parked:
