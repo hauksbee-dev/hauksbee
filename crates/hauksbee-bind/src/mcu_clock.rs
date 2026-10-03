@@ -25,7 +25,9 @@ pub enum ClockKind {
     Crystal,
     /// A fitted oscillator or other driver on the oscillator input pin.
     External,
-    /// No external clock part and the card declares an internal oscillator.
+    /// No external clock part and the card declares an internal oscillator. The
+    /// part can run, but the firmware's or fuses' clock selection is not
+    /// checked, so the evidence reports this as unknown, not valid.
     Internal,
     /// The board wires the clock pins so no clock can run.
     Broken,
