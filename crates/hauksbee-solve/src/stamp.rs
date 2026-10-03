@@ -222,6 +222,12 @@ pub struct JunctionEval {
     /// onto the 235 A false root). The Newton loop reads-and-clears this each
     /// iteration and refuses to call a limited iteration converged.
     limited: std::cell::Cell<bool>,
+    /// Anchors every solve's first iteration starts from instead of NaN, per
+    /// slot (NaN = none), until [`Self::clear_entries`]. Empty, the normal
+    /// case, makes [`Self::reset`] exactly the all-NaN reset. The transient
+    /// sets these for junctions whose seed voltage was never evaluated through
+    /// their own equation (see `Workspace::enter_junction_at`).
+    entry: Vec<f64>,
 }
 
 impl JunctionEval {
@@ -246,6 +252,7 @@ impl JunctionEval {
             slots,
             vals: std::cell::RefCell::new(vec![f64::NAN; n]),
             limited: std::cell::Cell::new(false),
+            entry: Vec::new(),
         }
     }
 
@@ -258,9 +265,29 @@ impl JunctionEval {
     /// anchor leaks between solves (each solve's first iteration anchors on
     /// its own entry point, exactly the previous behaviour).
     pub fn reset(&self) {
-        for v in self.vals.borrow_mut().iter_mut() {
-            *v = f64::NAN;
+        let mut vals = self.vals.borrow_mut();
+        if self.entry.is_empty() {
+            vals.fill(f64::NAN);
+        } else {
+            vals.copy_from_slice(&self.entry);
         }
+    }
+
+    /// Start junction `k` of `id` from evaluation anchor `v` at every solve
+    /// entry until [`Self::clear_entries`]. A device with no junction slot
+    /// is ignored.
+    pub fn set_entry(&mut self, id: DeviceId, k: usize, v: f64) {
+        if let Some(&s) = self.slots.get(&id) {
+            if self.entry.is_empty() {
+                self.entry = vec![f64::NAN; self.vals.borrow().len()];
+            }
+            self.entry[s + k] = v;
+        }
+    }
+
+    /// Drop every entry anchor: solves start unseeded again.
+    pub fn clear_entries(&mut self) {
+        self.entry.clear();
     }
 
     /// The stored evaluation anchor for junction `k` of `id`, or `fallback`

@@ -88,6 +88,13 @@ pub struct Workspace {
     /// every step too; an ordinary circuit that solved on the normal ladder
     /// leaves it false and keeps the bit-identical transient path.
     used_staged_dc: bool,
+    /// Set when the last DC solve ended on the staged ladder's relaxed
+    /// (diodes-off) power-on point rather than a root of the full circuit, and
+    /// `x` still holds that point. Every diode was a 1 GΩ stand-in there, so
+    /// a junction the point leaves forward-biased never carried the current
+    /// its own equation implies; the transient reads this to start such a
+    /// junction uncharged. Cleared at every DC and Newton solve entry.
+    relaxed_seed_adopted: bool,
     /// FROZEN comparator output decisions for the event-driven staged solve,
     /// keyed by device id. `None` (every normal solve) keeps the comparators
     /// self-deciding and the path bit-identical; the staged-DC outer loop sets
@@ -247,6 +254,32 @@ impl Workspace {
         self.used_staged_dc
     }
 
+    /// Whether `x` is the relaxed (diodes-off) power-on point the staged DC
+    /// adopted for want of a full root (see `relaxed_seed_adopted`).
+    pub const fn relaxed_seed_adopted(&self) -> bool {
+        self.relaxed_seed_adopted
+    }
+
+    /// Forget that `x` is the adopted relaxed point: the caller replaced it.
+    pub const fn clear_relaxed_seed_adopted(&mut self) {
+        self.relaxed_seed_adopted = false;
+    }
+
+    /// Start every Newton solve's junction limiting for diode `id` from the
+    /// evaluation voltage `v` rather than from its voltage in the entry point,
+    /// until [`Self::clear_junction_entries`]. For a junction whose entry
+    /// voltage was never evaluated through its own equation: pnjlim then
+    /// climbs its log schedule from `v`, the way a cold SPICE junction does,
+    /// instead of evaluating the exponential at the entry voltage outright.
+    pub fn enter_junction_at(&mut self, id: DeviceId, v: f64) {
+        self.junction_eval.set_entry(id, 0, v);
+    }
+
+    /// Drop the anchors [`Self::enter_junction_at`] set.
+    pub fn clear_junction_entries(&mut self) {
+        self.junction_eval.clear_entries();
+    }
+
     /// DC KCL residual at the current `self.x`: assemble the linearized system
     /// `g·x = rhs` at this iterate (DC, no homotopy: gmin = opts.gmin, full
     /// sources), then return the infinity norm of `F = g·x - rhs` over the NODE
@@ -379,6 +412,7 @@ impl Workspace {
             plan,
             staged_branch_reg: 0.0,
             used_staged_dc: false,
+            relaxed_seed_adopted: false,
             cmp_freeze: None,
             switch_freeze: None,
             switch_latch: None,
@@ -833,6 +867,8 @@ fn newton_solve_core(
     // this solve's own entry point (the previous accepted step), from then on
     // each junction anchors on the evaluation voltage its last stamp used.
     ws.junction_eval.reset();
+    // Iterating moves `x` off the adopted relaxed point.
+    ws.relaxed_seed_adopted = false;
     // A fresh attempt: any behavioral fault recorded here describes THIS solve.
     ws.behavioral_fault = None;
     // Same discipline for the stall site: a stale one from a previous attempt
@@ -1756,6 +1792,7 @@ fn dc_solve(
     // the next Jacobian can be singular even though the root is well-defined).
     const STAGED_BRANCH_REG: f64 = 1e-2;
     ws.used_staged_dc = false;
+    ws.relaxed_seed_adopted = false;
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
     let solve = |ws: &mut Workspace, gmin: f64, scale: f64| {
@@ -2058,6 +2095,7 @@ fn staged_dc(
         eprintln!("[staged] adopting relaxed power-on operating point as seed");
     }
     ws.x.copy_from_slice(seed);
+    ws.relaxed_seed_adopted = true;
 }
 
 /// Evaluate every comparator's output decision (`high` = output at the high
@@ -3235,5 +3273,83 @@ mod tests {
             hard_backtracks >= 1,
             "fixture drift: no hard backtrack (probe: {probe:?})"
         );
+    }
+
+    /// A spike stretcher in a relaxation loop: a comparator fires through
+    /// 1 kOhm and a diode into a stretch cap, and the stretched pulse closes a
+    /// switch that discharges the comparator's own input. The loop has no DC
+    /// root (high output discharges the input that holds it high), so the
+    /// staged ladder ends on its relaxed seed, and with the diode opened in
+    /// that seed the comparator sits high and the diode carries 4.95 V
+    /// forward. Adopted as is, the transient's first stamp evaluates the
+    /// diode exponential at e^100 (pnjlim sees a zero step from the seed),
+    /// and the seeded diffusion charge is as large: the march failed at t=0
+    /// with a device-internal unknown stepping ~1e31 V.
+    fn stretcher_relaxation_loop() -> (Circuit, NodeId) {
+        let mut c = Circuit::new();
+        let (vs, refn, mem) = (c.node("VS"), c.node("REF"), c.node("MEM"));
+        let (cmp, anode, vout) = (c.node("CMP"), c.node("A"), c.node("VOUT"));
+        vdc(&mut c, "V5", vs, 5.0);
+        vdc(&mut c, "VREF", refn, 2.5);
+        c.add(Device::Comparator {
+            name: "K".into(),
+            out: cmp,
+            inp: mem,
+            inn: refn,
+            out_lo: 0.05,
+            out_hi: 4.95,
+            hysteresis: 0.0075,
+            supply: hauksbee_ir::Supply::default(),
+        });
+        res(&mut c, "Rcharge", cmp, anode, 1e3);
+        let model = DiodeModel {
+            is: 4.352e-9,
+            n: 1.906,
+            rs: 0.6458,
+            cjo: 7.048e-13,
+            vj: 0.869,
+            m: 0.0306,
+            tt: 3.48e-9,
+            bv: 110.0,
+            ..DiodeModel::default()
+        };
+        diode(&mut c, "Dstretch", anode, vout, model);
+        cap(&mut c, "Cstretch", vout, GND, 10e-12);
+        res(&mut c, "Rstretch", vout, GND, 150e3);
+        res(&mut c, "Rmem", vs, mem, 100e3);
+        cap(&mut c, "Cmem", mem, GND, 1e-9);
+        sw(&mut c, "Sreset", mem, GND, vout, (1.75, 1.25), 6.0);
+        (c, vout)
+    }
+
+    /// The march starts from that seed with the forward junction uncharged,
+    /// charges the stretch cap through the diode, and fires the reset: the
+    /// stretched pulse crosses the switch's 1.75 V make level, under the
+    /// comparator's 4.95 V, and the input it discharges falls through the
+    /// 2.5 V trip. `TransientDyn` is the spike paths' own grant, which the
+    /// comparator flip at the reset needs whatever the start.
+    #[test]
+    fn transient_starts_from_a_staged_seed_whose_open_diode_sits_forward() {
+        let (c, vout) = stretcher_relaxation_loop();
+        let mut opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).expect("staged seed adopted");
+        assert!(
+            ws.relaxed_seed_adopted(),
+            "fixture drift: the staged DC reached a root"
+        );
+        opts.ladder = RobustnessLadder::none().with(Strategy::TransientDyn);
+        let w = crate::transient::Transient::new(opts)
+            .run(&c, 20e-6)
+            .expect("march from the staged seed");
+        let v = &w.node_voltages[vout.0 as usize];
+        let mem = &w.node_voltages[c.find_node("MEM").unwrap().0 as usize];
+        let peak = v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let mem_min = mem.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(
+            (1.75..4.95).contains(&peak),
+            "stretched pulse makes the reset switch: {peak}"
+        );
+        assert!(mem_min < 2.5, "reset discharges the input: {mem_min}");
     }
 }

@@ -470,8 +470,12 @@ impl Transient {
         // armed exactly as they were.
         if let Some(seed) = dc_seed.filter(|_| continuing) {
             ws.x.copy_from_slice(seed);
+            ws.clear_relaxed_seed_adopted();
         }
         seed_reactive_state(&mut state, circuit, &ws, opts);
+        if ws.relaxed_seed_adopted() {
+            start_forward_junctions_uncharged(&mut state, circuit, &mut ws, opts);
+        }
 
         let mut t = 0.0;
         let mut dt = match opts.step {
@@ -830,6 +834,9 @@ impl Transient {
             // Accept: advance time, update reactive history, emit.
             t += h;
             advance_reactive_state(&mut state, circuit, &ws, h, opts, first_step);
+            if first_step {
+                ws.clear_junction_entries();
+            }
             if predictor_armed {
                 match x_accepted_prev.as_mut() {
                     Some(p) => p.copy_from_slice(&x_accepted),
@@ -990,6 +997,42 @@ pub fn seed_reactive_state(
     for (id, dev) in circuit.iter() {
         if let Some((raw, lo, hi)) = opamp_target(ws, dev) {
             state.seed(0, id.0 as usize, raw.clamp(lo, hi));
+        }
+    }
+}
+
+/// Start every diode that the staged DC's adopted relaxed point leaves
+/// forward-biased as an unbiased junction, 0 V: its stored charge, and the
+/// anchor its first step's junction limiting climbs from.
+///
+/// That point solved each diode as a 1 GΩ stand-in, which is a sound model
+/// of a reverse-biased or unbiased junction and of nothing else: a junction
+/// it leaves forward-biased carried nanoamps there, not what its own equation
+/// gives at that voltage. Read through the full model, a stretch diode the
+/// stand-in held 4.95 V forward stores `tt * Is * e^100`, ~1e26 C, and the
+/// first step's companion history turns that into a ~1e31 V Newton step
+/// (measured on a comparator-fed pulse stretcher). The power-on premise the
+/// staged DC adopts that point under is that such a junction has not yet
+/// conducted, so it starts uncharged and the march charges it. Its limiting
+/// starts there too: anchored on the seed's own 4.95 V, pnjlim sees no step
+/// and Newton walks the exponential down from above one `n*Vt` per
+/// iteration, too slowly for any step to converge. Reverse-biased junctions
+/// keep their seed voltage and the depletion charge it implies, which the
+/// stand-in does model. The anchors last until the first accepted step.
+fn start_forward_junctions_uncharged(
+    state: &mut ReactiveState,
+    circuit: &Circuit,
+    ws: &mut Workspace,
+    opts: &SolverOptions,
+) {
+    for (id, dev) in circuit.iter() {
+        if let Device::Diode { a, k, model, .. } = dev {
+            if diode_vj(ws, id, *a, *k) > 0.0 {
+                ws.enter_junction_at(id, 0.0);
+                if crate::stamp::diode_has_charge(model, &opts.effects) {
+                    state.seed(0, id.0 as usize, diode_q(model, 0.0, opts));
+                }
+            }
         }
     }
 }
