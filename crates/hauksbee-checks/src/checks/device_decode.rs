@@ -1037,7 +1037,7 @@ fn check_bq2407x_ts(board: &ExtractedBoard, u: &Component, report: &mut NetLintR
 }
 
 /// Human ohms: 4700 -> "4.7k", 470 -> "470".
-fn format_ohms(ohms: f64) -> String {
+pub(crate) fn format_ohms(ohms: f64) -> String {
     if ohms >= 1_000_000.0 {
         format!("{:.1}M", ohms / 1_000_000.0)
     } else if ohms >= 1_000.0 {

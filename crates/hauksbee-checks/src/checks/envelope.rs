@@ -7,6 +7,11 @@
 //! verdict. Findings retain the limit, inferred range, model source, and any
 //! uncertainty that raised their severity.
 //!
+//! On solved levels, a rail that never reached its parts' minimum supply
+//! because their own card-stated static draw drops more than the headroom
+//! across a series feed resistor is reported once, as a starved rail naming
+//! the resistor, the feed and the drop, in place of one finding per part.
+//!
 //! Design rationale: `docs/how-and-why/hauksbee-engine/checks.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -405,6 +410,7 @@ fn envelope_lint_with_tolerance(
     let resolver = RailResolver::new(board, lib, solved);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
+    let mut starved: BTreeMap<i64, Vec<Starved>> = BTreeMap::new();
 
     for (comp, model) in super::resolved_components(board, lib) {
         let net_of = |role| role_net_id(comp, &model, role).and_then(|id| board.net(id));
@@ -443,6 +449,16 @@ fn envelope_lint_with_tolerance(
                     let fix = compatible_supply_rail(&resolver, net_id, *min_v, *max_v)
                         .map(|candidate| format!(" Tie {pin} to compatible rail '{candidate}'."))
                         .unwrap_or_default();
+                    // A solved rail that never came up to this part's minimum:
+                    // a candidate for one rail-level starvation finding.
+                    if resolver.solved(net_id).is_some() && range.max_v < *min_v - min_tol {
+                        starved.entry(net_id).or_default().push(Starved {
+                            finding: report.findings.len(),
+                            reference: comp.reference.clone(),
+                            min_v: *min_v,
+                            draw_a: static_draw_a(&model),
+                        });
+                    }
                     report.findings.push(LintFinding {
                         check: LintCheck::OperatingEnvelope,
                         severity,
@@ -508,7 +524,160 @@ fn envelope_lint_with_tolerance(
             }
         }
     }
+    fold_starved_rails(&resolver, starved, &mut report);
     report
+}
+
+/// How many of a starved rail's parts its finding names before "and N more".
+const STARVED_PARTS_SHOWN: usize = 6;
+
+/// A part whose solved supply rail never reached its minimum operating supply.
+struct Starved {
+    /// Index of the part's own envelope finding in the report.
+    finding: usize,
+    reference: String,
+    min_v: f64,
+    /// The part's static supply draw from its card, amps; `0` when it has none.
+    draw_a: f64,
+}
+
+/// The static supply current a card states for the part, in amps: its
+/// operating-mode `supply_static_ua`, else its quiescent `iq_a`. What the part
+/// draws once its rail is up, which is what a series feed must carry.
+fn static_draw_a(model: &ModelEntry) -> f64 {
+    let ua = model.params.get_f64("supply_static_ua").map(|ua| ua * 1e-6);
+    ua.or_else(|| model.params.get_f64("iq_a"))
+        .filter(|a| a.is_finite() && *a > 0.0)
+        .unwrap_or(0.0)
+}
+
+/// Resistors joining `net_id` to a higher, declared, non-ground rail, lowest
+/// resistance first: each one's reference, ohms and the far net's id and range.
+fn series_feeds(
+    resolver: &RailResolver<'_>,
+    net_id: i64,
+    rail: RailRange,
+) -> Vec<(String, f64, i64, RailRange)> {
+    let board = resolver.board;
+    let mut feeds = Vec::new();
+    for (comp, _) in board.net_members(net_id) {
+        let Some(ohms) = super::bus_loading::resistor_ohms(comp) else {
+            continue;
+        };
+        let far = comp
+            .pins
+            .iter()
+            .filter_map(|p| p.net)
+            .find(|n| *n != net_id);
+        let Some(far) = far.filter(|n| *n != 0) else {
+            continue;
+        };
+        if board.net(far).is_none_or(|net| is_ground(&net.name)) {
+            continue;
+        }
+        // A feed comes from a rail the board declares (a named supply or a
+        // regulator's output), judged at its solved level: a bias resistor to
+        // a signal net that happens to sit higher is a load, not a feed.
+        if !matches!(resolver.declared(far), RailKnowledge::Known(_)) {
+            continue;
+        }
+        if let RailKnowledge::Known(range) = resolver.range(far) {
+            if range.max_v > rail.max_v {
+                feeds.push((comp.reference.clone(), ohms, far, range));
+            }
+        }
+    }
+    feeds.sort_by(|a, b| a.1.total_cmp(&b.1));
+    feeds
+}
+
+/// Replace the per-part findings of a rail that never came up with ONE
+/// rail-level finding, where the parts' own static draw through the rail's
+/// series feed resistance explains it: the feed alone sits at or above the
+/// parts' minimum supply, but that draw would drop more than the headroom
+/// across the resistance. That is a starved rail, not N independent parts out
+/// of range, and the fix is the feed, not the parts. A rail a regulator
+/// defines, one with no resistive feed from a higher net, or one whose parts
+/// state no supply current keeps its per-part findings.
+fn fold_starved_rails(
+    resolver: &RailResolver<'_>,
+    starved: BTreeMap<i64, Vec<Starved>>,
+    report: &mut NetLintReport,
+) {
+    let board = resolver.board;
+    let mut folded = BTreeSet::new();
+    let mut rail_findings = Vec::new();
+    for (net_id, parts) in starved {
+        let (Some(net), Some(rail)) = (board.net(net_id), resolver.solved(net_id)) else {
+            continue;
+        };
+        if resolver.regulators.contains_key(&net_id) {
+            continue;
+        }
+        let feeds = series_feeds(resolver, net_id, rail);
+        if feeds.is_empty() {
+            continue;
+        }
+        // One entry per part: a card with several temperature rows records
+        // the part once per row.
+        let mut per_part: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
+        for p in &parts {
+            let slot = per_part.entry(&p.reference).or_insert((p.min_v, p.draw_a));
+            slot.0 = slot.0.max(p.min_v);
+        }
+        let need_v = per_part.values().map(|(v, _)| *v).fold(f64::MIN, f64::max);
+        let draw_a: f64 = per_part.values().map(|(_, a)| *a).sum();
+        let r_ohms = 1.0 / feeds.iter().map(|(_, ohms, ..)| 1.0 / ohms).sum::<f64>();
+        let (feed_net, feed) = feeds
+            .iter()
+            .map(|(_, _, far, range)| (*far, *range))
+            .max_by(|a, b| a.1.max_v.total_cmp(&b.1.max_v))
+            .expect("feeds is non-empty");
+        let headroom_v = feed.max_v - need_v;
+        let drop_v = draw_a * r_ohms;
+        if draw_a <= 0.0 || headroom_v < 0.0 || drop_v <= headroom_v {
+            continue;
+        }
+        let feed_name = board.net(feed_net).map_or("?", |n| n.name.as_str());
+        let resistors: Vec<String> = feeds
+            .iter()
+            .map(|(r, ohms, ..)| format!("{r} ({} ohm)", super::device_decode::format_ohms(*ohms)))
+            .collect();
+        let refs: Vec<&str> = per_part.keys().copied().collect();
+        let listed = if refs.len() > STARVED_PARTS_SHOWN {
+            let shown = refs[..STARVED_PARTS_SHOWN].join(", ");
+            format!("{shown}, and {} more", refs.len() - STARVED_PARTS_SHOWN)
+        } else {
+            refs.join(", ")
+        };
+        let max_ohms = headroom_v / draw_a;
+        let message = format!(
+            "'{}' is starved: it reaches only {:.3} V, below the {need_v:.3} V minimum supply of the {} part(s) it powers ({listed}). Their {:.1} mA static supply draw through {} from '{feed_name}' ({:.3} V) drops {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts do not run. Feed the rail through no more than {} ohm in total, or directly from '{feed_name}'.",
+            net.name,
+            rail.max_v,
+            refs.len(),
+            draw_a * 1e3,
+            resistors.join(" and "),
+            feed.max_v,
+            super::device_decode::format_ohms(max_ohms),
+        );
+        folded.extend(parts.iter().map(|p| p.finding));
+        let mut all_refs: Vec<String> = feeds.iter().map(|(r, ..)| r.clone()).collect();
+        all_refs.extend(refs.iter().map(|r| (*r).to_string()));
+        rail_findings.push(LintFinding {
+            check: LintCheck::OperatingEnvelope,
+            severity: Severity::High,
+            message,
+            refs: all_refs,
+            nets: vec![net.name.clone(), feed_name.to_string()],
+        });
+    }
+    let mut index = 0usize;
+    report.findings.retain(|_| {
+        index += 1;
+        !folded.contains(&(index - 1))
+    });
+    report.findings.extend(rail_findings);
 }
 
 /// The same limits as run evidence, judged on the levels the run SOLVED.
@@ -894,5 +1063,108 @@ vout_setpoint_high = 4.23
             .message
             .contains("no charger card declares its chemistry"));
         assert!(finding.message.contains("battery_chemistry"));
+    }
+
+    /// Three LMV7219s (1.1 mA each, 2.7 V minimum supply) on rail 'VA', fed
+    /// from '+5V' through R1 of `feed_ohms`, or straight from '+5V' when
+    /// `None`. Bound and DC-solved for real; returns the board and every net's
+    /// solved level.
+    fn comparator_rail(feed_ohms: Option<&str>) -> (ExtractedBoard, BTreeMap<String, RailRange>) {
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        let (gnd, five, va) = (1, 2, 3);
+        let vcc = if feed_ohms.is_some() { va } else { five };
+        let mut parts: Vec<Component> = (1..=3)
+            .map(|i| {
+                let out = 3 + i;
+                let pads = [("1", out), ("2", gnd), ("3", gnd), ("4", gnd), ("5", vcc)];
+                super::super::test_support::part(&format!("U{i}"), "LMV7219", &pads)
+            })
+            .collect();
+        if let Some(ohms) = feed_ohms {
+            let pads = [("1", five), ("2", va)];
+            parts.push(super::super::test_support::part("R1", ohms, &pads));
+        }
+        let nets = [
+            (gnd, "GND"),
+            (five, "+5V"),
+            (va, "VA"),
+            (4, "O1"),
+            (5, "O2"),
+            (6, "O3"),
+        ];
+        let b = board(&nets, parts);
+        let bound = hauksbee_bind::binder::bind_board(&b, &ModelLibrary::builtin());
+        let mut ws = Workspace::new(&bound.circuit);
+        dc_operating_point(&mut ws, &bound.circuit, &SolverOptions::default())
+            .expect("the comparator rail solves");
+        let solved = bound
+            .net_nodes
+            .iter()
+            .filter_map(|(name, node)| {
+                let v = ws.x.get(ws.layout.node(*node)?).copied()?;
+                Some((name.clone(), RailRange::point(v)))
+            })
+            .collect();
+        (b, solved)
+    }
+
+    #[test]
+    fn a_rail_its_parts_own_draw_starves_through_a_series_resistor_is_one_finding() {
+        let lib = ModelLibrary::builtin();
+        let tol = {
+            let o = hauksbee_solve::SolverOptions::default();
+            (o.reltol, o.vntol)
+        };
+        // Legal: a 10 ohm feed drops 33 mV; a direct feed drops nothing.
+        for feed in [Some("10"), None] {
+            let (b, solved) = comparator_rail(feed);
+            let report = envelope_lint_with_tolerance(&b, &lib, &solved, tol, Some(25.0));
+            let starved = |f: &&LintFinding| f.message.contains("is starved");
+            assert_eq!(
+                report.findings.iter().filter(starved).count(),
+                0,
+                "{feed:?}: {report:?}"
+            );
+            let rail = solved
+                .get(if feed.is_some() { "VA" } else { "+5V" })
+                .unwrap();
+            assert!(rail.min_v > 4.9, "{feed:?}: the rail is up, got {rail:?}");
+            let evidence = run_assumptions(&b, &lib, &solved, tol, (25.0, true));
+            assert!(evidence.is_empty(), "{feed:?}: {evidence:?}");
+        }
+
+        // Faulty: 1 kohm. The three parts' 3.3 mA would drop 3.3 V, more than
+        // the 2.3 V between +5V and their 2.7 V minimum, so VA cannot come up.
+        let (b, solved) = comparator_rail(Some("1k"));
+        let va = solved["VA"].max_v;
+        assert!(va < 2.7, "VA must solve below the parts' minimum, got {va}");
+        let report = envelope_lint_with_tolerance(&b, &lib, &solved, tol, Some(25.0));
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "one rail finding, not one per part: {report:?}"
+        );
+        let f = &report.findings[0];
+        assert_eq!(f.severity, Severity::High);
+        assert_eq!(f.refs, ["R1", "U1", "U2", "U3"]);
+        assert_eq!(f.nets, ["VA", "+5V"]);
+        for says in [
+            "'VA' is starved",
+            &format!("reaches only {va:.3} V"),
+            "2.700 V minimum supply of the 3 part(s)",
+            "3.3 mA static supply draw through R1 (1.0k ohm) from '+5V'",
+            "drops 3.3 V",
+            "no more than 697 ohm",
+        ] {
+            assert!(f.message.contains(says), "{says:?} in {}", f.message);
+        }
+        // As run evidence it is one measured violation, keyed on the feed.
+        let evidence = run_assumptions(&b, &lib, &solved, tol, (25.0, true));
+        let kinds: Vec<_> = evidence.iter().map(Assumption::kind).collect();
+        assert_eq!(
+            kinds,
+            [hauksbee_ir::evidence::AssumptionKind::OperatingLimitViolated],
+            "{evidence:?}"
+        );
     }
 }
