@@ -112,6 +112,22 @@ pub struct TransientDiagnostics {
     /// The relay latch at that final point, for a caller that continues the
     /// SAME circuit in a later run (a co-sim chunk); `None` when none is tracked.
     pub switch_latch: Option<HashMap<DeviceId, bool>>,
+    /// How the march's own t = 0 DC operating point was reached; `None` when
+    /// the march did not start from one (a power-on from rest, or a
+    /// continuation that opened on carried state).
+    pub operating_point: Option<OperatingPointReport>,
+}
+
+/// What a transient's t = 0 DC operating point is, beyond converging.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OperatingPointReport {
+    /// The staged ladder found no root and the march started from its
+    /// relaxed (diodes-open) seed instead (see
+    /// [`Workspace::relaxed_seed_adopted`]).
+    pub relaxed_seed_adopted: bool,
+    /// Comparators held at a rail because they have no self-consistent DC
+    /// state, released at t = 0 (see [`Workspace::pinned_comparators`]).
+    pub pinned_comparators: Vec<(DeviceId, bool)>,
 }
 
 /// The transient engine.
@@ -472,6 +488,10 @@ impl Transient {
             ws.x.copy_from_slice(seed);
             ws.clear_relaxed_seed_adopted();
         }
+        let operating_point = (!from_zero && !continuing).then(|| OperatingPointReport {
+            relaxed_seed_adopted: ws.relaxed_seed_adopted(),
+            pinned_comparators: ws.pinned_comparators().to_vec(),
+        });
         seed_reactive_state(&mut state, circuit, &ws, opts);
         if ws.relaxed_seed_adopted() {
             start_forward_junctions_uncharged(&mut state, circuit, &mut ws, opts);
@@ -861,6 +881,7 @@ impl Transient {
         Ok(TransientDiagnostics {
             final_residual,
             switch_latch: ws.switch_latch().cloned(),
+            operating_point,
         })
     }
 }
@@ -1129,7 +1150,7 @@ fn bjt_q(
 /// voltage the stamp linearised, or the co-simulation stops converging rather
 /// than merely drifting.
 #[inline]
-fn diode_vj(ws: &Workspace, id: DeviceId, a: NodeId, k: NodeId) -> f64 {
+pub fn diode_vj(ws: &Workspace, id: DeviceId, a: NodeId, k: NodeId) -> f64 {
     let anode = ws
         .layout
         .diode_internal(id)
@@ -1541,5 +1562,55 @@ mod branch_output_tests {
             run.is_ok() && (v - 0.01f64.tan()).abs() < 1e-6,
             "{run:?}: V(10 us) = {v}"
         );
+    }
+}
+
+#[cfg(test)]
+mod relaxed_seed_tests {
+    use super::{diode_q, start_forward_junctions_uncharged};
+    use crate::newton::Workspace;
+    use crate::options::SolverOptions;
+    use crate::system::ReactiveState;
+    use crate::test_fixtures::{diode, vdc};
+    use hauksbee_ir::{Circuit, DiodeModel};
+
+    /// From a relaxed seed (every diode a 1 GΩ stand-in), a junction the
+    /// seed leaves forward-biased starts the march uncharged, its history at
+    /// `Q(0)`, not at the charge its own equation gives at the seed's volts;
+    /// a reverse-biased one keeps the history it had.
+    #[test]
+    fn a_forward_seed_junction_starts_uncharged_and_a_reverse_one_keeps_its_charge() {
+        let mut c = Circuit::new();
+        let (hi, mid) = (c.node("HI"), c.node("MID"));
+        vdc(&mut c, "VHI", hi, 5.0);
+        vdc(&mut c, "VMID", mid, 0.05);
+        let model = DiodeModel {
+            cjo: 1e-12,
+            tt: 5e-9,
+            ..DiodeModel::default()
+        };
+        let fwd = diode(&mut c, "Dfwd", hi, mid, model);
+        let rev = diode(&mut c, "Drev", mid, hi, model);
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        ws.x[ws.layout.node(hi).unwrap()] = 5.0;
+        ws.x[ws.layout.node(mid).unwrap()] = 0.05;
+        if let Some(i) = ws.layout.diode_internal(fwd) {
+            ws.x[i] = 5.0;
+        }
+        if let Some(i) = ws.layout.diode_internal(rev) {
+            ws.x[i] = 0.05;
+        }
+        let mut state = ReactiveState::new(c.devices.len());
+        for id in [fwd, rev] {
+            state.seed(0, id.0 as usize, 1.0);
+        }
+        start_forward_junctions_uncharged(&mut state, &c, &mut ws, &opts);
+        let x1 = state.bank(0).0;
+        assert_eq!(
+            x1[fwd.0 as usize].to_bits(),
+            diode_q(&model, 0.0, &opts).to_bits()
+        );
+        assert_eq!(x1[rev.0 as usize].to_bits(), 1.0f64.to_bits());
     }
 }

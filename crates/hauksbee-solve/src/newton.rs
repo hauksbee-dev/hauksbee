@@ -95,6 +95,16 @@ pub struct Workspace {
     /// its own equation implies; the transient reads this to start such a
     /// junction uncharged. Cleared at every DC and Newton solve entry.
     relaxed_seed_adopted: bool,
+    /// Comparators the last DC solve had to PIN to a rail to reach a root,
+    /// with the rail each holds (`true` = high), in device order. Empty after
+    /// any DC that converged with every comparator agreeing with its own
+    /// inputs. Non-empty only when the staged ladder found the comparators to
+    /// have no self-consistent DC state at all, an astable loop such as a
+    /// relaxation oscillator (see `comparator_consistency_solve`): the
+    /// operating point is then a true root of the circuit with each listed
+    /// output held at its rail, and the march releases them at t = 0.
+    /// Cleared at every DC solve entry.
+    pinned_comparators: Vec<(DeviceId, bool)>,
     /// FROZEN comparator output decisions for the event-driven staged solve,
     /// keyed by device id. `None` (every normal solve) keeps the comparators
     /// self-deciding and the path bit-identical; the staged-DC outer loop sets
@@ -265,6 +275,14 @@ impl Workspace {
         self.relaxed_seed_adopted = false;
     }
 
+    /// The comparators the last DC operating point holds pinned to a rail
+    /// because they have no self-consistent DC state (an astable loop), with
+    /// the rail each holds (`true` = high). Empty for an ordinary operating
+    /// point. See `pinned_comparators`.
+    pub fn pinned_comparators(&self) -> &[(DeviceId, bool)] {
+        &self.pinned_comparators
+    }
+
     /// Start every Newton solve's junction limiting for diode `id` from the
     /// evaluation voltage `v` rather than from its voltage in the entry point,
     /// until [`Self::clear_junction_entries`]. For a junction whose entry
@@ -326,6 +344,24 @@ impl Workspace {
         empty: &ReactiveState,
     ) -> f64 {
         self.dc_residual_argmax_with(circuit, opts, use_ic, empty).0
+    }
+
+    /// As [`Self::dc_residual_inf_norm`], but with every comparator in
+    /// [`Self::pinned_comparators`] held at its pinned rail: the residual of
+    /// the system the DC operating point is a root of. Equal to the plain
+    /// residual when nothing is pinned; with pins, the plain one also counts
+    /// each pinned output's distance from the rail its inputs select.
+    pub fn pinned_dc_residual_inf_norm(&mut self, circuit: &Circuit, opts: &SolverOptions) -> f64 {
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
+        let empty = ReactiveState::new(circuit.devices.len());
+        let frozen = (self.cmp_freeze.take(), self.switch_freeze.take());
+        self.cmp_freeze = (!self.pinned_comparators.is_empty())
+            .then(|| self.pinned_comparators.iter().copied().collect());
+        let r = residual_argmax_at(
+            self, circuit, opts, 0.0, coeffs, &empty, true, false, opts.gmin, 1.0, 0.0,
+        );
+        (self.cmp_freeze, self.switch_freeze) = frozen;
+        r.0
     }
 
     /// Argmax companion of [`Self::dc_residual_inf_norm`]: returns
@@ -413,6 +449,7 @@ impl Workspace {
             staged_branch_reg: 0.0,
             used_staged_dc: false,
             relaxed_seed_adopted: false,
+            pinned_comparators: Vec::new(),
             cmp_freeze: None,
             switch_freeze: None,
             switch_latch: None,
@@ -1793,6 +1830,7 @@ fn dc_solve(
     const STAGED_BRANCH_REG: f64 = 1e-2;
     ws.used_staged_dc = false;
     ws.relaxed_seed_adopted = false;
+    ws.pinned_comparators.clear();
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
     let solve = |ws: &mut Workspace, gmin: f64, scale: f64| {
@@ -2036,7 +2074,13 @@ fn gmin_ladder(
 /// 4. a gmin walk from 1e-3 down to the floor, branch regularizer on;
 /// 5. (`Strategy::Ptc`) pseudo-transient continuation, the textbook robust
 ///    method, gated because a board whose per-step solve itself fails makes
-///    it slow and unproductive.
+///    it slow and unproductive;
+/// 6. the comparator-consistency rung ([`comparator_consistency_solve`]):
+///    comparators frozen and settled Gauss-Seidel on the pristine circuit,
+///    any with no self-consistent state at all (an astable loop) pinned at
+///    the state the seed selects and reported in `ws.pinned_comparators`.
+///
+/// Only when every rung fails is the relaxed seed itself adopted.
 #[allow(clippy::too_many_arguments)]
 fn staged_dc(
     ws: &mut Workspace,
@@ -2091,11 +2135,190 @@ fn staged_dc(
             return;
         }
     }
+    if let Some(pins) = comparator_consistency_solve(ws, circuit, opts, solve, seed, dbg) {
+        ws.pinned_comparators = pins;
+        return;
+    }
     if dbg {
         eprintln!("[staged] adopting relaxed power-on operating point as seed");
     }
     ws.x.copy_from_slice(seed);
     ws.relaxed_seed_adopted = true;
+}
+
+/// Inner Newton solves the comparator-consistency rung may spend, across its
+/// Gauss-Seidel passes and its pin checks together.
+const CMP_CONSISTENCY_SOLVES: usize = 96;
+
+/// The comparator-consistency rung of the staged ladder: settle the
+/// comparators' discrete output states Gauss-Seidel style, and where a set of
+/// them has NO self-consistent state, pin it and say so.
+///
+/// A bang-bang comparator has no tangent, so a Newton solve that lets it
+/// decide every iteration is a fixed-point iteration over its output, and
+/// around a loop that output feeds back into its own inputs it cannot settle.
+/// Freezing each output at a rail makes every inner solve smooth; the outer
+/// loop re-derives each decision from the converged inputs (with the
+/// hysteresis the stamp applies) and re-solves until none flips. That fixed
+/// point is a true root of the full circuit, every diode on its own
+/// equation, and is what a bistable loop settles on: the seed's decisions
+/// select one of its states, deterministically.
+///
+/// An astable loop has no such fixed point. A relaxation oscillator (a spiking
+/// neuron: a comparator whose output, stretched through a diode onto an RC,
+/// closes a switch that resets the comparator's own input) is inconsistent in
+/// both states, high resets the input that holds it high, low lets it charge
+/// past the threshold, and the outer loop cycles. The comparators whose
+/// decisions vary around that cycle are then PINNED at the cycle's first
+/// state, which `seed` (the power-on point) selects, and the rest re-settled
+/// around them. Each pin is then checked: flipped on its own, a comparator
+/// that is consistent there is a follower the cycle merely dragged along and
+/// is released into that state; one that wants to flip straight back again
+/// is astable and stays pinned. The march releases the pins at t = 0 and the
+/// oscillation proceeds from a genuine operating point.
+///
+/// Leaves the root in `ws.x` and returns the pins (empty when every
+/// comparator is self-consistent), or `None` (`ws.x` then unspecified) when
+/// the circuit has no comparator, an inner solve fails, or the budget
+/// `CMP_CONSISTENCY_SOLVES` runs out.
+fn comparator_consistency_solve(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    solve: &impl Fn(&mut Workspace, f64, f64) -> NewtonResult,
+    seed: &[f64],
+    dbg: bool,
+) -> Option<Vec<(DeviceId, bool)>> {
+    let ids: Vec<DeviceId> = circuit
+        .iter()
+        .filter(|(_, d)| matches!(d, Device::Comparator { .. }))
+        .map(|(id, _)| id)
+        .collect();
+    if ids.is_empty() {
+        return None;
+    }
+    // The pristine circuit: no gmin floor, no branch regularizer. Only the
+    // comparators are held, so a converged pass is a root of the real network.
+    ws.staged_branch_reg = 0.0;
+    ws.switch_freeze = None;
+    // The seed solved each diode as a 1 GOhm stand-in, so one it leaves
+    // forward-biased (a stretch diode under a comparator already high) sits
+    // volts forward of anything its own equation allows. Anchor its limiting
+    // at 0 V for the first solve so pnjlim climbs to the real drop instead of
+    // evaluating the exponential at the seed's voltage outright.
+    ws.x.copy_from_slice(seed);
+    for (id, dev) in circuit.iter() {
+        if let Device::Diode { a, k, .. } = dev {
+            if crate::transient::diode_vj(ws, id, *a, *k) > 0.0 {
+                ws.enter_junction_at(id, 0.0);
+            }
+        }
+    }
+    let decide = |ws: &Workspace, prev: &[bool]| -> Vec<bool> {
+        let prev: HashMap<DeviceId, bool> = ids.iter().copied().zip(prev.iter().copied()).collect();
+        let next = eval_comparator_states(circuit, &ws.layout, &ws.x, &prev);
+        ids.iter().map(|id| next[id]).collect()
+    };
+    let raw = eval_comparator_states(circuit, &ws.layout, seed, &HashMap::new());
+    let mut state: Vec<bool> = ids.iter().map(|id| raw[id]).collect();
+    let mut pinned: Vec<Option<bool>> = vec![None; ids.len()];
+    // A pin confirmed astable by its own flip test is never re-checked.
+    let mut confirmed = vec![false; ids.len()];
+    let mut history: Vec<Vec<bool>> = Vec::new();
+    let mut x = seed.to_vec();
+    let solves = std::cell::Cell::new(0usize);
+    let solve_at = |ws: &mut Workspace, state: &[bool], from: &[f64]| -> bool {
+        solves.set(solves.get() + 1);
+        ws.cmp_freeze = Some(ids.iter().copied().zip(state.iter().copied()).collect());
+        ws.x.copy_from_slice(from);
+        let ok = solves.get() <= CMP_CONSISTENCY_SOLVES && solve(ws, opts.gmin, 1.0).converged;
+        // The anchors were for the seed's never-evaluated junctions only.
+        ws.clear_junction_entries();
+        ok
+    };
+    let result = 'gs: loop {
+        if !solve_at(ws, &state, &x) {
+            if dbg {
+                eprintln!("[cmp-gs] inner solve failed (solve {})", solves.get());
+            }
+            break 'gs None;
+        }
+        x.copy_from_slice(&ws.x);
+        let mut next = decide(ws, &state);
+        for (n, p) in next.iter_mut().zip(&pinned) {
+            if let Some(p) = p {
+                *n = *p;
+            }
+        }
+        if dbg {
+            let flips = next.iter().zip(&state).filter(|(a, b)| a != b).count();
+            eprintln!(
+                "[cmp-gs] solve {}: {flips} comparator(s) disagree",
+                solves.get()
+            );
+        }
+        if next != state {
+            if let Some(k) = history.iter().position(|h| *h == next) {
+                state = pin_cycle(&history[k..], &state, &mut pinned);
+                if dbg {
+                    let n = pinned.iter().filter(|p| p.is_some()).count();
+                    eprintln!("[cmp-gs] cycle; {n} comparator(s) pinned");
+                }
+                history.clear();
+            } else {
+                history.push(std::mem::replace(&mut state, next));
+            }
+            continue;
+        }
+        // Consistent given the pins. Flip-test each unconfirmed pin alone.
+        for i in 0..ids.len() {
+            if pinned[i].is_none() || confirmed[i] {
+                continue;
+            }
+            let mut trial = state.clone();
+            trial[i] = !trial[i];
+            if solve_at(ws, &trial, &x) && decide(ws, &trial)[i] == trial[i] {
+                // A follower, consistent in the other state: release it there
+                // and re-settle the rest around it.
+                pinned[i] = None;
+                x.copy_from_slice(&ws.x);
+                history.clear();
+                state = trial;
+                continue 'gs;
+            }
+            confirmed[i] = true;
+        }
+        // Every pin is astable; `x` is the root of the last consistent pass.
+        ws.x.copy_from_slice(&x);
+        break 'gs Some(
+            ids.iter()
+                .zip(&pinned)
+                .filter_map(|(id, p)| p.map(|v| (*id, v)))
+                .collect(),
+        );
+    };
+    ws.cmp_freeze = None;
+    ws.clear_junction_entries();
+    result
+}
+
+/// A comparator Gauss-Seidel cycle: `cycle` (its states from the first on)
+/// then `last` lead back to `cycle[0]`. Pin every unpinned comparator whose
+/// decision varies around it at its value in `cycle[0]`, and return that
+/// state to resume from.
+fn pin_cycle(cycle: &[Vec<bool>], last: &[bool], pinned: &mut [Option<bool>]) -> Vec<bool> {
+    let first = cycle[0].clone();
+    for (i, p) in pinned.iter_mut().enumerate() {
+        let varies = cycle
+            .iter()
+            .map(Vec::as_slice)
+            .chain([last])
+            .any(|h| h[i] != first[i]);
+        if p.is_none() && varies {
+            *p = Some(first[i]);
+        }
+    }
+    first
 }
 
 /// Evaluate every comparator's output decision (`high` = output at the high
@@ -3277,14 +3500,14 @@ mod tests {
 
     /// A spike stretcher in a relaxation loop: a comparator fires through
     /// 1 kOhm and a diode into a stretch cap, and the stretched pulse closes a
-    /// switch that discharges the comparator's own input. The loop has no DC
-    /// root (high output discharges the input that holds it high), so the
-    /// staged ladder ends on its relaxed seed, and with the diode opened in
-    /// that seed the comparator sits high and the diode carries 4.95 V
-    /// forward. Adopted as is, the transient's first stamp evaluates the
-    /// diode exponential at e^100 (pnjlim sees a zero step from the seed),
-    /// and the seeded diffusion charge is as large: the march failed at t=0
-    /// with a device-internal unknown stepping ~1e31 V.
+    /// switch that discharges the comparator's own input. The loop has no
+    /// self-consistent DC state: high output discharges the input that holds
+    /// it high, low lets the input charge back past the threshold. Every
+    /// rung of the ladder that lets the comparator decide each iteration
+    /// chatters its output rail to rail; the staged ladder used to end on its
+    /// relaxed (diodes-open) seed, a point whose diode carried 4.95 V forward
+    /// and whose KCL residual was e^100-sized (the Tarski board's hidden-layer
+    /// neurons, ~1.7e35 A).
     fn stretcher_relaxation_loop() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
         let (vs, refn, mem) = (c.node("VS"), c.node("REF"), c.node("MEM"));
@@ -3322,34 +3545,122 @@ mod tests {
         (c, vout)
     }
 
-    /// The march starts from that seed with the forward junction uncharged,
-    /// charges the stretch cap through the diode, and fires the reset: the
-    /// stretched pulse crosses the switch's 1.75 V make level, under the
-    /// comparator's 4.95 V, and the input it discharges falls through the
-    /// 2.5 V trip. `TransientDyn` is the spike paths' own grant, which the
-    /// comparator flip at the reset needs whatever the start.
+    fn device(c: &Circuit, name: &str) -> DeviceId {
+        c.iter()
+            .find(|(_, d)| d.name() == name)
+            .map(|(id, _)| id)
+            .unwrap()
+    }
+
+    /// The staged ladder's comparator-consistency rung settles the loop's
+    /// comparator to a TRUE root instead of adopting the relaxed seed: no
+    /// state of `K` is consistent, so it is pinned at the rail the power-on
+    /// seed selects (high: the input starts at the 5 V rail with the reset
+    /// open), and reported. The point is a root of the circuit with `K` held
+    /// there, every diode on its own equation, and it is only `K`'s own
+    /// decision that disagrees: its inputs select the low rail.
     #[test]
-    fn transient_starts_from_a_staged_seed_whose_open_diode_sits_forward() {
+    fn staged_dc_pins_an_astable_comparator_at_a_root() {
         let (c, vout) = stretcher_relaxation_loop();
-        let mut opts = SolverOptions::default();
+        let opts = SolverOptions::default();
         let mut ws = Workspace::new(&c);
-        dc_operating_point(&mut ws, &c, &opts).expect("staged seed adopted");
+        dc_operating_point(&mut ws, &c, &opts).expect("dc");
+        assert!(ws.used_staged_dc(), "fixture drift: a plain rung converged");
+        assert!(!ws.relaxed_seed_adopted(), "adopted the relaxed seed");
+        assert_eq!(ws.pinned_comparators(), [(device(&c, "K"), true)]);
+        let pinned = ws.pinned_dc_residual_inf_norm(&c, &opts);
+        assert!(pinned < 1e-6, "not a root with K pinned: {pinned:e} A");
+        let free = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(free > 1.0, "K's inputs agree with its pin: {free:e} A");
+        let mem = node_v(&ws, c.find_node("MEM").unwrap());
+        assert!(node_v(&ws, vout) > 1.75 && mem < 2.5, "{mem} V");
+    }
+
+    /// A second comparator that only FOLLOWS the loop (it reads the stretched
+    /// pulse) flips with `K` around the inconsistent cycle and is pinned with
+    /// it, but flipped on its own it agrees with its inputs, so the rung
+    /// releases it: only the astable comparator stays pinned.
+    #[test]
+    fn staged_dc_releases_a_comparator_that_only_follows_an_astable_loop() {
+        let (mut c, vout) = stretcher_relaxation_loop();
+        let (refn, follow) = (c.find_node("REF").unwrap(), c.node("FOLLOW"));
+        comparator(&mut c, "K2", follow, vout, refn, 0.0075);
+        res(&mut c, "Rload", follow, GND, 10e3);
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).expect("dc");
+        assert!(!ws.relaxed_seed_adopted(), "adopted the relaxed seed");
+        assert_eq!(ws.pinned_comparators(), [(device(&c, "K"), true)]);
+        let pinned = ws.pinned_dc_residual_inf_norm(&c, &opts);
+        assert!(pinned < 1e-6, "not a root with K pinned: {pinned:e} A");
         assert!(
-            ws.relaxed_seed_adopted(),
-            "fixture drift: the staged DC reached a root"
+            node_v(&ws, follow) > 4.9,
+            "the follower agrees with its inputs"
         );
-        opts.ladder = RobustnessLadder::none().with(Strategy::TransientDyn);
+    }
+
+    /// A comparator latch (output fed back to its own + input) has two
+    /// self-consistent states. The rung keeps whichever the seed selects,
+    /// pins nothing, and is deterministic: the same seed gives the same
+    /// point, bit for bit.
+    #[test]
+    fn comparator_consistency_keeps_the_seeded_state_of_a_bistable_latch() {
+        let mut c = Circuit::new();
+        let (refn, inp, out) = (c.node("REF"), c.node("INP"), c.node("OUT"));
+        vdc(&mut c, "VREF", refn, 2.5);
+        comparator(&mut c, "K", out, inp, refn, 0.0075);
+        res(&mut c, "Rfb", out, inp, 1e3);
+        res(&mut c, "Rin", inp, refn, 1e3);
+        res(&mut c, "Rload", out, GND, 10e3);
+        let opts = SolverOptions::default();
+        let run = |vin: f64| {
+            let mut ws = Workspace::new(&c);
+            let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
+            let empty = ReactiveState::new(c.devices.len());
+            let solve = |ws: &mut Workspace, gmin: f64, scale: f64| {
+                newton_solve(
+                    ws, &c, &opts, 0.0, 1.0, coeffs, &empty, true, false, gmin, scale,
+                )
+            };
+            let mut seed = vec![0.0; ws.x.len()];
+            seed[ws.layout.node(refn).unwrap()] = 2.5;
+            seed[ws.layout.node(inp).unwrap()] = vin;
+            let pins = comparator_consistency_solve(&mut ws, &c, &opts, &solve, &seed, false);
+            (pins, node_v(&ws, out), ws.x)
+        };
+        let (pins, high, x) = run(3.0);
+        assert_eq!(pins, Some(vec![]));
+        assert!(high > 4.9, "seeded high: {high}");
+        assert_eq!(run(3.0).2, x, "same seed, same point");
+        let (pins, low, _) = run(2.0);
+        assert_eq!(pins, Some(vec![]));
+        assert!(low < 0.1, "seeded low: {low}");
+    }
+
+    /// The march releases the pin at t = 0: `K` drops to the rail its inputs
+    /// select, the stretched pulse decays and opens the reset, and the loop
+    /// oscillates from there (period ~70 us: the input's 100 us RC to the
+    /// 2.5 V trip).
+    /// `TransientDyn` is the spike paths' own grant, which the comparator
+    /// flips need.
+    #[test]
+    fn transient_releases_a_pinned_comparator_and_the_loop_oscillates() {
+        let (c, vout) = stretcher_relaxation_loop();
+        let opts = SolverOptions {
+            ladder: RobustnessLadder::none().with(Strategy::TransientDyn),
+            ..SolverOptions::default()
+        };
         let w = crate::transient::Transient::new(opts)
-            .run(&c, 20e-6)
-            .expect("march from the staged seed");
+            .run(&c, 150e-6)
+            .expect("march from the pinned root");
         let v = &w.node_voltages[vout.0 as usize];
         let mem = &w.node_voltages[c.find_node("MEM").unwrap().0 as usize];
-        let peak = v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let mem_min = mem.iter().copied().fold(f64::INFINITY, f64::min);
-        assert!(
-            (1.75..4.95).contains(&peak),
-            "stretched pulse makes the reset switch: {peak}"
-        );
-        assert!(mem_min < 2.5, "reset discharges the input: {mem_min}");
+        let v_min = v.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(v[0] > 1.75, "starts on the pinned spike: {}", v[0]);
+        assert!(v_min < 1.25, "released, the reset opens: {v_min}");
+        // Twice through the trip: the input recharged, fired, was reset by
+        // its own stretched pulse, and recharged again.
+        let trips = crate::test_fixtures::up_crossings(mem, 2.5);
+        assert!(trips >= 2, "the loop oscillates: {trips} trip(s)");
     }
 }

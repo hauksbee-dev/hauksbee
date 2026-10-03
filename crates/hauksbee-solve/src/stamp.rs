@@ -3040,8 +3040,9 @@ fn stamp_comparator<S: StampSink>(
     // hysteresis side. This is the limit-cycle cure: with every comparator's
     // state fixed, the inner circuit is smooth and Newton converges; the outer
     // loop re-evaluates and re-solves if any decision flipped.
-    if let Some(freeze) = ctx.cmp_freeze {
-        let high = freeze.get(&id).copied().unwrap_or(high);
+    // A comparator the map leaves out decides for itself as usual (the
+    // pinned-residual probe freezes only the pinned ones).
+    if let Some(&high) = ctx.cmp_freeze.and_then(|freeze| freeze.get(&id)) {
         // PIN the output to its frozen rail with a CONSTANT target (no input
         // dependence). A smooth input-dependent transfer still swings the output
         // whenever the comparator inputs pass near threshold, which makes the

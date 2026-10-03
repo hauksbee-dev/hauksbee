@@ -32,8 +32,8 @@ use hauksbee_mcu::AvrMcu;
 use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_models::{Bus, PeripheralSpec};
 use hauksbee_solve::{
-    dc_operating_point_seeded, DcInit, Layout, SolverOptions, Transient, TransientDiagnostics,
-    Workspace,
+    dc_operating_point_seeded, DcInit, Layout, OperatingPointReport, SolverOptions, Transient,
+    TransientDiagnostics, Workspace,
 };
 
 use crate::peripherals::{
@@ -629,6 +629,9 @@ pub struct Scheduler {
     /// `None` means the active solver path did not measure one; it never means
     /// a zero residual.
     worst_residual: Option<(f64, usize)>,
+    /// How the last chunk that solved its own t = 0 operating point (rather
+    /// than continuing carried state) reached it; see [`Self::operating_point`].
+    operating_point: Option<OperatingPointReport>,
     /// The relay latch the last converged chunk ENDED on, carried into the
     /// next. A chunk builds a fresh solver workspace, so without this every
     /// latching switch resets at every chunk boundary -- the same defect that
@@ -1433,6 +1436,7 @@ impl Scheduler {
             debug_skip_refined_companion: false,
             chunk_has_pwl_drives: false,
             worst_residual: None,
+            operating_point: None,
             last_switch_latch: None,
             latching: bound_latching,
             consecutive_failed_chunks: 0,
@@ -4762,6 +4766,9 @@ impl Scheduler {
         if self.latching && diagnostics.switch_latch.is_some() {
             self.last_switch_latch = diagnostics.switch_latch;
         }
+        if diagnostics.operating_point.is_some() {
+            self.operating_point = diagnostics.operating_point;
+        }
         let Some(candidate) = diagnostics.final_residual else {
             return;
         };
@@ -4876,6 +4883,15 @@ impl Scheduler {
     #[must_use]
     pub fn failed_windows(&self) -> &[(f64, f64)] {
         &self.failed_windows
+    }
+
+    /// How the last chunk that solved its own t = 0 DC operating point
+    /// reached it: whether that is a true root or the staged ladder's relaxed
+    /// seed, and which comparators it holds pinned because they have no
+    /// self-consistent DC state. `None` until such a chunk converges.
+    #[must_use]
+    pub const fn operating_point(&self) -> Option<&OperatingPointReport> {
+        self.operating_point.as_ref()
     }
 
     /// The solver's message from the most recent non-convergent chunk, or
@@ -5232,6 +5248,7 @@ impl Scheduler {
         self.fallback_chunks = 0;
         self.fallback_windows.clear();
         self.worst_residual = None;
+        self.operating_point = None;
         self.last_switch_latch = None;
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
