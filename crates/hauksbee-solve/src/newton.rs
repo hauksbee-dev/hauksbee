@@ -2930,6 +2930,68 @@ mod tests {
         assert!(!eval(&x, &HashMap::new()));
     }
 
+    /// A push-pull comparator cannot drive past its own supply. Its quiescent
+    /// draw starves a rail fed through 1 kOhm (20.9 mA would drop 20.9 V), the
+    /// inputs ask for HIGH, and the output follows the starved rail instead of
+    /// the card's 4.95 V; plain Newton reaches that root with no homotopy. A
+    /// stiffly fed rail keeps the card's level, so a powered part is unchanged.
+    #[test]
+    fn comparator_output_follows_a_starved_supply() {
+        for (shunt, starved) in [(1e3, true), (1e-3, false)] {
+            let mut c = Circuit::new();
+            let (vs, rail) = (c.node("VS"), c.node("RAIL"));
+            let (inp, out) = (c.node("INP"), c.node("OUT"));
+            vdc(&mut c, "V5", vs, 5.0);
+            res(&mut c, "Rshunt", vs, rail, shunt);
+            vdc(&mut c, "VIN", inp, 1.0);
+            res(&mut c, "Rload", out, GND, 10e3);
+            c.add(Device::Comparator {
+                name: "K".into(),
+                out,
+                inp,
+                inn: GND,
+                out_lo: 0.05,
+                out_hi: 4.95,
+                hysteresis: 0.0075,
+                supply: hauksbee_ir::Supply {
+                    hi: Some(rail),
+                    lo: None,
+                    quiescent_a: 20.9e-3,
+                },
+            });
+            let mut ws = Workspace::new(&c);
+            let opts = SolverOptions::default();
+            let r = newton_solve(
+                &mut ws,
+                &c,
+                &opts,
+                0.0,
+                1.0,
+                IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true),
+                &ReactiveState::new(c.devices.len()),
+                true,
+                false,
+                opts.gmin,
+                1.0,
+            );
+            assert!(
+                r.converged,
+                "plain Newton, shunt {shunt}: {} iters",
+                r.iters
+            );
+            let (v_rail, v_out) = (node_v(&ws, rail), node_v(&ws, out));
+            if starved {
+                assert!(v_rail > 0.0 && v_rail < 0.5, "starved rail {v_rail}");
+                assert!(
+                    (v_out - v_rail).abs() < 1e-3,
+                    "out {v_out} vs rail {v_rail}"
+                );
+            } else {
+                assert!((v_out - 4.95).abs() < 1e-3, "fed rail: out {v_out}");
+            }
+        }
+    }
+
     /// `hysteresis` is the FULL band (datasheet VHYS = VT+ - VT-): 10 mV trips
     /// at +5 mV rising and -5 mV falling, in the state rule and in a transient.
     #[test]

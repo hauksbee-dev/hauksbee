@@ -2915,6 +2915,84 @@ pub fn comparator_trip(high: bool, hysteresis: f64) -> f64 {
     0.5 * if high { -hysteresis } else { hysteresis }
 }
 
+/// One end of a push-pull comparator's output swing at this iterate: its
+/// voltage, and the unknown it tracks with unit slope when it is a supply pin
+/// rather than the card's fixed level.
+#[derive(Clone, Copy)]
+struct Swing {
+    v: f64,
+    pin: Option<usize>,
+}
+
+/// The `(low, high)` swing a comparator's output stage can reach at this
+/// iterate. A push-pull stage cannot drive past its own supply pins: where a
+/// pin sits inside the card's `out_lo..out_hi` levels (a starved or
+/// still-rising rail) that end of the swing follows the pin. A rail inverted
+/// below the floor collapses the band onto the floor, as [`hauksbee_ir::Rail::band`]
+/// does for an op-amp.
+///
+/// The pin is a Newton unknown, not a value held at the iterate: a rail fed
+/// through a shunt is anything but stiff next to the 1 ohm stage, and holding
+/// it explicit turns the rail/output loop into a fixed-point iteration that
+/// cycles forever at the tolerance (measured on the Tarski board's starved
+/// `ANALOG_VDD`: plain Newton parked on an 8.6 uV / 8.6 uA two-cycle). A stage
+/// without supply pins, or whose supply sits outside its levels, keeps the
+/// card's fixed levels and stamps exactly as before.
+fn comparator_swing(
+    ctx: &StampCtx,
+    (out_lo, out_hi): (f64, f64),
+    supply: hauksbee_ir::Supply,
+) -> (Swing, Swing) {
+    let fixed = |v| Swing { v, pin: None };
+    let Some(hi_pin) = supply.hi else {
+        return (fixed(out_lo), fixed(out_hi));
+    };
+    let pin = |n: Option<NodeId>, level: f64, inside: fn(f64, f64) -> bool| {
+        let v = n.map_or(0.0, |n| ctx.v(n));
+        if inside(v, level) {
+            Swing {
+                v,
+                pin: n.and_then(|n| ctx.layout.node(n)),
+            }
+        } else {
+            fixed(level)
+        }
+    };
+    let lo = pin(supply.lo, out_lo, |v, level| v > level);
+    let hi = pin(Some(hi_pin), out_hi, |v, level| v < level);
+    (lo, if hi.v < lo.v { lo } else { hi })
+}
+
+/// Drive a comparator's output unknown `oi` toward `target` through the 1 ohm
+/// stage, with `target`'s tangent `w` to each swing end that tracks a supply
+/// pin. The stage's Norton current returns through the supply pins, not
+/// ground (see `SupplyMirror`), so the caller can add further tangents to the
+/// same mirrored row through the returned sink.
+fn drive_comparator<'a, S: StampSink>(
+    ctx: &StampCtx,
+    sink: &'a mut S,
+    oi: usize,
+    supply: hauksbee_ir::Supply,
+    target: f64,
+    ends: [(Swing, f64); 2],
+) -> SupplyMirror<'a, S> {
+    let gout = COMPARATOR_GOUT;
+    let amps = gout * (target - ctx.x[oi]);
+    let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
+    sink.g(oi, oi, gout);
+    sink.i(oi, gout * target);
+    for (end, w) in ends {
+        if let Some(col) = end.pin.filter(|&c| c != oi && w != 0.0) {
+            sink.g(oi, col, -gout * w);
+            sink.i(oi, -(gout * w * end.v));
+        }
+    }
+    sink
+}
+
+/// A comparator output stage's conductance (1 ohm, a strong source).
+const COMPARATOR_GOUT: f64 = 1.0;
+
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2924,12 +3002,11 @@ fn stamp_comparator<S: StampSink>(
     sink: &mut S,
 ) {
     stamp_quiescent(ctx, supply, sink);
+    let (lo, hi) = comparator_swing(ctx, (out_lo, out_hi), supply);
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     // Hysteresis: the trip point depends on the current output state.
-    let high = ctx.v(out) > 0.5 * (out_lo + out_hi);
-    let gout = 1.0;
-
+    let high = ctx.v(out) > 0.5 * (lo.v + hi.v);
     // Event-driven staged path: the outer loop supplies a FROZEN decision for
     // this comparator. Hold its output state fixed for the whole inner Newton
     // solve so it cannot chatter; the threshold is set by the frozen state's
@@ -2949,14 +3026,20 @@ fn stamp_comparator<S: StampSink>(
         // consistency: it re-derives each comparator's rail from the converged
         // inputs and re-solves until no rail flips, so the fixed point is a true
         // root with every output consistent with its own inputs.
-        let target = if high { out_hi } else { out_lo };
+        let (target, weights) = if high {
+            (hi.v, [0.0, 1.0])
+        } else {
+            (lo.v, [1.0, 0.0])
+        };
         if let Some(oi) = ctx.layout.node(out) {
-            // The stage's Norton current returns through the supply pins, not
-            // ground (see `SupplyMirror`).
-            let amps = gout * (target - ctx.v(out));
-            let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
-            sink.g(oi, oi, gout);
-            sink.i(oi, gout * target);
+            drive_comparator(
+                ctx,
+                sink,
+                oi,
+                supply,
+                target,
+                [(lo, weights[0]), (hi, weights[1])],
+            );
         }
         return;
     }
@@ -2972,20 +3055,19 @@ fn stamp_comparator<S: StampSink>(
     // the discrete model below is kept bit-identical for every normal solve
     // (branch_reg == 0 and no freeze map).
     if ctx.branch_reg > 0.0 {
-        let span = out_hi - out_lo;
+        let span = hi.v - lo.v;
         let k = ctx.opts.effects.cmp_smooth_gain; // 1/V; ~2 mV transition width at the default
         let d = vp - vn - thresh;
         let kd = (k * d).clamp(-40.0, 40.0);
         let e = (-kd).exp();
         let sig = 1.0 / (1.0 + e); // logistic in (0,1)
-        let target = span.mul_add(sig, out_lo);
+        let target = span.mul_add(sig, lo.v);
         let dsig = k * sig * (1.0 - sig);
         let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
         if let Some(oi) = ctx.layout.node(out) {
-            let amps = gout * (target - ctx.v(out));
-            let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
-            sink.g(oi, oi, gout);
-            sink.i(oi, gout * target);
+            let gout = COMPARATOR_GOUT;
+            let mut sink =
+                drive_comparator(ctx, sink, oi, supply, target, [(lo, 1.0 - sig), (hi, sig)]);
             if let Some(pi) = ctx.layout.node(inp) {
                 sink.g(oi, pi, -gout * dtarget_dvp);
                 sink.i(oi, -(gout * dtarget_dvp * vp));
@@ -2998,12 +3080,20 @@ fn stamp_comparator<S: StampSink>(
         return;
     }
 
-    let target = if vp - vn > thresh { out_hi } else { out_lo };
+    let (target, weights) = if vp - vn > thresh {
+        (hi.v, [0.0, 1.0])
+    } else {
+        (lo.v, [1.0, 0.0])
+    };
     if let Some(oi) = ctx.layout.node(out) {
-        let amps = gout * (target - ctx.v(out));
-        let mut sink = SupplyMirror::new(sink, ctx, Some(oi), supply, amps);
-        sink.g(oi, oi, gout);
-        sink.i(oi, gout * target);
+        drive_comparator(
+            ctx,
+            sink,
+            oi,
+            supply,
+            target,
+            [(lo, weights[0]), (hi, weights[1])],
+        );
     }
 }
 
@@ -3133,6 +3223,57 @@ mod tests {
             .iter()
             .find(|(j, _)| *j == c)
             .map_or(0.0, |(_, v)| *v)
+    }
+
+    /// A comparator whose swing tracks a starved supply pin stamps that pin's
+    /// tangent: on the output row, the Jacobian column for the rail matches a
+    /// finite difference of the residual, on the bang-bang and the staged
+    /// smooth transfer alike.
+    #[test]
+    fn comparator_swing_tangent_matches_finite_difference() {
+        let mut c = Circuit::new();
+        let (rail, inp, out) = (c.node("RAIL"), c.node("INP"), c.node("OUT"));
+        c.add(Device::Comparator {
+            name: "K".into(),
+            out,
+            inp,
+            inn: GND,
+            out_lo: 0.05,
+            out_hi: 4.95,
+            hysteresis: 0.0075,
+            supply: hauksbee_ir::Supply {
+                hi: Some(rail),
+                lo: None,
+                quiescent_a: 1e-3,
+            },
+        });
+        let layout = Layout::new(&c);
+        let (ri, pi, oi) = (
+            layout.node(rail).unwrap(),
+            layout.node(inp).unwrap(),
+            layout.node(out).unwrap(),
+        );
+        let opts = SolverOptions::default();
+        let state = ReactiveState::new(c.devices.len());
+        // Inputs a hair above the trip so the smooth transfer is mid-swing too.
+        for (vin, branch_reg) in [(1.0, 0.0), (1.0, 1e-2), (4.0e-3, 1e-2)] {
+            let mut x = vec![0.0; layout.size];
+            (x[ri], x[pi], x[oi]) = (0.3, vin, 0.02);
+            let (_, m, _, f0) = assemble(&c, &x, &x, &opts, &state, true, 0.0, branch_reg);
+            let h = 1e-7;
+            x[ri] += h;
+            let (_, _, _, f1) = assemble(&c, &x, &x, &opts, &state, true, 0.0, branch_reg);
+            let fd = (f1[oi] - f0[oi]) / h;
+            let jac = at(&m, oi, ri);
+            assert!(
+                jac != 0.0,
+                "rail column stamped (vin {vin}, reg {branch_reg})"
+            );
+            assert!(
+                (fd - jac).abs() < 1e-5,
+                "vin {vin} reg {branch_reg}: fd {fd} vs J {jac}"
+            );
+        }
     }
 
     fn fd_matches_cap(q: impl Fn(f64) -> (f64, f64), points: &[f64], what: &str) {
