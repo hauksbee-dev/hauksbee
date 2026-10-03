@@ -131,12 +131,20 @@ impl Rail {
 /// (sourcing) or returned into `lo` (sinking), blended smoothly through zero
 /// ([`Supply::share_hi`]). A `None` side is not a pin the part has on a net:
 /// that share returns through ground as before. Both are CONDUCTION terminals.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The part's own quiescent current (`quiescent_a`) is drawn `hi -> lo` as well,
+/// once the supply is up ([`Supply::quiescent_draw`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Supply {
     /// The positive supply pin (`V+`, `VCC`, `VS`).
     pub hi: Option<NodeId>,
     /// The negative supply pin (`V-`, `VEE`), or `None` when it is ground.
     pub lo: Option<NodeId>,
+    /// The package's quiescent supply current in amps (the datasheet's ICC with
+    /// the outputs unloaded), drawn `hi -> lo`; `0` draws nothing. Carried on one
+    /// output stage of a package, not on each.
+    #[serde(default)]
+    pub quiescent_a: f64,
 }
 
 impl Supply {
@@ -149,6 +157,31 @@ impl Supply {
     #[must_use]
     pub fn share_hi(amps: f64) -> f64 {
         0.5 * (1.0 + (amps / Self::BLEND_A).tanh())
+    }
+
+    /// The knee of the quiescent draw ([`Supply::quiescent_draw`]), volts.
+    pub const QUIESCENT_KNEE_V: f64 = 0.5;
+
+    /// The quiescent draw `hi -> lo` at supply voltage `v = V(hi) - V(lo)`, and
+    /// its slope `d/dv`: `quiescent_a * tanh(v / QUIESCENT_KNEE_V)`.
+    ///
+    /// A plain current source here would pull a `hi` pin nothing feeds to
+    /// `-quiescent_a / gmin`, billions of volts below ground, and the solve
+    /// would be refused; on a rail fed only through resistors it drags the rail
+    /// volts negative (the Tarski board's unfed `ANALOG_VDD` sat at -16 V under
+    /// nineteen comparators). Around 0 V this is a conductance of
+    /// `quiescent_a / QUIESCENT_KNEE_V`, the part's bias circuitry out of
+    /// headroom, so an unfed supply rests at 0 V; a reversed one returns at
+    /// most `quiescent_a`, as the substrate junction would conduct. From 1.5 V
+    /// up the draw is the card's figure within 0.5% (1e-5 at 3 V), with a
+    /// slope that vanishes as fast, so a powered part solves as the plain
+    /// source did. A tanh rather than a clamped fade: no flat region, so Newton
+    /// always sees the conductance that holds a weakly fed rail.
+    #[must_use]
+    pub fn quiescent_draw(self, v: f64) -> (f64, f64) {
+        let t = (v / Self::QUIESCENT_KNEE_V).tanh();
+        let amps = self.quiescent_a;
+        (amps * t, amps * t.mul_add(-t, 1.0) / Self::QUIESCENT_KNEE_V)
     }
 
     /// The supply nodes that are not ground, `hi` then `lo`.

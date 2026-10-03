@@ -2734,6 +2734,7 @@ fn stamp_opamp<S: StampSink>(
     supply: hauksbee_ir::Supply,
     sink: &mut S,
 ) {
+    stamp_quiescent(ctx, supply, sink);
     // Behavioral: drive `out` toward clamp(gain*(vp-vn)) through a stiff
     // conductance, modeling an ideal output stage with finite open-loop gain.
     // In TRANSIENT, when `pole_hz`/`slew` are set, the drive EMF is not the
@@ -2827,6 +2828,26 @@ fn stamp_opamp<S: StampSink>(
     }
 }
 
+/// An output stage's package quiescent current, `hi -> lo`, drawn once the
+/// supply is up ([`hauksbee_ir::Supply::quiescent_draw`]) and linearised at this
+/// iterate. It rides on the part's own device rather than a separate source
+/// so the stamp adds no device, no island coupling and no new matrix slot (the
+/// supply pins are already the device's terminals): a board with dozens of
+/// op-amps solves exactly as with plain sources wherever its supplies are up.
+/// Scaled with the independent sources under source stepping, as the plain
+/// current source it replaces was.
+fn stamp_quiescent<S: StampSink>(ctx: &StampCtx, supply: hauksbee_ir::Supply, sink: &mut S) {
+    let Some(hi) = supply.hi.filter(|_| supply.quiescent_a != 0.0) else {
+        return;
+    };
+    let lo = supply.lo.unwrap_or(NodeId::GROUND);
+    let v = ctx.v(hi) - ctx.v(lo);
+    let (amps, slope) = supply.quiescent_draw(v);
+    let (amps, slope) = (amps * ctx.src_scale, slope * ctx.src_scale);
+    stamp_cond(sink, ctx.layout, hi, lo, slope);
+    stamp_current(sink, ctx.layout, hi, lo, slope.mul_add(-v, amps));
+}
+
 /// A sink that mirrors every write to an output stage's `out` row into the
 /// rows of its supply pins, negated and split by [`hauksbee_ir::Supply::share_hi`].
 ///
@@ -2902,6 +2923,7 @@ fn stamp_comparator<S: StampSink>(
     supply: hauksbee_ir::Supply,
     sink: &mut S,
 ) {
+    stamp_quiescent(ctx, supply, sink);
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     // Hysteresis: the trip point depends on the current output state.

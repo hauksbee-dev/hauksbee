@@ -4108,11 +4108,9 @@ const SUPPLY_FADE_V: f64 = 1.0;
 /// `amps / gmin`, billions of volts, and the solve is refused. Wherever a
 /// supply is present the draw is the card's figure, unchanged.
 ///
-/// Used for regulators only, whose input is the one supply pin a board
-/// routinely leaves unfed. Op-amp and comparator `Iq` stay plain sources: each
-/// behavioural device makes the stamp nonlinear, and on a board with dozens of
-/// them (the Tarski board) that cost the DAC co-sim its convergence and took
-/// 4231 s against 26 s.
+/// Used for regulators only. Op-amps and comparators carry their draw on
+/// their own device instead (`Supply::quiescent_draw`), which adds no device
+/// and no matrix slot per part.
 fn supply_draw(
     circuit: &mut Circuit,
     name: String,
@@ -4774,7 +4772,20 @@ fn bind_opamp(
     // The output stage's current is drawn from the part's supply pins, so a
     // load on the output shows up on the rail that feeds the part.
     let supply = stage_supply(roles);
+    // The card's `iq_a` is the whole package's supply current with the outputs
+    // unloaded (what datasheets print as ICC); a card without one draws none.
+    // The first unit carries it, drawn only once V+ is up (see
+    // `Supply::quiescent_draw`), so an unfed V+ is not dragged below ground.
+    let mut quiescent_a = model
+        .params
+        .get_f64("iq_a")
+        .filter(|i| i.is_finite())
+        .unwrap_or(0.0);
     for (name, out, inp, inn) in units {
+        let supply = hauksbee_ir::Supply {
+            quiescent_a: std::mem::take(&mut quiescent_a),
+            ..supply
+        };
         circuit.add(Device::OpAmp {
             name,
             out,
@@ -4789,16 +4800,6 @@ fn bind_opamp(
             supply,
         });
     }
-    // The card's `iq_a` is the whole package's supply current with the outputs
-    // unloaded (what datasheets print as ICC); a card without one draws none.
-    if let (Some(hi), Some(amps)) = (
-        supply.hi,
-        model.params.get_f64("iq_a").filter(|i| i.is_finite()),
-    ) {
-        let name = format!("Iq_{}", comp.reference);
-        let lo = supply.lo.unwrap_or(NodeId::GROUND);
-        circuit.add(Device::isource(name, hi, lo, SourceKind::Dc(amps)));
-    }
     (BindOutcome::Behavioral { device }, warning)
 }
 
@@ -4811,6 +4812,7 @@ fn stage_supply(roles: &HashMap<String, NodeId>) -> hauksbee_ir::Supply {
     hauksbee_ir::Supply {
         hi: pin(&["vcc", "vs", "vdd"]),
         lo: pin(&["vss", "vee", "v_minus", "gnd"]),
+        quiescent_a: 0.0,
     }
 }
 
@@ -5003,11 +5005,17 @@ fn bind_timer_555(
 /// the high level, two sections can wire-OR onto one net, and no pull-up leaves
 /// the output floating -- all of which a push-pull [`Device::Comparator`] gets
 /// wrong. Hysteresis is likewise the BOARD's feedback resistor, solved.
+///
+/// `supply` carries only the package's quiescent draw (on one section): the
+/// gate stage drives an internal node with no load, so the output current it
+/// would mirror onto the supply pins is gmin-sized, and the draw rides on an
+/// existing device instead of adding a behavioural source per package.
 fn bind_open_collector(
     circuit: &mut Circuit,
     name: &str,
     (out, inp, inn, gnd): (NodeId, NodeId, NodeId, NodeId),
     model: &ModelEntry,
+    supply: hauksbee_ir::Supply,
 ) {
     let p = |k: &str, d: f64| model.params.get_f64(k).unwrap_or(d);
     let gate = circuit.node(&format!("{name}_oc_gate"));
@@ -5022,7 +5030,7 @@ fn bind_open_collector(
         slew: None,
         rail_lo: Rail::fixed(0.0),
         rail_hi: Rail::fixed(1.0),
-        supply: hauksbee_ir::Supply::default(),
+        supply,
     });
     // `max(V(out), 0)` keeps the sink one-directional: the DC homotopy walks
     // the output node below ground on its way in, and an unclamped V(out)/RON
@@ -5057,34 +5065,6 @@ fn bind_comparator(
     // Full-band VHYS (see `Device::Comparator`); validation requires it on checked cards.
     let hyst = model.params.get_f64("hysteresis").unwrap_or(0.01);
 
-    // Static supply draw (`supply_static_ua`, default 0 = nothing stamped):
-    // the part's quiescent ICC pulled from its supply pin net, so a metering
-    // shunt in series with that rail reads the comparator. A fixed Isource is
-    // enough here, the behavioral Comparator device has no VCC leg at all,
-    // and its dynamic (switching) draw is negligible next to ICC for the
-    // LMV7219 class. Same param name as the digital layer's static term.
-    let static_ua = model.params.get_f64("supply_static_ua").unwrap_or(0.0);
-    if static_ua > 0.0 {
-        let vcc = roles
-            .get("vcc")
-            .or_else(|| roles.get("vs"))
-            .or_else(|| roles.get("vdd"))
-            .copied();
-        if let Some(vcc) = vcc.filter(|n| !n.is_ground()) {
-            let gnd = roles
-                .get("vss")
-                .or_else(|| roles.get("gnd"))
-                .copied()
-                .unwrap_or(NodeId::GROUND);
-            circuit.add(Device::isource(
-                format!("Iq_{}", comp.reference),
-                vcc,
-                gnd,
-                SourceKind::Dc(static_ua * 1e-6),
-            ));
-        }
-    }
-
     // Multi-channel packages (LM393 dual, LM339 quad): one section per wired
     // channel, keyed `_q<N>`, same shape and rationale as bind_opamp above. A
     // section whose three pins are not all connected is not bound at all, so
@@ -5115,9 +5095,31 @@ fn bind_comparator(
     // A driven output's current is drawn from the part's supply pins, so a
     // load on it shows on the rail that feeds the part.
     let supply = stage_supply(roles);
+    // Static supply draw (`supply_static_ua`, default 0 = nothing drawn): the
+    // part's quiescent ICC, pulled from its supply pin net so a metering shunt
+    // in series with that rail reads the comparator. Same param name as the
+    // digital layer's static term. A push-pull package's first section carries
+    // it, drawn only once VCC is up (see `Supply::quiescent_draw`), as does an
+    // open-collector package's first gate stage. An unfed VCC is then not
+    // dragged below ground.
+    let mut quiescent_a = model
+        .params
+        .get_f64("supply_static_ua")
+        .filter(|ua| ua.is_finite() && *ua > 0.0)
+        .map_or(0.0, |ua| ua * 1e-6);
     for (name, out, inp, inn) in &sections {
         if open_collector {
-            bind_open_collector(circuit, name, (*out, *inp, *inn, gnd), model);
+            let draw = hauksbee_ir::Supply {
+                quiescent_a: std::mem::take(&mut quiescent_a),
+                ..supply
+            };
+            // Only the section carrying the draw takes the supply pins.
+            let draw = if draw.quiescent_a > 0.0 {
+                draw
+            } else {
+                hauksbee_ir::Supply::default()
+            };
+            bind_open_collector(circuit, name, (*out, *inp, *inn, gnd), model, draw);
         } else {
             circuit.add(Device::Comparator {
                 name: name.clone(),
@@ -5127,7 +5129,10 @@ fn bind_comparator(
                 out_lo,
                 out_hi,
                 hysteresis: hyst,
-                supply,
+                supply: hauksbee_ir::Supply {
+                    quiescent_a: std::mem::take(&mut quiescent_a),
+                    ..supply
+                },
             });
         }
     }
@@ -10390,6 +10395,60 @@ style = "i2c_pointer"
             dc_operating_point(&mut ws, &circuit, &SolverOptions::default()).unwrap();
             let got = ws.x[ws.layout.node(nodes[0]).unwrap()];
             assert!((got - want_in).abs() < 1e-3, "fed {fed:?}: IN at {got} V");
+        }
+    }
+
+    /// An op-amp's quiescent draw needs a supply to draw from, as a regulator's
+    /// does. Stamped as an ideal current source on a V+ nothing feeds, it put
+    /// V+ at `-iq_a / gmin` (billions of volts below ground) and the solve was
+    /// refused; now the unfed V+ rests at 0 V, and a fed one carries exactly
+    /// the card's `iq_a`, once per package (both units of the dual are bound).
+    #[test]
+    fn an_opamp_with_no_supply_does_not_drag_its_v_plus_below_ground() {
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_testkit::circuits::vdc;
+        let lib = ModelLibrary::builtin();
+        let mut model = resolve_value(&lib, "LM358", "");
+        let iq = 1.5e-3;
+        model.params.set_f64("iq_a", iq);
+        for fed in [None, Some(5.0)] {
+            // Both units as grounded-input followers: no output current, so
+            // V+ carries the quiescent draw alone.
+            let mut part = comp("U1", "LM358");
+            let nets = [1, 1, 0, 0, 0, 2, 2, 3];
+            part.pins = (1..=8)
+                .zip(nets)
+                .map(|(p, n)| pin(&p.to_string(), n))
+                .collect();
+            let mut circuit = Circuit::new();
+            let nodes = ["OUTA", "OUTB", "VCC"].map(|name| circuit.node(name));
+            let node_of = |n: Option<i64>| match n {
+                Some(i @ 1..=3) => Some(nodes[usize::try_from(i - 1).unwrap()]),
+                Some(_) => Some(NodeId::GROUND),
+                None => None,
+            };
+            let (outcome, _) = bind_one(&part, &model, &mut circuit, &node_of, &HashMap::new());
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { .. }),
+                "{outcome:?}"
+            );
+            let source = fed.map(|v| vdc(&mut circuit, "VCC", nodes[2], v));
+            let mut ws = Workspace::new(&circuit);
+            dc_operating_point(&mut ws, &circuit, &SolverOptions::default()).unwrap();
+            // Unfed, V+ is held by gmin alone, so the outputs' own
+            // gmin-sized currents still move it by millivolts: not by volts.
+            let vcc = ws.x[ws.layout.node(nodes[2]).unwrap()];
+            assert!(
+                (vcc - fed.unwrap_or(0.0)).abs() < 0.1,
+                "fed {fed:?}: V+ at {vcc} V"
+            );
+            if let Some(id) = source {
+                let drawn = ws.x[ws.layout.branch(id).unwrap()].abs();
+                assert!(
+                    (drawn - iq).abs() < 1e-3 * iq,
+                    "V+ supplies {drawn} A, card iq_a {iq} A"
+                );
+            }
         }
     }
 }
