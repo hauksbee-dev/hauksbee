@@ -474,6 +474,9 @@ fn reverse_current_returns_to_a_diode_fed_input() {
             trace.iter().all(|&v| v > -0.7) && trace[29] < 1.0,
             "{trace:?}"
         );
+        // 40 us after the source drops, the 10 uF input (tau 100 us) still
+        // holds the rail in regulation: it decays WITH the input, not before.
+        assert!(trace[3] > 3.2, "rail dropped early: {trace:?}");
         let apart = trace.iter().zip(&traces[2]).map(|(a, b)| (a - b).abs());
         let apart = apart.fold(0.0, f64::max);
         assert!(apart < 0.05, "{apart} V apart: {trace:?}");

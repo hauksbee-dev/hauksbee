@@ -116,6 +116,58 @@ pub struct TransientDiagnostics {
     /// the march did not start from one (a power-on from rest, or a
     /// continuation that opened on carried state).
     pub operating_point: Option<OperatingPointReport>,
+    /// Everything beyond the unknowns that the march ENDED on, for a caller
+    /// that continues the same circuit in a later run (see [`MarchCarry`]).
+    /// `None` from the partitioned engine, which keeps no such state.
+    pub carry: Option<MarchCarry>,
+}
+
+/// What a monolithic march ends on besides its unknown vector.
+///
+/// A continuation (a co-sim chunk, [`DcInit::Continue`]) needs it to pick up
+/// exactly where the previous window closed, as one uninterrupted march would.
+///
+/// A continuation used to re-solve a DC operating point only to discard it,
+/// for its side effects: the relay latch it left, and whether it needed the
+/// staged ladder (which arms the staged regularizers for the march). Both are
+/// facts about the RUN, not about the window, and re-deriving them per window
+/// made them depend on the window: a board whose steady state is a different
+/// latch than the one the march reached re-latched at every boundary, and the
+/// regularizers could arm in one window and not the next. Carrying them is the
+/// physical answer (state is continuous across a window boundary) and costs
+/// nothing; the re-solve cost ~95% of a continuation window on a stiff board.
+///
+/// The reactive history VALUES are carried too: they hold device states a
+/// fresh seed cannot re-derive from the unknowns, chiefly an op-amp's lagged
+/// output EMF, which a re-seed snapped to its DC target at every boundary.
+/// The continuation still opens on a flat history (derivative 0, previous
+/// value = current), as a seeded start does; see [`Transient::with_carry`].
+#[derive(Debug, Clone)]
+pub struct MarchCarry {
+    switch_latch: Option<HashMap<DeviceId, bool>>,
+    staged: bool,
+    reactive: ReactiveState,
+}
+
+impl MarchCarry {
+    /// The relay latch the march ended on (`None` when none is tracked).
+    #[must_use]
+    pub const fn switch_latch(&self) -> Option<&HashMap<DeviceId, bool>> {
+        self.switch_latch.as_ref()
+    }
+
+    /// Whether the march ran with the staged regularizers armed (its run's
+    /// t = 0 DC point needed the staged ladder).
+    #[must_use]
+    pub const fn staged(&self) -> bool {
+        self.staged
+    }
+
+    /// Whether this carry fits `circuit` (same device count; a structural
+    /// edit between runs invalidates it).
+    const fn fits(&self, circuit: &Circuit) -> bool {
+        self.reactive.x1.len() == circuit.devices.len()
+    }
 }
 
 /// What a transient's t = 0 DC operating point is, beyond converging.
@@ -134,6 +186,7 @@ pub struct OperatingPointReport {
 pub struct Transient {
     opts: SolverOptions,
     switch_latch_seed: Option<HashMap<DeviceId, bool>>,
+    carry: Option<MarchCarry>,
 }
 
 impl Transient {
@@ -143,7 +196,22 @@ impl Transient {
         Self {
             opts,
             switch_latch_seed: None,
+            carry: None,
         }
+    }
+
+    /// Continue from the state a previous march of the SAME circuit ended on
+    /// (its [`TransientDiagnostics::carry`]). Honoured only on a continuation:
+    /// [`DcInit::Continue`] with a `dc_seed` of the right size. The march then
+    /// opens on the carried unknowns, latch, regularizer arming and reactive
+    /// history values (on a flat history, as a seeded start opens), and solves
+    /// no DC operating point at all. A carry that does
+    /// not fit the circuit is ignored (the continuation re-derives its state
+    /// as before).
+    #[must_use]
+    pub fn with_carry(mut self, carry: Option<MarchCarry>) -> Self {
+        self.carry = carry;
+        self
     }
 
     /// Start with the relay latch a previous run ENDED on. A latching relay is
@@ -336,11 +404,20 @@ impl Transient {
         // be discarded below, and a board whose latch drives the node that flips
         // it (a free-running 555 astable) has no operating point to find, so
         // every chunk would walk the whole homotopy ladder to a failure
-        // (measured: 95% of the wall time of a 2 ms run). Only a caller that
-        // carries a latch gets this; every other continuation still solves.
+        // (measured: 95% of the wall time of a 2 ms run). A caller that carries
+        // the latch, or the whole `MarchCarry`, gets this; a continuation that
+        // carries only the unknowns still solves, for the arming it needs.
         let continuing =
             opts.dc_init == DcInit::Continue && dc_seed.is_some_and(|s| s.len() == ws.x.len());
-        let carried = continuing && self.switch_latch_seed.is_some();
+        // A full carry (see `MarchCarry`) supersedes the latch-only seed.
+        let carry = self
+            .carry
+            .as_ref()
+            .filter(|c| continuing && c.fits(circuit));
+        if let Some(c) = carry {
+            ws.set_switch_latch(c.switch_latch.clone());
+        }
+        let carried = continuing && (carry.is_some() || self.switch_latch_seed.is_some());
         // Known softness (review note): the staged-DC regularizers arm on
         // ws.used_staged_dc(), which only a DC solve can set, so a power-on
         // march runs the bare per-step path. A stiff board that needed the
@@ -422,8 +499,10 @@ impl Transient {
         // series R + node damping + node-block convergence) for the whole march
         // in that case only; an ordinary diode circuit (e.g. a rectifier) solved
         // on the normal ladder keeps the bit-identical classic transient path.
+        // A carried march keeps the arming its run's t = 0 DC decided.
+        let staged = carry.map_or_else(|| ws.used_staged_dc(), |c| c.staged);
         let transient_dyn = opts.ladder.has(Strategy::TransientDyn);
-        if ws.used_staged_dc() || transient_dyn {
+        if staged || transient_dyn {
             // Arm the staged regularizers (negligible branch series R + node
             // damping + node-block convergence) AND the VSwitch/diode control
             // limiting (which is gated on branch_reg>0). On the synapse spike
@@ -482,8 +561,8 @@ impl Transient {
         // A continuation opens where the previous window closed, not at the
         // board's steady state: overwrite the operating point just solved with
         // the carried unknowns, BEFORE the reactive history is seeded from
-        // them. The DC solve above still ran, so the staged regularizers stay
-        // armed exactly as they were.
+        // them. A continuation without a full carry still ran its DC solve
+        // above, so the staged regularizers stay armed exactly as they were.
         if let Some(seed) = dc_seed.filter(|_| continuing) {
             ws.x.copy_from_slice(seed);
             ws.clear_relaxed_seed_adopted();
@@ -492,7 +571,28 @@ impl Transient {
             relaxed_seed_adopted: ws.relaxed_seed_adopted(),
             pinned_comparators: ws.pinned_comparators().to_vec(),
         });
-        seed_reactive_state(&mut state, circuit, &ws, opts);
+        // A full carry hands over the histories themselves; re-deriving them
+        // from the unknowns would reset every state the unknowns do not hold.
+        // The march still opens like a seeded one, with a backward-Euler step
+        // (`first_step`) on a FLAT history: the window boundary is where the
+        // caller may have stepped a source. Only the values carry; `dx1` and
+        // `x2` restart as a seed leaves them (0 and `x1`). The companions pick
+        // their history formula from `opts.integration`, not from the step, so
+        // a trapezoidal one adds `dx1` even on that BE step (a carried slope
+        // counted twice ran a 74HC14 RC oscillator 15% fast at 1 us windows);
+        // and the first step's LTE reads `x2` as one step `h` back, which a
+        // carried `x2` is not (a diode-fed buck dropped its 3.3 V rail).
+        if let Some(c) = carry {
+            state.clone_from(&c.reactive);
+            state.dx1.fill(0.0);
+            state.x2.clone_from(&state.x1);
+            for bank in &mut state.xb {
+                bank.dx1.fill(0.0);
+                bank.x2.clone_from(&bank.x1);
+            }
+        } else {
+            seed_reactive_state(&mut state, circuit, &ws, opts);
+        }
         if ws.relaxed_seed_adopted() {
             start_forward_junctions_uncharged(&mut state, circuit, &mut ws, opts);
         }
@@ -882,6 +982,11 @@ impl Transient {
             final_residual,
             switch_latch: ws.switch_latch().cloned(),
             operating_point,
+            carry: Some(MarchCarry {
+                switch_latch: ws.switch_latch().cloned(),
+                staged,
+                reactive: state,
+            }),
         })
     }
 }

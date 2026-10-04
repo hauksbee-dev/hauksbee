@@ -89,7 +89,9 @@ pub use sim::{default_probes, run_ac, run_dc, run_op, run_tran, Probe, SimOutput
 pub use sparse::{SparseMatrix, Symbolic};
 pub use stamp::{mos_body_vth, mos_channel};
 pub use system::Layout;
-pub use transient::{OperatingPointReport, StepSample, Transient, TransientDiagnostics, Waveforms};
+pub use transient::{
+    MarchCarry, OperatingPointReport, StepSample, Transient, TransientDiagnostics, Waveforms,
+};
 
 /// The node at dense index `i`. Dense node indices enumerate a circuit's
 /// `u32` node ids, so they always fit.

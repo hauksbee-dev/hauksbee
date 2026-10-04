@@ -32,8 +32,8 @@ use hauksbee_mcu::AvrMcu;
 use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_models::{Bus, PeripheralSpec};
 use hauksbee_solve::{
-    dc_operating_point_seeded, DcInit, Layout, OperatingPointReport, SolverOptions, Transient,
-    TransientDiagnostics, Workspace,
+    dc_operating_point_seeded, DcInit, Layout, MarchCarry, OperatingPointReport, SolverOptions,
+    Transient, TransientDiagnostics, Workspace,
 };
 
 use crate::peripherals::{
@@ -462,6 +462,12 @@ pub struct Scheduler {
     /// Cleared on a solver failure or a structural relayout (size mismatch is
     /// also rejected safely by the solver).
     last_dc_seed: Option<Vec<f64>>,
+    /// The rest of the state the previous converged chunk's march ENDED on
+    /// (relay latch, staged-regularizer arming, reactive histories), carried
+    /// with `last_dc_seed` so the next chunk continues one march rather than
+    /// re-solving a DC point per window (see [`MarchCarry`]). Cleared with
+    /// the seed, and on any chunk that did not converge.
+    last_carry: Option<MarchCarry>,
     /// Frozen MNA unknown layout for the current circuit (branch lookup).
     layout: Layout,
     /// Configurable power supplies, updated between chunks.
@@ -1399,6 +1405,7 @@ impl Scheduler {
             regulation: Vec::new(),
             branch_x: vec![0.0; n_branch],
             last_dc_seed: None,
+            last_carry: None,
             layout,
             supplies,
             behavioral,
@@ -4004,7 +4011,7 @@ impl Scheduler {
         &self,
         tstop: f64,
         opts: SolverOptions,
-        seed: Option<&[f64]>,
+        (seed, carry): (Option<&[f64]>, Option<&MarchCarry>),
         thermal: &mut ChunkThermalAccum,
     ) -> Result<(Vec<f64>, TransientDiagnostics), (String, Vec<f64>)> {
         // A chunk is a WINDOW of one continuous march, so a seeded chunk starts
@@ -4031,7 +4038,9 @@ impl Scheduler {
             // cold starts (the ladder's) must not restart the board from rest.
             opts.dc_init = DcInit::FromZero;
         }
-        let t = Transient::new(opts).with_switch_latch(self.last_switch_latch.clone());
+        let t = Transient::new(opts)
+            .with_switch_latch(self.last_switch_latch.clone())
+            .with_carry(carry.cloned());
         let mut final_x: Vec<f64> = Vec::new();
         // Trapezoid state: the previous accepted step's (time, per-device
         // powers). Local to this march on purpose: a fallback rung or a
@@ -4170,7 +4179,7 @@ impl Scheduler {
     /// error estimate, so the consumer knows which method produced
     /// which answer and how far the chunk-end state can be trusted.
     fn fallback_ladder(&self, chunk: f64, thermal: &mut ChunkThermalAccum) -> Option<RungOutcome> {
-        let seed = self.last_dc_seed.as_deref();
+        let seed = (self.last_dc_seed.as_deref(), self.last_carry.as_ref());
         let reduced = self.reduced_step_opts(chunk);
         // Rungs below the forced one are skipped (test hook; 0 in production,
         // so every rung runs).
@@ -4191,7 +4200,11 @@ impl Scheduler {
         for (method, opts, seed) in [
             (ChunkFallbackMethod::ReducedStep, reduced, seed),
             (ChunkFallbackMethod::BackwardEuler, be, seed),
-            (ChunkFallbackMethod::ColdStartBackwardEuler, be, None),
+            (
+                ChunkFallbackMethod::ColdStartBackwardEuler,
+                be,
+                (None, None),
+            ),
         ] {
             if min_rung > method as u8 {
                 continue;
@@ -4222,13 +4235,12 @@ impl Scheduler {
             return None;
         }
         thermal.clear();
-        let (x, diagnostics) =
-            self.march_chunk_subdivided(chunk, 4, be, self.last_dc_seed.clone(), thermal)?;
+        let (x, diagnostics) = self.march_chunk_subdivided(chunk, 4, be, seed, thermal)?;
         if self.insane_node_state(&x).is_some() {
             return None;
         }
         let method = ChunkFallbackMethod::SubdividedBackwardEuler;
-        let err = self.fallback_error_estimate(chunk, 4, be, self.last_dc_seed.as_deref(), &x);
+        let err = self.fallback_error_estimate(chunk, 4, be, seed, &x);
         Some((method, x, diagnostics, err))
     }
 
@@ -4247,7 +4259,7 @@ impl Scheduler {
         chunk: f64,
         method: ChunkFallbackMethod,
         opts: SolverOptions,
-        seed: Option<&[f64]>,
+        seed: (Option<&[f64]>, Option<&MarchCarry>),
         thermal: &mut ChunkThermalAccum,
     ) -> Option<RungOutcome> {
         thermal.clear();
@@ -4289,15 +4301,16 @@ impl Scheduler {
         chunk: f64,
         n: usize,
         opts: SolverOptions,
-        seed: Option<Vec<f64>>,
+        (seed, state): (Option<&[f64]>, Option<&MarchCarry>),
         thermal: &mut ChunkThermalAccum,
     ) -> Option<(Vec<f64>, TransientDiagnostics)> {
         let sub = chunk / n as f64;
-        let mut carry: Option<Vec<f64>> = seed;
+        let mut carry: Option<Vec<f64>> = seed.map(<[f64]>::to_vec);
+        let mut carried: Option<MarchCarry> = state.cloned();
         let mut diagnostics = TransientDiagnostics::default();
         for _ in 0..n {
-            match self.march_chunk(sub, opts, carry.as_deref(), thermal) {
-                Ok((x, sub_diagnostics)) => {
+            match self.march_chunk(sub, opts, (carry.as_deref(), carried.as_ref()), thermal) {
+                Ok((x, mut sub_diagnostics)) => {
                     // Every quarter must be physical, not just the final one:
                     // an insane intermediate would seed the next quarter (and
                     // deposit its thermal integral) and could wander back to
@@ -4313,11 +4326,16 @@ impl Scheduler {
                             diagnostics.final_residual = Some(candidate);
                         }
                     }
+                    // Each quarter continues the previous one's march whole,
+                    // and the last one's end state is the chunk's.
+                    carried = sub_diagnostics.carry.take();
+                    diagnostics.switch_latch = sub_diagnostics.switch_latch;
                     carry = Some(x);
                 }
                 Err(_) => return None,
             }
         }
+        diagnostics.carry = carried;
         carry.map(|x| (x, diagnostics))
     }
 
@@ -4391,7 +4409,7 @@ impl Scheduler {
         chunk: f64,
         subdivisions: usize,
         opts: SolverOptions,
-        seed: Option<&[f64]>,
+        seed: (Option<&[f64]>, Option<&MarchCarry>),
         x_end: &[f64],
     ) -> Option<f64> {
         // Worst-case Richardson factors at error ratio r = 2 (see above).
@@ -4427,29 +4445,17 @@ impl Scheduler {
         let companion = if self.debug_skip_refined_companion {
             None
         } else {
-            self.march_chunk_subdivided(
-                chunk,
-                subdivisions,
-                refined,
-                seed.map(<[f64]>::to_vec),
-                &mut scratch,
-            )
-            // A companion the sanity policy would reject as a MAIN result
-            // measures nothing as a reference either.
-            .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
-            .map(|(x_ref, _)| (x_ref, REFINED_FACTOR, REFINED_TOL_SCALE))
+            self.march_chunk_subdivided(chunk, subdivisions, refined, seed, &mut scratch)
+                // A companion the sanity policy would reject as a MAIN result
+                // measures nothing as a reference either.
+                .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
+                .map(|(x_ref, _)| (x_ref, REFINED_FACTOR, REFINED_TOL_SCALE))
         };
         let companion = companion.or_else(|| {
             let coarse = Self::companion_opts(opts, COARSE_TOL_SCALE);
-            self.march_chunk_subdivided(
-                chunk,
-                subdivisions,
-                coarse,
-                seed.map(<[f64]>::to_vec),
-                &mut scratch,
-            )
-            .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
-            .map(|(x_ref, _)| (x_ref, COARSE_FACTOR, COARSE_TOL_SCALE))
+            self.march_chunk_subdivided(chunk, subdivisions, coarse, seed, &mut scratch)
+                .filter(|(x_ref, _)| self.insane_node_state(x_ref).is_none())
+                .map(|(x_ref, _)| (x_ref, COARSE_FACTOR, COARSE_TOL_SCALE))
         })?;
         let (x_ref, richardson, tol_scale) = companion;
         let (diff, v_max) = end_state_diff(&x_ref);
@@ -4588,19 +4594,17 @@ impl Scheduler {
         // Keep temperature in sync with the circuit's global temp.
         self.circuit.temp_c = self.opts.temperature_c;
         // Run a short transient; capture the last accepted step's unknowns.
-        // Warm-start this chunk's DC operating point from the previous chunk's
-        // final unknowns: the operating point barely moves between 100 us chunks,
-        // so plain Newton converges in ~1 iteration instead of re-running the
-        // cold-start gmin/source-stepping homotopy on the full nonlinear board
-        // every chunk. Exact (same root, fewer iters); a size-mismatched or
-        // failing seed falls back to the cold solve inside the solver.
+        // A chunk after the first continues the previous chunk's march from its
+        // end state (unknowns plus `last_carry`) and solves no DC point; the
+        // first chunk, or one after a failure, solves its own.
         let mut thermal = ChunkThermalAccum::default();
         let primary = if self.debug_force_fallback_rung.is_some() {
             // Test hook: pretend the primary failed so the ladder runs on a
             // board of the test's choosing. Never set in production.
             Err(("primary march skipped by test hook".to_string(), Vec::new()))
         } else {
-            self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal)
+            let seed = (self.last_dc_seed.as_deref(), self.last_carry.as_ref());
+            self.march_chunk(chunk, self.opts, seed, &mut thermal)
         };
         // A "converged" state that is not board reality (a net at 1e12 V, an
         // inf/NaN) must never be adopted: it would seed every later chunk and
@@ -4673,6 +4677,10 @@ impl Scheduler {
                     } else {
                         recovered
                     };
+                    // A recovered state is not where a march ended, so there
+                    // is no march to continue: the next chunk re-derives its
+                    // state from the seed (or cold) as a fresh run would.
+                    self.last_carry = None;
                     if recovered.is_empty() {
                         // Nothing usable captured: hold previous voltages, and
                         // cold-start the next chunk.
@@ -4766,6 +4774,10 @@ impl Scheduler {
         if self.latching && diagnostics.switch_latch.is_some() {
             self.last_switch_latch = diagnostics.switch_latch;
         }
+        // Every board carries the rest of its march state into the next chunk.
+        // A path that keeps none (the partitioned engine) leaves `None`, and the
+        // next chunk re-derives it as before.
+        self.last_carry = diagnostics.carry;
         if diagnostics.operating_point.is_some() {
             self.operating_point = diagnostics.operating_point;
         }
@@ -5298,6 +5310,7 @@ impl Scheduler {
         // start and the previous run's solved node state so the first chunk
         // after reset re-solves from the same cold start as construction.
         self.last_dc_seed = None;
+        self.last_carry = None;
         self.node_volts.iter_mut().for_each(|v| *v = 0.0);
         self.branch_x.iter_mut().for_each(|v| *v = 0.0);
         for leg in &mut self.model_peripheral_power {
@@ -6369,6 +6382,7 @@ impl Scheduler {
         }
         // The unknown vector changed shape; a prior warm seed no longer applies.
         self.last_dc_seed = None;
+        self.last_carry = None;
         // New devices may touch input-pin nets (peripheral controls, buttons):
         // refresh the plain digital-input sync's drive-evidence index.
         self.rebuild_digital_in_evidence();
@@ -7644,7 +7658,7 @@ missing = ["measurement_registers"]
         Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
     }
 
-    fn bound_board(
+    pub(super) fn bound_board(
         name: &str,
         circuit: Circuit,
         net_nodes: HashMap<String, NodeId>,
@@ -10011,6 +10025,10 @@ data_out = ["io0"]
         assert!(!sched.firmware_quiet(0, false), "it did execute");
     }
 }
+
+#[cfg(test)]
+#[path = "scheduler/tests/continuation.rs"]
+mod continuation_tests;
 
 /// `renode:<part>` instantiation consults the SoC-descriptor override dirs:
 /// override beats builtin, an invalid override fails loudly, aliases fall back
