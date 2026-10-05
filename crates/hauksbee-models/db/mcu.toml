@@ -161,6 +161,94 @@ implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_exter
 missing = ["board_crystal_frequency_binding", "adc_channels_6_and_7", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ATmega16U2 (and the 8U2/32U2 that share its die family and pinout), 32-pad
+# QFN or 32-lead TQFP: the USB-to-serial bridge on Arduino Uno-class boards.
+#
+# Source: Atmel ATmega8U2/16U2/32U2 datasheet 7799E-AVR-09/2012. Figure 1-1
+#   (QFN32 and TQFP32 share one pinout; the centre pad "should be soldered to
+#   ground"), Features "Operating Voltages 2.7 - 5.5V", 26.1 Absolute Maximum
+#   Ratings.
+#
+# BACKEND IS `none:`, deliberately. simavr has no atmega16u2 core. Its
+# at90usb162 is the nearest relative, but binding the board to it would be a
+# silent substitution (`detect_substitution` returns None for simavr by design),
+# so co-sim is declared unavailable and refused loudly, as for the Daisy Seed.
+# Lint, DRC, envelope and rating checks still read the pad map below.
+[[models]]
+id = "atmega16u2_32pin"
+kind = "mcu"
+description = "ATmega16U2 8-bit USB AVR, 32-pad QFN or 32-lead TQFP (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/doc7799.pdf"
+title = "Atmel ATmega8U2/16U2/32U2 datasheet, 7799E-AVR-09/2012"
+locator = "Features (Operating Voltages); 1 Figure 1-1 Pinout; 26.1 Absolute Maximum Ratings"
+sha256 = "182d44b3834632028e2258ee410b3ad33ee89c692695b6dc3e68cbdd08a5d03a"
+
+[models.match]
+# MU = QFN32, AU = TQFP32; the "(R)" some CAD libraries append is the reel code.
+value_re = "(?i)^ATmega16U2([-_ ]?(MU|AU)(R|\\(R\\))?)?$"
+
+[models.params]
+backend = "none:atmega16u2"
+
+[models.pins]
+# Figure 1-1, QFN32 (TQFP32 identical).
+"1"  = "xtal1"
+"2"  = "pc0_xtal2"
+"3"  = "gnd"
+"4"  = "vcc"
+"5"  = "pc2_ain2"
+"6"  = "pd0_int0_oc0b"
+"7"  = "pd1_int1_ain0"
+"8"  = "pd2_rxd1_int2"
+"9"  = "pd3_txd1_int3"
+"10" = "pd4_int5"
+"11" = "pd5_xck"
+"12" = "pd6_rts_int6"
+"13" = "pd7_cts_hwb"
+"14" = "pb0_ss"
+"15" = "pb1_sck"
+"16" = "pb2_mosi"
+"17" = "pb3_miso"
+"18" = "pb4_t1"
+"19" = "pb5"
+"20" = "pb6"
+"21" = "pb7_oc0a_oc1c"
+"22" = "pc7_int4_icp1"
+"23" = "pc6_oc1a"
+"24" = "pc1_reset"
+"25" = "pc5_oc1b"
+"26" = "pc4"
+"27" = "ucap"
+"28" = "ugnd"
+"29" = "d_plus"
+"30" = "d_minus"
+"31" = "uvcc"
+"32" = "avcc"
+"33" = "gnd2"     # QFN centre pad, soldered to ground (Figure 1-1 note)
+
+[models.ratings]
+max_pin_current_a = 0.04  # 26.1, DC current per I/O pin 40.0 mA
+max_current_a = 0.2       # 26.1, DC current VCC and GND pins 200.0 mA
+max_voltage_v = 6.0       # 26.1, maximum operating voltage 6.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel 7799E, Features, Operating Voltages 2.7-5.5 V; 26.1 maximum operating voltage 6.0 V"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "pin_and_package_current_ratings"]
+missing = ["firmware_cosim_core", "usb_device_controller", "gpio_behaviour", "uart"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ATmega1284P: the 128 KB / 16 KB-SRAM megaX4-line AVR, 44-lead TQFP and 44-pad
 # VQFN/QFN(MLF), which share one pinout.
 #
