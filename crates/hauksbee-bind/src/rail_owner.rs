@@ -42,6 +42,7 @@
 
 use crate::behavioral::BehavioralDevice;
 use hauksbee_ir::{BOutput, Circuit, Device, DeviceId, NodeId, SourceKind};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The largest resistance treated as a series conductor joining two nets
 /// into one rail.
@@ -356,6 +357,90 @@ impl RailDomains {
             });
         }
         out
+    }
+}
+
+/// One fed group of the board's power tree, by board net name, for causal
+/// scoping: what a claim on a part powered from this rail depends on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SupplyGroup {
+    /// The board nets that are one rail at DC or one rail and its switched
+    /// branches ([`RailDomains::fed_joined`]).
+    pub nets: BTreeSet<String>,
+    /// The parts that pass power within the group: series conductors,
+    /// switches and pass FETs. Their other pins (an enable, a gate) are what
+    /// controls the rail.
+    pub passes: BTreeSet<String>,
+    /// The parts that regulate this group from another net: `(part, input net)`.
+    pub feeds: BTreeSet<(String, String)>,
+}
+
+/// A regulating part as the power tree sees it: its reference, the node it
+/// holds and the node it draws that power from.
+#[derive(Debug, Clone, Copy)]
+pub struct Regulation<'a> {
+    /// The part's reference designator.
+    pub part: &'a str,
+    /// The node it regulates.
+    pub output: NodeId,
+    /// The node it takes its power from.
+    pub input: NodeId,
+}
+
+impl RailDomains {
+    /// The board's power tree as fed groups of board nets: every group with
+    /// more than one net, a part passing power within it, or a regulator
+    /// feeding it from another net. `board_net` names a board node (private
+    /// stamp nodes take no part), `owner` maps a stamped device name to the
+    /// part it belongs to, and `regulations` are the regulators and converters
+    /// with their input and output nodes.
+    #[must_use]
+    pub fn supply_groups(
+        &self,
+        circuit: &Circuit,
+        board_net: impl Fn(NodeId) -> Option<String>,
+        owner: impl Fn(&str) -> Option<String>,
+        regulations: &[Regulation<'_>],
+    ) -> Vec<SupplyGroup> {
+        let mut groups: BTreeMap<usize, SupplyGroup> = BTreeMap::new();
+        let group = |node: NodeId| self.fed.get(node.0 as usize).copied();
+        for node in (0..u32::try_from(circuit.node_count()).unwrap_or(u32::MAX)).map(NodeId) {
+            let name = board_net(node).filter(|_| !node.is_ground());
+            if let (Some(name), Some(g)) = (name, group(node)) {
+                groups.entry(g).or_default().nets.insert(name);
+            }
+        }
+        for (_, d) in circuit.iter() {
+            let ends = match d {
+                Device::VSwitch { a, b, .. } => Some([*a, *b]),
+                Device::Mosfet { d, s, .. } => Some([*d, *s]),
+                _ => series_ends(d),
+            };
+            let Some([a, b]) = ends else {
+                continue;
+            };
+            let on_board = |n: NodeId| !n.is_ground() && board_net(n).is_some();
+            if !(on_board(a) && on_board(b) && self.fed_joined(a, b)) {
+                continue;
+            }
+            if let (Some(part), Some(g)) = (owner(d.name()), group(a)) {
+                groups.entry(g).or_default().passes.insert(part);
+            }
+        }
+        for r in regulations {
+            let (Some(g), Some(input)) = (group(r.output), board_net(r.input)) else {
+                continue;
+            };
+            if r.input.is_ground() || self.fed_joined(r.output, r.input) {
+                continue;
+            }
+            let feed = (r.part.to_string(), input);
+            groups.entry(g).or_default().feeds.insert(feed);
+        }
+        groups
+            .into_values()
+            .filter(|g| g.nets.len() > 1 || !g.passes.is_empty() || !g.feeds.is_empty())
+            .collect()
     }
 }
 
@@ -676,5 +761,74 @@ mod tests {
         d.join_pass_fets(&c, |_, _| true);
         assert!(d.fed_joined(out, ana) && d.fed_by_driver(ana));
         assert!(d.drivers_of(ana).is_empty(), "switched, not one rail");
+    }
+
+    /// A buck on `+12V` drives `SW`, which its inductor joins to `+5V`, and a
+    /// load switch makes `+5V_A` a branch of `+5V`: one group holding all
+    /// three, passed by the inductor and the switch and fed from `+12V`.
+    /// Ground never joins it, and a part's internal node names no net.
+    #[test]
+    fn the_power_tree_names_each_rail_its_passes_and_its_feed() {
+        let c = circuit(|c, [vin, sw, out, ana]| {
+            let private = c.node("U1_int");
+            c.add(Device::vsource(
+                "Vreg_U_B_1",
+                sw,
+                private,
+                SourceKind::Dc(5.0),
+            ));
+            c.add(Device::resistor(
+                "U_B_1_rint",
+                private,
+                NodeId::GROUND,
+                0.01,
+            ));
+            c.add(Device::Inductor {
+                name: "L1".into(),
+                a: sw,
+                b: out,
+                henries: 1e-5,
+                ic: None,
+            });
+            c.add(Device::VSwitch {
+                name: "U2_s1".into(),
+                a: out,
+                b: ana,
+                ctrl_p: vin,
+                ctrl_n: NodeId::GROUND,
+                von: 1.0,
+                voff: 0.5,
+                ron: 0.05,
+                roff: 1e9,
+            });
+        });
+        let [vin, sw] = ["+12V", "SW"].map(|n| c.find_node(n).unwrap());
+        let mut d = RailDomains::new(&c, &[], &[]);
+        d.join_switches(&c, |_| true);
+        let board = |n: NodeId| {
+            let name = c.node_name(n);
+            (name != "U1_int").then(|| name.to_string())
+        };
+        let refs = ["U_B_1", "L1", "U2"];
+        let owner = |name: &str| {
+            (refs.iter())
+                .filter(|r| name == **r || name.starts_with(&format!("{r}_")))
+                .max_by_key(|r| r.len())
+                .map(|r| (*r).to_string())
+        };
+        let regulation = Regulation {
+            part: "U_B_1",
+            output: sw,
+            input: vin,
+        };
+        let groups = d.supply_groups(&c, board, owner, &[regulation]);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        let g = &groups[0];
+        let nets: Vec<&str> = g.nets.iter().map(String::as_str).collect();
+        assert_eq!(nets, ["+5V", "+5V_A", "SW"]);
+        let passes: Vec<&str> = g.passes.iter().map(String::as_str).collect();
+        assert_eq!(passes, ["L1", "U2"]);
+        let feeds: Vec<(&str, &str)> = g.feeds.iter().map(|(p, n)| (&**p, &**n)).collect();
+        assert_eq!(feeds, [("U_B_1", "+12V")]);
     }
 }

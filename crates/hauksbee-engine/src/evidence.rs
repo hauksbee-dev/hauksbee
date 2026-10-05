@@ -24,6 +24,7 @@ use crate::reports::bind::{BindOutcome, BindReport};
 pub(crate) use hauksbee_bind::occurrence::{
     component_occurrence_subjects_for_references, OCCURRENCE_PREFIX,
 };
+use hauksbee_bind::rail_owner::SupplyGroup;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{
     ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionId,
@@ -116,6 +117,11 @@ pub struct BoardEvidence {
     reader_contributions: Vec<Contribution>,
     reader_ignored: Vec<IgnoredInput>,
     reader_cross_checks: Vec<CrossCheck>,
+    /// The board's power tree by net name, from the binder.
+    supply_groups: Vec<SupplyGroup>,
+    /// Each net to the nets a two-terminal part feeds from it that carry
+    /// another part's `power_in` pin: a filtered supply (an RC-fed VIN).
+    supply_taps: BTreeMap<String, BTreeSet<String>>,
 }
 
 fn provenance_display_reference(reference: &str) -> String {
@@ -626,6 +632,8 @@ impl BoardEvidence {
             reader_contributions,
             reader_ignored,
             reader_cross_checks,
+            supply_groups: report.supply_groups.clone(),
+            supply_taps: supply_taps(board, &net_names),
         })
     }
 
@@ -1347,12 +1355,15 @@ impl BoardEvidence {
     }
 
     /// The explicit `nets` plus every net a subject `reference` touches, less
-    /// ground: ground is the reference node every part shares, so reaching
-    /// through it would put each open part on the board (an antenna trimmer, a
-    /// connector shell) on a part's causal path. An open part that can move the
-    /// subject still lands there through the signal or rail it shares with it.
+    /// ground, plus that part's supply chain ([`Self::supply_chain`]). Ground is
+    /// the reference node every part shares, so reaching through it would put
+    /// each open part on the board (an antenna trimmer, a connector shell) on a
+    /// part's causal path. An open part that can move the subject still lands
+    /// there through the signal or rail it shares with it, or through the chain
+    /// that powers it.
     fn nets_for_subjects(&self, nets: &[String], references: &[String]) -> BTreeSet<String> {
         let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
+        let mut part_nets = BTreeSet::new();
         for (net, refs) in &self.refs_by_net {
             if crate::is_ground(net) {
                 continue;
@@ -1361,10 +1372,59 @@ impl BoardEvidence {
                 refs.iter()
                     .any(|subject| self.subject_matches_reference(subject, reference))
             }) {
-                scoped_nets.insert(net.clone());
+                part_nets.insert(net.clone());
             }
         }
+        scoped_nets.extend(self.supply_chain(&part_nets));
+        scoped_nets.extend(part_nets);
         scoped_nets
+    }
+
+    /// The supply chain behind `nets`: walking upstream from each net's rail
+    /// group through the regulators feeding it to their inputs' groups, to
+    /// where the board takes power. The chain is every net of those groups
+    /// (so every part loading a rail on it, which sets the current through the
+    /// chain and matters wherever a source limits current or has impedance),
+    /// every net of each part passing or regulating power along it (an enable,
+    /// a gate, so the parts controlling the chain), and each filtered supply
+    /// fed from a rail on it. Ground joins no group, so the chain never
+    /// reaches through it, and nothing downstream of another regulator on the
+    /// chain is included.
+    fn supply_chain(&self, nets: &BTreeSet<String>) -> BTreeSet<String> {
+        let group_of: HashMap<&str, usize> = (self.supply_groups.iter().enumerate())
+            .flat_map(|(i, g)| g.nets.iter().map(move |n| (n.as_str(), i)))
+            .collect();
+        let mut queue: Vec<usize> = (nets.iter())
+            .filter_map(|n| group_of.get(n.as_str()).copied())
+            .collect();
+        let (mut seen, mut rails, mut parts) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+        while let Some(i) = queue.pop() {
+            if !seen.insert(i) {
+                continue;
+            }
+            let group = &self.supply_groups[i];
+            rails.extend(group.nets.iter().map(String::as_str));
+            parts.extend(group.passes.iter().map(String::as_str));
+            for (part, input) in &group.feeds {
+                parts.insert(part.as_str());
+                rails.insert(input.as_str());
+                queue.extend(group_of.get(input.as_str()));
+            }
+        }
+        let by_name = self.nets_by_subject_name();
+        let controls = parts.iter().filter_map(|part| by_name.get(part)).flatten();
+        let taps = rails
+            .iter()
+            .filter_map(|rail| self.supply_taps.get(*rail))
+            .flatten();
+        rails
+            .iter()
+            .copied()
+            .chain(controls.map(|n| n.as_str()))
+            .chain(taps.map(String::as_str))
+            .filter(|n| !crate::is_ground(n) && self.refs_by_net.contains_key(*n))
+            .map(str::to_string)
+            .collect()
     }
 
     /// A numeric simulation assertion over nets and/or component references.
@@ -1923,6 +1983,48 @@ pub(crate) fn board_evidence(
 ) -> Result<BoardEvidence, EvidenceError> {
     BoardEvidence::from_bound(board, report, reader_notes, RunDate::from_system_clock())?
         .with_input_artifact(board_path, raw, input_kind)
+}
+
+/// Each net to the nets a two-terminal part feeds from it that carry another
+/// part's `power_in` pin: a supply filtered through a resistor or ferrite (an
+/// RC-fed controller's VIN, a ferrite-fed AVDD) loads the rail it hangs off
+/// even when the series element is too large to make it one rail.
+fn supply_taps(
+    board: &ExtractedBoard,
+    net_names: &BTreeMap<i64, &str>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let live = |id: i64| net_names.get(&id).filter(|n| !crate::is_ground(n));
+    let mut powered: BTreeMap<i64, BTreeSet<usize>> = BTreeMap::new();
+    for (index, component) in board.components.iter().enumerate() {
+        let pins = component.pins.iter();
+        let power_in = pins.filter(|p| p.kind.eq_ignore_ascii_case("power_in"));
+        for net in power_in.filter_map(|p| p.net) {
+            powered.entry(net).or_default().insert(index);
+        }
+    }
+    let mut taps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (index, component) in board.components.iter().enumerate() {
+        let [a, b] = component.pins.as_slice() else {
+            continue;
+        };
+        let (Some(a), Some(b)) = (a.net, b.net) else {
+            continue;
+        };
+        let feeds = |to: i64| {
+            powered
+                .get(&to)
+                .is_some_and(|by| by.iter().any(|&i| i != index))
+        };
+        for (from, to) in [(a, b), (b, a)] {
+            if let (Some(from_name), Some(to_name)) = (live(from), live(to)) {
+                if from != to && feeds(to) {
+                    let entry = taps.entry((*from_name).to_string()).or_default();
+                    entry.insert((*to_name).to_string());
+                }
+            }
+        }
+    }
+    taps
 }
 
 fn normalize_part_statement(text: &str, refs: &[String]) -> String {

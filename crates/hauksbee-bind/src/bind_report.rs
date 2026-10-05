@@ -168,6 +168,10 @@ pub struct BindReport {
     )>,
     /// Rails more than one source sets the voltage of (see `rail_owner`).
     pub rail_conflicts: Vec<crate::rail_owner::RailConflict>,
+    /// The board's power tree by net name (see
+    /// [`crate::rail_owner::RailDomains::supply_groups`]), so evidence can put a
+    /// part's supply chain on its causal path without the circuit.
+    pub supply_groups: Vec<crate::rail_owner::SupplyGroup>,
     /// Orderable-variant selections, keyed by the index of the row they bound.
     pub selections: std::collections::BTreeMap<usize, hauksbee_models::variants::Selection>,
 }

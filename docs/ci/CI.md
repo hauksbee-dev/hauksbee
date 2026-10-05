@@ -1304,12 +1304,25 @@ because both used to read green:
 
 An assertion's causal path is its subject: the asserted net(s), or every net a
 named `ref` touches other than ground (every part shares ground, so reaching
-through it would put each open part on the board on the path). A `uart`
+through it would put each open part on the board on the path) plus that part's
+supply chain. The chain walks upstream from each of the part's rails through
+the regulators and converters feeding it, the switches and pass FETs it is a
+switched branch of, and the series conductors (inductors, ferrites, fuses,
+sense resistors) joining it, to where the board takes power. On the path are
+every part loading a rail of that chain (they set the current through it, which
+decides the result when the source limits current or has impedance), every
+other pin of a part passing or regulating power along it (an enable, a gate, so
+whatever controls the chain), and a part powered from a chain rail through a
+filter (a resistor or ferrite to its `power_in` pin). Loads behind a second
+regulator on the chain are not. So a junction-temperature claim on a linear
+regulator fed through a load switch is undermined by an open switch controller
+or an open motor driver on the bench-supplied rail upstream. A `uart`
 assertion's subject is the MCU it reads (its
 `mcu`, or every MCU that printed when none is named), so an unmodelled part on
-any of that MCU's pins, rails, reset or clock undermines it, and an unmodelled
-part elsewhere on the board does not. Assertions with no subject at all
-(`no_faults`, model coverage) take the whole board.
+any of that MCU's pins, rails, reset or clock, or on the chain powering it,
+undermines it, and an unmodelled part elsewhere on the board does not.
+Assertions with no subject at all (`no_faults`, model coverage) take the whole
+board.
 
 There is no `--strict` on `hauksbee-ci run`, deliberately: a board used outside
 its datasheet, or an unmodelled part that can move the very net under

@@ -202,6 +202,8 @@ mod stm32_renode_cosim;
 mod stormduino_bind;
 #[path = "strap_lint_corpus.rs"]
 mod strap_lint_corpus;
+#[path = "supply_chain_scope.rs"]
+mod supply_chain_scope;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
 #[path = "tarski_stretcher_transient.rs"]

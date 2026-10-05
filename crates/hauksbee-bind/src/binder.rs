@@ -744,6 +744,8 @@ pub fn bind_board_with(
         matches!((rail_volts(d), rail_volts(s)), (Some(a), Some(b))
             if (a - b).abs() <= 0.01 * a.abs().max(b.abs()))
     });
+    report.supply_groups =
+        supply_groups(board, &circuit, &domains, &report.regulators, &behavioral);
     let entry = |node: NodeId| {
         board.components.iter().any(|c| {
             let port = component_kinds
@@ -1484,6 +1486,64 @@ fn led_colour(comp: &Component) -> Option<&'static str> {
             _ => None,
         });
     named.next().filter(|_| named.next().is_none())
+}
+
+/// The board's power tree by net name: the fed groups `domains` holds, the
+/// parts passing power within each, and the regulators and converters feeding
+/// each from its input (see [`crate::rail_owner::RailDomains::supply_groups`]).
+fn supply_groups(
+    board: &ExtractedBoard,
+    circuit: &Circuit,
+    domains: &crate::rail_owner::RailDomains,
+    regulators: &[SimpleRegulator],
+    behavioral: &[crate::behavioral::BehavioralDevice],
+) -> Vec<crate::rail_owner::SupplyGroup> {
+    use crate::rail_owner::Regulation;
+    let refs: std::collections::HashSet<&str> = board
+        .components
+        .iter()
+        .map(|c| c.reference.as_str())
+        .collect();
+    // A stamp is named for its part: the reference itself (`L1`), the
+    // reference and a suffix (`U5_s1`) or a prefix (`Vreg_U3`, `Rbeh_F1_fuse`).
+    // A reference may hold `_` itself, so the longest run of `_`-separated
+    // words that is a reference on this board names the owner.
+    let owner = |name: &str| {
+        let words: Vec<&str> = name.split('_').collect();
+        let runs = (0..words.len()).flat_map(|i| (i + 1..=words.len()).map(move |j| (i, j)));
+        runs.map(|(i, j)| words[i..j].join("_"))
+            .filter(|run| refs.contains(run.as_str()))
+            .max_by_key(String::len)
+    };
+    let nets: std::collections::HashSet<&str> = (board.nets.iter())
+        .filter(|net| net.id != 0)
+        .map(|net| net.name.as_str())
+        .collect();
+    let board_net = |n: NodeId| {
+        let name = circuit.node_name(n);
+        nets.contains(name).then(|| name.to_string())
+    };
+    let mut regulations: Vec<Regulation<'_>> = regulators
+        .iter()
+        .filter_map(|r| {
+            let Some(Device::Vsource { p, .. }) = circuit.devices.get(r.source.0 as usize) else {
+                return None;
+            };
+            Some(Regulation {
+                part: &r.reference,
+                output: *p,
+                input: r.input,
+            })
+        })
+        .collect();
+    regulations.extend(behavioral.iter().filter_map(|b| {
+        Some(Regulation {
+            part: &b.reference,
+            output: b.converter_out_node()?,
+            input: b.converter_in_node()?,
+        })
+    }));
+    domains.supply_groups(circuit, board_net, owner, &regulations)
 }
 
 /// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP").
