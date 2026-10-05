@@ -188,6 +188,8 @@ mod soft_i2c_cosim;
 mod spi_sensor_cosim_qemu;
 #[path = "spi_sensor_cosim_renode.rs"]
 mod spi_sensor_cosim_renode;
+#[path = "static_check_scaling.rs"]
+mod static_check_scaling;
 #[path = "static_pass_says_its_limits.rs"]
 mod static_pass_says_its_limits;
 #[path = "stm32_bind_check.rs"]

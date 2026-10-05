@@ -1204,7 +1204,17 @@ impl StressMonitor {
     ) -> Vec<f64> {
         (0..self.metas.len())
             .map(|i| {
-                if self.tracks[i].destroyed {
+                // An ideal capacitor or inductor stores energy and dissipates
+                // none (`operating_point` reports zero power for both), so a
+                // per-step operating point for one, often half the parts on a
+                // board, is work spent to learn zero. A regulator's estimated
+                // heat is the exception, so a meta carrying one is still read.
+                let stores_only = self.reg_heat[i].is_none()
+                    && matches!(
+                        circuit.devices.get(self.metas[i].device.0 as usize),
+                        Some(Device::Capacitor { .. } | Device::Inductor { .. })
+                    );
+                if self.tracks[i].destroyed || stores_only {
                     0.0
                 } else {
                     self.op_of(circuit, i, node_v, branch_current).power_w
