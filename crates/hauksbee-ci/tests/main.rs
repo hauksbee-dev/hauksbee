@@ -18,6 +18,7 @@ mod cli_diagnostics;
 mod comparator_hysteresis;
 #[cfg(feature = "renode")]
 mod cosim_coverage_honesty;
+mod d2pak_ldo;
 mod derated_rating_ci;
 mod doc_coverage;
 mod evidence_spine_ci;

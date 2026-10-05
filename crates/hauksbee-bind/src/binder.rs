@@ -2767,7 +2767,11 @@ fn role_node_map_guessed(
         // A role the card's pads give this pad bound its node, even beside a pin-function.
         let own = |r: &&String| roles[0].as_ref() != Some(*r) && m.get(*r) == node.as_ref();
         let carded = node.and_then(|_| roles[1].iter().chain(&roles[3]).find(own));
-        if let (Some(convention), Some(role)) = (standard, carded) {
+        // A pad number repeated on one footprint (a TO-263/SOT-223 tab sharing
+        // the centre lead's number) is one pad of the card: one guess, since a
+        // guess's assumption id is keyed by the pad number.
+        let said = |g: &Vec<String>| g.iter().any(|s| s.starts_with(&format!("pad {n} role ")));
+        if let (Some(convention), Some(role), false) = (standard, carded, said(&guesses)) {
             guesses.push(format!("pad {n} role '{role}' numbered from package standard \"{convention}\" (the datasheet prints lead letters only; footprint \"{}\")", comp.footprint));
         }
         let found = pin_rules.role_for_pad(&comp.footprint, Some(kind), pad_count, n);
@@ -2852,11 +2856,29 @@ fn pad_role_sources(
 ) -> [Option<String>; 4] {
     let card = |pad: &str| pins.get(pad).cloned();
     [
-        kind.and_then(|k| role_from_pinfunction(k, &pin.function)),
+        kind.and_then(|k| role_from_shared_pinfunction(k, &pin.function, card(&pin.number))),
         card(&pin.number),
         kind.and_then(|k| role_from_electrode_pad(k, &pin.number)),
         ordinal_pad(&pin.number).and_then(|ord| card(&ord)),
     ]
+}
+
+/// A pin-function's role, reading a symbol shared by a part's variants
+/// (`ADJ/GND`: the adjustable part's ADJ, the fixed part's GND) as the one
+/// alternative the card gives this pad. Alternatives naming no role the card
+/// gives it leave the pad unnamed, so a pin rule or the package standard still
+/// reports its guess.
+fn role_from_shared_pinfunction(
+    kind: ComponentKind,
+    function: &str,
+    card: Option<String>,
+) -> Option<String> {
+    role_from_pinfunction(kind, function).or_else(|| {
+        let mut alternatives = function
+            .split('/')
+            .filter_map(|f| role_from_pinfunction(kind, f));
+        card.filter(|c| function.contains('/') && alternatives.any(|r| r == *c))
+    })
 }
 
 /// Interpret an electrode-letter pad "number" as a binder role for `kind`.
@@ -3854,7 +3876,9 @@ fn vreg_stability_warning(
              `cout_esr_min_ohm` plus `cout_esr_max_ohm` to the card"
                 .to_owned(),
         ),
-        Some(required) if found < required => (
+        // A part-per-billion slack: "10uF" parses to 10 x 1e-6, one ulp short
+        // of the card's 10e-6, and a capacitor of exactly the minimum meets it.
+        Some(required) if found < required * (1.0 - 1e-9) => (
             Assumption::OPERATING_LIMIT_MARKER,
             format!(
                 "{} requires at least {} output capacitance for stability, but {} was found \
@@ -9651,6 +9675,22 @@ style = "i2c_pointer"
         for function in ["A", "B", "SDA", "P07", "OUT_B", ""] {
             assert_eq!(role(function), None, "{function}");
         }
+    }
+
+    /// One symbol drawn for a fixed and an adjustable part (`ADJ/GND`) names
+    /// the alternative the card gives the pad, and nothing when the card gives
+    /// it neither.
+    #[test]
+    fn a_shared_pin_name_reads_as_the_alternative_the_card_gives_the_pad() {
+        let role = |f: &str, card: Option<&str>| {
+            role_from_shared_pinfunction(ComponentKind::Vreg, f, card.map(str::to_owned))
+        };
+        assert_eq!(role("ADJ/GND", Some("gnd")).as_deref(), Some("gnd"));
+        assert_eq!(role("ADJ/GND", Some("fb")).as_deref(), Some("fb"));
+        assert_eq!(role("ADJ/GND", Some("out")), None);
+        assert_eq!(role("ADJ/GND", None), None);
+        assert_eq!(role("VIN", Some("gnd")).as_deref(), Some("in"));
+        assert_eq!(role("GND", Some("gnd")).as_deref(), Some("gnd"));
     }
 
     fn stm32_clock_board(crystal_dnp: bool) -> ExtractedBoard {

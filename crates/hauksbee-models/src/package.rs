@@ -81,8 +81,16 @@ const BODIES: &[(&[&str], &str, f64, bool)] = &[
     (&["DIP"], "DIP", 200.0, false),
 ];
 
+/// Upper-case ASCII alphanumerics of `text`. Datasheets print D²PAK/D³PAK with
+/// a superscript digit, which reads as its plain digit rather than vanishing
+/// (dropping it would spell DPAK, a different body).
 fn squash(text: &str) -> String {
-    let kept = text.chars().filter(char::is_ascii_alphanumeric);
+    let plain = text.chars().map(|c| match c {
+        '²' => '2',
+        '³' => '3',
+        other => other,
+    });
+    let kept = plain.filter(char::is_ascii_alphanumeric);
     kept.map(|c| c.to_ascii_uppercase()).collect()
 }
 
@@ -291,5 +299,14 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn a_superscript_d2pak_is_the_to263_body_not_a_dpak() {
+        let body = |n: &str| super::package_body(n).map(|b| b.name);
+        let fp = super::package_body("Package_TO_SOT_SMD:TO-263-3_TabPin2").expect("TO-263");
+        assert_eq!(body("D²PAK"), Some("TO-263"));
+        assert!(super::package_body("D²PAK").is_some_and(|b| b.rates(fp)));
+        assert_ne!(body("DPAK"), Some("TO-263"));
     }
 }

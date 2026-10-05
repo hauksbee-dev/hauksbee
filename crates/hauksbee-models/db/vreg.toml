@@ -5300,3 +5300,153 @@ high_threshold_v = 1.2       # VEN_H max
 [models.coverage]
 implements = ["averaged_boost_dc", "board_feedback_divider", "enable_gating", "reflected_input_power"]
 missing = ["pass_through", "pfm_mode", "switching_ripple", "soft_start", "valley_current_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LD1086D2T33: ST LD1086 family, fixed 3.3 V, 1.5 A low-dropout regulator in
+# D²PAK (order code LD1086D2T33TR).
+#
+# Source: STMicroelectronics LD1086 datasheet DocID6739 Rev 38 (July 2024),
+# https://www.st.com/resource/en/datasheet/ld1086.pdf,
+# sha256 22a1de79e468874302bc47d58da07fc82ce4e70311cf14047b328f442333d1c5.
+# Drafted by `hauksbee models extract` and reviewed by hand against the PDF;
+# the corrections are the pin-number provenance (the draft called it
+# "standard DPAK numbering" and cited an unrelated outline figure), the
+# operating rather than abs-max junction limit, and the output capacitor,
+# supply envelope and vout interval it left out.
+#
+# Datasheet figures used (Table 5 p.11, LD1086#33, VI = 6.3 V, CI = CO = 10 uF,
+# TA = -40..125 C unless noted):
+#   VO   3.267 / 3.3 / 3.333 V   IO = 0, TJ = 25 C
+#   VO   3.234 / 3.3 / 3.366 V   IO = 0..1.5 A, VI = 4.9..30 V (the vout interval)
+#   Vd   1.3 typ / 1.5 max V     IO = 1.5 A (Figure 10 p.17: about 1.1 V unloaded)
+#   Iq   5 typ / 10 max mA       VI <= 30 V
+#   Isc  1.5 min / 2 typ A at VI - VO = 5 V, folding back to 0.05 min / 0.2 typ A
+#        at 25 V (not modelled: the stamp has no current limit)
+#   Table 1 p.7: VI 30 V abs max; IO and PD internally limited; TJ -40..150 C.
+#   Table 2 p.7: D²PAK RthJA 62.5 C/W, RthJC 3 C/W.
+#   Features p.1: operating -40..125 C; 10 uF minimum output capacitor.
+#
+# THE PAD NUMBERS ARE ASSUMED. Figure 2 (p.6) draws the D²PAK top view with its
+# leads labelled INPUT / OUTPUT / ADJ/GND and no lead numbers, and notes that
+# the TAB is connected to OUTPUT. The numbering below is the JEDEC TO-263
+# convention (pin 1 = ADJ/GND, the centre pin 2 and the tab = OUTPUT,
+# pin 3 = INPUT), which KiCad's TO-263-3_TabPin2 footprint also uses (its tab
+# pad is numbered 2). The pinout's `standard` makes every pad's role a reported
+# guess on the bind report rather than a silent fact.
+[[models]]
+id = "ld1086d2t33"
+kind = "vreg"
+description = "LD1086D2T33 fixed 3.3 V, 1.5 A LDO regulator, D²PAK (ideal 3.3 V source behind a 1.5 V dropout; current limit, thermal limit and transient response not modelled)"
+
+[models.match]
+value_re = '(?i)^LD1086D2T33(?:TR)?$'
+
+[models.params]
+vout = { min = 3.234, typ = 3.3, max = 3.366, unit = "V", conditions = "IO = 0 to 1.5 A, VI = 4.9 to 30 V, TA = -40 to 125 °C", basis = "DocID6739 Rev 38, Table 5 (p.11), LD1086#33 output voltage over load and line, min/typ/max" }
+dropout_v = { typ = 1.3, max = 1.5, unit = "V", conditions = "IO = 1.5 A", basis = "DocID6739 Rev 38, Table 5 (p.11), dropout voltage, typ/max" }
+iq_a = { typ = 5, max = 10, unit = "mA", conditions = "VI ≤ 30 V", basis = "DocID6739 Rev 38, Table 5 (p.11), quiescent current, typ/max" }
+# Description (p.1): "Only a 10 µF (minimum) capacitor is needed for stability";
+# every Table 5 condition is CO = 10 µF. No ESR window is stated.
+cout_min_f = 10.0e-6
+
+[models.pins]
+# D²PAK, numbered from the JEDEC TO-263 top view (assumed; see above).
+"1" = "gnd"   # ADJ/GND: ground on the fixed-output variant
+"2" = "out"   # OUTPUT; the tab is OUTPUT too (Figure 2 note) and KiCad numbers it 2
+"3" = "in"    # INPUT
+
+[models.ratings]
+max_current_a = 1.5          # Features (p.1): output current guaranteed up to 1.5 A
+max_voltage_v = 30.0         # Table 1 (p.7): DC input voltage, abs max
+max_junction_temp_c = 125.0  # Features (p.1): operating -40 to 125 °C (Table 1 abs max 150 °C)
+theta_ja_c_per_w = 62.5      # Table 2 (p.7): D²PAK RthJA
+theta_jc_c_per_w = 3.0       # Table 2 (p.7): D²PAK RthJC
+
+# The datasheet has no recommended-operating table; Table 5 guarantees the
+# output-voltage limits over VI = 4.9 to 30 V, the range the stamp's 3.3 V is
+# evidence for.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.9
+max_v = 30.0
+abs_max_v = 30.0
+basis = "ST LD1086 DocID6739 Rev 38, Table 5 (p.11), LD1086#33 output voltage guaranteed for VI = 4.9 to 30 V; Table 1 (p.7), DC input voltage 30 V abs max"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/ld1086.pdf"
+title = "STMicroelectronics LD1086 datasheet DocID6739 Rev 38 (July 2024)"
+locator = "Figure 2 (p.6) D²PAK pin connections; Tables 1-2 (p.7); Table 5 (p.11) LD1086#33; Figure 10 (p.17) dropout vs output current"
+sha256 = "22a1de79e468874302bc47d58da07fc82ce4e70311cf14047b328f442333d1c5"
+
+[[models.source.pinout]]
+package = "D²PAK"
+standard = "JEDEC TO-263 top view, leads toward the viewer: 1 left, 2 centre and tab, 3 right (assumed; Figure 2 prints lead names only)"
+pins = { "1" = "ADJ/GND", "2" = "OUTPUT", "3" = "INPUT" }
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.234
+high = 3.366
+unit = "V"
+kind = "specification-limits"
+basis = "DocID6739 Rev 38, Table 5 (p.11), LD1086#33 VO min/max for IO = 0 to 1.5 A, VI = 4.9 to 30 V"
+
+[[models.source.characteristic]]
+parameter = "VO output voltage, no load"
+min = 3.267
+typ = 3.3
+max = 3.333
+unit = "V"
+conditions = "IO = 0 mA, TJ = 25 °C, VI = 6.3 V"
+basis = "DocID6739 Rev 38, Table 5 (p.11), output voltage, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "ΔVO line regulation"
+typ = 1
+max = 6
+unit = "mV"
+conditions = "IO = 0 mA, VI = 4.9 to 18 V"
+basis = "DocID6739 Rev 38, Table 5 (p.11), line regulation, typ/max (0.5/6 mV at TJ = 25 °C)"
+
+[[models.source.characteristic]]
+parameter = "ΔVO load regulation"
+typ = 7
+max = 25
+unit = "mV"
+conditions = "IO = 0 to 1.5 A"
+basis = "DocID6739 Rev 38, Table 5 (p.11), load regulation, typ/max (1/10 mV at TJ = 25 °C)"
+
+[[models.source.characteristic]]
+parameter = "Isc short-circuit current"
+min = 1.5
+typ = 2
+unit = "A"
+conditions = "VI - VO = 5 V"
+basis = "DocID6739 Rev 38, Table 5 (p.11), short-circuit current, min/typ"
+
+[[models.source.characteristic]]
+parameter = "Isc short-circuit current, foldback"
+min = 0.05
+typ = 0.2
+unit = "A"
+conditions = "VI - VO = 25 V"
+basis = "DocID6739 Rev 38, Table 5 (p.11), short-circuit current, min/typ"
+
+[[models.source.characteristic]]
+parameter = "RthJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 62.5
+unit = "°C/W"
+package = "D²PAK"
+conditions = "D²PAK / D²PAK/A"
+basis = "DocID6739 Rev 38, Table 2 (p.7), thermal data"
+
+[models.coverage]
+implements = ["fixed_output_voltage", "dropout_headroom", "quiescent_current", "output_capacitor_minimum"]
+missing = ["current_limit_foldback", "thermal_limit", "line_load_regulation", "transient_response", "capacitor_esr_stability"]
