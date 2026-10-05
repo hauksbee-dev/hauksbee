@@ -20,7 +20,7 @@ pub fn demo_firmware() -> PathBuf {
 
 /// A minimal synthetic `.kicad_pcb` (KiCad-5 `module` style, bare atoms):
 ///
-/// - U1: `ATmega328P` (TQFP-32 pad map), VCC/AVCC on +5V, GND pads on GND,
+/// - U1: `ATmega328P` (DIP-28 pad map), VCC/AVCC on +5V, GND pads on GND,
 ///   PB5 (pad 19) on net "D13", ADC0 (pad 23) on net "ADC0".
 /// - R1 330Ω from D13 to `LED_A`.
 /// - D1 `RED_LED` from `LED_A` (anode) to GND (cathode).
@@ -35,7 +35,7 @@ pub const SYNTH_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.
   (net 4 "LED_A")
   (net 5 "ADC0")
 
-  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
+  (module Package_DIP:DIP-28_W7.62mm (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
     (fp_text value ATmega328P (at 0 2) (layer F.Fab))

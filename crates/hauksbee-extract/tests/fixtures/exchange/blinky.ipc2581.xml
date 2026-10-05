@@ -58,8 +58,8 @@
         <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="RED_LED"/>
       </Characteristics>
     </BomItem>
-    <BomItem OEMDesignNumberRef="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" quantity="1" pinCount="6" category="ELECTRICAL">
-      <RefDes name="CMP:U1" packageRef="PKG:TQFP-32_7x7mm_P0.8mm" populate="true" layerRef="LAYER:F.Cu"/>
+    <BomItem OEMDesignNumberRef="REF:Package_DIP_DIP-28_W7.62mm_ATmega328P" quantity="1" pinCount="6" category="ELECTRICAL">
+      <RefDes name="CMP:U1" packageRef="PKG:DIP-28_W7.62mm" populate="true" layerRef="LAYER:F.Cu"/>
       <Characteristics category="ELECTRICAL">
         <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="ATmega328P"/>
       </Characteristics>
@@ -232,7 +232,7 @@
             <StandardPrimitiveRef id="CIRCLE_1"/>
           </Pin>
         </Package>
-        <Package name="KI:TQFP-32_7x7mm_P0.8mm_2" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
+        <Package name="KI:DIP-28_W7.62mm_2" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
           <Outline>
             <Polygon>
               <PolyBegin x="-3.50" y="0.50"/>
@@ -279,7 +279,7 @@
         <Component refDes="CMP:D1" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" part="REF:LED_THT_LED_D5.0mm_RED_LED" layerRef="LAYER:F.Cu" mountType="THMT">
           <Location x="4.9880" y="-7.2040"/>
         </Component>
-        <Component refDes="CMP:U1" packageRef="KI:TQFP-32_7x7mm_P0.8mm_2" part="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" layerRef="LAYER:F.Cu" mountType="THMT">
+        <Component refDes="CMP:U1" packageRef="KI:DIP-28_W7.62mm_2" part="REF:Package_DIP_DIP-28_W7.62mm_ATmega328P" layerRef="LAYER:F.Cu" mountType="THMT">
           <Location x="-4.0560" y="-2.9130"/>
         </Component>
         <Component refDes="CMP:R1" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" part="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_330" layerRef="LAYER:F.Cu" mountType="THMT">
@@ -560,7 +560,7 @@
     <AvlHeader title="BOM" source="KiCad" author="OWNER" datetime="2026-08-04T13:28:23" version="1"/>
     <AvlItem OEMDesignNumber="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_10k"/>
     <AvlItem OEMDesignNumber="REF:LED_THT_LED_D5.0mm_RED_LED"/>
-    <AvlItem OEMDesignNumber="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P"/>
+    <AvlItem OEMDesignNumber="REF:Package_DIP_DIP-28_W7.62mm_ATmega328P"/>
     <AvlItem OEMDesignNumber="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_330"/>
   </Avl>
 </IPC-2581>

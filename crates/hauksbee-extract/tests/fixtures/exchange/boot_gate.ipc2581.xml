@@ -57,8 +57,8 @@
     <BomHeader revision="1.0" assembly="KI:boot_gate">
       <StepRef name="BOARD:boot_gate"/>
     </BomHeader>
-    <BomItem OEMDesignNumberRef="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" quantity="1" pinCount="5" category="ELECTRICAL">
-      <RefDes name="CMP:U1" packageRef="PKG:TQFP-32_7x7mm_P0.8mm" populate="true" layerRef="LAYER:F.Cu"/>
+    <BomItem OEMDesignNumberRef="REF:Package_DIP_DIP-28_W7.62mm_ATmega328P" quantity="1" pinCount="5" category="ELECTRICAL">
+      <RefDes name="CMP:U1" packageRef="PKG:DIP-28_W7.62mm" populate="true" layerRef="LAYER:F.Cu"/>
       <Characteristics category="ELECTRICAL">
         <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="ATmega328P"/>
       </Characteristics>
@@ -242,7 +242,7 @@
           </PadstackPadDef>
         </PadStackDef>
         <Datum x="0.0" y="0.0"/>
-        <Package name="KI:TQFP-32_7x7mm_P0.8mm_1" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
+        <Package name="KI:DIP-28_W7.62mm_1" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
           <Outline>
             <Polygon>
               <PolyBegin x="-3.7620" y="0.7620"/>
@@ -334,7 +334,7 @@
             <StandardPrimitiveRef id="CIRCLE_2"/>
           </Pin>
         </Package>
-        <Component refDes="CMP:U1" packageRef="KI:TQFP-32_7x7mm_P0.8mm_1" part="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" layerRef="LAYER:F.Cu" mountType="THMT">
+        <Component refDes="CMP:U1" packageRef="KI:DIP-28_W7.62mm_1" part="REF:Package_DIP_DIP-28_W7.62mm_ATmega328P" layerRef="LAYER:F.Cu" mountType="THMT">
           <Location x="100.0" y="-100.0"/>
         </Component>
         <Component refDes="CMP:Q1" packageRef="KI:SOT-23_2" part="REF:Package_TO_SOT_SMD_SOT-23_2N7002" layerRef="LAYER:F.Cu" mountType="THMT">
@@ -987,7 +987,7 @@
   <Avl name="Primary_Vendor_List">
     <AvlHeader title="BOM" source="KiCad" author="OWNER" datetime="2026-08-04T13:28:28" version="1"/>
     <AvlItem OEMDesignNumber="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_1k"/>
-    <AvlItem OEMDesignNumber="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P"/>
+    <AvlItem OEMDesignNumber="REF:Package_DIP_DIP-28_W7.62mm_ATmega328P"/>
     <AvlItem OEMDesignNumber="REF:Package_TO_SOT_SMD_SOT-23_2N7002"/>
   </Avl>
 </IPC-2581>

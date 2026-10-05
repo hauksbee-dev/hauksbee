@@ -68,7 +68,7 @@ for i in range(1, 33):
     else:
         dx, dy, w, h = 2.8 - 0.8 * (i - 25), -3.9, 0.5, 1.2
     mcu_pads.append(smd(i, round(dx, 3), round(dy, 3), w, h, MCU_NETS.get(i)))
-comps.append(("U1", "ATmega328P", "Package_QFP:TQFP-32_7x7mm_P0.8mm", 30, 20, 0, "smd", mcu_pads))
+comps.append(("U1", "ATmega328P", "Package_DIP:DIP-28_W7.62mm", 30, 20, 0, "smd", mcu_pads))
 two_pad_0805("C3", "100n", 22, 17, "+3V3", "GND", "Capacitor_SMD:C_0603_1608Metric")
 two_pad_0805("C4", "100n", 37, 20.4, "+3V3", "GND", "Capacitor_SMD:C_0603_1608Metric")
 two_pad_0805("R8", "10k", 23, 25, "+3V3", "RESET")

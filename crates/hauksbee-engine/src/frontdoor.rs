@@ -3108,7 +3108,7 @@ fn main {
   (net 1 "+5V")
   (net 2 "GND")
   (net 3 "D13")
-  (footprint "Package_QFP:TQFP-32_7x7mm_P0.8mm" (layer "F.Cu") (at 0 0)
+  (footprint "Package_DIP:DIP-28_W7.62mm" (layer "F.Cu") (at 0 0)
     (property "Reference" "U1" (at 0 0))
     (property "Value" "ATmega328P" (at 0 0))
     (pad "7" smd rect (at -3 0) (size 0.5 0.5) (layers "F.Cu") (net 1))

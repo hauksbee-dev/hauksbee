@@ -4,7 +4,7 @@
   (net 2 "+5V")
   (net 3 "GATE_CTRL")
   (net 4 "LOAD_DRAIN")
-  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
+  (module Package_DIP:DIP-28_W7.62mm (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
     (fp_text value ATmega328P (at 0 2) (layer F.Fab))

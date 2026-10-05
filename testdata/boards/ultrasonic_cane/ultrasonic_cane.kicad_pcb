@@ -87,7 +87,7 @@
     (pad "2" smd roundrect (at 0.95 1) (size 0.6 1.0) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "GND"))
     (pad "3" smd roundrect (at 0 -1) (size 0.6 1.0) (layers "F.Cu" "F.Paste" "F.Mask") (net 6 "MOTOR_N"))
   )
-  (footprint "Package_QFP:TQFP-32_7x7mm_P0.8mm" (layer "F.Cu") (at 30 20 0) (attr smd)
+  (footprint "Package_DIP:DIP-28_W7.62mm" (layer "F.Cu") (at 30 20 0) (attr smd)
     (property "Reference" "U1" (at 0 -2 0) (layer "F.SilkS"))
     (property "Value" "ATmega328P" (at 0 2 0) (layer "F.Fab"))
     (pad "1" smd roundrect (at -3.9 -2.8) (size 1.2 0.5) (layers "F.Cu" "F.Paste" "F.Mask") (net 18 "RESET"))

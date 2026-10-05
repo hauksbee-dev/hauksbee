@@ -2233,6 +2233,61 @@ conditions = "2x2 DFN, EIA/JEDEC JESD51-7"
 package = "DFN-6"
 basis = "Microchip MCP1700 DS20001826F, Temperature Specifications, Thermal Package Resistance, Thermal Resistance, 2x2 DFN, θJA typ"
 
+# ── MCP1702-3302E/CB ─────────────────────────────────────────────────────────
+# Microchip 250 mA, 2 uA-IQ CMOS LDO with a 13.2 V input range, 3.3 V fixed.
+# Source: Microchip MCP1702 datasheet DS22008E (2010): Features p.1, Absolute
+# Maximum Ratings and DC Characteristics p.2-3, Temperature Specifications p.4,
+# Table 3-1 Pin Function Table p.11.
+# Only the 3.3 V code (3302) in the SOT-23A package (/CB) is matched: the pin
+# order differs per package (SOT-89 and TO-92 put VIN on pin 2), so a value
+# with no package code is left unbound rather than guessed. Like the MCP1700
+# it is a three-terminal part with no enable pin. The OpenEnergyMonitor emonTx
+# V3.4 makes its 3.3V rail with it as U$6.
+[[models]]
+id = "mcp1702_3v3_sot23a"
+kind = "vreg"
+description = "MCP1702-3302 CMOS LDO, 250mA, 3.3V fixed, 2uA IQ, 13.2V input, SOT-23A"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22008E.pdf"
+title = "Microchip MCP1702 250 mA Low Quiescent Current LDO Regulator, DS22008E"
+locator = "Absolute Maximum Ratings p.2; DC Characteristics p.2-3; Temperature Specifications p.4; Table 3-1 p.11"
+sha256 = "eebbb32821ad97abd2476a321cae17d405442889940d2c70bd159563c4772ea9"
+
+[models.match]
+value_re = "(?i)^MCP1702T?-3302E?/CB$"
+
+[models.params]
+vout      = 3.3      # VR +-0.4% typ, +-3.0% max over TJ -40 to 125 C
+dropout_v = 0.725    # max @ IL = 250 mA, 3.3 V <= VR < 5.0 V
+# Source: DS22008E Features: stable with 1.0 uF to 22 uF output capacitor.
+cout_min_f = 1.0e-6
+iq_a      = 2.0e-6   # Iq typ @ IL = 0 (5 uA max)
+
+[models.pins]
+# Table 3-1, SOT-23A.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.25         # 250 mA for VR >= 2.5 V
+max_voltage_v = 14.5         # VDD absolute maximum
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 336.0     # 3L-SOT-23A, JESD51-7 4-layer FR-4
+theta_jc_c_per_w = 110.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.7
+max_v = 13.2
+abs_max_v = 14.5
+basis = "Microchip MCP1702 DS22008E, DC Characteristics, Input Operating Voltage VIN 2.7 V to 13.2 V; Absolute Maximum Ratings VDD +14.5 V"
+
 # ── NCP1117ST50T3G ───────────────────────────────────────────────────────────
 # onsemi 1 A LDO, SOT-223, 5.0 V fixed. The 5 V regulator on the Arduino Uno R3
 # official board and the Adafruit Metro M4.

@@ -381,7 +381,7 @@ fn pin_overcurrent_fires_on_driver_leg_current() {
             reference: "U1:PB5".into(),
             device: vd,
             kind: ComponentKind::Mcu,
-            footprint: "Package_QFP:TQFP-32_7x7mm_P0.8mm".into(),
+            footprint: "Package_DIP:DIP-28_W7.62mm".into(),
             ratings: Ratings {
                 max_pin_current_a: Some(0.04), // ATmega-class 40 mA abs max
                 ..Default::default()

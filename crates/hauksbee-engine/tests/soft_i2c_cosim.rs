@@ -42,7 +42,7 @@ const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 3 "SOFT_SCL")
   (net 4 "SOFT_SDA")
 
-  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
+  (module Package_DIP:DIP-28_W7.62mm (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
     (fp_text value ATmega328P (at 0 2) (layer F.Fab))

@@ -17,7 +17,7 @@ use hauksbee_engine::binder::bind_board;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
-/// Bare `ATmega328P` (TQFP-32 pad map) plus one 74HC595:
+/// Bare `ATmega328P` (DIP-28 pad map) plus one 74HC595:
 ///   - PC2 (pad 25) -> net `"OE_S"`   -> 595 ~OE  (pad 13)   : digital control
 ///   - PC3 (pad 26) -> net `"SRCLR_S"`-> 595 ~MR  (pad 10)   : digital control
 ///   - PC0 (pad 23) -> net "AIN0"   -> 10k/10k divider      : genuine analog
@@ -34,7 +34,7 @@ const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 7 "MOSI")
   (net 8 "QA")
 
-  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
+  (module Package_DIP:DIP-28_W7.62mm (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
     (fp_text value ATmega328P (at 0 2) (layer F.Fab))
