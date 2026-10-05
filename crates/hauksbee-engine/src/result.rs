@@ -2839,6 +2839,18 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::FloatingInput => {
             "Tie each unused CMOS input high or low (directly or through a resistor), or drive it; a no-connect flag does not define its level."
         }
+        LintCheck::SiblingMismatch => {
+            "Compare the flagged part pin by pin with a neighbouring copy of the cell and correct the schematic (and footprint) so it matches."
+        }
+        LintCheck::UnlimitedBaseDrive => {
+            "Add a series resistor (a few kilohms) between the driver and the transistor base."
+        }
+        LintCheck::CapNoDcPath => {
+            "Add a bias or bleed resistor from the node to a rail or ground, or remove the capacitor."
+        }
+        LintCheck::FloatingGate => {
+            "Add a pull-up or pull-down resistor (about 100 kilohms) on the gate or select, to the level that is safe at power-up."
+        }
         LintCheck::I2cBusLoading => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
         }

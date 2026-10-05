@@ -1258,6 +1258,26 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A CMOS logic input has no level of its own: left unconnected it drifts with leakage and nearby signals, so the chip reads random values, and an input resting halfway between the rails makes the chip draw extra current. A no-connect mark in the schematic does not change that unless the datasheet says the pin has an internal pull resistor.".to_string(),
                 "Tie each unused input to ground or to the chip's supply (directly, or through a resistor), or drive it from an output.".to_string(),
             ),
+            LintCheck::SiblingMismatch => (
+                format!("{parts} is wired differently from the identical copies of its cell. {}", f.message),
+                "This part is one of many copies of the same sub-circuit, and every other copy is wired the same way except this one. A copy that deviates is rarely a design choice: it is usually a swapped pair of pins, a mislabelled net or a mirrored footprint in a single place, and each part looks fine when checked on its own.".to_string(),
+                "Compare it pin by pin with a neighbouring copy and correct the schematic (and the footprint if the pads are mirrored). If the difference is deliberate, say so in a note next to it.".to_string(),
+            ),
+            LintCheck::UnlimitedBaseDrive => (
+                format!("The base of {parts} is driven with nothing to limit the current. {}", f.message),
+                "A transistor's base-emitter junction is a diode. Held a volt or more above the emitter with no resistor in series, it conducts whatever current the driver can supply, which overheats the transistor and pulls the supply or the driving chip down with it.".to_string(),
+                "Put a resistor in series with the base (a few kilohms for a small-signal transistor) so the base current is set by the resistor.".to_string(),
+            ),
+            LintCheck::CapNoDcPath => (
+                format!("A node on {parts} has no path for DC. {}", f.message),
+                "A capacitor passes no DC, and a gate or amplifier input draws almost none. A node touched by nothing else has no defined voltage: leakage and the first power-up edge decide it, and charge stays on it with nowhere to go.".to_string(),
+                "Add a resistor from the node to the supply or to ground (a bias or bleed resistor), or take the capacitor out if it is not needed.".to_string(),
+            ),
+            LintCheck::FloatingGate => (
+                format!("A gate or select input on {parts} has no pull resistor. {}", f.message),
+                "A microcontroller pin is high-impedance while it resets and boots, and a connector pin is open when the cable is out. An input driven only from such a pin has no level then, so a transistor can turn on or a switch can pick the wrong side for as long as the pin is undefined.".to_string(),
+                "Add a pull-down or pull-up resistor (about 100 kilohms) to the level that is safe when the part is off.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),

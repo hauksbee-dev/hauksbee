@@ -161,6 +161,26 @@ pub enum LintCheck {
     /// cathode (directly or through one resistor each): reverse-biased in every
     /// state, it never lights.
     LedReversed,
+    /// One instance of a repeated cell (eight or more identical parts sharing
+    /// one dominant wiring signature) wired differently from its twins on two
+    /// or more pads: a swapped pair or a mislabelled net in one copy. Produced
+    /// by the engine-layer `siblings` check.
+    SiblingMismatch,
+    /// A BJT whose base is on the same node as a low-impedance driver (a
+    /// supply rail, an analog-switch channel to a rail, a logic or MCU output)
+    /// while its emitter is on a rail, with no series resistance: the junction
+    /// conducts whatever the driver can supply. Produced by the engine-layer
+    /// `node_drive` check.
+    UnlimitedBaseDrive,
+    /// A node whose only connections are capacitor plates and high-impedance
+    /// inputs: nothing sets or drains its DC level. Produced by the
+    /// engine-layer `node_drive` check.
+    CapNoDcPath,
+    /// A MOSFET gate or analog-switch select held only by MCU pins, connector
+    /// pins and other gates, with no pull resistor: undefined while the MCU is
+    /// in reset or the cable is out. Produced by the engine-layer `node_drive`
+    /// check.
+    FloatingGate,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -185,7 +205,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 29] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -211,6 +231,10 @@ impl LintCheck {
         Self::GroundIsland,
         Self::UnwiredConnector,
         Self::LedReversed,
+        Self::SiblingMismatch,
+        Self::UnlimitedBaseDrive,
+        Self::CapNoDcPath,
+        Self::FloatingGate,
     ];
 
     #[must_use]
@@ -241,6 +265,10 @@ impl LintCheck {
             Self::GroundIsland => "ground_island",
             Self::UnwiredConnector => "unwired_connector",
             Self::LedReversed => "led_reversed",
+            Self::SiblingMismatch => "sibling_mismatch",
+            Self::UnlimitedBaseDrive => "unlimited_base_drive",
+            Self::CapNoDcPath => "cap_no_dc_path",
+            Self::FloatingGate => "floating_gate",
         }
     }
 }

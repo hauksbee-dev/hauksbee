@@ -50,6 +50,16 @@
 //!   reported as a non-gating note).
 //! - [`floating_inputs`]: a CMOS logic input left with no driver, pull or
 //!   other connection, no-connect flag or not.
+//! - [`siblings`]: one instance of a repeated cell (a part group of eight or
+//!   more with one dominant wiring signature) wired differently from its
+//!   twins on two or more pads, or a minority of transistor units whose
+//!   base, collector and emitter are a terminal exchange of the majority's
+//!   wiring: the swapped-pin outlier. Run from [`node_drive`] on its index.
+//! - [`node_drive`]: three node-level DC faults read from pin roles: a BJT
+//!   base driven straight from a rail, switch or output with its emitter on a
+//!   rail; a node held only by capacitor plates and high-impedance inputs;
+//!   and a MOSFET gate or analog-switch select held only by MCU or connector
+//!   pins with no pull.
 //! - [`dc_stress`]: every card rating (junction, channel and driver-pin
 //!   current, resistor wattage, junction temperature) judged at the board's
 //!   solved DC operating point by the co-simulation's own stress monitor.
@@ -68,9 +78,11 @@ pub mod floating_inputs;
 pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
+pub mod node_drive;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
 pub mod ripple;
+pub mod siblings;
 pub mod straps;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -160,6 +172,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(floating_inputs::floating_input_lint(board, lib).findings);
+    report
+        .findings
+        .extend(node_drive::node_drive_lint(board, lib).findings);
     report
         .findings
         .extend(dc_stress::dc_stress_findings(bound).findings);
