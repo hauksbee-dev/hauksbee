@@ -299,6 +299,31 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             by_name.entry(name).or_insert(id);
         }
     }
+    // KiCad 10 drops the net table and cites every net by name alone, so a
+    // track's net would resolve to nothing and the whole board would read as
+    // copper-free. Give each name-only net a stable id past the declared ones.
+    let mut next_id = names.keys().copied().max().unwrap_or(0) + 1;
+    for item in root
+        .find_all("segment")
+        .chain(root.find_all("arc"))
+        .chain(root.find_all("zone"))
+    {
+        let Some(net) = item.find("net").filter(|n| n.arg_i64(0).is_none()) else {
+            continue;
+        };
+        let Some(name) = net
+            .arg_value(0)
+            .map(|n| crate::netname::unescape_net_name(&n))
+        else {
+            continue;
+        };
+        if name.is_empty() || by_name.contains_key(&name) {
+            continue;
+        }
+        names.insert(next_id, name.clone());
+        by_name.insert(name, next_id);
+        next_id += 1;
+    }
 
     let mut tally = WidthTally::default();
     let mut zone_count: HashMap<i64, usize> = HashMap::new();
