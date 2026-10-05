@@ -266,7 +266,7 @@ fn new_cards_do_not_bind_other_packages_or_family_members() {
 
 /// Buck and SPI NOR pad maps against the pin tables: TI SLVSD89B (TLV62568 SOT23-5),
 /// Silergy `AN_SY8089` (SOT23-5), TI SNVSA24/SNVSAC1 (LMR16006 SOT-23-6), TI SNVS077J
-/// (LM2677 TO-263-7), Winbond W25Q32JV 3.3 / W25Q80DV 3.4, GigaDevice GD25Q16C.
+/// (LM2677 TO-263-7), Winbond `W25Q32JV` 3.3 / `W25Q80DV` 3.4, `GigaDevice` `GD25Q16C`.
 /// An adjustable buck regulates FB at its reference; a fixed option senses VOUT on FB.
 #[test]
 fn buck_and_spi_nor_cards_follow_the_datasheets() {
