@@ -1281,7 +1281,7 @@ implements = ["pin_roles", "fixed_input_thresholds", "supply_current", "open_dra
 missing = ["smart_reset_timer", "recovery_timer", "low_voltage_input_ignore", "overvoltage_test_mode", "push_pull_variants"]
 
 # ═════════════════════════════════════════════════════════════════════════════
-# THE VOLTAGE DETECTORS AND THE LED DRIVER DELIBERATELY LEFT UNRESOLVED.
+# THE VOLTAGE DETECTORS AND THE LED DRIVERS DELIBERATELY LEFT UNRESOLVED.
 #
 # NCP303LSN27T1G (onsemi, SOT-23-5) and BD5230G (Rohm, SSOP5) are voltage
 # detectors, and FAN5622SX (onsemi, SuperSOT23-6) is a constant-current LED
@@ -1324,6 +1324,30 @@ missing = ["smart_reset_timer", "recovery_timer", "low_voltage_input_ignore", "o
 #     IIN 0.4 mA typ (0.8 max) at VIN=3.6 V with ILED=0, UVLO 2.70 V rising /
 #     2.30 falling, TSD 150 C typ with 20 C hysteresis, theta_JA 235 C/W.
 #     Source: Fairchild/onsemi FAN5622/24/26 Rev. 1.0.3, cover dated July 2013.
+#
+#   TPS61169 (TI, DCK SC70-5, NOT SOT-23-5): an asynchronous boost WLED driver
+#     whose regulated quantity is the LED current, FB held at VREF = 204 mV
+#     across the board's RSET (204 mV is a current-sense reference, never an
+#     output voltage). It has NO output pin: the output node is the cathode of
+#     the board's external Schottky, and the IC's pins are SW, GND, FB, CTRL and
+#     VIN. `[models.behavioral.converter]` needs `out_pin` to be an IC pin, and
+#     the only candidate, SW, is tied to VIN through the boost inductor, which
+#     the averaged loop sees as a DC short (`regulated_node` even follows that
+#     inductor back to VIN). Injecting the averaged current into SW would push
+#     it into the input rail, the diode would never conduct, and FB would never
+#     reach 204 mV, so the card would simulate a saturated converter heating the
+#     input rail. It waits for a converter output that can name an external
+#     node (the rectifier cathode). Recorded, SNVSA40B (October 2014, revised
+#     June 2024), Sections 4, 5.1, 5.3-5.5 and 6.3.5: pins 1 SW, 2 GND, 3 FB,
+#     4 CTRL, 5 VIN; VIN 2.7-5.5 V (abs max 7 V on VIN/CTRL/FB, 40 V on SW);
+#     VOUT VIN to 38 V; VREF 188/204/220 mV at 100% duty; VFB = duty x 204 mV;
+#     IQ 0.3 typ / 0.45 max mA switching; ISD 1 typ / 2 max uA; UVLO 2.3 V
+#     falling max / 2.6 V rising max, 200 mV hysteresis; CTRL VH 1.2 V min,
+#     VL 0.4 V max, 300 kOhm pull-down, 2.5 ms low to shutdown; RDS(on)
+#     0.35/0.7 Ohm; fSW 0.75/1.2/1.5 MHz; ILIM 1.2/1.8/2.4 A; OVP 36/37.5/39 V;
+#     theta_JA 263.8 C/W; TSD 160 C, 15 C hysteresis. PDF sha256
+#     7d0b8ace2459a9fd22fe7145086cbad4ccb3bb43219247459313fcba75230151
+#     (https://www.ti.com/lit/ds/symlink/tps61169.pdf).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAX6070AAUT18: Maxim/ADI low-noise precision SERIES voltage reference, 1.8 V,
