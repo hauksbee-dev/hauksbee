@@ -644,9 +644,11 @@ pub fn rated_paths(
     )
 }
 
-/// Every device touching each node (in circuit order), so a path's carriers
-/// are found among its nodes' neighbours instead of by a scan of the whole
-/// circuit per path: on an 800-part board the scan made binding quadratic.
+/// Every device touching each node, in circuit order.
+///
+/// A path's carriers are found among its nodes' neighbours instead of by a
+/// scan of the whole circuit per path: on an 800-part board the scan made
+/// binding quadratic.
 #[derive(Debug, Default)]
 pub struct DevicesByNode(HashMap<NodeId, Vec<DeviceId>>);
 
@@ -757,6 +759,10 @@ struct DeviceTrack {
 #[derive(Debug, Clone)]
 pub struct StressMonitor {
     metas: Vec<DeviceMeta>,
+    /// Each meta's package ([`strip_unit_suffix`] of its reference) as an
+    /// index, fixed with the metas, so pooling dissipation per chunk needs no
+    /// string work.
+    package: Vec<usize>,
     tracks: Vec<DeviceTrack>,
     /// Supply-rail absolute-maximum watches for MCU/logic packages (no analog
     /// device to meter; the rating is checked against the rail node directly).
@@ -954,10 +960,18 @@ impl StressMonitor {
     #[must_use]
     pub fn new(metas: Vec<DeviceMeta>) -> Self {
         let n = metas.len();
+        let mut packages: HashMap<&str, usize> = HashMap::new();
+        let package = (metas.iter())
+            .map(|m| {
+                let next = packages.len();
+                *packages.entry(strip_unit_suffix(&m.reference)).or_insert(next)
+            })
+            .collect();
         Self {
             limits: (metas.iter())
                 .map(|m| (m.power_rating_w(), m.theta_ja_c_per_w(), m.tj_max_c()))
                 .collect(),
+            package,
             metas,
             tracks: vec![DeviceTrack::default(); n],
             supply_watches: Vec::new(),
@@ -1426,8 +1440,8 @@ impl StressMonitor {
                 Some(op) => op.power_w,
             })
             .collect();
-        let mut package_power: HashMap<String, f64> = HashMap::new();
-        for (i, meta) in self.metas.iter().enumerate() {
+        let mut package_power = vec![0.0; self.metas.len()];
+        for i in 0..self.metas.len() {
             let heat_w = match (&ops[i], self.chunk_energy_j.get(i)) {
                 (Some(_), Some(&e)) if thermal_elapsed > 0.0 => {
                     self.run[i].heat_w(thermal_elapsed, e)
@@ -1435,9 +1449,7 @@ impl StressMonitor {
                 _ => unit_avg_w[i],
             };
             if heat_w > 0.0 {
-                *package_power
-                    .entry(strip_unit_suffix(&meta.reference).to_string())
-                    .or_insert(0.0) += heat_w;
+                package_power[self.package[i]] += heat_w;
             }
         }
         // The deposit covers exactly the chunk this evaluate closes; drain it
@@ -1466,10 +1478,7 @@ impl StressMonitor {
             // sub-chunk PWM part's Overpower verdict depend on pulse phase.
             let (peak_a, own) = (op.current_a, (self.run[i].lagged_a, unit_avg_w[i]));
             let (mut rated_w, theta_ja, tj_max) = self.limits[i];
-            let package_w = package_power
-                .get(strip_unit_suffix(&meta.reference))
-                .copied()
-                .unwrap_or(0.0);
+            let package_w = package_power[self.package[i]];
             // A card printing its current or power rating at several
             // temperatures is judged on the row for where the part sits now,
             // and one rating paths on the current and power of each.
@@ -1505,10 +1514,18 @@ impl StressMonitor {
                 c.is_some_and(|(v, l)| v > l * (1.0 + OVER_LIMIT_NOISE_MARGIN))
             };
             let flips = |(a, w)| (over(a) && !over(now.0)) || (over(w) && !over(now.1));
+            // Each flag only ever latches on, and nothing can flip once both
+            // limits are already over, so a probe is read (a full derating
+            // pass) only while its answer could still change the flag.
+            let can_flip = !(over(now.0) && over(now.1));
+            let (hot_seen, theta_seen) = (self.run[i].hot_flip, self.run[i].theta_flip);
             let hot = (meta.derating.hottest()).map(|h| h.max(HOT_PROBE_AMBIENT_C));
-            let hot_flip = hot.is_some_and(|h| !self.ambient_given && flips(read(theta_ja, h)));
+            let hot_flip = can_flip
+                && !hot_seen
+                && hot.is_some_and(|h| !self.ambient_given && flips(read(theta_ja, h)));
             let guessed = meta.ratings.theta_ja_c_per_w.is_none();
-            let theta_flip = guessed && flips(read(2.0 * theta_ja, self.ambient_c));
+            let theta_flip =
+                can_flip && !theta_seen && guessed && flips(read(2.0 * theta_ja, self.ambient_c));
             let run = &mut self.run[i];
             run.lag_over_limit |= meta.ratings.max_current_a.is_some_and(|c| op.current_a > c);
             if let Some(c) = meta

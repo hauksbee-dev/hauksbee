@@ -201,7 +201,7 @@ impl DynCsc {
 impl Symbolic {
     fn analyze(m: &SparseMatrix) -> Self {
         let n = m.n;
-        let perm = min_degree_order(&ordering_adjacency(m), n);
+        let perm = cached_min_degree_order(ordering_adjacency(m), n);
 
         // Build the fixed CSC structure once: column pointers and row indices
         // come straight from the matrix pattern; values are refreshed later.
@@ -866,6 +866,45 @@ fn ordering_adjacency(m: &SparseMatrix) -> Vec<Vec<usize>> {
         }
     }
     adj
+}
+
+/// Patterns whose ordering was computed most recently, newest last.
+const ORDER_CACHE_LEN: usize = 8;
+
+/// [`min_degree_order`], remembered per pattern.
+///
+/// A co-simulation builds a fresh workspace, and so a fresh analysis, for every
+/// chunk of one unchanging circuit; on a large board the ordering's dense
+/// trailing eliminations dominate that analysis. The order is a pure function
+/// of the adjacency, so an identical adjacency (compared in full, not just by
+/// hash) reuses it exactly.
+fn cached_min_degree_order(adj: Vec<Vec<usize>>, n: usize) -> Vec<usize> {
+    type Entry = (u64, Vec<Vec<usize>>, Vec<usize>);
+    static CACHE: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        adj.hash(&mut h);
+        h.finish()
+    };
+    let hit = |cache: &mut Vec<Entry>| {
+        let at = cache.iter().position(|(h, a, _)| *h == hash && *a == adj)?;
+        let entry = cache.remove(at);
+        let perm = entry.2.clone();
+        cache.push(entry);
+        Some(perm)
+    };
+    if let Some(perm) = CACHE.lock().ok().and_then(|mut c| hit(&mut c)) {
+        return perm;
+    }
+    let perm = min_degree_order(&adj, n);
+    if let Ok(mut cache) = CACHE.lock() {
+        if cache.len() >= ORDER_CACHE_LEN {
+            cache.remove(0);
+        }
+        cache.push((hash, adj, perm.clone()));
+    }
+    perm
 }
 
 /// Minimum-degree ordering over a symmetric adjacency: a cheap Markowitz proxy
