@@ -1817,7 +1817,7 @@ impl BoardEvidence {
         // Some map citing the assumption has a model on its path named (by
         // reference or display reference) for one of the assumption's parts.
         (surfaces.maps_citing.get(assumption.id()).into_iter().flatten())
-            .any(|&m| refs.iter().any(|r| surfaces.names[m].contains(r.as_str())))
+            .any(|&m| refs.iter().any(|r| surfaces.names(m).contains(r.as_str())))
     }
 
     /// Add the canonical evidence fields to a legacy structured report without
@@ -1848,19 +1848,19 @@ impl BoardEvidence {
     }
 }
 
-/// Which evidence maps cite each assumption, and every name (reference and
-/// display reference) of the models on each map's path: built once per
-/// render, since asking every map of every assumption was quadratic in the
-/// part count on a large board.
+/// Which evidence maps cite each assumption and, built on first ask, every
+/// name (reference and display reference) of the models on a map's path:
+/// asking every map of every assumption was quadratic in the part count on a
+/// large board.
 struct SurfaceIndex<'a> {
+    evidence: &'a BoardEvidence,
     maps_citing: HashMap<&'a AssumptionId, Vec<usize>>,
-    names: Vec<HashSet<&'a str>>,
+    names: Vec<std::cell::OnceCell<HashSet<&'a str>>>,
 }
 
 impl<'a> SurfaceIndex<'a> {
     fn new(evidence: &'a BoardEvidence) -> Self {
         let mut maps_citing: HashMap<&AssumptionId, Vec<usize>> = HashMap::new();
-        let mut names = Vec::with_capacity(evidence.maps.len());
         for (m, map) in evidence.maps.iter().enumerate() {
             for id in map.assumptions() {
                 let citing = maps_citing.entry(id).or_default();
@@ -1868,13 +1868,23 @@ impl<'a> SurfaceIndex<'a> {
                     citing.push(m);
                 }
             }
-            let display = |model: &ModelOnPath| {
+        }
+        let names = evidence.maps.iter().map(|_| std::cell::OnceCell::new()).collect();
+        Self { evidence, maps_citing, names }
+    }
+
+    /// The names of the models on map `m`'s path.
+    fn names(&self, m: usize) -> &HashSet<&'a str> {
+        self.names[m].get_or_init(|| {
+            let evidence = self.evidence;
+            let display = |model: &'a ModelOnPath| {
                 (evidence.display_ref_by_subject.get(model.subject())).map(String::as_str)
             };
-            let on_path = map.models().iter();
-            names.push(on_path.flat_map(|model| [Some(model.reference()), display(model)]).flatten().collect());
-        }
-        Self { maps_citing, names }
+            (evidence.maps[m].models().iter())
+                .flat_map(|model| [Some(model.reference()), display(model)])
+                .flatten()
+                .collect()
+        })
     }
 }
 
