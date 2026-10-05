@@ -117,6 +117,19 @@ fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64,
             ranges.insert(net_id, range);
         }
     }
+    // A fitted module's own supply pins (a dev board's 5V/3V3 header), unless
+    // a regulator on the board already defines the net.
+    for (comp, model) in super::resolved_components(board, lib) {
+        for out in &model.supply_outputs {
+            if let Some(net_id) = role_net_id(comp, &model, &out.role) {
+                let range = RailRange {
+                    min_v: out.min,
+                    max_v: out.max,
+                };
+                ranges.entry(net_id).or_insert(range);
+            }
+        }
+    }
     ranges
 }
 
@@ -754,6 +767,38 @@ min_v = 3.2
 max_v = 3.6
 basis = "Recommended Operating Conditions, Table 1, VDD row"
 "#;
+
+    /// A fitted Arduino Nano's 5V and 3V3 header pins source their rails per
+    /// the card (USB/VIN through the module's own parts), so a carrier rail
+    /// fed only from them has a range instead of abstaining; a DNP Nano does
+    /// not.
+    #[test]
+    fn a_fitted_modules_supply_pins_define_the_rails_they_feed() {
+        let nets = &[(1, "GND"), (2, "+5P"), (3, "MOD_3V3"), (4, "VREG")];
+        let nano = |dnp: bool| Component {
+            footprint: "Module:Arduino_Nano".into(),
+            dnp,
+            ..part(
+                "A101",
+                "Arduino Nano",
+                vec![pin("4", 1), pin("27", 2), pin("17", 3)],
+            )
+        };
+        let lib = ModelLibrary::builtin();
+        let solved = BTreeMap::new();
+        let known = |b: &ExtractedBoard, id| match RailResolver::new(b, &lib, &solved).range(id) {
+            RailKnowledge::Known(r) => Some((r.min_v, r.max_v)),
+            _ => None,
+        };
+        let fitted = board(nets, vec![nano(false)]);
+        assert_eq!(known(&fitted, 2), Some((4.365, 5.25)), "5V from USB/VIN");
+        assert_eq!(known(&fitted, 3), Some((3.0, 3.6)), "3V3 from the FT232RL");
+        assert_eq!(
+            known(&board(nets, vec![nano(true)]), 2),
+            None,
+            "a DNP module sources nothing"
+        );
+    }
 
     #[test]
     fn named_rail_uses_full_plus_minus_five_percent_range() {

@@ -531,6 +531,22 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             format!("[models.levels] '{key}' must be vih, vil, voh or vol, with two or more ascending [vcc, volts] points")
         });
     }
+    for out in &entry.supply_outputs {
+        let r = &out.role;
+        p.require(entry.pins.values().any(|v| v == r), || {
+            format!("[[models.supply_outputs]] role '{r}' is not a role in [models.pins]")
+        });
+        let ordered = out.min.is_finite()
+            && out.max.is_finite()
+            && out.min <= out.nominal
+            && out.nominal <= out.max;
+        p.require(ordered, || {
+            format!("[[models.supply_outputs]] '{r}' needs finite min <= nominal <= max")
+        });
+        p.require(!out.basis.trim().is_empty(), || {
+            format!("[[models.supply_outputs]] '{r}' needs a basis citing its source path")
+        });
+    }
     for (rail, roles) in &entry.level_rails {
         let unmapped = std::iter::once(rail)
             .chain(roles)

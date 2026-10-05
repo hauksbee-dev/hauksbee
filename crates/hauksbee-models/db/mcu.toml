@@ -386,6 +386,37 @@ module  = true        # flag: pin map is at the module header level
 max_pin_current_a = 0.04
 max_current_a = 0.2
 
+# The header's 5V and 3V3 pins are SOURCES on a powered Nano, so a carrier board
+# whose rail is fed from them has that rail at a known level. From the Arduino
+# Nano 3.0 reference design (ArduinoNano30Eagle, "Arduino Nano2.sch"): +5V is the
+# cathode of D1 MBR0520 (anode on USB VBUS) and the output of U3 UA78M05 (input
+# on VIN, pin 30); 3V3 is U2 FT232RL pin 17 3V3OUT, the FT232RL itself on +5V.
+# The higher of the two +5V sources wins through the Schottky.
+#   - USB path: VBUS 4.75 to 5.25 V (USB 2.0 7.3.2) less the MBR0520L forward
+#     drop, 0.385 V max at 0.5 A (onsemi MBR0520LT1/D, Maximum Instantaneous
+#     Forward Voltage): 4.365 V at worst.
+#   - VIN path: UA78M05 VO 4.75 to 5.25 V over the full TJ range (TI SLVS059V,
+#     5.6 Electrical Characteristics: UA78M05, VI = 7 to 20 V, IO = 5 to 350 mA).
+#   - 3V3: FT232R "3.3v regulator output" 3.0 / 3.3 / 3.6 V (FTDI FT_000053
+#     Version 2.10, Table 5.2 Operating Voltage and Current), 50 mA max for
+#     external circuitry (same datasheet, section 4, +3.3V LDO Regulator).
+# Clones with a CH340 in place of the FT232RL may not drive 3V3 the same way.
+# The 5V pin can also be an INPUT (a regulated 5 V fed to pin 27); a board that
+# drives it from its own regulator keeps that regulator's level.
+[[models.supply_outputs]]
+role = "5v"
+nominal = 5.0
+min = 4.365
+max = 5.25
+basis = "Arduino Nano 3.0 reference design: +5V = USB VBUS (4.75-5.25 V, USB 2.0 7.3.2) through D1 MBR0520 (VF <= 0.385 V at 0.5 A, onsemi MBR0520LT1/D) or U3 UA78M05 from VIN (4.75-5.25 V, TI SLVS059V 5.6)"
+
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.0
+max = 3.6
+basis = "Arduino Nano 3.0 reference design: 3V3 = FT232RL 3V3OUT, 3.0/3.3/3.6 V (FTDI FT_000053 v2.10 Table 5.2), 50 mA max external load"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────

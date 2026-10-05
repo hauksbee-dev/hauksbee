@@ -404,6 +404,8 @@ pub fn bind_board_with(
     // catching supply nets whose NAME is non-canonical (e.g. `+5P`) but whose
     // driving pin is tagged `power_out`.
     let power_out_nets = power_out_net_voltages(board);
+    // Rails a fitted module sources on its own pins, per its card.
+    let module_supply_nets = module_supply_net_voltages(board, lib);
     // Nets that are a regulator-shaped part's output: a convention-guessed
     // magnitude (bare `VCC` = 5 V) must not be stamped on one.
     let regulator_outputs = regulator_output_nets(board);
@@ -447,8 +449,9 @@ pub fn bind_board_with(
                     net.name
                 ));
                 report.push(row);
-            } else if let Some(v) =
-                power_rail_voltage(&net.name).or_else(|| power_out_nets.get(&net.id).copied())
+            } else if let Some(v) = power_rail_voltage(&net.name)
+                .or_else(|| power_out_nets.get(&net.id).copied())
+                .or_else(|| module_supply_nets.get(&net.id).copied())
             {
                 power_nets.insert(net.name.clone(), v);
             }
@@ -7048,6 +7051,40 @@ fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
         for pin in comp.pins.iter().filter(|p| is_out(p)) {
             if let Some(net_id) = pin.net.filter(|n| *n != 0) {
                 out.insert(net_id, format!("{} ({})", comp.reference, comp.value));
+            }
+        }
+    }
+    out
+}
+
+/// Rails a fitted part sources on its own pins per its card's
+/// `[[models.supply_outputs]]` (a dev-board module's 5V/3V3 header pins),
+/// as net id -> nominal volts. This is the card-side twin of
+/// [`power_out_net_voltages`] for a board whose symbol does not tag the pin
+/// `power_out`; a regulator output on the net is excluded the same way, by the
+/// caller's regulator check and the vreg model sourcing its own net.
+fn module_supply_net_voltages(board: &ExtractedBoard, lib: &ModelLibrary) -> HashMap<i64, f64> {
+    let mut out = HashMap::new();
+    for comp in &board.components {
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let Some(model) = resolve(lib, part).model else {
+            continue;
+        };
+        for supply in &model.supply_outputs {
+            let pads = model.pins.iter().filter(|(_, role)| **role == supply.role);
+            for (pad, _) in pads {
+                let pin = comp.pins.iter().find(|p| p.number == *pad);
+                let net = pin.and_then(|p| p.net).filter(|id| *id != 0);
+                // A pin on a net no other part touches feeds nothing.
+                let fed = |id: i64| {
+                    let others = board.components.iter().filter(|c| !std::ptr::eq(*c, comp));
+                    others.flat_map(|c| &c.pins).any(|p| p.net == Some(id))
+                };
+                if let Some(net_id) = net.filter(|id| fed(*id)) {
+                    out.entry(net_id).or_insert(supply.nominal);
+                }
             }
         }
     }

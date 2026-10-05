@@ -103,6 +103,11 @@ fn bind_single_part(reference: &str, value: &str, footprint: &str, nets: &[&str]
 /// Bind one SN74LVC1G3157 SPDT, wired per its SOT-23-6 pad map, with its VCC
 /// pad on the net named `vcc_net`.
 fn bind_spdt(vcc_net: &str) -> BoundBoard {
+    bind_spdt_with(vcc_net, Vec::new())
+}
+
+/// [`bind_spdt`] with `others` on the board too (nets 1..=6 as there, 7 spare).
+fn bind_spdt_with(vcc_net: &str, mut others: Vec<Component>) -> BoundBoard {
     let sw = comp(
         "SW1",
         "SN74LVC1G3157",
@@ -124,10 +129,70 @@ fn bind_spdt(vcc_net: &str) -> BoundBoard {
             (4, "S1_NET"),
             (5, "SEL"),
             (6, "GND"),
+            (7, "MOD_3V3"),
         ],
-        vec![sw],
+        {
+            others.insert(0, sw);
+            others
+        },
     );
     bind_board(&b, &ModelLibrary::builtin())
+}
+
+/// A rail fed only by a fitted dev-board module's 5V header pin (no
+/// `power_out` pin type, no voltage in its name) is sourced at the card's
+/// nominal 5 V: the Nano's +5V comes from USB through its Schottky or from
+/// VIN through its UA78M05. A switch on that rail then switches at its 5 V
+/// threshold (VIL/VIH midpoint 2.5 V), not the 3.3 V-rail fallback.
+#[test]
+fn a_fitted_modules_5v_pin_sources_the_rail_it_feeds() {
+    let nano = comp(
+        "A101",
+        "Arduino Nano",
+        "Module:Arduino_Nano",
+        vec![pin("4", 6, ""), pin("27", 1, ""), pin("17", 7, "")],
+    );
+    // A load on the 3V3 pin, so that rail feeds something.
+    let load = resistor_0402("R1", "10k", 7, 6);
+    let bound = bind_spdt_with("+5P", vec![nano, load]);
+    for (rail, v) in [("+5P", 5.0), ("MOD_3V3", 3.3)] {
+        let row = bound.report.row(&format!("RAIL:{rail}"));
+        let volts = row.and_then(|r| match r.outcome {
+            BindOutcome::PowerRail { volts } => Some(volts),
+            _ => None,
+        });
+        assert_eq!(volts, Some(v), "{rail} sourced by the module");
+    }
+    let von = devices(&bound).find_map(|d| match d {
+        Device::VSwitch { name, von, .. } if name == "SW1_s0" => Some(*von),
+        _ => None,
+    });
+    let von = von.expect("true-SPDT s0 leg stamped as a VSwitch");
+    assert!(
+        (von - (5.0 - 2.5 + 0.25)).abs() < 1e-9,
+        "s0 leg at the 5 V threshold: {von}"
+    );
+    // Unfitted, the module sources nothing and the rail stays unresolved.
+    let mut dnp = comp(
+        "A101",
+        "Arduino Nano",
+        "Module:Arduino_Nano",
+        vec![pin("27", 1, "")],
+    );
+    dnp.dnp = true;
+    assert!(bind_spdt_with("+5P", vec![dnp])
+        .report
+        .row("RAIL:+5P")
+        .is_none());
+    // A module pin on a net nothing else touches feeds nothing.
+    let nano = comp(
+        "A101",
+        "Arduino Nano",
+        "Module:Arduino_Nano",
+        vec![pin("17", 7, "")],
+    );
+    let bound = bind_spdt_with("+5P", vec![nano]);
+    assert!(bound.report.row("RAIL:MOD_3V3").is_none());
 }
 
 fn ltc4020_program_board() -> ExtractedBoard {

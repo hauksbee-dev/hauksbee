@@ -87,6 +87,15 @@ pub struct ModelEntry {
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
 
+    /// `[[models.supply_outputs]]`: rails this part SOURCES on its own pins
+    /// while it is fitted and powered, such as a dev-board module's regulated
+    /// `5V`/`3V3` header pins fed from its USB connector or on-board regulator.
+    /// A board that takes its supply from such a pin has that rail at the
+    /// declared level instead of an unknown one. A net something else already
+    /// defines (a regulator on the carrier board, a named rail) keeps that.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supply_outputs: Vec<SupplyOutput>,
+
     /// Pin-scoped recommended operating conditions and rail relationships.
     /// Every entry carries its own source basis so a static finding can quote
     /// the exact table row that authorizes the constraint.
@@ -186,6 +195,21 @@ pub struct ModelEntry {
     /// The package `[models.pins]` is read for, kept likewise (see `validation::pin_package`).
     #[serde(skip)]
     pub pin_package: Option<String>,
+}
+
+/// One rail a part sources on its own pin (see [`ModelEntry::supply_outputs`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct SupplyOutput {
+    /// The `[models.pins]` role of the pin that sources the rail.
+    pub role: String,
+    /// The level a solve stamps on the rail, V.
+    pub nominal: f64,
+    /// The lowest level the rail can sit at across the part's source paths, V.
+    pub min: f64,
+    /// The highest, V.
+    pub max: f64,
+    /// Where the range comes from: the source path(s) and the datasheet rows.
+    pub basis: String,
 }
 
 /// A `[models.levels]` table (two or more ascending `[vcc, volts]` points) read
