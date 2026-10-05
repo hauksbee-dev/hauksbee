@@ -183,6 +183,13 @@ pub struct SeedPlan {
     /// The variant member this run simulates for each undetermined same-pinout
     /// part, `(reference, member id)`: the member axis of [`with_variants`].
     pub variants: Vec<(String, String)>,
+    /// The `[search]` operating point this member runs at: one forced net
+    /// voltage or injected current per swept net (see [`crate::search`]).
+    pub conditions: Vec<crate::search::Condition>,
+    /// Post-bind nudges, `(reference, factor)`, that scale a switch's
+    /// thresholds: the culprit-ranking reruns of [`crate::search`]. Passive
+    /// values are nudged through `values` instead, before binding.
+    pub perturb: Vec<(String, f64)>,
 }
 
 /// Cross every plan with every combination of the undetermined variant sets.
@@ -491,7 +498,6 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
         .map(|p| SeedPlan {
             seed: first_seed + p as u32,
             interior: true,
-            variants: Vec::new(),
             values: tolerances
                 .iter()
                 .enumerate()
@@ -508,6 +514,7 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
                     }
                 })
                 .collect(),
+            ..SeedPlan::default()
         })
         .collect()
 }

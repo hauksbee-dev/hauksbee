@@ -144,6 +144,9 @@ struct ChunkThermalAccum {
     /// state on a continued march, a fresh operating point on a cold one. The
     /// cold-start rung measures its state discontinuity against it.
     start_x: Vec<f64>,
+    /// Every accepted step of the march at the watched nodes (see
+    /// [`Scheduler::watch_steps`]): chunk-local time and one voltage per node.
+    steps: Vec<(f64, Vec<f64>)>,
 }
 
 impl ChunkThermalAccum {
@@ -156,6 +159,7 @@ impl ChunkThermalAccum {
         self.drive_charge.clear();
         self.drive_s = 0.0;
         self.start_x.clear();
+        self.steps.clear();
     }
 }
 
@@ -740,6 +744,10 @@ pub struct Scheduler {
     /// current). `frame_v_extremes`: net name -> (`min_v`, `max_v`) over the frame.
     frame_peak_current: HashMap<String, f64>,
     frame_v_extremes: HashMap<String, (f64, f64)>,
+    /// Nets whose voltage is recorded at EVERY accepted transient step, not
+    /// once per chunk (see [`Scheduler::watch_steps`]), and the series so far.
+    step_watch: Vec<(String, NodeId)>,
+    step_series: HashMap<String, Vec<(f64, f64)>>,
     /// Net node -> references of TICK-evaluated sequential parts whose
     /// sequential inputs (register clocks / resets / loads / serial data, per
     /// the spec's own [`hauksbee_bind::logic::LogicComponent::sequential_pins`]) the
@@ -1502,6 +1510,8 @@ impl Scheduler {
             digital_in_evidence: HashMap::new(),
             frame_peak_current: HashMap::new(),
             frame_v_extremes: HashMap::new(),
+            step_watch: Vec::new(),
+            step_series: HashMap::new(),
             tick_sequential_nets: HashMap::new(),
             short_pulses: Vec::new(),
             short_pulse_nets: std::collections::HashSet::new(),
@@ -4125,9 +4135,15 @@ impl Scheduler {
             .map(|(source, _)| layout.branch(*source))
             .collect();
         let mut drive_prev: Option<(f64, Vec<f64>)> = None;
+        let watch = &self.step_watch;
         let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
             if thermal.start_x.is_empty() {
                 thermal.start_x.extend_from_slice(s.x);
+            }
+            if !watch.is_empty() {
+                let at = |n: NodeId| s.x.get((n.0 as usize).wrapping_sub(1)).copied();
+                let volts = watch.iter().map(|(_, n)| at(*n).unwrap_or(0.0));
+                thermal.steps.push((s.time, volts.collect()));
             }
             final_x.clear();
             final_x.extend_from_slice(s.x);
@@ -4666,6 +4682,42 @@ impl Scheduler {
 
     /// Adopt a converged end state: publish node voltages and branch currents,
     /// and seed the next chunk's DC solve from it.
+    /// Record every accepted step from now on at `nets` (unknown names are
+    /// skipped), for measurements a chunk-end sample would alias: the peak of
+    /// a 100 ns spike, or the input level at which a comparator decided.
+    ///
+    /// Only a chunk the PRIMARY march solved contributes steps. A fallback
+    /// rung restarts chunk-local time (a subdivided rung once per quarter), so
+    /// its steps cannot be placed on the run's clock honestly; such a chunk
+    /// contributes its chunk-end level through the ordinary frame extremes
+    /// only.
+    pub fn watch_steps(&mut self, nets: &[String]) {
+        for net in nets {
+            let known = self.step_watch.iter().any(|(n, _)| n == net);
+            if let (false, Some(&node)) = (known, self.net_nodes.get(net)) {
+                self.step_watch.push((net.clone(), node));
+            }
+        }
+    }
+
+    /// The per-step series of every watched net, `(t_s, volts)` on the run's
+    /// clock: see [`Scheduler::watch_steps`].
+    #[must_use]
+    pub const fn step_series(&self) -> &HashMap<String, Vec<(f64, f64)>> {
+        &self.step_series
+    }
+
+    /// Place one primary-solved chunk's watched steps on the run's clock.
+    fn commit_steps(&mut self, steps: &[(f64, Vec<f64>)]) {
+        for (t, volts) in steps {
+            for ((net, node), &v) in self.step_watch.iter().zip(volts) {
+                let v = if node.is_ground() { 0.0 } else { v };
+                let series = self.step_series.entry(net.clone()).or_default();
+                series.push((self.sim_time + t, v));
+            }
+        }
+    }
+
     fn adopt_chunk_state(&mut self, final_x: Vec<f64>) {
         let n_nodes = self.circuit.node_count();
         self.node_volts.resize(n_nodes, 0.0);
@@ -4720,6 +4772,7 @@ impl Scheduler {
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
             Ok((x, diagnostics)) => {
+                self.commit_steps(&thermal.steps);
                 self.adopt_chunk_state(x);
                 self.set_pass_draws(&thermal);
                 self.set_driver_draws(&thermal);
@@ -5426,6 +5479,7 @@ impl Scheduler {
         self.firmware_edge_toggles.clear();
         self.frame_peak_current.clear();
         self.frame_v_extremes.clear();
+        self.step_series.clear();
         self.faults_pending.clear();
         // Run-accumulated co-sim findings: a replay must re-detect (and a
         // stale once-per-net guard would silently swallow a real re-fire).

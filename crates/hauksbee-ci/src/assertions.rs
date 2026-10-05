@@ -445,6 +445,12 @@ fn evaluate_one(
         }
     }
 
+    if crate::search::is_outcome(a) {
+        // An outcome reports its WORST member (least margin), the one a
+        // search exists to find and the one culprits were ranked on.
+        let margin = |o: &RunOutcome| crate::search::measure(a, o).margin;
+        failures.sort_by(|x, y| margin(x.0).total_cmp(&margin(y.0)));
+    }
     if let Some((first, first_detail, first_why)) = failures.first() {
         // Lead with the first failing member's measurement, then the exact
         // sampled component values it ran with (the actionable artifact), then
@@ -662,7 +668,9 @@ fn stale_overlap(a: &Assertion, out: &RunOutcome) -> Option<((f64, f64), (f64, f
 pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
-        "voltage" | "pulse_width" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
+        "voltage" | "pulse_width" | "logic_level" | "fires" => {
+            Some((a.after_ms.unwrap_or(0.0) / 1000.0, end))
+        }
         "toggle" | "max_current" | "max_temp" | "rail_window" => Some((0.0, end)),
         "boot_coverage" | "boot-coverage" => Some((0.0, a.deadline_ms.map_or(end, |d| d / 1000.0))),
         // A vcd_sink's `transitions` field counts analog per-frame threshold
@@ -700,6 +708,7 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
         "model_coverage" => plain(check_model_coverage(a, out)),
         "phase_margin" => check_phase_margin(a, out),
         "ac_gain" => check_ac_gain(a, out),
+        "logic_level" | "fires" => crate::search::check(a, out),
         other => (false, format!("unknown assertion kind '{other}'"), None),
     }
 }

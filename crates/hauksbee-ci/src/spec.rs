@@ -419,6 +419,10 @@ pub struct Spec {
     #[serde(default, rename = "assert")]
     #[schemars(length(min = 1))]
     pub asserts: Vec<Assertion>,
+    /// Operating conditions every outcome must hold across (outcome-driven
+    /// fault finding, see `logic_level` / `fires`).
+    #[serde(default)]
+    pub search: Option<crate::search::Search>,
     /// Declarative sensors attached to the co-sim for this run. Each entry
     /// describes one I2C or SPI sensor (via an inline spec string or a file
     /// path) plus optional per-run input overrides.
@@ -1171,6 +1175,11 @@ pub struct Assertion {
     /// reproduces a captured hardware trace. `model_coverage`: enough of the
     /// board bound to a real device model. `pulse_width`: the width (ms) of the
     /// first complete high (or `level = "low"`) pulse on `net` after `after_ms`.
+    /// `logic_level`: `net` reaches a valid logic high (or `level = "low"`) at
+    /// every logic input it drives, the VIH/VIL read from those parts' cards at
+    /// their own supply. `fires`: the comparator `ref` fires (`min_toggles`
+    /// times, default once), at the `target` trip level when one is given.
+    /// Both are outcome assertions a `[search]` block searches.
     /// On the numeric kinds, omitting every bound makes the assertion a
     /// MEASUREMENT: the value is reported, nothing is judged.
     // Both `boot_coverage` spellings are listed: the canonical snake_case one
@@ -1181,7 +1190,7 @@ pub struct Assertion {
         "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
         "peripheral", "rail_window", "protection_trip", "boot_coverage",
         "boot-coverage", "phase_margin", "ac_gain", "hwtrace", "model_coverage",
-        "pulse_width"
+        "pulse_width", "logic_level", "fires"
     ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
@@ -1202,7 +1211,8 @@ pub struct Assertion {
     /// Only sample at/after this time (ms), lets the rail settle first.
     #[serde(default)]
     pub after_ms: Option<f64>,
-    /// `pulse_width`: which pulse to time, `"high"` (the default) or `"low"`.
+    /// `pulse_width`: which pulse to time, `"high"` (the default) or `"low"`;
+    /// `logic_level`: which level the net must reach.
     #[serde(default)]
     #[schemars(extend("enum" = ["high", "low"]))]
     pub level: Option<String>,
@@ -1226,9 +1236,14 @@ pub struct Assertion {
     #[serde(default)]
     #[schemars(extend("exclusiveMinimum" = 0, "maximum" = 1))]
     pub tolerance: Option<f64>,
-    /// Minimum toggle count over the run (alternative to `freq_hz`).
+    /// Minimum toggle count over the run (alternative to `freq_hz`); `fires`:
+    /// how many rising output edges are needed.
     #[serde(default)]
     pub min_toggles: Option<u64>,
+    /// `fires`: the intended trip level (V) of the comparator's first decision,
+    /// held to `tolerance` (a fraction, default 0.05).
+    #[serde(default)]
+    pub target: Option<f64>,
 
     /// `max_current` / `max_temp`: the component to check.
     #[serde(rename = "ref", default)]
@@ -1602,6 +1617,9 @@ impl Spec {
             "spec has no [[assert]] blocks: a check with no assertions always passes vacuously"
                 .into(),
         );
+        for problem in self.search.iter().flat_map(crate::search::Search::problems) {
+            check(false, problem);
+        }
         check(
             self.bom.is_some() || self.bom_columns.is_empty(),
             "`bom_columns` needs `bom = ...`; there is no BOM to map".into(),
@@ -1961,6 +1979,11 @@ impl Spec {
                     .map(tag("sensor")),
             )
             .chain(self.suppress_rail.iter().map(tag("suppress_rail")))
+            .chain(
+                (self.search.iter().flat_map(|s| &s.sweep))
+                    .map(|s| &s.net)
+                    .map(tag("search")),
+            )
             .chain(self.fuzz.iter().flat_map(|f| &f.nets).map(tag("fuzz")))
             .chain(
                 self.asserts
@@ -2271,6 +2294,8 @@ const ASSERTION_KINDS: &[&str] = &[
     "hwtrace",
     "model_coverage",
     "pulse_width",
+    "logic_level",
+    "fires",
 ];
 
 impl Assertion {
@@ -2372,6 +2397,36 @@ impl Assertion {
                             &["high", "low"]
                         )
                     ),
+                )?;
+            }
+            "logic_level" => {
+                need(self.net.is_some(), "logic_level assertion needs a `net`".into())?;
+                need(
+                    self.level
+                        .as_deref()
+                        .is_none_or(|l| l == "high" || l == "low"),
+                    format!(
+                        "logic_level assertion on '{net}': {}",
+                        unknown_token(
+                            "unknown level",
+                            self.level.as_deref().unwrap_or(""),
+                            &["high", "low"]
+                        )
+                    ),
+                )?;
+            }
+            "fires" => {
+                need(
+                    self.reference.is_some(),
+                    "fires assertion needs a `ref` naming the comparator".into(),
+                )?;
+                need(
+                    self.target.is_none_or(f64::is_finite),
+                    "fires assertion `target` must be a finite voltage".into(),
+                )?;
+                need(
+                    self.tolerance.is_none_or(|t| t.is_finite() && t > 0.0 && t <= 1.0),
+                    "fires assertion `tolerance` is a fraction of `target` in (0, 1]".into(),
                 )?;
             }
             "uart" => {
@@ -2667,6 +2722,14 @@ impl Assertion {
                 |f| format!("{net} toggles at ~{f} Hz"),
             ),
             "no_faults" => "no stress faults raised".into(),
+            "logic_level" => format!(
+                "{net} reaches a valid logic {}",
+                self.level.as_deref().unwrap_or("high")
+            ),
+            "fires" => self.target.map_or_else(
+                || format!("{reference} fires"),
+                |t| format!("{reference} fires at {t} V"),
+            ),
             // No bound is a measurement, not a limit of 0 A.
             "max_current" => self.amps.map_or_else(
                 || format!("I({reference})"),

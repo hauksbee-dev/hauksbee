@@ -456,6 +456,9 @@ pub struct RunOutcome {
     /// heuristic tier is documented actively wrong (merges two transactions in
     /// one chunk; truncates a boundary-spanning one).
     pub spi_framing: HashMap<String, String>,
+    /// What the outcome kinds (`logic_level`, `fires`) read: this member's
+    /// search condition, per-step series of the judged nets, and culprits.
+    pub probe: crate::search::Probe,
     /// How much of the board bound to a real device model, from the binder.
     ///
     /// Analogue accuracy is capped by model availability, and part of that cap
@@ -832,6 +835,7 @@ pub fn run_spec_with_lib(
     };
     let plans = crate::tolerance::build_plans(mode, spec.ensemble_seed_count(), &tols)?;
     let plans = sweep_variants(spec, &base, lib, plans);
+    let plans = crate::search::cross(plans, spec.search.as_ref());
 
     // Failing-seed isolation: keep only the requested member.
     let total = plans.len();
@@ -877,16 +881,17 @@ pub fn run_spec_with_lib(
         variant: prepared.variant.as_ref(),
         firmware: firmware.as_deref(),
     };
-    for plan in &plans {
-        let mut outcome = run_one(
-            spec,
-            &base,
-            &thresholds,
-            plan,
-            lib,
-            member_count,
-            &run_inputs,
-        )?;
+    let run_plans = |batch: &[SeedPlan]| {
+        let one = |plan: &SeedPlan| {
+            run_one(spec, &base, &thresholds, plan, lib, member_count, &run_inputs)
+        };
+        run_parallel(batch, spec.search.is_some(), one)
+    };
+    let mut ran = run_plans(&plans)?;
+    if spec.search.is_some() {
+        crate::search::rank_culprits(spec, &base, &plans, &mut ran, &run_plans)?;
+    }
+    for (plan, mut outcome) in plans.iter().zip(ran) {
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
             None if spec.ac.is_some() => {
@@ -1177,6 +1182,7 @@ pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<Sp
             .reference
             .as_ref()
             .map(|r| (r.as_str(), "max_temp assert")),
+        "fires" => a.reference.as_ref().map(|r| (r.as_str(), "fires assert")),
         _ => None,
     });
     let spi_refs = spec
@@ -1852,7 +1858,12 @@ fn run_one(
     // can POWER a rail has been applied by then, so anything still unpowered
     // is unpowered for the whole run, and any analog number below has to be
     // read knowing it.
-    let dead_rails = bias_bound(&mut bound, &board, spec, &fuzz_net_drives(spec, seed))?;
+    // A search condition that forces a net is one more drive.
+    let mut drives = fuzz_net_drives(spec, seed);
+    let forced = plan.conditions.iter().filter(|c| !c.amps);
+    drives.extend(forced.map(|c| (c.net.clone(), c.value)));
+    let dead_rails = bias_bound(&mut bound, &board, spec, &drives)?;
+    let (mut probe, watch) = crate::search::prepare(spec, &board, &mut bound, plan);
     // A ramped rail is a COLD power-on, which a stamped leg cannot express: it
     // sits at its setpoint from t=0 and the operating point pre-charges every
     // capacitor, so an RC power-on delay reads 0 ms. Open the leg here (AFTER
@@ -1910,6 +1921,7 @@ fn run_one(
 
     let mut engine = HauksbeeEngine::from_bound(bound, firmware, "/ci")
         .map_err(SpecError::invalid("building engine"))?;
+    engine.scheduler_mut().watch_steps(&watch);
 
     // Ambient for the steady-state junction-temperature estimate (max_temp).
     if let Some(ambient) = spec.ambient_c {
@@ -2277,7 +2289,12 @@ fn run_one(
         production_assumptions,
     )?;
 
+    let rail_v = |net: &str| windows.get(&(net.to_string(), 0f64.to_bits())).map(|w| w.max_v);
+    let steps = engine.scheduler().step_series();
+    crate::search::finish(&mut probe, spec, &board, lib, steps, &rail_v);
+
     Ok(RunOutcome {
+        probe,
         seed,
         windows,
         uart,
@@ -2348,6 +2365,34 @@ fn run_one(
             .into_iter()
             .map(|(bus, mode)| (bus, mode.as_str().to_string()))
             .collect(),
+    })
+}
+
+/// Run every plan through `one`, in order. A `[search]` grid and its culprit
+/// reruns are independent members, so with `parallel` they spread over the
+/// machine's cores (at most four, the shared-machine build cap); otherwise
+/// they run one after another exactly as before.
+fn run_parallel(
+    plans: &[SeedPlan],
+    parallel: bool,
+    one: impl Fn(&SeedPlan) -> Result<RunOutcome, SpecError> + Sync,
+) -> Result<Vec<RunOutcome>, SpecError> {
+    let workers = std::thread::available_parallelism().map_or(1, usize::from).min(4);
+    if !parallel || workers < 2 || plans.len() < 2 {
+        return plans.iter().map(one).collect();
+    }
+    let per = plans.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        let one = &one;
+        let handles: Vec<_> = plans
+            .chunks(per)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(one).collect::<Vec<_>>()))
+            .collect();
+        let joined = handles.into_iter().flat_map(|h| {
+            h.join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        });
+        joined.collect()
     })
 }
 

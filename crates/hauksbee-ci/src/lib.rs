@@ -36,6 +36,7 @@ pub mod progress;
 pub mod report;
 pub mod runner;
 pub mod scenarios;
+pub mod search;
 pub mod spec;
 pub mod tolerance;
 pub mod waveforms;

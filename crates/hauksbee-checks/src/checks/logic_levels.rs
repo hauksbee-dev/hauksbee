@@ -70,6 +70,81 @@ fn undefined(span: RailRange, (vil, vih): (f64, f64)) -> Option<String> {
     }
 }
 
+/// One declared logic input of a powered part: its role, net, supply rail,
+/// the rail's level and the VIL/VIH band the card gives at that level.
+struct Input<'a> {
+    role: &'a str,
+    net: String,
+    rail: String,
+    vcc: f64,
+    band: (f64, f64),
+}
+
+/// The declared inputs of `c` whose net and supply resolve and whose supply
+/// (read by `rail_v`) is up.
+fn powered_inputs<'a>(
+    board: &ExtractedBoard,
+    c: &Component,
+    m: &'a ModelEntry,
+    rail_v: &dyn Fn(&str) -> Option<f64>,
+) -> Vec<Input<'a>> {
+    let net_of = |role: &str| {
+        let id = super::envelope::role_net_id(c, m, role)?;
+        board.net(id).map(|n| n.name.clone())
+    };
+    let input = |role: &'a str| {
+        let rail = net_of(m.level_rail_of(role)?)?;
+        let net = net_of(role)?;
+        let vcc = rail_v(&rail).filter(|v| *v >= POWERED_V)?;
+        let band = m.input_band_at(vcc)?;
+        Some(Input {
+            role,
+            net,
+            rail,
+            vcc,
+            band,
+        })
+    };
+    input_roles(m).into_iter().filter_map(input).collect()
+}
+
+/// One logic input wired to a net, with the band its part guarantees at the
+/// level its own supply sits at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogicLoad {
+    pub reference: String,
+    pub role: String,
+    pub vil: f64,
+    pub vih: f64,
+    pub vcc: f64,
+}
+
+/// Every declared logic input on `net` (an analog switch's control, a gate's
+/// input), with its VIL/VIH read at the level `rail_v` gives its supply: the
+/// levels a signal on `net` must reach for every part it drives to read it.
+/// An input whose supply is not up is not a load yet and is left out.
+pub fn loads_on_net(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    net: &str,
+    rail_v: &dyn Fn(&str) -> Option<f64>,
+) -> Vec<LogicLoad> {
+    let on_net = |(c, m): (&Component, ModelEntry)| {
+        let load = |i: Input<'_>| LogicLoad {
+            reference: c.reference.clone(),
+            role: i.role.to_string(),
+            vil: i.band.0,
+            vih: i.band.1,
+            vcc: i.vcc,
+        };
+        let inputs = powered_inputs(board, c, &m, rail_v).into_iter();
+        inputs.filter(|i| i.net == net).map(load).collect::<Vec<_>>()
+    };
+    super::resolved_components(board, lib)
+        .flat_map(on_net)
+        .collect()
+}
+
 /// One part's undefined inputs.
 fn part_flags(
     board: &ExtractedBoard,
@@ -77,22 +152,17 @@ fn part_flags(
     m: &ModelEntry,
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> Vec<Flag> {
-    let net_of = |role: &str| {
-        let id = super::envelope::role_net_id(c, m, role)?;
-        board.net(id).map(|n| n.name.clone())
-    };
+    let rail_v = |rail: &str| span(rail).map(|r| r.max_v);
     let mut out = Vec::new();
-    for role in input_roles(m) {
-        let Some(rail_role) = m.level_rail_of(role) else {
-            continue;
-        };
-        let (Some(rail), Some(net)) = (net_of(rail_role), net_of(role)) else {
-            continue;
-        };
-        let Some(vcc) = span(&rail).map(|r| r.max_v).filter(|v| *v >= POWERED_V) else {
-            continue;
-        };
-        let (Some((vil, vih)), Some(level)) = (m.input_band_at(vcc), span(&net)) else {
+    for Input {
+        role,
+        net,
+        rail,
+        vcc,
+        band: (vil, vih),
+    } in powered_inputs(board, c, m, &rail_v)
+    {
+        let Some(level) = span(&net) else {
             continue;
         };
         let Some(how) = undefined(level, (vil, vih)) else {
