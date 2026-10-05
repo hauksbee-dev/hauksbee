@@ -16,7 +16,7 @@
 //! renderers only project those maps, so provenance and trust status cannot
 //! drift between terminal, JSON, web, `JUnit`, SARIF, and GitHub output.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -1119,10 +1119,15 @@ impl BoardEvidence {
         findings: &[crate::result::JsonFinding],
     ) -> Result<Vec<EvidenceMap>, EvidenceError> {
         let mut maps = Vec::new();
+        // Indexed once on first use: a scan of every net per finding was
+        // quadratic on a large board with many part-scoped findings.
+        let mut by_name: Option<HashMap<&str, BTreeSet<&String>>> = None;
         for finding in findings {
             let mut nets: BTreeSet<String> = finding.nets.iter().cloned().collect();
             if nets.is_empty() {
-                nets = self.nets_for_subjects(&[], &finding.refs);
+                let by_name = by_name.get_or_insert_with(|| self.nets_by_subject_name());
+                let named = finding.refs.iter().filter_map(|r| by_name.get(r.as_str()));
+                nets = named.flatten().map(|net| (*net).clone()).collect();
             }
             if nets.is_empty() {
                 continue;
@@ -1323,6 +1328,22 @@ impl BoardEvidence {
         let artifacts = self.board_artifact;
         map = map.with_artifacts(&self.registry, artifacts)?;
         Ok(map)
+    }
+
+    /// Every net by each name a part on it answers to: its subject and its
+    /// display reference, the two [`Self::subject_matches_reference`] accepts.
+    fn nets_by_subject_name(&self) -> HashMap<&str, BTreeSet<&String>> {
+        let mut by_name: HashMap<&str, BTreeSet<&String>> = HashMap::new();
+        for (net, refs) in &self.refs_by_net {
+            for subject in refs {
+                let display = self.display_ref_by_subject.get(subject.as_str());
+                by_name.entry(subject.as_str()).or_default().insert(net);
+                if let Some(display) = display {
+                    by_name.entry(display.as_str()).or_default().insert(net);
+                }
+            }
+        }
+        by_name
     }
 
     fn nets_for_subjects(&self, nets: &[String], references: &[String]) -> BTreeSet<String> {
@@ -1665,9 +1686,10 @@ impl BoardEvidence {
             .collect();
         let mut assumption_groups: BTreeMap<(String, String, String, String, String), Vec<String>> =
             BTreeMap::new();
+        let surfaces = SurfaceIndex::new(self);
         for assumption in self.assumptions.iter().filter(|assumption| {
             cited.contains(&assumption.id().to_string())
-                && self.compact_assumption_is_surface_relevant(assumption)
+                && self.compact_assumption_is_surface_relevant(assumption, &surfaces)
         }) {
             let refs = self.assumption_part_refs(assumption);
             let key = (
@@ -1783,23 +1805,19 @@ impl BoardEvidence {
         refs
     }
 
-    fn compact_assumption_is_surface_relevant(&self, assumption: &Assumption) -> bool {
+    fn compact_assumption_is_surface_relevant(
+        &self,
+        assumption: &Assumption,
+        surfaces: &SurfaceIndex<'_>,
+    ) -> bool {
         let refs = self.assumption_part_refs(assumption);
         if refs.is_empty() || !matches!(assumption.scope(), Scope::Board) {
             return true;
         }
-        self.maps.iter().any(|map| {
-            map.assumptions().iter().any(|id| id == assumption.id())
-                && map.models().iter().any(|model| {
-                    refs.iter().any(|reference| {
-                        model.reference() == reference
-                            || self
-                                .display_ref_by_subject
-                                .get(model.subject())
-                                .is_some_and(|display| display == reference)
-                    })
-                })
-        })
+        // Some map citing the assumption has a model on its path named (by
+        // reference or display reference) for one of the assumption's parts.
+        (surfaces.maps_citing.get(assumption.id()).into_iter().flatten())
+            .any(|&m| refs.iter().any(|r| surfaces.names[m].contains(r.as_str())))
     }
 
     /// Add the canonical evidence fields to a legacy structured report without
@@ -1827,6 +1845,36 @@ impl BoardEvidence {
                 .expect("IR evidence maps have an infallible JSON representation"),
         );
         value
+    }
+}
+
+/// Which evidence maps cite each assumption, and every name (reference and
+/// display reference) of the models on each map's path: built once per
+/// render, since asking every map of every assumption was quadratic in the
+/// part count on a large board.
+struct SurfaceIndex<'a> {
+    maps_citing: HashMap<&'a AssumptionId, Vec<usize>>,
+    names: Vec<HashSet<&'a str>>,
+}
+
+impl<'a> SurfaceIndex<'a> {
+    fn new(evidence: &'a BoardEvidence) -> Self {
+        let mut maps_citing: HashMap<&AssumptionId, Vec<usize>> = HashMap::new();
+        let mut names = Vec::with_capacity(evidence.maps.len());
+        for (m, map) in evidence.maps.iter().enumerate() {
+            for id in map.assumptions() {
+                let citing = maps_citing.entry(id).or_default();
+                if citing.last() != Some(&m) {
+                    citing.push(m);
+                }
+            }
+            let display = |model: &ModelOnPath| {
+                (evidence.display_ref_by_subject.get(model.subject())).map(String::as_str)
+            };
+            let on_path = map.models().iter();
+            names.push(on_path.flat_map(|model| [Some(model.reference()), display(model)]).flatten().collect());
+        }
+        Self { maps_citing, names }
     }
 }
 

@@ -147,9 +147,13 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(bus_loading::bus_loading_lint(board).findings);
+    // One binding serves both checks that need the bound board: the rail
+    // conflicts read its report, the DC stress pass then consumes it. Binding
+    // a large board is not cheap, so it is done once here, not once per check.
+    let bound = hauksbee_bind::binder::bind_board(board, lib);
     report
         .findings
-        .extend(rail_conflicts::rail_conflict_lint(board, lib).findings);
+        .extend(rail_conflicts::rail_conflict_findings(&bound.report).findings);
     report
         .findings
         .extend(rail_decoupling::decoupling_lint(board, lib).findings);
@@ -158,7 +162,7 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
         .extend(floating_inputs::floating_input_lint(board, lib).findings);
     report
         .findings
-        .extend(dc_stress::dc_stress_lint(board, lib).findings);
+        .extend(dc_stress::dc_stress_findings(bound).findings);
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.

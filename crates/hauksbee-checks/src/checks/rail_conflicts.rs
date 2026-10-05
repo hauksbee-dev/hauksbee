@@ -9,24 +9,26 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
+use hauksbee_bind::bind_report::BindReport;
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_models::ModelLibrary;
 
 /// Every rail more than one source drives.
 #[must_use]
 pub fn rail_conflict_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
-    let bound = hauksbee_bind::binder::bind_board(board, lib);
-    let findings = bound
-        .report
-        .rail_conflicts
-        .into_iter()
-        .map(|c| LintFinding {
-            check: LintCheck::RailConflict,
-            severity: Severity::High,
-            message: c.message,
-            refs: c.parts,
-            nets: c.nets,
-        });
+    rail_conflict_findings(&hauksbee_bind::binder::bind_board(board, lib).report)
+}
+
+/// [`rail_conflict_lint`] over a board already bound into `report`.
+#[must_use]
+pub fn rail_conflict_findings(report: &BindReport) -> NetLintReport {
+    let findings = report.rail_conflicts.iter().map(|c| LintFinding {
+        check: LintCheck::RailConflict,
+        severity: Severity::High,
+        message: c.message.clone(),
+        refs: c.parts.clone(),
+        nets: c.nets.clone(),
+    });
     NetLintReport {
         findings: findings.collect(),
     }
