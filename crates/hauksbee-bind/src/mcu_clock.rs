@@ -192,18 +192,8 @@ pub(crate) fn classify(
             .collect()
     };
     let (on_in, on_out) = (on(in_node), on(out_node));
-    let touches = |c: &Component, node: Option<NodeId>| {
-        node.is_some() && c.pins.iter().any(|p| (cb.node_of)(p.net) == node)
-    };
-    let crystals: Vec<&Component> = {
-        let mut seen: Vec<&Component> = Vec::new();
-        for &(c, _) in on_in.iter().chain(&on_out) {
-            if (cb.is_crystal)(c) && !seen.iter().any(|s| s.reference == c.reference) {
-                seen.push(c);
-            }
-        }
-        seen
-    };
+    let touches = |c: &Component, node| touches(cb, c, node);
+    let crystals = crystals_on(cb, on_in.iter().chain(&on_out).map(|&(c, _)| c));
     let out_label = output.map_or("its other oscillator pin", |o| o.label.as_str());
 
     if let (Some(n), Some(c)) = (rail_of(out_node), crystals.first()) {
@@ -229,43 +219,14 @@ pub(crate) fn classify(
             )
         };
     }
-    // A crystal with one leg reaching its pin through a fitted series resistor
-    // (the RP2040 hardware guide's 1 kOhm on XOUT, an STM32 HSE drive limiter):
-    // the resistor's far pad sits on the crystal's other leg, off any rail.
-    let series = |pin: Option<NodeId>, other: Option<NodeId>| -> Option<(&Component, NodeId)> {
-        let pin = pin?;
-        cb.board.components.iter().find_map(|r| {
-            if r.reference == mcu.reference || !(cb.fitted)(r) || !(cb.is_resistor)(r) {
-                return None;
-            }
-            let nodes: Vec<Option<NodeId>> = r.pins.iter().map(|p| (cb.node_of)(p.net)).collect();
-            let far = match nodes.as_slice() {
-                [Some(a), Some(b)] if *a == pin && *b != pin => *b,
-                [Some(a), Some(b)] if *b == pin && *a != pin => *a,
-                _ => return None,
-            };
-            (Some(far) != other && !(cb.is_rail)(far)).then_some((r, far))
-        })
-    };
-    for (near, far_pin, near_label, far_label) in [
-        (in_node, out_node, input.label.as_str(), out_label),
-        (out_node, in_node, out_label, input.label.as_str()),
-    ] {
-        let Some((r, far)) = series(far_pin, near) else {
-            continue;
-        };
-        if let Some(c) = crystals
-            .iter()
-            .find(|c| touches(c, near) && touches(c, Some(far)))
-        {
-            return McuClock::of(
-                Crystal,
-                format!(
-                    "{} {} across {near_label} and {far_label} (through series {} {})",
-                    c.reference, c.value, r.reference, r.value
-                ),
-            );
-        }
+    if let Some(clock) = crystal_through_series(
+        cb,
+        mcu,
+        &crystals,
+        (in_node, input.label.as_str()),
+        (out_node, out_label),
+    ) {
+        return clock;
     }
     // Something that drives the input: a driving pin (clock buffer, other
     // MCU) or a powered 3+ pad crystal-footprint oscillator.
@@ -308,6 +269,72 @@ fn crystal_hz(value: &str) -> Option<u64> {
     // a core clock is stated at.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     (1.0..1e15).contains(&hz).then(|| hz.round() as u64)
+}
+
+/// Whether `c` has a pin on `node` (never, when there is no node).
+fn touches(cb: &ClockBoard<'_>, c: &Component, node: Option<NodeId>) -> bool {
+    node.is_some() && c.pins.iter().any(|p| (cb.node_of)(p.net) == node)
+}
+
+/// The distinct crystals among `parts`, in first-seen order.
+fn crystals_on<'b>(
+    cb: &ClockBoard<'_>,
+    parts: impl Iterator<Item = &'b Component>,
+) -> Vec<&'b Component> {
+    let mut seen: Vec<&Component> = Vec::new();
+    for c in parts {
+        if (cb.is_crystal)(c) && !seen.iter().any(|s| s.reference == c.reference) {
+            seen.push(c);
+        }
+    }
+    seen
+}
+
+/// A crystal with one leg reaching its oscillator pin through a fitted series
+/// resistor (the RP2040 hardware guide's 1 kOhm on XOUT, an STM32 HSE drive
+/// limiter): the resistor's far pad sits on the crystal's other leg, off any
+/// rail. `a` and `b` are the two oscillator pins, each a node and a label.
+fn crystal_through_series(
+    cb: &ClockBoard<'_>,
+    mcu: &Component,
+    crystals: &[&Component],
+    a: (Option<NodeId>, &str),
+    b: (Option<NodeId>, &str),
+) -> Option<McuClock> {
+    let touches = |c: &Component, node| touches(cb, c, node);
+    let series = |pin: Option<NodeId>, other: Option<NodeId>| -> Option<(&Component, NodeId)> {
+        let pin = pin?;
+        cb.board.components.iter().find_map(|r| {
+            if r.reference == mcu.reference || !(cb.fitted)(r) || !(cb.is_resistor)(r) {
+                return None;
+            }
+            let nodes: Vec<Option<NodeId>> = r.pins.iter().map(|p| (cb.node_of)(p.net)).collect();
+            let far = match nodes.as_slice() {
+                [Some(a), Some(b)] if *a == pin && *b != pin => *b,
+                [Some(a), Some(b)] if *b == pin && *a != pin => *a,
+                _ => return None,
+            };
+            (Some(far) != other && !(cb.is_rail)(far)).then_some((r, far))
+        })
+    };
+    [(a, b), (b, a)]
+        .into_iter()
+        .find_map(|((near, near_label), (far_pin, far_label))| {
+            let (r, far) = series(far_pin, near)?;
+            let c = crystals
+                .iter()
+                .find(|c| touches(c, near) && touches(c, Some(far)))?;
+            Some(McuClock {
+                crystal_hz: crystal_hz(&c.value),
+                ..McuClock::of(
+                    ClockKind::Crystal,
+                    format!(
+                        "{} {} across {near_label} and {far_label} (through series {} {})",
+                        c.reference, c.value, r.reference, r.value
+                    ),
+                )
+            })
+        })
 }
 
 /// No crystal or oscillator found: parts that cannot be read leave the clock
