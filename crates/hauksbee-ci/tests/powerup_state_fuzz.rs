@@ -106,7 +106,9 @@ fn boot_state_fuzz(
 /// gate. We fuzz each gate node directly across its undefined boot level
 /// (0 / 3.3 V), which is more conservative than fuzzing the GPIO behind the 1k
 /// series, and require the externally-held rails stay up and no part faults on
-/// any seed.
+/// any seed. `+3.3V` is the AP1117-3.3 (U4) output fed from `+5V`, so it is
+/// not supplied here: an ideal source on a regulator's output would fight it,
+/// and its hold assertion now checks the regulator itself.
 ///
 /// The gate nets are read off the board rather than written down here. Naming
 /// them meant naming one revision's reference designators, and the revision the
@@ -142,7 +144,7 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
     boot_state_fuzz(
         "lumenpnp_gates",
         &board,
-        &[("VDC", 24.0), ("+5V", 5.0), ("+3.3V", 3.3)],
+        &[("VDC", 24.0), ("+5V", 5.0)],
         &gates,
         16,
         &(rail_holds("VDC", 23.0, 25.0) + &rail_holds("+3.3V", 3.2, 3.4)),
