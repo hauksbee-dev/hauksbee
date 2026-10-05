@@ -5046,3 +5046,604 @@ y2 = { enable = "oe_2", active = "high" }
 [models.coverage]
 implements = ["buffer", "tristate_enable", "logic_levels"]
 missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAX3237E: 5-driver / 3-receiver RS-232 transceiver with a regulated dual
+# charge pump, TSSOP-28 (TI PW, order code MAX3237EIPWR; also the SSOP-28 DB and
+# SOIC-28 DW, which share the pinout).
+#
+# Sources (both read; the order code is TI's, so TI's sheet is primary):
+#   [TI]  TI "MAX3237E 3-V to 5.5-V Multichannel RS-232 1-Mbit/s Line
+#         Driver/Receiver", SLLS709B (May 2006, revised January 2010),
+#         https://www.ti.com/lit/ds/symlink/max3237e.pdf,
+#         sha256 3c7a0153f3fbbd48164911544710a790f961cd9fcd852167d5ae54bd319bf0b9.
+#   [ADI] Maxim/ADI "MAX3222E/MAX3232E/MAX3237E/MAX3241E/MAX3246E", 19-1298 Rev 13
+#         (12/18), https://www.analog.com/media/en/technical-documentation/data-sheets/MAX3222E-MAX3246E.pdf,
+#         sha256 773dd6aa67273c10362119bc115eb772171d57f16f6980adf69942f1712ffeac.
+#         TI states the part is "designed to be interchangeable with Maxim
+#         MAX3237E" (p.1); ADI is cited only for what TI does not print: the
+#         charge-pump regulation point, the 400 kOhm input keeper and the
+#         V+/V- shutdown behaviour.
+# Drafted by `hauksbee models extract` (codex gpt-6-luna) from the ADI sheet and
+# rewritten by hand against both PDFs; see the corrections in the commit.
+#
+# Datasheet figures used:
+#   Pinout        [TI] p.1 DB/DW/PW top view = [ADI] p.16 MAX3237E SSOP/TSSOP
+#   VCC           [TI] p.4 ROC: 3.0-3.6 V (3.3 V) or 4.5-5.5 V (5 V); abs max
+#                 -0.3..6 V. Operation down to 2.7 V at EIA-562 levels: [ADI] p.13
+#   V+ / V-       [ADI] p.9: a regulated dual charge pump giving +5.5 V (doubler)
+#                 and -5.5 V (inverter) over VCC 3.0-5.5 V, discontinuous mode.
+#                 [TI] p.4 abs max: V+ -0.3..7 V, V- +0.3..-7 V, V+ - V- 13 V
+#   Capacitors    [TI] p.9 Figure 5: 3.3 V +-0.15 V -> C1..C4 0.1 uF; 3.3 V +-0.3 V
+#                 -> 0.22 uF; 5 V +-0.5 V -> C1 0.047 uF, C2..C4 0.33 uF;
+#                 3.0-5.5 V -> C1 0.22 uF, C2..C4 1 uF
+#   ICC           [TI] p.4: 0.5 mA typ / 2 mA max, no load, SHDN = VCC;
+#                 1 uA typ / 10 uA max with SHDN = GND (TA = 25 C)
+#   DIN/EN/SHDN/MBAUD  [TI] p.4: VIL 0.8 V max; VIH 2.0 V min at VCC = 3.3 V,
+#                 2.4 V min at VCC = 5 V; input current 9 uA typ / 18 uA max (the
+#                 active positive-feedback keeper, [ADI] p.9: 400 kOhm, zero
+#                 current at the rails, so unused inputs may float)
+#   Drivers       [TI] p.5: VOH +5 V min / +5.4 V typ, VOL -5 V min / -5.4 V typ,
+#                 every DOUT at RL = 3 kOhm to GND; IOS +-60 mA max at VO = 0;
+#                 ro 300 Ohm min with VCC = V+ = V- = 0
+#   Receivers     [TI] p.6: VOH VCC - 0.6 V min / VCC - 0.1 V typ at IOH = -1 mA;
+#                 VOL 0.4 V max at IOL = 1 mA; VIT+ 1.5 typ / 2.4 max (3.3 V),
+#                 2.0 / 2.4 (5 V); VIT- 0.6 min / 1.1 typ (3.3 V), 0.8 / 1.5 (5 V);
+#                 hysteresis 0.5 V typ; ri 3 / 5 / 7 kOhm
+#   Function      [TI] p.2 Table 1: SHDN low -> DOUT high-Z; EN high -> ROUT high-Z;
+#                 ROUT1B always active. [TI] p.2 / [ADI] p.10: in shutdown the
+#                 pump stops, V+ falls to VCC and V- rises to GND
+#
+# HOW IT IS STAMPED (behavioural laws on the generic runtime):
+#   - V+ and V- are voltage laws on the reservoir pins: min(5.5, 2 VCC) and
+#     max(-5.5, -2 VCC) while running, VCC and 0 V in shutdown, each behind
+#     `pump_r_ohms`. The 2 VCC ceiling is the doubler's ideal limit; it only
+#     shapes the ramp (VCC >= 2.75 V reaches 5.5 V).
+#   - VCC draws ICC plus twice the current each pump delivers: an ideal doubler
+#     takes 2 x Iout from its input, and the -5.5 V the inverter reaches at
+#     VCC = 3 V is only possible inverting V+, so it costs 2 x |I-| too. That
+#     2x is derived from the topology [ADI] p.9 describes, not printed.
+#   - Each driver is a voltage law following the live V+ (DIN low) or V- (DIN
+#     high), behind `drv_r_ohms`; its load current is drawn back out of the
+#     V+ / V- reservoir by a matching current law, so a loaded driver sags the
+#     pump rail and raises ICC the way the silicon does.
+#   - Each receiver is a voltage law to VCC or GND behind `rx_r_ohms`, with
+#     hysteresis taken from its own output (the threshold is VIT+ while ROUT is
+#     high, VIT- while it is low), and a `rin_ohms` load on RIN.
+#   - EN and SHDN select one of four FSM states; DOUT tri-states outside
+#     `on_*`, ROUT1..3 outside `*_rx`; ROUT1B always drives.
+#   - The keeper is a 400 kOhm law to whichever rail the pin is nearer.
+#
+# ASSUMED (no datasheet number; each is named in `warning` too):
+#   - `pump_r_ohms` 2 Ohm and `drv_r_ohms` 45 Ohm: fitted so five drivers into
+#     3 kOhm give the 5.4 V typical swing (5.5 / (1 + (45 + 5 x 2) / 3000) =
+#     5.40 V). No pump output impedance is printed. The resulting short-circuit
+#     current (~117 mA) is above the 60 mA IOS maximum: the driver current
+#     limit is not modelled.
+#   - `in_th_v` 1.4 V: one switching point midway between VIL 0.8 V and VIH
+#     2.0 V for DIN, EN and SHDN; the 0.5 V transmitter-input hysteresis
+#     ([ADI] p.2) is not modelled beyond what the keeper adds.
+#   - the receivers' 100 Ohm (r_ohms) from the typical VOH drop (0.1 V at 1 mA); the low
+#     side prints only a 0.4 V maximum, so the same value is used.
+#   - Receiver thresholds are the typical rows, linear in VCC between the
+#     3.3 V and 5 V columns.
+#   - A FLOATING EN or SHDN starts at 0 V in the solver and the keeper holds it
+#     there: SHDN floating reads as shutdown, EN floating as receivers enabled.
+#     Neither sheet says which way the keeper powers up.
+#
+# NOT MODELLED: slew rate and MBAUD (250 kbit/s vs 1 Mbit/s), propagation and
+# enable delays, pump ripple and switching frequency, the 100 us shutdown
+# recovery, the driver current limit, ESD, the receiver input range clamp
+# (+-25 V) and the 10 nA invalid-input shutdown current.
+[[models]]
+id = "max3237e"
+kind = "digital"
+description = "MAX3237E 5-driver / 3-receiver RS-232 transceiver with regulated +-5.5 V charge pump, SSOP/SOIC/TSSOP-28 (behavioural DC: pump rails, driver and receiver levels, EN/SHDN states, supply current; no slew or timing)"
+
+[models.match]
+# TI order codes MAX3237E{C,I}{DB,DW,PW}[R] and Maxim's MAX3237E{C,E}{AI,WI,UI}[+][T];
+# all three 28-pin packages share one pinout ([TI] p.1, [ADI] p.16). The QFN
+# (RHB / TQFN) numbers its pads differently and is not matched.
+value_re = "(?i)^MAX3237E(?:[CI](?:DB|DW|PW)R?|[CE](?:AI|WI|UI)\\+?T?)?$"
+
+[models.params]
+vih = 2.0            # [TI] p.4, DIN/SHDN/MBAUD/EN VIH min at VCC = 3.3 V (2.4 V at 5 V)
+vil = 0.8            # [TI] p.4, VIL max
+voh = 2.7            # [TI] p.6, ROUT VOH min VCC - 0.6 V at VCC = 3.3 V, IOH = -1 mA
+vol = 0.4            # [TI] p.6, ROUT VOL max at IOL = 1 mA
+vpump_v = 5.5        # [ADI] p.9, regulated V+ = +5.5 V, V- = -5.5 V
+pump_r_ohms = 2.0    # ASSUMED, fitted (see header)
+drv_r_ohms = 45.0    # ASSUMED, fitted (see header)
+rin_ohms = 5000.0    # [TI] p.6, ri 5 kOhm typ (3 to 7 kOhm)
+keeper_r_ohms = 400000.0  # [ADI] p.9, 400 kOhm active positive-feedback resistor
+in_th_v = 1.4        # ASSUMED, midway between VIL 0.8 V and VIH 2.0 V
+vit_pos_v = 1.5      # [TI] p.6, VIT+ typ at VCC = 3.3 V (2.0 V at 5 V)
+vit_neg_v = 1.1      # [TI] p.6, VIT- typ at VCC = 3.3 V (1.5 V at 5 V)
+icc_on_a = 0.0005    # [TI] p.4, ICC typ, no load, SHDN = VCC (2 mA max)
+icc_shdn_a = 0.000001  # [TI] p.4, ICC typ, SHDN = GND (10 uA max)
+warning = "behavioural DC model: the +-5.5 V pump output impedance and driver output resistance are fitted to the 5.4 V typical swing at 3 kOhm, not printed; the 60 mA driver current limit, slew rate/MBAUD, delays, pump ripple and shutdown recovery are not modelled; a floating SHDN or EN is held low by the input keeper (shutdown, receivers enabled)"
+
+[models.levels]
+# [TI] p.4 VIH: 2.0 V min at VCC = 3.3 V, 2.4 V min at VCC = 5 V.
+vih = [[3.3, 2.0], [5.0, 2.4]]
+# [TI] p.6 VOH min = VCC - 0.6 V, at the ROC band edges.
+voh = [[3.0, 2.4], [5.5, 4.9]]
+
+[models.pins]
+# [TI] p.1, DB/DW/PW (TSSOP-28) top view; identical to [ADI] p.16.
+"1"  = "c2p"       # C2+, inverting-pump flying capacitor
+"2"  = "gnd"
+"3"  = "c2n"       # C2-
+"4"  = "vneg"      # V-, -5.5 V reservoir (C4 to GND)
+"5"  = "dout1"
+"6"  = "dout2"
+"7"  = "dout3"
+"8"  = "rin1"
+"9"  = "rin2"
+"10" = "dout4"
+"11" = "rin3"
+"12" = "dout5"
+"13" = "en_n"      # EN, receiver enable, active low
+"14" = "shdn_n"    # SHDN, shutdown, active low
+"15" = "mbaud"     # MBAUD, 1 Mbit/s select (slew only; not modelled)
+"16" = "rout1b"    # ROUT1B, non-inverting complement of ROUT1, always active
+"17" = "din5"
+"18" = "rout3"
+"19" = "din4"
+"20" = "rout2"
+"21" = "rout1"
+"22" = "din3"
+"23" = "din2"
+"24" = "din1"
+"25" = "c1n"       # C1-, doubler flying capacitor
+"26" = "vcc"
+"27" = "vpos"      # V+, +5.5 V reservoir (C3 to GND or VCC)
+"28" = "c1p"       # C1+
+
+[models.ratings]
+max_voltage_v = 6.0   # [TI] p.4, VCC abs max (V+/V- 7 V, RIN +-25 V, DOUT +-13.2 V are per-pin and wider)
+max_pin_current_a = 0.06  # [TI] p.5, IOS max per driver
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI MAX3237E SLLS709B, Recommended Operating Conditions (p.4), VCC 3 V to 3.6 V or 4.5 V to 5.5 V (the 3.6-4.5 V gap is not modelled as forbidden); Absolute Maximum Ratings (p.4), VCC -0.3 V to 6 V"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/max3237e.pdf"
+title = "TI MAX3237E 3-V to 5.5-V multichannel RS-232 1-Mbit/s line driver/receiver, SLLS709B, May 2006, revised January 2010"
+locator = "DB/DW/PW pinout p.1; Table 1 function table p.2; logic diagram p.3; Absolute Maximum Ratings, Recommended Operating Conditions and Electrical Characteristics p.4; Driver Section p.5; Receiver Section p.6; Figure 5 typical operating circuit and capacitor values p.9"
+sha256 = "3c7a0153f3fbbd48164911544710a790f961cd9fcd852167d5ae54bd319bf0b9"
+
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/MAX3222E-MAX3246E.pdf"
+title = "Maxim/ADI MAX3222E/MAX3232E/MAX3237E/MAX3241E/MAX3246E ±15kV ESD-protected, 3.0V to 5.5V, up to 1Mbps, true RS-232 transceivers, 19-1298 Rev 13, 12/18"
+locator = "Detailed Description p.9 (regulated +5.5 V / -5.5 V dual charge pump; 400 kOhm input positive feedback); Shutdown Mode p.10 (V+ to VCC, V- to GND); Table 2 p.12 (capacitors); Pin Configurations p.16 (MAX3237E SSOP/TSSOP)"
+sha256 = "773dd6aa67273c10362119bc115eb772171d57f16f6980adf69942f1712ffeac"
+
+[[models.source.pinout]]
+package = "TSSOP-28"
+pins = { "1" = "C2+", "2" = "GND", "3" = "C2-", "4" = "V-", "5" = "DOUT1", "6" = "DOUT2", "7" = "DOUT3", "8" = "RIN1", "9" = "RIN2", "10" = "DOUT4", "11" = "RIN3", "12" = "DOUT5", "13" = "EN", "14" = "SHDN", "15" = "MBAUD", "16" = "ROUT1B", "17" = "DIN5", "18" = "ROUT3", "19" = "DIN4", "20" = "ROUT2", "21" = "ROUT1", "22" = "DIN3", "23" = "DIN2", "24" = "DIN1", "25" = "C1-", "26" = "VCC", "27" = "V+", "28" = "C1+" }
+
+[[models.source.characteristic]]
+parameter = "ICC supply current, no load"
+typ = 0.5
+max = 2
+unit = "mA"
+conditions = "SHDN = VCC, no load, TA = 25 C"
+basis = "TI SLLS709B p.4, Electrical Characteristics, ICC, no load, SHDN = VCC"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "rin_ohms"
+low = 3000.0
+high = 7000.0
+unit = "Ohm"
+kind = "specification-limits"
+basis = "TI SLLS709B p.6, receiver input resistance ri 3 / 5 / 7 kOhm, VI = +-3 V to +-25 V"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pump_r_ohms"
+reason = "no charge-pump output impedance is printed; 2 Ohm with drv_r_ohms 45 Ohm is fitted to the 5.4 V typical driver swing at 3 kOhm (TI p.5)"
+
+[[models.source.characteristic]]
+parameter = "VOH driver high-level output voltage"
+min = 5.0
+typ = 5.4
+unit = "V"
+conditions = "DOUT at RL = 3 kOhm to GND, DIN = GND, C1-C4 = 0.1 uF, VCC = 3 V to 5.5 V"
+basis = "TI SLLS709B p.5, Driver Section Electrical Characteristics, VOH"
+
+[[models.source.characteristic]]
+parameter = "VOL driver low-level output voltage"
+min = -5.0
+typ = -5.4
+unit = "V"
+conditions = "DOUT at RL = 3 kOhm to GND, DIN = VCC, C1-C4 = 0.1 uF, VCC = 3 V to 5.5 V"
+basis = "TI SLLS709B p.5, Driver Section Electrical Characteristics, VOL"
+
+[[models.source.characteristic]]
+parameter = "ICC shutdown supply current"
+typ = 1
+max = 10
+unit = "uA"
+conditions = "SHDN = GND, TA = 25 C"
+basis = "TI SLLS709B p.4, Electrical Characteristics, ICC"
+
+[[models.source.characteristic]]
+parameter = "VIT+ receiver positive-going input threshold"
+typ = 1.5
+max = 2.4
+unit = "V"
+conditions = "VCC = 3.3 V (2.0 typ / 2.4 max at VCC = 5 V)"
+basis = "TI SLLS709B p.6, Receiver Section Electrical Characteristics, VIT+"
+
+[[models.source.characteristic]]
+parameter = "VIT- receiver negative-going input threshold"
+min = 0.6
+typ = 1.1
+unit = "V"
+conditions = "VCC = 3.3 V (0.8 min / 1.5 typ at VCC = 5 V)"
+basis = "TI SLLS709B p.6, Receiver Section Electrical Characteristics, VIT-"
+
+[[models.source.characteristic]]
+parameter = "IOS driver short-circuit output current"
+max = 60
+unit = "mA"
+conditions = "VCC = 3.6 V or 3.3 V, VO = 0 V"
+basis = "TI SLLS709B p.5, Driver Section Electrical Characteristics, IOS (not modelled: the fitted driver resistance gives ~117 mA into a short)"
+
+[[models.source.characteristic]]
+parameter = "V+ positive-output supply voltage, absolute maximum"
+min = -0.3
+max = 7
+unit = "V"
+conditions = "with respect to GND, over operating free-air temperature"
+basis = "TI SLLS709B p.4, Absolute Maximum Ratings, V+ (V- +0.3 to -7 V; V+ - V- 13 V)"
+
+[models.behavioral.fsm]
+states = ["off_rx", "off_norx", "on_rx", "on_norx"]
+initial = "off_rx"
+
+[[models.behavioral.fsm.transitions]]
+from = "off_rx"
+to = "on_rx"
+guard = "v_shdn_n >= in_th_v && v_en_n < in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "off_rx"
+to = "on_norx"
+guard = "v_shdn_n >= in_th_v && v_en_n >= in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "off_rx"
+to = "off_norx"
+guard = "v_shdn_n < in_th_v && v_en_n >= in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "off_norx"
+to = "on_rx"
+guard = "v_shdn_n >= in_th_v && v_en_n < in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "off_norx"
+to = "on_norx"
+guard = "v_shdn_n >= in_th_v && v_en_n >= in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "off_norx"
+to = "off_rx"
+guard = "v_shdn_n < in_th_v && v_en_n < in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "on_rx"
+to = "on_norx"
+guard = "v_shdn_n >= in_th_v && v_en_n >= in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "on_rx"
+to = "off_rx"
+guard = "v_shdn_n < in_th_v && v_en_n < in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "on_rx"
+to = "off_norx"
+guard = "v_shdn_n < in_th_v && v_en_n >= in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "on_norx"
+to = "on_rx"
+guard = "v_shdn_n >= in_th_v && v_en_n < in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "on_norx"
+to = "off_rx"
+guard = "v_shdn_n < in_th_v && v_en_n < in_th_v"
+[[models.behavioral.fsm.transitions]]
+from = "on_norx"
+to = "off_norx"
+guard = "v_shdn_n < in_th_v && v_en_n >= in_th_v"
+
+# Charge pump: [ADI] p.9 regulation to +-5.5 V, the doubler's 2 VCC ceiling
+# while it ramps; in shutdown V+ falls to VCC and V- to GND ([TI] p.2).
+[[models.behavioral.laws]]
+name = "pump_vpos"
+kind = "voltage"
+a = "vpos"
+b = "gnd"
+expr = "if((state_on_rx + state_on_norx) > 0.5, min(vpump_v, 2.0 * v_vcc), v_vcc)"
+r_ohms = 2.0   # pump_r_ohms
+
+[[models.behavioral.laws]]
+name = "pump_vneg"
+kind = "voltage"
+a = "vneg"
+b = "gnd"
+expr = "if((state_on_rx + state_on_norx) > 0.5, max(-vpump_v, -2.0 * v_vcc), 0.0)"
+r_ohms = 2.0   # pump_r_ohms
+
+# VCC: ICC while running plus 2x each pump's delivered current (an ideal
+# doubler, and an inverter working from V+), ICC(shutdown) otherwise.
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "if((state_on_rx + state_on_norx) > 0.5, icc_on_a + 2.0 * (max(0.0, (min(vpump_v, 2.0 * v_vcc) - v_vpos) / pump_r_ohms) + max(0.0, (v_vneg - max(-vpump_v, -2.0 * v_vcc)) / pump_r_ohms)), icc_shdn_a)"
+
+# Driver load currents come out of the pump reservoirs: a high DOUT sources
+# from V+, a low one sinks into V-. Zero while the drivers are tri-stated.
+[[models.behavioral.laws]]
+name = "drivers_from_vpos"
+kind = "current"
+a = "vpos"
+b = "gnd"
+expr = "(state_on_rx + state_on_norx) * (if(v_din1 < in_th_v, max(0.0, (v_vpos - v_dout1) / drv_r_ohms), 0.0) + if(v_din2 < in_th_v, max(0.0, (v_vpos - v_dout2) / drv_r_ohms), 0.0) + if(v_din3 < in_th_v, max(0.0, (v_vpos - v_dout3) / drv_r_ohms), 0.0) + if(v_din4 < in_th_v, max(0.0, (v_vpos - v_dout4) / drv_r_ohms), 0.0) + if(v_din5 < in_th_v, max(0.0, (v_vpos - v_dout5) / drv_r_ohms), 0.0))"
+
+[[models.behavioral.laws]]
+name = "drivers_into_vneg"
+kind = "current"
+a = "gnd"
+b = "vneg"
+expr = "(state_on_rx + state_on_norx) * (if(v_din1 >= in_th_v, max(0.0, (v_dout1 - v_vneg) / drv_r_ohms), 0.0) + if(v_din2 >= in_th_v, max(0.0, (v_dout2 - v_vneg) / drv_r_ohms), 0.0) + if(v_din3 >= in_th_v, max(0.0, (v_dout3 - v_vneg) / drv_r_ohms), 0.0) + if(v_din4 >= in_th_v, max(0.0, (v_dout4 - v_vneg) / drv_r_ohms), 0.0) + if(v_din5 >= in_th_v, max(0.0, (v_dout5 - v_vneg) / drv_r_ohms), 0.0))"
+
+# Drivers: inverting, DIN high -> V-, DIN low -> V+ ([TI] p.3 logic diagram),
+# active only while SHDN is high ([TI] p.2 Table 1); drv_r_ohms behind each.
+[[models.behavioral.laws]]
+name = "dout1_on_rx"
+kind = "voltage"
+a = "dout1"
+b = "gnd"
+expr = "if(v_din1 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "dout1_on_norx"
+kind = "voltage"
+a = "dout1"
+b = "gnd"
+expr = "if(v_din1 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_norx"
+
+[[models.behavioral.laws]]
+name = "dout2_on_rx"
+kind = "voltage"
+a = "dout2"
+b = "gnd"
+expr = "if(v_din2 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "dout2_on_norx"
+kind = "voltage"
+a = "dout2"
+b = "gnd"
+expr = "if(v_din2 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_norx"
+
+[[models.behavioral.laws]]
+name = "dout3_on_rx"
+kind = "voltage"
+a = "dout3"
+b = "gnd"
+expr = "if(v_din3 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "dout3_on_norx"
+kind = "voltage"
+a = "dout3"
+b = "gnd"
+expr = "if(v_din3 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_norx"
+
+[[models.behavioral.laws]]
+name = "dout4_on_rx"
+kind = "voltage"
+a = "dout4"
+b = "gnd"
+expr = "if(v_din4 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "dout4_on_norx"
+kind = "voltage"
+a = "dout4"
+b = "gnd"
+expr = "if(v_din4 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_norx"
+
+[[models.behavioral.laws]]
+name = "dout5_on_rx"
+kind = "voltage"
+a = "dout5"
+b = "gnd"
+expr = "if(v_din5 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "dout5_on_norx"
+kind = "voltage"
+a = "dout5"
+b = "gnd"
+expr = "if(v_din5 >= in_th_v, v_vneg, v_vpos)"
+r_ohms = 45.0   # drv_r_ohms
+only_in_state = "on_norx"
+
+# Receivers: inverting, hysteresis from the output's own level (VIT+ while
+# ROUT is high, VIT- while low), thresholds linear in VCC between the 3.3 V
+# and 5 V typical columns ([TI] p.6). Active while EN is low ([TI] p.2).
+[[models.behavioral.laws]]
+name = "rout1_on_rx"
+kind = "voltage"
+a = "rout1"
+b = "gnd"
+expr = "if(v_rin1 > if(v_rout1 > 0.5 * v_vcc, vit_pos_v + 0.294 * (v_vcc - 3.3), vit_neg_v + 0.235 * (v_vcc - 3.3)), 0.0, v_vcc)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "rout1_off_rx"
+kind = "voltage"
+a = "rout1"
+b = "gnd"
+expr = "if(v_rin1 > if(v_rout1 > 0.5 * v_vcc, vit_pos_v + 0.294 * (v_vcc - 3.3), vit_neg_v + 0.235 * (v_vcc - 3.3)), 0.0, v_vcc)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+only_in_state = "off_rx"
+
+[[models.behavioral.laws]]
+name = "rout2_on_rx"
+kind = "voltage"
+a = "rout2"
+b = "gnd"
+expr = "if(v_rin2 > if(v_rout2 > 0.5 * v_vcc, vit_pos_v + 0.294 * (v_vcc - 3.3), vit_neg_v + 0.235 * (v_vcc - 3.3)), 0.0, v_vcc)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "rout2_off_rx"
+kind = "voltage"
+a = "rout2"
+b = "gnd"
+expr = "if(v_rin2 > if(v_rout2 > 0.5 * v_vcc, vit_pos_v + 0.294 * (v_vcc - 3.3), vit_neg_v + 0.235 * (v_vcc - 3.3)), 0.0, v_vcc)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+only_in_state = "off_rx"
+
+[[models.behavioral.laws]]
+name = "rout3_on_rx"
+kind = "voltage"
+a = "rout3"
+b = "gnd"
+expr = "if(v_rin3 > if(v_rout3 > 0.5 * v_vcc, vit_pos_v + 0.294 * (v_vcc - 3.3), vit_neg_v + 0.235 * (v_vcc - 3.3)), 0.0, v_vcc)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+only_in_state = "on_rx"
+
+[[models.behavioral.laws]]
+name = "rout3_off_rx"
+kind = "voltage"
+a = "rout3"
+b = "gnd"
+expr = "if(v_rin3 > if(v_rout3 > 0.5 * v_vcc, vit_pos_v + 0.294 * (v_vcc - 3.3), vit_neg_v + 0.235 * (v_vcc - 3.3)), 0.0, v_vcc)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+only_in_state = "off_rx"
+
+# ROUT1B: the non-inverting complement of receiver 1, always active ([TI] p.2).
+[[models.behavioral.laws]]
+name = "rout1b"
+kind = "voltage"
+a = "rout1b"
+b = "gnd"
+expr = "if(v_rin1 > if(v_rout1b > 0.5 * v_vcc, vit_neg_v + 0.235 * (v_vcc - 3.3), vit_pos_v + 0.294 * (v_vcc - 3.3)), v_vcc, 0.0)"
+r_ohms = 100.0   # ASSUMED from [TI] p.6 VOH typ VCC - 0.1 V at 1 mA
+
+# Receiver input resistance, 5 kOhm to GND ([TI] p.6), in every state.
+[[models.behavioral.laws]]
+name = "rin1_load"
+kind = "current"
+a = "rin1"
+b = "gnd"
+expr = "v_rin1 / rin_ohms"
+
+[[models.behavioral.laws]]
+name = "rin2_load"
+kind = "current"
+a = "rin2"
+b = "gnd"
+expr = "v_rin2 / rin_ohms"
+
+[[models.behavioral.laws]]
+name = "rin3_load"
+kind = "current"
+a = "rin3"
+b = "gnd"
+expr = "v_rin3 / rin_ohms"
+
+# Input keepers: 400 kOhm positive feedback to the rail the pin is nearer
+# ([ADI] p.9, [TI] p.4 note: zero current at the rails).
+[[models.behavioral.laws]]
+name = "din1_keeper"
+kind = "current"
+a = "din1"
+b = "gnd"
+expr = "(v_din1 - if(v_din1 >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "din2_keeper"
+kind = "current"
+a = "din2"
+b = "gnd"
+expr = "(v_din2 - if(v_din2 >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "din3_keeper"
+kind = "current"
+a = "din3"
+b = "gnd"
+expr = "(v_din3 - if(v_din3 >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "din4_keeper"
+kind = "current"
+a = "din4"
+b = "gnd"
+expr = "(v_din4 - if(v_din4 >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "din5_keeper"
+kind = "current"
+a = "din5"
+b = "gnd"
+expr = "(v_din5 - if(v_din5 >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "en_n_keeper"
+kind = "current"
+a = "en_n"
+b = "gnd"
+expr = "(v_en_n - if(v_en_n >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "shdn_n_keeper"
+kind = "current"
+a = "shdn_n"
+b = "gnd"
+expr = "(v_shdn_n - if(v_shdn_n >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[[models.behavioral.laws]]
+name = "mbaud_keeper"
+kind = "current"
+a = "mbaud"
+b = "gnd"
+expr = "(v_mbaud - if(v_mbaud >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
+
+[models.coverage]
+implements = ["charge_pump_rails", "supply_current", "shutdown", "receiver_enable", "inverting_drivers", "inverting_receivers", "receiver_hysteresis", "input_keepers", "logic_levels"]
+missing = ["slew_rate", "mbaud_mode", "propagation_timing", "driver_current_limit", "pump_ripple", "shutdown_recovery", "esd"]
