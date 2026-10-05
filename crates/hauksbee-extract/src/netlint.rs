@@ -457,6 +457,7 @@ pub fn numeric_rail_magnitude(n: &str) -> Option<f64> {
 /// exists. A bare designator-prefix test loses a real resistor numbered into an
 /// `RN` range and accepts a capacitor labelled `R5` as a pull-up, farads read as
 /// ohms. Shared with the SI checks so the two surfaces cannot disagree.
+#[must_use]
 pub fn is_resistor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_resistor()
 }

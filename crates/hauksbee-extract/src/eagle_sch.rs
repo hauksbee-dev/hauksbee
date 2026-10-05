@@ -194,17 +194,67 @@ pub fn schematic_pin_net_identities(
 ///
 /// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
 pub fn schematic_pad_names(text: &str) -> Result<Vec<(String, String, String)>, ExtractError> {
+    let mut out: Vec<_> = schematic_pad_pins(text)?
+        .into_iter()
+        .map(|(part, pad, name, _)| (part, pad, name))
+        .collect();
+    out.dedup();
+    Ok(out)
+}
+
+/// The pin kind (KiCad electrical-type vocabulary) an Eagle pin `direction`
+/// states. Eagle's default when the attribute is absent is `io`, but an
+/// absent attribute is no evidence, so it maps to an empty (unknown) kind.
+fn kind_of_direction(direction: &str) -> &'static str {
+    match direction {
+        "in" => "input",
+        "out" => "output",
+        "io" => "bidirectional",
+        "oc" => "open_collector",
+        "hiz" => "tri_state",
+        "pas" => "passive",
+        "pwr" | "sup" => "power_in",
+        "nc" => "no_connect",
+        _ => "",
+    }
+}
+
+/// Every physical part's package-pad pins, sorted.
+///
+/// Each entry is (reference, pad, pin name, pin kind). The kind comes from the symbol pin's stated
+/// `direction` ([`kind_of_direction`]); empty when the library states none.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
+pub fn schematic_pad_pins(
+    text: &str,
+) -> Result<Vec<(String, String, String, String)>, ExtractError> {
     let parsed = parse(text)?;
     let mut out = Vec::new();
     for (part, (library, deviceset, device)) in &parsed.part_devices {
-        for ((l, d, v, _gate, pin), pads) in &parsed.device_pin_maps {
-            if (l, d, v) == (library, deviceset, device) {
-                let name = pin.split('@').next().unwrap_or(pin);
-                out.extend(
-                    pads.iter()
-                        .map(|pad| (part.clone(), pad.clone(), name.to_string())),
-                );
+        for ((l, d, v, gate, pin), pads) in &parsed.device_pin_maps {
+            if (l, d, v) != (library, deviceset, device) {
+                continue;
             }
+            let kind = parsed
+                .gate_symbols
+                .get(&(l.clone(), d.clone(), gate.clone()))
+                .and_then(|symbol| {
+                    parsed
+                        .pin_directions
+                        .get(&(l.clone(), symbol.clone(), pin.clone()))
+                })
+                .map_or("", |dir| kind_of_direction(dir));
+            let name = pin.split('@').next().unwrap_or(pin);
+            out.extend(pads.iter().map(|pad| {
+                (
+                    part.clone(),
+                    pad.clone(),
+                    name.to_string(),
+                    kind.to_string(),
+                )
+            }));
         }
     }
     out.sort();
@@ -273,6 +323,10 @@ struct Parsed {
     physical_pin_nets: Vec<SchematicPinNetIdentity>,
     part_devices: HashMap<String, (LibraryId, String, String)>,
     device_pin_maps: DevicePinMaps,
+    /// (library, symbol, pin) -> the pin's Eagle `direction`, when stated.
+    pin_directions: HashMap<(LibraryId, String, String), String>,
+    /// (library, deviceset, gate) -> the symbol that gate places.
+    gate_symbols: HashMap<(LibraryId, String, String), String>,
 }
 
 /// (library, deviceset, device, gate, schematic pin) -> package pad(s).
@@ -302,6 +356,8 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
 
     let mut cur_library: Option<LibraryId> = None;
     let mut cur_symbol: Option<String> = None;
+    let mut pin_directions: HashMap<(LibraryId, String, String), String> = HashMap::new();
+    let mut gate_symbol_of: HashMap<(LibraryId, String, String), String> = HashMap::new();
     let mut cur_symbol_pins = SymbolPins::default();
     let mut cur_deviceset: Option<DevicesetScan> = None;
     let mut cur_device: Option<String> = None;
@@ -391,6 +447,17 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                         // Count EVERY pin, and remember the name of the `sup`
                         // one. The decision is deferred to `</symbol>` because it
                         // depends on the total: see `SymbolPins::supply_net`.
+                        if let (Some(library), Some(symbol), Some(pin), Some(dir)) = (
+                            cur_library.as_ref(),
+                            cur_symbol.as_ref(),
+                            a.get("name"),
+                            a.get("direction"),
+                        ) {
+                            pin_directions.insert(
+                                (library.clone(), symbol.clone(), pin.clone()),
+                                dir.clone(),
+                            );
+                        }
                         if cur_symbol.is_some() {
                             cur_symbol_pins.total += 1;
                             if a.get("direction").map(String::as_str) == Some("sup") {
@@ -412,6 +479,14 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                             (cur_deviceset.as_mut(), a.get("symbol"))
                         {
                             deviceset.gate_symbols.push(symbol.clone());
+                            if let (Some(library), Some(gate)) =
+                                (cur_library.as_ref(), a.get("name"))
+                            {
+                                gate_symbol_of.insert(
+                                    (library.clone(), deviceset.name.clone(), gate.clone()),
+                                    symbol.clone(),
+                                );
+                            }
                         }
                     }
                     b"device" => {
@@ -642,6 +717,8 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         physical_pin_nets,
         part_devices: physical_part_devices,
         device_pin_maps,
+        pin_directions,
+        gate_symbols: gate_symbol_of,
     })
 }
 
@@ -1065,5 +1142,40 @@ mod tests {
             schematic_pad_names("<eagle><drawing><board/></drawing></eagle>")
                 .map_or(true, |v| v.is_empty())
         );
+    }
+
+    /// Each pad's electrical kind is its symbol pin's library `direction`,
+    /// reached through the gate the pad's `<connect>` names: a transceiver's
+    /// `TXD` declared `in` is an input whatever its name suggests, and a pin
+    /// with no direction stays unknown rather than guessed.
+    #[test]
+    fn pad_kinds_come_from_the_symbol_pin_direction() {
+        let text = r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries><library name="ifc">
+  <symbols><symbol name="XCVR"><pin name="TXD" direction="in"/><pin name="RXD" direction="out"/>
+    <pin name="VCC" direction="pwr"/><pin name="FAULT" direction="oc"/><pin name="X"/></symbol></symbols>
+  <devicesets><deviceset name="XCVR"><gates><gate name="A" symbol="XCVR"/></gates><devices>
+    <device name="" package="SO8"><connects>
+      <connect gate="A" pin="TXD" pad="1"/><connect gate="A" pin="RXD" pad="4"/>
+      <connect gate="A" pin="VCC" pad="3"/><connect gate="A" pin="FAULT" pad="5"/>
+      <connect gate="A" pin="X" pad="8"/></connects></device>
+  </devices></deviceset></devicesets>
+</library></libraries>
+<parts><part name="U7" library="ifc" deviceset="XCVR" device=""/></parts>
+<sheets/>
+</schematic></drawing></eagle>"#;
+        let pins = schematic_pad_pins(text).expect("parses");
+        let kind = |pad: &str| {
+            pins.iter()
+                .find(|p| p.0 == "U7" && p.1 == pad)
+                .map(|p| p.3.clone())
+                .expect("pad present")
+        };
+        assert_eq!(kind("1"), "input");
+        assert_eq!(kind("4"), "output");
+        assert_eq!(kind("3"), "power_in");
+        assert_eq!(kind("5"), "open_collector");
+        assert_eq!(kind("8"), "", "an undeclared direction is not guessed");
     }
 }

@@ -34,6 +34,20 @@ pub fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
         .collect()
 }
 
+/// Whether an element `<attribute>` marks the part not fitted: the
+/// assembly-variant `POPULATE` attribute set false (`0`/`no`/`false`), or a
+/// `DNP` / `NOPOP` / `DO_NOT_POPULATE` attribute set true. Eagle libraries
+/// and CAM flows use these alongside the element's own `populate="no"`.
+fn attribute_marks_dnp(name: &str, value: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    let falsy = matches!(v.as_str(), "0" | "no" | "false" | "n");
+    let truthy = matches!(v.as_str(), "1" | "yes" | "true" | "y" | "dnp");
+    match name.trim().to_ascii_uppercase().as_str() {
+        "POPULATE" => falsy,
+        "DNP" | "NOPOP" | "DO_NOT_POPULATE" | "DONOTPOPULATE" => truthy,
+        _ => false,
+    }
+}
 #[allow(clippy::too_many_lines, reason = "one streaming pass over the XML")]
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     type Pads = Vec<(String, f64, f64)>;
@@ -64,6 +78,9 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     // signals
     let mut signals: Vec<(String, Vec<(String, String)>)> = Vec::new();
     let mut saw_eagle_root = false;
+    // Inside an `<element>`: its `<attribute>` children belong to the
+    // element just pushed.
+    let mut in_element = false;
 
     let mut buf = Vec::new();
     loop {
@@ -107,6 +124,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             return Err(corrupt_coord("element", &bad.0, &bad.1));
                         }
                         let rot = a.get("rot").map_or("R0", String::as_str);
+                        in_element = true;
                         elements.push(El {
                             name: a.get("name").cloned().unwrap_or_default(),
                             library: a.get("library").cloned().unwrap_or_default(),
@@ -132,6 +150,14 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                                 .is_some_and(|p| p.eq_ignore_ascii_case("no")),
                         });
                     }
+                    b"attribute" if in_element => {
+                        let a = attrs(&e);
+                        if let (Some(el), Some(name), Some(value)) =
+                            (elements.last_mut(), a.get("name"), a.get("value"))
+                        {
+                            el.dnp |= attribute_marks_dnp(name, value);
+                        }
+                    }
                     b"signal" => {
                         let a = attrs(&e);
                         signals.push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
@@ -148,6 +174,9 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 }
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"package" => cur_package = None,
+            Ok(Event::End(e)) if matches!(e.name().as_ref(), b"element" | b"elements") => {
+                in_element = false;
+            }
             Ok(Event::End(e)) if e.name().as_ref() == b"library" => cur_library.clear(),
             Ok(Event::Eof) => break,
             Err(err) => {
@@ -414,5 +443,38 @@ mod tests {
         let names: Vec<&str> = board.nets.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"VBUS&5"), "entity decoded: {names:?}");
         assert!(names.contains(&"A<B"), "entity decoded: {names:?}");
+    }
+
+    /// An assembly-variant attribute on the element (`POPULATE=0`, `DNP=1`)
+    /// marks the part not fitted just as `populate="no"` does; an attribute
+    /// that says the part is populated, or an unrelated one, leaves it fitted.
+    #[test]
+    fn element_attributes_mark_parts_not_fitted() {
+        let el = |name: &str, attr: &str| {
+            format!(
+                r#"<element name="{name}" library="l" package="P" value="v" x="0" y="0">{attr}</element>"#
+            )
+        };
+        let xml = format!(
+            r#"<eagle><drawing><board><libraries><library name="l"><packages><package name="P">
+<smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/></package></packages></library></libraries>
+<elements>{}{}{}{}{}</elements><signals/></board></drawing></eagle>"#,
+            el("U1", r#"<attribute name="POPULATE" value="0"/>"#),
+            el("U2", r#"<attribute name="POPULATE" value="1"/>"#),
+            el("U3", r#"<attribute name="DNP" value="yes"/>"#),
+            el("U4", r#"<attribute name="MPN" value="0"/>"#),
+            el("U5", ""),
+        );
+        let board = extract(&xml).unwrap();
+        let dnp = |r: &str| {
+            board
+                .components
+                .iter()
+                .find(|c| c.reference == r)
+                .map(|c| c.dnp)
+                .expect("element present")
+        };
+        assert!(dnp("U1") && dnp("U3"));
+        assert!(!dnp("U2") && !dnp("U4") && !dnp("U5"));
     }
 }

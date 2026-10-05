@@ -90,7 +90,7 @@ pub use kicad_dru::{
     KicadDruRules,
 };
 pub use netlint::{
-    control_role, is_capacitor, is_connector_like, is_ground, is_placeholder_value,
+    control_role, is_capacitor, is_connector_like, is_ground, is_placeholder_value, is_resistor,
     is_test_point_or_hole, is_unconnected_net, norm, pin_is_no_connect, render_netlint, LintCheck,
     LintFinding, NetLintReport, Severity, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
@@ -403,11 +403,11 @@ impl ExtractedBoard {
             let Ok(text) = std::fs::read_to_string(sch) else {
                 return;
             };
-            let Ok(pads) = eagle_sch::schematic_pad_names(&text) else {
+            let Ok(pads) = eagle_sch::schematic_pad_pins(&text) else {
                 return;
             };
-            for (reference, pad, name) in pads {
-                names.insert((reference, pad), (name, String::new()));
+            for (reference, pad, name, kind) in pads {
+                names.insert((reference, pad), (name, kind));
             }
         } else {
             let Ok(sheet) = Self::from_kicad_schematic_path(sch) else {

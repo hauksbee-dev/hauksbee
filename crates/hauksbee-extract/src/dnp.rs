@@ -113,6 +113,12 @@ pub enum DnpReason {
     ZeroOhmLink,
     /// The policy honours DNP.
     HonouredPolicy,
+    /// An alternative footprint under the default policy: a DNP part whose
+    /// every connection (three or more nets) is also made by a fitted part
+    /// of the same kind, so it is a second-source placement of that part,
+    /// not a missing one. Fitting both would put two copies of one part on
+    /// the same nets.
+    AlternativeFootprint,
 }
 
 impl DnpReason {
@@ -124,6 +130,9 @@ impl DnpReason {
             Self::NamedOpen => "DNP, left open because you asked for it",
             Self::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
             Self::HonouredPolicy => "DNP, left open",
+            Self::AlternativeFootprint => {
+                "DNP alternative footprint of a fitted part on the same nets, left open"
+            }
         }
     }
 
@@ -137,6 +146,7 @@ impl DnpReason {
             Self::NamedOpen => "named-open",
             Self::ZeroOhmLink => "zero-ohm-link",
             Self::HonouredPolicy => "honoured-policy",
+            Self::AlternativeFootprint => "alternative-footprint",
         }
     }
 
@@ -151,6 +161,7 @@ impl DnpReason {
             "named-open" => Some(Self::NamedOpen),
             "zero-ohm-link" => Some(Self::ZeroOhmLink),
             "honoured-policy" => Some(Self::HonouredPolicy),
+            "alternative-footprint" => Some(Self::AlternativeFootprint),
             _ => None,
         }
     }
@@ -424,6 +435,7 @@ impl ExtractedBoard {
             policy_line: policy.describe().to_string(),
             ..Default::default()
         };
+        let alternatives = alternative_footprints(&self.components);
         for comp in &mut self.components {
             // An explicit `no_fit` is also the assembly-variant seam: the
             // layout may describe the superset of placements and carry no DNP
@@ -445,6 +457,8 @@ impl ExtractedBoard {
                     DnpPolicy::FitExceptLinks => {
                         if is_zero_ohm_link(comp) {
                             DnpReason::ZeroOhmLink
+                        } else if alternatives.contains(&comp.reference) {
+                            DnpReason::AlternativeFootprint
                         } else {
                             DnpReason::Policy
                         }
@@ -484,6 +498,45 @@ impl ExtractedBoard {
         }
         Ok(decision)
     }
+}
+
+/// References of DNP parts that are alternative footprints of a fitted part:
+/// three or more connected nets, every one of which a single non-DNP part with
+/// the same designator prefix (`U`, `Q`, ...) also connects. Two placements
+/// of one part on the same nets are a second-source or package option; only
+/// one is ever assembled.
+fn alternative_footprints(components: &[Component]) -> std::collections::BTreeSet<String> {
+    use std::collections::BTreeSet;
+    let prefix = |r: &str| -> String {
+        r.chars()
+            .take_while(char::is_ascii_alphabetic)
+            .collect::<String>()
+            .to_ascii_uppercase()
+    };
+    let nets = |c: &Component| -> BTreeSet<i64> {
+        c.pins
+            .iter()
+            .filter_map(|p| p.net)
+            .filter(|&n| n != 0)
+            .collect()
+    };
+    components
+        .iter()
+        .filter(|c| c.dnp)
+        .filter(|c| {
+            let own = nets(c);
+            let pre = prefix(&c.reference);
+            own.len() >= 3
+                && !pre.is_empty()
+                && components.iter().any(|o| {
+                    !o.dnp
+                        && o.reference != c.reference
+                        && prefix(&o.reference) == pre
+                        && own.is_subset(&nets(o))
+                })
+        })
+        .map(|c| c.reference.clone())
+        .collect()
 }
 
 /// Closest reference designators to a mistyped one, case-insensitive, capped at
@@ -531,6 +584,55 @@ mod nearest_reference_tests {
         let near = nearest_references("R17", &known, 3);
         assert!(near.contains(&"R71".to_string()) || near.contains(&"R7".to_string()));
         assert!(nearest_references("XYZZY99", &known, 3).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod alternative_footprint_tests {
+    use super::{alternative_footprints, DnpPolicy, DnpReason};
+    use crate::testutil::{board, part, pin};
+
+    fn ic(reference: &str, nets: &[i64], dnp: bool) -> crate::Component {
+        let pins = nets
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| pin(&(i + 1).to_string(), Some(n)))
+            .collect();
+        let mut c = part(reference, "XCVR", "lib:XCVR", "SO8", pins);
+        c.dnp = dnp;
+        c
+    }
+
+    /// A DNP part whose every net a fitted part of the same kind also
+    /// connects is a second-source footprint, left open by default; a DNP
+    /// part with a connection of its own, a different designator class, or
+    /// too few nets to tell is an ordinary DNP part.
+    #[test]
+    fn a_dnp_second_footprint_on_a_fitted_parts_nets_is_left_open() {
+        let parts = vec![
+            ic("U2", &[1, 2, 3, 4, 5], false),
+            ic("U6", &[1, 2, 3, 5], true),
+            ic("U8", &[1, 2, 3, 9], true),
+            ic("Q3", &[1, 2, 3], true),
+            ic("U9", &[1, 2], true),
+        ];
+        let alt = alternative_footprints(&parts);
+        assert_eq!(alt.into_iter().collect::<Vec<_>>(), ["U6"]);
+
+        let nets: Vec<(i64, &str)> = (1..=9).map(|i| (i, "N")).collect();
+        let mut b = board(&nets, parts);
+        let decision = b
+            .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &[])
+            .expect("policy applies");
+        let u6 = b.components.iter().find(|c| c.reference == "U6").unwrap();
+        let u8 = b.components.iter().find(|c| c.reference == "U8").unwrap();
+        assert!(u6.dnp, "the alternative footprint stays open");
+        assert!(!u8.dnp, "an ordinary DNP part is still fitted by default");
+        assert!(format!("{decision:?}").contains("U6"));
+        assert_eq!(
+            DnpReason::from_policy_tag(DnpReason::AlternativeFootprint.policy_tag()),
+            Some(DnpReason::AlternativeFootprint)
+        );
     }
 }
 
