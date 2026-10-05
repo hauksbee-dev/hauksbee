@@ -1545,11 +1545,15 @@ kind = "vreg"
 description = "AP2112K-3.3 LDO, 600mA, 3.3V fixed, SOT25 (Diodes Inc)"
 
 [models.match]
-# AP2112K-3.3, AP2112K-3.3TRG1, and the AP2112 (non-K) variants of the same
-# 3.3 V die. The voltage code is REQUIRED: the AP2112 family also ships 1.2 V
-# through 5.0 V options on the same pinout, and binding a 1.8 V part to a 3.3 V
-# source would put 1.5 V of fiction on a rail.
-value_re = "(?i)^AP2112[KM]?[- ]?3[._]3([A-Z0-9-]*)?$"
+# AP2112K-3.3, AP2112K-3.3TRG1, AP2112K-3.3V. The voltage code is REQUIRED:
+# the AP2112 family also ships 1.2 V through 2.6 V options, and binding a 1.8 V
+# part to a 3.3 V source would put 1.5 V of fiction on a rail. The package
+# letter is REQUIRED too: DS39724 Ordering Information lists K = SOT25,
+# M = SO-8 and R5/R5A = SOT89-5, and the Pin Descriptions table gives each a
+# different map (SO-8: VIN 8, GND 6/7, EN 5, VOUT 1), so only K takes this
+# SOT25 map. A spelling with no package letter ("AP2112-3.3",
+# "AP2112(3.3V)") is the `ap2112_3v3_sot25` card below, gated on footprint.
+value_re = "(?i)^AP2112K[- ]?3[._]3([A-Z0-9-]*)?$"
 
 [models.params]
 vout      = 3.3      # +-1.5% @ VIN=4.3 V, 1 mA <= IOUT <= 30 mA
@@ -1578,6 +1582,11 @@ theta_jc_c_per_w = 96.0      # SOT25
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2112.pdf"
+title = "Diodes Incorporated AP2112 600mA CMOS LDO regulator with enable, DS39724 Rev. 2-2, June 2017"
+locator = "Pin Descriptions p.2 (SOT25 column); Absolute Maximum Ratings p.3; AP2112-3.3 Electrical Characteristics p.8; Ordering Information p.12"
+sha256 = "ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f"
 [[models.source.characteristic]]
 parameter = "θJA thermal resistance (junction to ambient)(no heatsink)"
 rating = "theta_ja_c_per_w"
@@ -1610,6 +1619,291 @@ unit = "°C/W"
 conditions = "SO-8"
 package = "SOIC-8"
 basis = "Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics, θJC typ, SO-8"
+
+# ── AP2112-3.3 with no package letter, SOT25 footprint only ──────────────────
+# Library values such as "AP2112-3.3" and "AP2112(3.3V)" name the 3.3 V die but
+# not the package. DS39724 ships it as K (SOT25), M (SO-8) and R5/R5A
+# (SOT89-5) with three different pin maps, so the package comes from the
+# footprint instead: only a SOT-23-5/SOT25 outline takes the SOT25 map.
+[[models]]
+id = "ap2112_3v3_sot25"
+kind = "vreg"
+description = "AP2112-3.3 LDO, 600mA, 3.3V fixed, SOT25 by footprint (Diodes Inc)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2112.pdf"
+title = "Diodes Incorporated AP2112 600mA CMOS LDO regulator with enable, DS39724 Rev. 2-2, June 2017"
+locator = "Pin Descriptions p.2 (SOT25 column); Absolute Maximum Ratings p.3; AP2112-3.3 Electrical Characteristics p.8; Ordering Information p.12"
+sha256 = "ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f"
+
+[models.match]
+value_re = "(?i)^AP2112[- ]?\\(?3[._]3V?\\)?([A-Z0-9-]*)?$"
+footprint_re = "(?i)SOT-?23-?5|SOT-?25|SC-?74A"
+
+[models.params]
+vout       = 3.3      # AP2112-3.3 Electrical Characteristics, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA
+dropout_v  = 0.4      # VDROP max @ IOUT = 600 mA (250 mV typ; 200 mV max @ 300 mA)
+cout_min_f = 1.0e-6   # Typical Applications Circuit and Note 4: 1.0 uF X7R/X5R ceramic
+iq_a       = 55.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (80 uA max)
+
+[models.pins]
+# Pin Descriptions table, SOT25 column.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.6          # IOUT(MAX) min, AP2112-3.3 Electrical Characteristics
+max_voltage_v = 6.5          # Absolute Maximum Ratings, input voltage
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 184.0     # Absolute Maximum Ratings, θJA SOT25, no heatsink
+theta_jc_c_per_w = 96.0      # AP2112-3.3 Electrical Characteristics, θJC typ SOT25
+
+# ── AP2114-3.3 (Diodes/BCD 1 A low-noise CMOS LDO) ──────────────────────────
+# Source for both cards: AP2114 data sheet Rev. 2.2, January 2013 (BCD
+# Semiconductor, now Diodes). The package letter selects the pin map (Figure 2
+# and the Pin Descriptions table): H = SOT-223 (1 GND, 2 VOUT, 3 VIN, tab
+# VOUT, no EN), HA = SOT-223 (1 VIN, 2 GND, 3 VOUT), D/DA = TO-252, S =
+# TO-263, M = SOIC-8 (fixed: 1/3/5/6/7 GND, 2 VOUT, 4 VIN, 8 EN). Only H and
+# M are carried; the regex requires the letter and the 3.3 voltage code (the
+# ADJ member's reference is not an output voltage).
+[[models]]
+id = "ap2114h_3v3"
+kind = "vreg"
+description = "Diodes AP2114H-3.3 1A low-noise LDO, 3.3V fixed, SOT-223 (no enable)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2114.pdf"
+title = "BCD Semiconductor / Diodes AP2114 1A low noise CMOS LDO regulator with enable, data sheet Rev. 2.2, January 2013"
+locator = "Figure 2 Pin Configuration and Pin Descriptions p.2-3 (H package); Ordering Information p.4-5; Absolute Maximum Ratings and Recommended Operating Conditions p.7; AP2114-3.3 Electrical Characteristics p.12"
+sha256 = "d20cd46c5f472fe220f3e1ffb82b2679bc37e3dd145891bfdedf0acb78089d51"
+
+[models.match]
+value_re = "(?i)^AP2114H-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 3.3      # AP2114-3.3 EC, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA, +-1.5%
+dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
+cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"; EC test COUT = 4.7 uF ceramic
+iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
+
+[models.pins]
+# Pin Descriptions, SOT-223 (H) column; Figure 2 shows the tab as VOUT.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+"4" = "out"   # SOT-223 tab
+
+[models.ratings]
+max_current_a = 1.0          # IOUT(MAX) min, AP2114-3.3 EC
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN (2.5 to 6.0 V recommended)
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 128.0     # Absolute Maximum Ratings, θJA SOT-223, no heatsink
+theta_jc_c_per_w = 50.9      # AP2114-3.3 EC, θJC SOT-223
+
+[[models]]
+id = "ap2114m_3v3"
+kind = "vreg"
+description = "Diodes AP2114M-3.3 1A low-noise LDO, 3.3V fixed, SOIC-8 (EN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2114.pdf"
+title = "BCD Semiconductor / Diodes AP2114 1A low noise CMOS LDO regulator with enable, data sheet Rev. 2.2, January 2013"
+locator = "Figure 2 Pin Configuration and Pin Descriptions p.2-3 (M package, fixed versions); Ordering Information p.4-5; Absolute Maximum Ratings p.7; AP2114-3.3 Electrical Characteristics p.12"
+sha256 = "d20cd46c5f472fe220f3e1ffb82b2679bc37e3dd145891bfdedf0acb78089d51"
+
+[models.match]
+value_re = "(?i)^AP2114M-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 3.3      # AP2114-3.3 EC, +-1.5%
+dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
+cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"
+iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
+
+[models.pins]
+# Pin Descriptions, SOIC-8 (Fixed) column.
+"1" = "gnd"
+"2" = "out"
+"3" = "gnd"
+"4" = "in"
+"5" = "gnd"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "en"
+
+[models.ratings]
+max_current_a = 1.0          # IOUT(MAX) min, AP2114-3.3 EC
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 144.0     # Absolute Maximum Ratings, θJA SOIC-8, no heatsink
+theta_jc_c_per_w = 74.6      # AP2114-3.3 EC, θJC SOIC-8
+
+# ── AP2125-3.3 (Diodes 300 mA low-noise LDO) ────────────────────────────────
+# Source: Diodes AP2125 DS38144 Rev. 2-2, May 2016. Ordering Information:
+# N = SOT-23-3, K = SOT-23-5, KS = SC-70-5. SOT-23-3: 1 GND, 2 VOUT, 3 VIN;
+# SOT-23-5/SC-70-5: 1 VIN, 2 GND, 3 CE, 4 NC, 5 VOUT. KS is left out (its
+# θJA is 300 C/W, not the K's 200), so the package letter is required.
+[[models]]
+id = "ap2125k_3v3"
+kind = "vreg"
+description = "Diodes AP2125K-3.3 300mA LDO, 3.3V fixed, SOT-23-5 (CE)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2125.pdf"
+title = "Diodes Incorporated AP2125 300mA low dropout linear regulator with enable, DS38144 Rev. 2-2, May 2016"
+locator = "Pin Descriptions p.2 (SOT-23-5 column); Absolute Maximum Ratings and Recommended Operating Conditions p.3; AP2125-3.3 Electrical Characteristics; Ordering Information"
+sha256 = "73dd4f47f543db12873c254465f6e74433bf8e43f1e91a930b49d15ab7eb71c1"
+
+[models.match]
+value_re = "(?i)^AP2125K-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout      = 3.3      # AP2125-3.3 EC, 3.234 to 3.366 V, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA
+dropout_v = 0.3      # VDROP max @ IOUT = 300 mA (200 mV typ)
+iq_a      = 60.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
+# cout_min_f absent: the sheet tests at COUT = 1 uF but states no minimum.
+
+[models.pins]
+# Pin Descriptions, SOT-23-5/SC-70-5 column.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.3          # IOUT(MAX) min, AP2125-3.3 EC (450 mA abs max)
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 200.0     # Absolute Maximum Ratings, θJA SOT-23-5
+
+[[models]]
+id = "ap2125n_3v3"
+kind = "vreg"
+description = "Diodes AP2125N-3.3 300mA LDO, 3.3V fixed, SOT-23-3 (no enable)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2125.pdf"
+title = "Diodes Incorporated AP2125 300mA low dropout linear regulator with enable, DS38144 Rev. 2-2, May 2016"
+locator = "Pin Descriptions p.2 (SOT-23-3 column); Absolute Maximum Ratings p.3; AP2125-3.3 Electrical Characteristics; Ordering Information"
+sha256 = "73dd4f47f543db12873c254465f6e74433bf8e43f1e91a930b49d15ab7eb71c1"
+
+[models.match]
+value_re = "(?i)^AP2125N-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout      = 3.3      # AP2125-3.3 EC, 3.234 to 3.366 V
+dropout_v = 0.3      # VDROP max @ IOUT = 300 mA
+iq_a      = 60.0e-6  # IQ typ (90 uA max)
+
+[models.pins]
+# Pin Descriptions, SOT-23-3 column.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.3          # IOUT(MAX) min, AP2125-3.3 EC
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 200.0     # Absolute Maximum Ratings, θJA SOT-23-3
+
+# ── AP2127-3.3 (Diodes 300 mA high-PSRR LDO) ────────────────────────────────
+# Source: Diodes AP2127 DS36478 Rev. 7-2, December 2017. Ordering Information:
+# N = SOT-23, N3 = SOT-23-3, K = SOT-23-5, R = SOT-89. Pin Descriptions:
+# SOT-23 and SOT-23-3 share 1 GND, 2 VOUT, 3 VIN; SOT-23-5 is 1 VIN, 2 GND,
+# 3 SHUTDOWN (enable), 4 NC/ADJ (NC on fixed parts), 5 VOUT; SOT-89 is
+# 1 GND, 2 VIN, 3 VOUT. R is not carried.
+[[models]]
+id = "ap2127k_3v3"
+kind = "vreg"
+description = "Diodes AP2127K-3.3 300mA LDO, 3.3V fixed, SOT-23-5 (enable)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2127.pdf"
+title = "Diodes Incorporated AP2127 300mA high-speed, extremely low noise LDO regulator, DS36478 Rev. 7-2, December 2017"
+locator = "Pin Descriptions p.2 (SOT-23-5 column); Absolute Maximum Ratings p.4; Electrical Characteristics p.4-5; Application Information (Output Capacitor); Ordering Information"
+sha256 = "d48c96ac985d348a379084ad921f699b8ec6f298c3d72fddc0ecae6bbe328993"
+
+[models.match]
+value_re = "(?i)^AP2127K-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 3.3      # Electrical Characteristics, +-2%, VIN = VOUT + 1 V, 1 mA <= IOUT <= 300 mA
+dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA, VOUT = 2.5-4.2 V row (170 mV typ)
+cout_min_f = 1.0e-6   # Application Information, Output Capacitor: stable with 1 uF or higher X7R/X5R
+iq_a       = 60.0e-6  # IQ typ @ VIN = VOUT + 1 V, IOUT = 0 (90 uA max)
+
+[models.pins]
+# Pin Descriptions, SOT-23-5 column (pin 4 is NC on fixed parts).
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.3          # IOUT(MAX) min, Electrical Characteristics (450 mA abs max)
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-5
+theta_jc_c_per_w = 150.0     # Electrical Characteristics, θJC SOT-23-5
+
+[[models]]
+id = "ap2127n_3v3"
+kind = "vreg"
+description = "Diodes AP2127N/N3-3.3 300mA LDO, 3.3V fixed, SOT-23 / SOT-23-3 (no enable)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2127.pdf"
+title = "Diodes Incorporated AP2127 300mA high-speed, extremely low noise LDO regulator, DS36478 Rev. 7-2, December 2017"
+locator = "Pin Descriptions p.2 (SOT-23 / SOT-23-3 column); Absolute Maximum Ratings p.4; Electrical Characteristics p.4-5; Ordering Information"
+sha256 = "d48c96ac985d348a379084ad921f699b8ec6f298c3d72fddc0ecae6bbe328993"
+
+[models.match]
+value_re = "(?i)^AP2127N3?-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 3.3      # Electrical Characteristics, +-2%
+dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA (170 mV typ)
+cout_min_f = 1.0e-6   # Application Information, Output Capacitor
+iq_a       = 60.0e-6  # IQ typ (90 uA max)
+
+[models.pins]
+# Pin Descriptions, SOT-23 / SOT-23-3 column.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.3          # IOUT(MAX) min, Electrical Characteristics
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-3 (SOT-23 is 180; the worse is kept)
 
 # ── MIC5205-3.3 ──────────────────────────────────────────────────────────────
 # Microchip (Micrel) 150 mA low-noise LDO, SOT-23-5. 17 instances on the
