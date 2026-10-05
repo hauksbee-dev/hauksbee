@@ -1865,45 +1865,640 @@ mounting = "LP087A EVM"
 basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DBV (SOT-23-5), EVM RθJA"
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SWITCHING REGULATORS DELIBERATELY LEFT UNRESOLVED, and the reason is the same
-# for all of them, so it is recorded once here rather than as four empty entries.
+# SMALL BUCK CONVERTERS: averaged board-feedback models.
 #
-# The corpus carries TLV62568 (MNT Reform), SY8089AAAC and SY8009AAAC (Olimex
-# ESP32-EVB) and LMR16006YQ3 (MNT Reform) as unresolved buck converters. Their
-# datasheets were read in full and they are NOT modelled, because the `vreg`
-# kind requires `vout` and NONE OF THESE PARTS HAS ONE. Every one of them is an
-# adjustable converter whose output is set by an external feedback divider on
-# the board:
+# An adjustable buck has no `vout`: the board's divider on FB sets the rail. These
+# cards carry the datasheet FB reference in `[models.behavioral.converter.feedback]`
+# and the binder solves the averaged switch node until FB sits at that reference,
+# so the rail comes from the resistors actually fitted, exactly as for
+# `ap64501sp_13` and `tps62933_drl`. The reference is NEVER written as an output
+# voltage. A fixed-output part (LMR16006YQ3/YQ5, LM2677-3.3/-5.0) instead has an
+# internal divider: its FB pin is wired straight to the output capacitor, so the
+# regulated quantity at FB IS the output voltage and the feedback target is the
+# datasheet's VOUT row, not a reference.
 #
-#   TLV62568   VFB = 0.6 V typ (0.588 to 0.612), VOUT = 0.6 * (1 + R1/R2)
-#   SY8089AAAC VREF = 0.6 V typ, VOUT = 0.6 * (1 + R1/R2)
-#   SY8009AAAC VREF = 0.6 V typ, same relation
-#   LMR16006Y  VFB = 0.765 V typ (0.747 to 0.782), VOUT = VFB * (1 + R1/R2)
+# Common to all of them, and listed under `missing`: switching ripple, loop
+# compensation, soft start, light-load (PFM/ECO) modes, cycle-by-cycle peak
+# limiting, UVLO and thermal shutdown. `iout_limit_a` is the rated continuous
+# output current, the same convention as the cards above; the higher switch peak
+# limits are recorded in comments only.
 #
-# Writing any specific `vout` for these would be inventing a divider the board
-# already has and the model cannot see. Filling in a plausible 3.3 V would be
-# wrong on every board that set them to something else, and silently right on
-# the ones that did not, which is the worst possible failure mode: a rail
-# reported confidently at a voltage nobody chose.
+# Not modelled and kept as a record: SY8009AAAC (Olimex ESP32-EVB), 1.5 A (the
+# 2 A rating is the SY8009B in SOT23-6), VIN 3-5.5 V, VREF 0.6 V, IQ 80 uA, ILIM
+# 1.8 A min, theta_JA 170 C/W, Silergy SY8009A/B Rev1.0. No board in the corpus
+# currently needs it, and its pin table was not re-read for this pass.
+
+# ── TLV62568DBV: TI 1 A synchronous buck, SOT-23-5, adjustable ──────────────
+# Source: TI SLVSD89B (November 2016, revised November 2017). Pin Functions
+# (p.3, SOT23-5 column), 6.1 Absolute Maximum Ratings and 6.3 Recommended
+# Operating Conditions (p.4), 6.4 Thermal Information (p.4), 6.5 Electrical
+# Characteristics (p.5), 7.3.2 100% Duty Cycle Low Dropout Operation (p.7).
+# Only the DBV (SOT-23-5) order code binds: the DDC/DRL packages put PG/NC on
+# extra pads and the DRL moves every pin (EN on 5, FB on 1).
+[[models]]
+id = "tlv62568_dbv"
+kind = "vreg"
+description = "TI TLV62568 1A 5.5V synchronous buck, SOT-23-5 (DBV), adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv62568.pdf"
+title = "TI TLV62568, TLV62568P 1-A High Efficiency Synchronous Buck Converter in SOT Package, SLVSD89B, November 2016, revised November 2017"
+locator = "Pin Functions p.3; 6.1 Absolute Maximum Ratings, 6.3 Recommended Operating Conditions and 6.4 Thermal Information p.4; 6.5 Electrical Characteristics p.5; 7.3.2 p.7"
+sha256 = "fa2ae3f5343f767f19f93532be18987ace26afc14b1c5b8f5258413a9f8dd0d9"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.588
+high = 0.612
+unit = "V"
+kind = "specification-limits"
+basis = "TLV62568 SLVSD89B 6.5, VFB feedback regulation voltage 0.588 min / 0.6 typ / 0.612 max"
+
+[models.match]
+value_re = "(?i)^TLV62568DBV[RT]?$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, loop stability, soft-start, power-save mode and protection transients are not modeled"
+iq_a = 35e-6           # 6.5 IQ, not switching, typ
+
+[models.pins]
+# Pin Functions, SOT23-5 column.
+"1" = "en"
+"2" = "gnd"
+"3" = "sw"
+"4" = "in"
+"5" = "fb"
+
+[models.ratings]
+max_current_a = 1.0          # 6.3 IOUT max
+max_voltage_v = 6.0          # 6.1 VIN, EN, PG abs max
+max_junction_temp_c = 150.0  # 6.1 TJ max
+theta_ja_c_per_w = 191.6     # 6.4 RθJA, DBV
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TLV62568 SLVSD89B, 6.3 Recommended Operating Conditions, VIN 2.5 V to 5.5 V; 6.1 Absolute Maximum Ratings, VIN 6 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.5          # 6.3 VOUT max is VIN (5.5 V); only used with no FB divider
+iout_limit_a = 1.0           # 6.3 rated output; the high-side limit is 1.5 A min (6.5 ILIM)
+max_duty = 1.0               # 7.3.2 100% duty cycle low-dropout operation
+switching_hz = 1.5e6         # 6.5 fSW typ at VOUT = 1.8 V
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.6                 # 6.5 VFB typ
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.2       # 6.5 VIH max (0.95 V typ); the pin must not float
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "power_save_mode", "cycle_by_cycle_peak_limit", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ── SY8089AAC / SY8089AAAC: Silergy 2 A synchronous buck, SOT23-5, adjustable ─
+# Source: Silergy Application Note AN_SY8089/SY8089A Rev. 0.9A. Ordering
+# Information (p.1: both order codes are SOT23-5), Pinout and pin description
+# (p.2), Absolute Maximum Ratings and Recommended Operating Conditions (p.2),
+# Electrical Characteristics (p.4). The two order codes differ only in the
+# protection behaviour (latch-off vs hiccup), which this model does not carry.
+[[models]]
+id = "sy8089_sot23_5"
+kind = "vreg"
+description = "Silergy SY8089/SY8089A 2A 5.5V synchronous buck, SOT23-5, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1810121512_Silergy-Corp-SY8089AAAC_C78988.pdf"
+title = "Silergy AN_SY8089/SY8089A Rev. 0.9A, High Efficiency 5.5V, 2A continuous, 3A peak, 1MHz Synchronous Step Down Regulator"
+locator = "Ordering Information p.1; Pinout and Absolute Maximum Ratings p.2; Electrical Characteristics p.4"
+sha256 = "be137413d9493bb799c498ccd012cea440803d5302202cebe6d7cdcc0f7b7c5d"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.588
+high = 0.612
+unit = "V"
+kind = "specification-limits"
+basis = "AN_SY8089 Rev. 0.9A Electrical Characteristics, VREF 0.588 min / 0.6 typ / 0.612 max"
+
+[models.match]
+# The board value may carry a package suffix in parentheses, "SY8089AAAC(SOT23-5)".
+value_re = "(?i)^SY8089A?AAC(\\(SOT-?23-?5\\))?$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, loop stability, soft-start, short-circuit latch/hiccup and over-voltage protection are not modeled"
+iq_a = 55e-6           # Electrical Characteristics, IQ typ, IOUT = 0
+
+[models.pins]
+# Pin description table, SOT23-5.
+"1" = "en"
+"2" = "gnd"
+"3" = "sw"     # LX
+"4" = "in"
+"5" = "fb"
+
+[models.ratings]
+max_current_a = 2.0          # 2 A continuous (3 A peak), title and Features
+max_voltage_v = 6.0          # Absolute Maximum Ratings, supply input -0.3 to 6.0 V
+max_power_w = 0.6            # Absolute Maximum Ratings, PD at TA = 25 C, SOT23-5
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 170.0     # Absolute Maximum Ratings, θJA (Note 2 board)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Silergy AN_SY8089/SY8089A Rev. 0.9A, Recommended Operating Conditions, supply 2.7 V to 5.5 V; Absolute Maximum Ratings, supply 6.0 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.5          # top of the input range; only used with no FB divider
+iout_limit_a = 2.0           # rated continuous; PFET current limit is 3.5 A min
+max_duty = 1.0               # Electrical Characteristics, max duty cycle 100 %
+switching_hz = 1.0e6         # Electrical Characteristics, FOSC typ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.6                 # Electrical Characteristics, VREF typ
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.5       # Electrical Characteristics, EN rising threshold (printed in the min column); "Do not float"
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "short_circuit_latch_or_hiccup", "ovp", "cycle_by_cycle_peak_limit", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ── LMR16006: TI 0.6 A 60 V non-synchronous buck, SOT-23-6 (DDC) ────────────
+# Two datasheets. SNVSA24 (October 2014) covers the adjustable LMR16006X (0.7
+# MHz) and LMR16006Y (2.1 MHz), 4-60 V. SNVSAC1 (June 2015) covers the
+# automotive LMR16006Y-Q1, 4-40 V, whose ordering table makes the suffix an
+# OUTPUT OPTION: LMR16006YQ is adjustable, LMR16006YQ3 is fixed 3.3 V and
+# LMR16006YQ5 is fixed 5 V ("ADJ, Fixed 3.3 V and Fixed 5 V Output Option",
+# p.1 Device Information; 7.5 VOUT rows). The pin map is the same in both (Pin
+# Functions, p.3): CB 1, GND 2, FB 3, SHDN 4, VIN 5, SW 6.
 #
-# What these need is a vreg variant that reads its output from a feedback-node
-# divider on the netlist, which is an engine change and not a database entry.
-# Until then they stay unresolved and the bind report says so, which is the
-# honest outcome. For the record, so the work is not lost when that variant
-# exists, the rest of each part's data was gathered:
-#   TLV62568   1 A, VIN 2.5-5.5 V, RDS(on) 150 mOhm HS / 100 mOhm LS, IQ 35 uA,
-#              ILIM 1.5 A min, theta_JA 191.6 C/W (DBV). TI SLVSD89B.
-#   SY8089AAAC 2 A cont / 3 A peak, VIN 2.7-5.5 V, RDS(on) 110 mOhm PFET /
-#              80 mOhm NFET, IQ 55 uA, ILIM 3.5 A min, PD 0.6 W at TA=25 C,
-#              theta_JA 170 C/W. Silergy AN_SY8089/SY8089A Rev. 0.9A.
-#   SY8009AAAC 1.5 A (NOT 2 A: the 2 A rating is the SY8009B in SOT23-6),
-#              VIN 3-5.5 V, RDS(on) 180 mOhm PFET / 120 mOhm NFET, IQ 80 uA,
-#              ILIM 1.8 A min, theta_JA 170 C/W. Silergy SY8009A/B Rev1.0.
-#   LMR16006Y  600 mA, VIN 4-60 V, high-side RDS(on) 900 mOhm (non-synchronous,
-#              external Schottky for the low side), IQ 28 uA, ILIM 1.2 A typ,
-#              theta_JA 102 C/W. The Y is the 2.1 MHz frequency grade and the Q
-#              suffix is AEC-Q100 qualification, NOT an output-voltage code.
-#              TI SNVSA24.
+# SHDN has an internal pull-up current source and "Float to enable" (Pin
+# Functions; 8.3.4), so no enable block is stated: the converter enable reads a
+# floating pin as low and would switch off a part the datasheet says is running.
+# The low-side of this buck is an external Schottky, which is the board's own
+# diode and is not stamped here.
+[[models]]
+id = "lmr16006x_adj"
+kind = "vreg"
+description = "TI LMR16006X 0.6A 60V buck, 0.7 MHz, SOT-23-6, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lmr16006.pdf"
+title = "TI LMR16006 SIMPLE SWITCHER 60 V 0.6 A Buck Regulators With High Efficiency ECO Mode, SNVSA24, October 2014"
+locator = "Pin Functions p.3; 7.1 Absolute Maximum Ratings, 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.4; 7.5 Electrical Characteristics and 7.6 Switching Characteristics p.5"
+sha256 = "6a7945205357cafb3ee494b0de099cc32ce1cb1fcd270d8b5c2e44490c098a2c"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.747
+high = 0.782
+unit = "V"
+kind = "specification-limits"
+basis = "LMR16006 SNVSA24 7.5, VFB 0.747 min / 0.765 typ / 0.782 max"
+
+[models.match]
+value_re = "(?i)^LMR16006XDDC[RT](G4)?$|^LMR16006X$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback is executable; SHDN (internal pull-up, float enables), switching ripple, loop stability, soft-start, ECO mode and protection transients are not modeled"
+iq_a = 28e-6           # 7.5 IQ, non-switching, VIN = 12 V, typ
+
+[models.pins]
+"1" = "cb"
+"2" = "gnd"
+"3" = "fb"
+"4" = "shdn"
+"5" = "in"
+"6" = "sw"
+
+[models.ratings]
+max_current_a = 0.6          # p.1 "Output Current up to 600 mA"
+max_voltage_v = 65.0         # 7.1 VIN to GND abs max
+max_junction_temp_c = 150.0  # 7.1
+theta_ja_c_per_w = 102.0     # 7.4 RθJA, DDC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.0
+max_v = 60.0
+abs_max_v = 65.0
+basis = "TI LMR16006 SNVSA24, 7.3 Recommended Operating Conditions, VIN 4 V to 60 V; 7.1 Absolute Maximum Ratings, VIN 65 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0          # placeholder seed only used with no FB divider on the board
+iout_limit_a = 0.6           # rated output; peak current limit 1.2 A typ (7.5 ILIMIT)
+max_duty = 0.96              # 7.6 DMAX, LMR16006X, typ
+switching_hz = 700e3         # 7.6 fSW, LMR16006X, typ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.765               # 7.5 VFB typ
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["shdn_enable_and_uvlo_divider", "switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
+
+[[models]]
+id = "lmr16006y_adj"
+kind = "vreg"
+description = "TI LMR16006Y / LMR16006YQ 0.6A buck, 2.1 MHz, SOT-23-6, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lmr16006.pdf"
+title = "TI LMR16006 SIMPLE SWITCHER 60 V 0.6 A Buck Regulators With High Efficiency ECO Mode, SNVSA24, October 2014"
+locator = "Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 and 7.6 p.5"
+sha256 = "6a7945205357cafb3ee494b0de099cc32ce1cb1fcd270d8b5c2e44490c098a2c"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lmr16006y-q1.pdf"
+title = "TI LMR16006Y-Q1 SIMPLE SWITCHER 40 V 0.6 A buck regulator, SNVSAC1, June 2015"
+locator = "Device Information p.1 (LMR16006YQ = ADJ); Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 and 7.6 p.5"
+sha256 = "ba6e4a9332e01ff2dddfe7ddb600f27dc37f13bc1cd9708e2e358b957e88af1d"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.747
+high = 0.782
+unit = "V"
+kind = "specification-limits"
+basis = "SNVSA24 and SNVSAC1 7.5, VFB 0.747 min / 0.765 typ / 0.782 max"
+
+[models.match]
+# LMR16006Y (SNVSA24) and the adjustable automotive LMR16006YQ (SNVSAC1). The
+# YQ3/YQ5 fixed options are separate cards below and must not match here.
+value_re = "(?i)^LMR16006Y(DDC[RT](G4)?)?$|^LMR16006YQ(DDC[RT]Q1)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback is executable; SHDN (internal pull-up, float enables), switching ripple, loop stability, soft-start, ECO mode and protection transients are not modeled"
+iq_a = 28e-6           # 7.5 IQ, non-switching, typ (both datasheets)
+
+[models.pins]
+"1" = "cb"
+"2" = "gnd"
+"3" = "fb"
+"4" = "shdn"
+"5" = "in"
+"6" = "sw"
+
+[models.ratings]
+max_current_a = 0.6
+# The -Q1 recommended VIN is 40 V against 60 V for SNVSA24; both share the 65 V
+# abs max, and the envelope below takes the tighter, -Q1 operating ceiling so a
+# 40-60 V input is reported rather than silently passed on the automotive part.
+max_voltage_v = 65.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 102.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.0
+max_v = 40.0
+abs_max_v = 65.0
+basis = "TI SNVSAC1 7.3 Recommended Operating Conditions, VIN 4 V to 40 V (SNVSA24 allows 60 V for the non-Q1 part); 7.1 Absolute Maximum Ratings, VIN 65 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0          # placeholder seed only used with no FB divider on the board
+iout_limit_a = 0.6
+max_duty = 0.97              # 7.6 DMAX, Y grade, typ
+switching_hz = 2.1e6         # 7.6 fSW, Y grade, typ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.765               # 7.5 VFB typ
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["shdn_enable_and_uvlo_divider", "switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
+
+# LMR16006YQ3: the FIXED 3.3 V automotive option. FB is the output sense input
+# of an internal divider ("Fixed Output Option" in 8.2 Functional Block Diagram,
+# p.7), wired to the output capacitor, so the feedback target is the 7.5 VOUT
+# row, 3.3 V typ, not the 0.765 V reference of the adjustable option.
+[[models]]
+id = "lmr16006yq3"
+kind = "vreg"
+description = "TI LMR16006YQ3 0.6A 40V buck, 2.1 MHz, fixed 3.3V, SOT-23-6 (averaged model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lmr16006y-q1.pdf"
+title = "TI LMR16006Y-Q1 SIMPLE SWITCHER 40 V 0.6 A buck regulator, SNVSAC1, June 2015"
+locator = "Device Information p.1 (LMR16006YQ3 = Fixed 3.3 V); Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 VOUT row and 7.6 p.5; 8.2 Functional Block Diagram p.7"
+sha256 = "ba6e4a9332e01ff2dddfe7ddb600f27dc37f13bc1cd9708e2e358b957e88af1d"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.201
+high = 3.399
+unit = "V"
+kind = "specification-limits"
+basis = "SNVSAC1 7.5, VOUT fixed 3.3 V version 3.201 min / 3.3 typ / 3.399 max"
+
+[models.match]
+value_re = "(?i)^LMR16006YQ3(DDC[RT]Q1)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: the fixed 3.3 V output is regulated at the FB sense pin; SHDN (internal pull-up, float enables), switching ripple, loop stability, soft-start, ECO mode and protection transients are not modeled"
+iq_a = 28e-6
+
+[models.pins]
+"1" = "cb"
+"2" = "gnd"
+"3" = "fb"     # output sense on the fixed option
+"4" = "shdn"
+"5" = "in"
+"6" = "sw"
+
+[models.ratings]
+max_current_a = 0.6
+max_voltage_v = 65.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 102.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.0
+max_v = 40.0
+abs_max_v = 65.0
+basis = "TI SNVSAC1 7.3 Recommended Operating Conditions, VIN 4 V to 40 V; 7.1 Absolute Maximum Ratings, VIN 65 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 3.3          # 7.5 VOUT, fixed 3.3 V version, typ
+iout_limit_a = 0.6
+max_duty = 0.97
+switching_hz = 2.1e6
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 3.3                 # fixed option: FB senses VOUT directly (7.5 VOUT typ)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "fixed_output_sense", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["shdn_enable_and_uvlo_divider", "switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
+
+[[models]]
+id = "lmr16006yq5"
+kind = "vreg"
+description = "TI LMR16006YQ5 0.6A 40V buck, 2.1 MHz, fixed 5V, SOT-23-6 (averaged model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lmr16006y-q1.pdf"
+title = "TI LMR16006Y-Q1 SIMPLE SWITCHER 40 V 0.6 A buck regulator, SNVSAC1, June 2015"
+locator = "Device Information p.1 (LMR16006YQ5 = Fixed 5 V); Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 VOUT row and 7.6 p.5; 8.2 Functional Block Diagram p.7"
+sha256 = "ba6e4a9332e01ff2dddfe7ddb600f27dc37f13bc1cd9708e2e358b957e88af1d"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.85
+high = 5.15
+unit = "V"
+kind = "specification-limits"
+basis = "SNVSAC1 7.5, VOUT fixed 5 V version 4.85 min / 5 typ / 5.15 max"
+
+[models.match]
+value_re = "(?i)^LMR16006YQ5(DDC[RT]Q1)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: the fixed 5 V output is regulated at the FB sense pin; SHDN (internal pull-up, float enables), switching ripple, loop stability, soft-start, ECO mode and protection transients are not modeled"
+iq_a = 28e-6
+
+[models.pins]
+"1" = "cb"
+"2" = "gnd"
+"3" = "fb"     # output sense on the fixed option
+"4" = "shdn"
+"5" = "in"
+"6" = "sw"
+
+[models.ratings]
+max_current_a = 0.6
+max_voltage_v = 65.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 102.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.0
+max_v = 40.0
+abs_max_v = 65.0
+basis = "TI SNVSAC1 7.3 Recommended Operating Conditions, VIN 4 V to 40 V; 7.1 Absolute Maximum Ratings, VIN 65 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0          # 7.5 VOUT, fixed 5 V version, typ
+iout_limit_a = 0.6
+max_duty = 0.97
+switching_hz = 2.1e6
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 5.0                 # fixed option: FB senses VOUT directly (7.5 VOUT typ)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "fixed_output_sense", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["shdn_enable_and_uvlo_divider", "switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
+
+# ── LM2677-3.3 / -5.0: TI 5 A non-synchronous buck, fixed outputs, TO-263-7 ─
+# Source: TI SNVS077J (May 2004, revised June 2016). Pin Functions (p.3,
+# TO-263/TO-220 column), 6.1 Absolute Maximum Ratings and 6.3 Recommended
+# Operating Conditions (p.4), 6.4 Thermal Information (p.5), 6.5/6.6 Electrical
+# Characteristics 3.3 V / 5 V (p.5) and 6.9 All Output Voltage Versions (p.6).
+# FB is "connected directly to the output capacitor for a fixed output version"
+# (Pin Functions), so the feedback target is the VOUT row. ON/OFF is "pull high
+# or float to enable" (internal 20 uA source, 6.9), so no enable block is stated,
+# for the same reason as the LMR16006 above. The S (TO-263) and the KTW TO-220
+# share the 7-pin map; the 14-pin VSON (SD order codes) does not, and is not
+# matched. The 12 V and ADJ versions are not carried.
+[[models]]
+id = "lm2677_3v3_to263"
+kind = "vreg"
+description = "TI LM2677-3.3 5A 40V buck, fixed 3.3V, TO-263-7 (averaged model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm2677.pdf"
+title = "TI LM2677 SIMPLE SWITCHER High Efficiency 5-A Step-Down Voltage Regulator With Sync, SNVS077J, May 2004, revised June 2016"
+locator = "Pin Functions p.3; 6.1 and 6.3 p.4; 6.4 Thermal Information p.5; 6.5 Electrical Characteristics 3.3 V p.5; 6.9 All Output Voltage Versions p.6"
+sha256 = "67567c9c5d7631681481c57ceb79e4b25d10065f664b75a5afb039e579ad8ace"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.201
+high = 3.399
+unit = "V"
+kind = "specification-limits"
+basis = "LM2677 SNVS077J 6.5, VOUT 3.234/3.3/3.366 V at 25 C, 3.201/3.399 V over -40 to 125 C, VIN 8-40 V, 0.1-5 A"
+
+[models.match]
+value_re = "(?i)^LM2677SX?-3\\.3(/NOPB)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: the fixed 3.3 V output is regulated at the FB sense pin; ON/OFF (float enables), SYNC, switching ripple, loop stability, soft-start and protection transients are not modeled"
+iq_a = 4.2e-3          # 6.9 IQ typ (6 mA max)
+
+[models.pins]
+# Pin Functions, TO-263 column; the tab is GND.
+"1" = "sw"     # VSW
+"2" = "in"
+"3" = "cb"
+"4" = "gnd"
+"5" = "sync"
+"6" = "fb"     # output sense on the fixed versions
+"7" = "on_off"
+
+[models.ratings]
+max_current_a = 5.0          # title, 5-A; ICL 6.1 A min at 25 C (6.9)
+max_voltage_v = 45.0         # 6.1 input supply voltage
+max_junction_temp_c = 150.0  # 6.1 (recommended 125 C, 6.3)
+theta_ja_c_per_w = 56.0      # 6.4 RθJA, KTW, package-sized 1 oz copper (35 / 26 with more copper)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 8.0
+max_v = 40.0
+abs_max_v = 45.0
+basis = "TI LM2677 SNVS077J, 6.3 Recommended Operating Conditions, supply 8 V to 40 V; 6.1 Absolute Maximum Ratings, 45 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 3.3          # 6.5 VOUT typ
+iout_limit_a = 5.0
+efficiency = 0.82            # 6.5 η, VIN = 12 V, ILOAD = 5 A, typ
+max_duty = 0.91              # 6.9 maximum duty cycle, typ
+switching_hz = 260e3         # 6.9 fO typ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 3.3                 # fixed version: FB senses VOUT directly (6.5 VOUT typ)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "fixed_output_sense", "output_current_ceiling", "reflected_input_power", "maximum_duty", "full_load_efficiency", "quiescent_current"]
+missing = ["on_off_enable", "sync_input", "switching_ripple", "compensation_stability", "soft_start", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
+
+[[models]]
+id = "lm2677_5v0_to263"
+kind = "vreg"
+description = "TI LM2677-5.0 5A 40V buck, fixed 5V, TO-263-7 (averaged model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm2677.pdf"
+title = "TI LM2677 SIMPLE SWITCHER High Efficiency 5-A Step-Down Voltage Regulator With Sync, SNVS077J, May 2004, revised June 2016"
+locator = "Pin Functions p.3; 6.1 and 6.3 p.4; 6.4 Thermal Information p.5; 6.6 Electrical Characteristics 5 V p.5; 6.9 All Output Voltage Versions p.6"
+sha256 = "67567c9c5d7631681481c57ceb79e4b25d10065f664b75a5afb039e579ad8ace"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.85
+high = 5.15
+unit = "V"
+kind = "specification-limits"
+basis = "LM2677 SNVS077J 6.6, VOUT 4.9/5/5.1 V at 25 C, 4.85/5.15 V over -40 to 125 C, VIN 8-40 V, 0.1-5 A"
+
+[models.match]
+# Board values spell the 5.0 V option "-5" as well as the order code's "-5.0".
+value_re = "(?i)^LM2677SX?-5(\\.0)?(/NOPB)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: the fixed 5 V output is regulated at the FB sense pin; ON/OFF (float enables), SYNC, switching ripple, loop stability, soft-start and protection transients are not modeled"
+iq_a = 4.2e-3
+
+[models.pins]
+"1" = "sw"
+"2" = "in"
+"3" = "cb"
+"4" = "gnd"
+"5" = "sync"
+"6" = "fb"
+"7" = "on_off"
+
+[models.ratings]
+max_current_a = 5.0
+max_voltage_v = 45.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 56.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 8.0
+max_v = 40.0
+abs_max_v = 45.0
+basis = "TI LM2677 SNVS077J, 6.3 Recommended Operating Conditions, supply 8 V to 40 V; 6.1 Absolute Maximum Ratings, 45 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0          # 6.6 VOUT typ
+iout_limit_a = 5.0
+efficiency = 0.84            # 6.6 η, VIN = 12 V, ILOAD = 5 A, typ
+max_duty = 0.91
+switching_hz = 260e3
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 5.0                 # fixed version: FB senses VOUT directly (6.6 VOUT typ)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "fixed_output_sense", "output_current_ceiling", "reflected_input_power", "maximum_duty", "full_load_efficiency", "quiescent_current"]
+missing = ["on_off_enable", "sync_input", "switching_ripple", "compensation_stability", "soft_start", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # THE PART NUMBER IS THE OUTPUT VOLTAGE. Every entry below binds ONE voltage

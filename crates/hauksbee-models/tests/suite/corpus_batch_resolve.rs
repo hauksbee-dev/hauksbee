@@ -165,13 +165,18 @@ fn polarity_and_die_boundaries_are_not_crossed() {
     // A regulator's voltage code is not optional. An adjustable part or a bare
     // family name says nothing about its output and must stay unresolved rather
     // than inherit a fixed one.
-    for indeterminate in ["MIC5205", "LM1117", "MCP1700", "TLV62568", "SY8089AAAC"] {
+    // A bare family name also leaves the package, and so the pin map, open.
+    for indeterminate in ["MIC5205", "LM1117", "MCP1700", "TLV62568"] {
         assert!(
             by_value(indeterminate).is_none_or(|m| m.kind != ComponentKind::Vreg),
             "{indeterminate} has no determinable output voltage and must not \
              bind to a fixed-output vreg entry"
         );
     }
+    // An adjustable buck may bind, but only to a board-feedback card whose rail
+    // comes from the fitted divider on FB, never to a fixed output.
+    let adjustable = by_value("SY8089AAAC").expect("SY8089AAAC binds its feedback card");
+    assert_eq!(adjustable.id, "sy8089_sot23_5");
 }
 
 #[test]
