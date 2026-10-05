@@ -249,6 +249,66 @@ implements = ["pad_map", "supply_envelope", "pin_and_package_current_ratings"]
 missing = ["firmware_cosim_core", "usb_device_controller", "gpio_behaviour", "uart"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CH32V003J4M6: WCH RISC-V (QingKe V2A) MCU in SOP8. Several die pads share one
+# lead in this package: lead 1 carries PD6 and PA1, lead 8 carries PD4, PD5 and
+# PD1/SWIO (Figure 2-1 and the SOP8 column of Table 2-1).
+#
+# Source: WCH CH32V003 Datasheet V1.8. 2.1 pinout (CH32V003J4M6), Table 2-1
+#   SOP8 column, 1.4.3 Power Supply Scheme (VDD 2.7-5.5 V), Table 3-1 Absolute
+#   maximum ratings (VDD -0.3..5.5 V, IVDD 100 mA, IVSS 80 mA, II/O 20 mA).
+#
+# BACKEND IS `none:`: no co-sim core models the QingKe V2A, so co-sim is
+# refused loudly; lint, envelope and rating checks read the pad map.
+[[models]]
+id = "ch32v003j4m6_sop8"
+kind = "mcu"
+description = "CH32V003J4M6 RISC-V MCU, SOP8 (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.wch-ic.com/products/CH32V003.html"
+title = "WCH CH32V003 Datasheet V1.8"
+locator = "1.4.3 Power Supply Scheme; 2.1 CH32V003J4M6 pinout; Table 2-1 SOP8 column; Table 3-1 Absolute maximum ratings"
+sha256 = "186210d35123325ea49305e3a0152cbfa6e377d8e6efc2e610e3497daabe17f8"
+
+[models.match]
+# Some CAD libraries append the package in brackets.
+value_re = "(?i)^CH32V003J4M6(\\(SOP-?8\\))?$"
+
+[models.params]
+backend = "none:ch32v003"
+
+[models.pins]
+# Table 2-1, SOP8 column.
+"1" = "pd6_pa1"            # PD6 (URX/A6) and PA1 (OSCI/A1) bonded together
+"2" = "gnd"
+"3" = "pa2"                # PA2 (OSCO/A0)
+"4" = "vcc"
+"5" = "pc1_sda"            # FT
+"6" = "pc2_scl"            # FT
+"7" = "pc4_a2"
+"8" = "pd4_pd5_pd1_swio"   # PD4 (A7), PD5 (UTX/A5), PD1 (SWIO) bonded together
+
+[models.ratings]
+max_pin_current_a = 0.02   # Table 3-1, II/O sink or source 20 mA on any I/O pin
+max_current_a = 0.08       # Table 3-1, IVSS 80 mA total out of the VSS lines (IVDD is 100 mA)
+max_voltage_v = 5.5        # Table 3-1, VDD-VSS max 5.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 5.5
+basis = "WCH CH32V003 Datasheet V1.8, 1.4.3 VDD 2.7-5.5 V; Table 3-1 VDD max 5.5 V"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "pin_and_package_current_ratings"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "shared_lead_contention"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ATmega1284P: the 128 KB / 16 KB-SRAM megaX4-line AVR, 44-lead TQFP and 44-pad
 # VQFN/QFN(MLF), which share one pinout.
 #
