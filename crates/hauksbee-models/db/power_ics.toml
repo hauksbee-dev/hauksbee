@@ -1999,3 +1999,711 @@ basis = "SLUSF65B 5.3 Thermal Information (p.5), DLH 10 pins"
 [models.coverage]
 implements = ["regulated_sys_output", "iset_programmed_charge_current", "strap_selected_float_and_input_limit", "charge_port_cc_cv", "two_path_package_dissipation"]
 missing = ["precharge_termination_recharge", "safety_timer", "thermal_regulation", "charge_enable_pin", "ts_ntc_monitor", "manual_reset_factory_mode", "vindpm_dppm_sharing", "battery_supplement_of_sys", "battery_tracking_sys", "status_outputs", "sleep_mode"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APX811: Diodes Incorporated 4-pin microprocessor supervisor with manual reset,
+# SOT143, push-pull ACTIVE-LOW RESET output.
+#
+# Source: Diodes Incorporated "APX811/812 4-Pin Microprocessor Supervisor With
+#   Manual Reset", DS31960 Rev. 2, October 2009
+#   (https://www.diodes.com/assets/Datasheets/APX811_812.pdf): Ordering
+#   Information, Pin Assignments / Pin Descriptions, Absolute Maximum Ratings,
+#   Recommended Operating Conditions, Electrical Characteristics, Switching
+#   Characteristics and the RESET vs. Vcc / RESET vs. /MR timing diagrams.
+#
+# PACKAGE. The datasheet lists exactly one package, SOT143 ("U" in the ordering
+# code), a 4-lead SOT-23-outline body. Pin Assignments (top view): 1 GND,
+# 2 RESET, 3 MR, 4 Vcc. A board that draws this part on a 3-pin SOT-23 footprint
+# is not drawing this datasheet's part.
+#
+# WHY THIS ONE IS EXECUTABLE WHERE NCP303/BD5230 ARE NOT. The APX811 output is
+# PUSH-PULL ("The APX811/812 have push-pull outputs", General Description), so
+# both levels are real driven levels and an FSM with two voltage laws says the
+# truth about it. The supervisor function is a two-state machine:
+#   reset -> run   once VCC > Vth AND MR is high have held CONTINUOUSLY for td
+#                  (guard_dwell_s, so a glitch restarts the timeout, as the
+#                  timing diagrams show td measured from the last release);
+#   run   -> reset as soon as VCC < Vth OR MR is low (tPHL 25 us / 0.1 us max,
+#                  far below a simulation chunk, so taken as immediate).
+#
+# FIGURES USED (Electrical Characteristics, TA = 25 C unless noted):
+#   Vth   per ordering code, TA = 25 C, min/typ/max in the card; the TYP is used.
+#         The sheet gives NO hysteresis figure, so none is modelled.
+#   td    140 / 200 / 280 ms (Switching Characteristics); 200 ms typ is used.
+#   ICC   30 typ / 40 max uA at Vth + 0.2 V.
+#   VOL   0.3 V max at 1.2 mA, 0.4 V max at 3.2 mA (VCC = Vth - 0.2 V).
+#   VOH   0.8 VCC min at 500 uA; VCC - 1.5 V min at 800 uA (VCC > Vth + 0.2 V).
+#   MR    VIL = 0.3 x VCC, VIH = 0.7 x VCC (Timing requirements / Switching
+#         Characteristics test conditions); minimum pulse 100 ns.
+#   VCC   1.0 to 5.5 V functional range; abs max -0.3 to 7 V; IO 20 mA;
+#         PD 320 mW; theta_JA 240 C/W (SOT143, Note 3 board).
+#
+# DERIVED, NOT PRINTED: the output resistances. r_ohms low = 0.4 V / 3.2 mA =
+# 125 Ohm (the VOL max row); r_ohms high = 1.5 V / 0.8 mA = 1875 Ohm (the
+# VCC - 1.5 V at 800 uA VOH row, the weaker of the two VOH rows). Both are
+# worst-case slopes through a guaranteed limit, so a model output is no
+# stronger than the guaranteed part.
+#
+# DELIBERATELY NOT MODELLED: any MR internal pull-up (the sheet does not state
+# one, unlike some x811 second sources, so an unconnected MR is left to float
+# and the FSM will hold reset if the board leaves it low); the undefined output
+# below VCC = 1.0 V; threshold tolerance and temperature drift; the APX812
+# (active-high) option, which is a different output polarity and is NOT matched.
+
+[[models]]
+id = "apx811_23"
+kind = "digital"
+description = "Diodes APX811-23 supervisor, 2.25 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-23UG-7 (11 = active low, 23 = 2.25 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?23(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 2.25             # Electrical Characteristics, Vth typ at TA = 25 C (2.22 min / 2.28 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 2.25 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+[[models]]
+id = "apx811_26"
+kind = "digital"
+description = "Diodes APX811-26 supervisor, 2.63 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-26UG-7 (11 = active low, 26 = 2.63 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?26(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 2.63             # Electrical Characteristics, Vth typ at TA = 25 C (2.59 min / 2.67 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 2.63 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+[[models]]
+id = "apx811_29"
+kind = "digital"
+description = "Diodes APX811-29 supervisor, 2.93 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-29UG-7 (11 = active low, 29 = 2.93 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?29(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 2.93             # Electrical Characteristics, Vth typ at TA = 25 C (2.89 min / 2.98 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 2.93 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+[[models]]
+id = "apx811_31"
+kind = "digital"
+description = "Diodes APX811-31 supervisor, 3.08 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-31UG-7 (11 = active low, 31 = 3.08 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?31(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 3.08             # Electrical Characteristics, Vth typ at TA = 25 C (3.03 min / 3.13 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 3.08 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+[[models]]
+id = "apx811_40"
+kind = "digital"
+description = "Diodes APX811-40 supervisor, 4.00 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-40UG-7 (11 = active low, 40 = 4.00 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?40(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 4.0             # Electrical Characteristics, Vth typ at TA = 25 C (3.94 min / 4.06 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 4.00 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+[[models]]
+id = "apx811_44"
+kind = "digital"
+description = "Diodes APX811-44 supervisor, 4.38 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-44UG-7 (11 = active low, 44 = 4.38 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?44(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 4.38             # Electrical Characteristics, Vth typ at TA = 25 C (4.31 min / 4.45 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 4.38 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+[[models]]
+id = "apx811_46"
+kind = "digital"
+description = "Diodes APX811-46 supervisor, 4.63 V threshold, push-pull active-low RESET, manual reset, SOT143"
+
+[models.match]
+# Ordering Information: APX811-46UG-7 (11 = active low, 46 = 4.63 V,
+# U = SOT143, G = green, -7 = tape and reel).
+value_re = "(?i)^APX811-?46(U(G(-7)?)?)?$"
+
+[models.params]
+vth_v = 4.63             # Electrical Characteristics, Vth typ at TA = 25 C (4.56 min / 4.7 max)
+icc_a = 3.0e-5          # Electrical Characteristics, ICC typ at Vth + 0.2 V (40 uA max)
+vol = 0.4               # VOL max, ISINK = 3.2 mA
+mr_vih_frac = 0.7       # MR VIH = 0.7 x VCC (test condition); see the header
+mr_vil_frac = 0.3       # MR VIL = 0.3 x VCC (test condition)
+supply_pin = "4"
+gnd_pin = "1"
+warning = "the RESET timeout is the 200 ms typical (140-280 ms spread) and the threshold the 25 C typical; no hysteresis is modelled (none is specified) and MR has no modelled pull-up"
+
+[models.pins]
+# Pin Assignments (SOT143 top view) and Pin Descriptions.
+"1" = "gnd"
+"2" = "reset_n"   # RESET, push-pull, active low (APX811)
+"3" = "mr_n"      # manual reset input, active low
+"4" = "vcc"
+
+[models.ratings]
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VCC -0.3 to 7 V
+max_pin_current_a = 0.02     # Absolute Maximum Ratings, IO output current 20 mA
+max_power_w = 0.32           # Absolute Maximum Ratings, PD 320 mW
+theta_ja_c_per_w = 240.0     # Electrical Characteristics, theta_JA SOT143 (Note 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.1
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Diodes DS31960 Rev. 2, Recommended Operating Conditions, VCC 1.1 V to 5.5 V; Absolute Maximum Ratings, VCC -0.3 to 7 V"
+
+[models.behavioral.fsm]
+states = ["reset", "run"]
+initial = "reset"
+
+[[models.behavioral.fsm.transitions]]
+from = "reset"
+to = "run"
+guard = "v_vcc > vth_v && v_mr_n > mr_vih_frac * v_vcc"
+guard_dwell_s = 0.200   # Switching Characteristics, td typ (0.140 min / 0.280 max), from the last qualifying edge
+
+[[models.behavioral.fsm.transitions]]
+from = "run"
+to = "reset"
+guard = "v_vcc < vth_v || v_mr_n < mr_vil_frac * v_vcc"
+
+[[models.behavioral.laws]]
+name = "reset_asserted"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "0.0"
+r_ohms = 125.0    # DERIVED: 0.4 V VOL max / 3.2 mA
+only_in_state = "reset"
+
+[[models.behavioral.laws]]
+name = "reset_released"
+kind = "voltage"
+a = "reset_n"
+b = "gnd"
+expr = "v_vcc"
+r_ohms = 1875.0   # DERIVED: 1.5 V (VCC - 1.5 V VOH min) / 0.8 mA
+only_in_state = "run"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "icc_a"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_threshold_reset", "manual_reset", "reset_timeout", "push_pull_output", "supply_current", "absolute_ratings", "supply_ranges"]
+missing = ["threshold_tolerance", "threshold_hysteresis", "temperature_drift", "low_vcc_undefined_output", "mr_pull_up"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
+title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
+locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 4.63 V row); Switching Characteristics td"
+sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
