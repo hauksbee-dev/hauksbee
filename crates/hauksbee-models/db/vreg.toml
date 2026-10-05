@@ -1905,6 +1905,63 @@ max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
 max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
 theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-3 (SOT-23 is 180; the worse is kept)
 
+# ── AP1117-33 / AP1117E33G-13 (Diodes 1 A LDO, fixed 3.3 V) ────────────────
+# Source: Diodes AP1117/AP1117I DS31009 Rev. 24-3, March 2015 (marked "not
+# recommended for new design"). Ordering Information: AP1117 [I] E 33 [G|L]
+# [-13|-U]; this revision lists only E = SOT223, with pin 1 Adj (GND for
+# fixed mode), 2 VOUT, 3 VIN and the tab VOUT (Typical Applications Circuit,
+# "Tab is VOUT"). Older revisions also sold SOT-89 and TO-252/TO-263/TO-220
+# parts that this sheet no longer documents, so the card takes the E letter
+# or, for a spelling with no package letter ("AP1117-33"), nothing; both are
+# held to a SOT-223 footprint, the one package whose map is stated here.
+# The voltage code 33 is required: the bare part is the adjustable one, whose
+# 1.25 V reference is not an output voltage.
+[[models]]
+id = "ap1117_33_sot223"
+kind = "vreg"
+description = "Diodes AP1117-33 1A LDO, 3.3V fixed, SOT223 (no enable)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP1117.pdf"
+title = "Diodes Incorporated AP1117/AP1117I 1A low dropout positive adjustable or fixed-mode regulator, DS31009 Rev. 24-3, March 2015"
+locator = "Typical Applications Circuit and Pin Descriptions p.2; Absolute Maximum Ratings p.2-3; Recommended Operating Conditions p.3; Electrical Characteristics p.3-4; Ordering Information p.7"
+sha256 = "102b3e3e42ab8cd5fe8ee89420706a2b33d8a0093358945b8fc68459929c90b2"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.235
+high = 3.365
+unit = "V"
+kind = "specification-limits"
+basis = "AP1117 DS31009 Electrical Characteristics, Output Voltage AP1117-3.3, 3.235 / 3.300 / 3.365 V, TA = +25 C"
+
+[models.match]
+value_re = "(?i)^AP1117I?E?-?33(G|L)?(-13|-U)?$"
+footprint_re = "(?i)SOT-?223"
+
+[models.params]
+vout       = 3.3      # Electrical Characteristics, AP1117-3.3 output voltage typ
+dropout_v  = 1.3      # Dropout Voltage max @ IOUT = 800 mA, 2.5/3.3/5.0, 0 C <= TJ <= 125 C (1.4 V max at 1 A, I grade)
+cout_min_f = 4.7e-6   # Pin Descriptions, VOUT: a minimum 4.7 uF (0.15-0.5 ohm ESR) for stability
+iq_a       = 5.0e-3   # Minimum Load Current typ (10 mA max); Note 7 defines the quiescent current as this
+
+[models.pins]
+# Pin Descriptions; tab is VOUT per the Typical Applications Circuit.
+"1" = "gnd"   # Adj (GND for fixed mode)
+"2" = "out"
+"3" = "in"
+"4" = "out"   # SOT223 tab
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current capability (Description; current limit 1.1 A min)
+max_voltage_v = 18.0         # Absolute Maximum Ratings, VIN DC supply voltage
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TMJ (operating range 0/-40 to +125 C)
+theta_ja_c_per_w = 107.0     # Electrical Characteristics, θJA SOT223 (Note 9: 5 mm x 5 mm pad, 2 oz FR-4)
+theta_jc_c_per_w = 15.0      # Electrical Characteristics, θJC SOT223, case point on the tab
+
 # ── MIC5205-3.3 ──────────────────────────────────────────────────────────────
 # Microchip (Micrel) 150 mA low-noise LDO, SOT-23-5. 17 instances on the
 # SparkFun RedBoard.
