@@ -302,6 +302,14 @@ fn host_record_longer_than_the_rx_fifo_round_trips() {
         summary.dropped_to_peer, 0,
         "no firmware output may be dropped"
     );
+    // The peer closes the moment it has its last byte, which can land between
+    // the endpoint's write and its liveness re-probe: that tail is unconfirmed,
+    // never dropped and never silently credited. Banner plus echo, all told.
+    assert_eq!(
+        summary.bytes_to_peer + summary.unconfirmed_to_peer,
+        1 + 256,
+        "every firmware byte is either credited or explicitly unconfirmed"
+    );
     assert_eq!(summary.attach_count, 1);
 }
 

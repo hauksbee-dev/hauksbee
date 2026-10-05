@@ -67,6 +67,15 @@
 //! every dropped byte is counted in [`HostSerialStats::dropped_to_peer`] so the
 //! loss is reported, never silent.
 //!
+//! A pty peer can hang up in the instant after the master accepted a write.
+//! Whether it read those bytes first (a tool that reads its reply and exits)
+//! or never did (a close racing the write) is invisible from the master: the
+//! slave's unread input dies with its last close. Such bytes stay in the
+//! backlog, so a later peer is served them (at least once), and if the session
+//! ends with them still held they are counted in
+//! [`HostSerialStats::unconfirmed_to_peer`], never as delivered and never as
+//! dropped.
+//!
 //! Nothing here spawns a process, so there is no child to reap (see
 //! [`crate::children`] for the emulator-process rules); teardown is closing the
 //! master fd, which hangs up any attached peer.
@@ -142,6 +151,11 @@ pub struct HostSerialStats {
     /// session ended before a peer drained it. Non-zero means the host tool
     /// did not see everything the firmware sent.
     pub dropped_to_peer: u64,
+    /// Firmware output bytes still held at session end that had been written
+    /// to a pty peer which hung up right after the write: the peer may or may
+    /// not have read them, and the master cannot tell which (see the module
+    /// doc). Neither delivered nor dropped.
+    pub unconfirmed_to_peer: u64,
     /// How many times a peer attached over the session (0 = the user never
     /// connected anything).
     pub attach_count: u64,
@@ -180,6 +194,9 @@ pub struct HostSerial {
     /// before updating attach state.
     inbound: VecDeque<u8>,
     backlog: VecDeque<u8>,
+    /// How many leading `backlog` bytes were written to a pty peer that hung
+    /// up right after the write, so their delivery is unknown.
+    unconfirmed: usize,
     stats: HostSerialStats,
 }
 
@@ -278,6 +295,7 @@ impl HostSerial {
                 events: Vec::new(),
                 inbound: VecDeque::new(),
                 backlog: VecDeque::new(),
+                unconfirmed: 0,
                 stats: HostSerialStats::default(),
             })
         }
@@ -312,6 +330,7 @@ impl HostSerial {
             events: Vec::new(),
             inbound: VecDeque::new(),
             backlog: VecDeque::new(),
+            unconfirmed: 0,
             stats: HostSerialStats::default(),
         })
     }
@@ -483,13 +502,26 @@ impl HostSerial {
     /// Push as much of the backlog as the peer will accept. Called by
     /// [`Self::write_to_peer`] and on attach; safe to call at any time.
     pub fn flush(&mut self) {
-        self.flush_with_after_probe(|| {});
+        self.flush_with_hooks(|| {}, || {});
     }
 
+    #[cfg(all(test, unix))]
     fn flush_with_after_probe<F>(&mut self, after_probe: F)
     where
         F: FnOnce(),
     {
+        self.flush_with_hooks(after_probe, || {});
+    }
+
+    /// [`Self::flush`] with test seams at the two race windows: after the
+    /// liveness probe (before any write) and after the first accepted write
+    /// (before the re-probe that credits it).
+    fn flush_with_hooks<F, G>(&mut self, after_probe: F, after_write: G)
+    where
+        F: FnOnce(),
+        G: FnOnce(),
+    {
+        let mut after_write = Some(after_write);
         if !self.attached || self.backlog.is_empty() {
             return;
         }
@@ -562,12 +594,20 @@ impl HostSerial {
             // hangup, so a positive write alone is not evidence that an
             // external peer owned them. Re-probe (draining first, so queued
             // input cannot mask the hangup) before crediting output;
-            // retaining the backlog is the conservative outcome.
+            // retaining the backlog is the conservative outcome. Whether the
+            // peer read them before hanging up is unknowable from here, so they
+            // are marked unconfirmed rather than undelivered.
+            if written > 0 {
+                if let Some(hook) = after_write.take() {
+                    hook();
+                }
+            }
             #[cfg(unix)]
             if written > 0
                 && matches!(self.inner, Inner::Pty { .. })
                 && !self.pty_externally_attached()
             {
+                self.unconfirmed = self.unconfirmed.max(written);
                 self.mark_detached();
                 break;
             }
@@ -575,6 +615,7 @@ impl HostSerial {
                 break;
             }
             self.backlog.drain(..written);
+            self.unconfirmed = self.unconfirmed.saturating_sub(written);
             self.stats.to_peer += written as u64;
             if self.backlog.is_empty() {
                 break;
@@ -591,11 +632,19 @@ impl HostSerial {
     /// Account for terminal firmware output that no peer drained. Session
     /// teardown is the only valid caller: while the endpoint remains live the
     /// backlog must stay available for a later peer instead of being discarded.
+    ///
+    /// Returns the bytes counted as dropped: never written to any peer. Held
+    /// bytes a peer may have read before hanging up go to
+    /// [`HostSerialStats::unconfirmed_to_peer`] instead.
     pub fn discard_terminal_output(&mut self) -> usize {
         let pending = self.backlog.len();
+        let unconfirmed = self.unconfirmed.min(pending);
+        let dropped = pending - unconfirmed;
         self.backlog.clear();
-        self.stats.dropped_to_peer += pending as u64;
-        pending
+        self.unconfirmed = 0;
+        self.stats.unconfirmed_to_peer += unconfirmed as u64;
+        self.stats.dropped_to_peer += dropped as u64;
+        dropped
     }
 
     /// A paste-ready hint for attaching a tool, tailored to the transport.
@@ -1071,5 +1120,60 @@ mod tests {
         assert_eq!(ep.pending_to_peer(), 4);
         assert_eq!(ep.stats().to_peer, 0);
         assert!(!ep.peer_attached());
+    }
+
+    /// The other side of the same window: a tool that reads its reply and
+    /// exits before the re-probe. The bytes are retained (the master cannot
+    /// tell this from a close that raced the write), but at session end they
+    /// are unconfirmed, not dropped: calling them lost would warn about output
+    /// the tool did read.
+    #[cfg(unix)]
+    #[test]
+    fn pty_peer_that_reads_and_closes_before_the_reprobe_is_unconfirmed_not_dropped() {
+        let _quiesce = quiesce_spawns();
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let mut peer = open_pty_peer(&ep, "peer");
+        await_attach(&mut ep, 1);
+        assert!(ep.peer_attached());
+        ep.backlog.extend(b"reply");
+
+        ep.flush_with_hooks(
+            || {},
+            move || {
+                let mut got = [0u8; 5];
+                peer.read_exact(&mut got).expect("peer reads the reply");
+                assert_eq!(&got, b"reply");
+                drop(peer);
+            },
+        );
+
+        assert_eq!(
+            ep.stats().to_peer,
+            0,
+            "a hangup after the write earns no credit"
+        );
+        assert_eq!(
+            ep.pending_to_peer(),
+            5,
+            "and the bytes stay for a later peer"
+        );
+        assert!(!ep.peer_attached());
+        assert_eq!(ep.discard_terminal_output(), 0);
+        assert_eq!(ep.stats().dropped_to_peer, 0);
+        assert_eq!(ep.stats().unconfirmed_to_peer, 5);
+    }
+
+    /// Output that was never written anywhere is still dropped at teardown,
+    /// even behind an unconfirmed prefix.
+    #[cfg(unix)]
+    #[test]
+    fn unconfirmed_prefix_does_not_hide_never_written_output() {
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        ep.backlog.extend(b"abcdef");
+        ep.unconfirmed = 2;
+        assert_eq!(ep.discard_terminal_output(), 4);
+        assert_eq!(ep.stats().dropped_to_peer, 4);
+        assert_eq!(ep.stats().unconfirmed_to_peer, 2);
+        assert_eq!(ep.pending_to_peer(), 0);
     }
 }

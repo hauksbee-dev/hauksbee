@@ -353,6 +353,14 @@ fn finalize_endpoint_io(
              session end and are counted as dropped"
         ));
     }
+    let unconfirmed = endpoint.stats().unconfirmed_to_peer;
+    if unconfirmed > 0 {
+        announce(&format!(
+            "host serial: {unconfirmed} firmware output byte(s) were written as the peer hung \
+             up; it may have read them before closing, so they are counted as unconfirmed, \
+             not dropped"
+        ));
+    }
     ensure_terminal_io_delivered(
         endpoint.pending_from_peer(),
         inbox.pending_bytes(),
@@ -372,6 +380,10 @@ pub struct SerialSessionSummary {
     /// Firmware output bytes dropped because the endpoint's backlog filled or
     /// the session ended before a peer drained it.
     pub dropped_to_peer: u64,
+    /// Firmware output bytes written to a peer that hung up right after the
+    /// write and still held at session end: the peer may have read them
+    /// before closing, and the pty cannot say. Neither delivered nor dropped.
+    pub unconfirmed_to_peer: u64,
     /// How many host tools attached over the session. Zero means nobody did.
     pub attach_count: u64,
     /// Simulated seconds delivered.
@@ -698,6 +710,7 @@ pub fn run_session(
     summary.bytes_to_mcu = delivered_to_mcu;
     summary.bytes_to_peer = stats.to_peer;
     summary.dropped_to_peer = stats.dropped_to_peer;
+    summary.unconfirmed_to_peer = stats.unconfirmed_to_peer;
     summary.attach_count = stats.attach_count;
     summary.rx_overflow = engine
         .scheduler()
@@ -759,6 +772,14 @@ pub fn summary_lines(s: &SerialSessionSummary) -> Vec<String> {
              endpoint's backlog filled or the session ended before a peer drained it. The host \
              tool did not see them.",
             s.dropped_to_peer
+        ));
+    }
+    if s.unconfirmed_to_peer > 0 {
+        out.push(format!(
+            "host serial: note {} byte(s) of firmware output were written as a peer hung up; \
+             whether it read them before closing is unknown (a pty discards a closed peer's \
+             unread input), and no later peer attached to take them.",
+            s.unconfirmed_to_peer
         ));
     }
     for (reference, n) in &s.rx_overflow {
@@ -1077,6 +1098,29 @@ mod tests {
             lines
                 .iter()
                 .any(|l| l.contains("no host tool ever attached")),
+            "lines: {lines:?}"
+        );
+    }
+
+    /// Output a peer may have read before hanging up is not a drop: it gets a
+    /// note of its own, never the DROPPED warning.
+    #[test]
+    fn unconfirmed_output_is_noted_but_not_called_dropped() {
+        let s = SerialSessionSummary {
+            endpoint: "/dev/ttys009".into(),
+            attach_count: 1,
+            unconfirmed_to_peer: 1,
+            ..Default::default()
+        };
+        let lines = summary_lines(&s);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("1 byte(s) of firmware output were written as a peer hung up")),
+            "lines: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("DROPPED")),
             "lines: {lines:?}"
         );
     }
