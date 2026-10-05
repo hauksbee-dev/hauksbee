@@ -46,13 +46,21 @@ fn board(cells: usize) -> String {
             n + 2
         );
     }
-    let part = |pcb: &mut String, lib: &str, at: usize, reference: &str, value: &str, pads: &[(u8, usize, &str)]| {
+    let part = |pcb: &mut String,
+                lib: &str,
+                at: usize,
+                reference: &str,
+                value: &str,
+                pads: &[(u8, usize, &str)]| {
         let _ = writeln!(
             pcb,
             "  (module {lib} (layer F.Cu)\n    (at {at} 100)\n    (fp_text reference {reference} (at 0 0) (layer F.SilkS))\n    (fp_text value {value} (at 0 2) (layer F.Fab))"
         );
         for (i, &(pad, net, name)) in pads.iter().enumerate() {
-            let _ = writeln!(pcb, "    (pad {pad} smd rect (at {i} 0) (net {net} \"{name}\"))");
+            let _ = writeln!(
+                pcb,
+                "    (pad {pad} smd rect (at {i} 0) (net {net} \"{name}\"))"
+            );
         }
         pcb.push_str("  )\n");
     };
@@ -62,10 +70,38 @@ fn board(cells: usize) -> String {
         let at = 100 + 40 * k;
         let soic = "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm";
         let r0603 = "Resistor_SMD:R_0603_1608Metric";
-        part(&mut pcb, soic, at, &format!("U{}", k + 1), "74HC04", &[(1, 1, "GND"), (2, n, &drive), (7, 1, "GND"), (14, 2, "+5V")]);
-        part(&mut pcb, r0603, at + 10, &format!("R{}", 2 * k + 1), "10k", &[(1, n, &drive), (2, n + 1, &base)]);
-        part(&mut pcb, "Package_TO_SOT_SMD:SOT-23", at + 20, &format!("Q{}", k + 1), "BC847", &[(1, n + 1, &base), (2, 1, "GND"), (3, n + 2, &coll)]);
-        part(&mut pcb, r0603, at + 30, &format!("R{}", 2 * k + 2), "1k", &[(1, 2, "+5V"), (2, n + 2, &coll)]);
+        part(
+            &mut pcb,
+            soic,
+            at,
+            &format!("U{}", k + 1),
+            "74HC04",
+            &[(1, 1, "GND"), (2, n, &drive), (7, 1, "GND"), (14, 2, "+5V")],
+        );
+        part(
+            &mut pcb,
+            r0603,
+            at + 10,
+            &format!("R{}", 2 * k + 1),
+            "10k",
+            &[(1, n, &drive), (2, n + 1, &base)],
+        );
+        part(
+            &mut pcb,
+            "Package_TO_SOT_SMD:SOT-23",
+            at + 20,
+            &format!("Q{}", k + 1),
+            "BC847",
+            &[(1, n + 1, &base), (2, 1, "GND"), (3, n + 2, &coll)],
+        );
+        part(
+            &mut pcb,
+            r0603,
+            at + 30,
+            &format!("R{}", 2 * k + 2),
+            "1k",
+            &[(1, 2, "+5V"), (2, n + 2, &coll)],
+        );
     }
     pcb.push_str(")\n");
     pcb

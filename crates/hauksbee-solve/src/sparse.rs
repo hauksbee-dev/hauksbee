@@ -899,8 +899,10 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
     // tie: exactly the first element of this `(degree, vertex)` set. A linear
     // scan per elimination made the ordering O(n^2) and, on the ~800-IC Tarski
     // board, half of every co-simulation chunk's wall time.
-    let mut queue: std::collections::BTreeSet<(usize, usize)> =
-        (0..n).filter(|&v| !eliminated[v]).map(|v| (deg[v], v)).collect();
+    let mut queue: std::collections::BTreeSet<(usize, usize)> = (0..n)
+        .filter(|&v| !eliminated[v])
+        .map(|v| (deg[v], v))
+        .collect();
     // `in_row[c] == stamp` marks `c` as already adjacent to the vertex being
     // filled, replacing a linear `contains` per candidate edge.
     let (mut in_row, mut stamp) = (vec![usize::MAX; n], 0usize);
@@ -970,7 +972,11 @@ fn min_degree_order_reference(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
         }
         perm.push(best);
         eliminated[best] = true;
-        let neigh: Vec<usize> = g[best].iter().copied().filter(|&u| !eliminated[u]).collect();
+        let neigh: Vec<usize> = g[best]
+            .iter()
+            .copied()
+            .filter(|&u| !eliminated[u])
+            .collect();
         for (ai, &a) in neigh.iter().enumerate() {
             for &c in neigh.iter().skip(ai + 1) {
                 if !g[a].contains(&c) {
@@ -1008,7 +1014,11 @@ mod tests {
                     m.touch(r, r);
                 }
                 for _ in 0..next(4) {
-                    let c = if next(6) == 0 { next(3.min(n)) } else { next(n) };
+                    let c = if next(6) == 0 {
+                        next(3.min(n))
+                    } else {
+                        next(n)
+                    };
                     m.touch(r, c);
                     if next(3) != 0 {
                         m.touch(c, r);

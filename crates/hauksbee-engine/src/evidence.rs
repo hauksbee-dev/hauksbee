@@ -1816,8 +1816,12 @@ impl BoardEvidence {
         }
         // Some map citing the assumption has a model on its path named (by
         // reference or display reference) for one of the assumption's parts.
-        (surfaces.maps_citing.get(assumption.id()).into_iter().flatten())
-            .any(|&m| refs.iter().any(|r| surfaces.names(m).contains(r.as_str())))
+        (surfaces
+            .maps_citing
+            .get(assumption.id())
+            .into_iter()
+            .flatten())
+        .any(|&m| refs.iter().any(|r| surfaces.names(m).contains(r.as_str())))
     }
 
     /// Add the canonical evidence fields to a legacy structured report without
@@ -1869,8 +1873,16 @@ impl<'a> SurfaceIndex<'a> {
                 }
             }
         }
-        let names = evidence.maps.iter().map(|_| std::cell::OnceCell::new()).collect();
-        Self { evidence, maps_citing, names }
+        let names = evidence
+            .maps
+            .iter()
+            .map(|_| std::cell::OnceCell::new())
+            .collect();
+        Self {
+            evidence,
+            maps_citing,
+            names,
+        }
     }
 
     /// The names of the models on map `m`'s path.

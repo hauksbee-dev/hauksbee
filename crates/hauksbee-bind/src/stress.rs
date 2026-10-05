@@ -634,7 +634,14 @@ pub fn rated_paths(
     roles: &HashMap<String, NodeId, impl std::hash::BuildHasher>,
     units: &[DeviceId],
 ) -> Vec<(Vec<String>, Vec<Carrier>)> {
-    rated_paths_indexed(circuit, &DevicesByNode::new(circuit), reference, derating, roles, units)
+    rated_paths_indexed(
+        circuit,
+        &DevicesByNode::new(circuit),
+        reference,
+        derating,
+        roles,
+        units,
+    )
 }
 
 /// Every device touching each node (in circuit order), so a path's carriers
