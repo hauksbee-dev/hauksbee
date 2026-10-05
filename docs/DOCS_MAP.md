@@ -110,7 +110,7 @@ This map covers the public documentation shipped with the repository.
 | [`../COMPLIANCE.md`](../COMPLIANCE.md) | Licence compliance, one row per shipped artifact and what redistributing it obliges |
 | [`../agents/AGENTS.md`](../agents/AGENTS.md) | Guide for AI agents: orient commands, exit codes, JSON shapes, the MCP server and its tools |
 | [`../agents/skills/README.md`](../agents/skills/README.md) | Agent skills (check a board, write a CI spec, debug a RED run, firmware co-sim, model a board) and how to install them |
-| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the six tools, install, and registration |
+| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the nine tools, install, and registration |
 | [`../integrations/github-action/README.md`](../integrations/github-action/README.md) | The GitHub Action that runs `hauksbee-ci` |
 | [`../integrations/pre-commit/README.md`](../integrations/pre-commit/README.md) | Hooks for the pre-commit framework that block a commit with a broken board |
 | [`../integrations/kicad-plugin/README.md`](../integrations/kicad-plugin/README.md) | pcbnew action plugin that runs `hauksbee-ci` on the open board |

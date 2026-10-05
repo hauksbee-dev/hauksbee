@@ -129,10 +129,13 @@ pub fn emit_or_serve(
     .to_string();
 
     let served_board_file = preloaded_board_file(&board_url, raw, input_kind, text);
+    // A retained `.board` source is not drawable; the compiled layout is.
+    let layout_file = (served_board_file.1 != *text).then(|| text.clone());
     crate::commands::common::serve(
         engine,
         cfg.port,
         Some(served_board_file),
+        layout_file,
         startup_json,
         cfg.open,
         cfg.no_open,

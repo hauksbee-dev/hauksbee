@@ -78,6 +78,10 @@ struct LiveSession {
     /// frontend's geometry viewer can render the launched board. None for
     /// formats with no client-drawable text (Altium, gerber zips).
     board_file: Option<(String, String)>,
+    /// The drawable layout behind `board_file`, when that file is source the
+    /// viewer cannot draw (a Board-as-Code `.board`). Served at
+    /// `/boards/<file name>/layout`.
+    layout_file: Option<String>,
     /// Anything the session must keep alive for its whole run, e.g. the staged
     /// firmware temp file the emulated MCU reloads from on reset. Dropped when
     /// the session is replaced.
@@ -118,6 +122,7 @@ impl LiveHub {
         engine: Box<dyn Engine>,
         board_name: String,
         board_file: Option<(String, String)>,
+        layout_file: Option<String>,
         keepalive: Option<Box<dyn std::any::Any + Send>>,
     ) -> bool {
         let (tx, _) = broadcast::channel::<String>(256);
@@ -147,6 +152,7 @@ impl LiveHub {
                 task,
                 board_name,
                 board_file,
+                layout_file,
                 _keepalive: keepalive,
             });
         match old {
@@ -191,6 +197,17 @@ impl LiveHub {
             .map(|s| s.board_name.clone())
     }
 
+    /// The drawable layout behind the session board `name`, when its served
+    /// board file is source (a `.board`). Backs `/boards/{name}/layout`.
+    fn layout_file(&self, name: &str) -> Option<String> {
+        self.session
+            .lock()
+            .expect("live hub lock")
+            .as_ref()
+            .filter(|s| s.board_name == name)
+            .and_then(|s| s.layout_file.clone())
+    }
+
     /// The launched board's own layout text, when the current session serves
     /// `name`. Backs the dynamic `/boards/{name}` route.
     fn board_file(&self, name: &str) -> Option<String> {
@@ -221,11 +238,23 @@ impl Server {
     /// name, so the engine-derived fallback is often empty.
     #[must_use]
     pub fn new_named(engine: Box<dyn Engine>, name: Option<String>) -> Self {
+        Self::new_named_with_layout(engine, name, None)
+    }
+
+    /// [`Server::new_named`] plus the drawable layout text for a board whose
+    /// own file is source the viewer cannot draw (a Board-as-Code `.board`),
+    /// served at `/boards/<name>/layout`.
+    #[must_use]
+    pub fn new_named_with_layout(
+        engine: Box<dyn Engine>,
+        name: Option<String>,
+        layout_file: Option<String>,
+    ) -> Self {
         let hub = LiveHub::new();
         let name = name
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| engine.board_info().name);
-        hub.launch(engine, name, None, None);
+        hub.launch(engine, name, None, layout_file, None);
         Self { hub }
     }
 
@@ -349,11 +378,16 @@ fn unified_router(parts: RouterParts) -> Router {
     // answer, not an error. A `run --serve` preloaded board's static route
     // (exact path, below) takes priority over the parameterised one.
     let mut router = hub.as_ref().map_or_else(
-        || Router::new().route("/boards/{name}", get(no_board_handler)),
+        || {
+            Router::new()
+                .route("/boards/{name}", get(no_board_handler))
+                .route("/boards/{name}/layout", get(no_board_handler))
+        },
         |hub| {
             Router::new()
                 .route("/ws", get(ws_handler))
                 .route("/boards/{name}", get(live_board_handler))
+                .route("/boards/{name}/layout", get(live_layout_handler))
                 .with_state(hub.clone())
         },
     );
@@ -625,6 +659,25 @@ async fn live_board_handler(
     UrlPath(name): UrlPath<String>,
 ) -> axum::response::Response {
     hub.board_file(&name).map_or_else(
+        || {
+            let miss = "{\"available\":false}";
+            ([(header::CONTENT_TYPE, "application/json")], miss).into_response()
+        },
+        |contents| {
+            let text_plain = "text/plain; charset=utf-8";
+            ([(header::CONTENT_TYPE, text_plain)], contents).into_response()
+        },
+    )
+}
+
+/// GET `/boards/{name}/layout`: the drawable `KiCad` layout of a session whose
+/// served board file is source the viewer cannot draw. Same hit/miss contract
+/// as [`live_board_handler`].
+async fn live_layout_handler(
+    State(hub): State<Arc<LiveHub>>,
+    UrlPath(name): UrlPath<String>,
+) -> axum::response::Response {
+    hub.layout_file(&name).map_or_else(
         || {
             let miss = "{\"available\":false}";
             ([(header::CONTENT_TYPE, "application/json")], miss).into_response()

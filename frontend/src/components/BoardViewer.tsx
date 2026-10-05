@@ -13,7 +13,7 @@ import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 import { FitIcon, ExpandIcon, CollapseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, readNet } from '../lib/net-state'
-import { fetchFile, isAbort } from '../lib/api'
+import { fetchLayoutText, isAbort } from '../lib/api'
 import { LayersControl, useLayerControls } from './board/LayersPanel'
 import { useBoardPointer } from '../hooks/useBoardPointer'
 
@@ -210,8 +210,7 @@ export function BoardViewer({
     setLoading(true)
     setError(null)
     setBoard(null)
-    fetchFile(boardFile, ctrl.signal)
-      .then(f => f.text())
+    fetchLayoutText(boardFile, ctrl.signal)
       .then(text => {
         if (cancelled) return
         const parsed = parseKicadPcb(text)

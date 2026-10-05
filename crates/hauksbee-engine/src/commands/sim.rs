@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 /// Exit code for a malformed deck (the loader rejected it).
 pub const EXIT_MALFORMED_DECK: i32 = 2;
 
-/// Why a deck could not be simulated. The CLI renders these as its two exit
-/// codes; a caller with no terminal (the browser deck panel) reads
+/// Why a deck could not be simulated.
+///
+/// The CLI renders these as its two exit codes; a caller with no terminal (the browser deck panel) reads
 /// [`SimError::message`] instead, so neither front end invents its own wording.
-enum SimError {
+pub enum SimError {
     /// The deck is malformed or the request misuses it (exit 2).
     Malformed(String),
     /// Well-formed, but the solver cannot answer it honestly (exit 3).
@@ -43,7 +44,8 @@ impl SimError {
     }
 
     /// One sentence, for a surface that cannot print a multi-line refusal.
-    fn message(self) -> String {
+    #[must_use]
+    pub fn message(self) -> String {
         match self {
             Self::Malformed(msg) => msg,
             Self::Refused {
@@ -51,6 +53,24 @@ impl SimError {
                 missing,
                 next_action,
             } => format!("{claim} refused: {missing}. {next_action}"),
+        }
+    }
+
+    /// The structured refusal when the deck was well-formed but unanswerable.
+    #[must_use]
+    pub fn refusal(&self) -> Option<Refusal> {
+        match self {
+            Self::Malformed(_) => None,
+            Self::Refused {
+                claim,
+                missing,
+                next_action,
+            } => Some(Refusal::new(
+                *claim,
+                missing.clone(),
+                vec!["the deck parsed and the circuit was assembled"],
+                *next_action,
+            )),
         }
     }
 
@@ -142,23 +162,7 @@ pub fn run(
             anyhow::anyhow!("reading '{}': {e}", file.display())
         }
     })?;
-    let text = decode_deck_text(bytes).unwrap_or_else(|why| {
-        SimError::malformed(format!(
-            "'{}' is not a text file ({why}); hauksbee sim expects a text SPICE deck (.cir)",
-            file.display()
-        ))
-        .exit()
-    });
-    let (circuit, directives) = SpiceLoader::load_file_with_directives(file)
-        .unwrap_or_else(|e| SimError::malformed(e).exit());
-    if circuit.devices.is_empty() {
-        SimError::malformed(format!(
-            "deck has no circuit elements: '{}' parses but contains no devices \
-             (R/C/L/V/I/D/Q/M...), so there is nothing to simulate.",
-            file.display()
-        ))
-        .exit();
-    }
+    let (text, circuit, directives) = parse_deck_file(file, bytes).unwrap_or_else(|e| e.exit());
     if matches!(format, SimFormat::Both) && out.is_none() {
         SimError::malformed(
             "--format both writes a CSV and a rawfile side by side, so it needs \
@@ -238,6 +242,67 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+/// Decode and load a deck read from `file`: its text (for the title), the
+/// circuit and the deck's directives. `hauksbee sim` and the MCP `simulate_deck`
+/// tool both go through here, so a deck means the same thing on either.
+fn parse_deck_file(file: &Path, bytes: Vec<u8>) -> Result<(String, Circuit, Directives), SimError> {
+    let text = decode_deck_text(bytes).map_err(|why| {
+        SimError::malformed(format!(
+            "'{}' is not a text file ({why}); hauksbee sim expects a text SPICE deck (.cir)",
+            file.display()
+        ))
+    })?;
+    let (circuit, directives) =
+        SpiceLoader::load_file_with_directives(file).map_err(SimError::malformed)?;
+    if circuit.devices.is_empty() {
+        return Err(SimError::malformed(format!(
+            "deck has no circuit elements: '{}' parses but contains no devices \
+             (R/C/L/V/I/D/Q/M...), so there is nothing to simulate.",
+            file.display()
+        )));
+    }
+    Ok((text, circuit, directives))
+}
+
+/// Simulate the deck at `file` the way `hauksbee sim <file>` does.
+///
+/// Returns the numbers instead of printing them. `.include`/`.lib` resolve against the
+/// deck's directory, as on the command line. `analysis` forces `"op"`,
+/// `"tran"`, `"ac"` or `"dc"`; `None` runs the deck's own card.
+///
+/// # Errors
+///
+/// [`SimError::Malformed`] for an unreadable or malformed deck or a bad probe or
+/// analysis name, [`SimError::Refused`] when the solver cannot answer honestly.
+pub fn simulate_deck_file(
+    file: &Path,
+    print: &[String],
+    analysis: Option<&str>,
+) -> Result<DeckRun, SimError> {
+    let forced = match analysis {
+        None => None,
+        Some("op") => Some(Analysis::Op),
+        Some("tran") => Some(Analysis::Tran),
+        Some("ac") => Some(Analysis::Ac),
+        Some("dc") => Some(Analysis::Dc),
+        Some(other) => {
+            return Err(SimError::malformed(format!(
+                "unknown analysis '{other}'; use op, tran, ac or dc"
+            )))
+        }
+    };
+    let bytes = std::fs::read(file)
+        .map_err(|e| SimError::malformed(format!("reading '{}': {e}", file.display())))?;
+    let (_, circuit, directives) = parse_deck_file(file, bytes)?;
+    let mut notes = directives.notes.clone();
+    let (analysis, output) = simulate(&circuit, &directives, print, forced, &mut notes)?;
+    Ok(DeckRun {
+        analysis,
+        output,
+        notes,
+    })
 }
 
 /// One deck simulated: what ran, the numbers, and the caveats `hauksbee sim`

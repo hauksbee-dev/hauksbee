@@ -176,6 +176,7 @@ Each `findings[]` entry carries:
 | `kind` | string | finding subtype |
 | `severity` | string | `"serious"` \| `"warning"` \| `"note"` \| `"info"` |
 | `gating` | bool | whether THIS finding is a reason the run fails its gate. Not a restatement of `severity`: every `serious` finding gates, and so do a medium (`warning`) lint finding, every real SI finding, and every co-sim fault. It runs the other way too, so a `warning` is not a gate grade on its own: a copper short on an unvalidated board format may be phantom and does not gate, and neither does a `note`-grade lint finding or a qualified/demoted evidence badge. Read this, not the severity word, to know which of these findings the exit code is about; the CI artifacts do. Copper shorts are the exception: they never appear in `findings[]` (they are rendered as `drc.shorts`, which carries no `gating`) and only the JUnit/SARIF artifacts show them with a gate grade |
+| `group` | string | a key shared by findings that say the same thing about different parts: same check, kind and severity, and a message that differs only in the part's designator (numbers included, so another current is another group). The terminal report prints each group once as `N parts like A, B, C and M more: ...`; `findings[]` keeps every finding, so a consumer groups on this key |
 | `nets` / `refs` | string[] | involved nets / component references |
 | `location_mm` / `layer` | optional | board location and copper layer |
 | `actionable` | bool | whether a user can act on it |

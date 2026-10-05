@@ -590,8 +590,9 @@ The rest of the CLI surface, one line each:
 
 `hauksbee-mcp` is the third binary in every release bundle (alongside
 `hauksbee` and `hauksbee-ci`): a stdio MCP server exposing the same engine,
-so a coding agent can analyze boards, run specs, and read reports over
-JSON-RPC without shelling out to the CLI. Documented in
+so a coding agent can analyze boards, run specs, simulate SPICE decks,
+lint model files, check which co-sim backends are installed, and read reports
+over JSON-RPC without shelling out to the CLI. Documented in
 [`crates/hauksbee-mcp/README.md`](../../crates/hauksbee-mcp/README.md).
 
 ---

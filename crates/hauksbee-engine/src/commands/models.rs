@@ -15,6 +15,24 @@ use hauksbee_ir::evidence::{
 use hauksbee_models::schema::model_error_warning;
 use hauksbee_models::{ModelLibrary, Pack, PackStore};
 
+/// The result of linting one model file: what `hauksbee models lint` prints,
+/// and the counts behind its exit code. The MCP server returns it as data.
+pub struct LintReport {
+    /// Every line the command prints, in order, the summary line last.
+    pub lines: Vec<String>,
+    pub checked: usize,
+    /// Findings fail the lint (exit 2); warnings never do.
+    pub findings: usize,
+    pub warnings: usize,
+}
+
+/// One printed line of a lint, collected instead of printed.
+macro_rules! say {
+    ($out:expr, $($arg:tt)*) => {
+        $out.push(format!($($arg)*))
+    };
+}
+
 /// `hauksbee models lint <file>`: standalone validation of model TOML.
 ///
 /// Dispatches on the file's root shape: a `[sensor]` table lints as a
@@ -32,9 +50,9 @@ use hauksbee_models::{ModelLibrary, Pack, PackStore};
 /// # Errors
 ///
 /// Returns an error if `file` is a board rather than a model spec, cannot be read,
-/// is not TOML, or has no `[sensor]`, `[[models]]` or `[soc]` content to lint. Lint
-/// findings exit the process with status 2.
-pub fn lint(file: &Path) -> anyhow::Result<()> {
+/// is not TOML, or has no `[sensor]`, `[[models]]` or `[soc]` content to lint.
+pub fn lint_report(file: &Path) -> anyhow::Result<LintReport> {
+    let mut lines: Vec<String> = Vec::new();
     // A board file handed to `models lint` would fall into the TOML parser,
     // which dumps the whole one-line board file as error context. Detect it
     // (extension first: a binary .PcbDoc fails read_to_string with a UTF-8
@@ -82,7 +100,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
     // first missing or unknown key, and every one of them is a finding.
     for problem in hauksbee_models::validation::source_shape_findings(&root) {
         findings += 1;
-        println!("source shape: ERROR: {problem}");
+        say!(lines, "source shape: ERROR: {problem}");
     }
     if root.get("sensor").is_some() {
         checked += 1;
@@ -92,7 +110,7 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                 let source = spec.sensor.source.take();
                 if let Some(w) = model_error_warning(source.as_ref()) {
                     warnings += 1;
-                    println!("sensor.source: warning: {w}");
+                    say!(lines, "sensor.source: warning: {w}");
                 }
                 let source = source.map(|s| s.problems());
                 let result = spec.validate().err().into_iter().map(|e| e.to_string());
@@ -103,23 +121,23 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                     .chain(result)
                     .collect();
                 for e in &errors {
-                    println!("sensor spec: ERROR: {e}");
+                    say!(lines, "sensor spec: ERROR: {e}");
                 }
                 findings += errors.len();
                 if errors.is_empty() {
-                    println!("sensor '{}': ok", spec.sensor().name);
+                    say!(lines, "sensor '{}': ok", spec.sensor().name);
                 }
             }
             Err(e) => {
                 findings += 1;
-                println!("sensor spec: ERROR: {e}");
+                say!(lines, "sensor spec: ERROR: {e}");
             }
         }
     } else if root.get("models").is_some() {
-        checked += lint_model_db(file, &text, &mut findings, &mut warnings);
+        checked += lint_model_db(file, &text, &mut findings, &mut warnings, &mut lines);
     } else if root.get("soc").is_some() {
         checked += 1;
-        findings += lint_soc(file, &text, &root);
+        findings += lint_soc(file, &text, &root, &mut lines);
     } else {
         anyhow::bail!(
             "'{}' has no [sensor] table, no [[models]] entries and no [soc] table; \
@@ -133,7 +151,8 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
     } else {
         String::new()
     };
-    println!(
+    say!(
+        lines,
         "{checked} item(s) checked, {findings} finding(s){warning_note}{}",
         if findings == 0 && warnings == 0 {
             ": clean"
@@ -141,7 +160,25 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             ""
         }
     );
-    if findings > 0 {
+    Ok(LintReport {
+        lines,
+        checked,
+        findings,
+        warnings,
+    })
+}
+
+/// `hauksbee models lint <file>`: [`lint_report`] printed, exiting 2 on findings.
+///
+/// # Errors
+///
+/// The errors of [`lint_report`].
+pub fn lint(file: &Path) -> anyhow::Result<()> {
+    let report = lint_report(file)?;
+    for line in &report.lines {
+        println!("{line}");
+    }
+    if report.findings > 0 {
         std::process::exit(2);
     }
     Ok(())
@@ -149,7 +186,13 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
 
 /// Lint every `[[models]]` entry in `text`, printing each finding and adding the
 /// finding and warning counts; returns how many entries were checked.
-fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut usize) -> usize {
+fn lint_model_db(
+    file: &Path,
+    text: &str,
+    findings: &mut usize,
+    warnings: &mut usize,
+    lines: &mut Vec<String>,
+) -> usize {
     // An unknown `kind` is the classic first-model mistake; serde's
     // unknown-variant wording lists the vocabulary but a synonym deserves
     // its direct answer (ldo -> vreg).
@@ -157,7 +200,11 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         *findings += 1;
         let note = hauksbee_models::validation::kind_error_note(&e.to_string());
         let note = note.map_or(String::new(), |n| format!("\n  {n}"));
-        println!("'{}': [[models]] parse ERROR: {e}{note}", file.display());
+        say!(
+            lines,
+            "'{}': [[models]] parse ERROR: {e}{note}",
+            file.display()
+        );
         hauksbee_models::schema::DbFile { models: Vec::new() }
     });
     let shipped = hauksbee_models::is_builtin_db(text);
@@ -167,12 +214,13 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         if let Err(errors) = hauksbee_models::validation::validate(entry) {
             for err in errors {
                 entry_findings += 1;
-                println!("model '{}': ERROR: {err}", entry.id);
+                say!(lines, "model '{}': ERROR: {err}", entry.id);
             }
         }
         if entry.r#match.is_empty() {
             entry_findings += 1;
-            println!(
+            say!(
+                lines,
                 "model '{}': ERROR: entry has no match rules (lib_id / value_re / \
                  footprint_re / mpn_re all absent); it cannot claim a board component",
                 entry.id
@@ -189,7 +237,7 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         let cited = hauksbee_models::param_names::source_warnings(entry);
         if let Some(w) = model_error_warning(entry.source.as_ref()) {
             entry_warnings += 1;
-            println!("model '{}' [models.source]: warning: {w}", entry.id);
+            say!(lines, "model '{}' [models.source]: warning: {w}", entry.id);
         }
         // A machine draft must also say which package its map is for; a
         // shipped card's map was checked by a person against the footprint.
@@ -202,10 +250,10 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         let pin_map = hauksbee_models::validation::unknown_pads_warning(entry).into_iter();
         for w in pin_map.chain(draft_rules.into_iter().flatten()) {
             entry_warnings += 1;
-            println!("model '{}' [models.pins]: warning: {w}", entry.id);
+            say!(lines, "model '{}' [models.pins]: warning: {w}", entry.id);
         }
         if let Some(standard) = hauksbee_models::validation::pin_standard(entry) {
-            println!("model '{}' [[models.source.pinout]]: note: [models.pins] pads are numbered from package standard \"{standard}\", not printed on the sheet; every result marks their roles assumed, so recheck the view and the pin-1 corner against the drawing", entry.id);
+            say!(lines, "model '{}' [[models.source.pinout]]: note: [models.pins] pads are numbered from package standard \"{standard}\", not printed on the sheet; every result marks their roles assumed, so recheck the view and the pin-1 corner against the drawing", entry.id);
         }
         for w in unknown
             .iter()
@@ -213,19 +261,19 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
             .chain(cited)
         {
             entry_warnings += 1;
-            println!("model '{}' [models.params]: warning: {w}", entry.id);
+            say!(lines, "model '{}' [models.params]: warning: {w}", entry.id);
         }
         if !entry.logic.is_empty() {
             match crate::logic::LogicComponent::compile(&entry.id, &entry.logic) {
                 Ok(compiled) => {
                     for w in &compiled.warnings {
                         entry_warnings += 1;
-                        println!("model '{}' [models.logic]: warning: {w}", entry.id);
+                        say!(lines, "model '{}' [models.logic]: warning: {w}", entry.id);
                     }
                 }
                 Err(e) => {
                     entry_findings += 1;
-                    println!("model '{}' [models.logic]: ERROR: {e}", entry.id);
+                    say!(lines, "model '{}' [models.logic]: ERROR: {e}", entry.id);
                 }
             }
         }
@@ -235,13 +283,17 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
         if !entry.behavioral.is_empty() {
             for err in hauksbee_models::behavioral::validate_behavioral(&entry.behavioral) {
                 entry_findings += 1;
-                println!("model '{}' [models.behavioral]: ERROR: {err}", entry.id);
+                say!(
+                    lines,
+                    "model '{}' [models.behavioral]: ERROR: {err}",
+                    entry.id
+                );
             }
         }
         if entry_findings == 0 {
             match entry_warnings {
-                0 => println!("model '{}': ok", entry.id),
-                n => println!("model '{}': ok, {n} warning(s) above", entry.id),
+                0 => say!(lines, "model '{}': ok", entry.id),
+                n => say!(lines, "model '{}': ok, {n} warning(s) above", entry.id),
             }
         }
         *findings += entry_findings;
@@ -249,7 +301,7 @@ fn lint_model_db(file: &Path, text: &str, findings: &mut usize, warnings: &mut u
     }
     for problem in hauksbee_models::variants::lint(&db.models) {
         *findings += 1;
-        println!("variant set: ERROR: {problem}");
+        say!(lines, "variant set: ERROR: {problem}");
     }
     db.models.len()
 }
@@ -287,11 +339,9 @@ fn board_not_model_spec(file: &Path) -> anyhow::Error {
 ///
 /// A wrong `odr_offset` cannot be caught from a file at all. That is why the
 /// walkthrough reads every offset off a running machine.
-fn lint_soc(file: &Path, text: &str, root: &toml::Value) -> usize {
+fn lint_soc(file: &Path, text: &str, root: &toml::Value, out: &mut Vec<String>) -> usize {
     let (lines, findings) = soc_lint_report(file, text, root);
-    for line in lines {
-        println!("{line}");
-    }
+    out.extend(lines);
     findings
 }
 

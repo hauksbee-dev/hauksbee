@@ -125,6 +125,9 @@ fn handshake_lists_every_tool_with_schemas() {
         "list_capabilities",
         "model_coverage",
         "board_to_code",
+        "simulate_deck",
+        "doctor",
+        "models_lint",
         "run_script",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}");
@@ -631,4 +634,143 @@ fn unknown_flag_fails_loudly_instead_of_starting_the_server() {
         stderr.contains("--definitely-not-a-flag") && stderr.contains("--help"),
         "stderr must name the argument and point at --help: {stderr}"
     );
+}
+
+#[test]
+fn simulate_deck_returns_the_cli_numbers() {
+    let mut c = McpClient::start();
+    let (v, is_error) = c.call_tool(
+        "simulate_deck",
+        &json!({ "deck_path": fixture("examples/decks/divider.cir"), "print": ["V(out)"] }),
+    );
+    assert!(!is_error, "{v}");
+    assert_eq!(v["analysis"], "op");
+    assert_eq!(v["columns"], json!(["V(out)"]));
+    // 5 V across 1k over 3k: 3.75 V, the same deck `hauksbee sim` prints.
+    let out = v["rows"][0][0].as_f64().expect("one number");
+    assert!((out - 3.75).abs() < 1e-6, "V(out) = {out}");
+    assert!(v["time"].is_null());
+    assert!(
+        v["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().is_some_and(|n| n.contains("no tolerance"))),
+        "the nominal-values caveat travels with the numbers: {v}"
+    );
+}
+
+#[test]
+fn simulate_deck_thins_a_long_run_and_says_so() {
+    let mut c = McpClient::start();
+    let (v, is_error) = c.call_tool(
+        "simulate_deck",
+        &json!({
+            "deck_path": fixture("examples/decks/rlc_ringdown.cir"),
+            "analysis": "tran",
+            "max_rows": 10,
+        }),
+    );
+    assert!(!is_error, "{v}");
+    assert_eq!(v["rows"].as_array().unwrap().len(), 10);
+    assert_eq!(v["time"].as_array().unwrap().len(), 10);
+    assert_eq!(v["decimated"]["to"], 10);
+    assert!(v["row_count"].as_u64().unwrap() > 10);
+}
+
+#[test]
+fn simulate_deck_separates_a_missing_deck_from_an_unanswerable_one() {
+    let mut c = McpClient::start();
+    let (missing, is_error) = c.call_tool(
+        "simulate_deck",
+        &json!({ "deck_path": fixture("examples/decks/nope.cir") }),
+    );
+    assert!(is_error, "{missing}");
+    assert!(missing["error"].as_str().unwrap().contains("nope.cir"));
+    let (bad, is_error) = c.call_tool(
+        "simulate_deck",
+        &json!({ "deck_path": fixture("examples/decks/divider.cir"), "analysis": "fft" }),
+    );
+    assert!(is_error, "{bad}");
+    assert!(bad["error"].as_str().unwrap().contains("unknown analysis"));
+}
+
+#[test]
+fn simulate_deck_refusal_is_the_structured_shape_not_an_error() {
+    let mut c = McpClient::start();
+    // The divider has only a `.op` card, so a forced transient has no stop time.
+    let (v, is_error) = c.call_tool(
+        "simulate_deck",
+        &json!({ "deck_path": fixture("examples/decks/divider.cir"), "analysis": "tran" }),
+    );
+    assert!(!is_error, "a refusal is an answer, not a malfunction: {v}");
+    assert_eq!(v["status"], "invalid_for_analysis");
+    assert!(v["reason"].as_str().unwrap().contains(".tran"));
+    assert_eq!(v["refusal"]["claim"], "transient analysis");
+}
+
+#[test]
+fn doctor_reports_the_cli_backend_rows() {
+    let mut c = McpClient::start();
+    let (v, is_error) = c.call_tool("doctor", &json!({}));
+    assert!(!is_error, "{v}");
+    let names: Vec<&str> = v["backends"]
+        .as_array()
+        .expect("backends")
+        .iter()
+        .map(|b| b["name"].as_str().unwrap())
+        .collect();
+    for expected in ["avr", "qemu-xtensa", "qemu-riscv32", "renode", "extract"] {
+        assert!(
+            names.contains(&expected),
+            "doctor row for {expected}: {names:?}"
+        );
+    }
+}
+
+#[test]
+fn models_lint_returns_the_cli_lines_and_counts() {
+    let mut c = McpClient::start();
+    let (v, is_error) = c.call_tool(
+        "models_lint",
+        &json!({ "file_path": fixture("crates/hauksbee-engine/tests/fixtures/logic_lint/undeclared_pin.toml") }),
+    );
+    assert!(!is_error, "{v}");
+    assert_eq!(v["clean"], false);
+    assert!(v["findings"].as_u64().unwrap() >= 1);
+    let lines = v["lines"].as_array().unwrap();
+    assert!(
+        lines.iter().any(|l| l
+            .as_str()
+            .unwrap()
+            .contains("references undeclared name 'phantom_pin'")),
+        "{v}"
+    );
+    assert!(lines
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .contains("finding(s)"));
+
+    let (board, is_error) = c.call_tool(
+        "models_lint",
+        &json!({ "file_path": fixture("testdata/boards/pic_programmer.kicad_pcb") }),
+    );
+    assert!(is_error, "{board}");
+    assert!(board["error"].as_str().unwrap().contains("is a board"));
+}
+
+#[test]
+fn the_script_sandbox_reaches_the_new_tools() {
+    let mut c = McpClient::start();
+    let (v, is_error) = c.call_tool(
+        "run_script",
+        &json!({ "source": format!(
+            "const d = hauksbee.simulateDeck({:?}, ['V(out)']); return {{a: d.analysis, n: hauksbee.doctor().backends.length > 0}};",
+            fixture("examples/decks/divider.cir")
+        ) }),
+    );
+    assert!(!is_error, "{v}");
+    assert_eq!(v["result"], json!({ "a": "op", "n": true }));
 }

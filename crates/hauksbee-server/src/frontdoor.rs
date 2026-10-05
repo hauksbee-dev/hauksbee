@@ -206,6 +206,7 @@ fn installed_live(hub: &crate::LiveHub, live: LiveLaunch) -> JsonResponse {
         live.engine,
         live.board_name,
         live.board_file,
+        live.layout_file,
         live.keepalive,
     );
     json_body(

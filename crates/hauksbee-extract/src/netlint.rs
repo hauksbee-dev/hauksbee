@@ -2170,12 +2170,91 @@ pub fn render_netlint(report: &NetLintReport) -> String {
         out.push_str("net-lint: no findings.\n");
         return out;
     }
-    let _ = writeln!(out, "net-lint: {} finding(s)", report.findings.len());
-    for f in &report.findings {
-        let (severity, check) = (f.severity.as_str(), f.check.as_str());
-        let _ = writeln!(out, "  [{severity}] {check} - {}", f.message);
+    let groups = crate::repeat::group_repeats(&report.findings, |f| {
+        let [_] = f.refs.as_slice() else { return None };
+        Some(format!(
+            "{}/{}/{}",
+            f.check.as_str(),
+            f.severity.as_str(),
+            crate::repeat::repeat_shape(&f.message, &f.refs)
+        ))
+    });
+    let _ = write!(out, "net-lint: {} finding(s)", report.findings.len());
+    if groups.len() < report.findings.len() {
+        let _ = write!(
+            out,
+            " (repeats grouped into {} lines; --json lists each)",
+            groups.len()
+        );
+    }
+    out.push('\n');
+    for group in groups {
+        let first = group[0];
+        let (severity, check) = (first.severity.as_str(), first.check.as_str());
+        if group.len() == 1 {
+            let _ = writeln!(out, "  [{severity}] {check} - {}", first.message);
+        } else {
+            let parts: Vec<&str> = group.iter().map(|f| f.refs[0].as_str()).collect();
+            let lead = crate::repeat::describe_parts(&parts);
+            let _ = writeln!(out, "  [{severity}] {check} - {lead}: {}", first.message);
+        }
     }
     out
+}
+
+#[cfg(test)]
+mod repeat_render_tests {
+    use super::*;
+
+    fn overstress(part: &str, ma: &str) -> LintFinding {
+        LintFinding {
+            check: LintCheck::DcOverstress,
+            severity: Severity::High,
+            message: format!("{part} is overstressed: {part}_s0 passes {ma} mA"),
+            refs: vec![part.to_string()],
+            nets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_finding_repeated_across_parts_is_one_line_with_a_count_and_a_few_refs() {
+        let report = NetLintReport {
+            findings: vec![
+                overstress("IC10006", "234"),
+                overstress("IC10106", "234"),
+                overstress("IC10206", "234"),
+                overstress("IC10306", "234"),
+                overstress("IC10406", "50"),
+            ],
+        };
+        let text = render_netlint(&report);
+        assert!(
+            text.contains("5 finding(s) (repeats grouped into 2 lines"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "[high] dc_overstress - 4 parts like IC10006, IC10106, IC10206 and 1 more: IC10006 is overstressed: IC10006_s0 passes 234 mA"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "[high] dc_overstress - IC10406 is overstressed: IC10406_s0 passes 50 mA"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn distinct_findings_render_as_before() {
+        let report = NetLintReport {
+            findings: vec![overstress("IC1", "234"), overstress("IC2", "50")],
+        };
+        let text = render_netlint(&report);
+        assert!(text.contains("2 finding(s)\n"), "{text}");
+        assert!(!text.contains("parts like"), "{text}");
+    }
 }
 
 #[cfg(test)]

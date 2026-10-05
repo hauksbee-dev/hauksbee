@@ -41,23 +41,11 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
     // Nothing below says where the web app is; both framings say it once.
     const SERVE_LINE: &str =
         "The web app is `hauksbee serve`, which serves http://127.0.0.1:3001 by default.";
-    let backends = probe_backends();
     if json {
-        let arr: Vec<serde_json::Value> = backends
-            .iter()
-            .map(|b| {
-                serde_json::json!({
-                    "name": b.name,
-                    "status": b.status,
-                    "available": b.status == "ok" || b.status == "builtin",
-                    "detail": b.detail,
-                    "summary": b.summary,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::json!({ "backends": arr }));
+        println!("{}", backends_json());
         return Ok(());
     }
+    let backends = probe_backends();
 
     // A TTY gets ONE table a human can actually read, closed by one summary
     // line; nothing else (U10: an earlier shape interleaved two formats). A
@@ -101,6 +89,28 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `hauksbee doctor --json` as data.
+///
+/// Shape: `{"backends": [{name, status, available, detail, summary}]}`. The CLI
+/// prints it and the MCP `doctor` tool returns it, so the two cannot disagree
+/// about what is installed.
+#[must_use]
+pub fn backends_json() -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = probe_backends()
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "name": b.name,
+                "status": b.status,
+                "available": b.status == "ok" || b.status == "builtin",
+                "detail": b.detail,
+                "summary": b.summary,
+            })
+        })
+        .collect();
+    serde_json::json!({ "backends": arr })
 }
 
 /// Probe every co-sim backend with the engine's own resolvers, in report order.

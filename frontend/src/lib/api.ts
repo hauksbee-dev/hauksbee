@@ -65,6 +65,20 @@ export async function fetchFile(url: string, signal?: AbortSignal, fallbackName 
   return new File([await res.blob()], url.split('/').pop() || fallbackName)
 }
 
+/** The layout text the board viewer draws for a served board file. A native
+ *  KiCad layout is its own text. A `.board` is retained as source (so a saved
+ *  session can resume from the bytes it was checked on), so the server also
+ *  keeps the compiled layout at `<url>/layout`. Anything else comes back as
+ *  fetched, and the parser reports that it has no layout. */
+export async function fetchLayoutText(url: string, signal?: AbortSignal): Promise<string> {
+  const text = await (await fetchFile(url, signal)).text()
+  if (/^\s*\(kicad_pcb\b/.test(text)) return text
+  const res = await fetch(`${url}/layout`, { signal })
+  if (!res.ok) return text
+  const layout = await res.text()
+  return /^\s*\(kicad_pcb\b/.test(layout) ? layout : text
+}
+
 // ── Server-Sent Events ───────────────────────────────────────────────────────
 // Installs and datasheet extraction run for minutes, and a request that blocks
 // silently until the end is indistinguishable from a hang. `EventSource` cannot

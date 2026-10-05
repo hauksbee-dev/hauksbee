@@ -59,8 +59,10 @@ Top-level keys to read first: `verdict`, `serious_count`, `actionable_count`,
 
 - `verdict` is `pass`, `fail`, or `invalid`. `fail` outranks `invalid`.
 - `findings[]`: each has `check`, `kind`, `severity`, `gating`, `actionable`,
-  `refs`, `nets`, `message`, `plain` and `fix`. Only `gating: true` findings
-  fail the strict gate.
+  `refs`, `nets`, `message`, `plain`, `fix` and `group`. Only `gating: true`
+  findings fail the strict gate. Findings with the same `group` are one finding
+  repeated across parts (a cell instantiated many times); the terminal report
+  prints each group once, the JSON keeps every entry.
 - `bind.active_path_unresolved[]` names each open active IC and why.
 - `notes[]` with `kind: "coverage"` start with `INCONCLUSIVE:` when parts
   that carry current have no model. A clean report with this note is not a

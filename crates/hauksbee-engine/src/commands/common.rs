@@ -250,6 +250,20 @@ pub(crate) fn resumable_board_file(
         .map(|text| (name.to_string(), text.to_string()))
 }
 
+/// The layout text the viewer should draw when the retained board file is not
+/// itself that layout (a `.board` keeps its source for resume; the viewer
+/// needs the compiled `KiCad` text).
+fn drawable_layout(
+    board_file: Option<&(String, String)>,
+    layout_text: Option<&str>,
+) -> Option<String> {
+    let layout = layout_text?;
+    match board_file {
+        Some((_, retained)) if retained == layout => None,
+        _ => Some(layout.to_string()),
+    }
+}
+
 #[must_use]
 pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::SchematicLiveLauncher {
     use hauksbee_extract::ExtractedBoard;
@@ -343,10 +357,12 @@ pub fn schematic_live_launcher() -> hauksbee_frontdoor_api::frontdoor::Schematic
             // bridged, KiCad-10 `version_warning` shorts left alone), recorded
             // on the engine so the sim view can disclose it.
             engine.apply_and_disclose_drc_shorts_with_qualification(&drc, qualification.as_ref());
+            let layout_file = drawable_layout(board_file.as_ref(), norm.layout_text.as_deref());
             Ok(LiveLaunch {
                 engine: Box::new(engine),
                 board_name: name.to_string(),
                 board_file,
+                layout_file,
                 keepalive,
             })
         },
@@ -419,10 +435,13 @@ pub fn design_live_launcher() -> hauksbee_frontdoor_api::frontdoor::DesignLiveLa
         } else {
             None
         };
+        let layout_file =
+            drawable_layout(board_file.as_ref(), prepared.norm.layout_text.as_deref());
         Ok(LiveLaunch {
             engine: Box::new(engine),
             board_name: name,
             board_file,
+            layout_file,
             keepalive,
         })
     })
@@ -439,6 +458,7 @@ pub fn serve(
     mut engine: HauksbeeEngine,
     port: u16,
     board_file: Option<(String, String)>,
+    layout_file: Option<String>,
     startup_json: String,
     open: bool,
     no_open: bool,
@@ -457,7 +477,7 @@ pub fn serve(
             .as_ref()
             .and_then(|(url, _)| url.rsplit('/').next())
             .map(ToString::to_string);
-        let server = Server::new_named(Box::new(engine), session_name);
+        let server = Server::new_named_with_layout(Box::new(engine), session_name, layout_file);
         // Resolve the web app via the ladder (HAUKSBEE_WEB_DIST override ->
         // checkout dist -> embedded copy), so an installed release binary shows
         // the live viewer too, not just a source checkout.
@@ -534,6 +554,7 @@ pub fn serve(
     _engine: HauksbeeEngine,
     _port: u16,
     _board_file: Option<(String, String)>,
+    _layout_file: Option<String>,
     _startup_json: String,
     _open: bool,
     _no_open: bool,

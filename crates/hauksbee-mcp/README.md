@@ -8,7 +8,7 @@ Transport is stdio: JSON-RPC 2.0, newline-delimited, protocol revision
 2025-06-18 (2025-03-26 and 2024-11-05 are also accepted). The server declares
 only the `tools` capability.
 
-## The six tools
+## The nine tools
 
 | Tool | Does |
 |---|---|
@@ -17,6 +17,9 @@ only the `tools` capability.
 | `list_capabilities` | The scope table as data: which report kinds and assertion kinds exist, which board and firmware formats are accepted, and which MCU backends this machine actually has, probed with the engine's own discovery. |
 | `model_coverage` | Read-only staged coverage for every connected active device: identity, executable scope, declared completeness, sources, pins/nets, implemented and missing behavior. The returned preparation command is explicitly marked as requiring user approval. |
 | `board_to_code` | Decompiles a text-format board (KiCad `.kicad_pcb`, Eagle `.brd`) into the editable Board-as-Code text form. |
+| `simulate_deck` | Runs a SPICE deck like `hauksbee sim` and returns `{analysis, columns, time, rows, notes}`. A long run is thinned to `max_rows` and says so. A deck the solver cannot answer honestly comes back as the `invalid_for_analysis` refusal. |
+| `doctor` | The co-sim backend probe as `hauksbee doctor --json`: `{backends: [{name, status, available, detail, summary}]}`, including the datasheet-extraction backend. |
+| `models_lint` | Validates a model TOML file like `hauksbee models lint`: `{clean, checked, findings, warnings, lines}`. Read-only. |
 | `run_script` | Code mode: submit one JavaScript program that runs server-side against the same API and returns a composed result, instead of many tool round-trips. |
 
 `model_coverage` is the same shared snapshot used by `hauksbee models coverage`
@@ -90,7 +93,9 @@ working directory, so absolute paths are safer.
 without `board`, `firmware`, or `schematic` keys) and the same optional paths.
 `model_coverage` takes `board_path` and optional `models_dir`.
 `board_to_code` takes `board_path`. `run_script` takes `source`.
-`list_capabilities` takes nothing. The per-tool argument table, the refusal
+`simulate_deck` takes `deck_path` and optional `print` (probe names),
+`analysis` (`op`, `tran`, `ac` or `dc`) and `max_rows`. `models_lint` takes
+`file_path`. `list_capabilities` and `doctor` take nothing. The per-tool argument table, the refusal
 shape, and a full `run_script` request and response are in
 [`agents/AGENTS.md`](../../agents/AGENTS.md#the-mcp-server).
 

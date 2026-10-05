@@ -57,6 +57,10 @@ pub struct LiveLaunch {
     pub board_name: String,
     /// `(file name, board text)` for the board-file route.
     pub board_file: Option<(String, String)>,
+    /// The drawable `KiCad` layout text, set only when `board_file` is some
+    /// other text (Board-as-Code source, an Eagle file) the viewer cannot
+    /// draw. Served at `/boards/<file name>/layout`.
+    pub layout_file: Option<String>,
     /// Resources that must remain alive for the session's lifetime.
     pub keepalive: Option<Box<dyn std::any::Any + Send>>,
 }

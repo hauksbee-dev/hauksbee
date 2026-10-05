@@ -2,9 +2,11 @@
 //!
 //! Definitions carry the name, agent-facing description and JSON Schema; the
 //! implementations cover `analyze_board`, `run_checks`, `list_capabilities`,
-//! `model_coverage`, `board_to_code`, and `run_script`. Everything routes
+//! `model_coverage`, `board_to_code`, `simulate_deck`, `doctor`, `models_lint`
+//! and `run_script`. Everything routes
 //! through the engine's own library front door (`analyze_json`,
-//! `hauksbee_ci::run`, the doctor's backend resolvers), never a re-implemented
+//! `hauksbee_ci::run`, the doctor's backend resolvers, the CLI's `sim` and
+//! `models lint` cores), never a re-implemented
 //! sniff or probe, so what the MCP server reports can never drift from what
 //! the CLI would say for the same inputs. The honesty contract is enforced
 //! here: an unanswerable run (the CLI's exit-3 territory) becomes a structured
@@ -142,8 +144,56 @@ pub fn definitions() -> Value {
             }
         },
         {
+            "name": "simulate_deck",
+            "description": "Run a SPICE deck (.cir) and return the solved numbers, the same run as `hauksbee sim DECK`. The analysis is the deck's own card (.op, .tran, .ac or .dc) unless `analysis` forces one. Result: {deck, analysis, columns, time, rows, row_count, notes}; `time` is null for .op/.dc/.ac, `rows[i]` is one value per column, and `notes` are the caveats the CLI prints on stderr (read them: results use the deck's own model cards at nominal values and carry no uncertainty interval). A long run is thinned to `max_rows` evenly spaced rows, first and last kept, and says so in `decimated`. HONESTY CONTRACT: a well-formed deck the solver cannot answer honestly comes back as {\"status\":\"invalid_for_analysis\",\"reason\":...,\"refusal\":...}; never read it as a result. A malformed deck or bad probe is an input error. `.include`/`.lib` resolve against the deck's directory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "deck_path": {
+                        "type": "string",
+                        "description": "Path to the text SPICE deck on this machine."
+                    },
+                    "print": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional probes, e.g. [\"V(out)\", \"I(R1)\"]. Default: every node voltage."
+                    },
+                    "analysis": {
+                        "type": "string",
+                        "enum": ["op", "tran", "ac", "dc"],
+                        "description": "Optional. Force an analysis instead of the deck's own card."
+                    },
+                    "max_rows": {
+                        "type": "integer",
+                        "minimum": 2,
+                        "description": "Most rows to return (default 2000)."
+                    }
+                },
+                "required": ["deck_path"]
+            }
+        },
+        {
+            "name": "doctor",
+            "description": "Which co-sim backends this machine has, as `hauksbee doctor --json`: {backends: [{name, status, available, detail, summary}]}. `status` is builtin, ok, absent or disabled; `detail` is the resolved path or the install hint. It also lists the datasheet-extraction backend. Unlike list_capabilities it carries no scope table. Call it to explain why a firmware run refused or substituted a backend.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "models_lint",
+            "description": "Validate a model TOML file the way `hauksbee models lint FILE` does: a [sensor] spec, [[models]] entries (kind parameters, logic compile, behavioral blocks, variant sets) or a [soc] MCU descriptor. Result: {file, clean, checked, findings, warnings, lines}; `lines` is the CLI output in order and the CLI exits 2 when `findings` > 0 (warnings never fail it). Read-only. A board file is an input error, and the message names the command meant (model_coverage).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the model TOML file."
+                    }
+                },
+                "required": ["file_path"]
+            }
+        },
+        {
             "name": "run_script",
-            "description": "Code mode: run a JavaScript program server-side against the hauksbee API and return the composed result in ONE call, instead of many tool round-trips. The sandbox (embedded QuickJS) exposes exactly one capability, the global `hauksbee` object: analyzeBoard(path, firmwarePath?, schematicPath?), runChecks(path, specToml, firmwarePath?), listCapabilities(), modelCoverage(path, modelsDir?), boardToCode(path). Each returns the same JSON object the corresponding tool returns. console.log(...) is captured into the response. The JS environment itself has no filesystem, no network, no imports and no other globals beyond the JS builtins. Note what that does NOT mean: `hauksbee.analyzeBoard(path)` reads any path on the machine and `hauksbee.runChecks(...)` can build a firmware project, which runs that project's build scripts. Treat those two as the capabilities they are, and do not pass a path or a spec that came from content you do not trust. The script runs as a function body: use `return` for its result, which must be JSON-serializable. HONESTY CONTRACT inside the sandbox: a refusal is THROWN as a structured error object with .status === \"invalid_for_analysis\" so a script cannot accidentally treat it as data; catch it if you want to handle it. Tool input errors are thrown as {error: message}. Response: {result, logs}; an uncaught throw comes back as an error with {thrown, logs}. Scripts are killed after 120 seconds.",
+            "description": "Code mode: run a JavaScript program server-side against the hauksbee API and return the composed result in ONE call, instead of many tool round-trips. The sandbox (embedded QuickJS) exposes exactly one capability, the global `hauksbee` object: analyzeBoard(path, firmwarePath?, schematicPath?), runChecks(path, specToml, firmwarePath?), listCapabilities(), modelCoverage(path, modelsDir?), boardToCode(path), simulateDeck(path, print?, analysis?, maxRows?), doctor(), modelsLint(path). Each returns the same JSON object the corresponding tool returns. console.log(...) is captured into the response. The JS environment itself has no filesystem, no network, no imports and no other globals beyond the JS builtins. Note what that does NOT mean: `hauksbee.analyzeBoard(path)` reads any path on the machine and `hauksbee.runChecks(...)` can build a firmware project, which runs that project's build scripts. Treat those two as the capabilities they are, and do not pass a path or a spec that came from content you do not trust. The script runs as a function body: use `return` for its result, which must be JSON-serializable. HONESTY CONTRACT inside the sandbox: a refusal is THROWN as a structured error object with .status === \"invalid_for_analysis\" so a script cannot accidentally treat it as data; catch it if you want to handle it. Tool input errors are thrown as {error: message}. Response: {result, logs}; an uncaught throw comes back as an error with {thrown, logs}. Scripts are killed after 120 seconds.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -168,6 +218,9 @@ pub fn call(name: &str, args: &Value) -> ToolResult {
         "list_capabilities" => ToolResult::ok(list_capabilities()),
         "model_coverage" => ToolResult::from_body(model_coverage(args)),
         "board_to_code" => ToolResult::from_body(board_to_code(args)),
+        "simulate_deck" => ToolResult::from_body(simulate_deck(args)),
+        "doctor" => ToolResult::ok(hauksbee_engine::commands::doctor::backends_json()),
+        "models_lint" => ToolResult::from_body(models_lint(args)),
         "run_script" => run_script(args),
         other => ToolResult::err(format!(
             "unknown tool '{other}'; call tools/list for the available tools"
@@ -581,6 +634,107 @@ fn board_to_code(args: &Value) -> Result<Value, String> {
     Ok(json!({ "board": display_name(board_path), "code": code }))
 }
 
+/// Rows returned by `simulate_deck` unless the caller asks for another cap.
+const DEFAULT_MAX_ROWS: usize = 2000;
+
+/// Longest a `simulate_deck` call may wait on the solver. The solver has no
+/// cancel hook, so an over-running solve is left to finish on its own thread.
+const DECK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// `simulate_deck`: `hauksbee sim` as data, through the engine's own deck
+/// loader and solver so the numbers match the CLI's CSV.
+fn simulate_deck(args: &Value) -> Result<Value, String> {
+    use hauksbee_engine::commands::sim::simulate_deck_file;
+    let deck_path = req_str(args, "deck_path")?;
+    let print: Vec<String> = args
+        .get("print")
+        .and_then(Value::as_array)
+        .map(|probes| {
+            probes
+                .iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let analysis = opt_str(args, "analysis").map(str::to_string);
+    let max_rows = args
+        .get("max_rows")
+        .and_then(Value::as_u64)
+        .map_or(DEFAULT_MAX_ROWS, |n| {
+            usize::try_from(n).unwrap_or(usize::MAX)
+        })
+        .max(2);
+    let path = std::path::PathBuf::from(deck_path);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(simulate_deck_file(&path, &print, analysis.as_deref()));
+    });
+    let run = match rx.recv_timeout(DECK_WAIT) {
+        Ok(Ok(run)) => run,
+        Ok(Err(error)) => {
+            if let Some(refusal) = error.refusal() {
+                return Ok(json!({
+                    "status": INVALID_FOR_ANALYSIS,
+                    "reason": refusal.missing_prerequisite,
+                    "refusal": refusal,
+                }));
+            }
+            return Err(error.message());
+        }
+        Err(_) => {
+            return Err(format!(
+                "deck '{deck_path}' was still solving after {DECK_WAIT:?}; shorten the stop \
+                 time or widen the step"
+            ))
+        }
+    };
+    let output = run.output;
+    let total = output.rows.len();
+    let keep = thinned_indices(total, max_rows);
+    let rows: Vec<&Vec<f64>> = keep.iter().map(|&i| &output.rows[i]).collect();
+    let time = output
+        .time
+        .as_ref()
+        .map(|t| keep.iter().map(|&i| t[i]).collect::<Vec<f64>>());
+    let mut value = json!({
+        "deck": display_name(deck_path),
+        "analysis": run.analysis,
+        "columns": output.columns,
+        "time": time,
+        "rows": rows,
+        "row_count": total,
+        "notes": run.notes,
+    });
+    if keep.len() < total {
+        value["decimated"] = json!({ "from": total, "to": keep.len() });
+    }
+    Ok(value)
+}
+
+/// Indices of at most `max` of `total` rows, evenly spaced, first and last kept.
+fn thinned_indices(total: usize, max: usize) -> Vec<usize> {
+    if total <= max {
+        return (0..total).collect();
+    }
+    let last = total - 1;
+    (0..max).map(|k| k * last / (max - 1)).collect()
+}
+
+/// `models_lint`: the CLI's `models lint` as data, from the same linter.
+fn models_lint(args: &Value) -> Result<Value, String> {
+    let file_path = req_str(args, "file_path")?;
+    let report = hauksbee_engine::commands::models::lint_report(std::path::Path::new(file_path))
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(json!({
+        "file": display_name(file_path),
+        "clean": report.findings == 0 && report.warnings == 0,
+        "checked": report.checked,
+        "findings": report.findings,
+        "warnings": report.warnings,
+        "lines": report.lines,
+    }))
+}
+
 /// `run_script`: hand the source to the `QuickJS` sandbox. Failures come back
 /// with the captured logs attached, because a half-run script's logs are the
 /// only forensic trail the caller has.
@@ -601,6 +755,13 @@ fn run_script(args: &Value) -> ToolResult {
 #[cfg(test)]
 mod coverage_contract_tests {
     use super::*;
+
+    #[test]
+    fn thinning_keeps_first_and_last_and_the_cap() {
+        assert_eq!(thinned_indices(3, 10), vec![0, 1, 2]);
+        let kept = thinned_indices(10_001, 5);
+        assert_eq!(kept, vec![0, 2500, 5000, 7500, 10_000]);
+    }
 
     #[test]
     fn analyze_board_description_names_every_timing_qualification() {

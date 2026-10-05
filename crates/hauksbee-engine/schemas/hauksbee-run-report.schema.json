@@ -1783,6 +1783,10 @@
           "description": "Whether THIS finding is a reason the run fails its gate.\n\nNot a restatement of `severity`. Every `serious` finding gates, and so do\nfindings the severity word grades lower: a medium (`warning`) lint\nfinding, every real SI finding, every co-sim fault. It runs the other way\ntoo, so a `warning` is not a gate grade on its own: a copper short on a\nboard format the copper extraction was never validated against may be\nphantom and does not gate, a `note`-grade lint finding does not gate, and\nneither does a qualified or demoted evidence badge.\n\nCurrent schema-v2 serializers always emit this additive field. It stays\noptional in the schema so documents emitted by earlier v2 binaries\nremain valid.",
           "type": "boolean"
         },
+        "group": {
+          "description": "Findings with the same `group` say the same thing about different parts\n(the message differs only in the part's designator). The human reports\nprint each group once; this array keeps every finding. Additive and\noptional in the schema, like `gating`.",
+          "type": "string"
+        },
         "kind": {
           "description": "The specific rule (e.g. `\"controlled_impedance\"`, `\"strap_pin\"`).",
           "type": "string"

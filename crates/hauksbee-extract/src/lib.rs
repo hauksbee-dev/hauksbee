@@ -63,6 +63,7 @@ mod pcb;
 pub mod placement;
 mod protel_ascii;
 pub mod reader;
+pub mod repeat;
 pub mod resource_conflict;
 mod schematic;
 /// Whether a parsed `.kicad_sch` is the ROOT of its hierarchy rather than a

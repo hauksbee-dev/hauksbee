@@ -135,6 +135,9 @@ Use an absolute path for `command` if `hauksbee-mcp` is not on the client's
 | `list_capabilities` | none | the scope table as data: report kinds, assertion kinds, board/firmware formats, and MCU backend availability probed on this machine with the engine's own discovery (doctor-style `builtin/ok/absent/disabled`) |
 | `model_coverage` | `board_path`, `models_dir?` | the same staged per-device identity/executable/declared coverage used by CLI and browser, plus a read-only next action that says model preparation requires approval |
 | `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
+| `simulate_deck` | `deck_path`, `print?`, `analysis?`, `max_rows?` | `hauksbee sim` as data: `{deck, analysis, columns, time, rows, row_count, notes}`, thinned to `max_rows` (default 2000) with a `decimated` field when it is; a deck the solver cannot answer honestly returns the refusal shape below |
+| `doctor` | none | `hauksbee doctor --json`: `{backends: [{name, status, available, detail, summary}]}`, co-sim backends plus the extraction backend |
+| `models_lint` | `file_path` | `hauksbee models lint` as data: `{file, clean, checked, findings, warnings, lines}`; the CLI exits 2 when `findings` is above 0 |
 | `run_script` | `source` | `{result, logs}`: code mode, below |
 
 `spec_toml` is the spec body without `board`, `firmware`, or `schematic`
@@ -176,6 +179,9 @@ The sandbox's only capability is the global `hauksbee` object:
 - `hauksbee.listCapabilities()`
 - `hauksbee.modelCoverage(path, modelsDir?)`
 - `hauksbee.boardToCode(path)`
+- `hauksbee.simulateDeck(path, print?, analysis?, maxRows?)`
+- `hauksbee.doctor()`
+- `hauksbee.modelsLint(path)`
 
 Each returns the same object the corresponding tool returns. The sandbox
 captures `console.log` into `logs`. No filesystem, network, timers, or

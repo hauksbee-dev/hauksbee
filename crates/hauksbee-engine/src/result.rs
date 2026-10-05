@@ -1921,16 +1921,36 @@ impl JsonFinding {
     }
 }
 
+impl JsonFinding {
+    /// A key shared by findings that say the same thing about different parts
+    /// (check, kind, severity and the message with its one part's designator
+    /// masked). The human reports print such findings once; the JSON keeps each
+    /// finding and lets a consumer group them on this.
+    #[must_use]
+    pub fn group_key(&self) -> String {
+        use sha2::{Digest as _, Sha256};
+        use std::fmt::Write as _;
+        let shape = hauksbee_extract::repeat::repeat_shape(&self.message, &self.refs);
+        let digest = Sha256::digest(shape.as_bytes());
+        let mut tag = String::new();
+        for byte in digest.iter().take(6) {
+            let _ = write!(tag, "{byte:02x}");
+        }
+        format!("{}/{}/{}/{tag}", self.check, self.kind, self.severity)
+    }
+}
+
 impl Serialize for JsonFinding {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("JsonFinding", 12)?;
+        let mut state = serializer.serialize_struct("JsonFinding", 13)?;
         state.serialize_field("check", &self.check)?;
         state.serialize_field("kind", &self.kind)?;
         state.serialize_field("severity", &self.severity)?;
         state.serialize_field("gating", &self.gates())?;
+        state.serialize_field("group", &self.group_key())?;
         state.serialize_field("nets", &self.nets)?;
         if let Some(location_mm) = &self.location_mm {
             state.serialize_field("location_mm", location_mm)?;
@@ -1974,6 +1994,11 @@ struct JsonFindingSchema {
     /// optional in the schema so documents emitted by earlier v2 binaries
     /// remain valid.
     gating: bool,
+    /// Findings with the same `group` say the same thing about different parts
+    /// (the message differs only in the part's designator). The human reports
+    /// print each group once; this array keeps every finding. Additive and
+    /// optional in the schema, like `gating`.
+    group: String,
     nets: Vec<String>,
     location_mm: Option<[f64; 2]>,
     layer: Option<String>,
@@ -2005,7 +2030,7 @@ impl schemars::JsonSchema for JsonFinding {
             .get_mut("required")
             .and_then(serde_json::Value::as_array_mut)
         {
-            required.retain(|field| field != "gating");
+            required.retain(|field| field != "gating" && field != "group");
         }
         schema
     }
@@ -2982,6 +3007,40 @@ mod tests {
             t: 0.01,
             destroyed,
         }
+    }
+
+    fn dc_overstress(part: &str, ma: &str) -> hauksbee_extract::LintFinding {
+        hauksbee_extract::LintFinding {
+            check: hauksbee_extract::LintCheck::DcOverstress,
+            severity: hauksbee_extract::Severity::High,
+            message: format!("{part} is overstressed at power-up: {part}_q2 passes {ma} mA"),
+            refs: vec![part.to_string()],
+            nets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn repeated_findings_share_a_group_key_and_all_stay_listed() {
+        let report = hauksbee_extract::NetLintReport {
+            findings: vec![
+                dc_overstress("IC1", "234"),
+                dc_overstress("IC2", "234"),
+                dc_overstress("IC3", "99"),
+            ],
+        };
+        let json = lint_findings_json(&report);
+        assert_eq!(json.len(), 3, "the JSON keeps every finding");
+        assert_eq!(json[0].group_key(), json[1].group_key());
+        assert_ne!(
+            json[0].group_key(),
+            json[2].group_key(),
+            "another current is another finding, not a repeat"
+        );
+        let value = serde_json::to_value(&json[0]).unwrap();
+        assert_eq!(value["group"], json[0].group_key());
+        assert!(json[0]
+            .group_key()
+            .starts_with("lint/dc_overstress/serious/"));
     }
 
     #[test]

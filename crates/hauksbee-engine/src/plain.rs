@@ -63,6 +63,10 @@ pub struct PlainFinding {
     /// report pan its board map to the finding instead of making the user
     /// parse "near x=12.3 mm" prose. None for findings with no single spot.
     pub loc_mm: Option<[f64; 2]>,
+    /// The one part this finding is about, when it names exactly one. Findings
+    /// that read the same for different parts print once in the text report
+    /// ([`write_findings`]); everything else leaves it `None` and prints alone.
+    pub part: Option<String>,
 }
 
 /// An actionable "heads up" note: worth knowing, not a failure.
@@ -177,7 +181,24 @@ impl PlainReport {
             why,
             fix,
             loc_mm: None,
+            part: None,
         });
+    }
+
+    /// [`Self::push`] for a finding about exactly one part, so a finding that
+    /// repeats across parts can be printed once.
+    fn push_for_part(
+        &mut self,
+        level: PlainLevel,
+        what: String,
+        why: String,
+        fix: String,
+        part: Option<&str>,
+    ) {
+        self.push(level, what, why, fix);
+        if let Some(last) = self.findings.last_mut() {
+            last.part = part.map(|p| readable(p.to_string()));
+        }
     }
 
     /// [`Self::push`] for a heads-up note, so notes get the same name
@@ -206,6 +227,7 @@ impl PlainReport {
             why,
             fix,
             loc_mm: Some(loc_mm),
+            part: None,
         });
     }
 
@@ -315,13 +337,41 @@ impl PlainReport {
         }
         if !self.findings.is_empty() {
             let _ = writeln!(s);
-            for (i, f) in self.sorted().iter().enumerate() {
-                write_finding(&mut s, i + 1, f);
-            }
+            write_findings(&mut s, 1, &self.sorted());
         }
         write_heads_up(&mut s, &self.heads_up);
         s
     }
+}
+
+/// The numbered finding blocks, from number `first`. Findings that differ only
+/// in which one part they name (same level, same why and fix, same wording
+/// around the designator) print once as `N parts like A, B, C and M more`; the
+/// JSON and the web list keep every one. Returns the next free number.
+fn write_findings(out: &mut String, first: usize, findings: &[&PlainFinding]) -> usize {
+    let groups = hauksbee_extract::repeat::group_repeats(findings.iter(), |f| {
+        let part = f.part.as_ref()?;
+        let shape = hauksbee_extract::repeat::repeat_shape(&f.what, std::slice::from_ref(part));
+        Some(format!("{:?}/{}/{}/{shape}", f.level, f.why, f.fix))
+    });
+    let mut index = first;
+    for group in groups {
+        let lead = group[0];
+        if group.len() == 1 {
+            write_finding(out, index, lead);
+        } else {
+            let parts: Vec<&str> = group.iter().filter_map(|f| f.part.as_deref()).collect();
+            let mut merged = (**lead).clone();
+            merged.what = format!(
+                "{}: {}",
+                hauksbee_extract::repeat::describe_parts(&parts),
+                lead.what
+            );
+            write_finding(out, index, &merged);
+        }
+        index += 1;
+    }
+    index
 }
 
 /// One finding as the numbered what / why / what-to-do block. The single
@@ -1199,7 +1249,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Size the pull-up between the two limits: above (rail voltage - 0.4 V) / 3 mA (so lows work), and low enough that the rise time fits the bus speed at the real bus capacitance. 2.2k to 4.7k suits most 3.3 V buses.".to_string(),
             ),
         };
-        out.push(level, what, why, fix);
+        out.push_for_part(
+            level,
+            what,
+            why,
+            fix,
+            match f.refs.as_slice() {
+                [part] => Some(part.as_str()),
+                _ => None,
+            },
+        );
     }
     out
 }
@@ -1487,6 +1546,43 @@ fn volts(v: f64) -> String {
 mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind, LintFinding, SiFinding, ViolationKind};
+
+    fn dc_overstress(part: &str, ma: &str) -> hauksbee_extract::LintFinding {
+        hauksbee_extract::LintFinding {
+            check: hauksbee_extract::LintCheck::DcOverstress,
+            severity: hauksbee_extract::Severity::High,
+            message: format!("{part} is overstressed at power-up: {part}_q2 passes {ma} mA"),
+            refs: vec![part.to_string()],
+            nets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn findings_that_repeat_across_parts_print_once() {
+        let many = hauksbee_extract::NetLintReport {
+            findings: (1..=5)
+                .map(|n| dc_overstress(&format!("IC{n}"), "234"))
+                .chain(std::iter::once(dc_overstress("IC9", "99")))
+                .collect(),
+        };
+        let report = plain_netlint(&many);
+        assert_eq!(
+            report.findings.len(),
+            6,
+            "the report data keeps every finding"
+        );
+        let text = report.render();
+        assert!(
+            text.contains("1. [SERIOUS] 5 parts like IC1, IC2, IC3 and 2 more: "),
+            "{text}"
+        );
+        assert!(
+            text.contains("2. "),
+            "the odd current stays its own finding: {text}"
+        );
+        assert!(!text.contains("3. "), "{text}");
+        assert!(text.contains("IC9 is overstressed"), "{text}");
+    }
 
     fn drc_short() -> DrcFinding {
         let mut f = crate::result::test_finding(

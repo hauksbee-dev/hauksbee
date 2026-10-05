@@ -1852,14 +1852,25 @@ pub fn render_si(report: &SiReport) -> String {
         out.push_str("si-checks: no gating findings.\n");
     } else {
         let _ = writeln!(out, "si-checks: {n} finding(s)");
-        for f in report.findings_only() {
-            let _ = writeln!(
-                out,
-                "  [{}] {} - {}",
-                f.severity.as_str(),
+        let groups = crate::repeat::group_repeats(report.findings_only(), |f| {
+            let [_] = f.refs.as_slice() else { return None };
+            Some(format!(
+                "{}/{}/{}",
                 f.check.as_str(),
-                f.message
-            );
+                f.severity.as_str(),
+                crate::repeat::repeat_shape(&f.message, &f.refs)
+            ))
+        });
+        for group in groups {
+            let first = group[0];
+            let (severity, check) = (first.severity.as_str(), first.check.as_str());
+            if group.len() == 1 {
+                let _ = writeln!(out, "  [{severity}] {check} - {}", first.message);
+            } else {
+                let parts: Vec<&str> = group.iter().map(|f| f.refs[0].as_str()).collect();
+                let lead = crate::repeat::describe_parts(&parts);
+                let _ = writeln!(out, "  [{severity}] {check} - {lead}: {}", first.message);
+            }
         }
     }
     // Info notes (the auditable computed values) after the findings.

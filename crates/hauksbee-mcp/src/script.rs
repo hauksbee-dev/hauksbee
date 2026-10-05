@@ -3,7 +3,7 @@
 //! The interpreter comes via rquickjs (MIT licensed, bundled C, no system dependency),
 //! and its ONLY capability is the `hauksbee` API. An agent submits one JavaScript
 //! program; it runs server-side, composing analyzeBoard / runChecks / listCapabilities
-//! / boardToCode calls and returning one result, instead of paying a round-trip per
+//! / boardToCode / simulateDeck / doctor / modelsLint calls and returning one result, instead of paying a round-trip per
 //! tool call (the Cloudflare "code mode" pattern). The bridge is deliberately narrow:
 //! one native function that takes a tool name and a JSON args string and returns a JSON
 //! result string, one native log sink, and a JS prelude that wraps them in the typed
@@ -78,6 +78,11 @@ globalThis.hauksbee = {
     modelCoverage: (path, modelsDir) =>
         __call("model_coverage", { board_path: path, models_dir: modelsDir }),
     boardToCode: (path) => __call("board_to_code", { board_path: path }),
+    simulateDeck: (path, print, analysis, maxRows) =>
+        __call("simulate_deck", { deck_path: path, print: print, analysis: analysis,
+                                  max_rows: maxRows }),
+    doctor: () => __call("doctor", {}),
+    modelsLint: (path) => __call("models_lint", { file_path: path }),
 };
 "#;
 
