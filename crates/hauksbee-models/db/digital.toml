@@ -7394,3 +7394,134 @@ url = "https://www.ti.com/lit/ds/symlink/ina233.pdf"
 title = "Texas Instruments INA233 36V, 16-Bit, Ultra-Precise I2C and PMBus Output Current, Voltage, Power, and Energy Monitor With Alert, SBOS790A, April 2017, revised March 2025"
 locator = "Table 4-1 Pin Functions; Section 5.1; Section 5.5; Section 6.5.6.1 Table 6-2; Section 6.5.6.2; Table 6-4; Section 6.6.3.7 TI_MFR_ID"
 sha256 = "33ccbb5b59f20c2907a64c0a23881cd6baeac434c9482b2e16572b89a5ca0845"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INA228: Texas Instruments 85 V, 20-bit power/energy/charge monitor, I2C,
+# DGS (VSSOP-10).
+#
+# Source: TI "INA228 85-V, 20-Bit, Ultra-Precise Power/Energy/Charge Monitor
+#   With I2C Interface", SLYS021A, January 2021, revised May 2022. Section 5
+#   Table 5-1 Pin Functions (Figure 5-1 DGS top view), Section 6.1 Absolute
+#   Maximum Ratings, Section 6.3 Recommended Operating Conditions, Section 6.4
+#   Thermal Information, Section 6.5 Electrical Characteristics, Section 7.5.1
+#   Serial Interface and Table 7-2 Address Pins, Table 7-3 register map,
+#   Section 7.6.1.19 MANUFACTURER_ID (3Eh), Section 7.6.1.20 DEVICE_ID (3Fh),
+#   Package Option Addendum.
+#
+# THE SHUNT IS EXTERNAL. IN+ and IN- sense across a board resistor; leaving them
+# high-impedance here does not open the measured power path.
+#
+# THE 6 V CEILING IS THE SUPPLY AND BUS PINS'. Section 6.1: VS 6 V; SDA, SCL 6 V;
+# ALERT VS + 0.3 V; but IN+, IN- (common mode) and VBUS -0.3 to 85 V. A `digital`
+# entry's max_voltage_v is not watched per pin, and the sensing pins legitimately
+# sit on rails far above 6 V.
+#
+# LOGIC LEVELS ARE ABSOLUTE (Section 6.5): VIH 1.2 V min, VIL 0.4 V max on SDA
+# and SCL; VOL 0.4 V max at 3 mA. SDA and ALERT are open drain, so no VOH.
+#
+# IDENTITY: Section 7.5.1 "All data bytes are transmitted most significant byte
+# first", so MANUFACTURER_ID 3Eh = 5449h ("TI") is 54h, 49h on the wire and
+# DEVICE_ID 3Fh = 2281h (DIEID 228h, REV_ID 1h) is 22h, 81h. The revision
+# history notes the DEVICE_ID reset value changed in revision A; 2281h is the
+# SLYS021A value.
+#
+# POWER-ON THRESHOLD: the sheet gives a start-up time (TPOR 300 us) but no POR
+# voltage, so the peripheral is gated at the 2.7 V bottom of the operating
+# supply range (Section 6.3) rather than at an invented POR level.
+[[models]]
+id = "ina228"
+kind = "digital"
+description = "TI INA228 85V 20-bit I2C power/energy monitor, VSSOP-10 (strapped I2C ID-register subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# Package Option Addendum: INA228AIDGSR (VSSOP DGS, 10 pins) is the orderable
+# part. INA229 (SPI) and INA238/INA237 are different parts and are excluded.
+value_re = "(?i)^INA228(AIDGSR?)?$"
+
+[models.params]
+# Section 6.5 Electrical Characteristics, absolute volts.
+vol   = 0.4      # VOL max, IOL = 3 mA
+vih   = 1.2      # VIH min, SDA and SCL
+vil   = 0.4      # VIL max, SDA and SCL
+supply_static_ua = 640.0   # Section 6.5 IQ typ, VSENSE = 0 V (750 uA max at 25 C)
+supply_pin = "6"           # VS
+gnd_pin    = "7"           # GND
+
+[models.pins]
+# Table 5-1 Pin Functions, DGS (VSSOP-10), all 10 pins.
+"1"  = "a1"      # address pin: GND, SCL, SDA or VS (Table 7-2)
+"2"  = "a0"      # address pin: GND, SCL, SDA or VS (Table 7-2)
+"3"  = "alert"   # open-drain alert output, active low by default
+"4"  = "sda"     # open-drain bidirectional I2C data
+"5"  = "scl"     # I2C clock input
+"6"  = "vdd"     # VS, power supply, 2.7 to 5.5 V
+"7"  = "gnd"
+"8"  = "vbus"    # bus voltage input, 0 to 85 V
+"9"  = "in_n"    # IN-, load side of the external shunt (high-side use)
+"10" = "in_p"    # IN+, supply side of the external shunt (high-side use)
+
+[models.ratings]
+# Section 6.1: VS 6 V; SDA, SCL 6 V. See the note above on IN+/IN-/VBUS.
+max_voltage_v = 6.0
+max_pin_current_a = 0.005   # Section 6.1, IIN input current into any pin 5 mA
+theta_ja_c_per_w = 177.6    # Section 6.4, RθJA DGS (VSSOP)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SLYS021A, Section 6.3 Recommended Operating Conditions, VS 2.7 V to 5.5 V; Section 6.1 Absolute Maximum Ratings, VS 6 V"
+
+# Table 7-2 has 16 addresses from four levels on each of A0 and A1; the binder
+# resolves only a two-level strap. A0 is therefore required at GND and A1
+# selects between its GND and VS rows: A1 = GND, A0 = GND is 1000000b (0x40);
+# A1 = VS, A0 = GND is 1000100b (0x44). Any other strap leaves the part unattached.
+[models.peripheral]
+kind = "register_map"
+required_low_roles = ["a0"]
+address_select_role = "a1"
+address_when_low = 0x40
+address_when_high = 0x44
+spec_toml = '''
+[sensor]
+name = "INA228 ID register subset"
+bus = "i2c"
+i2c_address = 0x40
+
+# Section 7.6.1.19: MANUFACTURER_ID (3Eh) = 5449h, MSB first (Section 7.5.1).
+[[sensor.register]]
+addr = 0x3E
+const = [0x54, 0x49]
+
+# Section 7.6.1.20: DEVICE_ID (3Fh) = 2281h, MSB first.
+[[sensor.register]]
+addr = 0x3F
+const = [0x22, 0x81]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.7    # Section 6.3, VS min (no POR voltage is published)
+idle_a = 0.000640             # Section 6.5, IQ typ
+read_a = 0.000640
+write_a = 0.000640
+low_power_a = 0.0000028       # Section 6.5, IQSD shutdown typ (5 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "manufacturer_id_read", "device_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "shunt_and_bus_measurement", "energy_and_charge_accumulators", "temperature_measurement", "alert_engine", "four_level_address_pins", "sense_pin_ratings", "power_on_reset_voltage"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ina228.pdf"
+title = "Texas Instruments INA228 85-V, 20-Bit, Ultra-Precise Power/Energy/Charge Monitor With I2C Interface, SLYS021A, January 2021, revised May 2022"
+locator = "Table 5-1 Pin Functions; Sections 6.1, 6.3, 6.4, 6.5; Section 7.5.1 and Table 7-2; Sections 7.6.1.19 MANUFACTURER_ID and 7.6.1.20 DEVICE_ID"
+sha256 = "a138d39eeee04f8388426fed204c2f4012e75d36e95b60b0751ef003cd277447"
