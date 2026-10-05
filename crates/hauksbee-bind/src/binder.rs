@@ -1928,7 +1928,7 @@ fn looks_like_mcu_candidate(comp: &Component) -> bool {
     // when its own value or footprint names an MCU family; a plain header stays
     // a connector.
     if prefix == "X" {
-        return [&comp.value, &comp.footprint]
+        return [comp.value.as_str(), symbol_name(&comp.footprint)]
             .iter()
             .any(|s| route_mcu_family_str(s).is_some());
     }
@@ -1953,10 +1953,19 @@ fn mcu_identity_strings(comp: &Component) -> Vec<String> {
             }
         }
     }
-    if let Some(v) = non_empty(&comp.lib_id) {
+    // The symbol name only: the library nickname before the `:` names a
+    // library, a sheet cache or a project (`ESP32-PoE_Rev_M1-cache:SN74LVC1G04`),
+    // not the part, so it is no evidence of the part's family.
+    if let Some(v) = non_empty(symbol_name(&comp.lib_id)) {
         out.push(v);
     }
     out
+}
+
+/// The part-name half of a `Library:Symbol` id (the whole id when it has no
+/// library nickname).
+fn symbol_name(lib_id: &str) -> &str {
+    lib_id.rsplit_once(':').map_or(lib_id, |(_, name)| name)
 }
 
 fn family_tokens(s: &str) -> Vec<String> {
@@ -11018,6 +11027,42 @@ style = "i2c_pointer"
             Some(McuFamilyRoute::NoPlatform { family: "ESP32-C6" })
         );
         assert_eq!(route_mcu_family_str("NANO_HEADER"), None);
+    }
+
+    /// A part's MCU identity comes from its own value, MPN and symbol name,
+    /// never from the library nickname: a board named `ESP32-PoE` puts every
+    /// part in a `ESP32-PoE_Rev_M1-cache` library, which must not turn an
+    /// inverter or a `PoE` controller into an ESP32.
+    #[test]
+    fn a_library_nickname_naming_a_family_does_not_make_a_part_an_mcu() {
+        for (value, lib_id) in [
+            ("SN74LVC1G04DBVR", "ESP32-PoE_Rev_M1-cache:SN74LVC1G04DBVR"),
+            ("TPS2375D", "ESP32-PoE_Rev_M1-cache:TPS2375D"),
+            ("TPS2375D", "STM32F4_Discovery:TPS2375D"),
+        ] {
+            let mut part = comp("U8", value);
+            part.lib_id = lib_id.into();
+            assert_eq!(route_mcu_family(&part), None, "{lib_id}");
+            assert!(mcu_identity_strings(&part)
+                .iter()
+                .all(|s| !s.contains("CACHE") && !s.contains("ESP32") && !s.contains("STM32")));
+        }
+        // The symbol name still identifies a real module, whatever the nickname.
+        let mut module = comp("U6", "");
+        module.lib_id = "ESP32-PoE_Rev_M1-cache:ESP32-WROVER-E".into();
+        assert!(matches!(
+            route_mcu_family(&module),
+            Some(McuFamilyRoute::Backend {
+                backend: "qemu:esp32",
+                ..
+            })
+        ));
+        // And a module value still routes on its own.
+        let mut module = comp("U6", "ESP32-WROVER-E");
+        module.lib_id = "ESP32-PoE_Rev_M1-cache:RF_Module".into();
+        assert!(route_mcu_family(&module).is_some());
+        assert_eq!(symbol_name("MCU_Module:nice_nano"), "nice_nano");
+        assert_eq!(symbol_name("bare_symbol"), "bare_symbol");
     }
 
     /// The alias table alone binds a module on an `X` refdes: no per-module
