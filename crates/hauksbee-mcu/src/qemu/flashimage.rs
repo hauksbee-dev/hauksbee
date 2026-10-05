@@ -327,6 +327,19 @@ mod tests {
         assert_eq!(out.len(), FLASH_SIZE_BYTES);
         assert_eq!(&out[..img.len()], &img[..]);
         assert!(out[img.len()..].iter().all(|&b| b == 0xFF));
+        // Images sized to the flash their header declares (4 and 8 MB, the
+        // sweep's boot-loop case) are padded the same way.
+        for mb in [4usize, 8] {
+            let mut sized = img.clone();
+            sized.resize(mb * 1024 * 1024, 0xFF);
+            std::fs::write(&merged, &sized).unwrap();
+            let padded = prepare_raw_image(&merged, "esp32")
+                .unwrap()
+                .expect("padded");
+            let out = std::fs::read(padded.path()).unwrap();
+            assert_eq!(out.len(), FLASH_SIZE_BYTES, "{mb} MB");
+            assert_eq!(&out[..sized.len()], &sized[..], "{mb} MB");
+        }
         // Legal control: already 16 MB, used in place.
         std::fs::write(&merged, &out).unwrap();
         assert!(prepare_raw_image(&merged, "esp32").unwrap().is_none());
