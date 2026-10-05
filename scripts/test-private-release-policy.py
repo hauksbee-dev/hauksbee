@@ -357,6 +357,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             for path in absent_paths
         ]
 
+        # Every suite in the private crate leaves with it, so each one needs a
+        # table row even though BOARD_EXCLUDE does not enumerate it.
+        for path in sorted((ROOT / "crates/hauksbee-tarski/tests").glob("*.rs")):
+            if path not in absent_paths:
+                absent_paths.append(path)
+
         disclosure = (ROOT / "docs/about/PRIVATE_SUITE.md").read_text()
         rows = {
             name: int(count)
