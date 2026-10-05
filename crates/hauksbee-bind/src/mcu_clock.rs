@@ -38,6 +38,11 @@ pub enum ClockKind {
 pub struct McuClock {
     pub kind: ClockKind,
     pub detail: String,
+    /// The fitted crystal's frequency, when the verdict is
+    /// [`ClockKind::Crystal`] and its value field parses as one ("16MHz"; a
+    /// bare part number does not). The AVR co-sim runs a crystal-fused core at
+    /// this clock.
+    pub crystal_hz: Option<u64>,
 }
 
 impl McuClock {
@@ -49,7 +54,11 @@ impl McuClock {
     }
 
     const fn of(kind: ClockKind, detail: String) -> Self {
-        Self { kind, detail }
+        Self {
+            kind,
+            detail,
+            crystal_hz: None,
+        }
     }
 }
 
@@ -205,13 +214,16 @@ pub(crate) fn classify(
         .iter()
         .find(|c| touches(c, in_node) && touches(c, out_node))
     {
-        return McuClock::of(
-            Crystal,
-            format!(
-                "{} {} across {} and {out_label}",
-                c.reference, c.value, input.label
-            ),
-        );
+        return McuClock {
+            crystal_hz: crystal_hz(&c.value),
+            ..McuClock::of(
+                Crystal,
+                format!(
+                    "{} {} across {} and {out_label}",
+                    c.reference, c.value, input.label
+                ),
+            )
+        };
     }
     // Something that drives the input: a driving pin (clock buffer, other
     // MCU) or a powered 3+ pad crystal-footprint oscillator.
@@ -245,6 +257,15 @@ pub(crate) fn classify(
         !on_in.is_empty() || !on_out.is_empty(),
         internal,
     )
+}
+
+/// A crystal's frequency from its value field, whole hertz.
+fn crystal_hz(value: &str) -> Option<u64> {
+    let hz = hauksbee_models::value::parse_frequency_hz(value)?;
+    // A finite positive value well inside u64; whole hertz is the resolution
+    // a core clock is stated at.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    (1.0..1e15).contains(&hz).then(|| hz.round() as u64)
 }
 
 /// No crystal or oscillator found: parts that cannot be read leave the clock
@@ -313,5 +334,14 @@ mod tests {
         for t in ["PA0", "NRST", "VDD", "oscillator_enable", ""] {
             assert_eq!(orientation(t), None, "{t}");
         }
+    }
+
+    #[test]
+    fn crystal_frequency_is_read_from_its_value_field() {
+        assert_eq!(crystal_hz("16MHz"), Some(16_000_000));
+        assert_eq!(crystal_hz("8 MHz"), Some(8_000_000));
+        assert_eq!(crystal_hz("32.768kHz"), Some(32_768));
+        assert_eq!(crystal_hz("HC-49"), None);
+        assert_eq!(crystal_hz(""), None);
     }
 }

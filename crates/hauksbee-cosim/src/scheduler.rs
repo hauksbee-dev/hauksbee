@@ -554,6 +554,9 @@ pub struct Scheduler {
     /// board occurrence stay paired so later evidence construction cannot zip
     /// two independently ordered collections or fall back to display refs.
     scoped_substitutions: Vec<ScopedMcuSubstitution>,
+    /// AVR fuse/board clock inconsistencies found at build time (see
+    /// [`avr_clock_plan`]); each was also printed as a WARNING.
+    clock_fuse_findings: Vec<AvrClockFinding>,
     /// Bus peripherals (I2C/SPI slave models) attached on a board whose live
     /// MCU backends model NO matching bus controller: the firmware's bus
     /// traffic can never reach them, so they sit at their power-on defaults for
@@ -1349,6 +1352,7 @@ impl Scheduler {
         let mut live = Vec::new();
         let mut substitutions = Vec::new();
         let mut scoped_substitutions = Vec::new();
+        let mut clock_fuse_findings = Vec::new();
         for binding in mcus {
             let evidence_subject = mcu_subjects
                 .next()
@@ -1370,6 +1374,10 @@ impl Scheduler {
                 scoped_substitutions
                     .push(ScopedMcuSubstitution::new(sub.clone(), evidence_subject));
                 substitutions.push(sub);
+            }
+            if let Some(finding) = avr_clock_plan(&binding, firmware).finding {
+                eprintln!("WARNING: {}", finding.message);
+                clock_fuse_findings.push(finding);
             }
             let core = instantiate_mcu(&binding, firmware)?;
             live.push(core_with_hooks(core, binding));
@@ -1454,6 +1462,7 @@ impl Scheduler {
             spi_controller_map: HashMap::new(),
             substitutions,
             scoped_substitutions,
+            clock_fuse_findings,
             unexercised_buses: Vec::new(),
             hc165_chains: Vec::new(),
             responder_registries: Vec::new(),
@@ -2379,6 +2388,12 @@ impl Scheduler {
     #[must_use]
     pub fn scoped_substitutions(&self) -> &[ScopedMcuSubstitution] {
         &self.scoped_substitutions
+    }
+
+    /// AVR fuse/board clock inconsistencies found when the cores were built.
+    #[must_use]
+    pub fn clock_fuse_findings(&self) -> &[AvrClockFinding] {
+        &self.clock_fuse_findings
     }
 
     /// Loud notes for every net whose voltage is decided by something other
@@ -6611,7 +6626,7 @@ fn instantiate_mcu(
              `backend` explicitly."
         )
     } else if backend.starts_with("simavr:") {
-        instantiate_avr(backend)?
+        instantiate_avr(backend, avr_clock_plan(binding, firmware).frequency_hz)?
     } else {
         // ALLOWLIST, mirroring backend_is_external: an unknown backend token
         // must fail loud, never drift into the AVR path (wrong ISA).
@@ -6747,6 +6762,86 @@ pub fn backend_is_external(backend: &str) -> bool {
     !backend.starts_with("simavr")
 }
 
+/// The clock an unfused AVR image runs at: the 16 MHz of the Arduino-class
+/// boards the AVR co-sim was built around.
+pub const AVR_DEFAULT_HZ: u64 = 16_000_000;
+
+/// A fuse/board clock inconsistency on one AVR (see [`avr_clock_plan`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvrClockFinding {
+    /// The MCU's reference designator.
+    pub reference: String,
+    /// The full sentence, reference and fuse byte included.
+    pub message: String,
+}
+
+/// How an AVR core is clocked for this run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvrClockPlan {
+    /// The core clock the co-sim runs at.
+    pub frequency_hz: u64,
+    /// The fuses' clock selection disagrees with the board's XTAL pins.
+    pub finding: Option<AvrClockFinding>,
+}
+
+/// Decide an AVR's co-sim clock from the firmware's fuses and the board.
+///
+/// The low fuse in the ELF `.fuse` section selects the clock source and the
+/// CKDIV8 prescaler ([`hauksbee_mcu::avr_fuses`]). The core runs at what that
+/// selection produces on THIS board: the internal RC frequency, or the fitted
+/// crystal's parsed value ([`McuClock::crystal_hz`]), each divided by 8 under
+/// CKDIV8. A selection that contradicts the board (a crystal source with no
+/// crystal or oscillator on XTAL1/XTAL2, or a fitted one the fuses ignore for
+/// the internal RC) is returned as a finding. With no fuses, an unknown fuse
+/// layout, or a frequency the board does not state, the core keeps
+/// [`AVR_DEFAULT_HZ`].
+///
+/// [`McuClock::crystal_hz`]: hauksbee_bind::mcu_clock::McuClock::crystal_hz
+#[must_use]
+pub fn avr_clock_plan(binding: &McuBinding, firmware: Option<&std::path::Path>) -> AvrClockPlan {
+    use hauksbee_bind::mcu_clock::ClockKind;
+    use hauksbee_mcu::avr_fuses::{decode_clock, read_elf_fuses};
+    let default = AvrClockPlan {
+        frequency_hz: AVR_DEFAULT_HZ,
+        finding: None,
+    };
+    let Some(part) = binding.backend.strip_prefix("simavr:") else {
+        return default;
+    };
+    let Some(fuses) = firmware.and_then(|fw| read_elf_fuses(fw).ok().flatten()) else {
+        return default;
+    };
+    let Some(select) = decode_clock(part, fuses.low) else {
+        return default;
+    };
+    // Only a decided clock verdict is checked: an unknown one (parts on the
+    // XTAL pins the binder cannot read) or a broken one (already reported by
+    // the clock evidence) says nothing about which source the fuses should
+    // pick.
+    let external = match binding.clock.kind {
+        ClockKind::Crystal | ClockKind::External => Some(true),
+        ClockKind::Internal => Some(false),
+        ClockKind::Unknown | ClockKind::Broken => None,
+    };
+    let finding = external
+        .and_then(|present| select.board_mismatch(present))
+        .map(|why| AvrClockFinding {
+            reference: binding.reference.clone(),
+            message: format!(
+                "{} ({part}): low fuse 0x{:02X}: {why}",
+                binding.reference, fuses.low
+            ),
+        });
+    let crystal_hz = binding
+        .clock
+        .crystal_hz
+        .filter(|_| binding.clock.kind == ClockKind::Crystal);
+    AvrClockPlan {
+        frequency_hz: select.core_hz(crystal_hz).unwrap_or(AVR_DEFAULT_HZ),
+        finding,
+    }
+}
+
 /// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
 ///
 /// The part token is passed STRAIGHT to simavr, which owns the list of cores it
@@ -6763,16 +6858,13 @@ pub fn backend_is_external(backend: &str) -> bool {
 /// skipped by `register_port_hooks` (its IRQ is null), so the lists below are
 /// upper bounds, not assertions.
 ///
-/// NOT handled here: the clock. Every core is instantiated at 16 MHz regardless
-/// of the crystal the board fits, which is a pre-existing simplification (the
-/// binder records `clock.external_present()` but no frequency), and it makes
-/// firmware-timed results wrong by the ratio of the two clocks on any board that
-/// is not a 16 MHz one. Carrying the crystal frequency through `McuBinding` is
-/// the fix; it is not this function's to make up.
+/// The clock comes from [`avr_clock_plan`]: the firmware's fused clock (the
+/// ELF `.fuse` section decoded against the board's crystal) when it carries
+/// fuses for a part whose fuse layout is known, else the historical 16 MHz.
 #[cfg(feature = "avr")]
-fn instantiate_avr(backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+fn instantiate_avr(backend: &str, frequency_hz: u64) -> anyhow::Result<Box<dyn Mcu + Send>> {
     let part = backend.strip_prefix("simavr:").unwrap_or(backend);
-    let mut avr = AvrMcu::new(part, 16_000_000).map_err(|e| {
+    let mut avr = AvrMcu::new(part, frequency_hz).map_err(|e| {
         anyhow::anyhow!(
             "{e}. The AVR co-sim runs whatever core simavr has, and will not \
              substitute a different one: an ATmega328P standing in for the part \
@@ -6815,7 +6907,7 @@ fn instantiate_avr(backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
 }
 
 #[cfg(not(feature = "avr"))]
-fn instantiate_avr(_backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+fn instantiate_avr(_backend: &str, _frequency_hz: u64) -> anyhow::Result<Box<dyn Mcu + Send>> {
     anyhow::bail!(
         "this build of hauksbee-engine was compiled without the `avr` feature; \
          rebuild with --features avr to run AVR firmware"
@@ -8178,6 +8270,89 @@ missing = ["measurement_registers"]
         );
     }
 
+    /// An `ATmega328P` whose board clock verdict is `kind`, with a crystal of
+    /// `crystal_hz` when one is fitted.
+    fn avr_binding(
+        kind: hauksbee_bind::mcu_clock::ClockKind,
+        crystal_hz: Option<u64>,
+    ) -> McuBinding {
+        let mut b = binding("U1", "simavr:atmega328p", HashMap::new());
+        b.requested_part = "ATmega328P-AU".into();
+        b.clock = hauksbee_bind::mcu_clock::McuClock {
+            kind,
+            crystal_hz,
+            ..Default::default()
+        };
+        b
+    }
+
+    fn fused_firmware(low: u8) -> tempfile::TempPath {
+        let mut f = tempfile::Builder::new().suffix(".elf").tempfile().unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            &hauksbee_mcu::avr_fuses::fuse_only_elf(&[low, 0xDE, 0xFD]),
+        )
+        .unwrap();
+        f.into_temp_path()
+    }
+
+    /// Fuses that contradict the board are reported, both ways round, and the
+    /// core runs at the clock the fuses actually produce on this board.
+    #[test]
+    fn avr_fuses_inconsistent_with_the_board_are_reported() {
+        use hauksbee_bind::mcu_clock::ClockKind;
+        // Crystal selected (0xFF), nothing on XTAL1/XTAL2.
+        let fw = fused_firmware(0xFF);
+        let plan = avr_clock_plan(&avr_binding(ClockKind::Internal, None), Some(&fw));
+        let f = plan.finding.expect("crystal fuses with no crystal fitted");
+        assert!(f.message.contains("no crystal"), "{}", f.message);
+        assert!(f.message.contains("0xFF"), "{}", f.message);
+
+        // Internal 8 MHz RC with CKDIV8 (factory 0x62) on a 16 MHz crystal board:
+        // reported, and the core runs at the fused 1 MHz, not the crystal's 16.
+        let fw = fused_firmware(0x62);
+        let plan = avr_clock_plan(
+            &avr_binding(ClockKind::Crystal, Some(16_000_000)),
+            Some(&fw),
+        );
+        assert!(plan.finding.unwrap().message.contains("crystal is unused"));
+        assert_eq!(plan.frequency_hz, 1_000_000);
+    }
+
+    /// The legal controls: consistent fuses produce no finding and the fused
+    /// frequency; an unfused image keeps the historical 16 MHz; an undecided
+    /// board clock is not second-guessed.
+    #[test]
+    fn avr_fuses_consistent_with_the_board_run_at_the_fused_clock() {
+        use hauksbee_bind::mcu_clock::ClockKind;
+        let fw = fused_firmware(0xFF);
+        let plan = avr_clock_plan(&avr_binding(ClockKind::Crystal, Some(8_000_000)), Some(&fw));
+        assert_eq!(plan.finding, None);
+        assert_eq!(plan.frequency_hz, 8_000_000);
+
+        let fw = fused_firmware(0x7F); // crystal + CKDIV8
+        let plan = avr_clock_plan(
+            &avr_binding(ClockKind::Crystal, Some(16_000_000)),
+            Some(&fw),
+        );
+        assert_eq!(plan.finding, None);
+        assert_eq!(plan.frequency_hz, 2_000_000);
+
+        let fw = fused_firmware(0xE2); // internal 8 MHz RC, no crystal
+        let plan = avr_clock_plan(&avr_binding(ClockKind::Internal, None), Some(&fw));
+        assert_eq!(plan.finding, None);
+        assert_eq!(plan.frequency_hz, 8_000_000);
+
+        let fw = fused_firmware(0xFF);
+        let plan = avr_clock_plan(&avr_binding(ClockKind::Unknown, None), Some(&fw));
+        assert_eq!(plan.finding, None, "an unknown board clock is not judged");
+        assert_eq!(plan.frequency_hz, AVR_DEFAULT_HZ);
+
+        let plan = avr_clock_plan(&avr_binding(ClockKind::Internal, None), None);
+        assert_eq!(plan.finding, None);
+        assert_eq!(plan.frequency_hz, AVR_DEFAULT_HZ);
+    }
+
     #[test]
     fn public_mcu_binding_literal_remains_source_compatible() {
         let mut b = binding("U1", "renode:stm32f4", HashMap::new());
@@ -8229,11 +8404,11 @@ missing = ["measurement_registers"]
             "attiny85",
         ] {
             assert!(
-                instantiate_avr(&format!("simavr:{part}")).is_ok(),
+                instantiate_avr(&format!("simavr:{part}"), AVR_DEFAULT_HZ).is_ok(),
                 "simavr knows {part}"
             );
         }
-        let err = instantiate_avr("simavr:atmega4809")
+        let err = instantiate_avr("simavr:atmega4809", AVR_DEFAULT_HZ)
             .err()
             .expect("an unmodelled AVR core must refuse, not substitute")
             .to_string();

@@ -456,6 +456,7 @@ mod tests {
             b.clock = McuClock {
                 kind,
                 detail: detail.to_string(),
+                ..McuClock::default()
             };
             ExecutionEvidence::new(
                 "U1",
