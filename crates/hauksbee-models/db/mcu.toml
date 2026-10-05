@@ -309,6 +309,94 @@ implements = ["pad_map", "supply_envelope", "pin_and_package_current_ratings"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "shared_lead_contention"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ATSAMD21E (A/B/D die revisions), 32-pad QFN or 32-lead TQFP. The ExxL variant
+# has a different pinout (5.7) and is excluded by the value match.
+#
+# Source: Microchip SAM D21/DA1 Family Complete Datasheet DS40001882L.
+#   5.5.1 QFN32/TQFP32 pinout; package drawing note "The exposed die attach pad
+#   is connected inside the device to GND and GNDANA"; Table 37-2 Absolute
+#   Maximum Ratings (VDD 3.8 V, IVDD 92 mA, IGND 130 mA); Table 37-3 General
+#   Operating Conditions (VDD 1.62-3.63 V, BOD33 disabled).
+#
+# BACKEND IS `none:`: no co-sim core here models the SAM D21, so co-sim is
+# refused loudly; lint, envelope and rating checks read the pad map. No per-pin
+# current is set: Table 37-2 gives only per-cluster limits (46 mA source, 65 mA
+# sink), which the per-pin rating cannot express.
+[[models]]
+id = "atsamd21e_32pin"
+kind = "mcu"
+description = "ATSAMD21E Cortex-M0+ MCU, 32-pad QFN or 32-lead TQFP (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU32/ProductDocuments/DataSheets/SAM-D21-DA1-Family-Data-Sheet-DS40001882.pdf"
+title = "Microchip SAM D21/DA1 Family Complete Datasheet, DS40001882L"
+locator = "5.5.1 QFN32/TQFP32; QFN32 package drawing note; Table 37-2 Absolute Maximum Ratings; Table 37-3 General Operating Conditions"
+sha256 = "cd6d39e3e5c2f2116cf99224a102f707444e0395f6faa7ddec75093bd249e394"
+
+[models.match]
+# ATSAMD21E15..18 with an optional A/B/D revision letter and -MU/-AU/-MF/-AF
+# ordering code; the bare family name is read as the A/B/D pinout.
+value_re = "(?i)^ATSAMD21E((15|16|17|18)[ABD]?)?(-[AM][UF]T?)?$"
+
+[models.params]
+backend = "none:samd21"
+
+[models.pins]
+# 5.5.1, QFN32 / TQFP32.
+"1"  = "pa00"
+"2"  = "pa01"
+"3"  = "pa02"
+"4"  = "pa03"
+"5"  = "pa04"
+"6"  = "pa05"
+"7"  = "pa06"
+"8"  = "pa07"
+"9"  = "vddana"
+"10" = "gnd"
+"11" = "pa08"
+"12" = "pa09"
+"13" = "pa10"
+"14" = "pa11"
+"15" = "pa14"
+"16" = "pa15"
+"17" = "pa16"
+"18" = "pa17"
+"19" = "pa18"
+"20" = "pa19"
+"21" = "pa22"
+"22" = "pa23"
+"23" = "pa24_usb_dm"
+"24" = "pa25_usb_dp"
+"25" = "pa27"
+"26" = "reset_n"
+"27" = "pa28"
+"28" = "gnd2"
+"29" = "vddcore"     # regulated core output, decoupling only
+"30" = "vcc"         # VDDIN
+"31" = "pa30_swclk"
+"32" = "pa31_swdio"
+"33" = "gnd3"        # exposed pad, tied inside to GND and GNDANA
+
+[models.ratings]
+max_current_a = 0.092     # Table 37-2, IVDD 92 mA into a VDD pin
+max_voltage_v = 3.8       # Table 37-2, VDD max 3.8 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.62
+max_v = 3.63
+abs_max_v = 3.8
+basis = "DS40001882L Table 37-3 VDD 1.62-3.63 V (BOD33 disabled); Table 37-2 VDD max 3.8 V"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "supply_current_rating"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "usb_device_controller", "gpio_cluster_current_limits"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ATmega1284P: the 128 KB / 16 KB-SRAM megaX4-line AVR, 44-lead TQFP and 44-pad
 # VQFN/QFN(MLF), which share one pinout.
 #
