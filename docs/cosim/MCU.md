@@ -92,6 +92,12 @@ by default):
 | `renode` | `RenodeBackend` | STM32 / nRF52 / SiFive RISC-V       | external headless Renode over Monitor TCP + UART socket | nothing native (sockets only) |
 | `qemu`   | `QemuBackend`   | ESP32 / ESP32-S3 / ESP32-C3         | external Espressif QEMU over QMP + gdbstub + UART socket | nothing native (sockets only) |
 
+An ATmega328P binds with the pad numbering of the package it is on: the
+32-pad TQFP/QFN/MLF map (VCC on 4 and 6, XTAL1 on 7, RESET on 29) when the
+footprint names a 32-pad QFP/QFN/MLF or the value carries a 32-pad ordering
+code (`-AU`, `-MU`, `-MMH`, `-MN`, with or without `R`), and the DIP-28 map
+(VCC on 7, XTAL1 on 9, RESET on 1) otherwise.
+
 A `--no-default-features --features renode,qemu` build is GPL-free: both the
 Renode and QEMU backends talk to their emulator over TCP and spawn it as a
 child process, so they link no GPL code.
@@ -341,12 +347,12 @@ report, an "Execution evidence:" block in the default text summary, and an
 | `reached_entry`, `entry_symbol` | `yes`/`no`/`unknown`: the core reached the ELF's `main` (`unknown` for an image without symbols) |
 | `instructions` | instructions retired (Renode), cycles (simavr); absent when the backend does not count |
 | `pc_samples`, `distinct_pcs`, `last_pc` | PC sampled at chunk boundaries; one distinct value is a parked core |
-| `faults` | fault handlers entered (Renode hooks the vector table's HardFault/MemManage/BusFault/UsageFault handlers), or a crashed simavr core |
+| `faults` | fault handlers entered (Renode hooks the HardFault/MemManage/BusFault/UsageFault handlers of the table VTOR points at and of the ELF's own vector table, found by its runtime's symbol such as `__vectors` or `g_pfnVectors`; a Cortex-M0/M0+/M1/M23 has only HardFault, so only that is hooked), or a crashed simavr core |
 | `uart_bytes` | bytes the firmware transmitted |
 | `gpio_toggles` | firmware output edges per pin (`"PA5": 12`) |
 | `reset_held` | the board's reset line (when something drives it) stayed asserted the whole run |
-| `supply_valid`, `supply_v` | supply pads inside the card's operating range (`min_v` of its supply envelope to its absolute maximum) |
-| `clock_valid`, `clock_source` | read off the MCU's core oscillator pins (found by pin role/name, e.g. `XTAL1`/`XTAL2`, `OSC_IN`/`OSC_OUT`, `XIN`/`XOUT`): `yes` for a fitted crystal across the pair or a fitted oscillator or driver on the input; `no` for a broken clock (pin tied to a rail, pins shorted, a crystal leg off the pin pair), which blocks eligibility; otherwise `unknown`, including a part with no external clock part on a card that declares an `internal_clock` (the source says "internal oscillator only"): the firmware or fuse clock selection is not checked, so it is never a valid-clock claim |
+| `supply_valid`, `supply_v` | supply pads inside the card's operating range (`min_v` of its supply envelope to its absolute maximum). A card with per-domain `supply_range` rows (the RP2040's 1.1 V DVDD beside its 3.3 V IOVDD) judges each pad against its own domain's floor; `supply_v` is then the deepest pad below its floor, or the lowest pad otherwise |
+| `clock_valid`, `clock_source` | read off the MCU's core oscillator pins (found by pin role/name, e.g. `XTAL1`/`XTAL2`, `OSC_IN`/`OSC_OUT`, `XIN`/`XOUT`): `yes` for a fitted crystal across the pair (directly, or with one leg through a fitted series resistor to a pin, the drive-level resistor many boards put on the output) or a fitted oscillator or driver on the input; `no` for a broken clock (pin tied to a rail, pins shorted, a crystal leg off the pin pair), which blocks eligibility; otherwise `unknown`, including a part with no external clock part on a card that declares an `internal_clock` (the source says "internal oscillator only"): the firmware or fuse clock selection is not checked, so it is never a valid-clock claim |
 | `executed` | entry reached, or any UART byte, or any firmware GPIO edge |
 | `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid, clock not broken; otherwise why not |
 
