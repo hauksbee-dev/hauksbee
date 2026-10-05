@@ -81,7 +81,10 @@ fn a_missed_threshold_names_its_worst_condition_culprits_and_repair() {
     let trips = why(&r, "trips");
     assert!(trips.contains("first tripping at 0.77"), "{trips}");
     assert!(trips.contains("VCC=5V"), "{trips}");
-    assert!(trips.contains("R2 150k -> 7") || trips.contains("R2 150k -> 6"), "{trips}");
+    assert!(
+        trips.contains("R2 150k -> 7") || trips.contains("R2 150k -> 6"),
+        "{trips}"
+    );
     assert!(trips.contains("meets the intent"), "{trips}");
     assert!(trips.contains("R1"), "{trips}");
 }
@@ -104,5 +107,9 @@ fn a_weak_logic_high_names_the_divider_that_starves_it() {
 fn a_board_that_meets_its_outcomes_passes_silently() {
     let r = run("outcome repaired", "68k", "47k");
     assert!(r.passed(), "{}", r.render_human());
-    assert!(r.results.iter().all(|row| row.why.is_none()), "{}", r.render_human());
+    assert!(
+        r.results.iter().all(|row| row.why.is_none()),
+        "{}",
+        r.render_human()
+    );
 }

@@ -2402,7 +2402,10 @@ impl Assertion {
                 )?;
             }
             "logic_level" => {
-                need(self.net.is_some(), "logic_level assertion needs a `net`".into())?;
+                need(
+                    self.net.is_some(),
+                    "logic_level assertion needs a `net`".into(),
+                )?;
                 need(
                     self.level
                         .as_deref()
@@ -2427,7 +2430,8 @@ impl Assertion {
                     "fires assertion `target` must be a finite voltage".into(),
                 )?;
                 need(
-                    self.tolerance.is_none_or(|t| t.is_finite() && t > 0.0 && t <= 1.0),
+                    self.tolerance
+                        .is_none_or(|t| t.is_finite() && t > 0.0 && t <= 1.0),
                     "fires assertion `tolerance` is a fraction of `target` in (0, 1]".into(),
                 )?;
             }

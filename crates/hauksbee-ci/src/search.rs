@@ -110,7 +110,9 @@ impl Search {
                 ));
             }
             if s.volts.iter().chain(&s.amps).any(|v| !v.is_finite()) {
-                out.push(format!("[[search.sweep]] on '{net}': every value must be finite"));
+                out.push(format!(
+                    "[[search.sweep]] on '{net}': every value must be finite"
+                ));
             }
         }
         let grid = self.grid_size();
@@ -189,7 +191,10 @@ pub fn cross(plans: Vec<SeedPlan>, search: Option<&Search>) -> Vec<SeedPlan> {
         grid.iter().map(with).collect::<Vec<_>>()
     };
     let crossed = plans.iter().flat_map(member);
-    (0u32..).zip(crossed).map(|(seed, p)| SeedPlan { seed, ..p }).collect()
+    (0u32..)
+        .zip(crossed)
+        .map(|(seed, p)| SeedPlan { seed, ..p })
+        .collect()
 }
 
 /// A comparator's judged nets and its output mid-swing.
@@ -231,16 +236,22 @@ fn owner<'a>(name: &str, refs: &'a [String]) -> Option<&'a String> {
     refs.iter().filter(owns).max_by_key(|r| r.len())
 }
 
-/// Post-bind, pre-engine: inject the member's current conditions, nudge its
-/// switch thresholds, and record which nets the outcome kinds judge. Returns
-/// the probe (without steps) and the nets to watch every step.
+/// Post-bind, pre-engine: apply one member's search condition and nudges.
+///
+/// Injects the member's current conditions, nudges its switch thresholds, and
+/// records which nets the outcome kinds judge. Returns the probe (without
+/// steps) and the nets to watch every step.
 pub fn prepare(
     spec: &Spec,
     board: &ExtractedBoard,
     bound: &mut hauksbee_engine::binder::BoundBoard,
     plan: &SeedPlan,
 ) -> (Probe, Vec<String>) {
-    let refs: Vec<String> = board.components.iter().map(|c| c.reference.clone()).collect();
+    let refs: Vec<String> = board
+        .components
+        .iter()
+        .map(|c| c.reference.clone())
+        .collect();
     for c in plan.conditions.iter().filter(|c| c.amps) {
         if let Some(node) = bound.node(&c.net).filter(|n| !n.is_ground()) {
             let name = format!("Ici_search_{}", c.net);
@@ -331,15 +342,15 @@ pub fn prepare(
 
 /// After the run: the judged nets' steps, and the logic loads on each
 /// `logic_level` net read at the run's rail levels.
-pub fn finish(
+pub fn finish<S: std::hash::BuildHasher>(
     probe: &mut Probe,
     spec: &Spec,
     board: &ExtractedBoard,
     lib: &hauksbee_models::ModelLibrary,
-    steps: &HashMap<String, Vec<(f64, f64)>>,
+    steps: &HashMap<String, Vec<(f64, f64)>, S>,
     rail_v: &dyn Fn(&str) -> Option<f64>,
 ) {
-    probe.steps.clone_from(steps);
+    probe.steps = steps.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let nets = spec
         .asserts
         .iter()
@@ -368,7 +379,7 @@ pub struct Measure {
 }
 
 impl Measure {
-    fn refused(detail: String) -> Self {
+    const fn refused(detail: String) -> Self {
         Self {
             passed: false,
             margin: f64::NEG_INFINITY,
@@ -422,7 +433,11 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
         (fold(f64::min, f64::INFINITY), load.vil, "VIL")
     };
     let margin = if high { reached - need } else { need - reached };
-    let (word, verb) = if high { ("high", "peaks at") } else { ("low", "bottoms at") };
+    let (word, verb) = if high {
+        ("high", "peaks at")
+    } else {
+        ("low", "bottoms at")
+    };
     let detail = format!(
         "{} {verb} {reached:.3} V; a valid logic {word} at every input it drives needs \
          {need:.3} V ({} {} {edge} at VCC {:.2} V)",
@@ -431,8 +446,7 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
         load.role,
         load.vcc
     );
-    let mut why = None;
-    if margin < 0.0 {
+    let why = (margin < 0.0).then(|| {
         let mut w = format!(
             "{} V short of {edge}: {} cannot read it as {word}",
             fmt3(-margin),
@@ -447,8 +461,8 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
                  this net"
             );
         }
-        why = Some(w);
-    }
+        w
+    });
     Measure {
         passed: margin >= 0.0,
         margin,
@@ -463,36 +477,50 @@ fn fmt3(v: f64) -> String {
     format!("{v:.3}")
 }
 
+/// The trip level of a comparator's first decision: where +IN first crossed
+/// -IN, both inputs read at the interpolated crossing (-IN's opening level if
+/// they never cross).
+fn trip_level(plus: &[(f64, f64)], minus: &[(f64, f64)], len: usize) -> f64 {
+    let diff = |k: usize| plus[k].1 - minus[k].1;
+    let first = (1..len).find(|&k| diff(k - 1) <= 0.0 && diff(k) > 0.0);
+    first.map_or(minus[0].1, |k| {
+        let (before, after) = (diff(k - 1), diff(k));
+        let frac = -before / (after - before);
+        let at = |s: &[(f64, f64)]| frac.mul_add(s[k].1 - s[k - 1].1, s[k - 1].1);
+        0.5 * (at(plus) + at(minus))
+    })
+}
+
 fn fires(a: &Assertion, out: &RunOutcome) -> Measure {
-    let r = a.reference.as_deref().unwrap_or_default();
-    let Some(c) = out.probe.comparators.get(r) else {
+    let reference = a.reference.as_deref().unwrap_or_default();
+    let Some(nets) = out.probe.comparators.get(reference) else {
         return Measure::refused(format!(
-            "'{r}' bound to no comparator model, so there is no output to watch fire"
+            "'{reference}' bound to no comparator model, so there is no output to watch fire"
         ));
     };
-    let (o, p, n) = (window(a, out, &c.out), window(a, out, &c.inp), window(a, out, &c.inn));
-    let len = o.len().min(p.len()).min(n.len());
+    let output = window(a, out, &nets.out);
+    let (plus, minus) = (window(a, out, &nets.inp), window(a, out, &nets.inn));
+    let len = output.len().min(plus.len()).min(minus.len());
     if len < 2 {
-        return Measure::refused(format!("{r} recorded no steps in the window"));
+        return Measure::refused(format!("{reference} recorded no steps in the window"));
     }
     let edges = (1..len)
-        .filter(|&k| o[k - 1].1 < c.mid && o[k].1 >= c.mid)
+        .filter(|&k| output[k - 1].1 < nets.mid && output[k].1 >= nets.mid)
         .count();
-    let diff = |k: usize| p[k].1 - n[k].1;
-    let (peak_k, peak) = (0..len)
-        .map(|k| (k, diff(k)))
+    let (peak_at, peak) = (0..len)
+        .map(|k| (k, plus[k].1 - minus[k].1))
         .max_by(|x, y| x.1.total_cmp(&y.1))
         .unwrap_or((0, f64::NAN));
     let need = usize::try_from(a.min_toggles.unwrap_or(1)).unwrap_or(usize::MAX);
     if edges < need {
         let margin = peak.min(-1e-6);
         let detail = format!(
-            "{r} fires {edges} time(s) (needs {need}): +IN peaks at {:.3} V against -IN \
-             {:.3} V",
-            p[peak_k].1, n[peak_k].1
+            "{reference} fires {edges} time(s) (needs {need}): +IN peaks at {:.3} V against \
+             -IN {:.3} V",
+            plus[peak_at].1, minus[peak_at].1
         );
         let why = format!(
-            "{r}'s +IN never rises above -IN: it stops {} V short of the trip point",
+            "{reference}'s +IN never rises above -IN: it stops {} V short of the trip point",
             fmt3(-peak.min(0.0))
         );
         return Measure {
@@ -510,28 +538,20 @@ fn fires(a: &Assertion, out: &RunOutcome) -> Measure {
             margin: peak,
             error: peak,
             measured: peak,
-            detail: format!("{r} fires {edges} time(s)"),
+            detail: format!("{reference} fires {edges} time(s)"),
             why: None,
         };
     };
-    // The trip level: where +IN crossed -IN for the first decision, both
-    // inputs read at the interpolated crossing.
-    let cross = (1..len).find(|&k| diff(k - 1) <= 0.0 && diff(k) > 0.0);
-    let trip = cross.map_or(n[0].1, |k| {
-        let (d0, d1) = (diff(k - 1), diff(k));
-        let f = -d0 / (d1 - d0);
-        let at = |s: &[(f64, f64)]| s[k - 1].1 + f * (s[k].1 - s[k - 1].1);
-        0.5 * (at(p) + at(n))
-    });
+    let trip = trip_level(plus, minus, len);
     let tol = a.tolerance.unwrap_or(0.05) * target.abs();
     let margin = tol - (trip - target).abs();
     let detail = format!(
-        "{r} fires {edges} time(s), first tripping at {trip:.3} V; intended {target:.3} V \
+        "{reference} fires {edges} time(s), first tripping at {trip:.3} V; intended {target:.3} V \
          +/- {tol:.3} V"
     );
     let why = (margin < 0.0).then(|| {
         format!(
-            "{r} trips {} V {} the intended level ({:.2}x)",
+            "{reference} trips {} V {} the intended level ({:.2}x)",
             fmt3((trip - target).abs()),
             if trip > target { "above" } else { "below" },
             trip / target
@@ -554,7 +574,12 @@ pub fn check(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) 
     let m = measure(a, out);
     let mut detail = m.detail;
     if !out.probe.conditions.is_empty() {
-        let at: Vec<String> = out.probe.conditions.iter().map(Condition::describe).collect();
+        let at: Vec<String> = out
+            .probe
+            .conditions
+            .iter()
+            .map(Condition::describe)
+            .collect();
         let _ = write!(detail, " [at {}]", at.join(", "));
     }
     let mut why = m.why;
@@ -678,7 +703,10 @@ pub fn rank_culprits(
         };
         let probe = &outcomes[i].probe;
         let parts = candidates(spec, board, a, probe);
-        let batch: Vec<SeedPlan> = parts.iter().map(|r| nudged(plan, probe, r, NUDGE)).collect();
+        let batch: Vec<SeedPlan> = parts
+            .iter()
+            .map(|r| nudged(plan, probe, r, NUDGE))
+            .collect();
         let reruns = run(&batch)?;
         let mut moved: Vec<(String, f64)> = parts
             .into_iter()
@@ -719,7 +747,10 @@ fn explain(
         let what = probe.passives.get(r).map_or_else(
             || {
                 let vt = probe.switches.values().flatten().find(|(s, _)| s == r);
-                vt.map_or_else(|| "threshold".to_string(), |(_, v)| format!("threshold {v:.2} V"))
+                vt.map_or_else(
+                    || "threshold".to_string(),
+                    |(_, v)| format!("threshold {v:.2} V"),
+                )
             },
             |v| format_engineering(*v),
         );
@@ -753,35 +784,35 @@ fn explain(
     Ok(lines)
 }
 
-/// Secant on the log of part `r`'s value to null the outcome's error: the
+/// Secant on the log of `part`'s value to null the outcome's error: the
 /// value that meets the intent, checked by a rerun.
 fn solve(
     a: &Assertion,
     plan: &SeedPlan,
     probe: &Probe,
-    m0: &Measure,
-    r: &str,
+    worst: &Measure,
+    part: &str,
     run: &RunPlans<'_>,
 ) -> Result<String, SpecError> {
-    let base = probe.passives.get(r).copied().unwrap_or(1.0);
+    let base = probe.passives.get(part).copied().unwrap_or(1.0);
     // A margin is aimed 5% past its boundary so the solved value clears it;
     // a trip error is aimed at the target itself, inside its band.
-    let aim = if (m0.error - m0.margin).abs() < 1e-12 {
-        0.05 * m0.error.abs()
+    let aim = if (worst.error - worst.margin).abs() < 1e-12 {
+        0.05 * worst.error.abs()
     } else {
         0.0
     };
-    let mut pts = vec![(0.0_f64, m0.error - aim)];
-    let mut x = NUDGE.ln();
+    let mut pts = vec![(0.0_f64, worst.error - aim)];
+    let mut log_scale = NUDGE.ln();
     let mut last = None;
     for _ in 0..SOLVE_STEPS {
-        let o = run(&[nudged(plan, probe, r, x.exp())])?;
-        let Some(m) = o.first().map(|o| measure(a, o)) else {
+        let ran = run(&[nudged(plan, probe, part, log_scale.exp())])?;
+        let Some(reading) = ran.first().map(|o| measure(a, o)) else {
             break;
         };
-        pts.push((x, m.error - aim));
-        let passed = m.passed;
-        last = Some((x, m));
+        pts.push((log_scale, reading.error - aim));
+        let passed = reading.passed;
+        last = Some((log_scale, reading));
         if passed {
             break;
         }
@@ -789,22 +820,82 @@ fn solve(
         if !(e1 - e0).is_normal() {
             break;
         }
-        x = (x1 - e1 * (x1 - x0) / (e1 - e0)).clamp(-4.6, 4.6);
+        log_scale = (x1 - e1 * (x1 - x0) / (e1 - e0)).clamp(-4.6, 4.6);
     }
-    let Some((x, m)) = last else {
-        return Ok(format!("fix: {r} could not be solved"));
+    let Some((log_scale, reading)) = last else {
+        return Ok(format!("fix: {part} could not be solved"));
     };
-    let value = format_engineering(base * x.exp());
-    Ok(if m.passed {
+    let value = format_engineering(base * log_scale.exp());
+    Ok(if reading.passed {
         format!(
-            "fix: {r} {} -> {value} meets the intent (rerun: {})",
+            "fix: {part} {} -> {value} meets the intent (rerun: {})",
             format_engineering(base),
-            m.detail
+            reading.detail
         )
     } else {
         format!(
-            "fix: moving {r} alone does not meet it; nearest tried {value} (rerun: {})",
-            m.detail
+            "fix: moving {part} alone does not meet it; nearest tried {value} (rerun: {})",
+            reading.detail
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sweep(net: &str, volts: &[f64], amps: &[f64]) -> Sweep {
+        Sweep {
+            net: net.into(),
+            volts: volts.to_vec(),
+            amps: amps.to_vec(),
+        }
+    }
+
+    #[test]
+    fn the_grid_crosses_every_plan_with_every_condition_and_renumbers_seeds() {
+        let search = Search {
+            sweep: vec![
+                sweep("/a/V_SET", &[0.0, 2.0], &[]),
+                sweep("I_IN", &[], &[4e-6, 6e-6, 8e-6]),
+            ],
+            culprits: None,
+        };
+        let interior = SeedPlan {
+            interior: true,
+            ..SeedPlan::default()
+        };
+        let crossed = cross(vec![SeedPlan::default(), interior], Some(&search));
+        assert_eq!(crossed.len(), 12);
+        assert!(crossed.iter().map(|p| p.seed).eq(0..12));
+        assert_eq!(crossed.iter().filter(|p| p.interior).count(), 6);
+        let at: Vec<String> = crossed[5]
+            .conditions
+            .iter()
+            .map(Condition::describe)
+            .collect();
+        assert_eq!(at, ["V_SET=2V", "I_IN=8uA"]);
+        // An empty search leaves the plans alone.
+        let none = cross(vec![SeedPlan::default()], Some(&Search::default()));
+        assert_eq!(none.len(), 1);
+    }
+
+    #[test]
+    fn a_sweep_needs_exactly_one_finite_axis_and_a_bounded_grid() {
+        let bad = Search {
+            sweep: vec![
+                sweep("A", &[1.0], &[1e-6]),
+                sweep("B", &[f64::NAN], &[]),
+                sweep("C", &[], &[]),
+            ],
+            culprits: None,
+        };
+        let problems = bad.problems();
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        let big = Search {
+            sweep: vec![sweep("A", &[0.0; 17], &[]), sweep("B", &[0.0; 16], &[])],
+            culprits: None,
+        };
+        assert!(big.problems().iter().any(|p| p.contains("cap 256")));
+    }
 }

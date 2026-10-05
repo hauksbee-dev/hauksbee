@@ -43,6 +43,7 @@ PATH), or grab the prebuilt release bundle and skip the build entirely.
   [`[fuzz]`](#initial-state-fuzzing-fuzz),
   [tolerances + `[ensemble]`](#component-tolerances-tolerance--ensemble)
 - [Assertions: `[[assert]]`](#assertions-assert), including
+  [outcome search](#outcome-search-say-what-the-board-is-for) and
   [measurements](#asking-for-a-number-measurements)
 - [Waiving a finding you have judged](#waiving-a-finding-you-have-judged)
 - [Output](#output)
@@ -541,6 +542,82 @@ max = 11.44          # optional, ms
 If the window holds no complete pulse -- no opening edge, or none closing it
 before the run ends -- the check REFUSES and reports no width. A refusal never
 passes; lengthen `duration_ms` or move `after_ms`.
+
+#### Outcome search: say what the board is for
+
+Two kinds state an intended OUTCOME instead of a voltage window, and a
+`[search]` block names the operating conditions it must hold across. A
+violated outcome is reported at its worst condition, with measured against
+intended, the parts that set it ranked, and a solved repair value.
+
+**`logic_level`**: `net` reaches a valid logic high (or `level = "low"`) at
+every logic input it drives. You do not type the level: it is the highest VIH
+(lowest VIL) that any part on the net declares on its card, read at that
+part's own solved supply.
+
+**`fires`**: the comparator `ref` fires: its output rises through mid-swing
+`min_toggles` times (default once). With `target`, its first decision must also
+trip at that input level, within `tolerance` (a fraction, default 0.05). The
+trip is read as the mean of +IN and -IN at the solver step where they cross.
+
+Both kinds read every accepted solver step of the nets they judge, so a
+100 ns spike or the instant a comparator decides is seen, even though it falls
+between the 100 µs chunk samples the other kinds use.
+
+```toml
+[search]
+culprits = 3                    # optional; 0 skips the ranking reruns
+[[search.sweep]]
+net   = "VCC"
+volts = [4.75, 5.0]             # force the net to each value
+[[search.sweep]]
+net  = "I_SYN"
+amps = [4.19e-6, 6e-6]          # or inject each current into it
+
+[[assert]]
+name   = "trips at 0.387 V"
+kind   = "fires"
+ref    = "U1"
+target = 0.387
+tolerance = 0.1
+
+[[assert]]
+name = "the gate reads a high"
+kind = "logic_level"
+net  = "X"
+```
+
+Every combination of the sweeps runs (at most 256), crossed with any
+tolerance ensemble. When run under `[search]`, the members execute in
+parallel on up to four cores. For each violated outcome, the worst member
+reruns once per nearby part with that part nudged +10%. "Nearby" means two
+hops from the judged nets, not through rails or ground. Parts are ranked by
+how far each one moves the outcome. A switch whose threshold the outcome
+follows is named as self-limiting: the pulse ends once the switch it drives
+turns on. The strongest passive is then solved for the value that meets the
+intent:
+
+```text
+[FAIL] trips at 0.387 V
+      seed 1: U1 fires 1 time(s), first tripping at 0.773 V; intended 0.387 V +/- 0.039 V [at VCC=5V]
+      why: U1 trips 0.386 V above the intended level (2.00x)
+        culprit 1: R2 (150k): +10% moves it +0.064 V
+        culprit 2: R1 (820k): +10% moves it -0.060 V
+        fix: R2 150k -> 73.2k meets the intent (rerun: U1 fires 1 time(s), first tripping at 0.410 V; ...)
+```
+
+A board that meets its outcomes passes with nothing to read. The pinned
+public case is `crates/hauksbee-ci/tests/outcome_search.rs`. On the Tarski
+neuron cell (`examples/tarski_neuron_outcomes.toml`, private), three outcomes
+are violated:
+
+- The spike peaks at 3.12 V, under the 3.5 V VIH of the switches it drives.
+  It is self-limiting on `NEURON_SWITCH2001`.
+- The threshold is 0.773 V where 0.387 V was intended. The fix is
+  `R_bottom2001` 150k -> 69k.
+- The output neuron never fires at a code-7 synapse current.
+
+The repaired cell passes.
 
 #### Asking for a number: measurements
 

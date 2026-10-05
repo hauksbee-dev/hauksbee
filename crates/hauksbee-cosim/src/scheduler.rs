@@ -161,6 +161,16 @@ impl ChunkThermalAccum {
         self.start_x.clear();
         self.steps.clear();
     }
+
+    /// Record one accepted step at the watched nodes (ground reads 0 V).
+    fn record_step(&mut self, watch: &[(String, NodeId)], time: f64, x: &[f64]) {
+        if watch.is_empty() {
+            return;
+        }
+        let at = |n: NodeId| x.get((n.0 as usize).wrapping_sub(1)).copied();
+        let volts = watch.iter().map(|(_, n)| at(*n).unwrap_or(0.0));
+        self.steps.push((time, volts.collect()));
+    }
 }
 
 /// Which fallback rung produced a chunk's converged answer after the primary
@@ -4140,11 +4150,7 @@ impl Scheduler {
             if thermal.start_x.is_empty() {
                 thermal.start_x.extend_from_slice(s.x);
             }
-            if !watch.is_empty() {
-                let at = |n: NodeId| s.x.get((n.0 as usize).wrapping_sub(1)).copied();
-                let volts = watch.iter().map(|(_, n)| at(*n).unwrap_or(0.0));
-                thermal.steps.push((s.time, volts.collect()));
-            }
+            thermal.record_step(watch, s.time, s.x);
             final_x.clear();
             final_x.extend_from_slice(s.x);
             if !drive.is_empty() {

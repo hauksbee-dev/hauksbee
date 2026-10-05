@@ -426,6 +426,8 @@ function specWith(table: string, key: string, bad: number | string, kind?: strin
         block("[[profile.segment]]", "level_a = 0.1"),
         asserts
       );
+    case "search":
+      return doc([head], block("[search]"), asserts);
     case "decoupling":
       return doc([head], block("[decoupling]", "parasitics = true"), asserts);
     case "decoupling.override":

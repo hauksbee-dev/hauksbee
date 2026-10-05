@@ -64,6 +64,14 @@ Other assertion kinds include `max_current`, `max_temp`, `rail_window`,
 `peripheral`, `hwtrace`, and `model_coverage`. `docs/ci/CI.md` documents each
 one's fields.
 
+When the user can say what the board is FOR, rather than which voltage a net
+should sit at, use the outcome kinds. `logic_level` checks that a net is read
+as a valid level by every input it drives. `fires` checks that a comparator
+fires, optionally at a `target` trip level. Add a `[search]` block of
+`[[search.sweep]]` nets (`volts` or `amps`) to give the conditions those
+outcomes must hold across. A failure names its worst condition, ranked culprit
+parts, and a solved repair value.
+
 Transients (load steps, WiFi bursts, inrush) are not a `hauksbee run` flag. They
 are a `[[profile]]` (the load current shape), a `[[scenario]]` that attaches it
 to a supply net, and a `rail_window` assertion. `init` writes a commented stub,

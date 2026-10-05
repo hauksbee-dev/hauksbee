@@ -119,8 +119,10 @@ pub struct LogicLoad {
     pub vcc: f64,
 }
 
-/// Every declared logic input on `net` (an analog switch's control, a gate's
-/// input), with its VIL/VIH read at the level `rail_v` gives its supply: the
+/// Every declared logic input on `net`, with its VIL/VIH at its own supply.
+///
+/// An input is an analog switch's control, a gate's input, and so on; its band
+/// is read at the level `rail_v` gives its supply. Together they are the
 /// levels a signal on `net` must reach for every part it drives to read it.
 /// An input whose supply is not up is not a load yet and is left out.
 pub fn loads_on_net(
@@ -138,7 +140,10 @@ pub fn loads_on_net(
             vcc: i.vcc,
         };
         let inputs = powered_inputs(board, c, &m, rail_v).into_iter();
-        inputs.filter(|i| i.net == net).map(load).collect::<Vec<_>>()
+        inputs
+            .filter(|i| i.net == net)
+            .map(load)
+            .collect::<Vec<_>>()
     };
     super::resolved_components(board, lib)
         .flat_map(on_net)
