@@ -104,7 +104,7 @@ loader ignores the deck's first line, which is its title.
 | Card | What it does |
 |------|--------------|
 | `.model ... D` | Diode model: `is n rs cjo vj m tt bv ibv xti eg` (aliases `cj0`, `pb`). |
-| `.model ... NPN/PNP` | BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr ikf ikr ise ne isc nc xti eg` (aliases `va`/`vb`, `jbf`/`jbr`, `c2`/`c4`). |
+| `.model ... NPN/PNP` | BJT model: `is bf br vaf var nf nr rb irb rbm re rc cje cjc tf tr ikf ikr ise ne isc nc xti eg` (aliases `va`/`vb`, `jbf`/`jbr`, `c2`/`c4`). |
 | `.model ... NMOS/PMOS` | MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj rd rs`. |
 | `.model ... SW/VSWITCH` | Voltage-switch model: `vt vh ron roff`. |
 

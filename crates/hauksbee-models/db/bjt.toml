@@ -41,8 +41,8 @@ value_re = "(?i)^BC84[5-9][A-C]?$"
 #   literally, the floating Q2 emitter leaves 0.8636 of the area in forward
 #   mode (IS 9.71e-15, VBE about 4 mV higher); BC847A.txt and BC847C.txt tie
 #   Q2's emitter to node 3, so the card takes MAIN at area 1 like its siblings.
-# Not read by the binder and so not carried: IRB 8.356e-4, RBM 0.8289,
-#   XTB 1.382, XTF 25, VTF 2, ITF 0.277, VJE/MJE, VJC/MJC.
+# Not read by the binder and so not carried: XTB 1.382, XTF 25, VTF 2,
+#   ITF 0.277, VJE/MJE, VJC/MJC.
 is  = 1.124e-14   # BC847.txt IS
 bf  = 281.7       # BC847.txt BF
 nf  = 0.9872      # BC847.txt NF
@@ -56,7 +56,9 @@ nc  = 0.9228      # BC847.txt NC
 br  = 7.047       # BC847.txt BR
 ikr = 0.8167      # BC847.txt IKR
 var = 16.61       # BC847.txt VAR
-rb  = 150.0       # BC847.txt RB (IRB/RBM not read, so RB is the zero-bias value)
+rb  = 150.0       # BC847.txt RB (the zero-bias value)
+irb = 8.356e-4    # BC847.txt IRB: base current where RB has fallen halfway to RBM
+rbm = 0.8289      # BC847.txt RBM: base resistance at high current
 re  = 0.804       # BC847.txt RE
 rc  = 0.2454      # BC847.txt RC
 eg  = 1.11        # BC847.txt EG
@@ -370,7 +372,7 @@ mpn_re   = "(?i)BCM847BS"
 #   kept and bf = 290, a Gummel-Poon evaluation gives hFE 289 and VBE 654 mV
 #   at 2 mA (Table 7 VBE typ 660 mV) and hFE 294 at 10 uA (Table 7 typ 250,
 #   where the vendor BF gives about 328). So the printed typ is kept for bf.
-# Not read by the binder and so not carried: IRB 5e-6, RBM 5, XTF 9.51,
+# Not read by the binder and so not carried: XTF 9.51,
 #   VTF 2.927, ITF 0.3131, VJE/MJE, VJC/MJC/XCJC, FC.
 is  = 1.822e-14 # BCM847BS.txt IS
 bf  = 290.0     # hFE typ @ VCE = 5 V, IC = 2 mA (200 min, 450 max): BCM847BS v.8
@@ -386,7 +388,9 @@ nc  = 1.763     # BCM847BS.txt NC
 br  = 8.29      # BCM847BS.txt BR
 ikr = 0.09      # BCM847BS.txt IKR
 var = 17.9      # BCM847BS.txt VAR
-rb  = 10.0      # BCM847BS.txt RB (IRB/RBM not read, so RB is the zero-bias value)
+rb  = 10.0      # BCM847BS.txt RB (the zero-bias value)
+irb = 5e-6      # BCM847BS.txt IRB
+rbm = 5.0       # BCM847BS.txt RBM
 re  = 0.649     # BCM847BS.txt RE
 rc  = 0.7014    # BCM847BS.txt RC
 eg  = 1.11      # BCM847BS.txt EG

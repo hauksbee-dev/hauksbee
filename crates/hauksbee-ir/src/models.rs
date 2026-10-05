@@ -188,6 +188,15 @@ pub struct BjtModel {
     pub rb: f64,
     pub re: f64,
     pub rc: f64,
+    /// SPICE IRB (A): the base current at which the base resistance falls
+    /// halfway from `rb` toward `rbm` (current crowding). `INFINITY` leaves
+    /// the base resistance at `rb` unless `rbm` alone is stated.
+    #[serde(with = "nonfinite_f64", default = "f64_infinity")]
+    pub irb: f64,
+    /// SPICE RBM (Ohms): the base resistance at high current. `None` is
+    /// SPICE's default, RBM = RB, so the base resistance never moves.
+    #[serde(default)]
+    pub rbm: Option<f64>,
     /// Base-emitter and base-collector zero-bias depletion caps (F).
     pub cje: f64,
     pub cjc: f64,
@@ -247,6 +256,8 @@ impl Default for BjtModel {
             rb: 0.0,
             re: 0.0,
             rc: 0.0,
+            irb: f64::INFINITY,
+            rbm: None,
             cje: 0.0,
             cjc: 0.0,
             mje: 0.33,
@@ -265,6 +276,46 @@ impl Default for BjtModel {
             xti: 3.0,
             eg: EG_SI,
         }
+    }
+}
+
+impl BjtModel {
+    /// The base resistance at base current `ib` (A) and inverse base charge
+    /// `qb_inv` (1/qb, 1 with no base-charge effects), SPICE3's `bjtload`:
+    ///
+    /// - IRB stated: `rbm + 3(rb - rbm)(tan z - z)/(z tan^2 z)` with
+    ///   `z = (-1 + sqrt(1 + 144 ib/(pi^2 IRB))) / ((24/pi^2) sqrt(ib/IRB))`,
+    ///   which is `rb` at zero current and falls toward `rbm` as the base
+    ///   current crowds to the emitter edge;
+    /// - otherwise `rbm + (rb - rbm)/qb`.
+    ///
+    /// With neither stated it is exactly `rb`, so a card without them is
+    /// unchanged.
+    #[must_use]
+    pub fn base_resistance(&self, ib: f64, qb_inv: f64) -> f64 {
+        let Some(rbm) = self
+            .rbm
+            .filter(|r| r.is_finite() && *r >= 0.0 && *r < self.rb)
+        else {
+            return self.rb;
+        };
+        let span = self.rb - rbm;
+        if self.irb.is_finite() && self.irb > 0.0 {
+            // The SPICE3 constants: 14.59025 = 144/pi^2, 2.4317 = 24/pi^2.
+            let a = (ib / self.irb).max(1e-9);
+            let z = (-1.0 + 14.590_25f64.mul_add(a, 1.0).sqrt()) / 2.4317 / a.sqrt();
+            let t = z.tan();
+            3.0f64.mul_add(span * (t - z) / z / t / t, rbm)
+        } else {
+            span.mul_add(qb_inv, rbm)
+        }
+    }
+
+    /// Whether the base resistance moves with bias (IRB or RBM stated below RB).
+    #[must_use]
+    pub fn base_resistance_modulated(&self) -> bool {
+        self.rbm
+            .is_some_and(|r| r.is_finite() && r >= 0.0 && r < self.rb)
     }
 }
 
@@ -419,5 +470,69 @@ impl MosfetModel {
     #[must_use]
     pub fn has_body_diode(&self) -> bool {
         self.body_is > 0.0 || self.cbd > 0.0 || self.cbs > 0.0
+    }
+}
+
+#[cfg(test)]
+mod base_resistance_tests {
+    use super::BjtModel;
+
+    /// The BC847 vendor card: RB 150, IRB 8.356e-4, RBM 0.8289.
+    fn bc847() -> BjtModel {
+        BjtModel {
+            rb: 150.0,
+            irb: 8.356e-4,
+            rbm: Some(0.8289),
+            ..BjtModel::default()
+        }
+    }
+
+    #[test]
+    fn irb_crowding_falls_from_rb_to_rbm_through_the_halfway_point() {
+        let m = bc847();
+        assert!(m.base_resistance_modulated());
+        // Zero current: the full zero-bias RB.
+        assert!((m.base_resistance(0.0, 1.0) - 150.0).abs() < 0.1);
+        // At IRB the SPICE3 expression sits within a few percent of halfway.
+        let mid = 0.5f64.mul_add(150.0 - 0.8289, 0.8289);
+        let at_irb = m.base_resistance(m.irb, 1.0);
+        assert!((at_irb - mid).abs() < 0.03 * 150.0, "{at_irb} vs {mid}");
+        // Monotone falling, and approaching RBM at high current.
+        let mut last = f64::INFINITY;
+        for k in 0..12 {
+            let r = m.base_resistance(1e-7 * 4f64.powi(k), 1.0);
+            assert!(r <= last && r >= 0.8289, "step {k}: {r}");
+            last = r;
+        }
+        assert!(m.base_resistance(1.0, 1.0) < 5.0);
+    }
+
+    #[test]
+    fn without_irb_rbm_scales_with_inverse_base_charge() {
+        let m = BjtModel {
+            irb: f64::INFINITY,
+            ..bc847()
+        };
+        assert!((m.base_resistance(1e-3, 1.0) - 150.0).abs() < 1e-9);
+        let want = 0.5f64.mul_add(150.0 - 0.8289, 0.8289);
+        assert!((m.base_resistance(1e-3, 0.5) - want).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_card_without_rbm_keeps_rb_fixed() {
+        for m in [
+            BjtModel {
+                rbm: None,
+                ..bc847()
+            },
+            // RBM at or above RB is not a modulation either.
+            BjtModel {
+                rbm: Some(200.0),
+                ..bc847()
+            },
+        ] {
+            assert!(!m.base_resistance_modulated());
+            assert!((m.base_resistance(0.1, 0.3) - 150.0).abs() < 1e-12);
+        }
     }
 }

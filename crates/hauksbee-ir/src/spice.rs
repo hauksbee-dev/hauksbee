@@ -1561,6 +1561,9 @@ fn bjt_model(m: &Model) -> BjtModel {
         |v: Option<f64>, dflt: f64| v.map_or(dflt, |x| if x > 0.0 { x } else { f64::INFINITY });
     d.ikf = knee(m.get("ikf"), d.ikf);
     d.ikr = knee(m.get("ikr"), d.ikr);
+    // Base-resistance modulation: IRB=0 is "not stated" (SPICE), RBM defaults to RB.
+    d.irb = knee(m.get("irb"), d.irb);
+    d.rbm = m.get("rbm");
     d
 }
 

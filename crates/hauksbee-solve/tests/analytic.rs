@@ -189,3 +189,55 @@ fn bjt_current_mirror_ratio() {
         "mirror ratio {ratio:.4} (Iref={i_ref:.3e} Iout={i_out:.3e})"
     );
 }
+
+/// A base driven hard through 47 ohm (gap G8): with the card's IRB/RBM the
+/// base resistance crowds down from RB toward RBM, so the base current is
+/// set by the external resistor, not by the zero-bias RB. The BC847 vendor
+/// values; the DC point must solve and land on the modulated resistance's
+/// self-consistent root.
+#[test]
+fn bjt_base_resistance_falls_with_base_current() {
+    let modulated = BjtModel {
+        is: 1.124e-14,
+        bf: 281.7,
+        br: 7.047,
+        rb: 150.0,
+        re: 0.804,
+        rc: 0.2454,
+        irb: 8.356e-4,
+        rbm: Some(0.8289),
+        ..BjtModel::default()
+    };
+    let base_current = |model: &BjtModel| {
+        let mut circuit = Circuit::new();
+        let vcc = circuit.node("vcc");
+        let nb = circuit.node("b");
+        let nc = circuit.node("c");
+        add_vdc(&mut circuit, "V1", vcc, NodeId::GROUND, 5.0);
+        add_resistor(&mut circuit, "RB", vcc, nb, 47.0);
+        add_resistor(&mut circuit, "RC", vcc, nc, 1e3);
+        bjt(&mut circuit, "Q1", nc, nb, NodeId::GROUND, model);
+        let mut ws = hauksbee_solve::Workspace::new(&circuit);
+        hauksbee_solve::dc_operating_point(&mut ws, &circuit, &SolverOptions::default())
+            .expect("dc solves");
+        let vb = ws.x[ws.layout.node(nb).unwrap()];
+        (5.0 - vb) / 47.0
+    };
+    let fixed = base_current(&BjtModel {
+        irb: f64::INFINITY,
+        rbm: None,
+        ..modulated
+    });
+    let ib = base_current(&modulated);
+    // Zero-bias RB: (5 - 0.8) / (47 + 150) is about 21 mA.
+    assert!((0.015..0.025).contains(&fixed), "fixed rb: {fixed}");
+    // Self-consistency: 5 = ib (47 + rbb(ib) + re) + vbe_j, vbe_j about 0.8 V,
+    // so rbb is about 17 ohm and ib about 64 mA.
+    let rbb = modulated.base_resistance(ib, 1.0);
+    assert!((5.0..30.0).contains(&rbb), "rbb {rbb}");
+    let vbe_j = ib.mul_add(-(47.0 + rbb), 5.0);
+    assert!(
+        (0.7..1.0).contains(&vbe_j),
+        "ib {ib} rbb {rbb} vbe_j {vbe_j}"
+    );
+}

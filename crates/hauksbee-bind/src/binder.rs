@@ -3783,6 +3783,10 @@ fn bjt_model_from(model: &ModelEntry) -> BjtModel {
         rb: p.get_f64("rb").unwrap_or(d.rb),
         re: p.get_f64("re").unwrap_or(d.re),
         rc: p.get_f64("rc").unwrap_or(d.rc),
+        // Base-resistance modulation (SPICE IRB/RBM). A zero IRB is SPICE's
+        // "not stated", as with the knees; RBM defaults to RB.
+        irb: knee(p.get_f64("irb"), d.irb),
+        rbm: p.get_f64("rbm"),
         cje: p.get_f64("cje").unwrap_or(d.cje),
         cjc: p.get_f64("cjc").unwrap_or(d.cjc),
         tf: p.get_f64("tf").unwrap_or(d.tf),

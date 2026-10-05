@@ -93,6 +93,8 @@ const BJT: &[&str] = &[
     "rb",
     "re",
     "rc",
+    "irb",
+    "rbm",
     "cje",
     "cjc",
     "tf",
@@ -264,6 +266,7 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     xti - saturation-current temperature exponent; bf - forward beta (hFE); br - reverse beta; \
     nf - forward emission coefficient; nr - reverse emission coefficient; \
     vaf V forward Early voltage; var V reverse Early voltage; rb ohm base resistance; \
+    irb A current where the base resistance falls halfway to rbm; rbm ohm high-current base resistance; \
     re ohm emitter resistance; rc ohm collector resistance; cje F zero-bias B-E capacitance; \
     cjc F zero-bias B-C capacitance; tf s forward transit time; tr s reverse transit time; \
     ikf A forward beta roll-off current; ise A B-E leakage saturation current; \

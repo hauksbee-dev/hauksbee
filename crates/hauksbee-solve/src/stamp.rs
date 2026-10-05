@@ -1891,12 +1891,20 @@ fn stamp_bjt<S: StampSink>(
     // coupled to nothing, so it cannot influence the solution).
     let ext = [ctx.layout.node(c), ctx.layout.node(b), ctx.layout.node(e)];
     let mut eff = ext;
+    // The base's ohmic resistance, when the card modulates it with current
+    // (SPICE IRB/RBM), is stamped below once this iterate's base current is
+    // known; `deferred_rb` carries its internal node there.
+    let mut deferred_rb = None;
     if let Some(&ints) = ctx.layout.bjt_internal(id) {
         if ctx.opts.effects.series_resistance {
             let rs = [model.rc, model.rb, model.re];
             for t in 0..3 {
                 if let Some(int_i) = ints[t] {
-                    stamp_cond_idx(sink, ext[t], Some(int_i), 1.0 / rs[t]);
+                    if t == 1 && model.base_resistance_modulated() {
+                        deferred_rb = Some(int_i);
+                    } else {
+                        stamp_cond_idx(sink, ext[t], Some(int_i), 1.0 / rs[t]);
+                    }
                     eff[t] = Some(int_i);
                 }
             }
@@ -2035,6 +2043,15 @@ fn stamp_bjt<S: StampSink>(
     // emitter's is minus their sum (KCL), folded directly into the RHS below.
     let ic = ict - ibc;
     let ib = ibe + ibc;
+
+    // Current-dependent base resistance (SPICE3 `bjtload`): evaluated at this
+    // iterate's base current and base charge and stamped as a plain
+    // conductance, with no derivative through ib, exactly as SPICE does. The
+    // root is the card's; only the Newton path differs from a fixed rb.
+    if let Some(int_i) = deferred_rb {
+        let rbb = model.base_resistance(ib, q1_inv).max(1e-6);
+        stamp_cond_idx(sink, ext[1], Some(int_i), 1.0 / rbb);
+    }
 
     // Linearized stamp: the EXACT tangent, the true partials
     //   ∂ic/∂vbe = gif·q1_inv
