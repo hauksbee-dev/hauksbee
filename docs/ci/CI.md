@@ -559,6 +559,10 @@ part's own solved supply.
 `min_toggles` times (default once). With `target`, its first decision must also
 trip at that input level, within `tolerance` (a fraction, default 0.05). The
 trip is read as the mean of +IN and -IN at the solver step where they cross.
+With `reset_below`, +IN must also fall below that level (V) after every
+firing: the highest point it bottoms at between one firing and the next is
+held to it, so a reset that only partly discharges the input fails even when
+the firing count looks healthy.
 
 Both kinds read every accepted solver step of the nets they judge, so a
 100 ns spike or the instant a comparator decides is seen, even though it falls

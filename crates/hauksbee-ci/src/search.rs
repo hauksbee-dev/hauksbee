@@ -504,9 +504,10 @@ fn fires(a: &Assertion, out: &RunOutcome) -> Measure {
     if len < 2 {
         return Measure::refused(format!("{reference} recorded no steps in the window"));
     }
-    let edges = (1..len)
+    let rises: Vec<usize> = (1..len)
         .filter(|&k| output[k - 1].1 < nets.mid && output[k].1 >= nets.mid)
-        .count();
+        .collect();
+    let edges = rises.len();
     let (peak_at, peak) = (0..len)
         .map(|k| (k, plus[k].1 - minus[k].1))
         .max_by(|x, y| x.1.total_cmp(&y.1))
@@ -532,16 +533,83 @@ fn fires(a: &Assertion, out: &RunOutcome) -> Measure {
             why: Some(why),
         };
     }
-    let Some(target) = a.target else {
-        return Measure {
+    let fired = a.target.map_or_else(
+        || Measure {
             passed: true,
             margin: peak,
             error: peak,
             measured: peak,
             detail: format!("{reference} fires {edges} time(s)"),
             why: None,
-        };
+        },
+        |target| trips_at(a, reference, edges, target, &plus[..len], &minus[..len]),
+    );
+    let Some(below) = a.reset_below else {
+        return fired;
     };
+    let reset = resets(reference, &nets.inp, below, &rises, &plus[..len]);
+    if reset.margin < fired.margin {
+        Measure {
+            detail: format!("{}; {}", fired.detail, reset.detail),
+            ..reset
+        }
+    } else {
+        Measure {
+            detail: format!("{}; {}", fired.detail, reset.detail),
+            ..fired
+        }
+    }
+}
+
+/// How fully the comparator's +IN resets after each firing: the highest
+/// level it bottoms at between one rising output edge and the next (or the
+/// window end after the last), held below `below`.
+fn resets(reference: &str, inp: &str, below: f64, rises: &[usize], plus: &[(f64, f64)]) -> Measure {
+    let ends = rises.iter().skip(1).copied().chain([plus.len()]);
+    let worst = rises
+        .iter()
+        .zip(ends)
+        .map(|(&from, to)| {
+            plus[from..to]
+                .iter()
+                .map(|p| p.1)
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    let margin = below - worst;
+    let detail = format!(
+        "{} resets only to {worst:.3} V between firings; a full reset needs below {below:.3} V",
+        leaf(inp)
+    );
+    let why = (margin < 0.0).then(|| {
+        format!(
+            "{reference}'s reset is partial: +IN ({}) stays {} V above the reset level, so \
+             each spike starts from a charged input and the firing count overstates the drive",
+            leaf(inp),
+            fmt3(-margin)
+        )
+    });
+    Measure {
+        passed: margin >= 0.0,
+        margin,
+        error: margin,
+        measured: worst,
+        detail,
+        why,
+    }
+}
+
+/// A `fires` outcome with a `target`: the first decision's trip level held to
+/// `tolerance`.
+fn trips_at(
+    a: &Assertion,
+    reference: &str,
+    edges: usize,
+    target: f64,
+    plus: &[(f64, f64)],
+    minus: &[(f64, f64)],
+) -> Measure {
+    let len = plus.len();
     let trip = trip_level(plus, minus, len);
     let tol = a.tolerance.unwrap_or(0.05) * target.abs();
     let margin = tol - (trip - target).abs();
@@ -850,6 +918,24 @@ mod tests {
             volts: volts.to_vec(),
             amps: amps.to_vec(),
         }
+    }
+
+    #[test]
+    fn a_reset_is_judged_by_its_highest_bottom_between_firings() {
+        // +IN fires at k=1 and k=4; the first gap bottoms at 0.02 V, the tail
+        // after the second firing only falls to 0.5 V: a partial reset.
+        let plus: Vec<(f64, f64)> = [0.0, 0.8, 0.02, 0.6, 0.8, 0.5, 0.6]
+            .into_iter()
+            .enumerate()
+            .map(|(k, v)| (f64::from(u8::try_from(k).unwrap()), v))
+            .collect();
+        let partial = resets("U1", "/a/MEM", 0.1, &[1, 4], &plus);
+        assert!(!partial.passed);
+        assert!((partial.measured - 0.5).abs() < 1e-12);
+        assert!(partial.detail.contains("MEM resets only to 0.500 V"));
+        assert!(partial.why.unwrap().contains("reset is partial"));
+        let full = resets("U1", "/a/MEM", 0.1, &[1], &plus[..3]);
+        assert!(full.passed && full.why.is_none(), "{}", full.detail);
     }
 
     #[test]

@@ -590,6 +590,15 @@
           ],
           "default": null
         },
+        "reset_below": {
+          "description": "`fires`: the level (V) the comparator's +IN must fall below after\nevery firing (reset completeness); a partial reset fails it.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
         "scenario": {
           "description": "Scope the assertion to one scenario's window by its `id`. When unset, the\nassertion spans the whole run.",
           "type": [

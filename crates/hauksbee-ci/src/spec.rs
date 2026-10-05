@@ -1244,6 +1244,10 @@ pub struct Assertion {
     /// held to `tolerance` (a fraction, default 0.05).
     #[serde(default)]
     pub target: Option<f64>,
+    /// `fires`: the level (V) the comparator's +IN must fall below after
+    /// every firing (reset completeness); a partial reset fails it.
+    #[serde(default)]
+    pub reset_below: Option<f64>,
 
     /// `max_current` / `max_temp`: the component to check.
     #[serde(rename = "ref", default)]
@@ -2428,6 +2432,10 @@ impl Assertion {
                 need(
                     self.target.is_none_or(f64::is_finite),
                     "fires assertion `target` must be a finite voltage".into(),
+                )?;
+                need(
+                    self.reset_below.is_none_or(f64::is_finite),
+                    "fires assertion `reset_below` must be a finite voltage".into(),
                 )?;
                 need(
                     self.tolerance
