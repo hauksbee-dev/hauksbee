@@ -25,8 +25,9 @@ fn olimex_evb_wifi_burst_on_robust_supply_passes() {
 
     // The ESP32-WROOM module's 3V3 supply is the +3.3V rail. We attach the WiFi
     // burst load to the +3.3V rail explicitly (robust against the part's exact
-    // reference designator), and supply +3.3V / +5V from a stiff wall adapter
-    // (the EVB is wall/USB powered, with a 3A-class AMS1117 LDO and bulk caps).
+    // reference designator), and supply +5V from a stiff wall adapter; the
+    // board's own TPS62A02 buck (U2) makes +3.3V from it, so a supply on +3.3V
+    // would fight the buck.
     let body = format!(
         r#"name = "Olimex ESP32-EVB: WiFi burst on robust supply (calibration)"
 board = {board}
@@ -34,18 +35,12 @@ duration_ms = 40
 frame_ms = 0.2
 
 [[supply]]
-net = "+3.3V"
-kind = "wall"
-volts = 3.3
-r_out_ohms = 0.1
-ripple_vpp = 0.02
-ripple_hz = 100.0
-
-[[supply]]
 net = "+5V"
 kind = "wall"
 volts = 5.0
 r_out_ohms = 0.1
+ripple_vpp = 0.02
+ripple_hz = 100.0
 
 # Honest decoupling on the real board's caps.
 [decoupling]

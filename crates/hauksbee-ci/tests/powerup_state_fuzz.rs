@@ -168,7 +168,8 @@ fn olimex_evb_relay_boot_states_are_safe() {
     boot_state_fuzz(
         "olimex_relay",
         &board,
-        &[("+3.3V", 3.3), ("+5V", 5.0)],
+        // +3.3V comes from the board's TPS62A02 buck (U2), fed from +5V.
+        &[("+5V", 5.0)],
         &["GPIO32/REL1".to_string(), "GPIO33/REL2".to_string()],
         8,
         &(rail_holds("+3.3V", 3.2, 3.4) + &rail_holds("+5V", 4.9, 5.1)),
