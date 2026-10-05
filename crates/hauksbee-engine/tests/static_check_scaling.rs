@@ -16,7 +16,7 @@
 //! `speed_gate` method), and each run gets a fresh model library so a
 //! resolution memo warmed by an earlier run cannot hide a quadratic bind.
 //!
-//! Run: `cargo nextest run -p hauksbee-engine --test main static_check_scaling`.
+//! Run: `cargo nextest run -p hauksbee-engine --test it static_check_scaling`.
 
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
@@ -27,8 +27,8 @@ use std::time::{Duration, Instant};
 const SMALL: usize = 12;
 /// Interleaved runs per size, keeping the fastest.
 const REPEATS: usize = 3;
-/// Largest accepted `large / small` time ratio. Measured about 4.3x after the
-/// fix (and well past 10x before it); linear is 4x, quadratic 16x.
+/// Largest accepted `large / small` time ratio. Measured 3.55x (load ~60,
+/// 2026-10-05); linear is 4x, quadratic 16x.
 const MAX_RATIO: f64 = 9.0;
 
 /// `cells` copies of a 74HC04 output driving a BC847 base through 10k with a
