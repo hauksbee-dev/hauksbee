@@ -6583,3 +6583,542 @@ title = "Bosch Sensortec BMP280 Data sheet, BST-BMP280-DS001-26, revision 1.26, 
 locator = "Table 2; Table 3; Table 12; Section 4.3.1 Register 0xD0 id; Sections 5.1 and 5.2; Table 26; Table 29 Pin description"
 sha256 = "473ff27d9df698b4757e36b36209f83b9f637b592c999d5fabe2a9453a488da6"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LIS3DH: STMicroelectronics 3-axis accelerometer, LGA-16 3 x 3 x 1 mm.
+#
+# Source: STMicroelectronics "LIS3DH MEMS digital output motion sensor ultra
+#   low-power high performance 3-axes nano accelerometer", Doc ID 17530 Rev 1,
+#   May 2010. Table 1 Device summary, Table 2 Pin description, Table 5
+#   Electrical characteristics, Table 8 Absolute maximum ratings, Section 6.1.1
+#   I2C operation, Section 8.6 WHO_AM_I (0Fh) / Table 21. ST's own host refused
+#   every request from here, so the copy read is Rev 1 as mirrored at
+#   cdn-shop.adafruit.com/datasheets/LIS3DH.pdf; later revisions were not seen.
+#
+# Levels are fractions of Vdd_IO (Table 5), evaluated here at 3.3 V. Supply draw
+# is the normal-mode 50 Hz figure, 11 uA typ, the highest current Table 5
+# tabulates (the part runs up to 5 kHz ODR, for which no current is printed).
+[[models]]
+id = "lis3dh"
+kind = "digital"
+description = "ST LIS3DH 3-axis accelerometer, LGA-16 (strap-selected I2C WHO_AM_I subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# Table 1 Device summary order codes: LIS3DH (tray) and LIS3DHTR (tape and
+# reel). LIS3DSH / LIS2DH12 / LIS331 are different parts and are excluded.
+value_re = "(?i)^LIS3DH(TR)?$"
+
+[models.params]
+# Table 5, fractions of Vdd_IO evaluated at Vdd_IO = 3.3 V.
+voh   = 2.97     # VOH 0.9 x Vdd_IO min
+vol   = 0.33     # VOL 0.1 x Vdd_IO max
+vih   = 2.64     # VIH 0.8 x Vdd_IO min
+vil   = 0.66     # VIL 0.2 x Vdd_IO max
+supply_static_ua = 11.0    # Table 5 Idd typ, normal mode, 50 Hz ODR
+supply_pin = "14"          # Vdd
+gnd_pin    = "5"           # GND
+
+[models.pins]
+# Table 2 Pin description, all 16 pads. SCL/SPC and SDA/SDI/SDO use the bus
+# vocabulary.
+"1"  = "vddio"   # Vdd_IO, I/O supply, 1.71 V to Vdd + 0.1 V
+"2"  = "nc"      # not connected
+"3"  = "nc2"     # not connected
+"4"  = "scl"     # I2C SCL / SPI SPC
+"5"  = "gnd"
+"6"  = "sda"     # I2C SDA / SPI SDI / 3-wire SDO
+"7"  = "sdo"     # SPI SDO; in I2C the address LSB SA0 (Section 6.1.1)
+"8"  = "cs"      # I2C/SPI mode selection (1: I2C, 0: SPI enabled)
+"9"  = "int2"    # inertial interrupt 2
+"10" = "res"     # reserved: connect to GND
+"11" = "int1"    # inertial interrupt 1
+"12" = "gnd2"
+"13" = "adc3"    # auxiliary ADC input 3
+"14" = "vdd"     # supply, 1.71 to 3.6 V
+"15" = "adc2"    # auxiliary ADC input 2
+"16" = "adc1"    # auxiliary ADC input 1
+
+[models.ratings]
+# Table 8: Vdd and Vdd_IO -0.3 to 4.8 V; control pins -0.3 V to Vdd_IO + 0.3 V.
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "ST LIS3DH Doc ID 17530 Rev 1, Table 5, Vdd supply voltage row"
+
+# Table 2: CS "1: I2C mode". Section 6.1.1: SAD is 001100xb; SA0 to supply gives
+# 0011001b (0x19), SA0 to ground 0011000b (0x18).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x18
+address_when_high = 0x19
+spec_toml = '''
+[sensor]
+name = "LIS3DH who_am_i subset"
+bus = "i2c"
+i2c_address = 0x18
+
+# Section 8.6 / Table 21: WHO_AM_I (0Fh) = 0011 0011b.
+[[sensor.register]]
+addr = 0x0F
+const = [0x33]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 5, Vdd min
+idle_a = 0.000011             # Table 5, normal mode 50 Hz typ
+read_a = 0.000011
+write_a = 0.000011
+low_power_a = 0.0000005       # Table 5, IddPdn power-down typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3_vddio", "normal_mode_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "who_am_i_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "acceleration_data", "auxiliary_adc", "temperature_sensor", "power_mode_state", "fifo", "interrupt_engine", "high_odr_supply_current", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn-shop.adafruit.com/datasheets/LIS3DH.pdf"
+title = "STMicroelectronics LIS3DH MEMS digital output motion sensor, Doc ID 17530 Rev 1, May 2010"
+locator = "Table 1; Table 2 Pin description; Table 5; Table 8; Section 6.1.1 I2C operation; Section 8.6 WHO_AM_I"
+sha256 = "eeb1316fcb8b5a6e3fdc4ed191263dd41da503eaf27813ff061df5bb1d186b4b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIS2MDL: STMicroelectronics 3-axis magnetometer, LGA-12 2 x 2 x 0.7 mm.
+#
+# Source: STMicroelectronics "LIS2MDL Digital output magnetic sensor:
+#   ultra-low-power, high-performance 3-axis magnetometer", DocID030621 Rev 5,
+#   November 2018. Table 1 Device summary, Table 2 Pin description, Table 5
+#   Electrical characteristics, Table 9 Absolute maximum ratings, Table 11
+#   Current consumption of operating modes, Section 6.1.1 I2C operation / Table
+#   21 SAD + Read/Write patterns, Section 8.4 WHO_AM_I (4Fh). ST's own host
+#   refused every request from here; the copy read is Rev 5 as mirrored at
+#   cdn.sparkfun.com/assets/d/b/f/b/3/lis2mdl.pdf.
+#
+# FIXED ADDRESS. Unlike the LIS3MDL there is no address pin: Section 6.1.1 gives
+# one slave address, 0011110b (0x1E). CS high selects I2C (Table 2: "1: SPI idle
+# mode / I2C communication enabled").
+#
+# SUPPLY DRAW is the Table 11 ceiling, 1130 uA (high-resolution, offset
+# cancellation on, ODR = 100 Hz); Table 5's headline figure is 200 uA typ at
+# 20 Hz high-resolution, and power-down is 1.5 uA typ. Which mode applies is
+# firmware this entry does not know. Levels: VIH/VIL are fractions of Vdd_IO and
+# VOH is Vdd_IO - 0.2 V (Table 5), evaluated here at Vdd_IO = 3.3 V; VOL is an
+# absolute 0.2 V.
+[[models]]
+id = "lis2mdl"
+kind = "digital"
+description = "ST LIS2MDL 3-axis magnetometer, LGA-12 (CS-selected I2C WHO_AM_I subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# Table 1 Device summary order codes: LIS2MDL (tray), LIS2MDLTR (tape and reel).
+value_re = "(?i)^LIS2MDL(TR)?$"
+
+[models.params]
+# Table 5, evaluated at Vdd_IO = 3.3 V where the row is Vdd_IO-relative.
+voh   = 3.1      # VOH Vdd_IO - 0.2 V min, IOH = 4 mA
+vol   = 0.2      # VOL max, IOL = 4 mA (absolute)
+vih   = 2.31     # VIH 0.7 x Vdd_IO min
+vil   = 0.99     # VIL 0.3 x Vdd_IO max
+supply_static_ua = 1130.0  # Table 11 ceiling (see above)
+supply_pin = "9"           # Vdd
+gnd_pin    = "8"           # GND (0 V)
+
+[models.pins]
+# Table 2 Pin description, all 12 pads.
+"1"  = "scl"     # I2C SCL / SPI SPC
+"2"  = "nc"      # internally not connected; may be tied to Vdd, Vdd_IO or GND
+"3"  = "cs"      # 1: SPI idle / I2C enabled; 0: SPI mode, I2C disabled
+"4"  = "sda"     # I2C SDA / SPI SDI / 3-wire SDO
+"5"  = "c1"      # capacitor connection, C1 = 220 nF
+"6"  = "gnd2"    # connected to GND
+"7"  = "int"     # INT/DRDY, or SDO for 4-wire SPI
+"8"  = "gnd"     # 0 V
+"9"  = "vdd"     # supply, 1.71 to 3.6 V
+"10" = "vddio"   # I/O supply, 1.71 to 3.6 V
+"11" = "nc2"     # internally not connected
+"12" = "nc3"     # internally not connected
+
+[models.ratings]
+# Table 9: Vdd and Vdd_IO -0.3 to 4.8 V; control pins -0.3 V to Vdd_IO + 0.3 V;
+# "Supply voltage on any pin should never exceed 4.8 V."
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "ST LIS2MDL DocID030621 Rev 5, Table 5, Vdd supply voltage row"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.71
+max_v = 3.6
+basis = "ST LIS2MDL DocID030621 Rev 5, Table 5, Vdd_IO module power supply for I/O row"
+
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+spec_toml = '''
+[sensor]
+name = "LIS2MDL who_am_i subset"
+bus = "i2c"
+i2c_address = 0x1E
+
+# Section 8.4 WHO_AM_I (4Fh) = 0100 0000b.
+[[sensor.register]]
+addr = 0x4F
+const = [0x40]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 5, Vdd min
+idle_a = 0.00113              # Table 11 ceiling (see above)
+read_a = 0.00113
+write_a = 0.00113
+low_power_a = 0.0000015       # Table 5, Idd_PD power-down typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3_vddio", "max_mode_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_fixed_address", "register_map_subset", "who_am_i_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "magnetic_field_data", "temperature_sensor", "power_mode_state", "interrupt_engine", "offset_cancellation", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn.sparkfun.com/assets/d/b/f/b/3/lis2mdl.pdf"
+title = "STMicroelectronics LIS2MDL Digital output magnetic sensor, DocID030621 Rev 5, November 2018"
+locator = "Table 1; Table 2 Pin description; Table 5; Table 9; Table 11; Section 6.1.1 I2C operation; Section 8.4 WHO_AM_I"
+sha256 = "ae60c1300c4ac6d412ee49d1d69d3df65711cb6c3fb90cab22e1acc98c820112"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIS3MDL: STMicroelectronics 3-axis magnetometer, LGA-12 2 x 2 x 1 mm.
+#
+# Source: STMicroelectronics "LIS3MDL Digital output magnetic sensor:
+#   ultra-low-power, high-performance 3-axis magnetometer", DocID024204 Rev 4,
+#   May 2015. Table 1 Device summary, Table 2 Pin description, Table 5
+#   Electrical characteristics, Table 8 Absolute maximum ratings, Section 5.1.1
+#   I2C operation / Table 11, Section 7.1 WHO_AM_I (0Fh) / Table 17. ST's host
+#   refused every request from here; the copy read is Rev 4 as mirrored at
+#   pololu.com/file/0J1089/LIS3MDL.pdf.
+#
+# NO LOGIC LEVELS. This revision of the sheet prints no VIH/VIL/VOH/VOL anywhere,
+# so `[models.params]` carries none; the logic-level check abstains on this part
+# rather than reading a borrowed threshold.
+#
+# SUPPLY DRAW is Table 5's ultra-high-resolution figure, 270 uA typ at 20 Hz,
+# the highest current the sheet prints (low-power 40 uA, power-down 1 uA).
+[[models]]
+id = "lis3mdl"
+kind = "digital"
+description = "ST LIS3MDL 3-axis magnetometer, LGA-12 (strap-selected I2C WHO_AM_I subset, pad map and supply draw; no logic levels on the sheet)"
+
+[models.match]
+# Table 1 Device summary order codes: LIS3MDL (tray), LIS3MDLTR (tape and reel).
+value_re = "(?i)^LIS3MDL(TR)?$"
+
+[models.params]
+supply_static_ua = 270.0   # Table 5 Idd_HR typ, ultra-high-resolution, ODR 20 Hz
+supply_pin = "5"           # Vdd
+gnd_pin    = "3"           # GND
+
+[models.pins]
+# Table 2 Pin description, all 12 pads.
+"1"  = "scl"     # I2C SCL / SPI SPC
+"2"  = "rsvd"    # reserved: connect to GND
+"3"  = "gnd"
+"4"  = "c1"      # capacitor connection, C1 = 100 nF
+"5"  = "vdd"     # supply, 1.9 to 3.6 V
+"6"  = "vddio"   # I/O supply, 1.71 V to Vdd + 0.1 V
+"7"  = "int"     # interrupt
+"8"  = "drdy"    # data ready
+"9"  = "sdo"     # SPI SDO; in I2C the address bit SA1 (Section 5.1.1)
+"10" = "cs"      # 1: SPI idle / I2C enabled; 0: SPI mode, I2C disabled
+"11" = "sda"     # I2C SDA / SPI SDI / 3-wire SDO
+"12" = "rsvd2"   # reserved: connect to GND
+
+[models.ratings]
+# Table 8: Vdd and Vdd_IO -0.3 to 4.8 V; control pins -0.3 V to Vdd_IO + 0.3 V;
+# "Supply voltage on any pin should never exceed 4.8 V."
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.9
+max_v = 3.6
+basis = "ST LIS3MDL DocID024204 Rev 4, Table 5, Vdd supply voltage row"
+
+# Table 2: CS high enables I2C. Section 5.1.1: SAD is 00111x0b; SDO/SA1 to
+# supply gives 0011110b (0x1E), to ground 0011100b (0x1C).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x1C
+address_when_high = 0x1E
+spec_toml = '''
+[sensor]
+name = "LIS3MDL who_am_i subset"
+bus = "i2c"
+i2c_address = 0x1C
+
+# Section 7.1 / Table 17: WHO_AM_I (0Fh) = 0011 1101b.
+[[sensor.register]]
+addr = 0x0F
+const = [0x3D]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.9    # Table 5, Vdd min
+idle_a = 0.00027              # Table 5, Idd_HR typ
+read_a = 0.00027
+write_a = 0.00027
+low_power_a = 0.000001        # Table 5, Idd_PD power-down typ
+
+[models.coverage]
+implements = ["pin_roles", "high_resolution_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "who_am_i_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["logic_levels", "full_register_map", "spi_register_map", "magnetic_field_data", "temperature_sensor", "power_mode_state", "interrupt_engine", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.pololu.com/file/0J1089/LIS3MDL.pdf"
+title = "STMicroelectronics LIS3MDL Digital output magnetic sensor, DocID024204 Rev 4, May 2015"
+locator = "Table 1; Table 2 Pin description; Table 5; Table 8; Section 5.1.1 I2C operation; Section 7.1 WHO_AM_I"
+sha256 = "25a64d1f772da769a0959d9d2abb259a8c3e7a175af845ce9c92a2d51dc08176"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LSM6DS3: STMicroelectronics 6-axis IMU (accelerometer + gyroscope), LGA-14L
+# 2.5 x 3 x 0.83 mm.
+#
+# Source: STMicroelectronics "LSM6DS3 iNEMO inertial module: always-on 3D
+#   accelerometer and 3D gyroscope", DocID026899 Rev 4, April 2015. Table 1 Device summary,
+#   Table 2 Pin description, Table 4 Electrical characteristics, Table 8
+#   Absolute maximum ratings, Section 6.1.1 I2C operation, Section 9.11
+#   WHO_AM_I (0Fh) / Table 44. ST's host refused every request from here; the
+#   copy read is Rev 4 as mirrored by SparkFun (DM00133076.pdf).
+#
+# NOT THE LSM6DS3TR-C. That later part shares the LGA-14L footprint and pinout
+# but is a different die (its WHO_AM_I is 0x6A, not 0x69) and is excluded by the
+# anchor. The value string is all the binder has: a board whose schematic says
+# "LSM6DS3" but fitted the TR-C would read the wrong ID through this entry.
+#
+# NO LOGIC LEVELS: this sheet prints no VIH/VIL/VOH/VOL, so none are carried and
+# the logic-level check abstains on this part. SUPPLY DRAW is the Table 4
+# high-performance figure for gyroscope + accelerometer, 1.25 mA typ (up to
+# ODR = 1.6 kHz), the highest the sheet prints; power-down is 6 uA typ.
+[[models]]
+id = "lsm6ds3"
+kind = "digital"
+description = "ST LSM6DS3 6-axis IMU, LGA-14L (strap-selected I2C WHO_AM_I subset, pad map and supply draw; no logic levels on the sheet)"
+
+[models.match]
+# Table 1 Device summary: LSM6DS3 (tray) and LSM6DS3TR (tape and reel). The
+# anchor rejects LSM6DS3TR-C and LSM6DS33 (separate entries / different dies).
+value_re = "(?i)^LSM6DS3(TR)?$"
+
+[models.params]
+supply_static_ua = 1250.0  # Table 4 IddHP typ, gyro + accel high-performance
+supply_pin = "8"           # VDD
+gnd_pin    = "6"           # GND
+
+[models.pins]
+# Table 2 Pin description (LGA-14L), all 14 pads; mode 1 (primary I2C/SPI with
+# the auxiliary master unused) named, other modes in the comments.
+"1"  = "sdo"     # SPI SDO; in I2C the address LSB SA0 (Section 6.1.1)
+"2"  = "sdx"     # mode 1: connect to VDDIO or GND; mode 2: master I2C MSDA
+"3"  = "scx"     # mode 1: connect to VDDIO or GND; mode 2: master I2C MSCL
+"4"  = "int1"    # programmable interrupt 1
+"5"  = "vddio"   # I/O supply, 1.62 V to Vdd + 0.1 V
+"6"  = "gnd"
+"7"  = "gnd2"
+"8"  = "vdd"     # supply, 1.71 to 3.6 V
+"9"  = "int2"    # programmable interrupt 2 / DEN
+"10" = "ocs"     # mode 1/2: leave unconnected; mode 3: aux SPI enable
+"11" = "nc"      # leave unconnected
+"12" = "cs"      # 1: SPI idle / I2C enabled; 0: SPI mode, I2C disabled
+"13" = "scl"     # I2C SCL / SPI SPC
+"14" = "sda"     # I2C SDA / SPI SDI
+
+[models.ratings]
+# Table 8: Vdd -0.3 to 4.8 V; control pins to Vdd_IO + 0.3 V; "Supply voltage on
+# any pin should never exceed 4.8 V."
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "ST LSM6DS3 DocID026899 Rev 4, Table 4, Vdd supply voltage row"
+
+# Table 2: CS high enables I2C. Section 6.1.1: SAD 110101xb; SDO/SA0 to supply
+# gives 1101011b (0x6B), to ground 1101010b (0x6A).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x6A
+address_when_high = 0x6B
+spec_toml = '''
+[sensor]
+name = "LSM6DS3 who_am_i subset"
+bus = "i2c"
+i2c_address = 0x6A
+
+# Section 9.11: WHO_AM_I (0Fh), read-only, "Its value is fixed at 69h."
+[[sensor.register]]
+addr = 0x0F
+const = [0x69]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 4, Vdd min
+idle_a = 0.00125              # Table 4, IddHP typ
+read_a = 0.00125
+write_a = 0.00125
+low_power_a = 0.000006        # Table 4, IddPD power-down typ
+
+[models.coverage]
+implements = ["pin_roles", "high_performance_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "who_am_i_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["logic_levels", "full_register_map", "spi_register_map", "acceleration_data", "angular_rate_data", "power_mode_state", "fifo", "interrupt_engine", "embedded_functions", "sensor_hub_i2c_master", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn.sparkfun.com/assets/learn_tutorials/4/1/6/DM00133076.pdf"
+title = "STMicroelectronics LSM6DS3 iNEMO inertial module, DocID026899 Rev 4, April 2015"
+locator = "Table 1; Table 2 Pin description; Table 4; Table 8; Section 6.1.1 I2C operation; Section 9.11 WHO_AM_I"
+sha256 = "ec33c24904ddeeb246f04cdf714af5d0ebaacb637c9936f45bb9b3963f88af51"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LSM6DS33: STMicroelectronics 6-axis IMU, LGA-16L 3 x 3 x 0.86 mm.
+#
+# Source: STMicroelectronics "LSM6DS33 iNEMO inertial module: always-on 3D
+#   accelerometer and 3D gyroscope", DocID027423 Rev 4, October 2015. Device summary, Table 2
+#   Pin description, Table 4 Electrical characteristics, Table 8 Absolute
+#   maximum ratings, Section 6.1.1 I2C operation, Section 9.10 WHO_AM_I (0Fh) /
+#   Table 41. Copy read as mirrored at pololu.com/file/0J1087/LSM6DS33.pdf.
+#
+# Same die behaviour as the LSM6DS3 above (same WHO_AM_I, same address scheme,
+# same Table 4 currents) in a DIFFERENT 16-pad package with a different pinout,
+# hence its own entry. No logic levels are printed, so none are carried.
+[[models]]
+id = "lsm6ds33"
+kind = "digital"
+description = "ST LSM6DS33 6-axis IMU, LGA-16L (strap-selected I2C WHO_AM_I subset, pad map and supply draw; no logic levels on the sheet)"
+
+[models.match]
+# Device summary: LSM6DS33 (tray) and LSM6DS33TR (tape and reel).
+value_re = "(?i)^LSM6DS33(TR)?$"
+
+[models.params]
+supply_static_ua = 1250.0  # Table 4 IddHP typ, gyro + accel high-performance
+supply_pin = "16"          # VDD
+gnd_pin    = "12"          # GND
+
+[models.pins]
+# Table 2 Pin description (LGA-16L), all 16 pads.
+"1"  = "vddio"   # I/O supply, 1.62 V to Vdd + 0.1 V
+"2"  = "scl"     # I2C SCL / SPI SPC
+"3"  = "sda"     # I2C SDA / SPI SDI / 3-wire SDO
+"4"  = "sdo"     # SPI SDO; in I2C the address LSB SA0 (Section 6.1.1)
+"5"  = "cs"      # 1: SPI idle / I2C enabled; 0: SPI mode, I2C disabled
+"6"  = "int2"    # programmable interrupt
+"7"  = "int1"    # programmable interrupt
+"8"  = "res"     # reserved, connect to GND
+"9"  = "res2"    # reserved, connect to GND
+"10" = "res3"    # reserved, connect to GND
+"11" = "res4"    # reserved, connect to GND
+"12" = "gnd"
+"13" = "gnd2"
+"14" = "nc"      # leave unconnected
+"15" = "res5"    # reserved, connect to GND
+"16" = "vdd"     # supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 8: Vdd -0.3 to 4.8 V; control pins to Vdd_IO + 0.3 V; "Supply Voltage on
+# any pin should never exceed 4.8 V."
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "ST LSM6DS33 DocID027423 Rev 4, Table 4, Vdd supply voltage row"
+
+# Table 2: CS high enables I2C. Section 6.1.1: SAD 110101xb; SDO/SA0 to supply
+# gives 0x6B, to ground 0x6A.
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x6A
+address_when_high = 0x6B
+spec_toml = '''
+[sensor]
+name = "LSM6DS33 who_am_i subset"
+bus = "i2c"
+i2c_address = 0x6A
+
+# Section 9.10: WHO_AM_I (0Fh), read-only, "Its value is fixed at 69h."
+[[sensor.register]]
+addr = 0x0F
+const = [0x69]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 4, Vdd min
+idle_a = 0.00125              # Table 4, IddHP typ
+read_a = 0.00125
+write_a = 0.00125
+low_power_a = 0.000006        # Table 4, IddPD power-down typ
+
+[models.coverage]
+implements = ["pin_roles", "high_performance_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "who_am_i_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["logic_levels", "full_register_map", "spi_register_map", "acceleration_data", "angular_rate_data", "power_mode_state", "fifo", "interrupt_engine", "embedded_functions", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.pololu.com/file/0J1087/LSM6DS33.pdf"
+title = "STMicroelectronics LSM6DS33 iNEMO inertial module, DocID027423 Rev 4, October 2015"
+locator = "Device summary; Table 2 Pin description; Table 4; Table 8; Section 6.1.1 I2C operation; Section 9.10 WHO_AM_I"
+sha256 = "96973195e7b425c7d66b6ab941cf6c7a0ab04ecd0bc61f78ec04f5362893048b"
