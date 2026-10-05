@@ -65,7 +65,7 @@ pub struct PlainFinding {
     pub loc_mm: Option<[f64; 2]>,
     /// The one part this finding is about, when it names exactly one. Findings
     /// that read the same for different parts print once in the text report
-    /// ([`write_findings`]); everything else leaves it `None` and prints alone.
+    /// (`write_findings`); everything else leaves it `None` and prints alone.
     pub part: Option<String>,
 }
 

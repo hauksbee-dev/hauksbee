@@ -626,7 +626,7 @@ pub struct TimedOut(pub String, pub u64, pub Option<PathBuf>);
 ///
 /// Distinct from [`TimedOut`]: the run had not used its time budget, it had
 /// gone silent (measured: codex calls stalling about 310 s with no event).
-/// [`validated_attempts`] retries it once and discloses that it did.
+/// `validated_attempts` retries it once and discloses that it did.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0} emitted no event for {1}s and was killed")]
 pub struct IdleStalled(pub String, pub u64);

@@ -708,7 +708,7 @@ fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
 /// Is this component a capacitor (decoupling, bulk or crystal load)?
 ///
 /// Its presence to ground makes a net read as a local supply rail. Delegates
-/// to the same evidence ladder as [`is_resistor`], so the capacitor and
+/// to the same evidence ladder as `is_resistor`, so the capacitor and
 /// resistor questions stay consistent about any one part.
 #[must_use]
 pub fn is_capacitor(c: &Component) -> bool {

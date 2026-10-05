@@ -367,7 +367,7 @@ impl Derating {
 /// so does the least favourable package (the card does not know the
 /// footprint). Whole-part rows rate the part; per-path rows only when there
 /// are no whole-part ones. A thermal resistance has no temperature: its
-/// highest row left. `None` when no row is tagged or [`read_rows`] refuses
+/// highest row left. `None` when no row is tagged or `read_rows` refuses
 /// them, leaving the scalar as written.
 #[must_use]
 pub fn standard_rating(entry: &ModelEntry, key: &str) -> Option<f64> {
