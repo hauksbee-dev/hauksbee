@@ -661,19 +661,23 @@ impl TraceAudit {
             .min_by(rank_bottleneck)
     }
 
+    /// One track of width `w` on `layer`, rated with that layer's copper basis.
+    #[must_use]
+    pub fn rate(&self, layer: Option<&str>, w: f64) -> Bottleneck {
+        let (oz, external, source) = self.copper_for(layer);
+        Bottleneck {
+            layer: layer.map(std::string::ToString::to_string),
+            width_mm: w,
+            ampacity_a: ipc2221_ampacity(w, oz, self.dt_c, external),
+            oz,
+            external,
+            copper_source: source,
+        }
+    }
+
     /// Every (layer, narrowest width) pair on the net, rated.
     fn rated_candidates(&self, nc: &NetCopper) -> Vec<Bottleneck> {
-        let rate = |layer: Option<&str>, w: f64| {
-            let (oz, external, source) = self.copper_for(layer);
-            Bottleneck {
-                layer: layer.map(std::string::ToString::to_string),
-                width_mm: w,
-                ampacity_a: ipc2221_ampacity(w, oz, self.dt_c, external),
-                oz,
-                external,
-                copper_source: source,
-            }
-        };
+        let rate = |layer: Option<&str>, w: f64| self.rate(layer, w);
         if nc.min_width_by_layer.is_empty() {
             return nc
                 .min_trace_width_mm

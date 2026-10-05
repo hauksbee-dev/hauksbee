@@ -43,6 +43,9 @@ use hauksbee_bind::program_resistor::{
 };
 use hauksbee_bind::{binder::resolve, component_evidence::role_net};
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
+use hauksbee_extract::drc::connectivity::{path_neck_from_text, PathNeck};
+use hauksbee_extract::trace_current::Bottleneck;
+use hauksbee_extract::Component;
 
 /// Direction of a regulated through-current at one of a component's rail pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -526,6 +529,83 @@ fn is_switch_role(role: &str) -> bool {
             .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Fitted inductors with a pin on the switch node `sw`.
+fn switch_inductors(board: &ExtractedBoard, sw: i64) -> impl Iterator<Item = &Component> {
+    board
+        .components
+        .iter()
+        .filter(|c| AssemblyState::of(c).is_present() && hauksbee_extract::is_plain_inductor(c))
+        .filter(move |c| c.pins.iter().any(|p| p.net == Some(sw)))
+}
+
+/// A switch-node track's copper weight, IPC-2221 rating and the basis to
+/// print. With no declared weight the track is rated as 2 oz, so an assumed
+/// weight can only suppress the finding, never create it.
+fn switch_rating(audit: &TraceAudit, b: &Bottleneck) -> (f64, f64, String) {
+    let (oz, basis) = if b.copper_source.is_assumed() {
+        (2.0, "2 oz, the copper weight was not declared".to_string())
+    } else {
+        (b.oz, hauksbee_extract::trace_current::describe_oz(b.oz))
+    };
+    let ampacity = hauksbee_extract::ipc2221_ampacity(b.width_mm, oz, audit.dt_c, b.external);
+    (oz, ampacity, basis)
+}
+
+/// The smallest inductor ripple a buck is designed with, as a fraction of its
+/// load current. TI SLVA477B ("Basic Calculation of a Buck Converter's Power
+/// Stage", section 3) puts the usual choice at 20 % to 40 % of the output
+/// current; the low end gives the largest load a chosen inductance implies.
+const MIN_RIPPLE_RATIO: f64 = 0.2;
+
+/// The largest load current the switch node's inductor implies, with how it
+/// was reached. `None` when the card states no switching frequency, the output
+/// voltage is board-programmed (not the card's own), or an inductor's value
+/// does not read as an inductance.
+///
+/// A buck's inductor is sized for its load: the ripple it allows is
+/// `vout * (1 - vout / vin) / (L * f_sw)`, below `vout / (L * f_sw)` at any input,
+/// and designers keep it at no less than [`MIN_RIPPLE_RATIO`] of the load. So
+/// the load the design was built for is at most `vout / (0.2 * L * f_sw)`.
+/// Every step leans high (the input-free ripple bound, the low ripple ratio),
+/// so this ceiling can only relax the rated-current rule where the inductor
+/// shows the design was never meant to run near the converter's rating.
+fn inductor_implied_load(
+    board: &ExtractedBoard,
+    sw: i64,
+    conv: &hauksbee_models::behavioral::Converter,
+) -> Option<(f64, String)> {
+    let fsw = conv.switching_hz.filter(|f| f.is_finite() && *f > 0.0)?;
+    let fixed_output = conv
+        .feedback
+        .as_ref()
+        .is_none_or(|fb| (fb.vref_v - conv.vout_setpoint).abs() < 1e-6);
+    let vout = Some(conv.vout_setpoint).filter(|v| fixed_output && v.is_finite() && *v > 0.0)?;
+    let henries: Vec<(String, f64)> = switch_inductors(board, sw)
+        .map(|c| {
+            hauksbee_models::value::parse_value(&c.value)
+                .filter(|p| {
+                    p.unit
+                        .as_deref()
+                        .is_none_or(|u| u.eq_ignore_ascii_case("H"))
+                })
+                .map(|p| (c.reference.clone(), p.si))
+                .filter(|(_, l)| l.is_finite() && *l > 0.0)
+        })
+        .collect::<Option<_>>()?;
+    let (inductor, l) = henries.into_iter().min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let load = vout / (MIN_RIPPLE_RATIO * l * fsw);
+    Some((
+        load,
+        format!(
+            "the {load:.2} A its inductor {inductor} implies ({:.0} uH at {:.0} kHz and \
+             {vout:.1} V out, with ripple at least {:.0} % of load)",
+            l * 1e6,
+            fsw / 1e3,
+            MIN_RIPPLE_RATIO * 100.0
+        ),
+    ))
+}
+
 /// The output rail behind a switch node: the far net of a fitted inductor on
 /// it, with its bottleneck width (infinite when poured). `None` when there is
 /// no such inductor or the rail has no copper, so there is nothing to compare.
@@ -535,11 +615,7 @@ fn output_rail_width(
     by_name: &HashMap<&str, &hauksbee_extract::NetCopper>,
     audit: &TraceAudit,
 ) -> Option<(String, f64)> {
-    board
-        .components
-        .iter()
-        .filter(|c| AssemblyState::of(c).is_present() && hauksbee_extract::is_plain_inductor(c))
-        .filter(|c| c.pins.iter().any(|p| p.net == Some(sw)))
+    switch_inductors(board, sw)
         .filter_map(|c| c.pins.iter().find_map(|p| p.net.filter(|&n| n != sw)))
         .filter_map(|id| board.net(id))
         .filter_map(|rail| {
@@ -569,10 +645,19 @@ fn output_rail_width(
 /// whole power path at one width (switch node and output rail alike) made a
 /// board-wide sizing choice the rated current cannot prove wrong, so the
 /// finding needs the switch node to be the odd one out: narrower than the
-/// output rail on the far side of the inductor.
+/// output rail on the far side of the inductor. Where the inductor's value and
+/// the card's switching frequency bound the load the design was built for
+/// ([`inductor_implied_load`]) below half the rating, that bound is the current
+/// judged instead.
+///
+/// The width judged is the weakest track on the path between the converter's
+/// switch pads and the inductor, not the narrowest segment anywhere on the
+/// net: the bootstrap capacitor hangs off the same node on a thin stub that
+/// carries gate-drive charge, not the inductor current.
 fn switch_node_findings(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
+    text: &str,
     copper: &[hauksbee_extract::NetCopper],
     audit: &TraceAudit,
 ) -> Vec<SiFinding> {
@@ -604,18 +689,51 @@ fn switch_node_findings(
         else {
             continue;
         };
-        let Some(b) = audit.bottleneck(nc) else {
+        let Some(mut b) = audit.bottleneck(nc) else {
             continue;
         };
-        let (oz, basis) = if b.copper_source.is_assumed() {
-            (2.0, "2 oz, the copper weight was not declared".to_string())
-        } else {
-            (b.oz, hauksbee_extract::trace_current::describe_oz(b.oz))
+        // The current to size against: half the rating, unless the inductor
+        // shows the design was built for less.
+        let (size_a, size_basis) = match inductor_implied_load(board, net.id, conv) {
+            Some((load, why)) if load < rated / 2.0 => (load, why),
+            _ => (
+                rated / 2.0,
+                "half the converter's rated output current".to_string(),
+            ),
         };
-        let ampacity = hauksbee_extract::ipc2221_ampacity(b.width_mm, oz, audit.dt_c, b.external);
-        if ampacity <= 0.0 || ampacity * 2.0 >= rated {
+        let thin = |b: &Bottleneck| {
+            let a = switch_rating(audit, b).1;
+            a > 0.0 && a < size_a
+        };
+        if !thin(&b) {
             continue;
         }
+        // The net-wide bottleneck can sit on a branch the inductor current
+        // never enters (the bootstrap capacitor's stub). Judge the copper
+        // between the converter's switch pads and the inductor instead, when
+        // the layout lets that path be traced; otherwise keep the net-wide
+        // figure, which can only be narrower.
+        let ends = |c: &Component| -> Vec<(String, String)> {
+            c.pins
+                .iter()
+                .filter(|p| p.net == Some(net.id))
+                .map(|p| (c.reference.clone(), p.number.clone()))
+                .collect()
+        };
+        let inductors: Vec<(String, String)> =
+            switch_inductors(board, net.id).flat_map(&ends).collect();
+        let rating = |layer: &str, w: f64| switch_rating(audit, &audit.rate(Some(layer), w)).1;
+        match path_neck_from_text(text, &net.name, &ends(comp), &inductors, &rating) {
+            Some(PathNeck::Untracked) => continue,
+            Some(PathNeck::Track { layer, width_mm }) => {
+                b = audit.rate(Some(&layer), width_mm);
+                if !thin(&b) {
+                    continue;
+                }
+            }
+            None => {}
+        }
+        let (oz, ampacity, basis) = switch_rating(audit, &b);
         let Some(rail) = output_rail_width(board, net.id, &by_name, audit) else {
             continue;
         };
@@ -632,8 +750,8 @@ fn switch_node_findings(
             severity: SiSeverity::Medium,
             message: format!(
                 "switch node '{}' of {} ({}, a {rated:.1} A buck) is routed at {:.2} mm, which \
-                 IPC-2221 rates at {ampacity:.2} A ({basis}, {:.0} C rise), under half the \
-                 converter's rated output current, while its output rail '{}' is routed at \
+                 IPC-2221 rates at {ampacity:.2} A ({basis}, {:.0} C rise), under {size_basis}, \
+                 while its output rail '{}' is routed at \
                  {rail_text}. The switch node carries the full inductor current while the \
                  switch is on, so it is the narrowest point of the power path; it needs >= \
                  {:.2} mm for {rated:.1} A.",
@@ -673,6 +791,7 @@ pub fn append_ampacity(
     report.findings.extend(switch_node_findings(
         board,
         lib,
+        text,
         &copper,
         &TraceAudit::from_pcb_text(text),
     ));
@@ -1289,9 +1408,14 @@ sense_full_scale_v = 0.05
         }
     }
 
-    #[test]
-    fn a_buck_switch_node_on_a_thin_trace_is_a_warning() {
-        let toml_src = r#"
+    /// The switch-node check on a 3 A, 5 V test buck (U1, switch pin 2) whose
+    /// inductor L1 (`henries`) joins the switch node SWN to +5V. `card_extra`
+    /// is appended to the converter block.
+    fn switch_node_run(card_extra: &str, henries: &str, text: &str) -> Vec<SiFinding> {
+        // One model directory per call: tests share a process under `cargo test`.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let toml_src = format!(
+            r#"
 [[models]]
 id = "test_buck"
 kind = "vreg"
@@ -1312,8 +1436,11 @@ out_pin = "sw"
 in_pin = "in"
 vout_setpoint = 5.0
 iout_limit_a = 3.0
-"#;
-        let lib = lib_from("switch_node", toml_src);
+{card_extra}
+"#
+        );
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let lib = lib_from(&format!("switch_node_{call}"), &toml_src);
         let board = board(
             "buck",
             &[(1, "+12V"), (2, "SWN"), (3, "GND"), (4, "+5V")],
@@ -1326,27 +1453,35 @@ iout_limit_a = 3.0
                 ),
                 comp(
                     "L1",
-                    "10uH",
+                    henries,
                     "Inductor_SMD:L_Bourns_SRR1260",
                     &[("1", 2), ("2", 4)],
                 ),
             ],
         );
-        let segment = |width: f64, net: &str| {
-            format!(
-                "(segment (start 0 0) (end 5 0) (width {width}) (layer \"F.Cu\") (net \"{net}\"))"
-            )
-        };
+        let copper = net_copper_from_text(text);
+        switch_node_findings(
+            &board,
+            &lib,
+            text,
+            &copper,
+            &TraceAudit::from_pcb_text(text),
+        )
+    }
+
+    fn segment(width: f64, net: &str) -> String {
+        format!("(segment (start 0 0) (end 5 0) (width {width}) (layer \"F.Cu\") (net \"{net}\"))")
+    }
+
+    #[test]
+    fn a_buck_switch_node_on_a_thin_trace_is_a_warning() {
+        let run = |text: &str| switch_node_run("", "10uH", text);
         let pcb = |sw: f64, rail: f64| {
             format!(
                 "(kicad_pcb {} {})",
                 segment(sw, "SWN"),
                 segment(rail, "+5V")
             )
-        };
-        let run = |text: &str| {
-            let copper = net_copper_from_text(text);
-            switch_node_findings(&board, &lib, &copper, &TraceAudit::from_pcb_text(text))
         };
         // A name-only net reference (KiCad 10 has no net table) still resolves.
         let thin = run(&pcb(0.2, 1.0));
@@ -1372,6 +1507,60 @@ iout_limit_a = 3.0
             run(&poured).is_empty(),
             "a poured switch node is out of reach"
         );
+    }
+
+    /// With pads placed, the switch node is judged on the copper between U1's
+    /// switch pad (0,0) and L1 (5,0), not on the bootstrap stub to C1 at (0,3),
+    /// which carries gate-drive charge rather than the inductor current.
+    #[test]
+    fn a_bootstrap_stub_off_the_switch_path_is_not_judged() {
+        let pad = |r: &str, n: &str, x: f64, y: f64| {
+            format!(
+                "(footprint \"X\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{r}\") \
+                 (pad \"{n}\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net \"SWN\")))"
+            )
+        };
+        let routed = |path: f64, stub: f64| {
+            format!(
+                "(kicad_pcb {} {} {} {} (segment (start 0 0) (end 0 3) (width {stub}) \
+                 (layer \"F.Cu\") (net \"SWN\")) {})",
+                pad("U1", "2", 0.0, 0.0),
+                pad("L1", "1", 5.0, 0.0),
+                pad("C1", "1", 0.0, 3.0),
+                segment(path, "SWN"),
+                segment(1.0, "+5V")
+            )
+        };
+        assert!(
+            switch_node_run("", "10uH", &routed(0.8, 0.2)).is_empty(),
+            "a thin bootstrap stub is off the inductor current's path"
+        );
+        let on_path = switch_node_run("", "10uH", &routed(0.2, 0.8));
+        assert_eq!(on_path.len(), 1, "{on_path:?}");
+        assert!(
+            on_path[0].message.contains("0.20 mm"),
+            "{}",
+            on_path[0].message
+        );
+    }
+
+    /// A large inductor shows the buck was built for far less than its rating,
+    /// and the switch node is judged against that load instead.
+    #[test]
+    fn a_buck_inductor_bounds_the_switch_node_load() {
+        let text = format!(
+            "(kicad_pcb {} {})",
+            segment(0.2, "SWN"),
+            segment(1.0, "+5V")
+        );
+        let fsw = "switching_hz = 500e3";
+        // 10 uH at 500 kHz allows up to 5 A, above half the rating: still flagged.
+        assert_eq!(switch_node_run(fsw, "10uH", &text).len(), 1);
+        // 220 uH at 500 kHz implies at most 0.23 A, which 0.2 mm carries.
+        let relaxed = switch_node_run(fsw, "220uH", &text);
+        assert!(relaxed.is_empty(), "{relaxed:?}");
+        // Without a stated switching frequency the inductor proves nothing.
+        assert_eq!(switch_node_run("", "220uH", &text).len(), 1);
     }
 
     /// A fixed LDO's current rating is a capability, never a cited load.

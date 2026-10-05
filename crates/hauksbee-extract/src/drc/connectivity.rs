@@ -509,3 +509,249 @@ pub fn copper_connectivity_from_text(text: &str) -> Option<CopperConnectivity> {
         .ok()
         .and_then(|doc| copper_connectivity(&doc))
 }
+
+/// The weakest copper on the best-rated path a current takes between two
+/// groups of pads of one net.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PathNeck {
+    /// The pads are joined without any track limiting the path: they touch,
+    /// or fills, vias and net graphics carry the current the whole way.
+    Untracked,
+    /// The lowest-rated track (or arc) on the best path.
+    Track { layer: String, width_mm: f64 },
+}
+/// The weakest track on the best path between two groups of pads of a net.
+///
+/// `from` and `to` name pads as `(reference, pad number)`. `None` when the
+/// board is not a readable `.kicad_pcb`, a pad cannot be found, or copper
+/// does not join the two groups.
+///
+/// A net's narrowest segment is not always on the path its current takes. A
+/// buck switch node also reaches its bootstrap capacitor, and that branch
+/// carries the gate-drive charge, not the inductor current, so rating the
+/// node by its narrowest segment judges a stub that the load current never
+/// enters. This finds the path whose weakest track is strongest (a widest-path
+/// search: every route is a candidate, and the best one bounds what the board
+/// can carry from end to end) and names that weakest track. `rating` turns
+/// a track's layer and width into the figure to compare (an ampacity), so a
+/// wide track on thin inner copper ranks below a narrower one outside. Pads,
+/// vias, fills and net graphics are not limited here: their capacity is a
+/// different question from a track's.
+#[must_use]
+pub fn path_neck_from_text(
+    text: &str,
+    net: &str,
+    from: &[(String, String)],
+    to: &[(String, String)],
+    rating: &dyn Fn(&str, f64) -> f64,
+) -> Option<PathNeck> {
+    let doc = forge_sexpr::parse(text).ok()?;
+    let root = doc.root().filter(|r| r.name() == Some("kicad_pcb"))?;
+    if renamed_copper(root) {
+        return None;
+    }
+    let mut nets = NetResolver::from_root(root);
+    let mut buckets = collect_primitives(root, &mut nets);
+    push_net_graphics(root, &mut nets, &mut buckets);
+    spread_through_holes(&mut buckets, &super::copper_layers_of(root));
+    let net_id = *nets.by_name.get(&crate::netname::unescape_net_name(net))?;
+    let items = &buckets.items;
+    let pad_set = |pads: &[(String, String)]| -> Vec<usize> {
+        (0..items.len())
+            .filter(|&i| {
+                let m = &items[i];
+                m.net == net_id
+                    && m.kind == Some(ItemKind::Pad)
+                    && m.copper != Copper::None
+                    && pads.iter().any(|(r, n)| *r == m.owner && *n == m.pad)
+            })
+            .collect()
+    };
+    let (sources, sinks) = (pad_set(from), pad_set(to));
+    if sources.is_empty() || sinks.is_empty() {
+        return None;
+    }
+    let graph = NetGraph::build(&buckets, net_id, rating);
+    let best = graph.widest_from(&sources);
+    let reached = sinks
+        .iter()
+        .filter_map(|t| best.get(t))
+        .max_by(|a, b| a.0.total_cmp(&b.0))?;
+    Some(
+        match reached.1.and_then(|n| graph.limit.get(&n)?.1.clone()) {
+            Some((layer, width_mm)) => PathNeck::Track { layer, width_mm },
+            None => PathNeck::Untracked,
+        },
+    )
+}
+
+/// One net's copper as a graph of board items that touch.
+struct NetGraph {
+    /// Each item's own limit, with the track behind it: a track's rating on
+    /// its layer; unlimited for anything else.
+    limit: HashMap<usize, (f64, Option<(String, f64)>)>,
+    adjacent: HashMap<usize, HashSet<usize>>,
+}
+
+impl NetGraph {
+    fn build(buckets: &super::LayerBuckets, net: i64, rating: &dyn Fn(&str, f64) -> f64) -> Self {
+        let items = &buckets.items;
+        let mut g = Self {
+            limit: HashMap::new(),
+            adjacent: HashMap::new(),
+        };
+        let reach = 2.0f64.mul_add(items.iter().map(|m| m.slack).fold(0.0, f64::max), TOUCH_MM);
+        for (layer, all) in &buckets.by_layer {
+            let prims: Vec<&super::Primitive> = all
+                .iter()
+                .filter(|p| p.net == net && items[p.item].copper != Copper::None)
+                .collect();
+            for p in &prims {
+                let own = match (&p.shape, items[p.item].kind) {
+                    (Shape::Capsule(c), Some(ItemKind::Track | ItemKind::Arc)) => {
+                        let width = 2.0 * c.r;
+                        (rating(layer, width), Some((layer.clone(), width)))
+                    }
+                    _ => (f64::INFINITY, None),
+                };
+                g.limit.entry(p.item).or_insert(own);
+            }
+            for (i, p) in prims.iter().enumerate() {
+                for q in &prims[i + 1..] {
+                    let apart = p.bounds[0] > q.bounds[2] + reach
+                        || q.bounds[0] > p.bounds[2] + reach
+                        || p.bounds[1] > q.bounds[3] + reach
+                        || q.bounds[1] > p.bounds[3] + reach;
+                    if p.item == q.item || apart {
+                        continue;
+                    }
+                    let (gap, _) = shape_gap_at(&p.shape, &q.shape);
+                    if gap <= TOUCH_MM + items[p.item].slack + items[q.item].slack {
+                        g.join(p.item, q.item);
+                    }
+                }
+            }
+            // Copper wholly inside a same-net fill never meets its outline.
+            let fills = buckets.zones.get(layer).map_or(&[][..], Vec::as_slice);
+            for z in fills.iter().filter(|z| z.filled && z.net == net) {
+                for p in prims.iter().filter(|p| p.kind != ItemKind::Zone) {
+                    let (x, y) = p.shape.center();
+                    if x >= z.bounds[0]
+                        && x <= z.bounds[2]
+                        && y >= z.bounds[1]
+                        && y <= z.bounds[3]
+                        && point_in_polygon(x, y, &z.pts)
+                    {
+                        g.join(p.item, z.item);
+                    }
+                }
+            }
+        }
+        g
+    }
+
+    fn join(&mut self, a: usize, b: usize) {
+        self.adjacent.entry(a).or_default().insert(b);
+        self.adjacent.entry(b).or_default().insert(a);
+    }
+
+    /// Widest-path search from `sources`: for each item reached, the strongest
+    /// bottleneck any route arrives with, and the item that sets it.
+    fn widest_from(&self, sources: &[usize]) -> HashMap<usize, (f64, Option<usize>)> {
+        let mut best: HashMap<usize, (f64, Option<usize>)> = HashMap::new();
+        let mut frontier: Vec<usize> = Vec::new();
+        for &s in sources {
+            best.insert(s, (f64::INFINITY, None));
+            frontier.push(s);
+        }
+        let mut done: HashSet<usize> = HashSet::new();
+        while let Some(pos) = (0..frontier.len())
+            .max_by(|&a, &b| best[&frontier[a]].0.total_cmp(&best[&frontier[b]].0))
+        {
+            let u = frontier.swap_remove(pos);
+            if !done.insert(u) {
+                continue;
+            }
+            let (cap_u, neck_u) = best[&u];
+            for &v in self.adjacent.get(&u).into_iter().flatten() {
+                if done.contains(&v) {
+                    continue;
+                }
+                let own = self.limit.get(&v).map_or(f64::INFINITY, |l| l.0);
+                let cand = if own < cap_u {
+                    (own, Some(v))
+                } else {
+                    (cap_u, neck_u)
+                };
+                if best.get(&v).is_none_or(|b| cand.0 > b.0) {
+                    best.insert(v, cand);
+                    frontier.push(v);
+                }
+            }
+        }
+        best
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    fn board(stub_w: f64, path_w: f64) -> String {
+        // U1 pad 2 (switch) at (0,0) runs to L1 pad 1 at (10,0); a stub from
+        // the switch pad reaches C1 pad 1 at (0,3).
+        format!(
+            "(kicad_pcb (version 20221018) (net 0 \"\") (net 1 \"SW\") \
+             (footprint \"U\" (layer \"F.Cu\") (at 0 0) (property \"Reference\" \"U1\") \
+               (pad \"2\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"SW\"))) \
+             (footprint \"L\" (layer \"F.Cu\") (at 10 0) (property \"Reference\" \"L1\") \
+               (pad \"1\" smd rect (at 0 0) (size 2 2) (layers \"F.Cu\") (net 1 \"SW\"))) \
+             (footprint \"C\" (layer \"F.Cu\") (at 0 3) (property \"Reference\" \"C1\") \
+               (pad \"1\" smd rect (at 0 0) (size 0.8 0.8) (layers \"F.Cu\") (net 1 \"SW\"))) \
+             (segment (start 0 0) (end 5 0) (width {path_w}) (layer \"F.Cu\") (net 1)) \
+             (segment (start 5 0) (end 10 0) (width {path_w}) (layer \"F.Cu\") (net 1)) \
+             (segment (start 0 0) (end 0 3) (width {stub_w}) (layer \"F.Cu\") (net 1)))"
+        )
+    }
+
+    fn pads(r: &str, n: &str) -> Vec<(String, String)> {
+        vec![(r.to_string(), n.to_string())]
+    }
+
+    fn neck(text: &str) -> Option<PathNeck> {
+        path_neck_from_text(text, "SW", &pads("U1", "2"), &pads("L1", "1"), &|_, w| w)
+    }
+
+    #[test]
+    fn a_stub_off_the_path_does_not_limit_it() {
+        assert_eq!(
+            neck(&board(0.2, 1.0)),
+            Some(PathNeck::Track {
+                layer: "F.Cu".into(),
+                width_mm: 1.0
+            })
+        );
+    }
+
+    #[test]
+    fn a_narrow_track_on_the_path_limits_it() {
+        assert_eq!(
+            neck(&board(1.0, 0.3)),
+            Some(PathNeck::Track {
+                layer: "F.Cu".into(),
+                width_mm: 0.3
+            })
+        );
+    }
+
+    #[test]
+    fn unresolved_pads_or_broken_copper_say_nothing() {
+        let text = board(0.2, 1.0);
+        assert_eq!(
+            path_neck_from_text(&text, "SW", &pads("U9", "2"), &pads("L1", "1"), &|_, w| w),
+            None
+        );
+        let broken = text.replace("(start 5 0) (end 10 0)", "(start 7 0) (end 10 0)");
+        assert_eq!(neck(&broken), None);
+    }
+}
