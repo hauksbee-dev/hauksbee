@@ -1,0 +1,52 @@
+# MCU module aliases: a module's value string -> the MCU it carries.
+#
+# A board often places a whole module (a carrier, a castellated SoM, a
+# dev-board footprint) under a value that names the module, not the silicon:
+# `nice_nano`, `T-Micro32_Plus`. The binder's family router knows silicon
+# names (ESP32..., NRF52..., STM32...), so without this table such a module is
+# either bound only because a per-module card happens to exist, or, when its
+# family has no emulator, refused without naming the family.
+#
+# Each entry maps `value_re` (case-insensitive, matched against the value, MPN
+# or library id) to `mcu`, the underlying part name, which then goes through the
+# ordinary family router. Nothing else changes: an alias cannot pick a backend
+# the router would not pick for the bare part, and a family with no emulator
+# still refuses, now by name.
+#
+# ONLY ADD AN ENTRY WHEN THE MODULE'S MCU IS CERTAIN, and cite where it is
+# stated in `source`. A guessed alias runs firmware on the wrong core.
+
+[[mcu_modules]]
+id = "esp32_wroom32_skinny"
+# Eagle microbuilder / Adafruit library spelling of the Espressif
+# ESP32-WROOM-32 module (narrow "skinny" footprint), placed as X2 on Adafruit
+# HUZZAH32-class boards. The WROOM-32 carries the ESP32-D0WDQ6 / ESP32-D0WD die.
+value_re = '^ESP32[-_ ]?WROOM[-_ ]?32[-_ ]?SKINNY$'
+mcu = "ESP32-WROOM-32"
+source = "Espressif ESP32-WROOM-32 datasheet, section 1 (module integrates ESP32-D0WDQ6)"
+
+[[mcu_modules]]
+id = "lilygo_t_micro32_plus"
+# LilyGO T-Micro32 Plus. The vendor page and distributor listings give the SiP
+# as ESP32-PICO-V3-02 (8 MB flash, 2 MB PSRAM); the older TTGO Micro-32 V2.0
+# used ESP32-PICO-D4. Both are classic ESP32 (Xtensa LX6) dies, so the family
+# is certain whichever revision is fitted.
+value_re = '^(LilyGO[-_ ]?|TTGO[-_ ]?)?T[-_ ]?Micro[-_ ]?32([-_ ]?(Plus|V2(\.0)?))?$'
+mcu = "ESP32-PICO-V3-02"
+source = "lilygo.cc/products/t-micro32-plus; tinytronics.nl T-Micro32 Plus listing (ESP32-PICO-V3-02)"
+
+[[mcu_modules]]
+id = "nice_nano"
+# nice!nano (Nice Keyboards), a Pro Micro footprint board built on the Nordic
+# nRF52840.
+value_re = '^nice[-_ !]*nano([-_ ]?v?[0-9.]+)?$'
+mcu = "nRF52840"
+source = "nicekeyboards.com/docs/nice-nano: 'nRF52840 based'"
+
+[[mcu_modules]]
+id = "seeed_xiao_esp32c6"
+# Seeed Studio XIAO ESP32C6: ESP32-C6 (RISC-V). No emulator exists for the
+# family, so this entry's job is to make the refusal name ESP32-C6.
+value_re = '^(Seeed[-_ ]?)?XIAO[-_ ]?ESP32[-_ ]?C6$'
+mcu = "ESP32-C6"
+source = "wiki.seeedstudio.com/xiao_esp32c6_getting_started (ESP32-C6 SoC)"

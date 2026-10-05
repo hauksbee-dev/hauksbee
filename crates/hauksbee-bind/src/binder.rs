@@ -1803,6 +1803,10 @@ const MCU_ROUTES: &[(&[&str], &str, Option<&str>)] = &[
 
 fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
     family_tokens(s).into_iter().find_map(|token| {
+        // A module value (`nice_nano`, `T-Micro32_Plus`) routes as the MCU it
+        // carries, per the data table `db/mcu_modules.toml`.
+        let token = hauksbee_models::mcu_modules::mcu_module_alias(&token)
+            .map_or(token, |alias| alias.mcu.to_ascii_uppercase());
         let compact = token.replace(['-', '_', ' '], "");
         let &(_, family, backend) = MCU_ROUTES
             .iter()
@@ -10273,6 +10277,78 @@ style = "i2c_pointer"
             Some("gpio2")
         );
         assert!(bound.unsupported_mcus.is_empty());
+    }
+
+    /// Module value strings route through `db/mcu_modules.toml` to the MCU
+    /// they carry, whether spelled as a value or inside a library id.
+    #[test]
+    fn module_aliases_route_to_the_family_of_the_mcu_they_carry() {
+        let esp32 = Some(McuFamilyRoute::Backend {
+            family: "ESP32",
+            backend: "qemu:esp32",
+        });
+        let nrf = Some(McuFamilyRoute::Backend {
+            family: "nRF52",
+            backend: "renode:nrf52840",
+        });
+        assert_eq!(route_mcu_family_str("T-Micro32_Plus"), esp32);
+        assert_eq!(route_mcu_family_str("ESP32_WROOM32_SKINNY"), esp32);
+        assert_eq!(route_mcu_family_str("nice_nano"), nrf);
+        assert_eq!(route_mcu_family_str("MCU_Module:nice_nano"), nrf);
+        assert_eq!(
+            route_mcu_family_str("XIAO_ESP32C6"),
+            Some(McuFamilyRoute::NoPlatform { family: "ESP32-C6" })
+        );
+        assert_eq!(route_mcu_family_str("NANO_HEADER"), None);
+    }
+
+    /// The alias table alone binds a module on an `X` refdes: no per-module
+    /// card is needed, and the card, where one exists, agrees with the alias.
+    #[test]
+    fn an_aliased_x_module_binds_without_a_card_and_agrees_with_its_card() {
+        let builtin = ModelLibrary::builtin();
+        for (value, backend) in [
+            ("nice_nano", "renode:nrf52840"),
+            ("T-Micro32_Plus", "qemu:esp32"),
+            ("ESP32_WROOM32_SKINNY", "qemu:esp32"),
+        ] {
+            let mut module = comp("X1", value);
+            module.pins = vec![named_pin("1", "GND", 9), named_pin("2", "3V3", 8)];
+            let board = ExtractedBoard {
+                name: "alias".to_string(),
+                nets: vec![net(8, "+3V3"), net(9, "GND")],
+                components: vec![module],
+            };
+            for lib in [&ModelLibrary::empty(), &builtin] {
+                let bound = bind_board(&board, lib);
+                let refs: Vec<_> = bound
+                    .mcus
+                    .iter()
+                    .map(|m| (m.reference.as_str(), m.backend.as_str()))
+                    .collect();
+                assert_eq!(refs, [("X1", backend)], "{value}");
+            }
+        }
+    }
+
+    /// A module whose MCU family has no emulator is refused by family name.
+    #[test]
+    fn an_aliased_module_on_an_unemulated_family_is_refused_by_name() {
+        let mut module = comp("X1", "XIAO_ESP32C6");
+        module.pins = vec![pin("1", 8), pin("2", 9)];
+        let board = ExtractedBoard {
+            name: "c6".to_string(),
+            nets: vec![net(8, "+3V3"), net(9, "GND")],
+            components: vec![module],
+        };
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        assert!(bound.mcus.is_empty());
+        assert_eq!(
+            bound.unsupported_mcus,
+            [("X1".to_string(), "ESP32-C6".to_string())]
+        );
+        let msg = no_processor_message(&bound.dnp_mcus, &bound.unsupported_mcus, FitRemedy::Cli);
+        assert!(msg.contains("ESP32-C6 (X1)"), "{msg}");
     }
 
     /// A recognised family with no emulator is named in the refusal; a board

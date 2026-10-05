@@ -35,7 +35,12 @@ fn every_builtin_passive_entry_declares_its_class() {
         // how an invariant quietly stops being enforced.
         let text = std::fs::read_to_string(&path).expect("db file readable");
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let non_model = ["pin_rules.toml", "load_profiles.toml", "unmodelled.toml"];
+        let non_model = [
+            "pin_rules.toml",
+            "load_profiles.toml",
+            "unmodelled.toml",
+            "mcu_modules.toml",
+        ];
         let db = match toml::from_str::<DbFile>(&text) {
             Ok(db) => db,
             Err(_) if non_model.contains(&name.as_str()) => continue,

@@ -49,6 +49,7 @@ pub mod extract_output;
 pub mod extract_progress;
 pub mod logic_spec;
 pub mod matcher;
+pub mod mcu_modules;
 pub mod pack;
 pub mod package;
 pub mod param_names;

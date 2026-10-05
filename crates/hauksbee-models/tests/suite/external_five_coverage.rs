@@ -754,7 +754,12 @@ fn an_mcu_with_no_cosim_platform_binds_but_cannot_run_firmware() {
 /// model file from a non-model one. This list can, and it is deliberately an
 /// ALLOWLIST rather than a skip-on-error: a new db file with a new schema has to be
 /// named here before the sweeps will pass, which is the point.
-const NON_MODEL_DB_FILES: &[&str] = &["pin_rules.toml", "load_profiles.toml", "unmodelled.toml"];
+const NON_MODEL_DB_FILES: &[&str] = &[
+    "pin_rules.toml",
+    "load_profiles.toml",
+    "unmodelled.toml",
+    "mcu_modules.toml",
+];
 
 /// Every `[[models]]` entry in every sorted `db/*.toml` model file, with its file
 /// name, for the three library-wide sweeps below.
