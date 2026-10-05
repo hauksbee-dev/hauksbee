@@ -7525,3 +7525,351 @@ url = "https://www.ti.com/lit/ds/symlink/ina228.pdf"
 title = "Texas Instruments INA228 85-V, 20-Bit, Ultra-Precise Power/Energy/Charge Monitor With I2C Interface, SLYS021A, January 2021, revised May 2022"
 locator = "Table 5-1 Pin Functions; Sections 6.1, 6.3, 6.4, 6.5; Section 7.5.1 and Table 7-2; Sections 7.6.1.19 MANUFACTURER_ID and 7.6.1.20 DEVICE_ID"
 sha256 = "a138d39eeee04f8388426fed204c2f4012e75d36e95b60b0751ef003cd277447"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADS122C04: Texas Instruments 24-bit, 4-channel, 2-kSPS delta-sigma ADC with
+# I2C interface, TSSOP-16 (PW) and WQFN-16 (RTE).
+#
+# Source: TI "ADS122C04 24-Bit, 4-Channel, 2000-SPS, Delta-Sigma ADC With I2C
+#   Interface", SBAS751B, October 2017, revised October 2018. Pin Configuration
+#   and Functions (PW and RTE columns), Section 6.1 Absolute Maximum Ratings,
+#   Section 6.3 Recommended Operating Conditions, Section 6.4 Thermal
+#   Information, Section 6.5 Electrical Characteristics (DIGITAL INPUTS/OUTPUTS,
+#   DIGITAL SUPPLY CURRENT), Section 8.4.1.1 Power-On Reset, Section 8.5.1.1
+#   Table 14 I2C Address Truth Table, Sections 8.5.3.6 RREG (0010 rrxx) and
+#   8.5.3.7 WREG (0100 rrxx dddd dddd), Section 8.6 Table 17 Configuration
+#   Register Map (all four registers reset to 00h), Section 9.1.7 Pseudo Code
+#   Example.
+#
+# WHAT IS EXECUTABLE. The device has no ID register; its firmware-visible
+# identity is the four configuration registers, read with RREG and written with
+# WREG. Both are a command byte followed by data, which the `i2c_pointer` style
+# expresses: WREG rr is a pointer write of 40h | rr << 2 followed by one data
+# byte, and RREG rr is a pointer write of 20h | rr << 2 followed by a
+# (repeated-START) one-byte read. Each WREG is stored and the matching RREG
+# returns it, so a driver's write-then-read-back sanity check (Section 9.1.7:
+# "read back all configuration registers with the RREG command") behaves as on
+# the part. Read-only and fixed bits are not echoed: register 2 bit 7 (DRDY,
+# R-0h) reads 0, and register 3 bits 1:0 (fixed 0) read 0.
+#
+# THE xx BITS ARE DON'T-CARE ON THE PART BUT NOT HERE. The model answers only
+# the canonical xx = 00 command bytes (20h/24h/28h/2Ch, 40h/44h/48h/4Ch). The
+# Section 9.1.7 example writes "40h, 08h, 42h, 08h": 42h decodes to rr = 00
+# (register 0 again) on the real part too, and here it is not decoded at all.
+# Several WREGs chained in one frame without a STOP (Section 8.5.3.7) are also
+# not decoded: the pointer model takes only the first command of a frame.
+#
+# ADDRESS. Table 14 has 16 addresses from four levels on each of A0 and A1; the
+# binder resolves only a two-level strap. A0 is required at DGND and A1 selects
+# between its DGND and DVDD rows: 100 0000 (0x40) and 100 0100 (0x44).
+#
+# LOGIC LEVELS are DVDD fractions (VIL 0.3 DVDD max, VIH 0.7 DVDD min), which the
+# absolute vih/vil params cannot carry, so only VOL (0.4 V max at 3 mA) is set.
+# POWER: the peripheral gate is the 2.3 V DVDD minimum (Section 6.3); Section
+# 8.4.1.1 gives a ~500 us POR release but no POR voltage. Currents are IDVDD only
+# (65 uA typ normal mode, 0.3 uA power-down); AVDD's 250 to 955 uA depends on
+# gain and mode, is drawn on a separate pin, and is not modelled.
+#
+# DELIBERATELY NOT MODELLED: conversions (RDATA: the 24-bit two's-complement
+# result has no encoding in the register-map interpreter), START/SYNC,
+# POWERDOWN and RESET commands, the RESET pin, the DRDY pin and bit, the
+# CRC/inverted-data modes, the IDACs, the AVDD supply current and the
+# four-level address pins.
+
+[[models]]
+id = "ads122c04_pw"
+kind = "digital"
+description = "TI ADS122C04 24-bit 4-channel I2C delta-sigma ADC, TSSOP-16 (PW) (strapped I2C configuration-register subset, pad map and supply draw)"
+
+[models.match]
+# Package Option Addendum orderables: ADS122C04IPW (tube), ADS122C04IPWR and IPWRG4 (reel).
+value_re = "(?i)^ADS122C04(IPW(R(G4)?)?)?$"
+
+[models.params]
+vol = 0.4                  # Section 6.5, VOL max at IOL = 3 mA
+supply_static_ua = 65.0    # Section 6.5, IDVDD typ, normal mode, DVDD = 3.3 V (100 max)
+supply_pin = "13"      # DVDD
+gnd_pin = "4"         # DGND
+warning = "configuration registers (WREG/RREG, canonical command bytes only) are executable; conversions, RDATA, START/SYNC, POWERDOWN, RESET, DRDY and the AVDD supply current are not modelled"
+
+[models.pins]
+# Pin Functions table, TSSOP-16 (PW) column.
+"1" = "a0"
+"2" = "a1"
+"3" = "reset_n"
+"4" = "dgnd"
+"5" = "avss"
+"6" = "ain3"
+"7" = "ain2"
+"8" = "refn"
+"9" = "refp"
+"10" = "ain1"
+"11" = "ain0"
+"12" = "avdd"
+"13" = "dvdd"
+"14" = "drdy_n"
+"15" = "sda"
+"16" = "scl"
+
+[models.ratings]
+max_voltage_v = 7.0           # Section 6.1, AVDD to AVSS and DVDD to DGND 7 V
+max_pin_current_a = 0.01      # Section 6.1, continuous input current, any non-supply pin
+theta_ja_c_per_w = 90.3    # Section 6.4, RθJA TSSOP-16 (PW)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvdd"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SBAS751B, Section 6.3 Recommended Operating Conditions, digital power supply DVDD to DGND 2.3 V to 5.5 V; Section 6.1, 7 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avdd"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SBAS751B, Section 6.3 Recommended Operating Conditions, unipolar analog supply AVDD to AVSS 2.3 V to 5.5 V; Section 6.1, 7 V"
+
+# Table 14: A1 = DGND, A0 = DGND is 100 0000 (0x40); A1 = DVDD, A0 = DGND is
+# 100 0100 (0x44). Any other strap leaves the part unattached.
+[models.peripheral]
+kind = "register_map"
+required_low_roles = ["a0"]
+address_select_role = "a1"
+address_when_low = 0x40
+address_when_high = 0x44
+spec_toml = '''
+[sensor]
+name = "ADS122C04 configuration registers"
+bus = "i2c"
+i2c_address = 0x40
+
+# WREG rr (Section 8.5.3.7): command 0100 rr00, then one data byte.
+[[sensor.write_register]]
+addr = 0x40
+encoding = "u8"
+store = "cfg0"
+
+[[sensor.write_register]]
+addr = 0x44
+encoding = "u8"
+store = "cfg1"
+
+[[sensor.write_register]]
+addr = 0x48
+encoding = "u8"
+store = "cfg2"
+[[sensor.write_register.field]]
+name = "cfg2_rw"
+bits = [6, 0]
+
+[[sensor.write_register]]
+addr = 0x4C
+encoding = "u8"
+store = "cfg3"
+[[sensor.write_register.field]]
+name = "cfg3_imux"
+bits = [7, 2]
+
+# RREG rr (Section 8.5.3.6): command 0010 rr00, then a one-byte read. Reset
+# values are 00h (Table 17).
+[[sensor.register]]
+addr = 0x20
+encoding = "u8"
+expr = "cfg0"
+
+[[sensor.register]]
+addr = 0x24
+encoding = "u8"
+expr = "cfg1"
+
+# Register 2: DRDY (bit 7) is read-only and reads 0 here.
+[[sensor.register]]
+addr = 0x28
+encoding = "u8"
+expr = "cfg2_rw"
+
+# Register 3: bits 1:0 are fixed 0.
+[[sensor.register]]
+addr = 0x2C
+encoding = "u8"
+expr = "cfg3_imux * 4.0"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "dvdd"
+return_role = "dgnd"
+power_on_threshold_v = 2.3    # Section 6.3, DVDD min (no POR voltage is published)
+idle_a = 0.000065             # Section 6.5, IDVDD typ, normal mode
+read_a = 0.000065
+write_a = 0.000065
+low_power_a = 0.0000003       # Section 6.5, IDVDD power-down typ (5 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "digital_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "configuration_register_write_readback", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_data", "rdata_command", "start_sync_powerdown_reset_commands", "chained_wreg_in_one_frame", "dont_care_command_bits", "reset_pin", "drdy_pin_and_bit", "crc_modes", "idacs", "analog_supply_current", "four_level_address_pins", "dvdd_relative_input_levels"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads122c04.pdf"
+title = "Texas Instruments ADS122C04 24-Bit, 4-Channel, 2000-SPS, Delta-Sigma ADC With I2C Interface, SBAS751B, October 2017, revised October 2018"
+locator = "Pin Functions (TSSOP-16 (PW)); Sections 6.1, 6.3, 6.4, 6.5; Section 8.4.1.1; Section 8.5.1.1 Table 14; Sections 8.5.3.6 RREG and 8.5.3.7 WREG; Section 8.6 Table 17; Section 9.1.7"
+sha256 = "2380301f98deb11efb06810f265a79ea1c75ca1df488833cd74d32364d5030b3"
+
+[[models]]
+id = "ads122c04_rte"
+kind = "digital"
+description = "TI ADS122C04 24-bit 4-channel I2C delta-sigma ADC, WQFN-16 (RTE) (strapped I2C configuration-register subset, pad map and supply draw)"
+
+[models.match]
+# Package Option Addendum orderables: ADS122C04IRTER and IRTERG4 (reel).
+value_re = "(?i)^ADS122C04IRTER(G4)?$"
+
+[models.params]
+vol = 0.4                  # Section 6.5, VOL max at IOL = 3 mA
+supply_static_ua = 65.0    # Section 6.5, IDVDD typ, normal mode, DVDD = 3.3 V (100 max)
+supply_pin = "11"      # DVDD
+gnd_pin = "2"         # DGND
+warning = "configuration registers (WREG/RREG, canonical command bytes only) are executable; conversions, RDATA, START/SYNC, POWERDOWN, RESET, DRDY and the AVDD supply current are not modelled"
+
+[models.pins]
+# Pin Functions table, WQFN-16 (RTE) column.
+"1" = "reset_n"
+"2" = "dgnd"
+"3" = "avss"
+"4" = "ain3"
+"5" = "ain2"
+"6" = "refn"
+"7" = "refp"
+"8" = "ain1"
+"9" = "ain0"
+"10" = "avdd"
+"11" = "dvdd"
+"12" = "drdy_n"
+"13" = "sda"
+"14" = "scl"
+"15" = "a0"
+"16" = "a1"
+# Thermal pad: "Connect to AVSS". KiCad numbers a 16-pin -1EP land's pad
+# "17"; Eagle lands often call it "EP". Both keys, distinct roles.
+"17" = "avss_ep"
+"EP" = "avss_ep_eagle"
+
+[models.ratings]
+max_voltage_v = 7.0           # Section 6.1, AVDD to AVSS and DVDD to DGND 7 V
+max_pin_current_a = 0.01      # Section 6.1, continuous input current, any non-supply pin
+theta_ja_c_per_w = 57.7    # Section 6.4, RθJA WQFN-16 (RTE)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvdd"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SBAS751B, Section 6.3 Recommended Operating Conditions, digital power supply DVDD to DGND 2.3 V to 5.5 V; Section 6.1, 7 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avdd"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SBAS751B, Section 6.3 Recommended Operating Conditions, unipolar analog supply AVDD to AVSS 2.3 V to 5.5 V; Section 6.1, 7 V"
+
+# Table 14: A1 = DGND, A0 = DGND is 100 0000 (0x40); A1 = DVDD, A0 = DGND is
+# 100 0100 (0x44). Any other strap leaves the part unattached.
+[models.peripheral]
+kind = "register_map"
+required_low_roles = ["a0"]
+address_select_role = "a1"
+address_when_low = 0x40
+address_when_high = 0x44
+spec_toml = '''
+[sensor]
+name = "ADS122C04 configuration registers"
+bus = "i2c"
+i2c_address = 0x40
+
+# WREG rr (Section 8.5.3.7): command 0100 rr00, then one data byte.
+[[sensor.write_register]]
+addr = 0x40
+encoding = "u8"
+store = "cfg0"
+
+[[sensor.write_register]]
+addr = 0x44
+encoding = "u8"
+store = "cfg1"
+
+[[sensor.write_register]]
+addr = 0x48
+encoding = "u8"
+store = "cfg2"
+[[sensor.write_register.field]]
+name = "cfg2_rw"
+bits = [6, 0]
+
+[[sensor.write_register]]
+addr = 0x4C
+encoding = "u8"
+store = "cfg3"
+[[sensor.write_register.field]]
+name = "cfg3_imux"
+bits = [7, 2]
+
+# RREG rr (Section 8.5.3.6): command 0010 rr00, then a one-byte read. Reset
+# values are 00h (Table 17).
+[[sensor.register]]
+addr = 0x20
+encoding = "u8"
+expr = "cfg0"
+
+[[sensor.register]]
+addr = 0x24
+encoding = "u8"
+expr = "cfg1"
+
+# Register 2: DRDY (bit 7) is read-only and reads 0 here.
+[[sensor.register]]
+addr = 0x28
+encoding = "u8"
+expr = "cfg2_rw"
+
+# Register 3: bits 1:0 are fixed 0.
+[[sensor.register]]
+addr = 0x2C
+encoding = "u8"
+expr = "cfg3_imux * 4.0"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "dvdd"
+return_role = "dgnd"
+power_on_threshold_v = 2.3    # Section 6.3, DVDD min (no POR voltage is published)
+idle_a = 0.000065             # Section 6.5, IDVDD typ, normal mode
+read_a = 0.000065
+write_a = 0.000065
+low_power_a = 0.0000003       # Section 6.5, IDVDD power-down typ (5 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "digital_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "configuration_register_write_readback", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_data", "rdata_command", "start_sync_powerdown_reset_commands", "chained_wreg_in_one_frame", "dont_care_command_bits", "reset_pin", "drdy_pin_and_bit", "crc_modes", "idacs", "analog_supply_current", "four_level_address_pins", "dvdd_relative_input_levels"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads122c04.pdf"
+title = "Texas Instruments ADS122C04 24-Bit, 4-Channel, 2000-SPS, Delta-Sigma ADC With I2C Interface, SBAS751B, October 2017, revised October 2018"
+locator = "Pin Functions (WQFN-16 (RTE)); Sections 6.1, 6.3, 6.4, 6.5; Section 8.4.1.1; Section 8.5.1.1 Table 14; Sections 8.5.3.6 RREG and 8.5.3.7 WREG; Section 8.6 Table 17; Section 9.1.7"
+sha256 = "2380301f98deb11efb06810f265a79ea1c75ca1df488833cd74d32364d5030b3"
