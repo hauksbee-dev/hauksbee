@@ -2222,6 +2222,132 @@ level = "high"
 note = "GPIO2 must be high at reset"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ESP32-C6-MINI-1 / -1U module (-N4 / -H4 / -H8 flash and temperature
+# variants), 53 pads: ESP32-C6FH4/FH8 (RISC-V) with in-package flash.
+#
+# Source: Espressif ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5 (2026-06-16).
+#   Tables 1-1/1-2 Series Comparison (the -N4/-H4/-H8 part numbers differ only
+#   in flash size and ambient temperature); 3.1 Figure 3-1, "applicable for
+#   ESP32-C6-MINI-1 and ESP32-C6-MINI-1U" (one pad map for both); Table 3-1 Pin
+#   Definitions; Table 4-3 Chip Boot Mode Control; Table 6-1 Absolute Maximum
+#   Ratings; Table 6-2 Recommended Operating Conditions; Table 6-3 DC
+#   Characteristics.
+#
+# BACKEND IS `none:`: no co-sim emulator exists for the ESP32-C6, so co-sim is
+# refused loudly (the binder's family router also names ESP32-C6 as a family
+# with no platform); lint, strap, envelope and rating checks read the pad map.
+# The 3V3 pad is `vdd`, as on the other ESP32 module cards, because the strap
+# lint scales VIL/VIH from the `vdd` role. No per-pin or package current rating
+# is set: Table 6-1 lists only VDD33, and Table 6-3 gives IOH/IOL as typical
+# drive strengths, not limits.
+[[models]]
+id = "esp32c6_mini1"
+kind = "mcu"
+description = "Espressif ESP32-C6-MINI-1/-1U module, 53 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-c6-mini-1_mini-1u_datasheet_en.pdf"
+title = "Espressif ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5"
+locator = "Tables 1-1/1-2 Series Comparison; Figure 3-1 Pin Layout; Table 3-1 Pin Definitions; Table 4-3 Chip Boot Mode Control; Table 6-1 Absolute Maximum Ratings; Table 6-2 Recommended Operating Conditions; Table 6-3 DC Characteristics"
+sha256 = "26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2"
+
+[models.match]
+# ESP32-C6-MINI-1 or -1U, optionally with the -N4/-H4/-H8 part-number suffix.
+# Anchored on MINI-1 so the bare chip ("ESP32-C6", "ESP32-C6FH4") and module
+# aliases routed by db/mcu_modules.toml (XIAO ESP32C6) are not taken.
+value_re = "(?i)^ESP32[-_ ]?C6[-_ ]?MINI[-_ ]?1U?([-_ ]?(N4|H4|H8))?$"
+
+[models.params]
+backend = "none:esp32c6"
+
+[models.pins]
+# Table 3-1 Pin Definitions. GND = 1, 2, 11, 14, 36-53 (incl. the centre and
+# corner ground pads of Figure 3-1); NC = 4, 7, 21, 32-35.
+"1"  = "gnd"
+"2"  = "gnd2"
+"3"  = "vdd"              # 3V3 supply
+"4"  = "nc"
+"5"  = "gpio2"            # LP_GPIO2, ADC1_CH2, FSPIQ
+"6"  = "gpio3"            # LP_GPIO3, ADC1_CH3
+"7"  = "nc2"
+"8"  = "en"               # CHIP_PU: high = on, low = off; must not float
+"9"  = "gpio4"            # MTMS (strap: SDIO edge), ADC1_CH4, FSPIHD
+"10" = "gpio5"            # MTDI (strap: SDIO edge), ADC1_CH5, FSPIWP
+"11" = "gnd3"
+"12" = "gpio0"            # XTAL_32K_P, ADC1_CH0
+"13" = "gpio1"            # XTAL_32K_N, ADC1_CH1
+"14" = "gnd4"
+"15" = "gpio6"            # MTCK, LP_I2C_SDA, ADC1_CH6, FSPICLK
+"16" = "gpio7"            # MTDO, LP_I2C_SCL, FSPID
+"17" = "gpio12_usb_dm"    # USB_D-
+"18" = "gpio13_usb_dp"    # USB_D+
+"19" = "gpio14"
+"20" = "gpio15"           # strap: JTAG signal source
+"21" = "nc3"
+"22" = "gpio8"            # strap: boot mode (with GPIO9), ROM print
+"23" = "gpio9"            # strap: boot mode (BOOT)
+"24" = "gpio18"
+"25" = "gpio19"
+"26" = "gpio20"
+"27" = "gpio21"
+"28" = "gpio22"
+"29" = "gpio23"
+"30" = "gpio17_rxd0"      # RXD0 = U0RXD
+"31" = "gpio16_txd0"      # TXD0 = U0TXD
+"32" = "nc4"
+"33" = "nc5"
+"34" = "nc6"
+"35" = "nc7"
+"36" = "gnd5"             # 36-48: top-edge GND row
+"37" = "gnd6"
+"38" = "gnd7"
+"39" = "gnd8"
+"40" = "gnd9"
+"41" = "gnd10"
+"42" = "gnd11"
+"43" = "gnd12"
+"44" = "gnd13"
+"45" = "gnd14"
+"46" = "gnd15"
+"47" = "gnd16"
+"48" = "gnd17"
+"49" = "gnd18"            # centre GND pad
+"50" = "gnd19"            # 50-53: corner GND pads
+"51" = "gnd20"
+"52" = "gnd21"
+"53" = "gnd22"
+
+[models.ratings]
+max_voltage_v = 3.6       # Table 6-1, VDD33 -0.3 to 3.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5, Table 6-2 VDD33 3.0-3.6 V; Table 6-1 VDD33 max 3.6 V"
+
+# Table 4-3: GPIO9 = 1 selects SPI boot whatever GPIO8 is; GPIO9 = 0 with
+# GPIO8 = 1 selects joint download boot. Table 4-1: GPIO9 has a weak pull-up,
+# GPIO8 floats (it matters only for download boot, so no level is asserted).
+[[models.straps]]
+role = "gpio9"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot
+# Table 6-3: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO9 (BOOT) high = SPI boot (normal); low with GPIO8 high = download boot"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "usb_serial_jtag", "pin_and_package_current_ratings"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "nrf52840"
