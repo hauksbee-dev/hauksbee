@@ -1561,11 +1561,17 @@ fn production_assumptions(
             hauksbee_engine::checks::envelope::RailRange { min_v, max_v },
         ))
     });
+    let levels: std::collections::BTreeMap<_, _> = levels.collect();
+    // A logic input whose span sat, or peaked, between its VCC-scaled VIL and
+    // VIH: the datasheet guarantees no state there (MEASURED, so it undermines).
+    let span = |net: &str| levels.get(net).copied();
+    let undefined = hauksbee_engine::checks::logic_levels::run_assumptions(board, lib, &span);
+    production_assumptions.extend(undefined);
     let opts = engine.scheduler().opts;
     let supply = hauksbee_engine::checks::envelope::run_assumptions(
         board,
         lib,
-        &levels.collect(),
+        &levels,
         (opts.reltol, opts.vntol),
         ambient,
     );

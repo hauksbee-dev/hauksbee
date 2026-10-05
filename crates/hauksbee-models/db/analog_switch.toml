@@ -138,9 +138,22 @@ mpn_re   = "(?i)SN74LVC1G3157"
 # ron at 5V supply: typ 6 Ω, max 11 Ω
 ron  = 6.0       # on-resistance (Ω) @ Vcc=5V typical
 roff = 1.0e9     # off-resistance (Ω), effectively open
-vth  = 1.5       # switch threshold (V), midpoint of Vih/Vil at 3.3V
+vth  = 1.5       # FALLBACK ONLY, for a select whose VCC net has no resolved
+                 # rail voltage (roughly the band middle at 3.3 V). Wherever the
+                 # rail is known the select switches at the middle of the
+                 # [models.levels] band below read at that rail: 2.5 V on 5 V.
 # Charge injection: negligible for behavioral simulation; marked ignore here.
 # bandwidth: −3 dB at ~180 MHz (Table 6.5), not modelled.
+
+# The select input's VIL/VIH band as a function of VCC: TI SCES424O Section 5.4
+# Recommended Operating Conditions, "High-level input voltage, control input"
+# VIH min = VCC x 0.75 (VCC 1.65-1.95 V), VCC x 0.7 (2.3-5.5 V); "Low-level input
+# voltage, control input" VIL max = VCC x 0.25 (1.65-1.95 V), VCC x 0.3 (2.3-5.5 V).
+# On a 5 V rail the band is 1.5-3.5 V: 1.5 V on S is a guaranteed LOW, and a
+# select between 1.5 and 3.5 V is undefined, not "high".
+[models.levels]
+vih = [[1.65, 1.2375], [1.95, 1.4625], [2.3, 1.61], [5.5, 3.85]]
+vil = [[1.65, 0.4125], [1.95, 0.4875], [2.3, 0.69], [5.5, 1.65]]
 
 [models.pins]
 # SN74LVC1G3157 SOT-23-6 per TI SCDS230: 1=B2, 2=GND, 3=B1, 4=A, 5=VCC, 6=S.
@@ -248,13 +261,27 @@ roff = 5.5e6     # 5.5 V / 1 uA, from TI SCES323R IS(off) = +/-1 uA MAX at
                  # not be quieter in the off state than the real part could be.
                  # Derived from a measured leakage figure either way, so this is a
                  # real resistance and not a floor picked for solver comfort.
-vth  = 2.31      # The HIGHER of the two vendors' control thresholds at a 3.3 V
-                 # rail, which is the conservative choice: the modelled switch then
-                 # needs at least as much control voltage as either real part.
-                 # TI SCES323R gives VIH = 0.7 x VCC over VCC = 3 to 3.6 V, which
-                 # is 2.31 V at 3.3 V; Nexperia Rev 14.1 gives a flat 2.0 V min
-                 # over 2.7 to 3.6 V. Taking Nexperia's 2.0 V would model a TI part
-                 # closing 0.3 V before it really does.
+vth  = 2.31      # FALLBACK ONLY, for a control whose VCC net has no resolved
+                 # rail voltage: TI's VIH at a 3.3 V rail. Wherever the rail is
+                 # known the switch closes at the middle of the [models.levels]
+                 # band below READ AT THAT RAIL (2.5 V on a 5 V rail, not 2.31),
+                 # and the undefined-level check reports a control that sits or
+                 # peaks inside the band instead of letting it silently switch.
+
+# The control input's VIL/VIH band, as a function of VCC. THE THRESHOLDS SCALE WITH
+# THE SUPPLY: a 2.3 V control on a 5 V rail is not a valid high (VIH = 3.5 V).
+#   TI SCES323R Section 5.3 Recommended Operating Conditions, control input:
+#     VIH min = 0.65 x VCC (1.65-1.95 V), 0.7 x VCC (2.3-2.7, 3-3.6, 4.5-5.5 V);
+#     VIL max = 0.35 x VCC (1.65-1.95 V), 0.3 x VCC (2.3-2.7, 3-3.6, 4.5-5.5 V).
+#   Nexperia 74LVC1G66 Rev. 14.1 Table 7 Static characteristics, pin E:
+#     VIH min = 0.65 VCC / 1.7 V / 2.0 V / 0.7 VCC and VIL max = 0.35 VCC / 0.7 V /
+#     0.8 V / 0.3 VCC over VCC = 1.65-1.95 / 2.3-2.7 / 2.7-3.6 / 4.5-5.5 V.
+# A part this entry binds may be either vendor's, so the band is the WIDER of the
+# two at every rail: the higher VIH and the lower VIL. Points in a gap between
+# printed rows (1.95-2.3 V, 3.6-4.5 V) are linear between the rows either side.
+[models.levels]
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.43, 1.7], [2.7, 2.0], [2.86, 2.0], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.69], [2.7, 0.7], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
 
 [models.pins]
 # The five-lead map both datasheets give. `in_out_a`/`in_out_b` and NOT `com`/`s0`:
@@ -297,7 +324,13 @@ value_re = "(?i)^(SN|NL|ST|MC|TC)?74LVC1G66(DRY|DSF|GM|GN|GS)R?([-.,][A-Z0-9.,]*
 [models.params]
 ron  = 6.5       # same die and the same rows as the five-lead entry above
 roff = 5.5e6     # same TI IS(off) +/-1 uA at 5.5 V; see the five-lead entry
-vth  = 2.31      # same reasoning as above: the higher of the two vendors' figures
+vth  = 2.31      # fallback only, as in the five-lead entry above
+
+# Same die, same control band: see the five-lead entry for the TI SCES323R
+# Section 5.3 and Nexperia Rev. 14.1 Table 7 rows this envelope is taken from.
+[models.levels]
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.43, 1.7], [2.7, 2.0], [2.86, 2.0], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.69], [2.7, 0.7], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
 
 [models.pins]
 "1" = "in_out_a"
@@ -327,7 +360,16 @@ value_re = "(?i)^(CD)?74HC4066|^ul_CD74HC4066"
 # Source: Texas Instruments CD74HC4066 datasheet (SCHS135C), Table 6.5
 ron  = 30.0    # on-resistance @ 5V supply typ (Ω)
 roff = 1.0e9
-vth  = 1.3     # control threshold (V) at Vcc=2.7V conservative
+vth  = 1.3     # FALLBACK ONLY, for a control whose VCC net has no resolved rail
+               # voltage; with a known rail the control switches at the middle
+               # of the [models.levels] band below read at that rail.
+
+# HC control-input band as a function of VCC: TI SCHS208E Section 9 Electrical
+# Characteristics: HC Devices, VIH min 1.5 / 3.15 / 6.3 V and VIL max 0.5 / 1.35 /
+# 2.7 V at VCC = 2 / 4.5 / 9 V (the same at every TA row). Linear between rows.
+[models.levels]
+vih = [[2.0, 1.5], [4.5, 3.15], [9.0, 6.3]]
+vil = [[2.0, 0.5], [4.5, 1.35], [9.0, 2.7]]
 
 [models.pins]
 # TI CD74HC4066 SCHS208E Table 4-1 (p.3): 1Y 1Z 2Z 2Y 2E 3E GND | 3Y 3Z 4Z 4Y 4E 1E VCC.
@@ -676,12 +718,24 @@ value_re = "(?i)^TXS0108E[A-Z]{0,4}R?$"
 ron  = 400.0     # midpoint of the datasheet's stated 300-500 Ohm pass-gate
                  # range; see the note above, this is an interval midpoint
 roff = 1.0e9     # NOT A DATASHEET FIGURE; conservative floor
-vth  = 2.145     # OE VIH min = 0.65 x VCCA, evaluated at VCCA = 3.3 V
+vth  = 2.145     # FALLBACK ONLY (OE VIH min at VCCA = 3.3 V) for an unresolved
+                 # VCCA; with a known VCCA, OE switches mid-band of the table below
 # See the PCA9306 note above for why this is a param and not a comment.
 warning = """one channel of eight is modelled (A1<->B1, 400 Ohm gated by OE); the \
 other seven are not stamped, and the edge-rate one-shots and the 4k/40k dynamic \
 pull-ups are not modelled at all, so this part answers connectivity and series \
 resistance only, never rise time, drive strength or bus contention"""
+
+# OE's band is referenced to VCCA, not VCCB: TI SCES642L Section 5.3 Recommended
+# Operating Conditions, OE: VIH min = VCCA x 0.65, VIL max = VCCA x 0.35, over
+# VCCA = 1.4 to 3.6 V.
+[models.levels]
+vih = [[1.4, 0.91], [3.6, 2.34]]
+vil = [[1.4, 0.49], [3.6, 1.26]]
+
+[models.level_rails]
+vcca = ["ctrl"]
+
 [models.pins]
 # PW (TSSOP-20).
 # ONE CHANNEL OF EIGHT IS STAMPED, A1<->B1, and only that pair carries

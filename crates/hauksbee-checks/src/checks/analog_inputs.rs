@@ -217,7 +217,7 @@ pub(super) fn at_ambient(
 /// Findings as run evidence: `true` marks a limit the run MEASURED as violated
 /// (it undermines), `false` one that only qualifies the answer. Of findings
 /// sharing an id the violation is kept, so a lesser row never masks it.
-fn as_evidence(mut found: Vec<Flag>, limit: &str, fix: &str) -> Vec<Assumption> {
+pub(super) fn as_evidence(mut found: Vec<Flag>, limit: &str, fix: &str) -> Vec<Assumption> {
     found.sort_by_key(|(_, bad)| !bad);
     let mut seen = HashSet::new();
     found

@@ -56,15 +56,7 @@ pub struct LogicLevels {
 /// A card's `[models.levels]`: level name to ascending `[vcc, volts]` points.
 pub type LevelTables = BTreeMap<String, Vec<[f64; 2]>>;
 
-/// A `[models.levels]` table (two or more points) read at `vcc`: linear between
-/// points, flat beyond the first and last.
-fn level_at(table: &[[f64; 2]], vcc: f64) -> f64 {
-    let i = table
-        .partition_point(|p| p[0] < vcc)
-        .clamp(1, table.len() - 1);
-    let (a, b) = (table[i - 1], table[i]);
-    (b[1] - a[1]).mul_add(((vcc - a[0]) / (b[0] - a[0])).clamp(0.0, 1.0), a[1])
-}
+use hauksbee_models::schema::level_at;
 
 impl LogicLevels {
     #[must_use]

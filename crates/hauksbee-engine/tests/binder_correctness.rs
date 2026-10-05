@@ -325,9 +325,11 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
         })
         .expect("true-SPDT s0 leg stamped as a VSwitch");
 
-    // vth = 1.5 (model), rail = 3.3: von = 3.3-1.5+0.25 = 2.05, voff = 1.55.
+    // The select threshold is the VIL..VIH midpoint read at the rail
+    // (SCES424O 5.4: VIL 0.3 x VCC, VIH 0.7 x VCC at 2.3-5.5 V), so on 3.3 V
+    // vth = 1.65 and von = 3.3-1.65+0.25 = 1.9, voff = 1.4.
     let rail = 3.3;
-    let vth = 1.5;
+    let vth = 0.5 * (0.3 + 0.7) * rail;
     assert!(
         (von - (rail - vth + 0.25)).abs() < 1e-9,
         "s0 von must be rail-referenced (expected {}, got {von})",

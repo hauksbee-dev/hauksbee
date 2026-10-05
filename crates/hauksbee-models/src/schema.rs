@@ -188,6 +188,50 @@ pub struct ModelEntry {
     pub pin_package: Option<String>,
 }
 
+/// A `[models.levels]` table (two or more ascending `[vcc, volts]` points) read
+/// at `vcc`: linear between points, flat beyond the first and last.
+#[must_use]
+pub fn level_at(table: &[[f64; 2]], vcc: f64) -> f64 {
+    let i = table
+        .partition_point(|p| p[0] < vcc)
+        .clamp(1, table.len().max(2) - 1);
+    let (a, b) = (table[i - 1], table[i]);
+    (b[1] - a[1]).mul_add(((vcc - a[0]) / (b[0] - a[0])).clamp(0.0, 1.0), a[1])
+}
+
+impl ModelEntry {
+    /// The supply role a logic input `role` is referenced to: the
+    /// `[models.level_rails]` entry naming it, else `vcc`, else `vdd`.
+    #[must_use]
+    pub fn level_rail_of(&self, role: &str) -> Option<&str> {
+        let named = self
+            .level_rails
+            .iter()
+            .find(|(_, roles)| roles.iter().any(|r| r == role));
+        let has = |r: &str| self.pins.values().any(|p| p == r);
+        named
+            .map(|(rail, _)| rail.as_str())
+            .or_else(|| ["vcc", "vdd"].into_iter().find(|r| has(r)))
+    }
+
+    /// The input band `(VIL, VIH)` at supply `vcc`: the `[models.levels]`
+    /// tables where the card has both, else the flat `vil`/`vih` params.
+    #[must_use]
+    pub fn input_band_at(&self, vcc: f64) -> Option<(f64, f64)> {
+        let tabled = |k: &str| {
+            self.levels
+                .get(k)
+                .filter(|t| t.len() >= 2)
+                .map(|t| level_at(t, vcc))
+        };
+        match (tabled("vil"), tabled("vih")) {
+            (Some(vil), Some(vih)) => Some((vil, vih)),
+            _ => Some((self.params.get_f64("vil")?, self.params.get_f64("vih")?)),
+        }
+        .filter(|(vil, vih)| vil < vih)
+    }
+}
+
 /// Declared executable scope of a model card.
 ///
 /// `implements` and `missing` are capability identifiers rather than prose so

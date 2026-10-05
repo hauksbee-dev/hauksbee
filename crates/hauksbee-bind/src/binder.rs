@@ -5500,6 +5500,31 @@ fn stamp_spdt(
     }
 }
 
+/// The switching point of an analog switch's control: the middle of the
+/// card's `[models.levels]` VIL..VIH band read at the control's resolved supply
+/// rail (CMOS control thresholds scale with VCC), else the card's flat `vth`.
+/// The band itself is judged by the undefined-logic-level check, so a control
+/// left between VIL and VIH is reported rather than trusted to this midpoint.
+fn control_threshold(
+    model: &ModelEntry,
+    roles: &HashMap<String, NodeId>,
+    circuit: &Circuit,
+    power_nets: &HashMap<String, f64>,
+) -> f64 {
+    let flat = model.params.get_f64("vth").unwrap_or(1.5);
+    let ctrl = ["ctrl", "ctrl_1", "sel", "s", "in"]
+        .into_iter()
+        .find(|r| roles.contains_key(*r));
+    let rail = ctrl
+        .and_then(|r| model.level_rail_of(r))
+        .and_then(|r| roles.get(r))
+        .and_then(|node| power_nets.get(circuit.node_name(*node)).copied());
+    let tabled = model.levels.contains_key("vih") && model.levels.contains_key("vil");
+    rail.filter(|_| tabled)
+        .and_then(|v| model.input_band_at(v))
+        .map_or(flat, |(vil, vih)| 0.5 * (vil + vih))
+}
+
 #[allow(clippy::too_many_lines)] // one arm per switch topology, in precedence order
 fn bind_analog_switch(
     comp: &Component,
@@ -5518,7 +5543,7 @@ fn bind_analog_switch(
         .unwrap_or(NodeId::GROUND);
     let ron = model.params.get_f64("ron").unwrap_or(50.0);
     let roff = model.params.get_f64("roff").unwrap_or(1e9);
-    let vth = model.params.get_f64("vth").unwrap_or(1.5);
+    let vth = control_threshold(model, roles, circuit, power_nets);
     // A part printing on-resistance per path gives each throw its own figure.
     let legs = ["ron_s0", "ron_s1"].map(|k| model.params.get_f64(k).unwrap_or(ron));
     let shared_dpdt = (

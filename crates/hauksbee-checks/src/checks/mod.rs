@@ -40,6 +40,8 @@
 //!   layer's `MissingI2cPullup`): an effective pull-up demanding more sink
 //!   current than the spec's 3 mA driver rating, or advisorily too weak for
 //!   the estimated bus capacitance to meet the rise-time budget.
+//! - [`logic_levels`]: a CMOS logic input left between its VCC-scaled VIL
+//!   and VIH, where the datasheet guarantees no logic state.
 //! - [`rail_conflicts`]: a rail more than one source sets the voltage of
 //!   (two regulators tied, differently named rails joined), from the binder's
 //!   rail-ownership pass.
@@ -53,6 +55,7 @@ pub mod contention;
 pub mod converter;
 pub mod device_decode;
 pub mod envelope;
+pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
 pub mod rail_conflicts;
@@ -143,6 +146,12 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(analog_inputs::analog_input_lint(board, lib, &rails).findings);
+    // Likewise a logic input is judged statically only where it is tied to a
+    // named rail (3.3 V into a 5 V CMOS input); solved levels judge the rest.
+    let point = |net: &str| rails(net).map(|v| envelope::RailRange { min_v: v, max_v: v });
+    report
+        .findings
+        .extend(logic_levels::logic_level_lint(board, lib, &point).findings);
     for finding in model_controls::model_control_lint(board, lib).findings {
         // Schematic/netlist extraction can already carry the pin function and
         // raise the same structural finding. The model-aware path exists for
