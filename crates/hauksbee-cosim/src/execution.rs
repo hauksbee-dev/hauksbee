@@ -401,9 +401,7 @@ impl RailWatch {
     /// a pad below its own floor when there is one, else the lowest pad.
     #[must_use]
     pub fn supply_v(&self) -> Option<f64> {
-        self.under_floor_now
-            .map(|(v, _)| v)
-            .or(self.supply_now_v)
+        self.under_floor_now.map(|(v, _)| v).or(self.supply_now_v)
     }
 }
 
@@ -588,8 +586,8 @@ mod tests {
         assert_eq!(w.supply_valid(Some(1.05), Some(3.63), 3.3), Observed::No);
         assert_eq!(w.supply_v(), Some(1.2));
         // A pad with no row of its own still takes the part-wide rule.
-        let mut mixed = RailWatch::new(vec![], vec![0, 1])
-            .with_supply_floors(HashMap::from([(1, 1.05)]));
+        let mut mixed =
+            RailWatch::new(vec![], vec![0, 1]).with_supply_floors(HashMap::from([(1, 1.05)]));
         mixed.observe(&[1.0, 1.1]);
         assert_eq!(mixed.supply_valid(None, None, 3.3), Observed::No);
         mixed.observe(&[3.3, 1.1]);

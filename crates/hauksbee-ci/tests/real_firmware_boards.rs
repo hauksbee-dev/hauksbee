@@ -33,7 +33,9 @@ fn board(rel: &str) -> Option<PathBuf> {
 /// skip note naming what is missing.
 fn firmware(name: &str) -> Option<PathBuf> {
     let Some(dir) = std::env::var_os("HAUKSBEE_REALFW_DIR") else {
-        eprintln!("SKIP: HAUKSBEE_REALFW_DIR unset (firmware {name} is built from source, not committed)");
+        eprintln!(
+            "SKIP: HAUKSBEE_REALFW_DIR unset (firmware {name} is built from source, not committed)"
+        );
         return None;
     };
     let path = Path::new(&dir).join(name);

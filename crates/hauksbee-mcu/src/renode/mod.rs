@@ -2369,15 +2369,18 @@ mod tests {
         assert!(group_fault_handlers(&[("HardFault", 0)]).is_empty());
         // The same handler seen through two tables (ROM VTOR and the ELF's
         // own) is one hook with one name.
-        let twice =
-            group_fault_handlers(&[("HardFault", 0x1000_01CD), ("HardFault", 0x1000_01CD)]);
+        let twice = group_fault_handlers(&[("HardFault", 0x1000_01CD), ("HardFault", 0x1000_01CD)]);
         assert_eq!(twice, vec![("HardFault".to_string(), 0x1000_01CC)]);
     }
 
     #[test]
     fn baseline_cores_watch_only_hardfault() {
         for m in ["cortex-m0+", "\"cortex-m0\"", "Cortex-M23\n"] {
-            assert_eq!(fault_vectors_for(Some(m)), &CORTEX_M_FAULT_VECTORS[..1], "{m}");
+            assert_eq!(
+                fault_vectors_for(Some(m)),
+                &CORTEX_M_FAULT_VECTORS[..1],
+                "{m}"
+            );
         }
         assert_eq!(fault_vectors_for(Some("cortex-m4f")).len(), 4);
         assert_eq!(fault_vectors_for(None).len(), 4);
