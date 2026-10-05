@@ -5992,3 +5992,381 @@ expr = "(v_mbaud - if(v_mbaud >= in_th_v, v_vcc, 0.0)) / keeper_r_ohms"
 [models.coverage]
 implements = ["charge_pump_rails", "supply_current", "shutdown", "receiver_enable", "inverting_drivers", "inverting_receivers", "receiver_hysteresis", "input_keepers", "logic_levels"]
 missing = ["slew_rate", "mbaud_mode", "propagation_timing", "driver_current_limit", "pump_ripple", "shutdown_recovery", "esd"]
+
+# ═════════════════════════════════════════════════════════════════════════════
+# I2C SENSORS WITH A CHIP-ID REGISTER SUBSET
+#
+# Every entry below follows the BMA423 entry's shape: a pad map, logic levels,
+# a sourced supply draw, the absolute-maximum ceiling, and a `register_map`
+# peripheral that carries ONLY the identity registers whose value the datasheet
+# states outright (CHIP_ID / WHO_AM_I / part ID). Nothing else on the bus is
+# modelled: a read of any other register sees no device behind it, and no
+# measurement appears anywhere. Where the logic levels are fractions of an I/O
+# rail they are evaluated at 3.3 V, the rail these parts sit on in the boards
+# they were written for, exactly as the BMA423 note explains; on a 1.8 V I/O
+# rail recompute them by the stated fractions.
+#
+# The I2C personality is attached only when the board's straps resolve directly
+# to a supply or ground (CS/CSB high for the parts whose bus is strap-selected,
+# SDO/SA0 for the address bit); an unresolved strap leaves the part unattached
+# with a named reason rather than a guessed address.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMI270: Bosch Sensortec 6-axis IMU (accelerometer + gyroscope), LGA-14
+# 2.5 x 3.0 mm.
+#
+# Source: Bosch Sensortec "BMI270 Datasheet", document BST-BMI270-DS000-08,
+#   revision 1.6, March 2026. Table 1 Basic electrical parameter specifications,
+#   Table 5 Absolute maximum ratings, Section 5.2.1 Register (0x00) CHIP_ID,
+#   Section 6.2 Table 17 Mapping for primary interface, Section 6.5 Primary
+#   interface I2C, Table 22 Pin-out and pin connections.
+#
+# SUPPLY DRAW IS THE A+G PERFORMANCE-MODE FIGURE, 970 uA typ (Table 1, VDD =
+# 1.8 V, 25 C, ODRmax). Which power mode applies is a firmware state this entry
+# does not know (Table 1 also lists 685 uA normal, 420 uA A+G low-power, 3.5 uA
+# suspend), so the ceiling is carried, as the BMA423 entry does. The sheet gives
+# no split between the VDD and VDDIO domains.
+#
+# THE CONFIG-FILE UPLOAD IS NOT MODELLED. A real BMI270 needs its 8 kB
+# configuration file written to INIT_DATA before it leaves suspend (Section 4.4
+# Power-On-Reset and Device Initialization); this
+# entry answers only the CHIP_ID read firmware does first, before any upload.
+[[models]]
+id = "bmi270"
+kind = "digital"
+description = "Bosch BMI270 6-axis IMU, LGA-14 (strap-selected I2C CHIP_ID subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# The bare part number is the only ordering string (Bosch sales part number
+# 0 273 017 008, cover page). BMI160/BMI260/BMI323 are different dies with
+# different maps and are excluded by the anchor.
+value_re = "(?i)^BMI270$"
+
+[models.params]
+# Table 1, every level a fraction of VDDIO, evaluated at VDDIO = 3.3 V.
+voh   = 2.64     # 0.8 x VDDIO min, VDDIO >= 1.62 V, IOH <= 2 mA
+vol   = 0.66     # 0.2 x VDDIO max, VDDIO >= 1.62 V, IOL <= 2 mA
+vih   = 2.31     # 0.7 x VDDIO min, SPI and I2C
+vil   = 0.99     # 0.3 x VDDIO max, SPI and I2C
+supply_static_ua = 970.0   # Table 1 IDD typ, A+G performance mode, VDD = 1.8 V,
+                           # 25 C, ODRmax
+supply_pin = "8"           # VDD
+gnd_pin    = "7"           # GND (digital and analog)
+
+[models.pins]
+# Table 22 Pin-out and pin connections (LGA-14), all 14 pads, cross-checked
+# against Table 17. SDx/SCx use the bus vocabulary (`sda`/`scl`), as the BMA423
+# entry explains.
+"1"  = "sdo"     # SPI 4W data out; in I2C the address bit 0 (GND = 0x68,
+                 # VDDIO = 0x69, Section 6.5)
+"2"  = "asda"    # secondary interface (aux I2C SDA / OIS SDI); VDDIO or DNC
+                 # when unused, never GND (Table 22 note **)
+"3"  = "ascl"    # secondary interface (aux I2C SCL / OIS SCK)
+"4"  = "int1"    # interrupt 1 (or FIFO sync input)
+"5"  = "vddio"   # I/O supply, 1.2 to 3.6 V
+"6"  = "gndio"   # I/O ground
+"7"  = "gnd"     # digital and analog ground
+"8"  = "vdd"     # analog and digital supply, 1.71 to 3.6 V
+"9"  = "int2"    # interrupt 2 (or FIFO sync input)
+"10" = "ocsb"    # OIS chip select; DNC, or GND only if IF_CONF.ois_en = 0
+"11" = "osdo"    # OIS data out; DNC when unused
+"12" = "csb"     # SPI chip select; VDDIO for I2C (Table 22)
+"13" = "scl"     # SCx: I2C SCL, SPI SCK
+"14" = "sda"     # SDx: I2C SDA, SPI SDI (4W) or SDIO (3W)
+
+[models.ratings]
+# Table 5: VDD and VDDIO pins -0.3 to 4 V; any logic pin -0.3 V to VDDIO + 0.3 V
+# and below 4 V. 4 V is the ceiling for every pin.
+max_voltage_v = 4.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "Bosch BST-BMI270-DS000-08, Table 1, Supply Voltage Core Domain VDD row"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+basis = "Bosch BST-BMI270-DS000-08, Table 1, Supply Voltage I/O Domain VDDIO row"
+
+# Sections 6.2/6.3: the interface comes up in I2C; CSB tied to VDDIO keeps it there
+# (Table 22 note ****: DNC is possible via the internal pull-up, but that is not
+# a strap the binder can resolve, so it is not accepted). Section 6.5: SDO = GND
+# selects 0x68, SDO = VDDIO selects 0x69.
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x68
+address_when_high = 0x69
+spec_toml = '''
+[sensor]
+name = "BMI270 chip-id subset"
+bus = "i2c"
+i2c_address = 0x68
+
+# Section 5.2.1: CHIP_ID, RESET 0x24, read-only.
+[[sensor.register]]
+addr = 0x00
+const = [0x24]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 1, VDD min
+idle_a = 0.000970             # Table 1, A+G performance mode typ (see above)
+read_a = 0.000970
+write_a = 0.000970
+low_power_a = 0.0000035       # Table 1, A+G suspend mode typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3_vddio", "performance_mode_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "chip_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "config_file_upload", "accelerometer_data", "gyroscope_data", "power_mode_state", "fifo", "interrupt_engine", "feature_engine", "auxiliary_i2c_master", "ois_interface", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf"
+title = "Bosch Sensortec BMI270 Datasheet, BST-BMI270-DS000-08, revision 1.6, March 2026"
+locator = "Table 1; Table 5; Section 5.2.1 CHIP_ID; Section 6.3; Section 6.5; Table 22 Pin-out and pin connections"
+sha256 = "f68ce3c74f011a80bbe4b0279c4abe9609a71a5dcda75a951381d77112e005fb"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMP581: Bosch Sensortec barometric pressure sensor, 10-pin LGA.
+#
+# Source: Bosch Sensortec "BMP581 Barometric Pressure Sensor", document
+#   BST-BMP581-DS004-13, revision 1.13, April 2025. Table 4 Electrical
+#   characteristics, Table 5 Interface pin electrical characteristics, Table 6
+#   Absolute maximum ratings, Section 5.6 I2C protocol (slave address), Table 28
+#   Pin description, Section 6.2.3 I2C connection, Section 7.1 Register (0x01)
+#   ASIC identification ID.
+#
+# SUPPLY DRAW is the "high resolution" figure, 75 uA typ (Table 4, OSR set to
+# high resolution, ODR = 30 Hz, 25 C), the highest typical operating current the
+# sheet tabulates; low-power mode at 1 Hz is 1.3 uA and deep standby 0.55 uA. The
+# 260 uA "peak current" row is a maximum DC current, not an operating level. No
+# VDD/VDDIO split is given.
+[[models]]
+id = "bmp581"
+kind = "digital"
+description = "Bosch BMP581 barometric pressure sensor, LGA-10 (strap-selected I2C CHIP_ID subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# The bare part number; BMP585 and BMP390 are different parts, excluded.
+value_re = "(?i)^BMP581$"
+
+[models.params]
+# Table 5, every level a percentage of VDDIO (stated at VDDIO = 1.2/1.8/3.3 V
+# +/-10 %), evaluated at VDDIO = 3.3 V.
+voh   = 2.64     # VOH 80 % min
+vol   = 0.66     # VOL 20 % max
+vih   = 2.31     # VIH 70 % min
+vil   = 0.99     # VIL 30 % max
+supply_static_ua = 75.0    # Table 4, high-resolution mode typ (see above)
+supply_pin = "10"          # VDD
+gnd_pin    = "3"           # VSS
+
+[models.pins]
+# Table 28 Pin description (Figure 23), all 10 pads. SCK/SDI use the bus
+# vocabulary: in I2C they are SCL/SDA (Section 6.2.3, Figure 26).
+"1"  = "vddio"   # digital interface supply, 1.08 to 3.6 V
+"2"  = "scl"     # SCK: SPI clock / I2C SCL
+"3"  = "gnd"     # VSS
+"4"  = "sda"     # SDI: SPI data in / I2C SDA
+"5"  = "sdo"     # SPI data out; in I2C the address bit (Section 5.6)
+"6"  = "csb"     # chip select; connected to VDDIO in I2C (Section 6.2.3)
+"7"  = "int"     # interrupt output
+"8"  = "gnd2"    # VSS
+"9"  = "gnd3"    # VSS
+"10" = "vdd"     # analog supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 6: VDD and VDDIO -0.3 to 4.3 V; I/O pins VSSIO - 0.3 V to VDDIO + 0.3 V.
+max_voltage_v = 4.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "Bosch BST-BMP581-DS004-13, Table 4, Power supply voltage VDD row"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.08
+max_v = 3.6
+basis = "Bosch BST-BMP581-DS004-13, Table 4, Power supply voltage I/Os VDDIO row"
+
+# Section 6.2.3: "In I2C mode, the CSB pin must be connected to VDDIO."
+# Section 5.6: "The I2C slave address of BMP581 is 7'h46 for SDO = 1'b0 and
+# 7'h47 for SDO = 1'b1. SDO must not be floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x46
+address_when_high = 0x47
+spec_toml = '''
+[sensor]
+name = "BMP581 chip-id subset"
+bus = "i2c"
+i2c_address = 0x46
+
+# Section 7.1: CHIP_ID (ASIC identification ID) at 0x01, reset value 0x50.
+[[sensor.register]]
+addr = 0x01
+const = [0x50]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 4, VDD min
+idle_a = 0.000075             # Table 4, high-resolution mode typ
+read_a = 0.000075
+write_a = 0.000075
+low_power_a = 0.00000055      # Table 4, deep standby typ, 25 C
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3_vddio", "high_resolution_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "chip_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "i3c", "pressure_data", "temperature_data", "power_mode_state", "fifo", "interrupt_engine", "nvm", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp581-ds004.pdf"
+title = "Bosch Sensortec BMP581 Barometric Pressure Sensor, BST-BMP581-DS004-13, revision 1.13, April 2025"
+locator = "Table 4; Table 5; Table 6; Section 5.6 I2C protocol; Table 28 Pin description; Section 7.1 CHIP_ID"
+sha256 = "ddcf4202c4fdf2ab6ad86f22b67ba4d2471d76b9ce510397cacfe398400ab439"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMP280: Bosch Sensortec digital pressure sensor, LGA-8 2.0 x 2.5 mm.
+#
+# Source: Bosch Sensortec "BMP280 Data sheet", document BST-BMP280-DS001-26,
+#   revision 1.26, October 2021. Table 2 Parameter specification, Table 3
+#   Absolute maximum ratings, Table 12 Current consumption, Section 4.3.1
+#   Register 0xD0 "id", Section 5.1 Interface selection, Section 5.2 I2C
+#   Interface, Table 26 interface parameters, Table 29 Pin description.
+#
+# SAME DIE FAMILY AND PAD ORDER AS THE BME280 ABOVE (no humidity channel, and a
+# different chip_id), with the same caveat on direction: Figure 14 numbers the
+# pads clockwise in top view. Levels are fractions of VDDIO, evaluated here at
+# 3.3 V (the BME280 entry evaluates at the 1.8 V typical; this one at the rail
+# the boards it was written for use).
+#
+# SUPPLY DRAW: Table 12 gives currents normalised to one measurement per second;
+# the ultra-high-resolution row, 24.8 uA typ at 1 Hz forced mode, is the highest
+# of them and is carried here. The current during a conversion is far higher
+# (Table 2 Ipeak 720 uA typ, 1120 uA max), and a fast normal-mode ODR approaches
+# that; which applies is firmware this entry does not know.
+[[models]]
+id = "bmp280"
+kind = "digital"
+description = "Bosch BMP280 pressure sensor, LGA-8 (strap-selected I2C chip_id subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# The bare part number (cover page; the ordering code is 0.273.300.436-1NV, a
+# Bosch number, not a value spelling). BME280/BMP180/BMP388 are excluded.
+value_re = "(?i)^BMP280$"
+
+[models.params]
+# Table 26, every level a fraction of VDDIO, evaluated at VDDIO = 3.3 V.
+voh   = 2.64     # Voh 0.8 x VDDIO min, VDDIO = 1.62 V row, ioh = 1 mA (SDO, SDI)
+vol   = 0.66     # Vol_SDI 0.2 x VDDIO max, VDDIO = 1.62 V row, iol = 3 mA (I2C)
+vih   = 2.64     # Vih_si 0.8 x VDDIO min, VDDIO = 1.2 to 3.6 V
+vil   = 0.66     # Vil_si 0.2 x VDDIO max, VDDIO = 1.2 to 3.6 V
+supply_static_ua = 24.8    # Table 12, ultra high resolution, 1 Hz forced mode, typ
+supply_pin = "8"           # VDD
+gnd_pin    = "1"           # GND
+
+[models.pins]
+# Table 29 Pin description, all 8 pads. SDI/SCK use the bus vocabulary.
+"1" = "gnd"
+"2" = "csb"      # chip select; VDDIO selects I2C (Section 5.1)
+"3" = "sda"      # SDI: I2C SDA / SPI SDI
+"4" = "scl"      # SCK: I2C SCL / SPI SCK
+"5" = "sdo"      # SPI data out; in I2C the address LSB (Section 5.2)
+"6" = "vddio"    # digital interface supply, 1.2 to 3.6 V
+"7" = "gnd2"
+"8" = "vdd"      # analog supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 3: VDD and VDDIO -0.3 to 4.25 V; interface pins -0.3 V to VDDIO + 0.3 V.
+max_voltage_v = 4.25
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+basis = "Bosch BST-BMP280-DS001-26, Table 2, Sensor supply voltage VDD row"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+basis = "Bosch BST-BMP280-DS001-26, Table 2, Interface supply voltage VDDIO row"
+
+# Section 5.1: "If CSB is connected to VDDIO, the I2C interface is active."
+# Section 5.2: SDO to GND gives 0x76, SDO to VDDIO gives 0x77; "The SDO pin
+# cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BMP280 chip-id subset"
+bus = "i2c"
+i2c_address = 0x76
+
+# Section 4.3.1 / Table 18: register 0xD0 "id", chip_id = 0x58, readable as soon
+# as the power-on reset has finished.
+[[sensor.register]]
+addr = 0xD0
+const = [0x58]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 2, VDD min
+idle_a = 0.0000248            # Table 12, ultra high resolution at 1 Hz, typ
+read_a = 0.0000248
+write_a = 0.0000248
+low_power_a = 0.0000001       # Table 2, sleep current IDDSL typ, 25 C
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "chip_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "calibration_coefficients", "pressure_data", "temperature_data", "power_mode_state", "conversion_peak_current", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf"
+title = "Bosch Sensortec BMP280 Data sheet, BST-BMP280-DS001-26, revision 1.26, October 2021"
+locator = "Table 2; Table 3; Table 12; Section 4.3.1 Register 0xD0 id; Sections 5.1 and 5.2; Table 26; Table 29 Pin description"
+sha256 = "473ff27d9df698b4757e36b36209f83b9f637b592c999d5fabe2a9453a488da6"
+
