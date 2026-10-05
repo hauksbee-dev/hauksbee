@@ -272,6 +272,7 @@ impl ExtractedBoard {
     #[must_use]
     pub fn net_lint(&self) -> NetLintReport {
         let mut report = NetLintReport::default();
+        let _members = MemberIndexScope::new(self);
         check_i2c_pullups(self, &mut report);
         check_sd_pullups(self, &mut report);
         check_floating_control_pins(self, &mut report);
@@ -624,9 +625,61 @@ fn is_pin_array_package(fp: &str) -> bool {
     false
 }
 
-/// All (component, pin) members of a net id.
+/// (component, pin) indices of every net's members, for the board a
+/// [`ExtractedBoard::net_lint`] run is on (keyed by its address): the checks ask
+/// for members net by net, and scanning every component per ask was quadratic
+/// in the part count on a large board.
+type MemberIndex = (usize, std::collections::HashMap<i64, Vec<(usize, usize)>>);
+
+std::thread_local! {
+    static MEMBER_INDEX: std::cell::RefCell<Option<MemberIndex>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Installs the member index for one lint run; removes it when dropped.
+struct MemberIndexScope;
+
+impl MemberIndexScope {
+    fn new(board: &ExtractedBoard) -> Self {
+        let mut by_net: std::collections::HashMap<i64, Vec<(usize, usize)>> =
+            std::collections::HashMap::new();
+        for (ci, c) in board.components.iter().enumerate() {
+            for (pi, p) in c.pins.iter().enumerate() {
+                if let Some(net) = p.net {
+                    by_net.entry(net).or_default().push((ci, pi));
+                }
+            }
+        }
+        let key = std::ptr::from_ref(board) as usize;
+        MEMBER_INDEX.with(|m| *m.borrow_mut() = Some((key, by_net)));
+        Self
+    }
+}
+
+impl Drop for MemberIndexScope {
+    fn drop(&mut self) {
+        MEMBER_INDEX.with(|m| *m.borrow_mut() = None);
+    }
+}
+
+/// All (component, pin) members of a net id, in component then pin order.
 fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
-    board.net_members(net_id)
+    let key = std::ptr::from_ref(board) as usize;
+    let indexed = MEMBER_INDEX.with(|m| {
+        let m = m.borrow();
+        let (_, by_net) = m.as_ref().filter(|(k, _)| *k == key)?;
+        Some(by_net.get(&net_id).cloned().unwrap_or_default())
+    });
+    indexed.map_or_else(
+        || board.net_members(net_id),
+        |at| {
+            let pick = |(ci, pi): (usize, usize)| {
+                let c = &board.components[ci];
+                (c, &c.pins[pi])
+            };
+            at.into_iter().map(pick).collect()
+        },
+    )
 }
 
 /// Is this component a capacitor (decoupling, bulk or crystal load)?
