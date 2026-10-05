@@ -544,6 +544,98 @@ fn comparator_output_is_held_by_its_output_stage_in_ac() {
     );
 }
 
+/// A push-pull comparator powered from `vcc_dc` (the `VINJ` injection, so the
+/// sweep measures supply -> output), its ground pin on `gnd_dc` (a plain DC
+/// source, AC ground), its non-inverting input at `vin` against board ground,
+/// driving a 10 k load. Card VOL/VOH 0.05/4.95 V.
+fn supplied_comparator(vcc_dc: f64, gnd_dc: f64, vin: f64, inject_gnd: bool) -> Circuit {
+    let mut ckt = Circuit::new();
+    let vcc = ckt.node("vcc");
+    let gnd = ckt.node("gnd_pin");
+    let inp = ckt.node("inp");
+    let out = ckt.node("out");
+    let (vcc_name, gnd_name) = if inject_gnd {
+        ("VCC", "VINJ")
+    } else {
+        ("VINJ", "VGND")
+    };
+    add_vdc(&mut ckt, vcc_name, vcc, NodeId::GROUND, vcc_dc);
+    add_vdc(&mut ckt, gnd_name, gnd, NodeId::GROUND, gnd_dc);
+    add_vdc(&mut ckt, "VP", inp, NodeId::GROUND, vin);
+    add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 10e3);
+    ckt.add(Device::Comparator {
+        name: "U1".into(),
+        out,
+        inp,
+        inn: NodeId::GROUND,
+        out_lo: 0.05,
+        out_hi: 4.95,
+        hysteresis: 0.003,
+        tpd_s: 0.0,
+        supply: hauksbee_ir::Supply {
+            hi: Some(vcc),
+            lo: Some(gnd),
+            quiescent_a: 0.0,
+        },
+    });
+    ckt
+}
+
+/// `|V(out)|` per volt of the `VINJ` injection, and the DC output voltage.
+fn injected_gain_and_dc(ckt: &Circuit) -> (f64, f64) {
+    let resp = AcAnalysis::new(opts()).run(ckt, &spot(1e3)).unwrap();
+    let g = resp.points[0].node(ckt, "out").unwrap().norm();
+    let mut ws = hauksbee_solve::Workspace::new(ckt);
+    hauksbee_solve::dc_operating_point(&mut ws, ckt, &opts()).unwrap();
+    let oi = ws.layout.node(ckt.find_node("out").unwrap()).unwrap();
+    (g, ws.x[oi])
+}
+
+/// A push-pull comparator cannot drive above its own supply. Powered from
+/// 3.3 V, a card characterised at VS = 5 V (VOH 4.95 V) drives ~3.3 V at DC,
+/// and in AC its high output follows the supply (supply ripple reaches the
+/// output at unit gain) instead of sitting at AC ground.
+#[test]
+fn supply_limited_comparator_high_output_tracks_its_supply() {
+    let (g, vout) = injected_gain_and_dc(&supplied_comparator(3.3, 0.0, 1.0, false));
+    assert!(
+        (vout - 3.3).abs() < 2e-3,
+        "high output must be clamped to the 3.3 V supply, got {vout}"
+    );
+    assert!(
+        (g - 1.0).abs() < 1e-3,
+        "supply-limited high output must follow its supply in AC, |H|={g}"
+    );
+}
+
+/// A low output held at a ground pin lifted above VOL (a sense shunt, a lifted
+/// rail) follows that pin in AC, as its DC stamp does.
+#[test]
+fn lifted_ground_comparator_low_output_tracks_its_ground_pin() {
+    let (g, vout) = injected_gain_and_dc(&supplied_comparator(5.0, 1.0, -1.0, true));
+    assert!(
+        (vout - 1.0).abs() < 2e-3,
+        "low output on its 1 V ground pin: {vout}"
+    );
+    assert!(
+        (g - 1.0).abs() < 1e-3,
+        "low output must follow its ground pin, |H|={g}"
+    );
+}
+
+/// The controls: a supply above the card's VOH leaves the fixed 4.95 V rail
+/// (AC ground), and a LOW output never follows the positive supply.
+#[test]
+fn comparator_output_ignores_supply_when_the_clamp_does_not_bind() {
+    let (g, vout) = injected_gain_and_dc(&supplied_comparator(5.0, 0.0, 1.0, false));
+    assert!((vout - 4.95).abs() < 2e-3, "VOH at a 5 V supply: {vout}");
+    assert!(g < 1e-6, "fixed VOH is AC ground, |H|={g}");
+
+    let (g, vout) = injected_gain_and_dc(&supplied_comparator(3.3, 0.0, -1.0, false));
+    assert!((vout - 0.05).abs() < 2e-3, "VOL: {vout}");
+    assert!(g < 1e-6, "a low output must not follow the supply, |H|={g}");
+}
+
 /// At a cold operating point (vbe ≈ 0, vbc strongly reverse) the true
 /// small-signal gmu is ~0 and the DC stamp leaves gpi/gmu UNFLOORED; a gmin
 /// floor on gmu coupled a floating base to a driven collector through the

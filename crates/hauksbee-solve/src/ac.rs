@@ -29,7 +29,8 @@
 //! single DC operating point, so it sees the *averaged* small-signal behaviour,
 //! not switching-level (cycle-by-cycle) dynamics, and it says nothing about
 //! large-signal stability. Behavioral comparators have no small-signal input
-//! path and contribute only their quiescent output conductance. Voltage
+//! path and contribute only their quiescent output conductance (plus unit
+//! coupling to the supply or ground pin a supply-limited rail follows). Voltage
 //! switches DO have a continuous small-signal model (the smooth tanh
 //! conductance is differentiable): they contribute their quiescent
 //! conductance PLUS the control transconductance
@@ -587,16 +588,34 @@ fn stamp_ac(
                 }
             }
         }
-        Device::Comparator { out, .. } => {
+        Device::Comparator {
+            out,
+            out_lo,
+            out_hi,
+            supply,
+            ..
+        } => {
             // Digital output: no small-signal INPUT path (the bang-bang
             // transfer has no tangent), but the DC stamp holds the output at
-            // its rail through a 1-S output stage on every path, small-
-            // signal that rail is AC ground, so the quiescent output
-            // conductance stays. Stamping nothing left the output node a
-            // gmin-open, and anything AC-coupled to it saw the wrong (near-
-            // infinite) impedance instead of the stiff output stage.
+            // its rail through a 1-S output stage on every path, so the
+            // quiescent output conductance stays. Stamping nothing left the
+            // output node a gmin-open, and anything AC-coupled to it saw the
+            // wrong (near-infinite) impedance instead of the stiff output
+            // stage. A fixed rail is AC ground; but an output held at a rail
+            // that tracks its own supply or ground pin (stamp.rs,
+            // `comparator_swing`) follows that pin with unit gain, the same
+            // tangent the DC stamp uses, so supply ripple reaches the output.
             if let Some(oi) = n(*out) {
                 sys.add(oi, oi, Complex64::new(1.0, 0.0));
+                let held = crate::stamp::comparator_held_pin(
+                    |n| op.v(n),
+                    op.v(*out),
+                    (*out_lo, *out_hi),
+                    *supply,
+                );
+                if let Some(si) = held.and_then(n).filter(|&si| si != oi) {
+                    sys.add(oi, si, Complex64::new(-1.0, 0.0));
+                }
             }
         }
         // Controlled sources are linear and frequency-independent: the AC

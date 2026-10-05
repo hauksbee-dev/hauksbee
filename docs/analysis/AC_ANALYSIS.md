@@ -35,7 +35,7 @@ linearized at the DC operating point:
 | MOSFET | `gm`, `gds` at the bias (triode / saturation / subthreshold) |
 | Op-amp (behavioral) | `out = gain*(vp - vn)` through the output stage, open when rail-pinned at the OP |
 | V-switch | quiescent conductance at the OP control voltage, plus the control transconductance `gm = (v_a - v_b) * dgsw/dvctrl` |
-| Comparator | digital output: no small-signal path |
+| Comparator | digital output: no small-signal input path; 1 S output stage, coupled at unit gain to the supply or ground pin its held rail follows |
 
 ### What is linearized
 
@@ -331,8 +331,9 @@ single-pole op-amp loop described above, explicitly labeled as representative.
   those.
 - **Behavioral blocks.** The behavioral op-amp uses a single-gain tangent (no
   internal poles unless they are in the surrounding RC network). Comparators
-  and digital outputs have no small-signal path and contribute only their
-  quiescent conductance. Voltage switches do have a continuous small-signal
+  and digital outputs have no small-signal input path and contribute only their
+  quiescent conductance; a comparator whose held rail is limited by its own
+  supply or ground pin also follows that pin at unit gain, as its DC stamp does. Voltage switches do have a continuous small-signal
   model (the smooth tanh conductance is differentiable) and contribute their
   quiescent conductance plus the control transconductance; that modulation path
   can be dropped with `effects.switch_ctrl_gm = false`, which leaves only the

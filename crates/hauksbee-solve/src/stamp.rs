@@ -3210,6 +3210,38 @@ pub fn comparator_swing_volts(
     (lo, if hi < lo { lo } else { hi })
 }
 
+/// The supply pin a push-pull comparator's settled output follows with unit
+/// gain at node voltages `v`, by `comparator_swing`'s rule: the high end while
+/// the output is high and its supply pin sits below the card's VOH, the low end
+/// while it is low and its ground/negative pin sits above VOL. `None` when the
+/// held end is the card's fixed level (small-signal AC ground). The `.ac` stamp
+/// reads this so a supply-limited output carries the DC stamp's tangent.
+#[must_use]
+pub fn comparator_held_pin(
+    v: impl Fn(NodeId) -> f64,
+    v_out: f64,
+    (out_lo, out_hi): (f64, f64),
+    supply: hauksbee_ir::Supply,
+) -> Option<NodeId> {
+    let hi_pin = supply.hi?;
+    let pin_lo = supply.lo.map_or(0.0, &v);
+    let lo = (pin_lo > out_lo).then_some(supply.lo).flatten();
+    let lo_v = if pin_lo > out_lo { pin_lo } else { out_lo };
+    let pin_hi = v(hi_pin);
+    let (hi, hi_v) = if pin_hi < out_hi {
+        (Some(hi_pin), pin_hi)
+    } else {
+        (None, out_hi)
+    };
+    // A collapsed swing (supply below VOL) holds the low end either way.
+    let (hi, hi_v) = if hi_v < lo_v { (lo, lo_v) } else { (hi, hi_v) };
+    if v_out > 0.5 * (lo_v + hi_v) {
+        hi
+    } else {
+        lo
+    }
+}
+
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
