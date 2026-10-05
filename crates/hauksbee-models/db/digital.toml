@@ -4348,6 +4348,87 @@ y = "a"
 implements = ["buffer", "logic_levels", "reduced_input_threshold"]
 missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
 
+[[models]]
+id = "sn74lv1t126"
+kind = "digital"
+description = "TI SN74LV1T126 single-supply buffer with 3-state output (active-high OE) and level-shifting (reduced-threshold, 5.5 V tolerant) inputs, SOT-23-5 / SC70-5"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lv1t126.pdf"
+title = "Texas Instruments SN74LV1T126 datasheet, SCLS744D, revised February 2024"
+locator = "Table 5-1 Pin Functions p.4; 6.1 Absolute Maximum Ratings, 6.3 Recommended Operating Conditions p.5; 6.4 Thermal Information and 6.5 Electrical Characteristics p.6; 6.6 Switching Characteristics p.7; 8.4 Function Tables"
+sha256 = "4dbf5bdaad9de66369ffd8481470270e6a1b0471cb2f12b7cf2b4a7b43b3dbe1"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "enable/disable times are not modelled; only the DC function table, the reduced input thresholds and a single tpd are"
+[[models.source.pinout]]
+package = "DBV (SOT-23, 5) / DCK (SC70, 5)"
+pins = { "1" = "OE", "2" = "A", "3" = "GND", "4" = "Y", "5" = "VCC" }
+
+[models.match]
+# DBV (SOT-23-5) and DCK (SC70-5) are the only packages and share the Table
+# 5-1 numbering below.
+value_re = "(?i)^(SN)?74LV1T126(DBV|DCK)?[RT]?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -20 uA, VCC 3.3 V
+vol = 0.1
+vih = 1.39         # VCC 3 to 3.3 V, -40 to 125 C
+vil = 0.65         # VCC 3 to 3.6 V, -40 to 125 C
+# VCC = 3.3 V, IOH = -5.5 mA: VOH 2.8 V min (-40 to 125 C) against 3.2 V,
+# 0.4 V / 5.5 mA = 73 Ohm, the worst row (5 V: 0.4 V / 8 mA = 50 Ohm).
+ro = 73.0
+tpd_s = 9.0e-9     # 6.6 Any In to Y, VCC 3.3 V, CL 30 pF, -65 to 125 C max
+supply_static_ua = 10.0
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 6.5, -40 to 125 C columns (the guaranteed full-range figures). VIL dips from
+# 0.71 V at 2.75 V to 0.65 V at 3 V exactly as the table states.
+vih = [[1.65, 1.0], [1.8, 1.0], [2.0, 1.03], [2.25, 1.18], [2.5, 1.18], [2.75, 1.25], [3.0, 1.39], [3.3, 1.39], [3.6, 1.48], [4.5, 2.03], [5.0, 2.03], [5.5, 2.11]]
+vil = [[1.65, 0.55], [2.0, 0.55], [2.25, 0.71], [2.75, 0.71], [3.0, 0.65], [3.6, 0.65], [4.5, 0.8], [5.5, 0.8]]
+voh = [[1.65, 1.55], [5.5, 5.4]]
+
+[models.pins]
+# Table 5-1, DBV and DCK: 1 OE (active high), 2 A, 3 GND, 4 Y, 5 VCC.
+"1" = "oe"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025   # IO continuous abs max
+max_voltage_v = 7.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 278.0    # DBV; DCK 289.2
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.6
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74LV1T126 SCLS744D, 6.3 VCC 1.6 V to 5.5 V; 6.1 VCC -0.5 V to 7.0 V"
+
+[models.logic]
+inputs = ["a", "oe"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+[models.logic.tristate]
+# 8.4 Function Tables: OE H passes A to Y, OE L puts Y in Z.
+y = { enable = "oe", active = "high" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels", "reduced_input_threshold"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
 # ── NTS0104GU12: 4-bit auto-direction translator, IDENTITY ONLY ─────────────
 # Pass-gate plus one-shot edge accelerators (datasheet section 14.2), the same
 # architecture as the TXS0108E, and the sheet publishes no pass-gate
