@@ -479,7 +479,7 @@ pub fn numeric_rail_magnitude(n: &str) -> Option<f64> {
 /// Is this component a plain two-terminal resistor (the kind that can be a
 /// pull-up)?
 ///
-/// Delegates to [`crate::part_class::classify_two_terminal`], which answers from
+/// Delegates to `crate::part_class::classify_two_terminal`, which answers from
 /// the model DB's declared passive class through the assembly witness and only
 /// falls back to the designator / `lib_id` strings when no better evidence
 /// exists. A bare designator-prefix test loses a real resistor numbered into an

@@ -19,7 +19,7 @@
 //!   symbols and pad numbers (two-terminal passives by class only, so a
 //!   different value or an R/C pad swap is not a deviation). A net with twenty
 //!   or more members reads as a bus.
-//! - A group is a **repeated cell** only when at least [`MIN_CELLS`] anchors
+//! - A group is a **repeated cell** only when at least `MIN_CELLS` anchors
 //!   exist and one whole-part signature covers at least 85 % of them. Several
 //!   well-populated variants (two neuron types, odd and even channels) fail
 //!   that test and the check stays silent.
@@ -37,7 +37,7 @@
 //! whole part is an outlier. The same evidence is read per transistor unit:
 //! a (base, collector, emitter) wiring class used by a minority of the units
 //! of one part type is reported when exchanging two of its terminals gives a
-//! class that at least [`MIN_CELLS`] units, and at least twice as many, use.
+//! class that at least `MIN_CELLS` units, and at least twice as many, use.
 //! That is the shape of a base and collector transposed in one symbol, and it
 //! is reported once with the affected parts listed.
 

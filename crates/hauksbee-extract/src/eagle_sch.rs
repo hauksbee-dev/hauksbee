@@ -222,7 +222,7 @@ fn kind_of_direction(direction: &str) -> &'static str {
 /// Every physical part's package-pad pins, sorted.
 ///
 /// Each entry is (reference, pad, pin name, pin kind). The kind comes from the symbol pin's stated
-/// `direction` ([`kind_of_direction`]); empty when the library states none.
+/// `direction` (`kind_of_direction`); empty when the library states none.
 ///
 /// # Errors
 ///
