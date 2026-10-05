@@ -1962,6 +1962,63 @@ max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TMJ (operating range 0/
 theta_ja_c_per_w = 107.0     # Electrical Characteristics, θJA SOT223 (Note 9: 5 mm x 5 mm pad, 2 oz FR-4)
 theta_jc_c_per_w = 15.0      # Electrical Characteristics, θJC SOT223, case point on the tab
 
+# ── RT9013-33 (Richtek 500 mA low-noise LDO, fixed 3.3 V) ───────────────────
+# Source: Richtek RT9013 DS9013-10, April 2011. richtek.com no longer serves
+# the DS9013 PDFs at a static URL (every assets/product_file/RT9013/DS9013-NN
+# path returns 404 as of 2026-10-05), so the copy cited is a third-party
+# mirror of the unmodified Richtek document; the sha256 pins the exact file.
+# Ordering Information: RT9013-[voltage][plating][package], plating P/G,
+# package Y = SC-82, B = SOT-23-5, U5 = SC-70-5, QW = WDFN-6L 2x2. Functional
+# Pin Description: SOT-23-5 and SC-70-5 share 1 VIN, 2 GND, 3 EN, 4 NC,
+# 5 VOUT; SC-82 (1 EN, 2 GND, 3 VOUT, 4 VIN) and WDFN differ. Only B is
+# matched: U5 shares the map but has its own thermal rows (333 C/W, no θJC).
+# The voltage code is required ("33" = 3.3 V).
+[[models]]
+id = "rt9013_33_sot23_5"
+kind = "vreg"
+description = "Richtek RT9013-33 500mA low-noise LDO, 3.3V fixed, SOT-23-5 (EN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://monitor.espec.ws/download.php?id=137579"
+title = "Richtek RT9013 500mA, low dropout, low noise ultra-fast without bypass capacitor CMOS LDO regulator, DS9013-10, April 2011 (third-party mirror)"
+locator = "Ordering Information and Pin Configurations p.1; Functional Pin Description p.2; Absolute Maximum Ratings, Recommended Operating Conditions and Electrical Characteristics p.3"
+sha256 = "b87f9e973b3a4305b25995deadacb63b2f83181cf5e29d84a653e1790e6ac816"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.234
+high = 3.366
+unit = "V"
+kind = "specification-limits"
+basis = "RT9013 DS9013-10 Electrical Characteristics, Output Voltage Accuracy -2 % to +2 % at IOUT = 10 mA, TA = 25 C"
+
+[models.match]
+value_re = "(?i)^RT9013-33[GP]B$"
+
+[models.params]
+vout       = 3.3      # fixed-output code 33; accuracy +-2 % at IOUT = 10 mA
+dropout_v  = 0.4      # VDROP max @ IOUT = 500 mA, 2.7 V <= VIN <= 5.5 V (250 mV typ)
+cout_min_f = 1.0e-6   # Features: "Output only 1uF capacitor required for stability"
+iq_a       = 25.0e-6  # IQ typ @ VEN = 5 V, IOUT = 0 (50 uA max; shutdown 0.7 uA typ)
+
+[models.pins]
+# Functional Pin Description, SOT-23-5 / SC-70-5 column (B = SOT-23-5).
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.5          # 500 mA rated; ILIM 0.5 A min at 2.7 V <= VIN <= 5.5 V
+max_voltage_v = 6.0          # Absolute Maximum Ratings, supply input voltage (2.2 to 5.5 V recommended)
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, junction temperature
+theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-5 (Note 2: JEDEC 51-3 board)
+theta_jc_c_per_w = 25.0      # Absolute Maximum Ratings, θJC SOT-23-5
+
 # ── MIC5205-3.3 ──────────────────────────────────────────────────────────────
 # Microchip (Micrel) 150 mA low-noise LDO, SOT-23-5. 17 instances on the
 # SparkFun RedBoard.
