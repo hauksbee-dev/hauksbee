@@ -964,7 +964,9 @@ impl StressMonitor {
         let package = (metas.iter())
             .map(|m| {
                 let next = packages.len();
-                *packages.entry(strip_unit_suffix(&m.reference)).or_insert(next)
+                *packages
+                    .entry(strip_unit_suffix(&m.reference))
+                    .or_insert(next)
             })
             .collect();
         Self {
