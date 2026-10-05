@@ -18,11 +18,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+    is_resistor, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
-use hauksbee_ir::evidence::Assumption;
+use hauksbee_ir::evidence::{Assumption, ModelUncertainty};
 use hauksbee_models::derating::{temp_span, TempRef};
-use hauksbee_models::{EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope};
+use hauksbee_models::value::parse_value;
+use hauksbee_models::{
+    ComponentKind, EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope,
+};
 
 use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
 
@@ -54,6 +57,22 @@ pub(crate) const fn finding_severity(severity: EnvelopeSeverity) -> Severity {
         EnvelopeSeverity::Serious => Severity::High,
         EnvelopeSeverity::Medium => Severity::Medium,
         EnvelopeSeverity::Note => Severity::Low,
+    }
+}
+
+/// `severity`, lowered to `cap` when it is more severe.
+const fn at_most(severity: Severity, cap: Severity) -> Severity {
+    const fn rank(s: Severity) -> u8 {
+        match s {
+            Severity::Low => 0,
+            Severity::Medium => 1,
+            Severity::High => 2,
+        }
+    }
+    if rank(severity) > rank(cap) {
+        cap
+    } else {
+        severity
     }
 }
 
@@ -96,6 +115,115 @@ fn model_output_range(model: &ModelEntry) -> Option<RailRange> {
         .or_else(|| model.params.get_f64("vout").map(RailRange::point))
 }
 
+/// Ohms of a fitted two-terminal resistor between nets `a` and `b` (either
+/// way round), or `None` when the part is not one.
+fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<f64> {
+    if !AssemblyState::of(c).is_present() || !is_resistor(c) {
+        return None;
+    }
+    let nets: Vec<i64> = c.pins.iter().filter_map(|pin| pin.net).collect();
+    let [first, second] = nets[..] else {
+        return None;
+    };
+    let joins = (first == a && b(second)) || (second == a && b(first));
+    let ohms = parse_value(&c.value).map(|value| value.si)?;
+    (joins && ohms.is_finite() && ohms > 0.0).then_some(ohms)
+}
+
+/// Parallel combination of `ohms`, `None` when empty.
+fn parallel(ohms: impl Iterator<Item = f64>) -> Option<f64> {
+    let g: f64 = ohms.map(f64::recip).sum();
+    (g > 0.0).then(|| g.recip())
+}
+
+/// The output a feedback-regulated converter sets with the board's own
+/// divider: `Vref * (1 + Rtop / Rbottom)`, Rtop from the feedback pin to the
+/// output (or a net tied to it) and Rbottom from the feedback pin to ground,
+/// across the card's stated reference interval when it gives one. `None`
+/// when the card has no feedback pin or the divider is not on the board, in
+/// which case the card's own set point stands.
+fn feedback_output_range(
+    board: &ExtractedBoard,
+    comp: &Component,
+    model: &ModelEntry,
+    uncertainty: &[ModelUncertainty],
+    out_net: i64,
+) -> Option<RailRange> {
+    let feedback = model.behavioral.converter.as_ref()?.feedback.as_ref()?;
+    let fb_net = role_net_id(comp, model, &feedback.pin)?;
+    let tied = tied_nets(board);
+    let on_output = |n: i64| n == out_net || tied.get(&out_net).is_some_and(|set| set.contains(&n));
+    let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
+    let top = parallel(
+        board
+            .components
+            .iter()
+            .filter_map(|c| resistor_between(c, fb_net, on_output)),
+    )?;
+    let bottom = parallel(
+        board
+            .components
+            .iter()
+            .filter_map(|c| resistor_between(c, fb_net, grounded)),
+    )?;
+    let (lo, hi) = uncertainty
+        .iter()
+        .find_map(|u| match u {
+            ModelUncertainty::Interval {
+                parameter,
+                low,
+                high,
+                ..
+            } if parameter == "feedback_reference" && low <= high => Some((*low, *high)),
+            _ => None,
+        })
+        .unwrap_or((feedback.vref_v, feedback.vref_v));
+    let gain = 1.0 + top / bottom;
+    Some(RailRange {
+        min_v: lo * gain,
+        max_v: hi * gain,
+    })
+}
+
+/// Nets joined by a fitted net tie or near-zero-ohm link, each net mapped to
+/// every other net of its tied group.
+fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
+    let is_tie = |c: &Component| {
+        let text = format!("{} {}", c.lib_id, c.footprint).to_ascii_lowercase();
+        let named_tie = text.contains("nettie") || text.contains("net_tie");
+        let zero_ohm = is_resistor(c)
+            && parse_value(&c.value).is_some_and(|v| v.si.is_finite() && v.si <= 0.1);
+        AssemblyState::of(c).is_present() && (named_tie || zero_ohm)
+    };
+    let mut groups: Vec<BTreeSet<i64>> = Vec::new();
+    for c in board.components.iter().filter(|c| is_tie(c)) {
+        let nets: BTreeSet<i64> = c
+            .pins
+            .iter()
+            .filter_map(|p| p.net)
+            .filter(|&n| n != 0)
+            .collect();
+        if nets.len() < 2 {
+            continue;
+        }
+        let (merged, rest): (Vec<_>, Vec<_>) =
+            groups.into_iter().partition(|g| !g.is_disjoint(&nets));
+        let mut group = nets;
+        for g in merged {
+            group.extend(g);
+        }
+        groups = rest;
+        groups.push(group);
+    }
+    let mut map = BTreeMap::new();
+    for g in groups {
+        for &n in &g {
+            map.insert(n, g.iter().copied().filter(|&o| o != n).collect());
+        }
+    }
+    map
+}
+
 fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, RailRange> {
     let mut ranges = BTreeMap::new();
     for (comp, model) in super::resolved_components(board, lib) {
@@ -114,8 +242,33 @@ fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64,
             });
         let Some(role) = output_role else { continue };
         if let Some(net_id) = role_net_id(comp, &model, role) {
+            // The library keeps a card's declared uncertainty on the
+            // resolution's provenance, not on the compiled entry.
+            let uncertainty = AssemblyState::of(comp)
+                .fitted()
+                .and_then(|part| resolve(lib, part).provenance)
+                .map(|source| source.uncertainty().to_vec())
+                .unwrap_or_default();
+            let range =
+                feedback_output_range(board, comp, &model, &uncertainty, net_id).unwrap_or(range);
             ranges.insert(net_id, range);
         }
+    }
+    // A regulated net reaches the loads through net ties and zero-ohm links
+    // as the same rail: the level is the regulator's, not one the far net's
+    // name suggests.
+    let tied = tied_nets(board);
+    let spread: Vec<(i64, RailRange)> = ranges
+        .iter()
+        .flat_map(|(&net, &range)| {
+            tied.get(&net)
+                .into_iter()
+                .flatten()
+                .map(move |&other| (other, range))
+        })
+        .collect();
+    for (net, range) in spread {
+        ranges.entry(net).or_insert(range);
     }
     // A fitted module's own supply pins (a dev board's 5V/3V3 header), unless
     // a regulator on the board already defines the net.
@@ -172,6 +325,15 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
         let Some(model) = resolve(lib, part).model else {
             continue;
         };
+        // Only a part that manages a cell (a charger or power-path card, or
+        // any card that states the chemistry) makes its battery pin a battery
+        // net. A chip that merely CONSUMES backup power on a VBAT pin (an
+        // MCU's or RTC's backup domain) is routinely strapped to a regulated
+        // rail; its pin says nothing about what feeds that net.
+        if model.kind != ComponentKind::Vreg && model.params.get_str("battery_chemistry").is_none()
+        {
+            continue;
+        }
         let Some(battery_role) = ["bat", "vbat", "battery"].into_iter().find(|role| {
             model
                 .pins
@@ -245,6 +407,18 @@ impl<'a> RailResolver<'a> {
     fn range(&self, net_id: i64) -> RailKnowledge {
         self.solved(net_id)
             .map_or_else(|| self.declared(net_id), RailKnowledge::Known)
+    }
+
+    /// True when the net's level is only the ±5 % band its NAME suggests: no
+    /// run solved it, and no regulator, battery or ground identity defines it.
+    fn assumed_from_name(&self, net_id: i64) -> bool {
+        self.solved(net_id).is_none()
+            && !self.regulators.contains_key(&net_id)
+            && !self.batteries.contains_key(&net_id)
+            && self
+                .board
+                .net(net_id)
+                .is_some_and(|n| !is_ground(&n.name) && power_rail_voltage(&n.name).is_some())
     }
 
     fn declared(&self, net_id: i64) -> RailKnowledge {
@@ -466,13 +640,56 @@ fn envelope_lint_with_tolerance(
                     if range.min_v >= *min_v - min_tol && range.max_v <= *max_v + max_tol {
                         continue;
                     }
+                    let above_abs_max = abs_max_v.is_some_and(|limit| range.max_v > limit);
                     let mut severity = finding_severity(envelope.severity());
-                    if abs_max_v.is_some_and(|limit| range.max_v > limit) {
+                    if above_abs_max {
                         severity = raised_one_band(severity);
                     }
-                    let fix = compatible_supply_rail(&resolver, net_id, *min_v, *max_v)
-                        .map(|candidate| format!(" Tie {pin} to compatible rail '{candidate}'."))
-                        .unwrap_or_default();
+                    // Only a tolerance corner leaves the window: the nominal
+                    // level is inside it and nothing reaches abs max. That is
+                    // a margin question, never a serious one.
+                    let nominal = f64::midpoint(range.min_v, range.max_v);
+                    let nominal_inside = nominal >= *min_v - min_tol && nominal <= *max_v + max_tol;
+                    // Declared ranges only: a solved span's midpoint is not
+                    // a nominal, and a solved excursion is what happened.
+                    let declared_only = resolver.solved(net_id).is_none();
+                    if declared_only && nominal_inside && !above_abs_max {
+                        severity = at_most(severity, Severity::Medium);
+                    }
+                    // A band the net's name implies is an assumption about a
+                    // level nothing on the board states: it can flag a margin
+                    // to check, not a fault, and it gives no basis for
+                    // rewiring the part to another rail.
+                    let assumed = resolver.assumed_from_name(net_id);
+                    let fix = if assumed {
+                        let cap = if nominal_inside && !above_abs_max {
+                            Severity::Low
+                        } else {
+                            Severity::Medium
+                        };
+                        severity = at_most(severity, cap);
+                        format!(
+                            " The range is assumed: ±5 % around the {nominal:.3} V the net name \
+                             implies, since no regulator, battery or solved run states this \
+                             rail's level; confirm the real supply tolerance."
+                        )
+                    } else if declared_only && nominal_inside && !above_abs_max {
+                        // The rail's own nominal suits the part: moving the
+                        // pin to another rail would change the circuit, while
+                        // the margin lives in the rail's set point.
+                        format!(
+                            " The {nominal:.3} V nominal is inside the window; only the rail's \
+                             tolerance corner leaves it, so tighten or lower the set point \
+                             (feedback divider, regulator grade) or use a part rated for the \
+                             full range."
+                        )
+                    } else {
+                        compatible_supply_rail(&resolver, net_id, *min_v, *max_v)
+                            .map(|candidate| {
+                                format!(" Tie {pin} to compatible rail '{candidate}'.")
+                            })
+                            .unwrap_or_default()
+                    };
                     // A solved rail that never came up to this part's minimum:
                     // a candidate for one rail-level starvation finding.
                     if resolver.solved(net_id).is_some() && range.max_v < *min_v - min_tol {
@@ -901,6 +1118,195 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         assert!(findings[0].message.contains("Table 1"));
     }
 
+    const MARGIN_CARD: &str = r#"
+[[models]]
+id = "margin_part"
+kind = "digital"
+description = "identity-only envelope fixture with an abs max"
+[models.match]
+value_re = "^MARGIN_PART$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vdd"
+"2" = "gnd"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.4
+abs_max_v = 4.0
+severity = "serious"
+basis = "Recommended Operating Conditions, VDD row"
+"#;
+
+    /// A band only the net NAME implies is an assumption: when just its
+    /// tolerance corner leaves the window (under abs max) it is a note that
+    /// says so, never a serious finding, and never a suggestion to rewire
+    /// the part to some other rail. Past abs max it is at most a warning.
+    #[test]
+    fn name_assumed_band_is_a_stated_note_not_a_serious_rewire() {
+        let lib = library("assumed", MARGIN_CARD);
+        let one = |rail: &str| {
+            let b = board(
+                &[(1, "GND"), (2, rail), (3, "+3V0")],
+                vec![part("U1", "MARGIN_PART", vec![pin("1", 2), pin("2", 1)])],
+            );
+            let report = envelope_lint(&b, &lib);
+            let found: Vec<_> = report
+                .of_check(LintCheck::OperatingEnvelope)
+                .cloned()
+                .collect();
+            assert_eq!(found.len(), 1, "{rail}: {found:?}");
+            found.into_iter().next().unwrap()
+        };
+        // +3V3 -> 3.135..3.465: nominal inside, corner above 3.4, under 4.0.
+        let corner = one("+3V3");
+        assert_eq!(corner.severity, Severity::Low, "{}", corner.message);
+        assert!(corner.message.contains("assumed"), "{}", corner.message);
+        assert!(!corner.message.contains("Tie "), "{}", corner.message);
+        // +5V -> 4.75..5.25: past abs max, but still only an assumed level.
+        let over = one("+5V");
+        assert_eq!(over.severity, Severity::Medium, "{}", over.message);
+        assert!(!over.message.contains("Tie "), "{}", over.message);
+    }
+
+    const BOOST_AND_LOAD: &str = r#"
+[[models]]
+id = "fb_boost"
+kind = "vreg"
+description = "feedback-set boost fixture"
+[models.match]
+value_re = "^FB_BOOST$"
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "fb"
+"4" = "out"
+[models.behavioral.converter]
+topology = "boost"
+out_pin = "out"
+in_pin = "in"
+vout_setpoint = 9.0
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.5
+
+[[models]]
+id = "load_part"
+kind = "digital"
+description = "identity-only load"
+[models.match]
+value_re = "^LOAD_PART$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vdd"
+"2" = "gnd"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.5
+max_v = 4.5
+abs_max_v = 6.0
+basis = "Recommended Operating Conditions, V+ row"
+"#;
+
+    /// The regulator's own feedback divider sets the rail, and the level
+    /// carries through a net tie to the load's net: the finding is judged at
+    /// Vref * (1 + Rtop/Rbot) = 5.0 V, not at the card's 9 V default nor at
+    /// the ±5 % band the far net's name would imply.
+    #[test]
+    fn divider_set_point_reaches_the_load_through_a_net_tie() {
+        let lib = library("fbboost", BOOST_AND_LOAD);
+        let res = |r: &str, v: &str, a: i64, b: i64| {
+            let mut c = part(r, v, vec![pin("1", a), pin("2", b)]);
+            c.lib_id = "Device:R".into();
+            c
+        };
+        let mut tie = part("NT1", "NetTie", vec![pin("1", 4), pin("2", 5)]);
+        tie.lib_id = "Device:NetTie_2".into();
+        let b = board(
+            &[
+                (1, "GND"),
+                (2, "VIN"),
+                (3, "FB"),
+                (4, "BOOST_OUT"),
+                (5, "+5V0"),
+            ],
+            vec![
+                part(
+                    "U1",
+                    "FB_BOOST",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                ),
+                res("R1", "450k", 3, 4),
+                res("R2", "50k", 3, 1),
+                tie,
+                part("U2", "LOAD_PART", vec![pin("1", 5), pin("2", 1)]),
+            ],
+        );
+        let report = envelope_lint(&b, &lib);
+        let found: Vec<_> = report
+            .of_check(LintCheck::OperatingEnvelope)
+            .filter(|f| f.refs.contains(&"U2".to_string()))
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let msg = &found[0].message;
+        assert!(msg.contains("5.000..5.000"), "{msg}");
+        assert!(!msg.contains("assumed"), "{msg}");
+        assert_eq!(found[0].severity, Severity::Medium, "{msg}");
+    }
+
+    /// A set point exactly at the load's recommended maximum is only in range
+    /// at the reference's typical value: the card's sourced reference interval
+    /// carries through the divider, so the tolerance corner is reported as a
+    /// margin finding rather than hidden behind the nominal.
+    #[test]
+    fn divider_set_point_carries_the_reference_tolerance() {
+        let card = BOOST_AND_LOAD.replace(
+            "vref_v = 0.5\n",
+            "vref_v = 0.5\n[models.source]\ntier = \"curated-library\"\n\
+             validation = \"physical-bounds-only\"\n[[models.source.uncertainty]]\n\
+             status = \"interval\"\nparameter = \"feedback_reference\"\nlow = 0.485\n\
+             high = 0.515\nunit = \"V\"\nkind = \"specification-limits\"\n\
+             basis = \"reference min/max\"\n",
+        );
+        let lib = library("fbtol", &card);
+        let res = |r: &str, v: &str, a: i64, b: i64| {
+            let mut c = part(r, v, vec![pin("1", a), pin("2", b)]);
+            c.lib_id = "Device:R".into();
+            c
+        };
+        let b = board(
+            &[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "OUT")],
+            vec![
+                part(
+                    "U1",
+                    "FB_BOOST",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                ),
+                res("R1", "400k", 3, 4),
+                res("R2", "50k", 3, 1),
+                part("U2", "LOAD_PART", vec![pin("1", 4), pin("2", 1)]),
+            ],
+        );
+        let report = envelope_lint(&b, &lib);
+        let found: Vec<_> = report
+            .of_check(LintCheck::OperatingEnvelope)
+            .filter(|f| f.refs.contains(&"U2".to_string()))
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let msg = &found[0].message;
+        assert!(msg.contains("4.365..4.635"), "{msg}");
+        assert!(!msg.contains("Tie "), "a margin is not a rewire: {msg}");
+        assert_eq!(found[0].severity, Severity::Medium, "{msg}");
+    }
+
     #[test]
     fn solved_level_uses_solver_voltage_tolerance_at_envelope_edge() {
         let b = board(
@@ -1193,6 +1599,51 @@ vout_setpoint_high = 4.23
             .message
             .contains("no charger card declares its chemistry"));
         assert!(finding.message.contains("battery_chemistry"));
+    }
+
+    /// A chip that only consumes backup power on its VBAT pin (an MCU's or
+    /// RTC's backup domain) strapped to a regulated rail does not make that
+    /// rail a battery net: nothing about the cell's chemistry is asked for.
+    #[test]
+    fn a_backup_domain_vbat_pin_does_not_make_a_battery_net() {
+        let card = format!(
+            "{SUPPLY_CARD}{}",
+            r#"
+[[models]]
+id = "backup_mcu"
+kind = "digital"
+description = "MCU with a backup-domain pin"
+[models.match]
+value_re = "^BACKUP_MCU$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vdd"
+"2" = "gnd"
+"3" = "vbat"
+"#
+        );
+        let b = board(
+            &[(1, "GND"), (2, "+3V3")],
+            vec![
+                part(
+                    "U1",
+                    "BACKUP_MCU",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 2)],
+                ),
+                part("U2", "RANGE_PART", vec![pin("1", 2), pin("2", 1)]),
+            ],
+        );
+        let report = envelope_lint(&b, &library("backup_vbat", &card));
+        assert!(
+            report
+                .of_check(LintCheck::OperatingEnvelope)
+                .all(|f| !f.message.contains("identifies a battery net")),
+            "{:?}",
+            report.findings
+        );
     }
 
     /// Three LMV7219s (1.1 mA each, 2.7 V minimum supply) on rail 'VA', fed
