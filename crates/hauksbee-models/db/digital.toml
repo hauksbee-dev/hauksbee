@@ -5161,6 +5161,7 @@ in_th_v = 1.4        # ASSUMED, midway between VIL 0.8 V and VIH 2.0 V
 vit_pos_v = 1.5      # [TI] p.6, VIT+ typ at VCC = 3.3 V (2.0 V at 5 V)
 vit_neg_v = 1.1      # [TI] p.6, VIT- typ at VCC = 3.3 V (1.5 V at 5 V)
 icc_on_a = 0.0005    # [TI] p.4, ICC typ, no load, SHDN = VCC (2 mA max)
+supply_static_ua = 500.0  # [TI] p.4, ICC typ, no load, SHDN = VCC
 icc_shdn_a = 0.000001  # [TI] p.4, ICC typ, SHDN = GND (10 uA max)
 warning = "behavioural DC model: the +-5.5 V pump output impedance and driver output resistance are fitted to the 5.4 V typical swing at 3 kOhm, not printed; the 60 mA driver current limit, slew rate/MBAUD, delays, pump ripple and shutdown recovery are not modelled; a floating SHDN or EN is held low by the input keeper (shutdown, receivers enabled)"
 
