@@ -36,7 +36,9 @@
 //! behind a switch from a driven rail, or from a rail already supplied at the
 //! same voltage, is that rail switched, not a second supply. Stamping one
 //! there would hold it up while the switch is open and carry its load while
-//! the switch is closed, so the upstream rail would never see it.
+//! the switch is closed, so the upstream rail would never see it. A discrete
+//! FET whose drain and source are supply nets at one nominal voltage is the
+//! same high-side switch ([`RailDomains::join_pass_fets`]).
 
 use crate::behavioral::BehavioralDevice;
 use hauksbee_ir::{BOutput, Circuit, Device, DeviceId, NodeId, SourceKind};
@@ -151,11 +153,47 @@ impl RailDomains {
                 continue;
             };
             if [a, b].iter().all(|n| !n.is_ground() && board_net(**n)) {
-                let fed = &mut self.fed;
-                let (ra, rb) = (find(fed, a.0 as usize), find(fed, b.0 as usize));
-                fed[ra.max(rb)] = ra.min(rb);
+                self.join_fed(*a, *b);
             }
         }
+        self.flatten_fed();
+    }
+
+    /// Join the channel of each discrete MOSFET whose drain and source
+    /// `same_rail` accepts into fed groups: a high-side load switch (a P-FET
+    /// from `+3.3V` to `+3.3V_LAN`, gated by a GPIO) is the same switched
+    /// branch as a load-switch IC, so its far rail is fed through it and takes
+    /// no supply of its own. An ideal source there back-drives the upstream
+    /// rail through the closed switch whenever its nominal sits above what the
+    /// upstream regulator settles at, and a synchronous converter returns that
+    /// current to its input.
+    ///
+    /// The caller decides which channels qualify (both ends supply nets at one
+    /// nominal voltage): a level shifter, a low-side switch or a power-path
+    /// FET between unlike rails is not a branch of either rail.
+    pub fn join_pass_fets(
+        &mut self,
+        circuit: &Circuit,
+        same_rail: impl Fn(NodeId, NodeId) -> bool,
+    ) {
+        for (_, dev) in circuit.iter() {
+            let Device::Mosfet { d, s, .. } = dev else {
+                continue;
+            };
+            if !d.is_ground() && !s.is_ground() && same_rail(*d, *s) {
+                self.join_fed(*d, *s);
+            }
+        }
+        self.flatten_fed();
+    }
+
+    fn join_fed(&mut self, a: NodeId, b: NodeId) {
+        let fed = &mut self.fed;
+        let (ra, rb) = (find(fed, a.0 as usize), find(fed, b.0 as usize));
+        fed[ra.max(rb)] = ra.min(rb);
+    }
+
+    fn flatten_fed(&mut self) {
         for i in 0..self.fed.len() {
             self.fed[i] = find(&mut self.fed, i);
         }
@@ -610,5 +648,33 @@ mod tests {
         assert!(d.drivers_of(ana).is_empty(), "switched, not one rail");
         assert_eq!(d.drivers_of(sw)[0].by, "U3");
         assert!(!d.fed_by_driver(vin));
+    }
+
+    #[test]
+    fn a_high_side_fet_between_like_rails_is_a_switched_branch() {
+        let c = circuit(|c, [_, _, out, ana]| {
+            c.add(Device::vsource(
+                "Vreg_U1",
+                out,
+                NodeId::GROUND,
+                SourceKind::Dc(3.3),
+            ));
+            let g = c.node("GATE");
+            c.add(Device::Mosfet {
+                name: "Q1".into(),
+                d: ana,
+                g,
+                s: out,
+                b: None,
+                model: hauksbee_ir::MosfetModel::default(),
+            });
+        });
+        let [out, ana] = ["+5V", "+5V_A"].map(|n| c.find_node(n).unwrap());
+        let mut d = RailDomains::new(&c, &[], &[]);
+        d.join_pass_fets(&c, |_, _| false);
+        assert!(!d.fed_by_driver(ana), "the caller refused the channel");
+        d.join_pass_fets(&c, |_, _| true);
+        assert!(d.fed_joined(out, ana) && d.fed_by_driver(ana));
+        assert!(d.drivers_of(ana).is_empty(), "switched, not one rail");
     }
 }

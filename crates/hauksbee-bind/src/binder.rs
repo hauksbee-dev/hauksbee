@@ -731,6 +731,19 @@ pub fn bind_board_with(
     let mut domains = crate::rail_owner::RailDomains::new(&circuit, &behavioral, &[]);
     let board_nodes: std::collections::HashSet<NodeId> = net_nodes.values().copied().collect();
     domains.join_switches(&circuit, |n| board_nodes.contains(&n));
+    // A discrete high-side FET between two supply nets of one nominal voltage
+    // switches one rail onto the other; nets of unlike voltage (a power-path
+    // FET, a level shifter) are not branches of each other.
+    let rail_volts = |n: NodeId| {
+        board_nodes
+            .contains(&n)
+            .then(|| power_nets.get(circuit.node_name(n)).copied())
+            .flatten()
+    };
+    domains.join_pass_fets(&circuit, |d, s| {
+        matches!((rail_volts(d), rail_volts(s)), (Some(a), Some(b))
+            if (a - b).abs() <= 0.01 * a.abs().max(b.abs()))
+    });
     let entry = |node: NodeId| {
         board.components.iter().any(|c| {
             let port = component_kinds
