@@ -111,10 +111,6 @@ hauksbee to-code w_rebuilt.kicad_pcb --out w2.board
 pads under one pad number, and those collapse to one key. One key carries no net
 at all, an unconnected pad, leaving 266 that the partition actually covers.)
 
-`forge-codegen` also exposes `compare_connectivity` (in `rebuild.rs`) for
-programmatic use, though nothing in the test suite calls it today: the shipped
-gate is the bind-equivalence pair above.
-
 ## Authoring a board from scratch
 
 You do not have to start from a decompiled board. The DSL is small enough to
@@ -464,11 +460,9 @@ freerouting for real boards.
 | executable DSL (emit / parse / build) | `vendor/kicad-forge/crates/forge-codegen/src/dsl/` |
 | re-layout + incremental + grid router | `vendor/kicad-forge/crates/forge-codegen/src/layout.rs` |
 | freerouting handoff (DSN / invoke / SES) | `vendor/kicad-forge/crates/forge-codegen/src/route_freerouting.rs` |
-| connectivity-only board comparison | `vendor/kicad-forge/crates/forge-codegen/src/rebuild.rs` (`compare_connectivity`) |
 | KiCad library-parity DRC test | `vendor/kicad-forge/crates/forge-codegen/tests/kicad_drc_parity.rs` |
 | edit -> simulate loop | `crates/hauksbee-engine/src/boardcode.rs` |
 | CLI subcommands (`to-code` / `from-code` / `merge-ses` / `check-code`) | `crates/hauksbee-engine/src/commands/boardcode.rs` |
 | round-trip bind-equivalence tests | `crates/hauksbee-engine/tests/boardcode_run.rs` |
 | CLI-level tests (DSN export, SES merge, JSON shapes) | `crates/hauksbee-engine/tests/cli_boardcode.rs` |
-| miswire edit -> simulate demo | `crates/hauksbee-engine/tests/boardcode_miswire.rs` |
 | re-runnable asset/export script | `scripts/board_as_code_assets.sh`, `scripts/make_incremental_viz.py` |
