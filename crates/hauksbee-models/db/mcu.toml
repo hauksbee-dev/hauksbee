@@ -75,6 +75,90 @@ implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_exter
 missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ATmega168 / ATmega168V in the 32-pin packages (32-pad MLF and 32-lead TQFP).
+#
+# Source: Atmel "ATmega48/V / 88/V / 168/V Datasheet Complete",
+#   Atmel-2545W-11/2016. Figure 5-3 (32-pin TQFP) and Figure 5-4 (32-pin MLF)
+#   draw one pinout; Features, "Operating Voltage" (2.7-5.5 V, 1.8-5.5 V for the
+#   V grade); Table 33-1 Absolute Maximum Ratings.
+#
+# NOT THE 328P MAP. The 328P card above carries a DIP-28 numbering. The 32-pin
+# packages add ADC6/ADC7 and a second VCC/GND pair, so pad 3 is GND here and
+# PD1 on a DIP. The value regex therefore requires a 32-pin package code (Eagle's
+# "MLF" suffix, or the -AU/-MU order codes) and a bare "ATmega168" stays open.
+# The exposed pad is soldered to ground (Figure 5-4 note) and has no pad number.
+[[models]]
+id = "atmega168_32pin"
+kind = "mcu"
+description = "ATmega168/168V 8-bit AVR MCU, 32-pad MLF or 32-lead TQFP"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2545-8-bit-AVR-Microcontroller-ATmega48-88-168_Datasheet.pdf"
+title = "Atmel ATmega48/V / 88/V / 168/V Datasheet Complete, Atmel-2545W-11/2016"
+locator = "Features (Operating Voltage); 5.1 Figure 5-3 and Figure 5-4; 33.1 Table 33-1"
+sha256 = "6dd5823d902bb87d170f0c26c918c49db4cd3deba906cba870b229f2607e7465"
+
+[models.match]
+value_re = "(?i)^ATmega168V?(MLF|[-_ ]?(10|20)?(AU|MU)R?)$"
+
+[models.params]
+backend = "simavr:atmega168"
+internal_clock = "internal 8 MHz RC oscillator"
+
+[models.pins]
+# Figure 5-4, 32-pin MLF Top View (Figure 5-3 TQFP is identical).
+"1"  = "pd3_int1_oc2b"
+"2"  = "pd4_t0_xck"
+"3"  = "gnd"
+"4"  = "vcc"
+"5"  = "gnd2"
+"6"  = "vcc2"
+"7"  = "pb6_xtal1"
+"8"  = "pb7_xtal2"
+"9"  = "pd5_t1_oc0b"
+"10" = "pd6_ain0_oc0a"
+"11" = "pd7_ain1"
+"12" = "pb0_icp1"
+"13" = "pb1_oc1a"
+"14" = "pb2_ss_oc1b"
+"15" = "pb3_mosi_oc2a"
+"16" = "pb4_miso"
+"17" = "pb5_sck"
+"18" = "avcc"
+"19" = "adc6"
+"20" = "aref"
+"21" = "gnd3"
+"22" = "adc7"
+"23" = "pc0_adc0"
+"24" = "pc1_adc1"
+"25" = "pc2_adc2"
+"26" = "pc3_adc3"
+"27" = "pc4_adc4_sda"
+"28" = "pc5_adc5_scl"
+"29" = "pc6_reset"
+"30" = "pd0_rxd"
+"31" = "pd1_txd"
+"32" = "pd2_int0"
+
+[models.ratings]
+max_pin_current_a = 0.04  # Table 33-1, DC current per I/O pin 40.0 mA
+max_current_a = 0.2       # Table 33-1, DC current VCC and GND pins 200.0 mA
+max_voltage_v = 6.0       # Table 33-1, maximum operating voltage 6.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel-2545W, Features, Operating Voltage 2.7-5.5 V for ATmega168 (1.8-5.5 V for the 168V grade, which this envelope reads conservatively); Table 33-1 maximum operating voltage 6.0 V"
+
+[models.coverage]
+implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot"]
+missing = ["board_crystal_frequency_binding", "adc_channels_6_and_7", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ATmega1284P: the 128 KB / 16 KB-SRAM megaX4-line AVR, 44-lead TQFP and 44-pad
