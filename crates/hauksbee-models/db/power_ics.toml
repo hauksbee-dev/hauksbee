@@ -1666,3 +1666,336 @@ max = 162.2
 unit = "°C/W"
 conditions = "DQA (USON) 10 pins"
 basis = "TI TPD4EUSB30 SLVSAC2G (June 2021), Section 6.4 Thermal Information, TPD4EUSB30 DQA (USON) 10 pins, RθJA 162.2 °C/W"
+
+# ── BQ25185: 1-cell Li-ion linear charger with power path, WSON-10 (DLH) ──────
+#
+# Source: TI BQ25185 datasheet SLUSF65B (October 2023, revised August 2026),
+# https://www.ti.com/lit/ds/symlink/bq25185.pdf,
+# sha256 c73ed7d63e6532bb05e26df30edd37c6ac2de310c1222a84a77625e15e133684.
+# Drafted by `hauksbee models extract` and reviewed by hand against the PDF.
+# Corrections to the draft: its `dropout_v` was RON_BAT x the 3.125 A battery
+# DISCHARGE limit (BAT -> SYS), not the IN -> SYS headroom the SYS stamp needs;
+# its IN envelope used the 18 V VIN_OP top where section 5.4 recommends 5.5 V;
+# its 20 mA STAT sink limit was carried as a whole-part pin limit; the
+# ILIM/VSET strap table, the charge-port float and the SYS interval were
+# missing, and it mapped a thermal pad Table 4-1 does not list.
+#
+# THE PART IS TWO PATHS OUT OF ONE INPUT, and the card says so through the
+# generic shapes the binder knows:
+#   - SYS (pin 1, `out`) is a regulated rail: the ordinary vreg stamp at 4.5 V,
+#     drawing its load plus IQ_IN from IN;
+#   - BAT (pin 2) is a CC/CV charge port (`current_out_roles = ["bat"]`, not
+#     `out`): the programmed current KISET / RISET (Equation 1, p.12) into the
+#     cell until VBAT reaches the float the ILIM/VSET strap selects, drawn from
+#     IN as well, so IN carries ISYS + ICHG and the package dissipation is the
+#     datasheet's PDISS = (VIN - VSYS) * IIN + (VSYS - VBAT) * IBAT (6.3.7.6).
+#
+# Datasheet figures used (5.5 Electrical Characteristics, pp.6-7, VIN = 5 V
+# unless noted):
+#   VSYS_REG   4.5 V, +-2 % (VIN = 5 V, VBATREG <= 4.3 V)
+#   IQ_IN      0.75 typ / 1 max mA (charge enabled, ICHG = 0)
+#   RON_IN     330 typ / 470 max mOhm (IIN = 1 A)       IN -> SYS
+#   RON_BAT    115 typ / 140 max mOhm (IBAT = 400 mA)   SYS <-> BAT
+#   KISET      285 / 300 / 315 A*Ohm, ICHG = KISET / RISET, 10 mA..1 A
+#   ILIM       90 / 475 / 1050 mA typ for the ILIM100 / 500 / 1100 settings
+#   VREG_ACC   +-0.5 % on every VBATREG setting
+#   IPRECHG 20 % below VLOWV 3.0 V; ITERM 10 %; VRCH 100 mV (not modelled)
+#   5.1 p.5: IN -0.3..25 V; every other pin 5.5 V; IN 1.1 A DC.
+#   5.3 p.5: RthetaJA 68.3 C/W.   5.4 p.5: VIN 2.7..5.5 V, VBAT 2.2..4.6 V,
+#   TJ -40..125 C.
+#
+# NOT MODELLED (each is a behaviour of the real part the stamps lack):
+# precharge, termination and recharge; the safety timer; thermal regulation and
+# shutdown; /CE and TS/MR (charging is always enabled); VINDPM and DPPM, so the
+# input limit caps the charge current alone rather than SYS + charge together
+# (the charge current is an upper bound when the system load is heavy);
+# battery supplement of SYS and sleep mode, so SYS is stamped from IN only; and
+# the battery-tracking SYS of the VBATREG > 4.3 V settings (6.3.5), which the
+# strap rows below name.
+[[models]]
+id = "bq25185"
+kind = "vreg"
+description = "BQ25185 1-cell Li-ion linear charger with power path, WSON-10 (4.5 V SYS rail from IN, plus a CC/CV BAT charge port at the ISET-programmed current and the ILIM/VSET-selected float)"
+
+[models.match]
+value_re = "(?i)^BQ25185(?:DLH[RT]?)?$"
+
+[models.params]
+vout = 4.5          # VSYS_REG (p.7), VIN = 5 V, VBATREG <= 4.3 V
+# The IN -> SYS headroom: RON_IN typ 330 mOhm (p.7) at the 1.1 A input-current
+# maximum (5.4, p.5). The max 470 mOhm would put a 1.1 A load's headroom above
+# what a 5 V input leaves over the 4.5 V rail, yet VSYS_REG is specified at
+# VIN = 5 V, so the typical figure is the one consistent with the datasheet's
+# own operating point.
+dropout_v = 0.363
+# The SYS -> BAT pass element: RON_BAT max 140 mOhm (p.7) at the 1 A charge
+# maximum. The charge port's headroom is dropout_v + bat_dropout_v.
+bat_dropout_v = 0.14
+iq_a = 0.00075      # IQ_IN typ (p.6), charge enabled, ICHG = 0
+
+[models.pins]
+# Table 4-1 (p.4), DLH WSON-10, every pin numbered by the datasheet. The roles
+# are the binder's vocabulary: SYS is `out`, the rail the vreg stamp drives.
+"1" = "out"        # SYS, regulated system output
+"2" = "bat"        # BAT, battery connection and charge port
+"3" = "stat2"      # STAT2, open-drain status
+"4" = "ce_n"       # /CE, charge enable, active low
+"5" = "gnd"        # GND
+"6" = "ts_mr"      # TS/MR, NTC input and manual reset
+"7" = "ilim_vset"  # ILIM/VSET, input limit and float strap (Table 6-1)
+"8" = "iset"       # ISET, charge-current program resistor
+"9" = "stat1"      # STAT1, open-drain status
+"10" = "in"        # IN, DC input
+
+[models.ratings]
+max_current_a = 1.1          # 5.4 (p.5): IIN, IN to SYS, max (the stamp feeds SYS from IN only)
+max_voltage_v = 25.0         # 5.1 (p.5): IN abs max
+max_junction_temp_c = 125.0  # 5.4 (p.5): TJ operating max (5.1 abs max 150 C)
+theta_ja_c_per_w = 68.3      # 5.3 (p.5): DLH RthetaJA
+
+# 5.4 (p.5) recommends VIN 2.7 to 5.5 V, but 5.5 Electrical Characteristics
+# (p.6) gives the operating range VIN_OP as 3.6 to 18 V (OVP trips at 18.5 V
+# typ): the envelope takes the narrower overlap, 3.6 to 5.5 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.6
+max_v = 5.5
+abs_max_v = 25.0
+basis = "TI BQ25185 SLUSF65B, 5.5 Electrical Characteristics (p.6), VIN_OP min 3.6 V; 5.4 Recommended Operating Conditions (p.5), VIN max 5.5 V; 5.1 Absolute Maximum Ratings (p.5), IN 25 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "bat"
+min_v = 2.2
+max_v = 4.6
+abs_max_v = 5.5
+basis = "TI BQ25185 SLUSF65B, 5.4 Recommended Operating Conditions (p.5), VBAT 2.2 V to 4.6 V; 5.1 Absolute Maximum Ratings (p.5), all pins other than IN 5.5 V"
+
+# Equation 1 (p.12): ICHG = KISET / RISET, KISET = 300 A*Ohm typ (p.7) over
+# ICHG = 10 mA to 1 A (5 mA to 1 A per the Features list). The current leaves
+# at `bat`, so the binder stamps it as a charge port beside SYS rather than
+# limiting the SYS rail to it.
+[models.current_program]
+pin = "iset"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["bat"]
+max_operating_current_a = 1.0
+equation = "inverse_resistance"
+k_volts = 300.0
+
+# Table 6-1 (p.16): the ILIM/VSET resistor to GND selects the input-current
+# limit and the charge float together. The table prints nominal resistances
+# only; the 5 % window is this card's assumption (adjacent rows are at least
+# 1.30x apart, so 5 % windows cannot overlap, and section 6.1.1.4 asks for
+# 1 % parts on ISET). The current limits are the ILIM rows' typical values
+# (p.6). The Features list (p.1) prints 4.02 V where Table 6-1 prints 4.05 V;
+# the table is used. VLOWV is 3.0 V on every row.
+[[models.resistor_bins]]
+pin = "ilim_vset"
+tolerance = 0.05
+
+[[models.resistor_bins.bin]]
+above_ohms = 180000.0
+params = { input_limit_a = 0.475 }
+note = "charge disabled (an open ILIM/VSET reads the same, 6.3.6): SYS stays regulated with a 500 mA input limit, and no charge current flows"
+
+[[models.resistor_bins.bin]]
+ohms = 130000.0
+params = { vbat_reg_v = 4.1, input_limit_a = 0.475 }
+
+[[models.resistor_bins.bin]]
+ohms = 100000.0
+params = { vbat_reg_v = 4.1, input_limit_a = 1.05 }
+
+[[models.resistor_bins.bin]]
+ohms = 75000.0
+params = { vbat_reg_v = 4.4, input_limit_a = 0.475 }
+note = "VBATREG 4.4 V puts SYS in battery tracking (6.3.5: VBAT + 225 mV, 3.8 V below VBAT 3.6 V), which is not modelled; SYS is stamped at 4.5 V"
+
+[[models.resistor_bins.bin]]
+ohms = 56000.0
+params = { vbat_reg_v = 4.4, input_limit_a = 1.05 }
+note = "VBATREG 4.4 V puts SYS in battery tracking (6.3.5: VBAT + 225 mV, 3.8 V below VBAT 3.6 V), which is not modelled; SYS is stamped at 4.5 V"
+
+[[models.resistor_bins.bin]]
+ohms = 43000.0
+params = { vbat_reg_v = 4.35, input_limit_a = 0.475 }
+note = "VBATREG 4.35 V puts SYS in battery tracking (6.3.5: VBAT + 225 mV, 3.8 V below VBAT 3.6 V), which is not modelled; SYS is stamped at 4.5 V"
+
+[[models.resistor_bins.bin]]
+ohms = 33000.0
+params = { vbat_reg_v = 4.35, input_limit_a = 1.05 }
+note = "VBATREG 4.35 V puts SYS in battery tracking (6.3.5: VBAT + 225 mV, 3.8 V below VBAT 3.6 V), which is not modelled; SYS is stamped at 4.5 V"
+
+[[models.resistor_bins.bin]]
+ohms = 24000.0
+params = { vbat_reg_v = 4.2, input_limit_a = 0.09 }
+
+[[models.resistor_bins.bin]]
+ohms = 18000.0
+params = { vbat_reg_v = 4.2, input_limit_a = 0.475 }
+
+[[models.resistor_bins.bin]]
+ohms = 13000.0
+params = { vbat_reg_v = 4.2, input_limit_a = 1.05 }
+
+[[models.resistor_bins.bin]]
+ohms = 9100.0
+params = { vbat_reg_v = 4.05, input_limit_a = 0.475 }
+
+[[models.resistor_bins.bin]]
+ohms = 6800.0
+params = { vbat_reg_v = 4.05, input_limit_a = 1.05 }
+
+[[models.resistor_bins.bin]]
+ohms = 5100.0
+params = { vbat_reg_v = 3.65, input_limit_a = 1.05 }
+
+[[models.resistor_bins.bin]]
+ohms = 3600.0
+params = { vbat_reg_v = 3.6, input_limit_a = 0.475 }
+
+[[models.resistor_bins.bin]]
+ohms = 2400.0
+params = { vbat_reg_v = 3.6, input_limit_a = 1.05 }
+
+[[models.resistor_bins.bin]]
+below_ohms = 1500.0
+note = "battery-only mode (a shorted ILIM/VSET reads the same, 6.3.6): IN is not used and SYS runs from BAT, which this card does not model; SYS is stamped from IN at 4.5 V regardless"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/bq25185.pdf"
+title = "TI BQ25185 datasheet SLUSF65B (October 2023, revised August 2026)"
+locator = "Table 4-1 (p.4) pin functions; 5.1-5.4 (p.5); 5.5 Electrical Characteristics (pp.6-7); Equation 1 (p.12); 6.3.5-6.3.6 (p.15); Table 6-1 (p.16); 6.3.7.6 (p.17)"
+sha256 = "c73ed7d63e6532bb05e26df30edd37c6ac2de310c1222a84a77625e15e133684"
+
+[[models.source.pinout]]
+package = "DLH (WSON, 10)"
+pins = { "1" = "SYS", "2" = "BAT", "3" = "STAT2", "4" = "/CE", "5" = "GND", "6" = "TS/MR", "7" = "ILIM/VSET", "8" = "ISET", "9" = "STAT1", "10" = "IN" }
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.41
+high = 4.59
+unit = "V"
+kind = "specification-limits"
+basis = "TI BQ25185 SLUSF65B, 5.5 (p.7), VSYS_REG 4.5 V with VSYS_REG_ACC -2 % / +2 % (VIN = 5 V, VBAT = 3.6 V)"
+
+[[models.source.characteristic]]
+parameter = "VSYS_REG SYS regulation voltage"
+typ = 4.5
+unit = "V"
+conditions = "VIN = 5 V, VBATREG ≤ 4.3 V"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.7), VSYS_REG typ"
+
+[[models.source.characteristic]]
+parameter = "VMINSYS minimum SYS voltage in battery tracking"
+typ = 3.8
+unit = "V"
+conditions = "VBAT < 3.6 V"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.7), VMINSYS typ"
+
+[[models.source.characteristic]]
+parameter = "IQ_IN input supply quiescent current"
+typ = 0.75
+max = 1
+unit = "mA"
+conditions = "VIN = 5 V, VBAT = 3.6 V, charge enabled, ICHG = 0 mA, SYSREG = 4.5 V"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.6), IQ_IN typ/max"
+
+[[models.source.characteristic]]
+parameter = "IQ_BAT battery quiescent current"
+typ = 4
+max = 5
+unit = "uA"
+conditions = "VIN < VUVLO, VBAT = 3.6 V, 0 °C < TJ < 85 °C"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.6), IQ_BAT typ/max"
+
+[[models.source.characteristic]]
+parameter = "RON_IN input FET on-resistance"
+typ = 330
+max = 470
+unit = "mOhm"
+conditions = "VIN = 5 V, IIN = 1 A"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.7), RON_IN typ/max"
+
+[[models.source.characteristic]]
+parameter = "RON_BAT battery FET on-resistance"
+typ = 115
+max = 140
+unit = "mOhm"
+conditions = "VBAT = 4.5 V, IBAT = 400 mA"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.7), RON_BAT typ/max"
+
+[[models.source.characteristic]]
+parameter = "KISET charge current setting factor"
+min = 285
+typ = 300
+max = 315
+unit = "A·Ω"
+conditions = "10 mA < ICHG < 1000 mA; ICHG = KISET / RISET"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.7), KISET min/typ/max; Equation 1 (p.12)"
+
+[[models.source.characteristic]]
+parameter = "VREG_ACC BAT charge voltage accuracy"
+min = -0.5
+max = 0.5
+unit = "%"
+conditions = "all VBATREG settings"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.7), VREG_ACC min/max"
+
+[[models.source.characteristic]]
+parameter = "ILIM input current limit, ILIM500 setting"
+min = 450
+typ = 475
+max = 498
+unit = "mA"
+conditions = "VIN = 5 V"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.6), ILIM min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "ILIM input current limit, ILIM1100 setting"
+min = 995
+typ = 1050
+max = 1100
+unit = "mA"
+conditions = "VIN = 5 V"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.6), ILIM min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "ILIM input current limit, ILIM100 setting"
+min = 80
+typ = 90
+max = 98
+unit = "mA"
+conditions = "VIN = 5 V"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.6), ILIM min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VIN_OVP input overvoltage rising threshold"
+min = 18
+typ = 18.5
+max = 19
+unit = "V"
+conditions = "VIN rising"
+basis = "SLUSF65B 5.5 Electrical Characteristics (p.6), VIN_OVP min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 68.3
+unit = "°C/W"
+package = "DLH (WSON, 10)"
+conditions = "JEDEC"
+basis = "SLUSF65B 5.3 Thermal Information (p.5), DLH 10 pins"
+
+[models.coverage]
+implements = ["regulated_sys_output", "iset_programmed_charge_current", "strap_selected_float_and_input_limit", "charge_port_cc_cv", "two_path_package_dissipation"]
+missing = ["precharge_termination_recharge", "safety_timer", "thermal_regulation", "charge_enable_pin", "ts_ntc_monitor", "manual_reset_factory_mode", "vindpm_dppm_sharing", "battery_supplement_of_sys", "battery_tracking_sys", "status_outputs", "sleep_mode"]

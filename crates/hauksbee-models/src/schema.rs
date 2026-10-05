@@ -128,6 +128,12 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_program: Option<CurrentProgram>,
 
+    /// Pins whose resistor to ground selects one row of a published table
+    /// (a strap that sets a float voltage, an input-current limit, an output
+    /// voltage): the selected row's values become params at bind time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resistor_bins: Vec<ResistorBins>,
+
     /// Optional firmware-visible peripheral protocol implemented by this part.
     /// The board binder turns this data into an I2C/SPI slave automatically;
     /// users should not have to repeat a datasheet's address/geometry in every
@@ -692,6 +698,92 @@ pub struct CurrentProgram {
     /// model reads `equation = "inverse_resistance"` beside its constants.
     #[serde(flatten)]
     pub equation: CurrentProgramEquation,
+}
+
+/// A pin whose resistor to ground picks one row of a datasheet's resistor table.
+///
+/// Such tables are discrete: a part reads its strap at power-up and
+/// maps it to a setting, with no formula between the printed values. So a row
+/// is either a printed nominal (`ohms`), accepted within `tolerance` of it, or
+/// an open-ended printed range (`above_ohms` / `below_ohms`); a resistance
+/// that lands in no row selects nothing and the binder says so, rather than
+/// interpolating a setting the part never offers.
+///
+/// A row's `params` are ordinary `[models.params]` names; the binder adds them
+/// to the card's params for the bound board, so every consumer that reads the
+/// param reads the board's selection. A row with no params (a "charge
+/// disabled" or "battery-only" row) selects a state the card's `note` names.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ResistorBins {
+    /// The pin role (a value in [`ModelEntry::pins`]) the resistor sits on.
+    pub pin: String,
+    /// Relative window around each printed nominal within which a fitted
+    /// resistance selects that row (0.05 = +/-5 %). The datasheet usually
+    /// prints only nominals, so cite where the window comes from.
+    pub tolerance: f64,
+    /// The table rows, in any order.
+    #[serde(rename = "bin")]
+    pub bins: Vec<ResistorBin>,
+}
+
+/// One row of a [`ResistorBins`] table.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct ResistorBin {
+    /// The printed nominal resistance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ohms: Option<f64>,
+    /// An open-ended row: any resistance strictly above this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub above_ohms: Option<f64>,
+    /// An open-ended row: any resistance strictly below this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below_ohms: Option<f64>,
+    /// The params this row sets, by `[models.params]` name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f64>,
+    /// What the row means, in the datasheet's words ("charge disabled").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl ResistorBin {
+    /// The row's resistance as printed, for messages.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match (self.ohms, self.above_ohms, self.below_ohms) {
+            (Some(r), ..) => format!("{r:.0} ohm"),
+            (_, Some(r), _) => format!("> {r:.0} ohm"),
+            (.., Some(r)) => format!("< {r:.0} ohm"),
+            _ => "unspecified".to_string(),
+        }
+    }
+}
+
+impl ResistorBins {
+    /// The row a fitted resistance selects: an open-ended range containing
+    /// it, else the printed nominal within [`Self::tolerance`] of it (the
+    /// nearest, should two windows overlap). `None` for a resistance in no
+    /// row, or a non-positive / non-finite one.
+    #[must_use]
+    pub fn select(&self, ohms: f64) -> Option<&ResistorBin> {
+        if !positive_finite(ohms) {
+            return None;
+        }
+        let ranged = self.bins.iter().find(|b| {
+            b.above_ohms.is_some_and(|r| ohms > r) || b.below_ohms.is_some_and(|r| ohms < r)
+        });
+        ranged.or_else(|| {
+            self.bins
+                .iter()
+                .filter_map(|b| Some((b, (ohms / b.ohms?).ln().abs())))
+                .filter(|(b, _)| {
+                    b.ohms
+                        .is_some_and(|r| (ohms - r).abs() <= self.tolerance * r)
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(b, _)| b)
+        })
+    }
 }
 
 /// Physical meaning of a current-programming equation.

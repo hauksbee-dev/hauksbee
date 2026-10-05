@@ -18,7 +18,7 @@ A negative regulator (7905/7912/7915) draws the same current from its negative i
 
 Every active output draws its current from its part's supply pins, so a load on an output shows on the rail that feeds the part. An `opamp` output, and a push-pull `comparator` output (`open_collector` unset), sources from `V+` (`vcc`, `vs`, `vdd`) and sinks into `V-` (`vss`, `vee`, or a ground pin, which carries nothing): the solver stamps a mirror of the output current onto the two supply rows each iteration, blended smoothly by output direction, so ground nets zero. An `opamp` card's optional `iq_a` is the package's supply current with the outputs unloaded, drawn `V+` to `V-`; a card without one draws none, and lists `quiescent_supply_current` under `[models.coverage] missing` so the gap is visible rather than guessed. A digital part's pin driver, a microcontroller's GPIO driver and a `dac` output draw their sourced current from the part's `vcc`/`vdd` (or the `[models.level_rails]` pin that powers that output) and return their sunk current into `vss`/`gnd`; the co-simulation sets these draws each chunk from the chunk-mean current the driver delivered, for the same reason as the regulator's. A card with `open_collector = true` (an open-collector `digital` array such as the ULN2003, or an open-collector `comparator`) only sinks: it never sources into a pull-down, draws nothing from a supply when off, and returns its sunk current into the part's `gnd`/`vss` pin.
 
-A `vreg` card whose `[models.current_program]` is `regulated_current` is a linear charger (TP4054/TP4056/MCP7383x class), recognised by that data and never by part name, and binds as a CC/CV source rather than an ideal one. Its output is a Thevenin CC/CV source: the float voltage `vout` (held down to `V(IN) - dropout_v` when the input cannot pass it) behind `10 mV / I_prog` of output resistance up to the current limit, and a limit that holds into any load past it, so a short load draws `I_prog` and a cell below the float is charged at `I_prog`. `I_prog` is the card's equation evaluated at the resistance the PROG pin sees to ground on the bound board (the same reading the ampacity check cites, `hauksbee-bind/src/program_resistor.rs`). The input draws that same current plus `iq_a`, so a charging cell shows up as `I_prog + iq_a` on the USB input, and a cell declared on BAT is the charger's load instead of a fight (`rail_owner` treats the charger's output as a current-limited feed). When the PROG network cannot be read, or the equation declines its resistance, the limit is the card's `max_operating_current_a` and the bind row carries a partial-model warning saying the charge current and the input current are upper bounds read from the card, not the board. A power-path part (a `sys` rail plus a `bat` charge port, the BQ2407x/BQ25185 shape) is not this stamp: its programmed current leaves at a role other than `out`, which the card says in `current_out_roles`, and its `out` is a system rail that carries more than the charge current, so it keeps the plain regulator stamp and its charge port is unmodelled. Still not modelled: trickle precharge, C/10 termination, recharge hysteresis, thermal foldback, the enable and thermistor pins.
+A `vreg` card whose `[models.current_program]` is `regulated_current` is a linear charger (TP4054/TP4056/MCP7383x class), recognised by that data and never by part name, and binds as a CC/CV source rather than an ideal one. Its output is a Thevenin CC/CV source: the float voltage `vout` (held down to `V(IN) - dropout_v` when the input cannot pass it) behind `10 mV / I_prog` of output resistance up to the current limit, and a limit that holds into any load past it, so a short load draws `I_prog` and a cell below the float is charged at `I_prog`. `I_prog` is the card's equation evaluated at the resistance the PROG pin sees to ground on the bound board (the same reading the ampacity check cites, `hauksbee-bind/src/program_resistor.rs`). The input draws that same current plus `iq_a`, so a charging cell shows up as `I_prog + iq_a` on the USB input, and a cell declared on BAT is the charger's load instead of a fight (`rail_owner` treats the charger's output as a current-limited feed). When the PROG network cannot be read, or the equation declines its resistance, the limit is the card's `max_operating_current_a` and the bind row carries a partial-model warning saying the charge current and the input current are upper bounds read from the card, not the board. A power-path part (a `sys` rail plus a `bat` charge port, the BQ2407x/BQ25185 shape) says so in `current_out_roles`: its programmed current leaves at one role other than `out`, and its `out` is a system rail that carries more than the charge current. Its `out` keeps the plain regulator stamp, and the charge port gets a second copy of the CC/CV stamp above, from IN to the port: floating at the `vbat_reg_v` param, behind `dropout_v + bat_dropout_v` of headroom, at the programmed current capped by an `input_limit_a` param when the card has one, with no extra `iq_a`. Both paths draw from IN, so IN carries the rail's load plus the charge current, and the dissipation watch charges the package `(V(in) - V(sys)) * I_sys + (V(in) - V(bat)) * I_bat`. The float and the input limit usually come from a strap resistor (see `[[models.resistor_bins]]` under Board-programmable resistors); a port with no float selected is not stamped, and the bind row says why. The input limit caps the charge current alone, not the system load and the charge together (no DPPM/VINDPM), and the battery does not supplement the system rail. Still not modelled: trickle precharge, C/10 termination, recharge hysteresis, thermal foldback, the enable and thermistor pins.
 
 An adjustable `vreg` card carries `vref` instead of `vout`, and the board's divider sets the rail. Its `[models.pins]` decides the law: with no `gnd` pin it is the LM317 class (`VOUT - VADJ = vref`, so `VOUT = vref*(1 + R2/R1) + iadj_a*R2` with R1 on OUT-ADJ; requires `iadj_a`), and with a `gnd` pin it is ground-referenced like most modern LDOs (`VFB - VGND = vref`, so `VOUT = vref*(1 + R1/R2)` with R1 on OUT-FB; requires `iq_a`, drawn from IN to GND). Both require `dropout_v`, checked against the solved rail.
 
@@ -1005,6 +1005,39 @@ rail current over-reported it fivefold. A part with a recognizable programming
 pin and no equation is likewise excluded from rating-based attribution: adding
 the block gains coverage, while omitting it costs only coverage, never
 correctness.
+
+### Strap tables: `[[models.resistor_bins]]`
+
+Some parts read a resistor to ground once and map it to a *setting* through a
+printed table, with no formula between the rows (a charger's float voltage and
+input limit, an output-voltage select). A card states such a table as data:
+
+```toml
+[[models.resistor_bins]]
+pin = "ilim_vset"          # a role in [models.pins]
+tolerance = 0.05           # +/-5 % window around each printed nominal
+
+[[models.resistor_bins.bin]]
+ohms = 18000.0
+params = { vbat_reg_v = 4.2, input_limit_a = 0.475 }
+
+[[models.resistor_bins.bin]]
+above_ohms = 180000.0      # an open-ended row
+params = { input_limit_a = 0.475 }
+note = "charge disabled"   # a mode the params do not express
+```
+
+At bind time the pin's resistance is read with the same nodal solve as
+`current_program`, and the row it selects adds its `params` to the card's
+for that board, so every consumer that reads a param reads the board's
+setting. A resistance within `tolerance` of no nominal and inside no range
+selects nothing: the settings stay unset and the bind row carries a
+partial-model warning, as it does for an unreadable strap and for a row with
+a `note`. Validation requires each row to give exactly one of `ohms`,
+`above_ohms`, `below_ohms`, param names the kind reads and the card does not
+already fix in `[models.params]`, and windows that cannot overlap. Datasheets
+usually print only nominals, so the card's comment says where its tolerance
+comes from.
 
 ## Adding a custom part without recompiling
 

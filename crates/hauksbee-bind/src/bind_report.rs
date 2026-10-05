@@ -158,6 +158,14 @@ pub struct BindReport {
     /// Linear charger pass elements whose dissipation is watched: the 0 V
     /// ammeter in series with the output and the input node it draws from.
     pub linear_heat: Vec<(hauksbee_ir::DeviceId, hauksbee_ir::NodeId)>,
+    /// Power-path parts whose dissipation is watched over both paths out of
+    /// IN: the system-rail source, the input node, and the charge-port ammeter
+    /// (see [`crate::stress::RegulatorHeat::LinearWithPort`]).
+    pub port_heat: Vec<(
+        hauksbee_ir::DeviceId,
+        hauksbee_ir::NodeId,
+        hauksbee_ir::DeviceId,
+    )>,
     /// Rails more than one source sets the voltage of (see `rail_owner`).
     pub rail_conflicts: Vec<crate::rail_owner::RailConflict>,
     /// Orderable-variant selections, keyed by the index of the row they bound.

@@ -739,6 +739,10 @@ pub struct StressMonitor {
 pub enum RegulatorHeat {
     /// A linear pass element: `(V(input) - V(out)) * I_out`.
     Linear { input: NodeId },
+    /// A power-path part: the linear system rail as [`Self::Linear`], plus a
+    /// second pass path from the same `input` out through the charge-port
+    /// ammeter `port`, `(V(input) - V(port.p)) * I_port`.
+    LinearWithPort { input: NodeId, port: DeviceId },
     /// An averaged converter: the input power its in-circuit draw, a behavioural
     /// current source, takes from its `p` node, minus the (signed) output
     /// power. The draw carries the card's efficiency both ways, so this is
@@ -761,13 +765,26 @@ impl RegulatorHeat {
         };
         let i_out = -branch_current(source).unwrap_or(0.0);
         let (input, i_in, i_out) = match self {
-            Self::Linear { input } => (input, i_out.abs(), i_out.abs()),
+            Self::Linear { input } | Self::LinearWithPort { input, .. } => {
+                (input, i_out.abs(), i_out.abs())
+            }
             Self::Converter { draw } => {
                 let (input, i_in) = crate::behavioral::behavioral_draw(circuit, draw, node_v);
                 (input, i_in, i_out)
             }
         };
-        node_v(input).mul_add(i_in, -node_v(*p) * i_out).max(0.0)
+        let rail = node_v(input).mul_add(i_in, -node_v(*p) * i_out).max(0.0);
+        let charge = match self {
+            Self::LinearWithPort { input, port } => match circuit.devices.get(port.0 as usize) {
+                Some(Device::Vsource { p: bat, .. }) => {
+                    let i_port = branch_current(port).unwrap_or(0.0).abs();
+                    ((node_v(input) - node_v(*bat)) * i_port).max(0.0)
+                }
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
+        rail + charge
     }
 }
 

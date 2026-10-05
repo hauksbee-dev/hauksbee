@@ -694,6 +694,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     if let Some(program) = &entry.current_program {
         check_current_program(entry, program, &mut p);
     }
+    for table in &entry.resistor_bins {
+        check_resistor_bins(entry, table, &mut p);
+    }
     // A param written as its printed row: the row's own shape, then a unit and
     // column the simulator can read.
     for (key, row) in params.rows() {
@@ -907,6 +910,60 @@ fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Pro
                 _ => p.push("peripheral register-map address selection requires address_select_role, address_when_low, and address_when_high together"),
             }
         }
+    }
+}
+
+/// A resistor table selects params at bind time, so it is held to what a
+/// param is held to, plus the table's own shape: every row is exactly one of a
+/// nominal or an open-ended range, the nominal windows cannot overlap (two rows
+/// claiming one resistor is an ambiguous strap), and a row sets only a name the
+/// kind's consumers read, never one `[models.params]` already fixes.
+fn check_resistor_bins(entry: &ModelEntry, table: &crate::schema::ResistorBins, p: &mut Problems) {
+    let pin = table.pin.trim();
+    p.require(!pin.is_empty() && has_role_ci(entry, pin), || {
+        not_a_role("resistor_bins.pin", &table.pin)
+    });
+    let tol = table.tolerance;
+    p.require(tol.is_finite() && tol > 0.0 && tol < 0.5, || {
+        format!("resistor_bins '{pin}' tolerance = {tol} must lie in (0, 0.5)")
+    });
+    p.require(!table.bins.is_empty(), || {
+        format!("resistor_bins '{pin}' needs at least one [[models.resistor_bins.bin]] row")
+    });
+    let known = crate::param_names::known_param_names(entry.kind);
+    let mut nominals = Vec::new();
+    for bin in &table.bins {
+        let shapes = [bin.ohms, bin.above_ohms, bin.below_ohms];
+        let given: Vec<f64> = shapes.into_iter().flatten().collect();
+        p.require(given.len() == 1 && given.iter().all(|r| positive_finite(*r)), || {
+            format!("resistor_bins '{pin}' row {} must give exactly one positive ohms, above_ohms or below_ohms", bin.label())
+        });
+        nominals.extend(bin.ohms.filter(|r| positive_finite(*r)));
+        for (name, value) in &bin.params {
+            p.require(value.is_finite(), || {
+                format!(
+                    "resistor_bins '{pin}' row {} param '{name}' = {value} is not finite",
+                    bin.label()
+                )
+            });
+            p.require(known.contains(&name.as_str()), || {
+                format!(
+                    "resistor_bins '{pin}' row {} sets '{name}', which no {:?} consumer reads",
+                    bin.label(),
+                    entry.kind
+                )
+            });
+            p.require(!entry.params.0.contains_key(name), || {
+                format!("resistor_bins '{pin}' row {} sets '{name}', which [models.params] already fixes: the board's strap and the card cannot both decide it", bin.label())
+            });
+        }
+    }
+    nominals.sort_by(f64::total_cmp);
+    for pair in nominals.windows(2) {
+        let (lo, hi) = (pair[0], pair[1]);
+        p.require(lo * (1.0 + tol) < hi * (1.0 - tol), || {
+            format!("resistor_bins '{pin}' rows {lo:.0} and {hi:.0} ohm overlap at tolerance {tol}: one resistor would select both")
+        });
     }
 }
 
@@ -2447,5 +2504,41 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         let note = kind_error_note("unknown variant `ldo`, expected one of `passive`, `bjt_npn`");
         assert!(note.unwrap().contains("vreg"));
         assert_eq!(kind_error_note("some other error"), None);
+    }
+
+    /// A strap table selects one row per resistance (a printed nominal within
+    /// its window, or an open-ended range), nothing between rows, and refuses
+    /// rows that overlap, unread params, and params the card already fixes.
+    #[test]
+    #[rustfmt::skip]
+    fn a_strap_table_selects_one_row_and_refuses_ambiguity() {
+        let table = |rows: &str| -> ModelEntry {
+            toml::from_str(&format!("{LDO_FIXTURE}\n[[resistor_bins]]\npin = \"en\"\ntolerance = 0.05\n{rows}")).unwrap()
+        };
+        let row = |shape: &str, params: &str| format!("[[resistor_bins.bin]]\n{shape}\nparams = {{ {params} }}\n");
+        let good = table(&[
+            row("ohms = 10000.0", "vbat_reg_v = 4.2"),
+            row("ohms = 20000.0", "vbat_reg_v = 4.35, input_limit_a = 0.5"),
+            "[[resistor_bins.bin]]\nabove_ohms = 100000.0\nnote = \"disabled\"\n".into(),
+        ].concat());
+        accepts(&good);
+        let bins = &good.resistor_bins[0];
+        let pick = |ohms: f64| bins.select(ohms).map(crate::schema::ResistorBin::label);
+        assert_eq!(pick(10_400.0).as_deref(), Some("10000 ohm"));
+        assert_eq!(pick(19_100.0).as_deref(), Some("20000 ohm"));
+        assert_eq!(pick(150_000.0).as_deref(), Some("> 100000 ohm"));
+        assert_eq!(pick(15_000.0), None, "between rows selects nothing");
+        assert_eq!(pick(0.0), None);
+        assert_eq!(pick(f64::NAN), None);
+        for (rows, needle) in [
+            (row("ohms = 10000.0", "vbat_reg_v = 4.2") + &row("ohms = 10500.0", "vbat_reg_v = 4.1"), "overlap at tolerance"),
+            (row("ohms = 10000.0", "frobnicate = 1.0"), "which no Vreg consumer reads"),
+            (row("ohms = 10000.0", "vout = 5.0"), "already fixes"),
+            (row("ohms = 10000.0\nbelow_ohms = 500.0", "vbat_reg_v = 4.2"), "exactly one positive"),
+        ] {
+            rejects(&table(&rows), needle);
+        }
+        let off_pin = toml::from_str(&format!("{LDO_FIXTURE}\n[[resistor_bins]]\npin = \"strap\"\ntolerance = 0.05\n{}", row("ohms = 1.0", "vbat_reg_v = 4.2"))).unwrap();
+        rejects(&off_pin, "resistor_bins.pin");
     }
 }

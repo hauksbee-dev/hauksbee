@@ -185,6 +185,12 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "cout_esr_min_ohm",
             "cout_esr_max_ohm",
             "battery_chemistry",
+            // A power-path charger's charge port (`bat`), beside its `out`
+            // system rail: the float, the IN-to-BAT headroom, and the input
+            // current limit that also caps the charge current.
+            "vbat_reg_v",
+            "bat_dropout_v",
+            "input_limit_a",
             "vout_setpoint_low",
             "vout_setpoint_high",
             "shunt",

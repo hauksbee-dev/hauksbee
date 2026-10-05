@@ -104,14 +104,37 @@ impl Card {
     }
 
     /// The charge current the card's PROG law gives at `ohms`, for a linear
-    /// charger: a `vreg` tagged `regulated_current`.
+    /// charger: a `vreg` tagged `regulated_current` whose current leaves at
+    /// `out`. A power-path part's leaves at a charge port beside its system
+    /// rail instead (see [`Card::charge_port`]).
     fn charge_current_at(&self, ohms: f64) -> Option<f64> {
-        let program = self.table.get("current_program")?;
-        if self.kind != "vreg" || text(program.as_table()?, "semantics")? != "regulated_current" {
+        let program = self.entry()?.current_program?;
+        let out = program.current_out_roles.iter().any(|r| r == "out");
+        (out && self.regulated_current()).then_some(())?;
+        program.operating_current_a(ohms)
+    }
+
+    /// For a power-path part (a regulated current out of a role other than
+    /// `out`): the program pin, the port role, and the current at `ohms`.
+    fn charge_port(&self, ohms: f64) -> Option<(String, String, f64)> {
+        let program = self.entry()?.current_program?;
+        self.regulated_current().then_some(())?;
+        let [port] = program.current_out_roles.as_slice() else {
             return None;
-        }
-        let entry: ModelEntry = self.table.clone().try_into().ok()?;
-        entry.current_program?.operating_current_a(ohms)
+        };
+        (port != "out").then_some(())?;
+        let amps = program.operating_current_a(ohms)?;
+        Some((program.pin.clone(), port.clone(), amps))
+    }
+
+    fn regulated_current(&self) -> bool {
+        let program = self.table.get("current_program").and_then(|p| p.as_table());
+        self.kind == "vreg"
+            && program.and_then(|p| text(p, "semantics")) == Some("regulated_current")
+    }
+
+    fn entry(&self) -> Option<ModelEntry> {
+        self.table.clone().try_into().ok()
     }
 }
 
@@ -268,6 +291,22 @@ fn rail(volts: f64) -> String {
     name
 }
 
+/// The rig's footprint for a card's part: a SOIC-8, unless the card numbers
+/// more pads than that, when it is left unnamed so the package-fit check has
+/// no rig-chosen outline to hold the card's own package against.
+fn rig_footprint(card: &Card) -> &'static str {
+    let pads = card
+        .pins()
+        .iter()
+        .filter_map(|(p, _)| p.parse::<u32>().ok())
+        .max();
+    if pads.is_some_and(|n| n > 8) {
+        ""
+    } else {
+        "Package_SO:SOIC-8"
+    }
+}
+
 /// What a card's board is expected to do.
 enum Expect {
     /// A linear part: input current is the load's plus `iq`.
@@ -351,7 +390,7 @@ fn vreg_plan(card: &Card, value: &str) -> Option<Plan> {
         .filter_map(|(pad, role)| Some(pin(&pad, rig.net(&net_of(&role)?))))
         .collect();
     rig.parts
-        .push(component("U1", value, "Package_SO:SOIC-8", pins));
+        .push(component("U1", value, rig_footprint(card), pins));
     if rig.nets.iter().any(|(_, n)| n == "PROG") {
         rig.two(&prog, "10k", RES, "PROG", "GND");
     }
@@ -1623,4 +1662,140 @@ fn a_power_path_charger_keeps_its_system_rail_unlimited() {
     let plan = vreg_plan(&cards[0], "PROBE0").unwrap();
     let bound = bind_board_with(&plan.rig.board(), &lib, &CustomRegistry::new());
     assert_eq!(path_of(&bound.circuit.devices), "fixed");
+}
+
+/// The first strap row of a card's resistor table that sets a charge float
+/// and names no unmodelled mode: (strap role, ohms, float, input limit).
+fn float_strap(card: &Card) -> Option<(String, f64, f64, Option<f64>)> {
+    let entry = card.entry()?;
+    entry.resistor_bins.iter().find_map(|table| {
+        table.bins.iter().find_map(|bin| {
+            let vfloat = *bin.params.get("vbat_reg_v")?;
+            (bin.note.is_none()).then_some(())?;
+            let ilim = bin.params.get("input_limit_a").copied();
+            Some((table.pin.clone(), bin.ohms?, vfloat, ilim))
+        })
+    })
+}
+
+/// A power-path board: the input on a +5V rail, the system rail loaded to
+/// about 100 mA, the program resistor, the charge port on `VBAT` (loaded by
+/// `port_load` ohms when set), and the strap resistor when `strap` is set.
+fn power_path_plan(card: &Card, value: &str, strap: bool, port_load: Option<f64>) -> Option<Plan> {
+    let (prog_role, port_role, _) = card.charge_port(CHARGER_PROG_OHMS)?;
+    let (strap_role, strap_ohms, ..) = float_strap(card)?;
+    let vout = card.param("vout")?;
+    let input = rail(5.0);
+    let mut rig = Rig::default();
+    rig.net("GND");
+    let pins = card
+        .pins()
+        .into_iter()
+        .filter_map(|(pad, role)| {
+            let net = match role.as_str() {
+                "in" => input.as_str(),
+                "out" => "SYS",
+                "gnd" => "GND",
+                r if r == prog_role => "PROG",
+                r if r == port_role => "VBAT",
+                r if r == strap_role => "STRAP",
+                _ => return None,
+            };
+            Some(pin(&pad, rig.net(net)))
+        })
+        .collect();
+    rig.parts
+        .push(component("U1", value, rig_footprint(card), pins));
+    rig.two("R9", &format!("{CHARGER_PROG_OHMS}R"), RES, "PROG", "GND");
+    if strap {
+        rig.two("R8", &format!("{strap_ohms}R"), RES, "STRAP", "GND");
+    }
+    rig.two("C1", "10uF", CAP, &input, "GND");
+    rig.two("C2", "10uF", CAP, "SYS", "GND");
+    rig.load("R1", "SYS", vout / 0.1);
+    if let Some(ohms) = port_load {
+        rig.load("R2", "VBAT", ohms);
+    }
+    Some(Plan {
+        rig,
+        input,
+        output: "VBAT".into(),
+        target: vout,
+        expect: Expect::Linear {
+            iq: card.param("iq_a").unwrap_or(0.0),
+        },
+    })
+}
+
+/// Every builtin power-path card powers its system rail from the input,
+/// charges a declared cell on its charge port at the programmed current
+/// (capped by the strap's input limit) drawn from that same input, floats an
+/// unloaded port at the strap's float voltage, and leaves the port unstamped,
+/// saying so, when the strap cannot be read.
+#[test]
+fn a_power_path_card_charges_its_port_and_powers_its_rail_from_the_input() {
+    let cards = power_cards();
+    let lib = probe_library(&cards, "power_path");
+    let mut seen = 0;
+    for (i, card) in cards.iter().enumerate() {
+        let Some((_, _, iprog)) = card.charge_port(CHARGER_PROG_OHMS) else {
+            continue;
+        };
+        let Some((_, _, vfloat, ilim)) = float_strap(card) else {
+            continue;
+        };
+        seen += 1;
+        let value = format!("PROBE{i}");
+        let ichg = ilim.map_or(iprog, |l| iprog.min(l));
+        let vout = card.param("vout").unwrap();
+        let iq = card.param("iq_a").unwrap_or(0.0);
+        let near = |got: f64, want: f64, tol: f64, what: &str| {
+            assert!(
+                (got / want - 1.0).abs() < tol,
+                "{}: {what} {got:.5e}, want {want:.5e}",
+                card.id
+            );
+        };
+
+        // A declared 3.7 V cell takes the programmed current; the system rail
+        // holds; the input carries the rail's load, the charge and Iq.
+        let plan = power_path_plan(card, &value, true, None).unwrap();
+        let sched = settle_charger_at(&plan, &lib, true, 5.0);
+        let states = sched.supply_states();
+        let v = |n: &str| sched.net_voltage(n).unwrap_or(f64::NAN);
+        near(v("SYS"), vout, 0.02, "system rail volts");
+        near(-states["VBAT"].1, ichg, 0.02, "charge current");
+        let isys = v("SYS") / (vout / 0.1);
+        near(
+            states[&plan.input].1,
+            isys + ichg + iq,
+            TOL,
+            "input current",
+        );
+
+        // An unloaded port (a 100 k bleed only) floats at the strap's voltage.
+        let plan = power_path_plan(card, &value, true, Some(1e5)).unwrap();
+        let sched = settle_charger_at(&plan, &lib, false, 5.0);
+        let vbat = sched.net_voltage("VBAT").unwrap_or(f64::NAN);
+        near(vbat, vfloat, 0.01, "port float volts");
+
+        // No strap: no float is selected, so no charge current is invented,
+        // and the bind report says why.
+        let plan = power_path_plan(card, &value, false, None).unwrap();
+        let bound = bind_board_with(&plan.rig.board(), &lib, &CustomRegistry::new());
+        let warning = bound.report.row("U1").and_then(|r| r.warning.clone());
+        assert!(
+            warning.as_deref().is_some_and(|w| w.contains("strap")),
+            "{}: unread strap not reported: {warning:?}",
+            card.id
+        );
+        let sched = settle_charger_at(&plan, &lib, true, 5.0);
+        let leak = sched.supply_states()["VBAT"].1;
+        assert!(
+            leak.abs() < 1e-3 * ichg,
+            "{}: VBAT carries {leak:.3e} A with no float selected",
+            card.id
+        );
+    }
+    assert!(seen >= 1, "no power-path charger cards found");
 }

@@ -828,6 +828,7 @@ pub fn bind_board_with(
     }
 
     report.linear_heat = charger_heat(&circuit);
+    report.port_heat = port_heat(&circuit);
 
     // ── Pass 4: gather fault-monitor metadata ───────────────────────────────
     // Match each monitorable IR device back to its component (device name ==
@@ -2378,6 +2379,13 @@ fn bind_component(
         );
     }
 
+    // A strap resistor that selects a row of the card's table sets those
+    // params for this board before any kind's binder reads them; a strap that
+    // cannot be read, or reads between rows, is said, never interpolated.
+    let (resolved, strap_note) =
+        resolve_resistor_bins(comp, model, &role_nets, circuit, components, node_of);
+    let model = resolved.as_ref();
+
     let (outcome, warning) = match model.kind {
         Passive => bind_passive(comp, model, circuit, node_of),
         Diode => bind_diode(comp, model, circuit, &role_nets),
@@ -2426,7 +2434,106 @@ fn bind_component(
             None,
         ),
     };
+    // The strap note leads: it carries the partial-model marker, which only
+    // counts at the front of the joined string.
+    let warning = if strap_note.is_some() {
+        join_caveats(comp, [strap_note, warning])
+    } else {
+        warning
+    };
     (outcome, warning, guesses)
+}
+
+/// The card with each `[[models.resistor_bins]]` table resolved against this
+/// board: the strap resistance the table's pin reads to ground (the same
+/// bounded nodal solve [`charge_limit`] uses) picks a row, and that row's
+/// params join the card's. Borrowed unchanged for a card with no tables.
+///
+/// The note is a partial-model caveat for every table that set nothing:
+/// a strap that cannot be read, one that lands between the printed rows, or a
+/// row that selects a mode the card names (`note`) rather than parameterises.
+fn resolve_resistor_bins<'m>(
+    comp: &Component,
+    model: &'m ModelEntry,
+    roles: &HashMap<String, NodeId>,
+    circuit: &Circuit,
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> (std::borrow::Cow<'m, ModelEntry>, Option<String>) {
+    use hauksbee_models::schema::ParamValue;
+    if model.resistor_bins.is_empty() {
+        return (std::borrow::Cow::Borrowed(model), None);
+    }
+    let is_ground =
+        |id| node_of(Some(id)).map(|n| n.is_ground() || is_ground_net(circuit.node_name(n)));
+    let excluded = components
+        .iter()
+        .position(|c| c.reference == comp.reference);
+    let mut entry = model.clone();
+    let mut notes = Vec::new();
+    for table in &model.resistor_bins {
+        let pin = &table.pin;
+        let names = {
+            let mut all: Vec<&str> = table
+                .bins
+                .iter()
+                .flat_map(|b| b.params.keys().map(String::as_str))
+                .collect();
+            all.sort_unstable();
+            all.dedup();
+            all.join(", ")
+        };
+        let read = roles
+            .get(pin)
+            .and_then(|node| {
+                comp.pins
+                    .iter()
+                    .find(|p| node_of(p.net) == Some(*node))?
+                    .net
+            })
+            .and_then(|net| program_resistance_to_ground(components, &is_ground, net, 4, excluded));
+        let Some((ohms, path)) = read else {
+            notes.push(format!(
+                "its `{pin}` strap resistor could not be read off the board (no populated \
+                 resistor path to ground, or a part on the net that is not a plain resistor), \
+                 so the settings it selects ({names}) are not set and what depends on them is \
+                 not modelled"
+            ));
+            continue;
+        };
+        let via = path.join("+");
+        let Some(bin) = table.select(ohms) else {
+            notes.push(format!(
+                "its `{pin}` strap {via} reads {ohms:.0} ohm, which is within {:.0}% of no row \
+                 of the datasheet's table, so the settings it selects ({names}) are not set and \
+                 what depends on them is not modelled",
+                table.tolerance * 100.0
+            ));
+            continue;
+        };
+        for (name, value) in &bin.params {
+            entry
+                .params
+                .0
+                .insert(name.clone(), ParamValue::Float(*value));
+        }
+        if let Some(note) = &bin.note {
+            notes.push(format!(
+                "its `{pin}` strap {via} reads {ohms:.0} ohm, the datasheet's {} row: {note}",
+                bin.label()
+            ));
+        }
+    }
+    let note = (!notes.is_empty()).then(|| {
+        format!(
+            "{}{} ({}): {}",
+            Assumption::PARTIAL_MODEL_MARKER,
+            comp.reference,
+            comp.value,
+            notes.join("; ")
+        )
+    });
+    (std::borrow::Cow::Owned(entry), note)
 }
 
 /// Bind one declarative-logic part and turn the result into a report outcome.
@@ -3996,7 +4103,13 @@ fn bind_vreg(
             prog: roles.get(&program.pin).copied(),
             vfloat: vout,
         };
-        let stamped = stamp_charger(comp, model, program, pins, circuit, components, node_of);
+        let stage = ChargerStage {
+            port: false,
+            headroom_v: model.params.get_f64("dropout_v").unwrap_or(0.0),
+            iq_a: model.params.get_f64("iq_a"),
+            cap_a: None,
+        };
+        let stamped = stamp_charger(comp, program, (pins, stage), circuit, components, node_of);
         let stability = vreg_stability_warning(comp, model, (out, gnd), components, node_of);
         let caveats = [stamped.assumption, stability, entry_warning(comp, model)];
         return (
@@ -4093,17 +4206,123 @@ fn bind_vreg(
     // are joined rather than one silently winning. Each is a full sentence already;
     // the leading one keeps the marker that makes the whole string evidence, and the
     // followers drop their own "REF (VALUE): " so the reference is not repeated.
+    // A power-path part's charge port, beside the system rail just stamped.
+    let (port_label, port_caveat) = bind_charge_port(
+        comp,
+        model,
+        (input, gnd),
+        roles,
+        circuit,
+        components,
+        node_of,
+    );
     let caveats = [
         vreg_stability_warning(comp, model, (out, gnd), components, node_of),
         entry_warning(comp, model),
         enable_warning,
+        port_caveat,
     ];
+    let device = port_label.map_or_else(
+        || format!("vreg {vout:.1}V source"),
+        |port| format!("vreg {vout:.1}V source; {port}"),
+    );
     (
-        BindOutcome::Behavioral {
-            device: format!("vreg {vout:.1}V source"),
-        },
+        BindOutcome::Behavioral { device },
         join_caveats(comp, caveats),
     )
+}
+
+/// The card's programming block and charge-port role when the part is a
+/// POWER-PATH charger: a regulated current that flows in at `in` and out at
+/// one role other than `out` (a `bat` port), while `out` is a system rail that
+/// [`bind_vreg`] stamps as an ordinary regulator. [`linear_charger`] is the
+/// other shape, the programmed current leaving at `out` itself.
+fn charge_port(model: &ModelEntry) -> Option<(&CurrentProgram, &str)> {
+    let program = model.current_program.as_ref().filter(|p| {
+        p.semantics == CurrentProgramSemantics::RegulatedCurrent
+            && p.current_in_roles.iter().any(|r| r == "in")
+    })?;
+    match program.current_out_roles.as_slice() {
+        [port] if port != "out" => Some((program, port.as_str())),
+        _ => None,
+    }
+}
+
+/// A power-path part's charge port: the CC/CV stamp of [`stamp_charger`] from
+/// IN to the port, floating at the card's `vbat_reg_v`, at the programmed
+/// current capped by `input_limit_a`, behind the `dropout_v` of the input path
+/// plus the `bat_dropout_v` of the port's own pass element. It draws from IN
+/// directly, so IN carries the system load plus the charge current, as the
+/// part's input does. Returns the stamp's label and its caveat.
+///
+/// Not a port at all (no charge program, an unwired port) returns nothing. A
+/// port whose float voltage the card does not set for this board (its strap
+/// table selected no float, or the card has none) is not stamped, and that is
+/// said unless the strap note already said why.
+fn bind_charge_port(
+    comp: &Component,
+    model: &ModelEntry,
+    (input, gnd): (NodeId, NodeId),
+    roles: &HashMap<String, NodeId>,
+    circuit: &mut Circuit,
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> (Option<String>, Option<String>) {
+    let Some((program, port_role)) = charge_port(model) else {
+        return (None, None);
+    };
+    let Some(port) = roles
+        .get(port_role)
+        .copied()
+        .filter(|n| *n != input && *n != gnd)
+    else {
+        return (None, None);
+    };
+    let Some(vfloat) = model
+        .params
+        .get_f64("vbat_reg_v")
+        .filter(|v| v.is_finite() && *v > 0.0)
+    else {
+        let strap_said = model
+            .resistor_bins
+            .iter()
+            .any(|t| t.bins.iter().any(|b| b.params.contains_key("vbat_reg_v")));
+        let caveat = (!strap_said).then(|| {
+            format!(
+                "{}{} ({}): its `{port_role}` charge port is not stamped because the card \
+                 sets no charge regulation voltage (`vbat_reg_v`), so no charge current is \
+                 modelled and IN carries the system rail's draw only",
+                Assumption::PARTIAL_MODEL_MARKER,
+                comp.reference,
+                comp.value
+            )
+        });
+        return (None, caveat);
+    };
+    let headroom = ["dropout_v", "bat_dropout_v"]
+        .iter()
+        .filter_map(|k| {
+            model
+                .params
+                .get_f64(k)
+                .filter(|d| d.is_finite() && *d > 0.0)
+        })
+        .sum();
+    let pins = ChargerPins {
+        input,
+        out: port,
+        gnd,
+        prog: roles.get(&program.pin).copied(),
+        vfloat,
+    };
+    let stage = ChargerStage {
+        port: true,
+        headroom_v: headroom,
+        iq_a: None,
+        cap_a: model.params.get_f64("input_limit_a"),
+    };
+    let stamped = stamp_charger(comp, program, (pins, stage), circuit, components, node_of);
+    (Some(stamped.label), stamped.assumption)
 }
 
 /// Several caveats can apply to one part and there is one channel, so they are
@@ -4111,7 +4330,10 @@ fn bind_vreg(
 /// comes off so the reference is not said twice in one sentence. The KNOWN
 /// prefix is stripped rather than cutting at the first ": ", which a component
 /// value containing a colon would break.
-fn join_caveats(comp: &Component, caveats: [Option<String>; 3]) -> Option<String> {
+fn join_caveats(
+    comp: &Component,
+    caveats: impl IntoIterator<Item = Option<String>>,
+) -> Option<String> {
     let prefix = format!("{} ({}): ", comp.reference, comp.value);
     caveats.into_iter().flatten().reduce(|lead, c| {
         let c = c
@@ -4244,9 +4466,30 @@ struct ChargerPins {
     gnd: NodeId,
     /// The node on the part's programming pin, when it is wired.
     prog: Option<NodeId>,
-    /// The float voltage, the card's `vout`.
+    /// The float voltage: the card's `vout`, or a power-path part's
+    /// `vbat_reg_v`.
     vfloat: f64,
 }
+
+/// Which charger a stamp is and what it carries beyond its pins.
+#[derive(Clone, Copy)]
+struct ChargerStage {
+    /// The charge port of a power-path part, beside its `Vreg_` system rail:
+    /// its devices take a `_port` suffix and its ammeter is named by
+    /// [`PORT_AMMETER_PREFIX`] plus the reference, so neither collides with
+    /// the rail's.
+    port: bool,
+    /// The input headroom the pass path needs above the float.
+    headroom_v: f64,
+    /// Quiescent draw on IN, when this stage carries the part's.
+    iq_a: Option<f64>,
+    /// A ceiling on the programmed current from another of the card's
+    /// settings (a power-path part's input-current limit).
+    cap_a: Option<f64>,
+}
+
+/// The ammeter of a power-path part's charge port.
+const PORT_AMMETER_PREFIX: &str = "Vport_";
 
 /// What a charger stamp tells the bind report.
 struct StampedCharger {
@@ -4360,9 +4603,8 @@ fn charge_limit(
 /// and the assumption is returned for the bind report; no value is invented.
 fn stamp_charger(
     comp: &Component,
-    model: &ModelEntry,
     program: &CurrentProgram,
-    pins: ChargerPins,
+    (pins, stage): (ChargerPins, ChargerStage),
     circuit: &mut Circuit,
     components: &[Component],
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
@@ -4375,7 +4617,7 @@ fn stamp_charger(
         vfloat,
     } = pins;
     let reference = &comp.reference;
-    let (ilim, assumption) = charge_limit(
+    let (programmed, assumption) = charge_limit(
         comp,
         program,
         prog,
@@ -4383,14 +4625,21 @@ fn stamp_charger(
         &|id| node_of(Some(id)).map(|n| n.is_ground() || is_ground_net(circuit.node_name(n))),
         node_of,
     );
-    let full = model
-        .params
-        .get_f64("dropout_v")
+    let ilim = stage
+        .cap_a
+        .filter(|c| c.is_finite() && *c > 0.0)
+        .map_or(programmed, |c| programmed.min(c));
+    let full = Some(stage.headroom_v)
         .filter(|d| d.is_finite() && *d > 0.0)
         .unwrap_or(0.0);
+    let (sfx, node_tag, ammeter_name) = if stage.port {
+        ("_port", "port", format!("{PORT_AMMETER_PREFIX}{reference}"))
+    } else {
+        ("", "chg", format!("Vreg_{reference}"))
+    };
     let (set, cc) = (
-        circuit.node(&format!("{reference}_chg_set")),
-        circuit.node(&format!("{reference}_chg_out")),
+        circuit.node(&format!("{reference}_{node_tag}_set")),
+        circuit.node(&format!("{reference}_{node_tag}_out")),
     );
     // The set voltage: the float, held down to what the input can pass.
     // `m` is `min(u, 0)` rounded over `PASS_FADE_V`, `u` the input's headroom
@@ -4403,7 +4652,7 @@ fn stamp_charger(
         w / 2.0
     );
     circuit.add(Device::Behavioral {
-        name: format!("Vchg_{reference}"),
+        name: format!("Vchg_{reference}{sfx}"),
         p: set,
         n: gnd,
         output: BOutput::Voltage,
@@ -4413,12 +4662,7 @@ fn stamp_charger(
     });
     // The output ammeter: a 0 V source whose branch reads `-Iout`, the seam the
     // stress monitor and the input draw below both read.
-    let ammeter = circuit.add(Device::vsource(
-        format!("Vreg_{reference}"),
-        out,
-        cc,
-        SourceKind::Dc(0.0),
-    ));
+    let ammeter = circuit.add(Device::vsource(ammeter_name, out, cc, SourceKind::Dc(0.0)));
     let (droop_ohms, hold_ohms) = (CV_BAND_V / ilim, 1e4 * vfloat / ilim);
     let i_out = "(-__d0)";
     let drop = format!(
@@ -4426,7 +4670,10 @@ fn stamp_charger(
          +{hold_ohms:?}*max({i_out}-{ilim:?},0.0)"
     );
     circuit.add(Device::Behavioral {
-        name: format!("{}{reference}", crate::rail_owner::LIMITED_SOURCE_PREFIX),
+        name: format!(
+            "{}{reference}{sfx}",
+            crate::rail_owner::LIMITED_SOURCE_PREFIX
+        ),
         p: set,
         n: cc,
         output: BOutput::Voltage,
@@ -4442,21 +4689,28 @@ fn stamp_charger(
         droop_ohms * ilim
     );
     circuit.add(Device::Behavioral {
-        name: format!("{CHARGER_DRAW_PREFIX}{reference}"),
+        name: format!("{CHARGER_DRAW_PREFIX}{reference}{sfx}"),
         p: input,
         n: gnd,
         output: BOutput::Current,
         expr: CompiledExpr::compile(&draw).expect("charger draw compiles"),
         deps: vec![BDep::Volt(set), BDep::Volt(cc)],
     });
-    if let Some(amps) = model.params.get_f64("iq_a").filter(|i| i.is_finite()) {
+    if let Some(amps) = stage.iq_a.filter(|i| i.is_finite()) {
         let name = format!("Iq_{reference}");
         circuit.add(Device::isource(name, input, gnd, SourceKind::Dc(amps)));
     }
-    StampedCharger {
-        label: format!("linear charger {vfloat:.1}V CC/CV, {ilim:.3}A limit"),
-        assumption,
-    }
+    let label = if stage.port {
+        let capped = if ilim < programmed {
+            " (the input-current limit)"
+        } else {
+            ""
+        };
+        format!("charge port {vfloat:.2}V CC/CV, {ilim:.3}A limit{capped}")
+    } else {
+        format!("linear charger {vfloat:.1}V CC/CV, {ilim:.3}A limit")
+    };
+    StampedCharger { label, assumption }
 }
 
 /// The name prefix of a charger's input draw, the copy of its output current
@@ -4478,6 +4732,35 @@ fn charger_heat(circuit: &Circuit) -> Vec<(DeviceId, NodeId)> {
                 Some((ammeter.0, *p))
             }
             _ => None,
+        })
+        .collect()
+}
+
+/// Each power-path part's system-rail source, the input node both of its
+/// paths draw from, and its charge-port ammeter: the package dissipates
+/// `(V(in) - V(sys)) * I_sys + (V(in) - V(bat)) * I_bat`, the datasheet's
+/// `(VIN - VSYS) * IIN + (VSYS - VBAT) * IBAT` with `IIN = ISYS + IBAT`.
+fn port_heat(circuit: &Circuit) -> Vec<(DeviceId, NodeId, DeviceId)> {
+    let vsource = |want: &str| {
+        circuit
+            .iter()
+            .find(|(_, d)| matches!(d, Device::Vsource { name, .. } if name == want))
+            .map(|(id, _)| id)
+    };
+    circuit
+        .iter()
+        .filter_map(|(port, d)| {
+            let Device::Vsource { name, .. } = d else {
+                return None;
+            };
+            let reference = name.strip_prefix(PORT_AMMETER_PREFIX)?;
+            let rail = vsource(&format!("Vreg_{reference}"))?;
+            let draw = format!("{CHARGER_DRAW_PREFIX}{reference}_port");
+            let input = circuit.iter().find_map(|(_, b)| match b {
+                Device::Behavioral { name, p, .. } if *name == draw => Some(*p),
+                _ => None,
+            })?;
+            Some((rail, input, port))
         })
         .collect()
 }
