@@ -291,8 +291,6 @@ fn buck_and_spi_nor_cards_follow_the_datasheets() {
         ("LMR16006XDDCR", "lmr16006x_adj", LMR, 0.765, None),
         ("LMR16006YDDCR", "lmr16006y_adj", LMR, 0.765, None),
         ("LMR16006YQDDCRQ1", "lmr16006y_adj", LMR, 0.765, None),
-        ("LMR16006YQ3DDCRQ1", "lmr16006yq3", LMR, 3.3, None),
-        ("LMR16006YQ5", "lmr16006yq5", LMR, 5.0, None),
         ("LM2677SX-3.3/NOPB", "lm2677_3v3_to263", LM2677, 3.3, None),
         ("LM2677S-5.0", "lm2677_5v0_to263", LM2677, 5.0, None),
         ("LM2677SX-5", "lm2677_5v0_to263", LM2677, 5.0, None),
@@ -328,6 +326,10 @@ fn buck_and_spi_nor_cards_follow_the_datasheets() {
         "TLV62568",
         "LM2677SD-3.3",
         "LM2677S-ADJ",
+        // The fixed LMR16006 options are left unresolved, not caught by the
+        // adjustable card (vreg.toml says why).
+        "LMR16006YQ3DDCRQ1",
+        "LMR16006YQ5",
         "W25Q32JVSFIQ",
         "W25Q32JVSSIM",
         "GD25LQ16",

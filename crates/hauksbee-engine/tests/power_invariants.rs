@@ -76,6 +76,16 @@ struct Card {
 }
 
 impl Card {
+    /// Whether the card records its sheet's package pinout
+    /// (`[[models.source.pinout]]`), which the binder holds a footprint to.
+    fn declares_package(&self) -> bool {
+        let source = self.table.get("source").and_then(toml::Value::as_table);
+        source
+            .and_then(|s| s.get("pinout"))
+            .and_then(toml::Value::as_array)
+            .is_some_and(|p| !p.is_empty())
+    }
+
     fn pins(&self) -> Vec<(String, String)> {
         let pins = self.table.get("pins").and_then(toml::Value::as_table);
         pins.into_iter()
@@ -229,6 +239,10 @@ struct Rig {
     parts: Vec<Component>,
     /// Resistors to ground off the output side: (name, net, ohms).
     loads: Vec<(String, String, f64)>,
+    /// Resistors between two output-side nets (a divider's top leg): (from,
+    /// to, ohms). No current of their own returns to ground, but what they
+    /// dissipate is output power the part delivers.
+    series: Vec<(String, String, f64)>,
 }
 
 impl Rig {
@@ -249,6 +263,11 @@ impl Rig {
             footprint,
             vec![pin("1", a), pin("2", b)],
         ));
+    }
+
+    fn series(&mut self, reference: &str, a: &str, b: &str, ohms: f64) {
+        self.two(reference, &format!("{ohms}R"), RES, a, b);
+        self.series.push((a.into(), b.into(), ohms));
     }
 
     fn load(&mut self, reference: &str, net: &str, ohms: f64) {
@@ -411,7 +430,7 @@ fn vreg_plan(card: &Card, value: &str) -> Option<Plan> {
         } else {
             (1e3, 1e3 * k)
         };
-        rig.two("R2", &format!("{top}R"), RES, &outp, "FB");
+        rig.series("R2", &outp, "FB", top);
         rig.load("R3", "FB", bot);
         // The ADJ pin's own current runs through the bottom resistor too.
         target += card.param("iadj_a").unwrap_or(0.0) * bot;
@@ -673,7 +692,14 @@ fn run(plan: &Plan, lib: &ModelLibrary, model_id: &str) -> Outcome {
         .loads
         .iter()
         .map(|(_, n, r)| v(n).powi(2) / r)
-        .sum();
+        .sum::<f64>()
+        + plan
+            .rig
+            .series
+            .iter()
+            .filter(|(_, _, r)| *r > 0.0)
+            .map(|(a, b, r)| (v(a) - v(b)).powi(2) / r)
+            .sum::<f64>();
     let supplies = sched.supply_states();
     let iin = supplies.get(&plan.input).map_or(f64::NAN, |s| s.1);
     let p_in = vin * iin;
@@ -1125,8 +1151,14 @@ fn digital_rig(card: &Card, value: &str, drive: Drive, ohms: Option<f64>) -> (Ri
         let id = rig.net(&net);
         pins.push(pin(&pad, id));
     }
-    rig.parts
-        .push(component("U1", value, "Package_SO:SOIC-14", pins));
+    // A card that records its package binds only on a matching footprint; the
+    // rig names none for it rather than a SOIC-14 the part never comes in.
+    let footprint = if card.declares_package() {
+        ""
+    } else {
+        "Package_SO:SOIC-14"
+    };
+    rig.parts.push(component("U1", value, footprint, pins));
     for (i, net) in outs.iter().enumerate() {
         rig.load(&format!("RL{i}"), net, ohms.unwrap_or(1e9));
     }
