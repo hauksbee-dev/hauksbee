@@ -274,3 +274,38 @@ fn a_reused_sheet_takes_each_placements_unit() {
     assert!(gate_a.is_some() && gate_b.is_some(), "{:?}", u1.pins);
     assert_ne!(gate_a, gate_b, "each placement's gate is on its own CHAN");
 }
+
+/// A local label is scoped to one placement of its sheet: a sheet placed
+/// twice whose `CLAMP` label joins two parts makes two nets, named the way
+/// `kicad-cli sch export netlist` names them (`/bank_a/CLAMP`,
+/// `/bank_b/CLAMP`), not one net shorting both placements together.
+#[test]
+fn a_local_label_in_a_reused_sheet_is_one_net_per_placement() {
+    let board =
+        ExtractedBoard::from_kicad_schematic_path(&fixture("local_label_reuse_top.kicad_sch"))
+            .expect("extract the reused-sheet hierarchy");
+    let net_of = |reference: &str, number: &str| {
+        let net = board
+            .components
+            .iter()
+            .find(|c| c.reference == reference)
+            .and_then(|c| c.pins.iter().find(|p| p.number == number))
+            .and_then(|p| p.net)
+            .expect("pin is connected");
+        board
+            .nets
+            .iter()
+            .find(|n| n.id == net)
+            .map(|n| n.name.clone())
+            .expect("net exists")
+    };
+    assert_eq!(net_of("R1", "2"), net_of("R2", "1"), "joined within bank_a");
+    assert_eq!(net_of("R3", "2"), net_of("R4", "1"), "joined within bank_b");
+    assert_ne!(
+        net_of("R1", "2"),
+        net_of("R3", "2"),
+        "placements stay apart"
+    );
+    assert_eq!(net_of("R1", "2"), "/bank_a/CLAMP");
+    assert_eq!(net_of("R3", "2"), "/bank_b/CLAMP");
+}

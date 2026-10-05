@@ -1,0 +1,23 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-0000000000b0")
+	(paper "A4")
+	(sheet
+		(at 150 90)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-0000000000b1")
+		(property "Sheetname" "bank_a")
+		(property "Sheetfile" "local_label_reuse_child.kicad_sch")
+	)
+	(sheet
+		(at 150 130)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-0000000000b2")
+		(property "Sheetname" "bank_b")
+		(property "Sheetfile" "local_label_reuse_child.kicad_sch")
+	)
+	(sheet_instances
+		(path "/" (page "1"))
+	)
+)

@@ -345,6 +345,12 @@ struct NetlistBuilder {
     /// schematic path cries wolf on a deliberately-unconnected control pin.
     no_connect_nodes: Vec<usize>,
     next_sheet: SheetId,
+    /// Each sheet instance's KiCad display path (`/IO Banks/Bank A/`; `/`
+    /// for the root), indexed by `SheetId`. Qualifies a sheet-scoped net
+    /// name that more than one instance carries.
+    sheet_display: Vec<String>,
+    /// The display path the next `add_sheet_doc` call is entering.
+    pending_display: Option<String>,
     /// The chain of sub-sheet files currently being expanded, canonicalized,
     /// innermost last. A `Sheetfile` that points back at one of its own
     /// ancestors (a sheet that references itself, or two sheets that reference
@@ -408,6 +414,8 @@ impl NetlistBuilder {
             bus_boundaries: Vec::new(),
             no_connect_nodes: Vec::new(),
             next_sheet: 0,
+            sheet_display: Vec::new(),
+            pending_display: None,
             ancestor_sheets: Vec::new(),
             sheet_depth: 0,
         }
@@ -466,6 +474,11 @@ impl NetlistBuilder {
 
         let sheet: SheetId = self.next_sheet;
         self.next_sheet += 1;
+        let display = self
+            .pending_display
+            .take()
+            .unwrap_or_else(|| "/".to_string());
+        self.sheet_display.push(display);
 
         // The hierarchical instance path KiCad records on each symbol begins
         // with the *root* schematic's uuid. At the top level we are handed
@@ -974,6 +987,14 @@ impl NetlistBuilder {
                         let child_dir = child.parent().map(Path::to_path_buf);
                         self.sheet_depth += 1;
                         self.ancestor_sheets.push(key);
+                        let parent = self
+                            .sheet_display
+                            .get(sheet as usize)
+                            .map_or("/", String::as_str);
+                        let title = sheet_property(sub, "Sheetname")
+                            .or_else(|| sheet_property(sub, "Sheet name"))
+                            .unwrap_or_else(|| sheet_uuid.clone());
+                        self.pending_display = Some(format!("{parent}{title}/"));
                         let result =
                             self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None);
                         self.ancestor_sheets.pop();
@@ -1142,6 +1163,40 @@ impl NetlistBuilder {
         None
     }
 
+    /// KiCad names a net by a sheet-scoped label (local or hierarchical)
+    /// with the sheet's path whenever that label text is not unique to one
+    /// net: a sub-sheet instantiated several times carries the same local
+    /// label in every instance, and each instance is its own net
+    /// (`/IO Banks/Bank A/V_CLAMP`, `/IO Banks/Bank B/V_CLAMP`, ...). Bare,
+    /// those names collide, and anything keyed by net name merges distinct
+    /// nets. Globally-scoped names (global labels, power symbols) stay bare.
+    fn qualify_sheet_scoped_names(
+        &self,
+        net_name: &mut BTreeMap<usize, String>,
+        winner: &HashMap<usize, (u8, String, usize)>,
+    ) {
+        let mut uses: HashMap<&str, usize> = HashMap::new();
+        for n in net_name.values() {
+            *uses.entry(n.as_str()).or_default() += 1;
+        }
+        let renames: Vec<(usize, String)> = net_name
+            .iter()
+            .filter(|(_, n)| uses.get(n.as_str()).copied().unwrap_or(0) > 1)
+            .filter_map(|(root, n)| {
+                let &(_, _, i) = winner.get(root)?;
+                let a = &self.anchors[i];
+                if !matches!(a.kind, AnchorKind::Local | AnchorKind::Hier) {
+                    return None;
+                }
+                let display = self.sheet_display.get(self.anchor_sheet[i] as usize)?;
+                Some((*root, format!("{display}{n}")))
+            })
+            .collect();
+        for (root, name) in renames {
+            net_name.insert(root, name);
+        }
+    }
+
     /// Resolve the union-find into nets, name them KiCad-style, and assign net
     /// ids to component pins.
     #[allow(clippy::too_many_lines, reason = "sequential netlist phases")]
@@ -1237,18 +1292,18 @@ impl NetlistBuilder {
         //    power pin unifies globally yet must lose the *name* contest to a
         //    global label, and a hierarchical label unifies locally yet must
         //    lose it to a local label.
-        let mut anchor_name_of_root: HashMap<usize, (u8, String)> = HashMap::new();
-        for a in &self.anchors {
+        let mut anchor_name_of_root: HashMap<usize, (u8, String, usize)> = HashMap::new();
+        for (i, a) in self.anchors.iter().enumerate() {
             let r = self.uf.find(a.node);
             let prio = a.kind.prio();
             anchor_name_of_root
                 .entry(r)
                 .and_modify(|e| {
                     if prio > e.0 || (prio == e.0 && a.name < e.1) {
-                        *e = (prio, a.name.clone());
+                        *e = (prio, a.name.clone(), i);
                     }
                 })
-                .or_insert_with(|| (prio, a.name.clone()));
+                .or_insert_with(|| (prio, a.name.clone(), i));
         }
 
         // Group pins by root.
@@ -1261,13 +1316,14 @@ impl NetlistBuilder {
         // unnamed nets by their synthesized name. Net 0 stays "unconnected".
         let mut net_name: BTreeMap<usize, String> = BTreeMap::new();
         for (root, pin_idxs) in &members {
-            let name = if let Some((_, n)) = anchor_name_of_root.get(root) {
+            let name = if let Some((_, n, _)) = anchor_name_of_root.get(root) {
                 n.clone()
             } else {
                 synth_name(&self.components, &self.pin_sites, pin_idxs)
             };
             net_name.insert(*root, name);
         }
+        self.qualify_sheet_scoped_names(&mut net_name, &anchor_name_of_root);
 
         // Build the Net table. A single-pin net that is unnamed and sits on a
         // no-connect, or a power/flag pseudo pin alone, is still a net; we keep

@@ -1,0 +1,81 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-0000000000d0")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_names (offset 0))
+			(symbol "R_1_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+				(pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-0000000000d1")
+		(property "Reference" "R1" (at 102 100 90))
+		(property "Value" "10k" (at 102 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-0000000001d1"))
+		(pin "2" (uuid "00000000-0000-0000-0000-0000000002d1"))
+		(instances
+			(project "local_label_reuse_top"
+				(path "/00000000-0000-0000-0000-0000000000b0/00000000-0000-0000-0000-0000000000b1"
+					(reference "R1")
+					(unit 1)
+				)
+				(path "/00000000-0000-0000-0000-0000000000b0/00000000-0000-0000-0000-0000000000b2"
+					(reference "R3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 120 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-0000000000d2")
+		(property "Reference" "R2" (at 122 100 90))
+		(property "Value" "10k" (at 122 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-0000000001d2"))
+		(pin "2" (uuid "00000000-0000-0000-0000-0000000002d2"))
+		(instances
+			(project "local_label_reuse_top"
+				(path "/00000000-0000-0000-0000-0000000000b0/00000000-0000-0000-0000-0000000000b1"
+					(reference "R2")
+					(unit 1)
+				)
+				(path "/00000000-0000-0000-0000-0000000000b0/00000000-0000-0000-0000-0000000000b2"
+					(reference "R4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 100 103.81) (xy 100 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-0000000003d3")
+	)
+	(wire
+		(pts (xy 120 96.19) (xy 120 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-0000000003d4")
+	)
+	(wire
+		(pts (xy 100 96.19) (xy 100 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-0000000003d5")
+	)
+	(wire
+		(pts (xy 120 103.81) (xy 120 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-0000000003d6")
+	)
+	(label "CLAMP" (at 100 110 0) (uuid "00000000-0000-0000-0000-0000000004d1"))
+	(label "CLAMP" (at 120 90 0) (uuid "00000000-0000-0000-0000-0000000004d2"))
+)
