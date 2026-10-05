@@ -169,11 +169,11 @@ column) unless a vendor file is named.
 
 ## Sources
 
-"Dev-set copy" means the PDF held under `target/launch/devset/pdf/`. The
-revision printed in it is given.
+"Audit copy" means the manufacturer PDF as retrieved for this audit, which
+is not checked into the repository. The revision printed in it is given.
 
 **BJT**
-- **BC847:** BC847X_SER Rev. 13, 1 Jul 2022 (dev-set copy).
+- **BC847:** BC847X_SER Rev. 13, 1 Jul 2022 (audit copy).
   - SPICE: https://assets.nexperia.com/documents/spice-model/BC847.txt (extraction week 24/2021)
 - **2N3904:** https://www.onsemi.com/download/data-sheet/pdf/2n3904-d.pdf (Rev. 3, Oct 2024).
   - SPICE: https://www.onsemi.com/download/models/lib/2n3904.lib (MODPEX, 7 Aug 2001)
@@ -181,31 +181,31 @@ revision printed in it is given.
   - SPICE: https://www.onsemi.com/download/models/lib/2n3906.lib (MODPEX, 7 Aug 2001)
 - **BC237/BC547 family:** https://www.onsemi.com/download/data-sheet/pdf/bc550-d.pdf (Rev. 6, Feb 2026)
 - **BC307/BC557 family:** https://www.onsemi.com/download/data-sheet/pdf/bc556bta-d.pdf (Rev. 3, Jun 2024)
-- **S8050:** Galaxy STM0043A, Aug 2020 (dev-set copy)
-- **BCM847BS:** v.8 (dev-set copy).
+- **S8050:** Galaxy STM0043A, Aug 2020 (audit copy)
+- **BCM847BS:** v.8 (audit copy).
   - SPICE: https://assets.nexperia.com/documents/spice-model/BCM847BS.txt (week 14/2006)
 - **BC857:** https://assets.nexperia.com/documents/data-sheet/BC856_BC857_BC858.pdf (Rev. 9).
   - SPICE: https://assets.nexperia.com/documents/spice-model/BC857.txt (week 19/2020)
 - **BCM857BS:** https://assets.nexperia.com/documents/data-sheet/BCM857BS.pdf (v.9).
   - SPICE: https://assets.nexperia.com/documents/spice-model/BCM857BS.txt (week 47/2005)
-- **BC817-40, BC807-40, BC807:** BC817_SER and BC807_SER Rev. 8 (dev-set copies).
+- **BC817-40, BC807-40, BC807:** BC817_SER and BC807_SER Rev. 8 (audit copies).
   - SPICE: BC817-40.txt, BC807-40.txt and BC807.txt, from the same Nexperia spice-model path
 
 **Diodes**
 - **1N4148:** https://www.vishay.com/docs/81857/1n4148.pdf (Rev. 1.6, 07-Nov-2024)
 - **1N4001..1N4007:** https://www.vishay.com/docs/88503/1n4001.pdf (29-Apr-2020).
   - onsemi 1n4001rl.lib was checked and not used: its CJO/VJ/M give 3.9 pF at 4 V, against the 15 pF row.
-- **BAT43:** Vishay 85660 Rev. 2.2 (dev-set copy)
-- **BAT54:** Nexperia BAT54, 1 Jul 2022 (dev-set copy)
+- **BAT43:** Vishay 85660 Rev. 2.2 (audit copy)
+- **BAT54:** Nexperia BAT54, 1 Jul 2022 (audit copy)
 - **BAT54XV2:** https://www.onsemi.com/pdf/datasheet/bat54xv2t1-d.pdf (Rev. 13)
-- **USBLC6-2:** ST DS4260 Rev. 7 (dev-set copy)
-- **1N4728A..1N4764A:** Multicomp V1.1 (dev-set copy)
-- **1N5817..1N5819:** Vishay 88525 (dev-set copy)
+- **USBLC6-2:** ST DS4260 Rev. 7 (audit copy)
+- **1N4728A..1N4764A:** Multicomp V1.1 (audit copy)
+- **1N5817..1N5819:** Vishay 88525 (audit copy)
 - **1N5822:**
   - https://www.vishay.com/docs/88526/1n5820.pdf
   - https://www.taiwansemi.com/assets/datasheet/pdf.php?pn=1N5822 (I2105)
-- **1N5819HW:** Diodes DS30217 Rev. 22-2 (dev-set copy)
-- **BAV70:** Nexperia BAV70, 1 Jul 2022 (dev-set copy)
+- **1N5819HW:** Diodes DS30217 Rev. 22-2 (audit copy)
+- **BAV70:** Nexperia BAV70, 1 Jul 2022 (audit copy)
 
 **MOSFETs**
 - **2N7002:** https://assets.nexperia.com/documents/data-sheet/2N7002.pdf
@@ -224,7 +224,7 @@ revision printed in it is given.
 - **IRLML6402 SPICE:** https://www.infineon.com/dgdl/irlml6402.spi?fileId=5546d462533600a401535683a6e32bcc
 - **WPM2015:** https://datasheet.lcsc.com/datasheet/pdf/903395ae1f2101a77730f1a7221883cd.pdf?productCode=C213159
 - **CJ3134K:** https://www.jscj-elec.com/gallery/file/CJ3134K%20SOT-23%20V1.1.pdf
-- **AO3400A, IRF540N, FDV301N, IRLML6402, DMG3404L, FDN360P:** dev-set copies
+- **AO3400A, IRF540N, FDV301N, IRLML6402, DMG3404L, FDN360P:** audit copies
 
 ## Citations found to point at nothing
 
