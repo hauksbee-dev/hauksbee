@@ -611,17 +611,7 @@ intent:
 ```
 
 A board that meets its outcomes passes with nothing to read. The pinned
-public case is `crates/hauksbee-ci/tests/outcome_search.rs`. On the Tarski
-neuron cell (`examples/tarski_neuron_outcomes.toml`, private), three outcomes
-are violated:
-
-- The spike peaks at 3.12 V, under the 3.5 V VIH of the switches it drives.
-  It is self-limiting on `NEURON_SWITCH2001`.
-- The threshold is 0.773 V where 0.387 V was intended. The fix is
-  `R_bottom2001` 150k -> 69k.
-- The output neuron never fires at a code-7 synapse current.
-
-The repaired cell passes.
+case is `crates/hauksbee-ci/tests/outcome_search.rs`.
 
 #### Asking for a number: measurements
 
