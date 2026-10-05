@@ -2170,49 +2170,312 @@ low_power_a = 0.000020
 implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
 missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
 
-# Winbond W25Q80DV SPI NOR, exact board identity and static control contract.
+# Winbond W25Q32JV 32-Mbit SPI NOR, 8-pin SOIC/VSOP/WSON (executable standard-SPI
+# subset, same shape as `w25q128jv_soic8` above).
 #
-# Primary sources:
-# - Winbond W25Q80DV datasheet, pin configuration/description (the 8-pin map):
-#   https://www.winbond.com/hq/support/documentation/downloadV2022.jsp?__locale=en&xmlPath=/support/resources/.content/item/DA00-W25Q80DV.html&level=1
-# - Winbond Technical FAQ, "Are external 10K ohm pull up resistors required...":
-#   https://www.winbond.com/hq/support/faq/technical/?__locale=en
-#   /HOLD must be tied high outside Quad mode to prevent unintended HOLD, and
-#   SPI NOR input pins must not be left floating. The model therefore opts WP
-#   and HOLD into the generic must-not-float topology check. It does not assert
-#   that either must be tied high when firmware actively drives Quad IO2/IO3.
+# Source: Winbond W25Q32JV datasheet, Revision G, March 27 2018. Section 1
+# (16,384 pages of 256 bytes, 1,024 4 KB sectors), Sections 3.1 to 3.3 (one
+# pad map for SOIC 150/208-mil, VSOP 208-mil and WSON/XSON, package codes SN, SS,
+# ST, ZP, ZE, XG), 8.1 (manufacturer EFh, 9Fh device ID 4016h for -IQ/JQ,
+# 7016h for -IM/JM), 9.1, 9.2 and 9.4.
+#
+# A value with no grade suffix (as fitted boards often write it, "W25Q32JVSS")
+# binds as the -IQ/JQ device: that is the only assumption here, and it only
+# shows in a firmware JEDEC-ID read, where the -IM/JM grade answers 7016h.
 [[models]]
-id = "w25q80dv_identity"
+id = "w25q32jv_soic8"
 kind = "digital"
-description = "Winbond W25Q80DV 8-Mbit SPI NOR (identity/pins and static non-floating control contract only)"
+description = "Winbond W25Q32JV 32-Mbit SPI NOR, 8-pin SOIC/VSOP/WSON (executable standard-SPI subset)"
 
 [models.source]
 tier = "curated-library"
-validation = "physical-bounds-only"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.winbond.com/resource-files/w25q32jv%20revg%2003272018%20plus.pdf"
+title = "Winbond W25Q32JV 3V 32M-bit Serial Flash Memory with Dual/Quad SPI, Revision G, March 27 2018"
+locator = "Sections 1, 3.1 to 3.3, 8.1, 9.1, 9.2 and 9.4"
+sha256 = "b2585095ac503e7cee7916ab3f025a51699b49e2cad7f6782e92b828c1cc09d8"
 [[models.source.uncertainty]]
 status = "unknown"
-parameter = "flash_behavior"
-reason = "SPI NOR commands, status registers, array contents, timing, Quad mode, and power-loss behavior are not modeled"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q32JV Revision G 9.4 ICC1 maximum"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q32JV Revision G 9.4 worst listed ICC3 maximum (104 MHz row)"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q32JV Revision G 9.4 ICC4 through ICC7 maximum"
 
 [models.match]
-value_re = "(?i)^W25Q80DVS$"
-footprint_re = "(?i)(SOIC|SO|SOP)[-_]?[0]?8([^0-9]|$)"
+# The package letters SN/SS/ST/ZP/ZE share the 8-pin map (Sections 3.1 to 3.3);
+# the 16-pin SF package and the TFBGA balls do not, and are excluded.
+value_re = "(?i)^W25Q32JV(?:SN|SS|ST|ZP|ZE)(?:IQ|JQ)?(?:-TR)?$"
 
 [models.params]
-identity_only = true
-warning = "W25Q80DV identity, 8-pin map, and non-floating control contract are sourced; flash commands, state, contents, timing, and Quad-mode behavior are not modeled"
-unlocked_by = "a validated W25Q80DV SPI NOR command/register/storage model plus firmware-selected bus mode"
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
 must_not_float_roles = "wp_n, hold_n"
 
 [models.pins]
+# Section 3.3 Pin Description.
 "1" = "cs"
-"2" = "miso"
-"3" = "wp_n"
-"4" = "vss"
-"5" = "mosi"
+"2" = "miso"     # DO (IO1)
+"3" = "wp_n"     # /WP (IO2)
+"4" = "gnd"
+"5" = "mosi"     # DI (IO0)
 "6" = "sck"
-"7" = "hold_n"
+"7" = "hold_n"   # /HOLD or /RESET (IO3)
 "8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 4.6   # 9.1 supply voltage, -0.6 to 4.6 V
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 4194304   # Section 1: 16,384 pages x 256 bytes
+page_size = 256
+sector_size = 4096
+jedec_id = [239, 64, 22]   # 8.1: EFh, 4016h (-IQ/JQ)
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 9.2 VCC minimum (FR = 104 MHz row)
+idle_a = 0.000050            # 9.4 ICC1 max
+read_a = 0.020               # 9.4 ICC3 max, 104 MHz
+write_a = 0.025              # 9.4 ICC4-ICC7 max
+low_power_a = 0.000015       # 9.4 ICC2 max
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# Winbond W25Q80DV 8-Mbit SPI NOR, 8-pin SOIC/VSOP/WSON/USON/PDIP (executable
+# standard-SPI subset).
+#
+# Source: Winbond W25Q80DV/DL datasheet, Revision H, October 02 2015. Section 1
+# (4,096 pages of 256 bytes), Section 3.4 Pin Description (one map for SOIC,
+# VSOP, WSON/USON and PDIP), 8.1 (EFh, 9Fh device ID 4014h), 9.1, 9.2 and 9.4.
+# The DL is the 2.3 V, 80 MHz grade of the same die and has its own value code;
+# only DV values bind here.
+#
+# WP and HOLD keep the generic must-not-float topology check: Winbond's
+# technical FAQ ("Are external 10K ohm pull up resistors required...",
+# https://www.winbond.com/hq/support/faq/technical/?__locale=en) says /HOLD must
+# be tied high outside Quad mode and SPI NOR inputs must not float. The model does
+# not assert either must be tied high when firmware drives Quad IO2/IO3.
+[[models]]
+id = "w25q80dv_soic8"
+kind = "digital"
+description = "Winbond W25Q80DV 8-Mbit SPI NOR, 8-pin SOIC/VSOP/WSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.winbond.com/hq/support/documentation/downloadV2022.jsp?__locale=en&xmlPath=/support/resources/.content/item/DA00-W25Q80DV.html&level=1"
+title = "Winbond W25Q80DV/DL 2.5V and 3V 8M-bit Serial Flash Memory with Dual and Quad SPI, Revision H, October 02 2015"
+locator = "Sections 1, 3.4, 8.1, 9.1, 9.2 and 9.4"
+sha256 = "f82eb5b993d595100c0e00149ef43214fe03ac048b6af40de760d0f7e1189342"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q80DV Revision H 9.4 Icc1 maximum"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.025
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q80DV Revision H 9.4 worst listed Icc3 maximum (Quad 104 MHz row)"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025
+unit = "A"
+kind = "specification-limits"
+basis = "Winbond W25Q80DV Revision H 9.4 Icc4 through Icc7 maximum"
+
+[models.match]
+# SN/SS (SOIC), SV (VSOP), ZP (WSON), UX (USON) and DA (PDIP) share the 8-pin map
+# (Section 3.4), so the bare "W25Q80DVS" spelling some boards use (an S-prefixed
+# SOIC or VSOP code) needs no footprint guard.
+value_re = "(?i)^W25Q80DV(?:S|SN|SS|SV|ZP|UX|DA)(?:IG|IQ)?(?:-TR)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "wp_n, hold_n"
+
+[models.pins]
+# Section 3.4 Pin Description.
+"1" = "cs"
+"2" = "miso"     # DO (IO1)
+"3" = "wp_n"     # /WP (IO2)
+"4" = "gnd"
+"5" = "mosi"     # DI (IO0)
+"6" = "sck"
+"7" = "hold_n"   # /HOLD (IO3)
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 4.2   # 9.1 supply voltage -0.6 to VCC+0.6 V, at the 3.6 V operating maximum of 9.2
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 1048576   # Section 1: 4,096 pages x 256 bytes
+page_size = 256
+sector_size = 4096
+jedec_id = [239, 64, 20]   # 8.1: EFh, 4014h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 9.2 VCC minimum, W25Q80DV
+idle_a = 0.000050            # 9.4 Icc1 max
+read_a = 0.025               # 9.4 Icc3 max, Quad 104 MHz
+write_a = 0.025              # 9.4 Icc4-Icc7 max
+low_power_a = 0.000005       # 9.4 Icc2 max
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# GigaDevice GD25Q16 16-Mbit SPI NOR, 8-pin SOP/VSOP/DIP/USON/WSON (executable
+# standard-SPI subset).
+#
+# Source: GigaDevice GD25Q16C datasheet, revision 1.9 (2016-04-19). Section 2 pin
+# description (one map for the 8-lead SOP/DIP and WSON/USON), Section 3 memory
+# organization (2 MB, 256-byte pages, 4 KB sectors), 7.22 Read Identification
+# (9Fh returns C8h 40h 15h), 8.1, 8.3 and 8.5 (T = -40 to 85 C, VCC = 2.7 to
+# 3.6 V). A bare "GD25Q16" binds here: every 3 V GD25Q16 die revision answers
+# C84015h and shares the 8-pin map; the 1.8 V part is the GD25LQ16 and is a
+# different value string.
+[[models]]
+id = "gd25q16_soic8"
+kind = "digital"
+description = "GigaDevice GD25Q16 16-Mbit SPI NOR, 8-pin SOP/WSON/USON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://cdn.components.ru/media/PDF/8048136.pdf"
+title = "GigaDevice GD25Q16C 3.3V Uniform Sector Dual and Quad Serial Flash datasheet, revision 1.9, 2016-04-19"
+locator = "Section 2 pin description; Section 3 memory organization; 7.22; 8.1 Table 6; 8.3; 8.5 DC characteristics (-40 to 85 C)"
+sha256 = "de373b35fad70775b52699ec67a99d1bd292b1865a08ea688c7832e0b4018205"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF), as delivered (8.2)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000005
+unit = "A"
+kind = "specification-limits"
+basis = "GigaDevice GD25Q16C 8.5 ICC1 maximum (-40 to 85 C)"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020
+unit = "A"
+kind = "specification-limits"
+basis = "GigaDevice GD25Q16C 8.5 ICC3 maximum, 120 MHz row"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.020
+unit = "A"
+kind = "specification-limits"
+basis = "GigaDevice GD25Q16C 8.5 ICC4 through ICC8 maximum"
+
+[models.match]
+# Section 9 ordering: T/S (SOP8), V (VSOP8), P (DIP8), E/N/Q (USON8) and W
+# (WSON8) share the 8-pin map; the 24-ball TFBGA does not and is excluded.
+value_re = "(?i)^GD25Q16(?:[BCE]?|[BCE][TSVPENQW][IJEF32A]G[TYR]?)$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "wp_n, hold_n"
+
+[models.pins]
+# Section 2 pin description, 8-lead SOP/DIP and WSON/USON.
+"1" = "cs"
+"2" = "miso"     # SO (IO1)
+"3" = "wp_n"     # WP# (IO2)
+"4" = "gnd"      # VSS
+"5" = "mosi"     # SI (IO0)
+"6" = "sck"
+"7" = "hold_n"   # HOLD# (IO3)
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 4.2   # 8.3 VCC, -0.6 to 4.2 V
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 2097152   # Section 3: 2M bytes
+page_size = 256
+sector_size = 4096
+jedec_id = [200, 64, 21]   # 7.22: C8h 40h 15h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # Features and 8.5: VCC 2.7 to 3.6 V
+idle_a = 0.000005            # 8.5 ICC1 max
+read_a = 0.020               # 8.5 ICC3 max, 120 MHz
+write_a = 0.020              # 8.5 ICC4-ICC8 max
+low_power_a = 0.000005       # 8.5 ICC2 max
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BMA423: Bosch Sensortec 12-bit triaxial accelerometer, LGA-12 2 x 2 mm.
