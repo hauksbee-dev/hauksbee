@@ -199,19 +199,24 @@ fn toml_path(path: String) -> String {
 }
 
 /// `to` expressed relative to the directory `from` (both absolute), walking up
-/// with `..` where needed. `None` when they share no root (different drives).
+/// with `..` where needed. `None` when they share nothing below the root: a
+/// different drive, or two trees that only meet at `/`. A board in a separate
+/// checkout spelled `../../../../../../../Users/...` is correct but unreadable,
+/// and it breaks as soon as the spec moves one level, so the absolute path is
+/// the honest reference there.
 fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
     use std::path::Component;
     let from: Vec<Component> = from.components().collect();
     let to: Vec<Component> = to.components().collect();
-    // Different prefixes (Windows drives) cannot be related; same-root paths
-    // always share at least the root component.
     let common = from
         .iter()
         .zip(to.iter())
         .take_while(|(a, b)| a == b)
         .count();
-    if common == 0 {
+    if from[..common]
+        .iter()
+        .all(|c| matches!(c, Component::Prefix(_) | Component::RootDir))
+    {
         return None;
     }
     let mut rel = PathBuf::new();
@@ -643,6 +648,13 @@ mod relative_path_tests {
             rel("/repo", "/repo/board.kicad_pcb"),
             Some(PathBuf::from("board.kicad_pcb"))
         );
+    }
+
+    #[test]
+    fn trees_that_only_meet_at_the_root_stay_absolute() {
+        let rel = |from: &str, to: &str| relative_path(Path::new(from), Path::new(to));
+        assert_eq!(rel("/tmp/specs", "/Users/me/boards/board.brd"), None);
+        assert_eq!(rel("/", "/board.brd"), None);
     }
 
     #[test]

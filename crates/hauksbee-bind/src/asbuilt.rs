@@ -1282,6 +1282,7 @@ mod tests {
             module: false,
             max_supply_v: None,
             min_supply_v: None,
+            supply_floors: HashMap::new(),
         };
         let dac = DacBinding {
             reference: "U9".to_string(),

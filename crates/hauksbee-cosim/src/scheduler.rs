@@ -6784,6 +6784,30 @@ fn direct_supply_nodes(binding: &McuBinding) -> Vec<NodeId> {
     nodes
 }
 
+/// Each direct-supply node's own datasheet floor: the strictest
+/// `supply_range` row among the supply roles on it (`iovdd2` reads its
+/// `iovdd` row). A node none of whose roles has a row is absent.
+fn supply_floor_nodes(binding: &McuBinding) -> HashMap<NodeId, f64> {
+    let mut floors: HashMap<NodeId, f64> = HashMap::new();
+    for (role, &node) in &binding.role_nets {
+        if node.is_ground() {
+            continue;
+        }
+        let floor = binding.supply_floors.get(role.as_str()).or_else(|| {
+            binding
+                .supply_floors
+                .get(role.trim_end_matches(|c: char| c.is_ascii_digit()))
+        });
+        if let Some(&f) = floor {
+            floors
+                .entry(node)
+                .and_modify(|v| *v = v.max(f))
+                .or_insert(f);
+        }
+    }
+    floors
+}
+
 /// Whether `net` has real drive evidence: a non-pin device with live
 /// resistance under [`WEAK_DIGITAL_DRIVE_OHMS`], or any non-R/C device. A
 /// floating net's ~0 V solve is the pins' own 1 GΩ legs talking.
@@ -7399,6 +7423,12 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
             .into_iter()
             .filter_map(node_index)
             .collect(),
+    )
+    .with_supply_floors(
+        supply_floor_nodes(&binding)
+            .into_iter()
+            .filter_map(|(n, v)| Some((node_index(n)?, v)))
+            .collect(),
     );
     LiveMcu {
         core,
@@ -7883,6 +7913,7 @@ missing = ["measurement_registers"]
             module: false,
             max_supply_v: None,
             min_supply_v: None,
+            supply_floors: HashMap::new(),
         }
     }
 

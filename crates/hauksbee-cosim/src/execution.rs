@@ -15,7 +15,7 @@
 //! ([`Observed`]): "unknown" is a value of its own and never reads as a pass or
 //! a failure.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use hauksbee_bind::mcu_clock::{ClockKind, McuClock};
 use hauksbee_mcu::ExecutionProbe;
@@ -275,12 +275,22 @@ pub struct RailWatch {
     pub reset_nodes: Vec<usize>,
     /// Direct-supply pad nodes.
     pub supply_nodes: Vec<usize>,
+    /// A supply node's own datasheet minimum, when the card gives its pad's
+    /// domain a `supply_range` row (the RP2040's 1.1 V DVDD next to its 3.3 V
+    /// IOVDD). Nodes without one fall back to the part-wide minimum.
+    pub supply_floors: HashMap<usize, f64>,
     /// Highest reset-line voltage seen (the most-released moment).
     reset_peak_v: Option<f64>,
     /// Highest supply-pad voltage seen.
     supply_peak_v: Option<f64>,
     /// Lowest supply-pad voltage at the latest observation.
     supply_now_v: Option<f64>,
+    /// Lowest voltage at the latest observation among pads with no floor of
+    /// their own (`None` when every watched pad has one).
+    unfloored_now_v: Option<f64>,
+    /// The deepest pad below its own floor at the latest observation, as
+    /// (voltage, floor).
+    under_floor_now: Option<(f64, f64)>,
 }
 
 impl RailWatch {
@@ -292,6 +302,13 @@ impl RailWatch {
             supply_nodes,
             ..Self::default()
         }
+    }
+
+    /// Give supply nodes their own datasheet minimum (see `supply_floors`).
+    #[must_use]
+    pub fn with_supply_floors(mut self, floors: HashMap<usize, f64>) -> Self {
+        self.supply_floors = floors;
+        self
     }
 
     /// Record one solved chunk's node voltages.
@@ -312,6 +329,22 @@ impl RailWatch {
             self.supply_peak_v = Some(self.supply_peak_v.map_or(highest, |p| p.max(highest)));
         }
         self.supply_now_v = supply.iter().copied().reduce(f64::min);
+        let pads = self.supply_nodes.iter().filter_map(|n| {
+            let v = node_volts.get(*n).copied().filter(|v| v.is_finite())?;
+            Some((v, self.supply_floors.get(n).copied()))
+        });
+        let (mut unfloored, mut under) = (None::<f64>, None::<(f64, f64)>);
+        for (v, floor) in pads {
+            match floor {
+                None => unfloored = Some(unfloored.map_or(v, |u| u.min(v))),
+                Some(f) if v < f && under.is_none_or(|(uv, uf)| f - v > uf - uv) => {
+                    under = Some((v, f));
+                }
+                Some(_) => {}
+            }
+        }
+        self.unfloored_now_v = unfloored;
+        self.under_floor_now = under;
     }
 
     /// Whether the reset line stayed below `vil` for the whole run. Unknown
@@ -344,6 +377,19 @@ impl RailWatch {
         if over {
             return Observed::No;
         }
+        if self.under_floor_now.is_some() {
+            return Observed::No;
+        }
+        if self.supply_floors.is_empty() {
+            return Self::judge(now, min_v, logic_high_v);
+        }
+        // Every floored pad is inside its own row; the rest take the
+        // part-wide minimum.
+        self.unfloored_now_v
+            .map_or(Observed::Yes, |v| Self::judge(v, min_v, logic_high_v))
+    }
+
+    fn judge(now: f64, min_v: Option<f64>, logic_high_v: f64) -> Observed {
         match min_v {
             Some(min) => Observed::from_option(Some(now >= min)),
             None if now < 0.5 * logic_high_v => Observed::No,
@@ -351,10 +397,13 @@ impl RailWatch {
         }
     }
 
-    /// The lowest supply-pad voltage at the latest observation.
+    /// The supply-pad voltage the verdict rests on at the latest observation:
+    /// a pad below its own floor when there is one, else the lowest pad.
     #[must_use]
-    pub const fn supply_v(&self) -> Option<f64> {
-        self.supply_now_v
+    pub fn supply_v(&self) -> Option<f64> {
+        self.under_floor_now
+            .map(|(v, _)| v)
+            .or(self.supply_now_v)
     }
 }
 
@@ -522,5 +571,28 @@ mod tests {
         assert_eq!(low.supply_valid(None, None, 3.3), Observed::No);
         low.observe(&[2.5]);
         assert_eq!(low.supply_valid(None, None, 3.3), Observed::Unknown);
+    }
+
+    /// The RP2040's 1.1 V DVDD next to its 3.3 V IOVDD: each pad is judged
+    /// against its own row, so the core rail is not an unpowered I/O rail.
+    #[test]
+    fn each_supply_domain_is_judged_against_its_own_floor() {
+        let mut w = RailWatch::new(vec![], vec![0, 1])
+            .with_supply_floors(HashMap::from([(0, 1.62), (1, 1.05)]));
+        w.observe(&[3.3, 1.1]);
+        assert_eq!(w.supply_valid(Some(1.05), Some(3.63), 3.3), Observed::Yes);
+        assert_eq!(w.supply_v(), Some(1.1));
+        // IOVDD sagging to 1.2 V is under its own 1.62 V floor even though
+        // it clears the part-wide (DVDD) minimum.
+        w.observe(&[1.2, 1.1]);
+        assert_eq!(w.supply_valid(Some(1.05), Some(3.63), 3.3), Observed::No);
+        assert_eq!(w.supply_v(), Some(1.2));
+        // A pad with no row of its own still takes the part-wide rule.
+        let mut mixed = RailWatch::new(vec![], vec![0, 1])
+            .with_supply_floors(HashMap::from([(1, 1.05)]));
+        mixed.observe(&[1.0, 1.1]);
+        assert_eq!(mixed.supply_valid(None, None, 3.3), Observed::No);
+        mixed.observe(&[3.3, 1.1]);
+        assert_eq!(mixed.supply_valid(None, None, 3.3), Observed::Unknown);
     }
 }

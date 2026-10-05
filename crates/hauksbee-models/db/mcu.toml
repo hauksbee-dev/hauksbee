@@ -3,7 +3,7 @@
 [[models]]
 id = "atmega328p"
 kind = "mcu"
-description = "ATmega328P 8-bit AVR MCU, TQFP-32 or DIP-28"
+description = "ATmega328P 8-bit AVR MCU, DIP-28 (28-pin numbering)"
 
 [models.match]
 value_re   = "(?i)^ATmega328P?$"
@@ -25,7 +25,9 @@ internal_clock = "internal 8 MHz RC oscillator"
 max_adc_source_impedance_ohms = 10000.0
 
 [models.pins]
-# TQFP-32 / DIP-28 pin map (KiCad Device:ATmega328P default symbol)
+# DIP-28 pin map (KiCad Device:ATmega328P-P symbol). The 32-pad TQFP/QFN/MLF
+# numbers the same port pins differently; that package has its own entry below,
+# gated on the footprint, and wins wherever the footprint names it.
 "1"  = "pc6_reset"
 "2"  = "pd0_rxd"
 "3"  = "pd1_txd"
@@ -62,6 +64,87 @@ max_voltage_v = 6.0       # Abs max row "Maximum Operating Voltage"; NOT the 5.5
 
 # The recommended range; max_voltage_v above is the abs max, so a supply
 # between the two raises the operating-envelope finding.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Microchip ATmega328P DS40001984, Features, Operating Voltage 1.8-5.5 V; Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
+
+[models.coverage]
+implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
+missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# ATmega328P in the 32-pad packages: 32-lead TQFP and 32-pad VQFN/MLF.
+#
+# Source: Microchip ATmega328P DS40001984, section 4 "Pin Configurations",
+#   Figure "32 TQFP Top View" / "32-pad VQFN Top View" (the two share one
+#   numbering; the VQFN adds the bottom pad, which must be soldered to GND).
+#
+# WHY A SECOND ENTRY. The DIP-28 numbering above is not this package's: on the
+# TQFP pad 7 is PB6/XTAL1, where the DIP has VCC, pad 3 is GND where the DIP has
+# PD1/TXD, and pads 19/22 are the ADC6/ADC7 inputs the DIP does not bond out.
+# Binding a TQFP board through the DIP map put the supply role on the crystal
+# net (the emonTx V3.4 read "VCC = -1.8 V") and moved every GPIO two to six
+# pads, so a firmware-driven LED net never moved. The footprint gate adds
+# specificity, so this entry wins on a TQFP/QFN/MLF-32 footprint and the DIP
+# entry keeps every other board.
+[[models]]
+id = "atmega328p_32pad"
+kind = "mcu"
+description = "ATmega328P 8-bit AVR MCU, TQFP-32 or VQFN/MLF-32"
+
+[models.match]
+value_re     = "(?i)^ATmega328P?$"
+mpn_re       = "(?i)^ATmega328P"
+footprint_re = '(?i)(^|[:_ ])(L?TQFP|QFP|V?QFN|MLF)[-_]?32([^0-9]|$)'
+
+[models.params]
+backend = "simavr:atmega328p"
+internal_clock = "internal 8 MHz RC oscillator"
+max_adc_source_impedance_ohms = 10000.0
+
+[models.pins]
+"1"  = "pd3_int1_oc2b"
+"2"  = "pd4_t0_xck"
+"3"  = "gnd"
+"4"  = "vcc"
+"5"  = "gnd2"
+"6"  = "vcc2"
+"7"  = "pb6_xtal1"
+"8"  = "pb7_xtal2"
+"9"  = "pd5_t1_oc0b"
+"10" = "pd6_ain0_oc0a"
+"11" = "pd7_ain1"
+"12" = "pb0_icp1"
+"13" = "pb1_oc1a"
+"14" = "pb2_ss_oc1b"
+"15" = "pb3_mosi_oc2a"
+"16" = "pb4_miso"
+"17" = "pb5_sck"
+"18" = "avcc"
+"19" = "adc6"
+"20" = "aref"
+"21" = "gnd3"
+"22" = "adc7"
+"23" = "pc0_adc0"
+"24" = "pc1_adc1"
+"25" = "pc2_adc2"
+"26" = "pc3_adc3"
+"27" = "pc4_adc4_sda"
+"28" = "pc5_adc5_scl"
+"29" = "pc6_reset"
+"30" = "pd0_rxd"
+"31" = "pd1_txd"
+"32" = "pd2_int0"
+"33" = "gnd4"      # VQFN/MLF exposed pad
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
 [[models.envelope]]
 kind = "supply_range"
 pin = "vcc"
@@ -2573,6 +2656,44 @@ role = "qspi_ss"
 level = "high"
 boot_select = true
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+# Each supply domain has its own recommended range, so co-sim judges the 1.1 V
+# DVDD core pads and the 3.3 V IOVDD pads each against their own row.
+[[models.envelope]]
+kind = "supply_range"
+pin = "iovdd"
+min_v = 1.62
+max_v = 3.63
+abs_max_v = 3.63
+basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, IOVDD Digital IO 1.62-3.63 V; Table 622 Absolute maximum IOVDD 3.63 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvdd"
+min_v = 1.05
+max_v = 1.16
+basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, DVDD Digital core 1.05-1.16 V (1.1 V typ, from VREG_VOUT)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vreg_vin"
+min_v = 1.62
+max_v = 3.63
+basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, VREG_VIN Voltage regulator 1.62-3.63 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "usb_vdd"
+min_v = 3.135
+max_v = 3.63
+basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, USB_VDD USB PHY 3.135-3.63 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "adc_avdd"
+min_v = 1.62
+max_v = 3.63
+basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, ADC_AVDD ADC 1.62-3.63 V (ADC performance compromised below 2.97 V)"
 
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]

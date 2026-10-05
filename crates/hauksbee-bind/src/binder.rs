@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use hauksbee_extract::{is_placeholder_value, Component, ExtractedBoard};
+use hauksbee_extract::{Component, ExtractedBoard, is_placeholder_value};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
     BDep, BOutput, BjtModel, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, MosLevel,
@@ -35,9 +35,9 @@ use hauksbee_models::{
 };
 
 use crate::bind_report::{BindOutcome, BindReport, BindRow, SimpleRegulator};
-use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
-use crate::drivers::{PinDriver, DEFAULT_RO};
-use crate::mcu_clock::{classify as classify_clock, ClockBoard, ClockKind, McuClock};
+use crate::digital::{DigitalComponent, SupplyDraw, output_roles};
+use crate::drivers::{DEFAULT_RO, PinDriver};
+use crate::mcu_clock::{ClockBoard, ClockKind, McuClock, classify as classify_clock};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::program_resistor::{is_ground_net, program_resistance_to_ground};
 use crate::stress::DeviceMeta;
@@ -93,6 +93,11 @@ pub struct McuBinding {
     /// execution evidence reads a supply below this as "supply not valid", so
     /// firmware that "ran" on an under-powered core is not counted as a pass.
     pub min_supply_v: Option<f64>,
+    /// Recommended operating minimum (V) per supply role, from the card's
+    /// per-pin `supply_range` rows. A part with several supply domains (the
+    /// RP2040's 3.3 V IOVDD and 1.1 V DVDD) has each pad judged against its
+    /// own row rather than one part-wide floor.
+    pub supply_floors: HashMap<String, f64>,
 }
 
 /// One MCP4728 quad DAC discovered on the board.
@@ -650,6 +655,7 @@ pub fn bind_board_with(
     let net_name = |n: NodeId| circuit.node_name(n).to_string();
     let fitted = |c: &Component| AssemblyState::of(c).is_present();
     let is_crystal = |c: &Component| fitted_crystal(c, lib);
+    let is_resistor = |c: &Component| c.pins.len() == 2 && passive_letter(c) == Some('R');
     let clock_board = ClockBoard {
         board,
         node_of: &node_of,
@@ -657,6 +663,7 @@ pub fn bind_board_with(
         net_name: &net_name,
         fitted: &fitted,
         is_crystal: &is_crystal,
+        is_resistor: &is_resistor,
     };
     for mcu in &mut mcus {
         let Some(comp) = board
@@ -1396,7 +1403,10 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
         (by_colour.value, by_colour.mpn) = (Some(format!("{card} LED")), None);
         let mut coloured = lib.resolve(&by_colour);
         if let Some(model) = coloured.model.as_mut() {
-            let note = format!("value '{}' names only a colour: assumed a typical {card} LED, forward voltage included ({})", comp.value, model.id);
+            let note = format!(
+                "value '{}' names only a colour: assumed a typical {card} LED, forward voltage included ({})",
+                comp.value, model.id
+            );
             model.params.set_str("warning", note);
             (coloured.confidence, coloured.query) = (Confidence::Guessed, q);
             return coloured;
@@ -1505,8 +1515,9 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     if val_up.starts_with("ATMEGA328") {
         let mut params = hauksbee_models::Params::default();
         params.set_str("backend", "simavr:atmega328p");
-        // Standard ATmega328P DIP-28 / TQFP-32 pad map (matches db/mcu.toml).
-        let pins = atmega328p_pin_map();
+        // The DIP-28 and 32-pad packages number the port pins differently
+        // (matches the two db/mcu.toml entries).
+        let pins = atmega328p_pin_map(comp);
         return Some(make_entry(
             "atmega328p_fallback",
             ComponentKind::Mcu,
@@ -2060,42 +2071,114 @@ fn make_entry(
     }
 }
 
-/// The `ATmega328P` DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
-fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
-    [
-        ("1", "pc6_reset"),
-        ("2", "pd0_rxd"),
-        ("3", "pd1_txd"),
-        ("4", "pd2_int0"),
-        ("5", "pd3_int1_oc2b"),
-        ("6", "pd4_t0_xck"),
-        ("7", "vcc"),
-        ("8", "gnd"),
-        ("9", "pb6_xtal1"),
-        ("10", "pb7_xtal2"),
-        ("11", "pd5_t1_oc0b"),
-        ("12", "pd6_ain0_oc0a"),
-        ("13", "pd7_ain1"),
-        ("14", "pb0_icp1"),
-        ("15", "pb1_oc1a"),
-        ("16", "pb2_ss_oc1b"),
-        ("17", "pb3_mosi_oc2a"),
-        ("18", "pb4_miso"),
-        ("19", "pb5_sck"),
-        ("20", "avcc"),
-        ("21", "aref"),
-        ("22", "gnd2"),
-        ("23", "pc0_adc0"),
-        ("24", "pc1_adc1"),
-        ("25", "pc2_adc2"),
-        ("26", "pc3_adc3"),
-        ("27", "pc4_adc4_sda"),
-        ("28", "pc5_adc5_scl"),
-    ]
-    .iter()
-    .map(|(k, v)| (k.to_string(), v.to_string()))
-    .collect()
+/// Whether an `ATmega328P` sits in a 32-pad package (TQFP-32, VQFN/MLF-32):
+/// its footprint names one, or its ordering code carries the `-AU`/`-MU`/`-MMH`
+/// package suffix. Anything else keeps the DIP-28 numbering.
+fn atmega328p_is_32pad(comp: &Component) -> bool {
+    let footprint = comp.footprint.to_ascii_uppercase();
+    let names_32pad = ["QFP", "QFN", "MLF"].iter().any(|family| {
+        footprint.match_indices(family).any(|(at, _)| {
+            let rest = footprint[at + family.len()..].trim_start_matches(['-', '_']);
+            rest.strip_prefix("32")
+                .is_some_and(|tail| !tail.starts_with(|c: char| c.is_ascii_digit()))
+        })
+    });
+    let value = comp.value.trim().to_ascii_uppercase();
+    let coded_32pad = value
+        .strip_prefix("ATMEGA328P")
+        .or_else(|| value.strip_prefix("ATMEGA328"))
+        .map(|rest| rest.trim_start_matches(['-', '_']))
+        .is_some_and(|code| {
+            matches!(
+                code,
+                "AU" | "AUR" | "MU" | "MUR" | "MMH" | "MMHR" | "MN" | "MNR"
+            )
+        });
+    names_32pad || coded_32pad
 }
+
+/// The `ATmega328P` pad→role map for `comp`'s package (mirrors the
+/// `atmega328p` and `atmega328p_32pad` entries in db/mcu.toml).
+fn atmega328p_pin_map(comp: &Component) -> std::collections::BTreeMap<String, String> {
+    let map: &[(&str, &str)] = if atmega328p_is_32pad(comp) {
+        &ATMEGA328P_32PAD_PINS
+    } else {
+        &ATMEGA328P_DIP28_PINS
+    };
+    map.iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
+}
+
+/// `ATmega328P` 32-lead TQFP / 32-pad VQFN numbering (DS40001984 section 4);
+/// pad 33 is the VQFN's exposed ground pad.
+const ATMEGA328P_32PAD_PINS: [(&str, &str); 33] = [
+    ("1", "pd3_int1_oc2b"),
+    ("2", "pd4_t0_xck"),
+    ("3", "gnd"),
+    ("4", "vcc"),
+    ("5", "gnd2"),
+    ("6", "vcc2"),
+    ("7", "pb6_xtal1"),
+    ("8", "pb7_xtal2"),
+    ("9", "pd5_t1_oc0b"),
+    ("10", "pd6_ain0_oc0a"),
+    ("11", "pd7_ain1"),
+    ("12", "pb0_icp1"),
+    ("13", "pb1_oc1a"),
+    ("14", "pb2_ss_oc1b"),
+    ("15", "pb3_mosi_oc2a"),
+    ("16", "pb4_miso"),
+    ("17", "pb5_sck"),
+    ("18", "avcc"),
+    ("19", "adc6"),
+    ("20", "aref"),
+    ("21", "gnd3"),
+    ("22", "adc7"),
+    ("23", "pc0_adc0"),
+    ("24", "pc1_adc1"),
+    ("25", "pc2_adc2"),
+    ("26", "pc3_adc3"),
+    ("27", "pc4_adc4_sda"),
+    ("28", "pc5_adc5_scl"),
+    ("29", "pc6_reset"),
+    ("30", "pd0_rxd"),
+    ("31", "pd1_txd"),
+    ("32", "pd2_int0"),
+    ("33", "gnd4"),
+];
+
+/// `ATmega328P` DIP-28 numbering.
+const ATMEGA328P_DIP28_PINS: [(&str, &str); 28] = [
+    ("1", "pc6_reset"),
+    ("2", "pd0_rxd"),
+    ("3", "pd1_txd"),
+    ("4", "pd2_int0"),
+    ("5", "pd3_int1_oc2b"),
+    ("6", "pd4_t0_xck"),
+    ("7", "vcc"),
+    ("8", "gnd"),
+    ("9", "pb6_xtal1"),
+    ("10", "pb7_xtal2"),
+    ("11", "pd5_t1_oc0b"),
+    ("12", "pd6_ain0_oc0a"),
+    ("13", "pd7_ain1"),
+    ("14", "pb0_icp1"),
+    ("15", "pb1_oc1a"),
+    ("16", "pb2_ss_oc1b"),
+    ("17", "pb3_mosi_oc2a"),
+    ("18", "pb4_miso"),
+    ("19", "pb5_sck"),
+    ("20", "avcc"),
+    ("21", "aref"),
+    ("22", "gnd2"),
+    ("23", "pc0_adc0"),
+    ("24", "pc1_adc1"),
+    ("25", "pc2_adc2"),
+    ("26", "pc3_adc3"),
+    ("27", "pc4_adc4_sda"),
+    ("28", "pc5_adc5_scl"),
+];
 
 /// A component's likely manufacturer part number, as model matching uses it.
 ///
@@ -2781,7 +2864,7 @@ fn bind_model_peripheral(
                                 "model '{}' register-map behavior not attached because {error}",
                                 model.id
                             ),
-                        ))
+                        ));
                     }
                 },
                 _ if sensor.address_selects.is_empty() => None,
@@ -3248,8 +3331,7 @@ fn bind_passive(
                 BindOutcome::Unresolved {
                     reason: format!(
                         "{} model '{}' has no positive finite DC resistance",
-                        if model.passive_class
-                            == Some(hauksbee_models::schema::PassiveClass::Fuse)
+                        if model.passive_class == Some(hauksbee_models::schema::PassiveClass::Fuse)
                         {
                             "fuse"
                         } else {
@@ -3444,11 +3526,7 @@ const ZERO_OHM_JUMPER_OHMS: f64 = 1e-3;
 /// never reach here: the model library classes them as beads first.
 fn rkm_henries(p: &hauksbee_models::value::ParsedValue) -> f64 {
     let rkm = p.suffix.as_deref() == Some("R") && p.unit.is_none();
-    if rkm {
-        p.si * 1e-6
-    } else {
-        p.si
-    }
+    if rkm { p.si * 1e-6 } else { p.si }
 }
 
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
@@ -6380,8 +6458,24 @@ fn bind_mcu(
                 _ => None,
             })
             .reduce(f64::min),
+        supply_floors: supply_floors(model),
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
+}
+
+/// Each supply role's recommended operating minimum across the card's
+/// `supply_range` rows (the loosest row when temperature rows repeat a pin).
+fn supply_floors(model: &ModelEntry) -> HashMap<String, f64> {
+    let mut floors: HashMap<String, f64> = HashMap::new();
+    for row in &model.envelope {
+        if let hauksbee_models::OperatingEnvelope::SupplyRange { pin, min_v, .. } = row {
+            floors
+                .entry(pin.trim().to_ascii_lowercase())
+                .and_modify(|v| *v = v.min(*min_v))
+                .or_insert(*min_v);
+        }
+    }
+    floors
 }
 
 /// Whether `comp` is an assembled crystal or resonator: recognised by its
@@ -8356,6 +8450,30 @@ mod tests {
         Net::new(id, name.to_string())
     }
 
+    /// The `ATmega328P` 32-pad packages number their pads differently from
+    /// DIP-28: binding DIP numbering to a TQFP put VCC on XTAL1 (emonTx V3.4).
+    #[test]
+    fn atmega328p_pin_numbering_follows_the_package() {
+        let lib = ModelLibrary::builtin();
+        let tqfp = resolve_value(&lib, "ATMEGA328P", "TQFP32-08");
+        assert_eq!(tqfp.id, "atmega328p_32pad");
+        assert_eq!(tqfp.pins.get("4").map(String::as_str), Some("vcc"));
+        assert_eq!(tqfp.pins.get("7").map(String::as_str), Some("pb6_xtal1"));
+        let dip = resolve_value(&lib, "ATMEGA328P", "Package_DIP:DIP-28_W7.62mm");
+        assert_eq!(dip.id, "atmega328p");
+        assert_eq!(dip.pins.get("7").map(String::as_str), Some("vcc"));
+
+        let mut c = comp("U1", "ATMEGA328P-AU");
+        assert_eq!(atmega328p_pin_map(&c)["10"], "pd6_ain0_oc0a");
+        c.value = "ATMEGA328P".into();
+        c.footprint = "Housings_QFP:TQFP-32_7x7mm_Pitch0.8mm".into();
+        assert_eq!(atmega328p_pin_map(&c)["10"], "pd6_ain0_oc0a");
+        c.footprint = "Package_DIP:DIP-28_W7.62mm".into();
+        assert_eq!(atmega328p_pin_map(&c)["12"], "pd6_ain0_oc0a");
+        c.footprint = "QFN-320".into();
+        assert_eq!(atmega328p_pin_map(&c)["12"], "pd6_ain0_oc0a");
+    }
+
     /// Resolve `value` the way the binder does (value and MPN both set).
     fn resolve_value(lib: &ModelLibrary, value: &str, footprint: &str) -> ModelEntry {
         let fp = (!footprint.is_empty()).then(|| footprint.to_string());
@@ -8883,16 +9001,22 @@ style = "i2c_pointer"
                 ("out".into(), circuit.node(out)),
                 ("gnd".into(), circuit.node(gnd)),
             ]);
-            let resolved = card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
+            let resolved =
+                card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
             let model = resolved.as_ref().map_or_else(
                 || simple_vreg(Some(vout)),
                 |r| r.model.clone().expect("card resolves"),
             );
             let source = resolved.as_ref().and_then(|r| r.provenance.as_ref());
             let (outcome, warning, regs) = bind_u9(&model, source, &mut circuit, &roles);
-            let marked = |w: &str| w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains(token);
+            let marked =
+                |w: &str| w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains(token);
             let caveat = warning.as_deref().map(marked);
-            assert_eq!(caveat, (token != "-").then_some(true), "{case}: {warning:?}");
+            assert_eq!(
+                caveat,
+                (token != "-").then_some(true),
+                "{case}: {warning:?}"
+            );
             assert!(
                 matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {vout:.1}V source")),
                 "{case}"
@@ -8913,7 +9037,11 @@ style = "i2c_pointer"
             want.extend(iq.map(|_| "Iq_U9"));
             assert_eq!(names, want, "{case}");
             let helpers: Vec<u32> = reg.helpers.iter().map(|h| h.0).collect();
-            assert_eq!((helpers[0], reg.pass_level.map(|l| l.0)), (2, Some(1)), "{case}");
+            assert_eq!(
+                (helpers[0], reg.pass_level.map(|l| l.0)),
+                (2, Some(1)),
+                "{case}"
+            );
             let into_ret = |d: &Device| d.conduction_nodes() == [roles["in"], roles["gnd"]];
             assert!(circuit.devices[2..].iter().all(into_ret), "{case}");
             let Device::Behavioral { expr, .. } = &circuit.devices[2] else {
@@ -8923,13 +9051,20 @@ style = "i2c_pointer"
             let draw = |h: f64, time: f64| {
                 let level = if time > 0.0 { amps } else { 0.0 };
                 let branch = if time > 0.0 { 0.0 } else { -amps };
-                expr.eval(&[level, branch, sign.mul_add(h, vout), vout], time).unwrap()
+                expr.eval(&[level, branch, sign.mul_add(h, vout), vout], time)
+                    .unwrap()
             };
             let full = dropout_v.unwrap_or(0.0);
             for time in [0.0, 1e-3] {
                 assert!((draw(full, time) - amps).abs() < 1e-12, "{case} at {time}");
-                assert!(draw(0.1f64.mul_add(-full.max(0.1), full), time) < amps, "{case} at {time}");
-                assert!(draw(full - full.max(PASS_FADE_V), time).abs() < 1e-12, "{case}");
+                assert!(
+                    draw(0.1f64.mul_add(-full.max(0.1), full), time) < amps,
+                    "{case} at {time}"
+                );
+                assert!(
+                    draw(full - full.max(PASS_FADE_V), time).abs() < 1e-12,
+                    "{case}"
+                );
             }
             assert_eq!((reg.reference.as_str(), reg.input), ("U9", roles["in"]));
             assert_eq!((reg.source.0, reg.dropout_v), (0, dropout_v));
@@ -9082,10 +9217,12 @@ style = "i2c_pointer"
             &power_nets,
         );
         assert_eq!(literal.devices.len(), 4);
-        assert!(literal
-            .devices
-            .iter()
-            .all(|d| crate::stress::strip_unit_suffix(d.name()) == "U8_l1"));
+        assert!(
+            literal
+                .devices
+                .iter()
+                .all(|d| crate::stress::strip_unit_suffix(d.name()) == "U8_l1")
+        );
         // Each leg takes its own path's ron; a card with only `ron` gives both legs it.
         let per_path = card(&[("ron", 5.0), ("ron_s0", 0.25), ("ron_s1", 1.3)]);
         for (model, s0, s1) in [(&model, 5.0, 5.0), (&per_path, 0.25, 1.3)] {
@@ -9185,7 +9322,7 @@ style = "i2c_pointer"
                 .1;
             assert_eq!(carriers.len(), 1, "one s0 leg on lane {lane}");
             assert_eq!(
-                enabled.devices[carriers[0].0 .0 as usize].name(),
+                enabled.devices[carriers[0].0.0 as usize].name(),
                 format!("U8_s{}", (lane - 1) * 2)
             );
         }
@@ -9223,7 +9360,7 @@ style = "i2c_pointer"
     /// ctrl) or without one (a power mux: both legs reference vss).
     #[test]
     fn spdt_with_or_without_vcc_follows_ctrl_through_a_dc_solve() {
-        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
         use hauksbee_testkit::circuits::{res, vdc};
         let names = ["com", "s0:in1", "s1:in2", "ctrl", "vss:gnd", "vcc:+3v3"];
         let rails = HashMap::from([("+3V3".to_string(), 3.3)]);
@@ -10034,7 +10171,7 @@ style = "i2c_pointer"
     /// predicts each path's voltage drop under load using its own resistance.
     #[test]
     fn the_power_mux_selects_both_paths_with_their_own_resistance() {
-        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
         use hauksbee_testkit::circuits::{res, vdc};
         let lib = ModelLibrary::builtin();
         let model = resolve_value(&lib, "TPS2104", "");
@@ -10055,13 +10192,8 @@ style = "i2c_pointer"
             let mut circuit = Circuit::new();
             let nodes = ["EN", "IN2", "OUT", "IN1"].map(|name| circuit.node(name));
             let node_of = |n: Option<i64>| {
-                n.and_then(|n| usize::try_from(n).ok()).map(|n| {
-                    if n == 0 {
-                        NodeId::GROUND
-                    } else {
-                        nodes[n - 1]
-                    }
-                })
+                n.and_then(|n| usize::try_from(n).ok())
+                    .map(|n| if n == 0 { NodeId::GROUND } else { nodes[n - 1] })
             };
             let (outcome, warning) =
                 bind_one(&part, &model, &mut circuit, &node_of, &HashMap::new());
@@ -10222,11 +10354,33 @@ style = "i2c_pointer"
             .iter()
             .find(|r| r.reference == "U1")
             .unwrap();
-        assert!(row
-            .warning
-            .as_deref()
-            .unwrap()
-            .contains("clock source broken"));
+        assert!(
+            row.warning
+                .as_deref()
+                .unwrap()
+                .contains("clock source broken")
+        );
+    }
+
+    /// The RP2040 hardware guide puts 1 kOhm between XOUT and the crystal
+    /// (`SparkFun` Thing Plus R11): the crystal still spans the pin pair.
+    #[test]
+    fn a_crystal_reaching_one_pin_through_a_series_resistor_is_a_valid_clock() {
+        let mut r = comp("R11", "1k");
+        r.pins = vec![pin("1", 4), pin("2", 2)];
+        let y = crystal(vec![pin("1", 1), pin("2", 4), pin("3", 3)]);
+        let (kind, detail) = clock_of(&clock_case(vec![y.clone(), r.clone()]));
+        assert_eq!(kind, ClockKind::Crystal, "{detail}");
+        assert!(detail.contains("through series R11"), "{detail}");
+        // A resistor from the pin to a rail is a load, not a series leg.
+        r.pins = vec![pin("1", 5), pin("2", 2)];
+        let (kind, detail) = clock_of(&clock_case(vec![y.clone(), r.clone()]));
+        assert_eq!(kind, ClockKind::Broken, "{detail}");
+        // A DNP series resistor leaves the leg open.
+        r.pins = vec![pin("1", 4), pin("2", 2)];
+        r.dnp = true;
+        let (kind, detail) = clock_of(&clock_case(vec![y, r]));
+        assert_eq!(kind, ClockKind::Broken, "{detail}");
     }
 
     #[test]
@@ -10628,10 +10782,12 @@ style = "i2c_pointer"
         let mut twin = duplicated.components[0].clone();
         twin.pins[0].net = Some(4);
         duplicated.components.push(twin);
-        assert!(duplicated
-            .components
-            .iter()
-            .all(|c| matches!(AssemblyState::of(c), AssemblyState::Present(_))));
+        assert!(
+            duplicated
+                .components
+                .iter()
+                .all(|c| matches!(AssemblyState::of(c), AssemblyState::Present(_)))
+        );
         assert_eq!(cs_net(&duplicated, "U5"), None, "duplicated designator");
 
         let mut no_cs_role = eeprom_board(Some(1));
@@ -10944,7 +11100,7 @@ style = "i2c_pointer"
     /// floating input rests at 0 V, and a fed one still carries `Iq`.
     #[test]
     fn a_regulator_with_no_input_supply_does_not_drag_it_below_ground() {
-        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
         use hauksbee_testkit::circuits::vdc;
         let lib = ModelLibrary::builtin();
         let model = resolve_value(&lib, "LM7805", "");
@@ -10981,7 +11137,7 @@ style = "i2c_pointer"
     /// the card's `iq_a`, once per package (both units of the dual are bound).
     #[test]
     fn an_opamp_with_no_supply_does_not_drag_its_v_plus_below_ground() {
-        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
         use hauksbee_testkit::circuits::vdc;
         let lib = ModelLibrary::builtin();
         let mut model = resolve_value(&lib, "LM358", "");

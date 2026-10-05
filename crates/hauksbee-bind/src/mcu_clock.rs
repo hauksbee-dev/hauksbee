@@ -4,7 +4,8 @@
 //! `XOUT`, `OSC_IN`/`OSC_OUT`, `OSC1`/`OSC2`, `XC1`/`XC2`, `XTAL_P`/`XTAL_N`),
 //! never by part name; low-speed (RTC) oscillator pins are recognised and left
 //! out, since they do not clock the core. The board then decides the verdict:
-//! a fitted resonator across the pair, a fitted oscillator or driver on the
+//! a fitted resonator across the pair (directly, or with one leg through a
+//! series drive-limiting resistor), a fitted oscillator or driver on the
 //! input, nothing external on a part whose card declares an internal oscillator,
 //! or a visible fault (pin tied to a rail, pins shorted, a resonator leg that
 //! does not reach the pin pair). Anything else stays unknown, never "valid".
@@ -72,6 +73,9 @@ pub(crate) struct ClockBoard<'a> {
     /// Assembled with an established identity.
     pub fitted: &'a dyn Fn(&Component) -> bool,
     pub is_crystal: &'a dyn Fn(&Component) -> bool,
+    /// A two-pad resistor, the series drive-limiting part some oscillators
+    /// put between an oscillator pin and the crystal.
+    pub is_resistor: &'a dyn Fn(&Component) -> bool,
 }
 
 /// `(is_output, is_low_speed)` for a pin whose role/name marks an oscillator pin.
@@ -224,6 +228,44 @@ pub(crate) fn classify(
                 ),
             )
         };
+    }
+    // A crystal with one leg reaching its pin through a fitted series resistor
+    // (the RP2040 hardware guide's 1 kOhm on XOUT, an STM32 HSE drive limiter):
+    // the resistor's far pad sits on the crystal's other leg, off any rail.
+    let series = |pin: Option<NodeId>, other: Option<NodeId>| -> Option<(&Component, NodeId)> {
+        let pin = pin?;
+        cb.board.components.iter().find_map(|r| {
+            if r.reference == mcu.reference || !(cb.fitted)(r) || !(cb.is_resistor)(r) {
+                return None;
+            }
+            let nodes: Vec<Option<NodeId>> = r.pins.iter().map(|p| (cb.node_of)(p.net)).collect();
+            let far = match nodes.as_slice() {
+                [Some(a), Some(b)] if *a == pin && *b != pin => *b,
+                [Some(a), Some(b)] if *b == pin && *a != pin => *a,
+                _ => return None,
+            };
+            (Some(far) != other && !(cb.is_rail)(far)).then_some((r, far))
+        })
+    };
+    for (near, far_pin, near_label, far_label) in [
+        (in_node, out_node, input.label.as_str(), out_label),
+        (out_node, in_node, out_label, input.label.as_str()),
+    ] {
+        let Some((r, far)) = series(far_pin, near) else {
+            continue;
+        };
+        if let Some(c) = crystals
+            .iter()
+            .find(|c| touches(c, near) && touches(c, Some(far)))
+        {
+            return McuClock::of(
+                Crystal,
+                format!(
+                    "{} {} across {near_label} and {far_label} (through series {} {})",
+                    c.reference, c.value, r.reference, r.value
+                ),
+            );
+        }
     }
     // Something that drives the input: a driving pin (clock buffer, other
     // MCU) or a powered 3+ pad crystal-footprint oscillator.

@@ -999,6 +999,42 @@ const CORTEX_M_FAULT_VECTORS: [(u32, &str); 4] = [
     (0x18, "UsageFault"),
 ];
 
+/// The fault vectors a core of Renode `cpuType` `model` actually has. ARMv6-M
+/// (Cortex-M0/M0+/M1) and ARMv8-M Baseline (Cortex-M23) have only `HardFault`:
+/// offsets 0x10..0x18 are reserved there, and on the RP2040 the boot ROM keeps
+/// its magic, version and `rom_table_lookup` pointer in them, so hooking them
+/// reported every ROM-table call as a "`UsageFault`". An unknown model keeps all
+/// four (a reserved slot then points at a default handler, not live code).
+fn fault_vectors_for(model: Option<&str>) -> &'static [(u32, &'static str)] {
+    let baseline = model.is_some_and(|m| {
+        let m = m.trim().trim_matches('"').to_ascii_lowercase();
+        matches!(
+            m.as_str(),
+            "cortex-m0" | "cortex-m0+" | "cortex-m0plus" | "cortex-m1" | "cortex-m23"
+        )
+    });
+    if baseline {
+        &CORTEX_M_FAULT_VECTORS[..1]
+    } else {
+        &CORTEX_M_FAULT_VECTORS
+    }
+}
+
+/// Vector-table symbols the common Cortex-M runtimes export: pico-sdk
+/// (`__vectors`, `__VECTOR_TABLE`), ST `CubeMX` (`g_pfnVectors`), CMSIS/nRF MDK
+/// (`__isr_vector`), Zephyr (`_vector_table`) and libopencm3 (`vector_table`).
+/// A part that boots through a ROM (the RP2040) starts with VTOR on the ROM's
+/// table and only moves it to the firmware's once its runtime starts, so the
+/// firmware's own fault handlers are found here, not through VTOR.
+const VECTOR_TABLE_SYMBOLS: [&str; 6] = [
+    "__vectors",
+    "__VECTOR_TABLE",
+    "g_pfnVectors",
+    "__isr_vector",
+    "_vector_table",
+    "vector_table",
+];
+
 /// Group fault vectors by handler address so a shared default handler is one
 /// hook named after every vector that lands on it. Zero (unset) vectors are
 /// skipped; the Thumb bit is cleared.
@@ -1010,8 +1046,10 @@ fn group_fault_handlers(vectors: &[(&str, u32)]) -> Vec<(String, u32)> {
             continue;
         }
         if let Some(entry) = out.iter_mut().find(|(_, a)| *a == addr) {
-            entry.0.push('/');
-            entry.0.push_str(name);
+            if !entry.0.split('/').any(|n| n == name) {
+                entry.0.push('/');
+                entry.0.push_str(name);
+            }
         } else {
             out.push((name.to_string(), addr));
         }
@@ -1265,13 +1303,29 @@ impl RenodeBackend {
             };
             vtor = guessed;
         }
-        let vectors: Vec<(&str, u32)> = CORTEX_M_FAULT_VECTORS
-            .iter()
-            .filter_map(|&(off, name)| {
-                let word = self.read_word_abs(vtor.wrapping_add(off))?;
-                Some((name, word))
-            })
-            .collect();
+        let model = self.monitor.run(&format!("{cpu} Model")).ok();
+        let watched = fault_vectors_for(model.as_deref());
+        let mut tables = vec![vtor];
+        for symbol in VECTOR_TABLE_SYMBOLS {
+            let table = self
+                .monitor
+                .run(&format!("sysbus GetSymbolAddress \"{symbol}\""))
+                .ok()
+                .and_then(|r| parse_u64(&r))
+                .and_then(|a| u32::try_from(a).ok())
+                .filter(|&a| a != 0);
+            if let Some(table) = table.filter(|t| !tables.contains(t)) {
+                tables.push(table);
+            }
+        }
+        let mut vectors: Vec<(&str, u32)> = Vec::new();
+        for table in tables {
+            for &(off, name) in watched {
+                if let Some(word) = self.read_word_abs(table.wrapping_add(off)) {
+                    vectors.push((name, word));
+                }
+            }
+        }
         for (label, addr) in group_fault_handlers(&vectors) {
             if self.monitor.run(&hook_install_command(&cpu, addr)).is_ok() {
                 self.probe.hooks.push((label, addr));
@@ -2313,6 +2367,20 @@ mod tests {
             ]
         );
         assert!(group_fault_handlers(&[("HardFault", 0)]).is_empty());
+        // The same handler seen through two tables (ROM VTOR and the ELF's
+        // own) is one hook with one name.
+        let twice =
+            group_fault_handlers(&[("HardFault", 0x1000_01CD), ("HardFault", 0x1000_01CD)]);
+        assert_eq!(twice, vec![("HardFault".to_string(), 0x1000_01CC)]);
+    }
+
+    #[test]
+    fn baseline_cores_watch_only_hardfault() {
+        for m in ["cortex-m0+", "\"cortex-m0\"", "Cortex-M23\n"] {
+            assert_eq!(fault_vectors_for(Some(m)), &CORTEX_M_FAULT_VECTORS[..1], "{m}");
+        }
+        assert_eq!(fault_vectors_for(Some("cortex-m4f")).len(), 4);
+        assert_eq!(fault_vectors_for(None).len(), 4);
     }
 
     #[test]
