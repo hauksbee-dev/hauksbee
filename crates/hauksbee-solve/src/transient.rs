@@ -13,7 +13,7 @@
 use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
 use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy, SwitchModel};
-use crate::stamp::IntegCoeffs;
+use crate::stamp::{ComparatorLatch, IntegCoeffs};
 use crate::system::ReactiveState;
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use std::collections::HashMap;
@@ -614,6 +614,14 @@ impl Transient {
         });
 
         let mut first_step = true;
+        // The previous accepted step ended on an undelayed comparator's
+        // decision, so its output steps as this one opens: integrate this step
+        // first order from a flat derivative history, as the first one.
+        // Trapezoidal carries each capacitor's pre-flip current into the step
+        // and splits the step's charge between the two rails' drive, a
+        // half-step lag per edge (measured: an RC relaxation oscillator's
+        // period 3.6% long).
+        let mut restart_order = false;
         let mut x_accepted = ws.x.clone();
         let mut steps_taken: u64 = 0;
         let max_steps: u64 = 50_000_000; // safety valve
@@ -636,10 +644,24 @@ impl Transient {
         };
         let mut next_bp = 0usize;
         let adaptive = matches!(opts.step, StepControl::Adaptive { .. });
+        // On the staged-armed march, the one whose comparators would
+        // otherwise stamp the smooth transfer, comparators latch: they decide
+        // from the accepted state and their outputs follow the decision with
+        // the part's delay (`ComparatorLatch`).
+        let latched = staged || transient_dyn;
+        let comparators: Vec<(DeviceId, f64)> = circuit
+            .iter()
+            .filter_map(|(id, d)| match d {
+                Device::Comparator { tpd_s, .. } => Some((id, *tpd_s)),
+                _ => None,
+            })
+            .collect();
+        // A latched comparator with a stated delay slews: its output is a
+        // continuous control the event locator can aim at. Any other steps.
         let stepped: Vec<NodeId> = circuit
             .iter()
             .filter_map(|(_, d)| match d {
-                Device::Comparator { out, .. } => Some(*out),
+                Device::Comparator { out, tpd_s, .. } if !(latched && *tpd_s > 0.0) => Some(*out),
                 _ => None,
             })
             .collect();
@@ -728,6 +750,19 @@ impl Transient {
                 }
             }
 
+            // Never stride past a corner of a latched comparator's output
+            // (its hold ending, its slew reaching the rail): a kink the step
+            // must land on, exactly as a source corner (and with the same
+            // `bp_landing` promise).
+            if latched && adaptive {
+                if let Some(left) = next_output_corner(&comparators, &state) {
+                    if left > dt_min && h > left {
+                        h = left;
+                        bp_landing = true;
+                    }
+                }
+            }
+
             // The relay latch this step enters with: the trial commits its own,
             // and the (adaptive-only) event locator must aim at the threshold
             // live BEFORE it.
@@ -756,7 +791,12 @@ impl Transient {
             // (x1..x2); Gear-2's variable-step BDF2 stencil needs it whenever
             // the adaptive controller changed h. 0.0 (no accepted step yet)
             // means "assume uniform", exact because the seeded history is flat.
-            let coeffs = IntegCoeffs::for_step(opts.integration, h, h_prev_accepted, first_step);
+            let coeffs = IntegCoeffs::for_step(
+                opts.integration,
+                h,
+                h_prev_accepted,
+                first_step || restart_order,
+            );
             let r = newton_solve(
                 &mut ws,
                 circuit,
@@ -856,9 +896,14 @@ impl Transient {
             if !used_event && adaptive {
                 let latch = latch0.as_ref().map(|l0| (l0, ws.switch_latch()));
                 let xs = (x_accepted.as_slice(), ws.x.as_slice());
-                if let Some(frac) =
-                    crossing_fraction(circuit, xs, &ws.layout_nodes(), latch, &stepped)
-                {
+                let cmp_latch = latched.then_some(&state);
+                if let Some(frac) = crossing_fraction(
+                    circuit,
+                    xs,
+                    &ws.layout_nodes(),
+                    (latch, cmp_latch),
+                    &stepped,
+                ) {
                     if h > dt_min * 4.0 {
                         // Bisect toward the crossing for a sharper edge.
                         let refined = (h * frac).clamp(dt_min, h);
@@ -953,7 +998,19 @@ impl Transient {
 
             // Accept: advance time, update reactive history, emit.
             t += h;
-            advance_reactive_state(&mut state, circuit, &ws, h, opts, first_step);
+            let flips = advance_reactive_state(
+                &mut state,
+                circuit,
+                &ws,
+                h,
+                opts,
+                first_step || restart_order,
+            );
+            let cmp_flipped = flips.any;
+            restart_order = latched && flips.stepped;
+            if restart_order {
+                state.restart_derivatives();
+            }
             if first_step {
                 ws.clear_junction_entries();
             }
@@ -971,11 +1028,20 @@ impl Transient {
             // diode-connected base extrapolated from 5 mV to 4.8 V, seeding a
             // 238 A junction imbalance that no dt cut could recover, because
             // every retry re-extrapolated the same line).
-            pred_skip_once = used_event || ws.latch_flipped();
+            pred_skip_once = used_event || ws.latch_flipped() || (latched && cmp_flipped);
             x_accepted.copy_from_slice(&ws.x);
             first_step = false;
             h_prev_accepted = h;
             dt = next_dt;
+            // A comparator that just decided starts its delayed transition:
+            // open at a quarter of the time to its first corner rather than at
+            // the sliver the crossing landing left (the corner landing above
+            // bounds the step, LTE still rejects one that is too long).
+            if latched && cmp_flipped && adaptive {
+                if let Some(left) = next_output_corner(&comparators, &state) {
+                    dt = dt.max(0.25 * left).clamp(dt_min, dt_max);
+                }
+            }
             sink(StepSample { time: t, x: &ws.x });
         }
         Ok(TransientDiagnostics {
@@ -1007,6 +1073,16 @@ struct Reactive {
     ic: Option<f64>,
     /// Absolute floor of the state's LTE tolerance.
     atol: f64,
+}
+
+/// The time to the nearest corner of any latched comparator's output
+/// trajectory in `comparators` (id, `tpd_s`); see
+/// [`ComparatorLatch::next_corner`].
+fn next_output_corner(comparators: &[(DeviceId, f64)], state: &ReactiveState) -> Option<f64> {
+    comparators
+        .iter()
+        .filter_map(|&(id, tpd_s)| ComparatorLatch::of(state, id)?.next_corner(tpd_s))
+        .reduce(f64::min)
 }
 
 /// Visit every reactive state of every device at the solution in `ws`, in
@@ -1124,6 +1200,30 @@ pub fn seed_reactive_state(
         if let Some((raw, lo, hi)) = opamp_target(ws, dev) {
             state.seed(0, id.0 as usize, raw.clamp(lo, hi));
         }
+        // A comparator's latch (`ComparatorLatch`) starts where the
+        // operating point's output stands, pinned or decided: its position
+        // across the swing, and the side of mid-swing it is on.
+        if let Device::Comparator {
+            out,
+            out_lo,
+            out_hi,
+            supply,
+            ..
+        } = dev
+        {
+            let (lo, hi) = crate::stamp::comparator_swing_volts(
+                |n| node_v(ws, n),
+                (*out_lo, *out_hi),
+                *supply,
+            );
+            let v = node_v(ws, *out);
+            let frac = if hi > lo {
+                ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            ComparatorLatch::settled(frac > 0.5, frac).store(state, id);
+        }
     }
 }
 
@@ -1163,12 +1263,25 @@ fn start_forward_junctions_uncharged(
     }
 }
 
+/// Which comparators' latched decisions flipped on an accepted step.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LatchFlips {
+    /// Some latched comparator re-decided.
+    pub any: bool,
+    /// One without a propagation delay did, so its output STEPS at the start
+    /// of the next step: a discontinuity a multi-step integration rule must
+    /// restart across.
+    pub stepped: bool,
+}
+
 /// After an accepted step, roll every history forward (see
 /// [`ReactiveState::roll`]). The op-amp EMF rolls through the SAME single-pole +
 /// slew update the stamp used this step (`opamp_transient_output` is shared
 /// code), from the frozen previous EMF and the ACCEPTED inputs, so at
 /// convergence it reproduces exactly the EMF the final Newton iteration
 /// stamped; updated on acceptance only, never mid-Newton.
+///
+/// Returns which comparators' latched decisions flipped on this step.
 pub fn advance_reactive_state(
     state: &mut ReactiveState,
     circuit: &Circuit,
@@ -1176,7 +1289,8 @@ pub fn advance_reactive_state(
     h: f64,
     opts: &SolverOptions,
     first: bool,
-) {
+) -> LatchFlips {
+    let mut flipped = LatchFlips::default();
     // The derivative must be backed out with whatever rule actually ran this
     // step. A multi-step rule (trapezoidal) falls back to backward Euler on the
     // very first step, so the derivative there is the BE one.
@@ -1185,6 +1299,26 @@ pub fn advance_reactive_state(
         state.roll(r.bank, r.dev, r.value, h, trapz);
     });
     for (id, dev) in circuit.iter() {
+        if let Device::Comparator {
+            inp,
+            inn,
+            hysteresis,
+            tpd_s,
+            ..
+        } = dev
+        {
+            // The accepted step moved the output along its slew, and the
+            // accepted inputs decide the side the next step slews toward
+            // (`ComparatorLatch`).
+            if let Some(latch) = ComparatorLatch::of(state, id) {
+                let d = node_v(ws, *inp) - node_v(ws, *inn);
+                let (latch, decided) = latch.advanced(*tpd_s, h, d, *hysteresis);
+                flipped.any |= decided;
+                flipped.stepped |= decided && *tpd_s <= 0.0;
+                latch.store(state, id);
+            }
+            continue;
+        }
         let Device::OpAmp { pole_hz, slew, .. } = dev else {
             continue;
         };
@@ -1198,6 +1332,7 @@ pub fn advance_reactive_state(
             state.dx1[i] = 0.0;
         }
     }
+    flipped
 }
 
 /// MOSFET stored charges `(Q_gs, Q_gd, Q_bd, Q_bs)` at the solution in `ws`,
@@ -1470,7 +1605,10 @@ fn crossing_fraction(
     circuit: &Circuit,
     (x0, x1): (&[f64], &[f64]),
     node_idx: &dyn Fn(NodeId) -> Option<usize>,
-    latch: Option<(&SwitchLatch, Option<&SwitchLatch>)>,
+    (latch, cmp_latch): (
+        Option<(&SwitchLatch, Option<&SwitchLatch>)>,
+        Option<&ReactiveState>,
+    ),
     stepped: &[NodeId],
 ) -> Option<f64> {
     let mut earliest: Option<f64> = None;
@@ -1486,9 +1624,22 @@ fn crossing_fraction(
                 hysteresis,
                 ..
             } => {
-                let high = |x: &[f64]| vat(x, *out) > 0.5 * (out_lo + out_hi);
-                let trip = crate::stamp::comparator_trip(high(x0), *hysteresis);
-                (*inp, *inn, trip, high(x0) != high(x1))
+                // A latched comparator holds its decision across the step
+                // (`ComparatorLatch`): its trip is that decision's,
+                // and its output slewing past mid-swing is not an event.
+                cmp_latch
+                    .and_then(|s| ComparatorLatch::of(s, id))
+                    .map_or_else(
+                        || {
+                            let high = |x: &[f64]| vat(x, *out) > 0.5 * (out_lo + out_hi);
+                            let trip = crate::stamp::comparator_trip(high(x0), *hysteresis);
+                            (*inp, *inn, trip, high(x0) != high(x1))
+                        },
+                        |held| {
+                            let trip = crate::stamp::comparator_trip(held.high, *hysteresis);
+                            (*inp, *inn, trip, false)
+                        },
+                    )
             }
             Device::VSwitch {
                 ctrl_p,

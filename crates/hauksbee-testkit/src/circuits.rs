@@ -133,6 +133,7 @@ pub fn comparator(
         out_lo: 0.0,
         out_hi: 5.0,
         hysteresis,
+        tpd_s: 0.0,
         supply: hauksbee_ir::Supply::default(),
     })
 }
@@ -170,6 +171,83 @@ pub fn vswitch(
         ron,
         roff,
     })
+}
+
+/// A 0/5 V comparator with propagation delay `tpd_s`.
+pub fn comparator_tpd(
+    c: &mut Circuit,
+    name: &str,
+    (out, inp, inn): (NodeId, NodeId, NodeId),
+    hysteresis: f64,
+    tpd_s: f64,
+) -> DeviceId {
+    c.add(Device::Comparator {
+        name: name.into(),
+        out,
+        inp,
+        inn,
+        out_lo: 0.0,
+        out_hi: 5.0,
+        hysteresis,
+        tpd_s,
+        supply: hauksbee_ir::Supply::default(),
+    })
+}
+
+/// Timing of [`comparator_relaxation`]: the charge resistor, the discharge
+/// resistor and the timing capacitor.
+pub const RELAX_RC: f64 = 2e3;
+pub const RELAX_RD: f64 = 10e3;
+pub const RELAX_C: f64 = 1e-9;
+
+/// A diode-steered comparator relaxation oscillator; returns `(out, ct)`.
+///
+/// `K{tag}` compares a 2.5 V reference against the timing cap `ct{tag}` with
+/// a 1 V band (trips at 2.0 V and 3.0 V). High, its output `out{tag}`
+/// charges the cap through a diode and [`RELAX_RC`] toward ~3.6 V; low, the
+/// diode blocks and the cap discharges through [`RELAX_RD`] alone, so the low
+/// phase is exactly `RELAX_RD * RELAX_C * ln 1.5`. The diode also breaks the loop for the
+/// relaxed (diodes open) DC seed, the route by which a board's astable
+/// comparator loops reach their pinned t = 0 operating point.
+pub fn comparator_relaxation(c: &mut Circuit, tag: &str, tpd_s: f64) -> (NodeId, NodeId) {
+    let out = c.node(&format!("out{tag}"));
+    let ct = c.node(&format!("ct{tag}"));
+    let rf = c.node(&format!("ref{tag}"));
+    let a = c.node(&format!("steer{tag}"));
+    vdc(c, &format!("VREF{tag}"), rf, 2.5);
+    comparator_tpd(c, &format!("K{tag}"), (out, rf, ct), 1.0, tpd_s);
+    diode(c, &format!("DSTEER{tag}"), out, a, DiodeModel::default());
+    res(c, &format!("RCHG{tag}"), a, ct, RELAX_RC);
+    res(c, &format!("RDIS{tag}"), ct, GND, RELAX_RD);
+    cap(c, &format!("CT{tag}"), ct, GND, RELAX_C);
+    (out, ct)
+}
+
+/// Three comparators in cascade, each flip driving the next one's input.
+///
+/// `K1` is [`comparator_relaxation`] (tag `1`); its output drives `K2`'s
+/// inverting input directly against 2.5 V, so `o2` is high through `K1`'s
+/// ~4 us low phase; `o2` charges an integrate-and-fire membrane `m` (2 kOhm,
+/// 1 nF) into `K3` (trip 2.1 V rising, 1.9 V falling), whose fire is
+/// stretched through a diode onto `s` (10 kOhm, 10 pF) and closes a 10 ohm
+/// reset switch across its own membrane, as a spiking neuron does.
+#[must_use]
+pub fn comparator_cascade(tpd_s: f64) -> Circuit {
+    let mut c = Circuit::new();
+    let (o1, _) = comparator_relaxation(&mut c, "1", tpd_s);
+    let (o2, o3, m, s) = (c.node("o2"), c.node("o3"), c.node("m"), c.node("s"));
+    let (mid, th) = (c.node("mid"), c.node("th"));
+    vdc(&mut c, "VMID", mid, 2.5);
+    vdc(&mut c, "VTH", th, 2.0);
+    comparator_tpd(&mut c, "K2", (o2, mid, o1), 0.1, tpd_s);
+    res(&mut c, "RIN", o2, m, 2e3);
+    cap(&mut c, "CM", m, GND, 1e-9);
+    comparator_tpd(&mut c, "K3", (o3, m, th), 0.2, tpd_s);
+    diode(&mut c, "DSTRETCH", o3, s, DiodeModel::default());
+    res(&mut c, "RS", s, GND, 10e3);
+    cap(&mut c, "CS", s, GND, 10e-12);
+    sw(&mut c, "SRESET", m, GND, s, (3.0, 2.0), 10.0);
+    c
 }
 
 /// 1 V through two 1 kΩ resistors to ground: the midpoint solves to 0.5 V.

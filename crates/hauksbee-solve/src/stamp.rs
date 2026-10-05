@@ -618,13 +618,14 @@ pub fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, si
             out_lo,
             out_hi,
             hysteresis,
+            tpd_s,
             supply,
             ..
         } => stamp_comparator(
             ctx,
             id,
             (*out, *inp, *inn),
-            (*out_lo, *out_hi, *hysteresis),
+            (*out_lo, *out_hi, *hysteresis, *tpd_s),
             *supply,
             sink,
         ),
@@ -3020,11 +3021,183 @@ fn drive_comparator<'a, S: StampSink>(
 /// A comparator output stage's conductance (1 ohm, a strong source).
 const COMPARATOR_GOUT: f64 = 1.0;
 
+/// A comparator's LATCHED transient state: the decision its internal latch
+/// holds, how long ago that decision changed, and where its output stands
+/// across its swing (`0` = low end, `1` = high end), all at the last ACCEPTED
+/// step. A march keeps it in [`ReactiveState`]: `xb[0].x1` holds the decision
+/// (`+1` high, `-1` low; `0` = never seeded, the state of a history no march
+/// seeded), `xb[1].x1` its age and `x1` the output position.
+///
+/// Why a latch. A comparator with hysteresis is bistable: once its input
+/// passes the trip, internal positive feedback carries the output to the other
+/// rail whatever the input does next, unless it recrosses the OTHER trip a
+/// whole band away. The smooth staged transfer (a 2 mV-wide logistic of the
+/// input) has no such memory. Inside one Newton solve it is a linear amplifier
+/// of gain ~2500, so a comparator whose output resets its own input (a neuron
+/// whose fire closes the switch that discharges its membrane, any relaxation
+/// oscillator) found a REGULATING root with the output parked mid-swing, and
+/// the march crawled through it at 0.1 ns steps until its Newton budget ran out
+/// (measured: nine Tarski hidden neurons held at 1.93 V with their inputs 3.5
+/// mV over threshold, ~4400 steps, then the fallback ladder for ~360 s more).
+/// Reading the hysteresis side from the iterate instead has no root at all:
+/// the trip jumps the whole band as the output passes mid-swing.
+///
+/// Latched, the decision is taken from the accepted state between steps (the
+/// march lands a step on each input crossing, see `crossing_fraction`), and
+/// within a step the output is a function of time alone: the inner Newton sees
+/// the comparator as a scheduled source and converges as it does on any
+/// feed-forward stage.
+///
+/// The output follows the decision with the card's propagation delay `tpd_s`
+/// (input crossing to output mid-swing) as an INERTIAL delay: it holds for
+/// `tpd_s / 2`, then slews linearly across its swing in `tpd_s`, so it passes
+/// mid-swing `tpd_s` after the decision. A decision that reverts inside the
+/// hold never reaches the output (an input pulse too short for the part to
+/// answer), and a longer one keeps its width, shifted by the delay: a neuron's
+/// fire holds its output for the delay after its membrane has started to
+/// reset, as the real part does. The card gives no edge time; the slew over
+/// `tpd_s` is a bounded slope that keeps the output stage continuous for the
+/// march, not a datasheet rise time. A part without a stated delay steps at
+/// the decision.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ComparatorLatch {
+    /// The decision the internal latch holds.
+    pub high: bool,
+    /// Seconds since `high` last changed (infinite when no change is pending).
+    pub age: f64,
+    /// Output position across the swing, `0` low end .. `1` high end.
+    pub frac: f64,
+}
+
+impl ComparatorLatch {
+    /// The latch of comparator `id` in `state`, `None` when no march seeded it.
+    #[must_use]
+    pub fn of(state: &ReactiveState, id: DeviceId) -> Option<Self> {
+        let i = id.0 as usize;
+        let side = *state.xb[0].x1.get(i)?;
+        (side != 0.0).then(|| Self {
+            high: side > 0.0,
+            age: state.xb[1].x1[i],
+            frac: state.x1[i],
+        })
+    }
+
+    /// A settled latch: deciding `high`, no change pending, output at `frac`.
+    #[must_use]
+    pub const fn settled(high: bool, frac: f64) -> Self {
+        Self {
+            high,
+            age: f64::INFINITY,
+            frac,
+        }
+    }
+
+    /// Store this latch as comparator `id`'s accepted history in `state`.
+    pub fn store(self, state: &mut ReactiveState, id: DeviceId) {
+        let i = id.0 as usize;
+        let side = if self.high { 1.0 } else { -1.0 };
+        for (bank, v) in [(0, side), (1, self.age)] {
+            let b = &mut state.xb[bank];
+            (b.x1[i], b.x2[i], b.dx1[i]) = (v, v, 0.0);
+        }
+        (state.x1[i], state.x2[i], state.dx1[i]) = (self.frac, self.frac, 0.0);
+    }
+
+    /// The hold before the output starts toward a new decision.
+    fn hold(tpd_s: f64) -> f64 {
+        0.5 * tpd_s
+    }
+
+    /// Output position after `h` more seconds of following the decision.
+    #[must_use]
+    pub fn frac_after(self, tpd_s: f64, h: f64) -> f64 {
+        let slew = |frac: f64, high: bool, dt: f64| {
+            if tpd_s <= 0.0 {
+                return if high { 1.0 } else { 0.0 };
+            }
+            let moved = dt / tpd_s;
+            if high {
+                (frac + moved).min(1.0)
+            } else {
+                (frac - moved).max(0.0)
+            }
+        };
+        let switch_in = Self::hold(tpd_s) - self.age;
+        if switch_in <= 0.0 {
+            slew(self.frac, self.high, h)
+        } else if h <= switch_in {
+            slew(self.frac, !self.high, h)
+        } else {
+            slew(
+                slew(self.frac, !self.high, switch_in),
+                self.high,
+                h - switch_in,
+            )
+        }
+    }
+
+    /// Time from now to the next corner of the output's trajectory (a pending
+    /// hold ending, or a slew reaching its end), or `None` when it is settled.
+    /// A step that strides a corner smears a kink the march must land on.
+    #[must_use]
+    pub fn next_corner(self, tpd_s: f64) -> Option<f64> {
+        if tpd_s <= 0.0 {
+            return None;
+        }
+        let switch_in = Self::hold(tpd_s) - self.age;
+        if switch_in > 0.0 {
+            return Some(switch_in);
+        }
+        let left = if self.high {
+            1.0 - self.frac
+        } else {
+            self.frac
+        };
+        (left > 0.0).then_some(left * tpd_s)
+    }
+
+    /// The latch after an accepted step of `h` whose end state has input
+    /// difference `d`: the output moved along its trajectory, and the latch
+    /// re-decided across its hysteresis band. A decision reverting inside its
+    /// hold cancels it (nothing pending). Also returns whether it re-decided.
+    #[must_use]
+    pub fn advanced(self, tpd_s: f64, h: f64, d: f64, hysteresis: f64) -> (Self, bool) {
+        let frac = self.frac_after(tpd_s, h);
+        let age = self.age + h;
+        let high = d > comparator_trip(self.high, hysteresis);
+        if high == self.high {
+            return (Self { high, age, frac }, false);
+        }
+        let pending = age < Self::hold(tpd_s);
+        let age = if pending { f64::INFINITY } else { 0.0 };
+        (Self { high, age, frac }, true)
+    }
+}
+
+/// The `(low, high)` output swing of a push-pull comparator at node voltages
+/// `v`, by the same rule as the stamp's (see `comparator_swing`).
+#[must_use]
+pub fn comparator_swing_volts(
+    v: impl Fn(NodeId) -> f64,
+    (out_lo, out_hi): (f64, f64),
+    supply: hauksbee_ir::Supply,
+) -> (f64, f64) {
+    let Some(hi_pin) = supply.hi else {
+        return (out_lo, out_hi);
+    };
+    // Exactly `comparator_swing`'s rule, an absent low pin reading 0 V.
+    let pin_lo = supply.lo.map_or(0.0, &v);
+    let lo = if pin_lo > out_lo { pin_lo } else { out_lo };
+    let pin_hi = v(hi_pin);
+    let hi = if pin_hi < out_hi { pin_hi } else { out_hi };
+    (lo, if hi < lo { lo } else { hi })
+}
+
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
     (out, inp, inn): (NodeId, NodeId, NodeId),
-    (out_lo, out_hi, hyst): (f64, f64, f64),
+    (out_lo, out_hi, hyst, tpd_s): (f64, f64, f64, f64),
     supply: hauksbee_ir::Supply,
     sink: &mut S,
 ) {
@@ -3070,6 +3243,26 @@ fn stamp_comparator<S: StampSink>(
             );
         }
         return;
+    }
+
+    // Latched transient path (see `ComparatorLatch`): a staged-armed march
+    // step drives the output to where it has slewed toward the decision the
+    // accepted state holds, independent of this step's inputs.
+    if ctx.branch_reg > 0.0 && !ctx.dc {
+        if let Some(latch) = ComparatorLatch::of(ctx.state, id) {
+            let frac = latch.frac_after(tpd_s, ctx.coeffs.dt);
+            if let Some(oi) = ctx.layout.node(out) {
+                drive_comparator(
+                    ctx,
+                    sink,
+                    oi,
+                    supply,
+                    (hi.v - lo.v).mul_add(frac, lo.v),
+                    [(lo, 1.0 - frac), (hi, frac)],
+                );
+            }
+            return;
+        }
     }
 
     let thresh = comparator_trip(high, hyst);
@@ -3269,6 +3462,7 @@ mod tests {
             out_lo: 0.05,
             out_hi: 4.95,
             hysteresis: 0.0075,
+            tpd_s: 0.0,
             supply: hauksbee_ir::Supply {
                 hi: Some(rail),
                 lo: None,
@@ -3876,5 +4070,62 @@ mod tests {
             e1 / e2 > 3.4 && e2 / e3 > 3.4,
             "not ~h^2: {e1:.3e}/{e2:.3e}/{e3:.3e}"
         );
+    }
+
+    /// The latch's inertial delay: a decision holds the output for half
+    /// the delay, then slews it across the swing in one delay, so it passes
+    /// mid-swing one delay after the decision; a decision reverting inside
+    /// the hold never reaches the output.
+    #[test]
+    fn comparator_latch_follows_a_decision_one_delay_late() {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        let tpd = 10e-9;
+        let low = super::ComparatorLatch::settled(false, 0.0);
+        assert_eq!(low.next_corner(tpd), None, "settled at its rail");
+        // Input 1 V over a 0.2 V band: decides high.
+        let (high, flipped) = low.advanced(tpd, 1e-9, 1.0, 0.2);
+        assert!(flipped && high.high);
+        assert!(near(high.age, 0.0));
+        assert!(near(high.frac_after(tpd, 5e-9), 0.0), "held for tpd / 2");
+        assert!(
+            (high.frac_after(tpd, 10e-9) - 0.5).abs() < 1e-12,
+            "mid-swing at tpd"
+        );
+        assert!(
+            near(high.frac_after(tpd, 15e-9), 1.0),
+            "at the rail tpd / 2 later"
+        );
+        assert!(near(high.frac_after(tpd, 30e-9), 1.0));
+        assert!(
+            (high.next_corner(tpd).unwrap() - 5e-9).abs() < 1e-18,
+            "the hold ends"
+        );
+        // Inside the band the decision stands.
+        let (held, flipped) = high.advanced(tpd, 2e-9, 0.05, 0.2);
+        assert!(!flipped && held.high && held.frac == 0.0);
+        // Back under the low trip inside the hold: the pulse is swallowed.
+        let (swallowed, flipped) = held.advanced(tpd, 2e-9, -1.0, 0.2);
+        assert!(flipped && !swallowed.high && swallowed.age.is_infinite());
+        assert!(
+            near(swallowed.frac_after(tpd, 1e-6), 0.0),
+            "the output never moved"
+        );
+        // A decision older than the hold keeps going once reverted: the
+        // output turns back from where it got to.
+        let (moving, _) = high.advanced(tpd, 8e-9, 1.0, 0.2);
+        assert!((moving.frac - 0.3).abs() < 1e-12);
+        let (back, flipped) = moving.advanced(tpd, 1e-9, -1.0, 0.2);
+        assert!(flipped && !back.high && back.age == 0.0);
+        assert!(
+            (back.frac - 0.4).abs() < 1e-12,
+            "still slewing up through its hold"
+        );
+        // Up to 0.9 by the hold's end, then down at the same rate.
+        assert!((back.frac_after(tpd, 10e-9) - 0.4).abs() < 1e-12);
+        assert!(near(back.frac_after(tpd, 20e-9), 0.0));
+        // Without a stated delay the output steps at the decision.
+        let (step, _) = low.advanced(0.0, 1e-9, 1.0, 0.2);
+        assert!(near(step.frac_after(0.0, 1e-12), 1.0));
+        assert_eq!(step.next_corner(0.0), None);
     }
 }

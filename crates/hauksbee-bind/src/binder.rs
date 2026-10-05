@@ -5068,6 +5068,14 @@ fn bind_comparator(
     let out_hi = model.params.get_f64("out_hi").unwrap_or(5.0);
     // Full-band VHYS (see `Device::Comparator`); validation requires it on checked cards.
     let hyst = model.params.get_f64("hysteresis").unwrap_or(0.01);
+    // Propagation delay: the transient output follows each decision this
+    // much later (see `Device::Comparator::tpd_s`). A card without one, or
+    // with a nonsensical one, steps at the decision.
+    let tpd_s = model
+        .params
+        .get_f64("tpd_s")
+        .filter(|t| t.is_finite() && *t > 0.0)
+        .unwrap_or(0.0);
 
     // Multi-channel packages (LM393 dual, LM339 quad): one section per wired
     // channel, keyed `_q<N>`, same shape and rationale as bind_opamp above. A
@@ -5133,6 +5141,7 @@ fn bind_comparator(
                 out_lo,
                 out_hi,
                 hysteresis: hyst,
+                tpd_s,
                 supply: hauksbee_ir::Supply {
                     quiescent_a: std::mem::take(&mut quiescent_a),
                     ..supply

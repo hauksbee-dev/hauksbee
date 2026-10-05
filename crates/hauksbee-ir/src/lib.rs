@@ -452,6 +452,16 @@ pub enum Device {
         /// the offset: the output rises at `V(inp) - V(inn) > +hysteresis/2`
         /// and falls below `-hysteresis/2`. `0` is a bare zero-crossing.
         hysteresis: f64,
+        /// Propagation delay in seconds, input crossing to output mid-swing:
+        /// the card's `tpd_s`. A transient march whose comparators latch
+        /// their decisions between steps (`hauksbee_solve::stamp::ComparatorLatch`)
+        /// holds the output for `tpd_s / 2` after a decision, then slews it
+        /// linearly across its swing in `tpd_s`, so it passes mid-swing
+        /// `tpd_s` after the decision; a decision reverting inside the hold
+        /// never reaches the output. `0` (no stated delay) is an output that
+        /// steps at the decision.
+        #[serde(default)]
+        tpd_s: f64,
         /// The supply pins a driven output's current is drawn from (see
         /// [`Supply`]).
         #[serde(default)]
@@ -1244,6 +1254,7 @@ impl Device {
                 out_lo: 0.0,
                 out_hi: 5.0,
                 hysteresis: 1e-3,
+                tpd_s: 0.0,
                 supply: Supply::default(),
             },
             Self::Vcvs {

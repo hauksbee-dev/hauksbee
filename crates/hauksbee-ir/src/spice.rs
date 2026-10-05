@@ -1187,6 +1187,7 @@ impl<'a> Build<'a> {
                         out_lo,
                         out_hi,
                         hysteresis,
+                        tpd_s: 0.0,
                         supply: crate::Supply::default(),
                     }
                 } else {

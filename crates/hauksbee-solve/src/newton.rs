@@ -3214,6 +3214,7 @@ mod tests {
                 out_lo: 0.05,
                 out_hi: 4.95,
                 hysteresis: 0.0075,
+                tpd_s: 0.0,
                 supply: hauksbee_ir::Supply {
                     hi: Some(rail),
                     lo: None,
@@ -3522,6 +3523,7 @@ mod tests {
             out_lo: 0.05,
             out_hi: 4.95,
             hysteresis: 0.0075,
+            tpd_s: 0.0,
             supply: hauksbee_ir::Supply::default(),
         });
         res(&mut c, "Rcharge", cmp, anode, 1e3);

@@ -499,6 +499,17 @@ impl ReactiveState {
         dx1[i] = 0.0;
     }
 
+    /// Drop every stored derivative, so the next step integrates first order
+    /// from the stored values alone, as the march's first step does: the
+    /// restart across a discontinuity in a source's drive, where a
+    /// trapezoidal step would carry the pre-step currents into it.
+    pub(crate) fn restart_derivatives(&mut self) {
+        self.dx1.fill(0.0);
+        for b in &mut self.xb {
+            b.dx1.fill(0.0);
+        }
+    }
+
     /// Roll bank `k` of device `i` forward after an accepted step of `h`:
     /// `x2 <- x1`, `x1 <- new`, and `dx1 <-` the derivative backed out with
     /// the rule that ran the step (trapezoidal when `trapz`, else backward

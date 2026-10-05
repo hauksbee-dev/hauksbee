@@ -22,6 +22,8 @@ mod board_benchmark_inputs;
 mod breakpoints;
 #[path = "bughunt_regression.rs"]
 mod bughunt_regression;
+#[path = "comparator_flip.rs"]
+mod comparator_flip;
 #[path = "controlled_sources.rs"]
 mod controlled_sources;
 #[path = "coupled_inductors.rs"]

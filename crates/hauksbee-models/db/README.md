@@ -81,7 +81,7 @@ tf    = 3.0e-10   # forward transit time (s)
 | nmos/pmos       | vto, kp                                                          |
 | vreg            | vout, dropout_v, iq_a                                            |
 | opamp           | gain, rail_lo, rail_hi (optional iq_a)                           |
-| comparator      | out_lo, out_hi, hysteresis                                       |
+| comparator      | out_lo, out_hi, hysteresis (optional tpd_s)                      |
 | analog_switch   | ron, roff, vth                                                   |
 | digital         | voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin (open_collector) |
 | dac             | bits, vref_pin, sda_pin, scl_pin                                 |
