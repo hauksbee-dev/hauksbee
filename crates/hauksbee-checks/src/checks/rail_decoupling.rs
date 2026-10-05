@@ -100,6 +100,26 @@ fn is_module(c: &Component) -> bool {
         || c.footprint.to_ascii_lowercase().contains("module")
 }
 
+/// A light emitter, including a smart (addressable) LED with a built-in
+/// driver: designator `LED…`, or a library/footprint name whose first word is
+/// `LED` (an `OLED` display is not one). Its supply pin feeds an LED driver
+/// string, not an IC core: a chain of such LEDs commonly shares bulk
+/// capacitance, so counting each one as an IC wanting its own bypass
+/// capacitor inflates the per-IC ratio of every rail it sits on.
+fn is_light_emitter(c: &Component) -> bool {
+    let first_word_is_led = |s: &str| {
+        let name = s.rsplit(':').next().unwrap_or(s);
+        name.split(|ch: char| !ch.is_ascii_alphanumeric())
+            .next()
+            .is_some_and(|w| w.eq_ignore_ascii_case("led"))
+    };
+    let r = c.reference.to_ascii_uppercase();
+    let led_ref = r
+        .strip_prefix("LED")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(|ch: char| ch.is_ascii_digit()));
+    led_ref || first_word_is_led(&c.lib_id) || first_word_is_led(&c.footprint)
+}
+
 /// One rail's tally.
 #[derive(Default)]
 struct Rail {
@@ -151,7 +171,7 @@ pub fn decoupling_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
             }
             continue;
         }
-        if c.pins.len() < 3 {
+        if c.pins.len() < 3 || is_light_emitter(c) {
             continue;
         }
         let card = card_supply.get(c.reference.as_str());
@@ -387,6 +407,42 @@ mod tests {
             findings(&board(vec![ic("U1", 2), ic("U2", 2), c1])).len(),
             1
         );
+    }
+
+    #[test]
+    fn addressable_leds_are_not_counted_as_ics() {
+        // A chain of smart LEDs (VDD, DOUT, VSS, DIN) on a rail: by designator
+        // or by an `LED_…` footprint, none counts as an IC wanting a bypass cap.
+        let led = |r: &str, fp: &str| Component {
+            reference: r.into(),
+            value: "SmartLED".into(),
+            footprint: fp.into(),
+            pins: vec![
+                pin("1", 2, "VDD"),
+                pin("2", 9, "DOUT"),
+                pin("3", 1, "VSS"),
+                pin("4", 9, "DIN"),
+            ],
+            ..Default::default()
+        };
+        let chain = vec![
+            led("LED1", "Custom:Smart_2020"),
+            led("LED2", "Custom:Smart_2020"),
+            led("D3", "LED_SMD:LED_RGB_2020_PLCC4"),
+            led("D4", "LED_SMD:LED_RGB_2020_PLCC4"),
+        ];
+        assert!(
+            findings(&board(chain.clone())).is_empty(),
+            "LEDs are not ICs"
+        );
+        // Real ICs on the same rail are still counted, and only they.
+        let mut parts = chain;
+        parts.extend([ic("U1", 2), ic("U2", 2)]);
+        let found = findings(&board(parts));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("2 ICs"), "{}", found[0].message);
+        // An OLED display is not mistaken for an LED.
+        assert!(!is_light_emitter(&led("U9", "Display:OLED_128x64")));
     }
 
     #[test]
