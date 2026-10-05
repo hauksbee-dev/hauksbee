@@ -9,7 +9,7 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**93 tests: 87 in the 24 absent files below, plus 6 removed from files that
+**95 tests: 89 in the 25 absent files below, plus 6 removed from files that
 otherwise ship. Also absent: 11 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
@@ -24,6 +24,7 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `tarski_stretcher_transient` | 3 | Pulse-stretcher transient against measured hardware |
 | `tarski_staged_replay` | 7 | Ordered as-built rework replay against the private board and its firmware |
 | `flagship_brownout` | 3 | The brownout CI scenario, red and repaired |
+| `tarski_outcome_search` | 2 | Outcome search on the neuron cell: three intended outcomes violated with culprits, and the repaired cell passing |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |
 | `asbuilt_equivalence` | 5 | That the declarative as-built overlay reproduces the imperative rework it replaced |
 | `boardcode_miswire` | 2 | Round-trip through the board-as-code form |

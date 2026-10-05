@@ -2329,7 +2329,9 @@ impl Assertion {
     /// the clock; both are meaningless on a DC-initialised board.
     #[must_use]
     pub fn times_startup(&self) -> bool {
-        self.kind == "pulse_width" || self.after_ms.is_some_and(|t| t > 0.0)
+        // An outcome kind's `after_ms` only skips the settle; it times nothing.
+        self.kind == "pulse_width"
+            || (self.after_ms.is_some_and(|t| t > 0.0) && !crate::search::is_outcome(self))
     }
 
     // One independent rule per assertion kind; each arm is a short guard.

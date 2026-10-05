@@ -215,6 +215,17 @@
       ],
       "default": null
     },
+    "search": {
+      "description": "Operating conditions every outcome must hold across (outcome-driven\nfault finding, see `logic_level` / `fires`).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Search"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "sensor": {
       "description": "Declarative sensors attached to the co-sim for this run. Each entry\ndescribes one I2C or SPI sensor (via an inline spec string or a file\npath) plus optional per-run input overrides.",
       "type": "array",
@@ -426,7 +437,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model. `pulse_width`: the width (ms) of the\nfirst complete high (or `level = \"low\"`) pulse on `net` after `after_ms`.\nOn the numeric kinds, omitting every bound makes the assertion a\nMEASUREMENT: the value is reported, nothing is judged.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model. `pulse_width`: the width (ms) of the\nfirst complete high (or `level = \"low\"`) pulse on `net` after `after_ms`.\n`logic_level`: `net` reaches a valid logic high (or `level = \"low\"`) at\nevery logic input it drives, the VIH/VIL read from those parts' cards at\ntheir own supply. `fires`: the comparator `ref` fires (`min_toggles`\ntimes, default once), at the `target` trip level when one is given.\nBoth are outcome assertions a `[search]` block searches.\nOn the numeric kinds, omitting every bound makes the assertion a\nMEASUREMENT: the value is reported, nothing is judged.",
           "type": "string",
           "enum": [
             "voltage",
@@ -444,11 +455,13 @@
             "ac_gain",
             "hwtrace",
             "model_coverage",
-            "pulse_width"
+            "pulse_width",
+            "logic_level",
+            "fires"
           ]
         },
         "level": {
-          "description": "`pulse_width`: which pulse to time, `\"high\"` (the default) or `\"low\"`.",
+          "description": "`pulse_width`: which pulse to time, `\"high\"` (the default) or `\"low\"`;\n`logic_level`: which level the net must reach.",
           "type": [
             "string",
             "null"
@@ -526,7 +539,7 @@
           "minimum": 0.0
         },
         "min_toggles": {
-          "description": "Minimum toggle count over the run (alternative to `freq_hz`).",
+          "description": "Minimum toggle count over the run (alternative to `freq_hz`); `fires`:\nhow many rising output edges are needed.",
           "type": [
             "integer",
             "null"
@@ -629,6 +642,15 @@
             "string",
             "null"
           ],
+          "default": null
+        },
+        "target": {
+          "description": "`fires`: the intended trip level (V) of the comparator's first decision,\nheld to `tolerance` (a fraction, default 0.05).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
           "default": null
         },
         "tolerance": {
@@ -1309,6 +1331,30 @@
         "profile"
       ]
     },
+    "Search": {
+      "description": "The `[search]` block: the operating conditions every outcome must hold\nacross.\n\n```toml\n[search]\nculprits = 3\n[[search.sweep]]\nnet   = \"V_SET\"\nvolts = [0.0, 2.0]\n[[search.sweep]]\nnet  = \"I_IN\"\namps = [4e-6, 6e-6]\n```",
+      "type": "object",
+      "properties": {
+        "culprits": {
+          "description": "How many culprit parts to rank under each violated outcome (default\n3; 0 skips the ranking reruns).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "sweep": {
+          "description": "The conditions to search, one entry per net. Every combination runs\n(a grid), crossed with any tolerance ensemble.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Sweep"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "SensorAttach": {
       "description": "A declarative I2C or SPI sensor attached to the co-sim for one run.\n\nThe sensor is described by a `[sensor]` TOML spec (parsed by\n`RegisterMapSensor::from_toml`). Exactly one of `spec` (inline string) or\n`spec_file` (path relative to the CI spec file) must be present.\n\n```toml\n[[sensor]]\nid          = \"U2_temp\"\nspec_file   = \"sensors/lm75.toml\"      # or: spec = \"\"\" ... \"\"\"\n\n[sensor.inputs]\ntemperature_c = 40.0                   # override the default for this run\n```",
       "type": "object",
@@ -1590,6 +1636,38 @@
       ],
       "required": [
         "kind"
+      ]
+    },
+    "Sweep": {
+      "description": "One searched net: forced to each of `volts`, or fed each of `amps`.",
+      "type": "object",
+      "properties": {
+        "amps": {
+          "description": "Inject each of these currents into the net from ground (amps;\nnegative draws current out).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "net": {
+          "description": "The net the condition is applied to.",
+          "type": "string"
+        },
+        "volts": {
+          "description": "Hold the net at each of these voltages (an ideal source to ground).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "net"
       ]
     },
     "TimelineEventSpec": {
