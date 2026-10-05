@@ -2827,6 +2827,15 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::DcOverstress => {
             "Limit the current into the named part: add or enlarge the series resistance that feeds it (a base resistor of a few kilohms for a small transistor) so it and its driver stay inside their ratings."
         }
+        LintCheck::GroundIsland => {
+            "Join the net to the board ground (same ground symbol, a net tie, or a 0 ohm link), or name it as a deliberately separate domain."
+        }
+        LintCheck::UnwiredConnector => {
+            "Wire the connector to the circuit it serves (check for a mismatched net label), or remove it."
+        }
+        LintCheck::LedReversed => {
+            "Turn the LED round so its anode faces the positive rail and its cathode ground."
+        }
         LintCheck::FloatingInput => {
             "Tie each unused CMOS input high or low (directly or through a resistor), or drive it; a no-connect flag does not define its level."
         }

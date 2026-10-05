@@ -1238,6 +1238,21 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This is the board's resting state, solved from the design: every part with a datasheet rating was held to it there. A part over its current, power or temperature rating in that state is overstressed the whole time the board is on; a transistor base or diode driven from a supply or logic output through too little resistance is the usual cause.".to_string(),
                 "Find the path feeding the named part and add or enlarge the series resistance (a base resistor of a few kilohms for a small transistor) so the current stays inside its rating and the driver's.".to_string(),
             ),
+            LintCheck::GroundIsland => (
+                format!("A ground net is not connected to the board's ground. {}", f.message),
+                "A net named as a ground is where the parts on it return their current. If nothing on the board joins it to the main ground, those parts have no return path: a signal referenced to it floats, audio and analog inputs pick up noise, and anything powered through it does not work. Split grounds are fine when they meet at one point through copper, a net tie, a 0 ohm link or a ferrite; this one meets the main ground nowhere.".to_string(),
+                "Connect it to the board ground: use the same ground symbol, or add a net tie or 0 ohm link where the two should meet. If it is meant to be a separate, isolated domain, name it so (for example with ISO in the name).".to_string(),
+            ),
+            LintCheck::UnwiredConnector => (
+                format!("A connector on {parts} is not wired to anything. {}", f.message),
+                "Every signal pin of this connector sits on a net that touches only that pin. A label or wire was drawn on it, so a connection was intended, but nothing else on the board shares the net: whatever plugs in here receives and sends nothing. A mismatched net label is the usual cause.".to_string(),
+                "Route the connector to the circuit it is meant to serve (check that its net labels match the ones at the other end), or remove it if it is not needed.".to_string(),
+            ),
+            LintCheck::LedReversed => (
+                format!("An LED on {parts} is fitted backwards. {}", f.message),
+                "An LED conducts and lights only when its anode is more positive than its cathode. Here the anode sits at ground and the cathode at a positive supply, so it is reverse-biased all the time: it never lights, and supplies above about 5 V can exceed its reverse-voltage rating.".to_string(),
+                "Turn the LED round (anode toward the supply, cathode toward ground) in the schematic symbol and on the footprint.".to_string(),
+            ),
             LintCheck::FloatingInput => (
                 format!("Logic inputs on {parts} are left floating. {}", f.message),
                 "A CMOS logic input has no level of its own: left unconnected it drifts with leakage and nearby signals, so the chip reads random values, and an input resting halfway between the rails makes the chip draw extra current. A no-connect mark in the schematic does not change that unless the datasheet says the pin has an internal pull resistor.".to_string(),

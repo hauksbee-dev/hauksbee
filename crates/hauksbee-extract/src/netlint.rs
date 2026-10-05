@@ -21,6 +21,8 @@ use crate::part_class::{self, connected_pads, ref_designator};
 use crate::{Component, ExtractedBoard, Net, Pin};
 use std::fmt::Write as _;
 
+mod topology;
+
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
 #[derive(Debug, Clone)]
 pub struct LintFinding {
@@ -148,6 +150,17 @@ pub enum LintCheck {
     /// `dc_stress` check, which runs the co-simulation's stress monitor over
     /// that one solved state.
     DcOverstress,
+    /// A ground- or return-named net that nothing on the board joins to the
+    /// main ground (no copper, resistor, ferrite, net tie or part spans them),
+    /// with parts returning through it. A capacitor is not a join.
+    GroundIsland,
+    /// A connector whose every signal pin sits on a net touching only that pin,
+    /// with at least one of those nets explicitly drawn: nothing reaches it.
+    UnwiredConnector,
+    /// A two-pin LED held at ground on its anode and at a positive rail on its
+    /// cathode (directly or through one resistor each): reverse-biased in every
+    /// state, it never lights.
+    LedReversed,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -172,7 +185,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 25] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -195,6 +208,9 @@ impl LintCheck {
         Self::MissingDecoupling,
         Self::FloatingInput,
         Self::DcOverstress,
+        Self::GroundIsland,
+        Self::UnwiredConnector,
+        Self::LedReversed,
     ];
 
     #[must_use]
@@ -222,6 +238,9 @@ impl LintCheck {
             Self::MissingDecoupling => "missing_decoupling",
             Self::FloatingInput => "floating_input",
             Self::DcOverstress => "dc_overstress",
+            Self::GroundIsland => "ground_island",
+            Self::UnwiredConnector => "unwired_connector",
+            Self::LedReversed => "led_reversed",
         }
     }
 }
@@ -280,6 +299,9 @@ impl ExtractedBoard {
         check_output_contention(self, &mut report);
         check_pin_functions(self, &mut report);
         check_design_file_qc(self, &mut report);
+        topology::check_ground_islands(self, &mut report);
+        topology::check_unwired_connectors(self, &mut report);
+        topology::check_reversed_leds(self, &mut report);
         report
     }
 }
