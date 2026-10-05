@@ -1221,6 +1221,13 @@ because both used to read green:
 | a documented omission of the model itself (`reduced_fidelity`: "temperature is not modelled", one channel of eight) | `qualified` | PASS, exit 0, with the caveat stated |
 | firmware with no evidence it executed, or executed under a fault handler, a held reset or an out-of-range supply (`not_exercised` on `firmware/<ref>`; see `execution` in the JSON and the `EXECUTION EVIDENCE` note, documented in [MCU.md](../cosim/MCU.md#execution-evidence)) | `undermined` | INVALID, exit 3 |
 
+An assertion's causal path is its subject: the asserted net(s), or every net a
+named `ref` touches. A `uart` assertion's subject is the MCU it reads (its
+`mcu`, or every MCU that printed when none is named), so an unmodelled part on
+any of that MCU's pins, rails, reset or clock undermines it, and an unmodelled
+part elsewhere on the board does not. Assertions with no subject at all
+(`no_faults`, model coverage) take the whole board.
+
 There is no `--strict` on `hauksbee-ci run`, deliberately: a board used outside
 its datasheet, or an unmodelled part that can move the very net under
 assertion, must not need a flag before the exit code says so.

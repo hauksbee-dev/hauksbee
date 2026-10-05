@@ -6168,6 +6168,86 @@ high_threshold_v = 1.28      # EN rising threshold max (1.21 V typ)
 implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty"]
 missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_modes", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
 
+# ── TPS62A02 / TPS62A02A (adjustable buck, SOT563) ───────────────────────────
+# TI 2 A, 2.5-5.5 V synchronous buck, DRL (SOT563-6). Source: TI SLUSEG9E
+# (December 2021, revised June 2024): Device Comparison Table 4 p.3, Pin
+# Functions Table 5-1 p.3, Absolute Maximum Ratings 6.1, Recommended Operating
+# Conditions 6.3 and Thermal Information 6.4 p.4, Electrical Characteristics 6.5
+# p.5-6, 100% duty-cycle mode 7.3.2. Only the DRL TPS62A02 (PSM/PWM) and
+# TPS62A02A (FPWM) are matched: both carry PG on pin 6. The TPS62A02N puts OUT on
+# pin 6, the DDC (SOT23-6) parts use another pin order, and the TPS62A01 is a
+# 1 A part. Olimex ESP32-EVB rev L carries it as U2 "TPS62A02ADRLR(SOT-563-6)"
+# making +3.3V from the 5 V input.
+[[models]]
+id = "tps62a02_drl"
+kind = "vreg"
+description = "TI TPS62A02/TPS62A02A 2A 5.5V synchronous buck, SOT563, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps62a02.pdf"
+title = "TI TPS62A01, TPS62A01A, TPS62A02, TPS62A02A, TPS62A02N, TPS62A02NA 2.5-V to 5.5-V, 1-A/2-A synchronous buck converters in SOT563 and SOT23-6, SLUSEG9E, December 2021, revised June 2024"
+locator = "Device Comparison Table 4 p.3; Pin Functions Table 5-1 p.3; Absolute Maximum Ratings 6.1, Recommended Operating Conditions 6.3, Thermal Information 6.4 p.4; Electrical Characteristics 6.5 p.5-6"
+sha256 = "cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.591
+high = 0.609
+unit = "V"
+kind = "specification-limits"
+basis = "TPS62A02 Electrical Characteristics, VFB in PWM mode, 591 mV min to 609 mV max over TJ -40 to 125 C"
+
+[models.match]
+value_re = '(?i)^TPS62A02A?(DRL[RT]?)?(\s*\(SOT-?563(-6)?\))?$'
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, loop stability, soft-start, power-save mode, PG and protection transients are not modeled"
+
+[models.pins]
+"1" = "gnd"
+"2" = "sw"
+"3" = "in"
+"4" = "en"
+"5" = "fb"
+"6" = "pg"     # open-drain power good; named, not modelled
+
+[models.ratings]
+max_current_a = 2.0          # Recommended Operating Conditions, IOUT TPS62A02
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN/EN/PG
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 157.3     # DRL JEDEC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI TPS62A02 SLUSEG9E, Recommended Operating Conditions 6.3, VIN 2.5 V to 5.5 V; Absolute Maximum Ratings 6.1, VIN 6.5 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.5          # top of the 0.6 V to VIN setting range; only used with no FB divider
+iout_limit_a = 2.0
+max_duty = 1.0               # 7.3.2 100% duty-cycle low-dropout operation
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.600
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.2       # VEN(R) EN rising threshold max
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "psm_modes", "power_good_output", "cycle_by_cycle_peak_limit", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
 # ── TLV61070A (adjustable boost) ─────────────────────────────────────────────
 # TI 2.5 A synchronous boost, DBV and DDC (SOT23-6; the pin tables are the same).
 # Source: TI SLVSGK6B (September 2022, revised July 2026): Pin Functions Table

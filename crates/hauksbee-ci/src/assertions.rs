@@ -429,7 +429,7 @@ fn evaluate_one(
         .flatten()
         .cloned()
         .collect();
-    let subject_refs: Vec<String> = a.reference.iter().cloned().collect();
+    let subject_refs = subject_refs_for(a, outcomes);
 
     let mut last_detail = String::new();
     let mut failures: Vec<(&RunOutcome, String, Option<String>)> = Vec::new();
@@ -1453,6 +1453,29 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
     };
     let detail = format!("{net}{when}: {} [settled {:.3}V]", v.parts(), win.last_v);
     v.finish(detail)
+}
+
+/// The component references an assertion judges. A `uart` claim is about what
+/// one MCU printed, so its subject is that MCU (the spec's `mcu`, or every MCU
+/// that produced UART output when none is named, the same streams
+/// [`check_uart`] reads). Its evidence then covers the MCU's own nets (supply,
+/// reset, clock and every pin it drives or reads) and an unmodelled part on any
+/// of them still undermines it, instead of every unrelated open part on the
+/// board doing so.
+fn subject_refs_for(a: &Assertion, outcomes: &[RunOutcome]) -> Vec<String> {
+    let mut refs: Vec<String> = a.reference.iter().cloned().collect();
+    if a.kind == "uart" {
+        let mcus: std::collections::BTreeSet<&String> = a.mcu.as_ref().map_or_else(
+            || outcomes.iter().flat_map(|out| out.uart.keys()).collect(),
+            |m| std::iter::once(m).collect(),
+        );
+        for mcu in mcus {
+            if !refs.contains(mcu) {
+                refs.push(mcu.clone());
+            }
+        }
+    }
+    refs
 }
 
 fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
@@ -2736,6 +2759,24 @@ mod tests {
             !matches("READY\n", "BOOT_OK\n"),
             "B's output never leads it"
         );
+    }
+
+    #[test]
+    fn a_uart_claim_is_about_the_mcu_that_printed_it() {
+        let mut out = RunOutcome::default();
+        out.uart.insert("U1".to_string(), "hello".to_string());
+        out.uart.insert("U7".to_string(), String::new());
+        let outcomes = [out];
+        // Unnamed: every MCU whose stream check_uart reads.
+        let any = assertion("kind = \"uart\"\ncontains = \"hello\"\n");
+        assert_eq!(subject_refs_for(&any, &outcomes), ["U1", "U7"]);
+        // Named: just that MCU.
+        let one = assertion("kind = \"uart\"\nmcu = \"U1\"\ncontains = \"hello\"\n");
+        assert_eq!(subject_refs_for(&one, &outcomes), ["U1"]);
+        // Other kinds keep only their own reference (an empty scope is the
+        // whole board, as before).
+        let faults = assertion("kind = \"no_faults\"\n");
+        assert!(subject_refs_for(&faults, &outcomes).is_empty());
     }
 
     #[test]
