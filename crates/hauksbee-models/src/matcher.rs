@@ -354,7 +354,7 @@ fn normalise_property_key(s: &str) -> String {
 /// All available metadata for a component, used as input to [`crate::ModelLibrary::resolve`].
 ///
 /// All fields are optional; the library matches against whatever is present.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct ComponentQuery {
     /// KiCad `lib_id`, e.g. `"Device:R"` or `"Device:Q_NPN_BCE"`.
     pub lib_id: Option<String>,

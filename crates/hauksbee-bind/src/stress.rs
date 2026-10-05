@@ -659,12 +659,14 @@ impl DevicesByNode {
         Self(by_node)
     }
 
-    /// The devices touching any of `nodes`, in circuit order, each once.
-    fn touching(&self, nodes: &[NodeId]) -> Vec<DeviceId> {
+    /// The devices touching any of `nodes` that `keep` accepts, in circuit
+    /// order, each once. A rail touches thousands; few are kept.
+    fn touching(&self, nodes: &[NodeId], keep: impl Fn(DeviceId) -> bool) -> Vec<DeviceId> {
         let mut ids: Vec<DeviceId> = (nodes.iter())
             .filter_map(|n| self.0.get(n))
             .flatten()
             .copied()
+            .filter(|&id| keep(id))
             .collect();
         ids.sort_unstable_by_key(|id| id.0);
         ids.dedup();
@@ -685,10 +687,12 @@ pub fn rated_paths_indexed(
     let carriers = |pins: &[String]| {
         let nodes: Option<Vec<NodeId>> = pins.iter().map(|p| roles.get(p).copied()).collect();
         let on = |n: &NodeId| nodes.iter().flatten().any(|m| m == n);
-        let touching = index.touching(nodes.as_deref().unwrap_or_default());
+        let named = |id: DeviceId| {
+            units.contains(&id) || circuit.devices[id.0 as usize].name().contains(reference)
+        };
+        let touching = index.touching(nodes.as_deref().unwrap_or_default(), named);
         let (ours, stray): (Vec<_>, Vec<_>) = (touching.into_iter())
             .map(|id| (id, &circuit.devices[id.0 as usize]))
-            .filter(|(id, d)| units.contains(id) || d.name().contains(reference))
             .partition(|(id, _)| units.contains(id));
         let bits = |d: &Device| (d.nodes().into_iter().take(3).zip(0..)).filter(|t| on(&t.0));
         let ours = (ours.into_iter()).map(|(id, d)| (id, bits(d).fold(0, |m, t| m | (1 << t.1))));

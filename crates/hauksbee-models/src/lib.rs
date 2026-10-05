@@ -387,7 +387,17 @@ pub struct ModelLibrary {
     /// input that would unlock it. Consulted ONLY on the no-model path, and it
     /// can change nothing but the disclosure text.
     unmodelled: UnmodelledTable,
+    /// Every resolution answered so far, by query. A static check resolves
+    /// each part once per check and binding once per pass, so a large board
+    /// asked the same few thousand questions over a dozen times each, a full
+    /// entry scan apiece. [`Self::resolve`] is a pure function of the query
+    /// and the loaded entries, and every method that loads entries clears this.
+    resolved: std::sync::Mutex<Option<std::collections::HashMap<ComponentQuery, Resolution>>>,
 }
+
+/// Resolutions [`ModelLibrary`] keeps before it starts over, so a long-lived
+/// session resolving many boards stays bounded.
+const RESOLVED_CAP: usize = 1 << 15;
 
 use matcher::CompiledEntry;
 
@@ -400,6 +410,7 @@ impl ModelLibrary {
             spice: Vec::new(),
             pin_rules: PinRuleTable::empty(),
             unmodelled: UnmodelledTable::empty(),
+            resolved: std::sync::Mutex::new(None),
         }
     }
 
@@ -691,12 +702,14 @@ impl ModelLibrary {
         let cards = spice_input::parse_spice_file(path)?;
         let n = cards.len();
         self.spice.extend(cards);
+        self.forget_resolutions();
         Ok(n)
     }
 
     /// Add a SPICE card directly (for testing).
     pub fn add_spice_card(&mut self, card: SpiceCard) {
         self.spice.push(card);
+        self.forget_resolutions();
     }
 
     /// Load a user SPICE model file at [`SourceLayer::Spice`], the top of the
@@ -746,6 +759,33 @@ impl ModelLibrary {
     /// are layer 40, the highest, and match by exact card name, so they are
     /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
+        let cached = |m: &Option<std::collections::HashMap<_, Resolution>>| {
+            m.as_ref().and_then(|m| m.get(q).cloned())
+        };
+        if let Some(r) = self.resolved.lock().ok().and_then(|m| cached(&m)) {
+            return r;
+        }
+        let r = self.resolve_uncached(q);
+        if let Ok(mut memo) = self.resolved.lock() {
+            let memo = memo.get_or_insert_with(std::collections::HashMap::new);
+            if memo.len() >= RESOLVED_CAP {
+                memo.clear();
+            }
+            memo.insert(q.clone(), r.clone());
+        }
+        r
+    }
+
+    /// Drop every remembered resolution: the entries they were answered from
+    /// are about to change.
+    fn forget_resolutions(&mut self) {
+        if let Ok(memo) = self.resolved.get_mut() {
+            *memo = None;
+        }
+    }
+
+    /// [`Self::resolve`] without the memo: one scan of every entry.
+    fn resolve_uncached(&self, q: &ComponentQuery) -> Resolution {
         use std::cmp::Reverse;
         // Layer 40: SPICE cards, match by card name against value and MPN.
         if let Some(card) = self.find_spice_match(q) {
@@ -928,6 +968,7 @@ impl ModelLibrary {
                 &id,
             )
             .map_err(|error| invalid(format!("invalid [models.source]: {error}")))?;
+            self.forget_resolutions();
             self.entries.push(LayeredEntry {
                 layer,
                 origin: source_name.to_string(),
