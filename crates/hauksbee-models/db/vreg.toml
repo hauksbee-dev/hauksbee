@@ -2019,6 +2019,72 @@ max_junction_temp_c = 150.0  # Absolute Maximum Ratings, junction temperature
 theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-5 (Note 2: JEDEC 51-3 board)
 theta_jc_c_per_w = 25.0      # Absolute Maximum Ratings, θJC SOT-23-5
 
+# ── TPS70918 (TI 150 mA, 30 V, 1 uA IQ LDO, fixed 1.8 V), DBV ───────────────
+# Source: TI TPS709 SBVS186H (March 2012, revised July 2021). Device
+# Nomenclature (Table 11-1): TPS709xx(x) yyy z[M3], xx = output voltage
+# ("18" = 1.8 V), yyy = package, z = reel (R/T). Table 5-1 Pin Functions gives
+# the plain TPS709 DBV map 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT; the TPS709A and
+# TPS709B DBV parts use different maps (OUT 1 / OUT 3), and DRV differs again,
+# so the match takes only TPS70918 + DBV.
+#
+# Dropout is not specified at 1.8 V: Note 3 of 6.5 says VDO is only valid for
+# VOUT >= 2.8 V because of the 2.7 V minimum input. The headroom a 1.8 V part
+# actually needs is therefore that input floor, so `dropout_v` is DERIVED as
+# VIN(min) - VOUT = 2.7 - 1.8 = 0.9 V, and the floor itself is the envelope.
+[[models]]
+id = "tps70918_dbv"
+kind = "vreg"
+description = "TI TPS70918 150mA 30V 1uA-IQ LDO, 1.8V fixed, DBV SOT-23-5 (EN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps709.pdf"
+title = "Texas Instruments TPS709 150-mA, 30-V, 1-uA IQ voltage regulators with enable, SBVS186H, March 2012, revised July 2021"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings, 6.3 Recommended Operating Conditions, 6.4 Thermal Information p.4; 6.5 Electrical Characteristics p.5; Table 11-1 Device Nomenclature p.17"
+sha256 = "8c14e3efae738a27b857b789aa87369de9037a8ef3616a9f71a423587cdc6949"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.764
+high = 1.836
+unit = "V"
+kind = "specification-limits"
+basis = "TI SBVS186H 6.5 Electrical Characteristics, DC output accuracy -2 % to +2 % for VOUT < 3.3 V, TA = -40 C to +85 C"
+
+[models.match]
+value_re = "(?i)^TPS70918DBV[RT]?(M3)?$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.7
+max_v = 30.0
+abs_max_v = 32.0
+basis = "TI SBVS186H 6.3 Recommended Operating Conditions, VIN 2.7 V to 30 V; 6.1 Absolute Maximum Ratings, VIN -0.3 V to 32 V"
+
+[models.params]
+vout       = 1.8      # nomenclature code 18; DC output accuracy +-2 % (VOUT < 3.3 V)
+dropout_v  = 0.9      # DERIVED: VIN(min) 2.7 V - 1.8 V; 6.5 Note 3, VDO undefined below VOUT = 2.8 V
+cout_min_f = 2.2e-6   # Table 5-1, OUT: "2.2-uF or greater ceramic capacitor ... to assure stability"
+iq_a       = 1.3e-6   # 6.5 IGND typ, IOUT = 0 mA, VOUT <= 3.3 V (2.05 uA max; shutdown 150 nA typ)
+
+[models.pins]
+# Table 5-1 Pin Functions, DBV column for TPS709 (not TPS709A/B).
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.15         # 150 mA rated (title, load-regulation range); I(CL) 200 mA min
+max_voltage_v = 32.0         # 6.1 Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # 6.1 Absolute Maximum Ratings, TJ (125 C operating)
+theta_ja_c_per_w = 212.1     # 6.4 Thermal Information, RθJA DBV
+theta_jc_c_per_w = 78.5      # 6.4 Thermal Information, RθJC(top) DBV
+
 # ── MIC5205-3.3 ──────────────────────────────────────────────────────────────
 # Microchip (Micrel) 150 mA low-noise LDO, SOT-23-5. 17 instances on the
 # SparkFun RedBoard.
