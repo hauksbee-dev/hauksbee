@@ -131,7 +131,7 @@ import sys, os
 sys.path.insert(0, "integrations/kicad-plugin")
 import hauksbee_ci_core as core
 run = core.run_ci(
-    os.path.abspath("crates/hauksbee-ci/examples/tarski_brownout.toml"),
+    os.path.abspath("crates/hauksbee-ci/examples/blinky.toml"),
     binary=os.path.abspath("target/release/hauksbee-ci"),
 )
 print(core.format_report(run))

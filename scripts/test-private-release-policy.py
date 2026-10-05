@@ -406,6 +406,46 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("fn real_nep_host_exposes_standard_grade_7ms_gap()", nep)
         self.assertIn("fn real_nep_host_succeeds_with_compliant_firmware()", nep)
 
+    def test_mirror_scan_finds_every_reference_to_a_withheld_fixture(self) -> None:
+        namespace = {}
+        exec((ROOT / "scripts/mirror_content.py").read_text(), namespace)
+        needles = namespace["board_fixture_needles"](
+            ["testdata/board_a.net", "board_root.board"],
+            ["*board_b*.toml"],
+            ["testdata/other.net", "crates/x/examples/board_b_spec.toml"],
+        )
+        # Full and last-two-component spellings, from the list and from a glob;
+        # a root-level file is too ambiguous as a bare name to be a needle.
+        self.assertEqual(
+            needles,
+            [
+                "crates/x/examples/board_b_spec.toml",
+                "examples/board_b_spec.toml",
+                "testdata/board_a.net",
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            (tree / "tests").mkdir()
+            (tree / "tests" / "reads.rs").write_text(
+                'fn t() {\n    read("../../testdata/board_a.net");\n}\n'
+            )
+            (tree / "README.md").write_text("see crates/x/examples/board_b_spec.toml\n")
+            # Legitimate neighbours: a longer name, an in-memory entry, binary.
+            (tree / "ok.rs").write_text('zip("export/board_a.net.bak"); read("testdata/other.net");\n')
+            (tree / "blob.bin").write_bytes(b"\0testdata/board_a.net")
+            (tree / ".git").mkdir()
+            (tree / ".git" / "cfg").write_text("testdata/board_a.net\n")
+            self.assertEqual(
+                namespace["board_fixture_references"](tree, needles),
+                [
+                    "README.md:1: crates/x/examples/board_b_spec.toml",
+                    "tests/reads.rs:2: testdata/board_a.net",
+                ],
+            )
+        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
+        self.assertIn("board_fixture_references", builder)
+
     def test_mirror_content_preserves_public_bytes(self) -> None:
         namespace = {}
         exec((ROOT / "scripts/mirror_content.py").read_text(), namespace)
