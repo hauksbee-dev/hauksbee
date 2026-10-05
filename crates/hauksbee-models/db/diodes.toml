@@ -2702,3 +2702,79 @@ max = 0.125
 unit = "A"
 conditions = "double diode loaded; no temperature printed, read at Tamb = 25 °C"
 basis = "Nexperia BAV99 product data sheet v.9 (1 July 2022), Table 5 Limiting values, per diode, IF, double diode loaded"
+
+# ── LM4040 3.0 V shunt reference, DBZ (SOT-23-3) ─────────────────────────────
+# A FIXED two-terminal shunt reference has no REF pin and no board divider, so
+# it is not the TL431 shunt-reference stamp (db/vreg.toml), which needs one.
+# Electrically it is a precision Zener and is carried the way the 1N47xxA
+# Zeners above are: a diode whose reverse breakdown `bv` at the test current
+# `ibv` is the datasheet's reverse breakdown voltage VZ at IZ.
+#
+# "LM4040DBZ-3" is the KiCad Reference_Voltage symbol name for TI's 3.0 V
+# LM4040 in DBZ, and it names no accuracy grade, so `bv` is the 3.0 V nominal
+# every grade shares and the D-grade +-30 mV (the widest at 25 C) is carried
+# as the interval. Source: TI LM4040A/B/C/D SLOS456Q (January 2005, revised
+# April 2026).
+#
+# Not modelled: the minimum cathode current for regulation (IZ,min 45 uA typ,
+# 77 uA max at 25 C; below it the part does not hold VZ, while the diode knee
+# keeps conducting smoothly), the dynamic impedance ZZ (0.4 ohm typ at 1 mA,
+# carried by nothing here), temperature drift, noise and the forward
+# behaviour: the sheet gives no forward characteristic, so the forward
+# parameters are the binder defaults and anyone who forward-biases this part
+# gets no evidence from this card about what happens.
+[[models]]
+id = "lm4040_30_dbz"
+kind = "diode"
+description = "TI LM4040 3.0 V precision micropower shunt reference (grade unspecified), DBZ SOT-23-3"
+
+[models.match]
+# The KiCad symbol name with or without a trailing " VREF" note, and the
+# 3.0 V spellings "-3.0" / "-30". Only the 3.0 V code: LM4040 also ships
+# 2.048, 2.5, 4.096, 5, 8.192 and 10 V parts.
+value_re = "(?i)^LM4040DBZ-3(\\.0|0)?( VREF)?$"
+# The DBZ three-pad outline; the trailing `$` keeps it off five-pad SOT-23-5.
+footprint_re = "(?ix)(SOT-?23|SC-?59|TO-?236)([-_]?3)?(_HandSolder\\w*)?$"
+
+[models.params]
+bv  = 3.0       # VZ typ at IZ = 100 uA, 6.11/6.12 Electrical Characteristics (all grades)
+ibv = 1.0e-4    # the IZ at which VZ and its tolerance are specified
+
+[models.pins]
+# Table 5-1 Pin Functions, DBZ column: CATHODE 1, ANODE 2, pin 3 "*" (must
+# float or connect to the anode).
+"1" = "cathode"
+"2" = "anode"
+"3" = "nc"
+
+[models.ratings]
+max_junction_temp_c = 150.0  # 6.1 Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 206.0     # 6.4 Thermal Information, RθJA DBZ
+# The cathode-current window (IZ,min to 15 mA recommended, -10 mA to 25 mA
+# absolute) is recorded here only: the diode ratings score FORWARD current,
+# and a reverse 15 mA scored as forward would be the wrong check.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm4040.pdf"
+title = "Texas Instruments LM4040 precision micropower shunt voltage reference, SLOS456Q, January 2005, revised April 2026"
+locator = "Figure 5-1 and Table 5-1 Pin Functions p.4; 6.1 Absolute Maximum Ratings, 6.3 Recommended Operating Conditions, 6.4 Thermal Information p.5; 6.11 LM4040A30I/B30I p.12 and 6.12 LM4040C30I/D30I p.13 Electrical Characteristics"
+sha256 = "f43b6b6d3ecd51c8c90b70a7c4630c7e3140822b0073953ed2459df81b251c1c"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "bv"
+low = 2.970
+high = 3.030
+unit = "V"
+kind = "specification-limits"
+basis = "TI SLOS456Q 6.12, LM4040D30I reverse breakdown voltage tolerance -30 to +30 mV at 25 C, IZ = 100 uA; the A, B and C grades are strictly inside this"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 206.0
+unit = "°C/W"
+conditions = "DBZ (SOT-23-3) package"
+package = "SOT-23-3"
+basis = "TI LM4040 SLOS456Q, 6.4 Thermal Information, RθJA, DBZ"
