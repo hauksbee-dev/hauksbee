@@ -518,6 +518,140 @@ fn ampacity_message(f: &TraceCurrentFinding, dt_c: f64) -> (SiSeverity, String) 
     )
 }
 
+/// A converter pin role that names the switch node itself.
+fn is_switch_role(role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    matches!(r.as_str(), "lx" | "ph" | "phase")
+        || r.strip_prefix("sw")
+            .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The output rail behind a switch node: the far net of a fitted inductor on
+/// it, with its bottleneck width (infinite when poured). `None` when there is
+/// no such inductor or the rail has no copper, so there is nothing to compare.
+fn output_rail_width(
+    board: &ExtractedBoard,
+    sw: i64,
+    by_name: &HashMap<&str, &hauksbee_extract::NetCopper>,
+    audit: &TraceAudit,
+) -> Option<(String, f64)> {
+    board
+        .components
+        .iter()
+        .filter(|c| AssemblyState::of(c).is_present() && hauksbee_extract::is_plain_inductor(c))
+        .filter(|c| c.pins.iter().any(|p| p.net == Some(sw)))
+        .filter_map(|c| c.pins.iter().find_map(|p| p.net.filter(|&n| n != sw)))
+        .filter_map(|id| board.net(id))
+        .filter_map(|rail| {
+            let nc = by_name.get(rail.name.as_str())?;
+            let width = match nc.kind {
+                hauksbee_extract::CopperKind::Poured => f64::INFINITY,
+                hauksbee_extract::CopperKind::Traces => audit.bottleneck(nc)?.width_mm,
+                hauksbee_extract::CopperKind::None => return None,
+            };
+            Some((rail.name.clone(), width))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// A buck converter's switch node routed on a trace rated for less than half
+/// the converter's rated output current, and narrower than its own output
+/// rail.
+///
+/// The switch node of a buck carries the full inductor current while the
+/// switch is on, so at the converter's rated load it carries that load plus the
+/// ripple peak. This is a design-rule finding, not an overstress claim: the
+/// rated output current is what the converter is built to deliver, not proof of
+/// what the board draws, so the trace is judged against half of it and the
+/// finding is a warning. A poured switch node is out of reach and skipped. With
+/// no declared copper weight the trace is rated as 2 oz, so an assumed weight
+/// can only suppress the finding, never create it. A board that routes its
+/// whole power path at one width (switch node and output rail alike) made a
+/// board-wide sizing choice the rated current cannot prove wrong, so the
+/// finding needs the switch node to be the odd one out: narrower than the
+/// output rail on the far side of the inductor.
+fn switch_node_findings(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    copper: &[hauksbee_extract::NetCopper],
+    audit: &TraceAudit,
+) -> Vec<SiFinding> {
+    let by_name: HashMap<&str, &hauksbee_extract::NetCopper> =
+        copper.iter().map(|nc| (nc.name.as_str(), nc)).collect();
+    let mut out = Vec::new();
+    for (comp, model) in super::resolved_components(board, lib) {
+        let Some(conv) = model.behavioral.converter.as_ref() else {
+            continue;
+        };
+        let rated = conv.iout_limit_a.or(model.ratings.max_current_a);
+        let (Some(rated), true, true) = (
+            rated.filter(|a| a.is_finite() && *a > 0.0),
+            conv.topology == hauksbee_models::behavioral::Topology::Buck,
+            is_switch_role(&conv.out_pin),
+        ) else {
+            continue;
+        };
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let Some(net) = pin_net_for_role(part, &model, &conv.out_pin).and_then(|id| board.net(id))
+        else {
+            continue;
+        };
+        let Some(nc) = by_name
+            .get(net.name.as_str())
+            .filter(|nc| nc.kind == hauksbee_extract::CopperKind::Traces)
+        else {
+            continue;
+        };
+        let Some(b) = audit.bottleneck(nc) else {
+            continue;
+        };
+        let (oz, basis) = if b.copper_source.is_assumed() {
+            (2.0, "2 oz, the copper weight was not declared".to_string())
+        } else {
+            (b.oz, hauksbee_extract::trace_current::describe_oz(b.oz))
+        };
+        let ampacity = hauksbee_extract::ipc2221_ampacity(b.width_mm, oz, audit.dt_c, b.external);
+        if ampacity <= 0.0 || ampacity * 2.0 >= rated {
+            continue;
+        }
+        let Some(rail) = output_rail_width(board, net.id, &by_name, audit) else {
+            continue;
+        };
+        if b.width_mm >= rail.1 {
+            continue;
+        }
+        let rail_text = if rail.1.is_finite() {
+            format!("{:.2} mm", rail.1)
+        } else {
+            "a pour".to_string()
+        };
+        out.push(SiFinding {
+            check: SiCheck::TraceAmpacity,
+            severity: SiSeverity::Medium,
+            message: format!(
+                "switch node '{}' of {} ({}, a {rated:.1} A buck) is routed at {:.2} mm, which \
+                 IPC-2221 rates at {ampacity:.2} A ({basis}, {:.0} C rise), under half the \
+                 converter's rated output current, while its output rail '{}' is routed at \
+                 {rail_text}. The switch node carries the full inductor current while the \
+                 switch is on, so it is the narrowest point of the power path; it needs >= \
+                 {:.2} mm for {rated:.1} A.",
+                net.name,
+                comp.reference,
+                model.id,
+                b.width_mm,
+                audit.dt_c,
+                rail.0,
+                hauksbee_extract::ipc2221_min_width_mm(rated, oz, audit.dt_c, b.external),
+            ),
+            refs: vec![comp.reference.clone()],
+            nets: vec![net.name.clone()],
+        });
+    }
+    out
+}
+
 /// Run the trace-ampacity check and append its findings (and an info note) to an
 /// SI report.
 ///
@@ -536,6 +670,12 @@ pub fn append_ampacity(
     if copper.is_empty() {
         return;
     }
+    report.findings.extend(switch_node_findings(
+        board,
+        lib,
+        &copper,
+        &TraceAudit::from_pcb_text(text),
+    ));
     let Attributions {
         cited,
         undetermined,
@@ -1147,6 +1287,91 @@ sense_full_scale_v = 0.05
             assert!((*current - 0.1).abs() < 1e-12, "{rail}: {current}");
             assert!(citation.contains("R3") && citation.contains("10000"));
         }
+    }
+
+    #[test]
+    fn a_buck_switch_node_on_a_thin_trace_is_a_warning() {
+        let toml_src = r#"
+[[models]]
+id = "test_buck"
+kind = "vreg"
+description = "test 3 A buck"
+
+[models.match]
+value_re = "(?i)^TESTBUCK$"
+
+[models.pins]
+"1" = "in"
+"2" = "sw"
+"3" = "gnd"
+"4" = "fb"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0
+iout_limit_a = 3.0
+"#;
+        let lib = lib_from("switch_node", toml_src);
+        let board = board(
+            "buck",
+            &[(1, "+12V"), (2, "SWN"), (3, "GND"), (4, "+5V")],
+            vec![
+                comp(
+                    "U1",
+                    "TESTBUCK",
+                    "",
+                    &[("1", 1), ("2", 2), ("3", 3), ("4", 4)],
+                ),
+                comp(
+                    "L1",
+                    "10uH",
+                    "Inductor_SMD:L_Bourns_SRR1260",
+                    &[("1", 2), ("2", 4)],
+                ),
+            ],
+        );
+        let segment = |width: f64, net: &str| {
+            format!(
+                "(segment (start 0 0) (end 5 0) (width {width}) (layer \"F.Cu\") (net \"{net}\"))"
+            )
+        };
+        let pcb = |sw: f64, rail: f64| {
+            format!(
+                "(kicad_pcb {} {})",
+                segment(sw, "SWN"),
+                segment(rail, "+5V")
+            )
+        };
+        let run = |text: &str| {
+            let copper = net_copper_from_text(text);
+            switch_node_findings(&board, &lib, &copper, &TraceAudit::from_pcb_text(text))
+        };
+        // A name-only net reference (KiCad 10 has no net table) still resolves.
+        let thin = run(&pcb(0.2, 1.0));
+        assert_eq!(thin.len(), 1, "{thin:?}");
+        assert_eq!(thin[0].severity, SiSeverity::Medium);
+        assert!(thin[0].message.contains("2 oz"), "{}", thin[0].message);
+        assert!(run(&pcb(2.0, 2.0)).is_empty(), "a wide switch node is fine");
+        assert!(
+            run(&pcb(0.2, 0.2)).is_empty(),
+            "a power path routed at one width throughout is a board-wide choice"
+        );
+        assert!(
+            run(&format!("(kicad_pcb {})", segment(0.2, "SWN"))).is_empty(),
+            "an unrouted output rail gives nothing to compare against"
+        );
+        let poured = format!(
+            "(kicad_pcb {} {} \
+             (zone (net \"SWN\") (layers \"F.Cu\") (filled_polygon (layer \"F.Cu\") (pts (xy 0 0) (xy 1 0) (xy 1 1)))))",
+            segment(0.2, "SWN"),
+            segment(1.0, "+5V")
+        );
+        assert!(
+            run(&poured).is_empty(),
+            "a poured switch node is out of reach"
+        );
     }
 
     /// A fixed LDO's current rating is a capability, never a cited load.

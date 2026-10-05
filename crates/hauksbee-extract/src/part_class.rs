@@ -160,6 +160,16 @@ pub fn is_plain_resistor(c: &Component) -> bool {
     classify_two_terminal(c).is_resistor()
 }
 
+/// Public rung-ladder answer to "is this record a two-terminal inductor?",
+/// on the same ladder as [`is_plain_resistor`]. A ferrite bead is not one.
+#[must_use]
+pub fn is_plain_inductor(c: &Component) -> bool {
+    matches!(
+        classify_two_terminal(c),
+        PartClass::Passive(PassiveClass::Inductor)
+    )
+}
+
 /// Classify one component record against the ladder in the module doc.
 pub fn classify_two_terminal(c: &Component) -> PartClass {
     // Rung 1: terminal count.
