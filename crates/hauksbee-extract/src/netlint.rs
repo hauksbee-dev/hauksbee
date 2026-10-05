@@ -8,7 +8,8 @@
 //! Design priority is **low false-positive rate**. Every check is conservative:
 //! it fires only when the structural evidence is unambiguous, and it carries the
 //! exact nets / refs / pins so a finding can be chased to the source. Decoupling
-//! absence is deliberately NOT a check (too noisy to be useful).
+//! is not judged here per IC (too noisy); the engine layer's
+//! `rail_decoupling` check reports it as a per-rail ratio note.
 //!
 //! Works on any extraction path. Pin-function-aware checks (control-pin
 //! floating) need `Pin.function` populated, which the KiCad netlist, newer
@@ -126,6 +127,12 @@ pub enum LintCheck {
     /// sources fight, so the rail's voltage and the input currents upstream
     /// of it mean nothing. Produced by the engine-layer `rail_conflicts` check.
     RailConflict,
+    /// A supply rail whose ICs are short of local decoupling: far fewer
+    /// capacitors to ground on the rail than ICs drawing from it, or no bulk
+    /// (>= 1 uF) capacitor on a rail feeding several ICs. A netlist carries no
+    /// placement, so this is a ratio, never a proximity claim; it is a
+    /// non-gating note. Produced by the engine-layer `rail_decoupling` check.
+    MissingDecoupling,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -150,7 +157,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -170,6 +177,7 @@ impl LintCheck {
         Self::UnroutedPad,
         Self::PcbSchematicMismatch,
         Self::RailConflict,
+        Self::MissingDecoupling,
     ];
 
     #[must_use]
@@ -194,6 +202,7 @@ impl LintCheck {
             Self::UnroutedPad => "unrouted_pad",
             Self::PcbSchematicMismatch => "pcb_schematic_mismatch",
             Self::RailConflict => "rail_conflict",
+            Self::MissingDecoupling => "missing_decoupling",
         }
     }
 }
@@ -465,13 +474,15 @@ fn is_led(c: &Component) -> bool {
 }
 
 /// True if the component looks like a bare connector / header / test point /
-/// mounting hole - things whose pins legitimately dangle or break a bus out to
-/// an external module that carries its own terminations.
+/// mounting hole.
 ///
-/// Checks the reference prefix, the library/symbol id, AND the footprint /
-/// package name, because boards label headers with non-obvious refs (Adafruit's
-/// Arduino headers are `IOH`/`IOL`/`AD`/`POWER`, Eagle package `1X10`).
-fn is_connector_like(c: &Component) -> bool {
+/// These are things whose pins legitimately dangle or break a bus out to an
+/// external module that carries its own terminations. Checks the reference
+/// prefix, the library/symbol id, AND the footprint / package name, because
+/// boards label headers with non-obvious refs (Adafruit's Arduino headers are
+/// `IOH`/`IOL`/`AD`/`POWER`, Eagle package `1X10`).
+#[must_use]
+pub fn is_connector_like(c: &Component) -> bool {
     // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector, even
     // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
     // that `is_pin_array_package` reads as a pin array. Without this a resistor-
@@ -599,10 +610,12 @@ fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
     board.net_members(net_id)
 }
 
-/// Is this component a decoupling / bulk capacitor, the kind used as a crystal
-/// load cap and the kind whose presence to ground makes a net read as a local
-/// supply rail? Delegates to the same evidence ladder as [`is_resistor`], so the
-/// capacitor and resistor questions stay consistent about any one part.
+/// Is this component a capacitor (decoupling, bulk or crystal load)?
+///
+/// Its presence to ground makes a net read as a local supply rail. Delegates
+/// to the same evidence ladder as [`is_resistor`], so the capacitor and
+/// resistor questions stay consistent about any one part.
+#[must_use]
 pub fn is_capacitor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_capacitor()
 }
@@ -844,6 +857,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
 /// KiCad emits one placeholder net per deliberately-unconnected pad, named
 /// `unconnected-(REF-PIN-PadN)`. A pin on such a net is an explicit no-connect,
 /// never a fault.
+#[must_use]
 pub fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }

@@ -45,6 +45,9 @@
 //! - [`rail_conflicts`]: a rail more than one source sets the voltage of
 //!   (two regulators tied, differently named rails joined), from the binder's
 //!   rail-ownership pass.
+//! - [`rail_decoupling`]: a supply rail with far fewer capacitors to ground
+//!   than ICs drawing from it, or no bulk capacitor on a busy rail (a count,
+//!   reported as a non-gating note).
 
 pub mod ampacity;
 pub mod analog_inputs;
@@ -59,6 +62,7 @@ pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
 pub mod rail_conflicts;
+pub mod rail_decoupling;
 pub mod ripple;
 pub mod straps;
 #[cfg(test)]
@@ -139,6 +143,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(rail_conflicts::rail_conflict_lint(board, lib).findings);
+    report
+        .findings
+        .extend(rail_decoupling::decoupling_lint(board, lib).findings);
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.

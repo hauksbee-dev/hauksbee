@@ -2796,6 +2796,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::RailConflict => {
             "Leave one source on the rail: unfit the extra regulator or jumper, or split the rail so each source feeds its own net."
         }
+        LintCheck::MissingDecoupling => {
+            "Add ~100 nF from the rail to ground at each IC's supply pin, plus a bulk capacitor (several uF) on the rail."
+        }
         LintCheck::I2cBusLoading => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
         }

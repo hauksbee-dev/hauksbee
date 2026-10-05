@@ -1178,6 +1178,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A regulator output holds its rail at a fixed voltage. Tie two of them together, or join two differently named rails through a jumper, ferrite or sense resistor, and they fight: current flows between them according to tiny internal differences, one may back-drive the other, and the rail's real voltage and load are not what either part assumes.".to_string(),
                 "Leave one source on the rail: remove or leave unfitted the extra regulator or jumper, or split the rail so each source feeds its own net.".to_string(),
             ),
+            LintCheck::MissingDecoupling => (
+                format!("The supply rail \"{net}\" looks short of decoupling capacitors. {}", f.message),
+                "Every chip pulls its supply current in short bursts each time it switches, faster than the regulator can respond. A small capacitor (about 100 nF) beside each chip's supply pin supplies those bursts, and a larger bulk capacitor (microfarads) on the rail refills them. With too few, the rail bounces on every edge: logic can double-clock and comparators chatter, and it looks like a firmware fault. The design files do not say where parts sit, so this is a count of capacitors against chips, not a layout check.".to_string(),
+                format!("Add about 100 nF from \"{net}\" to ground at each chip's supply pin, plus a bulk capacitor (for example 10 uF) where the rail enters the board or section."),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
