@@ -19,7 +19,12 @@ pub fn emit_selected(
     run_inputs: &RunInputs,
     artifacts: &mut RunArtifacts,
 ) -> anyhow::Result<bool> {
-    let board = &run_inputs.board;
+    // The as-built board when --asbuilt was given: static checks judge the
+    // board on the bench, not the design it was reworked from.
+    let board = artifacts
+        .asbuilt_board
+        .as_ref()
+        .unwrap_or(&run_inputs.board);
     let text = &run_inputs.text;
     let raw = &run_inputs.raw;
     let input_kind = run_inputs.input_kind;

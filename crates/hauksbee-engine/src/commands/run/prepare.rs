@@ -33,6 +33,9 @@ pub struct RunInputs {
 
 pub struct RunArtifacts {
     pub(crate) prebound: Option<BoundBoard>,
+    /// The design board with the as-built overlay's static-representable
+    /// entries applied, for the static checks; `None` without `--asbuilt`.
+    pub(crate) asbuilt_board: Option<ExtractedBoard>,
     pub(crate) schematic_ties: Option<SchematicTies>,
     pub(crate) ci_findings: Option<Vec<JsonFinding>>,
 }
@@ -449,10 +452,14 @@ pub fn prepare_run_inputs(
     // does not describe this board is a hard error everywhere. The bound board
     // it produced is reused by the circuit-reading branches below (--ac,
     // --list-nets, co-sim, --serve).
-    let prebound = if let Some(asbuilt_path) = &cfg.asbuilt {
+    let (prebound, asbuilt_board) = if let Some(asbuilt_path) = &cfg.asbuilt {
         let overlay = crate::asbuilt::AsBuiltOverlay::load(asbuilt_path)?;
         let mut b = bind_board(&board, &lib);
         let overlay_report = overlay.apply(&mut b)?;
+        // The same overlay on the extraction, so the static checks (lint,
+        // envelope, bind, SI...) judge the reworked board too.
+        let mut static_board = board.clone();
+        let static_report = overlay.apply_to_board(&mut static_board)?;
         // Under --json stdout must stay one machine document, so the applied
         // narration is suppressed there (the validation above still ran).
         if !quiet && !cfg.json {
@@ -460,14 +467,19 @@ pub fn prepare_run_inputs(
             for line in &overlay_report.lines {
                 println!("  {line}");
             }
+            println!("static checks read the as-built board:");
+            for line in &static_report.lines {
+                println!("  {line}");
+            }
             println!(
-                "  note: the copper/netlist checks read the DESIGN files; the overlay is \
-                 applied to the simulated circuit (co-sim, --ac, --serve)."
+                "  note: the copper (DRC) checks read the DESIGN files; the overlay is \
+                 applied to the simulated circuit (co-sim, --ac, --serve) and to the \
+                 connectivity/model checks."
             );
         }
-        Some(b)
+        (Some(b), Some(static_board))
     } else {
-        None
+        (None, None)
     };
 
     // The companion Eagle `.sch`, if the user named one or one sits beside the
@@ -578,6 +590,7 @@ pub fn prepare_run_inputs(
         },
         RunArtifacts {
             prebound,
+            asbuilt_board,
             schematic_ties,
             ci_findings,
         },

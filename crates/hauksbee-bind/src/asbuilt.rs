@@ -50,7 +50,9 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Spanned;
 
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::{Device, NodeId};
+use hauksbee_models::value::parse_value;
 
 use crate::binder::BoundBoard;
 
@@ -822,6 +824,207 @@ impl AsBuiltOverlay {
     }
 }
 
+/// The overlay entries a static check can represent on an [`ExtractedBoard`]:
+/// fitted resistor/capacitor values, bodge-wire net merges and wired-on parts.
+/// The rest (switch trip points, cut/lifted transistor terminals) are circuit
+/// behaviour only the simulated board carries.
+impl AsBuiltOverlay {
+    /// Apply the static-representable entries to `board`, in the same order as
+    /// [`apply`](Self::apply) (replace, jumper, fit), so the static checks judge
+    /// the reworked board and not the design. [`apply`](Self::apply) is the
+    /// authority on whether the overlay describes the board and fails loudly;
+    /// this mirrors it onto the extraction, leaving a line in the report for
+    /// each entry it cannot represent.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first `[[jumper]]` or `[[fit]]` entry that names a net the
+    /// board lacks, joins a net to itself, reuses a part reference, or lacks
+    /// exactly one of `ohms`/`farads`.
+    pub fn apply_to_board(
+        &self,
+        board: &mut ExtractedBoard,
+    ) -> Result<AsBuiltReport, AsBuiltError> {
+        let mut report = AsBuiltReport::default();
+        for rep in &self.doc.replaces {
+            Self::replace_on_board(rep, board, &mut report);
+        }
+        for cut in &self.doc.cuts {
+            report.lines.push(format!(
+                "cut {}: not represented in static checks (simulated circuit only)",
+                cut.net_glob.get_ref()
+            ));
+        }
+        for lift in &self.doc.lifts {
+            report.lines.push(format!(
+                "lift {}: not represented in static checks (simulated circuit only)",
+                lift.reference.get_ref()
+            ));
+        }
+        for jumper in &self.doc.jumpers {
+            self.jumper_on_board(jumper, board, &mut report)?;
+        }
+        for fit in &self.doc.fits {
+            self.fit_on_board(fit, board, &mut report)?;
+        }
+        Ok(report)
+    }
+
+    fn replace_on_board(rep: &Replace, board: &mut ExtractedBoard, report: &mut AsBuiltReport) {
+        let reference = rep.reference.get_ref().as_str();
+        let value = rep.set.ohms.or(rep.set.farads);
+        let Some(value) = value else {
+            report.lines.push(format!(
+                "replace {reference}: {} not represented in static checks (simulated circuit only)",
+                describe_set(&rep.set)
+            ));
+            return;
+        };
+        let was = rep.was.as_ref().and_then(|w| w.ohms.or(w.farads));
+        let near = |actual: f64, expected: f64| (actual - expected).abs() < 0.01 * expected.abs();
+        let hits: Vec<usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.reference.contains(reference))
+            .filter(|(_, c)| {
+                let current = parse_value(&c.value).map(|p| p.si);
+                was.is_none_or(|w| current.is_some_and(|cur| near(cur, w)))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        // The simulated board is the authority on what the entry hits; a static
+        // board that disagrees on the count is left as designed, and says so.
+        let expected = rep.expect_matches.unwrap_or(1);
+        if hits.len() != expected {
+            report.lines.push(format!(
+                "replace {reference}: matched {} static part(s), expected {expected}; left as designed",
+                hits.len()
+            ));
+            return;
+        }
+        for &i in &hits {
+            board.components[i].value = format!("{value}");
+        }
+        report.lines.push(format!(
+            "replace {reference}: {} part(s) set {}",
+            hits.len(),
+            describe_set(&rep.set)
+        ));
+    }
+
+    fn net_id_on_board(
+        &self,
+        board: &ExtractedBoard,
+        net: &Spanned<String>,
+        what: &'static str,
+    ) -> Result<i64, AsBuiltError> {
+        let name = net.get_ref().as_str();
+        board
+            .nets
+            .iter()
+            .find(|n| n.name == name)
+            .map(|n| n.id)
+            .ok_or_else(|| {
+                let known: Vec<String> = board.nets.iter().map(|n| n.name.clone()).collect();
+                AsBuiltError::UnknownNet {
+                    origin: self.origin.clone(),
+                    line: self.line_of(net),
+                    what,
+                    pattern: name.to_string(),
+                    suggestions: near_matches(name, &known, 3),
+                }
+            })
+    }
+
+    fn jumper_on_board(
+        &self,
+        jumper: &Jumper,
+        board: &mut ExtractedBoard,
+        report: &mut AsBuiltReport,
+    ) -> Result<(), AsBuiltError> {
+        let from = self.net_id_on_board(board, &jumper.from, "[[jumper]] from")?;
+        let to = self.net_id_on_board(board, &jumper.to, "[[jumper]] to")?;
+        if from == to {
+            return Err(AsBuiltError::JumperSelf {
+                origin: self.origin.clone(),
+                line: self.line_of(&jumper.to),
+                net: jumper.to.get_ref().clone(),
+            });
+        }
+        for pin in board.components.iter_mut().flat_map(|c| &mut c.pins) {
+            if pin.net == Some(to) {
+                pin.net = Some(from);
+            }
+        }
+        board.nets.retain(|n| n.id != to);
+        report.lines.push(format!(
+            "jumper {} -> {}: nets merged",
+            jumper.to.get_ref(),
+            jumper.from.get_ref()
+        ));
+        Ok(())
+    }
+
+    fn fit_on_board(
+        &self,
+        fit: &Fit,
+        board: &mut ExtractedBoard,
+        report: &mut AsBuiltReport,
+    ) -> Result<(), AsBuiltError> {
+        let reference = fit.reference.get_ref().as_str();
+        let line = self.line_of(&fit.reference);
+        let origin = self.origin.clone();
+        if board.components.iter().any(|c| c.reference == reference) {
+            return Err(AsBuiltError::FitRefCollision {
+                origin,
+                line,
+                reference: reference.to_string(),
+            });
+        }
+        let a = self.net_id_on_board(board, &fit.from, "[[fit]] from")?;
+        let b = self.net_id_on_board(board, &fit.to, "[[fit]] to")?;
+        if a == b {
+            return Err(AsBuiltError::FitSelf {
+                origin,
+                line: self.line_of(&fit.to),
+                net: fit.to.get_ref().clone(),
+            });
+        }
+        let (lib_id, value) = match (fit.ohms, fit.farads) {
+            (Some(ohms), None) => ("Device:R", ohms),
+            (None, Some(farads)) => ("Device:C", farads),
+            _ => {
+                return Err(AsBuiltError::FitValue {
+                    origin,
+                    line,
+                    reference: reference.to_string(),
+                })
+            }
+        };
+        let pin = |number: &str, net: i64| Pin {
+            number: number.to_string(),
+            net: Some(net),
+            function: String::new(),
+            kind: "passive".to_string(),
+            position: None,
+        };
+        board.components.push(Component {
+            reference: reference.to_string(),
+            value: format!("{value}"),
+            lib_id: lib_id.to_string(),
+            pins: vec![pin("1", a), pin("2", b)],
+            ..Component::default()
+        });
+        report.lines.push(format!(
+            "fit {reference}: {value} between {} and {}",
+            fit.from.get_ref(),
+            fit.to.get_ref()
+        ));
+        Ok(())
+    }
+}
+
 const fn variant_name(dev: &Device) -> &'static str {
     match dev {
         Device::Resistor { .. } => "resistor",
@@ -1137,5 +1340,86 @@ mod tests {
             d.drivers["y0"].net, bus,
             "digital output driver net remapped"
         );
+    }
+
+    fn static_part(reference: &str, value: &str, nets: [i64; 2]) -> Component {
+        let pin = |number: &str, net: i64| Pin {
+            number: number.to_string(),
+            net: Some(net),
+            function: String::new(),
+            kind: "passive".to_string(),
+            position: None,
+        };
+        Component {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            lib_id: "Device:R".to_string(),
+            pins: vec![pin("1", nets[0]), pin("2", nets[1])],
+            ..Component::default()
+        }
+    }
+
+    #[test]
+    fn overlay_applies_replace_jumper_and_fit_to_the_static_board() {
+        let net = |id, name: &str| hauksbee_extract::Net {
+            id,
+            name: name.to_string(),
+        };
+        let mut board = ExtractedBoard {
+            name: "static".into(),
+            nets: vec![net(1, "A"), net(2, "B"), net(3, "C")],
+            components: vec![
+                static_part("R1", "1k", [1, 2]),
+                static_part("R2", "10k", [2, 3]),
+            ],
+        };
+        let overlay = AsBuiltOverlay::parse(
+            r#"
+[[replace]]
+ref = "R1"
+was = { ohms = 1000.0 }
+set = { ohms = 0.001 }
+[[replace]]
+ref = "NEURON_SWITCH1"
+set = { von = 3.6, voff = 3.4 }
+[[jumper]]
+from = "A"
+to = "C"
+[[fit]]
+ref = "R_fit"
+from = "A"
+to = "B"
+ohms = 4700.0
+"#,
+            "unit",
+        )
+        .unwrap();
+        let report = overlay.apply_to_board(&mut board).unwrap();
+        assert_eq!(board.components[0].value, "0.001");
+        assert_eq!(board.components[1].pins[1].net, Some(1), "C merged onto A");
+        assert!(board.nets.iter().all(|n| n.name != "C"));
+        let fitted = board.components.last().unwrap();
+        assert_eq!(
+            (fitted.reference.as_str(), fitted.value.as_str()),
+            ("R_fit", "4700")
+        );
+        assert!(report
+            .lines
+            .iter()
+            .any(|l| l.contains("NEURON_SWITCH1") && l.contains("not represented")));
+        // A `was` that disagrees with the board leaves the part as designed.
+        let mut other = board.clone();
+        other.components[1].value = "10k".into();
+        let stale = AsBuiltOverlay::parse(
+            "[[replace]]\nref = \"R2\"\nwas = { ohms = 1.0 }\nset = { ohms = 5.0 }\n",
+            "unit",
+        )
+        .unwrap();
+        stale.apply_to_board(&mut other).unwrap();
+        assert_eq!(other.components[1].value, "10k");
+        // A jumper onto a net the board lacks is a hard error.
+        let bad =
+            AsBuiltOverlay::parse("[[jumper]]\nfrom = \"A\"\nto = \"NOPE\"\n", "unit").unwrap();
+        assert!(bad.apply_to_board(&mut other).is_err());
     }
 }
