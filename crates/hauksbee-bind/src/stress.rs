@@ -1249,6 +1249,23 @@ impl StressMonitor {
         &self.temp_by_ref
     }
 
+    /// Judge one solved DC operating point as a steady state: the same
+    /// ratings, derating and package pooling as [`Self::evaluate`], with the
+    /// operating point held for the sustain window so a continuous rating can
+    /// trip. A board resting in this state for any length of time is exactly
+    /// the sustained case the window exists to recognise.
+    pub fn evaluate_steady(
+        &mut self,
+        circuit: &mut Circuit,
+        node_v: &dyn Fn(NodeId) -> f64,
+        branch_current: &dyn Fn(DeviceId) -> Option<f64>,
+    ) -> Vec<FaultEvent> {
+        self.clear_chunk_energy();
+        (0..SUSTAIN_CHUNKS)
+            .flat_map(|_| self.evaluate(circuit, node_v, branch_current, 0.0))
+            .collect()
+    }
+
     /// Evaluate every monitored device for the chunk just solved.
     ///
     /// `node_v(node)` returns the node voltage; `branch_current(id)` returns the
@@ -1674,14 +1691,9 @@ fn operating_point(
             // Temperature-corrected saturation current, consistent with the
             // temp-corrected Vt above and with the solver's stamp (which pairs
             // `is_at(t)` with the temp-corrected thermal voltage).
-            let is = model.is_at(circuit.temp_c);
             let vbe = sign * (node_v(*b) - node_v(*e));
             let vbc = sign * (node_v(*b) - node_v(*c));
-            let ex = |v: f64, n: f64| ((v / (n * vt)).clamp(-100.0, 200.0)).exp();
-            let cf = is * (ex(vbe, model.nf) - 1.0);
-            let cr = is * (ex(vbc, model.nr) - 1.0);
-            let ic = (cf - cr) - cr / model.br;
-            let ib = cf / model.bf + cr / model.br;
+            let (ic, ib) = bjt_terminal_currents(model, vbe, vbc, vt, circuit.temp_c);
             let vce = node_v(*c) - node_v(*e);
             let i_worst = ic.abs().max(ib.abs()).min(1e3);
             let power = (vce * ic).abs().min(1e6) + (sign * vbe * ib).abs().min(1e6);
@@ -1915,6 +1927,103 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64, w: Option<f
         _ => {}
     }
     checks
+}
+
+/// Collector and base current magnitudes `(ic, ib)` the BJT device `id`
+/// carries at the node voltages `node_v`, read the way the stress monitor
+/// reads them; `None` when `id` is not a BJT.
+#[must_use]
+pub fn bjt_currents(
+    circuit: &Circuit,
+    id: DeviceId,
+    node_v: &dyn Fn(NodeId) -> f64,
+) -> Option<(f64, f64)> {
+    let Some(Device::Bjt { c, b, e, model, .. }) = circuit.devices.get(id.0 as usize) else {
+        return None;
+    };
+    let sign = match model.polarity {
+        hauksbee_ir::Polarity::N => 1.0,
+        hauksbee_ir::Polarity::P => -1.0,
+    };
+    let vt = hauksbee_ir::thermal_voltage_c(circuit.temp_c);
+    let vbe = sign * (node_v(*b) - node_v(*e));
+    let vbc = sign * (node_v(*b) - node_v(*c));
+    let (ic, ib) = bjt_terminal_currents(model, vbe, vbc, vt, circuit.temp_c);
+    Some((ic.abs().min(1e3), ib.abs().min(1e3)))
+}
+
+/// Collector and base current `(ic, ib)` of a BJT, polarity-folded, from its
+/// TERMINAL voltages `vbe`/`vbc`.
+///
+/// The solver puts the Gummel-Poon core behind the card's `rb`/`rc`/`re` on
+/// internal nodes, so the terminals read the junctions plus the ohmic drops.
+/// Feeding terminal voltages straight into the exponentials (as this arm once
+/// did) turned a BC847 (`rb` = 10 ohm) carrying 250 mA of base current into
+/// a reading of 1000 A (the clamp), 2 MW and a 1.25e9 C junction: the
+/// fault fired, but every number it printed was false. Same physics as
+/// [`diode_current`]: recover the junction voltages first, by 2-D Newton on
+///
+/// ```text
+///   vbe = vbe_j + ib*rb + (ic + ib)*re
+///   vbc = vbc_j + ib*rb - ic*rc
+/// ```
+///
+/// with each junction step limited to 0.1 V so the exponentials cannot run
+/// away from a terminal-voltage start far above the junction drop.
+fn bjt_terminal_currents(
+    model: &hauksbee_ir::BjtModel,
+    vbe: f64,
+    vbc: f64,
+    vt: f64,
+    temp_c: f64,
+) -> (f64, f64) {
+    let is = model.is_at(temp_c);
+    let (fwd_vt, rev_vt) = (model.nf * vt, model.nr * vt);
+    let core = |vbe_j: f64, vbc_j: f64| {
+        let ef = (vbe_j / fwd_vt).clamp(-100.0, 200.0).exp();
+        let er = (vbc_j / rev_vt).clamp(-100.0, 200.0).exp();
+        let (cf, cr) = (is * (ef - 1.0), is * (er - 1.0));
+        let (gf, gr) = (is * ef / fwd_vt, is * er / rev_vt);
+        let ic = (cf - cr) - cr / model.br;
+        let ib = cf / model.bf + cr / model.br;
+        // d(ic)/d(vbe_j, vbc_j), d(ib)/d(vbe_j, vbc_j)
+        let dic = (gf, -gr * (1.0 + 1.0 / model.br));
+        let dib = (gf / model.bf, gr / model.br);
+        (ic, ib, dic, dib)
+    };
+    let (rb0, rc, re) = (model.rb.max(0.0), model.rc.max(0.0), model.re.max(0.0));
+    if rb0 + rc + re <= 0.0 {
+        let (ic, ib, ..) = core(vbe, vbc);
+        return (ic, ib);
+    }
+    // A junction never sits far above ~1 V; start there or below.
+    let (mut xf, mut xr) = (vbe.min(0.8), vbc.min(0.8));
+    for _ in 0..200 {
+        let (ic, ib, dic, dib) = core(xf, xr);
+        // A card that modulates its base resistance (IRB/RBM) sets it from
+        // the base current, held fixed within each step as the solver does.
+        let rb = model.base_resistance(ib, 1.0).max(0.0);
+        let f1 = (ic + ib).mul_add(re, ib.mul_add(rb, xf)) - vbe;
+        let f2 = ic.mul_add(-rc, ib.mul_add(rb, xr)) - vbc;
+        let j11 = re.mul_add(dic.0 + dib.0, rb.mul_add(dib.0, 1.0));
+        let j12 = re.mul_add(dic.1 + dib.1, rb * dib.1);
+        let j21 = rb.mul_add(dib.0, -(rc * dic.0));
+        let j22 = rc.mul_add(-dic.1, rb.mul_add(dib.1, 1.0));
+        let det = j11.mul_add(j22, -(j12 * j21));
+        if !det.is_finite() || det.abs() < 1e-300 {
+            break;
+        }
+        let dx = (f1 * j22 - f2 * j12) / det;
+        let dy = (j11 * f2 - j21 * f1) / det;
+        let (dx, dy) = (dx.clamp(-0.1, 0.1), dy.clamp(-0.1, 0.1));
+        xf -= dx;
+        xr -= dy;
+        if dx.abs() < 1e-12 && dy.abs() < 1e-12 {
+            break;
+        }
+    }
+    let (ic, ib, ..) = core(xf, xr);
+    (ic, ib)
 }
 
 /// Forward current from the diode's TERMINAL voltage `vd` at temperature
@@ -2721,6 +2830,50 @@ mod monitor_temp_tests {
             ohms_after(FaultKind::Overvoltage) < 1.0,
             "reverse over-voltage shorts"
         );
+    }
+
+    #[test]
+    fn bjt_currents_read_the_junction_behind_its_ohmic_resistances() {
+        // A BC847-class card (rb 10, rc 1, re 0.5) carrying a real base
+        // current: build the terminal voltages from a known internal state,
+        // then ask the monitor to recover it. Reading the terminals as the
+        // junction would clamp at 1 kA.
+        let model = hauksbee_ir::BjtModel {
+            is: 1e-14,
+            bf: 150.0,
+            br: 4.0,
+            rb: 10.0,
+            rc: 1.0,
+            re: 0.5,
+            ..hauksbee_ir::BjtModel::default()
+        };
+        let t = 27.0;
+        let vt = hauksbee_ir::thermal_voltage_c(t);
+        let is = model.is_at(t);
+        let (v_fwd, v_rev) = (0.85, 0.80);
+        let cf = is * (v_fwd / (model.nf * vt)).exp_m1();
+        let cr = is * (v_rev / (model.nr * vt)).exp_m1();
+        let ic = (cf - cr) - cr / model.br;
+        let ib = cf / model.bf + cr / model.br;
+        let vbe = (ic + ib).mul_add(model.re, ib.mul_add(model.rb, v_fwd));
+        let vbc = ic.mul_add(-model.rc, ib.mul_add(model.rb, v_rev));
+        assert!(vbe > 1.0, "terminal V_BE well above the junction: {vbe}");
+        let (coll, base) = bjt_terminal_currents(&model, vbe, vbc, vt, t);
+        assert!((base - ib).abs() <= ib.abs() * 1e-6, "ib {base} vs {ib}");
+        assert!(
+            (coll - ic).abs() <= ic.abs().max(1e-6) * 1e-6,
+            "ic {coll} vs {ic}"
+        );
+        // Without series resistance the terminal IS the junction.
+        let ideal = hauksbee_ir::BjtModel {
+            rb: 0.0,
+            rc: 0.0,
+            re: 0.0,
+            ..model
+        };
+        let (_, ib0) = bjt_terminal_currents(&ideal, 0.6, -2.0, vt, t);
+        let want = is * (0.6 / vt).exp_m1() / ideal.bf;
+        assert!((ib0 - want).abs() <= want * 1e-3, "{ib0} vs {want}");
     }
 
     #[test]

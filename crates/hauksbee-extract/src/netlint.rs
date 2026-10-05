@@ -141,6 +141,13 @@ pub enum LintCheck {
     /// pull on that input. Produced by the engine-layer `floating_inputs`
     /// check.
     FloatingInput,
+    /// A part held past one of its card's ratings (a junction's or channel's
+    /// current, a driver pin's current, a resistor's wattage, a package's
+    /// junction temperature) at the board's solved DC operating point: the
+    /// state it powers up into and rests in. Produced by the engine-layer
+    /// `dc_stress` check, which runs the co-simulation's stress monitor over
+    /// that one solved state.
+    DcOverstress,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -165,7 +172,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -187,6 +194,7 @@ impl LintCheck {
         Self::RailConflict,
         Self::MissingDecoupling,
         Self::FloatingInput,
+        Self::DcOverstress,
     ];
 
     #[must_use]
@@ -213,6 +221,7 @@ impl LintCheck {
             Self::RailConflict => "rail_conflict",
             Self::MissingDecoupling => "missing_decoupling",
             Self::FloatingInput => "floating_input",
+            Self::DcOverstress => "dc_overstress",
         }
     }
 }

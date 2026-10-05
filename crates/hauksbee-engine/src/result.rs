@@ -2799,6 +2799,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::MissingDecoupling => {
             "Add ~100 nF from the rail to ground at each IC's supply pin, plus a bulk capacitor (several uF) on the rail."
         }
+        LintCheck::DcOverstress => {
+            "Limit the current into the named part: add or enlarge the series resistance that feeds it (a base resistor of a few kilohms for a small transistor) so it and its driver stay inside their ratings."
+        }
         LintCheck::FloatingInput => {
             "Tie each unused CMOS input high or low (directly or through a resistor), or drive it; a no-connect flag does not define its level."
         }

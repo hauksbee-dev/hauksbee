@@ -1183,6 +1183,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Every chip pulls its supply current in short bursts each time it switches, faster than the regulator can respond. A small capacitor (about 100 nF) beside each chip's supply pin supplies those bursts, and a larger bulk capacitor (microfarads) on the rail refills them. With too few, the rail bounces on every edge: logic can double-clock and comparators chatter, and it looks like a firmware fault. The design files do not say where parts sit, so this is a count of capacitors against chips, not a layout check.".to_string(),
                 format!("Add about 100 nF from \"{net}\" to ground at each chip's supply pin, plus a bulk capacitor (for example 10 uF) where the rail enters the board or section."),
             ),
+            LintCheck::DcOverstress => (
+                format!("A part is pushed past its datasheet rating as soon as the board powers up. {}", f.message),
+                "This is the board's resting state, solved from the design: every part with a datasheet rating was held to it there. A part over its current, power or temperature rating in that state is overstressed the whole time the board is on; a transistor base or diode driven from a supply or logic output through too little resistance is the usual cause.".to_string(),
+                "Find the path feeding the named part and add or enlarge the series resistance (a base resistor of a few kilohms for a small transistor) so the current stays inside its rating and the driver's.".to_string(),
+            ),
             LintCheck::FloatingInput => (
                 format!("Logic inputs on {parts} are left floating. {}", f.message),
                 "A CMOS logic input has no level of its own: left unconnected it drifts with leakage and nearby signals, so the chip reads random values, and an input resting halfway between the rails makes the chip draw extra current. A no-connect mark in the schematic does not change that unless the datasheet says the pin has an internal pull resistor.".to_string(),

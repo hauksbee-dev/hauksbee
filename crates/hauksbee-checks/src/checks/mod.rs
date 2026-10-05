@@ -50,6 +50,9 @@
 //!   reported as a non-gating note).
 //! - [`floating_inputs`]: a CMOS logic input left with no driver, pull or
 //!   other connection, no-connect flag or not.
+//! - [`dc_stress`]: every card rating (junction, channel and driver-pin
+//!   current, resistor wattage, junction temperature) judged at the board's
+//!   solved DC operating point by the co-simulation's own stress monitor.
 
 pub mod ampacity;
 pub mod analog_inputs;
@@ -58,6 +61,7 @@ pub mod boot;
 pub mod bus_loading;
 pub mod contention;
 pub mod converter;
+pub mod dc_stress;
 pub mod device_decode;
 pub mod envelope;
 pub mod floating_inputs;
@@ -152,6 +156,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(floating_inputs::floating_input_lint(board, lib).findings);
+    report
+        .findings
+        .extend(dc_stress::dc_stress_lint(board, lib).findings);
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.
