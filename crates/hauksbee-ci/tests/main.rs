@@ -42,6 +42,9 @@ mod packaged_asset_sync;
 mod peripherals;
 mod powerup_state_fuzz;
 mod progress_stays_out_of_the_way;
+// Every case is an AVR, Renode or Espressif QEMU co-sim of a real board.
+#[cfg(any(feature = "avr", feature = "renode", feature = "qemu"))]
+mod real_firmware_boards;
 mod regulator_headroom_boundary;
 mod regulator_validity;
 mod round2_ci_surface;
