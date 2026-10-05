@@ -109,7 +109,7 @@ pub use frontdoor::{
     analyze_with_firmware_json, WebCosimSection, WebFirmwareAnalysis, WebFirmwareCoverage,
     WebGpioNet, WebReport, WebSection,
 };
-pub use hauksbee_mcu::validate_firmware_path;
+pub use hauksbee_mcu::{validate_firmware_format, validate_firmware_path};
 pub use peripherals::{
     controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},
     i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75},

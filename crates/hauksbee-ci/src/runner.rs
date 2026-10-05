@@ -60,6 +60,9 @@ struct RunInputEvidence<'a> {
     schematic_ties: Option<&'a hauksbee_engine::schematic_ties::SchematicTies>,
     supporting_artifacts: &'a [ArtifactProvenance],
     variant: Option<&'a VariantEvidence>,
+    /// The spec's firmware, resolved and format-checked once before the board
+    /// was read.
+    firmware: Option<&'a Path>,
 }
 
 /// The evidence-spine record for one assembly input (BOM or placement): the
@@ -739,6 +742,17 @@ pub fn spec_model_library(
     }
 }
 
+/// Distinct `after_ms` thresholds (plus 0) that assertion windows are bucketed by.
+fn after_ms_thresholds(spec: &Spec) -> Vec<f64> {
+    let mut thresholds: Vec<f64> = spec.asserts.iter().filter_map(|a| a.after_ms).collect();
+    thresholds.push(0.0);
+    // total_cmp, not partial_cmp().unwrap(): after_ms comes from a user's
+    // spec file, and a NaN there must not take the process down.
+    thresholds.sort_by(f64::total_cmp);
+    thresholds.dedup();
+    thresholds
+}
+
 /// [`run_spec_seeded`] against an explicit, already-built model library (how
 /// the CLI threads `--models-dir` through).
 ///
@@ -758,6 +772,8 @@ pub fn run_spec_with_lib(
     // read by hauksbee_mcu::SocConfig::resolve), scoped to this run by the
     // guard's Drop. An explicitly set env var wins over the spec field.
     let _descriptor_dir = DescriptorDirGuard::apply(spec);
+    // Firmware first: checked in milliseconds, before a board read of tens of seconds.
+    let firmware = resolve_spec_firmware(spec)?;
     // Read + extract the board once; clone per seed (binding mutates nothing on
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
@@ -803,13 +819,7 @@ pub fn run_spec_with_lib(
         .collect();
     check_component_refs(spec, &known_refs)?;
 
-    // Distinct after_ms thresholds (plus 0) that windows are bucketed by.
-    let mut thresholds: Vec<f64> = spec.asserts.iter().filter_map(|a| a.after_ms).collect();
-    thresholds.push(0.0);
-    // total_cmp, not partial_cmp().unwrap(): after_ms comes from a user's
-    // spec file, and a NaN there must not take the process down.
-    thresholds.sort_by(f64::total_cmp);
-    thresholds.dedup();
+    let thresholds = after_ms_thresholds(spec);
 
     // Resolve the tolerance ensemble (if any) and lay out one plan per member.
     // With no tolerances this degenerates to the plain fuzz seed list (a
@@ -865,6 +875,7 @@ pub fn run_spec_with_lib(
         schematic_ties: schematic_ties.as_ref(),
         supporting_artifacts: &prepared.supporting_artifacts,
         variant: prepared.variant.as_ref(),
+        firmware: firmware.as_deref(),
     };
     for plan in &plans {
         let mut outcome = run_one(
@@ -1120,7 +1131,11 @@ pub(crate) fn firmware_format_mismatch(path: &Path) -> Option<String> {
              the .hex your build actually produced",
             path.display()
         )),
-        _ => None,
+        // Anything else the shared loader-side check refuses: an extension no
+        // backend loads, or contents that do not match the extension.
+        _ => hauksbee_engine::validate_firmware_format(path)
+            .err()
+            .map(|e| e.to_string()),
     }
 }
 
@@ -1869,7 +1884,7 @@ fn run_one(
     // monitorable for peak-current (resistors/diodes by name).
     let net_node: HashMap<String, NodeId> = bound.net_nodes.clone();
 
-    let firmware = resolve_spec_firmware(spec)?;
+    let firmware = run_inputs.firmware;
 
     // Captured before `bound` is consumed by `from_bound`; see the bus-slave
     // warning below.
@@ -1880,7 +1895,7 @@ fn run_one(
         .map(|m| m.backend.clone())
         .collect();
 
-    let mut engine = HauksbeeEngine::from_bound(bound, firmware.as_deref(), "/ci")
+    let mut engine = HauksbeeEngine::from_bound(bound, firmware, "/ci")
         .map_err(SpecError::invalid("building engine"))?;
 
     // Ambient for the steady-state junction-temperature estimate (max_temp).
@@ -2245,7 +2260,7 @@ fn run_one(
         &board,
         &engine,
         run_inputs,
-        firmware.as_deref(),
+        firmware,
         production_assumptions,
     )?;
 

@@ -144,8 +144,12 @@ pub fn validate_firmware_format(path: &Path) -> anyhow::Result<()> {
         "hex" | "ihex" => head.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b':'),
         "bin" => true,
         _ => anyhow::bail!(
-            "unsupported firmware extension '.{ext}' ({}); use .elf, .hex, .uf2, \
-             or a merged ESP flash .bin",
+            "unsupported firmware extension '.{ext}' ({}); supported formats are .elf, \
+             .hex, .uf2 (converted to Intel HEX on input) and a merged ESP flash .bin. \
+             Convert it to Intel HEX first, e.g. `objcopy -O ihex {} firmware.hex` \
+             (use your toolchain's objcopy, such as arm-none-eabi-objcopy; add \
+             `-I srec` or `-I binary` for an input objcopy cannot detect)",
+            path.display(),
             path.display()
         ),
     };
@@ -235,6 +239,7 @@ mod firmware_guard_tests {
                 .contains("unsupported firmware extension '.srec'"),
             "{err}"
         );
+        assert!(err.to_string().contains("objcopy -O ihex"), "{err}");
         let err = validate_firmware_format(&write("b.hex", b"\x7fELF")).unwrap_err();
         assert!(err.to_string().contains("Intel HEX"), "{err}");
         let err = validate_firmware_format(&write("b.elf", b":0000")).unwrap_err();

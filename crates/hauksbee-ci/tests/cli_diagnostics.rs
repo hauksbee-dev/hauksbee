@@ -127,6 +127,33 @@ fn an_elf_renamed_hex_is_caught_the_same_way() {
     assert!(err.contains("Rename it to .elf"), "{err}");
 }
 
+// The format check runs BEFORE the board is read (which takes tens of seconds
+// on a real board): an unloadable extension is refused first, so here an
+// unparseable board is never reached.
+#[test]
+fn an_unsupported_firmware_format_is_refused_before_the_board_is_read() {
+    let dir = dir_with_spec(&firmware_body("app.srec"));
+    std::fs::write(
+        dir.path().join("app.srec"),
+        "S00F000068656C6C6F202020202000003C\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("blinky.kicad_pcb"), "not a board").unwrap();
+    for cmd in ["run", "check"] {
+        let out = run_in(dir.path(), &[cmd, "s.toml"]);
+        assert_eq!(out.status.code(), Some(2), "{cmd}");
+        let err = stderr(&out);
+        assert!(
+            err.contains("unsupported firmware extension '.srec'"),
+            "{cmd}: {err}"
+        );
+        assert!(
+            err.contains("objcopy"),
+            "{cmd}: the message says how to convert: {err}"
+        );
+    }
+}
+
 // L5: clap's required-unless message said `<SPEC>...` was required while the
 // help it points at calls it `[SPEC]...`, and neither mentioned `--example`.
 #[test]
