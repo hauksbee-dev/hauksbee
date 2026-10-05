@@ -29,6 +29,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use forge_sexpr::{Document, List};
 
@@ -124,6 +125,8 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .unwrap_or_default()
         .to_string();
     let mut builder = NetlistBuilder::new();
+    builder.design_bus_aliases = project_bus_aliases(&path.with_extension("kicad_pro"));
+    builder.scan_hierarchy(&doc, base.as_deref());
     // The root sheet is the first ancestor, so a sub-sheet pointing back at the
     // top file closes the cycle here instead of recursing into it.
     builder
@@ -131,6 +134,50 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
     Ok(builder.finish(root))
+}
+
+/// Every `(bus_alias "NAME" (members "A" "B" ...))` a sheet defines, in
+/// file order.
+fn bus_alias_defs(root: &List) -> Vec<(String, Vec<String>)> {
+    root.find_all("bus_alias")
+        .filter_map(|ba| {
+            let name = ba.arg_value(0)?;
+            let members = ba
+                .find("members")
+                .map(|ms| (0..).map_while(|i| ms.arg_value(i)).collect())
+                .unwrap_or_default();
+            Some((name, members))
+        })
+        .collect()
+}
+
+/// The bus aliases a KiCad project file defines (`schematic.bus_aliases`, a
+/// map of alias name to member tokens; KiCad 9 and later). A missing or
+/// unreadable project file defines none: older projects keep their aliases in
+/// the sheet files, which `add_sheet_doc` reads.
+fn project_bus_aliases(pro: &Path) -> HashMap<String, Vec<String>> {
+    let Ok(text) = std::fs::read_to_string(pro) else {
+        return HashMap::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return HashMap::new();
+    };
+    json.pointer("/schematic/bus_aliases")
+        .and_then(serde_json::Value::as_object)
+        .map(|aliases| {
+            aliases
+                .iter()
+                .filter_map(|(name, members)| {
+                    let members = members
+                        .as_array()?
+                        .iter()
+                        .filter_map(|m| m.as_str().map(str::to_string))
+                        .collect();
+                    Some((name.clone(), members))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Whether a parsed schematic is the ROOT of its hierarchy.
@@ -269,8 +316,11 @@ enum AnchorKind {
     Power,
     /// Local label.
     Local,
-    /// Hierarchical label / sheet-pin member binding.
+    /// Hierarchical label / bus member bound through one.
     Hier,
+    /// Member of a bus driven only by sheet pins. Joins a same-named net on
+    /// its sheet but, unlike a label, not another bus's same-named member.
+    SheetPin,
 }
 
 impl AnchorKind {
@@ -283,6 +333,7 @@ impl AnchorKind {
             Self::Power => 3,
             Self::Local => 2,
             Self::Hier => 1,
+            Self::SheetPin => 0,
         }
     }
 }
@@ -322,6 +373,28 @@ struct NetlistBuilder {
     /// names another alias is left as a literal member (KiCad does not chain
     /// aliases either), so resolution cannot recurse through this map.
     bus_aliases: HashMap<(SheetId, String), Vec<String>>,
+    /// Bus aliases visible on every sheet of the design: the project file's
+    /// (`<root>.kicad_pro`, `schematic.bus_aliases`, where KiCad 9 and later
+    /// keep them), then each sheet file's `(bus_alias ...)` in hierarchy
+    /// order, the first definition of a name winning. eeschema resolves an
+    /// alias schematic-wide, so a sheet may use `{LVDS}` that only a sibling
+    /// sheet defines; a sheet's own definition still wins on that sheet.
+    /// Without these, a group bus such as `{FX2}` crossing into a sub-sheet
+    /// expands to one literal member and every net it carries splits at the
+    /// sheet boundary.
+    design_bus_aliases: HashMap<String, Vec<String>>,
+    /// Every sheet file of the hierarchy, parsed once by
+    /// [`Self::scan_hierarchy`] and keyed by canonical path, so the alias
+    /// pre-pass costs no second parse and a reused sheet is parsed once.
+    parsed_sheets: HashMap<PathBuf, Rc<Document>>,
+    /// The root file's `(symbol_instances (path "/sheet/symbol" (reference ..)
+    /// (unit ..)))` table, which KiCad 6 and early 7 files keep their per
+    /// placement designators in instead of in each symbol. Keyed by the path
+    /// without the root uuid; see [`Self::legacy_instance`].
+    legacy_instances: HashMap<String, (String, Option<i64>)>,
+    /// The root sheet's uuid, which a sub-sheet's instance path starts with
+    /// but a legacy `symbol_instances` path does not.
+    root_uuid: String,
     /// Hierarchical wiring: (sheet instance path, pin name) → union-find node,
     /// recorded for both the parent sheet-pin and the child hierarchical-label
     /// so the two sides can be joined.
@@ -331,8 +404,10 @@ struct NetlistBuilder {
     /// names that bus carries. Used to resolve a bus that crosses a sheet
     /// boundary under a *different* name (a bus `DQ[0..31]` feeding a sheet pin
     /// `DPC[0..31]`): the members map positionally by index, so we need the
-    /// bus's own member list at the pin's location.
-    bus_labels: Vec<(SheetId, Pt, Vec<String>)>,
+    /// bus's own member list at the pin's location. The last field is each
+    /// member's group-local name when the label is a group bus (see
+    /// [`group_locals`]), which is how a group bus matches members.
+    bus_labels: Vec<BusLabel>,
     /// Bus boundary anchors: a bus-valued sheet pin (parent side) or bus-valued
     /// hierarchical label (child side) that must connect member-wise. Resolved
     /// in `finish`, once every bus and bus label is known.
@@ -378,7 +453,15 @@ struct NetlistBuilder {
 /// the stack budget of `add_sheet_doc`.
 const MAX_SHEET_DEPTH: usize = 64;
 
+/// The most distinct sheet files the alias pre-pass parses. Far above any real
+/// hierarchy; a bound so a generated project cannot make the pre-pass unbounded.
+const MAX_HIERARCHY_FILES: usize = 4096;
+
 type SheetId = u32;
+
+/// A bus label: its sheet, position, members, and (for a group bus) each
+/// member's group-local name.
+type BusLabel = (SheetId, Pt, Vec<String>, Option<Vec<String>>);
 
 /// One side of a bus crossing a sheet boundary.
 struct BusBoundary {
@@ -387,6 +470,9 @@ struct BusBoundary {
     /// The pin/label's own member names (`DPC0..DPC31`). These key the
     /// cross-boundary join so they match the other side by name.
     own_members: Vec<String>,
+    /// The own members' group-local names when the pin/label is a group bus
+    /// (`{Q[0..7]}` -> `Q0..Q7`).
+    own_locals: Option<Vec<String>>,
     /// Hierarchy key path (the child instance path).
     path: String,
     /// Parent (sheet pin) or child (hierarchical label) side.
@@ -408,6 +494,10 @@ impl NetlistBuilder {
             pin_points: HashSet::new(),
             segments: Vec::new(),
             bus_aliases: HashMap::new(),
+            design_bus_aliases: HashMap::new(),
+            parsed_sheets: HashMap::new(),
+            legacy_instances: HashMap::new(),
+            root_uuid: String::new(),
             hier_parent: Vec::new(),
             hier_child: Vec::new(),
             bus_labels: Vec::new(),
@@ -485,6 +575,10 @@ impl NetlistBuilder {
         // "/", so seed the real path from this file's uuid; sub-sheets already
         // arrive with a fully-qualified path from their parent.
         let inst_path: String = if inst_path == "/" {
+            if let Some(uuid) = root.find_value("uuid") {
+                self.root_uuid = uuid;
+            }
+            self.legacy_instances = legacy_symbol_instances(root);
             root.find_value("uuid")
                 .map_or_else(|| "/".to_string(), |u| format!("/{u}"))
         } else {
@@ -570,19 +664,8 @@ impl NetlistBuilder {
 
         // -- Bus aliases: `(bus_alias "NAME" (members "A" "B" ...))`. Recorded
         //    per sheet so a group bus referencing `{NAME}` can expand it.
-        for ba in root.find_all("bus_alias") {
-            if let Some(name) = ba.arg_value(0) {
-                let mut members = Vec::new();
-                if let Some(ms) = ba.find("members") {
-                    for i in 0.. {
-                        match ms.arg_value(i) {
-                            Some(m) => members.push(m),
-                            None => break,
-                        }
-                    }
-                }
-                self.bus_aliases.insert((sheet, name), members);
-            }
+        for (name, members) in bus_alias_defs(root) {
+            self.bus_aliases.insert((sheet, name), members);
         }
 
         // -- Junctions: a junction is a connection point; touching wires/pins
@@ -619,8 +702,9 @@ impl NetlistBuilder {
         for lbl in root.find_all("hierarchical_label") {
             if let (Some(name), Some(at)) = (lbl.arg_value(0), at_xy(lbl)) {
                 let node = self.node_at(sheet, at);
-                let name = normalize_label(&name);
-                if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
+                let raw = name;
+                let name = normalize_label(&raw);
+                if let Some(members) = self.expand_bus_on_sheet(sheet, &raw) {
                     // A bus passing through a hierarchical label connects
                     // member-wise one level up. Recorded and resolved in
                     // `finish` (child side), where the bus this label sits on is
@@ -628,6 +712,7 @@ impl NetlistBuilder {
                     self.bus_boundaries.push(BusBoundary {
                         sheet,
                         at,
+                        own_locals: group_locals(&raw, &members),
                         own_members: members,
                         path: inst_path.to_string(),
                         parent_side: false,
@@ -685,10 +770,8 @@ impl NetlistBuilder {
         // pins common to every gate (power pins usually live there). All
         // instances sharing a reference are merged into one component later.
         // A reused sheet picks the unit per placement, in its instances entry.
-        let instance = instance_path(sym, inst_path);
-        let unit = instance
-            .and_then(|p| p.find_i64("unit"))
-            .or_else(|| sym.find_i64("unit"));
+        let (instance_ref, instance_unit) = self.placement_entry(sym, inst_path);
+        let unit = instance_unit.or_else(|| sym.find_i64("unit"));
         let inst_unit = u32::try_from(unit.unwrap_or(1).max(0)).unwrap_or(u32::MAX);
         // Likewise a De Morgan part draws each unit in two body styles, and
         // only the placed style's pins exist: `(convert N)` through KiCad 8,
@@ -704,14 +787,13 @@ impl NetlistBuilder {
         // The static `(property "Reference")` is only a template, so we prefer
         // the instances entry whose path matches the sheet instance we are
         // currently expanding. Falls back to the template for flat designs.
-        let reference = instance
-            .and_then(|p| p.find_value("reference"))
+        let reference = instance_ref
             .or_else(|| property(sym, "Reference"))
             .unwrap_or_default();
         let value = property(sym, "Value").unwrap_or_default();
         let footprint = property(sym, "Footprint").unwrap_or_default();
 
-        let def = lib.get(lib_id);
+        let def = lib.for_instance(sym, lib_id);
         // A symbol is a power-net source only when its library symbol carries
         // the `(power)` flag; a `#PWR` reference alone is not one (kicad-cli
         // leaves its visible `power_in` pin unnamed, and a hidden one is caught
@@ -772,7 +854,7 @@ impl NetlistBuilder {
                     self.push_anchor(
                         sheet,
                         NamedAnchor {
-                            name: normalize_label(&value),
+                            name: normalize_label(lib.power_net_name(lp, &value)),
                             scope: power_scope,
                             kind: AnchorKind::Power,
                             node,
@@ -827,6 +909,35 @@ impl NetlistBuilder {
         });
     }
 
+    /// The designator and unit recorded for this symbol on the sheet placement
+    /// `inst_path`: its own `(instances ...)` entry, else (KiCad 6) the root
+    /// file's `symbol_instances` entry. `None`s for a flat or unannotated
+    /// file, where the symbol's own properties apply.
+    fn placement_entry(&self, sym: &List, inst_path: &str) -> (Option<String>, Option<i64>) {
+        if let Some(entry) = instance_path(sym, inst_path) {
+            return (entry.find_value("reference"), entry.find_i64("unit"));
+        }
+        self.legacy_instance(sym, inst_path)
+            .map_or((None, None), |(r, u)| (Some(r.clone()), *u))
+    }
+
+    /// The designator and unit a KiCad 6 root file's `symbol_instances` table
+    /// gives this symbol on the sheet placement `inst_path` (`/rootuuid` for
+    /// the root, `/rootuuid/sheetuuid/...` below it). A reused sheet lists one
+    /// entry per placement; the symbol's own `Reference` property is only the
+    /// last annotation written, so every placement but one would otherwise
+    /// carry the wrong designator.
+    fn legacy_instance(&self, sym: &List, inst_path: &str) -> Option<&(String, Option<i64>)> {
+        if self.legacy_instances.is_empty() {
+            return None;
+        }
+        let uuid = sym.find_value("uuid")?;
+        let below_root = inst_path
+            .strip_prefix('/')?
+            .strip_prefix(self.root_uuid.as_str())?;
+        self.legacy_instances.get(&format!("{below_root}/{uuid}"))
+    }
+
     /// Expand a bus label on `sheet`, resolving any bus-alias reference against
     /// the aliases recorded for that sheet. A bare alias token inside a group
     /// bus (`MEM{ADDR}` where `ADDR` is an alias) expands to the alias's
@@ -835,8 +946,11 @@ impl NetlistBuilder {
     /// no alias.
     fn expand_bus_on_sheet(&self, sheet: SheetId, name: &str) -> Option<Vec<String>> {
         let aliases = &self.bus_aliases;
+        let project = &self.design_bus_aliases;
         let resolve = move |tok: &str| -> Option<Vec<String>> {
-            let members = aliases.get(&(sheet, tok.to_string()))?;
+            let members = aliases
+                .get(&(sheet, tok.to_string()))
+                .or_else(|| project.get(tok))?;
             // Expand each alias member token (it may be a vector/group bus).
             let mut out = Vec::new();
             for m in members {
@@ -847,13 +961,21 @@ impl NetlistBuilder {
             }
             Some(out)
         };
-        expand_bus_aliased(name, &resolve)
+        // Expand the label as written, then normalise each member exactly as
+        // a plain label is normalised. Normalising the whole bus text first
+        // would leave alias members (`~{ALERT}`, `NAFE_{~{CS}}`) spelled
+        // differently from the same-named labels they must join, and would
+        // re-normalise members already normalised, which is not idempotent
+        // for nested markup.
+        let members = expand_bus_aliased(name, &resolve)?;
+        Some(members.iter().map(|m| normalize_label(m)).collect())
     }
 
     fn add_label(&mut self, sheet: SheetId, lbl: &List, scope: NameScope) {
         if let (Some(name), Some(at)) = (lbl.arg_value(0), at_xy(lbl)) {
             let node = self.node_at(sheet, at);
-            let name = normalize_label(&name);
+            let raw = name;
+            let name = normalize_label(&raw);
             // A label whose text is a bus expression (vector `D[0..7]` or group
             // `NAME{...}`) names a *bus*, not a single net. On a flat sheet the
             // bus is cosmetic: every member already reaches the bus via its own
@@ -862,7 +984,7 @@ impl NetlistBuilder {
             // must not, or `D[0..7]` would become one giant net). We record the
             // bus label's members and position so a sheet pin sitting on this
             // bus under a different name can map its members positionally.
-            if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
+            if let Some(members) = self.expand_bus_on_sheet(sheet, &raw) {
                 // A GLOBAL bus label additionally globalizes every member,
                 // exactly as a plain global label globalizes its one net:
                 // `D[0..7]` as a global label means each of D0..D7 connects
@@ -896,7 +1018,8 @@ impl NetlistBuilder {
                         );
                     }
                 }
-                self.bus_labels.push((sheet, at, members));
+                let locals = group_locals(&raw, &members);
+                self.bus_labels.push((sheet, at, members, locals));
             } else {
                 // A plain label's naming rank follows its scope directly.
                 let kind = match scope {
@@ -939,8 +1062,9 @@ impl NetlistBuilder {
             if let (Some(name), Some(at)) = (pin.arg_value(0), at_xy(pin)) {
                 let node = self.node_at(sheet, at);
                 self.pin_points.insert((sheet, at));
-                let name = normalize_label(&name);
-                if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
+                let raw = name;
+                let name = normalize_label(&raw);
+                if let Some(members) = self.expand_bus_on_sheet(sheet, &raw) {
                     // A bus sheet pin connects member-wise to the child's
                     // matching bus hierarchical label. Recorded and resolved in
                     // `finish` (parent side): the pin may sit on a parent bus
@@ -950,6 +1074,7 @@ impl NetlistBuilder {
                     self.bus_boundaries.push(BusBoundary {
                         sheet,
                         at,
+                        own_locals: group_locals(&raw, &members),
                         own_members: members,
                         path: child_path.clone(),
                         parent_side: true,
@@ -982,31 +1107,79 @@ impl NetlistBuilder {
             let key = child.canonicalize().unwrap_or_else(|_| child.clone());
             let is_cycle = self.ancestor_sheets.contains(&key);
             if self.sheet_depth < MAX_SHEET_DEPTH && !is_cycle {
-                if let Ok(text) = std::fs::read_to_string(&child) {
-                    if let Ok(doc) = forge_sexpr::parse(&text) {
-                        let child_dir = child.parent().map(Path::to_path_buf);
-                        self.sheet_depth += 1;
-                        self.ancestor_sheets.push(key);
-                        let parent = self
-                            .sheet_display
-                            .get(sheet as usize)
-                            .map_or("/", String::as_str);
-                        let title = sheet_property(sub, "Sheetname")
-                            .or_else(|| sheet_property(sub, "Sheet name"))
-                            .unwrap_or_else(|| sheet_uuid.clone());
-                        self.pending_display = Some(format!("{parent}{title}/"));
-                        let result =
-                            self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None);
-                        self.ancestor_sheets.pop();
-                        self.sheet_depth -= 1;
-                        result?;
-                    }
+                if let Some(doc) = self.sheet_doc(&child, &key) {
+                    let child_dir = child.parent().map(Path::to_path_buf);
+                    self.sheet_depth += 1;
+                    self.ancestor_sheets.push(key);
+                    let parent = self
+                        .sheet_display
+                        .get(sheet as usize)
+                        .map_or("/", String::as_str);
+                    let title = sheet_property(sub, "Sheetname")
+                        .or_else(|| sheet_property(sub, "Sheet name"))
+                        .unwrap_or_else(|| sheet_uuid.clone());
+                    self.pending_display = Some(format!("{parent}{title}/"));
+                    let result = self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None);
+                    self.ancestor_sheets.pop();
+                    self.sheet_depth -= 1;
+                    result?;
                 }
                 // A sub-sheet that cannot be read or parsed is not fatal: the
                 // board is incomplete, not unreadable.
             }
         }
         Ok(())
+    }
+
+    /// A sub-sheet's parsed document: from the hierarchy pre-pass when it ran,
+    /// else read and parsed now. `None` when it cannot be read or parsed.
+    fn sheet_doc(&self, path: &Path, key: &Path) -> Option<Rc<Document>> {
+        if let Some(doc) = self.parsed_sheets.get(key) {
+            return Some(Rc::clone(doc));
+        }
+        let text = std::fs::read_to_string(path).ok()?;
+        forge_sexpr::parse(&text).ok().map(Rc::new)
+    }
+
+    /// Parse every sheet file the root reaches, once each, and gather their
+    /// bus aliases into [`Self::design_bus_aliases`] (depth-first in
+    /// `(sheet ...)` order; a name already defined keeps its first
+    /// definition). Runs before the netlist pass because a sheet may use an
+    /// alias that only a later sheet defines.
+    fn scan_hierarchy(&mut self, root: &Document, base_dir: Option<&Path>) {
+        let Some(base_dir) = base_dir else { return };
+        // Record a document's aliases; return its sub-sheet files, in order.
+        let visit = |this: &mut Self, doc: &Document, dir: &Path| -> Vec<PathBuf> {
+            let Some(node) = doc.root() else {
+                return Vec::new();
+            };
+            for (name, members) in bus_alias_defs(node) {
+                this.design_bus_aliases.entry(name).or_insert(members);
+            }
+            node.find_all("sheet")
+                .filter_map(|sub| sheet_property(sub, "Sheetfile"))
+                .map(|file| dir.join(file))
+                .collect()
+        };
+        let mut pending: Vec<PathBuf> = visit(self, root, base_dir);
+        pending.reverse();
+        while let Some(child) = pending.pop() {
+            if self.parsed_sheets.len() >= MAX_HIERARCHY_FILES {
+                break;
+            }
+            let key = child.canonicalize().unwrap_or_else(|_| child.clone());
+            if self.parsed_sheets.contains_key(&key) {
+                continue;
+            }
+            let Some(doc) = self.sheet_doc(&child, &key) else {
+                continue;
+            };
+            self.parsed_sheets.insert(key, Rc::clone(&doc));
+            let dir = child.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+            let mut next = visit(self, &doc, &dir);
+            next.reverse();
+            pending.extend(next);
+        }
     }
 
     /// Union every anchored point that lies strictly inside a *wire* segment
@@ -1049,96 +1222,147 @@ impl NetlistBuilder {
     }
 
     /// Resolve bus-valued sheet pins / hierarchical labels into member-wise
-    /// hierarchical connections, handling buses that cross a sheet boundary
-    /// under a different name by mapping members positionally by index.
+    /// hierarchical connections.
+    ///
+    /// This follows eeschema's bus model. Every bus item on one connected bus
+    /// (a bus label, a bus hierarchical label, a bus sheet pin) is part of one
+    /// bus subgraph whose *driver* names its members: a bus label first, then
+    /// a hierarchical label, then a sheet pin (KiCad's driver priority). Each
+    /// boundary on the subgraph takes the driver's member that matches each
+    /// of its own (`matchBusMember`): by member name when both are group
+    /// buses (`{Q[0..7]}` on `A{DIR[0..7] Q[0..7]}` takes `A.Q0..A.Q7`), by
+    /// index otherwise (`DPC[0..31]` on `DQ[0..31]`). The driver's members
+    /// join same-named nets on the sheet, and the boundary keys the
+    /// hierarchical join under its own member names so it meets the other
+    /// side of the sheet boundary.
+    ///
+    /// A bus driven only by sheet pins has no label, so its members join a
+    /// same-named label on the sheet but not each other's buses: two
+    /// placements of one sheet whose `Control{CTL}` pins each sit on their own
+    /// unlabelled bus stay apart.
     fn resolve_bus_boundaries(&mut self) {
-        // Per sheet, group bus segments into connected subgraphs and record,
-        // for each subgraph, the member list of any bus label sitting on it.
-        // A query point is matched to a subgraph by lying on one of its
-        // segments (endpoint or interior). We keep it simple: a flat list of
-        // (sheet, points-of-subgraph, members) is overkill; instead, for each
-        // boundary we directly search bus labels whose subgraph reaches the
-        // boundary point. To connect a label to a boundary we test reachability
-        // over the sheet's bus segments.
         let boundaries = std::mem::take(&mut self.bus_boundaries);
-        for b in &boundaries {
-            // Find the bus member list at this boundary: a bus label on the
-            // same bus subgraph as the boundary point. If none, fall back to
-            // the boundary's own member names (same-named bus both sides).
-            let bus_members = self
-                .bus_label_on_same_bus(b.sheet, b.at)
-                .unwrap_or_else(|| b.own_members.clone());
-
-            // Pair positionally. Lengths normally match; if they differ (a
-            // malformed schematic) we connect the common prefix and leave the
-            // rest as their own-named members.
-            for (i, own) in b.own_members.iter().enumerate() {
-                let local_name = bus_members.get(i).unwrap_or(own).clone();
-                let mnode = self.uf.make();
-                // Bind the fresh node to the member's net on this sheet via a
-                // local label of the *local* (bus) member name. Hier kind for
-                // naming: this anchor stands in for a sheet pin / hierarchical
-                // label, which KiCad ranks below the member's own local label.
-                self.push_anchor(
-                    b.sheet,
-                    NamedAnchor {
-                        name: local_name,
-                        scope: NameScope::Local,
-                        kind: AnchorKind::Hier,
-                        node: mnode,
-                    },
-                );
-                // Key the hierarchical join under the boundary's OWN member
-                // name so it matches the other side.
-                let key = own.clone();
-                if b.parent_side {
-                    self.hier_parent.push((b.path.clone(), key, mnode));
-                } else {
-                    self.hier_child.push((b.path.clone(), key, mnode));
+        // Group boundaries by bus subgraph: same sheet and reachable over bus
+        // segments. A boundary off every bus segment is its own group.
+        let mut groups: Vec<(SheetId, BTreeSet<Pt>, Vec<usize>)> = Vec::new();
+        for (i, b) in boundaries.iter().enumerate() {
+            let found = groups.iter().position(|(gs, reach, _)| {
+                *gs == b.sheet && self.point_on_reach(b.sheet, b.at, reach)
+            });
+            if let Some(g) = found {
+                groups[g].2.push(i);
+            } else {
+                groups.push((b.sheet, self.bus_reach(b.sheet, b.at), vec![i]));
+            }
+        }
+        for (sheet, reach, members) in &groups {
+            let sheet = *sheet;
+            // The driver: a bus label on the subgraph, else the first
+            // hierarchical label, else the first sheet pin.
+            let label = self
+                .bus_labels
+                .iter()
+                .find(|(s, at, _, _)| *s == sheet && self.point_on_reach(sheet, *at, reach))
+                .map(|(_, _, m, l)| (m.clone(), l.clone()));
+            let first_of = |parent_side: bool| {
+                members
+                    .iter()
+                    .map(|&i| &boundaries[i])
+                    .find(|b| b.parent_side == parent_side)
+            };
+            let (driver_members, driver_locals, kind) = if let Some((m, l)) = label {
+                (m, l, AnchorKind::Hier)
+            } else if let Some(b) = first_of(false) {
+                (
+                    b.own_members.clone(),
+                    b.own_locals.clone(),
+                    AnchorKind::Hier,
+                )
+            } else if let Some(b) = first_of(true) {
+                (
+                    b.own_members.clone(),
+                    b.own_locals.clone(),
+                    AnchorKind::SheetPin,
+                )
+            } else {
+                continue;
+            };
+            // One node per driver member, bound to the member's net on this
+            // sheet by name. Ranked below the member's own label for naming:
+            // it stands in for a sheet pin / hierarchical label.
+            let driver_nodes: Vec<usize> = driver_members
+                .iter()
+                .map(|m| {
+                    let node = self.uf.make();
+                    self.push_anchor(
+                        sheet,
+                        NamedAnchor {
+                            name: m.clone(),
+                            scope: NameScope::Local,
+                            kind,
+                            node,
+                        },
+                    );
+                    node
+                })
+                .collect();
+            let by_local: Option<HashMap<&str, usize>> = driver_locals
+                .as_ref()
+                .map(|dl| dl.iter().map(String::as_str).zip(0..).collect());
+            for &bi in members {
+                let b = &boundaries[bi];
+                for (i, own) in b.own_members.iter().enumerate() {
+                    let matched = match (&by_local, &b.own_locals) {
+                        (Some(map), Some(own_locals)) => {
+                            own_locals.get(i).and_then(|l| map.get(l.as_str()).copied())
+                        }
+                        _ => (i < driver_nodes.len()).then_some(i),
+                    };
+                    // A member the driver does not carry keeps its own name
+                    // (a malformed or mismatched bus).
+                    let node = if let Some(j) = matched {
+                        driver_nodes[j]
+                    } else {
+                        let node = self.uf.make();
+                        self.push_anchor(
+                            sheet,
+                            NamedAnchor {
+                                name: own.clone(),
+                                scope: NameScope::Local,
+                                kind,
+                                node,
+                            },
+                        );
+                        node
+                    };
+                    let key = (b.path.clone(), own.clone(), node);
+                    if b.parent_side {
+                        self.hier_parent.push(key);
+                    } else {
+                        self.hier_child.push(key);
+                    }
                 }
             }
         }
     }
 
-    /// Member list of a bus label sitting on the same bus subgraph as `at`, if
-    /// any. Bus segments on the sheet are walked from `at` to discover the
-    /// subgraph; a bus label whose coordinate lies on a reached segment names
-    /// the bus.
-    #[allow(clippy::tuple_array_conversions, reason = "a, b also used apart")]
-    fn bus_label_on_same_bus(&self, sheet: SheetId, at: Pt) -> Option<Vec<String>> {
-        // Collect this sheet's bus segments.
-        let segs: Vec<(Pt, Pt)> = self
+    /// The bus segment endpoints reachable over `sheet`'s bus segments from
+    /// `at` (which lies on an endpoint or the interior of one). Empty when
+    /// `at` touches no bus segment.
+    fn bus_reach(&self, sheet: SheetId, at: Pt) -> BTreeSet<Pt> {
+        let segs: Vec<[Pt; 2]> = self
             .segments
             .iter()
             .filter(|(s, _, _, is_bus)| *s == sheet && *is_bus)
-            .map(|(_, a, b, _)| (*a, *b))
+            .map(|(_, a, b, _)| [*a, *b])
             .collect();
-        if segs.is_empty() {
-            return None;
-        }
-        // Flood the bus subgraph reachable from `at` (which lies on some bus
-        // segment, being the sheet-pin / hierarchical-label connection point).
         let mut reached: BTreeSet<Pt> = BTreeSet::new();
-        let mut frontier: Vec<Pt> = Vec::new();
-        // Seed: any segment endpoint coincident with `at`, or, if `at` lies on
-        // a segment interior, both its endpoints.
-        for &(a, b) in &segs {
-            if a == at || b == at || point_strictly_inside(at, a, b) {
-                for p in [a, b] {
-                    if reached.insert(p) {
-                        frontier.push(p);
-                    }
-                }
-            }
-        }
-        if reached.is_empty() {
-            return None;
-        }
+        let mut frontier: Vec<Pt> = vec![at];
         while let Some(p) = frontier.pop() {
-            for &(a, b) in &segs {
-                let touch = a == p || b == p || point_strictly_inside(p, a, b);
-                if touch {
-                    for q in [a, b] {
+            for &seg in &segs {
+                let [a, b] = seg;
+                if a == p || b == p || point_strictly_inside(p, a, b) {
+                    for q in seg {
                         if reached.insert(q) {
                             frontier.push(q);
                         }
@@ -1146,21 +1370,20 @@ impl NetlistBuilder {
                 }
             }
         }
-        // A bus label on this sheet whose coordinate lies on a reached segment.
-        for (s, lpt, members) in &self.bus_labels {
-            if *s != sheet {
-                continue;
-            }
-            let on_bus = reached.contains(lpt)
-                || segs.iter().any(|&(a, b)| {
-                    (reached.contains(&a) || reached.contains(&b))
-                        && (point_strictly_inside(*lpt, a, b) || a == *lpt || b == *lpt)
-                });
-            if on_bus {
-                return Some(members.clone());
-            }
-        }
-        None
+        reached
+    }
+
+    /// Whether `pt` lies on the bus subgraph `reach` (from [`Self::bus_reach`])
+    /// on `sheet`: at one of its endpoints or inside one of its segments.
+    fn point_on_reach(&self, sheet: SheetId, pt: Pt, reach: &BTreeSet<Pt>) -> bool {
+        reach.contains(&pt)
+            || self.segments.iter().any(|&(s, a, b, is_bus)| {
+                s == sheet
+                    && is_bus
+                    && reach.contains(&a)
+                    && reach.contains(&b)
+                    && point_strictly_inside(pt, a, b)
+            })
     }
 
     /// KiCad names a net by a sheet-scoped label (local or hierarchical)
@@ -1185,7 +1408,10 @@ impl NetlistBuilder {
             .filter_map(|(root, n)| {
                 let &(_, _, i) = winner.get(root)?;
                 let a = &self.anchors[i];
-                if !matches!(a.kind, AnchorKind::Local | AnchorKind::Hier) {
+                if !matches!(
+                    a.kind,
+                    AnchorKind::Local | AnchorKind::Hier | AnchorKind::SheetPin
+                ) {
                     return None;
                 }
                 let display = self.sheet_display.get(self.anchor_sheet[i] as usize)?;
@@ -1266,14 +1492,28 @@ impl NetlistBuilder {
         // local label meets a same-named global label, power symbol or
         // hierarchical label on its own sheet (kicad-cli netlists), though
         // never a local label on another sheet.
+        // A sheet-pin-driven bus member is not a label: it joins the
+        // same-named net but never directly another such member, so those
+        // are folded in after every labelled name is keyed.
         let mut local_by_key: HashMap<(SheetId, String), usize> = HashMap::new();
         for (i, a) in self.anchors.iter().enumerate() {
+            if a.kind == AnchorKind::SheetPin {
+                continue;
+            }
             let key = (self.anchor_sheet[i], a.name.clone());
             match local_by_key.get(&key) {
                 Some(&first) => self.uf.union(first, a.node),
                 None => {
                     local_by_key.insert(key, a.node);
                 }
+            }
+        }
+        for (i, a) in self.anchors.iter().enumerate() {
+            if a.kind != AnchorKind::SheetPin {
+                continue;
+            }
+            if let Some(&named) = local_by_key.get(&(self.anchor_sheet[i], a.name.clone())) {
+                self.uf.union(named, a.node);
             }
         }
 
@@ -1593,7 +1833,19 @@ struct LibDef {
 /// All lib symbol definitions embedded in one schematic, indexed by `lib_id`.
 struct LibSymbols {
     defs: HashMap<String, LibDef>,
+    /// The file predates KiCad 8's format, where a power symbol's hidden
+    /// `power_in` pin name, not its Value, names the net (see
+    /// [`LEGACY_POWER_NAME_BEFORE`]).
+    legacy_power_names: bool,
 }
+
+/// The first `.kicad_sch` format version (KiCad 8.0) whose power symbols are
+/// named by their Value. In older files a power symbol whose Value was edited
+/// away from its hidden pin's name (`+3.3V` on a `+3V3` pin) still names the
+/// pin's net: `kicad-cli sch export netlist` joins it with every `+3V3`
+/// symbol and names the net `+3V3`. Files from KiCad 8 on carry `~` or an
+/// empty pin name and the Value decides.
+const LEGACY_POWER_NAME_BEFORE: i64 = 20_231_120;
 
 impl LibSymbols {
     fn parse(root: &List) -> Self {
@@ -1637,11 +1889,36 @@ impl LibSymbols {
                 );
             }
         }
-        Self { defs }
+        let legacy_power_names = root
+            .find("version")
+            .and_then(|v| v.arg_value(0))
+            .and_then(|v| v.parse::<i64>().ok())
+            .is_some_and(|v| v < LEGACY_POWER_NAME_BEFORE);
+        Self {
+            defs,
+            legacy_power_names,
+        }
     }
 
-    fn get(&self, lib_id: &str) -> Option<&LibDef> {
-        self.defs.get(lib_id)
+    /// The definition a symbol instance draws. An instance whose symbol was
+    /// edited away from the library carries `(lib_name "X_1")` and its
+    /// embedded definition is stored under that name, not under `lib_id`;
+    /// looking up `lib_id` alone found nothing and the part lost every pin.
+    fn for_instance(&self, sym: &List, lib_id: &str) -> Option<&LibDef> {
+        sym.find_value("lib_name")
+            .and_then(|name| self.defs.get(&name))
+            .or_else(|| self.defs.get(lib_id))
+    }
+
+    /// The net a power symbol's `power_in` pin names: its Value, or in a
+    /// pre-KiCad-8 file its hidden pin's name.
+    fn power_net_name<'a>(&self, pin: &'a LibPin, value: &'a str) -> &'a str {
+        let legacy = self.legacy_power_names && pin.hidden;
+        if legacy && !pin.name.is_empty() && pin.name != "~" {
+            &pin.name
+        } else {
+            value
+        }
     }
 }
 
@@ -1773,6 +2050,59 @@ const fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
 ///   names. `USB{DP DM}` → `USB.DP`, `USB.DM`; `{A B[0..1]}` → `A`, `B0`, `B1`.
 ///
 /// The names returned are already `normalize_label`-d (the input should be).
+/// Where a group bus `PREFIX{...}` opens, or `None` when `name` is not one.
+///
+/// KiCad text markup, overbar `~{X}`, subscript `_{X}`, superscript `^{X}`,
+/// is NOT bus syntax: the char immediately before `{` is the markup marker
+/// and KiCad keeps the literal text (`~{RST}`) as the net name. Treating it
+/// as a group bus (prefix `~`, member `~.RST`) silently splits ubiquitous
+/// active-low nets like `~{RESET}` / `~{CS}`. A named escape (`{slash}`,
+/// `{brace}`, ...) is not a group either: bus text is expanded before it is
+/// unescaped. Either may also appear in a group's prefix.
+fn group_bus_open(name: &str) -> Option<usize> {
+    if !name.ends_with('}') {
+        return None;
+    }
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        let markup = i > 0 && matches!(bytes[i - 1], b'~' | b'_' | b'^');
+        if !markup && !crate::netname::starts_with_named_escape(&name[i..]) {
+            return Some(i);
+        }
+        // Step over the markup or escape so a group whose prefix carries one
+        // (`I_{2}C1{SCL SDA}`) still opens at its own brace.
+        i += name[i..].find('}')? + 1;
+    }
+    None
+}
+
+/// The group-local name of each member of a group bus `PREFIX{...}`: the
+/// member with its `PREFIX.` qualifier removed (`A{DIR[0..1]}` carries
+/// `A.DIR0`, `A.DIR1`, whose local names are `DIR0`, `DIR1`). `None` when
+/// `raw` (the label text as written) is not a group bus.
+fn group_locals(raw: &str, members: &[String]) -> Option<Vec<String>> {
+    let open = group_bus_open(raw)?;
+    let prefix = normalize_label(&raw[..open]);
+    let qualifier = format!("{prefix}.");
+    Some(
+        members
+            .iter()
+            .map(|m| {
+                if prefix.is_empty() {
+                    m.clone()
+                } else {
+                    m.strip_prefix(&qualifier).unwrap_or(m).to_string()
+                }
+            })
+            .collect(),
+    )
+}
+
 fn expand_bus(name: &str) -> Option<Vec<String>> {
     // No alias context: a bare token never resolves to an alias.
     expand_bus_aliased(name, &|_| None)
@@ -1812,38 +2142,34 @@ fn expand_bus_aliased_depth(
         return None;
     }
     // Group bus: optional prefix then `{ ... }`.
-    if let Some(open) = name.find('{') {
-        // KiCad text markup, overbar `~{X}`, subscript `_{X}`, superscript
-        // `^{X}`, is NOT bus syntax: the char immediately before `{` is the
-        // markup marker and KiCad keeps the literal text (`~{RST}`) as the net
-        // name. Treating it as a group bus (prefix `~`, member `~.RST`) silently
-        // splits ubiquitous active-low nets like `~{RESET}` / `~{CS}`. Only a
-        // `{` that is not a markup brace opens a group bus.
-        let is_markup = open > 0 && matches!(name.as_bytes()[open - 1], b'~' | b'_' | b'^');
-        if !is_markup && name.ends_with('}') {
-            let prefix = &name[..open];
-            let inner = &name[open + 1..name.len() - 1];
-            let mut out = Vec::new();
-            for tok in inner.split_whitespace() {
-                // A token expands as: a nested vector/group bus, OR a bus-alias
-                // reference (`{ALIAS}` is written bare inside the group), OR a
-                // literal single member.
-                let expanded = expand_bus_aliased_depth(tok, alias, depth + 1)
-                    .or_else(|| alias(tok))
-                    .unwrap_or_else(|| vec![tok.to_string()]);
-                for m in expanded {
-                    if prefix.is_empty() {
-                        out.push(m);
-                    } else {
-                        out.push(format!("{prefix}.{m}"));
-                    }
+    if let Some(open) = group_bus_open(name) {
+        let prefix = &name[..open];
+        let inner = &name[open + 1..name.len() - 1];
+        let mut out = Vec::new();
+        // Members are separated by whitespace or commas (`USB{VBUS, CC1}`),
+        // as in eeschema's bus-group parser.
+        for tok in inner
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|t| !t.is_empty())
+        {
+            // A token expands as: a nested vector/group bus, OR a bus-alias
+            // reference (`{ALIAS}` is written bare inside the group), OR a
+            // literal single member.
+            let expanded = expand_bus_aliased_depth(tok, alias, depth + 1)
+                .or_else(|| alias(tok))
+                .unwrap_or_else(|| vec![tok.to_string()]);
+            for m in expanded {
+                if prefix.is_empty() {
+                    out.push(m);
+                } else {
+                    out.push(format!("{prefix}.{m}"));
                 }
             }
-            if out.is_empty() {
-                return None;
-            }
-            return Some(out);
         }
+        if out.is_empty() {
+            return None;
+        }
+        return Some(out);
     }
     // Vector bus: `PREFIX[m..n]`.
     let open = name.find('[')?;
@@ -1888,6 +2214,21 @@ fn instance_path<'a>(sym: &'a List, inst_path: &str) -> Option<&'a List> {
         .find(|path| path.arg_value(0).as_deref() == Some(inst_path))
 }
 
+/// The root file's KiCad 6 `(symbol_instances (path P (reference R) (unit U)))`
+/// table, keyed by path.
+fn legacy_symbol_instances(root: &List) -> HashMap<String, (String, Option<i64>)> {
+    let Some(table) = root.find("symbol_instances") else {
+        return HashMap::new();
+    };
+    table
+        .find_all("path")
+        .filter_map(|path| {
+            let key = path.arg_value(0)?;
+            Some((key, (path.find_value("reference")?, path.find_i64("unit"))))
+        })
+        .collect()
+}
+
 /// A symbol-instance property value by key.
 fn property(sym: &List, key: &str) -> Option<String> {
     for prop in sym.find_all("property") {
@@ -1898,10 +2239,15 @@ fn property(sym: &List, key: &str) -> Option<String> {
     None
 }
 
-/// A `(sheet ...)` property value by key (Sheetname/Sheetfile).
+/// A `(sheet ...)` property value by key (Sheetname/Sheetfile). KiCad 6
+/// writes these keys with a space (`"Sheet file"`, `"Sheet name"`) and
+/// KiCad 7 onward without, so keys compare with spaces ignored; matching only
+/// one spelling silently dropped every sub-sheet of a KiCad 6 hierarchy.
 fn sheet_property(sheet: &List, key: &str) -> Option<String> {
+    let bare = |k: &str| k.chars().filter(|c| *c != ' ').collect::<String>();
+    let key = bare(key);
     for prop in sheet.find_all("property") {
-        if prop.arg_value(0).as_deref() == Some(key) {
+        if prop.arg_value(0).is_some_and(|k| bare(&k) == key) {
             return prop.arg_value(1);
         }
     }
@@ -2014,6 +2360,15 @@ mod tests {
         assert_eq!(
             expand_bus("IRQ-[1..3]"),
             Some(vec!["IRQ-1".into(), "IRQ-2".into(), "IRQ-3".into()])
+        );
+    }
+
+    #[test]
+    fn group_members_may_be_comma_separated() {
+        // `USB{VBUS, CC1}` is the same bus as `USB{VBUS CC1}`.
+        assert_eq!(
+            expand_bus("USB{VBUS, CC1}"),
+            Some(vec!["USB.VBUS".to_string(), "USB.CC1".to_string()])
         );
     }
 

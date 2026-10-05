@@ -1,0 +1,107 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "00000000-0000-0000-0000-000000e00001")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_names (offset 0))
+			(symbol "R_1_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+				(pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(uuid "00000000-0000-0000-0000-000000e00003")
+		(property "Reference" "R1" (at 102 100 90))
+		(property "Value" "10k" (at 102 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-000000e00004"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000e00005"))
+		(instances
+			(project "bus_alias_project_top"
+				(path "/00000000-0000-0000-0000-000000e00001"
+					(reference "R1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 100 96.19) (xy 100 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00006")
+	)
+	(wire
+		(pts (xy 100 103.81) (xy 100 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00007")
+	)
+	(label "SCL" (at 100 93 0) (uuid "00000000-0000-0000-0000-000000e00008"))
+	(label "~{ALERT}" (at 100 107 0) (uuid "00000000-0000-0000-0000-000000e00009"))
+	(symbol
+		(lib_id "Device:R")
+		(at 110 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(uuid "00000000-0000-0000-0000-000000e0000a")
+		(property "Reference" "R2" (at 112 100 90))
+		(property "Value" "10k" (at 112 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-000000e0000b"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000e0000c"))
+		(instances
+			(project "bus_alias_project_top"
+				(path "/00000000-0000-0000-0000-000000e00001"
+					(reference "R2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 110 96.19) (xy 110 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0000d")
+	)
+	(wire
+		(pts (xy 110 103.81) (xy 110 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0000e")
+	)
+	(label "CLK.P" (at 110 93 0) (uuid "00000000-0000-0000-0000-000000e0000f"))
+	(bus
+		(pts (xy 120 95) (xy 140 95))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00010")
+	)
+	(label "{CTL}" (at 125 95 0) (uuid "00000000-0000-0000-0000-000000e00011"))
+	(bus
+		(pts (xy 130 100) (xy 140 100))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00012")
+	)
+	(sheet
+		(at 140 90)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-000000e00002")
+		(property "Sheetname" "fpga" (at 140 89 0))
+		(property "Sheetfile" "bus_alias_project_child.kicad_sch" (at 140 111 0))
+		(pin "{CTL}" bidirectional (at 140 95 180) (uuid "00000000-0000-0000-0000-000000e00013"))
+		(pin "CLK{PAIR}" bidirectional (at 140 100 180) (uuid "00000000-0000-0000-0000-000000e00014"))
+		(instances
+			(project "bus_alias_project_top"
+				(path "/00000000-0000-0000-0000-000000e00001" (page "22"))
+			)
+		)
+	)
+	(sheet_instances
+		(path "/" (page "1"))
+	)
+)

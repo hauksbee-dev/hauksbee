@@ -1,0 +1,58 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "00000000-0000-0000-0000-000000e00051")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_names (offset 0))
+			(symbol "R_1_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+				(pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(uuid "00000000-0000-0000-0000-000000e00048")
+		(property "Reference" "R3" (at 102 100 90))
+		(property "Value" "10k" (at 102 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-000000e00049"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000e0004a"))
+		(instances
+			(project "bus_member_match_top"
+				(path "/00000000-0000-0000-0000-000000e00027/00000000-0000-0000-0000-000000e00029"
+					(reference "R3")
+					(unit 1)
+				)
+				(path "/00000000-0000-0000-0000-000000e00027/00000000-0000-0000-0000-000000e0002b"
+					(reference "R5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 100 96.19) (xy 100 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0004b")
+	)
+	(wire
+		(pts (xy 100 103.81) (xy 100 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0004c")
+	)
+	(label "L.P" (at 100 93 0) (uuid "00000000-0000-0000-0000-000000e0004d"))
+	(label "L.N" (at 100 107 0) (uuid "00000000-0000-0000-0000-000000e0004e"))
+	(bus
+		(pts (xy 120 93) (xy 130 93))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0004f")
+	)
+	(hierarchical_label "L{P N}" (shape bidirectional) (at 130 93 0) (uuid "00000000-0000-0000-0000-000000e00050"))
+)

@@ -1,0 +1,92 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "00000000-0000-0000-0000-000000e00015")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_names (offset 0))
+			(symbol "R_1_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+				(pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+			)
+		)
+	)
+	(bus_alias "PAIR" (members "P" "N"))
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(uuid "00000000-0000-0000-0000-000000e00016")
+		(property "Reference" "R3" (at 102 100 90))
+		(property "Value" "10k" (at 102 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-000000e00017"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000e00018"))
+		(instances
+			(project "bus_alias_project_top"
+				(path "/00000000-0000-0000-0000-000000e00001/00000000-0000-0000-0000-000000e00002"
+					(reference "R3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 100 96.19) (xy 100 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00019")
+	)
+	(wire
+		(pts (xy 100 103.81) (xy 100 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0001a")
+	)
+	(label "SCL" (at 100 93 0) (uuid "00000000-0000-0000-0000-000000e0001b"))
+	(label "~{ALERT}" (at 100 107 0) (uuid "00000000-0000-0000-0000-000000e0001c"))
+	(symbol
+		(lib_id "Device:R")
+		(at 110 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(uuid "00000000-0000-0000-0000-000000e0001d")
+		(property "Reference" "R4" (at 112 100 90))
+		(property "Value" "10k" (at 112 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-000000e0001e"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000e0001f"))
+		(instances
+			(project "bus_alias_project_top"
+				(path "/00000000-0000-0000-0000-000000e00001/00000000-0000-0000-0000-000000e00002"
+					(reference "R4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 110 96.19) (xy 110 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00020")
+	)
+	(wire
+		(pts (xy 110 103.81) (xy 110 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00021")
+	)
+	(label "CLK.P" (at 110 93 0) (uuid "00000000-0000-0000-0000-000000e00022"))
+	(bus
+		(pts (xy 120 93) (xy 130 93))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00023")
+	)
+	(hierarchical_label "{CTL}" (shape bidirectional) (at 130 93 0) (uuid "00000000-0000-0000-0000-000000e00024"))
+	(bus
+		(pts (xy 120 98) (xy 130 98))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00025")
+	)
+	(hierarchical_label "CLK{PAIR}" (shape bidirectional) (at 130 98 0) (uuid "00000000-0000-0000-0000-000000e00026"))
+)

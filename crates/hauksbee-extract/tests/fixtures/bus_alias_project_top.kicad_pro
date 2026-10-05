@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "filename": "bus_alias_project_top.kicad_pro",
+    "version": 1
+  },
+  "schematic": {
+    "bus_aliases": {
+      "CTL": [
+        "SCL",
+        "SDA",
+        "~{ALERT}"
+      ]
+    }
+  }
+}

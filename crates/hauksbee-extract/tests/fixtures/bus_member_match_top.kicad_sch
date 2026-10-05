@@ -1,0 +1,134 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "00000000-0000-0000-0000-000000e00027")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_names (offset 0))
+			(symbol "R_1_1"
+				(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+				(pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(uuid "00000000-0000-0000-0000-000000e0002c")
+		(property "Reference" "R1" (at 102 100 90))
+		(property "Value" "10k" (at 102 100 90))
+		(pin "1" (uuid "00000000-0000-0000-0000-000000e0002d"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000e0002e"))
+		(instances
+			(project "bus_member_match_top"
+				(path "/00000000-0000-0000-0000-000000e00027"
+					(reference "R1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts (xy 100 96.19) (xy 100 90))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0002f")
+	)
+	(wire
+		(pts (xy 100 103.81) (xy 100 110))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00030")
+	)
+	(label "A.Q0" (at 100 93 0) (uuid "00000000-0000-0000-0000-000000e00031"))
+	(label "A.DIR0" (at 100 107 0) (uuid "00000000-0000-0000-0000-000000e00032"))
+	(bus
+		(pts (xy 120 95) (xy 140 95))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00033")
+	)
+	(label "A{DIR[0..1] Q[0..1]}" (at 122 95 0) (uuid "00000000-0000-0000-0000-000000e00034"))
+	(sheet
+		(at 140 90)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-000000e00028")
+		(property "Sheetname" "q" (at 140 89 0))
+		(property "Sheetfile" "bus_member_match_q.kicad_sch" (at 140 111 0))
+		(pin "{Q[0..1]}" bidirectional (at 140 95 180) (uuid "00000000-0000-0000-0000-000000e00035"))
+		(instances
+			(project "bus_member_match_top"
+				(path "/00000000-0000-0000-0000-000000e00027" (page "55"))
+			)
+		)
+	)
+	(bus
+		(pts (xy 130 135) (xy 140 135))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00036")
+	)
+	(bus
+		(pts (xy 130 135) (xy 130 160))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00037")
+	)
+	(bus
+		(pts (xy 130 160) (xy 190 160))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00038")
+	)
+	(bus
+		(pts (xy 190 135) (xy 190 160))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e00039")
+	)
+	(sheet
+		(at 140 130)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-000000e00029")
+		(property "Sheetname" "left" (at 140 129 0))
+		(property "Sheetfile" "bus_member_match_pair.kicad_sch" (at 140 151 0))
+		(pin "L{P N}" bidirectional (at 140 135 180) (uuid "00000000-0000-0000-0000-000000e0003a"))
+		(instances
+			(project "bus_member_match_top"
+				(path "/00000000-0000-0000-0000-000000e00027" (page "60"))
+			)
+		)
+	)
+	(sheet
+		(at 190 130)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-000000e0002a")
+		(property "Sheetname" "right" (at 190 129 0))
+		(property "Sheetfile" "bus_member_match_right.kicad_sch" (at 190 151 0))
+		(pin "R{P N}" bidirectional (at 190 135 180) (uuid "00000000-0000-0000-0000-000000e0003b"))
+		(instances
+			(project "bus_member_match_top"
+				(path "/00000000-0000-0000-0000-000000e00027" (page "61"))
+			)
+		)
+	)
+	(bus
+		(pts (xy 230 135) (xy 240 135))
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000e0003c")
+	)
+	(sheet
+		(at 240 130)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-000000e0002b")
+		(property "Sheetname" "solo" (at 240 129 0))
+		(property "Sheetfile" "bus_member_match_pair.kicad_sch" (at 240 151 0))
+		(pin "L{P N}" bidirectional (at 240 135 180) (uuid "00000000-0000-0000-0000-000000e0003d"))
+		(instances
+			(project "bus_member_match_top"
+				(path "/00000000-0000-0000-0000-000000e00027" (page "63"))
+			)
+		)
+	)
+	(sheet_instances
+		(path "/" (page "1"))
+	)
+)

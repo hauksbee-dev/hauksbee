@@ -23,6 +23,14 @@ const NAMED_ESCAPES: &[(&str, &str)] = &[
     ("{brace}", "{"),
 ];
 
+/// Whether `text` begins with one of KiCad's named escape tokens
+/// (`{slash}`, `{brace}`, ...), i.e. a `{` that is an escaped character and
+/// not the opening of a group bus.
+#[must_use]
+pub(crate) fn starts_with_named_escape(text: &str) -> bool {
+    NAMED_ESCAPES.iter().any(|(tok, _)| text.starts_with(tok))
+}
+
 /// Turn a net name as spelled in a KiCad file into the name the schematic
 /// shows.
 ///

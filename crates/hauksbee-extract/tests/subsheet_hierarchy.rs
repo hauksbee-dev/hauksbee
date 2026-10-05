@@ -309,3 +309,82 @@ fn a_local_label_in_a_reused_sheet_is_one_net_per_placement() {
     assert_eq!(net_of("R1", "2"), "/bank_a/CLAMP");
     assert_eq!(net_of("R3", "2"), "/bank_b/CLAMP");
 }
+
+/// Each pin's net id in a hierarchy, keyed `REF.PIN`, for partition checks
+/// against what `kicad-cli sch export netlist` reports for the same fixture.
+fn pin_nets(top: &str) -> std::collections::HashMap<String, i64> {
+    let board =
+        ExtractedBoard::from_kicad_schematic_path(&fixture(top)).expect("extract hierarchy");
+    board
+        .components
+        .iter()
+        .flat_map(|c| {
+            c.pins
+                .iter()
+                .filter_map(move |p| Some((format!("{}.{}", c.reference, p.number), p.net?)))
+        })
+        .collect()
+}
+
+/// A group bus naming a bus alias crosses a sheet boundary and joins each
+/// member to the same-named label on both sides. `{CTL}` is defined in the
+/// project file (where KiCad 9+ keeps aliases) and `{PAIR}` only in the child
+/// sheet, yet both are in force on every sheet; a member spelled with markup
+/// (`~{ALERT}`) joins its label like any other. kicad-cli nets: `/SCL` = R1.1
+/// R3.1, `/~{ALERT}` = R1.2 R3.2, `/fpga/CLK.P` = R2.1 R4.1.
+#[test]
+fn a_bus_alias_carries_its_members_across_a_sheet_boundary() {
+    let n = pin_nets("bus_alias_project_top.kicad_sch");
+    assert_eq!(n["R1.1"], n["R3.1"], "SCL through the project alias");
+    assert_eq!(n["R1.2"], n["R3.2"], "~{{ALERT}} through the project alias");
+    assert_eq!(
+        n["R2.1"], n["R4.1"],
+        "CLK.P through a sibling sheet's alias"
+    );
+    assert_ne!(n["R1.1"], n["R1.2"]);
+}
+
+/// Group buses pair members by name, not position: the `{Q[0..1]}` sheet pin
+/// on an `A{DIR[0..1] Q[0..1]}` bus carries `A.Q0`/`A.Q1`, not `A.DIR0`. Two
+/// sheet pins on one unlabelled bus (`L{P N}`, `R{P N}`) join member-wise,
+/// and a second placement of the left sheet on its own unlabelled bus stays
+/// apart. kicad-cli nets: `/A.Q0` = R1.1 R2.1, `/A.DIR0` = R1.2,
+/// `/left/L.P` = R3.1 R4.1, `/left/L.N` = R3.2 R4.2, `/solo/L.P` = R5.1.
+#[test]
+fn group_bus_members_pair_by_name_across_sheet_pins() {
+    let n = pin_nets("bus_member_match_top.kicad_sch");
+    assert_eq!(n["R1.1"], n["R2.1"], "A.Q0 meets the child's Q0");
+    assert_ne!(n["R1.2"], n["R2.1"], "A.DIR0 is not Q0");
+    assert_ne!(n["R1.2"], n["R2.2"], "A.DIR0 is not Q1");
+    assert_eq!(n["R3.1"], n["R4.1"], "L.P meets R.P over the shared bus");
+    assert_eq!(n["R3.2"], n["R4.2"], "L.N meets R.N over the shared bus");
+    assert_ne!(n["R3.1"], n["R5.1"], "the solo placement stays apart");
+    assert_ne!(n["R4.1"], n["R5.1"], "the solo placement stays apart");
+}
+
+/// A KiCad 6 hierarchy: its sheets name their file under `"Sheet file"`, a
+/// power symbol whose Value (`+3.3V`) differs from its hidden pin's name
+/// (`+3V3`) is named by the pin, and a symbol edited away from its library
+/// is defined under its `lib_name`. kicad-cli nets: `+3V3` = R1.1 R2.1,
+/// `/rails/X` = R1.2 R3.1.
+#[test]
+fn a_kicad_6_hierarchy_reads_like_kicad_cli_does() {
+    let n = pin_nets("legacy_v6_top.kicad_sch");
+    assert_eq!(n.len(), 6, "every resistor pin is on a net: {n:?}");
+    assert_eq!(
+        n["R1.1"], n["R2.1"],
+        "+3.3V and +3V3 symbols share pin +3V3"
+    );
+    assert_eq!(n["R1.2"], n["R3.1"], "the lib_name part keeps its pins");
+}
+
+/// A KiCad 6 sheet placed twice keeps each placement's designator in the root
+/// file's `symbol_instances` table; the symbol's own `Reference` property is
+/// only one of them. kicad-cli nets: `/left/NODE` = R1.1, `/right/NODE` = R2.1.
+#[test]
+fn a_kicad_6_reused_sheet_takes_each_placements_designator() {
+    let n = pin_nets("legacy_v6_reuse_top.kicad_sch");
+    assert!(n.contains_key("R1.1"), "left placement is R1: {n:?}");
+    assert!(n.contains_key("R2.1"), "right placement is R2: {n:?}");
+    assert_ne!(n["R1.1"], n["R2.1"], "local NODE labels stay per placement");
+}
