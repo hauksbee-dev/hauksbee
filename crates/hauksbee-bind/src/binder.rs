@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use hauksbee_extract::{Component, ExtractedBoard, is_placeholder_value};
+use hauksbee_extract::{is_placeholder_value, Component, ExtractedBoard};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
     BDep, BOutput, BjtModel, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, MosLevel,
@@ -35,9 +35,9 @@ use hauksbee_models::{
 };
 
 use crate::bind_report::{BindOutcome, BindReport, BindRow, SimpleRegulator};
-use crate::digital::{DigitalComponent, SupplyDraw, output_roles};
-use crate::drivers::{DEFAULT_RO, PinDriver};
-use crate::mcu_clock::{ClockBoard, ClockKind, McuClock, classify as classify_clock};
+use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
+use crate::drivers::{PinDriver, DEFAULT_RO};
+use crate::mcu_clock::{classify as classify_clock, ClockBoard, ClockKind, McuClock};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::program_resistor::{is_ground_net, program_resistance_to_ground};
 use crate::stress::DeviceMeta;
@@ -3526,7 +3526,11 @@ const ZERO_OHM_JUMPER_OHMS: f64 = 1e-3;
 /// never reach here: the model library classes them as beads first.
 fn rkm_henries(p: &hauksbee_models::value::ParsedValue) -> f64 {
     let rkm = p.suffix.as_deref() == Some("R") && p.unit.is_none();
-    if rkm { p.si * 1e-6 } else { p.si }
+    if rkm {
+        p.si * 1e-6
+    } else {
+        p.si
+    }
 }
 
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
@@ -9217,12 +9221,10 @@ style = "i2c_pointer"
             &power_nets,
         );
         assert_eq!(literal.devices.len(), 4);
-        assert!(
-            literal
-                .devices
-                .iter()
-                .all(|d| crate::stress::strip_unit_suffix(d.name()) == "U8_l1")
-        );
+        assert!(literal
+            .devices
+            .iter()
+            .all(|d| crate::stress::strip_unit_suffix(d.name()) == "U8_l1"));
         // Each leg takes its own path's ron; a card with only `ron` gives both legs it.
         let per_path = card(&[("ron", 5.0), ("ron_s0", 0.25), ("ron_s1", 1.3)]);
         for (model, s0, s1) in [(&model, 5.0, 5.0), (&per_path, 0.25, 1.3)] {
@@ -9322,7 +9324,7 @@ style = "i2c_pointer"
                 .1;
             assert_eq!(carriers.len(), 1, "one s0 leg on lane {lane}");
             assert_eq!(
-                enabled.devices[carriers[0].0.0 as usize].name(),
+                enabled.devices[carriers[0].0 .0 as usize].name(),
                 format!("U8_s{}", (lane - 1) * 2)
             );
         }
@@ -9360,7 +9362,7 @@ style = "i2c_pointer"
     /// ctrl) or without one (a power mux: both legs reference vss).
     #[test]
     fn spdt_with_or_without_vcc_follows_ctrl_through_a_dc_solve() {
-        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
         use hauksbee_testkit::circuits::{res, vdc};
         let names = ["com", "s0:in1", "s1:in2", "ctrl", "vss:gnd", "vcc:+3v3"];
         let rails = HashMap::from([("+3V3".to_string(), 3.3)]);
@@ -10171,7 +10173,7 @@ style = "i2c_pointer"
     /// predicts each path's voltage drop under load using its own resistance.
     #[test]
     fn the_power_mux_selects_both_paths_with_their_own_resistance() {
-        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
         use hauksbee_testkit::circuits::{res, vdc};
         let lib = ModelLibrary::builtin();
         let model = resolve_value(&lib, "TPS2104", "");
@@ -10192,8 +10194,13 @@ style = "i2c_pointer"
             let mut circuit = Circuit::new();
             let nodes = ["EN", "IN2", "OUT", "IN1"].map(|name| circuit.node(name));
             let node_of = |n: Option<i64>| {
-                n.and_then(|n| usize::try_from(n).ok())
-                    .map(|n| if n == 0 { NodeId::GROUND } else { nodes[n - 1] })
+                n.and_then(|n| usize::try_from(n).ok()).map(|n| {
+                    if n == 0 {
+                        NodeId::GROUND
+                    } else {
+                        nodes[n - 1]
+                    }
+                })
             };
             let (outcome, warning) =
                 bind_one(&part, &model, &mut circuit, &node_of, &HashMap::new());
@@ -10354,12 +10361,11 @@ style = "i2c_pointer"
             .iter()
             .find(|r| r.reference == "U1")
             .unwrap();
-        assert!(
-            row.warning
-                .as_deref()
-                .unwrap()
-                .contains("clock source broken")
-        );
+        assert!(row
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("clock source broken"));
     }
 
     /// The RP2040 hardware guide puts 1 kOhm between XOUT and the crystal
@@ -10782,12 +10788,10 @@ style = "i2c_pointer"
         let mut twin = duplicated.components[0].clone();
         twin.pins[0].net = Some(4);
         duplicated.components.push(twin);
-        assert!(
-            duplicated
-                .components
-                .iter()
-                .all(|c| matches!(AssemblyState::of(c), AssemblyState::Present(_)))
-        );
+        assert!(duplicated
+            .components
+            .iter()
+            .all(|c| matches!(AssemblyState::of(c), AssemblyState::Present(_))));
         assert_eq!(cs_net(&duplicated, "U5"), None, "duplicated designator");
 
         let mut no_cs_role = eeprom_board(Some(1));
@@ -11100,7 +11104,7 @@ style = "i2c_pointer"
     /// floating input rests at 0 V, and a fed one still carries `Iq`.
     #[test]
     fn a_regulator_with_no_input_supply_does_not_drag_it_below_ground() {
-        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
         use hauksbee_testkit::circuits::vdc;
         let lib = ModelLibrary::builtin();
         let model = resolve_value(&lib, "LM7805", "");
@@ -11137,7 +11141,7 @@ style = "i2c_pointer"
     /// the card's `iq_a`, once per package (both units of the dual are bound).
     #[test]
     fn an_opamp_with_no_supply_does_not_drag_its_v_plus_below_ground() {
-        use hauksbee_solve::{SolverOptions, Workspace, dc_operating_point};
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
         use hauksbee_testkit::circuits::vdc;
         let lib = ModelLibrary::builtin();
         let mut model = resolve_value(&lib, "LM358", "");
