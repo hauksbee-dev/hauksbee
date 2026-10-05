@@ -1183,6 +1183,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Every chip pulls its supply current in short bursts each time it switches, faster than the regulator can respond. A small capacitor (about 100 nF) beside each chip's supply pin supplies those bursts, and a larger bulk capacitor (microfarads) on the rail refills them. With too few, the rail bounces on every edge: logic can double-clock and comparators chatter, and it looks like a firmware fault. The design files do not say where parts sit, so this is a count of capacitors against chips, not a layout check.".to_string(),
                 format!("Add about 100 nF from \"{net}\" to ground at each chip's supply pin, plus a bulk capacitor (for example 10 uF) where the rail enters the board or section."),
             ),
+            LintCheck::FloatingInput => (
+                format!("Logic inputs on {parts} are left floating. {}", f.message),
+                "A CMOS logic input has no level of its own: left unconnected it drifts with leakage and nearby signals, so the chip reads random values, and an input resting halfway between the rails makes the chip draw extra current. A no-connect mark in the schematic does not change that unless the datasheet says the pin has an internal pull resistor.".to_string(),
+                "Tie each unused input to ground or to the chip's supply (directly, or through a resistor), or drive it from an output.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),

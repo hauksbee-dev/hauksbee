@@ -381,6 +381,11 @@ pub struct Logic {
     /// from B1 when the direction flips.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sense: BTreeMap<String, String>,
+    /// Inputs the datasheet gives an internal pull resistor, so the pin may be
+    /// left open (and marked no-connect) without floating. Every other input
+    /// left open is a floating CMOS input to the static floating-input check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pulled_inputs: Vec<String>,
 }
 
 impl Logic {
@@ -395,6 +400,7 @@ impl Logic {
             && self.init.is_empty()
             && self.memories.is_empty()
             && self.sense.is_empty()
+            && self.pulled_inputs.is_empty()
     }
 }
 
@@ -1006,6 +1012,10 @@ impl Logic {
                 })
             }
         };
+
+        for pin in &self.pulled_inputs {
+            need_input("pulled_inputs".to_string(), pin)?;
+        }
 
         for (input, pin) in &self.sense {
             need_input("sense".into(), input)?;

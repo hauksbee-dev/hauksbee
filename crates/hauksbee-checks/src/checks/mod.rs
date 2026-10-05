@@ -48,6 +48,8 @@
 //! - [`rail_decoupling`]: a supply rail with far fewer capacitors to ground
 //!   than ICs drawing from it, or no bulk capacitor on a busy rail (a count,
 //!   reported as a non-gating note).
+//! - [`floating_inputs`]: a CMOS logic input left with no driver, pull or
+//!   other connection, no-connect flag or not.
 
 pub mod ampacity;
 pub mod analog_inputs;
@@ -58,6 +60,7 @@ pub mod contention;
 pub mod converter;
 pub mod device_decode;
 pub mod envelope;
+pub mod floating_inputs;
 pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
@@ -146,6 +149,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(rail_decoupling::decoupling_lint(board, lib).findings);
+    report
+        .findings
+        .extend(floating_inputs::floating_input_lint(board, lib).findings);
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.

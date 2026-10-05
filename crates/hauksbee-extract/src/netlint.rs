@@ -133,6 +133,14 @@ pub enum LintCheck {
     /// placement, so this is a ratio, never a proximity claim; it is a
     /// non-gating note. Produced by the engine-layer `rail_decoupling` check.
     MissingDecoupling,
+    /// A CMOS logic input (by the part's model card or its schematic pin type)
+    /// on no net, or on a net with no driver, pull resistor or other
+    /// connection. A floating CMOS input reads random levels and can sit in
+    /// its linear region drawing shoot-through current. An explicit
+    /// no-connect flag does not excuse it unless the card records an internal
+    /// pull on that input. Produced by the engine-layer `floating_inputs`
+    /// check.
+    FloatingInput,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -157,7 +165,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -178,6 +186,7 @@ impl LintCheck {
         Self::PcbSchematicMismatch,
         Self::RailConflict,
         Self::MissingDecoupling,
+        Self::FloatingInput,
     ];
 
     #[must_use]
@@ -203,6 +212,7 @@ impl LintCheck {
             Self::PcbSchematicMismatch => "pcb_schematic_mismatch",
             Self::RailConflict => "rail_conflict",
             Self::MissingDecoupling => "missing_decoupling",
+            Self::FloatingInput => "floating_input",
         }
     }
 }
@@ -863,7 +873,8 @@ pub fn is_unconnected_net(name: &str) -> bool {
 }
 
 /// The pin's electrical type marks it as a deliberate no-connect.
-fn pin_is_no_connect(p: &Pin) -> bool {
+#[must_use]
+pub fn pin_is_no_connect(p: &Pin) -> bool {
     let k = p.kind.to_ascii_lowercase();
     k.contains("no_connect") || k == "nc" || k == "unconnected"
 }
@@ -1281,7 +1292,8 @@ fn is_card_socket_structurally(board: &ExtractedBoard, c: &Component) -> bool {
 
 /// A test point or mounting hole is a single-point attachment, not a bus
 /// leaving the board; it must not count as "the bus exits to a connector".
-fn is_test_point_or_hole(c: &Component) -> bool {
+#[must_use]
+pub fn is_test_point_or_hole(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     let lib = c.lib_id.to_ascii_lowercase();
     r.starts_with("TP")
