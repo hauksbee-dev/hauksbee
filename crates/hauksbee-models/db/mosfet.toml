@@ -2344,6 +2344,130 @@ mounting = "FR-4, 2 oz Cu, 1 in² copper plate"
 basis = "DS37640 Rev. 2-2 (January 2016), Thermal Characteristics, RθJA (Note 6)"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DMG3415U: Diodes Incorporated P-channel enhancement-mode MOSFET, SOT-23,
+# -20 V, gate ESD-protected. Marked "not recommended for new design" (successor
+# DMP2045U, a different die that this card does not match).
+#
+# Source: Diodes Incorporated DMG3415U datasheet, DS31735 Rev. 14-3, February
+#   2022, Maximum Ratings, Thermal Characteristics and Electrical
+#   Characteristics tables (p.2).
+#
+# Datasheet figures used (TA = +25 C; every voltage and current is negative):
+#   VGS(th) = -0.3 / -0.55 / -1.0 V   @ VDS = VGS, ID = -250 uA        -> vto
+#   RDS(on) typ 31 mOhm (max 42.5)    @ VGS = -4.5 V, ID = -4.0 A
+#   RDS(on) typ 40 mOhm (max 53)      @ VGS = -2.5 V, ID = -3.5 A
+#   RDS(on) typ 51 mOhm (max 71)      @ VGS = -1.8 V, ID = -2.0 A
+#   |gFS|   typ 3 S                   @ VDS = -5 V, ID = -4 A
+#   Ciss 294 pF / Coss 104 pF / Crss 25 pF  @ VDS = -10 V, VGS = 0, 1 MHz
+#   BVDSS -20 V, VGSS +/-8 V, IDM -30 A
+#
+# kp, in magnitudes, from the -4.5 V and -1.8 V rows (overdrives 3.95 V and
+# 1.25 V): kp = (1/1.25 - 1/3.95) / (0.051 - 0.031) = 0.546835 / 0.020
+#      = 27.34 A/V^2
+#   rd+rs = 0.031 - 1/(27.34 * 3.95) = 21.74 mOhm, split evenly.
+# OUT-OF-SAMPLE CHECK: the -2.5 V row (overdrive 1.95 V), not used in the fit,
+#   lands at 1/(27.34 * 1.95) + 0.02174 = 40.5 mOhm against a typ of 40 (+1.2%).
+# The gFS row DISAGREES and is recorded rather than hidden: the level-1 fit
+#   gives sqrt(2 * 27.34 * 4) = 14.8 S at ID = -4 A against a datasheet typ of
+#   3 S. At VDS = -5 V and 4 A this part is far from the square-law regime the
+#   level-1 gm assumes, so the RDS(on) route (which governs the conducted drop
+#   through a closed switch, the job this part does on a board) is used.
+#
+# NOT MODELLED: the body diode, the gate ESD protection diode, `lambda`, and the
+# 250 Ohm gate resistance Rg.
+[[models]]
+id = "dmg3415u"
+kind = "pmos"
+description = "DMG3415U P-channel MOSFET SOT-23, -20V, -4A, Rds(on) 31mOhm typ @ Vgs=-4.5V"
+
+[models.match]
+# Ordering Information lists DMG3415U-7 and DMG3415U-13 (tape-and-reel quantity
+# codes), both SOT23. The AEC-Q101 "Q" part and the successor DMP2045U have
+# their own datasheets and are not matched.
+value_re = "(?i)^DMG3415U(-7|-13)?$"
+
+[models.params]
+vto    = -0.55     # VGS(th) typ (V), NEGATIVE for P-channel (min -0.3, max -1.0)
+kp     = 27.34     # A/V^2, from the -4.5 V and -1.8 V RDS(on) rows (see above)
+rd     = 0.01087   # half the 21.74 mOhm ohmic residue
+rs     = 0.01087   # other half
+cgd    = 2.5e-11   # = Crss typ 25 pF, DS31735 Dynamic Characteristics (Note 8), VDS = -10 V, VGS = 0, f = 1 MHz
+cgs    = 2.69e-10  # = Ciss typ - Crss typ = 294 - 25 = 269 pF, same test condition
+
+[models.pins]
+# 1 = Gate, 2 = Source, 3 = Drain, the standard SOT-23 single-MOSFET order.
+# DS31735 prints only a top-view drawing with D on the single lead and G, S on
+# the two-lead side (G left, S right) and no pin NUMBERS, so the numbering is
+# the standard reading of that drawing, the same reading the DMG3404L card above
+# uses for the same Diodes SOT23 outline.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+max_current_a       = 3.5     # |ID| continuous, VGS = -4.5 V, TA = 70 C (Note 6),
+                              # the least favourable tagged row (4.0 A at 25 C)
+max_surge_current_a = 30.0    # |IDM|, 10 us pulse, duty 1%
+max_power_w         = 0.9     # PD (Note 6)
+max_voltage_v       = 20.0    # |VDSS|
+theta_ja_c_per_w    = 139.0   # RthJA (Note 6)
+theta_jc_c_per_w    = 32.0    # RthJC (Note 6)
+max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
+rds_on_vgs          = 1.8     # lowest |VGS| RDS(on) row (51 mOhm typ / 71 max @ VGS=-1.8V)
+vgs_th_max          = 1.0     # |VGS(th)| max (-1.0 V) @ ID=-250uA
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/datasheet/download/DMG3415U.pdf"
+title = "Diodes Incorporated DMG3415U P-Channel Enhancement Mode MOSFET, DS31735 Rev. 14-3, February 2022"
+locator = "p.1 SOT23 top view and Ordering Information; p.2 Maximum Ratings, Thermal Characteristics, Electrical Characteristics"
+sha256 = "3863b974014c768a92ed8924d8c10667627afb05cec1a9a7410a79e2e63392bb"
+[[models.source.pinout]]
+package = "SOT23"
+standard = "JEDEC SOT-23 top view: 1 G and 2 S on the two-lead side, 3 D opposite (assumed; the drawing prints lead names only)"
+pins = { "1" = "G", "2" = "S", "3" = "D" }
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = -4.0
+unit = "A"
+conditions = "TA = 25 °C, VGS = -4.5 V, steady state, Note 6: FR-4 PC board, minimum recommended pad layout"
+mounting = "FR-4, minimum recommended pad"
+basis = "DS31735 Rev. 14-3 (February 2022), Maximum Ratings, ID (Note 6), TA = +25°C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current, steady state"
+rating = "max_current_a"
+max = -3.5
+unit = "A"
+conditions = "TA = 70 °C, VGS = -4.5 V, steady state, Note 6: FR-4 PC board, minimum recommended pad layout"
+mounting = "FR-4, minimum recommended pad"
+basis = "DS31735 Rev. 14-3 (February 2022), Maximum Ratings, ID (Note 6), TA = +70°C"
+[[models.source.characteristic]]
+parameter = "PD total power dissipation"
+rating = "max_power_w"
+max = 0.9
+unit = "W"
+conditions = "TA = 25 °C, Note 6: FR-4 PC board, minimum recommended pad layout"
+mounting = "FR-4, minimum recommended pad"
+basis = "DS31735 Rev. 14-3 (February 2022), Thermal Characteristics, PD (Note 6)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 139.0
+unit = "°C/W"
+conditions = "Note 6: FR-4 PC board, minimum recommended pad layout"
+mounting = "FR-4, minimum recommended pad"
+basis = "DS31735 Rev. 14-3 (February 2022), Thermal Characteristics, RθJA (Note 6)"
+[[models.source.characteristic]]
+parameter = "RθJC thermal resistance, junction to case"
+rating = "theta_jc_c_per_w"
+max = 32.0
+unit = "°C/W"
+conditions = "Note 6: FR-4 PC board, minimum recommended pad layout"
+basis = "DS31735 Rev. 14-3 (February 2022), Thermal Characteristics, RθJC (Note 6)"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FDN360P: onsemi (ex-Fairchild) P-channel PowerTrench MOSFET, SuperSOT-3.
 #
 # Source: Fairchild/onsemi "FDN360P Single P-Channel, PowerTrench MOSFET",
