@@ -110,6 +110,7 @@ export interface WebFallbackWindow {
   method: string
   fidelity_note: string
   error_estimate_v?: number
+  state_jump_v?: number
 }
 
 export interface WebCosimSection {

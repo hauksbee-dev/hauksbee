@@ -747,6 +747,14 @@
         "start_s": {
           "format": "double",
           "type": "number"
+        },
+        "state_jump_v": {
+          "description": "For a rung that discarded the carried chunk-start state (a cold\nstart): the largest node-voltage jump, in volts, between the state the\nprevious chunk ended in and the fresh operating point the rung marched\nfrom. The trajectory is DISCONTINUOUS by this much at the window\nstart. Worst chunk of a merged window; omitted for a rung that\ncontinued the carried state.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [

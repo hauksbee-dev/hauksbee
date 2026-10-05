@@ -617,6 +617,7 @@ mod tests {
                 method: "backward-euler".to_string(),
                 fidelity_note: "first-order and numerically dissipative".to_string(),
                 error_estimate_v: Some(0.012),
+                state_jump_v: None,
             }],
             short_pulses: vec![ShortPulse {
                 net: "/STROBE".to_string(),

@@ -119,13 +119,7 @@ pub fn build_cosim_json(
     let fallback_windows: Vec<CosimFallbackWindow> = sched
         .fallback_windows()
         .iter()
-        .map(|w| CosimFallbackWindow {
-            start_s: w.start_s,
-            end_s: w.end_s,
-            method: w.method.as_str().to_string(),
-            fidelity_note: w.method.fidelity_note().to_string(),
-            error_estimate_v: w.error_estimate_v,
-        })
+        .map(CosimFallbackWindow::from)
         .collect();
 
     Ok(Some(CosimJson {

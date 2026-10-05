@@ -895,6 +895,14 @@ pub struct CosimFallbackWindow {
     pub fidelity_note: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate_v: Option<f64>,
+    /// For a rung that discarded the carried chunk-start state (a cold
+    /// start): the largest node-voltage jump, in volts, between the state the
+    /// previous chunk ended in and the fresh operating point the rung marched
+    /// from. The trajectory is DISCONTINUOUS by this much at the window
+    /// start. Worst chunk of a merged window; omitted for a rung that
+    /// continued the carried state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_jump_v: Option<f64>,
 }
 
 impl From<&crate::scheduler::FallbackWindow> for CosimFallbackWindow {
@@ -905,6 +913,7 @@ impl From<&crate::scheduler::FallbackWindow> for CosimFallbackWindow {
             method: window.method.as_str().to_string(),
             fidelity_note: window.method.fidelity_note().to_string(),
             error_estimate_v: window.error_estimate_v,
+            state_jump_v: window.state_jump_v,
         }
     }
 }

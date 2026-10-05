@@ -151,7 +151,10 @@ export function fallbackWindowLine(window: WebFallbackWindow): string {
   const estimate = window.error_estimate_v == null
     ? 'no measured error estimate'
     : `${window.error_estimate_v.toFixed(3)} V measured chunk-end error estimate`
-  return `${ms(window.start_s)}-${ms(window.end_s)} ms: ${window.method}; ${estimate}; ${window.fidelity_note}.`
+  const jump = window.state_jump_v == null
+    ? ''
+    : `; carried state discarded, ${window.state_jump_v.toFixed(3)} V jump at the window start`
+  return `${ms(window.start_s)}-${ms(window.end_s)} ms: ${window.method}; ${estimate}${jump}; ${window.fidelity_note}.`
 }
 
 /** The timing refusals the refusal contract does not already carry: the

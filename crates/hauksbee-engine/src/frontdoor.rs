@@ -3896,6 +3896,7 @@ fn main {
             method: "backward-euler".to_string(),
             fidelity_note: "first-order and numerically dissipative".to_string(),
             error_estimate_v: Some(0.012),
+            state_jump_v: None,
         };
         let section = clean_ran_section();
         let mut coverage = WebCosimCoverage {

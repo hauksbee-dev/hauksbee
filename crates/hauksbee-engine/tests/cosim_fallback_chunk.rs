@@ -20,7 +20,9 @@ use crate::support::{bound_board, capacitor, impossible_board, resistor, vsource
 
 use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::result::{strict_analog_exit_code, EXIT_INVALID_FOR_ANALYSIS};
-use hauksbee_engine::scheduler::{ChunkFallbackMethod, Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
+use hauksbee_engine::scheduler::{
+    ChunkFallbackMethod, FallbackWindow, Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT,
+};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind::Dc, SourceKind::Pulse};
 use hauksbee_solve::SolverOptions;
 
@@ -85,6 +87,7 @@ fn firing_board() -> BoundBoard {
         out_lo: 0.0,
         out_hi: 5.0,
         hysteresis: 0.4,
+        tpd_s: 0.0,
         supply: hauksbee_ir::Supply::default(),
     });
     c.add(Device::Comparator {
@@ -95,6 +98,7 @@ fn firing_board() -> BoundBoard {
         out_lo: 0.0,
         out_hi: 5.0,
         hysteresis: 0.4,
+        tpd_s: 0.0,
         supply: hauksbee_ir::Supply::default(),
     });
     c.add(Device::VSwitch {
@@ -449,4 +453,66 @@ fn merged_window_keeps_the_worst_per_chunk_estimate() {
         "the merged estimate is the worst of its chunks (max), so it can never \
          drop below an already-recorded chunk: first={first:.3e} merged={merged:.3e}"
     );
+}
+
+/// A 5 V step at 1 us charging 10 nF through 10 kOhm (a 100 us time
+/// constant), bound with its cap net.
+fn charging_board() -> BoundBoard {
+    let mut c = Circuit::new();
+    let (src, cap) = (c.node("src"), c.node("cap"));
+    c.add(vsource(
+        "VSTEP".into(),
+        src,
+        NodeId::GROUND,
+        Pulse {
+            v1: 0.0,
+            v2: 5.0,
+            delay: 1e-6,
+            rise: 1e-9,
+            fall: 1e-9,
+            width: 1.0,
+            period: 2.0,
+        },
+    ));
+    c.add(resistor("R".into(), src, cap, 10e3));
+    c.add(capacitor("C".into(), cap, NodeId::GROUND, 10e-9));
+    bound_board("step", c, &[("cap", cap)])
+}
+
+/// The one fallback window after a primary first chunk and a second chunk
+/// forced onto `rung`, with the cap voltage the first chunk carried.
+fn forced_second_chunk(rung: ChunkFallbackMethod) -> (FallbackWindow, f64) {
+    let mut sched = scheduler(charging_board(), SolverOptions::default(), false);
+    sched.step(CHUNK);
+    let carried = sched.net_voltage("cap").expect("cap sampled");
+    sched.debug_force_fallback_rung = Some(rung);
+    sched.step(CHUNK);
+    let windows = sched.fallback_windows();
+    assert_eq!(windows.len(), 1, "{windows:?}");
+    assert_eq!(windows[0].method, rung);
+    (windows[0], carried)
+}
+
+/// The cold-start rung re-derives its chunk from a fresh operating point,
+/// discarding the state the previous chunk carried; its window says how far
+/// the trajectory jumped there.
+#[test]
+fn cold_start_window_states_its_jump_from_the_carried_state() {
+    let (window, carried) = forced_second_chunk(ChunkFallbackMethod::ColdStartBackwardEuler);
+    assert!(
+        carried > 1.0 && carried < 4.0,
+        "the cap is partway up: {carried:.3} V"
+    );
+    let jump = window.state_jump_v.expect("a cold start states its jump");
+    assert!(
+        jump > 0.5,
+        "the cap's {carried:.3} V carried state is discarded: jump {jump:.3} V"
+    );
+}
+
+/// A rung that continues the carried state has no jump to state.
+#[test]
+fn continuing_rung_window_states_no_jump() {
+    let (window, _) = forced_second_chunk(ChunkFallbackMethod::BackwardEuler);
+    assert_eq!(window.state_jump_v, None);
 }

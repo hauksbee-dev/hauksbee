@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  assumptionsForEvidence, describeModelSource, overallVerdict, reportView, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
+  assumptionsForEvidence, describeModelSource, fallbackWindowLine, overallVerdict, reportView, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
 } from '../src/lib/report-view'
 import type { WebReport, CheckResult, ErrorBudget, ModelOnPath, ModelUncertainty, RefusalContract, RunResponse } from '../src/types/report'
 
@@ -159,4 +159,16 @@ test('a run that judged nothing is measured, never passed', () => {
   expect(verdict(row(true), row(true))).toBe('measured')
   expect(verdict(row(true), row(false))).toBe('passed')
   expect(verdict(row(true), row(true, true))).toBe('invalid')
+})
+
+test('a cold-start fallback window states the jump from the carried state', () => {
+  const window = {
+    start_s: 0.001, end_s: 0.002, method: 'cold-start-backward-euler',
+    fidelity_note: 'restarted from a fresh operating point', error_estimate_v: 0.012,
+  }
+  expect(fallbackWindowLine(window)).not.toContain('jump')
+  expect(fallbackWindowLine({ ...window, state_jump_v: 1.25 })).toBe(
+    '1.000-2.000 ms: cold-start-backward-euler; 0.012 V measured chunk-end error estimate; '
+    + 'carried state discarded, 1.250 V jump at the window start; restarted from a fresh operating point.',
+  )
 })

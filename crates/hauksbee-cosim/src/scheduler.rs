@@ -140,6 +140,10 @@ struct ChunkThermalAccum {
     drive_charge: Vec<(f64, f64)>,
     /// Simulated seconds `drive_charge` covers.
     drive_s: f64,
+    /// The march's own t = 0 state (the first streamed sample): the carried
+    /// state on a continued march, a fresh operating point on a cold one. The
+    /// cold-start rung measures its state discontinuity against it.
+    start_x: Vec<f64>,
 }
 
 impl ChunkThermalAccum {
@@ -151,6 +155,7 @@ impl ChunkThermalAccum {
         self.pass_s = 0.0;
         self.drive_charge.clear();
         self.drive_s = 0.0;
+        self.start_x.clear();
     }
 }
 
@@ -203,7 +208,17 @@ impl ChunkFallbackMethod {
                  state, from a companion re-solve at a shifted accuracy dial \
                  (absent when no companion converged)"
             }
-            Self::BackwardEuler | Self::ColdStartBackwardEuler | Self::SubdividedBackwardEuler => {
+            Self::ColdStartBackwardEuler => {
+                "first-order backward Euler from a FRESH DC operating point: \
+                 the state carried from the previous chunk (capacitor \
+                 voltages, inductor currents, latches) was DISCARDED, so the \
+                 trajectory is discontinuous at the window start; \
+                 state_jump_v carries the largest node-voltage jump that \
+                 restart introduced, and error_estimate_v only the error each \
+                 chunk's march added after it, from a companion re-solve at a \
+                 shifted accuracy dial (absent when no companion converged)"
+            }
+            Self::BackwardEuler | Self::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
                  to the second-order primary solve; error_estimate_v carries \
@@ -238,6 +253,16 @@ pub struct FallbackWindow {
     /// neither companion converged: the window is still a real converged
     /// solve, but no empirical estimate was established for it.
     pub error_estimate_v: Option<f64>,
+    /// For a rung that DISCARDS the carried chunk-start state
+    /// ([`ChunkFallbackMethod::ColdStartBackwardEuler`]): the largest
+    /// node-voltage jump, in volts, between the state the previous chunk
+    /// ended in and the fresh operating point the rung marched from. The run's
+    /// trajectory is discontinuous by this much at the start of each such
+    /// chunk, which `error_estimate_v` (measured against the rung's own seed)
+    /// cannot see. Merged windows carry the worst chunk's jump. `None` for a
+    /// rung that continues the carried state, or when no carried state
+    /// existed to jump from.
+    pub state_jump_v: Option<f64>,
 }
 
 /// Live chip-select framing hook installed by [`Scheduler::attach_spi_bus`] when
@@ -4063,6 +4088,9 @@ impl Scheduler {
             .collect();
         let mut drive_prev: Option<(f64, Vec<f64>)> = None;
         let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
+            if thermal.start_x.is_empty() {
+                thermal.start_x.extend_from_slice(s.x);
+            }
             final_x.clear();
             final_x.extend_from_slice(s.x);
             if !drive.is_empty() {
@@ -4239,9 +4267,14 @@ impl Scheduler {
         if self.insane_node_state(&x).is_some() {
             return None;
         }
-        let method = ChunkFallbackMethod::SubdividedBackwardEuler;
-        let err = self.fallback_error_estimate(chunk, 4, be, seed, &x);
-        Some((method, x, diagnostics, err))
+        let error_estimate_v = self.fallback_error_estimate(chunk, 4, be, seed, &x);
+        Some(RungOutcome {
+            method: ChunkFallbackMethod::SubdividedBackwardEuler,
+            x,
+            diagnostics,
+            error_estimate_v,
+            state_jump: None,
+        })
     }
 
     /// One rung of [`Scheduler::fallback_ladder`]: discard the previous rung's
@@ -4267,8 +4300,34 @@ impl Scheduler {
         if self.insane_node_state(&x).is_some() {
             return None;
         }
+        // A rung that marched from a cold start did not continue the carried
+        // state: measure the jump it introduced (before the error estimate's
+        // companion marches overwrite `thermal`'s start sample).
+        let state_jump = (seed.0.is_none())
+            .then(|| self.state_jump(&thermal.start_x))
+            .flatten();
         let error_estimate_v = self.fallback_error_estimate(chunk, 1, opts, seed, &x);
-        Some((method, x, diagnostics, error_estimate_v))
+        Some(RungOutcome {
+            method,
+            x,
+            diagnostics,
+            error_estimate_v,
+            state_jump,
+        })
+    }
+
+    /// The largest node-voltage difference between the state the previous
+    /// chunk ended in (`last_dc_seed`) and `start`, a march's t = 0 state, with
+    /// the unknown it occurs on. `None` when there is no carried state to
+    /// compare against (the first chunk, or one after a refusal), or no start
+    /// sample was captured.
+    fn state_jump(&self, start: &[f64]) -> Option<(f64, usize)> {
+        let carried = self.last_dc_seed.as_deref()?;
+        (carried.iter().zip(start).take(self.layout.n_nodes))
+            .map(|(a, b)| (a - b).abs())
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, v)| (v, i))
     }
 
     /// Whether every source the current chunk sees holds a constant value
@@ -4642,9 +4701,26 @@ impl Scheduler {
                 // (an insane "rescue" neither ends the ladder nor gets
                 // adopted), so a `Some` here is a converged AND physical
                 // answer.
-                if let Some((method, x, diagnostics, error_estimate_v)) =
-                    self.fallback_ladder(chunk, &mut thermal)
+                if let Some(RungOutcome {
+                    method,
+                    x,
+                    diagnostics,
+                    error_estimate_v,
+                    state_jump,
+                }) = self.fallback_ladder(chunk, &mut thermal)
                 {
+                    // A rung that restarted from a fresh operating point broke
+                    // the trajectory: say so where it happens (with the net),
+                    // and carry the jump on the window record, never let it
+                    // pass as a continuous solve.
+                    if let Some((volts, unknown)) = state_jump {
+                        let net = hauksbee_solve::blame::name_node_unknown(&self.circuit, unknown);
+                        eprintln!(
+                            "WARNING: analog chunk at t={:.6e}s rescued by a cold start: \
+                             the carried state was discarded, a {volts:.3e} V jump on {net}",
+                            self.sim_time
+                        );
+                    }
                     self.adopt_chunk_state(x);
                     self.set_pass_draws(&thermal);
                     self.set_driver_draws(&thermal);
@@ -4653,7 +4729,12 @@ impl Scheduler {
                     // real; the ladder cleared every failed attempt's partial.
                     self.stress
                         .deposit_chunk_energy(&thermal.energy_j, thermal.elapsed_s);
-                    self.record_fallback_chunk(chunk, method, error_estimate_v);
+                    self.record_fallback_chunk(
+                        chunk,
+                        method,
+                        error_estimate_v,
+                        state_jump.map(|(volts, _)| volts),
+                    );
                     true
                 } else {
                     // Every rung failed. Keep the solver's own refusal message:
@@ -4745,6 +4826,7 @@ impl Scheduler {
         chunk: f64,
         method: ChunkFallbackMethod,
         error_estimate_v: Option<f64>,
+        state_jump_v: Option<f64>,
     ) {
         self.fallback_chunks += 1;
         let start = self.sim_time;
@@ -4756,12 +4838,17 @@ impl Scheduler {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     _ => None,
                 };
+                prev.state_jump_v = match (prev.state_jump_v, state_jump_v) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
             }
             _ => self.fallback_windows.push(FallbackWindow {
                 start_s: start,
                 end_s: end,
                 method,
                 error_estimate_v,
+                state_jump_v,
             }),
         }
     }
@@ -6395,14 +6482,17 @@ pub struct StepResult {
     pub uart: HashMap<String, Vec<u8>>,
 }
 
-/// A fallback rung that rescued a chunk: its method, end state, diagnostics and
-/// step-doubling error estimate.
-type RungOutcome = (
-    ChunkFallbackMethod,
-    Vec<f64>,
-    TransientDiagnostics,
-    Option<f64>,
-);
+/// A fallback rung that rescued a chunk: its method, end state, diagnostics,
+/// step-doubling error estimate, and (for a rung that discarded the carried
+/// state) the largest node-voltage jump it introduced with the unknown it
+/// occurred on.
+struct RungOutcome {
+    method: ChunkFallbackMethod,
+    x: Vec<f64>,
+    diagnostics: TransientDiagnostics,
+    error_estimate_v: Option<f64>,
+    state_jump: Option<(f64, usize)>,
+}
 
 /// The solved branch current of device `id`, when it owns a branch unknown.
 fn branch_current_of(layout: &Layout, branch_x: &[f64], id: DeviceId) -> Option<f64> {

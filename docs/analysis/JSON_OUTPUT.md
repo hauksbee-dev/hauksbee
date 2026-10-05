@@ -254,7 +254,11 @@ degradation so a run that silently lost fidelity never reads as healthy:
   non-empty list exits INVALID rather than trusting a collapsed waveform.
 - `fallback_windows[]`, spans converged only through a second-class integration
   rung. Each retains `{start_s, end_s, method, fidelity_note,
-  error_estimate_v?}`; absence of the measured estimate is not zero error.
+  error_estimate_v?, state_jump_v?}`; absence of the measured estimate is not
+  zero error. `state_jump_v` is present only for a rung that restarted from a
+  fresh operating point (`cold-start-backward-euler`): the carried state was
+  discarded, and the trajectory jumps by up to that many volts at the window
+  start, which `error_estimate_v` does not include.
 - `substituted`: the firmware ran on a substitute core (also in `notes`).
 - `adc_dropped[]`, ADC channels whose modelled voltage the platform could not
   inject (the firmware read nothing on that pin).

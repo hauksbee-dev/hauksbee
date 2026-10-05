@@ -122,6 +122,10 @@ record states the method and carries a measured `error_estimate_v`, a
 conservative step-doubling estimate of the chunk-end voltage error obtained by
 re-solving the window at a shifted accuracy dial and differencing the end
 states (absent, never invented, when no companion re-solve converges). The
+cold-start rung is different in kind: it discards the state the previous chunk
+ended in and marches from a fresh DC operating point, so its window carries
+`state_jump_v`, the largest node-voltage discontinuity that restart introduced,
+and the run prints a warning naming the net where it happens. The
 typed [`error_budget`](../analysis/ERROR_BUDGETS.md) partitions solved methods
 and marks unsolved spans invalid; it does not yet carry the per-window
 estimate, which today lives on the window record, the co-sim JSON, the CLI

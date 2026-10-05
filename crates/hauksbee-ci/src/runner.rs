@@ -1588,6 +1588,13 @@ fn production_assumptions(
             || "no error estimate was established (no companion re-solve converged)".to_string(),
             |e| format!("measured chunk-end error estimate {e:.3e} V"),
         );
+        let accuracy = match w.state_jump_v {
+            Some(jump) => format!(
+                "{accuracy}; the rung restarted from a fresh operating point, discarding the \
+                 carried state, so the trajectory jumps by up to {jump:.3e} V at each restarted chunk"
+            ),
+            None => accuracy,
+        };
         production_assumptions.push(Assumption::reduced_fidelity(
             AssumptionSource::Solver,
             Subject::new(
