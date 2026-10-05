@@ -6255,6 +6255,219 @@ locator = "Table 4; Table 5; Table 6; Section 5.6 I2C protocol; Table 28 Pin des
 sha256 = "ddcf4202c4fdf2ab6ad86f22b67ba4d2471d76b9ce510397cacfe398400ab439"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# APDS-9306-065: Broadcom (Avago) digital ambient light sensor, 6-pin
+# 2.0 x 2.0 x 0.65 mm package.
+#
+# Source: Avago Technologies "APDS-9306/APDS-9306-065 Miniature Surface-Mount
+#   Digital Ambient Light Sensor" data sheet, AV02-4755EN, October 21, 2016.
+#   Ordering Information; "APDS-9306-065 I/O Pins Configuration" table; Absolute
+#   Maximum Ratings; Recommended Operating Conditions; Operating Characteristics
+#   (VDD = 2.8 V, 25 C); I2C Protocol; register map and the PART_ID register
+#   description.
+#
+# ONE SUPPLY, ABSOLUTE LEVELS. Unlike the Bosch parts there is no VDDIO pin: the
+# input thresholds are printed in volts (VIH 1.5 V min, VIL 0.4 V max), so no
+# rail has to be assumed. INT is open drain and the sheet gives VOL only
+# and no VOH; `voh` is deliberately absent (nothing on this part drives high).
+#
+# THE TWO PACKAGES HAVE DIFFERENT PINOUTS. The plain APDS-9306 is an 8-pad part
+# (GND on pad 1, VDD on pad 4, SCL/SDA on 5/6) and reports PART_ID 0xB1; only the
+# -065 ordering code may use this map and its 0xB3 ID.
+[[models]]
+id = "apds9306_065"
+kind = "digital"
+description = "Broadcom APDS-9306-065 ambient light sensor, 6-pin (I2C PART_ID subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# The -065 ordering code only (Ordering Information lists APDS-9306 and
+# APDS-9306-065, both tape and reel).
+value_re = "(?i)^APDS-9306-065$"
+
+[models.params]
+# Operating Characteristics, VDD = 2.8 V, TA = 25 C.
+vol   = 0.4      # VOL, INT output low voltage, max (the row names INT only)
+vih   = 1.5      # SCL, SDA input high voltage, min
+vil   = 0.4      # SCL, SDA input low voltage, max
+supply_static_ua = 85.0    # IDD typ, G = 18x, 50 ms (ALS active); the only
+                           # active-current row. ISTBY is 2 uA max in standby.
+supply_pin = "3"           # VDD
+gnd_pin    = "6"           # GND
+
+[models.pins]
+# "APDS-9306-065 I/O Pins Configuration" table, all 6 pads.
+"1" = "scl"      # I2C serial clock input
+"2" = "sda"      # I2C serial data I/O
+"3" = "vdd"      # supply, 1.7 to 3.6 V
+"4" = "int"      # interrupt, open drain
+"5" = "nc"       # no connect
+"6" = "gnd"
+
+[models.ratings]
+# Absolute Maximum Ratings: VDD 3.8 V max; SCL, SDA, INT -0.5 to 3.8 V.
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+basis = "Avago AV02-4755EN, Recommended Operating Conditions, Supply Voltage VDD row"
+
+# I2C Protocol: "The device supports a single slave address of 0X52 hex using
+# 7-bit addressing protocol." No strap: there is no address pin.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "APDS-9306-065 part-id subset"
+bus = "i2c"
+i2c_address = 0x52
+
+# Register map and PART_ID description: register 06h, read-only, default value
+# B3h for the APDS-9306-065 (B1h for the APDS-9306).
+[[sensor.register]]
+addr = 0x06
+const = [0xB3]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.7    # Recommended Operating Conditions, VDD min
+idle_a = 0.000085             # Operating Characteristics, IDD typ (ALS active)
+read_a = 0.000085
+write_a = 0.000085
+low_power_a = 0.000002        # Operating Characteristics, ISTBY max, standby,
+                              # no active I2C communication
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_fixed_address", "register_map_subset", "part_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "ambient_light_data", "power_mode_state", "interrupt_engine", "nvm_trim_load"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://docs.broadcom.com/doc/AV02-4755EN"
+title = "Avago Technologies APDS-9306/APDS-9306-065 Miniature Surface-Mount Digital Ambient Light Sensor, AV02-4755EN, October 21, 2016"
+locator = "APDS-9306-065 I/O Pins Configuration; Absolute Maximum Ratings; Operating Characteristics; I2C Protocol; PART_ID register"
+sha256 = "1696cbc111fba239bb49d88a34e791e8e4f9d323df3d869facc3e0bcfad30e5f"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APDS-9960: Broadcom (Avago) proximity, ambient light, RGB and gesture sensor
+# with integrated IR LED, 8-pin module.
+#
+# Source: Avago Technologies "APDS-9960 Digital Proximity, Ambient Light, RGB
+#   and Gesture Sensor" data sheet, AV02-4191EN, November 13, 2015. Ordering
+#   Information; I/O Pins Configuration; Absolute Maximum Ratings; Recommended
+#   Operating Conditions; Operating Characteristics (VDD = 3 V, 25 C); I2C
+#   Protocol; Register Set; ID Register (0x92).
+#
+# SUPPLY DRAW is the proximity/gesture figure, 790 uA typ (LDR pulse ON,
+# PPulse/GPulse = 8, ILDR NOT included), the highest of the operating states the
+# sheet tabulates (active ALS 200 uA typ / 250 uA max, wait 38 uA, sleep 1.0 uA
+# typ). Which state applies is firmware, so the ceiling is carried, as the BMA423
+# entry does. The IR LED current (LEDA, 100 mA pulsed at LDRIVE = 0, scaled up to 300 % by LED_BOOST) is a
+# separate supply and is not on this leg at all.
+#
+# THE 3.8 V CEILING IS NOT LEDA'S. Absolute Maximum Ratings covers VDD, input and
+# output voltages (3.8 V each), while Recommended Operating Conditions puts the LED
+# supply VLEDA at 3.0 to 4.5 V; no absolute maximum is printed for LEDA itself.
+[[models]]
+id = "apds9960"
+kind = "digital"
+description = "Broadcom APDS-9960 proximity/ALS/RGB/gesture sensor, 8-pin (I2C ID subset, pad map, logic levels and supply draw)"
+
+[models.match]
+# The only ordering code (Ordering Information: APDS-9960, tape and reel).
+value_re = "(?i)^APDS-9960$"
+
+[models.params]
+# Operating Characteristics, VDD = 3 V, TA = 25 C. INT and SDA are open drain:
+# VOL only, no VOH.
+vol   = 0.4      # VOL, INT and SDA output low voltage, max at 3 mA sink
+vih   = 1.26     # SCL, SDA input high voltage, min
+vil   = 0.54     # SCL, SDA input low voltage, max
+supply_static_ua = 790.0   # IDD typ, proximity / gesture with LDR pulse ON,
+                           # excluding ILDR (see above)
+supply_pin = "8"           # VDD
+gnd_pin    = "6"           # GND
+
+[models.pins]
+# I/O Pins Configuration table, all 8 pads.
+"1" = "sda"      # I2C serial data
+"2" = "int"      # interrupt, open drain, active low
+"3" = "ldr"      # LED driver input (constant-current sink for the IR LED)
+"4" = "ledk"     # LED cathode; tie to LDR when using the internal driver
+"5" = "leda"     # LED anode; to VLEDA, 3.0 to 4.5 V
+"6" = "gnd"
+"7" = "scl"      # I2C serial clock
+"8" = "vdd"      # supply, 2.4 to 3.6 V
+
+[models.ratings]
+# Absolute Maximum Ratings: VDD 3.8 V; VIN -0.5 to 3.8 V; VOUT -0.3 to 3.8 V.
+# See the note above on LEDA.
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.4
+max_v = 3.6
+basis = "Avago AV02-4191EN, Recommended Operating Conditions, Power supply voltage VDD row"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "leda"
+min_v = 3.0
+max_v = 4.5
+basis = "Avago AV02-4191EN, Recommended Operating Conditions, LED supply voltage VLEDA row"
+
+# I2C-bus Protocol: "The device supports a single slave address of 0x39 Hex". No
+# address pin.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "APDS-9960 id subset"
+bus = "i2c"
+i2c_address = 0x39
+
+# ID Register (0x92), read-only: "0xAB = APDS-9960".
+[[sensor.register]]
+addr = 0x92
+const = [0xAB]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.4    # Recommended Operating Conditions, VDD min
+idle_a = 0.000790             # Operating Characteristics, IDD typ (see above)
+read_a = 0.000790
+write_a = 0.000790
+low_power_a = 0.000001        # Operating Characteristics, sleep state typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_fixed_address", "register_map_subset", "device_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "proximity_data", "gesture_engine", "color_als_data", "led_driver", "led_supply_current", "power_mode_state", "interrupt_engine", "fifo"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://docs.broadcom.com/doc/AV02-4191EN"
+title = "Avago Technologies APDS-9960 Digital Proximity, Ambient Light, RGB and Gesture Sensor, AV02-4191EN, November 13, 2015"
+locator = "I/O Pins Configuration; Absolute Maximum Ratings; Recommended Operating Conditions; Operating Characteristics; I2C-bus Protocol; ID Register (0x92)"
+sha256 = "70810e8a0d9d5a91b4741d12785c0e44178b80039f150c5bb6a36acef2ccb8ee"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BMP280: Bosch Sensortec digital pressure sensor, LGA-8 2.0 x 2.5 mm.
 #
 # Source: Bosch Sensortec "BMP280 Data sheet", document BST-BMP280-DS001-26,
