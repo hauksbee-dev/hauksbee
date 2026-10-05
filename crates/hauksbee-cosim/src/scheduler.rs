@@ -683,6 +683,12 @@ pub struct Scheduler {
     /// later chunk converges, so a strict post-run check still sees a streak that
     /// crossed the abort threshold mid-run.
     max_consecutive_failed_chunks: u32,
+    /// True once any chunk's analog march converged this run. A run that has
+    /// never converged and has failed a whole abort streak from t = 0 is
+    /// re-solving the same cold start: see [`Self::dead_from_start`].
+    analog_ever_converged: bool,
+    /// The dead-from-start notice has been printed for this run.
+    dead_from_start_noted: bool,
     /// The solver's message from the most recent failed chunk (e.g. "Newton
     /// failed at t=... even at `dt_min`=...", device-named when a behavioural
     /// fault caused it). Kept so the failure surfaces with its cause instead
@@ -1485,6 +1491,8 @@ impl Scheduler {
             latching: bound_latching,
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
+            analog_ever_converged: false,
+            dead_from_start_noted: false,
             last_solve_error: None,
             reset_failure: None,
             replay_chips,
@@ -3271,6 +3279,17 @@ impl Scheduler {
         self.frame_v_extremes.clear();
 
         for _ in 0..chunks {
+            if self.dead_from_start() {
+                if self.stop_when_dead {
+                    break;
+                }
+                // The analog side has never solved: every chunk so far
+                // re-solved the same cold start and was refused. Marching on
+                // only regrinds that refusal (a full rescue ladder per chunk),
+                // so record the rest of the span as unsolved and advance.
+                self.skip_dead_chunk(chunk);
+                continue;
+            }
             self.run_chunk(chunk, &mut uart);
             // Live sessions opt in to stopping a DEAD solve mid-step: once
             // the strict-abort streak trips, every further chunk is another
@@ -3553,6 +3572,7 @@ impl Scheduler {
         let pwl_restores = self.apply_pwl_drives(chunk);
         self.chunk_has_pwl_drives = !pwl_restores.is_empty();
         let chunk_converged = self.solve_chunk(chunk);
+        self.analog_ever_converged |= chunk_converged;
         self.chunk_has_pwl_drives = false;
         self.restore_pwl_drives(&pwl_restores);
         // An MCU that refused to advance makes this chunk untrustworthy even if
@@ -5216,6 +5236,34 @@ impl Scheduler {
         self.max_consecutive_failed_chunks >= STRICT_CONSECUTIVE_FAILED_ABORT
     }
 
+    /// True when the analog solve has been refused from t = 0 for a whole
+    /// abort streak and has never converged a chunk. Nothing a later chunk
+    /// does differs from the cold start every one of those chunks already
+    /// re-solved, so the run is invalid for analysis and further marching
+    /// cannot change that: the remaining span is recorded, not re-solved.
+    #[must_use]
+    pub const fn dead_from_start(&self) -> bool {
+        !self.analog_ever_converged
+            && self.consecutive_failed_chunks >= STRICT_CONSECUTIVE_FAILED_ABORT
+    }
+
+    /// Account one chunk of a run that is [`Self::dead_from_start`] without
+    /// solving it: the chunk joins the failed window (so the record still
+    /// spans everything requested) and time advances.
+    fn skip_dead_chunk(&mut self, chunk: f64) {
+        if !self.dead_from_start_noted {
+            self.dead_from_start_noted = true;
+            eprintln!(
+                "WARNING: the analog solve has failed every chunk since t=0 \
+                 ({STRICT_CONSECUTIVE_FAILED_ABORT} in a row, never converged); the run is \
+                 invalid for analysis and the rest of the span is recorded as unsolved \
+                 without re-marching it"
+            );
+        }
+        self.record_failed_chunk(chunk, None);
+        self.sim_time += chunk;
+    }
+
     /// Clear all forced node-voltage overrides.
     pub fn clear_forced_voltages(&mut self) {
         self.forced_node_volts.clear();
@@ -5369,6 +5417,8 @@ impl Scheduler {
         self.last_switch_latch = None;
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
+        self.analog_ever_converged = false;
+        self.dead_from_start_noted = false;
         self.last_solve_error = None;
         for st in self.stats.values_mut() {
             *st = NetStat::default();

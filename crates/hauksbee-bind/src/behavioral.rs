@@ -248,6 +248,10 @@ const DC_FARADS: f64 = 22e-6;
 /// The draw reads `V(sw)` held to `[0, hi]`, where the solved switch node
 /// always sits: a Newton iterate with the input near 0 V and the switch node
 /// not yet would otherwise divide into a kiloamp draw and throw the input rail.
+/// Largest output/input voltage ratio an averaged boost or buck-boost stage is
+/// allowed: a 95 % duty cycle, beyond any practical converter's maximum.
+const MAX_STEP_UP_RATIO: f64 = 20.0;
+
 fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [String; 4] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
     let (g, wz, wl) = (wc * farads, wc / 4.0, wc * 1e-5);
@@ -255,7 +259,11 @@ fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [S
     let armed = format!("min(max(__d3*{:?},0.0),1.0)", 1.0 / full_lim.min(0.01));
     let hi = match c.topology {
         Topology::Buck => format!("(1.0-{:?}*{armed})*max(__d4,0.0)", 1.0 - dmax),
-        _ => "1e4".into(),
+        // A step-up stage moves energy from its input: its averaged switch
+        // node is at most `vin / (1 - D)`. Bounding it by the input keeps a
+        // dead (unfed) input from delivering power that the draw then has to
+        // pull out of a floating net, which has no physical answer.
+        _ => format!("{MAX_STEP_UP_RATIO:?}*max(__d4,0.0)"),
     };
     let iout_max = c.iout_limit_a.unwrap_or(1e3);
     let cap = if c.iin_limit_a.is_some() || c.iin_program.is_some() {

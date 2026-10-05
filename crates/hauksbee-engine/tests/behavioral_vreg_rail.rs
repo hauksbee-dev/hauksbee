@@ -573,3 +573,60 @@ fn regulator_input_current_balances_output_power() {
         }
     }
 }
+
+/// A feedback-regulated boost whose input net nothing feeds (its source is
+/// on another board, or not fitted) is a dead converter: no input power, so
+/// no output. The averaged model's output drive was bounded only by a fixed
+/// 1e4 ceiling, so on a floating input the solve chased an unbounded power
+/// draw and diverged to -1e10 V, and the run never finished. A step-up switch
+/// node is at most a bounded multiple of its input: with nothing on the input
+/// the run stays sane and the rail stays down.
+#[test]
+fn boost_with_an_unfed_input_stays_sane_and_dead() {
+    let dir = hauksbee_testkit::fresh_scratch_dir("behavioral_vreg_rail", "unfed_boost");
+    let card = "[[models]]\nid = \"test_fb_boost\"\nkind = \"vreg\"\ndescription = \"test boost\"\n\
+         [models.match]\nvalue_re = \"(?i)^TESTFBBOOST$\"\n\
+         [models.pins]\n\"1\" = \"sw\"\n\"2\" = \"gnd\"\n\"4\" = \"fb\"\n\"5\" = \"out\"\n\"6\" = \"in\"\n\
+         [models.behavioral.converter]\ntopology = \"boost\"\nout_pin = \"out\"\nin_pin = \"in\"\n\
+         vout_setpoint = 5.5\nefficiency = 0.92\nswitching_hz = 1.0e6\n\
+         [models.behavioral.converter.feedback]\npin = \"fb\"\nvref_v = 0.5\n";
+    std::fs::write(dir.join("testfbboost.toml"), card).unwrap();
+    let lib = ModelLibrary::builtin_with_user_dirs(&[dir.as_path()]);
+    let u1 = vec![
+        pin("1", 4),
+        pin("2", 3),
+        pin("4", 5),
+        pin("5", 2),
+        pin("6", 1),
+    ];
+    let parts = vec![
+        comp("U1", "TESTFBBOOST", "Package_TO_SOT_SMD:SOT-23-6", u1),
+        two("L1", "1uH", "Inductor_SMD:L_1210_3225Metric", 1, 4),
+        two("C1", "10uF", CAP, 1, 3),
+        two("C2", "22uF", CAP, 2, 3),
+        two("R1", "442k", RES, 2, 5),
+        two("R2", "44.2k", RES, 5, 3),
+        two("R3", "1k", RES, 2, 3),
+    ];
+    let names = [
+        (1, "BOOST_IN"),
+        (2, "BOOST_OUT"),
+        (3, "GND"),
+        (4, "SW"),
+        (5, "FB"),
+    ];
+    let bound = bind_board_with(&board(&names, parts), &lib, &CustomRegistry::new());
+    let mut sched =
+        Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler builds");
+    for _ in 0..20 {
+        sched.step(1e-4);
+    }
+    assert!(
+        sched.analog_valid(),
+        "failed windows: {:?}",
+        sched.failed_windows()
+    );
+    for (net, v) in sched.net_voltages() {
+        assert!(v.is_finite() && v.abs() < 1.0, "net '{net}' at {v:.3e} V");
+    }
+}

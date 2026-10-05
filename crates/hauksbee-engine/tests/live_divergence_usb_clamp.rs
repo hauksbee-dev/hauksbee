@@ -206,6 +206,35 @@ fn constant_blast_into_floating_net_refuses_honestly_not_fake_quiet() {
     }
 }
 
+/// A run whose analog solve has never converged since t=0 is dead, not
+/// recovering: once the strict-abort streak trips without one good chunk, a
+/// headless run must stop re-solving it (each refused solve can take seconds
+/// on a real board, and the whole span used to be re-marched) while still
+/// recording the full requested span as failed and reaching its end time.
+#[test]
+fn a_solve_dead_from_t0_is_recorded_to_the_end_without_re_marching() {
+    let mut sched =
+        Scheduler::new(blast_fixture(), None, SolverOptions::default()).expect("scheduler builds");
+    let steps: u32 = 40;
+    for _ in 0..steps {
+        let _ = sched.step(1e-4);
+    }
+    assert!(
+        sched.dead_from_start(),
+        "never converged and the streak tripped"
+    );
+    let elapsed = sched.sim_time();
+    assert!(
+        f64::from(steps).mul_add(-1e-4, elapsed).abs() < 1e-9,
+        "the run still reaches the requested end time, got {elapsed:e}"
+    );
+    assert!(
+        sched.failed_chunk_count() >= u64::from(steps),
+        "every chunk of the span is recorded unsolved, got {}",
+        sched.failed_chunk_count()
+    );
+}
+
 /// Corpus gate: the whole lily58 Pro V2 board, bound by the ordinary pipeline,
 /// must now march past the 1 ms mark the live sim stuck at, with zero failed
 /// chunks and physical voltages. This is the board the defect shipped on.
