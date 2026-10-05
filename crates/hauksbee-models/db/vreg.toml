@@ -5019,8 +5019,11 @@ basis = "Micrel MIC5225 M9999-072908-A, Operating Ratings, VIN 2.3 V to 16 V; Ab
 # Electrical Characteristics 5.5 p.5. Pin 4 is FB on the adjustable TPS73101
 # (NR on the fixed TPS731xx), so only the adjustable part is matched. The
 # reference is `vref`, never a `vout`: the board's divider sets the rail,
-# VOUT = (R1 + R2) / R2 x 1.204 V. No zero-load quiescent current is printed
-# (IGND is 400 uA typ at 10 mA), so `iq_a` is left out.
+# VOUT = (R1 + R2) / R2 x 1.204 V. `iq_a` is the ground-pin current TI itself
+# labels IQ: IGND at IOUT = 10 mA, 400 uA typ (550 uA max legacy silicon, 630 uA
+# max new silicon), Electrical Characteristics 5.5 p.5. No zero-load row is
+# printed; the 10 mA row is the closest, and IGND only rises to 550 uA typ at
+# 150 mA, so the load dependence is small.
 [[models]]
 id = "tps73101_dbv"
 kind = "vreg"
@@ -5049,6 +5052,7 @@ value_re = "(?i)^TPS73101(DBV[RT]?)?$"
 [models.params]
 vref      = 1.204
 dropout_v = 0.1       # max at 150 mA (30 mV typ)
+iq_a      = 4.0e-4    # IGND "IOUT = 10mA (IQ)" typ, 5.5 p.5 (630 uA max new silicon)
 
 [models.pins]
 "1" = "in"
