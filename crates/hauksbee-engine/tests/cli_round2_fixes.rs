@@ -401,3 +401,41 @@ fn run_version_does_not_claim_a_hauksbee_run_binary() {
         "no surface may claim a 'hauksbee-run' binary exists"
     );
 }
+
+// ── static starved-rail estimate and --asbuilt on `check` ───────────────────
+
+/// The real Tarski board as designed feeds `ANALOG_VDD`'s nineteen comparators
+/// through a 1 kOhm shunt: the static `--check` says the rail is starved. The
+/// same check with an as-built overlay shorting that shunt (the owner's rework)
+/// no longer does, which shows `--check` judges the as-built board.
+#[test]
+fn check_reports_a_starved_rail_and_honours_asbuilt_shorting_the_shunt() {
+    let b = board("../../testdata/tarski_inputsystem.net");
+    let designed = run_board(&b, &["--check", "--plain"]);
+    let out = stdout(&designed);
+    assert!(
+        out.contains("'ANALOG_VDD' is likely starved") && out.contains("R_Shunt15301"),
+        "the designed board must report the starved rail:\n{out}"
+    );
+    let overlay = tmp("shunt.asbuilt.toml");
+    std::fs::write(
+        &overlay,
+        "[[replace]]\nref = \"R_Shunt15301\"\nset = { ohms = 0.001 }\n",
+    )
+    .unwrap();
+    let reworked = run_board(
+        &b,
+        &["--check", "--plain", "--asbuilt", overlay.to_str().unwrap()],
+    );
+    let _ = std::fs::remove_file(&overlay);
+    assert!(reworked.status.success(), "{}", stderr(&reworked));
+    let out = stdout(&reworked);
+    assert!(
+        out.contains("static checks read the as-built board"),
+        "the overlay is narrated:\n{out}"
+    );
+    assert!(
+        !out.contains("is likely starved"),
+        "the shorted shunt must clear the finding:\n{out}"
+    );
+}

@@ -424,6 +424,7 @@ fn envelope_lint_with_tolerance(
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
     let mut starved: BTreeMap<i64, Vec<Starved>> = BTreeMap::new();
+    let mut unleveled: BTreeMap<i64, Vec<Starved>> = BTreeMap::new();
 
     for (comp, model) in super::resolved_components(board, lib) {
         let net_of = |role| role_net_id(comp, &model, role).and_then(|id| board.net(id));
@@ -446,6 +447,16 @@ fn envelope_lint_with_tolerance(
                                 let finding =
                                     unknown_abstention(&net.name, &knowledge, &comp.reference);
                                 report.findings.push(finding);
+                            }
+                            // No level known: a candidate for the static
+                            // starved-rail estimate, from the card's draw.
+                            if matches!(knowledge, RailKnowledge::Unknown) {
+                                unleveled.entry(net_id).or_default().push(Starved {
+                                    finding: usize::MAX,
+                                    reference: comp.reference.clone(),
+                                    min_v: *min_v,
+                                    draw_a: static_draw_a(&model),
+                                });
                             }
                             continue;
                         }
@@ -538,6 +549,7 @@ fn envelope_lint_with_tolerance(
         }
     }
     fold_starved_rails(&resolver, starved, &mut report);
+    estimate_starved_rails(&resolver, lib, &unleveled, &mut report);
     report
 }
 
@@ -617,73 +629,20 @@ fn fold_starved_rails(
     starved: BTreeMap<i64, Vec<Starved>>,
     report: &mut NetLintReport,
 ) {
-    let board = resolver.board;
     let mut folded = BTreeSet::new();
     let mut rail_findings = Vec::new();
     for (net_id, parts) in starved {
-        let (Some(net), Some(rail)) = (board.net(net_id), resolver.solved(net_id)) else {
+        let Some(rail) = resolver.solved(net_id) else {
             continue;
         };
         if resolver.regulators.contains_key(&net_id) {
             continue;
         }
-        let feeds = series_feeds(resolver, net_id, rail);
-        if feeds.is_empty() {
+        let Some(finding) = explain_starved(resolver, net_id, &parts, Some(rail)) else {
             continue;
-        }
-        // One entry per part: a card with several temperature rows records
-        // the part once per row.
-        let mut per_part: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
-        for p in &parts {
-            let slot = per_part.entry(&p.reference).or_insert((p.min_v, p.draw_a));
-            slot.0 = slot.0.max(p.min_v);
-        }
-        let need_v = per_part.values().map(|(v, _)| *v).fold(f64::MIN, f64::max);
-        let draw_a: f64 = per_part.values().map(|(_, a)| *a).sum();
-        let r_ohms = 1.0 / feeds.iter().map(|(_, ohms, ..)| 1.0 / ohms).sum::<f64>();
-        let (feed_net, feed) = feeds
-            .iter()
-            .map(|(_, _, far, range)| (*far, *range))
-            .max_by(|a, b| a.1.max_v.total_cmp(&b.1.max_v))
-            .expect("feeds is non-empty");
-        let headroom_v = feed.max_v - need_v;
-        let drop_v = draw_a * r_ohms;
-        if draw_a <= 0.0 || headroom_v < 0.0 || drop_v <= headroom_v {
-            continue;
-        }
-        let feed_name = board.net(feed_net).map_or("?", |n| n.name.as_str());
-        let resistors: Vec<String> = feeds
-            .iter()
-            .map(|(r, ohms, ..)| format!("{r} ({} ohm)", super::device_decode::format_ohms(*ohms)))
-            .collect();
-        let refs: Vec<&str> = per_part.keys().copied().collect();
-        let listed = if refs.len() > STARVED_PARTS_SHOWN {
-            let shown = refs[..STARVED_PARTS_SHOWN].join(", ");
-            format!("{shown}, and {} more", refs.len() - STARVED_PARTS_SHOWN)
-        } else {
-            refs.join(", ")
         };
-        let max_ohms = headroom_v / draw_a;
-        let message = format!(
-            "'{}' is starved: it reaches only {:.3} V, below the {need_v:.3} V minimum supply of the {} part(s) it powers ({listed}). Their {:.1} mA static supply draw through {} from '{feed_name}' ({:.3} V) drops {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts do not run. Feed the rail through no more than {} ohm in total, or directly from '{feed_name}'.",
-            net.name,
-            rail.max_v,
-            refs.len(),
-            draw_a * 1e3,
-            resistors.join(" and "),
-            feed.max_v,
-            super::device_decode::format_ohms(max_ohms),
-        );
         folded.extend(parts.iter().map(|p| p.finding));
-        let mut all_refs: Vec<String> = feeds.iter().map(|(r, ..)| r.clone()).collect();
-        all_refs.extend(refs.iter().map(|r| (*r).to_string()));
-        rail_findings.push(LintFinding {
-            check: LintCheck::OperatingEnvelope,
-            severity: Severity::High,
-            message,
-            refs: all_refs,
-            nets: vec![net.name.clone(), feed_name.to_string()],
-        });
+        rail_findings.push(finding);
     }
     let mut index = 0usize;
     report.findings.retain(|_| {
@@ -691,6 +650,132 @@ fn fold_starved_rails(
         !folded.contains(&(index - 1))
     });
     report.findings.extend(rail_findings);
+}
+
+/// The static counterpart of [`fold_starved_rails`], for a rail no level is
+/// known for (no solve, no regulator, no declared voltage): the parts' own
+/// card-stated static draw through the rail's series feed from a declared rail
+/// is a floor on the drop, so when that alone exceeds the headroom the rail
+/// cannot reach the parts' minimum supply. Worded as an estimate. It is raised
+/// only when everything else on the rail is a passive or a part with a card:
+/// a pin of an unmodelled part (a connector, a module) might source the rail
+/// and hold it up, which would make the estimate wrong. A modelled source of
+/// the rail (a regulator, a battery) already gives the rail a declared level.
+fn estimate_starved_rails(
+    resolver: &RailResolver<'_>,
+    lib: &ModelLibrary,
+    unleveled: &BTreeMap<i64, Vec<Starved>>,
+    report: &mut NetLintReport,
+) {
+    let modelled: BTreeSet<&str> = super::resolved_components(resolver.board, lib)
+        .map(|(comp, _)| comp.reference.as_str())
+        .collect();
+    for (&net_id, parts) in unleveled {
+        if rail_may_have_other_source(resolver.board, &modelled, net_id) {
+            continue;
+        }
+        report
+            .findings
+            .extend(explain_starved(resolver, net_id, parts, None));
+    }
+}
+
+/// Whether some pin on the net belongs to an unmodelled part or a connector
+/// (not a passive two-terminal one), so might source the net.
+fn rail_may_have_other_source(
+    board: &ExtractedBoard,
+    modelled: &BTreeSet<&str>,
+    net_id: i64,
+) -> bool {
+    board.net_members(net_id).into_iter().any(|(comp, _)| {
+        let r = comp.reference.to_ascii_uppercase();
+        // A connector is a way in for power even when its card is a generic one.
+        let connector = ["J", "P", "X", "CN"].iter().any(|p| r.starts_with(p));
+        if modelled.contains(comp.reference.as_str()) && !connector {
+            return false;
+        }
+        let passive = comp.pins.len() == 2
+            && ["R", "C", "L"].iter().any(|p| r.starts_with(p))
+            && !["RV", "RT"].iter().any(|p| r.starts_with(p));
+        // A DNP part is absent; one of unknown identity may well be there.
+        !passive && !matches!(AssemblyState::of(comp), AssemblyState::DnpAbsent(_))
+    })
+}
+
+/// The rail-level starved finding for `parts`' supply rail `net_id`, or `None`
+/// when the rail has no resistive feed from a higher declared rail, the parts
+/// state no supply current, or their draw through the feed fits the headroom.
+/// `reached` is the level the rail solved to; `None` words it as an estimate
+/// from the cards alone.
+fn explain_starved(
+    resolver: &RailResolver<'_>,
+    net_id: i64,
+    parts: &[Starved],
+    reached: Option<RailRange>,
+) -> Option<LintFinding> {
+    let board = resolver.board;
+    let net = board.net(net_id)?;
+    let feeds = series_feeds(resolver, net_id, reached.unwrap_or(RailRange::point(0.0)));
+    if feeds.is_empty() {
+        return None;
+    }
+    // One entry per part: a card with several temperature rows records the
+    // part once per row.
+    let mut per_part: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
+    for p in parts {
+        let slot = per_part.entry(&p.reference).or_insert((p.min_v, p.draw_a));
+        slot.0 = slot.0.max(p.min_v);
+    }
+    let need_v = per_part.values().map(|(v, _)| *v).fold(f64::MIN, f64::max);
+    let draw_a: f64 = per_part.values().map(|(_, a)| *a).sum();
+    let r_ohms = 1.0 / feeds.iter().map(|(_, ohms, ..)| 1.0 / ohms).sum::<f64>();
+    let (feed_net, feed) = feeds
+        .iter()
+        .map(|(_, _, far, range)| (*far, *range))
+        .max_by(|a, b| a.1.max_v.total_cmp(&b.1.max_v))?;
+    let headroom_v = feed.max_v - need_v;
+    let drop_v = draw_a * r_ohms;
+    if draw_a <= 0.0 || headroom_v < 0.0 || drop_v <= headroom_v {
+        return None;
+    }
+    let feed_name = board.net(feed_net).map_or("?", |n| n.name.as_str());
+    let resistors: Vec<String> = feeds
+        .iter()
+        .map(|(r, ohms, ..)| format!("{r} ({} ohm)", super::device_decode::format_ohms(*ohms)))
+        .collect();
+    let refs: Vec<&str> = per_part.keys().copied().collect();
+    let listed = if refs.len() > STARVED_PARTS_SHOWN {
+        let shown = refs[..STARVED_PARTS_SHOWN].join(", ");
+        format!("{shown}, and {} more", refs.len() - STARVED_PARTS_SHOWN)
+    } else {
+        refs.join(", ")
+    };
+    let max_ohms = super::device_decode::format_ohms(headroom_v / draw_a);
+    let (count, milliamps, feed_v) = (refs.len(), draw_a * 1e3, feed.max_v);
+    let fed_by = resistors.join(" and ");
+    let message = reached.map_or_else(
+        || {
+            format!(
+                "'{}' is likely starved (estimate from the cards' stated supply current; no operating point was solved): the {count} part(s) it powers ({listed}) need at least {need_v:.3} V, but their {milliamps:.1} mA static supply draw alone through {fed_by} from '{feed_name}' ({feed_v:.3} V) would drop {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts would not run. Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
+                net.name,
+            )
+        },
+        |rail| {
+            format!(
+                "'{}' is starved: it reaches only {:.3} V, below the {need_v:.3} V minimum supply of the {count} part(s) it powers ({listed}). Their {milliamps:.1} mA static supply draw through {fed_by} from '{feed_name}' ({feed_v:.3} V) drops {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts do not run. Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
+                net.name, rail.max_v,
+            )
+        },
+    );
+    let mut all_refs: Vec<String> = feeds.iter().map(|(r, ..)| r.clone()).collect();
+    all_refs.extend(refs.iter().map(|r| (*r).to_string()));
+    Some(LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: Severity::High,
+        message,
+        refs: all_refs,
+        nets: vec![net.name.clone(), feed_name.to_string()],
+    })
 }
 
 /// The same limits as run evidence, judged on the levels the run SOLVED.
@@ -1211,5 +1296,57 @@ vout_setpoint_high = 4.23
             [hauksbee_ir::evidence::AssumptionKind::OperatingLimitViolated],
             "{evidence:?}"
         );
+    }
+
+    #[test]
+    fn a_rail_with_no_level_is_estimated_starved_from_the_cards_draw() {
+        let lib = ModelLibrary::builtin();
+        let starved = |report: &NetLintReport| {
+            let f = |f: &&LintFinding| f.message.contains("is likely starved");
+            report
+                .findings
+                .iter()
+                .filter(f)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // 1 kohm feed: the three parts' 3.3 mA alone would drop 3.3 V of 2.3 V.
+        let (b, _) = comparator_rail(Some("1k"));
+        let found = starved(&envelope_lint(&b, &lib));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, Severity::High);
+        assert_eq!(found[0].nets, ["VA", "+5V"]);
+        // +5V is judged at its 5.25 V top (2.55 V of headroom) on a static surface.
+        for says in [
+            "estimate",
+            "3.3 mA",
+            "R1 (1.0k ohm)",
+            "no more than 773 ohm",
+        ] {
+            assert!(found[0].message.contains(says), "{says:?}: {found:?}");
+        }
+        // 10 ohm feed: fine. No feed at all: nothing to blame.
+        for feed in [Some("10"), None] {
+            let (b, _) = comparator_rail(feed);
+            assert!(starved(&envelope_lint(&b, &lib)).is_empty(), "{feed:?}");
+        }
+        // An unmodelled part on the rail could source it: no estimate.
+        let (mut b, _) = comparator_rail(Some("1k"));
+        let va = b.nets.iter().find(|n| n.name == "VA").unwrap().id;
+        b.components.push(super::super::test_support::part(
+            "J1",
+            "WIDGET-X9",
+            &[("1", va), ("2", 1), ("3", 1)],
+        ));
+        assert!(starved(&envelope_lint(&b, &lib)).is_empty());
+        // The overlay's rework of the feed, applied statically, clears it.
+        let (mut b, _) = comparator_rail(Some("1k"));
+        hauksbee_bind::asbuilt::AsBuiltOverlay::parse(
+            "[[replace]]\nref = \"R1\"\nset = { ohms = 0.001 }\n",
+            "test",
+        )
+        .and_then(|o| o.apply_to_board(&mut b))
+        .unwrap();
+        assert!(starved(&envelope_lint(&b, &lib)).is_empty());
     }
 }
