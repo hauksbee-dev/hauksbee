@@ -1062,13 +1062,13 @@ max_current_a = 0.5 # Source: absolute maximum ratings
     #[test]
     fn custom_command_discloses_its_own_routing_and_costs() {
         let mut config = extract_config::ExtractConfig::default();
-        config.claude_code.command = Some("claude-mix".into());
+        config.claude_code.command = Some("my-wrapper".into());
         let resolved = config.resolve(&ProcessHost, Some(datasheet::Backend::ClaudeCode));
-        assert!(cost_line(&resolved).contains("claude-mix"));
+        assert!(cost_line(&resolved).contains("my-wrapper"));
         assert!(!cost_line(&resolved).contains("nothing extra"));
         assert!(resolved
             .sends_data_to(resolved.backend)
-            .contains("claude-mix"));
+            .contains("my-wrapper"));
     }
 
     #[test]

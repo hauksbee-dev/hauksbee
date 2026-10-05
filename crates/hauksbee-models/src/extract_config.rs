@@ -1420,16 +1420,16 @@ mod tests {
     #[test]
     fn custom_commands_resolve_discover_and_disclose_without_fallback() {
         let mut cfg = ExtractConfig::default();
-        cfg.set("claude-code.command", "claude-mix").unwrap();
+        cfg.set("claude-code.command", "my-wrapper").unwrap();
         cfg.set("claude-code.model", "gpt-5.6-sol").unwrap();
-        let h = FakeHost::new(&[], &["claude-mix"]);
+        let h = FakeHost::new(&[], &["my-wrapper"]);
         let r = cfg.resolve(&h, None);
         assert_eq!(r.backend, Backend::ClaudeCode);
-        assert_eq!(r.claude_code.command, "claude-mix");
+        assert_eq!(r.claude_code.command, "my-wrapper");
         assert!(r.summary().contains("gpt-5.6-sol"));
         assert!(r.summary().contains(&r.sends_data_to(r.backend)));
         let row = availability(&h, &r).remove(0);
-        assert!(row.available && row.sends_data_to.contains("claude-mix"));
+        assert!(row.available && row.sends_data_to.contains("my-wrapper"));
         assert!(!row.sends_data_to.contains("Anthropic"));
         cfg.set("backend", "claude-code").unwrap();
         let h = FakeHost::new(
