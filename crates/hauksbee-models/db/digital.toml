@@ -2072,6 +2072,158 @@ write_a = 0.003
 implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
 missing = ["factory_serial_number", "write_cycle_timing", "ack_polling", "write_protect_pin"]
 
+# Belling BL24C256A 256-Kbit (32768 x 8) I2C EEPROM: executable primary array.
+#
+# Source: Shanghai Belling "BL24C256A 256K bits (32768x8)" datasheet, Version
+#   2.00 (03/23/2023, per its revision history), retrieved from the LCSC copy
+#   https://datasheet.lcsc.com/datasheet/pdf/75e653c09ea92b4a6774cae586f2af0b.pdf
+#   sha256 322402a79a9e6642e7c419d470ed0139157ff22d8a4f9b2c9d2bdf5062d4ffa7.
+#   Pin Configuration and Table 1 Pin Descriptions; Functional Description
+#   1 (512 pages x 64 bytes, 15-bit word address) and 3 Device Addressing
+#   (1010 A2 A1 A0 R/W, floating address pins biased low); Byte Write (two
+#   word-address bytes); Table 2 WP; Electrical Characteristics (Absolute
+#   Maximum Stress Ratings, Table 3 DC); Table 7 AC; Ordering Information.
+#
+# ADDRESS. The peripheral carries the fixed 7-bit address 0x50, i.e. A2:A0 = 000.
+# Section 3 says floating A pins are biased low, and the 5-pin SOT23-5/TSOT23-5
+# packages bond no A pins at all, so 0x50 is the datasheet's own address there.
+# On the 8-pin packages the `i2c_eeprom` peripheral has no strap input: a board
+# that ties any of A0..A2 high is simulated at 0x50 anyway (see the warning).
+#
+# SUPPLY CURRENTS ARE THE Table 3 TYPICALS AT VCC = 5.0 V: IR 0.14 mA (0.3 max,
+# read at 400 kHz), IW 0.28 mA (0.5 max), ISB 0.03 uA (0.5 max). The 1.7 V
+# power-on threshold is the bottom of the BL24C256A (-40 to +85 C) supply range.
+#
+# DELIBERATELY NOT MODELLED: the 64-byte Identification Page (device type 1011b)
+# and its lock; WP enforcement (Table 2); the 3 ms max tWR write cycle and the
+# acknowledge polling it implies; the E1/E0 temperature grades' 2.5 V minimum.
+[[models]]
+id = "bl24c256a_8pin"
+kind = "digital"
+description = "Belling BL24C256A 256-Kbit I2C EEPROM, 8-pin SOP/TSSOP/PDIP/UDFN (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://datasheet.lcsc.com/datasheet/pdf/75e653c09ea92b4a6774cae586f2af0b.pdf"
+title = "Shanghai Belling BL24C256A 256K bits (32768x8) I2C serial EEPROM datasheet, Version 2.00, 03/23/2023"
+locator = "Pin Configuration; Table 1; Functional Description 1 and 3; Byte Write; Page Write; Absolute Maximum Stress Ratings; Table 3; Table 7; Ordering Information"
+sha256 = "322402a79a9e6642e7c419d470ed0139157ff22d8a4f9b2c9d2bdf5062d4ffa7"
+
+[models.match]
+# Ordering Information: BL24C256A[E1|E0]-<package><R|T><S|C>; PA = SOP-8L,
+# SF = TSSOP-8L, DA = PDIP-8L, NT = UDFN-8L. The bare part number is accepted
+# here; the SOT23-5 entry below outranks it on a 5-pin SOT-23 footprint.
+value_re = "(?i)^BL24C256A(E[01])?(-(PA|SF|DA|NT)[RT]?[SC]?)?$"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read, and the Identification Page, WP enforcement, tWR write-cycle timing and ACK polling are not modelled"
+
+[models.pins]
+# Pin Configuration (8-lead PDIP/SOP/TSSOP and 8-pad DFN share one map) and Table 1.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.5   # Absolute Maximum Stress Ratings, DC supply voltage -0.3 to +6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Belling BL24C256A V2.00, Table 3 conditions, BL24C256A (-40 to +85 C) VCC = +1.7 V to +5.5 V; Absolute Maximum Stress Ratings, DC supply voltage +6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (Section 3, Figure 5)
+size_bytes = 32768      # 32768 x 8 (Description)
+page_size = 64          # 512 pages of 64 bytes (Functional Description 1)
+word_address_bytes = 2  # 15-bit word address sent as two bytes (Byte Write, Figure 6)
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 3 conditions, VCC min
+idle_a = 3.0e-8              # Table 3, ISB typ at 5.0 V (0.5 uA max)
+read_a = 0.00014             # Table 3, IR typ, read at 400 kHz (0.3 mA max)
+write_a = 0.00028            # Table 3, IW typ, write at 400 kHz (0.5 mA max)
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current", "read_current", "write_current", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "identification_page", "write_cycle_timing", "ack_polling", "write_protect_pin", "temperature_grade_supply_ranges"]
+
+# BL24C256A in SOT23-5 / TSOT23-5 (ordering codes TC / RR): same die and
+# datasheet as the entry above; no A pins are bonded, so 0x50 is fixed.
+[[models]]
+id = "bl24c256a_sot23_5"
+kind = "digital"
+description = "Belling BL24C256A 256-Kbit I2C EEPROM, SOT23-5/TSOT23-5 (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://datasheet.lcsc.com/datasheet/pdf/75e653c09ea92b4a6774cae586f2af0b.pdf"
+title = "Shanghai Belling BL24C256A 256K bits (32768x8) I2C serial EEPROM datasheet, Version 2.00, 03/23/2023"
+locator = "Pin Configuration (5-lead SOT23-5 / TSOT23-5); Table 1; Functional Description 1 and 3; Absolute Maximum Stress Ratings; Table 3; Ordering Information"
+sha256 = "322402a79a9e6642e7c419d470ed0139157ff22d8a4f9b2c9d2bdf5062d4ffa7"
+
+[models.match]
+# TC = SOT23-5L, RR = TSOT23-5L (Ordering Information). The bare number binds
+# here only on a 5-lead SOT-23 footprint.
+value_re = "(?i)^BL24C256A(E[01])?(-(TC|RR)[RT]?[SC]?)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 is executable; the Identification Page, WP enforcement, tWR write-cycle timing and ACK polling are not modelled"
+
+[models.pins]
+# Pin Configuration, 5-lead SOT23-5 and TSOT23-5 (identical maps).
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+"5" = "wp"
+
+[models.ratings]
+max_voltage_v = 6.5   # Absolute Maximum Stress Ratings, DC supply voltage -0.3 to +6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Belling BL24C256A V2.00, Table 3 conditions, BL24C256A (-40 to +85 C) VCC = +1.7 V to +5.5 V; Absolute Maximum Stress Ratings, DC supply voltage +6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 000 (Section 3; no A pins on this package)
+size_bytes = 32768
+page_size = 64
+word_address_bytes = 2
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 3 conditions, VCC min
+idle_a = 3.0e-8              # Table 3, ISB typ at 5.0 V
+read_a = 0.00014             # Table 3, IR typ at 400 kHz
+write_a = 0.00028            # Table 3, IW typ at 400 kHz
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current", "read_current", "write_current", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["identification_page", "write_cycle_timing", "ack_polling", "write_protect_pin", "temperature_grade_supply_ranges"]
+
 # Winbond W25Q128JV 128-Mbit SPI NOR, executable standard-SPI subset.
 #
 # Primary source: Winbond W25Q128JV Revision F (2018):
