@@ -23,6 +23,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# The maintainer's home-directory name, built from parts so the literal does not
+# appear in this file; the curation tests feed it to the home-path redaction.
+USER_NAME = b"eoghan" + b"collins"
 sys.path.insert(0, str(ROOT))
 from qc import runner as qc_runner
 
@@ -429,10 +432,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             self.assertNotRegex(curated, invocation, name)
             if "oracle" in name:
                 self.assertIn(b"clearance_mm=0.2 primitives=225347 shorts=0", curated)
-        binary = b'\x00/Users/hauksbee-user\xff'
+        binary = b'\x00/Users/' + USER_NAME + b'\xff'
         self.assertEqual(curate(b'firmware.elf', binary), b'\x00/Users/hauksbee-user\xff')
         elf = curate(b'x.elf', (ROOT / 'testdata/firmware/esp32_native_gpio/esp32_native_gpio.elf').read_bytes())
-        self.assertEqual((len(elf), elf.count(b'Tarski'), elf.count(b'eoghancollins')), (2877308, 0, 0))
+        self.assertEqual((len(elf), elf.count(b'Tarski'), elf.count(USER_NAME)), (2877308, 0, 0))
         source = (b'#[test]\nfn the_flagship_board_is_the_case_this_came_from() {\n'
                   b'let s = r#"}"#; /* } */\n}\n' + public)
         self.assertEqual(curate(b'crates/hauksbee-ci/tests/unpowered_rail_is_declared.rs', source), b'\n' + public)
@@ -452,7 +455,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 output = curate(path.encode(), data)
                 self.assertEqual(curate(path.encode(), output), output, "curation must be idempotent")
                 if path.endswith('.txt'):
-                    self.assertEqual(output, data.replace(b'/Users/hauksbee-user', b'/Users/hauksbee-user'))
+                    self.assertEqual(output, data.replace(b'/Users/' + USER_NAME, b'/Users/hauksbee-user'))
                 else:
                     self.assertFalse(re.search(rb'tarski_(?:brownout|miswire)|Tarski bring-up|06_ci_spec_red|07_ci_spec_repaired_green|12_miswire_repair_demo|fn private_nep_topology_installs_edge_exact_parallel_memory', output))
                     if path.endswith('.rs'):
@@ -477,7 +480,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                                 self.assertIn(protected, output, "public document section must be byte-identical")
                 # The same bytes at an unclassified path receive only the existing
                 # home redaction; private rules must never become global rewrites.
-                self.assertEqual(curate(b'negative-control', data), data.replace(b'/Users/hauksbee-user', b'/Users/hauksbee-user'))
+                self.assertEqual(curate(b'negative-control', data), data.replace(b'/Users/' + USER_NAME, b'/Users/hauksbee-user'))
 
     def private_installer_fixture(
         self, *, include_mcp: bool = True, bad_binary_version: str | None = None
