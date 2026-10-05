@@ -211,12 +211,16 @@ export function DatasheetExtract({
                    per part, and "Draft a model from a datasheet" repeated down
                    the list is a set of controls that cannot be told apart. */
                 aria-label={`Draft a model for ${p.reference} from a datasheet`}
-                className="hb-btn hb-press px-3 py-1 text-[12px] shrink-0 max-w-full whitespace-nowrap w-full sm:w-auto"
+                className="hb-btn hb-press px-3 py-1 text-[12px] shrink-0 max-w-full w-full sm:w-auto sm:whitespace-nowrap leading-tight"
                 style={{ minHeight: 28 }}
               >
                 {/* The row already wraps, so on a phone this sits on its own line
                     across the card. Even then 320px has no room for the long
-                    spelling, and the short one says the same thing. */}
+                    spelling, and the short one says the same thing. Below the
+                    sm breakpoint the label may also wrap onto a second line (the
+                    button grows with minHeight, not a fixed height): the card is
+                    narrower than its text in a wide fallback font, and a label
+                    that wraps is better than one cut off at the button's edge. */}
                 <span className="hidden min-[400px]:inline">Draft a model from a datasheet</span>
                 <span className="min-[400px]:hidden">Draft from a datasheet</span>
               </button>
@@ -364,7 +368,7 @@ export function DatasheetExtract({
                     <select
                       data-testid="extract-kind"
                       className="hb-input text-[12px] block w-full"
-                      style={{ height: 30, maxWidth: '17rem' }}
+                      style={{ height: 30, maxWidth: '17rem', textOverflow: 'ellipsis' }}
                       value={kind}
                       onChange={e => setKind(e.target.value)}
                     >
@@ -373,7 +377,7 @@ export function DatasheetExtract({
                           making someone classify their part first is a barrier
                           at exactly the wrong moment. The picker stays for
                           anyone who knows better than the model. */}
-                      <option value="">from the datasheet</option>
+                      <option value="">auto-detect</option>
                       {/* The kind's own name only. What a kind COVERS is shown
                           below, where it can wrap: in the option text it makes
                           the widest option wider than this card is on a phone,

@@ -416,9 +416,12 @@ code.hb-inline {
 .nav-item:disabled { opacity: 0.38; cursor: default; }
 
 /* Narrow windows: the rail narrows to icons with small labels under them, so
-   the work surface keeps its width and every destination is still named. */
+   the work surface keeps its width and every destination is still named. The
+   rail is wide enough for its longest label ("Environment") at the active
+   item's semibold weight in a wide fallback face (72px measured on Linux, where
+   the app's sans is not installed), plus the rail's border and nav padding. */
 @media (max-width: 1180px) {
-  .sidebar { width: 72px !important; }
+  .sidebar { width: 84px !important; }
   .sidebar .sidebar-label { display: none; }
   .sidebar .nav-list { padding-inline: 4px; }
   .sidebar .nav-item { flex-direction: column; justify-content: center; gap: 3px; padding: 5px 0; }
