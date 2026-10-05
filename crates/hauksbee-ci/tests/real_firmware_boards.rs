@@ -228,7 +228,7 @@ fn thing_plus() -> Option<PathBuf> {
     board("sparkfun_thingplus_rp2040/Hardware/RP2040_Thing_Plus.brd")
 }
 
-/// pico-examples `blink` toggles LED_BUILTIN at 2 Hz on the Thing Plus. The
+/// pico-examples `blink` toggles `LED_BUILTIN` at 2 Hz on the Thing Plus. The
 /// rail and fault claims stay INVALID: the W25Q128 flash (U4) and the WS2812
 /// (U6) sit on 3.3V with no model.
 #[cfg(feature = "renode")]
