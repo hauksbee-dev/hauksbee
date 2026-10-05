@@ -42,6 +42,13 @@ const BIN = ["release", "debug"]
   .filter(isExecutableFile)
   .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 
+/**
+ * The loader's refusal of a missing board or firmware file. Both come from the
+ * runner after `Spec::validate` has accepted the spec, so either one means the
+ * probe passed structural validation.
+ */
+const RUNTIME_FILE_REFUSAL = /no (board|firmware) file at /;
+
 /** Fixtures the extension flags. Every one must fail the loader too. */
 const REJECTED = [
   "typo_kind.toml",
@@ -185,8 +192,12 @@ describe.skipIf(!BIN)("loader parity", () => {
           probe: `${c.table}.${c.key}`,
           gotOutput: true,
         });
-        // Reaching board resolution means structural validation passed.
-        loaderRejects = !stderr.includes("no board file at");
+        // Reaching run-time file resolution means structural validation passed.
+        // The loader resolves `firmware` before the board (a millisecond check
+        // ahead of a slow board read), so the boot_coverage scaffolding's
+        // placeholder firmware is refused first; that refusal is just as much
+        // past `Spec::validate` as the missing board is.
+        loaderRejects = !RUNTIME_FILE_REFUSAL.test(stderr);
       } finally {
         fs.rmSync(file, { force: true });
       }
