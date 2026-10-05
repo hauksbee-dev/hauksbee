@@ -201,20 +201,7 @@ impl DynCsc {
 impl Symbolic {
     fn analyze(m: &SparseMatrix) -> Self {
         let n = m.n;
-        // Symmetric adjacency of A + A^T for the ordering heuristic.
-        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut seen = vec![usize::MAX; n];
-        for (i, row) in m.rows.iter().enumerate() {
-            for &(j, _) in row {
-                for &(a, b) in &[(i, j), (j, i)] {
-                    if seen[b] != a {
-                        seen[b] = a;
-                        adj[a].push(b);
-                    }
-                }
-            }
-        }
-        let perm = min_degree_order(&adj, n);
+        let perm = min_degree_order(&ordering_adjacency(m), n);
 
         // Build the fixed CSC structure once: column pointers and row indices
         // come straight from the matrix pattern; values are refreshed later.
@@ -862,6 +849,25 @@ fn dfs_reach(
     }
 }
 
+/// Symmetric adjacency of A + A^T for the ordering heuristic (a row may list
+/// a neighbour more than once; the ordering's degrees count it that way).
+fn ordering_adjacency(m: &SparseMatrix) -> Vec<Vec<usize>> {
+    let n = m.n;
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut seen = vec![usize::MAX; n];
+    for (i, row) in m.rows.iter().enumerate() {
+        for &(j, _) in row {
+            for &(a, b) in &[(i, j), (j, i)] {
+                if seen[b] != a {
+                    seen[b] = a;
+                    adj[a].push(b);
+                }
+            }
+        }
+    }
+    adj
+}
+
 /// Minimum-degree ordering over a symmetric adjacency: a cheap Markowitz proxy
 /// that keeps fill low. `perm[k]` = original column eliminated k-th.
 fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
@@ -889,6 +895,67 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
         }
     }
 
+    // The next pivot is the live vertex of least degree, the lowest index on a
+    // tie: exactly the first element of this `(degree, vertex)` set. A linear
+    // scan per elimination made the ordering O(n^2) and, on the ~800-IC Tarski
+    // board, half of every co-simulation chunk's wall time.
+    let mut queue: std::collections::BTreeSet<(usize, usize)> =
+        (0..n).filter(|&v| !eliminated[v]).map(|v| (deg[v], v)).collect();
+    // `in_row[c] == stamp` marks `c` as already adjacent to the vertex being
+    // filled, replacing a linear `contains` per candidate edge.
+    let (mut in_row, mut stamp) = (vec![usize::MAX; n], 0usize);
+    while let Some((_, best)) = queue.pop_first() {
+        perm.push(best);
+        eliminated[best] = true;
+
+        let neigh: Vec<usize> = g[best]
+            .iter()
+            .copied()
+            .filter(|&u| !eliminated[u])
+            .collect();
+        for (ai, &a) in neigh.iter().enumerate() {
+            stamp += 1;
+            for &w in &g[a] {
+                in_row[w] = stamp;
+            }
+            for &c in neigh.iter().skip(ai + 1) {
+                if in_row[c] != stamp {
+                    in_row[c] = stamp;
+                    g[a].push(c);
+                    g[c].push(a);
+                }
+            }
+        }
+        for &u in &neigh {
+            // Eliminated neighbours never count again; dropping them keeps the
+            // rows short without changing any degree or adjacency test.
+            g[u].retain(|&w| !eliminated[w]);
+            if g[u].len() != deg[u] {
+                queue.remove(&(deg[u], u));
+                deg[u] = g[u].len();
+                queue.insert((deg[u], u));
+            }
+        }
+    }
+    perm
+}
+
+/// The original quadratic minimum-degree scan, kept as the oracle the fast
+/// ordering must reproduce exactly (the factorization's rounding, and so every
+/// bit-exact solver result, follows the order).
+#[cfg(test)]
+fn min_degree_order_reference(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
+    let mut deg: Vec<usize> = adj.iter().map(Vec::len).collect();
+    let mut eliminated = vec![false; n];
+    let mut g: Vec<Vec<usize>> = adj.to_vec();
+    let mut perm = Vec::with_capacity(n);
+    for v in 0..n {
+        let isolated = g[v].is_empty() || (g[v].len() == 1 && g[v][0] == v);
+        if isolated {
+            perm.push(v);
+            eliminated[v] = true;
+        }
+    }
     for _ in perm.len()..n {
         let mut best = usize::MAX;
         let mut best_deg = usize::MAX;
@@ -903,12 +970,7 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
         }
         perm.push(best);
         eliminated[best] = true;
-
-        let neigh: Vec<usize> = g[best]
-            .iter()
-            .copied()
-            .filter(|&u| !eliminated[u])
-            .collect();
+        let neigh: Vec<usize> = g[best].iter().copied().filter(|&u| !eliminated[u]).collect();
         for (ai, &a) in neigh.iter().enumerate() {
             for &c in neigh.iter().skip(ai + 1) {
                 if !g[a].contains(&c) {
@@ -927,6 +989,40 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_min_degree_order_matches_the_quadratic_scan() {
+        // Random MNA-like patterns: a diagonal on most rows, a few hub rows
+        // (rails) and branch rows with no diagonal, so ties, duplicate
+        // adjacency entries and heavy fill all occur.
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |k: usize| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            usize::try_from(seed >> 33).expect("31 bits fit") % k
+        };
+        for case in 0..300 {
+            let n = 1 + next(60) + if case % 10 == 0 { 400 } else { 0 };
+            let mut m = SparseMatrix::new(n);
+            for r in 0..n {
+                if next(5) != 0 {
+                    m.touch(r, r);
+                }
+                for _ in 0..next(4) {
+                    let c = if next(6) == 0 { next(3.min(n)) } else { next(n) };
+                    m.touch(r, c);
+                    if next(3) != 0 {
+                        m.touch(c, r);
+                    }
+                }
+            }
+            let adj = ordering_adjacency(&m);
+            assert_eq!(
+                min_degree_order(&adj, n),
+                min_degree_order_reference(&adj, n),
+                "case {case} (n = {n})"
+            );
+        }
+    }
 
     fn matrix(n: usize, ent: &[(usize, usize, f64)]) -> SparseMatrix {
         let mut m = SparseMatrix::new(n);
