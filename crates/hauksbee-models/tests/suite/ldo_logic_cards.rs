@@ -263,3 +263,75 @@ fn new_cards_do_not_bind_other_packages_or_family_members() {
         );
     }
 }
+
+/// Buck and SPI NOR pad maps against the pin tables: TI SLVSD89B (TLV62568 SOT23-5),
+/// Silergy `AN_SY8089` (SOT23-5), TI SNVSA24/SNVSAC1 (LMR16006 SOT-23-6), TI SNVS077J
+/// (LM2677 TO-263-7), Winbond W25Q32JV 3.3 / W25Q80DV 3.4, GigaDevice GD25Q16C.
+/// An adjustable buck regulates FB at its reference; a fixed option senses VOUT on FB.
+#[test]
+fn buck_and_spi_nor_cards_follow_the_datasheets() {
+    const LMR: &str = "1=cb 2=gnd 3=fb 4=shdn 5=in 6=sw";
+    const LM2677: &str = "1=sw 2=in 3=cb 4=gnd 5=sync 6=fb 7=on_off";
+    const NOR: &str = "1=cs 2=miso 3=wp_n 4=gnd 5=mosi 6=sck 7=hold_n 8=vcc";
+    let rows = [
+        (
+            "TLV62568DBVR",
+            "tlv62568_dbv",
+            "1=en 2=gnd 3=sw 4=in 5=fb",
+            0.6,
+            Some(1.2),
+        ),
+        (
+            "SY8089AAAC",
+            "sy8089_sot23_5",
+            "1=en 2=gnd 3=sw 4=in 5=fb",
+            0.6,
+            Some(1.5),
+        ),
+        ("LMR16006XDDCR", "lmr16006x_adj", LMR, 0.765, None),
+        ("LMR16006YDDCR", "lmr16006y_adj", LMR, 0.765, None),
+        ("LMR16006YQDDCRQ1", "lmr16006y_adj", LMR, 0.765, None),
+        ("LMR16006YQ3DDCRQ1", "lmr16006yq3", LMR, 3.3, None),
+        ("LMR16006YQ5", "lmr16006yq5", LMR, 5.0, None),
+        ("LM2677SX-3.3/NOPB", "lm2677_3v3_to263", LM2677, 3.3, None),
+        ("LM2677S-5.0", "lm2677_5v0_to263", LM2677, 5.0, None),
+        ("LM2677SX-5", "lm2677_5v0_to263", LM2677, 5.0, None),
+    ];
+    for (value, id, map, vref, enable) in rows {
+        let m = expect_query(Some(value), Some(value), None);
+        assert_pin_map(&m, id, &pins(map));
+        let c = m.behavioral.converter.expect("converter block");
+        assert_eq!(c.topology, Topology::Buck, "{value}");
+        assert!(
+            (c.feedback.expect("feedback").vref_v - vref).abs() < 1e-9,
+            "{value}"
+        );
+        assert_eq!(c.enable.map(|e| e.high_threshold_v), enable, "{value}");
+    }
+    for (value, id) in [
+        ("W25Q32JVSSIQ", "w25q32jv_soic8"),
+        ("W25Q32JVSS", "w25q32jv_soic8"),
+        ("W25Q80DVSSIG", "w25q80dv_soic8"),
+        ("W25Q80DVS", "w25q80dv_soic8"),
+        ("GD25Q16CSIG", "gd25q16_soic8"),
+        ("GD25Q16", "gd25q16_soic8"),
+    ] {
+        assert_pin_map(
+            &expect_query(Some(value), Some(value), None),
+            id,
+            &pins(NOR),
+        );
+    }
+    // Other packages, grades and output options stay unbound.
+    for value in [
+        "TLV62568DRLR",
+        "TLV62568",
+        "LM2677SD-3.3",
+        "LM2677S-ADJ",
+        "W25Q32JVSFIQ",
+        "W25Q32JVSSIM",
+        "GD25LQ16",
+    ] {
+        assert_eq!(query_id(Some(value), Some(value), None), None, "{value}");
+    }
+}
