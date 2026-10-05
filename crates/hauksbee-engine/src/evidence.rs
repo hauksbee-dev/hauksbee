@@ -1346,9 +1346,17 @@ impl BoardEvidence {
         by_name
     }
 
+    /// The explicit `nets` plus every net a subject `reference` touches, less
+    /// ground: ground is the reference node every part shares, so reaching
+    /// through it would put each open part on the board (an antenna trimmer, a
+    /// connector shell) on a part's causal path. An open part that can move the
+    /// subject still lands there through the signal or rail it shares with it.
     fn nets_for_subjects(&self, nets: &[String], references: &[String]) -> BTreeSet<String> {
         let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
         for (net, refs) in &self.refs_by_net {
+            if crate::is_ground(net) {
+                continue;
+            }
             if references.iter().any(|reference| {
                 refs.iter()
                     .any(|subject| self.subject_matches_reference(subject, reference))
@@ -2718,6 +2726,49 @@ mod tests {
             .expect("reader-facing references still resolve occurrence subjects");
         assert_eq!(by_display_reference.status(), EvidenceStatus::Undermined);
         assert_eq!(by_display_reference.models().len(), 1);
+    }
+
+    #[test]
+    fn a_part_subject_does_not_reach_through_ground() {
+        let two_pin = |reference: &str, a: i64, b: i64| {
+            let mut c = component(reference, "part", a);
+            c.pins.push(Pin {
+                number: "2".to_string(),
+                net: Some(b),
+                ..Default::default()
+            });
+            c
+        };
+        let rows = || {
+            let mcu = BindOutcome::Analog {
+                device: "mcu".to_string(),
+            };
+            report(vec![
+                row("U1", "part", Some("mcu"), mcu, None),
+                unresolved("C20", "part", "no model"),
+            ])
+        };
+        let status_with_c20_on = |far_net: i64| {
+            let b = board(
+                "ground-reach",
+                &[(1, "GND"), (2, "TX"), (3, "ANT")],
+                vec![two_pin("U1", 1, 2), two_pin("C20", 1, far_net)],
+            );
+            evidence(&b, &rows())
+                .simulation_map("U1 prints", &[], &["U1".to_string()], None)
+                .expect("U1 resolves to its signal net")
+                .status()
+        };
+        assert_ne!(
+            status_with_c20_on(3),
+            EvidenceStatus::Undermined,
+            "an open part sharing only ground with the subject is off its path"
+        );
+        assert_eq!(
+            status_with_c20_on(2),
+            EvidenceStatus::Undermined,
+            "an open part on the subject's signal net is on it"
+        );
     }
 
     #[test]

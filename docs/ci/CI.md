@@ -1222,7 +1222,9 @@ because both used to read green:
 | firmware with no evidence it executed, or executed under a fault handler, a held reset or an out-of-range supply (`not_exercised` on `firmware/<ref>`; see `execution` in the JSON and the `EXECUTION EVIDENCE` note, documented in [MCU.md](../cosim/MCU.md#execution-evidence)) | `undermined` | INVALID, exit 3 |
 
 An assertion's causal path is its subject: the asserted net(s), or every net a
-named `ref` touches. A `uart` assertion's subject is the MCU it reads (its
+named `ref` touches other than ground (every part shares ground, so reaching
+through it would put each open part on the board on the path). A `uart`
+assertion's subject is the MCU it reads (its
 `mcu`, or every MCU that printed when none is named), so an unmodelled part on
 any of that MCU's pins, rails, reset or clock undermines it, and an unmodelled
 part elsewhere on the board does not. Assertions with no subject at all
