@@ -128,6 +128,16 @@ pub struct BehavioralPin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub od_to_volts: Option<f64>,
 
+    /// The pin role the output transistor's emitter/source returns to (e.g.
+    /// `"gnd"`, `"vss"`, `"pgnd"`). The asserted sink references THAT pin's
+    /// net, so a part whose ground pin sits on a sense shunt or a negative
+    /// rail sinks to it rather than to board ground. When neither this nor
+    /// `od_to_volts` is set, the part's own ground-pin role (`gnd`, `vss`,
+    /// `pgnd`, `agnd`, in that order) is used when connected; board ground
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub od_to: Option<String>,
+
     /// Open-drain on-resistance (ohms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub od_ohms: Option<f64>,

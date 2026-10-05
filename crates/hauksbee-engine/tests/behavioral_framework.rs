@@ -199,6 +199,65 @@ fn fsm_open_drain_pulls_low_in_asserted_state() {
     );
 }
 
+/// The open-drain transistor's source returns to the part's own ground pin.
+/// With that pin on a 1.0 V net (a lifted ground / sense shunt), the asserted
+/// STAT sinks to ~1.0 V, not to board ground. The control is
+/// `fsm_open_drain_pulls_low_in_asserted_state` (no ground role: board ground).
+#[test]
+fn open_drain_sinks_to_its_ground_pin_net() {
+    for explicit in [false, true] {
+        let mut c = Circuit::new();
+        let v33 = c.node("V33");
+        let stat = c.node("STAT");
+        let en = c.node("EN");
+        let lifted = c.node("LIFTED");
+        stamp_rail(&mut c, v33, "Vv33", 3.3);
+        stamp_rail(&mut c, en, "Ven", 3.3);
+        stamp_rail(&mut c, lifted, "Vlift", 1.0);
+        c.add(resistor("Rstat_pullup".into(), stat, v33, 10_000.0));
+        // Implicit: the `gnd` role. Explicit: `od_to` names a `pgnd` role.
+        let (od_to, role) = if explicit {
+            ("od_to = \"pgnd\"\n", "pgnd")
+        } else {
+            ("", "gnd")
+        };
+        let toml = format!(
+            r#"
+[pins.stat]
+open_drain = true
+od_ohms = 50.0
+{od_to}
+[fsm]
+states = ["idle", "charging"]
+
+[[fsm.transitions]]
+from = "idle"
+to = "charging"
+guard = "v_en > 1.5"
+
+[fsm.state_pins.charging.stat]
+od_assert = true
+"#
+        );
+        let model: Behavioral = toml::from_str(&toml).unwrap();
+        let mut roles = BTreeMap::new();
+        roles.insert("stat".to_string(), stat);
+        roles.insert("en".to_string(), en);
+        roles.insert(role.to_string(), lifted);
+        let dev =
+            BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &|_| None)
+                .expect("fsm + open-drain stamps");
+        let mut h = Harness::new(c, dev);
+        h.run(12, 1e-4);
+        assert_eq!(h.dev.state(), "charging");
+        let v_stat = h.v("STAT");
+        assert!(
+            (v_stat - 1.0).abs() < 0.05,
+            "asserted open-drain must sink to its 1.0 V ground pin (explicit={explicit}), got {v_stat:.3} V"
+        );
+    }
+}
+
 #[test]
 fn fsm_stays_when_guard_false() {
     // Same FSM but the enable is LOW: the device must remain in "idle" and the

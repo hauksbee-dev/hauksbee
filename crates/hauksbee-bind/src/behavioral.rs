@@ -748,11 +748,23 @@ impl BehavioralDevice {
             // Open-drain sink leg (starts off / high-impedance).
             if pin.open_drain {
                 let sink = pin.od_to_volts.unwrap_or(0.0);
-                let sink_node = if sink.abs() < 1e-12 {
-                    NodeId::GROUND
-                } else {
-                    hidden_dc_node(circuit, reference, &format!("{role}_odsink"), sink).0
+                // The emitter/source the sink returns to: an explicit `od_to`
+                // role, else the part's own ground pin. Its net, not board
+                // ground, is what an asserted output pulls toward.
+                let emitter_node = match (&pin.od_to, pin.od_to_volts) {
+                    (Some(r), _) => role_nodes.get(r).copied(),
+                    (None, None) => ["gnd", "vss", "pgnd", "agnd"]
+                        .iter()
+                        .find_map(|r| role_nodes.get(*r).copied()),
+                    (None, Some(_)) => None,
                 };
+                let sink_node = emitter_node.unwrap_or_else(|| {
+                    if sink.abs() < 1e-12 {
+                        NodeId::GROUND
+                    } else {
+                        hidden_dc_node(circuit, reference, &format!("{role}_odsink"), sink).0
+                    }
+                });
                 let on_ohms = pin.od_ohms.unwrap_or(20.0);
                 let r = circuit.add(Device::resistor(
                     format!("Rbeh_{reference}_{role}_od"),
