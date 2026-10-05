@@ -269,3 +269,70 @@ fn bare_pcb_routes_backend_but_does_not_guess_pin_numbers_as_gpio_roles() {
         "warning was {warning:?}"
     );
 }
+
+/// A card with no pin map binds an MCU only through the board's own pin
+/// names. When those name no supply pin, nothing can power the part, and
+/// accepting the bind would hand the solver an unpowered MCU (and report the
+/// part as covered): it must abstain, saying why. The same card on a board
+/// that names its supply pins still binds.
+#[test]
+fn pinless_card_with_no_named_supply_abstains_with_a_reason() {
+    let dir = std::env::temp_dir().join(format!("hauksbee_pinless_mcu_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let toml = r#"
+[[models]]
+id = "pinless_module"
+kind = "mcu"
+description = "module card without a pin map"
+[models.match]
+value_re = "(?i)^PINLESS-MODULE$"
+[models.params]
+backend = "renode:stm32f103"
+module = true
+"#;
+    std::fs::write(dir.join("mcu.toml"), toml).unwrap();
+    let lib = ModelLibrary::builtin_with_user_dirs(&[dir.as_path()]);
+
+    let unnamed = board_with(component(
+        "M1",
+        "PINLESS-MODULE",
+        "",
+        vec![
+            pin("1", Some(5), ""),
+            pin("2", Some(6), ""),
+            pin("3", Some(1), ""),
+        ],
+    ));
+    let named = board_with(component(
+        "M1",
+        "PINLESS-MODULE",
+        "",
+        vec![
+            pin("1", Some(5), "VDD"),
+            pin("2", Some(6), "GND"),
+            pin("3", Some(1), "PA0"),
+        ],
+    ));
+    let abstained = bind_board(&unnamed, &lib);
+    let powered = bind_board(&named, &lib);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(abstained.mcus.is_empty());
+    match &abstained.report.rows[0].outcome {
+        BindOutcome::Unresolved { reason } => {
+            assert!(reason.contains("no pin map"), "{reason}");
+            assert!(reason.contains("no supply pin"), "{reason}");
+        }
+        other => panic!("expected an abstention, got {other:?}"),
+    }
+    assert_eq!(powered.mcus.len(), 1, "named supply pins still bind");
+
+    // A bare chip (not a module) keeps binding through its own pin names.
+    let chip = board_with(component(
+        "U5",
+        "STM32F411CEU6",
+        "MCU_ST_STM32F4:STM32F411CEUx",
+        vec![pin("10", Some(1), "PA0")],
+    ));
+    assert_eq!(bind_board(&chip, &ModelLibrary::builtin()).mcus.len(), 1);
+}

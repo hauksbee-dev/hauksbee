@@ -2430,11 +2430,18 @@ fn bind_component(
         }
         // Treated as a behavioral passthrough buffer for now.
         Adc => bound_digital_outcome(comp, model, circuit, &role_nets, digital, "adc"),
-        Mcu => {
-            let backend = mcu_backend_string(comp, model);
-            let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
-            (BindOutcome::Mcu { backend }, warning)
-        }
+        Mcu => unpowerable_mcu_card(comp, model, node_of).map_or_else(
+            || {
+                let backend = mcu_backend_string(comp, model);
+                let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
+                (BindOutcome::Mcu { backend }, warning)
+            },
+            |reason| {
+                eprintln!("[bind] {}: {reason}", comp.reference);
+                let warning = Some(format!("{}: {reason}", comp.reference));
+                (BindOutcome::Unresolved { reason }, warning)
+            },
+        ),
         Connector => (
             BindOutcome::Skipped {
                 reason: "connector".to_string(),
@@ -6160,6 +6167,75 @@ fn bind_nor_latches(
     bound > 0
 }
 
+/// Supply roles an MCU or module can be powered through (chip or module pins).
+const MCU_SUPPLY_ROLES: [&str; 8] = ["vddio", "iovdd", "vdd", "vcc", "dvdd", "5v", "3v3d", "3v3"];
+
+/// Is `name` (a module header pin's own name) a supply input or rail pin?
+/// Carrier modules label their power pins by rail, not by chip role: `3V3`,
+/// `5V`, `VIN`, `VBUS`, `BAT+`, `RAW`. Any of these on a live net can power
+/// the module, so a module carrying one is not unpowerable.
+fn is_module_supply_pin_name(name: &str) -> bool {
+    let upper = name.trim().trim_start_matches('+').to_ascii_uppercase();
+    // "3V3", "3.3V", "5V", "1V8": a voltage spelled as a rail name.
+    let rail = upper.starts_with(|c: char| c.is_ascii_digit())
+        && upper.contains('V')
+        && upper
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == 'V' || c == '.');
+    rail || upper.starts_with("VDD")
+        || upper.starts_with("VCC")
+        || matches!(
+            upper.as_str(),
+            "VIN" | "VBUS" | "VBAT" | "VSYS" | "BAT" | "BAT+" | "RAW" | "USB" | "V+"
+        )
+}
+
+/// Why a carrier MODULE (a dev board wrapping an MCU: a module-alias value or
+/// a `module = true` card) cannot be bound on this board: its card maps zero
+/// pins, and the board's own pin names establish no connected supply pin. The
+/// module's header pins are its own, not the chip's, so a "binding" would run
+/// firmware on a chip connected to nothing that powers it; it abstains
+/// instead. A bare chip binds through its own pin names as before, and a card
+/// with a curated pin map, and the family router (which records its own
+/// derivation), are not judged here.
+fn unpowerable_mcu_card(
+    comp: &Component,
+    model: &ModelEntry,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Option<String> {
+    if !model.pins.is_empty() || model.params.get_str("auto_bind") == Some("family_router") {
+        return None;
+    }
+    let module = model.params.get_bool("module") == Some(true)
+        || hauksbee_models::mcu_modules::mcu_module_alias(&comp.value).is_some();
+    if !module {
+        return None;
+    }
+    let derived = derive_mcu_pin_roles(comp);
+    let powered = comp.pins.iter().any(|p| {
+        let supply = derived
+            .roles
+            .get(&p.number)
+            .is_some_and(|r| MCU_SUPPLY_ROLES.contains(&r.as_str()))
+            || is_module_supply_pin_name(&p.function);
+        supply && node_of(p.net).is_some_and(|n| !n.is_ground())
+    });
+    if powered {
+        return None;
+    }
+    let mapped = if derived.roles.is_empty() {
+        "name no pins".to_string()
+    } else {
+        format!("name only {} signal/ground pin(s)", derived.roles.len())
+    };
+    Some(format!(
+        "\"{}\" not bound: this MCU module's card has no pin map and the board's pin names \
+         {mapped} with no supply pin, so the part cannot be powered in simulation; add a pin \
+         map (--models-dir) to simulate it",
+        comp.value
+    ))
+}
+
 fn bind_mcu(
     comp: &Component,
     model: &ModelEntry,
@@ -6269,7 +6345,7 @@ fn bind_mcu(
     // its ground pin, so a load on a GPIO shows on the rail that feeds the chip.
     let roles_net = |names: &[&str]| pick(&role_nets, names).copied();
     // A module's logic supply is its `5v` (Nano) or `3v3`/`3v3d` pin.
-    let io_supply = roles_net(&["vddio", "iovdd", "vdd", "vcc", "dvdd", "5v", "3v3d", "3v3"]);
+    let io_supply = roles_net(&MCU_SUPPLY_ROLES);
     let io_return = roles_net(&["vss", "gnd"]).unwrap_or(NodeId::GROUND);
     let mut pins: Vec<(char, u8)> = gpio_drivers.keys().copied().collect();
     pins.sort_unstable();
@@ -10737,6 +10813,21 @@ style = "i2c_pointer"
                     .collect();
                 assert_eq!(refs, [("X1", backend)], "{value}");
             }
+        }
+    }
+
+    /// Module header pins are named by rail, not chip role; those names count
+    /// as supply pins when judging whether a pinless module card can be
+    /// powered. Signal and ground names do not.
+    #[test]
+    fn module_rail_pin_names_count_as_supply_pins() {
+        for name in [
+            "3V3", "+3V3", "3.3V", "5V", "VIN", "VBUS", "BAT+", "RAW", "VCC",
+        ] {
+            assert!(is_module_supply_pin_name(name), "{name}");
+        }
+        for name in ["GND", "P0.06", "IO4", "RST", "TX", "V_IO_EN", ""] {
+            assert!(!is_module_supply_pin_name(name), "{name}");
         }
     }
 
