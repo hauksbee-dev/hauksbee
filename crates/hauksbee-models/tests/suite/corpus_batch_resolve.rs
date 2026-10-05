@@ -591,3 +591,97 @@ fn footprint_only_cards_never_speak_for_a_u_or_ic_reference() {
     assert_eq!((id("U7"), id("IC3")), (None, None));
     assert_eq!(id("Q1").as_deref(), Some("generic_nmos_power_pkg"));
 }
+
+/// Resolve by value and footprint, the way a layout board with a package queries.
+fn by_value_on(value: &str, footprint: &str) -> Option<ModelEntry> {
+    let q = ComponentQuery {
+        reference: Some("U1".into()),
+        value: Some(value.into()),
+        footprint: Some(footprint.into()),
+        ..Default::default()
+    };
+    ModelLibrary::builtin_shared().resolve(&q).model
+}
+
+#[test]
+fn fixed_ldos_and_shunt_references_bind_only_their_stated_package() {
+    let id = |value: &str, footprint: &str| by_value_on(value, footprint).map(|m| m.id);
+    // AP1117: E is SOT223, and a letter-less spelling is held to SOT-223 too.
+    for value in ["AP1117-33", "AP1117E33G-13", "AP1117IE33G-13"] {
+        assert_eq!(
+            id(value, "Package_TO_SOT_SMD:SOT-223-3_TabPin2").as_deref(),
+            Some("ap1117_33_sot223"),
+            "{value}"
+        );
+    }
+    assert_ne!(
+        id("AP1117-33", "Package_TO_SOT_SMD:TO-252-2").as_deref(),
+        Some("ap1117_33_sot223")
+    );
+    // The adjustable AP1117 has no output voltage.
+    assert!(by_value("AP1117").is_none_or(|m| m.kind != ComponentKind::Vreg));
+    // RT9013: only B (SOT-23-5); SC-82 (Y) and WDFN (QW) maps differ.
+    assert_eq!(
+        id("RT9013-33GB", "Package_TO_SOT_SMD:SOT-23-5").as_deref(),
+        Some("rt9013_33_sot23_5")
+    );
+    for other in ["RT9013-33GY", "RT9013-33GQW", "RT9013-18GB"] {
+        assert_ne!(
+            id(other, "").as_deref(),
+            Some("rt9013_33_sot23_5"),
+            "{other}"
+        );
+    }
+    // TPS709: plain TPS709 DBV only; TPS709A/B DBV put OUT elsewhere.
+    assert_eq!(
+        id("TPS70918DBVR", "Package_TO_SOT_SMD:SOT-23-5").as_deref(),
+        Some("tps70918_dbv")
+    );
+    assert_ne!(id("TPS709A18DBVR", "").as_deref(), Some("tps70918_dbv"));
+    // LM4040 3.0 V in DBZ: the three-pad outline only.
+    for value in ["LM4040DBZ-3", "LM4040DBZ-3 VREF"] {
+        assert_eq!(
+            id(value, "Package_TO_SOT_SMD:SOT-23").as_deref(),
+            Some("lm4040_30_dbz"),
+            "{value}"
+        );
+    }
+    assert_ne!(
+        id("LM4040DBZ-3", "Package_TO_SOT_SMD:SOT-23-5").as_deref(),
+        Some("lm4040_30_dbz")
+    );
+}
+
+#[test]
+fn the_new_fixed_ldo_and_reference_numbers_match_their_datasheets() {
+    let on = |value: &str, footprint: &str| by_value_on(value, footprint).expect(value);
+    // (value, footprint, vout, dropout_v, iq_a): DS31009 Rev. 24-3, DS9013-10, SBVS186H.
+    for (value, footprint, vout, dropout, iq) in [
+        ("AP1117E33G-13", "SOT223", 3.3, 1.3, 5.0e-3),
+        ("RT9013-33GB", "SOT-23-5", 3.3, 0.4, 25.0e-6),
+        ("TPS70918DBVR", "SOT-23-5", 1.8, 0.9, 1.3e-6),
+    ] {
+        let m = on(value, footprint);
+        assert_eq!(
+            (p(&m, "vout"), p(&m, "dropout_v"), p(&m, "iq_a")),
+            (vout, dropout, iq),
+            "{value}"
+        );
+    }
+    assert_pins(
+        &on("AP1117-33", "SOT-223"),
+        &[("1", "gnd"), ("2", "out"), ("3", "in"), ("4", "out")],
+    );
+    for value in ["RT9013-33GB", "TPS70918DBVR"] {
+        assert_pins(
+            &on(value, "SOT-23-5"),
+            &[("1", "in"), ("2", "gnd"), ("3", "en"), ("5", "out")],
+        );
+    }
+    let r = on("LM4040DBZ-3", "SOT-23");
+    assert_eq!(
+        (r.kind, p(&r, "bv"), p(&r, "ibv")),
+        (ComponentKind::Diode, 3.0, 1.0e-4)
+    );
+    assert_pins(&r, &[("1", "cathode"), ("2", "anode")]);
+}
