@@ -634,12 +634,61 @@ pub fn rated_paths(
     roles: &HashMap<String, NodeId, impl std::hash::BuildHasher>,
     units: &[DeviceId],
 ) -> Vec<(Vec<String>, Vec<Carrier>)> {
+    rated_paths_indexed(circuit, &DevicesByNode::new(circuit), reference, derating, roles, units)
+}
+
+/// Every device touching each node (in circuit order), so a path's carriers
+/// are found among its nodes' neighbours instead of by a scan of the whole
+/// circuit per path: on an 800-part board the scan made binding quadratic.
+#[derive(Debug, Default)]
+pub struct DevicesByNode(HashMap<NodeId, Vec<DeviceId>>);
+
+impl DevicesByNode {
+    /// Index `circuit` by the nodes each device touches ([`Device::nodes`]).
+    #[must_use]
+    pub fn new(circuit: &Circuit) -> Self {
+        let mut by_node: HashMap<NodeId, Vec<DeviceId>> = HashMap::new();
+        for (id, d) in circuit.iter() {
+            for n in d.nodes() {
+                let at = by_node.entry(n).or_default();
+                if at.last() != Some(&id) {
+                    at.push(id);
+                }
+            }
+        }
+        Self(by_node)
+    }
+
+    /// The devices touching any of `nodes`, in circuit order, each once.
+    fn touching(&self, nodes: &[NodeId]) -> Vec<DeviceId> {
+        let mut ids: Vec<DeviceId> = (nodes.iter())
+            .filter_map(|n| self.0.get(n))
+            .flatten()
+            .copied()
+            .collect();
+        ids.sort_unstable_by_key(|id| id.0);
+        ids.dedup();
+        ids
+    }
+}
+
+/// [`rated_paths`] over a prebuilt [`DevicesByNode`] of `circuit`.
+#[must_use]
+pub fn rated_paths_indexed(
+    circuit: &Circuit,
+    index: &DevicesByNode,
+    reference: &str,
+    derating: &Derating,
+    roles: &HashMap<String, NodeId, impl std::hash::BuildHasher>,
+    units: &[DeviceId],
+) -> Vec<(Vec<String>, Vec<Carrier>)> {
     let carriers = |pins: &[String]| {
         let nodes: Option<Vec<NodeId>> = pins.iter().map(|p| roles.get(p).copied()).collect();
         let on = |n: &NodeId| nodes.iter().flatten().any(|m| m == n);
-        let (ours, stray): (Vec<_>, Vec<_>) = (circuit.iter())
+        let touching = index.touching(nodes.as_deref().unwrap_or_default());
+        let (ours, stray): (Vec<_>, Vec<_>) = (touching.into_iter())
+            .map(|id| (id, &circuit.devices[id.0 as usize]))
             .filter(|(id, d)| units.contains(id) || d.name().contains(reference))
-            .filter(|(_, d)| d.nodes().iter().any(on))
             .partition(|(id, _)| units.contains(id));
         let bits = |d: &Device| (d.nodes().into_iter().take(3).zip(0..)).filter(|t| on(&t.0));
         let ours = (ours.into_iter()).map(|(id, d)| (id, bits(d).fold(0, |m, t| m | (1 << t.1))));

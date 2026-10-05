@@ -1157,13 +1157,24 @@ fn gather_device_meta(
 
     // A card rating current or power per path: which of the part's devices
     // carry each path, so the monitor judges the path on their current.
-    let part = |m: &DeviceMeta| crate::stress::strip_unit_suffix(&m.reference).to_owned();
-    for i in 0..metas.len() {
-        let (r, units) = (part(&metas[i]), metas.iter().map(|m| (part(m), m.device)));
-        let units: Vec<_> = units.filter(|u| u.0 == r).map(|u| u.1).collect();
-        if let Some(c) = by_ref.get(&r) {
-            let paths = crate::stress::rated_paths(circuit, &r, &c.derating, &c.roles, &units);
-            metas[i].derating.carriers = paths;
+    // Every meta of one part shares its units and so its paths: group once
+    // and solve each part's paths once (per meta, both were quadratic).
+    let parts: Vec<String> = (metas.iter())
+        .map(|m| crate::stress::strip_unit_suffix(&m.reference).to_owned())
+        .collect();
+    let mut units_of: HashMap<&str, Vec<DeviceId>> = HashMap::new();
+    for (r, m) in parts.iter().zip(&metas) {
+        units_of.entry(r).or_default().push(m.device);
+    }
+    let index = crate::stress::DevicesByNode::new(circuit);
+    let mut paths_of: HashMap<&str, Vec<_>> = HashMap::new();
+    for (r, meta) in parts.iter().zip(metas.iter_mut()) {
+        if let Some(c) = by_ref.get(r) {
+            let paths = paths_of.entry(r).or_insert_with(|| {
+                let units = &units_of[r.as_str()];
+                crate::stress::rated_paths_indexed(circuit, &index, r, &c.derating, &c.roles, units)
+            });
+            meta.derating.carriers.clone_from(paths);
         }
     }
 
