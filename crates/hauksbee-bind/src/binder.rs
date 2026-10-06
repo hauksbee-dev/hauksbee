@@ -2103,6 +2103,19 @@ fn role_from_mcu_pinfunction(function: &str) -> Option<String> {
         return None;
     }
     let upper = f.to_ascii_uppercase();
+    // An on-chip regulator's OUTPUT pad (the ESP flash LDO's VDD_SDIO/VDD_SPI,
+    // a SAM VDDCORE) is not a supply input: left unconnected it reads 0 V and
+    // failed the supply check of a module that was powered. A module's bare
+    // "3V3" pad, by contrast, is its supply input.
+    if ["VDD_SDIO", "VDD_SPI", "VDDCORE"]
+        .iter()
+        .any(|out| upper.starts_with(out))
+    {
+        return None;
+    }
+    if matches!(upper.as_str(), "3V3" | "+3V3" | "3.3V") {
+        return Some("vdd".to_string());
+    }
     let mut base = None;
     for token in pinfunction_tokens(&upper) {
         if let Some(role) = role_from_mcu_pinfunction_token(&token) {
@@ -11121,6 +11134,26 @@ style = "i2c_pointer"
         }
         for token in ["IO64", "IOREF", "P2.01", "P0.32"] {
             assert_eq!(role_from_mcu_pinfunction_token(token), None, "{token}");
+        }
+    }
+
+    /// The smartknob T-Micro32 module (2026-10-01 sweep): its unconnected
+    /// `VDD_SDIO` pad, the flash LDO's output, read as a dead supply.
+    #[test]
+    fn regulator_output_pads_are_not_supply_inputs() {
+        for (function, want) in [
+            ("VDD_SDIO", None),
+            ("VDD_SPI", None),
+            ("VDDCORE", None),
+            ("3V3", Some("vdd")),
+            ("VDD3P3_RTC", Some("vdd")),
+            ("3V3_EN", None),
+        ] {
+            assert_eq!(
+                role_from_mcu_pinfunction(function).as_deref(),
+                want,
+                "{function}"
+            );
         }
     }
 
