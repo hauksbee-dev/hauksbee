@@ -646,15 +646,16 @@ fn envelope_lint_with_tolerance(
                         severity = raised_one_band(severity);
                     }
                     // Only a tolerance corner leaves the window: the nominal
-                    // level is inside it and nothing reaches abs max. That is
-                    // a margin question, never a serious one.
+                    // level is inside it and nothing reaches abs max. A rail
+                    // set at the recommended limit is a deliberate design
+                    // choice, so the corner is a margin note, not a fault.
                     let nominal = f64::midpoint(range.min_v, range.max_v);
                     let nominal_inside = nominal >= *min_v - min_tol && nominal <= *max_v + max_tol;
                     // Declared ranges only: a solved span's midpoint is not
                     // a nominal, and a solved excursion is what happened.
                     let declared_only = resolver.solved(net_id).is_none();
                     if declared_only && nominal_inside && !above_abs_max {
-                        severity = at_most(severity, Severity::Medium);
+                        severity = at_most(severity, Severity::Low);
                     }
                     // A band the net's name implies is an assumption about a
                     // level nothing on the board states: it can flag a margin
@@ -1265,7 +1266,7 @@ basis = "Recommended Operating Conditions, V+ row"
     /// A set point exactly at the load's recommended maximum is only in range
     /// at the reference's typical value: the card's sourced reference interval
     /// carries through the divider, so the tolerance corner is reported as a
-    /// margin finding rather than hidden behind the nominal.
+    /// margin note (under abs max) rather than hidden behind the nominal.
     #[test]
     fn divider_set_point_carries_the_reference_tolerance() {
         let card = BOOST_AND_LOAD.replace(
@@ -1304,7 +1305,7 @@ basis = "Recommended Operating Conditions, V+ row"
         let msg = &found[0].message;
         assert!(msg.contains("4.365..4.635"), "{msg}");
         assert!(!msg.contains("Tie "), "a margin is not a rewire: {msg}");
-        assert_eq!(found[0].severity, Severity::Medium, "{msg}");
+        assert_eq!(found[0].severity, Severity::Low, "{msg}");
     }
 
     #[test]
