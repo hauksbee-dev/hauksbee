@@ -5605,6 +5605,151 @@ b1 = { enable = "dir", active = "high" }
 implements = ["direction_control", "dual_supply_levels", "vcc_isolation"]
 missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
 
+# ── SN74AVC4T245: 4-bit dual-supply transceiver, two 2-bit halves, 1.2-3.6 V ─
+# Source: TI SN74AVC4T245 datasheet SCES576I (June 2004, revised February
+#   2025), https://www.ti.com/lit/ds/symlink/sn74avc4t245.pdf (sha256
+#   6d7f0ba1f575afe1b7e05d689a4fd91b1382683cdbe6a53731ac6c2f13db062c).
+#   Pin map: 4 Pin Configuration and Functions, Table 4-1 Pin Functions (p.5),
+#   column D, DGV, PW, RGY (1 VCCA, 2 1DIR, 3 2DIR, 4-7 1A1 1A2 2A1 2A2,
+#   8-9 GND, 10-13 2B2 2B1 1B2 1B1, 14 2OE, 15 1OE, 16 VCCB). Absolute maximum
+#   supply -0.5 to 4.6 V and continuous output current +/-50 mA: 5.1 (p.6).
+#   VCCA/VCCB 1.2 to 3.6 V and the VIH/VIL bands of data and DIR inputs: 5.3
+#   Recommended Operating Conditions (p.7). VOH/VOL: 5.5 Electrical
+#   Characteristics (p.9). Function: Table 7-1 (p.16, each 2-bit section): OE
+#   low, DIR low, A port enabled, B data to A; OE low, DIR high, B port
+#   enabled, A data to B; OE high, both ports Hi-Z. The control pins (1DIR,
+#   2DIR, 1OE, 2OE) are referenced to VCCA: 7.1 Overview (p.15) and Table 4-1.
+# Each half has its own DIR and OE_n; both ports are bidirectional, so each
+# carries an output and a sensed `*_in` input, as the 74HCT245 card does.
+[[models]]
+id = "sn74avc4t245"
+kind = "digital"
+description = "TI SN74AVC4T245 4-bit dual-supply translating bus transceiver (two 2-bit halves), 3-state, 1.2 V to 3.6 V, SOIC/TVSOP/TSSOP-16"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74avc4t245.pdf"
+title = "TI SN74AVC4T245 dual-bit bus transceiver with configurable voltage translation and 3-state outputs (SCES576I), February 2025"
+locator = "Table 4-1 Pin Functions p.5; 5.1 Absolute Maximum Ratings p.6; 5.3 Recommended Operating Conditions p.7; 5.5 Electrical Characteristics p.9; 7.1 Overview p.15; Table 7-1 Function Table p.16"
+sha256 = "6d7f0ba1f575afe1b7e05d689a4fd91b1382683cdbe6a53731ac6c2f13db062c"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "propagation delay (5.7 to 5.11), enable/disable times, data rate, output edge rate, Ioff and IOZ leakage and supply current (ICCA, ICCB) are not modelled; only the DC function table, the supply-referenced levels and the output resistance are"
+
+[models.match]
+# D, DGV, PW and RGY share Table 4-1's numbering below (the RSV UQFN, BQB and
+# DYY packages number differently and are not matched). A trailing R or T is
+# tape and reel; the bare 74AVC4T245 marking is accepted too.
+value_re = "(?i)^(SN)?74AVC4T245(D|DGV|PW|RGY)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.1          # VCCO - 0.2 V at IOH = -100 uA, VCCO 3.3 V (5.5)
+vol = 0.2          # IOL = 100 uA (5.5)
+vih = 2.0          # VCCI 2.7 V to 3.6 V (5.3)
+vil = 0.8
+# VCCO = 3 V, -40 C to 85 C: VOH 2.3 V min at IOH = -12 mA against the 2.8 V
+# light-load level, 0.5 V / 12 mA = 42 Ohm (VOL side: 0.7 V max at 12 mA
+# against 0.2 V, 0.5 V / 12 mA = 42 Ohm) (5.5).
+ro = 42.0
+supply_pin = "1"
+gnd_pin = "8"
+
+[models.levels]
+# 5.3, VIH/VIL of data and DIR inputs against VCCI: 0.65/0.35 x VCCI at 1.2 to
+# 1.95 V, 1.6/0.7 V at 1.95 to 2.7 V, 2/0.8 V at 2.7 to 3.6 V; gaps between
+# bands interpolate.
+vih = [[1.2, 0.78], [1.95, 1.2675], [2.3, 1.6], [2.7, 1.6], [3.0, 2.0], [3.6, 2.0]]
+vil = [[1.2, 0.42], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8]]
+# VOH = VCCO - 0.2 V at IOH = -100 uA, VCCO 1.2 V to 3.6 V (5.5).
+voh = [[1.2, 1.0], [3.6, 3.4]]
+
+[models.level_rails]
+# Table 4-1 and 7.1: the A ports and all four control pins sit on VCCA, the B
+# ports on VCCB.
+vcca = ["1a1", "1a2", "2a1", "2a2", "1dir", "2dir", "1oe_n", "2oe_n"]
+vccb = ["1b1", "1b2", "2b1", "2b2"]
+
+[models.pins]
+# Table 4-1, D, DGV, PW and RGY.
+"1" = "vcca"
+"2" = "1dir"
+"3" = "2dir"
+"4" = "1a1"
+"5" = "1a2"
+"6" = "2a1"
+"7" = "2a2"
+"8" = "gnd"
+"9" = "gnd"
+"10" = "2b2"
+"11" = "2b1"
+"12" = "1b2"
+"13" = "1b1"
+"14" = "2oe_n"
+"15" = "1oe_n"
+"16" = "vccb"
+
+[models.ratings]
+max_pin_current_a = 0.05      # IO continuous output current, 5.1
+max_voltage_v = 4.6           # VCCA / VCCB, 5.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AVC4T245 SCES576I, 5.3 VCCA 1.2 V to 3.6 V; 5.1 VCCA -0.5 V to 4.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AVC4T245 SCES576I, 5.3 VCCB 1.2 V to 3.6 V; 5.1 VCCB -0.5 V to 4.6 V"
+
+[models.logic]
+# Table 7-1, per half: OE low and DIR low, B data to the A bus; OE low and DIR
+# high, A data to the B bus; OE high, both ports Hi-Z. The A side drives only
+# with OE_n low and DIR low; the B side only with OE_n low and DIR high.
+inputs = ["1dir", "1oe_n", "2dir", "2oe_n",
+  "1a1_in", "1a2_in", "1b1_in", "1b2_in", "2a1_in", "2a2_in", "2b1_in", "2b2_in"]
+outputs = ["1a1", "1a2", "1b1", "1b2", "2a1", "2a2", "2b1", "2b2"]
+[models.logic.sense]
+1a1_in = "1a1"
+1a2_in = "1a2"
+1b1_in = "1b1"
+1b2_in = "1b2"
+2a1_in = "2a1"
+2a2_in = "2a2"
+2b1_in = "2b1"
+2b2_in = "2b2"
+[models.logic.comb]
+1a1 = "1b1_in"
+1a2 = "1b2_in"
+1b1 = "1a1_in"
+1b2 = "1a2_in"
+2a1 = "2b1_in"
+2a2 = "2b2_in"
+2b1 = "2a1_in"
+2b2 = "2a2_in"
+[models.logic.tristate]
+1a1 = { enable = "1dir", active = "low", and = [{ pin = "1oe_n", active = "low" }] }
+1a2 = { enable = "1dir", active = "low", and = [{ pin = "1oe_n", active = "low" }] }
+1b1 = { enable = "1dir", active = "high", and = [{ pin = "1oe_n", active = "low" }] }
+1b2 = { enable = "1dir", active = "high", and = [{ pin = "1oe_n", active = "low" }] }
+2a1 = { enable = "2dir", active = "low", and = [{ pin = "2oe_n", active = "low" }] }
+2a2 = { enable = "2dir", active = "low", and = [{ pin = "2oe_n", active = "low" }] }
+2b1 = { enable = "2dir", active = "high", and = [{ pin = "2oe_n", active = "low" }] }
+2b2 = { enable = "2dir", active = "high", and = [{ pin = "2oe_n", active = "low" }] }
+
+[models.coverage]
+implements = ["direction_control", "tristate_enable", "dual_supply_levels"]
+missing = ["propagation_timing", "enable_disable_timing", "output_drive_curve", "input_leakage", "off_state_output_current", "supply_current", "vcc_isolation"]
+
 # ── SN74LVC2G126: dual bus buffer, 3-state, active-HIGH enables ─────────────
 # Source: Texas Instruments SN74LVC2G126 datasheet SCES205N, April 1999,
 #   revised September 2020: 5 Pin Configuration and Functions (p.3), 6.1

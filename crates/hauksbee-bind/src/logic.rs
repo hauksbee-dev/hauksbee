@@ -1971,6 +1971,47 @@ disable = [
         assert_eq!(lc.output_enabled("a1"), Some(false));
     }
 
+    /// Each half of the SN74AVC4T245 has its own `DIR` and `OE_n`: A drives with
+    /// `OE_n` low and `DIR` low, B with `OE_n` low and `DIR` high, neither with
+    /// `OE_n` high, and the other half is unaffected.
+    #[test]
+    fn avc4t245_half_drives_by_its_own_dir_and_oe() {
+        let mut lc = card("SN74AVC4T245PWR");
+        let data = "1a1_in=1 1a2_in=0 1b1_in=0 1b2_in=1 2a1_in=1 2b1_in=1";
+        // (controls, half 1 A driven, half 1 B driven)
+        let cases = [
+            ("1oe_n=0 1dir=1", false, true),
+            ("1oe_n=0 1dir=0", true, false),
+            ("1oe_n=1 1dir=1", false, false),
+            ("1oe_n=1 1dir=0", false, false),
+        ];
+        for (controls, a_driven, b_driven) in cases {
+            // Half 2 is held disabled, so it must stay released throughout.
+            tick(&mut lc, &format!("{controls} 2oe_n=1 2dir=1 {data}"));
+            for pin in ["1a1", "1a2"] {
+                assert_eq!(lc.output_enabled(pin), Some(a_driven), "{controls}: {pin}");
+            }
+            for pin in ["1b1", "1b2"] {
+                assert_eq!(lc.output_enabled(pin), Some(b_driven), "{controls}: {pin}");
+            }
+            for pin in ["2a1", "2a2", "2b1", "2b2"] {
+                assert_eq!(lc.output_enabled(pin), Some(false), "{controls}: {pin}");
+            }
+        }
+        // Data follows the direction: A to B with DIR high, B to A with DIR low.
+        tick(&mut lc, &format!("1oe_n=0 1dir=1 2oe_n=1 {data}"));
+        assert_eq!(lc.output_level("1b1"), Some(true));
+        assert_eq!(lc.output_level("1b2"), Some(false));
+        tick(&mut lc, &format!("1oe_n=0 1dir=0 2oe_n=1 {data}"));
+        assert_eq!(lc.output_level("1a1"), Some(false));
+        assert_eq!(lc.output_level("1a2"), Some(true));
+        // Half 2 enabled B to A while half 1 is disabled.
+        tick(&mut lc, &format!("1oe_n=1 2oe_n=0 2dir=0 {data}"));
+        assert_eq!(lc.output_enabled("2a1"), Some(true));
+        assert_eq!(lc.output_level("2a1"), Some(true));
+        assert_eq!(lc.output_enabled("1a1"), Some(false));
+    }
+
     /// Unwired `SRCLR_n` / `OE_n` read released / enabled.
     #[test]
     fn unwired_controls_read_released() {
