@@ -706,12 +706,12 @@ fn reference_ambiguous_merge_with_source_uid_binds_one_scalar() {
 /// Bug (binder-r3 #1): a multi-element passive array (a 4-pad isolated
 /// resistor network) used to bind as ONE 2-terminal resistor across its first
 /// two pads; the other elements silently vanished from the circuit. An even
-/// pad count is the isolated-array convention: sequential pad pairs (1-2,
-/// 3-4, …), one element per pair at the pack's per-element value.
+/// pad count is an isolated array: a chip array pairs pads across the package
+/// (1-4, 2-3), one element per pair at the pack's per-element value.
 #[test]
 fn isolated_passive_array_stamps_one_element_per_pad_pair() {
-    // 4-pad isolated array: element 1 = pads 1-2 (NET_A..NET_B), element 2 =
-    // pads 3-4 (NET_C..NET_D).
+    // 4-pad chip array: element 1 = pads 1-4 (NET_A..NET_D), element 2 =
+    // pads 2-3 (NET_B..NET_C).
     let bound = bind_single_part(
         "RN1",
         "10k",
@@ -739,11 +739,11 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
             (*a == node(x) && *b == node(y)) || (*a == node(y) && *b == node(x))
         })
     };
-    assert!(bridges("NET_A", "NET_B"), "element 1 spans pads 1-2");
-    assert!(bridges("NET_C", "NET_D"), "element 2 spans pads 3-4");
+    assert!(bridges("NET_A", "NET_D"), "element 1 spans pads 1-4");
+    assert!(bridges("NET_B", "NET_C"), "element 2 spans pads 2-3");
     assert!(
-        !bridges("NET_B", "NET_C"),
-        "no element may span across the pad-pair boundary"
+        !bridges("NET_A", "NET_B") && !bridges("NET_C", "NET_D"),
+        "a chip array never pairs neighbouring pads"
     );
     for (name, _, _, ohms) in &resistors {
         assert!(
@@ -751,14 +751,13 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
             "{name}: each element carries the per-element value, got {ohms}"
         );
     }
-    // R5: the 1-2/3-4 sequential pairing is a convention (a mirror-pinout array
-    // would pair differently), so the even-count path must say so in the bind
-    // report, matching the odd-count branch, not a silent guess.
+    // R5: the pairing is a footprint-family convention, so the even-count path
+    // must say so in the bind report, matching the odd-count branch.
     let row = bound.report.row("RN1").expect("RN1 gets a bind row");
     let w = row.warning.as_deref().unwrap_or("");
     assert!(
-        w.contains("sequential"),
-        "even-pad isolated array must carry the sequential-pairing note, got {w:?}"
+        w.contains("1-N, 2-(N-1)"),
+        "even-pad isolated array must carry the pairing note, got {w:?}"
     );
 }
 

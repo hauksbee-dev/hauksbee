@@ -2908,22 +2908,33 @@ fn bind_model_peripheral(
         } => {
             let sensor = sensor.as_ref().expect("parsed above for a register map");
             // A strap role must resolve to ground or to a rail the board's own
-            // power-net resolution accepted; anything else is not a level.
+            // power-net resolution accepted, directly or through pull resistors
+            // that all end on the same one; anything else is not a level.
+            let rail_level = |node: NodeId| {
+                (node.is_ground() || power_nets.contains_key(circuit.node_name(node)))
+                    .then(|| !node.is_ground())
+            };
             let strap_level = |role: &str| -> Result<bool, String> {
                 let node = role_nets
                     .get(role)
                     .copied()
                     .ok_or_else(|| format!("strap role '{role}' is not connected"))?;
-                if node.is_ground() {
-                    Ok(false)
-                } else if power_nets.contains_key(circuit.node_name(node)) {
-                    Ok(true)
-                } else {
-                    Err(format!(
-                        "strap role '{role}' is on '{}' rather than a resolved supply or ground",
-                        circuit.node_name(node)
-                    ))
-                }
+                let pulls: Vec<Option<bool>> = (circuit.devices.iter())
+                    .filter_map(|d| match d {
+                        Device::Resistor { a, b, .. } if *a == node => Some(rail_level(*b)),
+                        Device::Resistor { a, b, .. } if *b == node => Some(rail_level(*a)),
+                        _ => None,
+                    })
+                    .collect();
+                let pulled = pulls.first().copied().flatten();
+                rail_level(node)
+                    .or_else(|| pulled.filter(|_| pulls.iter().all(|p| *p == pulled)))
+                    .ok_or_else(|| {
+                        format!(
+                            "strap role '{role}' is on '{}' rather than a resolved supply or ground",
+                            circuit.node_name(node)
+                        )
+                    })
             };
             let require_strap = |role: &str, want: bool| -> Result<(), (String, String)> {
                 if strap_level(role) == Ok(want) {
@@ -3680,9 +3691,10 @@ fn passive_device(
 /// device PER ELEMENT, never as a single 2-terminal element.
 ///
 /// Pad conventions:
-///   - EVEN pad count -> isolated array: sequential pad pairs in natural pad
-///     order (1-2, 3-4, …) each carry one element at the pack's per-element
-///     value (the value field of an array is per element, not the pack total).
+///   - EVEN pad count -> isolated array: pads paired across the package
+///     (1-N, 2-(N-1), …, the chip-array and DIP convention), or neighbours
+///     (1-2, 3-4, …) for a SIP footprint; each pair carries one element at the
+///     pack's per-element value (an array's value is per element).
 ///   - ODD pad count -> assumed BUSSED array: the lowest-numbered pad is the
 ///     shared common and every other pad carries one element to it. That
 ///     pairing is a convention, not a certainty, so this variant always binds
@@ -3714,24 +3726,35 @@ fn bind_passive_array(
     // (element name, a, b) before connectivity filtering.
     let mut elements: Vec<(String, Option<NodeId>, Option<NodeId>)> = Vec::new();
     if pads.len().is_multiple_of(2) {
-        // Isolated-array convention: sequential pad pairs.
-        for (i, pair) in pads.chunks(2).enumerate() {
+        // Isolated arrays. Chip arrays (convex/concave 2x/4x, KiCad R_Pack,
+        // Eagle RESPACK) and DIP/SO networks pair pads across the package,
+        // 1-N, 2-(N-1), …; only a SIP isolated network pairs neighbours.
+        let sip = comp.footprint.to_ascii_uppercase().contains("SIP");
+        let n = pads.len();
+        for i in 0..n / 2 {
+            let (x, y) = if sip {
+                (2 * i, 2 * i + 1)
+            } else {
+                (i, n - 1 - i)
+            };
             elements.push((
                 format!("{}_e{}", comp.reference, i + 1),
-                node_of(pair[0].net),
-                node_of(pair[1].net),
+                node_of(pads[x].net),
+                node_of(pads[y].net),
             ));
         }
-        // Sequential 1-2/3-4 pairing is as much a convention as the odd-count
-        // bussed one, a mirror-pinout isolated array (some Bourns SIP packs
-        // pair 1-8/2-7) would pair differently, and that is not knowable from
-        // the netlist alone. Emit the same "verify against the datasheet" note
-        // the odd branch does, rather than binding silently.
+        // The pairing is read from the footprint family, not the netlist, so
+        // the report says which convention was bound.
         notes.push(format!(
-            "{}: {}-pad passive array bound as sequential isolated pairs \
-             (1-2, 3-4, …) by convention; verify against the part's datasheet",
+            "{}: {n}-pad passive array bound as isolated pairs {} by the {} \
+             convention; verify against the part's datasheet",
             comp.reference,
-            pads.len(),
+            if sip {
+                "1-2, 3-4, …"
+            } else {
+                "1-N, 2-(N-1), …"
+            },
+            if sip { "SIP" } else { "chip-array/DIP" },
         ));
     } else {
         // Odd pad count: ambiguous. Bind the common bussed convention (lowest
@@ -8722,6 +8745,16 @@ mod tests {
         component: &Component,
         model: &ModelEntry,
     ) -> (BindOutcome, Option<String>, Vec<PeripheralBinding>) {
+        bind_peripheral_pulled(component, model, &[])
+    }
+
+    /// [`bind_peripheral`] with 10k resistors already stamped between the
+    /// given board nets (0/1 ground, 2 SDA, 3 +3V3, 4 SCL, 5 IRQ).
+    fn bind_peripheral_pulled(
+        component: &Component,
+        model: &ModelEntry,
+        pulls: &[(i64, i64)],
+    ) -> (BindOutcome, Option<String>, Vec<PeripheralBinding>) {
         let lib = ModelLibrary::builtin();
         let mut circuit = Circuit::new();
         let nodes = ["SDA", "+3V3", "SCL", "IRQ"].map(|name| circuit.node(name));
@@ -8730,6 +8763,10 @@ mod tests {
             Some(n @ 2..=5) => nodes.get(usize::try_from(n - 2).ok()?).copied(),
             _ => None,
         };
+        for (i, &(a, b)) in pulls.iter().enumerate() {
+            let (a, b) = (node_of(Some(a)).unwrap(), node_of(Some(b)).unwrap());
+            circuit.add(Device::resistor(format!("RP{i}"), a, b, 10e3));
+        }
         let mut peripherals = Vec::new();
         let (outcome, warning, _) = bind_component(
             component,
@@ -8856,6 +8893,14 @@ style = "i2c_pointer"
                 && warning.contains("strap role 'a0' is on 'IRQ'"),
             "{warning}"
         );
+
+        // A strap on a signal net pulled to one rail takes that rail's level;
+        // pulls to both rails leave it assumed.
+        let (_, warning, peripherals) = bind_peripheral_pulled(&component, &model, &[(5, 3)]);
+        assert_eq!(peripherals[0].i2c_address_override, Some(0x41));
+        assert_eq!(warning, None);
+        let (_, warning, _) = bind_peripheral_pulled(&component, &model, &[(5, 3), (0, 5)]);
+        assert!(warning.is_some_and(|w| w.contains("0x40 is assumed")));
 
         // Without SCL wired the bus personality is not attached.
         component.pins.retain(|p| p.number != "1");
