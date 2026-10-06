@@ -1425,6 +1425,12 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
     }
     q.mpn = component_mpn(comp);
     let mut res = lib.resolve(&q);
+    // A KiCad generic transistor value ("Q_NPN_BCE") spells its symbol's pad order.
+    if let Some(model) = res.model.as_mut() {
+        if let Some(pins) = generic_symbol_pins(&comp.value, model.kind) {
+            model.pins = pins;
+        }
+    }
     // `led_generic` is a two-pad guess from the footprint: WS2812B/RGB parts are not it.
     if res.model.as_ref().is_some_and(|m| m.id == "led_generic")
         && logical_passive_pins(comp).map_or(0, |pins| pins.len()) > 2
@@ -1595,6 +1601,64 @@ fn is_port_class(prefix: &str) -> bool {
     matches!(prefix, "J" | "P" | "X" | "JP" | "TP" | "MP" | "H")
 }
 
+/// The pad map a KiCad generic transistor symbol spells in its name: in
+/// `Q_NPN_BCE` or `Q_PMOS_GSD` pad n is the n-th electrode letter (a fourth
+/// repeats one, the tab). `None` for any other value or a non-transistor kind.
+fn generic_symbol_pins(
+    value: &str,
+    kind: ComponentKind,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    use ComponentKind::{BjtNpn, BjtPnp, Nmos, Pmos};
+    let upper = value.trim().to_ascii_uppercase();
+    let (class, order) = upper.strip_prefix("Q_")?.split_once('_')?;
+    let class_kind = matches!((class, kind), ("NPN", BjtNpn) | ("PNP", BjtPnp))
+        || matches!((class, kind), ("NMOS", Nmos) | ("PMOS", Pmos));
+    let pins = (order.chars().enumerate())
+        .map(|(i, c)| {
+            Some((
+                (i + 1).to_string(),
+                role_from_pinfunction(kind, &c.to_string())?,
+            ))
+        })
+        .collect::<Option<std::collections::BTreeMap<_, _>>>()?;
+    let roles: std::collections::BTreeSet<_> = pins.values().collect();
+    (class_kind && (3..=4).contains(&pins.len()) && roles.len() == 3).then_some(pins)
+}
+
+/// A memory-card socket placed under any designator (a `U3` microSD socket is
+/// still a connector): its symbol, footprint or value names the socket, or its
+/// pins carry the SD-bus contacts (CMD, CLK, DAT0) beside a mechanical contact or
+/// card-detect switch. The mechanical pin is what separates a socket from an SD
+/// NAND or eMMC chip, which names the same bus pins but has no shell or detect.
+fn is_card_socket(comp: &Component) -> bool {
+    const MECHANICAL: [&str; 7] = [
+        "SHIELD",
+        "SHELL",
+        "CD",
+        "DET",
+        "DETECT",
+        "CARD_DETECT",
+        "SW",
+    ];
+    let named = [&comp.value, &comp.footprint, &comp.lib_id]
+        .iter()
+        .any(|s| {
+            let s = s.to_ascii_uppercase().replace(['-', '_', ' '], "");
+            let socket = ["MICROSD", "SDCARD", "TFCARD", "CARDSOCKET"]
+                .iter()
+                .any(|k| s.contains(k));
+            socket && !s.contains("NAND") && !s.contains("EMMC")
+        });
+    let has = |names: &[&str]| {
+        comp.pins.iter().any(|p| {
+            let f = p.function.trim().to_ascii_uppercase();
+            names.iter().any(|n| f == *n)
+        })
+    };
+    let bus = has(&["CMD"]) && has(&["CLK"]) && has(&["DAT0", "D0"]);
+    named || (bus && has(&MECHANICAL))
+}
+
 /// Synthesize a model entry for a component the library could not resolve,
 /// using only the reference-designator class and a parseable value. Returns
 /// `None` when no confident fallback applies.
@@ -1645,6 +1709,15 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
 
     // Connector-class references: not simulatable parts; classify so they
     // don't count against resolution (J5 "Power", P1, test points, jumpers).
+    if is_card_socket(comp) {
+        return Some(make_entry(
+            "card_socket_fallback",
+            ComponentKind::Connector,
+            "memory-card socket (engine fallback by socket name or SD contact pins)",
+            hauksbee_models::Params::default(),
+            BTreeMap::new(),
+        ));
+    }
     if is_port_class(&prefix) && parse_value(&comp.value).is_none() {
         return Some(make_entry(
             "connector_fallback",
@@ -3985,7 +4058,7 @@ fn bind_bjt(
         BindOutcome::Analog {
             device: "bjt".to_string(),
         },
-        None,
+        entry_warning(comp, model),
     )
 }
 
@@ -8602,6 +8675,89 @@ mod tests {
         assert_eq!(atmega328p_pin_map(&c)["12"], "pd6_ain0_oc0a");
         c.footprint = "QFN-320".into();
         assert_eq!(atmega328p_pin_map(&c)["12"], "pd6_ain0_oc0a");
+    }
+
+    /// A value still reading as KiCad's generic transistor symbol binds to the
+    /// class card, disclosed as an estimated fallback, with the pad order the
+    /// symbol name spells (not the SOT-23 rule's B-E-C guess).
+    #[test]
+    fn generic_kicad_transistor_symbols_bind_by_class_in_their_pad_order() {
+        use hauksbee_ir::evidence::ModelSourceTier;
+        let lib = ModelLibrary::builtin();
+        for (value, id, roles) in [
+            (
+                "Q_NPN_BCE",
+                "generic_kicad_npn",
+                ["base", "collector", "emitter"],
+            ),
+            (
+                "Q_PNP_EBC",
+                "generic_kicad_pnp",
+                ["emitter", "base", "collector"],
+            ),
+            (
+                "Q_PMOS_GSD",
+                "generic_kicad_pmos_switch",
+                ["gate", "source", "drain"],
+            ),
+            (
+                "q_nmos_dgs",
+                "generic_kicad_nmos_switch",
+                ["drain", "gate", "source"],
+            ),
+        ] {
+            let mut c = comp("Q1", value);
+            c.footprint = "Package_TO_SOT_SMD:SOT-23".into();
+            c.pins = vec![pin("1", 1), pin("2", 2), pin("3", 3)];
+            let res = library_resolution(&lib, &c);
+            let model = res
+                .model
+                .unwrap_or_else(|| panic!("{value} must bind by class"));
+            assert_eq!(model.id, id);
+            let tier = res.provenance.as_ref().map(ModelSource::tier);
+            assert_eq!(tier, Some(ModelSourceTier::EstimatedFallback), "{value}");
+            assert!(model
+                .params
+                .get_str("warning")
+                .is_some_and(|w| w.contains("ASSUMED")));
+            let got: Vec<_> = ["1", "2", "3"].map(|p| model.pins[p].clone()).into();
+            assert_eq!(got, roles, "{value}");
+        }
+        // Only the generic symbol name carries a pad order, and only for its own class.
+        assert!(generic_symbol_pins("2N7002", ComponentKind::Nmos).is_none());
+        assert!(generic_symbol_pins("Q_NMOS_GSD", ComponentKind::Pmos).is_none());
+        assert!(generic_symbol_pins("Q_NPN_BBE", ComponentKind::BjtNpn).is_none());
+        let tab = generic_symbol_pins("Q_NMOS_GDSD", ComponentKind::Nmos).expect("tab pad");
+        assert_eq!(tab["4"], "drain");
+    }
+
+    /// A memory-card socket is a connector under any designator; an SD NAND chip
+    /// that names the same bus pins but has no shell or detect contact is not.
+    #[test]
+    fn card_sockets_are_connectors_whatever_their_designator() {
+        let named = |names: &[&str]| -> Vec<Pin> {
+            (names.iter().enumerate())
+                .map(|(i, f)| Pin {
+                    function: (*f).to_string(),
+                    ..pin(&(i + 1).to_string(), 1)
+                })
+                .collect()
+        };
+        let bus = [
+            "DAT2", "CD/DAT3", "CMD", "VDD", "CLK", "VSS", "DAT0", "DAT1",
+        ];
+        let mut socket = comp("U3", "XYZ2075");
+        socket.pins = named(&[&bus[..], &["CD", "SHIELD"]].concat());
+        let entry = fallback_entry(&socket).expect("socket");
+        assert_eq!(entry.kind, ComponentKind::Connector);
+        let mut by_name = comp("U9", "ABC");
+        by_name.footprint = "Connector_Card:microSD_HC_Molex".into();
+        assert!(is_card_socket(&by_name));
+        let mut nand = comp("U4", "SD-NAND 4G");
+        nand.pins = named(&bus);
+        assert!(!is_card_socket(&nand));
+        nand.footprint = "MicroSD_NAND_LGA8".into();
+        assert!(!is_card_socket(&nand));
     }
 
     /// Resolve `value` the way the binder does (value and MPN both set).

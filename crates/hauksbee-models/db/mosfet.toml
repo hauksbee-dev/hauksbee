@@ -744,6 +744,91 @@ max_voltage_v       = 30.0
 theta_ja_c_per_w    = 50.0
 max_junction_temp_c = 150.0
 
+# ── KiCad generic MOSFET symbols (no part number) ─────────────────────────────
+#
+# A value that is still the stock KiCad symbol name ("Q_NMOS_GSD",
+# "Q_PMOS_GSD") names a device CLASS, not a part: the designer never said which
+# FET is fitted. Leaving it open is not neutral, it isolates every net through
+# the switch (a load switch's whole downstream rail), so these bind by class to
+# a generic small-signal switch whose numbers are ASSUMED, not datasheet values.
+#
+# The letters after the class are the symbol's pad order (GSD: pad 1 gate, 2
+# source, 3 drain); the binder reads the pad map from them, so one card serves
+# every ordering.
+#
+# CONSERVATIVE, in the direction that surfaces a fault rather than hides one:
+#   - |VGS(th)| 1.5 V and a weak channel (about 1.9 ohm at |VGS| = 3.3 V), the
+#     high-resistance end of SOT-23 small-signal FETs, so a marginal gate drive
+#     or a heavy load shows as a drop instead of being absorbed by a hard switch.
+#   - ratings at the low end of the class (20 V, 0.2 A, 350 C/W SOT-23 still
+#     air), so a stress check flags early rather than late.
+#
+# DISCLOSURE: tier estimated-fallback raises the reduced-fidelity assumption
+# naming the part and this card on every surface, and the warning below rides
+# the bind row. Putting the MPN on the component replaces it.
+
+[[models]]
+id = "generic_kicad_nmos_switch"
+kind = "nmos"
+description = "KiCad generic N-MOSFET symbol (Q_NMOS_xxx) with no part number: generic small-signal switch, ASSUMED parameters"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
+[models.match]
+value_re = "(?i)^Q_NMOS(_[DGS]{3,4})?$"
+
+[models.params]
+vto    = 1.5    # ASSUMED VGS(th) (V), upper-middle of logic-level small-signal FETs
+kp     = 0.5    # ASSUMED weak channel (A/V^2): about 1.9 ohm at VGS = 3.3 V with rd + rs
+lambda = 0.01
+rd     = 0.5
+rs     = 0.25
+warning = "value is the KiCad generic MOSFET symbol with no part number: bound to a generic small-signal switch whose threshold, on-resistance and ratings are ASSUMED (conservative), not from any datasheet; put the manufacturer part number on the component to replace it"
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a       = 0.2    # ASSUMED, low end of SOT-23 small-signal FETs
+max_voltage_v       = 20.0   # ASSUMED, low end of the class
+theta_ja_c_per_w    = 350.0  # ASSUMED SOT-23 still air, minimum footprint
+max_junction_temp_c = 150.0
+
+[[models]]
+id = "generic_kicad_pmos_switch"
+kind = "pmos"
+description = "KiCad generic P-MOSFET symbol (Q_PMOS_xxx) with no part number: generic small-signal switch, ASSUMED parameters"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
+[models.match]
+value_re = "(?i)^Q_PMOS(_[DGS]{3,4})?$"
+
+[models.params]
+vto    = -1.5   # ASSUMED, P-channel mirror of the N card above
+kp     = 0.5
+lambda = 0.01
+rd     = 0.5
+rs     = 0.25
+warning = "value is the KiCad generic MOSFET symbol with no part number: bound to a generic small-signal switch whose threshold, on-resistance and ratings are ASSUMED (conservative), not from any datasheet; put the manufacturer part number on the component to replace it"
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a       = 0.2
+max_voltage_v       = 20.0
+theta_ja_c_per_w    = 350.0
+max_junction_temp_c = 150.0
+
 # ── Specific datasheet-sourced power-FET entries ───────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1271,3 +1271,83 @@ unit = "K/W"
 conditions = "in free air"
 mounting = "FR4 single-sided Cu, 1 cm2 collector pad"
 basis = "Nexperia BC807_SER Rev. 8 (1 July 2022), Table 7 Thermal characteristics, Rth(j-a) in free air, note [3] FR4 PCB, single-sided copper, tin-plated, 1 cm² collector mounting pad"
+
+# ── KiCad generic BJT symbols (no part number) ────────────────────────────────
+#
+# Same rule as the generic MOSFET cards in mosfet.toml: a value still reading
+# "Q_NPN_BCE" names a class, not a part, and leaving it open isolates its nets.
+# These bind it to a generic small-signal transistor with ASSUMED, conservative
+# numbers (hFE 100, the low guaranteed end of the 2N3904/BC847 class; 25 V,
+# 0.1 A and 350 C/W ratings at the class's low end) as an estimated-fallback,
+# which every surface discloses. The suffix letters are the symbol's pad order
+# (BCE: pad 1 base, 2 collector, 3 emitter); the binder reads the pad map from
+# them, so one card serves every ordering.
+
+[[models]]
+id = "generic_kicad_npn"
+kind = "bjt_npn"
+description = "KiCad generic NPN symbol (Q_NPN_xxx) with no part number: generic small-signal BJT, ASSUMED parameters"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
+[models.match]
+value_re = "(?i)^Q_NPN(_[BCE]{3,4})?$"
+
+[models.params]
+is  = 6.7e-15  # ASSUMED, small-signal silicon class
+bf  = 100.0    # ASSUMED, low end of guaranteed hFE for the class
+nf  = 1.0
+vaf = 50.0
+br  = 1.0
+rb  = 10.0
+rc  = 0.5
+re  = 0.2
+warning = "value is the KiCad generic BJT symbol with no part number: bound to a generic small-signal transistor whose gain and ratings are ASSUMED (conservative), not from any datasheet; put the manufacturer part number on the component to replace it"
+
+[models.pins]
+"B" = "base"
+"C" = "collector"
+"E" = "emitter"
+
+[models.ratings]
+max_current_a       = 0.1    # ASSUMED, low end of the class
+max_voltage_v       = 25.0   # ASSUMED, low end of the class
+theta_ja_c_per_w    = 350.0  # ASSUMED SOT-23 still air
+max_junction_temp_c = 150.0
+
+[[models]]
+id = "generic_kicad_pnp"
+kind = "bjt_pnp"
+description = "KiCad generic PNP symbol (Q_PNP_xxx) with no part number: generic small-signal BJT, ASSUMED parameters"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
+[models.match]
+value_re = "(?i)^Q_PNP(_[BCE]{3,4})?$"
+
+[models.params]
+# Params are magnitudes; the kind carries the polarity.
+is  = 1.4e-15
+bf  = 100.0
+nf  = 1.0
+vaf = 20.0
+br  = 1.0
+rb  = 10.0
+rc  = 0.5
+re  = 0.2
+warning = "value is the KiCad generic BJT symbol with no part number: bound to a generic small-signal transistor whose gain and ratings are ASSUMED (conservative), not from any datasheet; put the manufacturer part number on the component to replace it"
+
+[models.pins]
+"B" = "base"
+"C" = "collector"
+"E" = "emitter"
+
+[models.ratings]
+max_current_a       = 0.1
+max_voltage_v       = 25.0
+theta_ja_c_per_w    = 350.0
+max_junction_temp_c = 150.0
