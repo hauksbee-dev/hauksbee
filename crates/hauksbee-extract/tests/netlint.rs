@@ -595,6 +595,9 @@ fn pin_function_rules_fire_on_faults_and_stay_silent_on_legal_twins() {
         // A transceiver's TXD is the pin the controller transmits into: its
         // library direction says input, whatever the name says.
         ("tx into a transceiver input", ic, "U: U1.1=TXD:output U2.1=TXD:input", LintCheck::PinFunction, 0),
+        // An untyped TXD on a part with CAN bus pins is still a transceiver input.
+        ("tx into an untyped can transceiver", ic, "U: U1.1=TXD:output U2.1=TXD:passive|BUS: U2.7=CANH:passive", LintCheck::PinFunction, 0),
+        ("untyped tx to tx", ic, "U: U1.1=TXD:output U2.1=TXD:passive|BUS: U2.7=SDA:passive", LintCheck::PinFunction, 1),
         ("muxed alternates only", ic, "U: U1.1=PA9/USART1_TX:bidirectional U2.4=GPIO43/U0TXD:bidirectional", LintCheck::PinFunction, 0),
         ("led anode on fault flag", &format!("{ic} {led}"), "F: U1.3=~{FLT}:open_collector D1.2=A:passive|K: D1.1=K:passive R1.1=~:passive|GND: R1.2=~:passive", LintCheck::PinFunction, 1),
         ("led cathode on fault flag", &format!("{ic} {led}"), "F: U1.3=~{FLT}:open_collector D1.1=K:passive|A: D1.2=A:passive R1.1=~:passive|+3V3: R1.2=~:passive", LintCheck::PinFunction, 0),

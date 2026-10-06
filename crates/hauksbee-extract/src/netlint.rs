@@ -2124,6 +2124,16 @@ fn uart_role(p: &Pin) -> Option<(bool, bool)> {
     Some((tx, function_tokens(&p.function).count() == 1))
 }
 
+/// A bus transceiver (a part with a `CANH`/`CANL` bus pin): its `TXD` is
+/// the input the controller transmits into and its `RXD` an output, whatever
+/// direction an untyped symbol gives them, so its pins carry no UART role.
+fn is_bus_transceiver(c: &Component) -> bool {
+    c.pins.iter().any(|p| {
+        function_tokens(&p.function)
+            .any(|t| matches!(t.to_ascii_uppercase().as_str(), "CANH" | "CANL"))
+    })
+}
+
 /// An active-low fault flag (`FLT`, `~{FAULT}`, `nFLT`) that is not typed as
 /// a push-pull output. Such a pin only sinks, and it sinks on the fault, so an
 /// LED from it to ground is dark on the fault. A power-good flag is excluded:
@@ -2156,7 +2166,10 @@ fn check_pin_functions(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in board.nets.iter().filter(signal) {
         let roles: Vec<_> = members(board, net.id)
             .into_iter()
-            .filter_map(|(c, p)| Some((c, p, uart_role(p).filter(|_| fitted(c))?)))
+            .filter_map(|(c, p)| {
+                let role = uart_role(p).filter(|_| fitted(c) && !is_bus_transceiver(c))?;
+                Some((c, p, role))
+            })
             .collect();
         let parts: std::collections::BTreeSet<String> =
             roles.iter().map(|r| r.0.reference.clone()).collect();
