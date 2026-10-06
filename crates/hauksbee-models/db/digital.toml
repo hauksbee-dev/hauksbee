@@ -7737,8 +7737,10 @@ kind = "digital"
 description = "TI ADS122C04 24-bit 4-channel I2C delta-sigma ADC, WQFN-16 (RTE) (strapped I2C configuration-register subset, pad map and supply draw)"
 
 [models.match]
-# Package Option Addendum orderables: ADS122C04IRTER and IRTERG4 (reel).
-value_re = "(?i)^ADS122C04IRTER(G4)?$"
+# Package Option Addendum orderables: ADS122C04IRTER and IRTERG4 (reel). The
+# package-code spelling (ADS122C04RTE) and an "ADC_" library category prefix
+# (Adafruit's ADC_ADS122C04RTE symbol) name the same WQFN-16 part.
+value_re = "(?i)^(ADC_)?ADS122C04I?RTER?(G4)?$"
 
 [models.params]
 vol = 0.4                  # Section 6.5, VOL max at IOL = 3 mA
@@ -7881,3 +7883,266 @@ url = "https://www.ti.com/lit/ds/symlink/ads122c04.pdf"
 title = "Texas Instruments ADS122C04 24-Bit, 4-Channel, 2000-SPS, Delta-Sigma ADC With I2C Interface, SBAS751B, October 2017, revised October 2018"
 locator = "Pin Functions (WQFN-16 (RTE)); Sections 6.1, 6.3, 6.4, 6.5; Section 8.4.1.1; Section 8.5.1.1 Table 14; Sections 8.5.3.6 RREG and 8.5.3.7 WREG; Section 8.6 Table 17; Section 9.1.7"
 sha256 = "2380301f98deb11efb06810f265a79ea1c75ca1df488833cd74d32364d5030b3"
+
+# Microchip AT24C64D 64-Kbit (8192 x 8) I2C EEPROM: executable primary array.
+#
+# Source: Microchip "AT24C64D 64-Kbit Serial EEPROM I2C-Compatible (Two-Wire)"
+#   data sheet DS20005937D, Revision D (November 2023),
+#   product page https://www.microchip.com/en-us/product/AT24C64D (the PDF
+#   URL was not fetched here); local copy read is sha256 fc63b777b4e429a1bc77d685ad74d6b16bbba5217d18c83e654f7eef2ec6f7df.
+#   1 Package Types p.4 and Table 2-1 Pin Function Table p.5; 4.1 Absolute
+#   Maximum Ratings, Table 4-1 DC and AC Operating Range and Table 4-2 DC
+#   Characteristics p.9; Table 4-3 AC (tWR 5 ms max) p.10; 5.1 power-up (VPOR
+#   1.5 V max) p.11; 6 Device Operation (256 pages x 32 bytes, device type
+#   1010 A2 A1 A0 R/W, two word-address bytes carrying a 13-bit address)
+#   p.15-16; Product Identification System / ordering examples p.37.
+#
+# PINS. Table 2-1: SOIC, TSSOP, UDFN and VFBGA all use one map (A0 1, A1 2,
+# A2 3, GND 4, SDA 5, SCL 6, WP 7, VCC 8), so the bare part number is safe for
+# every orderable package. Checked on the trigger-output-fmc board: U9
+# (Package_SO:SOIC-8_3.9x4.9mm, MPN AT24C64D-SSHM-T) pins 1-8 land on A0, A1,
+# A2, GND, /FMC/EEPROM_SDA, /FMC/EEPROM_SCL, WP jumper net and 3P3VAUX.
+#
+# ADDRESS. The peripheral carries a fixed 7-bit address 0x50 (A2:A0 = 000, the
+# internal pull-down state of floating pins, Table 2-1 note 2). The
+# `i2c_eeprom` peripheral has no strap input, so a board that straps A0..A2 is
+# simulated at 0x50 anyway. The trigger-output-fmc board does exactly that:
+# A2 is pulled to 3P3VAUX and A0/A1 come from the FMC GA1/GA0 pins through
+# 4.75 k, so the real part sits at 0x54..0x57, not 0x50 (see the warning).
+#
+# SUPPLY CURRENTS ARE Table 4-2 MAXIMA AT VCC = 5.0 V (the sheet gives no
+# typicals): ICC1 1.0 mA read at 400 kHz, ICC2 3.0 mA write at 400 kHz, ISB1
+# 6.0 uA standby (1.0 uA at 1.7 V). They overstate a 3.3 V board's draw.
+# The power-on threshold is the 1.7 V VCC minimum (VPOR is 1.5 V max).
+#
+# DELIBERATELY NOT MODELLED: A0..A2 strap decoding, WP enforcement, the 5 ms
+# max tWR write cycle and ACK polling, 1 MHz FM+ needing VCC >= 2.5 V.
+[[models]]
+id = "at24c64d_8pin"
+kind = "digital"
+description = "Microchip AT24C64D 64-Kbit I2C EEPROM, 8-pin SOIC/TSSOP/UDFN/VFBGA (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.microchip.com/en-us/product/AT24C64D"
+title = "Microchip AT24C64D 64-Kbit Serial EEPROM I2C-Compatible (Two-Wire), DS20005937D, Revision D, November 2023"
+locator = "Package Types p.4; Table 2-1 p.5; 4.1 Absolute Maximum Ratings, Table 4-1 and Table 4-2 p.9; Table 4-3 p.10; 6 Device Operation p.15-16; Product Identification System"
+sha256 = "fc63b777b4e429a1bc77d685ad74d6b16bbba5217d18c83e654f7eef2ec6f7df"
+
+[models.match]
+# Ordering: AT24C64D-<pkg><grade>-<carrier>; SSHM = SOIC, XHM = TSSOP,
+# MAHM = UDFN, CUM = VFBGA; -T/-B/-E carrier. All share Table 2-1's pin map.
+# Excludes AT24C64 (no D), AT24C64C, AT24CS64 and other densities.
+value_re = "(?i)^AT24C64D(-(SSHM|XHM|MAHM|CUM)(-[TBE])?)?$"
+mpn_re = "(?i)^AT24C64D(-(SSHM|XHM|MAHM|CUM)(-[TBE])?)?$"
+
+[models.params]
+warning = "primary 8 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at 5 V"
+
+[models.pins]
+# Table 2-1 Pin Function Table (all packages).
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.25   # 4.1 Absolute Maximum Ratings, VCC 6.25 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.25
+basis = "Microchip AT24C64D DS20005937D, Table 4-1 VCC 1.7 V to 5.5 V; 4.1 Absolute Maximum Ratings, VCC 6.25 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (6.1 Device Addressing)
+size_bytes = 8192       # 8,192 x 8
+page_size = 32          # 256 pages of 32 bytes (6 Device Operation)
+word_address_bytes = 2  # two word-address bytes, 13-bit address (6.2)
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 4-1 VCC min (VPOR 1.5 V max)
+idle_a = 6.0e-6              # Table 4-2, ISB1 max at 5.0 V
+read_a = 0.001               # Table 4-2, ICC1 max, read at 400 kHz, 5.0 V
+write_a = 0.003              # Table 4-2, ICC2 max, write at 400 kHz, 5.0 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current", "read_current", "write_current", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PCM5122: Texas Instruments 2.1-VRMS, 112-dB stereo audio DAC with 32-bit,
+# 384-kHz PCM interface, TSSOP-28 (PW).
+#
+# Source: TI "PCM512x 2-VRMS DirectPath, 112/106-dB Audio Stereo DAC with
+#   32-bit, 384-kHz PCM Interface" (PCM5121, PCM5122), SLAS763C, August 2012,
+#   revised October 2018. Section 6 Pin Configuration and Functions and 6.1 Pin
+#   Functions (I2C / SPI / HW columns), Section 7.1 Absolute Maximum Ratings,
+#   7.3 Recommended Operating Conditions, 7.4 Thermal Information, 7.5
+#   Electrical Characteristics (DIGITAL INPUT/OUTPUT 3.3-V LVCMOS rows, POWER
+#   SUPPLY REQUIREMENTS), Section 8.4.1.1.2.1 / Table 39 I2C Slave Address,
+#   Section 10.5.2 Power Save Modes, Package Option Addendum (PCM5122PW /
+#   PCM5122PWR, TSSOP (PW) 28).
+#   PDF sha256 2e7b7d81b5b5895c497b296ab6608c544353951da3c37cb3294efb57b4b26822
+#
+# WHAT IS EXECUTABLE HERE: THE SUPPLY DRAW, NOT THE CONTROL PORT.
+# The part has three control personalities picked by MODE1/MODE2 (Section 6.1):
+# MODE1 low + MODE2 low = hardwired, MODE1 low + MODE2 high = I2C, MODE1 high =
+# SPI. On the Adafruit PCM5122 breakout both MODE1 (pin 17) and MODE2 (pin 18)
+# go to the user header and are pulled to AGND by the R15 10k array, so the
+# board AS BUILT is in hardwired mode: pins 11/12 are ATT2/ATT1 gain inputs,
+# not SDA/SCL. A `[models.peripheral]` register map gated on mode1 low and
+# mode2 high would be the honest I2C card, but (a) the binder refuses a strap
+# that sits behind a resistor rather than directly on a rail, and refusal leaves
+# the part OPEN, and (b) on this board the refusal would be correct anyway.
+# The datasheet's control-port identity is also weak: there is no chip-ID
+# register; Table 39 gives only the address 1001 1 ADR2 ADR1 (0x4C to 0x4F).
+# So no register map is declared. What does hold in every mode is the DVDD and
+# AVDD + CPVDD supply current, which is declared as model-owned profiled loads.
+#
+# SUPPLY LEVELS CHOSEN. Section 7.5 POWER SUPPLY REQUIREMENTS at AVDD = CPVDD =
+# DVDD = 3.3 V, fS = 48 kHz, bipolar-zero data: IDD (DVDD at 3.3 V) 12 mA typ /
+# 15 mA max; ICC (AVDD + CPVDD) 11 mA typ / 16 mA max. That is the running-DAC
+# draw and is held for the whole window. It over-states an idle breakout:
+# Section 10.5.2 says a clock halt drops the part to standby, and BCK/LRCK low
+# for over 1 s to power-down (DVDD 0.5 mA, AVDD + CPVDD 0.2 mA typ). It
+# under-states a loud stream: 1 kHz -1 dBFS raises ICC to 24 mA typ / 32 mA max.
+# Both are workload, which belongs in a scenario, not the card.
+#
+# ICC IS PUBLISHED ONLY AS AVDD + CPVDD COMBINED. There is no split, so the whole
+# 11 mA is drawn from AVDD (pin 8). On boards that feed AVDD through a ferrite
+# from the same rail as CPVDD (as here: FB1 from 3.3V) the regulator sees the
+# same total; only the ferrite's DC drop is over-stated.
+#
+# LOGIC LEVELS are printed as fractions of DVDD (Section 7.5, 3.3-V LVCMOS
+# rows); the schema takes absolute volts, so they are evaluated at the 3.3 V
+# DVDD this card's supply envelope assumes. A 1.8 V-DVDD board would need
+# 0.7/0.3/0.8/0.22 x 1.8 V instead.
+#
+# NOT MODELLED: LDOO (1.8 V internal LDO output) and VNEG (-3.3 V charge-pump
+# rail) are left as the part's terminals with no driven voltage; the sheet gives
+# a nominal value but no output resistance or tolerance. No audio path, clocking
+# or control behaviour.
+[[models]]
+id = "pcm5122"
+kind = "digital"
+description = "TI PCM5122 stereo audio DAC, TSSOP-28 (pad map, 3.3 V DVDD logic levels, sourced DVDD and AVDD+CPVDD running supply draw; no control port or audio path)"
+
+[models.match]
+# Package Option Addendum: PCM5122PW (tube) and PCM5122PWR (reel) are the
+# orderable PCM5122 parts. PCM5121 (106 dB) and PCM5141/5142 (miniDSP) are
+# excluded by the anchored number.
+value_re = "(?i)^PCM5122(PWR?)?$"
+
+[models.params]
+# Section 7.5 DIGITAL INPUT/OUTPUT, 3.3-V LVCMOS family, at DVDD = 3.3 V.
+vih = 2.31     # 0.7 x DVDD min
+vil = 0.99     # 0.3 x DVDD max
+voh = 2.64     # 0.8 x DVDD min, IOH = -4 mA
+vol = 0.726    # 0.22 x DVDD max, IOL = 4 mA
+
+[models.pins]
+# Section 6.1 Pin Functions; pin numbers are the same in every mode, and the
+# role names carry all three mode names (I2C / SPI / HW) where they differ.
+"1"  = "cpvdd"            # charge-pump supply, 3.3 V
+"2"  = "capp"             # flying cap, positive
+"3"  = "cpgnd"            # charge-pump ground
+"4"  = "capm"             # flying cap, negative
+"5"  = "vneg"             # -3.3 V charge-pump rail, decoupling
+"6"  = "outl"             # left analogue output
+"7"  = "outr"             # right analogue output
+"8"  = "avdd"             # analogue supply, 3.3 V
+"9"  = "agnd"
+"10" = "vcom_demp"        # I2C/SPI: VCOM (ties to GND in default VREF mode); HW: DEMP input
+"11" = "sda_mosi_att2"    # I2C SDA (open drain) / SPI MOSI / HW ATT2
+"12" = "scl_mc_att1"      # I2C SCL / SPI MC / HW ATT1
+"13" = "gpio5_att0"       # I2C/SPI GPIO5 (internal pulldown) / HW ATT0
+"14" = "gpio4_mast"       # I2C/SPI GPIO4 / HW MAST (master/slave select)
+"15" = "gpio3_agns"       # I2C/SPI GPIO3 / HW AGNS (analogue gain select)
+"16" = "adr2_gpio2_dout"  # I2C ADR2 / SPI GPIO2 / HW DOUT
+"17" = "mode1"
+"18" = "mode2_ms"         # I2C/HW MODE2 / SPI MS (chip select)
+"19" = "gpio6_flt"        # I2C/SPI GPIO6 / HW FLT (filter select)
+"20" = "sck"              # system (master) clock input
+"21" = "bck"
+"22" = "din"
+"23" = "lrck"
+"24" = "adr1_miso_fmt"    # I2C ADR1 / SPI MISO / HW FMT
+"25" = "xsmt"             # soft mute, active low
+"26" = "ldoo"             # 1.8 V internal LDO output, decoupling
+"27" = "dgnd"
+"28" = "dvdd"             # digital / I/O supply, 3.3 V or 1.8 V
+
+[models.ratings]
+# Section 7.1: AVDD, CPVDD, DVDD -0.3 to 3.9 V; digital inputs at 3.3 V DVDD
+# -0.3 to 3.9 V; analogue inputs -0.3 to 3.9 V.
+max_voltage_v = 3.9
+max_junction_temp_c = 130.0   # Section 7.1, operating TJ max
+# Section 7.4 RθJA. The table's column header reads "RHB (TSSOP) 32 PINS",
+# which disagrees with the 28-pin PW package everywhere else in the sheet; the
+# value is the only thermal figure published for this part.
+theta_ja_c_per_w = 72.2
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avdd"
+min_v = 3.2
+max_v = 3.46
+abs_max_v = 3.9
+basis = "TI SLAS763C Section 7.3 Recommended Operating Conditions, AVDD 3.2 to 3.46 V in VREF mode (the power-up default and the only mode in HW control); Section 7.1 3.9 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvdd"
+min_v = 3.1
+max_v = 3.46
+abs_max_v = 3.9
+basis = "TI SLAS763C Section 7.3, DVDD 3.3 V row 3.1 to 3.46 V (the 1.65 to 1.95 V row is for a 1.8 V I/O board, which these logic levels do not describe); Section 7.1 3.9 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "cpvdd"
+min_v = 3.1
+max_v = 3.46
+abs_max_v = 3.9
+basis = "TI SLAS763C Section 7.3, CPVDD 3.1 to 3.46 V; Section 7.1 3.9 V"
+
+# Section 7.5 POWER SUPPLY REQUIREMENTS, fS = 48 kHz, bipolar-zero data, typ.
+[[models.behavioral.profiled_loads]]
+name = "dvdd_core"
+supply_pin = "dvdd"
+return_pin = "dgnd"
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.012     # IDD, DVDD at 3.3 V, 12 mA typ (15 mA max)
+
+[[models.behavioral.profiled_loads]]
+name = "analog_and_charge_pump"
+supply_pin = "avdd"
+return_pin = "agnd"
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.011     # ICC, AVDD + CPVDD combined, 11 mA typ (16 mA max); no split published
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "absolute_ratings", "supply_ranges", "active_supply_current"]
+missing = ["i2c_spi_control_port", "register_map", "mode_strap_decoding", "audio_path", "clocking_and_pll", "standby_and_powerdown_current", "ldo_and_charge_pump_outputs", "avdd_cpvdd_current_split", "gpio_behaviour"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/pcm5122.pdf"
+title = "Texas Instruments PCM512x 2-VRMS DirectPath, 112/106-dB Audio Stereo DAC with 32-bit, 384-kHz PCM Interface (PCM5121, PCM5122), SLAS763C, August 2012, revised October 2018"
+locator = "Section 6.1 Pin Functions; Sections 7.1, 7.3, 7.4, 7.5 (DIGITAL INPUT/OUTPUT, POWER SUPPLY REQUIREMENTS); Table 39 I2C Slave Address; Section 10.5.2 Power Save Modes; Package Option Addendum"
+sha256 = "2e7b7d81b5b5895c497b296ab6608c544353951da3c37cb3294efb57b4b26822"
