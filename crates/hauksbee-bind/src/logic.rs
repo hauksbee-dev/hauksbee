@@ -186,6 +186,9 @@ struct CompTristate {
     /// Input pin index of the enable.
     enable: usize,
     active: Level,
+    /// Further `(input pin index, active level)` conditions that must all be
+    /// active together with `enable` for the outputs to drive.
+    and: Vec<(usize, Level)>,
 }
 
 /// One compiled addressable memory array. Storage is shared so an
@@ -1005,6 +1008,9 @@ fn unwired_input_defaults(
     for ts in tristates {
         // Outputs driven = active.
         input_defaults[ts.enable] = ts.active == Level::High;
+        for &(pin, active) in &ts.and {
+            input_defaults[pin] = active == Level::High;
+        }
     }
     for m in memories {
         // Unwired memory controls fail safe: selects/enables are inactive,
@@ -1131,6 +1137,11 @@ impl LogicComponent {
                 outputs: outs.iter().map(|o| output_idx[o.as_str()]).collect(),
                 enable: input_idx[ts.enable.as_str()],
                 active: ts.active,
+                and: ts
+                    .and
+                    .iter()
+                    .map(|g| (input_idx[g.pin.as_str()], g.active))
+                    .collect(),
             });
         }
 
@@ -1749,7 +1760,11 @@ impl LogicComponent {
             self.output_enabled[i] = true;
         }
         for ts in &self.tristates {
-            let en = ts.active.is_active(self.input_levels[ts.enable]);
+            let en = ts.active.is_active(self.input_levels[ts.enable])
+                && ts
+                    .and
+                    .iter()
+                    .all(|&(pin, active)| active.is_active(self.input_levels[pin]));
             if !en {
                 for &oi in &ts.outputs {
                     self.output_enabled[oi] = false;
@@ -1919,6 +1934,41 @@ disable = [
         );
         tick(&mut lc, "oe_n=0 srclr_n=1");
         assert_eq!(lc.output_enabled("qa"), Some(true));
+    }
+
+    /// The 74HCT245 drives B from A only with `OE_n` low and `DIR` high, A from B
+    /// only with `OE_n` low and `DIR` low, and neither side with `OE_n` high: each
+    /// side's tri-state needs both conditions (`and`).
+    #[test]
+    fn hct245_drives_a_side_only_when_oe_low_and_dir_selects_it() {
+        let mut lc = card("SN74HCT245");
+        // (levels, a side driven, b side driven)
+        let cases = [
+            ("oe_n=0 dir=1 a1_in=1 a8_in=0 b1_in=0 b8_in=1", false, true),
+            ("oe_n=0 dir=0 a1_in=1 a8_in=0 b1_in=0 b8_in=1", true, false),
+            ("oe_n=1 dir=1 a1_in=1 a8_in=0 b1_in=0 b8_in=1", false, false),
+            ("oe_n=1 dir=0 a1_in=1 a8_in=0 b1_in=0 b8_in=1", false, false),
+        ];
+        for (levels, a_driven, b_driven) in cases {
+            tick(&mut lc, levels);
+            for pin in ["a1", "a8"] {
+                assert_eq!(lc.output_enabled(pin), Some(a_driven), "{levels}: {pin}");
+            }
+            for pin in ["b1", "b8"] {
+                assert_eq!(lc.output_enabled(pin), Some(b_driven), "{levels}: {pin}");
+            }
+        }
+        // Data follows the direction: A to B with DIR high, B to A with DIR low.
+        tick(&mut lc, "oe_n=0 dir=1 a1_in=1 a8_in=0 b1_in=0 b8_in=1");
+        assert_eq!(lc.output_level("b1"), Some(true));
+        assert_eq!(lc.output_level("b8"), Some(false));
+        tick(&mut lc, "oe_n=0 dir=0 a1_in=1 a8_in=0 b1_in=0 b8_in=1");
+        assert_eq!(lc.output_level("a1"), Some(false));
+        assert_eq!(lc.output_level("a8"), Some(true));
+        // Unwired OE_n reads enabled, unwired DIR reads A to B.
+        tick(&mut lc, "a1_in=1");
+        assert_eq!(lc.output_enabled("b1"), Some(true));
+        assert_eq!(lc.output_enabled("a1"), Some(false));
     }
 
     /// Unwired `SRCLR_n` / `OE_n` read released / enabled.

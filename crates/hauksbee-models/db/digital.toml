@@ -598,6 +598,147 @@ outputs = ["y1", "y2", "y3", "y4"]
 "y4" = "a4 & b4"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 74HCT245: octal bus transceiver, 3-state, TTL-compatible inputs, 4.5 V to 5.5 V.
+# Source: TI SN54HCT245, SN74HCT245 octal bus transceivers with 3-state outputs
+#   (SCLS020H, March 1984, revised December 2022),
+#   https://www.ti.com/lit/ds/symlink/sn74hct245.pdf (sha256
+#   f2fc295993ccea0adbde9023d6cefed22fb214fec3a0d593b97f7f892b104c97).
+#   Pin map: 5 Pin Configuration and Functions, Pin Functions table (p.3), the
+#   same numbering for the J/W/DB/DW/N/NS/PW/DGS 20-pin packages (1 DIR,
+#   2-9 A1-A8, 10 GND, 11-18 B8-B1, 19 OE, 20 VCC). Absolute maximum VCC 7 V and
+#   continuous output current +/-35 mA: 6.1 (p.4). VCC 4.5 to 5.5 V, VIH min
+#   2 V, VIL max 0.8 V: 6.3 Recommended Operating Conditions (p.4). VOH, VOL
+#   and ICC for SN74HCT245: 6.5 Electrical Characteristics (p.5). tpd:
+#   6.6 Switching Characteristics, CL = 50 pF (p.6). Cpd: 6.8 Operating
+#   Characteristics (p.7). Function: Table 8-1 (p.9): OE low, DIR high, A to B;
+#   OE low, DIR low, B to A; OE high, isolation (both ports high impedance).
+# Both ports are bidirectional: each carries an output (driven while that side
+# is the destination) and a sensed input (`*_in`), as the 74AXP1T45 card does,
+# and its tri-state needs BOTH conditions (OE_n low AND the direction), which
+# the `and` field of a tristate group expresses.
+[[models]]
+id = "74hct245"
+kind = "digital"
+description = "74HCT245 octal bus transceiver, 3-state, TTL input levels, DIP/SO/SSOP/TSSOP-20"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hct245.pdf"
+title = "TI SN54HCT245, SN74HCT245 octal bus transceivers with 3-state outputs (SCLS020H), December 2022"
+locator = "5 Pin Configuration and Functions, Pin Functions table p.3; 6.1 Absolute Maximum Ratings and 6.3 Recommended Operating Conditions p.4; 6.5 Electrical Characteristics p.5; 6.6 Switching Characteristics CL = 50 pF p.6; 6.8 Operating Characteristics p.7; 8.4 Table 8-1 Function Table p.9"
+sha256 = "f2fc295993ccea0adbde9023d6cefed22fb214fec3a0d593b97f7f892b104c97"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "enable_disable_timing"
+reason = "ten and tdis (OE to A or B), output transition time, input current, off-state output current (IOZ) and the CL = 150 pF timing are not modelled; only the DC function table, the TTL input thresholds, the output levels and the propagation delay are"
+
+[models.match]
+# The SN54 J/W/FK packages (FK numbers differently) are not matched; DB, DGS,
+# DW, N, NS and PW share the pin map. A trailing R is tape and reel.
+value_re = "(?i)^(SN)?74HCT245(DB|DGS|DW|N|NS|PW)?R?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # SN74HCT245, IOH = -20 uA, VCC 4.5 V (6.5)
+vol = 0.1          # SN74HCT245, IOL = 20 uA, VCC 4.5 V (6.5)
+vih = 2.0          # VCC 4.5 V to 5.5 V (6.3)
+vil = 0.8
+# VCC = 4.5 V, SN74HCT245: VOH 3.84 V min at IOH = -6 mA against the 4.4 V
+# light-load level, 0.56 V / 6 mA = 93 Ohm (VOL side: 0.33 V max at 6 mA,
+# 0.33 V / 6 mA = 55 Ohm).
+ro = 93.0
+tpd_s = 16.0e-9    # A to B or B to A, TA = 25 C typ, VCC 4.5 V, CL = 50 pF (6.6)
+supply_static_ua = 8.0   # ICC max at TA = 25 C, VCC 5.5 V, IO = 0 (6.5)
+supply_cpd_pf = 40.0     # per transceiver, no load (6.8)
+supply_pin = "20"
+gnd_pin = "10"
+
+[models.pins]
+# Pin Functions table, p.3.
+"1" = "dir"
+"2" = "a1"
+"3" = "a2"
+"4" = "a3"
+"5" = "a4"
+"6" = "a5"
+"7" = "a6"
+"8" = "a7"
+"9" = "a8"
+"10" = "gnd"
+"18" = "b1"
+"17" = "b2"
+"16" = "b3"
+"15" = "b4"
+"14" = "b5"
+"13" = "b6"
+"12" = "b7"
+"11" = "b8"
+"19" = "oe_n"
+"20" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035     # IO continuous output current, 6.1
+max_voltage_v = 7.0           # VCC, 6.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74HCT245 SCLS020H, 6.3 VCC 4.5 V to 5.5 V; 6.1 VCC -0.5 V to 7 V"
+
+[models.logic]
+# Table 8-1: OE low and DIR high, A data to the B bus; OE low and DIR low, B
+# data to the A bus; OE high, isolation. A side drives only with OE_n low and
+# DIR low; B side only with OE_n low and DIR high.
+inputs = ["dir", "oe_n", "a1_in", "b1_in", "a2_in", "b2_in", "a3_in", "b3_in", "a4_in", "b4_in", "a5_in", "b5_in", "a6_in", "b6_in", "a7_in", "b7_in", "a8_in", "b8_in"]
+outputs = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8",
+  "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"]
+[models.logic.sense]
+a1_in = "a1"
+b1_in = "b1"
+a2_in = "a2"
+b2_in = "b2"
+a3_in = "a3"
+b3_in = "b3"
+a4_in = "a4"
+b4_in = "b4"
+a5_in = "a5"
+b5_in = "b5"
+a6_in = "a6"
+b6_in = "b6"
+a7_in = "a7"
+b7_in = "b7"
+a8_in = "a8"
+b8_in = "b8"
+[models.logic.comb]
+a1 = "b1_in"
+a2 = "b2_in"
+a3 = "b3_in"
+a4 = "b4_in"
+a5 = "b5_in"
+a6 = "b6_in"
+a7 = "b7_in"
+a8 = "b8_in"
+b1 = "a1_in"
+b2 = "a2_in"
+b3 = "a3_in"
+b4 = "a4_in"
+b5 = "a5_in"
+b6 = "a6_in"
+b7 = "a7_in"
+b8 = "a8_in"
+[models.logic.tristate]
+"a1..a8" = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+"b1..b8" = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+
+[models.coverage]
+implements = ["direction_control", "tristate_enable", "ttl_input_levels"]
+missing = ["enable_disable_timing", "output_transition_time", "output_drive_curve", "input_leakage", "off_state_output_current"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "74hc00"

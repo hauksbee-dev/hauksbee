@@ -120,7 +120,10 @@ The pieces, and where each is specified:
   should too when you make the same call.
 - **Tri-state**: `[models.logic.tristate]` maps an output (or an `a..b` range
   over the outputs declaration order) to an enable pin + polarity. See the
-  74HC125 entry for per-gate independent enables.
+  74HC125 entry for per-gate independent enables. A group that needs more
+  than one condition (a transceiver driving B only while OE is low and DIR is
+  high) adds `and = [{ pin = "oe_n", active = "low" }]`; every listed
+  condition must be active with `enable`. The 74HCT245 entry does this.
 - **Bidirectional pins**: `[models.logic.sense]` maps an extra input name
   to a declared output whose pin it reads, so one pad can be driven while
   enabled and sampled while high impedance. The SN74AVC1T45 entry uses it for

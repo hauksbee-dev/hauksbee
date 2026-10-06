@@ -40,6 +40,11 @@
 //! "qa..qh" = { enable = "oe_n", active = "low" }
 //! ```
 //!
+//! A group that needs more than one condition (a bus transceiver driving B
+//! only while OE is low AND DIR is high) lists the extra conditions in `and`,
+//! all of which must be active together with `enable`:
+//! `b1 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }`.
+//!
 //! Parallel-bus memories (28C EEPROMs, 62256 SRAMs, 27C ROMs) declare their
 //! data array with `[[models.logic.memory]]` (see [`MemorySpec`]): an
 //! addressable `words` x `bits` store, address pins LSB first, data read onto
@@ -213,10 +218,20 @@ pub struct LogicRegister {
 
 /// A tri-state group: while `enable` is NOT active the listed outputs go
 /// high-impedance.
+///
+/// `and` adds further level conditions that must ALL be active together with
+/// `enable` for the outputs to drive (empty for the usual single-enable
+/// group). A direction-controlled bus transceiver with an output enable, such
+/// as a 74HCT245, drives each side only while OE is active AND DIR selects
+/// that side, which no single enable pin can express:
+/// `b1 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TristateSpec {
     pub enable: String,
     pub active: Level,
+    /// Extra conditions, all of which must also be active. Declared inputs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub and: Vec<EnableSpec>,
 }
 
 /// One address/value write in a memory's command protocol.
@@ -1435,6 +1450,14 @@ impl Logic {
                     enable: ts.enable.clone(),
                 });
             }
+            for g in &ts.and {
+                if !inputs.contains(g.pin.as_str()) {
+                    return Err(LogicSpecError::TristateEnableUndeclared {
+                        group: group.clone(),
+                        enable: g.pin.clone(),
+                    });
+                }
+            }
             self.expand_tristate_group(group)?;
         }
 
@@ -1778,6 +1801,7 @@ disable = [
                 TristateSpec {
                     enable: "nonexistent_oe".into(),
                     active: Level::Low,
+                    and: Vec::new(),
                 },
             );
         });
@@ -1792,10 +1816,61 @@ disable = [
                 TristateSpec {
                     enable: "oe_n".into(),
                     active: Level::Low,
+                    and: Vec::new(),
                 },
             );
         });
         assert!(matches!(e, TristateRangeInvalid { .. }), "{e}");
+
+        // `and` pins are validated like `enable`.
+        let e = err_after(hc595(), |l| {
+            l.tristate.insert(
+                "qa".into(),
+                TristateSpec {
+                    enable: "oe_n".into(),
+                    active: Level::Low,
+                    and: vec![EnableSpec {
+                        pin: "missing_gate".into(),
+                        active: Level::High,
+                    }],
+                },
+            );
+        });
+        assert!(
+            matches!(e, TristateEnableUndeclared { ref enable, .. } if enable == "missing_gate"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn tristate_and_parses_and_defaults_empty() {
+        let l = parse_logic(
+            r#"
+inputs  = ["dir", "oe_n", "a_in", "b_in"]
+outputs = ["a", "b"]
+[sense]
+a_in = "a"
+b_in = "b"
+[comb]
+a = "b_in"
+b = "a_in"
+[tristate]
+a = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+b = { enable = "dir", active = "high" }
+"#,
+        );
+        l.validate().unwrap();
+        assert_eq!(
+            l.tristate["a"].and,
+            vec![EnableSpec {
+                pin: "oe_n".into(),
+                active: Level::Low
+            }]
+        );
+        assert!(
+            l.tristate["b"].and.is_empty(),
+            "absent `and` defaults empty"
+        );
     }
 
     #[test]

@@ -2218,6 +2218,11 @@ LSB; shift_left inserts at bit 0, shift_right at bits-1. Match the function tabl
 abstain if its semantics differ, rather than inventing priority controls.
 For high-impedance outputs, `[models.logic.tristate]` maps each output name to
 `{ enable = "input_role", active = "low" }` (or "high"); inactive means high-Z.
+When an output needs several conditions at once (a direction-controlled bus
+transceiver with an output enable drives each side only while OE is active AND
+DIR selects that side), add `and = [{ pin = "input_role", active = "low" }]`:
+every listed condition must be active together with `enable`. For bidirectional
+pins, declare each as an output plus a sensed input via `[models.logic.sense]`.
 An open-drain or open-collector output has no VOH (the board pull-up sets its
 high level): give it the constant `0` and a tristate entry enabled exactly while
 it sinks, as `od_out` below; abstain if no single input decides that. For a
