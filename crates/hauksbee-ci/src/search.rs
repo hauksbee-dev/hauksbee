@@ -6,7 +6,9 @@
 //! - `logic_level`: a net reaches a valid logic level at every logic input it
 //!   drives. The level to reach is not typed into the spec: it is the highest
 //!   VIH (or, for `level = "low"`, the lowest VIL) any part on the net declares,
-//!   read at that part's own solved supply.
+//!   read at that part's own solved supply. With `min_width_ms` the level must
+//!   be held that long, in at least `min_toggles` separate pulses: the value
+//!   judged is the highest level the net holds over any window that wide.
 //! - `fires`: a comparator's output rises (`min_toggles` times, default once),
 //!   and, with a `target`, trips at that input level within `tolerance`.
 //!
@@ -420,38 +422,74 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
     }
     let loads = out.probe.loads.get(net).map_or(&[][..], Vec::as_slice);
     let pick = |l: &&LogicLoad| if high { l.vih } else { -l.vil };
-    let Some(load) = loads.iter().max_by(|x, y| pick(x).total_cmp(&pick(y))) else {
-        return Measure::refused(format!(
-            "no powered part on '{net}' declares a logic input, so there is no VIH/VIL to \
-             hold it to; assert a `voltage` window instead"
-        ));
+    let load = loads.iter().max_by(|x, y| pick(x).total_cmp(&pick(y)));
+    let edge = if high { "VIH" } else { "VIL" };
+    let stated = if high { a.min } else { a.max };
+    let (need, whose, part) = match (stated, load) {
+        (Some(v), _) => (v, "the spec's level".to_string(), None),
+        (None, Some(l)) => {
+            let v = if high { l.vih } else { l.vil };
+            let at = format!("{} {} {edge} at VCC {:.2} V", l.reference, l.role, l.vcc);
+            (v, at, Some(l.reference.as_str()))
+        }
+        (None, None) => {
+            return Measure::refused(format!(
+                "no powered part on '{net}' declares a logic input, so there is no VIH/VIL to \
+                 hold it to; assert a `voltage` window instead"
+            ))
+        }
     };
-    let fold = |f: fn(f64, f64) -> f64, init| s.iter().map(|p| p.1).fold(init, f);
-    let (reached, need, edge) = if high {
-        (fold(f64::max, f64::NEG_INFINITY), load.vih, "VIH")
+    // Judged as a high either way: a low level is the high of the negated net.
+    let sign = if high { 1.0 } else { -1.0 };
+    let x: Vec<(f64, f64)> = s.iter().map(|&(t, v)| (t, sign * v)).collect();
+    let width = a.min_width_ms.unwrap_or(0.0) / 1000.0;
+    let pulses = usize::try_from(a.min_toggles.unwrap_or(1)).unwrap_or(usize::MAX);
+    let (held, count) = sustained(&x, width, sign * need);
+    let reached = sign * held;
+    let margin = sign * (reached - need);
+    let margin = if count < pulses {
+        margin.min(-1e-6)
     } else {
-        (fold(f64::min, f64::INFINITY), load.vil, "VIL")
+        margin
     };
-    let margin = if high { reached - need } else { need - reached };
     let (word, verb) = if high {
         ("high", "peaks at")
     } else {
         ("low", "bottoms at")
     };
-    let detail = format!(
-        "{} {verb} {reached:.3} V; a valid logic {word} at every input it drives needs \
-         {need:.3} V ({} {} {edge} at VCC {:.2} V)",
-        leaf(net),
-        load.reference,
-        load.role,
-        load.vcc
-    );
+    let leaf = leaf(net);
+    let detail = if a.min_width_ms.is_none() && a.min_toggles.is_none() {
+        format!(
+            "{leaf} {verb} {reached:.3} V; a valid logic {word} at every input it drives needs \
+             {need:.3} V ({whose})"
+        )
+    } else {
+        let peak = sign * sustained(&x, 0.0, f64::INFINITY).0;
+        let longest = longest_past(&x, sign * need) * 1e3;
+        format!(
+            "{leaf} {verb} {peak:.3} V and holds {reached:.3} V for {ms} ms; past {need:.3} V \
+             for at most {longest:.4} ms, in {count} pulse(s) {ms} ms long; a valid logic {word} \
+             needs {need:.3} V held {ms} ms in {pulses} pulse(s) ({whose})",
+            ms = a.min_width_ms.unwrap_or(0.0)
+        )
+    };
     let why = (margin < 0.0).then(|| {
-        let mut w = format!(
-            "{} V short of {edge}: {} cannot read it as {word}",
-            fmt3(-margin),
-            load.reference
-        );
+        let who = part.unwrap_or("the next stage");
+        let mut w = if count < pulses && sign * (reached - need) >= 0.0 {
+            format!("only {count} of the {pulses} pulse(s) {who} needs hold {edge}")
+        } else if a.min_width_ms.is_some() {
+            format!(
+                "{} V short of {edge} over the {} ms {who} needs: no pulse is {word} enough \
+                 for long enough",
+                fmt3(-margin),
+                a.min_width_ms.unwrap_or(0.0)
+            )
+        } else {
+            format!(
+                "{} V short of {edge}: {who} cannot read it as {word}",
+                fmt3(-margin)
+            )
+        };
         let near = |(_, vt): &&(String, f64)| (reached - vt).abs() <= 0.1 * vt.abs().max(1.0);
         let switches = out.probe.switches.get(net).map_or(&[][..], Vec::as_slice);
         if let Some((sw, vt)) = switches.iter().find(near) {
@@ -471,6 +509,83 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
         detail,
         why,
     }
+}
+
+/// `s` at time `t`, linear between steps and held flat past either end.
+fn at(s: &[(f64, f64)], t: f64) -> f64 {
+    match s.partition_point(|p| p.0 < t) {
+        0 => s[0].1,
+        k if k == s.len() => s[k - 1].1,
+        k => {
+            let ((t0, v0), (t1, v1)) = (s[k - 1], s[k]);
+            (v1 - v0).mul_add((t - t0) / (t1 - t0), v0)
+        }
+    }
+}
+
+/// The highest level `s` holds continuously for `width` seconds (the peak
+/// when `width` is 0), and how many separate stretches hold `need` that long.
+///
+/// The window minimum is piecewise linear in the window's start between the
+/// starts where either end meets a step, so its maximum is at one of those or
+/// where a rising start meets a falling end at equal level.
+fn sustained(s: &[(f64, f64)], width: f64, need: f64) -> (f64, usize) {
+    let (Some(first), Some(last)) = (s.first(), s.last()) else {
+        return (f64::NEG_INFINITY, 0);
+    };
+    let fits = |t: &f64| (first.0..=last.0 - width).contains(t);
+    let mut starts: Vec<f64> = s
+        .iter()
+        .flat_map(|p| [p.0, p.0 - width])
+        .filter(fits)
+        .collect();
+    starts.sort_by(f64::total_cmp);
+    starts.dedup();
+    let gap = |t: f64| at(s, t) - at(s, t + width);
+    let meets = starts.windows(2).filter_map(|w| {
+        let (d0, d1) = (gap(w[0]), gap(w[1]));
+        (d0 * d1 < 0.0).then(|| (w[1] - w[0]).mul_add(d0 / (d0 - d1), w[0]))
+    });
+    let mut starts: Vec<f64> = starts.iter().copied().chain(meets).collect();
+    starts.sort_by(f64::total_cmp);
+    let low = |t: f64| {
+        let inner = s.partition_point(|p| p.0 <= t)..s.partition_point(|p| p.0 < t + width);
+        let ends = at(s, t).min(at(s, t + width));
+        s.get(inner)
+            .unwrap_or_default()
+            .iter()
+            .fold(ends, |m, p| m.min(p.1))
+    };
+    let (mut best, mut count, mut inside) = (f64::NEG_INFINITY, 0, false);
+    for l in starts.into_iter().map(low) {
+        best = best.max(l);
+        count += usize::from(l >= need && !inside);
+        inside = l >= need;
+    }
+    (best, count)
+}
+
+/// The longest continuous stretch (s) `s` spends at or past `need`, edges
+/// interpolated.
+fn longest_past(s: &[(f64, f64)], need: f64) -> f64 {
+    let (mut best, mut from) = (0.0_f64, None);
+    for k in 0..s.len() {
+        let above = s[k].1 >= need;
+        let cross = || {
+            let (t0, v0, t1, v1) = (s[k - 1].0, s[k - 1].1, s[k].0, s[k].1);
+            (t1 - t0).mul_add((need - v0) / (v1 - v0), t0)
+        };
+        match (from, above) {
+            (None, true) => from = Some(if k == 0 { s[0].0 } else { cross() }),
+            (Some(t0), false) => {
+                best = best.max(cross() - t0);
+                from = None;
+            }
+            _ => {}
+        }
+    }
+    let tail = from.map_or(0.0, |t0| s[s.len() - 1].0 - t0);
+    best.max(tail)
 }
 
 fn fmt3(v: f64) -> String {
@@ -936,6 +1051,34 @@ mod tests {
         assert!(partial.why.unwrap().contains("reset is partial"));
         let full = resets("U1", "/a/MEM", 0.1, &[1], &plus[..3]);
         assert!(full.passed && full.why.is_none(), "{}", full.detail);
+    }
+
+    #[test]
+    fn a_held_level_is_the_best_window_minimum_and_counts_separate_pulses() {
+        // Two trapezoids: 0-4 V over 1 us, flat 2 us, down over 1 us; then a
+        // 3 V spike with no flat top.
+        let s = [
+            (0.0, 0.0),
+            (1.0, 4.0),
+            (3.0, 4.0),
+            (4.0, 0.0),
+            (5.0, 0.0),
+            (6.0, 3.0),
+            (7.0, 0.0),
+        ];
+        for (width, need, held, count) in [
+            (0.0, 2.5, 4.0, 2), // the peak; both pulses pass 2.5 V
+            (2.0, 2.5, 4.0, 1), // only the flat top holds for 2
+            (3.0, 2.5, 2.0, 0), // a 3-wide window reaches halfway down each ramp
+            (1.0, 3.5, 4.0, 1), // the spike holds 1.5 V for 1, under 3.5 V
+        ] {
+            let (h, n) = sustained(&s, width, need);
+            assert!((h - held).abs() < 1e-9, "width {width}: held {h}");
+            assert_eq!(n, count, "width {width}, need {need}");
+        }
+        // Past 2 V: the first pulse from 0.5 to 3.5, the spike from 5.67 to 6.33.
+        assert!((longest_past(&s, 2.0) - 3.0).abs() < 1e-9);
+        assert!(longest_past(&s, 5.0).abs() < 1e-12);
     }
 
     #[test]

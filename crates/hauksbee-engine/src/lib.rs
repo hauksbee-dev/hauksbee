@@ -85,8 +85,8 @@ pub use hauksbee_cosim::{engine, error_budget, execution, peripherals, responder
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{
-    bind_board, bind_board_with, is_ground, names_a_supply_of_unknown_voltage, power_rail_voltage,
-    unpowered_supply_nets, BoundBoard,
+    bind_board, bind_board_driven, bind_board_with, is_ground, names_a_supply_of_unknown_voltage,
+    power_rail_voltage, unpowered_supply_nets, BoundBoard,
 };
 pub use board_input::{BoardInputError, InputKind, NormalizedBoard};
 pub use boardcode::{

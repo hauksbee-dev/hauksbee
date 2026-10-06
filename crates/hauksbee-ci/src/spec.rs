@@ -1248,6 +1248,12 @@ pub struct Assertion {
     /// every firing (reset completeness); a partial reset fails it.
     #[serde(default)]
     pub reset_below: Option<f64>,
+    /// `logic_level`: how long (ms) the level must be HELD, continuously, for
+    /// the next stage to take it ("high enough, for long enough"); at least
+    /// `min_toggles` (default 1) separate pulses must hold it. An explicit
+    /// `min` (high) or `max` (low) replaces the card-read VIH/VIL.
+    #[serde(default)]
+    pub min_width_ms: Option<f64>,
 
     /// `max_current` / `max_temp`: the component to check.
     #[serde(rename = "ref", default)]
@@ -2409,6 +2415,14 @@ impl Assertion {
                 need(
                     self.net.is_some(),
                     "logic_level assertion needs a `net`".into(),
+                )?;
+                need(
+                    self.min_width_ms.is_none_or(|w| w.is_finite() && w > 0.0)
+                        && self.min.into_iter().chain(self.max).all(f64::is_finite),
+                    format!(
+                        "logic_level assertion on '{net}': `min_width_ms` must be a positive \
+                         time and `min`/`max` finite voltages"
+                    ),
                 )?;
                 need(
                     self.level

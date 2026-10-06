@@ -548,12 +548,30 @@ passes; lengthen `duration_ms` or move `after_ms`.
 Two kinds state an intended OUTCOME instead of a voltage window, and a
 `[search]` block names the operating conditions it must hold across. A
 violated outcome is reported at its worst condition, with measured against
-intended, the parts that set it ranked, and a solved repair value.
+intended, the parts that set it ranked, and a solved repair value. A rail
+held by `[[net_drive]]` or swept by the search is also the supply every part
+on it is bound at, so a level read from a card at its supply (an analog
+switch's control threshold) follows the rail at each grid point.
 
 **`logic_level`**: `net` reaches a valid logic high (or `level = "low"`) at
 every logic input it drives. You do not type the level: it is the highest VIH
 (lowest VIL) that any part on the net declares on its card, read at that
-part's own solved supply.
+part's own solved supply. With `min_width_ms`, the level must be HELD that
+long without a break: high enough for long enough, as a pulse driving the
+next stage's input needs. The measured value is the highest level the net
+holds over any window of that width, and at least `min_toggles` (default 1)
+separate pulses must hold the level for that width. An explicit `min` (high)
+or `max` (low) replaces the level read from the cards, for an input with no
+card or a threshold the cards do not state.
+
+```toml
+[[assert]]
+kind = "logic_level"
+net = "SPIKE"
+min_width_ms = 0.001    # VIH held for 1 us
+min_toggles = 3         # in at least 3 separate pulses (default 1)
+# min = 2.0             # optional: this level instead of the cards' VIH
+```
 
 **`fires`**: the comparator `ref` fires: its output rises through mid-swing
 `min_toggles` times (default once). With `target`, its first decision must also

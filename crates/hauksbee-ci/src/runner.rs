@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
 use hauksbee_engine::rail_owner::{Feed, RailDomains};
 pub use hauksbee_engine::unpowered_supply_nets;
-use hauksbee_engine::{bind_board, BoundBoard, CsProvenance, HauksbeeEngine, ResolvedCs};
+use hauksbee_engine::{
+    bind_board_driven, BoundBoard, CsProvenance, CustomRegistry, HauksbeeEngine, ResolvedCs,
+};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::evidence::{
@@ -902,7 +904,7 @@ fn compute_ac(
     let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
     let mut board = apply_overrides(spec, base);
     apply_plan(&mut board, plan);
-    let mut bound = bind_board(&board, lib);
+    let mut bound = bind_driven(&board, lib, spec, fuzz_drives);
 
     // Bias the operating point exactly as the transient run would: rail
     // suppression, supplies, and net drives (the per-seed fuzz straps
@@ -1798,7 +1800,12 @@ fn run_one(
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base);
     apply_plan(&mut board, plan);
-    let mut bound = bind_board(&board, lib);
+    // A search condition that forces a net is one more drive; parts bind
+    // against every driven level (see `bind_driven`).
+    let mut drives = fuzz_net_drives(spec, seed);
+    let forced = plan.conditions.iter().filter(|c| !c.amps);
+    drives.extend(forced.map(|c| (c.net.clone(), c.value)));
+    let mut bound = bind_driven(&board, lib, spec, &drives);
 
     // The as-built overlay comes first: it is BOARD state (the physical rework
     // record, cuts, jumpers, fitted values), so it lands before any harness
@@ -1839,10 +1846,6 @@ fn run_one(
     // can POWER a rail has been applied by then, so anything still unpowered
     // is unpowered for the whole run, and any analog number below has to be
     // read knowing it.
-    // A search condition that forces a net is one more drive.
-    let mut drives = fuzz_net_drives(spec, seed);
-    let forced = plan.conditions.iter().filter(|c| !c.amps);
-    drives.extend(forced.map(|c| (c.net.clone(), c.value)));
     let dead_rails = bias_bound(&mut bound, &board, spec, &drives)?;
     let (mut probe, watch) = crate::search::prepare(spec, &board, &mut bound, plan);
     // A ramped rail is a COLD power-on, which a stamped leg cannot express: it
@@ -3411,6 +3414,21 @@ fn ramp_source((t_s, volts): (f64, f64)) -> SourceKind {
         PwlPoint { t: 0.0, v: 0.0 },
         PwlPoint { t: t_s, v: volts },
     ])
+}
+
+/// Bind `board` with every level the run will drive (the spec's
+/// `[[net_drive]]`s, then `drives`, which win as they do in [`bias_bound`]),
+/// so a part on a driven rail reads its supply-referred thresholds at that
+/// rail, per member when a search sweeps it.
+fn bind_driven(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    spec: &Spec,
+    drives: &[(String, f64)],
+) -> BoundBoard {
+    let set = spec.net_drives.iter().map(|d| (d.net.clone(), d.volts));
+    let levels: Vec<(String, f64)> = set.chain(drives.iter().cloned()).collect();
+    bind_board_driven(board, lib, &CustomRegistry::new(), &levels)
 }
 
 /// Force `net` to a source waveform by stamping an ideal source (unless one is

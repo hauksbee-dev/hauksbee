@@ -387,11 +387,28 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
 /// by that [`CustomBehavior`](crate::behavioral::CustomBehavior) instead of the declarative
 /// layer.
 #[must_use]
-#[allow(clippy::too_many_lines)] // the ordered bind passes share many locals
 pub fn bind_board_with(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     custom: &crate::behavioral::CustomRegistry,
+) -> BoundBoard {
+    bind_board_driven(board, lib, custom, &[])
+}
+
+/// Bind with the voltages the caller will hold `driven` nets at.
+///
+/// A spec's `[[net_drive]]` or a searched rail: every part reads its
+/// supply-referred levels (a switch's control threshold, a strap's level) at
+/// the rail it will actually see, not at a name-guessed default. A driven
+/// value wins over a name's; it only informs part binding, never stamps a
+/// rail source: the caller drives the net itself.
+#[must_use]
+#[allow(clippy::too_many_lines)] // the ordered bind passes share many locals
+pub fn bind_board_driven(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    custom: &crate::behavioral::CustomRegistry,
+    driven: &[(String, f64)],
 ) -> BoundBoard {
     let mut circuit = Circuit::new();
     let mut net_nodes: HashMap<String, NodeId> = HashMap::new();
@@ -462,6 +479,10 @@ pub fn bind_board_with(
             }
         }
     }
+
+    // The levels parts bind against: the named rails, then the driven nets.
+    let mut level_nets = power_nets.clone();
+    level_nets.extend(driven.iter().cloned());
 
     // Resolve a net id to a node, defaulting to ground for the no-net bucket.
     let node_of = |id: Option<i64>| -> Option<NodeId> {
@@ -591,7 +612,7 @@ pub fn bind_board_with(
                         &mut dacs,
                         &mut peripherals,
                         &mut report.regulators,
-                        (&board.components, &power_nets),
+                        (&board.components, &level_nets),
                         lib.pin_rules(),
                     );
                     let rail = |n: Option<i64>| {

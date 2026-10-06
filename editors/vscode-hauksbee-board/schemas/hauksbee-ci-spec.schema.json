@@ -548,6 +548,15 @@
           "default": null,
           "minimum": 0
         },
+        "min_width_ms": {
+          "description": "`logic_level`: how long (ms) the level must be HELD, continuously, for\nthe next stage to take it (\"high enough, for long enough\"); at least\n`min_toggles` (default 1) separate pulses must hold it. An explicit\n`min` (high) or `max` (low) replaces the card-read VIH/VIL.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
         "name": {
           "description": "Optional label (defaults to a generated description).",
           "type": [

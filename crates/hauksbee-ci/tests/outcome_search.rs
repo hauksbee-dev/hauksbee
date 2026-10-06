@@ -103,6 +103,127 @@ fn a_weak_logic_high_names_the_divider_that_starves_it() {
     assert!(gate.contains("RB") && gate.contains("RA"), "{gate}");
 }
 
+/// A board-DSL board from `(ref, footprint, value, nets)` rows.
+fn parts_board(parts: &[(&str, &str, &str, &[&str])]) -> String {
+    let mut nets: Vec<&str> = parts.iter().flat_map(|p| p.3.iter().copied()).collect();
+    nets.sort_unstable();
+    nets.dedup();
+    let body: String = (parts.iter().enumerate())
+        .map(|(i, &(r, lib, val, pins))| {
+            let pads = pins.iter().zip(1..).map(|(n, k)| pad(k, n)).collect();
+            comp(r, lib, val, 10 + i * 8, pads)
+        })
+        .collect();
+    let nets = nets
+        .iter()
+        .map(|n| format!("net \"{n}\"\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    format!("board version 20171130\nfn main {{\n{nets}{body}}}\n")
+}
+
+const R0805: &str = "Resistor_SMD:R_0805_2012Metric";
+
+#[test]
+fn a_driven_rail_reaches_the_parts_that_read_their_levels_from_it() {
+    // A 74LVC1G66 on a rail whose NAME states no voltage, and a 2:1 divider
+    // off the same rail. Only the spec's drive (swept by the search) says
+    // what the rail is, so the switch's control threshold must be read at
+    // the swept level, not at a name-guessed default.
+    let board = parts_board(&[
+        (
+            "U1",
+            "Package_TO_SOT_SMD:SOT-353_SC-70-5",
+            "SN74LVC1G66DCKR",
+            &["A", "B", "GND", "CTL", "AVDD"],
+        ),
+        ("R1", R0805, "20k", &["AVDD", "TH"]),
+        ("R2", R0805, "10k", &["TH", "GND"]),
+        ("R3", R0805, "10k", &["CTL", "GND"]),
+        ("R4", R0805, "10k", &["B", "GND"]),
+    ]);
+    let path = support::write_tmp("rail.board", &board);
+    let spec = support::load_spec(
+        "rail.toml",
+        &format!(
+            "name = \"rail\"\nboard = {}\nduration_ms = 0.1\n\
+             [[net_drive]]\nnet = \"AVDD\"\nvolts = 5.0\n\
+             [search]\n[[search.sweep]]\nnet = \"AVDD\"\nvolts = [3.0, 5.0]\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"TH\"\n",
+            support::toml_path(&path),
+        ),
+    );
+    let runs = hauksbee_ci::runner::run_spec(&spec).expect("spec runs");
+    let mut seen: Vec<(f64, f64)> = runs
+        .iter()
+        .map(|o| {
+            let rail = o.probe.conditions[0].value;
+            let th = o.windows[&("TH".to_string(), 0f64.to_bits())].max_v;
+            assert!((th - rail / 3.0).abs() < 0.01, "TH {th} V at {rail} V");
+            (rail, o.probe.switches["CTL"][0].1)
+        })
+        .collect();
+    // The card's VIL/VIH midpoint: 2.50 V at 5 V, about 1.42 V at 3 V; an
+    // unresolved rail reads the 2.31 V fallback at every level.
+    seen.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!((seen[0].1 - 1.42).abs() < 0.03, "{seen:?}");
+    assert!((seen[1].1 - 2.5).abs() < 0.03, "{seen:?}");
+}
+
+#[test]
+fn a_pulse_must_be_high_enough_for_long_enough_at_the_input_it_drives() {
+    // A 50 us 5 V pulse through R1 into C1 drives a 74LVC1G04 input (VIH
+    // 3.5 V at 5 V); the outcome is VIH held for the width the gate needs.
+    let run = |farads: &str, ms: f64| {
+        let board = parts_board(&[
+            (
+                "U2",
+                "Package_TO_SOT_SMD:SOT-23-5",
+                "74LVC1G04",
+                &["NC", "X", "GND", "NY", "VCC"],
+            ),
+            ("R1", R0805, "1k", &["IN", "X"]),
+            (
+                "C1",
+                "Capacitor_SMD:C_0805_2012Metric",
+                farads,
+                &["X", "GND"],
+            ),
+        ]);
+        let path = support::write_tmp("pulse.board", &board);
+        support::run_body(
+            "pulse.toml",
+            &format!(
+                "name = \"pulse\"\nboard = {}\nduration_ms = 0.2\nframe_ms = 0.002\n\
+                 [[net_drive]]\nnet = \"VCC\"\nvolts = 5.0\n\
+                 [[peripheral]]\nid = \"P\"\ntype = \"stimulus\"\nnet = \"IN\"\n\
+                 waveform = \"pwl\"\npwl = [[0.0, 0.0], [0.01, 0.0], [0.0101, 5.0], \
+                 [0.06, 5.0], [0.0601, 0.0]]\n\
+                 [search]\n[[search.sweep]]\nnet = \"VCC\"\nvolts = [4.5, 5.0]\n\
+                 [[assert]]\nname = \"held\"\nkind = \"logic_level\"\nnet = \"X\"\n\
+                 min_width_ms = {ms}\n",
+                support::toml_path(&path),
+            ),
+        )
+    };
+    // tau 1 us: X sits near 5 V for ~50 us, so a 20 us need holds silently.
+    let r = run("1n", 0.02);
+    assert!(support::row(&r, "held").passed, "{}", r.render_human());
+    // tau 47 us: the pulse ends before X reaches VIH (too low). tau 10 us: X
+    // is past VIH for ~41 us, short of a 45 us need (too short). Both name
+    // the RC that sets it.
+    for (farads, ms, says) in [
+        ("47n", 0.02, "for at most 0.0000 ms"),
+        ("10n", 0.045, "in 0 pulse(s)"),
+    ] {
+        let w = why(&run(farads, ms), "held");
+        assert!(w.contains(says) && w.contains("long enough"), "{w}");
+        assert!(w.contains("VCC=5V"), "{w}");
+        assert!(w.contains("C1") && w.contains("R1"), "{w}");
+    }
+}
+
 #[test]
 fn a_board_that_meets_its_outcomes_passes_silently() {
     let r = run("outcome repaired", "68k", "47k");
