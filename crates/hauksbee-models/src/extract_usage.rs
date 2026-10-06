@@ -8,8 +8,10 @@
 //!
 //! Prices are USD per million tokens (input, cached input, output) at the
 //! standard list tier, kept for the models this tool has a source for.
-//! `HAUKSBEE_LLM_PRICE=in,cached,out` prices any other model; with neither, the
-//! tokens are shown and the cost is unknown.
+//! A call on the fast tier (`service_tier="fast"`, or its former name
+//! `"priority"`) bills double. `HAUKSBEE_LLM_PRICE=in,cached,out` prices any
+//! other model as given, tier included; with neither, the tokens are shown and
+//! the cost is unknown.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -26,8 +28,21 @@ pub struct Usage {
 /// USD per million tokens: input, cached input, output.
 type Price = [f64; 3];
 
-/// Standard-tier list prices; the fast tier bills double.
-const LIST_PRICES: &[(&str, Price)] = &[("gpt-6-luna", [0.10, 0.01, 0.50])];
+/// Standard-tier list prices, from developers.openai.com/api/docs/pricing
+/// (2026-10-06); the fast tier is listed at exactly double.
+const LIST_PRICES: &[(&str, Price)] = &[
+    ("gpt-6.1-sol", [2.00, 0.10, 10.00]),
+    ("gpt-6-luna", [0.10, 0.01, 0.50]),
+];
+
+/// Whether backend arguments select `OpenAI`'s fast tier (named "priority" before 2026-07-30).
+#[must_use]
+pub fn fast_tier(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        let a = a.replace(['"', '\'', ' '], "");
+        a.ends_with("service_tier=fast") || a.ends_with("service_tier=priority")
+    })
+}
 
 #[derive(Default, Clone)]
 struct Ledger {
@@ -86,7 +101,7 @@ const fn add(a: Usage, b: Usage) -> Usage {
     }
 }
 
-fn price(model: &str) -> Option<Price> {
+fn price(model: &str, fast: bool) -> Option<Price> {
     if let Ok(text) = std::env::var("HAUKSBEE_LLM_PRICE") {
         let parts: Vec<f64> = text
             .split(',')
@@ -94,10 +109,11 @@ fn price(model: &str) -> Option<Price> {
             .collect();
         return <Price>::try_from(parts).ok();
     }
+    let tier = if fast { 2.0 } else { 1.0 };
     LIST_PRICES
         .iter()
         .find(|(m, _)| *m == model)
-        .map(|(_, p)| *p)
+        .map(|(_, p)| p.map(|x| x * tier))
 }
 
 #[allow(clippy::cast_precision_loss)] // token counts are far below 2^52
@@ -118,7 +134,7 @@ fn describe(u: Usage) -> String {
 }
 
 /// Record one backend call (`None` = it reported no usage) and say what it cost.
-pub fn record(tool: &str, model: &str, usage: Option<Usage>) {
+pub fn record(tool: &str, model: &str, fast: bool, usage: Option<Usage>) {
     let mut guard = ledger();
     let l = guard.get_or_insert_with(|| Ledger {
         cost: Some(0.0),
@@ -133,7 +149,7 @@ pub fn record(tool: &str, model: &str, usage: Option<Usage>) {
         Some(u) => {
             l.known += 1;
             l.tokens = add(l.tokens, u);
-            let priced = price(model).map(|p| cost(u, p));
+            let priced = price(model, fast).map(|p| cost(u, p));
             l.cost = l.cost.zip(priced).map(|(a, b)| a + b);
             let spend = priced.map_or_else(
                 || format!("cost unknown (no list price for {model}; set HAUKSBEE_LLM_PRICE=in,cached,out in USD per million tokens)"),
@@ -227,25 +243,35 @@ mod tests {
         std::env::remove_var("HAUKSBEE_LLM_PRICE");
         reset();
         assert_eq!(summary(), "");
-        record("claude-code", "m", None);
+        record("claude-code", "m", false, None);
         assert!(summary().starts_with("cost: unknown"), "{}", summary());
         reset();
         let u = from_codex_events(STREAM).unwrap();
-        record("codex", "gpt-6-luna", Some(u));
+        record("codex", "gpt-6-luna", false, Some(u));
         // fresh 1.1M * 0.10 + cached 0.4M * 0.01 + out 0.1M * 0.50, per million.
         assert_eq!(summary(), "cost: 1500000 input (400000 cached), 100000 output tokens, about $0.1640 at list price");
-        record("codex", "gpt-6-luna", None);
+        record("codex", "gpt-6-luna", false, None);
         let s = summary();
         assert!(
             s.contains("at least $0.1640") && s.contains("1 of 2 call(s) reported usage"),
             "{s}"
         );
         reset();
-        record("codex", "no-such-model", Some(u));
+        // Sol: 1.1M * 2.00 + 0.4M * 0.10 + 0.1M * 10.00; the fast tier doubles it.
+        record("codex", "gpt-6.1-sol", false, Some(u));
+        assert!(summary().contains("about $3.2400"), "{}", summary());
+        reset();
+        let fast = ["-c".to_string(), "service_tier=\"priority\"".to_string()];
+        record("codex", "gpt-6.1-sol", fast_tier(&fast), Some(u));
+        assert!(summary().contains("about $6.4800"), "{}", summary());
+        assert!(fast_tier(&["service_tier=fast".to_string()]));
+        assert!(!fast_tier(&["service_tier=\"flex\"".to_string()]));
+        reset();
+        record("codex", "no-such-model", false, Some(u));
         assert!(summary().contains("cost unknown"), "{}", summary());
         std::env::set_var("HAUKSBEE_LLM_PRICE", "1,0,2");
         reset();
-        record("codex", "no-such-model", Some(u));
+        record("codex", "no-such-model", false, Some(u));
         assert!(summary().contains("about $1.3000"), "{}", summary());
         std::env::remove_var("HAUKSBEE_LLM_PRICE");
         reset();

@@ -133,7 +133,13 @@ the same validation, and the same retry-with-feedback loop:
 Every default is the most accurate current model at `high` effort (not `max`:
 the extra cost has not been shown to buy a better pin map). GPT-6 Luna
 (`gpt-6-luna`, on `codex` and `api`) is the recommended budget choice: very good
-for most circuit extraction and much cheaper, so pick it to save money. `hauksbee models backend show` and the web
+for most circuit extraction and much cheaper, so pick it to save money. At
+OpenAI's list prices (2026-10-06, USD per million input / cached input /
+output tokens) Sol is $2.00 / $0.10 / $10.00 and Luna $0.10 / $0.01 / $0.50,
+about 20 times cheaper; the fast tier (`service_tier="fast"`, formerly
+`"priority"`) costs double. Codex and `api` runs end with a token count and a
+list-price estimate that includes the fast-tier doubling;
+`HAUKSBEE_LLM_PRICE=in,cached,out` prices any other model. `hauksbee models backend show` and the web
 Settings page list each backend's picks with the same one-line notes. Older
 names are not offered but still work: a saved or typed `--model` is used as
 written, and the CLI and Settings page only note that a newer one is recommended.

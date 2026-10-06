@@ -2637,7 +2637,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
             let request = ApiRequest::prepare(&resolved.api)?;
             let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
                 let (text, usage) = request.send_with_usage(p)?;
-                crate::extract_usage::record("api", &request.model, usage);
+                crate::extract_usage::record("api", &request.model, false, usage);
                 Ok(extract_toml_block(&text, reply.table()))
             });
             return raw.map(|raw| (raw, None));
@@ -2668,7 +2668,10 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         let ran = run_agent_once(&resolved, p, &ws);
         let usage = ran.as_ref().ok().filter(|_| chosen == Backend::Codex);
         let usage = usage.and_then(|out| crate::extract_usage::from_codex_events(out));
-        crate::extract_usage::record(chosen.name(), resolved.model(), usage);
+        let fast = resolved
+            .agent(chosen)
+            .is_some_and(|a| crate::extract_usage::fast_tier(&a.extra_args));
+        crate::extract_usage::record(chosen.name(), resolved.model(), fast, usage);
         let stdout = match ran {
             // A killed run keeps its draft only if it passes the finished-answer check.
             Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
