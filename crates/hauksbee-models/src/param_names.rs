@@ -65,6 +65,8 @@ const UNIVERSAL: &[&str] = &[
     "identity_only",
     "unlocked_by",
     "must_not_float_roles",
+    "float_tolerated_roles",
+    "float_tolerated_basis",
     "auto_bind",
     "auto_bind_family",
     "auto_bind_pin_summary",

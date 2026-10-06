@@ -2282,7 +2282,9 @@ value_re = "(?i)^W25Q128JV[SPE](?:IQ|JQ|Q)?(?:-TR)?$"
 
 [models.params]
 warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
-must_not_float_roles = "wp_n, hold_n"
+must_not_float_roles = "hold_n"
+float_tolerated_roles = "wp_n"
+float_tolerated_basis = "/WP only acts when the status-register protect bits are set; they ship cleared, and in Quad mode the pin is IO2"
 
 [models.pins]
 "1" = "cs"
@@ -2383,7 +2385,9 @@ value_re = "(?i)^W25Q32JV(?:SN|SS|ST|ZP|ZE)(?:IQ|JQ)?(?:-TR)?$"
 
 [models.params]
 warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
-must_not_float_roles = "wp_n, hold_n"
+must_not_float_roles = "hold_n"
+float_tolerated_roles = "wp_n"
+float_tolerated_basis = "/WP only acts when the status-register protect bits are set; they ship cleared, and in Quad mode the pin is IO2"
 
 [models.pins]
 # Section 3.3 Pin Description.
@@ -2488,7 +2492,9 @@ value_re = "(?i)^W25Q80DV(?:S|SN|SS|SV|ZP|UX|DA)(?:IG|IQ)?(?:-TR)?$"
 
 [models.params]
 warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
-must_not_float_roles = "wp_n, hold_n"
+must_not_float_roles = "hold_n"
+float_tolerated_roles = "wp_n"
+float_tolerated_basis = "/WP only acts when the status-register protect bits are set; they ship cleared, and in Quad mode the pin is IO2"
 
 [models.pins]
 # Section 3.4 Pin Description.
@@ -2588,7 +2594,9 @@ value_re = "(?i)^GD25Q16(?:[BCE]?|[BCE][TSVPENQW][IJEF32A]G[TYR]?)$"
 
 [models.params]
 warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
-must_not_float_roles = "wp_n, hold_n"
+must_not_float_roles = "hold_n"
+float_tolerated_roles = "wp_n"
+float_tolerated_basis = "/WP only acts when the status-register protect bits are set; they ship cleared, and in Quad mode the pin is IO2"
 
 [models.pins]
 # Section 2 pin description, 8-lead SOP/DIP and WSON/USON.

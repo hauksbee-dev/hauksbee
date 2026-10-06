@@ -553,27 +553,29 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             .find(|r| !entry.pins.values().any(|v| v == *r));
         p.require(unmapped.is_none(), || format!("[models.level_rails] '{rail}' names role '{}', which no pad in [models.pins] carries", unmapped.map_or("", String::as_str)));
     }
-    if params.0.contains_key("must_not_float_roles") {
-        match params.get_str("must_not_float_roles") {
-            None => p.push(
-                "params.must_not_float_roles must be a comma-separated string of [models.pins] roles",
-            ),
-            Some(raw) => {
-                let mut seen = HashSet::new();
-                let mut any = false;
-                for role in raw.split(',').map(str::trim).filter(|r| !r.is_empty()) {
-                    any = true;
-                    if seen.insert(role.to_ascii_lowercase()) {
-                        p.require(has_role_ci(entry, role), || {
-                            format!("params.must_not_float_roles entry '{role}' is not a role in [models.pins]")
-                        });
-                    } else {
-                        p.push(format!("params.must_not_float_roles repeats role '{role}'"));
-                    }
-                }
-                p.require(any, || "params.must_not_float_roles names no roles".into());
+    for key in ["must_not_float_roles", "float_tolerated_roles"] {
+        if !params.0.contains_key(key) {
+            continue;
+        }
+        let Some(raw) = params.get_str(key) else {
+            p.push(format!(
+                "params.{key} must be a comma-separated string of [models.pins] roles"
+            ));
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let mut any = false;
+        for role in raw.split(',').map(str::trim).filter(|r| !r.is_empty()) {
+            any = true;
+            if seen.insert(role.to_ascii_lowercase()) {
+                p.require(has_role_ci(entry, role), || {
+                    format!("params.{key} entry '{role}' is not a role in [models.pins]")
+                });
+            } else {
+                p.push(format!("params.{key} repeats role '{role}'"));
             }
         }
+        p.require(any, || format!("params.{key} names no roles"));
     }
 
     // Identity-only entries name the intended part class but intentionally do
@@ -2030,6 +2032,11 @@ mod tests {
         accepts(&e);
         e.params.set_str("must_not_float_roles", "wp_n, missing");
         rejects(&e, "missing");
+        e.params.set_str("must_not_float_roles", "hold_n");
+        e.params.set_str("float_tolerated_roles", "wp_n");
+        accepts(&e);
+        e.params.set_str("float_tolerated_roles", "nope");
+        rejects(&e, "nope");
     }
 
     const fn i2c_eeprom() -> PeripheralSpec {

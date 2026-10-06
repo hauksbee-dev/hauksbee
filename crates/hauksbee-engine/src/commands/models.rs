@@ -2377,6 +2377,15 @@ fn coverage_component(
                     .map(|role| format!("must_not_float:{role}")),
             );
         }
+        if let Some(roles) = entry.params.get_str("float_tolerated_roles") {
+            static_contracts.extend(
+                roles
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|role| !role.is_empty())
+                    .map(|role| format!("float_tolerated:{role}")),
+            );
+        }
         static_contracts.extend(
             entry
                 .straps

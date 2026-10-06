@@ -9,6 +9,12 @@
 //! only member is that control pad. It does not guess bias polarity, firmware
 //! mode, or behavior for models that did not opt in.
 //!
+//! A card lists in `params.float_tolerated_roles` a control input its
+//! datasheet ignores at the part's default configuration (a flash write
+//! protect that only acts once status-register protection is enabled). The
+//! same topology there is a note citing `params.float_tolerated_basis`: a
+//! floating CMOS input is still poor practice, but not a functional fault.
+//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
@@ -23,14 +29,24 @@ fn unconnected_placeholder(name: &str) -> bool {
 pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for (comp, model) in super::resolved_components(board, lib) {
-        let Some(raw_roles) = model.params.get_str("must_not_float_roles") else {
-            continue;
+        let roles = |key| {
+            model
+                .params
+                .get_str(key)
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|role| !role.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
         };
-        for role in raw_roles
-            .split(',')
-            .map(str::trim)
-            .filter(|role| !role.is_empty())
-        {
+        let required = roles("must_not_float_roles");
+        let tolerated = roles("float_tolerated_roles");
+        let contracts = required
+            .iter()
+            .map(|role| (role, true))
+            .chain(tolerated.iter().map(|role| (role, false)));
+        for (role, must) in contracts {
             for (pad, model_role) in &model.pins {
                 if !model_role.eq_ignore_ascii_case(role) {
                     continue;
@@ -47,11 +63,26 @@ pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
                 if unconnected_placeholder(&net.name) || board.net_members(net_id).len() != 1 {
                     continue;
                 }
+                let (severity, consequence) = if must {
+                    (
+                        Severity::High,
+                        "the model requires this role not to float".to_string(),
+                    )
+                } else {
+                    let basis = model
+                        .params
+                        .get_str("float_tolerated_basis")
+                        .unwrap_or("the datasheet ignores it at the part's default configuration");
+                    (
+                        Severity::Low,
+                        format!("harmless as shipped ({basis}), but tie it to its inactive rail so it cannot pick up noise or act if the configuration changes"),
+                    )
+                };
                 report.findings.push(LintFinding {
                     check: LintCheck::FloatingControlPin,
-                    severity: Severity::High,
+                    severity,
                     message: format!(
-                        "{} pad {} ({role}, from model '{}') is a control input on floating net '{}': the net touches only this pad; the model requires this role not to float",
+                        "{} pad {} ({role}, from model '{}') is a control input on floating net '{}': the net touches only this pad; {consequence}",
                         comp.reference, pin.number, model.id, net.name
                     ),
                     refs: vec![comp.reference.clone()],
@@ -114,12 +145,16 @@ mod tests {
         let report = model_control_lint(&flash_board(false), &ModelLibrary::builtin());
         let findings: Vec<_> = report.of_check(LintCheck::FloatingControlPin).collect();
         assert_eq!(findings.len(), 2, "WP and HOLD must both be localized");
-        assert!(findings
-            .iter()
-            .any(|finding| finding.message.contains("wp_n")));
-        assert!(findings
-            .iter()
-            .any(|finding| finding.message.contains("hold_n")));
+        // HOLD freezes the bus when it drifts low: a fault. WP only acts once
+        // status-register protection is enabled: a note.
+        for (role, severity) in [("hold_n", Severity::High), ("wp_n", Severity::Low)] {
+            let found = findings.iter().find(|f| f.message.contains(role));
+            assert_eq!(
+                found.map(|f| f.severity),
+                Some(severity),
+                "{role}: {findings:?}"
+            );
+        }
     }
 
     #[test]
