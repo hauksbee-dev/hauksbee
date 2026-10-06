@@ -131,13 +131,21 @@ impl ExecutionEvidence {
             .filter(|&(_, &n)| n > 0)
             .map(|(&(port, bit), &n)| (format!("P{port}{bit}"), n))
             .collect();
-        let executed = reached_entry == Observed::Yes || uart_bytes > 0 || !gpio_toggles.is_empty();
+        // A boot ROM that logs on the same UART talks before (and without) the
+        // image, so its bytes are not firmware output.
+        let firmware_uart = uart_bytes > 0 && !probe.boot_rom_console;
+        let executed = reached_entry == Observed::Yes || firmware_uart || !gpio_toggles.is_empty();
         let mut blockers = Vec::new();
         if !executed {
             blockers.push(match reached_entry {
                 Observed::No => format!(
                     "the core never reached {} and produced no UART or GPIO activity",
                     probe.entry_symbol.as_deref().unwrap_or("its entry symbol")
+                ),
+                _ if uart_bytes > 0 => format!(
+                    "no evidence the firmware executed: no {} seen and no GPIO toggles; \
+                     the {uart_bytes} UART bytes may be the boot ROM's own log",
+                    probe.entry_symbol.as_deref().unwrap_or("entry symbol")
                 ),
                 _ => "no evidence the firmware executed: no entry symbol seen, no UART \
                       bytes and no GPIO toggles"
@@ -427,7 +435,41 @@ mod tests {
             distinct_pcs: 3,
             last_pc: Some(0x0800_0100),
             faults: faults.iter().map(ToString::to_string).collect(),
+            boot_rom_console: false,
         }
+    }
+
+    #[test]
+    fn boot_rom_log_bytes_alone_are_not_execution() {
+        // An ESP mask ROM prints its boot log whatever the image holds.
+        let rom = ExecutionProbe {
+            boot_rom_console: true,
+            ..probe(None, &[])
+        };
+        let e = ExecutionEvidence::new(
+            "U1",
+            "qemu:esp32",
+            rom.clone(),
+            907,
+            &BTreeMap::new(),
+            board(Observed::Unknown, Observed::Unknown),
+        );
+        assert!(!e.executed && !e.firmware_pass_eligible, "{e:?}");
+        assert!(e.blockers[0].contains("boot ROM's own log"), "{e:?}");
+        // A PC sample in the image's code is.
+        let ran = ExecutionProbe {
+            reached_entry: Some(true),
+            ..rom
+        };
+        let e = ExecutionEvidence::new(
+            "U1",
+            "qemu:esp32",
+            ran,
+            907,
+            &BTreeMap::new(),
+            board(Observed::Unknown, Observed::Unknown),
+        );
+        assert!(e.executed && e.firmware_pass_eligible, "{e:?}");
     }
 
     #[test]

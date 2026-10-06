@@ -93,7 +93,8 @@ pub struct McuState {
 /// Every field is optional or countable because backends differ in what they
 /// can see: Renode can hook the ELF's `main` and the Cortex-M fault vectors and
 /// count retired instructions, simavr watches its PC against the ELF symbol
-/// table, and QEMU reports nothing here. "Unknown" is a value, never a pass:
+/// table, and QEMU samples its PC against the mask ROM and reads the ESP
+/// panic handler off the console. "Unknown" is a value, never a pass:
 /// the co-sim layer combines this with the I/O it saw (UART bytes, GPIO
 /// toggles) before calling a run executed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -116,6 +117,9 @@ pub struct ExecutionProbe {
     /// Faults or exception handlers entered, one human-readable entry per kind
     /// (for example `"HardFault x1"` or `"core crashed at pc 0x1a2"`).
     pub faults: Vec<String>,
+    /// The part's mask ROM prints on the same UART before the image runs (the
+    /// ESP boot log), so UART bytes alone do not show the firmware executed.
+    pub boot_rom_console: bool,
 }
 
 /// Cap on distinct program counters a backend remembers for

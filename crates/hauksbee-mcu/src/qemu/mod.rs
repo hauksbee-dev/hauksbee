@@ -72,6 +72,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
+mod console;
 mod flashimage;
 mod gdb;
 pub mod install;
@@ -557,6 +558,9 @@ pub struct QemuBackend {
     /// single 32-bit bank '0'). Such pins cannot be observed or injected, so the
     /// backend must SAY so rather than silently report the pin as never-driven.
     unbridged_gpio_warned: bool,
+    /// Panics and reboots read off UART0, and PC samples outside the mask ROM.
+    console: console::BootConsole,
+    pcs: crate::traits::PcSampler,
 }
 
 impl QemuBackend {
@@ -676,8 +680,8 @@ impl QemuBackend {
             }
         };
         qmp.set_timeout(Duration::from_secs(20));
-        // The guest is running at boot; pause it so the first chunk starts from a
-        // known stopped state (the lockstep is cont -> window -> stop).
+        // The guest starts stopped (`-S`); stopping again is harmless and keeps
+        // the first chunk's known state explicit (lockstep: cont -> window -> stop).
         checked_control(&mut process, "initial stop", qmp.stop())?;
 
         // Attach a gdbstub for GPIO-input memory writes. Best-effort: if it fails
@@ -762,6 +766,8 @@ impl QemuBackend {
             adc_no_gdb_warned: false,
             digital_no_gdb_warned: false,
             unbridged_gpio_warned: false,
+            console: console::BootConsole::default(),
+            pcs: crate::traits::PcSampler::default(),
         })
     }
 
@@ -888,7 +894,17 @@ impl QemuBackend {
         // Service the mailbox bus cells while the guest is paused,
         // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
         self.service_bus_mailbox()?;
-        self.core.pump_uart_out(false)?;
+        let console = self.core.pump_uart_out(false)?;
+        self.console.feed(&console);
+        // A PC sample while paused: one HMP round trip, and only on the
+        // sampler's schedule. A failed read is a missing sample, not an error.
+        if self.pcs.due() {
+            let pc = self.qmp.hmp("info registers").ok();
+            if let Some(pc) = pc.as_deref().and_then(console::parse_pc) {
+                self.pcs.record(pc);
+                self.console.sample_pc(pc);
+            }
+        }
         // Unmodified firmware deliberately has no mailbox MAGIC. With the
         // patched GPIO model, a real enabled peripheral transition is direct
         // guest activity and is therefore a valid end-of-boot signal;
@@ -1306,6 +1322,22 @@ impl Mcu for QemuBackend {
     /// backend drives QEMU, not a per-part property. See [`TIMING_LIMITATION`].
     fn timing_limitation(&self) -> Option<String> {
         Some(TIMING_LIMITATION.to_string())
+    }
+
+    /// No symbol table reaches QEMU (it boots a flash image), so "entry" here
+    /// is any code outside the mask ROM: a PC sample in the image's
+    /// bootloader or app. The ROM prints its own boot log on UART0, so the
+    /// probe marks the console as shared and UART bytes alone prove nothing.
+    fn execution_probe(&mut self) -> crate::traits::ExecutionProbe {
+        let mut probe = crate::traits::ExecutionProbe {
+            reached_entry: (self.console.firmware_pcs > 0).then_some(true),
+            entry_symbol: Some("code outside the boot ROM".to_string()),
+            faults: self.console.faults(),
+            boot_rom_console: true,
+            ..crate::traits::ExecutionProbe::default()
+        };
+        self.pcs.fill(&mut probe);
+        probe
     }
 
     fn pins_configured_output(&self) -> Vec<PinId> {

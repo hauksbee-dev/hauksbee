@@ -455,10 +455,11 @@ impl PollState {
     }
 
     /// Drain UART bytes the firmware emitted and dispatch them, echoing them
-    /// to stderr when `trace` is set.
-    pub(crate) fn pump_uart_out(&mut self, trace: bool) -> Result<()> {
+    /// to stderr when `trace` is set. Returns the bytes for a backend that
+    /// also reads its console (QEMU's ESP panic and reboot lines).
+    pub(crate) fn pump_uart_out(&mut self, trace: bool) -> Result<Vec<u8>> {
         let Some(uart) = &mut self.uart else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let bytes = uart.drain()?;
         if trace && !bytes.is_empty() {
@@ -469,9 +470,9 @@ impl PollState {
             );
         }
         if let Some(cb) = &mut self.on_uart {
-            bytes.into_iter().for_each(cb);
+            bytes.iter().copied().for_each(cb);
         }
-        Ok(())
+        Ok(bytes)
     }
 
     /// Whether `letter` is one of the ports the engine asked to be polled.

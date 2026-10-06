@@ -344,16 +344,16 @@ report, an "Execution evidence:" block in the default text summary, and an
 
 | Field | Meaning |
 |---|---|
-| `reached_entry`, `entry_symbol` | `yes`/`no`/`unknown`: the core reached the ELF's `main` (`unknown` for an image without symbols) |
+| `reached_entry`, `entry_symbol` | `yes`/`no`/`unknown`: the core reached `main` from the firmware ELF's own symbol table (`unknown` for an image without symbols; a support image's `main`, such as the RP2040 boot ROM's, is never hooked). QEMU boots a flash image with no symbols, so its entry is "code outside the boot ROM": `yes` once a PC sample lands outside the ESP mask ROM (`0x4000_0000..0x4006_0000`), in the image's bootloader or app |
 | `instructions` | instructions retired (Renode), cycles (simavr); absent when the backend does not count |
 | `pc_samples`, `distinct_pcs`, `last_pc` | PC sampled at chunk boundaries; one distinct value is a parked core |
-| `faults` | fault handlers entered (Renode hooks the HardFault/MemManage/BusFault/UsageFault handlers of the table VTOR points at and of the ELF's own vector table, found by its runtime's symbol such as `__vectors` or `g_pfnVectors`; a Cortex-M0/M0+/M1/M23 has only HardFault, so only that is hooked), or a crashed simavr core |
-| `uart_bytes` | bytes the firmware transmitted |
+| `faults` | fault handlers entered (Renode hooks the HardFault/MemManage/BusFault/UsageFault handlers of the table VTOR points at and of the ELF's own vector table, found by its runtime's symbol such as `__vectors` or `g_pfnVectors`; a Cortex-M0/M0+/M1/M23 has only HardFault, so only that is hooked), a crashed simavr core, or on QEMU the ESP-IDF panic handler's lines (`panic'ed (...)`, `assert failed:`, `abort() was called`) and every ROM reset banner after the power-on one (a reboot; a deep-sleep wake excepted) |
+| `uart_bytes` | bytes on the MCU's UART. On QEMU the ESP mask ROM prints its boot log on the same UART whatever the image holds, so there UART bytes alone are not execution |
 | `gpio_toggles` | firmware output edges per pin (`"PA5": 12`) |
 | `reset_held` | the board's reset line (when something drives it) stayed asserted the whole run |
 | `supply_valid`, `supply_v` | supply pads inside the card's operating range (`min_v` of its supply envelope to its absolute maximum). A card with per-domain `supply_range` rows (the RP2040's 1.1 V DVDD beside its 3.3 V IOVDD) judges each pad against its own domain's floor; `supply_v` is then the deepest pad below its floor, or the lowest pad otherwise |
 | `clock_valid`, `clock_source` | read off the MCU's core oscillator pins (found by pin role/name, e.g. `XTAL1`/`XTAL2`, `OSC_IN`/`OSC_OUT`, `XIN`/`XOUT`): `yes` for a fitted crystal across the pair (directly, or with one leg through a fitted series resistor to a pin, the drive-level resistor many boards put on the output) or a fitted oscillator or driver on the input; `no` for a broken clock (pin tied to a rail, pins shorted, a crystal leg off the pin pair), which blocks eligibility; otherwise `unknown`, including a part with no external clock part on a card that declares an `internal_clock` (the source says "internal oscillator only"): the firmware or fuse clock selection is not checked, so it is never a valid-clock claim |
-| `executed` | entry reached, or any UART byte, or any firmware GPIO edge |
+| `executed` | entry reached, or any UART byte (not on a boot-ROM console), or any firmware GPIO edge |
 | `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid, clock not broken; otherwise why not |
 
 No evidence of execution is never a firmware pass. Net toggles alone do not

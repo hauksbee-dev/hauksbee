@@ -229,7 +229,10 @@ impl QemuProcess {
         let bin = find_qemu(arch)?;
         let flash = flash_image.to_str().context("non-UTF-8 flash image path")?;
         let mut cmd = Command::new(&bin);
-        cmd.args(["-nographic", "-machine", machine, "-drive"])
+        // `-S`: start with the vCPU stopped. The UART socket is `nowait`, so a
+        // guest running before the backend connects loses the ROM boot log
+        // (and, on a fast boot, the first app lines) to a socket nobody reads.
+        cmd.args(["-nographic", "-S", "-machine", machine, "-drive"])
             .arg(format!("file={flash},if=mtd,format=raw,snapshot=on"))
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
