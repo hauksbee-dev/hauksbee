@@ -407,10 +407,15 @@ impl ExtractedBoard {
             let Ok(pads) = eagle_sch::schematic_pad_pins(&text) else {
                 return;
             };
-            // A blank layout value takes the library device the schematic placed.
+            // A blank layout value takes the library device the schematic placed,
+            // when that names a part number (ATTINY85) rather than a class (R, C)
+            // whose identity is the value a placement file may still supply.
             for (reference, name) in
                 eagle_sch::schematic_blank_value_device_names(&text).unwrap_or_default()
             {
+                if !name.chars().any(|c| c.is_ascii_digit()) {
+                    continue;
+                }
                 let blank =
                     |c: &&mut Component| c.reference == reference && c.value.trim().is_empty();
                 if let Some(c) = self.components.iter_mut().find(blank) {

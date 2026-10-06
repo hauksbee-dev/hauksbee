@@ -311,15 +311,15 @@ fn rail(volts: f64) -> String {
 }
 
 /// The rig's footprint for a card's part: a SOIC-8, unless the card numbers
-/// more pads than that, when it is left unnamed so the package-fit check has
-/// no rig-chosen outline to hold the card's own package against.
+/// more pads than that or records its own package, when it is left unnamed so
+/// the package-fit check has no rig-chosen outline to hold the card against.
 fn rig_footprint(card: &Card) -> &'static str {
     let pads = card
         .pins()
         .iter()
         .filter_map(|(p, _)| p.parse::<u32>().ok())
         .max();
-    if pads.is_some_and(|n| n > 8) {
+    if card.declares_package() || pads.is_some_and(|n| n > 8) {
         ""
     } else {
         "Package_SO:SOIC-8"
