@@ -2387,7 +2387,7 @@ value_re = "(?i)^W25Q32JV(?:SN|SS|ST|ZP|ZE)(?:IQ|JQ)?(?:-TR)?$"
 warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
 must_not_float_roles = "hold_n"
 float_tolerated_roles = "wp_n"
-float_tolerated_basis = "/WP only acts when the status-register protect bits are set; they ship cleared, and in Quad mode the pin is IO2"
+float_tolerated_basis = "Rev G §4.3 and Status Register Protect table (p.15): with SRP=SRL=0, the factory default, \"/WP pin has no control\"; no internal pull-up is specified, and with QE=1 the pin is IO2"
 
 [models.pins]
 # Section 3.3 Pin Description.
