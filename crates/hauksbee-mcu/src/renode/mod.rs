@@ -1269,14 +1269,15 @@ impl RenodeBackend {
     /// [`Mcu::execution_probe`] can say whether the firmware ran. Best effort:
     /// a missing symbol leaves "reached main" unknown rather than failing the
     /// load.
-    fn install_execution_hooks(&mut self) {
+    ///
+    /// `main` comes from the firmware file's own symbol table, never from
+    /// Renode's merged one: a support image (the RP2040 boot ROM ELF) carries
+    /// a `main` of its own, and hooking that reports the ROM running, not the
+    /// firmware. A `.hex` has no symbols, so "reached main" stays unknown.
+    fn install_execution_hooks(&mut self, firmware: &Path) {
         let cpu = self.config.cpu.clone();
-        if let Some(addr) = self
-            .monitor
-            .run("sysbus GetSymbolAddress \"main\"")
-            .ok()
-            .and_then(|r| parse_u64(&r))
-            .and_then(|a| u32::try_from(a & !1).ok())
+        if let Some(addr) = crate::elf::symbol_address(firmware, "main")
+            .map(|a| a & !1)
             .filter(|&a| a != 0)
         {
             if self.monitor.run(&hook_install_command(&cpu, addr)).is_ok() {
@@ -1948,7 +1949,7 @@ impl Mcu for RenodeBackend {
             self.monitor.run(&cmd.replace("{cpu}", &cpu))?;
         }
         self.core.firmware_loaded = true;
-        self.install_execution_hooks();
+        self.install_execution_hooks(&abs);
         self.install_pull_hooks()?;
 
         // Execution-trace introspection: opt-in via HAUKSBEE_RENODE_TRACE=1.
