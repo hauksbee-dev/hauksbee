@@ -209,11 +209,14 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::Opamp => &[
             "gain", "pole_hz", "slew", "rail_lo", "rail_hi", "swing_lo", "swing_hi",
         ],
-        // `out_lo`/`out_hi`/`hysteresis` are the push-pull stamp's; the last four
+        // `out_lo`/`out_hi`/`hysteresis` are the push-pull stamp's (`swing_*`
+        // put its levels on the supply nets, as for an op-amp); the last four
         // the open-collector stage's, whose levels come from the board instead.
         ComponentKind::Comparator => &[
             "out_lo",
             "out_hi",
+            "swing_lo",
+            "swing_hi",
             "hysteresis",
             "tpd_s",
             "supply_static_ua",

@@ -297,6 +297,8 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
                 ("hysteresis", 0.0, 5.0),
                 ("out_lo", -60.0, 60.0),
                 ("out_hi", -60.0, 60.0),
+                ("swing_lo", 0.0, 5.0),
+                ("swing_hi", 0.0, 5.0),
             ],
             ordered: &[("out_lo", "out_hi")],
             ..NO_RULES

@@ -530,6 +530,11 @@ basis = "TI LMV7219 SNOS458I, 6.3 Recommended Operating Conditions, supply volta
 # VCC - 0.02 V and 10 mV).
 out_lo     = 0.05   # VOL max at 5V supply (V)
 out_hi     = 4.95   # VOH min at 5V supply (V)
+# The same rows as headroom: VOH min VCC - 0.05 V and VOL max 50 mV at
+# IL = 0.4 mA in both the 2.7 V and 5 V tables (SNOS458I Electrical
+# Characteristics), so the output follows the supply it is bound to.
+swing_hi   = 0.05
+swing_lo   = 0.05
 # VHYST typ 7.5 mV at V+ = 5 V (7 mV at 2.7 V), TI SNOS458I Electrical
 # Characteristics 5 V; its footnote (4) defines it as Vtrip+ minus Vtrip-, the
 # full band this param means. VOS (the trip points' average) is not modelled.

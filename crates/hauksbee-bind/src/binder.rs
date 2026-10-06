@@ -2681,7 +2681,7 @@ fn bind_component(
             comp, model, source, circuit, &role_nets, regulators, components, node_of,
         ),
         Opamp => bind_opamp(comp, model, circuit, &role_nets),
-        Comparator => bind_comparator(comp, model, circuit, &role_nets),
+        Comparator => bind_comparator(comp, model, circuit, &role_nets, power_nets),
         Timer => bind_timer_555(comp, model, circuit, &role_nets),
         AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets, power_nets),
         Digital | ShiftRegister => {
@@ -5689,9 +5689,28 @@ fn bind_comparator(
     model: &ModelEntry,
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
+    power_nets: &HashMap<String, f64>,
 ) -> (BindOutcome, Option<String>) {
-    let out_lo = model.params.get_f64("out_lo").unwrap_or(0.0);
-    let out_hi = model.params.get_f64("out_hi").unwrap_or(5.0);
+    // A card's `swing_lo`/`swing_hi` (datasheet VOL/VOH as headroom from the
+    // supply pins) put the output levels on the rail the part actually sits
+    // at, so a 4.5 V supply gives a 4.45 V high, not the 5 V table's 4.95 V;
+    // `out_lo`/`out_hi` remain where the supply net's voltage is unknown.
+    let swing = |key: &str, fixed: &str, dflt: f64, sign: f64, pins: &[&str]| {
+        let fallback = model.params.get_f64(fixed).unwrap_or(dflt);
+        let Some(headroom) = model.params.get_f64(key) else {
+            return fallback;
+        };
+        let rail = pick(roles, pins).and_then(|n| {
+            if n.is_ground() {
+                Some(0.0)
+            } else {
+                power_nets.get(circuit.node_name(*n)).copied()
+            }
+        });
+        rail.map_or(fallback, |v| sign.mul_add(headroom, v))
+    };
+    let out_lo = swing("swing_lo", "out_lo", 0.0, 1.0, &["vss", "gnd", "vee"]);
+    let out_hi = swing("swing_hi", "out_hi", 5.0, -1.0, &["vcc", "vs", "vdd"]);
     // Full-band VHYS (see `Device::Comparator`); validation requires it on checked cards.
     let hyst = model.params.get_f64("hysteresis").unwrap_or(0.01);
     // Propagation delay: the transient output follows each decision this
@@ -9481,6 +9500,60 @@ style = "i2c_pointer"
             matches!(outcome, BindOutcome::Unresolved { .. }),
             "{outcome:?}"
         );
+    }
+
+    #[test]
+    fn a_comparator_with_a_datasheet_swing_sits_on_its_actual_supply() {
+        let mut params = hauksbee_models::Params::default();
+        for (k, v) in [
+            ("out_lo", 0.05),
+            ("out_hi", 4.95),
+            ("hysteresis", 0.0075),
+            ("swing_lo", 0.05),
+            ("swing_hi", 0.05),
+        ] {
+            params.set_f64(k, v);
+        }
+        let model = make_entry(
+            "swing_cmp",
+            ComponentKind::Comparator,
+            "push-pull comparator",
+            params,
+            std::collections::BTreeMap::new(),
+        );
+        let levels = |rails: &[(&str, f64)]| {
+            let mut circuit = Circuit::new();
+            let roles = HashMap::from([
+                ("out".to_string(), circuit.node("OUT")),
+                ("in_plus".to_string(), circuit.node("P")),
+                ("in_minus".to_string(), circuit.node("N")),
+                ("vcc".to_string(), circuit.node("ANALOG_VDD")),
+                ("vss".to_string(), NodeId::GROUND),
+            ]);
+            let power_nets = rails.iter().map(|(n, v)| ((*n).to_string(), *v)).collect();
+            let _ = bind_comparator(
+                &comp("U1", "LMV7219"),
+                &model,
+                &mut circuit,
+                &roles,
+                &power_nets,
+            );
+            circuit
+                .devices
+                .iter()
+                .find_map(|d| match d {
+                    Device::Comparator { out_lo, out_hi, .. } => Some((*out_lo, *out_hi)),
+                    _ => None,
+                })
+                .expect("a comparator is stamped")
+        };
+        let (lo, hi) = levels(&[("ANALOG_VDD", 4.5)]);
+        assert!(
+            (hi - 4.45).abs() < 1e-12 && (lo - 0.05).abs() < 1e-12,
+            "{lo} {hi}"
+        );
+        // An unknown supply voltage keeps the card's printed levels.
+        assert_eq!(levels(&[]), (0.05, 4.95));
     }
 
     #[test]
