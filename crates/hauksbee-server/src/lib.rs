@@ -1341,10 +1341,22 @@ mod rate_honesty_tests {
         let slow = frames(&msgs).last().expect("at least one frame");
         assert_eq!(slow.requested_factor.to_bits(), 1.0_f64.to_bits());
         assert!(slow.rate_limited);
+        // A loaded runner may deliver far below the ceiling; the claim under
+        // test is that the reported rate is what was delivered. Over the
+        // two-second play the delivered average is `t / 2`, which the windowed
+        // meter must agree with to within a factor of three, never above the
+        // ~0.2x ceiling.
+        let delivered = slow.t / 2.0;
         assert!(
-            (0.03..=0.30).contains(&slow.realtime_factor),
-            "achieved {} should track the ~0.2x ceiling",
+            slow.realtime_factor > 0.0 && slow.realtime_factor <= 0.30,
+            "achieved {} should never exceed the ~0.2x ceiling",
             slow.realtime_factor
+        );
+        assert!(
+            (delivered / 3.0..=delivered * 3.0).contains(&slow.realtime_factor),
+            "achieved {} should match the delivered {delivered}x (t = {} s over 2 s)",
+            slow.realtime_factor,
+            slow.t
         );
 
         let msgs = play_for(TestEngine::new(0.01, false), 1.5).await;
