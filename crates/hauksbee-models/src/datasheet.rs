@@ -27,9 +27,9 @@
 //! `~/.config/hauksbee/extract.toml` (see [`crate::extract_config`]):
 //!
 //! 1. **codex**: shells out to `codex exec` with a carefully constructed
-//!    prompt. Requires `codex` in PATH.
+//!    prompt. Requires `codex` in PATH. Defaults to gpt-6.1-sol at high effort.
 //! 2. **claude-code**: shells out to headless `claude -p` with the same
-//!    prompt contract. Requires `claude` in PATH. Defaults to Opus 5 at high
+//!    prompt contract. Requires `claude` in PATH. Defaults to Opus 5.5 at high
 //!    reasoning effort.
 //! 3. **agy**: shells out to Antigravity's `agy --print` under the same
 //!    contract. Requires `agy` in PATH. Defaults to Gemini 3.8 Flash at high
@@ -1013,8 +1013,8 @@ OPTIONS:
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
     --force               Replace an existing model of the same name
     --model <id>          Model for the extraction agent (default: the
-                          backend's own, e.g. claude-opus-5 for claude-code,
-                          gemini-3.8-flash for agy, gpt-5.6-sol for codex)
+                          backend's own, e.g. claude-opus-5-5 for claude-code,
+                          gemini-3.8-flash for agy, gpt-6.1-sol for codex)
     --effort <level>      Reasoning effort for an agent backend (default: high)
     --backend <name>      LLM backend: claude-code, agy, codex, or api
                           (default: ~/.config/hauksbee/extract.toml, else the
@@ -4584,7 +4584,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let mut cfg = extract_config::ExtractConfig::default();
         cfg.set("claude-code.command", command.to_str().unwrap())
             .unwrap();
-        cfg.set("claude-code.model", "gpt-5.6-sol").unwrap();
+        cfg.set("claude-code.model", "gpt-6.1-sol").unwrap();
         cfg.set("claude-code.effort", "high").unwrap();
         let mut resolved = cfg.resolve(
             &extract_config::FakeHost::default(),
@@ -4621,7 +4621,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                     "--permission-mode",
                     mode,
                     "--model",
-                    "gpt-5.6-sol",
+                    "gpt-6.1-sol",
                     "--effort",
                     "high",
                     "--no-session-persistence",

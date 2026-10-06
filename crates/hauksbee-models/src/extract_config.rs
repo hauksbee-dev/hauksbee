@@ -56,10 +56,25 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
 /// Silence on a streaming agent run (codex `--json`) before it is killed and retried.
 pub const DEFAULT_IDLE_SECS: u64 = 150;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-pub const DEFAULT_API_MODEL: &str = "gpt-5.6-sol";
+pub const DEFAULT_API_MODEL: &str = "gpt-6.1-sol";
 pub const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
 /// The key variable that, when exported, selects the API backend and names itself.
 const LLM_API_KEY_ENV: &str = "HAUKSBEE_LLM_API_KEY";
+
+/// One entry of a model picker. The note is the one-line wording the CLI and
+/// the web Settings page both show, so neither keeps its own copy.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ModelChoice {
+    pub name: &'static str,
+    pub note: &'static str,
+}
+
+const fn choice(name: &'static str, note: &'static str) -> ModelChoice {
+    ModelChoice { name, note }
+}
+
+const MOST_ACCURATE: &str = "Recommended: most accurate";
+const BUDGET: &str = "Very good for most circuit extraction, and much cheaper";
 
 /// What one agent CLI is called, what it defaults to, and what it accepts.
 ///
@@ -67,10 +82,13 @@ const LLM_API_KEY_ENV: &str = "HAUKSBEE_LLM_API_KEY";
 /// is a table cell); the pin map is where a weak model fails, because package
 /// drawings are rotated, mirrored, and labelled without numbers, and getting
 /// one wrong produces a part that binds cleanly and simulates a different
-/// device. So every CLI defaults to its strongest general tier at `high`
+/// device. So every CLI defaults to its most accurate current tier at `high`
 /// reasoning effort (high, deliberately not the maximum: the extra cost has
 /// not been shown to buy a better pin map) rather than whatever the CLI
-/// happens to default to.
+/// happens to default to. The picker puts that default first and, where a
+/// vendor has one, a clearly labelled cheaper tier after it (GPT-6 Luna is the
+/// recommended budget choice). Older models are left out of the picker, not
+/// refused: a saved or typed name is used as written.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct AgentSpec {
     pub backend: Backend,
@@ -87,15 +105,21 @@ pub struct AgentSpec {
     pub permission_modes: &'static [&'static str],
     /// Models worth offering in a picker. Free text is always allowed too:
     /// vendors ship new names faster than this list can follow.
-    pub models: &'static [&'static str],
+    pub models: &'static [ModelChoice],
 }
+
+/// Codex and the OpenAI-compatible API share one list: Sol first, Luna as the budget pick.
+const OPENAI_MODELS: &[ModelChoice] = &[
+    choice("gpt-6.1-sol", MOST_ACCURATE),
+    choice("gpt-6-luna", BUDGET),
+];
 
 /// The agent CLIs, in the order the surfaces list them.
 pub const AGENTS: [AgentSpec; 3] = [
     AgentSpec {
         backend: Backend::ClaudeCode,
         env_prefix: "HAUKSBEE_CLAUDE",
-        model: "claude-opus-5",
+        model: "claude-opus-5-5",
         effort: "high",
         permission_mode: "acceptEdits",
         efforts: &["low", "medium", "high", "xhigh", "max"],
@@ -108,11 +132,12 @@ pub const AGENTS: [AgentSpec; 3] = [
             "plan",
         ],
         models: &[
-            "claude-opus-5",
-            "claude-sonnet-5",
-            "claude-fable-5-1",
-            "opus",
-            "sonnet",
+            choice("claude-opus-5-5", MOST_ACCURATE),
+            choice(
+                "claude-sonnet-5-5",
+                "Faster and cheaper; fine for simple parts",
+            ),
+            choice("claude-fable-5-1", ""),
         ],
     },
     AgentSpec {
@@ -124,16 +149,17 @@ pub const AGENTS: [AgentSpec; 3] = [
         efforts: &["low", "medium", "high"],
         permission_modes: &["accept-edits", "plan"],
         models: &[
-            "gemini-3.8-flash",
-            "gemini-3.7-flash",
-            "gemini-3.1-pro",
-            "claude-opus-4-6-thinking",
+            choice("gemini-3.8-flash", "Recommended: fast and accurate"),
+            choice(
+                "gemini-3.1-pro",
+                "Slower, stronger tier for dense datasheets",
+            ),
         ],
     },
     AgentSpec {
         backend: Backend::Codex,
         env_prefix: "HAUKSBEE_CODEX",
-        model: "gpt-5.6-sol",
+        model: "gpt-6.1-sol",
         effort: "high",
         // Every mode but danger-full-access runs under hauksbee's read-confining profile.
         permission_mode: "workspace-write",
@@ -144,7 +170,7 @@ pub const AGENTS: [AgentSpec; 3] = [
             "approve-for-me",
             "danger-full-access",
         ],
-        models: &["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5"],
+        models: OPENAI_MODELS,
     },
 ];
 
@@ -162,18 +188,31 @@ pub const DEFAULT_AGY_EFFORT: &str = AGENTS[1].effort;
 pub const DEFAULT_CODEX_MODEL: &str = AGENTS[2].model;
 pub const DEFAULT_CODEX_EFFORT: &str = AGENTS[2].effort;
 
-/// Model names worth offering in a picker, per backend.
+/// Models worth offering in a picker, per backend, best first.
 #[must_use]
-pub fn suggested_models(backend: Backend) -> &'static [&'static str] {
-    match agent_spec(backend) {
-        Some(a) => a.models,
-        None => &[
-            "gpt-5.6-sol",
-            "gpt-5.6",
-            "anthropic/claude-opus-5",
-            "google/gemini-3.8-flash",
-        ],
+pub fn suggested_models(backend: Backend) -> &'static [ModelChoice] {
+    agent_spec(backend).map_or(OPENAI_MODELS, |a| a.models)
+}
+
+/// A short nudge when `model` is not one of the current picks for `backend`.
+///
+/// The model may be an older name saved earlier, or free text. It is still used
+/// as written; this only says what the recommendation is. The API backend serves any
+/// OpenAI-compatible endpoint (a local Ollama model, say), so only a `gpt-` name
+/// there is compared against the list.
+#[must_use]
+pub fn model_hint(backend: Backend, model: &str) -> Option<String> {
+    if backend == Backend::Api && !model.starts_with("gpt-") {
+        return None;
     }
+    let picks = suggested_models(backend);
+    let best = picks.first()?;
+    (!picks.iter().any(|m| m.name == model)).then(|| {
+        format!(
+            "{model} is not in the current list; {} is recommended.",
+            best.name
+        )
+    })
 }
 
 // ── The file ──────────────────────────────────────────────────────────────────
@@ -797,10 +836,10 @@ pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
 
-static PRESETS: [Preset; 8] = [
+static PRESETS: [Preset; 9] = [
     agent_preset(
         "claude-code",
-        "Claude Code · Opus 5, high effort",
+        "Claude Code · Opus 5.5, high effort",
         "Strongest reading of pin maps. Signs in with your Claude account (`claude login`).",
         Backend::ClaudeCode,
         DEFAULT_CLAUDE_MODEL,
@@ -809,10 +848,10 @@ static PRESETS: [Preset; 8] = [
     ),
     agent_preset(
         "claude-code-fast",
-        "Claude Code · Sonnet 5, medium effort",
+        "Claude Code · Sonnet 5.5, medium effort",
         "Faster and cheaper; fine for simple parts with a numbered pinout.",
         Backend::ClaudeCode,
-        "claude-sonnet-5",
+        "claude-sonnet-5-5",
         "medium",
         false,
     ),
@@ -836,16 +875,25 @@ static PRESETS: [Preset; 8] = [
     ),
     agent_preset(
         "codex",
-        "Codex · gpt-5.6-sol, high effort",
+        "Codex · gpt-6.1-sol, high effort",
         "OpenAI's agent CLI. Signs in with your ChatGPT account (`codex login`).",
         Backend::Codex,
         DEFAULT_CODEX_MODEL,
         DEFAULT_CODEX_EFFORT,
         true,
     ),
+    agent_preset(
+        "codex-luna",
+        "Codex · gpt-6-luna, high effort",
+        "Much cheaper, and very good for most circuit extraction; Sol reads the hardest pin maps better.",
+        Backend::Codex,
+        "gpt-6-luna",
+        "high",
+        false,
+    ),
     api_preset(
         "openai",
-        "OpenAI API · gpt-5.6-sol",
+        "OpenAI API · gpt-6.1-sol",
         "Direct API billing. Needs OPENAI_API_KEY exported; text only (no page images).",
         DEFAULT_API_MODEL,
         DEFAULT_API_BASE,
@@ -853,9 +901,9 @@ static PRESETS: [Preset; 8] = [
     ),
     api_preset(
         "openrouter",
-        "OpenRouter API · Claude Opus 5",
+        "OpenRouter API · Claude Opus 5.5",
         "Any OpenRouter model by id. Needs OPENROUTER_API_KEY exported; text only.",
-        "anthropic/claude-opus-5",
+        "anthropic/claude-opus-5.5",
         "https://openrouter.ai/api/v1",
         "OPENROUTER_API_KEY",
     ),
@@ -1317,9 +1365,14 @@ mod tests {
         assert_eq!(r.backend, Backend::ClaudeCode);
         assert_eq!(r.backend_source, BackendSource::Auto);
         for (backend, model, effort, permission) in [
-            (Backend::ClaudeCode, "claude-opus-5", "high", "acceptEdits"),
+            (
+                Backend::ClaudeCode,
+                "claude-opus-5-5",
+                "high",
+                "acceptEdits",
+            ),
             (Backend::Agy, "gemini-3.8-flash", "high", "accept-edits"),
-            (Backend::Codex, "gpt-5.6-sol", "high", "workspace-write"),
+            (Backend::Codex, "gpt-6.1-sol", "high", "workspace-write"),
         ] {
             let a = r.agent(backend).unwrap();
             assert_eq!(
@@ -1328,7 +1381,7 @@ mod tests {
             );
         }
         assert_eq!((r.retries, r.timeout_secs), (2, 900));
-        assert!(r.summary().contains("-opus-5, high effort; file tools"));
+        assert!(r.summary().contains("-opus-5-5, high effort; file tools"));
         for a in AGENTS {
             assert_eq!(
                 r.agent(a.backend).unwrap().command,
@@ -1418,15 +1471,31 @@ mod tests {
     }
 
     #[test]
+    fn the_picker_leads_with_the_default_then_luna_and_hints_at_older_names() {
+        for b in [Backend::Codex, Backend::Api] {
+            let names: Vec<_> = suggested_models(b).iter().map(|m| m.name).collect();
+            assert_eq!(names, ["gpt-6.1-sol", "gpt-6-luna"]);
+        }
+        assert!(suggested_models(Backend::Codex)
+            .iter()
+            .all(|m| !m.note.is_empty()));
+        assert_eq!(model_hint(Backend::Codex, "gpt-6-luna"), None);
+        assert!(model_hint(Backend::Codex, "gpt-5.6-sol")
+            .is_some_and(|h| h.contains("gpt-6.1-sol is recommended")));
+        assert_eq!(model_hint(Backend::Api, "qwen3"), None);
+        assert!(model_hint(Backend::Api, "gpt-5.5").is_some());
+    }
+
+    #[test]
     fn custom_commands_resolve_discover_and_disclose_without_fallback() {
         let mut cfg = ExtractConfig::default();
         cfg.set("claude-code.command", "my-wrapper").unwrap();
-        cfg.set("claude-code.model", "gpt-5.6-sol").unwrap();
+        cfg.set("claude-code.model", "gpt-6.1-sol").unwrap();
         let h = FakeHost::new(&[], &["my-wrapper"]);
         let r = cfg.resolve(&h, None);
         assert_eq!(r.backend, Backend::ClaudeCode);
         assert_eq!(r.claude_code.command, "my-wrapper");
-        assert!(r.summary().contains("gpt-5.6-sol"));
+        assert!(r.summary().contains("gpt-6.1-sol"));
         assert!(r.summary().contains(&r.sends_data_to(r.backend)));
         let row = availability(&h, &r).remove(0);
         assert!(row.available && row.sends_data_to.contains("my-wrapper"));
@@ -1454,7 +1523,7 @@ mod tests {
                 cfg.claude_code.model.as_deref(),
                 cfg.claude_code.effort.as_deref()
             ),
-            (Some("claude-opus-5"), Some("high"))
+            (Some("claude-opus-5-5"), Some("high"))
         );
         assert_eq!(cfg.codex.model.as_deref(), Some("keep-me"));
 

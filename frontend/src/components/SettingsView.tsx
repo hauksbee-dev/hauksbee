@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, errorText } from '../lib/api'
 import type {
   ExtractAgentConfig, ExtractApiBackendConfig, ExtractBackendAvailability, ExtractBackendsConfig,
-  ExtractPreset, ExtractResolved, ExtractResolvedApi, ExtractSettings,
+  ExtractPreset, ExtractResolved, ModelChoice, ExtractResolvedApi, ExtractSettings,
 } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ChevronDownIcon, ChevronRightIcon } from './Icons'
@@ -184,6 +184,45 @@ function MonoInput({ testId, width, onChange, ...rest }: {
       {...rest}
       onChange={e => onChange(e.target.value)}
     />
+  )
+}
+
+/** The model picker: each pick with its note, one click to choose, plus a hint
+ *  when the model in use is not on the list (it is still used as written).
+ *  `hintable` is off for an OpenAI-compatible endpoint serving a non-GPT model. */
+function ModelPicks({ picks, current, hintable, onPick }: {
+  picks: ModelChoice[]
+  current: string
+  hintable: boolean
+  onPick: (name: string) => void
+}) {
+  const listed = picks.some(p => p.name === current)
+  return (
+    <div className="mt-2 flex flex-col gap-1" data-testid="settings-model-picks">
+      {picks.map(p => (
+        <button
+          key={p.name}
+          type="button"
+          data-testid={`settings-model-pick-${p.name}`}
+          aria-pressed={p.name === current}
+          onClick={() => onPick(p.name)}
+          className="hb-press text-left text-[11px] cursor-pointer rounded-md px-2 py-1"
+          style={{
+            border: '1px solid var(--hairline)',
+            background: p.name === current ? 'var(--copper-tint-strong)' : 'var(--surface-2)',
+            color: 'var(--silk-dim)',
+          }}
+        >
+          <span style={{ fontFamily: 'var(--font-mono)', color: p.name === current ? 'var(--copper-hi)' : 'var(--silk)' }}>{p.name}</span>
+          {p.note && <span> &mdash; {p.note}</span>}
+        </button>
+      ))}
+      {!listed && hintable && picks.length > 0 && (
+        <span className="text-[11px]" data-testid="settings-model-hint" style={{ color: 'var(--silk-faint)' }}>
+          {current} is not in the current list and is used as written; {picks[0].name} is recommended.
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -433,6 +472,7 @@ export function SettingsView() {
   const selectedAgent = draft[agentBackend]
   const setAgent = (key: keyof DraftAgent) => (value: string) =>
     setDraft(d => d && { ...d, [agentBackend]: { ...d[agentBackend], [key]: value } })
+  const setApiModel = (v: string) => setDraft(d => d && { ...d, api: { ...d.api, model: v } })
   const fields = {
     ...selectedAgent, extraArgs: selectedAgent.extra_args, permission: selectedAgent.permission_mode,
     setModel: setAgent('model'), setEffort: setAgent('effort'), setCommand: setAgent('command'),
@@ -588,7 +628,9 @@ export function SettingsView() {
             </Field>
             <Field label="Model" hint={`blank = ${data.resolved.api.model}`}>
               <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={draft.api.model}
-                placeholder={data.resolved.api.model} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, model: v } })} />
+                placeholder={data.resolved.api.model} onChange={setApiModel} />
+              <ModelPicks picks={data.options.models.api ?? []} current={draft.api.model || data.resolved.api.model}
+                hintable={/^gpt-/.test(draft.api.model || data.resolved.api.model)} onPick={setApiModel} />
             </Field>
             <Field
               label="API key variable"
@@ -603,7 +645,7 @@ export function SettingsView() {
                 placeholder={data.resolved.api.api_key_env} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, api_key_env: v } })} />
             </Field>
             <datalist id="settings-model-options">
-              {(data.options.models.api ?? []).map(m => <option key={m} value={m} />)}
+              {(data.options.models.api ?? []).map(m => <option key={m.name} value={m.name} label={m.note} />)}
             </datalist>
           </div>
         ) : (
@@ -613,8 +655,10 @@ export function SettingsView() {
                 <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={fields.model}
                   placeholder={resolvedForSelected.model} onChange={fields.setModel} />
                 <datalist id="settings-model-options">
-                  {(data.options.models[selectedBackend] ?? []).map(m => <option key={m} value={m} />)}
+                  {(data.options.models[selectedBackend] ?? []).map(m => <option key={m.name} value={m.name} label={m.note} />)}
                 </datalist>
+                <ModelPicks picks={data.options.models[selectedBackend] ?? []}
+                  current={fields.model || resolvedForSelected.model} hintable onPick={fields.setModel} />
               </Field>
               <Field label="Effort" hint={`blank = ${resolvedForSelected.effort}`}>
                 <Segmented

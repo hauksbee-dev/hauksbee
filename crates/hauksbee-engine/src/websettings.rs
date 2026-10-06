@@ -234,7 +234,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
         assert_eq!(value["resolved"]["backend"], "claude-code", "{text}");
         assert_eq!(
-            value["resolved"]["claude_code"]["model"], "claude-opus-5",
+            value["resolved"]["claude_code"]["model"], "claude-opus-5-5",
             "{text}"
         );
         assert_eq!(value["resolved"]["claude_code"]["effort"], "high", "{text}");

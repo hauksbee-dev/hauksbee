@@ -525,10 +525,16 @@ export interface ExtractPreset {
   recommended: boolean
 }
 
+/** One picker entry; the note is the server's single wording for CLI and web. */
+export interface ModelChoice {
+  name: string
+  note: string
+}
+
 export interface ExtractOptions {
   efforts: Record<string, string[]>
   permission_modes: Record<string, string[]>
-  models: Record<string, string[]>
+  models: Record<string, ModelChoice[]>
 }
 
 export interface ExtractSettingsKey {

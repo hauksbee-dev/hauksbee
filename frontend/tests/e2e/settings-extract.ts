@@ -75,7 +75,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   await page.waitForSelector('[data-testid="settings-status"]', { timeout: 20_000 })
   await settle(page, 700)
   const statusText = await page.locator('[data-testid="settings-status"]').innerText()
-  ok('the status strip names the active backend', statusText.includes('Claude Code (claude-opus-5, high effort)'), statusText)
+  ok('the status strip names the active backend', statusText.includes('Claude Code (claude-opus-5-5, high effort)'), statusText)
   ok('the status strip names where it came from', /extract\.toml/.test(statusText), statusText)
   await shoot(page, '01-settings-loaded')
 
@@ -123,6 +123,19 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   // ── 5. Codex permission mode is editable and persists ───────────────────
   step('Codex approve-for-me saves and reloads')
   await page.click('[data-testid="settings-backend-codex"]')
+  await page.locator('[data-testid="settings-model-pick-gpt-6.1-sol"]').waitFor()
+  const picks = (await page.locator('[data-testid="settings-model-picks"] button').allInnerTexts()).map(t => t.replace(/\s+/g, ' '))
+  ok('the picker lists Sol first, recommended', picks[0]?.includes('gpt-6.1-sol') && picks[0].includes('Recommended'), picks.join(' | '))
+  ok('Luna is next, labelled as the cheaper pick', picks[1]?.includes('gpt-6-luna') && picks[1].includes('much cheaper'), picks.join(' | '))
+  ok('no outdated model is offered', picks.length === 2 && !/gpt-5|gpt-6-sol/.test(picks.join(' ')), picks.join(' | '))
+  ok('the unset model reads Sol as the default', await page.locator('[data-testid="settings-model"]').getAttribute('placeholder') === 'gpt-6.1-sol')
+  await page.click('[data-testid="settings-model-pick-gpt-6-luna"]')
+  ok('choosing Luna fills the model field', await page.locator('[data-testid="settings-model"]').inputValue() === 'gpt-6-luna')
+  await page.locator('[data-testid="settings-model"]').fill('gpt-5.6-sol')
+  ok('an older name typed in is accepted and gets a hint, not a refusal',
+    (await page.locator('[data-testid="settings-model-hint"]').innerText()).includes('gpt-6.1-sol is recommended'))
+  await shoot(page, '05a-model-picker')
+  await page.locator('[data-testid="settings-model"]').fill('')
   const permission = page.locator('[data-testid="settings-permission-mode"]')
   ok('Codex renders the server-populated permission selector', await permission.isVisible())
   ok('blank Codex permission uses the resolved default',

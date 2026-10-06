@@ -32,6 +32,23 @@ fn print_backend_line(resolved: &Resolved) {
     );
 }
 
+/// The picker for `backend`, one model per line with its note, then a hint when
+/// `current` is not on it. The same list and wording the web Settings page shows.
+fn print_models(backend: Backend, current: &str) {
+    println!("  models:");
+    for m in extract_config::suggested_models(backend) {
+        let note = if m.note.is_empty() {
+            String::new()
+        } else {
+            format!(" \u{2014} {}", m.note)
+        };
+        println!("    {}{note}", m.name);
+    }
+    if let Some(hint) = extract_config::model_hint(backend, current) {
+        println!("  note:     {hint}");
+    }
+}
+
 // ── show ─────────────────────────────────────────────────────────────────────
 
 /// The extraction backend `show` resolves and whether it can run, as
@@ -83,6 +100,7 @@ pub fn show(json: bool) -> anyhow::Result<()> {
     println!();
     print_backend_line(&resolved);
     println!("  model:    {}", resolved.model());
+    print_models(resolved.backend, resolved.model());
     if let Some(effort) = resolved.effort() {
         println!("  effort:   {effort}");
     }
@@ -456,6 +474,7 @@ pub fn setup() -> anyhow::Result<()> {
 
     loaded.config.apply_preset(chosen.id)?;
 
+    print_models(chosen.backend, chosen.model);
     let model = prompt_line(&format!("Model [{}]: ", chosen.model))?;
     if !model.is_empty() {
         loaded.config.set(&model_key(chosen.backend), &model)?;

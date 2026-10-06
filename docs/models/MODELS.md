@@ -125,10 +125,18 @@ the same validation, and the same retry-with-feedback loop:
 
 | backend | requirement | default model / effort | flags |
 |---------|-------------|-------------------------|-------|
-| `claude-code` | `claude` CLI in PATH, signed in | `claude-opus-5`, high | `--backend claude-code`, `--model`, `--effort` |
+| `claude-code` | `claude` CLI in PATH, signed in | `claude-opus-5-5`, high | `--backend claude-code`, `--model`, `--effort` |
 | `agy` | `agy` CLI in PATH, signed in (Antigravity) | `gemini-3.8-flash`, high | `--backend agy`, `--model`, `--effort` |
-| `codex` | `codex` CLI in PATH, signed in | `gpt-5.6-sol`, high | `--backend codex`, `--model`, `--effort` |
-| `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `gpt-5.6-sol` | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
+| `codex` | `codex` CLI in PATH, signed in | `gpt-6.1-sol`, high | `--backend codex`, `--model`, `--effort` |
+| `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `gpt-6.1-sol` | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
+
+Every default is the most accurate current model at `high` effort (not `max`:
+the extra cost has not been shown to buy a better pin map). GPT-6 Luna
+(`gpt-6-luna`, on `codex` and `api`) is the recommended budget choice: very good
+for most circuit extraction and much cheaper, so pick it to save money. `hauksbee models backend show` and the web
+Settings page list each backend's picks with the same one-line notes. Older
+names are not offered but still work: a saved or typed `--model` is used as
+written, and the CLI and Settings page only note that a newer one is recommended.
 
 `--api-key-env` takes the NAME of an environment variable, never the key
 itself: the key is read from the environment at call time and is never stored

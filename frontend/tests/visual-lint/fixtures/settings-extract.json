@@ -6,7 +6,7 @@
     "retries": 2,
     "timeout_secs": 600,
     "codex": { "model": "", "effort": "", "permission_mode": "", "profile": "", "extra_args": [] },
-    "claude-code": { "model": "claude-opus-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
+    "claude-code": { "model": "claude-opus-5-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
     "agy": { "model": "", "effort": "", "permission_mode": "", "extra_args": [] },
     "api": { "base_url": "", "model": "", "api_key_env": "" }
   },
@@ -15,13 +15,13 @@
     "backend_source": { "kind": "config" },
     "retries": 2,
     "timeout_secs": 600,
-    "codex": { "model": "gpt-5.6-sol", "effort": "high", "permission_mode": "workspace-write", "profile": null, "extra_args": [] },
-    "claude_code": { "model": "claude-opus-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
+    "codex": { "model": "gpt-6.1-sol", "effort": "high", "permission_mode": "workspace-write", "profile": null, "extra_args": [] },
+    "claude_code": { "model": "claude-opus-5-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
     "agy": { "model": "gemini-3.8-flash", "effort": "high", "permission_mode": "accept-edits", "extra_args": [] },
-    "api": { "base_url": "https://api.openai.com/v1", "model": "gpt-5.6-sol", "api_key_env": "OPENAI_API_KEY" },
+    "api": { "base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "api_key_env": "OPENAI_API_KEY" },
     "env_overrides": []
   },
-  "summary": "Claude Code (claude-opus-5, high effort)",
+  "summary": "Claude Code (claude-opus-5-5, high effort)",
   "backends": [
     {
       "id": "claude-code",
@@ -63,10 +63,10 @@
   "presets": [
     {
       "id": "claude-code",
-      "label": "Claude Code · Opus 5, high effort",
+      "label": "Claude Code · Opus 5.5, high effort",
       "summary": "Strongest reading of pin maps. Signs in with your Claude account (`claude login`).",
       "backend": "claude-code",
-      "model": "claude-opus-5",
+      "model": "claude-opus-5-5",
       "effort": "high",
       "api_base": "",
       "api_key_env": "",
@@ -74,10 +74,10 @@
     },
     {
       "id": "claude-code-fast",
-      "label": "Claude Code · Sonnet 5, medium effort",
+      "label": "Claude Code · Sonnet 5.5, medium effort",
       "summary": "Faster and cheaper; fine for simple passives and well-scanned datasheets.",
       "backend": "claude-code",
-      "model": "claude-sonnet-5",
+      "model": "claude-sonnet-5-5",
       "effort": "medium",
       "api_base": "",
       "api_key_env": "",
@@ -107,21 +107,32 @@
     },
     {
       "id": "codex",
-      "label": "Codex · gpt-5.6-sol, high effort",
+      "label": "Codex · gpt-6.1-sol, high effort",
       "summary": "Signs in with your ChatGPT account (`codex login`). Free if you already pay for one.",
       "backend": "codex",
-      "model": "gpt-5.6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "high",
       "api_base": "",
       "api_key_env": "",
       "recommended": true
     },
     {
+      "id": "codex-luna",
+      "label": "Codex · gpt-6-luna, high effort",
+      "summary": "Much cheaper, and very good for most circuit extraction; Sol reads the hardest pin maps better.",
+      "backend": "codex",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": false
+    },
+    {
       "id": "openai",
       "label": "OpenAI API",
       "summary": "Billed to your own OpenAI API key rather than a signed-in account.",
       "backend": "api",
-      "model": "gpt-5.6-sol",
+      "model": "gpt-6.1-sol",
       "effort": "",
       "api_base": "https://api.openai.com/v1",
       "api_key_env": "OPENAI_API_KEY",
@@ -132,7 +143,7 @@
       "label": "OpenRouter",
       "summary": "One key, many hosted models, billed per token.",
       "backend": "api",
-      "model": "anthropic/claude-opus-5",
+      "model": "anthropic/claude-opus-5.5",
       "effort": "",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_env": "OPENROUTER_API_KEY",
@@ -162,22 +173,35 @@
       "codex": ["read-only", "workspace-write", "approve-for-me", "danger-full-access"]
     },
     "models": {
-      "claude-code": ["claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "opus", "sonnet"],
-      "agy": ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro"],
-      "codex": ["gpt-5.6-sol", "gpt-5.6"],
-      "api": ["gpt-5.6-sol", "anthropic/claude-opus-5"]
+      "claude-code": [
+        { "name": "claude-opus-5-5", "note": "Recommended: most accurate" },
+        { "name": "claude-sonnet-5-5", "note": "Faster and cheaper; fine for simple parts" },
+        { "name": "claude-fable-5-1", "note": "" }
+      ],
+      "agy": [
+        { "name": "gemini-3.8-flash", "note": "Recommended: fast and accurate" },
+        { "name": "gemini-3.1-pro", "note": "Slower, stronger tier for dense datasheets" }
+      ],
+      "codex": [
+        { "name": "gpt-6.1-sol", "note": "Recommended: most accurate" },
+        { "name": "gpt-6-luna", "note": "Very good for most circuit extraction, and much cheaper" }
+      ],
+      "api": [
+        { "name": "gpt-6.1-sol", "note": "Recommended: most accurate" },
+        { "name": "gpt-6-luna", "note": "Very good for most circuit extraction, and much cheaper" }
+      ]
     }
   },
   "keys": [
     { "key": "backend", "help": "codex | claude-code | agy | api (blank = auto-detect)", "default": "auto" },
     { "key": "retries", "help": "how many times to retry a failed extraction call", "default": "2" },
     { "key": "timeout_secs", "help": "how long to wait for one extraction call", "default": "600" },
-    { "key": "codex.model", "help": "the codex model to use", "default": "gpt-5.6-sol" },
+    { "key": "codex.model", "help": "the codex model to use", "default": "gpt-6.1-sol" },
     { "key": "codex.effort", "help": "minimal | low | medium | high | xhigh", "default": "high" },
     { "key": "codex.permission_mode", "help": "read-only | workspace-write | approve-for-me | danger-full-access", "default": "workspace-write" },
     { "key": "codex.profile", "help": "a named codex profile, if you use one", "default": "" },
     { "key": "codex.extra_args", "help": "extra arguments passed through to codex", "default": "" },
-    { "key": "claude-code.model", "help": "the Claude Code model to use", "default": "claude-opus-5" },
+    { "key": "claude-code.model", "help": "the Claude Code model to use", "default": "claude-opus-5-5" },
     { "key": "claude-code.effort", "help": "low | medium | high | xhigh | max", "default": "high" },
     { "key": "claude-code.permission_mode", "help": "acceptEdits | auto | bypassPermissions | dontAsk | manual | plan", "default": "acceptEdits" },
     { "key": "claude-code.extra_args", "help": "extra arguments passed through to claude", "default": "" },
@@ -186,7 +210,7 @@
     { "key": "agy.permission_mode", "help": "accept-edits | plan", "default": "accept-edits" },
     { "key": "agy.extra_args", "help": "extra arguments passed through to agy", "default": "" },
     { "key": "api.base_url", "help": "the OpenAI-compatible base URL", "default": "https://api.openai.com/v1" },
-    { "key": "api.model", "help": "the model name to send", "default": "gpt-5.6-sol" },
+    { "key": "api.model", "help": "the model name to send", "default": "gpt-6.1-sol" },
     { "key": "api.api_key_env", "help": "the NAME of an environment variable holding the key", "default": "OPENAI_API_KEY" }
   ],
   "consent_notice": "This sends the datasheet to an LLM backend: whichever is configured for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend show` or the Settings page says which). The API gets the extracted text. An agent CLI runs a model with a shell on a scratch copy of the PDF, its text and page images, and whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude Code out of your home and temporary directories and off the web, but Antigravity, or Codex in another sandbox mode, can read anything your account can. Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\"."
