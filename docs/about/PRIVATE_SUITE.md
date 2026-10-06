@@ -9,7 +9,7 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**95 tests: 89 in the 25 absent files below, plus 6 removed from files that
+**96 tests: 90 in the 25 absent files below, plus 6 removed from files that
 otherwise ship. Also absent: 11 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
@@ -33,7 +33,7 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
 | `analog_vdd_starved` | 5 | Starved analogue supply rail: the static check's estimate against the solved board |
 | `tarski_rework_transient` | 1 | Transient behaviour of the as-built rework on the private board |
-| `tarski_static_lints` | 1 | Static lints run against the private board's netlist |
+| `tarski_static_lints` | 2 | Static lints run against the private board's netlist, including the miswired-sibling, base-drive, discharge-path and floating-gate lints |
 | `tarski_dc_overstress` | 1 | Part ratings judged at the private board's DC operating point |
 | `nep_private_acceptance` | 2 | Cycle-exact AT28C256 page-program rejection and corrected-firmware positive control for a second private board, both driven by the board owner's real host tool |
 | `stretcher_transient` | 2 | Private neuron topology and comparator/stretcher rework, not an independent numerical fixture |
