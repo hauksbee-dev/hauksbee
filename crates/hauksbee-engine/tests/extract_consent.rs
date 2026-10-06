@@ -278,6 +278,7 @@ max_voltage_v = 6.0 # Source: Absolute Maximum Ratings
     (run, out)
 }
 
+#[cfg(unix)]
 fn run_resolve(board: &std::path::Path, models: &std::path::Path) -> String {
     let out = Command::new(hauksbee())
         .args(["models", "resolve"])
