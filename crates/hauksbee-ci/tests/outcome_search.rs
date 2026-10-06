@@ -225,6 +225,72 @@ fn a_pulse_must_be_high_enough_for_long_enough_at_the_input_it_drives() {
 }
 
 #[test]
+fn a_relation_across_conditions_names_the_pair_that_breaks_it() {
+    // An LMV7219 compares a 0-1 V ramp against TH = SET * 270/1090: SET = 3 V
+    // trips it once (0.74 V), SET = 5 V never (1.24 V). Each relation is
+    // judged per VCC between neighbouring SET values (two pairs).
+    let board = parts_board(&[
+        (
+            "U1",
+            "Package_TO_SOT_SMD:SOT-23-5",
+            "LMV7219",
+            &["OUT", "GND", "VIN", "TH", "VCC"],
+        ),
+        ("R1", R0805, "820k", &["SET", "TH"]),
+        ("R2", R0805, "270k", &["TH", "GND"]),
+    ]);
+    let path = support::write_tmp("relation.board", &board);
+    let rows = [
+        ("level up", "increases", "net = \"TH\"", None),
+        ("rate down", "decreases", "ref = \"U1\"", None),
+        (
+            "level down",
+            "decreases",
+            "net = \"TH\"",
+            Some("at SET=3V but 1.24 V at SET=5V; 2 of 2"),
+        ),
+        (
+            "rate up",
+            "increases",
+            "ref = \"U1\"",
+            Some("U1 is 500 Hz at SET=3V but 0 Hz at SET=5V; 2 of 2"),
+        ),
+    ];
+    let asserts = rows
+        .iter()
+        .map(|(name, kind, subject, _)| {
+            format!(
+                "[[assert]]\nname = \"{name}\"\nkind = \"{kind}\"\n{subject}\nalong = \"SET\"\n"
+            )
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    let r = support::run_body(
+        "relation.toml",
+        &format!(
+            "name = \"relation\"\nboard = {}\nduration_ms = 2\n\
+             [[net_drive]]\nnet = \"VCC\"\nvolts = 5.0\n\
+             [[peripheral]]\nid = \"RAMP\"\ntype = \"stimulus\"\nnet = \"VIN\"\n\
+             waveform = \"pwl\"\npwl = [[0.0, 0.0], [2.0, 1.0]]\n\
+             [search]\n[[search.sweep]]\nnet = \"VCC\"\nvolts = [4.5, 5.0]\n\
+             [[search.sweep]]\nnet = \"SET\"\nvolts = [3.0, 5.0]\n{asserts}",
+            support::toml_path(&path),
+        ),
+    );
+    for (name, _, _, says) in rows {
+        let row = support::row(&r, name);
+        match says {
+            None => assert!(row.passed, "{name}: {}", r.render_human()),
+            Some(says) => {
+                let w = why(&r, name);
+                assert!(w.contains(says) && w.contains("inverted"), "{w}");
+                assert!(w.contains("[with VCC="), "{w}");
+            }
+        }
+    }
+}
+
+#[test]
 fn a_board_that_meets_its_outcomes_passes_silently() {
     let r = run("outcome repaired", "68k", "47k");
     assert!(r.passed(), "{}", r.render_human());

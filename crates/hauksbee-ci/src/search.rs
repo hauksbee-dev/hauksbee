@@ -12,7 +12,15 @@
 //! - `fires`: a comparator's output rises (`min_toggles` times, default once),
 //!   and, with a `target`, trips at that input level within `tolerance`.
 //!
-//! Both are read off every accepted solver step of the nets they judge (see
+//! A RELATION compares grid points instead of judging each alone:
+//! `increases` / `decreases` hold that a quantity (a comparator `ref`'s firing
+//! rate, or a `net`'s mean level) rises (falls) `along` one swept condition.
+//! Members that differ only in that condition form a series; each neighbouring
+//! pair is judged, and the violating pairs are reported with both values. A
+//! relation is not culprit-ranked: a 10% nudge moves a value, not the sign of
+//! a response, so an inverted one is a topology finding.
+//!
+//! All are read off every accepted solver step of the nets they judge (see
 //! `Scheduler::watch_steps`), because a 100 ns spike or the instant a
 //! comparator decides falls between chunk-end samples.
 //!
@@ -36,6 +44,7 @@ use hauksbee_ir::{Device, NodeId, SourceKind};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::assertions::AssertResult;
 use crate::error::SpecError;
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
@@ -155,6 +164,135 @@ impl Condition {
 #[must_use]
 pub fn is_outcome(a: &Assertion) -> bool {
     matches!(a.kind.as_str(), "logic_level" | "fires")
+}
+
+/// The kinds judged across grid points rather than per member.
+#[must_use]
+pub fn is_relation(a: &Assertion) -> bool {
+    matches!(a.kind.as_str(), "increases" | "decreases")
+}
+
+/// One member's value of a relation's quantity: the comparator `ref`'s firing
+/// rate (rising output edges per second of window), or the `net`'s
+/// time-averaged level (V).
+fn quantity(a: &Assertion, out: &RunOutcome) -> Option<f64> {
+    let nets = a
+        .reference
+        .as_ref()
+        .and_then(|r| out.probe.comparators.get(r));
+    let s = window(a, out, nets.map(|c| &c.out).or(a.net.as_ref())?);
+    let span = s.last()?.0 - s.first()?.0;
+    let total = nets.map_or_else(
+        || {
+            s.windows(2)
+                .map(|w| 0.5 * (w[0].1 + w[1].1) * (w[1].0 - w[0].0))
+                .sum()
+        },
+        |c| {
+            let rises = s
+                .windows(2)
+                .filter(|w| w[0].1 < c.mid && w[1].1 >= c.mid)
+                .count();
+            f64::from(u32::try_from(rises).unwrap_or(u32::MAX))
+        },
+    );
+    (span > 0.0).then(|| total / span)
+}
+
+/// Judge a relation over the grid's members.
+///
+/// `skip` drops an untrustworthy member. Every neighbouring pair along the swept net, with all other
+/// conditions held, must move in the intended sense. The worst violating
+/// pair is reported first; both members of every violating pair fail.
+#[must_use]
+pub fn relation(
+    a: &Assertion,
+    outcomes: &[RunOutcome],
+    skip: &dyn Fn(&RunOutcome) -> bool,
+) -> AssertResult {
+    let shell = AssertResult::shell(a.label(), a.kind.clone(), outcomes.len());
+    let along = a.along.as_deref().unwrap_or_default();
+    let unit = if a.reference.is_some() { "Hz" } else { "V" };
+    let subject = a.reference.as_deref().or(a.net.as_deref()).map_or("", leaf);
+    let sense = if a.kind == "increases" { 1.0 } else { -1.0 };
+    // Members that differ only in `along` form one series.
+    let mut series: HashMap<String, Vec<(&Condition, f64, u32)>> = HashMap::new();
+    for o in outcomes.iter().filter(|o| !skip(o)) {
+        let at = o.probe.conditions.iter().find(|c| c.net == along);
+        let (Some(at), Some(v)) = (at, quantity(a, o)) else {
+            continue;
+        };
+        let rest = o.probe.conditions.iter().filter(|c| c.net != along);
+        let mut key: Vec<String> = rest.map(Condition::describe).collect();
+        key.push(crate::tolerance::describe_values(&o.sampled_values));
+        key.retain(|k| !k.is_empty());
+        let key = key.join(", ");
+        series.entry(key).or_default().push((at, v, o.seed));
+    }
+    let mut judged = 0;
+    let mut bad = Vec::new();
+    for (key, mut s) in series {
+        s.sort_by(|x, y| x.0.value.total_cmp(&y.0.value));
+        for w in s.windows(2) {
+            judged += 1;
+            let margin = sense * (w[1].1 - w[0].1);
+            if margin <= 0.0 {
+                bad.push((margin, w[0], w[1], key.clone()));
+            }
+        }
+    }
+    bad.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let Some((margin, (lo, v_lo, _), (hi, v_hi, _), key)) = bad.first() else {
+        let detail = if judged == 0 {
+            format!("no two members along {} measured {subject}", leaf(along))
+        } else {
+            format!(
+                "{subject} {} along {} over {judged} pair(s)",
+                a.kind,
+                leaf(along)
+            )
+        };
+        let passed = judged > 0;
+        return AssertResult {
+            passed,
+            detail,
+            ..shell
+        };
+    };
+    let value = |v: f64| format!("{} {unit}", format_engineering(v));
+    let mut detail = format!(
+        "{subject} is {} at {} but {} at {}; {} of {judged} neighbouring pair(s) violate",
+        value(*v_lo),
+        lo.describe(),
+        value(*v_hi),
+        hi.describe(),
+        bad.len()
+    );
+    if !key.is_empty() {
+        let _ = write!(detail, " [with {key}]");
+    }
+    let intended = if sense > 0.0 { "rise" } else { "fall" };
+    let why = if *margin < 0.0 {
+        format!(
+            "{subject} moves against the intended sense: it should {intended} as {} rises, \
+             so the response is inverted (a sign or topology fault, not a margin; a \
+             relation is not culprit-ranked, since a nudge moves a value, not a sign)",
+            leaf(along)
+        )
+    } else {
+        format!(
+            "{subject} does not change with {}: the condition never reaches it",
+            leaf(along)
+        )
+    };
+    let failing_seeds: Vec<u32> = bad.iter().flat_map(|b| [b.1 .2, b.2 .2]).collect();
+    AssertResult {
+        detail,
+        why: Some(why),
+        failing_seed: failing_seeds.first().copied(),
+        failing_seeds,
+        ..shell
+    }
 }
 
 /// Cross every plan with every combination of the search grid, renumbering
@@ -324,14 +462,14 @@ pub fn prepare(
     let wanted: HashSet<&str> = spec
         .asserts
         .iter()
-        .filter(|a| a.kind == "fires")
+        .filter(|a| a.kind == "fires" || is_relation(a))
         .filter_map(|a| a.reference.as_deref())
         .collect();
     probe.comparators.retain(|r, _| wanted.contains(r.as_str()));
     let mut watch: Vec<String> = spec
         .asserts
         .iter()
-        .filter(|a| a.kind == "logic_level")
+        .filter(|a| a.kind == "logic_level" || is_relation(a))
         .filter_map(|a| a.net.clone())
         .collect();
     for c in probe.comparators.values() {

@@ -333,6 +333,14 @@
           "format": "double",
           "default": null
         },
+        "along": {
+          "description": "`increases` / `decreases`: the `[[search.sweep]]` net the quantity\nmust rise (fall) along, judged between neighbouring values of that\nsweep with every other condition held. The quantity is the comparator\n`ref`'s firing rate (Hz) or the `net`'s time-averaged level (V).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "amps": {
           "description": "`max_current`: ceiling in amps for the component named by `ref`.",
           "type": [
@@ -457,7 +465,9 @@
             "model_coverage",
             "pulse_width",
             "logic_level",
-            "fires"
+            "fires",
+            "increases",
+            "decreases"
           ]
         },
         "level": {

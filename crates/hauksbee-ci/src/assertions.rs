@@ -431,6 +431,14 @@ fn evaluate_one(
         .collect();
     let subject_refs = subject_refs_for(a, outcomes);
 
+    if crate::search::is_relation(a) {
+        let r = crate::search::relation(a, outcomes, &member_invalid);
+        return AssertResult {
+            subject_nets,
+            subject_refs,
+            ..r
+        };
+    }
     let mut last_detail = String::new();
     let mut failures: Vec<(&RunOutcome, String, Option<String>)> = Vec::new();
     for out in outcomes {
@@ -668,7 +676,7 @@ fn stale_overlap(a: &Assertion, out: &RunOutcome) -> Option<((f64, f64), (f64, f
 pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
-        "voltage" | "pulse_width" | "logic_level" | "fires" => {
+        "voltage" | "pulse_width" | "logic_level" | "fires" | "increases" | "decreases" => {
             Some((a.after_ms.unwrap_or(0.0) / 1000.0, end))
         }
         "toggle" | "max_current" | "max_temp" | "rail_window" => Some((0.0, end)),

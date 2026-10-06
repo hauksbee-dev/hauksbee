@@ -1165,7 +1165,9 @@ pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<Sp
             .reference
             .as_ref()
             .map(|r| (r.as_str(), "max_temp assert")),
-        "fires" => a.reference.as_ref().map(|r| (r.as_str(), "fires assert")),
+        "fires" | "increases" | "decreases" => {
+            a.reference.as_ref().map(|r| (r.as_str(), "outcome assert"))
+        }
         _ => None,
     });
     let spi_refs = spec

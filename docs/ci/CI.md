@@ -631,6 +631,28 @@ intent:
 A board that meets its outcomes passes with nothing to read. The pinned
 case is `crates/hauksbee-ci/tests/outcome_search.rs`.
 
+**`increases` / `decreases`**: a RELATION between grid points rather than a
+check of each one. A quantity must rise (fall) `along` one swept net: the
+comparator `ref`'s firing rate (rising output edges per second of window),
+or a `net`'s time-averaged level. Members that differ only in the `along`
+value form a series, and each neighbouring pair is judged; a flat pair fails
+too (the condition does not reach the quantity). A violation names the pair
+and both values, the other conditions it was held at, and fails both
+members. Relations are not culprit-ranked: a 10% nudge moves a value, not
+the sign of a response, so an inverted one is a topology finding.
+
+```toml
+[[assert]]
+name  = "a higher input code fires faster"
+kind  = "increases"
+ref   = "U1"                    # or net = "X" for its mean level
+along = "V_SET"                 # a [[search.sweep]] net with 2+ values
+after_ms = 0.05
+
+# [FAIL] a higher input code fires faster
+#       U1 is 12k Hz at V_SET=0V but 4k Hz at V_SET=2V; 2 of 2 neighbouring pair(s) violate [with I_SYN=6uA]
+```
+
 #### Asking for a number: measurements
 
 On the numeric kinds -- `voltage`, `toggle`, `max_current`, `pulse_width`,

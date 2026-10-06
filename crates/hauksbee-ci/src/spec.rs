@@ -1190,7 +1190,7 @@ pub struct Assertion {
         "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
         "peripheral", "rail_window", "protection_trip", "boot_coverage",
         "boot-coverage", "phase_margin", "ac_gain", "hwtrace", "model_coverage",
-        "pulse_width", "logic_level", "fires"
+        "pulse_width", "logic_level", "fires", "increases", "decreases"
     ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
@@ -1254,6 +1254,12 @@ pub struct Assertion {
     /// `min` (high) or `max` (low) replaces the card-read VIH/VIL.
     #[serde(default)]
     pub min_width_ms: Option<f64>,
+    /// `increases` / `decreases`: the `[[search.sweep]]` net the quantity
+    /// must rise (fall) along, judged between neighbouring values of that
+    /// sweep with every other condition held. The quantity is the comparator
+    /// `ref`'s firing rate (Hz) or the `net`'s time-averaged level (V).
+    #[serde(default)]
+    pub along: Option<String>,
 
     /// `max_current` / `max_temp`: the component to check.
     #[serde(rename = "ref", default)]
@@ -1629,6 +1635,24 @@ impl Spec {
         );
         for problem in self.search.iter().flat_map(crate::search::Search::problems) {
             check(false, problem);
+        }
+        for a in self
+            .asserts
+            .iter()
+            .filter(|a| crate::search::is_relation(a))
+        {
+            let along = a.along.as_deref().unwrap_or_default();
+            let swept = self.search.iter().flat_map(|s| &s.sweep);
+            check(
+                swept
+                    .filter(|s| s.net == along)
+                    .any(|s| s.volts.len().max(s.amps.len()) >= 2),
+                format!(
+                    "{} along '{along}' needs a [[search.sweep]] with at least two values \
+                     on that net",
+                    a.kind
+                ),
+            );
         }
         check(
             self.bom.is_some() || self.bom_columns.is_empty(),
@@ -2306,6 +2330,8 @@ const ASSERTION_KINDS: &[&str] = &[
     "pulse_width",
     "logic_level",
     "fires",
+    "increases",
+    "decreases",
 ];
 
 impl Assertion {
@@ -2341,7 +2367,9 @@ impl Assertion {
     pub fn times_startup(&self) -> bool {
         // An outcome kind's `after_ms` only skips the settle; it times nothing.
         self.kind == "pulse_width"
-            || (self.after_ms.is_some_and(|t| t > 0.0) && !crate::search::is_outcome(self))
+            || (self.after_ms.is_some_and(|t| t > 0.0)
+                && !crate::search::is_outcome(self)
+                && !crate::search::is_relation(self))
     }
 
     // One independent rule per assertion kind; each arm is a short guard.
@@ -2438,6 +2466,10 @@ impl Assertion {
                     ),
                 )?;
             }
+            "increases" | "decreases" => need(
+                self.along.is_some() && self.reference.is_some() != self.net.is_some(),
+                format!("{kind} assertion needs `along` and exactly one of `ref` or `net`"),
+            )?,
             "fires" => {
                 need(
                     self.reference.is_some(),
@@ -2753,6 +2785,12 @@ impl Assertion {
             "logic_level" => format!(
                 "{net} reaches a valid logic {}",
                 self.level.as_deref().unwrap_or("high")
+            ),
+            "increases" | "decreases" => format!(
+                "{} {} along {}",
+                self.reference.as_deref().unwrap_or(net),
+                self.kind,
+                self.along.as_deref().unwrap_or_default()
             ),
             "fires" => self.target.map_or_else(
                 || format!("{reference} fires"),
