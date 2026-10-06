@@ -1687,7 +1687,7 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                         "parameter unit conditions basis",
                         "min typ max rating package mounting pins",
                     ),
-                    ("pinout", _) => ("package pins", ""),
+                    ("pinout", _) => ("package pins", "standard"),
                     (_, Some("interval")) => ("status parameter low high unit kind basis", ""),
                     (_, Some("unknown")) => ("status parameter reason", ""),
                     _ => ("status", "parameter low high unit kind basis reason"),
@@ -1705,6 +1705,40 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                         key_hint(extra, &known)
                     ));
                 }
+            }
+        }
+    }
+    out
+}
+
+/// The keys that belong under `[models.params]` and nowhere else.
+const PARAMS_ONLY_KEYS: [&str; 3] = ["identity_only", "warning", "unlocked_by"];
+
+/// Where `identity_only`, `warning` or `unlocked_by` sit outside `[models.params]`.
+///
+/// Read from the raw TOML because the schema drops such a key at the entry level
+/// without a word, and names it only as "unknown field" inside another table, so
+/// the card is refused for lacking the very key it carries.
+#[must_use]
+pub fn misplaced_param_keys(root: &toml::Value) -> Vec<String> {
+    let models = root.get("models").and_then(toml::Value::as_array);
+    let mut out = Vec::new();
+    for entry in models
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+    {
+        let id = entry.get("id").and_then(toml::Value::as_str).unwrap_or("?");
+        let tables = entry.iter().filter(|(k, _)| *k != "params");
+        let tables = tables.filter_map(|(k, v)| Some((format!("[models.{k}]"), v.as_table()?)));
+        let places = std::iter::once(("[[models]] itself".to_string(), entry)).chain(tables);
+        for (place, table) in places {
+            for key in PARAMS_ONLY_KEYS.iter().filter(|k| table.contains_key(**k)) {
+                out.push(format!(
+                    "model '{id}': `{key}` is set directly in {place}, but it is a param and only \
+                     counts under [models.params]: move the line `{key} = ...` below the \
+                     `[models.params]` header"
+                ));
             }
         }
     }
@@ -2239,6 +2273,49 @@ high_offset = 1.3333333333333333
         ] {
             assert!(found.contains(needle), "{needle}\n{found}");
         }
+    }
+
+    #[test]
+    fn params_only_keys_set_at_the_wrong_level_are_named_with_where_they_belong() {
+        let root = |src: &str| toml::from_str::<toml::Value>(src).unwrap();
+        let ok = "[[models]]\nid = \"a\"\n[models.params]\nidentity_only = true\nwarning = \"w\"";
+        assert!(misplaced_param_keys(&root(ok)).is_empty());
+        let entry = "[[models]]\nid = \"a\"\nidentity_only = true\n[models.params]\nx = 1";
+        let found = misplaced_param_keys(&root(entry));
+        assert_eq!(found.len(), 1);
+        for needle in [
+            "model 'a'",
+            "`identity_only`",
+            "[[models]] itself",
+            "[models.params]",
+        ] {
+            assert!(found[0].contains(needle), "{needle}: {found:?}");
+        }
+        let nested =
+            "[[models]]\nid = \"b\"\n[models.source]\nwarning = \"w\"\nunlocked_by = \"u\"";
+        let found = misplaced_param_keys(&root(nested));
+        assert!(
+            found.len() == 2 && found[0].contains("[models.source]"),
+            "{found:?}"
+        );
+    }
+
+    /// Every shipped card passes the raw-TOML shape lint the way `models lint` runs it.
+    #[test]
+    fn shipped_cards_pass_the_raw_shape_lint() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
+        let mut checked = 0;
+        for file in std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()) {
+            if file.extension().is_none_or(|e| e != "toml") {
+                continue;
+            }
+            let root: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            let found = [source_shape_findings(&root), misplaced_param_keys(&root)].concat();
+            assert!(found.is_empty(), "{}: {found:?}", file.display());
+            checked += 1;
+        }
+        assert!(checked > 5, "the db directory was not scanned");
     }
 
     #[test]

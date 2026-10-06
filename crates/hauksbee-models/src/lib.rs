@@ -47,6 +47,7 @@ pub mod derating;
 pub mod extract_config;
 pub mod extract_output;
 pub mod extract_progress;
+pub mod extract_usage;
 pub mod logic_spec;
 pub mod matcher;
 pub mod mcu_modules;

@@ -98,7 +98,9 @@ pub fn lint_report(file: &Path) -> anyhow::Result<LintReport> {
 
     // Source-record shape first, from the raw TOML: a parse names only its
     // first missing or unknown key, and every one of them is a finding.
-    for problem in hauksbee_models::validation::source_shape_findings(&root) {
+    let shape = hauksbee_models::validation::source_shape_findings(&root);
+    let misplaced = hauksbee_models::validation::misplaced_param_keys(&root);
+    for problem in shape.iter().chain(&misplaced) {
         findings += 1;
         say!(lines, "source shape: ERROR: {problem}");
     }
@@ -3500,6 +3502,33 @@ mod tests {
             "{errors}"
         );
         assert!(resolve_report(&lib, &board).contains("UNRESOLVED"));
+    }
+
+    /// A param set at the wrong TOML level is named with where it belongs, and
+    /// the shipped `ld1086d2t33` card (a `pinout.standard` key) lints clean.
+    #[test]
+    fn lint_names_misplaced_params_and_accepts_pinout_standard() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = "[[models]]\nid = 'd'\nkind = 'digital'\nidentity_only = true\nwarning = 'w'\n\
+                    [models.match]\nvalue_re = '^D$'\n";
+        let file = dir.path().join("d.toml");
+        std::fs::write(&file, card).unwrap();
+        let report = super::lint_report(&file).unwrap();
+        let text = report.lines.join("\n");
+        assert!(report.findings > 0, "{text}");
+        assert!(text.contains("source shape: ERROR: model 'd': `identity_only` is set directly in [[models]] itself"), "{text}");
+        assert!(
+            text.contains("`warning`") && text.contains("below the `[models.params]` header"),
+            "{text}"
+        );
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hauksbee-models/db/vreg.toml");
+        let vreg = super::lint_report(&shipped).unwrap();
+        assert!(
+            !vreg.lines.join("\n").contains("source shape: ERROR"),
+            "{:?}",
+            vreg.lines
+        );
     }
 
     /// Lint a descriptor source the way `models lint` does, from the parse

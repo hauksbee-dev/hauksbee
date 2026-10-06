@@ -448,6 +448,14 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     let (tx, rx) = std::sync::mpsc::channel::<Result<Option<String>, String>>();
     std::thread::spawn(move || {
         let outcome = datasheet::run(args).map(|_| None).or_else(|e| {
+            // A draft that failed validation is kept for review, as a timed-out one is.
+            let rejected = e.downcast_ref::<datasheet::Rejected>();
+            if let Some(r) = rejected.filter(|r| r.kept.is_some()) {
+                return Ok(Some(format!(
+                    "this draft failed validation after {} attempt(s): {}. Fix it here, then press Check.",
+                    r.attempts, r.error
+                )));
+            }
             let kept = e.downcast_ref::<TimedOut>().filter(|t| t.2.is_some());
             kept.map(|t| Some(t.to_string()))
                 .ok_or_else(|| format!("{e:#}"))
@@ -460,7 +468,10 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     let incomplete = loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Ok(warning)) => break warning,
-            Ok(Err(e)) => return Err(e),
+            Ok(Err(e)) => {
+                say_cost(progress);
+                return Err(e);
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let now = extract_progress::snapshot();
                 if now.1 != shown.1 {
@@ -486,6 +497,7 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     };
 
     extract_progress::record(started.elapsed());
+    say_cost(progress);
     let (path, toml_text) = read_draft(&out_dir)?;
     progress(&format!(
         "Draft written after {}s. Nothing has been saved: review it below.",
@@ -509,10 +521,11 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
 /// the draft is found by looking rather than by rebuilding its naming rules
 /// here, which would break the day either name changes.
 fn read_draft(out_dir: &std::path::Path) -> Result<(PathBuf, String), String> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir(out_dir)
-        .map_err(|e| format!("the extraction wrote no draft directory: {e}"))?
-        .flatten()
-        .map(|e| e.path())
+    // A draft that failed validation is kept under `rejected/` instead.
+    let mut found: Vec<PathBuf> = [out_dir.to_path_buf(), out_dir.join("rejected")]
+        .iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flat_map(|d| d.flatten().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
         .collect();
     found.sort();
@@ -930,6 +943,7 @@ pub fn check(toml_text: &str) -> Result<String, String> {
             spec.sensor.name, spec.sensor.bus
         ));
     }
+    misplaced_params(toml_text)?;
     let db: hauksbee_models::schema::DbFile =
         toml::from_str(toml_text).map_err(|e| format!("this is not valid model TOML: {e}"))?;
     let summaries = validate_model_db(&db)?;
@@ -946,6 +960,21 @@ pub fn check(toml_text: &str) -> Result<String, String> {
         Some(note) => format!("{summary} · {note}"),
         None => summary,
     })
+}
+
+/// Refuse a card with an `identity_only`/`warning`/`unlocked_by` outside `[models.params]`.
+fn misplaced_params(toml_text: &str) -> Result<(), String> {
+    let root = toml::from_str::<toml::Value>(toml_text).ok();
+    let found = root.map(|r| hauksbee_models::validation::misplaced_param_keys(&r));
+    found.and_then(|f| f.into_iter().next()).map_or(Ok(()), Err)
+}
+
+/// Tell the page what the extraction cost, when any backend call was made.
+fn say_cost(progress: &mut dyn FnMut(&str)) {
+    let cost = hauksbee_models::extract_usage::summary();
+    if !cost.is_empty() {
+        progress(&cost);
+    }
 }
 
 fn existing_model_error(path: &Path) -> String {
@@ -1012,6 +1041,7 @@ pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
         hauksbee_models::SensorSpec::from_toml(toml_text)
             .map_err(|e| format!("this is not a valid sensor spec, so it was not saved: {e}"))?;
     } else {
+        misplaced_params(toml_text).map_err(|e| format!("{e}, so it was not saved"))?;
         let db: hauksbee_models::schema::DbFile = toml::from_str(toml_text)
             .map_err(|e| format!("this is not valid model TOML, so it was not saved: {e}"))?;
         validate_model_db(&db).map_err(|e| format!("{e}, so it was not saved"))?;
@@ -1300,5 +1330,23 @@ max_current_a = 0.5 # Source: absolute maximum ratings
         ] {
             assert_eq!(looks_assumed(comment), assumed, "misclassified: {comment}");
         }
+    }
+
+    #[test]
+    fn a_param_at_the_wrong_level_is_named_and_a_rejected_draft_is_read_back() {
+        let bad = DRAFT.replace("[models.params]", "identity_only = true\n[models.params]");
+        let err = check(&bad).unwrap_err();
+        assert!(
+            err.contains("`identity_only` is set directly in [models.match]")
+                && err.contains("[models.params]"),
+            "{err}"
+        );
+        assert!(save("TP4054", "vreg", &bad)
+            .unwrap_err()
+            .ends_with("so it was not saved"));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("rejected")).unwrap();
+        std::fs::write(dir.path().join("rejected/tp4054.toml"), &bad).unwrap();
+        assert_eq!(read_draft(dir.path()).unwrap().1, bad);
     }
 }

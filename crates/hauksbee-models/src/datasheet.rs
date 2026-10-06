@@ -323,7 +323,54 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 /// cannot be resolved, the backend is unavailable or fails, the draft never
 /// validates within the retries, the run times out, or the result cannot be
 /// written.
-pub fn run(mut args: Args) -> Result<PathBuf> {
+pub fn run(args: Args) -> Result<PathBuf> {
+    crate::extract_usage::reset();
+    let outcome = run_inner(args);
+    let cost = crate::extract_usage::summary();
+    if !cost.is_empty() {
+        say!("[model-extract] {cost}");
+    }
+    outcome
+}
+
+/// A draft that failed validation on its last attempt, saved beside the
+/// output as `rejected/<file>` (not a directory the model scan reads) with the
+/// errors on top, so it can be fixed by hand rather than only read in a log.
+fn keep_rejected(e: anyhow::Error, dest: &Path, args: &Args) -> anyhow::Error {
+    let Some(r) = e.downcast_ref::<Rejected>() else {
+        return e;
+    };
+    let name = dest.file_name().unwrap_or_default();
+    let path = dest.with_file_name("rejected").join(name);
+    let body = output::finalise(&r.draft, &args.part, &args.aliases, &args.pdf)
+        .unwrap_or_else(|_| r.draft.clone());
+    let errors = r
+        .error
+        .lines()
+        .fold(String::new(), |acc, l| acc + "# " + l + "\n");
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            std::fs::write(
+                &path,
+                format!("# hauksbee rejected this draft:\n{errors}\n{body}"),
+            )
+        });
+    match saved {
+        Ok(()) => Rejected {
+            kept: Some((path, dest.to_path_buf())),
+            ..r.clone()
+        }
+        .into(),
+        Err(io) => e.context(format!(
+            "(could not save the draft to {}: {io})",
+            path.display()
+        )),
+    }
+}
+
+fn run_inner(mut args: Args) -> Result<PathBuf> {
     // Magic bytes rather than extension, and BEFORE any backend is chosen: a
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
     // shipped to the LLM, producing a confidently wrong model; a downloaded
@@ -373,7 +420,8 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
     // as a `SensorSpec`, NOT the SPICE `[[models]]` schema.
     let (raw, id, timed_out) = if sensor {
         let prompt = build_sensor_prompt(part, kind, &pdf_text);
-        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Sensor { part, kind })?;
+        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Sensor { part, kind })
+            .map_err(|e| keep_rejected(e, &out_path, &args))?;
         let name = validate_sensor_reply(&raw, part, kind)?.sensor.name;
         (raw, name, timed_out)
     } else {
@@ -401,7 +449,8 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
                 args.footprints.join(", ")
             );
         }
-        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })?;
+        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })
+            .map_err(|e| keep_rejected(e, &out_path, &args))?;
         let entry = parse_and_validate_reply(&raw, part, kind)?;
         if let Some(warning) = crate::validation::unknown_pads_warning(&entry) {
             say!("[model-extract] warning: {warning}");
@@ -630,6 +679,41 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0} timed out after {1}s{tail}", tail = timeout_tail(.2.as_deref()))]
 pub struct TimedOut(pub String, pub u64, pub Option<PathBuf>);
+
+/// A draft that still failed validation on the last attempt.
+///
+/// `draft` is the last reply; once `run` has saved it, `kept` is (where it is,
+/// where it belongs when fixed) and the message gives the next commands.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{tool} produced an answer that failed validation after {attempts} attempt(s): {error}{tail}", tail = rejected_tail(.draft, .kept.as_ref()))]
+pub struct Rejected {
+    pub tool: String,
+    pub attempts: usize,
+    pub error: String,
+    pub draft: String,
+    pub kept: Option<(PathBuf, PathBuf)>,
+}
+
+fn rejected_tail(draft: &str, kept: Option<&(PathBuf, PathBuf)>) -> String {
+    let Some((saved, dest)) = kept else {
+        return format!("\nRaw reply was:\n{draft}");
+    };
+    let quote = |p: &Path| {
+        let p = p.display().to_string();
+        let plain = |c: char| c.is_ascii_alphanumeric() || "/._-~+".contains(c);
+        if p.chars().all(plain) {
+            p
+        } else {
+            format!("'{}'", p.replace('\'', "'\\''"))
+        }
+    };
+    let (s, d) = (quote(saved), quote(dest));
+    format!(
+        "\n\nThe last draft was kept for you to fix, with the errors above it: {s}\n  \
+         check it after editing:  hauksbee models lint {s}\n  \
+         keep it once it passes:  mv {s} {d}"
+    )
+}
 
 /// A streaming agent run killed because no event arrived for the idle period.
 ///
@@ -1051,6 +1135,8 @@ ENVIRONMENT (each overrides the config file for one run):
                               that backend when nothing else chose one)
     HAUKSBEE_LLM_MODEL        Model ID for the api backend
     HAUKSBEE_LLM_BASE_URL     Base URL (default: https://api.openai.com/v1)
+    HAUKSBEE_LLM_PRICE        in,cached,out USD per million tokens, to price a
+                              model the cost estimate has no list price for
 ",
         kinds = supported_kinds().join("|"),
     );
@@ -2513,7 +2599,16 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         let canned = std::fs::read_to_string(&path)
             .with_context(|| format!("reading mock reply from {path}"))?;
         let raw = reply.complete(extract_toml_block(&canned, reply.table()));
-        reply.check(&raw)?;
+        if let Err(e) = reply.check(&raw) {
+            return Err(Rejected {
+                tool: "mock reply".into(),
+                attempts: 1,
+                error: format!("{e:#}"),
+                draft: raw,
+                kept: None,
+            }
+            .into());
+        }
         return Ok((raw, None));
     }
 
@@ -2541,7 +2636,9 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         Backend::Api => {
             let request = ApiRequest::prepare(&resolved.api)?;
             let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
-                Ok(extract_toml_block(&request.send(p)?, reply.table()))
+                let (text, usage) = request.send_with_usage(p)?;
+                crate::extract_usage::record("api", &request.model, usage);
+                Ok(extract_toml_block(&text, reply.table()))
             });
             return raw.map(|raw| (raw, None));
         }
@@ -2568,7 +2665,11 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     let mut timed_out = None;
     let raw = validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
         let _ = std::fs::remove_file(ws.answer_path());
-        let stdout = match run_agent_once(&resolved, p, &ws) {
+        let ran = run_agent_once(&resolved, p, &ws);
+        let usage = ran.as_ref().ok().filter(|_| chosen == Backend::Codex);
+        let usage = usage.and_then(|out| crate::extract_usage::from_codex_events(out));
+        crate::extract_usage::record(chosen.name(), resolved.model(), usage);
+        let stdout = match ran {
             // A killed run keeps its draft only if it passes the finished-answer check.
             Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
                 let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
@@ -2656,10 +2757,16 @@ fn validated_attempts(
                     retry_feedback(&raw, &format!("{e:#}"), reply.table())
                 );
             }
-            Err(e) => bail!(
-                "{tool} produced an answer that failed validation after {attempt} attempt(s): \
-                 {e:#}\nRaw reply was:\n{raw}"
-            ),
+            Err(e) => {
+                return Err(Rejected {
+                    tool: tool.to_string(),
+                    attempts: attempt,
+                    error: format!("{e:#}"),
+                    draft: raw,
+                    kept: None,
+                }
+                .into())
+            }
         }
     }
     unreachable!("the loop returns or bails on its last attempt")
@@ -3505,6 +3612,14 @@ impl ApiRequest {
 
     /// POST `prompt` and return the assistant's content.
     fn send(&self, prompt: &str) -> Result<String> {
+        self.send_with_usage(prompt).map(|(text, _)| text)
+    }
+
+    /// [`Self::send`], with the token usage the endpoint reported (`None` when it gave none).
+    fn send_with_usage(
+        &self,
+        prompt: &str,
+    ) -> Result<(String, Option<crate::extract_usage::Usage>)> {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -3561,10 +3676,11 @@ impl ApiRequest {
         if let Some(err_msg) = resp["error"]["message"].as_str() {
             bail!("{} answered with an error: {err_msg}", self.url);
         }
-        resp["choices"][0]["message"]["content"]
+        let text = resp["choices"][0]["message"]["content"]
             .as_str()
             .map(str::to_owned)
-            .context("missing content in API response")
+            .context("missing content in API response")?;
+        Ok((text, crate::extract_usage::from_chat_reply(&resp)))
     }
 }
 
@@ -3620,6 +3736,11 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
         }
         format!("[[models]]\n{trimmed}")
     };
+    if let Some(v) = toml::from_str::<toml::Value>(&text).ok().as_ref() {
+        if let Some(misplaced) = crate::validation::misplaced_param_keys(v).first() {
+            bail!("{misplaced}");
+        }
+    }
     let db: crate::schema::DbFile = toml::from_str(&text).with_context(|| {
         format!(
             "the reply for {part} did not deserialize as a hauksbee [[models]] db file (the \
@@ -4806,6 +4927,78 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(clean.to_string().contains("INCOMPLETE"), "{clean}");
         assert!(kept.is_some_and(|k| k.contains("datasheet-derived") && k.contains("sha256")));
         assert!(bad.2.is_none() && dropped.is_none(), "{bad}");
+    }
+
+    /// A draft that fails every attempt is saved with its errors, off the model
+    /// scan path, the command to re-check it is printed, and the codex usage
+    /// from each call is totalled at list price.
+    #[cfg(unix)]
+    #[test]
+    fn a_rejected_draft_is_kept_for_editing_and_the_cost_is_totalled() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let [pdf, agent, draft, cfg] = ["a.pdf", "agent", "draft", "c"].map(|f| dir.path().join(f));
+        let event = r#"{"type":"turn.completed","usage":{"input_tokens":1000000,"cached_input_tokens":0,"output_tokens":100000}}"#;
+        let script =
+            format!("#!/bin/sh\ncat >/dev/null\ncp {draft:?} model.toml\necho '{event}'\n");
+        let bad =
+            "[[models]]\nid = \"tp\"\nkind = \"digital\"\n[models.source]\nidentity_only = true\n";
+        for (path, text) in [
+            (&pdf, "%PDF-1.4\n"),
+            (&cfg, ""),
+            (&agent, script.as_str()),
+            (&draft, bad),
+        ] {
+            std::fs::write(path, text).unwrap();
+        }
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [
+            (extract_config::ENV_CONFIG_PATH, cfg.to_str().unwrap()),
+            ("HAUKSBEE_CODEX_COMMAND", agent.to_str().unwrap()),
+            ("HAUKSBEE_CODEX_MODEL", "gpt-6-luna"),
+        ];
+        for (k, v) in env {
+            std::env::set_var(k, v);
+        }
+        let out = tempfile::tempdir_in(dir.path()).unwrap();
+        let args = Args::new(pdf, "TP".into(), "digital".into());
+        let args = args
+            .backend(Some(Backend::Codex))
+            .out_dir(Some(out.path().into()));
+        let err = run(args).unwrap_err();
+        for (k, _) in env {
+            std::env::remove_var(k);
+        }
+        let kept = out.path().join("rejected/TP.toml");
+        let text = err.to_string();
+        let saved = std::fs::read_to_string(&kept).unwrap();
+        assert!(
+            saved.starts_with("# hauksbee rejected this draft:\n# "),
+            "{saved}"
+        );
+        assert!(saved.contains("identity_only = true") && !out.path().join("TP.toml").exists());
+        let lint = format!("hauksbee models lint {}", kept.display());
+        let keep = format!(
+            "mv {} {}",
+            kept.display(),
+            out.path().join("TP.toml").display()
+        );
+        assert!(text.contains(&lint) && text.contains(&keep), "{text}");
+        assert!(!text.contains("Raw reply was"), "{text}");
+        assert!(
+            text.contains("`identity_only` is set directly in [models.source]"),
+            "{text}"
+        );
+        // Three attempts of 1M in / 100k out at luna's 0.10 / 0.50 per million.
+        let cost = crate::extract_usage::summary();
+        assert!(
+            cost.contains("3000000 input") && cost.contains("about $0.4500"),
+            "{cost}"
+        );
+        let spaced = Path::new("/tmp/a b/it's.toml");
+        let tail = rejected_tail("", Some(&(spaced.into(), "/x.toml".into())));
+        assert!(tail.contains(r"lint '/tmp/a b/it'\''s.toml'"), "{tail}");
     }
 
     /// Fake codex for the idle watchdog: attempt 1 stalls (with a helper
