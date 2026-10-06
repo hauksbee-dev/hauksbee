@@ -386,7 +386,8 @@ impl ExtractedBoard {
     /// same-stem schematic `sch` (`.kicad_sch`, or an Eagle `.sch`), so the
     /// pin-function lints and MCU GPIO derivation can read them. Only a
     /// matching reference and pad number is copied, and a component whose
-    /// layout names any of its pads is left untouched.
+    /// layout names any of its pads is left untouched. An Eagle component with
+    /// a blank value also takes its schematic library device name as value.
     pub fn adopt_schematic_pin_names(&mut self, sch: &Path) {
         let unnamed =
             |c: &Component| !c.pins.is_empty() && c.pins.iter().all(|p| p.function.is_empty());
@@ -406,6 +407,16 @@ impl ExtractedBoard {
             let Ok(pads) = eagle_sch::schematic_pad_pins(&text) else {
                 return;
             };
+            // A blank layout value takes the library device the schematic placed.
+            for (reference, name) in
+                eagle_sch::schematic_blank_value_device_names(&text).unwrap_or_default()
+            {
+                let blank =
+                    |c: &&mut Component| c.reference == reference && c.value.trim().is_empty();
+                if let Some(c) = self.components.iter_mut().find(blank) {
+                    c.value = name;
+                }
+            }
             for (reference, pad, name, kind) in pads {
                 names.insert((reference, pad), (name, kind));
             }
@@ -1301,5 +1312,50 @@ mod schematic_pin_name_tests {
         };
         assert_eq!(functions(0), ["GND", "IO2"]);
         assert_eq!(functions(1), ["LAYOUT_NAME"]);
+    }
+
+    /// A layout part with a blank value takes the library device name the
+    /// schematic placed it from (`*` = technology, `?` = device); a valued
+    /// part keeps its own value.
+    #[test]
+    fn blank_eagle_values_adopt_the_schematic_device_name() {
+        let sch = r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries><library name="l">
+  <symbols><symbol name="S"><pin name="A"/></symbol></symbols>
+  <devicesets><deviceset name="74*245?"><gates><gate name="G" symbol="S"/></gates><devices>
+    <device name="DW" package="P"><connects><connect gate="G" pin="A" pad="1"/></connects>
+    </device></devices></deviceset>
+  <deviceset name="TINY85"><gates><gate name="G" symbol="S"/></gates><devices>
+    <device name="-MU" package="P"><connects><connect gate="G" pin="A" pad="1"/></connects>
+    </device></devices></deviceset></devicesets>
+</library></libraries>
+<parts><part name="U1" library="l" deviceset="74*245?" device="DW" technology="HCT"/>
+<part name="U2" library="l" deviceset="TINY85" device="-MU" value=""/>
+<part name="U3" library="l" deviceset="TINY85" device="-MU" value="KEEP"/></parts>
+<sheets/>
+</schematic></drawing></eagle>"#;
+        let path = std::env::temp_dir().join(format!("hauksbee-blank-{}.sch", std::process::id()));
+        std::fs::write(&path, sch).unwrap();
+        let mut board = ExtractedBoard {
+            name: "blank".into(),
+            nets: Vec::new(),
+            components: ["U1", "U2", "U3"]
+                .iter()
+                .map(|r| {
+                    part(
+                        r,
+                        if *r == "U3" { "OWN" } else { "" },
+                        "P",
+                        "P",
+                        vec![pin("1", Some(1))],
+                    )
+                })
+                .collect(),
+        };
+        board.adopt_schematic_pin_names(&path);
+        std::fs::remove_file(&path).ok();
+        let values: Vec<&str> = board.components.iter().map(|c| c.value.as_str()).collect();
+        assert_eq!(values, ["74HCT245DW", "TINY85-MU", "OWN"]);
     }
 }

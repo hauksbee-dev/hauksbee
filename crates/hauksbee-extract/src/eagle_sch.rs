@@ -169,6 +169,33 @@ pub fn schematic_part_identities(text: &str) -> Result<Vec<SchematicPartIdentity
     Ok(parts)
 }
 
+/// The library device name of every physical part whose value is blank.
+///
+/// Returned as (reference, name), sorted. With no value set, the deviceset/device a part
+/// was placed from (`ATTINY85`) is the only identity the design states.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
+pub fn schematic_blank_value_device_names(
+    text: &str,
+) -> Result<Vec<(String, String)>, ExtractError> {
+    let mut names = parse(text)?.blank_value_device_names;
+    names.sort();
+    Ok(names)
+}
+
+/// Eagle's full device name: `*` in the deviceset name takes the technology and
+/// `?` the device (package variant); with no `?` the device name is appended.
+fn eagle_device_name(deviceset: &str, device: &str, technology: &str) -> String {
+    let name = deviceset.replace('*', technology);
+    if name.contains('?') {
+        name.replace('?', device)
+    } else {
+        name + device
+    }
+}
+
 /// Every package-pad net incidence in the schematic, sorted and deduplicated.
 ///
 /// # Errors
@@ -322,6 +349,8 @@ struct Parsed {
     physical_parts: Vec<SchematicPartIdentity>,
     physical_pin_nets: Vec<SchematicPinNetIdentity>,
     part_devices: HashMap<String, (LibraryId, String, String)>,
+    /// Part name -> its library device name, for physical parts with no value.
+    blank_value_device_names: Vec<(String, String)>,
     device_pin_maps: DevicePinMaps,
     /// (library, symbol, pin) -> the pin's Eagle `direction`, when stated.
     pin_directions: HashMap<(LibraryId, String, String), String>,
@@ -353,6 +382,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
     let mut device_pin_maps: DevicePinMaps = HashMap::new();
     // Physical part -> its selected library/deviceset/device mapping.
     let mut physical_part_devices: HashMap<String, (LibraryId, String, String)> = HashMap::new();
+    let mut blank_value_device_names = Vec::new();
 
     let mut cur_library: Option<LibraryId> = None;
     let mut cur_symbol: Option<String> = None;
@@ -556,9 +586,18 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                         }) {
                             part_supply.insert(name.clone(), supply.clone());
                         } else {
+                            let value = a.get("value").cloned().unwrap_or_default();
+                            if value.trim().is_empty() {
+                                let device = a.get("device").map_or("", String::as_str);
+                                let technology = a.get("technology").map_or("", String::as_str);
+                                blank_value_device_names.push((
+                                    name.clone(),
+                                    eagle_device_name(deviceset, device, technology),
+                                ));
+                            }
                             physical_parts.push(SchematicPartIdentity {
                                 reference: name.clone(),
-                                value: a.get("value").cloned().unwrap_or_default(),
+                                value,
                             });
                             if let Some(library_id) = library_id {
                                 physical_part_devices.insert(
@@ -716,6 +755,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         physical_parts,
         physical_pin_nets,
         part_devices: physical_part_devices,
+        blank_value_device_names,
         device_pin_maps,
         pin_directions,
         gate_symbols: gate_symbol_of,
