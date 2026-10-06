@@ -208,6 +208,24 @@ fn a_pin_left_off_ground_on_the_layout_is_a_mismatch() {
     assert!(parity(&three(GND, ""), &three(GND, "")).is_empty());
 }
 
+/// A two-pin switch or resistor whose pads land on each other's schematic
+/// nets wires the same circuit; a diode turned round does not.
+#[test]
+fn swapped_ends_mismatch_only_on_a_polarised_part() {
+    for (reference, want) in [("SW3", 0), ("R3", 0), ("D3", 1)] {
+        let parts = |a: &str, b: &str| {
+            format!(
+                "{}{}{}",
+                part("R1", 0.0, A, GND, ""),
+                part("R2", 10.0, A, GND, ""),
+                part(reference, 20.0, a, b, "")
+            )
+        };
+        let found = parity(&parts(GND, A), &parts(A, GND));
+        assert_eq!(found.len(), want, "{reference}: {found:?}");
+    }
+}
+
 #[test]
 fn a_renamed_net_with_the_same_pins_is_not_a_mismatch() {
     let renamed = board(&three(GND, "")).replace(r#""GND""#, r#""VSS""#);

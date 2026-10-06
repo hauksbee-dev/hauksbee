@@ -263,13 +263,48 @@ fn pin_groups(pins: &BTreeMap<String, (Side, Side)>) -> Vec<Vec<&String>> {
     groups.into_values().collect()
 }
 
+/// A two-terminal part whose ends are interchangeable: a resistor, an
+/// inductor, or a two-pin switch. Exchanging its pads changes no circuit.
+fn interchangeable_ends(c: &Component) -> bool {
+    crate::part_class::connected_pads(c) == 2
+        && (crate::is_plain_resistor(c)
+            || crate::is_plain_inductor(c)
+            || crate::part_class::ref_designator(&c.reference).starts_with("SW"))
+}
+
+/// A layout that lands an interchangeable part's two pads on each other's
+/// schematic nets (a footprint numbered the other way round) wires the same
+/// circuit: read its layout sides back in schematic order.
+fn unswap_interchangeable_pins(pcb: &ExtractedBoard, pins: &mut BTreeMap<String, (Side, Side)>) {
+    for c in pcb.components.iter().filter(|c| interchangeable_ends(c)) {
+        let prefix = format!("{}.", c.reference);
+        let keys: Vec<String> = pins
+            .keys()
+            .filter(|k| k.strip_prefix(&prefix).is_some_and(|pad| !pad.is_empty()))
+            .cloned()
+            .collect();
+        let [a, b] = keys.as_slice() else { continue };
+        let ((sa, pa), (sb, pb)) = (&pins[a], &pins[b]);
+        let same_net = |x: &Side, y: &Side| match (x, y) {
+            (Side::Net(_, _, m), Side::Net(_, _, n)) => m == n,
+            _ => false,
+        };
+        if sa != sb && same_net(sa, pb) && same_net(sb, pa) && !same_net(sa, pa) {
+            let (pa, pb) = (pa.clone(), pb.clone());
+            pins.get_mut(a).expect("key listed").1 = pb;
+            pins.get_mut(b).expect("key listed").1 = pa;
+        }
+    }
+}
+
 /// Compare the net partitions of a layout and its schematic, pin by pin.
 ///
 /// Only parts fitted on both sides are compared; a net renamed but holding the
 /// same pins is the same connection. Each group of pins whose joins differ is
 /// one finding naming the pins that moved.
 fn schematic_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<LintFinding>) {
-    let (pins, skipped) = pin_sides(pcb, sch);
+    let (mut pins, skipped) = pin_sides(pcb, sch);
+    unswap_interchangeable_pins(pcb, &mut pins);
     let groups = pin_groups(&pins);
     let members = |side: &Side, of_layout: bool| -> Vec<&String> {
         pins.iter()
