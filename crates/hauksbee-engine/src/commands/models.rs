@@ -2368,22 +2368,16 @@ fn coverage_component(
     );
     let mut static_contracts = Vec::new();
     if let Some(entry) = model {
-        if let Some(roles) = entry.params.get_str("must_not_float_roles") {
+        for (key, tag) in [
+            ("must_not_float_roles", "must_not_float"),
+            ("float_tolerated_roles", "float_tolerated"),
+        ] {
+            let roles = entry.params.get_str(key).unwrap_or_default().split(',');
             static_contracts.extend(
                 roles
-                    .split(',')
                     .map(str::trim)
                     .filter(|role| !role.is_empty())
-                    .map(|role| format!("must_not_float:{role}")),
-            );
-        }
-        if let Some(roles) = entry.params.get_str("float_tolerated_roles") {
-            static_contracts.extend(
-                roles
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|role| !role.is_empty())
-                    .map(|role| format!("float_tolerated:{role}")),
+                    .map(|role| format!("{tag}:{role}")),
             );
         }
         static_contracts.extend(
