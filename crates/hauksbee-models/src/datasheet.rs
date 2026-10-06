@@ -2667,7 +2667,12 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     );
     let agent_prompt = prompt_for_agent_backend(prompt);
     let clause = verification_clause(&ws, reply.table());
-    let base_prompt = format!("{agent_prompt}\n\n{clause}");
+    let agy_note = if chosen == Backend::Agy {
+        agy_tool_note(&ws)
+    } else {
+        String::new()
+    };
+    let base_prompt = format!("{agent_prompt}\n\n{clause}{agy_note}");
     let mut timed_out = None;
     let billing = resolved
         .agent(chosen)
@@ -3309,17 +3314,85 @@ pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Resu
     }
     cmd.env("PATH", agent_path(ws)?);
     cmd.args(&a.extra_args).current_dir(ws.path());
-    run_cli_agent(
+    let log = ws.path().join(format!("{}-stderr.log", backend.name()));
+    let stdout = run_cli_agent(
         tool,
         &mut cmd,
         ws,
         prompt,
-        &ws.path().join(format!("{}-stderr.log", backend.name())),
+        &log,
         Duration::from_secs(resolved.timeout_secs),
         // Only codex streams events; claude and agy print once at the end, so
         // their silence is normal and a watchdog would kill every healthy run.
         (backend == Backend::Codex && resolved.idle_secs > 0)
             .then(|| Duration::from_secs(resolved.idle_secs)),
+    )?;
+    if backend == Backend::Agy {
+        agy_denial(&stdout, &log, ws)?;
+    }
+    Ok(stdout)
+}
+
+/// What agy is told beyond the shared prompt. Headless agy auto-denies every
+/// shell command that has no allow-rule, then stops with no answer and exit 0,
+/// and it honours rules only in the user's own settings.json (probed: nothing
+/// under the workspace is read). So it is steered to its file tools, with the
+/// lint command as the one command it may run.
+fn agy_tool_note(ws: &Workspace) -> String {
+    let lint = ws.checker.as_ref().map_or_else(
+        || "Run no shell command at all.".to_string(),
+        |c| {
+            format!(
+                "The only shell command you may run is exactly `'{}' models lint model.toml`.",
+                c.display()
+            )
+        },
+    );
+    format!(
+        "\n\nTool rule for this run: list and read files with your file tools, never with \
+         shell commands (no `ls`, `cat`, `find`, `head`). {lint} Never run `--help` or any \
+         other command: a denied command ends the whole run with no answer."
+    )
+}
+
+/// Turn agy's silent permission stop into an error that names the fix.
+///
+/// A run that printed nothing and left no `model.toml` is never a usable
+/// reply. agy's own message ("a tool required the \"command\" permission ...
+/// auto-denied") goes to stderr, but a denial can also leave nothing at all, so
+/// both read as a likely permission denial rather than "empty reply".
+fn agy_denial(stdout: &str, log: &Path, ws: &Workspace) -> Result<()> {
+    let answered = std::fs::read_to_string(ws.answer_path()).is_ok_and(|t| !t.trim().is_empty());
+    if answered || !stdout.trim().is_empty() {
+        return Ok(());
+    }
+    let stderr = std::fs::read_to_string(log).unwrap_or_default();
+    let said = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map_or_else(String::new, |l| format!(" It said: {l}"));
+    let denied = [
+        "auto-denied",
+        "no output produced",
+        "user denied permission",
+    ]
+    .iter()
+    .any(|m| stderr.contains(m));
+    let cmd = ws.checker.as_ref().map_or_else(
+        || "<the denied command>".to_string(),
+        |c| format!("'{}' models lint model.toml", c.display()),
+    );
+    let cause = if denied {
+        "a tool needed a permission that headless agy cannot prompt for, so it was auto-denied"
+    } else {
+        "it exited 0 with no output and no model.toml, which headless agy does when a tool \
+         permission (usually `command`) is auto-denied"
+    };
+    bail!(
+        "agy stopped without an answer: {cause}.{said} Fix: add an allow-rule to \
+         permissions.allow in ~/.gemini/antigravity-cli/settings.json (agy reads no \
+         workspace-level rules), e.g. `command({cmd})`; or use another backend."
     )
 }
 
@@ -4897,6 +4970,48 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             .to_string()
             .contains("custom wrapper"));
         assert!(smoke_test(&resolved, &mut |_| {}).is_err());
+    }
+
+    /// Headless agy auto-denies a command with no allow-rule and stops with
+    /// exit 0 and no answer: that must surface as a permission error naming the
+    /// fix, never as an empty reply, while a normal run still passes.
+    #[cfg(unix)]
+    #[test]
+    fn agy_permission_denial_is_named_not_an_empty_reply() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let command = dir.path().join("fake-agy");
+        let mut cfg = extract_config::ExtractConfig::default();
+        cfg.set("agy.command", command.to_str().unwrap()).unwrap();
+        let resolved = cfg.resolve(&extract_config::FakeHost::default(), Some(Backend::Agy));
+        let mut ws = Workspace::scratch().unwrap();
+        ws.checker = Some(dir.path().join("hauksbee"));
+        let note = agy_tool_note(&ws);
+        assert!(note.contains("models lint model.toml") && note.contains("`--help`"));
+        let run = |body: &str| {
+            let script = format!("#!/bin/sh\n[ \"$1\" = login ] && exit 0\ncat >/dev/null\n{body}");
+            std::fs::write(&command, script).unwrap();
+            std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _ = std::fs::remove_file(ws.answer_path());
+            run_agent_once(&resolved, "fake prompt", &ws)
+        };
+        let said = run(
+            "echo 'jetski: no output produced - the \"command\" permission was auto-denied' >&2",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            said.contains("auto-denied") && said.contains("permissions.allow"),
+            "{said}"
+        );
+        assert!(said.contains("models lint model.toml") && !said.contains("empty reply"));
+        let silent = run("exit 0").unwrap_err().to_string();
+        assert!(
+            silent.contains("permission") && silent.contains("no model.toml"),
+            "{silent}"
+        );
+        assert!(run("printf 'x = 1\\n' > model.toml").is_ok());
+        assert!(run("echo 'some prose'").is_ok());
     }
 
     /// A timed-out agent's lint-clean draft is published, stamped and flagged,

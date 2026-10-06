@@ -248,7 +248,12 @@ and checker); unlike codex's profile, the rest of the system (`/etc`,
 `/Library`, `/Applications`) stays readable to its shell. agy gets `--sandbox`,
 agy's own terminal sandbox (by agy's documentation: workspace-only files, no
 network); hauksbee cannot verify that boundary or confine agy's own file tools,
-so treat agy as able to read anything your account can. A custom `command`
+so treat agy as able to read anything your account can. Headless agy auto-denies
+any shell command without an allow-rule and then stops with no answer; it reads
+rules only from `~/.gemini/antigravity-cli/settings.json`, never from the
+workspace, so hauksbee tells it to use file tools and run only the lint command,
+and reports a denial as an error naming the rule to add
+(`command('<hauksbee>' models lint model.toml)` under `permissions.allow`). A custom `command`
 receives the same flags, but it is your program: hauksbee cannot confine it.
 `hauksbee models backend show`, doctor and the web page state the confinement
 of the configured backend. What any agent reads can reach its vendor. Every agent CLI starts in
