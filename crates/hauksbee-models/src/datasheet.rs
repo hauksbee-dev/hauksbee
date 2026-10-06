@@ -391,7 +391,16 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
                 crate::validation::KIND_NAMES.join(", ")
             );
         }
-        let prompt = build_prompt(part, kind, &pdf_text);
+        let mut prompt = build_prompt(part, kind, &pdf_text);
+        if !args.footprints.is_empty() {
+            use std::fmt::Write as _;
+            let _ = write!(
+                prompt,
+                "\n\nTHE BOARD places {part} on footprint {}: model the package that footprint \
+                 names (P4) and name it in the description.",
+                args.footprints.join(", ")
+            );
+        }
         let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })?;
         let entry = parse_and_validate_reply(&raw, part, kind)?;
         if let Some(warning) = crate::validation::unknown_pads_warning(&entry) {
@@ -768,6 +777,9 @@ pub struct Args {
     /// Board values the draft is for; the card's value rule is widened to
     /// match each one exactly (see [`output::finalise`]).
     pub aliases: Vec<String>,
+    /// Board footprints the part sits on: they name the package whose pin map
+    /// the draft must read when the datasheet covers several.
+    pub footprints: Vec<String>,
     pub out_dir: Option<PathBuf>,
     /// Retry count for LLM calls (default 2, for at most three attempts)
     pub retries: usize,
@@ -807,6 +819,7 @@ impl Args {
             part,
             kind_str,
             aliases: Vec::new(),
+            footprints: Vec::new(),
             out_dir: None,
             retries: 2,
             model: None,

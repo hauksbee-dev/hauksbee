@@ -1497,6 +1497,8 @@ pub struct UnmodelledPart {
     pub part: String,
     /// Every board value it appears under, so the card binds to each.
     pub aliases: Vec<String>,
+    /// Every board footprint it sits on, so the draft reads that package.
+    pub footprints: Vec<String>,
     pub references: Vec<String>,
     /// A local PDF path or an http(s) URL; `None` when the board names none.
     pub datasheet: Option<String>,
@@ -1569,6 +1571,7 @@ pub fn unmodelled_parts(
             parts.push(UnmodelledPart {
                 part: part.clone(),
                 aliases: Vec::new(),
+                footprints: Vec::new(),
                 references: Vec::new(),
                 datasheet: None,
             });
@@ -1579,6 +1582,9 @@ pub fn unmodelled_parts(
         entry.datasheet = entry.datasheet.take().or(datasheet);
         if !comp.value.trim().is_empty() && !entry.aliases.contains(&comp.value) {
             entry.aliases.push(comp.value.clone());
+        }
+        if !comp.footprint.trim().is_empty() && !entry.footprints.contains(&comp.footprint) {
+            entry.footprints.push(comp.footprint.clone());
         }
     }
     for entry in &mut parts {
@@ -1800,6 +1806,7 @@ pub fn extract_unmodelled(
                 pdf,
                 part: p.part.clone(),
                 aliases: p.aliases.clone(),
+                footprints: p.footprints.clone(),
                 kind_str: kind_of(p),
                 ..template.clone()
             };
@@ -3401,6 +3408,39 @@ mod tests {
         // Natural reference order: R2 before R10, groups by prefix.
         assert!(natural_ref_key("R2") < natural_ref_key("R10"));
         assert!(natural_ref_key("C1") < natural_ref_key("R1"));
+    }
+
+    /// `--unmodelled` hands each part's board footprints to the extraction,
+    /// so a multi-package datasheet is read for the package actually fitted.
+    #[test]
+    fn unmodelled_parts_carry_their_board_footprints() {
+        let pin = |number: &str, net| hauksbee_extract::Pin {
+            number: number.into(),
+            net: Some(net),
+            ..Default::default()
+        };
+        let board = hauksbee_extract::ExtractedBoard {
+            name: "fp".into(),
+            nets: vec![
+                hauksbee_extract::Net::new(1, "GND"),
+                hauksbee_extract::Net::new(2, "+5V"),
+                hauksbee_extract::Net::new(3, "SIG"),
+            ],
+            components: vec![hauksbee_extract::Component {
+                reference: "U1".into(),
+                value: "MYSTERY245".into(),
+                footprint: "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm".into(),
+                pins: vec![pin("1", 3), pin("10", 1), pin("20", 2)],
+                ..Default::default()
+            }],
+        };
+        let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+        let parts = super::unmodelled_parts(&board, &lib, std::path::Path::new(""), &[]).unwrap();
+        assert_eq!(parts.len(), 1, "{parts:?}");
+        assert_eq!(
+            parts[0].footprints,
+            ["Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm"]
+        );
     }
 
     #[test]
