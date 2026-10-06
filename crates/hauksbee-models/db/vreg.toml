@@ -6527,3 +6527,803 @@ basis = "DocID6739 Rev 38, Table 2 (p.7), thermal data"
 [models.coverage]
 implements = ["fixed_output_voltage", "dropout_headroom", "quiescent_current", "output_capacitor_minimum"]
 missing = ["current_limit_foldback", "thermal_limit", "line_load_regulation", "transient_response", "capacitor_esr_stability"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# XC6220B331MR-G: Torex 1 A "Green Operation" CMOS LDO, 3.30 V fixed, SOT-25.
+#
+# Source: Torex Semiconductor Ltd "XC6220 Series, 1A LDO Voltage Regulator with
+#   'Green Operation'", document ETR03041-016b
+#   (https://product.torexsemi.com/system/files/series/xc6220.pdf), PDF sha256
+#   e6a8fbbb28750515582d7bdde5c641293a0286dc1094454f26a00e0b16b9736c:
+#   PRODUCT CLASSIFICATION / Ordering Information (p.2), PIN CONFIGURATION and
+#   PIN ASSIGNMENT (p.3), ABSOLUTE MAXIMUM RATINGS (p.4), ELECTRICAL
+#   CHARACTERISTICS (p.5-6) and Voltage Chart 2, VOUT(T) = 3.30 row (p.8).
+#
+# Ordering code decode (p.2): B = no CE pull-down, with CL auto-discharge
+# (standard); 33 = 3.3 V; 1 = second decimal 0 (3.30 V); MR-G = SOT-25.
+#
+# Datasheet figures used (Ta = 25 C, VIN = VOUT(T) + 1.0 V = 4.3 V unless stated):
+#   VOUT(E)  = 3.2670 .. 3.3330 V  HS mode, IOUT = 30 mA (Voltage Chart 2, E-0)
+#              3.2340 .. 3.3660 V  PS mode, IOUT = 0.1 mA
+#   Vdif1    = 60 mV typ, 95 mV max   @ IOUT = 300 mA  (E-1, the 3.00-3.95 V cell)
+#   Vdif2    = 655 mV max             @ IOUT = 1000 mA (E-2, the 2.0-5.0 V cell)
+#              (Voltage Chart 2 prints these as merged cells; pdftotext places
+#               60/95 on the 3.50 row and 655 on the 4.00 row, the vertical
+#               centres of the 3.00-3.95 V and 3.00-5.00 V spans on p.8)
+#   ISS1     = 50 uA typ, 108 uA max  HS mode, IOUT = 10 mA (A/B series)
+#   ISS2     = 8 uA typ, 18 uA max    PS mode, IOUT = 0.1 mA (A/B series)
+#   ISTBY    = 0.01 uA typ            VIN = 6.0 V, VCE = VSS
+#   IOUTMAX  = 1000 mA min, 1200 typ  1.2 V <= VOUT(T) <= 5.0 V
+#   ILIM     = 1005 mA min, 1200 typ;  ISHORT 180 mA typ (foldback into a short)
+#   VIN      = 1.6 to 6.0 V; VCEH 1.2 V min, VCEL 0.4 V max
+#   TSD      = 150 C detect, 135 C release (typ)
+# Absolute Maximum Ratings: VIN -0.3 to 6.5 V; VOUT -0.3 to VIN + 0.3 V; VCE
+#   -0.3 to 6.5 V; Pd SOT-25 250 mW IC only / 600 mW 40x40 mm standard board /
+#   760 mW JESD51-7 board; Topr -40 to 85 C. No theta_JA or TJ(max) is printed,
+#   so this entry carries `max_power_w` (bare-IC figure) only, like xc6206_3v3.
+#
+# PIN MAP (SOT-25, PIN ASSIGNMENT p.3): 1 VIN, 2 VSS, 3 CE, 4 NC, 5 VOUT. The
+# SOT-89-5 (PR-G: 1 CE, 2 VSS, 3 NC, 4 VIN, 5 VOUT) and USP-6C (ER-G) maps
+# differ, so the regex takes ONLY the MR (SOT-25) order code. Checked on
+# open-book OSO-BOOK-B1 U1 (Package_TO_SOT_SMD:SOT-23-5, symbol borrowed from
+# AP2112K-3.3): pad 1 -> VCC, pad 3 -> VCC (CE tied high), pad 2 -> GND,
+# pad 5 -> +3V3, pad 4 unconnected.
+#
+# `dropout_v` follows the library convention (the guaranteed max at the rated
+# current, as ap2112k_3v3 does): Vdif2 655 mV at 1 A. At the 300 mA row the
+# guaranteed max is 95 mV, so on a light load this headroom is pessimistic.
+#
+# DELIBERATELY NOT MODELLED: bind_vreg stamps an ideal DC source, so Green
+# Operation (HS/PS auto-switching at IGO/IGOR), the +/-1% / +/-2% accuracy
+# windows, load/line regulation, the 1.2 A current limit and 180 mA foldback,
+# the 700 mA inrush limiter, CL auto-discharge, CE gating and thermal shutdown
+# are absent rather than wrong.
+#
+# Corrections vs the unreviewed LLM draft: pin map and VOUT/dropout values were
+# right; added the merged-cell provenance for E-1/E-2, the 250 mW bare-IC
+# `max_power_w`, the vendor URL and document number, the HS-mode ISS1 row, and
+# tightened the match so XC6220A/C/D and the PR/ER package codes cannot bind.
+[[models]]
+id = "xc6220b331mr"
+kind = "vreg"
+description = "XC6220B331MR-G Torex 1A LDO, 3.30V fixed, SOT-25 (Green Operation not modeled)"
+
+[models.match]
+# Accepts XC6220B331MR-G and XC6220B331MR. Rejects other output codes (e.g.
+# B301, B181, B33B = 3.35 V), the A/C/D CE types, and the PR-G (SOT-89-5) and
+# ER-G (USP-6C) package codes whose pin maps differ.
+value_re = "(?i)^XC6220B331MR(?:-?G)?$"
+
+[models.params]
+# Torex ETR03041-016b, Voltage Chart 2, VOUT(T) = 3.30 row (p.8).
+vout      = 3.3      # nominal; VOUT(E) 3.267..3.333 V in HS mode @ IOUT = 30 mA
+dropout_v = 0.655    # Vdif2 MAX @ IOUT = 1000 mA (E-2); Vdif1 60 typ / 95 max mV @ 300 mA
+iq_a      = 8.0e-6   # ISS2 typ, PS mode @ IOUT = 0.1 mA (18 uA max; HS mode ISS1 50 uA typ)
+
+[models.pins]
+# SOT-25, PIN ASSIGNMENT (p.3).
+"1" = "in"    # VIN
+"2" = "gnd"   # VSS
+"3" = "en"    # CE, ON/OFF control (B type: no internal pull-down; do not leave open)
+"4" = "nc"    # NC
+"5" = "out"   # VOUT
+
+[models.ratings]
+max_current_a = 1.0   # IOUTMAX min, 1.2 V <= VOUT(T) <= 5.0 V (1200 mA typ)
+max_voltage_v = 6.5   # VIN abs max
+max_power_w   = 0.25  # SOT-25 Pd, IC only, Ta = 25 C (600 mW on 40x40 mm board)
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://product.torexsemi.com/system/files/series/xc6220.pdf"
+title = "Torex Semiconductor XC6220 Series 1A LDO Voltage Regulator with Green Operation, ETR03041-016b"
+locator = "Ordering Information p.2; PIN CONFIGURATION and PIN ASSIGNMENT p.3; ABSOLUTE MAXIMUM RATINGS p.4; ELECTRICAL CHARACTERISTICS p.5-6; Voltage Chart 2, VOUT(T) = 3.30 row, p.8"
+sha256 = "e6a8fbbb28750515582d7bdde5c641293a0286dc1094454f26a00e0b16b9736c"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "green_mode_and_protection_dynamics"
+reason = "HS/PS mode switching, current limit and foldback, inrush limiting, CL discharge and thermal shutdown are not modeled; the output is an ideal 3.3 V source above the dropout headroom"
+
+[[models.source.pinout]]
+package = "SOT-25"
+pins = { "1" = "VIN", "2" = "VSS", "3" = "CE", "4" = "NC", "5" = "VOUT" }
+
+[[models.source.characteristic]]
+parameter = "VOUT(E) output voltage, HS mode"
+min = 3.267
+typ = 3.3
+max = 3.333
+unit = "V"
+conditions = "Ta = 25 °C, VIN = 4.3 V, VCE = VIN, IOUT = 30 mA, VOUT(T) = 3.30 V"
+basis = "Torex ETR03041-016b, Voltage Chart 2, E-0 HS mode, VOUT(T) = 3.30 row, p.8"
+
+[[models.source.characteristic]]
+parameter = "VOUT(E) output voltage, PS mode"
+min = 3.234
+typ = 3.3
+max = 3.366
+unit = "V"
+conditions = "Ta = 25 °C, VIN = 4.3 V, VCE = VIN, IOUT = 0.1 mA, VOUT(T) = 3.30 V"
+basis = "Torex ETR03041-016b, Voltage Chart 2, E-0 PS mode, VOUT(T) = 3.30 row, p.8"
+
+[[models.source.characteristic]]
+parameter = "Vdif1 dropout voltage"
+typ = 60
+max = 95
+unit = "mV"
+conditions = "Ta = 25 °C, IOUT = 300 mA, VCE = VIN, 3.00 V <= VOUT(T) <= 3.95 V"
+basis = "Torex ETR03041-016b, Voltage Chart 2, E-1 merged cell spanning 3.00-3.95 V, p.8"
+
+[[models.source.characteristic]]
+parameter = "Vdif2 dropout voltage"
+max = 655
+unit = "mV"
+conditions = "Ta = 25 °C, IOUT = 1000 mA, VCE = VIN"
+basis = "Torex ETR03041-016b, Voltage Chart 2, E-2 merged cell, p.8"
+
+[[models.source.characteristic]]
+parameter = "ISS1 supply current, HS mode (A/B series)"
+typ = 50
+max = 108
+unit = "uA"
+conditions = "Ta = 25 °C, VIN = VCE = 4.3 V, IOUT = 10 mA"
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS, Supply Current 1 ISS1, A/B series row, p.5"
+
+[[models.source.characteristic]]
+parameter = "ISS2 supply current, PS mode (A/B series)"
+typ = 8
+max = 18
+unit = "uA"
+conditions = "Ta = 25 °C, VIN = VCE = 4.3 V, IOUT = 0.1 mA"
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS, Supply Current 2 ISS2, A/B series row, p.5"
+
+[[models.source.characteristic]]
+parameter = "IOUTMAX output current"
+min = 1000
+typ = 1200
+unit = "mA"
+conditions = "Ta = 25 °C, VCE = VIN, VIN = VOUT(T) + 1.0 V, 1.2 V <= VOUT(T) <= 5.0 V"
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS, Output Current IOUTMAX, p.5"
+
+[[models.source.characteristic]]
+parameter = "ILIM limit current"
+min = 1005
+typ = 1200
+unit = "mA"
+conditions = "Ta = 25 °C, VCE = VIN = VOUT(T) + 1.0 V, 1.2 V <= VOUT(T) <= 5.0 V"
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS (Continued), Limit Current ILIM, p.6"
+
+[[models.source.characteristic]]
+parameter = "VCEH CE high level voltage"
+min = 1.2
+max = 6.0
+unit = "V"
+conditions = "Ta = 25 °C"
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS (Continued), VCEH, p.6"
+
+[[models.source.characteristic]]
+parameter = "VCEL CE low level voltage"
+max = 0.4
+unit = "V"
+conditions = "Ta = 25 °C"
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS (Continued), VCEL, p.6"
+
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.25
+unit = "W"
+conditions = "TA = 25 °C, IC only"
+mounting = "IC only"
+basis = "Torex ETR03041-016b, ABSOLUTE MAXIMUM RATINGS, Pd, SOT-25, 250 mW (IC only), p.4"
+
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.6
+unit = "W"
+conditions = "TA = 25 °C, PCB mounted, for reference only (*1)"
+mounting = "40 x 40 mm standard board"
+basis = "Torex ETR03041-016b, ABSOLUTE MAXIMUM RATINGS, Pd, SOT-25, 600 mW (40mm x 40mm Standard Board) (*1), p.4"
+
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.76
+unit = "W"
+conditions = "TA = 25 °C, PCB mounted, for reference only (*1)"
+mounting = "JESD51-7 board"
+basis = "Torex ETR03041-016b, ABSOLUTE MAXIMUM RATINGS, Pd, SOT-25, 760 mW (JESD51-7 Board) (*1), p.4"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.6
+max_v = 6.0
+abs_max_v = 6.5
+basis = "Torex ETR03041-016b, ELECTRICAL CHARACTERISTICS, Input Voltage VIN 1.6-6.0 V (p.5); ABSOLUTE MAXIMUM RATINGS, VIN 6.5 V (p.4)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "en"
+min_v = -0.3
+max_v = 6.5
+basis = "Torex ETR03041-016b, ABSOLUTE MAXIMUM RATINGS, CE Input Voltage VSS - 0.3 to 6.5 V (p.4); a stress bound, not a logic range"
+
+[models.coverage]
+implements = ["fixed_output_regulation", "dropout_headroom", "quiescent_current", "input_supply_range"]
+missing = ["green_mode_transitions", "enable_gating", "current_limit", "foldback", "inrush_current_prevention", "cl_auto_discharge", "thermal_shutdown", "load_dependent_dropout", "line_and_load_regulation"]
+
+# ── TLV75733P (fixed 3.3 V LDO, SOT-23-5 DBV) ───────────────────────────────
+# TI TLV757P 1 A low-IQ LDO, 3.3 V fixed option, DBV (SOT-23-5) package, as
+# fitted at U20/U24 on the trigger-output-fmc board (VDDA rails of the two
+# Si5394 jitter cleaners).
+#
+# Source: TI "TLV757P 1A, Low IQ, Small-Size, Low-Dropout Regulator",
+#   SBVS322C, October 2017, revised March 2024,
+#   https://www.ti.com/lit/ds/symlink/tlv757p.pdf
+#   (local copy sha256 84930bb4785ab3ddf29a6d1731a50c9bd37abeb9cbb91db86d476a9ff54033f0).
+#   Pin Functions Table 4-1 and Figure 4-1 p.3; 5.1 Absolute Maximum Ratings,
+#   5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information and
+#   5.5 Electrical Characteristics p.5-6; Orderable addendum (TLV75733PDBVR,
+#   SOT-23 (DBV) 5).
+#
+# Datasheet figures used:
+#   VIN       = 1.45 to 5.5 V recommended; 6.0 V abs max
+#   IOUT      = 0 to 1 A recommended
+#   VOUT      = +/-1% (-40..85 C), +/-1.5% (-40..125 C) for VOUT >= 1 V
+#   VDO       = 300 mV typ / 425 mV max (-40..85 C), 475 mV max (-40..125 C)
+#               at IOUT = 1 A, 3.3 V <= VOUT < 5.0 V row (non-DYD)
+#   IGND      = 25 uA typ, 31 uA max at TJ = 25 C, IOUT = 1 mA
+#   COUT      = 1 uF min (200 uF max) recommended
+#   RθJA      = 231.1 C/W JEDEC 2s2p, DBV (100.8 on the DYD-layout EVM; not used)
+#   TJ        = -40..125 C recommended (abs-max table lists -40..150 C)
+#
+# `dropout_v` is the 475 mV MAXIMUM over -40..125 C, not the 300 mV typical, so
+# a rail with marginal headroom is flagged rather than passed.
+# `max_junction_temp_c` is the 125 C recommended-operating limit, not the 150 C
+# abs-max line: the electrical table is only guaranteed to 125 C.
+#
+# Package: the match requires the DBV code. The DRV (WSON-6) package puts OUT on
+# pin 1 and IN on pin 6, so a looser rule would bind a wrong pin map. The DYD
+# (SOT-23-5 with thermal pad) has the same pinout but different dropout rows
+# and RθJA, so it is also left to its own entry.
+#
+# Board check: U20/U24 symbol pins 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT on footprint
+# Package_TO_SOT_SMD:SOT-23-5, matching Table 4-1 DBV. EN is tied to IN on this
+# board, so the ungated EN pin (the vreg kind has no enable) costs nothing here.
+#
+# DELIBERATELY NOT MODELLED: soft start, EN gating, foldback current limit
+# (ICL 1.2 A min, ISC 755 mA typ), active output discharge (95 Ω, P version),
+# UVLO (1.3 V typ rising), thermal shutdown, PSRR, noise, line/load regulation.
+[[models]]
+id = "tlv75733p_dbv"
+kind = "vreg"
+description = "TI TLV75733P 3.3V fixed 1A LDO, SOT-23-5 DBV (nominal DC model; protection/transients not modeled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv757p.pdf"
+title = "TI TLV757P 1A, Low IQ, Small-Size, Low-Dropout Regulator, SBVS322C, October 2017, revised March 2024"
+locator = "Pin Functions Table 4-1 p.3; 5.1 Absolute Maximum Ratings and 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information and 5.5 Electrical Characteristics p.5-6"
+sha256 = "84930bb4785ab3ddf29a6d1731a50c9bd37abeb9cbb91db86d476a9ff54033f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.2505
+high = 3.3495
+unit = "V"
+kind = "specification-limits"
+basis = "TLV757P SBVS322C 5.5 Electrical Characteristics, output accuracy -1.5% to +1.5% over TJ -40 to 125 C, VOUT >= 1 V"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 231.1
+unit = "°C/W"
+conditions = "JEDEC 2s2p PCB, DBV (SOT-23) 5 pins"
+package = "SOT-23-5"
+basis = "TLV757P SBVS322C, 5.4 Thermal Information, JEDEC RθJA, DBV"
+
+[models.match]
+value_re = "(?i)^TLV75733PDBV[RT]?$"
+mpn_re = "(?i)^TLV75733PDBV[RT]?$"
+
+[models.params]
+vout = 3.3            # fixed 3.3 V option (code 33)
+dropout_v = 0.475     # VDO MAX, IOUT = 1 A, 3.3 V <= VOUT < 5.0 V, TJ -40..125 C
+iq_a = 25.0e-6        # IGND typ at TJ = 25 C, IOUT = 1 mA (31 uA max)
+cout_min_f = 1.0e-6   # 5.3 Recommended Operating Conditions, COUT min
+warning = "[partial model] TLV75733P nominal 3.3 V DC rail and sourced ratings are modeled; EN gating, soft start, foldback current limit, active discharge, UVLO, thermal shutdown and line/load regulation are not modeled"
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"    # named for the report; NOT gated
+"4" = "nc"    # no internal connection
+"5" = "out"
+
+[models.ratings]
+max_current_a = 1.0          # 5.3 Recommended Operating Conditions, IOUT max
+max_voltage_v = 6.0          # 5.1 Absolute Maximum Ratings, VIN
+max_junction_temp_c = 125.0  # 5.3 Recommended Operating Conditions, TJ max
+theta_ja_c_per_w = 231.1     # 5.4 Thermal Information, JEDEC, DBV
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.45
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TLV757P SBVS322C, 5.3 Recommended Operating Conditions, VIN 1.45 V to 5.5 V; 5.1 Absolute Maximum Ratings, VIN -0.3 V to 6.0 V"
+
+[models.coverage]
+implements = ["fixed_output_voltage", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum"]
+missing = ["enable_gating", "soft_start", "foldback_current_limit", "active_output_discharge", "undervoltage_lockout", "thermal_shutdown", "psrr", "line_regulation", "load_regulation"]
+
+# ── TLV75718P (fixed 1.8 V LDO, SOT-23-5 DBV) ───────────────────────────────
+# TI TLV757P 1 A low-IQ LDO, 1.8 V fixed option, DBV (SOT-23-5) package, as
+# fitted at U21/U28 on the trigger-output-fmc board (VDD core rails of the two
+# Si5394 jitter cleaners).
+#
+# Source: TI "TLV757P 1A, Low IQ, Small-Size, Low-Dropout Regulator",
+#   SBVS322C, October 2017, revised March 2024,
+#   https://www.ti.com/lit/ds/symlink/tlv757p.pdf
+#   (local copy sha256 84930bb4785ab3ddf29a6d1731a50c9bd37abeb9cbb91db86d476a9ff54033f0).
+#   Pin Functions Table 4-1 and Figure 4-1 p.3; 5.1 Absolute Maximum Ratings,
+#   5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information and
+#   5.5 Electrical Characteristics p.5-6; Orderable addendum (TLV75718PDBVR,
+#   SOT-23 (DBV) 5).
+#
+# Datasheet figures used:
+#   VIN       = 1.45 to 5.5 V recommended; 6.0 V abs max
+#   IOUT      = 0 to 1 A recommended
+#   VOUT      = +/-1% (-40..85 C), +/-1.5% (-40..125 C) for VOUT >= 1 V
+#   VDO       = 650 mV typ / 750 mV max (-40..85 C), 800 mV max (-40..125 C)
+#               at IOUT = 1 A, 1.8 V <= VOUT < 2.5 V row (non-DYD)
+#   IGND      = 25 uA typ, 31 uA max at TJ = 25 C, IOUT = 1 mA
+#   COUT      = 1 uF min (200 uF max) recommended
+#   RθJA      = 231.1 C/W JEDEC 2s2p, DBV (100.8 on the DYD-layout EVM; not used)
+#   TJ        = -40..125 C recommended (abs-max table lists -40..150 C)
+#
+# `dropout_v` is the 800 mV MAXIMUM over -40..125 C, not the 650 mV typical, so
+# a rail with marginal headroom is flagged rather than passed.
+# `max_junction_temp_c` is the 125 C recommended-operating limit, not the 150 C
+# abs-max line: the electrical table is only guaranteed to 125 C.
+#
+# Package: the match requires the DBV code. The DRV (WSON-6) package puts OUT on
+# pin 1 and IN on pin 6, so a looser rule would bind a wrong pin map. The DYD
+# (SOT-23-5 with thermal pad) has the same pinout but different dropout rows
+# and RθJA, so it is also left to its own entry.
+#
+# Board check: U21/U28 symbol pins 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT on footprint
+# Package_TO_SOT_SMD:SOT-23-5, matching Table 4-1 DBV. EN is tied to IN on this
+# board, so the ungated EN pin (the vreg kind has no enable) costs nothing here.
+#
+# DELIBERATELY NOT MODELLED: soft start, EN gating, foldback current limit
+# (ICL 1.2 A min, ISC 755 mA typ), active output discharge (95 Ω, P version),
+# UVLO (1.3 V typ rising), thermal shutdown, PSRR, noise, line/load regulation.
+[[models]]
+id = "tlv75718p_dbv"
+kind = "vreg"
+description = "TI TLV75718P 1.8V fixed 1A LDO, SOT-23-5 DBV (nominal DC model; protection/transients not modeled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tlv757p.pdf"
+title = "TI TLV757P 1A, Low IQ, Small-Size, Low-Dropout Regulator, SBVS322C, October 2017, revised March 2024"
+locator = "Pin Functions Table 4-1 p.3; 5.1 Absolute Maximum Ratings and 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information and 5.5 Electrical Characteristics p.5-6"
+sha256 = "84930bb4785ab3ddf29a6d1731a50c9bd37abeb9cbb91db86d476a9ff54033f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.773
+high = 1.827
+unit = "V"
+kind = "specification-limits"
+basis = "TLV757P SBVS322C 5.5 Electrical Characteristics, output accuracy -1.5% to +1.5% over TJ -40 to 125 C, VOUT >= 1 V"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 231.1
+unit = "°C/W"
+conditions = "JEDEC 2s2p PCB, DBV (SOT-23) 5 pins"
+package = "SOT-23-5"
+basis = "TLV757P SBVS322C, 5.4 Thermal Information, JEDEC RθJA, DBV"
+
+[models.match]
+value_re = "(?i)^TLV75718PDBV[RT]?$"
+mpn_re = "(?i)^TLV75718PDBV[RT]?$"
+
+[models.params]
+vout = 1.8            # fixed 1.8 V option (code 18)
+dropout_v = 0.800     # VDO MAX, IOUT = 1 A, 1.8 V <= VOUT < 2.5 V, TJ -40..125 C
+iq_a = 25.0e-6        # IGND typ at TJ = 25 C, IOUT = 1 mA (31 uA max)
+cout_min_f = 1.0e-6   # 5.3 Recommended Operating Conditions, COUT min
+warning = "[partial model] TLV75718P nominal 1.8 V DC rail and sourced ratings are modeled; EN gating, soft start, foldback current limit, active discharge, UVLO, thermal shutdown and line/load regulation are not modeled"
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"    # named for the report; NOT gated
+"4" = "nc"    # no internal connection
+"5" = "out"
+
+[models.ratings]
+max_current_a = 1.0          # 5.3 Recommended Operating Conditions, IOUT max
+max_voltage_v = 6.0          # 5.1 Absolute Maximum Ratings, VIN
+max_junction_temp_c = 125.0  # 5.3 Recommended Operating Conditions, TJ max
+theta_ja_c_per_w = 231.1     # 5.4 Thermal Information, JEDEC, DBV
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.45
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TLV757P SBVS322C, 5.3 Recommended Operating Conditions, VIN 1.45 V to 5.5 V; 5.1 Absolute Maximum Ratings, VIN -0.3 V to 6.0 V"
+
+[models.coverage]
+implements = ["fixed_output_voltage", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum"]
+missing = ["enable_gating", "soft_start", "foldback_current_limit", "active_output_discharge", "undervoltage_lockout", "thermal_shutdown", "psrr", "line_regulation", "load_regulation"]
+
+# ── TPS563200 (adjustable buck, SOT-23-6 DDC) ───────────────────────────────
+# TI 3 A, 4.5-17 V synchronous buck, D-CAP2, 650 kHz, DDC (SOT-23-6).
+# Source: TI "TPS56x200 4.5-V to 17-V Input, 2-A, 3-A Synchronous Step-down
+#   Voltage Regulator in 6-Pin SOT-23", SLVSCB0E, January 2014, revised May
+#   2023, https://www.ti.com/lit/ds/symlink/tps563200.pdf
+#   (local copy sha256 ec98a636c386d233ed2dfa01cc84cb6c73cd3cc25b0cadd27a2f1c6ca4a45df2).
+#   Features p.1 (650 kHz, 0.76-7 V output, 3 A); Pin Functions Table 5-1 p.4;
+#   6.1 Absolute Maximum Ratings and 6.3 Recommended Operating Conditions p.5;
+#   6.4 Thermal Information p.6; 6.5 Electrical Characteristics and 6.6 Timing
+#   Requirements p.7; Orderable addendum (TPS563200DDCR / DDCT).
+#
+# ADJUSTABLE: the feedback threshold VFB(TH) is 765 mV typ (758-772 mV, TA =
+# 25 C, continuous mode), and the board divider on VFB sets the rail. It is
+# NOT the output voltage. On trigger-output-fmc, R66 107k (output to VFB) and
+# R67 17.4k (VFB to GND) give 0.765 * (1 + 107/17.4) = 5.47 V, which feeds
+# /Digital IO/Switched_5P45V through FB1 from +12V_FMC.
+#
+# max_duty: D-CAP2 has no fixed max duty; the ceiling is the minimum off-time,
+# 1 - tOFF(MIN) * fSW = 1 - 310 ns (max) * 650 kHz = 0.80. The 650 kHz is the
+# nominal (Features); fSW varies with VOUT (Figure 6-7), so this is approximate.
+#
+# Board check: U22 symbol Regulator_Switching:TPS563200 on SOT-23-6, pins
+# 1 GND, 2 SW, 3 VIN, 4 VFB, 5 EN, 6 VBST, matching Table 5-1. EN is tied to
+# VIN (+12V_FMC through FB2) here.
+#
+# Only the TPS563200 is matched: the TPS562200 shares the pinout but is a 2 A
+# part with different FETs and current limit; TPS563201/TPS563208/TPS563252 are
+# different datasheets.
+[[models]]
+id = "tps563200_ddc"
+kind = "vreg"
+description = "TI TPS563200 3A 17V synchronous buck, SOT-23-6, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps563200.pdf"
+title = "TI TPS56x200 4.5-V to 17-V Input, 2-A, 3-A Synchronous Step-down Voltage Regulator in 6-Pin SOT-23, SLVSCB0E, January 2014, revised May 2023"
+locator = "Features p.1; Pin Functions Table 5-1 p.4; 6.1 Absolute Maximum Ratings and 6.3 Recommended Operating Conditions p.5; 6.4 Thermal Information p.6; 6.5 Electrical Characteristics and 6.6 Timing Requirements p.7"
+sha256 = "ec98a636c386d233ed2dfa01cc84cb6c73cd3cc25b0cadd27a2f1c6ca4a45df2"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.758
+high = 0.772
+unit = "V"
+kind = "specification-limits"
+basis = "TPS563200 SLVSCB0E 6.5 Electrical Characteristics, VFB(TH) continuous mode, 758 mV min to 772 mV max at TA = 25 C (no over-temperature limits given)"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 87.9
+unit = "°C/W"
+conditions = "TPS563200 DDC (SOT) 6 pins"
+package = "SOT-23-6"
+basis = "TPS563200 SLVSCB0E, 6.4 Thermal Information, RθJA, TPS563200 DDC"
+
+[models.match]
+value_re = "(?i)^TPS563200(DDC[RT]?)?$"
+mpn_re = "(?i)^TPS563200(DDC[RT]?)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, D-CAP2 loop and ESR stability, Eco-mode, soft-start, OVP/UVP hiccup, UVLO and thermal shutdown are not modeled"
+
+[models.pins]
+"1" = "gnd"
+"2" = "sw"
+"3" = "in"
+"4" = "fb"
+"5" = "en"
+"6" = "bst"
+
+[models.ratings]
+max_current_a = 3.0          # Features / Description, TPS563200 3-A converter
+max_voltage_v = 19.0         # 6.1 Absolute Maximum Ratings, VIN/EN
+max_junction_temp_c = 150.0  # 6.1 operating TJ -40 to 150 C (6.5 is specified over the same range)
+theta_ja_c_per_w = 87.9      # 6.4 Thermal Information, TPS563200 DDC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.5
+max_v = 17.0
+abs_max_v = 19.0
+basis = "TI TPS563200 SLVSCB0E, 6.3 Recommended Operating Conditions, VIN 4.5 V to 17 V; 6.1 Absolute Maximum Ratings, VIN -0.3 V to 19 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 7.0          # top of the 0.76-7 V output range; only used with no FB divider
+iout_limit_a = 3.0
+max_duty = 0.80              # 1 - tOFF(MIN) max 310 ns x 650 kHz
+switching_hz = 650e3
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.765
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.6       # VEN(H) EN high-level input voltage min
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "ovp", "uvp_hiccup", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves", "efficiency"]
+
+# ── LP3855-ADJ in SOT-223-5 (adjustable LDO) ────────────────────────────────
+# TI (ex-National) 1.5 A fast-response ultra-low-dropout LDO, adjustable,
+# SOT-223-5 (NDC) as LP3855EMP-ADJ/NOPB / LP3855EMPX-ADJ/NOPB.
+# Source: TI "LP3855-ADJ 1.5A Fast Response Ultra Low Dropout Linear
+#   Regulators", SNVS244F, September 2003, revised April 2013,
+#   https://www.ti.com/lit/ds/symlink/lp3855-adj.pdf
+#   (local copy sha256 d1610e06156c9fbef98c2b87a69bbba54bcf03d1176608b2c4a410cd4e5feb60).
+#   Figure 3 and Table 2 Pin Descriptions for SOT-223-5 p.2; Absolute Maximum
+#   Ratings and Recommended Operating Conditions p.3; Electrical
+#   Characteristics p.4; Application Hints (VOUT = VADJ x (1 + R1/R2), output
+#   capacitor 10 uF minimum); Package Option Addendum (EMP/EMPX = SOT-223 NDC).
+#
+# ADJUSTABLE: VADJ is 1.216 V typ (1.180-1.253 V over 10 mA..1.5 A and full
+# temperature). It is NOT the output voltage. The part is ground-referenced
+# (Application Hints, VOUT = VADJ x (1 + R1/R2), R1 on OUT-ADJ), so the card has
+# a `gnd` pin and `iq_a`. On trigger-output-fmc, R75 56k (VOUT to ADJ) and R74
+# 18k (ADJ to GND) give 1.216 x (1 + 56/18) = 5.00 V on /Digital IO/VCC, fed
+# from /Digital IO/Switched_5P45V (about 5.47 V from U22 TPS563200) via FB3.
+#
+# PACKAGE MATTERS: the SOT-223-5 pin order (SD 1, VIN 2, VOUT 3, ADJ 4, GND 5,
+# Table 2) differs from the TO-220-5 / DDPAK-TO-263-5 order (GND 3, VOUT 4,
+# ADJ 5, Table 1), so only the EMP/EMPX (SOT-223) codes match. Board check: U44
+# symbol evr-fmc:LP3855-ADJ on rf-input-fmc:SOT-223-5, pins 1 ~SD, 2 Vin,
+# 3 Vout, 4 ADJ, 5 GND, matching Table 2. SD is tied to VIN on this board.
+#
+# `dropout_v` is the SOT-223 row MAXIMUM at IL = 1.5 A over temperature, 435 mV
+# (260 mV typ; 45 mV max at 150 mA). Footnote 5: SOT-223 has higher dropout than
+# TO-220/DDPAK from bond-wire resistance. `iq_a` is IGND normal mode, 3 mA typ
+# (9 mA max at 25 C, 10 mA over temperature) at both 150 mA and 1.5 A.
+# No θJA is stated for SOT-223 (only TO-220 50 C/W and DDPAK 60 C/W in the
+# abs-max footnote), so `theta_ja_c_per_w` is deliberately absent.
+#
+# DELIBERATELY NOT MODELLED: SD gating (threshold 1.3 V typ, 2 V max rising),
+# the 3.2 A short-circuit limit and overtemperature protection, line/load
+# regulation, PSRR, and the COUT ESR stability window (Figure 18).
+[[models]]
+id = "lp3855_adj_sot223"
+kind = "vreg"
+description = "TI LP3855-ADJ 1.5A ultra-low-dropout adjustable LDO, VADJ 1.216V, SOT-223-5"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lp3855-adj.pdf"
+title = "TI LP3855-ADJ 1.5A Fast Response Ultra Low Dropout Linear Regulators, SNVS244F, September 2003, revised April 2013"
+locator = "Figure 3 and Table 2 p.2; Absolute Maximum Ratings and Recommended Operating Conditions p.3; Electrical Characteristics p.4; Application Hints, Output Capacitor and Equation 1"
+sha256 = "d1610e06156c9fbef98c2b87a69bbba54bcf03d1176608b2c4a410cd4e5feb60"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vref"
+low = 1.180
+high = 1.253
+unit = "V"
+kind = "specification-limits"
+basis = "LP3855-ADJ SNVS244F Electrical Characteristics, VADJ 1.180 V min to 1.253 V max, 10 mA <= IL <= 1.5 A, full operating temperature"
+
+[models.match]
+value_re = "(?i)^LP3855EMPX?-ADJ(/NOPB)?$"
+mpn_re = "(?i)^LP3855EMPX?-ADJ(/NOPB)?$"
+
+[models.params]
+vref = 1.216          # VADJ typ
+dropout_v = 0.435     # SOT-223 dropout max at IL = 1.5 A, full temperature
+iq_a = 3.0e-3         # IGND normal operation typ (10 mA max over temperature)
+cout_min_f = 10.0e-6  # Application Hints, minimum stable output capacitance 10 uF
+warning = "[partial model] LP3855-ADJ board-divider DC rail and sourced ratings are modeled; SD gating, current limit, thermal protection, line/load regulation and the COUT ESR stability window are not modeled; no SOT-223 thermal resistance is published"
+
+[models.pins]
+"1" = "en"    # SD: pulled low = shutdown, so high enables; named, NOT gated
+"2" = "in"
+"3" = "out"
+"4" = "fb"    # ADJ
+"5" = "gnd"   # tab
+
+[models.ratings]
+max_current_a = 1.5          # Recommended Operating Conditions, maximum operating current (DC)
+max_voltage_v = 7.5          # Absolute Maximum Ratings, input supply voltage (survival)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions, operating TJ -40 to +125 C
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 7.0
+abs_max_v = 7.5
+basis = "TI LP3855-ADJ SNVS244F, Recommended Operating Conditions, input supply voltage 2.5 V to 7.0 V (min is the greater of VOUT + VDROPOUT and 2.5 V); Absolute Maximum Ratings, input supply voltage (survival) -0.3 V to +7.5 V"
+
+[models.coverage]
+implements = ["board_feedback_divider", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum"]
+missing = ["shutdown_gating", "current_limit", "thermal_shutdown", "line_regulation", "load_regulation", "psrr", "cout_esr_window", "thermal_resistance"]
+
+# ── "AP2112/RT9080-3.3": either-part 3.3 V LDO, SOT-23-5 ──────────────────────
+# Adafruit's BOM value for a footprint that may be stuffed with EITHER a Diodes
+# AP2112K-3.3 or a Richtek RT9080-33GJ5 (Adafruit Feather ESP32-S3, U2 and U5).
+#
+# Sources:
+#   [1] Diodes Incorporated "AP2112 600mA CMOS LDO regulator with enable",
+#       DS39724 Rev. 2-2, June 2017. Pin Descriptions p.2 (SOT25 column),
+#       Absolute Maximum Ratings p.3, AP2112-3.3 Electrical Characteristics p.8.
+#       PDF sha256 ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f
+#       (the copy named AP2112_RT9080-3.3.pdf in the eval set is this same file:
+#       it contains NO RT9080 data).
+#   [2] Richtek "RT9080 2uA IQ, 600mA Low-Dropout Linear Voltage Regulator",
+#       DS9080-09, December 2024. Section 2 Ordering Information (J5 =
+#       TSOT-23-5; "RT9080: Without SNS Pin", RT9080N with), Section 7 Pin
+#       Configuration, Section 8 Functional Pin Description, Section 10 Absolute
+#       Maximum Ratings, Section 12 Recommended Operating Conditions, Section 13
+#       Thermal Information, Section 14 Electrical Characteristics.
+#       PDF sha256 52d09967ef32672003df93d1382bc249715365406f59d110d9ebad6d618017d4
+#
+# WHY A SEPARATE ENTRY AND NOT A WIDER AP2112 REGEX. The two pin maps agree on
+# these pads: AP2112 SOT25 1 VIN, 2 GND, 3 EN, 4 NC, 5 VOUT [1]; RT9080 (no SNS,
+# i.e. not the RT9080N) TSOT-23-5 1 VIN, 2 GND, 3 EN, 4 NC, 5 VOUT [2 Section
+# 8]. The numbers do not: RT9080 dropout at 600 mA is 0.53 V max for VOUT >= 3 V
+# against the AP2112's 0.4 V, its recommended VIN tops out at 5.5 V against
+# 6.0 V, its θJA is 189.4 C/W against 184, and its accuracy is ±2% against
+# ±1.5%. Widening ap2112_3v3_sot25 would put AP2112-only numbers on a board that
+# may carry the Richtek part. Every limit below is the WORSE of the two; the
+# quiescent current is the AP2112's 55 uA (the larger load; RT9080 is 2 uA).
+#
+# BOARD CHECK (Adafruit ESP32-S3 8MB No PSRAM.brd, package SOT23-5): U2 pads
+# 1 VHI, 2 GND, 3 EN, 4 unconnected, 5 3.3V; U5 pads 1 VHI, 2 GND, 3 I2C_PWR,
+# 4 unconnected, 5 VSENSOR. Both agree with the shared map.
+[[models]]
+id = "ap2112_or_rt9080_3v3_sot25"
+kind = "vreg"
+description = "AP2112K-3.3 or RT9080-33GJ5 alternate-stuffed 3.3V 600mA LDO, SOT-23-5 (worst case of both datasheets)"
+
+[models.match]
+# Only the alternate-part spelling. The single-vendor values keep their own
+# cards (ap2112k_3v3, ap2112_3v3_sot25). The footprint gate keeps the AP2112's
+# SO-8 / SOT89-5 maps and the RT9080's ZQFN-4L map (1 VOUT, 2 GND, 3 EN, 4 VIN)
+# out, because the value names no package.
+value_re = "(?i)^AP2112[A-Z]?\\s*/\\s*RT9080[- ]?3[._]3V?$"
+footprint_re = "(?i)T?SOT-?23-?5|SOT-?25|SC-?74A"
+
+[models.params]
+vout       = 3.3      # [1] AP2112-3.3 EC (±1.5%); [2] Section 14 ±2% at 1 mA
+dropout_v  = 0.53     # [2] Section 14 VDROP max, ILOAD = 600 mA, VOUT >= 3 V (AP2112: 0.4 V max)
+cout_min_f = 1.0e-6   # [1] Note 4 1.0 uF ceramic; [2] Section 8 "1uF or larger ceramic (0.7uF effective)"
+iq_a       = 55.0e-6  # [1] IQ typ, VIN = 4.3 V (80 uA max); [2] RT9080 IQ 2 uA typ, so the larger is carried
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.6          # [1] IOUT(MAX) 600 mA min; [2] 600 mA for VIN >= 2.3 V
+max_voltage_v = 6.5          # [1] VCC abs max 6.5 V; [2] Section 10 VIN -0.3 to 6.5 V
+max_junction_temp_c = 150.0  # [1] TJ 150 C; [2] Section 10 150 C (recommended 125 C max)
+theta_ja_c_per_w = 189.4     # [2] Section 13 θJA TSOT-23-5, JEDEC (AP2112 SOT25: 184)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Intersection of AP2112 DS39724 Rev. 2-2 recommended VIN 2.5 to 6.0 V and RT9080 DS9080-09 Section 12 VIN 1.2 to 5.5 V; abs max 6.5 V in both"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2112.pdf"
+title = "Diodes Incorporated AP2112 600mA CMOS LDO regulator with enable, DS39724 Rev. 2-2, June 2017"
+locator = "Pin Descriptions p.2 (SOT25 column); Absolute Maximum Ratings p.3; AP2112-3.3 Electrical Characteristics p.8"
+sha256 = "ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f"
+[[models.source.references]]
+url = "https://www.richtek.com/assets/product_file/RT9080/DS9080-09.pdf"
+title = "Richtek RT9080 2uA IQ, 600mA Low-Dropout Linear Voltage Regulator, DS9080-09, December 2024"
+locator = "Section 2 Ordering Information; Section 7 Pin Configuration; Section 8 Functional Pin Description; Sections 10, 12, 13; Section 14 Electrical Characteristics"
+sha256 = "52d09967ef32672003df93d1382bc249715365406f59d110d9ebad6d618017d4"
+
+# ── AP2114HA-3.3 (Diodes/BCD 1 A low-noise CMOS LDO, SOT-223, HA pinout) ──────
+# Source: BCD Semiconductor (now Diodes) "AP2114 1A Low Noise CMOS LDO Regulator
+#   with Enable", data sheet Rev. 2.2, January 2013. Figure 2 Pin Configuration
+#   (page 2, top view) and Pin Descriptions (page 3); Ordering Information
+#   (pages 4 to 5, AP2114HA-3.3TRG1, marking GH14F); Absolute Maximum Ratings and
+#   Recommended Operating Conditions (page 7); AP2114-3.3 Electrical
+#   Characteristics (page 12).
+#   PDF sha256 d20cd46c5f472fe220f3e1ffb82b2679bc37e3dd145891bfdedf0acb78089d51
+#
+# THE HA PIN MAP IS NOT THE H PIN MAP. Figure 2: H = 1 GND, 2 VOUT, 3 VIN, tab
+# VOUT; HA = 1 VIN, 2 GND, 3 VOUT, tab GND. The Pin Descriptions table agrees
+# (HA column: GND 2, VOUT 3, VIN 1). Like the H, the HA has no EN pin: EN
+# exists only on the SOIC-8 / PSOP-8 members.
+#
+# BOARD CHECK (smartknob view_base.kicad_pcb, U6, footprint
+# "Modified:SOT-223-3_TabPin2_InGndOut"): pad 1 +5V, pad 2 GND (both the pin and
+# the tab are numbered "2"), pad 3 +3V3. That is the HA map exactly. Pad "4" is
+# carried for libraries that number the tab separately.
+#
+# Same die and the same AP2114-3.3 Electrical Characteristics table as
+# ap2114h_3v3; only the package pin assignment differs, so the numbers match it.
+[[models]]
+id = "ap2114ha_3v3"
+kind = "vreg"
+description = "Diodes AP2114HA-3.3 1A low-noise LDO, 3.3V fixed, SOT-223 HA pinout (1 VIN, 2/tab GND, 3 VOUT; no enable)"
+
+[models.match]
+# Ordering Information: AP2114HA-3.3TRG1. The voltage code is required (1.2, 1.5,
+# 1.8, 2.5 V HA parts exist), and "HA" is required so the H map is never used.
+value_re = "(?i)^AP2114HA-3[._]3(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 3.3      # AP2114-3.3 EC, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA (3.25 to 3.35 V at IOUT(MAX) row)
+dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
+cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"; EC test COUT = 4.7 uF ceramic
+iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
+
+[models.pins]
+# Figure 2 and Pin Descriptions, SOT-223 (HA).
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+"4" = "gnd"   # SOT-223 tab, GND on the HA (Figure 2)
+
+[models.ratings]
+max_current_a = 1.0          # IOUT(MAX) min, AP2114-3.3 EC
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 128.0     # Absolute Maximum Ratings, θJA SOT-223, no heatsink
+theta_jc_c_per_w = 50.9      # AP2114-3.3 EC, θJC SOT-223
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 6.0
+abs_max_v = 6.5
+basis = "AP2114 Rev. 2.2 Recommended Operating Conditions VIN 2.5 to 6.0 V; Absolute Maximum Ratings VIN 6.5 V"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2114.pdf"
+title = "BCD Semiconductor / Diodes AP2114 1A low noise CMOS LDO regulator with enable, data sheet Rev. 2.2, January 2013"
+locator = "Figure 2 Pin Configuration p.2 (HA); Pin Descriptions p.3; Ordering Information p.4-5; Absolute Maximum Ratings and Recommended Operating Conditions p.7; AP2114-3.3 Electrical Characteristics p.12"
+sha256 = "d20cd46c5f472fe220f3e1ffb82b2679bc37e3dd145891bfdedf0acb78089d51"

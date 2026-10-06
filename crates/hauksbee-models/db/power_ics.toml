@@ -1325,29 +1325,8 @@ missing = ["smart_reset_timer", "recovery_timer", "low_voltage_input_ignore", "o
 #     2.30 falling, TSD 150 C typ with 20 C hysteresis, theta_JA 235 C/W.
 #     Source: Fairchild/onsemi FAN5622/24/26 Rev. 1.0.3, cover dated July 2013.
 #
-#   TPS61169 (TI, DCK SC70-5, NOT SOT-23-5): an asynchronous boost WLED driver
-#     whose regulated quantity is the LED current, FB held at VREF = 204 mV
-#     across the board's RSET (204 mV is a current-sense reference, never an
-#     output voltage). It has NO output pin: the output node is the cathode of
-#     the board's external Schottky, and the IC's pins are SW, GND, FB, CTRL and
-#     VIN. `[models.behavioral.converter]` needs `out_pin` to be an IC pin, and
-#     the only candidate, SW, is tied to VIN through the boost inductor, which
-#     the averaged loop sees as a DC short (`regulated_node` even follows that
-#     inductor back to VIN). Injecting the averaged current into SW would push
-#     it into the input rail, the diode would never conduct, and FB would never
-#     reach 204 mV, so the card would simulate a saturated converter heating the
-#     input rail. It waits for a converter output that can name an external
-#     node (the rectifier cathode). Recorded, SNVSA40B (October 2014, revised
-#     June 2024), Sections 4, 5.1, 5.3-5.5 and 6.3.5: pins 1 SW, 2 GND, 3 FB,
-#     4 CTRL, 5 VIN; VIN 2.7-5.5 V (abs max 7 V on VIN/CTRL/FB, 40 V on SW);
-#     VOUT VIN to 38 V; VREF 188/204/220 mV at 100% duty; VFB = duty x 204 mV;
-#     IQ 0.3 typ / 0.45 max mA switching; ISD 1 typ / 2 max uA; UVLO 2.3 V
-#     falling max / 2.6 V rising max, 200 mV hysteresis; CTRL VH 1.2 V min,
-#     VL 0.4 V max, 300 kOhm pull-down, 2.5 ms low to shutdown; RDS(on)
-#     0.35/0.7 Ohm; fSW 0.75/1.2/1.5 MHz; ILIM 1.2/1.8/2.4 A; OVP 36/37.5/39 V;
-#     theta_JA 263.8 C/W; TSD 160 C, 15 C hysteresis. PDF sha256
-#     7d0b8ace2459a9fd22fe7145086cbad4ccb3bb43219247459313fcba75230151
-#     (https://www.ti.com/lit/ds/symlink/tps61169.pdf).
+#   TPS61169: see the sourced identity card `tps61169_identity` below; it
+#     stays OPEN on purpose for the reason recorded there.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAX6070AAUT18: Maxim/ADI low-noise precision SERIES voltage reference, 1.8 V,
@@ -2731,3 +2710,456 @@ url = "https://www.diodes.com/assets/Datasheets/APX811_812.pdf"
 title = "Diodes Incorporated APX811/812 4-Pin Microprocessor Supervisor With Manual Reset, DS31960 Rev. 2, October 2009"
 locator = "Ordering Information; Pin Assignments; Pin Descriptions; Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics (Vth 4.63 V row); Switching Characteristics td"
 sha256 = "7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+
+# ── TPS61169: TI 40 V asynchronous boost WLED driver, DCK (SC70-5) ──────────
+#
+# Source: Texas Instruments "TPS61169 38V High Current-Boost WLED Driver With
+#   PWM Control", SNVSA40B, October 2014, revised June 2024:
+#   Figure 4-1 / Table 4-1 Pin Functions (p.3), 5.1 Absolute Maximum Ratings,
+#   5.3 Recommended Operating Conditions, 5.4 Thermal Information (p.4),
+#   5.5 Electrical Characteristics (p.5), 6.3.4 Current Program and 6.3.5 LED
+#   Brightness Dimming (p.8-9), 10 Package Option Addendum.
+#   PDF sha256 7d0b8ace2459a9fd22fe7145086cbad4ccb3bb43219247459313fcba75230151
+#   (https://www.ti.com/lit/ds/symlink/tps61169.pdf).
+#
+# WHY IDENTITY-ONLY. The regulated quantity is the LED CURRENT: FB is held at
+# VREF = 204 mV (188/204/220 mV, 100 % duty) across the board's sense resistor
+# RSET, ILED = VFB / RSET (Eq. 1), and VFB = Duty x 204 mV under PWM on CTRL
+# (Eq. 2). 204 mV is a current-sense reference, never an output voltage, so it
+# is deliberately NOT a `vout`/`vref` param here (a reader of a vreg card must
+# not mistake it for a rail). The part has NO output pin: the output node is
+# the cathode of the board's external Schottky; the IC pins are SW, GND, FB,
+# CTRL, VIN. `[models.behavioral.converter]` needs `out_pin` to be an IC pin,
+# and the only candidate, SW, is tied to VIN through the boost inductor, which
+# the averaged loop treats as a DC short (`regulated_node` follows that inductor
+# back to VIN). Injecting the averaged current into SW would push it into the
+# input rail and FB would never reach 204 mV: a saturated converter heating the
+# input rail. So the card resolves identity, pins, ratings and envelopes and
+# leaves the part OPEN; `bind` keeps reporting U3 as active-path-unresolved,
+# which is the truthful state. Unlocked by a converter output that can name an
+# external node (the rectifier cathode) and a current-sense feedback.
+#
+# PIN MAP CHECK (Adafruit TPS61169 LED driver board, package SC70-5 pads
+# 1-2-3 bottom row, 4-5 top row): U3.1 -> N$5 (L1 + D2 anode) = SW; U3.2 -> GND;
+# U3.3 -> LEDK (R7 8.2 ohm to GND, LED cathode terminal X1.1) = FB;
+# U3.4 -> PWM (R1 10k to VIN) = CTRL; U3.5 -> VIN (C7, L1) = VIN. Matches
+# Table 4-1. On that board ILED = 204 mV / 8.2 ohm = 24.9 mA typ with all DIP
+# positions off; the LED string is off-board (X1), so there is no on-board
+# load whose current could be checked even with a behavioural model.
+#
+# Corrections vs the unreviewed LLM draft: dropped the `vref` param (204 mV
+# mis-typed as a vreg reference with unit "mV"); dropped the "VIN falling typ
+# 2.0 V" pairing (the 2 V typ in Table 5.5 sits between the rising and falling
+# rows and is not attributable to either, so it is recorded as an unattributed
+# typ); added the SW 40 V and CTRL/FB 7 V abs-max envelopes, theta_JA and the
+# orderable-code match.
+[[models]]
+id = "tps61169_identity"
+kind = "vreg"
+description = "TI TPS61169 boost WLED driver, DCK SC70-5 (identity, pins, ratings and pin envelopes only; boost conversion and LED-current regulation are not modeled, the part stays OPEN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps61169.pdf"
+title = "Texas Instruments TPS61169 38V High Current-Boost WLED Driver With PWM Control, SNVSA40B (October 2014, revised June 2024)"
+locator = "Figure 4-1 and Table 4-1 Pin Functions (p.3); Sections 5.1, 5.3, 5.4 (p.4); 5.5 Electrical Characteristics (p.5); 6.3.4 Current Program and 6.3.5 LED Brightness Dimming; Section 10 Package Option Addendum"
+sha256 = "7d0b8ace2459a9fd22fe7145086cbad4ccb3bb43219247459313fcba75230151"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "converter_behavior"
+reason = "ABSTAIN: the converter regulates LED current via FB = 204 mV across an external RSET and has no output pin (output is the external Schottky cathode); the averaged converter primitive needs an IC output pin, so boost conversion, LED-current regulation, PWM-to-analog dimming, soft start, current limit, OVP and thermal foldback are not modeled"
+
+[[models.source.pinout]]
+package = "DCK (SC70), 5 pins"
+pins = { "1" = "SW", "2" = "GND", "3" = "FB", "4" = "CTRL", "5" = "VIN" }
+
+[[models.source.characteristic]]
+parameter = "VREF voltage feedback regulation voltage (FB, LED-current sense reference; not an output voltage)"
+min = 188
+typ = 204
+max = 220
+unit = "mV"
+conditions = "Duty = 100%, TA >= 25 °C, VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, VREF row, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VVIN_UVLO undervoltage lockout threshold, VIN falling"
+max = 2.3
+unit = "V"
+conditions = "VIN falling"
+basis = "SNVSA40B Section 5.5, VVIN_UVLO VIN falling row, max column"
+
+[[models.source.characteristic]]
+parameter = "VVIN_UVLO undervoltage lockout threshold, VIN rising"
+max = 2.6
+unit = "V"
+conditions = "VIN rising"
+basis = "SNVSA40B Section 5.5, VVIN_UVLO VIN rising row, max column"
+
+[[models.source.characteristic]]
+parameter = "VVIN_UVLO undervoltage lockout threshold (unattributed typical)"
+typ = 2.0
+unit = "V"
+conditions = "printed between the rising and falling rows; not attributable to either"
+basis = "SNVSA40B Section 5.5, VVIN_UVLO row, typ column"
+
+[[models.source.characteristic]]
+parameter = "VVIN_HYS VIN UVLO hysteresis"
+typ = 200
+unit = "mV"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, VVIN_HYS row, typ column"
+
+[[models.source.characteristic]]
+parameter = "IQ_VIN operating quiescent current into VIN"
+typ = 0.3
+max = 0.45
+unit = "mA"
+conditions = "device enabled, switching 1.2 MHz, no load"
+basis = "SNVSA40B Section 5.5, IQ_VIN row, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "ISD shutdown current"
+typ = 1
+max = 2
+unit = "uA"
+conditions = "CTRL = GND"
+basis = "SNVSA40B Section 5.5, ISD row, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VH CTRL logic high voltage"
+min = 1.2
+unit = "V"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, VH row, min column"
+
+[[models.source.characteristic]]
+parameter = "VL CTRL logic low voltage"
+max = 0.4
+unit = "V"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, VL row, max column"
+
+[[models.source.characteristic]]
+parameter = "RPD CTRL pin internal pull-down resistor"
+typ = 300
+unit = "kohm"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, RPD row, typ column"
+
+[[models.source.characteristic]]
+parameter = "tSD CTRL logic low time to shutdown"
+max = 2.5
+unit = "ms"
+conditions = "CTRL high to low"
+basis = "SNVSA40B Section 5.5, tSD row, max column"
+
+[[models.source.characteristic]]
+parameter = "IFB FB pin bias current"
+max = 2.5
+unit = "uA"
+conditions = "VFB = 204 mV"
+basis = "SNVSA40B Section 5.5, IFB row, max column"
+
+[[models.source.characteristic]]
+parameter = "RDS(ON) N-channel MOSFET on-resistance"
+typ = 0.35
+max = 0.7
+unit = "ohm"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, RDS(ON) row, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "fSW switching frequency"
+min = 0.75
+typ = 1.2
+max = 1.5
+unit = "MHz"
+conditions = "VIN = 3 V"
+basis = "SNVSA40B Section 5.5, fSW row, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "ILIM switching MOSFET current limit"
+min = 1.2
+typ = 1.8
+max = 2.4
+unit = "A"
+conditions = "D = DMAX, TA <= 85 °C"
+basis = "SNVSA40B Section 5.5, ILIM row, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VOVP_SW output overvoltage threshold (sensed at SW)"
+min = 36
+typ = 37.5
+max = 39
+unit = "V"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, VOVP_SW row, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Tshutdown thermal shutdown threshold"
+typ = 160
+unit = "°C"
+conditions = "VIN = 3.6 V"
+basis = "SNVSA40B Section 5.5, Tshutdown row, typ column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 263.8
+unit = "°C/W"
+conditions = "DCK (SC70) 5 pins, JESD51-7 high-K board, TA = 25 °C"
+basis = "SNVSA40B Section 5.4 Thermal Information, RθJA row, DCK column"
+
+[models.match]
+# TPS61169 and its TI orderables TPS61169DCKR / DCKRG4 (Section 10). It is a
+# single-variant part (one package, adjustable LED current), so nothing else
+# in the family can be mis-bound; the TPS61168/61170 siblings do not match.
+value_re = "(?i)^TPS61169(?:DCKR(?:G4)?)?$"
+
+[models.params]
+identity_only = true
+warning = "TPS61169 identity, pin map, ratings and pin-voltage envelopes are sourced; boost conversion and LED-current regulation (FB = 204 mV across the board's RSET) are not modeled, so the part stays OPEN"
+iq_a = 3e-4   # SNVSA40B 5.5, IQ_VIN typ 0.3 mA (enabled, switching, no load); 0.45 mA max
+unlocked_by = "an averaged boost converter whose output can name the external rectifier cathode node and regulate a current-sense FB pin (VFB = Duty x 204 mV)"
+
+[models.pins]
+# DCK (SC70-5), SNVSA40B Figure 4-1 / Table 4-1.
+"1" = "sw"     # SW, drain of the internal power FET
+"2" = "gnd"    # GND
+"3" = "fb"     # FB, current feedback; RSET from FB to GND
+"4" = "ctrl"   # CTRL, PWM dimming / enable input (300 kOhm internal pull-down)
+"5" = "in"     # VIN, supply input
+
+[models.ratings]
+max_voltage_v = 7.0          # SNVSA40B 5.1, VIN/CTRL/PWM/FB maximum (SW is 40 V, see envelope)
+max_junction_temp_c = 150.0  # SNVSA40B 5.1, TJ maximum (recommended 125 C, 5.3)
+theta_ja_c_per_w = 263.8     # SNVSA40B 5.4, DCK RθJA
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "SNVSA40B Section 5.3 Recommended Operating Conditions, VIN row (2.7-5.5 V); Section 5.1 Absolute Maximum Ratings, VIN row (7 V)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "ctrl"
+min_v = -0.3
+max_v = 7.0
+basis = "SNVSA40B Section 5.1 Absolute Maximum Ratings, CTRL row (-0.3 to 7 V); a stress bound, not a logic range"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "fb"
+min_v = -0.3
+max_v = 7.0
+basis = "SNVSA40B Section 5.1 Absolute Maximum Ratings, FB row (-0.3 to 7 V); a stress bound, not the 204 mV regulation point"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "sw"
+min_v = -0.3
+max_v = 40.0
+basis = "SNVSA40B Section 5.1 Absolute Maximum Ratings, SW row (-0.3 to 40 V); OVP trips at 36-39 V (Section 5.5)"
+
+# ── R1218N: Ricoh/Nisshinbo step-up DC/DC for white-LED backlight, SOT-23-6 ──
+#
+# Source: Nisshinbo Micro Devices (formerly Ricoh) "R1218x Series Step-up
+#   DC/DC converter for White LED Backlight", No. EA-166-230419: SELECTION GUIDE
+#   (p.2), PIN DESCRIPTIONS (p.4), ABSOLUTE MAXIMUM RATINGS and RECOMMENDED
+#   OPERATING CONDITIONS (p.5), ELECTRICAL CHARACTERISTICS (p.6). PDF sha256
+#   ad74f60bda9195c11634a1fefaa04ae0015592ac145ae36bac9ba7d7a0e2ec34. No
+#   canonical vendor URL could be confirmed offline, so none is given.
+#
+# WHY IDENTITY-ONLY. Like the TPS61169 this is an LED-CURRENT regulator: VFB is
+# held at 0.20 V (0.19/0.20/0.21 V) across the board's sense resistor, so
+# ILED = 0.2 V / RSET; 0.2 V is a current-sense reference, never an output
+# voltage, and is deliberately NOT a `vref` param (on a vreg card `vref` means
+# an adjustable LDO whose divider sets the rail). Unlike the TPS61169 it does
+# have a VOUT pin (the built-in diode's cathode on xxx1A, the OVP sense on
+# xxx2A), so an averaged boost with `out_pin = "out"` and FB feedback is
+# topologically expressible. It is still not modelled because (a) the LED
+# string that closes the FB loop is normally off-board (on open-book it sits in
+# the e-paper display behind FPC J4), so the averaged loop would never reach
+# 0.2 V on FB and would wind the output up without the OVP clamp; (b) the OVP
+# threshold, and with it the VOUT/LX abs max, depends on the order code
+# (9.5/14/18.5 V with built-in diode, 23/27.5/31.5 V without), which a bare
+# "R1218" value does not carry; (c) CE is a PWM-dimming input with a 10 ms
+# shutdown delay. The card resolves identity, pins, supply envelope and
+# ratings and leaves the part OPEN.
+#
+# PACKAGE HAZARD. The two packages do NOT share a pin order:
+#   SOT-23-6      : 1 CE, 2 VOUT, 3 VIN, 4 Lx, 5 GND, 6 VFB   (R1218N...)
+#   DFN(PL)1820-6 : 1 CE, 2 VFB, 3 Lx, 4 GND, 5 VIN, 6 VOUT   (R1218K..., discontinued April 2023)
+# This card takes the SOT-23-6 map only: an R1218N order code, or a bare
+# "R1218" gated on a SOT-23-6 footprint. R1218K is rejected.
+#
+# PIN MAP CHECK (open-book OSO-BOOK-B1 U5, Package_TO_SOT_SMD:SOT-23-6, symbol
+# R1218:R1218): 1 CE -> /BACKLIGHT (U2 GPIO46); 2 VOUT -> /+17V (J4 pins 5-6,
+# display backlight anode); 3 VIN -> +3.3VP (also L2.1); 4 LX -> L2.2 only;
+# 5 GND; 6 VFB -> /FEEDBACK (R8 to GND, J4 pins 1-2 LED return). LX has no
+# external Schottky, so the fitted part must be a built-in-diode xxx1A code
+# (021A/031A/041A, OVP 9.5/14/18.5 V, VOUT/LX abs max 22 V); the "+17V" net
+# name points at 041A (OVP 17.0/18.5/20.0 V) but the board value does not say.
+#
+# Corrections vs the unreviewed LLM draft: the draft had two variant cards
+# (K and N) that BOTH matched a bare "R1218", so the board's SOT-23-6 part
+# could take the DFN pin map; dropped the K card and gated the bare value on
+# footprint. Dropped `vref` (current-sense reference mis-typed as a vreg
+# reference). `max_power_w` 0.66 W is the JEDEC 51-7 land-pattern figure (kept,
+# labelled). Recorded the CE pull-down, UVLO, OVP-by-code and Lx limit rows.
+[[models]]
+id = "r1218n_identity"
+kind = "vreg"
+description = "Ricoh/Nisshinbo R1218N step-up white-LED driver, SOT-23-6 (identity, pins, supply envelope and ratings only; boost conversion and LED-current regulation are not modeled, the part stays OPEN)"
+
+[models.match]
+# R1218N<code>A[-TR-FE] or a bare R1218; both only on a SOT-23-6 footprint.
+value_re = "(?i)^R1218(?:N(?:0[234]1A|0[567]2A)(?:-TR(?:-FE)?)?)?$"
+footprint_re = "(?i)SOT-?23-?6"
+
+[models.params]
+identity_only = true
+warning = "R1218N identity, SOT-23-6 pin map, VIN envelope and ratings are sourced; boost conversion, LED-current regulation (VFB = 0.2 V across the board's sense resistor), OVP and CE PWM dimming are not modeled, so the part stays OPEN"
+unlocked_by = "an averaged boost converter with a current-sense FB loop, a code-specific OVP clamp, and an LED-string load model for off-board displays"
+iq_a = 5.0e-4   # IDD typ 0.5 mA (1.0 max) @ VIN = 5.5 V, VFB = 0 V, Lx no load
+
+[models.pins]
+# SOT-23-6, EA-166-230419 PIN DESCRIPTIONS (p.4).
+"1" = "en"     # CE, chip enable ("H" active), 600/1200/2200 kOhm pull-down; PWM dimming input
+"2" = "out"    # VOUT, output (built-in diode cathode on xxx1A; OVP sense)
+"3" = "in"     # VIN
+"4" = "sw"     # Lx, switching pin (open-drain NMOS)
+"5" = "gnd"    # GND
+"6" = "fb"     # VFB, feedback (LED current sense, 0.2 V)
+
+[models.ratings]
+max_voltage_v = 6.5          # VIN pin abs max
+max_power_w = 0.66           # PD, SOT-23-6, JEDEC STD 51-7 test land pattern
+max_junction_temp_c = 125.0  # Tj range upper end
+max_pin_current_a = 1.0      # ILX, Lx pin current abs max
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+title = "Nisshinbo Micro Devices (Ricoh) R1218x Series Step-up DC/DC converter for White LED Backlight, No. EA-166-230419"
+locator = "SELECTION GUIDE p.2; PIN DESCRIPTIONS p.4 (SOT-23-6 Pin Description); ABSOLUTE MAXIMUM RATINGS and RECOMMENDED OPERATING CONDITIONS p.5; ELECTRICAL CHARACTERISTICS p.6"
+sha256 = "ad74f60bda9195c11634a1fefaa04ae0015592ac145ae36bac9ba7d7a0e2ec34"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "converter_behavior"
+reason = "ABSTAIN: LED-current regulation via VFB = 0.2 V across an external sense resistor, with the LED string usually off-board; OVP and VOUT/LX abs max depend on an order code a bare R1218 value does not carry; boost conversion, OVP, current limit, UVLO and CE PWM dimming are not modeled"
+
+[[models.source.pinout]]
+package = "SOT-23-6"
+pins = { "1" = "CE", "2" = "VOUT", "3" = "VIN", "4" = "Lx", "5" = "GND", "6" = "VFB" }
+
+[[models.source.characteristic]]
+parameter = "VFB feedback voltage (LED-current sense reference; not an output voltage)"
+min = 0.19
+typ = 0.20
+max = 0.21
+unit = "V"
+conditions = "Ta = 25 °C, VIN = 3.6 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, VFB Voltage row, min/typ/max, p.6"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 0.5
+max = 1.0
+unit = "mA"
+conditions = "Ta = 25 °C, VIN = 5.5 V, VFB = 0 V, Lx at no load"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, Supply Current row, typ/max, p.6"
+
+[[models.source.characteristic]]
+parameter = "Istandby standby current"
+max = 3.0
+unit = "uA"
+conditions = "Ta = 25 °C, VIN = 5.5 V, VCE = 0 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, Standby Current row, max, p.6"
+
+[[models.source.characteristic]]
+parameter = "VUVLO1 UVLO detector threshold"
+min = 1.5
+typ = 1.6
+max = 1.7
+unit = "V"
+conditions = "Ta = 25 °C, VIN falling"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, UVLO Detector Threshold row, p.6"
+
+[[models.source.characteristic]]
+parameter = "VCEH CE input voltage high"
+min = 1.5
+unit = "V"
+conditions = "Ta = 25 °C, VIN = 5.5 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, VCEH row, min, p.6"
+
+[[models.source.characteristic]]
+parameter = "VCEL CE input voltage low"
+max = 0.5
+unit = "V"
+conditions = "Ta = 25 °C, VIN = 1.8 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, VCEL row, max, p.6"
+
+[[models.source.characteristic]]
+parameter = "RCE CE pull-down resistance"
+min = 600
+typ = 1200
+max = 2200
+unit = "kohm"
+conditions = "Ta = 25 °C, VIN = 3.6 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, RCE row, p.6"
+
+[[models.source.characteristic]]
+parameter = "ILXlim switch current limit"
+min = 400
+typ = 700
+max = 1000
+unit = "mA"
+conditions = "Ta = 25 °C, VIN = 3.6 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, Switch Current Limit row, p.6"
+
+[[models.source.characteristic]]
+parameter = "fosc oscillator frequency"
+min = 1.0
+typ = 1.2
+max = 1.4
+unit = "MHz"
+conditions = "Ta = 25 °C, VIN = 3.6 V, VOUT = VFB = 0 V"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, Oscillator Frequency row, p.6"
+
+[[models.source.characteristic]]
+parameter = "VOVP1 OVP detector threshold, R1218x041A (built-in diode)"
+min = 17.0
+typ = 18.5
+max = 20.0
+unit = "V"
+conditions = "Ta = 25 °C, VIN = 3.6 V, VOUT rising; code-specific (021A 9.5 V, 031A 14.0 V, 052A 23.0 V, 062A 27.5 V, 072A 31.5 V typ)"
+basis = "EA-166-230419, ELECTRICAL CHARACTERISTICS, VOVP1 R1218x041A row, p.6"
+
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.66
+unit = "W"
+conditions = "TA = 25 °C, SOT-23-6"
+mounting = "JEDEC STD. 51-7 test land pattern"
+basis = "EA-166-230419, ABSOLUTE MAXIMUM RATINGS, PD, SOT-23-6, 660 mW (JEDEC STD. 51-7 Test Land Pattern), p.5"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.5
+basis = "EA-166-230419, RECOMMENDED OPERATING CONDITIONS, Operating Input Voltage 1.8-5.5 V; ABSOLUTE MAXIMUM RATINGS, VIN Pin Voltage 6.5 V (p.5)"
