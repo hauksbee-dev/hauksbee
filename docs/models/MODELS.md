@@ -137,8 +137,11 @@ for most circuit extraction and much cheaper, so pick it to save money. At
 OpenAI's list prices (2026-10-06, USD per million input / cached input /
 output tokens) Sol is $2.00 / $0.10 / $10.00 and Luna $0.10 / $0.01 / $0.50,
 about 20 times cheaper; the fast tier (`service_tier="fast"`, formerly
-`"priority"`) costs double. Codex and `api` runs end with a token count and a
-list-price estimate that includes the fast-tier doubling;
+`"priority"`) costs double. Those prices apply to an API key. A `codex` signed in
+with a ChatGPT account (`codex login status`) draws on the plan's Codex usage
+instead, with no per-call charge; Luna uses less of that allowance than Sol.
+Codex and `api` runs end with a token count; metered ones (an API key, or
+`api`) add a list-price estimate that includes the fast-tier doubling, and
 `HAUKSBEE_LLM_PRICE=in,cached,out` prices any other model. `hauksbee models backend show` and the web
 Settings page list each backend's picks with the same one-line notes. Older
 names are not offered but still work: a saved or typed `--model` is used as

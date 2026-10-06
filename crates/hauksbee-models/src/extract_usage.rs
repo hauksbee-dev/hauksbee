@@ -8,7 +8,10 @@
 //!
 //! Prices are USD per million tokens (input, cached input, output) at the
 //! standard list tier, kept for the models this tool has a source for.
-//! A call on the fast tier (`service_tier="fast"`, or its former name
+//! A codex CLI signed in with a `ChatGPT` account draws on the plan the user
+//! already pays for, so its calls show tokens and no dollar figure; dollars are
+//! only estimated for metered calls (an API key, or the `api` backend).
+//! A metered call on the fast tier (`service_tier="fast"`, or its former name
 //! `"priority"`) bills double. `HAUKSBEE_LLM_PRICE=in,cached,out` prices any
 //! other model as given, tier included; with neither, the tokens are shown and
 //! the cost is unknown.
@@ -35,6 +38,55 @@ const LIST_PRICES: &[(&str, Price)] = &[
     ("gpt-6-luna", [0.10, 0.01, 0.50]),
 ];
 
+/// How a call is paid for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Billing {
+    /// Billed per token at list price; `fast` doubles it.
+    Metered { fast: bool },
+    /// Drawn from a `ChatGPT` plan's Codex allowance: no per-call charge.
+    Plan,
+}
+
+/// How a codex CLI bills: `codex login status` names a `ChatGPT` sign-in, else metered.
+#[must_use]
+pub fn codex_billing(command: &str, extra_args: &[String]) -> Billing {
+    let chatgpt = login_status(command).is_some_and(|text| text.contains("ChatGPT"));
+    if chatgpt {
+        Billing::Plan
+    } else {
+        Billing::Metered {
+            fast: fast_tier(extra_args),
+        }
+    }
+}
+
+/// `codex login status` output, or `None` if it fails or takes over 5 s (it is killed).
+fn login_status(command: &str) -> Option<String> {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(command)
+        .args(["login", "status"])
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while child.try_wait().ok()?.is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    child.stderr.take()?.read_to_string(&mut text).ok()?;
+    Some(text)
+}
+
 /// Whether backend arguments select `OpenAI`'s fast tier (named "priority" before 2026-07-30).
 #[must_use]
 pub fn fast_tier(args: &[String]) -> bool {
@@ -49,8 +101,10 @@ struct Ledger {
     calls: usize,
     known: usize,
     tokens: Usage,
-    /// Summed cost of the known calls; `None` once any known call has no price.
+    /// Summed cost of the known metered calls; `None` once any has no price.
     cost: Option<f64>,
+    /// Known calls drawn from a plan rather than metered.
+    plan: usize,
 }
 
 static LEDGER: Mutex<Option<Ledger>> = Mutex::new(None);
@@ -134,7 +188,7 @@ fn describe(u: Usage) -> String {
 }
 
 /// Record one backend call (`None` = it reported no usage) and say what it cost.
-pub fn record(tool: &str, model: &str, fast: bool, usage: Option<Usage>) {
+pub fn record(tool: &str, model: &str, billing: Billing, usage: Option<Usage>) {
     let mut guard = ledger();
     let l = guard.get_or_insert_with(|| Ledger {
         cost: Some(0.0),
@@ -149,6 +203,17 @@ pub fn record(tool: &str, model: &str, fast: bool, usage: Option<Usage>) {
         Some(u) => {
             l.known += 1;
             l.tokens = add(l.tokens, u);
+            let Billing::Metered { fast } = billing else {
+                l.plan += 1;
+                let line = format!(
+                    "{tool} call {}: {}, from your ChatGPT plan's Codex usage (no per-call charge)",
+                    l.calls,
+                    describe(u)
+                );
+                drop(guard);
+                crate::extract_progress::say(&format!("[model-extract] {line}"));
+                return;
+            };
             let priced = price(model, fast).map(|p| cost(u, p));
             l.cost = l.cost.zip(priced).map(|(a, b)| a + b);
             let spend = priced.map_or_else(
@@ -172,6 +237,17 @@ pub fn summary() -> String {
         return format!(
             "cost: unknown ({} call(s), none reported token usage)",
             l.calls
+        );
+    }
+    if l.plan == l.known {
+        let part = if l.known < l.calls {
+            format!(", {} of {} call(s) reported usage", l.known, l.calls)
+        } else {
+            String::new()
+        };
+        return format!(
+            "usage: {}, from your ChatGPT plan's Codex allowance (no per-call charge; gpt-6-luna uses less of it than gpt-6.1-sol){part}",
+            describe(l.tokens)
         );
     }
     let money = l.cost.map_or_else(
@@ -198,6 +274,8 @@ pub fn summary() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const METERED: Billing = Billing::Metered { fast: false };
 
     /// The ledger is process-wide, so tests that touch it run one at a time.
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -243,14 +321,14 @@ mod tests {
         std::env::remove_var("HAUKSBEE_LLM_PRICE");
         reset();
         assert_eq!(summary(), "");
-        record("claude-code", "m", false, None);
+        record("claude-code", "m", METERED, None);
         assert!(summary().starts_with("cost: unknown"), "{}", summary());
         reset();
         let u = from_codex_events(STREAM).unwrap();
-        record("codex", "gpt-6-luna", false, Some(u));
+        record("codex", "gpt-6-luna", METERED, Some(u));
         // fresh 1.1M * 0.10 + cached 0.4M * 0.01 + out 0.1M * 0.50, per million.
         assert_eq!(summary(), "cost: 1500000 input (400000 cached), 100000 output tokens, about $0.1640 at list price");
-        record("codex", "gpt-6-luna", false, None);
+        record("codex", "gpt-6-luna", METERED, None);
         let s = summary();
         assert!(
             s.contains("at least $0.1640") && s.contains("1 of 2 call(s) reported usage"),
@@ -258,20 +336,35 @@ mod tests {
         );
         reset();
         // Sol: 1.1M * 2.00 + 0.4M * 0.10 + 0.1M * 10.00; the fast tier doubles it.
-        record("codex", "gpt-6.1-sol", false, Some(u));
+        record("codex", "gpt-6.1-sol", METERED, Some(u));
         assert!(summary().contains("about $3.2400"), "{}", summary());
         reset();
         let fast = ["-c".to_string(), "service_tier=\"priority\"".to_string()];
-        record("codex", "gpt-6.1-sol", fast_tier(&fast), Some(u));
+        record(
+            "codex",
+            "gpt-6.1-sol",
+            Billing::Metered {
+                fast: fast_tier(&fast),
+            },
+            Some(u),
+        );
         assert!(summary().contains("about $6.4800"), "{}", summary());
         assert!(fast_tier(&["service_tier=fast".to_string()]));
         assert!(!fast_tier(&["service_tier=\"flex\"".to_string()]));
         reset();
-        record("codex", "no-such-model", false, Some(u));
+        // A ChatGPT-plan call shows tokens, never dollars.
+        record("codex", "gpt-6.1-sol", Billing::Plan, Some(u));
+        let s = summary();
+        assert!(
+            s.starts_with("usage: 1500000 input") && s.contains("ChatGPT plan") && !s.contains('$'),
+            "{s}"
+        );
+        reset();
+        record("codex", "no-such-model", METERED, Some(u));
         assert!(summary().contains("cost unknown"), "{}", summary());
         std::env::set_var("HAUKSBEE_LLM_PRICE", "1,0,2");
         reset();
-        record("codex", "no-such-model", false, Some(u));
+        record("codex", "no-such-model", METERED, Some(u));
         assert!(summary().contains("about $1.3000"), "{}", summary());
         std::env::remove_var("HAUKSBEE_LLM_PRICE");
         reset();

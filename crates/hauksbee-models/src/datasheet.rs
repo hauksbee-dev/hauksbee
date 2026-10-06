@@ -2637,7 +2637,8 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
             let request = ApiRequest::prepare(&resolved.api)?;
             let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
                 let (text, usage) = request.send_with_usage(p)?;
-                crate::extract_usage::record("api", &request.model, false, usage);
+                let metered = crate::extract_usage::Billing::Metered { fast: false };
+                crate::extract_usage::record("api", &request.model, metered, usage);
                 Ok(extract_toml_block(&text, reply.table()))
             });
             return raw.map(|raw| (raw, None));
@@ -2663,15 +2664,17 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     let clause = verification_clause(&ws, reply.table());
     let base_prompt = format!("{agent_prompt}\n\n{clause}");
     let mut timed_out = None;
+    let billing = resolved
+        .agent(chosen)
+        .filter(|_| chosen == Backend::Codex)
+        .map(|a| crate::extract_usage::codex_billing(&a.command, &a.extra_args));
     let raw = validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
         let _ = std::fs::remove_file(ws.answer_path());
         let ran = run_agent_once(&resolved, p, &ws);
         let usage = ran.as_ref().ok().filter(|_| chosen == Backend::Codex);
         let usage = usage.and_then(|out| crate::extract_usage::from_codex_events(out));
-        let fast = resolved
-            .agent(chosen)
-            .is_some_and(|a| crate::extract_usage::fast_tier(&a.extra_args));
-        crate::extract_usage::record(chosen.name(), resolved.model(), fast, usage);
+        let billing = billing.unwrap_or(crate::extract_usage::Billing::Metered { fast: false });
+        crate::extract_usage::record(chosen.name(), resolved.model(), billing, usage);
         let stdout = match ran {
             // A killed run keeps its draft only if it passes the finished-answer check.
             Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
@@ -4900,7 +4903,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let _guard = MOCK_ENV.lock().unwrap();
         let (dir, ex) = (tempfile::tempdir().unwrap(), FORMAT_EXAMPLES[0]);
         let [pdf, agent, draft, cfg] = ["a.pdf", "agent", "draft", "c"].map(|f| dir.path().join(f));
-        let script = format!("#!/bin/sh\ncp {draft:?} model.toml\nexec sleep 30\n");
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = login ] && exit 0\ncp {draft:?} model.toml\nexec sleep 30\n"
+        );
         for (path, text) in [(&pdf, "%PDF-1.4\n"), (&cfg, ""), (&agent, script.as_str())] {
             std::fs::write(path, text).unwrap();
         }
@@ -4944,7 +4949,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let [pdf, agent, draft, cfg] = ["a.pdf", "agent", "draft", "c"].map(|f| dir.path().join(f));
         let event = r#"{"type":"turn.completed","usage":{"input_tokens":1000000,"cached_input_tokens":0,"output_tokens":100000}}"#;
         let script =
-            format!("#!/bin/sh\ncat >/dev/null\ncp {draft:?} model.toml\necho '{event}'\n");
+            format!("#!/bin/sh\n[ \"$1\" = login ] && exit 0\ncat >/dev/null\ncp {draft:?} model.toml\necho '{event}'\n");
         let bad =
             "[[models]]\nid = \"tp\"\nkind = \"digital\"\n[models.source]\nidentity_only = true\n";
         for (path, text) in [
@@ -5023,7 +5028,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
              echo '{\"type\":\"done\"}'; cp DRAFT model.toml\n"
         };
         let script = format!(
-            "#!/bin/sh\ncat >/dev/null\necho x >> {count:?}\nn=$(wc -l < {count:?} | tr -d ' ')\n{}",
+            "#!/bin/sh\n[ \"$1\" = login ] && exit 0\ncat >/dev/null\necho x >> {count:?}\nn=$(wc -l < {count:?} | tr -d ' ')\n{}",
             body.replace("DRAFT", &format!("{draft:?}")).replace("HELPER", &format!("{helper:?}"))
         );
         for (path, text) in [(&pdf, "%PDF-1.4\n"), (&cfg, ""), (&agent, script.as_str())] {
