@@ -89,14 +89,17 @@ fn run_si(path: &PathBuf) -> Option<hauksbee_extract::SiReport> {
 /// THE GATE: no SI check fires (high/medium/low) on any known-good corpus board.
 /// The zero-false-positive gate over the whole known-good corpus.
 ///
-/// Currently reports 11 findings, all `antenna_keepout` on Olimex ESP32-EVB
-/// revisions, all ground copper in the WROOM band. See the doc comment on
-/// `olimex_wroom_antenna_keepout_is_clear` for the geometry; until that question
-/// is settled this cannot distinguish a false alarm from a true finding, and
-/// silencing it by whitelisting the boards would hide whichever it turns out
-/// to be.
+/// Every board in the corpus is a shipping or reference design, so any SI
+/// finding here is a false positive to fix in the check, never a board to
+/// whitelist. The classes it has caught are pinned by unit tests in
+/// `si/tests.rs`: a WROOM keepout measured from the pad-row centre instead of
+/// the footprint's pad edge, the WROOM-32 rectangle applied to a WROOM-02, a DC
+/// bias line (`ANT_BIAS`) read as a 50 ohm feed, a differential pair judged
+/// against a reference plane nobody could verify, and crystals on drivers with
+/// on-chip load capacitance (XR22417, EFM32PG22).
+///
+/// About 7 s over the whole corpus; skips visibly when the corpus is absent.
 #[test]
-#[ignore = "unsettled: 11 antenna_keepout findings on Olimex, see task #59"]
 fn si_checks_are_silent_on_the_entire_known_good_corpus() {
     let Some(famous) = corpus_root() else {
         eprintln!("corpus absent; skipping SI corpus sweep");
@@ -201,24 +204,21 @@ fn zswatch_busy_i2c_bus_rise_time_is_clean() {
     );
 }
 
-/// The Olimex ESP32-EVB carries the corpus's only ESP32-WROOM-32 module, mounted
-/// at the board's top edge so the 15 mm antenna keepout lies off the board: the
-/// keepout check is correctly clear (INFO), never a fire. Pins the WROOM keepout
-/// geometry and the edge-placement no-fire.
-/// Whether the Olimex ESP32-EVB's WROOM keepout counts as clear.
+/// The Olimex ESP32-EVB carries a WROOM-32 mounted flush with the board's top
+/// edge, so the module's own antenna end (and the 15 mm keepout beyond it) lies
+/// at or off the board edge: the keepout check is clear (INFO), never a fire.
 ///
-/// Measured: U3's antenna edge sits at y 74.58 and the board outline starts at
-/// y 67.06, so roughly 7.5 mm of Espressif's 15 mm band hangs off the board and
-/// the other 7.5 mm lies over copper Olimex floods with ground. The check
-/// reports 17 to 22 ground intrusions on every revision.
-///
-/// This test asserted Info, meaning "clear". That is one answer to a hardware
-/// question nobody has settled: a shipping, widely used board either has a real
-/// RF compromise here, or the 15 mm band is stricter than practice and the
-/// check needs refining. Ignored rather than flipped to High, because asserting
-/// the finding is correct would be just as unearned as asserting it is not.
+/// Measured on Rev L: the footprint's antenna-side pad edge sits at y 74.12 and
+/// the board outline starts at y 67.06, so the whole antenna region is either
+/// off the board or empty board. The only copper near the band is the module's
+/// own ground-pad row (stitching vias, fill clearance contour), which reaches at
+/// most 0.65 mm past the pad edge; it is not antenna-region copper. This test
+/// used to fail with 17 to 22 ground intrusions per revision because the check
+/// started the band at the pad-row CENTRE and counted that pad-row environment;
+/// the geometry is now taken from the footprint's pad edge with a 1 mm
+/// registration slack, and the unit tests in `si/tests.rs` pin that a ground
+/// track or pour genuinely in the antenna region still fires.
 #[test]
-#[ignore = "unsettled: see the doc comment and task #59"]
 fn olimex_wroom_antenna_keepout_is_clear() {
     let Some(path) =
         corpus_board(&["famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb"])

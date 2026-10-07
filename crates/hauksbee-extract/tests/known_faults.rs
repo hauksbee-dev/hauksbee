@@ -807,17 +807,23 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
         2,
         "both contacts remain gate-grade"
     );
-    for f in report.shorts() {
-        let declared = qualified
-            .declaration_for(f)
-            .unwrap_or_else(|| panic!("{} on {} lost its declaration", f.net_a_name, f.layer));
-        assert_eq!(declared.declaration, "AGND7 wired to SUPPLY6 in net GND");
-        assert!(
-            declared.source.ends_with("emonTx V3.4.5.sch"),
-            "the declaration must cite the file it came from: {}",
-            declared.source
-        );
-    }
+    // Two distinct contacts of the one declared pair (top and bottom copper, no
+    // via common to both rows): a net-name declaration has no coordinates, so it
+    // cannot say which contact it describes. `qualify_with_declared_ties`
+    // records context ONLY for a unique measured contact (see its doc and
+    // `declaration_for`); the unique case is pinned by `declared.brd`, this
+    // ambiguous one by `aligned_unplated.brd`. So: no context on either row.
+    assert_eq!(
+        qualified.matched_declaration_count(),
+        0,
+        "no unique contact"
+    );
+    assert!(
+        report
+            .shorts()
+            .all(|f| qualified.declaration_for(f).is_none()),
+        "neither of the two contacts can carry the declaration"
+    );
 }
 
 /// The revision boundary, as a false-negative guard on a REAL board.

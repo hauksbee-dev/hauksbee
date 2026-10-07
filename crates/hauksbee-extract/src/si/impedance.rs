@@ -71,9 +71,10 @@
 //!    ADJACENT to the routing layer, the same assumption `read_stackup` makes
 //!    when it reads `H` from the first dielectric, so on a stack whose real
 //!    plane is one deeper the estimate is measured to the wrong layer anyway.
-//!    And an unfilled or absent pour yields `Unverified` rather than an
-//!    abstention, so the estimate is still printed with its reference declared
-//!    unverified.
+//!    And an unfilled or absent pour yields `Unverified`: the Zdiff is still
+//!    printed, but as an info note that says no judgement was made, because a
+//!    number measured to a plane nobody could find is not an estimate of
+//!    anything and must not become a finding.
 //!
 //! 3. **Declared impedance-control intent.** The closed-form model is a
 //!    quasi-static estimate with a real error band on dense boards: it has no
@@ -88,8 +89,8 @@
 //!
 //! A finding therefore always carries a real, file-derived stackup AND the
 //! board's own statement that the net should be controlled. A reported
-//! *differential* impedance additionally carries a reference plane that was
-//! either verified under the pair or explicitly stated as unverified; the
+//! *differential* impedance additionally carries a reference plane verified under
+//! the pair (an unverified plane yields an info note, never a finding); the
 //! single-ended 50 ohm path does NOT yet check its plane and still assumes one,
 //! a known gap rather than a claim.
 
@@ -491,6 +492,18 @@ fn is_single_ended_50(name: &str) -> bool {
                 | "DIVERSITY"
                 | "STAT"
                 | "STATUS"
+                // A DC bias / supply line riding next to the RF feed (`ANT_BIAS`,
+                // `ANT_PWR`, a bias-tee supply): it carries DC to power an active
+                // antenna or LNA and is routed as a power trace, not as the 50
+                // ohm line that shares its `ANT` token.
+                | "BIAS"
+                | "BIAST"
+                | "VBIAS"
+                | "PWR"
+                | "POWER"
+                | "SUPPLY"
+                | "VCC"
+                | "VDD"
         )
     });
     if is_control {
@@ -584,15 +597,29 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             emit_reference_missing(&pname, &mname, class, w, s, stackup, missing, report);
             continue;
         }
-        // Solid, or unverifiable: report the Zdiff as before. A verified plane
-        // is not narrated (a check that says "ok" about every assumption it
-        // discharged is unreadable); an unverified one says so, so the estimate
-        // never reads as more grounded than it is.
-        let reference_note = match &reference {
-            ReferencePlane::Solid => String::new(),
-            ReferencePlane::Unverified(why) => format!(" (reference plane unverified: {why})"),
-            ReferencePlane::Missing(_) => unreachable!("handled above"),
-        };
+        // Unverifiable: the formula's H is the height to a plane nobody could
+        // find, so the number it produced is not an estimate of anything and
+        // must not be judged against the target. Abstain with an info note that
+        // still prints the figure and says why it is not judged. A verified
+        // plane is not narrated (a check that says "ok" about every assumption
+        // it discharged is unreadable).
+        if let ReferencePlane::Unverified(why) = &reference {
+            report.findings.push(SiFinding {
+                check: SiCheck::ControlledImpedance,
+                severity: SiSeverity::Info,
+                message: format!(
+                    "{pname} / {mname} ({}): W~{w:.3} mm, S~{s:.3} mm microstrip -> Zdiff ~ \
+                     {zdiff:.0} ohm vs target {:.0} ohm - info only, no judgement: reference plane \
+                     unverified: {why} [{}]",
+                    class.label(),
+                    class.target_ohm(),
+                    stackup.describe()
+                ),
+                refs: vec![],
+                nets: vec![pname.clone(), mname.clone()],
+            });
+            continue;
+        }
 
         judge(
             report,
@@ -600,7 +627,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             class,
             zdiff,
             &format!(
-                "{pname} / {mname}: W~{w:.3} mm, S~{s:.3} mm microstrip -> Zdiff ~ {zdiff:.0} ohm{reference_note}"
+                "{pname} / {mname}: W~{w:.3} mm, S~{s:.3} mm microstrip -> Zdiff ~ {zdiff:.0} ohm"
             ),
             vec![pname.clone(), mname.clone()],
         );

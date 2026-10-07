@@ -273,6 +273,50 @@ fn rtc_with_integrated_caps_no_cap_is_silent() {
     assert_eq!(r.finding_count(), 0, "RTC integrates caps; must be silent");
 }
 
+/// A 4-pin MHz crystal hung directly on a driver IC of value `driver`, with no
+/// load caps anywhere.
+fn xtal_on_driver(driver: &str) -> ExtractedBoard {
+    pcb(&format!(
+        r#"(net 1 "XI") (net 2 "XO") (net 3 "GND")
+        (footprint "Crystal:Crystal_SMD_3225-4Pin"
+          (at 10 10) (layer "F.Cu")
+          (property "Reference" "Y1") (property "Value" "12MHz")
+          (pad "1" smd rect (at -1 0) (net 1 "XI"))
+          (pad "2" smd rect (at -1 1) (net 3 "GND"))
+          (pad "3" smd rect (at 1 0) (net 2 "XO"))
+          (pad "4" smd rect (at 1 1) (net 3 "GND")))
+        (footprint "Package_QFN:QFN-48"
+          (at 16 10) (layer "F.Cu")
+          (property "Reference" "U1") (property "Value" "{driver}")
+          (pad "22" smd rect (at 0 0) (net 1 "XI"))
+          (pad "23" smd rect (at 0 1) (net 2 "XO")))"#
+    ))
+}
+
+#[test]
+fn crystal_on_a_driver_with_on_chip_load_caps_is_silent() {
+    // Datasheet-documented on-chip load capacitance: the XR22417 hub (REV1A,
+    // "External Crystal": load capacitors and feedback resistance are internal)
+    // and the EFM32PG22's HFXO (on-chip CTUNE). Bare crystal pins are correct.
+    for driver in ["MaxLinear_XR22417-48", "EFM32PG22C200F512IM40"] {
+        let r = run_board(&xtal_on_driver(driver), check_crystal_load_cap);
+        assert_eq!(
+            r.finding_count(),
+            0,
+            "{driver} integrates its load caps; must be silent: {:?}",
+            r.findings
+        );
+    }
+}
+
+#[test]
+fn crystal_on_a_driver_without_on_chip_caps_still_fires() {
+    // The real-fault partner: the same bare crystal on a driver that does NOT
+    // integrate load caps (an STM32F4 HSE oscillator needs two external caps).
+    let r = run_board(&xtal_on_driver("STM32F405RGT6"), check_crystal_load_cap);
+    assert_eq!(r.finding_count(), 1, "no caps, no integration: must fire");
+}
+
 #[test]
 fn dnp_crystal_is_skipped() {
     let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
@@ -567,6 +611,90 @@ fn antenna_keepout_track_outside_is_silent() {
     );
 }
 
+/// A module at (50,50,0) whose antenna-side end pad sits at local y `pad_y`,
+/// 0.8 mm tall (so the pad's outer edge is at `pad_y - 0.4`), value `value`.
+fn module_with_end_pad(value: &str, pad_y: f64, intruder_body: &str) -> String {
+    format!(
+        r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT")
+        (footprint "OLIMEX_Cases-FP:ESP-WROOM-32_MODULE"
+          (at 50 50 0) (layer "F.Cu")
+          (property "Reference" "U3") (property "Value" "{value}")
+          (pad "1" smd rect (at -8.6 {pad_y}) (size 1.8 0.8) (layers "F.Cu" "F.Mask"))
+          (pad "2" smd rect (at 0 12) (size 1.8 0.8) (layers "F.Cu" "F.Mask") (net 2 "ANT")))
+        {intruder_body})"#
+    )
+}
+
+#[test]
+fn antenna_keepout_ignores_the_modules_own_pad_row_environment() {
+    // The legal control. A module whose end-pad row is at local y -5.31 (outer
+    // edge -5.71): ground stitching vias and a tracks just inside that row (local
+    // y -5.6), and a ground pour whose clearance contour pokes 0.5 mm past the
+    // edge, are the module's own ground-pad surroundings, not copper in the
+    // antenna region (the Olimex ESP32-EVB / PoE boards, whose antenna region is
+    // otherwise empty). Board y = 50 + local y.
+    let own = r#"(via (at 45 44.4) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))
+        (segment (start 44 44.4) (end 46 44.4) (width 0.5) (layer "F.Cu") (net 1))
+        (zone (net 1) (net_name "GND") (layers "F.Cu")
+          (filled_polygon (layer "F.Cu")
+            (pts (xy 41 44.2) (xy 59 44.2) (xy 59 60) (xy 41 60))))"#;
+    let r = run_keepout(&module_with_end_pad("ESP32-WROOM-32E-N4", -5.31, own));
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "the module's own pad-row environment must stay silent: {:?}",
+        r.findings
+    );
+}
+
+#[test]
+fn antenna_keepout_still_fires_on_ground_copper_in_the_antenna_region() {
+    // The real fault, on the same module: a ground track 6 mm in front of the
+    // pad row (local y -12) and a pour reaching 5 mm past it both sit squarely
+    // in the 15 mm band.
+    let track = r#"(segment (start 44 38) (end 56 38) (width 0.5) (layer "F.Cu") (net 1))"#;
+    let pour = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
+        (filled_polygon (layer "F.Cu")
+          (pts (xy 41 39) (xy 59 39) (xy 59 60) (xy 41 60))))"#;
+    for body in [track, pour] {
+        let r = run_keepout(&module_with_end_pad("ESP32-WROOM-32E-N4", -5.31, body));
+        assert_eq!(r.finding_count(), 1, "ground copper in the band must fire");
+        assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
+    }
+}
+
+#[test]
+fn antenna_keepout_starts_at_this_footprints_own_pad_edge() {
+    // The same ground via 7.5 mm in front of the footprint origin (board y 42.5).
+    // On a WROOM-32-style footprint (end pad at local y -5.31) that is open
+    // antenna region and fires. On a longer, WROVER-style footprint whose end pad
+    // sits at local y -8.26 (outer edge -8.66) the same point is among the
+    // module's own ground pads and is not the antenna region at all.
+    let via = r#"(via (at 50 42.5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))"#;
+    let wroom = module_with_end_pad("ESP32-WROOM-32E-N4", -5.31, via);
+    let wrover = module_with_end_pad("ESP32-WROOM-32E-N4", -8.26, via);
+    assert_eq!(run_keepout(&wroom).finding_count(), 1);
+    assert_eq!(run_keepout(&wrover).finding_count(), 0);
+}
+
+#[test]
+fn antenna_keepout_has_no_geometry_for_the_wroom_02() {
+    // ESP-WROOM-02's footprint is symmetric about its origin and a different
+    // size; the WROOM-32 rectangle is not its keepout. The same pour that fires
+    // for a WROOM-32 must not be judged against a WROOM-02.
+    let pour = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
+        (filled_polygon (layer "F.Cu")
+          (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35))))"#;
+    let w32 = wroom_text(pour);
+    assert_eq!(run_keepout(&w32).finding_count(), 1);
+    let w02 = w32.replace("ESP32-WROOM-32E-N4", "ESP-WROOM-02");
+    assert_eq!(
+        run_keepout(&w02).findings.len(),
+        0,
+        "no keepout geometry is known for the WROOM-02"
+    );
+}
+
 #[test]
 fn antenna_unknown_module_no_keepout() {
     // A part with no keepout entry -> the check never considers it.
@@ -703,10 +831,30 @@ fn differential_microstrip_matches_hand_value() {
 /// `controlled` sets `dielectric_constraints yes` (the board declares
 /// impedance-control intent, so a deviation can be a finding).
 fn impedance_usb_text_intent(w: f64, gap: f64, diel: f64, er: f64, controlled: bool) -> String {
+    impedance_usb_text_plane(w, gap, diel, er, controlled, true)
+}
+
+/// As [`impedance_usb_text_intent`], with `plane` choosing whether a solid GND
+/// pour on B.Cu sits under the whole run (a verified reference plane) or the
+/// reference layer carries no pour at all (the plane cannot be verified).
+fn impedance_usb_text_plane(
+    w: f64,
+    gap: f64,
+    diel: f64,
+    er: f64,
+    controlled: bool,
+    plane: bool,
+) -> String {
     // Two parallel horizontal runs; centre-to-centre = gap + w (so edge-to-edge
     // spacing = gap). Stackup: F.Cu 0.035, dielectric `diel` Er `er`, B.Cu.
     let y_minus = gap + w; // centreline of D- relative to D+ at y=0.
     let dc = if controlled { "yes" } else { "no" };
+    let pour = if plane {
+        r#"(zone (net 3) (net_name "GND") (layer "B.Cu")
+             (filled_polygon (pts (xy -5 -5) (xy 25 -5) (xy 25 5) (xy -5 5))))"#
+    } else {
+        ""
+    };
     format!(
         r#"(kicad_pcb (version 20240101)
         (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
@@ -715,9 +863,10 @@ fn impedance_usb_text_intent(w: f64, gap: f64, diel: f64, er: f64, controlled: b
           (layer "dielectric 1" (type "core") (thickness {diel}) (material "FR4") (epsilon_r {er}))
           (layer "B.Cu" (type "copper") (thickness 0.035))
           (dielectric_constraints {dc})))
-        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM")
+        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
         (segment (start 0 0) (end 20 0) (width {w}) (layer "F.Cu") (net 1))
-        (segment (start 0 {y_minus}) (end 20 {y_minus}) (width {w}) (layer "F.Cu") (net 2)))"#
+        (segment (start 0 {y_minus}) (end 20 {y_minus}) (width {w}) (layer "F.Cu") (net 2))
+        {pour})"#
     )
 }
 
@@ -776,6 +925,93 @@ fn controlled_impedance_out_of_band_usb_fires() {
         "finding cites the deviation: {}",
         f.message
     );
+}
+
+#[test]
+fn controlled_impedance_unverified_reference_plane_abstains() {
+    // The SAME grossly out-of-band geometry as the test above, but the reference
+    // layer carries no pour at all, so the plane under the pair cannot be
+    // verified. The closed form's H is then the height to copper nobody found,
+    // and the number it gives is not an estimate of anything: the check must
+    // say so as an info note and never raise a finding. (The tiny_tapeout demo's
+    // USB pair on a stack whose reference layer is not determined.)
+    let text = impedance_usb_text_plane(0.1, 0.5, 0.5, 4.3, true, false);
+    let r = run_text(&text, super::impedance::check_controlled_impedance);
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "an unverified reference plane must not fire: {:?}",
+        r.findings
+    );
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an abstention note");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(
+        f.message.contains("no judgement") && f.message.contains("unverified"),
+        "the note must say it did not judge, and why: {}",
+        f.message
+    );
+}
+
+/// A board with one routed single-ended net `name`, `w` mm wide on F.Cu over a
+/// real stackup that declares impedance control.
+fn single_ended_text(name: &str, w: f64) -> String {
+    format!(
+        r#"(kicad_pcb (version 20240101)
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+        (setup (stackup
+          (layer "F.Cu" (type "copper") (thickness 0.035))
+          (layer "dielectric 1" (type "core") (thickness 0.21) (material "FR4") (epsilon_r 4.6))
+          (layer "B.Cu" (type "copper") (thickness 0.035))
+          (dielectric_constraints yes)))
+        (net 0 "") (net 1 "{name}")
+        (segment (start 0 0) (end 20 0) (width {w}) (layer "F.Cu") (net 1)))"#
+    )
+}
+
+#[test]
+fn a_dc_bias_line_with_an_antenna_token_is_not_a_50_ohm_feed() {
+    // `ANT_BIAS` powers an active antenna (a bias tee's DC leg). It carries the
+    // `ANT` token but is routed as a power trace, so judging its 0.2 mm width
+    // against 50 ohm fabricated a finding on the HackRF One's bias control line.
+    for name in [
+        "ANT_BIAS",
+        "!ANT_BIAS",
+        "/frontend/!ANT_BIAS",
+        "ANT_PWR",
+        "RF_VCC",
+    ] {
+        let r = run_text(
+            &single_ended_text(name, 0.203),
+            super::impedance::check_controlled_impedance,
+        );
+        assert_eq!(
+            r.of_check(SiCheck::ControlledImpedance).count(),
+            0,
+            "{name} is a DC line, never judged as a 50 ohm feed"
+        );
+    }
+}
+
+#[test]
+fn a_mistuned_antenna_feed_still_fires_as_a_50_ohm_line() {
+    // The real-fault partner: the genuine feed `ANT` (and `RF_OUT`) at the same
+    // 0.203 mm width over 0.21 mm of dielectric is ~66 ohm, +31% from 50: a
+    // finding against the file's own stackup.
+    for name in ["ANT", "RF_OUT", "/frontend/ANT1"] {
+        let r = run_text(
+            &single_ended_text(name, 0.203),
+            super::impedance::check_controlled_impedance,
+        );
+        assert_eq!(
+            r.finding_count(),
+            1,
+            "{name} is the 50 ohm feed and must still be judged: {:?}",
+            r.findings
+        );
+    }
 }
 
 #[test]

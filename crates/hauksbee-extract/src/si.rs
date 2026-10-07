@@ -404,6 +404,19 @@ fn has_integrated_xtal_caps(value: &str) -> bool {
         "RV3028",
         "DS3231",
         "ABRACON AB18",
+        // MaxLinear XR22417 USB 2.0 7-port hub: datasheet REV1A, Applications
+        // Information "External Crystal": "both the load capacitors and feedback
+        // resistance are internal to the XR22417 device"; the 12 MHz crystal
+        // (rated 16-20 pF) hangs straight on XTALIN/XTALOUT.
+        "XR22417",
+        // Silicon Labs Series 2 xG22 (EFM32PG22, EFR32xG22): the HFXO has
+        // on-chip, software-tuned load capacitance (CTUNE on XI and XO), so the
+        // crystal needs no external caps (Silicon Labs EFM32PG22 data sheet,
+        // HFXO; Gecko Platform HFXO initialisation, `CMU_HFXOInit_TypeDef`).
+        "EFM32PG22",
+        "EFR32BG22",
+        "EFR32FG22",
+        "EFR32MG22",
     ]
     .iter()
     .any(|p| v.contains(p))
@@ -1097,7 +1110,13 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
                 .strip_suffix('U')
                 .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
         });
-    if hay.contains("WROOM") && !external_antenna {
+    // ESP-WROOM-02 / 02D / 02U is a different module (18 x 20 mm, pads on two
+    // sides, a footprint that is symmetric about its origin): the WROOM-32
+    // footprint-frame rectangle below says nothing about where its antenna is,
+    // and applied to it (Duet 2, rotated 180 degrees) it lands on the module's
+    // own body. Its keepout is not in this table, so it gets none.
+    let is_wroom_02 = hay.contains("WROOM-02") || hay.contains("WROOM02");
+    if hay.contains("WROOM") && !external_antenna && !is_wroom_02 {
         // The ESP32-WROOM-32 is 18 x 25.5 mm. The PCB antenna is at the "top"
         // end (the edge with no castellated pads); the module's pads occupy the
         // body and stop ~5.3 mm short of the footprint origin on the antenna
@@ -1108,12 +1127,13 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
         // We model the band from the antenna edge (local y -5.3) outward by 15 mm
         // (to -20.3), spanning the module half-width (+-9 mm).
         //
-        // A module set back from the board edge leaves part of the 15 mm band
-        // over board copper, which on ground-flooded designs reports intrusions
-        // on every revision. Whether that is a real RF defect or an accepted
-        // compromise is a hardware question this table cannot settle, so the
-        // corpus expectations name it as an open question rather than asserting
-        // either answer.
+        // The rectangle below is only the FALLBACK geometry, used when the
+        // footprint's pads cannot be read: `check_antenna_keepout` starts the band
+        // at the footprint's own antenna-side pad edge (`antenna_side_pad_edge`),
+        // because that edge differs per footprint (WROOM-32 -5.7, WROVER -8.7)
+        // and the pad-row centre used here puts the module's own ground-pad
+        // stitching inside the band. A module set back from the board edge with
+        // ground copper really in front of the antenna still fires.
         return Some((
             KeepoutRect {
                 x_min: -9.0,
@@ -1134,6 +1154,70 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
     // back requires the cited datasheet rectangle plus a placement-verified
     // corpus board to calibrate against.
     None
+}
+
+/// Depth (mm) of the keepout beyond the module's antenna-side pad edge
+/// (Espressif's 15 mm).
+const KEEPOUT_DEPTH_MM: f64 = 15.0;
+
+/// How far (mm) a copper object must reach past the module's antenna-side pad
+/// edge before it counts as inside the antenna keepout.
+///
+/// The datasheet draws the keepout from the module's antenna end; the footprint
+/// only locates that to its outermost pad row, and the module's own environment
+/// sits right against that row: the pour's clearance contour around the end
+/// pads, the stitching vias and ground tracks of the module's own ground pads.
+/// Measured on the Olimex ESP32-EVB Rev L (a shipping, working board whose
+/// antenna region is otherwise copper-free): the nearest ground fill vertex is
+/// 0.65 mm past the pad edge and the stitching vias' centres sit just inside it.
+/// 1 mm clears that environment; a pour or track that genuinely floods the
+/// antenna region reaches millimetres, never tenths.
+const KEEPOUT_NEAR_EDGE_SLACK_MM: f64 = 1.0;
+
+/// The antenna-side outer edge (footprint-local y, mm) of the part's copper pads.
+///
+/// The keepout starts where the module's own copper ends, and that depends on
+/// the footprint: a WROOM-32 footprint's end pads reach local y -5.7, a WROVER
+/// footprint's reach -8.7 (it is a longer module with the same antenna end), so
+/// a fixed constant put the rectangle over the WROVER's own ground pads. The
+/// antenna is at the -y end for every footprint in the table. `None` when the
+/// footprint cannot be found or carries no copper pad, and the caller falls back
+/// to the table's constant.
+fn antenna_side_pad_edge(root: &List, ant: &Component) -> Option<f64> {
+    let fp = ["footprint", "module"]
+        .into_iter()
+        .flat_map(|kw| root.find_all(kw))
+        .find(|fp| {
+            let by_property = fp.find_all("property").any(|p| {
+                p.arg_value(0).as_deref() == Some("Reference")
+                    && p.arg_value(1).as_deref() == Some(ant.reference.as_str())
+            });
+            by_property
+                || fp.find_all("fp_text").any(|t| {
+                    t.arg_value(0).as_deref() == Some("reference")
+                        && t.arg_value(1).as_deref() == Some(ant.reference.as_str())
+                })
+        })?;
+    let fp_rot = crate::pcb::at_of(fp).2;
+    fp.find_all("pad")
+        .filter(|pad| {
+            pad.find("layers").is_some_and(|l| {
+                (0..)
+                    .map_while(|i| l.arg_value(i))
+                    .any(|n| n.ends_with(".Cu"))
+            })
+        })
+        .filter_map(|pad| {
+            let (_, y, pad_rot) = crate::pcb::at_of(pad);
+            let size = pad.find("size")?;
+            let (w, h) = (size.arg_f64(0)?, size.arg_f64(1)?);
+            // A pad turned a quarter-turn relative to its footprint swaps its
+            // extents along the footprint's y axis.
+            let quarter_turns = ((pad_rot - fp_rot) / 90.0).round().abs();
+            let along_y = if quarter_turns % 2.0 > 0.5 { w } else { h };
+            Some(y - along_y / 2.0)
+        })
+        .min_by(f64::total_cmp)
 }
 
 /// Rotate a local-frame point by the placement angle (degrees, KiCad CCW with
@@ -1174,10 +1258,19 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         if !crate::assembly::AssemblyState::of(ant).is_present() {
             continue;
         }
-        let Some((k, cite)) = antenna_keepout(ant) else {
+        let Some((table_k, cite)) = antenna_keepout(ant) else {
             continue;
         };
         let Some(pos) = ant.position else { continue };
+        // The band starts at the module's own antenna-side pad edge (from the
+        // footprint, else the table's constant), `KEEPOUT_DEPTH_MM` deep, less the
+        // near-edge slack.
+        let edge = antenna_side_pad_edge(root, ant).unwrap_or(table_k.y_max);
+        let k = KeepoutRect {
+            y_min: edge - KEEPOUT_DEPTH_MM,
+            y_max: edge - KEEPOUT_NEAR_EDGE_SLACK_MM,
+            ..table_k
+        };
         let poly = keepout_polygon(pos, &k);
         let poly_v: Vec<(f64, f64)> = poly.to_vec();
         let [left, bottom, right, top] = polygon_bounds(&poly_v);
