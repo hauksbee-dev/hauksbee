@@ -451,6 +451,69 @@ value_re = "(?i)^TFC-WXCP11-08-LF$"
 "7" = "miso"
 "8" = "dat1"
 
+# GCT MEM2075: 1.40 mm profile push-push microSD socket with a normally-open
+# card-detect switch (open-book OSO-BOOK-B1/C1, the sole unbound critical part on
+# those boards).
+#
+# Source: GCT drawing MEM2075, revision A1 (10/09/20), sheet 1/2,
+#   https://gct.co/files/drawings/mem2075.pdf (sha256
+#   9f1a621a3f7c649fd51f8ea49189e91ab2a4345eefcf7024382a072b782e90a3).
+#   "Micro SD Card Pin Assignment" table: P1 DAT2, P2 CD/DAT3, P3 CMD, P4 VDD,
+#   P5 CLK, P6 Vss, P7 DAT0, P8 DAT1. "Card Detect Switch Circuit": the Card
+#   Detect contact and Ground are open without a card and closed with one
+#   inserted ("Normally Open"; ordering grid switch code 00). The recommended
+#   PCB layout labels the four shell tabs "Ground". Electrical block: 30 V AC/DC,
+#   0.5 A per pin, 100 mOhm contact resistance max.
+#
+# The board's pad strings are those of GCT's own footprint (GCT_MEM2075-00-140-
+# 01-A): P1..P8 for the card contacts, P9 for card detect, SH1..SH4 for the
+# shell. The SD-mode names are given in the comments; the roles use the SPI-bus
+# naming the microSD entry above uses, which is how the corpus wires it.
+#
+# NOT MODELLED: the card itself and the card-detect switch. With no card in the
+# socket (the only state a board check can assume) the switch is open, which is
+# what a connector's absence of physics already gives, so CD is a named pad and
+# nothing more. A design that relies on CD being pulled low by an inserted card is
+# a scenario's business, like anything else on the far side of a connector.
+[[models]]
+id = "gct_mem2075"
+kind = "connector"
+description = "GCT MEM2075 push-push microSD socket with normally-open card detect"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://gct.co/files/drawings/mem2075.pdf"
+title = "GCT MEM2075 Micro SD Memory Card Connector drawing, revision A1"
+locator = "sheet 1/2: Micro SD Card Pin Assignment table, Card Detect Switch Circuit, Recommended PCB Layout, Electrical"
+sha256 = "9f1a621a3f7c649fd51f8ea49189e91ab2a4345eefcf7024382a072b782e90a3"
+
+[models.match]
+# "MEM2075" and the full ordering code "MEM2075-00-140-01-A" (switch 00 =
+# normally open, 140 = 1.40 mm profile, 01 = with locating post, A = tape and
+# reel), both as they appear on the open-book boards.
+value_re = "(?i)^(GCT[_ -]?)?MEM2075(-[0-9]{2}-[0-9]{3}-[0-9]{2}-[A-Z])?$"
+
+[models.pins]
+"P1"  = "dat2"
+"P2"  = "cs"      # CD/DAT3
+"P3"  = "mosi"    # CMD
+"P4"  = "vdd"
+"P5"  = "sck"     # CLK
+"P6"  = "gnd"     # Vss
+"P7"  = "miso"    # DAT0
+"P8"  = "dat1"
+"P9"  = "cd"      # card-detect contact; closes to the shell (Ground) on insertion
+"SH1" = "shell1"  # shell tabs, "Ground" on the recommended layout
+"SH2" = "shell2"
+"SH3" = "shell3"
+"SH4" = "shell4"
+
+[models.ratings]
+max_voltage_v = 30.0  # drawing sheet 1, Electrical: Voltage Rating 30 V AC/DC
+max_current_a = 0.5   # Current Rating 0.5 A per pin
+
 # ── 2x20 pin headers ─────────────────────────────────────────────────────────
 [[models]]
 id = "header_2x20_2mm54"

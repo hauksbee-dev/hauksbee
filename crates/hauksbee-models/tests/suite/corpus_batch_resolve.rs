@@ -46,6 +46,9 @@ fn value_strings_from_the_corpus_bind_to_the_right_entry() {
         ("BH10S(B-D-02x5-LF)", "bh10s_idc_header"),
         ("PWRJ-2mm(YDJ-1134)", "dc_barrel_jack_2mm"),
         ("TFC-WXCP11-08-LF", "microsd_socket"),
+        // open-book
+        ("MEM2075", "gct_mem2075"),
+        ("MEM2075-00-140-01-A", "gct_mem2075"),
         // MNT Reform
         ("PMV50ENEAR", "pmv50enea"),
         ("PMV50EPEAR", "pmv50epea"),
@@ -571,6 +574,26 @@ fn c0_cards_carry_their_datasheet_pins_and_levels() {
         assert_pins(&m, &[(pad, role)]);
         assert_eq!((p(&m, "vih"), p(&m, "vil")), (2.0, 0.8));
     }
+}
+
+#[test]
+fn the_mem2075_socket_carries_the_gct_drawing_pad_map() {
+    // GCT MEM2075 rev A1 sheet 1: P1 DAT2 .. P8 DAT1, P9 card detect, SH1-4 shell.
+    let m = resolve("MEM2075-00-140-01-A");
+    assert_eq!(m.kind, ComponentKind::Connector);
+    assert_pins(
+        &m,
+        &[
+            ("P2", "cs"),
+            ("P3", "mosi"),
+            ("P4", "vdd"),
+            ("P5", "sck"),
+            ("P6", "gnd"),
+            ("P7", "miso"),
+            ("P9", "cd"),
+            ("SH4", "shell4"),
+        ],
+    );
 }
 
 #[test]
