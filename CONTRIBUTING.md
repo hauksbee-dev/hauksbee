@@ -375,10 +375,10 @@ git push --force-with-lease
 
 (`git commit --amend --signoff --no-edit` fixes just the latest commit.)
 
-Maintainer commits are not pull requests. The maintainer publishes directly to
-this repository, so the `dco` check does not run on them, and their commits
-carry no `Signed-off-by` line: the maintainer's own authorship of those commits
-stands in for it. Bot pull requests are skipped for the same reason.
+Maintainer commits are not pull requests: the maintainer publishes directly to
+this repository, so the `dco` check does not run on them, but they carry a
+`Signed-off-by` line all the same. Commits from before the DCO was adopted
+(2026-10-07) have none. The check skips pull requests opened by bots.
 
 ## Reporting bugs
 
