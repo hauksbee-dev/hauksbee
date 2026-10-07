@@ -407,6 +407,15 @@ fn verdict_counts(
     // Heads-up notes are actionable observations: they count as worth a look,
     // exactly as the web headline refuses "Looks healthy" over one.
     worth_a_look += drc_plain.heads_up.len() + lint_plain.heads_up.len() + si_plain.heads_up.len();
+    // An abstention names what was not judged. It stays in the report, but it is
+    // not a flaw to look at, and the coverage caveat carries the missing
+    // judgement (the same split `--json` makes with its `actionable` flag).
+    worth_a_look = worth_a_look.saturating_sub(
+        lint.findings
+            .iter()
+            .filter(|f| f.is_abstention() && f.severity != hauksbee_extract::Severity::High)
+            .count(),
+    );
     if usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious) {
         serious += 1;
     }

@@ -2138,10 +2138,16 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             location_mm: None,
             layer: None,
             refs: f.refs.clone(),
-            actionable: true,
+            // An abstention says what was not judged; it stays on the report
+            // but is not a finding to act on (see `LintFinding::is_abstention`).
+            actionable: !f.is_abstention(),
             message: f.message.clone(),
             plain: f.message.clone(),
-            fix: lint_fix_hint(f.check, f.severity).map(str::to_string),
+            fix: if f.is_abstention() {
+                lint_abstention_hint(f.check).map(str::to_string)
+            } else {
+                lint_fix_hint(f.check, f.severity).map(str::to_string)
+            },
         })
         .collect()
 }
@@ -2751,6 +2757,20 @@ pub const fn si_fix_hint(check: SiCheck) -> Option<&'static str> {
     })
 }
 
+/// What unlocks a lint abstention. `None` where the finding's own message
+/// already names the unlock (the decode abstention); the strap and unchecked-MCU
+/// abstentions use the shared [`lint_fix_hint`], which words them correctly.
+fn lint_abstention_hint(check: LintCheck) -> Option<&'static str> {
+    match check {
+        LintCheck::OperatingEnvelope => Some(
+            "Declare the rail's level with a net_drive, or bind the regulator that defines the net, so its operating envelope can be judged.",
+        ),
+        LintCheck::UnroutedPad => Some("Refill the zones (KiCad: B), save the board, and re-check so connectivity through the pours can be judged."),
+        LintCheck::DeviceDecode => None,
+        _ => lint_fix_hint(check, Severity::Low),
+    }
+}
+
 /// A concise suggested fix for a lint finding kind, for the machine-readable `fix` field.
 ///
 /// `None` when no template applies. Severity disambiguates the resource-conflict
@@ -3062,6 +3082,65 @@ mod tests {
         assert!(json[0]
             .group_key()
             .starts_with("lint/dc_overstress/serious/"));
+    }
+
+    /// A clean board that only carries abstentions must report zero actionable
+    /// findings: the notes stay listed, flagged non-actionable, and a real
+    /// low-severity finding of the same check kind still counts.
+    #[test]
+    fn abstentions_are_listed_but_not_actionable() {
+        use hauksbee_extract::{LintCheck, LintFinding, Severity};
+        let low = |check, message: &str| LintFinding {
+            check,
+            severity: Severity::Low,
+            message: message.to_string(),
+            refs: vec!["U1".to_string()],
+            nets: vec!["N1".to_string()],
+        };
+        let abstentions = [
+            low(
+                LintCheck::OperatingEnvelope,
+                "operating envelope on net 'N1' abstained: declare the level with a net_drive, or bind the regulator that defines this net",
+            ),
+            low(
+                LintCheck::DeviceDecode,
+                "U1 TS thermistor network abstained on 'N1': unreadable; unlock: identify the part",
+            ),
+            low(LintCheck::StrapPin, "cannot judge divider (R1, R2): no thresholds, so its boot level is unchecked"),
+            low(LintCheck::UncheckedMcu, "U1 looks like a strap-bearing MCU but has no table"),
+            low(
+                LintCheck::UnroutedPad,
+                "zones not filled: the copper pours on GND have no computed fill in the file, so whether their pads are connected was not checked",
+            ),
+        ];
+        let real = [
+            low(
+                LintCheck::OperatingEnvelope,
+                "U1 role vdd on 'N1' presents 3.0..3.6 V, within the envelope but near its bound",
+            ),
+            low(
+                LintCheck::UnroutedPad,
+                "2 piece(s) of track or via copper join nothing else on their net",
+            ),
+            low(
+                LintCheck::MissingI2cPullup,
+                "I2C SDA net 'N1' has no pull-up to a rail: bus breaks out to a header",
+            ),
+        ];
+        let json = lint_findings_json(&hauksbee_extract::NetLintReport {
+            findings: abstentions.iter().chain(&real).cloned().collect(),
+        });
+        assert_eq!(json.len(), 8, "abstentions stay on the report");
+        assert!(json[..5].iter().all(|f| !f.actionable), "{json:?}");
+        assert!(json[5..].iter().all(|f| f.actionable), "{json:?}");
+        assert!(json[..5].iter().all(|f| f.severity == "note"));
+        assert!(
+            json[0]
+                .fix
+                .as_deref()
+                .is_some_and(|f| f.contains("net_drive")),
+            "an envelope abstention says how to unlock it, not 'move the pin'"
+        );
     }
 
     #[test]

@@ -1203,6 +1203,13 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so a strap-bearing MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps were verified, and a mis-strapped boot pin is latched by hardware at reset, before any firmware runs.".to_string(),
                 "Check the boot/strap pins (e.g. BOOT0, or the ESP32 strapping pins) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
             ),
+            // The abstention is the check saying it did not judge, so it must
+            // not read as the violation the arm below describes.
+            LintCheck::OperatingEnvelope | LintCheck::DeviceDecode if f.is_abstention() => (
+                format!("An operating-condition check on {parts} (net \"{net}\") could not be judged, so it is unchecked, not known to be wrong."),
+                format!("The check needs the level the net actually sits at, or the part's identity, and the design files do not give it. Detail: {}", f.message),
+                "Declare the net's level (a net_drive), bind the regulator that defines it, or supply what the detail names as missing so the check can judge it.".to_string(),
+            ),
             LintCheck::DeviceDecode => (
                 format!("A configuration pin on {parts} (net \"{net}\") decodes to the wrong setting. {}", f.message),
                 // Deliberately generic: this template covers EVERY decoder in the
@@ -1807,6 +1814,35 @@ mod tests {
             assert_eq!(what.contains("will not be held"), !unchecked, "{what}");
             let hint = crate::result::lint_fix_hint(LintCheck::StrapPin, severity).unwrap();
             assert_eq!(hint.contains("missing model data"), unchecked, "{hint}");
+        }
+    }
+
+    /// An operating-envelope abstention says the level was not known; the plain
+    /// text must not tell a reader a sourced condition "is violated".
+    #[test]
+    fn envelope_abstention_reads_as_unchecked_not_as_a_violation() {
+        for (message, abstained) in [
+            (
+                "operating envelope on net 'N1' abstained: declare the level",
+                true,
+            ),
+            (
+                "U1 role vdd on 'N1' presents 4.75..5.25 V, outside the envelope",
+                false,
+            ),
+        ] {
+            let report = NetLintReport {
+                findings: vec![LintFinding {
+                    check: LintCheck::OperatingEnvelope,
+                    severity: Severity::Low,
+                    message: message.to_string(),
+                    refs: vec!["U1".to_string()],
+                    nets: vec!["N1".to_string()],
+                }],
+            };
+            let what = &plain_netlint(&report).findings[0].what;
+            assert_eq!(what.contains("unchecked"), abstained, "{what}");
+            assert_eq!(what.contains("is violated"), !abstained, "{what}");
         }
     }
 

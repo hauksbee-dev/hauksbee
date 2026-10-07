@@ -424,14 +424,23 @@ jobs:
       # commands that mutate their own supposedly pinned input bytes.
       - run: python3 -m unittest -v qc.defect_regressions.test_tool
       - run: python3 -m qc.defect_regressions.tool manifest qc/defect_regressions/manifest.json
-      - name: build the one binary used for both defect revisions
-        run: cargo build --locked -p hauksbee-engine --bin hauksbee --no-default-features --features renode,qemu
-      # Run the exact before/fix pair, not only the harness. The first shipped
-      # case is intentionally qualified rather than laundered into RED->GREEN:
-      # the upstream fix removes all four actionable findings, while unrelated
-      # open active parts make the fixed board INVALID under strict coverage.
-      - name: replay pinned C64-Saver defect and fix
-        run: python3 -m qc.defect_regressions.tool run qc/defect_regressions/c64_saver_i2c_pullups.json
+      - name: build the binaries used for both defect revisions
+        run: |
+          cargo build --locked -p hauksbee-engine --bin hauksbee --no-default-features --features renode,qemu
+          cargo build --locked -p hauksbee-ci --bin hauksbee-ci --no-default-features --features renode,qemu
+      # Replay every pinned before/fix pair, not one: a case that is not run
+      # drifts unnoticed (five of eleven had when only the C64-Saver pair was
+      # replayed here). Both sides of each case use the same prebuilt
+      # binaries and every fixture is hash-pinned in the repository. Pairs
+      # whose fixed side is not green are recorded as qualified (the fixed
+      # board stays INVALID or keeps unrelated findings), never as red-to-green.
+      - name: replay every pinned defect and fix
+        run: >
+          python3 -m qc.defect_regressions.tool run-manifest
+          qc/defect_regressions/manifest.json
+          --hauksbee-bin target/debug/hauksbee
+          --hauksbee-ci-bin target/debug/hauksbee-ci
+          --output "$RUNNER_TEMP/defect-regressions.json"
 
   docs:
     name: cargo doc (rendered module docs stay valid)

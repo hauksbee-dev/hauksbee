@@ -151,7 +151,8 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
         out.push(finding(
             Severity::Low,
             format!(
-                "zones not filled: the copper pours on {} have no computed fill in the file, so whether their pads are connected was not checked. Refill the zones (KiCad: B) and save",
+                "{}: the copper pours on {} have no computed fill in the file, so whether their pads are connected was not checked. Refill the zones (KiCad: B) and save",
+                crate::netlint::ZONES_NOT_FILLED_PREFIX,
                 sample_list(&conn.unfilled_zone_nets)
             ),
             Vec::new(),

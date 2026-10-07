@@ -37,6 +37,42 @@ pub struct LintFinding {
     pub nets: Vec<String>,
 }
 
+/// The word every low-severity abstention message carries when a check says it
+/// declined to judge (`... abstained: ...`). [`LintFinding::is_abstention`]
+/// keys on it for the checks whose abstentions share a kind with real findings.
+pub const ABSTENTION_MARKER: &str = " abstained";
+
+/// How the layout lint's unfilled-zone note opens. That note says connectivity
+/// through a pour was not checked, so it is an abstention too.
+pub const ZONES_NOT_FILLED_PREFIX: &str = "zones not filled";
+
+impl LintFinding {
+    /// Whether this finding records what a check did NOT judge rather than a
+    /// flaw it found: an MCU with no model, a strap divider it cannot evaluate,
+    /// an operating envelope / decode whose input level is unknown, or a
+    /// pour with no saved fill that connectivity cannot be read through.
+    ///
+    /// An abstention tells the reader where coverage ends and must stay visible,
+    /// but it is not something to act on: a clean board that merely lacks a
+    /// declared rail level or a model must not read as having findings. The
+    /// run-level coverage verdict (`invalid`) is what carries the missing
+    /// coverage; this flag keeps the note out of the actionable tally.
+    #[must_use]
+    pub fn is_abstention(&self) -> bool {
+        match self.check {
+            LintCheck::UncheckedMcu => true,
+            LintCheck::StrapPin => self.severity == Severity::Low,
+            LintCheck::UnroutedPad => {
+                self.severity == Severity::Low && self.message.starts_with(ZONES_NOT_FILLED_PREFIX)
+            }
+            LintCheck::OperatingEnvelope | LintCheck::DeviceDecode => {
+                self.severity == Severity::Low && self.message.contains(ABSTENTION_MARKER)
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintCheck {
     /// An I2C bus net (SDA/SCL) with no resistor to a power rail.
