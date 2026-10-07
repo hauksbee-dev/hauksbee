@@ -16,7 +16,8 @@
 //!   `PK\x03\x04` prefix routes through the zip classifier, Board-as-Code is
 //!   compiled to `KiCad` board text, and everything else falls through to the
 //!   text sniffer. It never invents a board name: a titleless board keeps its
-//!   empty name so the web report's `board_name` is unchanged.
+//!   empty name here, and the web report fills `board_name` from the file
+//!   stem itself.
 //! * [`from_path`]: the CLI/CI path. Adds what only a path can give you:
 //!   gerber DIRECTORY detection, `.kicad_sch` loaded by path so sheet
 //!   hierarchies recurse into sibling files, and the file-stem fallback for a
@@ -312,8 +313,8 @@ pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String>
 /// OLE2 container) are sniffed from the bytes first, exactly like the CLI
 /// path; lossy-decoding before that point would corrupt a binary board before
 /// it was ever parsed. Deliberately NO file-stem name fallback here: a
-/// titleless board keeps its empty name so the web report's `board_name` does
-/// not change under the normalizer.
+/// titleless board keeps its empty name, and the web report applies the
+/// file-stem fallback when it renders `board_name`.
 ///
 /// # Errors
 ///

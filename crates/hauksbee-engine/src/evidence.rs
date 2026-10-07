@@ -1446,6 +1446,65 @@ impl BoardEvidence {
         self.check_simulation_map(assertion, nets, references, budget, None)
     }
 
+    /// [`Self::simulation_map`] for a subject the board may not carry: `None`
+    /// when neither `nets` nor `references` resolves to any board net, so the
+    /// caller can keep the claim and say it has no board location rather than
+    /// fail a whole run over one unmappable subject. Every other error still
+    /// propagates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the traversal, map or artifact list fails
+    /// validation.
+    fn simulation_map_if_mapped(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+        references: &[String],
+        budget: Option<ErrorBudget>,
+    ) -> Result<Option<EvidenceMap>, EvidenceError> {
+        match self.simulation_map(assertion, nets, references, budget) {
+            Ok(map) => Ok(Some(map)),
+            Err(EvidenceError::Empty {
+                field: "simulation_map.nets",
+            }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The simulation maps backing a run's fault findings, one per finding
+    /// whose component maps onto board nets.
+    ///
+    /// A fault on a component that maps to no board net (a part the netlist
+    /// never connects, one tied only to ground, or a reference the board does
+    /// not carry) cannot back a map. It stays a finding, keeps its severity and
+    /// so its gate, and says in its own text that it is not mapped to the
+    /// board. One unmappable finding must not fail a run whose simulation
+    /// succeeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a mappable finding's map fails validation.
+    pub fn fault_finding_maps(
+        &self,
+        findings: &mut [crate::result::JsonFinding],
+        budget: &ErrorBudget,
+    ) -> Result<Vec<EvidenceMap>, EvidenceError> {
+        let mut maps = Vec::new();
+        for finding in findings {
+            match self.simulation_map_if_mapped(
+                finding.message.clone(),
+                &finding.nets,
+                &finding.refs,
+                Some(budget.clone()),
+            )? {
+                Some(map) => maps.push(map),
+                None => finding.mark_not_mapped_to_board(),
+            }
+        }
+        Ok(maps)
+    }
+
     /// [`Self::simulation_map`] for a claim a `Scope::Check { check, kind }`
     /// assumption can name as `check_scope = (check, kind)`.
     ///
@@ -2828,6 +2887,75 @@ mod tests {
             .expect("reader-facing references still resolve occurrence subjects");
         assert_eq!(by_display_reference.status(), EvidenceStatus::Undermined);
         assert_eq!(by_display_reference.models().len(), 1);
+    }
+
+    fn fault_finding(reference: &str, what: &str) -> crate::result::JsonFinding {
+        crate::result::JsonFinding {
+            check: "cosim".to_string(),
+            kind: "overcurrent".to_string(),
+            severity: "serious".to_string(),
+            nets: Vec::new(),
+            location_mm: None,
+            layer: None,
+            refs: vec![reference.to_string()],
+            actionable: true,
+            message: what.to_string(),
+            plain: what.to_string(),
+            fix: None,
+        }
+    }
+
+    /// A fault finding whose component maps to no board net must not fail the
+    /// run (it used to abort with "`simulation_map.nets` must not be empty"). It
+    /// stays, still gates, and says it has no board location; a sibling that
+    /// does map keeps its map and its text.
+    #[test]
+    fn a_fault_on_an_unmappable_component_is_kept_and_marked_not_mapped() {
+        let two_pin = |reference: &str, a: i64, b: i64| {
+            let mut c = component(reference, "part", a);
+            c.pins.push(Pin {
+                number: "2".to_string(),
+                net: Some(b),
+                ..Default::default()
+            });
+            c
+        };
+        let b = board(
+            "synthetic-unmappable-fault",
+            &[(1, "GND"), (2, "SIG")],
+            vec![
+                two_pin("R1", 2, 1),
+                // Tied to ground alone: ground joins no scope, so nothing maps.
+                two_pin("D9", 1, 1),
+            ],
+        );
+        let ev = evidence(&b, &report(vec![unresolved("R1", "part", "no model")]));
+        let budget = BoardEvidence::solver_error_budget(&hauksbee_solve::SolverOptions::default())
+            .expect("default solver options give a budget");
+        let mut findings = vec![
+            fault_finding("R1", "R1 overcurrent"),
+            fault_finding("D9", "D9 overcurrent"),
+            fault_finding("U404", "U404 overcurrent"),
+        ];
+        let maps = ev
+            .fault_finding_maps(&mut findings, &budget)
+            .expect("an unmappable finding is not a run failure");
+        assert_eq!(maps.len(), 1, "only R1 maps onto board nets");
+        assert_eq!(maps[0].assertion(), "R1 overcurrent");
+        assert_eq!(findings[0].message, "R1 overcurrent");
+        for unmapped in &findings[1..] {
+            assert!(
+                unmapped
+                    .message
+                    .contains(crate::result::NOT_MAPPED_TO_BOARD_NOTE),
+                "{unmapped:?}"
+            );
+            assert!(unmapped
+                .plain
+                .contains(crate::result::NOT_MAPPED_TO_BOARD_NOTE));
+            assert_eq!(unmapped.severity, "serious", "the finding still gates");
+            assert!(unmapped.gates());
+        }
     }
 
     #[test]

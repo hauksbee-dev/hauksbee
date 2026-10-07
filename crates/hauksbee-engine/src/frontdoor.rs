@@ -927,6 +927,22 @@ fn web_import_failure(
     }
 }
 
+/// The board name a report shows: the board's own title, else the uploaded
+/// file's stem (directory part and one extension removed, as the CLI's
+/// file-stem fallback does), so `board_name` is never blank beside a set
+/// `file_name`. A name with no usable stem stays empty rather than invented.
+fn display_board_name(board_name: &str, file_name: &str) -> String {
+    if !board_name.trim().is_empty() {
+        return board_name.to_string();
+    }
+    let leaf = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+    let stem = match leaf.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem,
+        _ => leaf,
+    };
+    stem.trim().to_string()
+}
+
 fn unreadable_with_import_failure(
     file_name: &str,
     error: String,
@@ -1356,7 +1372,7 @@ fn analyze_normalized_with_context(
 
     let mut report = WebReport {
         ok: true,
-        board_name: board.name.clone(),
+        board_name: display_board_name(&board.name, file_name),
         file_name: file_name.to_string(),
         num_components: board.components.len(),
         num_nets: bound.net_names.len(),
@@ -1986,16 +2002,35 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 /// `.board` exports and gerber zips included, reaches co-sim identically.
 /// The exact terminal command that runs this co-sim outside the web report,
 /// with the REAL uploaded file names, never placeholders (a `<board>`
-/// placeholder is an instruction the user cannot follow). The binary is named
-/// by its full running path: an app user has no `hauksbee` on PATH (it lives
-/// in Hauksbee.app/Contents/Resources/bin), and the serving executable IS that
-/// binary, so its own path is the one command guaranteed to exist on this
-/// machine.
+/// placeholder is an instruction the user cannot follow). An installed app
+/// names its binary by full running path: an app user has no `hauksbee` on
+/// PATH (it lives in Hauksbee.app/Contents/Resources/bin), and the serving
+/// executable IS that binary, so its own path is the one command guaranteed to
+/// exist on this machine. A development build runs from a cargo `target/`
+/// directory whose absolute path means nothing to a reader, so it is shown as
+/// plain `hauksbee` and the report says which version that is.
 fn cli_cosim_command(board_file: &str, fw_file: &str) -> String {
     let exe = std::env::current_exe()
         .ok()
-        .map_or_else(|| "hauksbee".to_string(), |p| p.display().to_string());
+        .map_or_else(|| "hauksbee".to_string(), |p| display_executable(&p));
     format!("\"{exe}\" run \"{board_file}\" --firmware \"{fw_file}\" --headless")
+}
+
+/// How a running binary's path reads in report text: the path itself for an
+/// installed binary, `hauksbee` for a cargo build artifact (anything up to
+/// three levels under a `target` directory: `target/<profile>/hauksbee`,
+/// `target/<triple>/<profile>/hauksbee`).
+fn display_executable(path: &std::path::Path) -> String {
+    let parts: Vec<_> = path.components().collect();
+    let dev_build = parts
+        .iter()
+        .rposition(|c| c.as_os_str() == "target")
+        .is_some_and(|i| parts.len() - i <= 4);
+    if dev_build {
+        "hauksbee".to_string()
+    } else {
+        path.display().to_string()
+    }
 }
 
 /// Project ordinary coverage limitations/events onto the web finding cards.
@@ -2105,7 +2140,8 @@ fn run_web_cosim_with_bound(
              long enough is a job of tens of wall-clock seconds, which is why it is not \
              done inside a page load. The complete co-sim works, two ways: open the live \
              sim (\"Drive it live\") to boot this firmware here in the app, or run it \
-             from a terminal, from the folder holding your files: {}",
+             from a terminal (hauksbee {}), from the folder holding your files: {}",
+            env!("CARGO_PKG_VERSION"),
             cli_cosim_command(board_file_name, fw_name)
         ));
         // The generic fix line ("drop a board with an in-process MCU") would be
@@ -2780,6 +2816,36 @@ fn top_gpio_nets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_board_name_falls_back_to_the_file_stem() {
+        assert_eq!(
+            display_board_name("", "power_resistor.kicad_pcb"),
+            "power_resistor"
+        );
+        assert_eq!(
+            display_board_name("  ", "C:\\fakepath\\my.board.zip"),
+            "my.board"
+        );
+        assert_eq!(display_board_name("", "dir/noext"), "noext");
+        assert_eq!(display_board_name("", ".hidden"), ".hidden");
+        assert_eq!(display_board_name("Rev B", "x.kicad_pcb"), "Rev B");
+    }
+
+    #[test]
+    fn a_dev_build_binary_reads_as_hauksbee_but_an_installed_one_keeps_its_path() {
+        use std::path::Path;
+        for dev in [
+            "/home/u/repo/target/debug/hauksbee",
+            "/home/u/repo/target/release/hauksbee",
+            "/home/u/repo/target/aarch64-apple-darwin/release/hauksbee",
+            "/home/u/repo/target/debug/deps/frontdoor-0123abcd",
+        ] {
+            assert_eq!(display_executable(Path::new(dev)), "hauksbee", "{dev}");
+        }
+        let app = "/Applications/Hauksbee.app/Contents/Resources/bin/hauksbee";
+        assert_eq!(display_executable(Path::new(app)), app);
+    }
 
     const SHORTED: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     const BLUEPILL: &[u8] =

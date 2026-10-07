@@ -1921,7 +1921,22 @@ impl JsonFinding {
     }
 }
 
+/// The sentence a finding carries when its subject resolves to no board net.
+pub const NOT_MAPPED_TO_BOARD_NOTE: &str = "Not mapped to the board: the affected component connects to no board net, so this finding has no board location.";
+
 impl JsonFinding {
+    /// Say, in the finding's own words, that it has no board location. The
+    /// finding keeps its severity and gating; only its text gains the note.
+    /// Idempotent.
+    pub fn mark_not_mapped_to_board(&mut self) {
+        for text in [&mut self.message, &mut self.plain] {
+            if !text.contains(NOT_MAPPED_TO_BOARD_NOTE) {
+                text.push(' ');
+                text.push_str(NOT_MAPPED_TO_BOARD_NOTE);
+            }
+        }
+    }
+
     /// A key shared by findings that say the same thing about different parts
     /// (check, kind, severity and the message with its one part's designator
     /// masked). The human reports print such findings once; the JSON keeps each

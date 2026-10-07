@@ -260,14 +260,11 @@ fn assemble_evidence_and_ci_artifacts(
             Some(budget.clone()),
         )?);
     }
-    for finding in &fault_findings {
-        cosim_maps.push(board_evidence.simulation_map(
-            finding.message.clone(),
-            &finding.nets,
-            &finding.refs,
-            Some(budget.clone()),
-        )?);
-    }
+    // `run_findings` opens with the fault findings, one per fault in order;
+    // the boot-advisory findings follow them.
+    cosim_maps.extend(
+        board_evidence.fault_finding_maps(&mut run_findings[..fault_findings.len()], &budget)?,
+    );
     if let Some(summary) = &observations.cosim {
         cosim_maps.push(board_evidence.simulation_map(
             format!(
