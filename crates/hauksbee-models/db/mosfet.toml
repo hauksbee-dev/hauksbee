@@ -2468,8 +2468,11 @@ description = "DMG3415U P-channel MOSFET SOT-23, -20V, -4A, Rds(on) 31mOhm typ @
 [models.match]
 # Ordering Information lists DMG3415U-7 and DMG3415U-13 (tape-and-reel quantity
 # codes), both SOT23. The AEC-Q101 "Q" part and the successor DMP2045U have
-# their own datasheets and are not matched.
-value_re = "(?i)^DMG3415U(-7|-13)?$"
+# their own datasheets and are not matched. The bare base number "DMG3415"
+# (open-book OSO-BOOK-B1 Q1, on a SOT-23 land) names this part: DS31735 is the
+# only SOT23 DMG3415, and the DFN variant carries its own "UFY" suffix, which
+# this rule does not take.
+value_re = "(?i)^DMG3415(U(-7|-13)?)?$"
 
 [models.params]
 vto    = -0.55     # VGS(th) typ (V), NEGATIVE for P-channel (min -0.3, max -1.0)

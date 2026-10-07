@@ -49,6 +49,7 @@ fn value_strings_from_the_corpus_bind_to_the_right_entry() {
         // open-book
         ("MEM2075", "gct_mem2075"),
         ("MEM2075-00-140-01-A", "gct_mem2075"),
+        ("DMG3415", "dmg3415u"),
         // pvrouter mk2Wifi-C6: the symbol names the MINI-1/-1U pair at once
         ("ESP32-C6-MINI-1/U", "esp32c6_mini1"),
         ("ESP32-C6-MINI-1U-H4", "esp32c6_mini1"),
@@ -577,6 +578,12 @@ fn c0_cards_carry_their_datasheet_pins_and_levels() {
         assert_pins(&m, &[(pad, role)]);
         assert_eq!((p(&m, "vih"), p(&m, "vil")), (2.0, 0.8));
     }
+}
+
+#[test]
+fn the_dmg3415_base_number_does_not_take_the_dfn_variant() {
+    // DS31735 is the SOT23 part; the DFN2015 DMG3415UFY has another pad map.
+    assert!(by_value("DMG3415UFY").is_none_or(|e| e.id != "dmg3415u"));
 }
 
 #[test]
