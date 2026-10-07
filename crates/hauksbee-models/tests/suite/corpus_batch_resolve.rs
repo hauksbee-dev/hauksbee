@@ -49,6 +49,9 @@ fn value_strings_from_the_corpus_bind_to_the_right_entry() {
         // open-book
         ("MEM2075", "gct_mem2075"),
         ("MEM2075-00-140-01-A", "gct_mem2075"),
+        // pvrouter mk2Wifi-C6: the symbol names the MINI-1/-1U pair at once
+        ("ESP32-C6-MINI-1/U", "esp32c6_mini1"),
+        ("ESP32-C6-MINI-1U-H4", "esp32c6_mini1"),
         // MNT Reform
         ("PMV50ENEAR", "pmv50enea"),
         ("PMV50EPEAR", "pmv50epea"),
@@ -573,6 +576,17 @@ fn c0_cards_carry_their_datasheet_pins_and_levels() {
         let m = resolve(value);
         assert_pins(&m, &[(pad, role)]);
         assert_eq!((p(&m, "vih"), p(&m, "vil")), (2.0, 0.8));
+    }
+}
+
+#[test]
+fn the_c6_module_card_does_not_take_the_bare_chip() {
+    // The MINI-1 pad map is the module's; the bare QFN-40 chip numbers differently.
+    for value in ["ESP32-C6", "ESP32-C6FH4", "ESP32-C6-MINI-1/X"] {
+        assert!(
+            by_value(value).is_none_or(|e| e.id != "esp32c6_mini1"),
+            "{value} must not bind the module card"
+        );
     }
 }
 

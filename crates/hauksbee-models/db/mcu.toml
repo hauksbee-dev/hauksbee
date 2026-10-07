@@ -2338,10 +2338,13 @@ locator = "Tables 1-1/1-2 Series Comparison; Figure 3-1 Pin Layout; Table 3-1 Pi
 sha256 = "26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2"
 
 [models.match]
-# ESP32-C6-MINI-1 or -1U, optionally with the -N4/-H4/-H8 part-number suffix.
+# ESP32-C6-MINI-1 or -1U, optionally with the -N4/-H4/-H8 part-number suffix,
+# and the combined "ESP32-C6-MINI-1/U" symbol name (pvrouter mk2Wifi-C6), which
+# is the datasheet's own spelling of the pair: the two share one pad map
+# (Figure 3-1, "applicable for ESP32-C6-MINI-1 and ESP32-C6-MINI-1U").
 # Anchored on MINI-1 so the bare chip ("ESP32-C6", "ESP32-C6FH4") and module
 # aliases routed by db/mcu_modules.toml (XIAO ESP32C6) are not taken.
-value_re = "(?i)^ESP32[-_ ]?C6[-_ ]?MINI[-_ ]?1U?([-_ ]?(N4|H4|H8))?$"
+value_re = "(?i)^ESP32[-_ ]?C6[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?(N4|H4|H8))?$"
 
 [models.params]
 backend = "none:esp32c6"
