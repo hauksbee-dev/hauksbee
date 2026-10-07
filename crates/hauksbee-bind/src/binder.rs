@@ -10401,9 +10401,11 @@ style = "i2c_pointer"
     #[test]
     fn a_logic_entry_that_models_only_a_pad_map_stays_open() {
         let lib = ModelLibrary::builtin();
+        // The card's LDO law and input pulls are its only behavior; with them
+        // removed it is exactly a pad map plus levels.
         let mut model = resolve_value(&lib, "FT231X-Q", "");
-        assert_eq!(model.params.get_bool("identity_only"), Some(true));
         model.params.0.remove("identity_only");
+        model.behavioral = hauksbee_models::behavioral::Behavioral::default();
         let mut c = comp("U2", "FT231X-Q");
         c.pins = vec![pin("12", 1), pin("3", 0), pin("17", 2), pin("20", 1)];
         let mut circuit = Circuit::new();
@@ -10421,6 +10423,55 @@ style = "i2c_pointer"
         );
         let w = warning.expect("the identity-only warning must surface");
         assert!(w.contains("USB stack") && w.contains("remains OPEN"), "{w}");
+    }
+
+    /// A bus-powered FT231XQ (VCC on +5V, VCCIO and RESET# on its own 3V3OUT,
+    /// `FT_000565` Table 3.1) binds, and its internal LDO is the supply of the
+    /// 3V3OUT rail, so that rail takes no name-derived ideal source while +5V
+    /// does.
+    #[test]
+    fn ft231x_binds_and_its_3v3out_ldo_supplies_the_io_rail() {
+        let mut u1 = comp("U1", "FT231XQ");
+        u1.footprint = "Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.5x2.5mm".into();
+        u1.pins = vec![
+            pin("1", 4),
+            pin("3", 3),
+            pin("10", 2),
+            pin("11", 2),
+            pin("12", 1),
+            pin("13", 3),
+            pin("17", 5),
+            pin("20", 2),
+            pin("21", 3),
+        ];
+        let board = ExtractedBoard {
+            name: "ft231x-bus-powered".into(),
+            nets: vec![
+                net(1, "+5V"),
+                net(2, "+3V"),
+                net(3, "GND"),
+                net(4, "UART_RX"),
+                net(5, "UART_TX"),
+            ],
+            components: vec![u1],
+        };
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        let row = bound.report.row("U1").unwrap();
+        assert_eq!(row.model_id.as_deref(), Some("ft231x"));
+        assert!(
+            !matches!(row.outcome, BindOutcome::Unresolved { .. }),
+            "{:?}",
+            row.outcome
+        );
+        let rail = bound.circuit.find_node("+3V").unwrap();
+        let ldo = bound.behavioral.iter().find(|b| b.reference == "U1");
+        assert!(
+            ldo.is_some_and(|b| b.driven_nodes().contains(&rail)),
+            "3V3OUT must drive its rail"
+        );
+        let supplied: Vec<&str> = bound.supplies.iter().map(|s| s.net_name.as_str()).collect();
+        assert!(supplied.contains(&"+5V"), "{supplied:?}");
+        assert!(!supplied.contains(&"+3V"), "{supplied:?}");
     }
 
     /// When an entry names the switched pads and one is unwired, no path may

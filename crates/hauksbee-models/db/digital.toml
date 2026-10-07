@@ -2938,8 +2938,16 @@ missing = ["full_register_map", "spi_register_map", "accelerometer_data", "power
 # FT231XQ: FTDI USB-to-full-speed-serial UART bridge, QFN-20.
 #
 # Source: FTDI "FT231X USB to Full Handshake UART IC" datasheet, FT_000565
-#   Version 1.2 (2013), Section 3 Pin configuration (QFN-20 figure and the
-#   Table 3.x signal descriptions) and Section 6 DC characteristics.
+#   Version 1.2 (Clearance No. FTDI# 261, 2013),
+#   https://ftdichip.com/wp-content/uploads/2020/08/DS_FT231X.pdf (sha256
+#   8999a05c9ad906a0183c02a27f48b1d056623c876dd28d565c027f7510f0b3f9; FTDI's
+#   host refuses scripted requests, so the file read is the byte-identical
+#   web.archive.org capture of that URL). Pin map: 3.1 QFN Schematic Symbol and
+#   Tables 3.1 to 3.3 (pp.7-8). 3V3OUT: Table 3.1 ("3V3 output at 50mA. May be
+#   used to power VCCIO") and the +3.3V LDO Regulator paragraph of 4 (p.13,
+#   "maximum current of 50mA"). Ratings: Table 5.1 (p.16). Supply ranges, ICC
+#   and the 3V3OUT band: Table 5.3 (p.17). I/O levels and the input pull-ups:
+#   Table 5.4, VCCIO = 3.3 V (p.18), and Table 3.3 note 1 (p.8).
 #
 # TWO SUPPLY DOMAINS, AND THE ONE THAT SETS LOGIC LEVELS IS VCCIO. VCC (pad 12)
 # runs the core at 2.97 to 5.5 V; VCCIO (pad 20) runs the UART I/O ring at 1.62
@@ -2949,19 +2957,35 @@ missing = ["full_register_map", "spi_register_map", "accelerometer_data", "power
 # what a bus-powered design ties VCCIO to. On a board that feeds VCCIO 1.8 V,
 # VIH becomes 1.6 V and VOH 1.62 V, and this entry would read the bus optimistically.
 #
+# WHAT IS MODELLED is the part's DC face before and between transfers, which is
+# what a board check sees: the internal 3.3 V LDO on 3V3OUT, which bus-powered
+# boards use to feed VCCIO and their own logic; the ~75 kOhm pull-ups to VCCIO
+# on the UART and modem-status inputs; the supply draw; and the levels.
+#
 # DELIBERATELY NOT MODELLED: the USB device itself. There is no host, no
 # enumeration, no baud-rate divisor and no FIFO, so pads 8/9 (USBDP/USBDM) carry
-# roles and carry nothing else, and TXD never emits a byte. The CBUS pins are
-# EEPROM-configurable (the roles below are the factory defaults, and the margay
-# datalogger's board uses CBUS1/CBUS2 as LED drivers exactly as the defaults
-# intend) so a board that reprograms them has different functions on those pads
-# than the names here suggest. The internal 3V3OUT LDO is not stamped: pad 10 is
-# named `v3v3out` and is not a source, so a board powering VCCIO from it sees no
-# path. That is the biggest gap and it is a `digital`-kind limitation.
+# roles and nothing else, and TXD never emits a byte. The datasheet does not
+# state the level TXD, RTS# or DTR# rest at, so no driver is stamped on them
+# rather than assuming a UART idle level. The CBUS pins are MTP-configurable
+# (the roles below are the factory defaults, Table 3.3) so a board that
+# reprograms them has different functions on those pads than the names suggest.
 [[models]]
 id = "ft231x"
 kind = "digital"
-description = "FTDI FT231X USB-to-UART bridge, QFN-20 (pad map and VCCIO logic levels; no USB stack)"
+description = "FTDI FT231X USB-to-UART bridge, QFN-20 (pad map, VCCIO levels, internal 3V3OUT LDO and input pull-ups; no USB stack)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ftdichip.com/wp-content/uploads/2020/08/DS_FT231X.pdf"
+title = "FTDI FT231X USB to Full Handshake UART IC datasheet, FT_000565 Version 1.2"
+locator = "3.1 QFN Schematic Symbol and Tables 3.1-3.3 pp.7-8; 4 +3.3V LDO Regulator p.13; Table 5.1 p.16; Table 5.3 p.17; Table 5.4 p.18"
+sha256 = "8999a05c9ad906a0183c02a27f48b1d056623c876dd28d565c027f7510f0b3f9"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "ldo_output_resistance"
+reason = "Table 5.3 gives the 3V3OUT band (2.97 to 3.63 V) and 4 the 50 mA limit, but no load regulation, dropout or current limit; the 1 Ohm source resistance is assumed (it drops 50 mV at the rated 50 mA, inside the band), and VCC below 3.3 V is passed through without a dropout"
 
 [models.match]
 # "FT231XQ" is the QFN-20 ordering code and "FT231XS" the SSOP-20 one; the two
@@ -2971,19 +2995,17 @@ description = "FTDI FT231X USB-to-UART bridge, QFN-20 (pad map and VCCIO logic l
 value_re = "(?i)^FT231X[-_ ]?Q([A-Z0-9-]*)?$"
 
 [models.params]
-identity_only = true
-unlocked_by = "a validated FT231X USB/UART, internal-regulator, and configurable-I/O model"
-# Section 6, VCCIO = 3.3 V column. See the note above before trusting these on a
+# Table 5.4, VCCIO = 3.3 V column. See the note above before trusting these on a
 # board with a lower I/O rail.
 voh   = 2.97     # min, at the table's IOH = 2 mA test current. The four VOH rows
                  # in that table are DRIVE-STRENGTH settings (4/8/12/16 mA, which
-                 # the EEPROM selects), not load currents, so this is not a claim
+                 # the MTP selects), not load currents, so this is not a claim
                  # that the pin holds 2.97 V into 16 mA.
 vol   = 0.4      # max, same table and same 2 mA test current
 vih   = 2.0      # min (LVTTL)
 vil   = 0.8      # max
-supply_static_ua = 8000.0  # ICC1 typ, normal operation (8.4 mA max); USB-suspend
-                           # ICC2 is 125 uA and is not the operating figure
+supply_static_ua = 8000.0  # Table 5.3 ICC1 typ, normal operation (8.4 mA max);
+                           # USB-suspend ICC2 is 125 uA and is not the operating figure
 # `supply_pin`/`gnd_pin` record WHICH pads the draw belongs to, for a reader; they
 # are not what the engine meters against. `bind_digital` takes the supply leg's
 # nets from the ROLES (`vcc`/`vdd` and `gnd`/`vss`), which is why pad 12 is named
@@ -2991,23 +3013,19 @@ supply_static_ua = 8000.0  # ICC1 typ, normal operation (8.4 mA max); USB-suspen
 # so the whole figure sits on the core supply either way.
 supply_pin = "12"          # VCC
 gnd_pin    = "3"
-# WHAT THIS ENTRY IS AND IS NOT. It is a pad map plus VCCIO logic levels; there is
-# no USB stack behind it, and `bind_digital` stamps no driver on TXD or the modem
-# outputs (see the note in the pin map on why they are not `y`-prefixed). So the
-# part answers "what levels does this bridge present, and which pad is which" and
-# nothing about traffic. Said as a `warning` and not only in these comments because
-# comments reach no report surface: `entry_warning` puts this on the bind report and
-# on the evidence map, where a reader deciding whether a UART result means anything
+# Said as a `warning` and not only in these comments because comments reach no
+# report surface: `entry_warning` puts this on the bind report and on the
+# evidence map, where a reader deciding whether a UART result means anything
 # will actually meet it.
-warning = """pad map and VCCIO logic levels only: there is no USB stack and no \
-driver is stamped on TXD or the modem-status outputs, so this part cannot source \
-or answer for any UART traffic, and a result that depends on data arriving through \
-this bridge is not evidence"""
+warning = """the USB stack is not modelled: TXD, RTS# and DTR# carry no driver \
+and the bridge sources or answers no UART traffic, so a result that depends on \
+data arriving through it is not evidence; the 3V3OUT LDO, the input pull-ups \
+and the VCCIO levels are modelled"""
 
 [models.pins]
-# Section 3, QFN-20. Cross-checked against the margay datalogger: pad 18 sits on
-# a net named DTR, pads 8/9 on the USB pair, pad 11 tied to the 3.3 V rail
-# (RESET# released), pad 20 on the I/O rail, and the exposed pad on GND.
+# Tables 3.1 to 3.3, QFN-20. Cross-checked against the margay datalogger: pad 18
+# sits on a net named DTR, pads 8/9 on the USB pair, pad 11 tied to the 3.3 V
+# rail (RESET# released), pad 20 on the I/O rail, and the exposed pad on GND.
 "1"  = "rxd"        # UART data in (to the IC)
 "2"  = "ri_n"       # ring indicator input
 "3"  = "gnd"
@@ -3017,49 +3035,92 @@ this bridge is not evidence"""
 "7"  = "cbus2"      # configurable; factory default TXLED#
 "8"  = "usbdp"      # USB D+; no USB stack, see above
 "9"  = "usbdm"      # USB D-
-"10" = "v3v3out"    # internal 3.3 V LDO output; NOT stamped as a source
-"11" = "reset_n"    # active-low reset input; tie high for normal operation
+"10" = "v3v3out"    # internal 3.3 V LDO output, 50 mA (behavioral law below)
+"11" = "reset_n"    # active-low reset input; may be tied to 3V3OUT (4, p.15)
 "12" = "vcc"        # core supply, 2.97 to 5.5 V
 "13" = "gnd2"
 "14" = "cbus1"      # configurable; factory default RXLED#
 "15" = "cbus0"      # configurable; factory default TXDEN
 "16" = "cbus3"      # configurable; factory default SLEEP#
-# THE OUTPUTS ARE NOT `y`-PREFIXED, and that is the opposite of what it looks
-# like it should be. `digital::output_roles` stamps a Thevenin driver on every
-# `y`-prefixed role, and for a part with NO `[models.logic]` block nothing ever
-# computes a value for that driver: it stays at its initial 0 V and ENABLED, so a
-# `y`-named output becomes a strong constant LOW on the board's net. On this part
-# that would hold the MCU's UART RX line at ground. There is no USB stack here to
-# compute a TXD value from, so the honest shape is a named pad with no driver,
-# which is what the CH340G and CP2102 entries above do for the same reason.
+# THE OUTPUTS ARE NOT `y`-PREFIXED. `digital::output_roles` stamps a Thevenin
+# driver on every `y`-prefixed role, and for a part with NO `[models.logic]`
+# block nothing ever computes a value for that driver: it stays at its initial
+# 0 V and ENABLED, so a `y`-named output becomes a strong constant LOW on the
+# board's net. On this part that would hold the MCU's UART RX line at ground.
 "17" = "txd"        # UART data out (not driven; see above)
 "18" = "dtr_n"      # modem-status output
 "19" = "rts_n"      # flow-control output
 "20" = "vccio"      # I/O-ring supply, 1.62 to 3.63 V; sets every level above
-# THE EXPOSED PAD IS KEYED TWICE because the two CAD tools number it differently
-# and the binder matches the BOARD's pad string, not the datasheet's. Eagle's
-# QFN20 land (the margay datalogger's, checked in its .brd: pads 1..20 plus "EP",
-# with EP on GND) calls it "EP"; KiCad's Package_DFN_QFN:QFN-20-1EP_3.5x3.5mm land
-# calls it "21", and `package_electrical_pad_count` already reads the `-1EP` suffix
-# as one more electrical pad. Keying only "EP" left the pad unmapped on every KiCad
-# board, which drops the IC's thermal-and-ground tie. FTDI's own numbering for it
-# could not be read: their PDF host refused every request from here, so this pair
-# rests on the two footprint conventions, which is the evidence the binder uses
-# anyway. Both keys name the same node on every board that fits either land.
-"EP" = "gnd3"       # exposed pad, tied to ground on every board (Eagle spelling)
-"21" = "gnd4"       # the same exposed pad under KiCad's numbering
+# The exposed pad is keyed twice because the CAD tools number it differently and
+# the binder matches the BOARD's pad string. The datasheet calls it pin 21
+# (Table 3.1 note: "Pin 21 on the symbol is the pad under the centre of the chip
+# package and should be connected to GND"), as KiCad's QFN-20-1EP land does;
+# Eagle's QFN20 land (the margay datalogger's) calls it "EP".
+"EP" = "gnd3"       # exposed pad (Eagle spelling)
+"21" = "gnd4"       # the same exposed pad, datasheet and KiCad numbering
 
 [models.ratings]
-# Section 5 Absolute maximum ratings. VCCIO's -0.3 to 4.0 V is the TIGHTER of the
-# two supply limits, and there is no per-domain field on this schema, so the tighter
-# one is what is recorded: the 5.5 V figure belongs to VCC alone.
-#
-# NOTHING COMPARES THIS AGAINST A NODE TODAY. The scheduler builds supply-rail
-# watches for `mcu` bindings only, and `digital` is not among the kinds that get
-# whole-device stress meta, so this rating is carried for the report and for
-# whatever consumes it later. The same is true of every `max_voltage_v` on a
-# digital entry in this file; it is said once, here.
+# Table 5.1. VCCIO's -0.3 to 4.0 V is the TIGHTER of the two supply limits, and
+# there is no per-domain field on this schema, so the tighter one is recorded
+# here; the per-domain limits are in the envelopes below.
 max_voltage_v = 4.0
+max_pin_current_a = 0.022   # DC output current, outputs
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.97
+max_v = 5.5
+abs_max_v = 5.5
+basis = "FTDI FT231X FT_000565 v1.2, Table 5.3 VCC operating supply 2.97 V to 5.5 V; Table 5.1 VCC supply voltage -0.3 V to +5.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccio"
+min_v = 1.62
+max_v = 3.63
+abs_max_v = 4.0
+basis = "FTDI FT231X FT_000565 v1.2, Table 5.3 VCCIO operating supply 1.62 V to 3.63 V; Table 5.1 VCCIO IO voltage -0.3 V to +4.0 V"
+
+# Internal 3.3 V LDO (Table 3.1, 4, Table 5.3). With VCC above 3.3 V it holds
+# 3V3OUT at 3.3 V; with VCC at 3.3 V the datasheet makes 3V3OUT an input tied to
+# VCC, which `min(v_vcc, 3.3)` reproduces with no current between them. The
+# 1 Ohm source resistance is assumed (see the uncertainty above); at or below
+# `rail_owner::SERIES_OHMS` it makes the law the supply of the net it drives, so
+# a rail fed only from 3V3OUT takes no name-derived ideal source beside it.
+[[models.behavioral.laws]]
+name = "ldo_3v3out"
+kind = "voltage"
+a = "v3v3out"
+b = "gnd"
+expr = "max(0.0, min(v_vcc, 3.3))"
+r_ohms = 1.0
+
+# Table 3.3 note 1: input pins are pulled to VCCIO through internal ~75 kOhm
+# resistors (Table 5.4 Rpu 40 / 75 / 190 kOhm min / typ / max).
+[models.behavioral.pins.rxd]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.cts_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.dsr_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.dcd_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.ri_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.coverage]
+implements = ["pin_roles", "vccio_logic_levels", "internal_3v3_ldo", "input_pullups", "operating_supply_current", "supply_ranges", "absolute_ratings"]
+missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "cbus_functions", "ldo_dropout", "reset_generator", "usb_suspend_current", "vccio_1v8_2v5_levels"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BME280: Bosch combined humidity, pressure and temperature sensor, LGA-8.
