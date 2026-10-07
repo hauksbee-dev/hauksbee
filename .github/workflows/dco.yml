@@ -1,7 +1,8 @@
-# Developer Certificate of Origin: every commit in a pull request carries a
-# `Signed-off-by:` line for its author (`git commit -s`), certifying the
-# contributor may submit it under the repository licence (CONTRIBUTING.md,
-# "Licensing of contributions"; https://developercertificate.org).
+# Developer Certificate of Origin (https://developercertificate.org): every
+# commit in a contributor's pull request carries a `Signed-off-by:` line for
+# its author, certifying they may submit it under the repository licence
+# (CONTRIBUTING.md, "Licensing of contributions"). This is the only
+# contributor-assent check; there is no CLA.
 name: dco
 
 on:
@@ -12,6 +13,9 @@ permissions:
 
 jobs:
   sign-off:
+    # Bots (dependabot and the like) cannot certify anything; the maintainer
+    # publishes through the release mirror, not pull requests.
+    if: github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -24,13 +28,28 @@ jobs:
         run: |
           missing=0
           for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            name=$(git log -1 --format=%an "$sha")
             email=$(git log -1 --format=%ae "$sha")
-            if ! git log -1 --format=%B "$sha" | grep -i "^Signed-off-by:" | grep -qiF "<$email>"; then
-              echo "::error::$sha has no Signed-off-by for its author <$email>"
+            if ! git log -1 --format=%B "$sha" \
+                | grep -iE '^Signed-off-by:' \
+                | grep -qiF "<$email>"; then
+              echo "::error::${sha:0:12} is missing 'Signed-off-by: $name <$email>'"
               missing=1
             fi
           done
           if [ "$missing" = 1 ]; then
-            echo "Sign off with 'git commit -s', or fix a branch with 'git rebase --signoff $BASE'."
+            cat <<MSG
+          Every commit must be signed off by its author (the Developer
+          Certificate of Origin, https://developercertificate.org).
+
+            New commits:        git commit -s
+            Fix your branch:    git rebase --signoff $BASE
+                                git push --force-with-lease
+            Only the last one:  git commit --amend --signoff --no-edit
+
+          The sign-off email must match the commit author email
+          (git config user.email). See CONTRIBUTING.md, "Licensing of
+          contributions".
+          MSG
             exit 1
           fi

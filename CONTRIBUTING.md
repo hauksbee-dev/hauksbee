@@ -355,11 +355,30 @@ There is no CLA. By opening a pull request you license your contribution
 under the repository's licence (Apache-2.0, section 5: inbound = outbound), and
 you keep your copyright. Only submit work you have the right to license that way.
 
-Every commit certifies that with a sign-off, per the Developer Certificate of
-Origin (https://developercertificate.org): commit with `git commit -s`, which
-adds `Signed-off-by: Your Name <you@example.com>` for the commit's author. The
-`dco` check fails a pull request with an unsigned commit; `git rebase --signoff
-main` fixes a branch.
+Every commit in a pull request certifies that with a sign-off, per the
+Developer Certificate of Origin (https://developercertificate.org). Sign off as
+you commit:
+
+```sh
+git commit -s -m "Your message"
+```
+
+That adds `Signed-off-by: Your Name <you@example.com>`, using your configured
+`user.name` and `user.email`. The email must be the commit author's. The `dco`
+check fails a pull request with any unsigned commit and names each one. To fix
+a branch, add the sign-off to every commit and push again:
+
+```sh
+git rebase --signoff origin/main
+git push --force-with-lease
+```
+
+(`git commit --amend --signoff --no-edit` fixes just the latest commit.)
+
+Maintainer commits are not pull requests. The maintainer publishes directly to
+this repository, so the `dco` check does not run on them, and their commits
+carry no `Signed-off-by` line: the maintainer's own authorship of those commits
+stands in for it. Bot pull requests are skipped for the same reason.
 
 ## Reporting bugs
 

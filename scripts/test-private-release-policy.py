@@ -69,6 +69,34 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             self.assertIn("Binaries: `<EXTERNAL-BIN-DIR>`", external_text)
             self.assertNotIn(str(tmp), external_text)
 
+    def test_contributor_assent_is_dco_only(self) -> None:
+        workflows = sorted(
+            w.name for w in (ROOT / ".github/workflows").iterdir() if w.suffix in (".yml", ".yaml")
+        )
+        self.assertIn("dco.yml", workflows)
+        self.assertEqual([w for w in workflows if "cla" in re.split(r"[-_.]", w.lower())], [])
+        for gone in ("CLA.md", ".github/workflows/cla.yml", ".github/workflows/cla-assistant.yml"):
+            self.assertFalse((ROOT / gone).exists(), gone)
+        dco = (ROOT / ".github/workflows/dco.yml").read_text()
+        for needle in ("pull_request:", "Signed-off-by", "git commit -s", "git rebase --signoff"):
+            self.assertIn(needle, dco)
+        self.assertNotIn("pull_request_target", dco)
+        contributing = (ROOT / "CONTRIBUTING.md").read_text()
+        for needle in ("git commit -s", "git rebase --signoff", "Maintainer commits"):
+            self.assertIn(needle, contributing)
+        # Only wording that denies a CLA may name one, and nothing names the bot's branch.
+        for surface in (".github", "CONTRIBUTING.md", "README.md", "COMPLIANCE.md", "docs/about"):
+            root = ROOT / surface
+            for path in [root] if root.is_file() else sorted(root.rglob("*")):
+                if not path.is_file():
+                    continue
+                text = path.read_text(errors="ignore")
+                self.assertNotIn("cla-signatures", text, str(path))
+                self.assertNotIn("cla-assistant", text.lower(), str(path))
+                for line in text.splitlines():
+                    if re.search(r"\bCLA\b", line):
+                        self.assertRegex(line, r"(?i)\bno CLA\b", f"{path}: {line}")
+
     def test_source_installer_never_succeeds_after_a_failed_web_build(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)

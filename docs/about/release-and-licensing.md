@@ -154,7 +154,7 @@ The platform differences are explicit:
 
 ## 6. The core stays open
 
-The Apache-2.0 core of hauksbee (extraction, models, solver, checks, co-sim, CI runner, MCP server, everything in this repository) stays open, under Apache-2.0, permanently. Anything sold around it is additive: hosting, support, integrations. No existing capability moves behind a paywall, and no release removes from the open core something an earlier release shipped in it. Contributions come in under the same Apache-2.0 licence they go out under (no CLA), so the project holds no grant that could be used to close the core.
+The Apache-2.0 core of hauksbee (extraction, models, solver, checks, co-sim, CI runner, MCP server, everything in this repository) stays open, under Apache-2.0, permanently. Anything sold around it is additive: hosting, support, integrations. No existing capability moves behind a paywall, and no release removes from the open core something an earlier release shipped in it. Contributions come in under the same Apache-2.0 licence they go out under (no CLA; each pull-request commit carries a Developer Certificate of Origin sign-off), so the project holds no grant that could be used to close the core.
 
 ## 7. Provenance of the vendored RP2040 platform
 
