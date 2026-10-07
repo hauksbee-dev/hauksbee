@@ -103,11 +103,20 @@ fn boot_gate_board() -> PathBuf {
         .join("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb")
 }
 
-/// A real board whose SI report carries a medium (`warning`) crystal-load-cap
-/// finding and nothing serious, so `--si`'s own gate is the only thing that can
-/// make it fail.
-fn medium_si_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/stickhub.kicad_pcb")
+/// A real board made to carry one medium (`warning`) crystal-load-cap finding
+/// and nothing serious, so `--si`'s own gate is the only thing that can make it
+/// fail. `StickHub`'s 12 MHz crystal hangs bare on an XR22417, whose load caps are
+/// internal; renaming that hub to a USB2514B, which needs external load caps,
+/// turns the same copper into the fault.
+fn medium_si_board() -> (tempfile::TempDir, PathBuf) {
+    let src =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/stickhub.kicad_pcb");
+    let text = std::fs::read_to_string(&src).expect("stickhub fixture");
+    assert!(text.contains("XR22417"), "the fixture names its hub");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("stickhub_bare_crystal.kicad_pcb");
+    std::fs::write(&path, text.replace("XR22417", "USB2514B")).expect("write fixture");
+    (dir, path)
 }
 
 fn run(args: &[&str]) -> Output {
@@ -855,7 +864,7 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
 /// while both the verdict and the exit code have to say the run failed.
 #[test]
 fn a_medium_si_finding_fails_the_verdict_because_it_fails_the_gate() {
-    let b = medium_si_board();
+    let (_dir, b) = medium_si_board();
     let out = run_board(&b, &["--si", "--json"]);
     let v = json_doc(&out);
     assert_eq!(v["serious_count"], 0, "{v}");
