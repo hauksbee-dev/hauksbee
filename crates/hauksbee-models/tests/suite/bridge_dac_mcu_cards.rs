@@ -71,3 +71,34 @@ fn dac43204_takes_the_rte_map() {
         assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
     }
 }
+
+/// Cypress 38-08032 Rev. AD Figure 10 (56 QFN). The SSOP, VFBGA and TQFP
+/// order codes of the same die have other maps and must not bind.
+#[test]
+fn cy7c68013a_binds_only_the_56_qfn_order_codes() {
+    for value in [
+        "CY7C68013A-56LTXC",
+        "CY7C68013A-56LTXCT",
+        "CY7C68013A-56LTXI",
+    ] {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_eq!(m.id, "cy7c68013a_56ltx");
+        assert_pins(
+            &m,
+            &pins(
+                "1=rdy0 3=avcc 8=dplus 9=dminus 11=vcc 12=gnd 15=scl 16=sda 42=reset_n \
+                 54=clkout 56=gnd6 57=die_paddle",
+            ),
+        );
+        assert_eq!(m.pins.len(), 57);
+    }
+    for other in [
+        "CY7C68013A-56PVXC",
+        "CY7C68013A-100AXC",
+        "CY7C68013A-56BAXC",
+        "CY7C68015A-56LTXC",
+        "CY7C68013A",
+    ] {
+        assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
+    }
+}

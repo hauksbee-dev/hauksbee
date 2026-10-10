@@ -9348,3 +9348,158 @@ url = "https://www.ti.com/lit/ds/symlink/pcm5122.pdf"
 title = "Texas Instruments PCM512x 2-VRMS DirectPath, 112/106-dB Audio Stereo DAC with 32-bit, 384-kHz PCM Interface (PCM5121, PCM5122), SLAS763C, August 2012, revised October 2018"
 locator = "Section 6.1 Pin Functions; Sections 7.1, 7.3, 7.4, 7.5 (DIGITAL INPUT/OUTPUT, POWER SUPPLY REQUIREMENTS); Table 39 I2C Slave Address; Section 10.5.2 Power Save Modes; Package Option Addendum"
 sha256 = "2e7b7d81b5b5895c497b296ab6608c544353951da3c37cb3294efb57b4b26822"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CY7C68013A-56LTX: Cypress (Infineon) EZ-USB FX2LP USB 2.0 microcontroller,
+# 56-pin QFN.
+#
+# Source: Cypress "CY7C68013A/CY7C68014A/CY7C68015A/CY7C68016A EZ-USB FX2LP USB
+#   Microcontroller High-Speed USB Peripheral Controller", Document Number
+#   38-08032 Rev. AD (revised April 30, 2021). Figure 10 56-Pin QFN Pin
+#   Assignment (p.23); Table 11 FX2LP Pin Descriptions, 56 QFN column
+#   (pp.24-29); Absolute Maximum Ratings, Operating Conditions and Table 13
+#   Thermal Characteristics (p.41); Table 14 DC Characteristics (p.42); Ordering
+#   Information (p.60: -56LTXC, -56LTXCT, -56LTXI are the 56 QFN Pb-free codes);
+#   QFN package notes (die paddle soldered to a thermal pad).
+#
+# PACKAGE HAZARD. The same die ships as 56 SSOP, 56 VFBGA, 100 TQFP and 128
+# TQFP, every one with a different pin map (the 56 SSOP has PD5/FD13 on pin 1
+# where the QFN has RDY0). This card takes the 56 QFN map only, by the -56LT
+# order code. The CY7C68015A/16A QFN parts swap two pins (54 PE1, 13 PE0) and
+# are not matched.
+#
+# IDENTITY AND SUPPLY/PIN LEVEL ONLY. The 8051 core, the firmware, the USB
+# serial interface engine, the GPIF and slave FIFOs and the I2C boot loader are
+# not modelled, so no port pin is driven and the part stays OPEN. What is
+# sourced: the pin map, the 3.3 V supply envelope with its 4.0 V absolute
+# maximum, the 5.25 V-tolerant input levels and the 4 mA output levels.
+[[models]]
+id = "cy7c68013a_56ltx"
+kind = "digital"
+description = "Cypress/Infineon CY7C68013A EZ-USB FX2LP USB microcontroller, 56-pin QFN (identity, pin map, supply range, levels and ratings; the 8051, USB engine and GPIF are not modeled, the part stays OPEN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.infineon.com/dgdl/Infineon-CY7C68013A_CY7C68014A_CY7C68015A_CY7C68016A_EZ-USB_FX2LP_USB_Microcontroller_High-Speed_USB_Peripheral_Controller-DataSheet-v31_00-EN.pdf?fileId=8ac78c8c7d0d8da4017d0ec9f7974252"
+title = "Cypress CY7C68013A/14A/15A/16A EZ-USB FX2LP datasheet, 38-08032 Rev. AD (revised April 30, 2021)"
+locator = "Figure 10 p.23; Table 11 56 QFN column pp.24-29; Absolute Maximum Ratings, Operating Conditions and Table 13 p.41; Table 14 p.42; Ordering Information p.60"
+sha256 = "67d39521d4c859392bdf5cccf27ef6c4eb172430a7c52cb17e0d26b66904905b"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "microcontroller_behavior"
+reason = "the 8051 core, firmware, USB engine, GPIF/slave FIFOs and I2C boot are not modelled; no port pin is driven"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "thermal_pad_net"
+reason = "the datasheet asks for the QFN die paddle to be soldered to a thermal pad conducted to the inner ground plane, but does not name it a GND terminal; it keeps its own role and is not counted as a ground"
+[[models.source.pinout]]
+package = "56 QFN"
+pins = { "1" = "RDY0/*SLRD", "2" = "RDY1/*SLWR", "3" = "AVCC", "4" = "XTALOUT", "5" = "XTALIN", "6" = "AGND", "7" = "AVCC", "8" = "DPLUS", "9" = "DMINUS", "10" = "AGND", "11" = "VCC", "12" = "GND", "13" = "*IFCLK", "14" = "RESERVED", "15" = "SCL", "16" = "SDA", "17" = "VCC", "18" = "PB0/FD0", "19" = "PB1/FD1", "20" = "PB2/FD2", "21" = "PB3/FD3", "22" = "PB4/FD4", "23" = "PB5/FD5", "24" = "PB6/FD6", "25" = "PB7/FD7", "26" = "GND", "27" = "VCC", "28" = "GND", "29" = "CTL0/*FLAGA", "30" = "CTL1/*FLAGB", "31" = "CTL2/*FLAGC", "32" = "VCC", "33" = "PA0/INT0#", "34" = "PA1/INT1#", "35" = "PA2/*SLOE", "36" = "PA3/*WU2", "37" = "PA4/FIFOADR0", "38" = "PA5/FIFOADR1", "39" = "PA6/*PKTEND", "40" = "PA7/*FLAGD/SLCS#", "41" = "GND", "42" = "RESET#", "43" = "VCC", "44" = "*WAKEUP", "45" = "PD0/FD8", "46" = "PD1/FD9", "47" = "PD2/FD10", "48" = "PD3/FD11", "49" = "PD4/FD12", "50" = "PD5/FD13", "51" = "PD6/FD14", "52" = "PD7/FD15", "53" = "GND", "54" = "CLKOUT", "55" = "VCC", "56" = "GND", "57" = "die paddle" }
+
+[models.match]
+# CY7C68013A-56LTXC, -56LTXCT, -56LTXI (the Ordering Information codes).
+value_re = "(?i)^CY7C68013A-56LTX(C|CT|I)$"
+
+[models.params]
+identity_only = true
+warning = "CY7C68013A 56-QFN identity, pin map, supply range, I/O levels and ratings are sourced; the 8051 core, firmware, USB engine and GPIF are not modeled, so no port pin is driven and the part stays OPEN"
+unlocked_by = "an 8051 co-simulation backend running the board's FX2LP firmware with the USB and GPIF peripherals"
+# Table 14.
+voh = 2.4        # min at IOUT = 4 mA
+vol = 0.4        # max at IOUT = -4 mA
+vih = 2.0        # min (inputs tolerate up to 5.25 V)
+vil = 0.8        # max
+supply_static_ua = 50000.0   # ICC typ, 8051 running, connected to USB HS (85 mA max; 35 mA typ at FS)
+supply_pin = "11"
+gnd_pin    = "12"
+
+[models.pins]
+# Figure 10 and Table 11, 56 QFN (CY7C68013A/14A pinout).
+"1"  = "rdy0"       # RDY0 / SLRD
+"2"  = "rdy1"       # RDY1 / SLWR
+"3"  = "avcc"
+"4"  = "xtalout"    # 24 MHz crystal
+"5"  = "xtalin"
+"6"  = "agnd"
+"7"  = "avcc2"
+"8"  = "dplus"      # USB D+
+"9"  = "dminus"     # USB D-
+"10" = "agnd2"
+"11" = "vcc"
+"12" = "gnd"
+"13" = "ifclk"
+"14" = "reserved"   # Table 11: connect to ground
+"15" = "scl"
+"16" = "sda"
+"17" = "vcc2"
+"18" = "pb0"
+"19" = "pb1"
+"20" = "pb2"
+"21" = "pb3"
+"22" = "pb4"
+"23" = "pb5"
+"24" = "pb6"
+"25" = "pb7"
+"26" = "gnd2"
+"27" = "vcc3"
+"28" = "gnd3"
+"29" = "ctl0"       # CTL0 / FLAGA
+"30" = "ctl1"       # CTL1 / FLAGB
+"31" = "ctl2"       # CTL2 / FLAGC
+"32" = "vcc4"
+"33" = "pa0"        # PA0 / INT0#
+"34" = "pa1"        # PA1 / INT1#
+"35" = "pa2"        # PA2 / SLOE
+"36" = "pa3"        # PA3 / WU2
+"37" = "pa4"        # PA4 / FIFOADR0
+"38" = "pa5"        # PA5 / FIFOADR1
+"39" = "pa6"        # PA6 / PKTEND
+"40" = "pa7"        # PA7 / FLAGD / SLCS#
+"41" = "gnd4"
+"42" = "reset_n"
+"43" = "vcc5"
+"44" = "wakeup"
+"45" = "pd0"
+"46" = "pd1"
+"47" = "pd2"
+"48" = "pd3"
+"49" = "pd4"
+"50" = "pd5"
+"51" = "pd6"
+"52" = "pd7"
+"53" = "gnd5"
+"54" = "clkout"
+"55" = "vcc6"
+"56" = "gnd6"
+# Die paddle (see the uncertainty above), numbered 57 as KiCad's QFN-56-1EP land is.
+"57" = "die_paddle"
+
+[models.ratings]
+max_voltage_v = 4.0            # supply voltage to ground potential, abs max
+max_power_w = 0.3              # power dissipation, abs max
+max_pin_current_a = 0.01       # max output current per I/O port
+max_junction_temp_c = 125.0    # Thermal Characteristics
+theta_ja_c_per_w = 25.2        # Table 13, 56 QFN
+theta_jc_c_per_w = 10.6        # Table 13, 56 QFN
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Cypress 38-08032 Rev. AD Operating Conditions and Table 14 VCC 3.00 V to 3.60 V; Absolute Maximum Ratings supply -0.5 V to +4.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avcc"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Cypress 38-08032 Rev. AD Table 11 AVCC: connect to the 3.3 V power source; same limits as VCC"
+
+[models.coverage]
+implements = ["pin_roles", "supply_ranges", "io_logic_levels", "absolute_ratings"]
+missing = ["mcu_core", "firmware", "usb_engine", "gpif_fifos", "i2c_boot", "crystal_oscillator", "port_drive"]
