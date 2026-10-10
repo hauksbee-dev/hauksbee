@@ -95,10 +95,37 @@ fn boot_state_fuzz(
         "{case} boot-state fuzz must be GREEN across all seeds:\n{}",
         result.render_human()
     );
+    // Every boot seed runs once per combination of the board's open variant
+    // and corner sets (an LED bound to the assumed forward-voltage corners
+    // runs at each corner), and every one of those runs must hold: a boot
+    // state is safe only if it is safe whichever part is fitted.
+    let expected = expected_members(board, seeds);
     assert_eq!(
-        result.seeds, seeds,
-        "{case}: must hold across every boot seed"
+        result.seeds, expected,
+        "{case}: must hold across every boot seed ({seeds}) at each open-set combination"
     );
+}
+
+/// How many members a `seeds`-seed fuzz runs on `board`: each seed crossed
+/// with every combination of the board's open same-pinout variant and corner
+/// sets, as `hauksbee-ci` plans them. Past `2^CORNER_CAP` runs the runner keeps
+/// each open part's flagged stand-in instead (see
+/// [`hauksbee_ci::tolerance::with_variants`]), so every seed still runs once.
+/// Counted off the board independently of the run, so a run that skipped a seed
+/// or a corner cannot match it.
+fn expected_members(board: &Path, seeds: u32) -> u32 {
+    let extracted = hauksbee_extract::ExtractedBoard::from_kicad_schematic_path(board)
+        .expect("corpus schematic reads");
+    let lib = hauksbee_models::ModelLibrary::builtin();
+    let crossed = hauksbee_engine::variant_sweep::open_sets(&extracted, &lib)
+        .iter()
+        .try_fold(u64::from(seeds), |runs, set| {
+            let runs = runs * set.ids.len() as u64;
+            (runs <= 1 << hauksbee_ci::tolerance::CORNER_CAP).then_some(runs)
+        });
+    crossed.map_or(seeds, |runs| {
+        u32::try_from(runs).expect("capped run count fits u32")
+    })
 }
 
 /// `LumenPnP` motherboard: the low-side AO3400A MOSFET gates are driven by

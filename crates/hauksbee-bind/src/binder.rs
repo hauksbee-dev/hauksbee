@@ -431,11 +431,31 @@ pub fn bind_board_driven(
     // Nets that are a regulator-shaped part's output: a convention-guessed
     // magnitude (bare `VCC` = 5 V) must not be stamped on one.
     let regulator_outputs = regulator_output_nets(board);
+    // A separate circuit's own ground is its reference: see
+    // `island_reference_grounds`.
+    let island_grounds = island_reference_grounds(board);
     for net in &board.nets {
         if net.id == 0 {
             continue;
         }
-        let node = if is_canonical_ground(&net.name) {
+        if island_grounds.contains(&net.id) {
+            let mut row = BindRow::without_model(
+                format!("RAIL:{}", net.name),
+                "0.00V".to_string(),
+                Confidence::Exact,
+                BindOutcome::Skipped {
+                    reason: "ground of a circuit no part joins to GND".to_string(),
+                },
+            );
+            row.warning = Some(format!(
+                "'{}' shares no part with GND: it is the ground of a separate circuit on this \
+                 board (a second half, a separate sub-board), so it is simulated as that \
+                 circuit's 0 V reference, the same node as GND",
+                net.name
+            ));
+            report.push(row);
+        }
+        let node = if is_canonical_ground(&net.name) || island_grounds.contains(&net.id) {
             NodeId::GROUND
         } else {
             circuit.node(&net.name)
@@ -7281,6 +7301,90 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 
 // ── Power-net detection ──────────────────────────────────────────────────────
 
+/// The split-ground nets that are the reference of a circuit sharing no part
+/// with the board's canonical ground, by net id: one per such circuit.
+///
+/// A board file can carry more than one circuit: the two halves of a split
+/// keyboard panelised on one PCB (`GND`/`+5V` on one, `GNDA`/`+5VA` on the
+/// other), or a sub-board beside the main one. Nothing joins such a ground to
+/// node 0, yet the parts on it are not referenced to it: a
+/// regulator's pass source and an MCU's pin drivers stamp against node 0, and
+/// the bench supply the binder assumes for its rails returns to node 0. The
+/// island's ground then has no DC definition but gmin, every part on it sits
+/// wherever that leakage puts it (the second half's ground read 5 V), and the
+/// operating point hinges on how one indicator LED happens to conduct. Its own
+/// ground IS that circuit's reference, and with no shared copper nothing can
+/// tell it apart from node 0, so it is node 0.
+///
+/// Only a ground no part reaches from canonical ground qualifies, counting
+/// every part, fitted or not, as joining all its pins' nets: an `AGND` that a
+/// ferrite, a 0 ohm link, a net tie, an isolated converter or a cable header
+/// joins to `GND` keeps its own node, so the split-ground and isolation
+/// structure stays checkable, and so does every split ground on a board with
+/// no part on canonical ground at all. Of several ground-family nets in one such
+/// circuit, the one with the most pins is its reference (ties by name) and the
+/// rest stay split from it. `VEE` is never one: it is a negative rail.
+#[must_use]
+pub fn island_reference_grounds(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
+    // Union-find over net ids: each part joins all of its pins' nets.
+    let root = |parent: &HashMap<i64, i64>, mut id: i64| {
+        while let Some(&up) = parent.get(&id).filter(|&&up| up != id) {
+            id = up;
+        }
+        id
+    };
+    let mut parent: HashMap<i64, i64> = HashMap::new();
+    let mut pins: HashMap<i64, usize> = HashMap::new();
+    for comp in &board.components {
+        let nets: Vec<i64> = comp
+            .pins
+            .iter()
+            .filter_map(|p| p.net.filter(|&id| id != 0))
+            .collect();
+        for &id in &nets {
+            *pins.entry(id).or_default() += 1;
+        }
+        for pair in nets.windows(2) {
+            let (a, b) = (root(&parent, pair[0]), root(&parent, pair[1]));
+            if a != b {
+                parent.insert(a, b);
+            }
+        }
+    }
+    let canonical: std::collections::HashSet<i64> = board
+        .nets
+        .iter()
+        .filter(|n| n.id != 0 && is_canonical_ground(&n.name) && pins.contains_key(&n.id))
+        .map(|n| root(&parent, n.id))
+        .collect();
+    // With no part on canonical ground there is no main circuit for an island
+    // to be separate from: its split grounds stay as they are.
+    if canonical.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let mut best: HashMap<i64, (usize, &str, i64)> = HashMap::new();
+    for net in &board.nets {
+        let leaf = net.name.rsplit('/').next().unwrap_or(&net.name).trim();
+        if net.id == 0
+            || !is_ground(&net.name)
+            || is_canonical_ground(&net.name)
+            || leaf.eq_ignore_ascii_case("vee")
+        {
+            continue;
+        }
+        let island = root(&parent, net.id);
+        let count = pins.get(&net.id).copied().unwrap_or(0);
+        if count == 0 || canonical.contains(&island) {
+            continue;
+        }
+        let entry = best.entry(island).or_insert((count, &net.name, net.id));
+        if (count, std::cmp::Reverse(net.name.as_str())) > (entry.0, std::cmp::Reverse(entry.1)) {
+            *entry = (count, &net.name, net.id);
+        }
+    }
+    best.into_values().map(|(_, _, id)| id).collect()
+}
+
 /// True only for the canonical ground net itself.
 ///
 /// That is `"GND"` or `"0"`, optionally behind a hierarchical sheet path
@@ -9334,6 +9438,82 @@ mod tests {
                 "{split} must stay a distinct node"
             );
         }
+    }
+
+    /// A ground no part joins to GND (the second half of a panelised split
+    /// keyboard) is that circuit's reference and binds onto node 0; a split
+    /// ground any part bridges to GND, even through a ferrite, keeps its own
+    /// node, and so does `VEE`.
+    #[test]
+    fn a_ground_no_part_joins_to_gnd_is_its_circuits_reference() {
+        let part = |r: &str, value: &str, nets: &[i64]| {
+            let mut c = comp(r, value);
+            c.lib_id = "Device:R".into();
+            c.pins = (1..)
+                .zip(nets)
+                .map(|(n, &id)| pin(&n.to_string(), id))
+                .collect();
+            c
+        };
+        // Left half on GND/+5V, right half on GNDA/+5VA with an AGND inside it
+        // (via FB2), and an AGND2 that FB1 joins to the left half's GND.
+        let nets = [
+            (1, "GND"),
+            (2, "+5V"),
+            (3, "GNDA"),
+            (4, "+5VA"),
+            (5, "AGND"),
+            (6, "AGND2"),
+            (7, "VEE"),
+            (8, "-5V"),
+        ];
+        let board = ExtractedBoard {
+            name: "two halves".into(),
+            nets: nets.iter().map(|&(id, name)| net(id, name)).collect(),
+            components: vec![
+                part("C1", "100n", &[2, 1]),
+                part("FB1", "FB", &[1, 6]),
+                part("C2", "100n", &[4, 3]),
+                part("C3", "100n", &[4, 3]),
+                part("FB2", "FB", &[3, 5]),
+                part("C4", "100n", &[7, 8]),
+            ],
+        };
+        // GNDA carries the most pins of its circuit (AGND rides on it through
+        // FB2 and stays split); the VEE circuit has no ground-family reference.
+        assert_eq!(
+            island_reference_grounds(&board),
+            std::collections::HashSet::from([3])
+        );
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        assert_eq!(bound.node("GNDA"), Some(NodeId::GROUND));
+        for split in ["AGND", "AGND2", "VEE"] {
+            assert_ne!(bound.node(split), Some(NodeId::GROUND), "{split}");
+        }
+        let row = bound
+            .report
+            .row("RAIL:GNDA")
+            .expect("the fusion is disclosed");
+        assert!(row
+            .warning
+            .as_deref()
+            .is_some_and(|w| w.contains("shares no part with GND")));
+
+        // Bridge the halves (a cable header carrying both grounds): GNDA is a
+        // split ground of one circuit again and keeps its own node.
+        // With no part on GND there is no main circuit to be separate from.
+        let mut alone = board.clone();
+        alone
+            .components
+            .retain(|c| !matches!(c.reference.as_str(), "C1" | "FB1"));
+        assert!(island_reference_grounds(&alone).is_empty());
+        let mut joined = board;
+        joined.components.push(part("J1", "CONN", &[1, 3]));
+        assert!(island_reference_grounds(&joined).is_empty());
+        assert_ne!(
+            bind_board(&joined, &ModelLibrary::builtin()).node("GNDA"),
+            Some(NodeId::GROUND)
+        );
     }
 
     #[test]
