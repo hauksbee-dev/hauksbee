@@ -3123,6 +3123,188 @@ implements = ["pin_roles", "vccio_logic_levels", "internal_3v3_ldo", "input_pull
 missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "cbus_functions", "ldo_dropout", "reset_generator", "usb_suspend_current", "vccio_1v8_2v5_levels"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CP2102N (QFN28): Silicon Labs USB-to-UART bridge, 5 x 5 mm QFN-28.
+#
+# Source: Silicon Labs "CP2102N Data Sheet" Rev. 1.5,
+#   https://www.silabs.com/documents/public/data-sheets/cp2102n-datasheet.pdf
+#   (sha256 32fbab0ba17f394ab76fbbd8129bddad228c1c486a1693d96ea5905936e437fe,
+#   the web.archive.org capture of that URL). Ordering codes and the QFN28
+#   member (7 GPIO, no separate VIO pin): Figure 1.1 and Table 1.1 (p.2). Power
+#   pin connections: 2.1 Figures 2.1-2.3 (pp.5-6). Supply ranges: Table 3.1
+#   (p.10; note 3, "On devices without a VIO pin, VIO = VDD"). Supply current:
+#   Table 3.2 (p.10). Internal 5 V-to-3.3 V regulator: Table 3.6 (p.12). GPIO
+#   levels and weak pull-up: Table 3.7 (p.13). Absolute maximum ratings: Table
+#   3.10 (p.15). GPIO default state: 4.3.1 (p.19). Pin map: Figure 5.1 and
+#   Table 5.1 (pp.27-28).
+#
+# ONE SUPPLY DOMAIN. The QFN28 part has no VIO pin, so every I/O level is
+# referenced to VDD (pad 6), 3.0 to 3.6 V. VREGIN (pad 7) feeds the internal
+# regulator whose output is VDD; when the regulator is not used VREGIN is tied
+# to VDD (Figure 2.3, Table 3.6 note 1).
+#
+# THE INTERNAL REGULATOR IS NOT MODELLED. A voltage law on VDD (as the FT231X
+# card has on 3V3OUT) would claim the VDD rail as its supply; on the common
+# self-powered board, where a board regulator feeds VDD and VREGIN together,
+# that is two drivers on one rail and a false conflict. So a bus-powered board
+# whose VDD rail is fed only by this part takes the rail's name-derived source.
+#
+# DELIBERATELY NOT MODELLED: the USB device itself. TXD, RTS, DTR, SUSPEND,
+# SUSPENDb and the CHRx outputs carry no driver (no `y`-prefixed roles, see the
+# FT231X note), and the GPIO alternate functions and output modes are
+# configured in the part's one-time memory (4.3, 4.5).
+[[models]]
+id = "cp2102n_qfn28"
+kind = "digital"
+description = "Silicon Labs CP2102N USB-to-UART bridge, QFN-28 (pad map, VDD-referenced GPIO levels, default GPIO pull-ups, supply ranges; no USB stack or internal regulator)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.silabs.com/documents/public/data-sheets/cp2102n-datasheet.pdf"
+title = "Silicon Labs CP2102N Data Sheet, Rev. 1.5"
+locator = "Figure 1.1 and Table 1.1 p.2; 2.1 Figures 2.1-2.3 pp.5-6; Tables 3.1 and 3.2 p.10; Table 3.6 p.12; Table 3.7 p.13; Table 3.10 p.15; 4.3.1 p.19; Figure 5.1 and Table 5.1 pp.27-28"
+sha256 = "32fbab0ba17f394ab76fbbd8129bddad228c1c486a1693d96ea5905936e437fe"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "gpio_pullup_resistance"
+reason = "Table 3.7 gives the weak pull-up as a current (-10 / -20 / -30 uA at VIN = 0 V, VDD = 3.6 V), not a resistance; 180 kOhm is 3.6 V / 20 uA, an assumed linear equivalent of the typical figure"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "internal_regulator"
+reason = "Table 3.6's 5 V-to-3.3 V regulator (VDD 3.1 to 3.6 V for VREGIN >= 4.1 V, 100 mA, 0.8 V dropout) is not modelled; see the comment above the entry"
+
+[models.match]
+# The QFN28 member only: the QFN24 and QFN20 parts have a different pin map
+# (and the QFN24 a separate VIO pin), Table 1.1 and 5.2-5.3. Figure 1.1 code
+# CP2102N-A<hw/fw rev>-G QFN28 [R]; "CP2102N-Axx-xQFN28" is the generic
+# library spelling of the same part.
+value_re = "(?i)^CP2102N[-_ ]?A(0[0-9]|XX)[-_ ]?[GX]QFN28R?$"
+
+[models.params]
+# Table 3.7 at VIO = VDD = 3.3 V.
+voh   = 2.6      # VIO - 0.7 V min at IOH = -7 mA (high drive), VIO >= 3.0 V
+vol   = 0.6      # max at IOL = 13.5 mA (high drive), VIO >= 3.0 V
+vih   = 2.7      # VIO - 0.6 V min (all GPIO pins including VBUS)
+vil   = 0.6      # max
+supply_static_ua = 9500.0  # Table 3.2 IDD typ, 115200 baud continuous data;
+                           # it flows into VREGIN, and is drawn on the VDD role
+                           # because that is the leg the binder meters
+supply_pin = "6"           # VDD
+gnd_pin    = "3"
+warning = """the USB stack and the internal 5 V-to-3.3 V regulator are not \
+modelled: TXD, RTS, DTR, SUSPEND and the CHRx outputs carry no driver and the \
+bridge sources or answers no UART traffic, so a result that depends on data \
+arriving through it is not evidence; the VDD-referenced levels, the default \
+GPIO pull-ups and the supply ranges are modelled"""
+
+[models.levels]
+# Table 3.7: VIH = VIO - 0.6 V, VIL = 0.6 V, VOH = VIO - 0.7 V (IOH = -7 mA),
+# VIO = VDD on this package, over VDD 3.0 to 3.6 V (Table 3.1).
+vih = [[3.0, 2.4], [3.6, 3.0]]
+vil = [[3.0, 0.6], [3.6, 0.6]]
+voh = [[3.0, 2.3], [3.6, 2.9]]
+
+[models.pins]
+# Figure 5.1 and Table 5.1, QFN28.
+"1"  = "dcd_n"      # data carrier detect input
+"2"  = "ri_n"       # ring indicator input / CLK output
+"3"  = "gnd"
+"4"  = "usbdp"      # USB D+; no USB stack, see above
+"5"  = "usbdm"      # USB D-
+"6"  = "vdd"        # supply input / internal regulator output, 3.0 to 3.6 V
+"7"  = "vregin"     # internal regulator input, 3.0 to 5.25 V
+"8"  = "vbus"       # VBUS sense input
+"9"  = "rst_n"      # active-low reset
+"10" = "nc"
+"11" = "suspend_n"  # low in USB suspend (not driven)
+"12" = "suspend"    # high in USB suspend (not driven)
+"13" = "chren"      # battery-charge enable output (not driven)
+"14" = "chr1"
+"15" = "chr0"
+"16" = "gpio3"      # GPIO.3 / WAKEUP
+"17" = "gpio2"      # GPIO.2 / RS485
+"18" = "gpio1"      # GPIO.1 / RXT
+"19" = "gpio0"      # GPIO.0 / TXT
+"20" = "gpio6"
+"21" = "gpio5"
+"22" = "gpio4"
+"23" = "cts_n"      # clear-to-send input
+"24" = "rts_n"      # ready-to-send output (not driven)
+"25" = "rxd"        # UART data in (to the IC)
+"26" = "txd"        # UART data out (not driven)
+"27" = "dsr_n"      # data-set-ready input
+"28" = "dtr_n"      # data-terminal-ready output (not driven)
+# The centre pad is GND (Table 5.1 "Center"); KiCad's QFN-28-1EP land numbers
+# it 29, other libraries "EP".
+"29" = "gnd2"
+"EP" = "gnd3"
+
+[models.ratings]
+# Table 3.10. VDD's 4.2 V is the tightest supply limit; per-pin limits are in
+# the envelopes below.
+max_voltage_v = 4.2
+max_pin_current_a = 0.1     # IIO, any UART, GPIO, VBUS or RSTb pin
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.2
+basis = "Silicon Labs CP2102N Rev. 1.5, Table 3.1 VDD 3.0 V to 3.6 V; Table 3.10 VDD GND-0.3 V to 4.2 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vregin"
+min_v = 3.0
+max_v = 5.25
+abs_max_v = 5.8
+basis = "Silicon Labs CP2102N Rev. 1.5, Table 3.1 VREGIN 3.0 V to 5.25 V; Table 3.10 VREGIN GND-0.3 V to 5.8 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbus"
+min_v = -0.3
+max_v = 5.8
+basis = "Silicon Labs CP2102N Rev. 1.5, Table 3.10 VBUS GND-0.3 V to 5.8 V with VIO > 3.3 V (VIO + 2.5 V below that); a stress bound, not a logic range. 2.3 recommends a 22.1k / 47.5k divider on VBUS"
+
+# 4.3.1: by default and during reset the GPIO pins are open-drain with the weak
+# pull-up enabled and the latch at 1; Table 3.7 IPU -20 uA typ at VDD 3.6 V
+# (180 kOhm equivalent, see the uncertainty above).
+[models.behavioral.pins.gpio0]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.behavioral.pins.gpio1]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.behavioral.pins.gpio2]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.behavioral.pins.gpio3]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.behavioral.pins.gpio4]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.behavioral.pins.gpio5]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.behavioral.pins.gpio6]
+pull_to = "vdd"
+pull_ohms = 180000.0
+
+[models.coverage]
+implements = ["pin_roles", "vdd_logic_levels", "gpio_default_pullups", "operating_supply_current", "supply_ranges", "absolute_ratings"]
+missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "gpio_alternate_functions", "internal_regulator", "reset_generator", "usb_suspend_current", "battery_charger_detect"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BME280: Bosch combined humidity, pressure and temperature sensor, LGA-8.
 #
 # Source: Bosch Sensortec "BME280 Combined humidity and pressure sensor"

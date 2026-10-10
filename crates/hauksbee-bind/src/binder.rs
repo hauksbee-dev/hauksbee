@@ -10474,6 +10474,66 @@ style = "i2c_pointer"
         assert!(!supplied.contains(&"+3V"), "{supplied:?}");
     }
 
+    /// A self-powered CP2102N QFN28 (VDD and VREGIN on one 3.3 V rail, Silicon
+    /// Labs CP2102N Rev. 1.5 Figure 2.3) binds by its Figure 1.1 ordering code
+    /// and the library spelling, and claims no rail of its own: its internal
+    /// regulator is unmodelled, so the 3.3 V rail keeps its own supply.
+    #[test]
+    fn cp2102n_qfn28_binds_without_claiming_its_vdd_rail() {
+        for value in ["CP2102N-A02-GQFN28R", "CP2102N-Axx-xQFN28"] {
+            let mut u1 = comp("U1", value);
+            u1.pins = vec![
+                pin("3", 3),
+                pin("6", 2),
+                pin("7", 2),
+                pin("8", 1),
+                pin("19", 4),
+                pin("25", 5),
+                pin("26", 6),
+                pin("29", 3),
+            ];
+            let board = ExtractedBoard {
+                name: "cp2102n-self-powered".into(),
+                nets: vec![
+                    net(1, "VBUS_DIV"),
+                    net(2, "+3V3"),
+                    net(3, "GND"),
+                    net(4, "TX_LED"),
+                    net(5, "UART_TX"),
+                    net(6, "UART_RX"),
+                ],
+                components: vec![u1],
+            };
+            let bound = bind_board(&board, &ModelLibrary::builtin());
+            let row = bound.report.row("U1").unwrap();
+            assert_eq!(row.model_id.as_deref(), Some("cp2102n_qfn28"), "{value}");
+            assert!(
+                !matches!(row.outcome, BindOutcome::Unresolved { .. }),
+                "{value}: {:?}",
+                row.outcome
+            );
+            let rail = bound.circuit.find_node("+3V3").unwrap();
+            assert!(
+                bound
+                    .behavioral
+                    .iter()
+                    .filter(|b| b.reference == "U1")
+                    .all(|b| !b.driven_nodes().contains(&rail)),
+                "{value}: the part must not drive VDD"
+            );
+            let supplied: Vec<&str> = bound.supplies.iter().map(|s| s.net_name.as_str()).collect();
+            assert!(supplied.contains(&"+3V3"), "{value}: {supplied:?}");
+        }
+        // The QFN24 and QFN20 members number their pads differently.
+        let lib = ModelLibrary::builtin();
+        for value in ["CP2102N-A02-GQFN24", "CP2102N-A02-GQFN20"] {
+            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
+            q.mpn = Some(value.to_string());
+            let id = lib.resolve(&q).model.map(|m| m.id);
+            assert_ne!(id.as_deref(), Some("cp2102n_qfn28"), "{value}");
+        }
+    }
+
     /// When an entry names the switched pads and one is unwired, no path may
     /// be stamped between other pads.
     #[test]
