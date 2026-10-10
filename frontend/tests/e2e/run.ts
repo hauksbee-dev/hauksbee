@@ -17,6 +17,7 @@ export const E2E_FLOWS = [
   'layers-dismiss.ts',
   'sessions-export.ts',
   'settings-extract.ts',
+  'verdict-conditions.ts',
 ] as const
 
 async function main(): Promise<void> {

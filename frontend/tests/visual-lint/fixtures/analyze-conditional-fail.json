@@ -1,0 +1,437 @@
+{
+ "ok": true,
+ "error": null,
+ "board_name": "generic_pmos_switch_gate_2v5",
+ "file_name": "generic_pmos_switch_gate_2v5.kicad_pcb",
+ "num_components": 4,
+ "num_nets": 5,
+ "clearance_rule_source": {
+  "source": "defaulted",
+  "value_mm": 0.2,
+  "project_file_found": false
+ },
+ "triage": {
+  "do_not_order": [
+   {
+    "id": "lint",
+    "kind": "gate_underdrive",
+    "statement": "Whether Q1 turns on depends on which part is fitted. Q1 has no part number, so it is bounded by assumed corners; at the corner generic_pmos_sot_corner_low_vth it conducts with |VGS| = 2.48 V, below the 3.00 V maximum VGS(th) of its class, so a part nearer generic_pmos_sot_corner_high_vth is not guaranteed to turn on: put the MPN on Q1 to remove this assumption, or drive its gate to at least 4.50 V"
+   }
+  ],
+  "inspect": [],
+  "checked_ok": [],
+  "not_covered": "Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
+ },
+ "headline": "1 issue found, 1 serious. Fix the serious ones before ordering boards.",
+ "serious": 1,
+ "total": 1,
+ "sections": [
+  {
+   "title": "Copper spacing (DRC; DEFAULT rules, not your rules)",
+   "verdict": "CLEARANCE RULE SOURCE: DEFAULT 0.200 mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules. Looks healthy: no copper spacing (drc) problems found.",
+   "findings": []
+  },
+  {
+   "title": "Connectivity & wiring",
+   "verdict": "1 issue found, 1 serious.",
+   "findings": [
+    {
+     "level": "serious",
+     "what": "Whether Q1 turns on depends on which part is fitted. Q1 has no part number, so it is bounded by assumed corners; at the corner generic_pmos_sot_corner_low_vth it conducts with |VGS| = 2.48 V, below the 3.00 V maximum VGS(th) of its class, so a part nearer generic_pmos_sot_corner_high_vth is not guaranteed to turn on: put the MPN on Q1 to remove this assumption, or drive its gate to at least 4.50 V",
+     "why": "The board names this transistor only by its class, with no part number, so its gate threshold is anywhere in the class's range. The gate is driven to a voltage inside that range: a low-threshold part turns on, a high-threshold one may stay off, and the circuit behaves differently depending on which one the assembler fits.",
+     "fix": "Put the manufacturer part number on the transistor so its real threshold is checked, or drive the gate further (a level shifter or a higher gate supply), or pick a logic-level part rated at this drive."
+    }
+   ]
+  },
+  {
+   "title": "Signal integrity",
+   "verdict": "Looks healthy: no signal-integrity problems found.",
+   "findings": []
+  }
+ ],
+ "components": [
+  {
+   "reference": "Q1",
+   "value": "Q_PMOS_GSD",
+   "x": 110.0,
+   "y": 100.0,
+   "rot": 0.0
+  },
+  {
+   "reference": "RL",
+   "value": "1k",
+   "x": 130.0,
+   "y": 100.0,
+   "rot": 0.0
+  },
+  {
+   "reference": "RGS",
+   "value": "10k",
+   "x": 110.0,
+   "y": 115.0,
+   "rot": 0.0
+  },
+  {
+   "reference": "RG",
+   "value": "100",
+   "x": 110.0,
+   "y": 130.0,
+   "rot": 0.0
+  }
+ ],
+ "import_diagnostics": {
+  "format": "text board / netlist",
+  "recovered": 4,
+  "partial": 0,
+  "unplaced": 0,
+  "missing_or_refused": 0,
+  "objects": [
+   {
+    "id": "Q1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 110.0,
+    "y": 100.0,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+5V",
+     "G",
+     "OUT"
+    ]
+   },
+   {
+    "id": "RG",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 110.0,
+    "y": 130.0,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+2V5",
+     "G"
+    ]
+   },
+   {
+    "id": "RGS",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 110.0,
+    "y": 115.0,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+5V",
+     "G"
+    ]
+   },
+   {
+    "id": "RL",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 130.0,
+    "y": 100.0,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "OUT"
+    ]
+   }
+  ]
+ },
+ "bind": {
+  "critical_parts_bound": "0/0",
+  "open_selections": [
+   {
+    "reference": "Q1",
+    "value": "Q_PMOS",
+    "family": "generic_pmos_sot",
+    "members": [
+     {
+      "id": "generic_pmos_sot_corner_high_vth",
+      "selector": "",
+      "basis": "ASSUMED high-vth corner of the SOT-class small-signal package class envelope; bounds from this library's curated cards (see the section comment)",
+      "verdict": "U",
+      "reason": "nothing names it"
+     },
+     {
+      "id": "generic_pmos_sot_corner_low_vth",
+      "selector": "",
+      "basis": "ASSUMED low-vth corner of the SOT-class small-signal package class envelope; bounds from this library's curated cards (see the section comment)",
+      "verdict": "U",
+      "reason": "nothing names it"
+     }
+    ],
+    "determined": null,
+    "via": "board",
+    "same_pinout": true,
+    "widened": [],
+    "corners": true,
+    "swept": null
+   }
+  ]
+ },
+ "model_coverage": {
+  "schema_version": 1,
+  "summary": {
+   "active_connected": 0,
+   "identified": 0,
+   "executable_available": 0,
+   "unresolved": 0,
+   "identity_only": 0,
+   "executable_scope_unspecified": 0,
+   "executable_partial": 0,
+   "executable_declared": 0,
+   "ignored": 0,
+   "actionable_behavior_gaps": 0,
+   "authoring_targets": 0,
+   "requirements_total": 0,
+   "requirements_met": 0,
+   "requirements_unmet": 0
+  },
+  "components": [],
+  "authoring_targets": []
+ },
+ "inventory": [
+  {
+   "path": "generic_pmos_switch_gate_2v5.kicad_pcb",
+   "kind": "ki_cad_pcb",
+   "role": "layout",
+   "sha256": "63f3d2109d826acdd59557e0be56ba115b57fa51d4fb133d0c7900f74cf12c66",
+   "contributed": [
+    {
+     "what": "connectivity",
+     "detail": "component and net incidence consumed by binding and electrical checks"
+    },
+    {
+     "what": "copper_geometry",
+     "detail": "layout geometry consumed by geometry-bearing checks"
+    }
+   ]
+  }
+ ],
+ "assumptions": [
+  {
+   "id": "reduced-fidelity:corners/Q1",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "Q1"
+     }
+    ]
+   },
+   "statement": "Q1 is judged at every assumed corner (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth), not at one stand-in.",
+   "because": "Nothing on the board names the part Q1 is, only its class, so the checks judged the board with it at each assumed corner the card lists (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth).",
+   "consequence": "A result for Q1 holds for a part inside those corners; a fitted part outside them (a threshold or on-resistance the class bounds do not cover) is not judged.",
+   "replacement": "Put the manufacturer part number on Q1 (its value or an MPN field) so the run binds that part."
+  },
+  {
+   "id": "reduced-fidelity:model/Q1",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "Q1 (Q_PMOS_GSD) was produced at reduced fidelity.",
+   "because": "It came from the generic fallback model 'generic_pmos_sot_corner_high_vth', whose ratings and device parameters are estimates for the package class rather than values from any datasheet, not from the primary path.",
+   "consequence": "Numbers for Q1 (Q_PMOS_GSD) are indicative: the mechanism that produced them is documented as less accurate than the primary path.",
+   "replacement": "Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component."
+  },
+  {
+   "id": "reduced-fidelity:Q1",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "Q1 (Q_PMOS_GSD) is modelled only in part.",
+   "because": "The board names only a P-channel MOSFET class, no part number: simulated at ASSUMED corners (|VGS(th)| 0.4 to 3.0 V, RDS(on) from the strongest to the weakest SOT-class small-signal package part this library carries), not any datasheet; hauksbee-ci passes it only if every corner passes; put the manufacturer part number on the component to replace it.",
+   "consequence": "Q1 (Q_PMOS_GSD) counts as a resolved part, so nothing else on this report flags it, but any result that depends on the unmodelled part of it is not evidence.",
+   "replacement": "Model the rest of the part, or treat results that depend on it as unanswered."
+  }
+ ],
+ "evidence": [
+  {
+   "assertion": "Q1 has no part number, so it is bounded by assumed corners; at the corner generic_pmos_sot_corner_low_vth it conducts with |VGS| = 2.48 V, below the 3.00 V maximum VGS(th) of its class, so a part nearer generic_pmos_sot_corner_high_vth is not guaranteed to turn on: put the MPN on Q1 to remove this assumption, or drive its gate to at least 4.50 V",
+   "models": [
+    {
+     "subject": "Q1",
+     "reference": "Q1",
+     "model_id": "generic_pmos_sot_corner_high_vth",
+     "layer": "builtin",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "builtin",
+      "origin": "mosfet",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "generic_pmos_sot_corner_high_vth.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "subject": "RG",
+     "reference": "RG",
+     "model_id": "resistor_tht",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "resistor_tht.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "subject": "RGS",
+     "reference": "RGS",
+     "model_id": "resistor_tht",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "resistor_tht.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    }
+   ],
+   "parameters": [
+    {
+     "subject": "Q1",
+     "parameter": "Q1.variant",
+     "value": "generic_pmos_sot_corner_high_vth, standing in for generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth",
+     "origin": {
+      "type": "model",
+      "model_id": "generic_pmos_sot_corner_high_vth",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "subject": "Q1",
+     "parameter": "Q1.model",
+     "value": "generic_pmos_sot_corner_high_vth",
+     "origin": {
+      "type": "model",
+      "model_id": "generic_pmos_sot_corner_high_vth",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "subject": "RG",
+     "parameter": "RG.model",
+     "value": "resistor_tht",
+     "origin": {
+      "type": "model",
+      "model_id": "resistor_tht",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "subject": "RGS",
+     "parameter": "RGS.model",
+     "value": "resistor_tht",
+     "origin": {
+      "type": "model",
+      "model_id": "resistor_tht",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    }
+   ],
+   "assumptions": [
+    "reduced-fidelity:corners/Q1",
+    "reduced-fidelity:model/Q1",
+    "reduced-fidelity:Q1"
+   ],
+   "status": "qualified"
+  },
+  {
+   "assertion": "DRC input coverage",
+   "artifacts": [
+    0
+   ],
+   "assumptions": [
+    "reduced-fidelity:model/Q1",
+    "reduced-fidelity:Q1"
+   ],
+   "status": "qualified"
+  },
+  {
+   "assertion": "Signal-integrity input coverage",
+   "artifacts": [
+    0
+   ],
+   "assumptions": [
+    "reduced-fidelity:model/Q1",
+    "reduced-fidelity:Q1"
+   ],
+   "status": "qualified"
+  }
+ ],
+ "nets": [
+  "+2V5",
+  "+5V",
+  "G",
+  "GND",
+  "OUT"
+ ],
+ "component_kinds": {
+  "Q1": "pmos",
+  "RG": "passive",
+  "RGS": "passive",
+  "RL": "passive"
+ },
+ "component_assertions": {
+  "Q1": [
+   "max_temp"
+  ],
+  "RG": [
+   "max_current",
+   "max_temp"
+  ],
+  "RGS": [
+   "max_current",
+   "max_temp"
+  ],
+  "RL": [
+   "max_current",
+   "max_temp"
+  ]
+ },
+ "supplies": [
+  {
+   "net": "+2V5",
+   "volts": 2.5
+  },
+  {
+   "net": "+5V",
+   "volts": 5.0
+  }
+ ],
+ "verdict_reason": "1 blocking problem(s), first: Whether Q1 turns on depends on which part is fitted. Q1 has no part number, so it is bounded by assumed corners; at the corner generic_pmos_sot_corner_low_vth it conducts with |VGS| = 2.48 V, below the 3.00 V maximum VGS(th) of its class, so a part nearer generic_pmos_sot_corner_high_vth is not guaranteed to turn on: put the MPN on Q1 to remove this assumption, or drive its gate to at least 4.50 V; next: Put the manufacturer part number on the transistor so its real threshold is checked, or drive the gate further (a level shifter or a higher gate supply), or pick a logic-level part rated at this drive."
+}

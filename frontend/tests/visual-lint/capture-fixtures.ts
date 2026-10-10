@@ -67,6 +67,25 @@ const analyzeOpen = await fetch(`${base}/api/analyze`, {
 })
 write('analyze-openparts.json', await analyzeOpen.json())
 
+// Two reports for the verdict card's conditions: the pMOS switch board whose
+// part is named only by class (a pass that rests on assumed corners, so the
+// report carries `verdict_conditions`), and the same switch with too little
+// gate drive (a fail, which carries none). The boards live with the engine's
+// own tests, which pin the same premise.
+for (const [name, fixture] of [
+  ['generic_pmos_switch_gate_0v', 'analyze-conditional-pass.json'],
+  ['generic_pmos_switch_gate_2v5', 'analyze-conditional-fail.json'],
+] as const) {
+  const file = `${name}.kicad_pcb`
+  const bytesOf = await Bun.file(join(here, `../../../crates/hauksbee-engine/tests/fixtures/${file}`)).arrayBuffer()
+  const res = await fetch(`${base}/api/analyze`, {
+    method: 'POST',
+    headers: { 'X-Board-Filename': file, 'Content-Type': 'application/octet-stream' },
+    body: bytesOf,
+  })
+  write(fixture, await res.json())
+}
+
 // One check run: the two assertions the lint's builder surface composes.
 const spec = 'name = "watchy checks"\nduration_ms = 50\n\n'
   + '[[assert]]\nkind = "no_faults"\n\n'

@@ -282,6 +282,9 @@ export interface ReportView {
   reason: string | null
   /** [`briefReason`] of `reason`, for the verdict card. */
   reasonBrief: string | null
+  /** The assumptions a pass rests on, one sentence each; empty for an
+   *  unconditional report and for a verdict that is not a pass. */
+  conditions: string[]
   /** `board_name`, else the file name. */
   title: string
   /** "3 parts, 4 nets" */
@@ -308,16 +311,28 @@ export interface ReportView {
   importMarkers: ImportMarker[]
 }
 
+/** The engine's conditional headline carries the same sentences as
+ *  `verdict_conditions` ("No blocking findings, on a condition: <joined>"). The
+ *  card lists them as items, so the headline keeps only its lead-in rather than
+ *  saying everything twice. Any other headline is left alone. */
+function headlineWithoutConditions(headline: string, conditions: string[]): string {
+  const joined = conditions.join(' ')
+  if (!joined || !headline.endsWith(joined)) return headline
+  return headline.slice(0, headline.length - joined.length).trimEnd()
+}
+
 export function reportView(r: WebReport): ReportView {
   const unresolved = r.bind?.active_path_unresolved ?? []
   const open = unresolved.length > 0
   const maps = r.evidence ?? []
   const assumptions = r.assumptions ?? []
   const inventory = r.inventory ?? []
+  const conditions = (r.verdict_conditions ?? []).filter(c => c.trim() !== '')
   return {
     tone: reportVerdictTone(r),
     palette: reportVerdictPalette(r),
-    headline: reportVerdictHeadline(r),
+    headline: headlineWithoutConditions(reportVerdictHeadline(r), conditions),
+    conditions,
     reason: r.verdict_reason ?? null,
     reasonBrief: r.verdict_reason ? briefReason(r.verdict_reason) : null,
     title: r.board_name || r.file_name,

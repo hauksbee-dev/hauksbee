@@ -362,6 +362,12 @@ export interface WebReport {
   /** Why the verdict is not a pass, and what to do next: one sentence, the
    *  same text the CLI, `--json` and the CI report carry. */
   verdict_reason?: string
+  /** The assumptions a pass rests on beyond the checks, one sentence each
+   *  (e.g. "Q1 passes across assumed corners (...); put the MPN on Q1 to
+   *  remove this assumption."): the same list `--json` and the CLI's
+   *  "VERDICT: clean, conditionally: ..." carry. Absent when there are none or
+   *  the verdict is not a pass. */
+  verdict_conditions?: string[]
 }
 
 export interface WebSupply {

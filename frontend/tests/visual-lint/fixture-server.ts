@@ -84,7 +84,12 @@ async function api(req: Request, url: URL): Promise<Response | null> {
     const uploaded = await uploadedBoard(req)
     const name = uploaded?.name ?? null
     if (uploaded) liveBoards.set(uploaded.name, uploaded.text)
-    const which = name?.includes('open_active_ic') ? 'analyze-openparts.json' : 'analyze-watchy.json'
+    // The two pMOS switch boards replay their own captured reports: a
+    // conditional pass (with `verdict_conditions`) and a fail (without).
+    const which = name?.includes('open_active_ic') ? 'analyze-openparts.json'
+      : name?.includes('pmos_switch_gate_0v') ? 'analyze-conditional-pass.json'
+      : name?.includes('pmos_switch_gate_2v5') ? 'analyze-conditional-fail.json'
+      : 'analyze-watchy.json'
     const captured = await file(join(FIXTURES, which)).json() as Record<string, unknown>
     const layoutSha256 = uploaded
       ? new Bun.CryptoHasher('sha256').update(uploaded.text).digest('hex')

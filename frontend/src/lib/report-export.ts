@@ -493,6 +493,7 @@ footer code{font-family:var(--font-mono)}
   <div class="verdict">
     ${esc(v.headline)}
     ${v.reason ? `<div class="counts">${esc(v.reason)}</div>` : ''}
+    ${v.conditions.map(c => `<div class="counts">${esc(c)}</div>`).join('')}
     <div class="counts">
       ${r.serious} serious &middot; ${plural(r.total, 'finding')} total
       ${checksLine ? `&middot; checks: ${esc(checksLine)}` : ''}

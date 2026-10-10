@@ -19,6 +19,7 @@ import { NoteBlock, SectionBlock } from './report/Findings'
 import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
+import { VerdictConditions } from './report/VerdictConditions'
 import { BoardMap } from './report/BoardMap'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -201,6 +202,7 @@ export function BoardView({
                 {v.reasonBrief}
               </div>
             )}
+            <VerdictConditions conditions={v.conditions} />
             <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
               {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}
             </div>
