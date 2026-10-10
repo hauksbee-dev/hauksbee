@@ -208,6 +208,8 @@ mod stm32_renode_cosim;
 mod stormduino_bind;
 #[path = "strap_lint_corpus.rs"]
 mod strap_lint_corpus;
+#[path = "strong_drive_overstress.rs"]
+mod strong_drive_overstress;
 #[path = "supply_chain_scope.rs"]
 mod supply_chain_scope;
 #[path = "synthetic_cosim.rs"]

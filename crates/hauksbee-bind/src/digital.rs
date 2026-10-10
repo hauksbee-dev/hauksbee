@@ -49,9 +49,29 @@ pub struct LogicLevels {
     pub vol: f64,
     pub vih: f64,
     pub vil: f64,
+    /// Output resistance at the WEAK corner: what a datasheet's minimum VOH
+    /// (maximum VOL) under load implies. Level checks and the co-simulation
+    /// drive through it.
     pub ro: f64,
+    /// Output resistance at the STRONG corner: the card's `ro_strong` (from
+    /// the typical VOH under load), else [`STRONG_RO_FRACTION`] of a stated
+    /// `ro`, else [`DEFAULT_RO`]. Over-current judgements drive through it,
+    /// since a part that only meets its minimum VOH is not the one that pushes
+    /// the most current into a low-impedance load.
+    pub ro_strong: f64,
     pub supply: Option<(NodeId, Arc<LevelTables>)>,
 }
+
+/// ASSUMED ratio of a logic output's strong-corner (typical) resistance to its
+/// weak-corner (minimum-VOH) resistance, for a card that states only `ro`.
+///
+/// Derived from one datasheet that prints both points: Nexperia `74HC_HCT1G125`
+/// Rev. 8 Table 8 (74HCT1G125, VCC 4.5 V) gives VOH 4.32 V typ and 3.84 V min
+/// at IO = -6 mA against the 4.5 V typ / 4.4 V min light-load level, so
+/// (4.5 - 4.32) / 6 mA = 30 ohm against (4.4 - 3.84) / 6 mA = 93 ohm, a ratio
+/// of 0.32. Not a law of any family: a card that prints its own typical point
+/// states `ro_strong` and this is never read.
+pub const STRONG_RO_FRACTION: f64 = 1.0 / 3.0;
 
 /// A card's `[models.levels]`: level name to ascending `[vcc, volts]` points.
 pub type LevelTables = BTreeMap<String, Vec<[f64; 2]>>;
@@ -67,6 +87,11 @@ impl LogicLevels {
             vih: m.params.get_f64("vih").unwrap_or(3.15),
             vil: m.params.get_f64("vil").unwrap_or(1.35),
             ro: m.params.get_f64("ro").unwrap_or(DEFAULT_RO),
+            ro_strong: m.params.get_f64("ro_strong").unwrap_or_else(|| {
+                m.params
+                    .get_f64("ro")
+                    .map_or(DEFAULT_RO, |ro| ro * STRONG_RO_FRACTION)
+            }),
             supply: None,
         }
     }

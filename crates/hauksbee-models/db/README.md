@@ -83,13 +83,22 @@ tf    = 3.0e-10   # forward transit time (s)
 | opamp           | gain, rail_lo, rail_hi (optional iq_a)                           |
 | comparator      | out_lo, out_hi, hysteresis (optional tpd_s)                      |
 | analog_switch   | ron, roff, vth                                                   |
-| digital         | voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin (open_collector) |
+| digital         | voh, vol, vih, vil, ro, tpd_s, supply_pin, gnd_pin (ro_strong, open_collector) |
 | dac             | bits, vref_pin, sda_pin, scl_pin                                 |
 | adc             | bits, vref, channels                                             |
 | shift_register  | bits, tpd_s, supply_pin, gnd_pin                                 |
 | mcu             | backend (e.g. "simavr:atmega328p")                               |
 | connector       | (none — pad map is the useful part)                              |
 | ignore          | (none — component is silently skipped during extraction)         |
+
+A logic output has two drive corners. `ro` is the WEAK one, from the
+datasheet's minimum VOH (maximum VOL) under load: level checks and the
+co-simulation drive through it. `ro_strong` is the STRONG one, from the
+typical VOH under load: the DC over-current judgement drives through it. A
+card that prints no typical point leaves `ro_strong` out and gets an ASSUMED
+third of its `ro` (`STRONG_RO_FRACTION`, from the one family that prints both:
+74HCT1G125, 93 ohm minimum against 30 ohm typical); a card with no `ro` keeps
+`DEFAULT_RO` at both corners.
 
 ## Pin-role inference rules (`pin_rules.toml`)
 

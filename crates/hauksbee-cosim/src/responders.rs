@@ -1551,6 +1551,7 @@ pub(crate) mod tests {
         vih: 2.0,
         vil: 0.8,
         ro: 50.0,
+        ro_strong: 50.0,
         supply: None,
     };
 

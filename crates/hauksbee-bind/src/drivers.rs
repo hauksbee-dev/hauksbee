@@ -199,6 +199,20 @@ impl PinDriver {
         }
     }
 
+    /// Retune the active output resistance (a drive-strength corner). A
+    /// tri-stated leg keeps `roff` and takes the new `ron` when re-enabled.
+    pub fn set_ron(&mut self, circuit: &mut Circuit, ron: f64) {
+        self.ron = ron;
+        if !self.enabled {
+            return;
+        }
+        if let Some(Device::Resistor { ohms, .. }) =
+            circuit.devices.get_mut(self.resistor.0 as usize)
+        {
+            *ohms = ron;
+        }
+    }
+
     /// Enable or tri-state the driver by swapping the series resistance between
     /// `ron` and `roff`. A tri-stated leg presents a near-open to the net.
     pub fn set_enabled(&mut self, circuit: &mut Circuit, enabled: bool) {

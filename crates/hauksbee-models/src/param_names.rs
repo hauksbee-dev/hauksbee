@@ -134,7 +134,7 @@ const MOSFET: &[&str] = &[
 /// "not read for this kind, so it is silently ignored", which is the opposite of
 /// true: the engine reads them and the LINT was the thing that did not know. An
 /// entry author who believed the warning would strip a bus level the solver wanted.
-static CONVERTER_AND_DIGITAL: [&str; 20] = [
+static CONVERTER_AND_DIGITAL: [&str; 21] = [
     "gain",
     "rout",
     "vref_int",
@@ -151,6 +151,7 @@ static CONVERTER_AND_DIGITAL: [&str; 20] = [
     "voh",
     "vol",
     "ro",
+    "ro_strong",
     "tpd_s",
     "supply_static_ua",
     "supply_cpd_pf",
@@ -163,7 +164,7 @@ static CONVERTER_AND_DIGITAL: [&str; 20] = [
 const SHIFT_REGISTER_FROM: usize = 8; // `bits`
 const DIGITAL_FROM: usize = 9; // `supply_pin`
 const DAC_TO: usize = 11; // through `gnd_pin`
-const ADC_TO: usize = 18; // everything before `supply_cpd_pf`
+const ADC_TO: usize = 19; // everything before `supply_cpd_pf`
 
 /// The parameter names this kind's consumers read, beyond `UNIVERSAL`.
 ///

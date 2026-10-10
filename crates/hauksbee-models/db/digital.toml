@@ -4948,6 +4948,10 @@ vil = 0.8
 # light-load level, 0.56 V / 6 mA = 93 Ohm (VOL side: 0.33 V max at 6 mA,
 # 55 Ohm) (Table 8).
 ro = 93.0
+# Strong corner, VCC = 4.5 V, 25 C typ: VOH 4.32 V at IO = -6 mA against the
+# 4.5 V typ light-load level, 0.18 V / 6 mA = 30 Ohm (VOL side: 0.16 V typ at
+# 6 mA, 27 Ohm) (Table 8). Over-current judgements drive through this.
+ro_strong = 30.0
 tpd_s = 11.0e-9    # A to Y typ, VCC 4.5 V, CL = 50 pF, 25 C (Table 9)
 supply_static_ua = 10.0  # ICC max, VCC 5.5 V, -40 to 85 C (Table 8)
 supply_cpd_pf = 27.0     # Table 9

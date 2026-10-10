@@ -146,6 +146,17 @@ const STATES: [(&str, bool); 2] = [
     ("with every register output set high", true),
 ];
 
+/// Each state of [`STATES`] again with the logic outputs at their strong-drive
+/// corner ([`set_drive`]). A logic card's `ro` is its weak corner (minimum
+/// VOH under load), right for whether a level is met and wrong for how much
+/// current a typical part pushes into a low-impedance load: a 74HCT output
+/// at 93 ohm weak is about 30 ohm typical, three times the current into an
+/// LED with no series resistor.
+const STRONG_STATES: [&str; 2] = [
+    "at power-up (registers cleared) with the logic outputs at their strong-drive corner",
+    "with every register output set high and the logic outputs at their strong-drive corner",
+];
+
 /// Logic sweeps allowed for combinational outputs to settle against the
 /// analog solve; a chain of gates settles one stage per sweep.
 const SETTLE_SWEEPS: usize = 8;
@@ -164,7 +175,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     let mut by_part: BTreeMap<String, PartFaults> = BTreeMap::new();
     let mut unsolved = Vec::new();
     let mut under: BTreeMap<String, (GateDrive, Vec<String>)> = BTreeMap::new();
-    for (label, registers_high) in STATES {
+    for ((label, registers_high), strong_label) in STATES.into_iter().zip(STRONG_STATES) {
         // The states run in order on the one bound board: the second starts
         // from the first's settled circuit and re-settles after its change.
         let state = &mut bound;
@@ -184,14 +195,38 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
                 worst.0 = drive;
             }
         }
-        for (part, clauses, nets) in overstressed {
-            let entry = by_part.entry(part).or_default();
-            entry.0.push(label);
-            if entry.1.is_empty() {
-                entry.1 = clauses;
-            }
-            entry.2.extend(nets);
+        let weak: Vec<String> = (overstressed.into_iter())
+            .map(|(part, clauses, nets)| {
+                let entry = by_part.entry(part.clone()).or_default();
+                entry.0.push(label);
+                if entry.1.is_empty() {
+                    entry.1 = clauses;
+                }
+                entry.2.extend(nets);
+                part
+            })
+            .collect();
+        // The same state at the strong-drive corner, then back to the weak
+        // one so the next state starts where it always did. A part already
+        // over a rating at the weak corner is not news at the strong one, and
+        // a gate under-driven at the weak corner is judged there alone.
+        if !set_drive(state, true) {
+            continue;
         }
+        if let Some(x) = settle(state) {
+            for (part, clauses, nets) in judge(state, &x).0 {
+                if weak.contains(&part) {
+                    continue;
+                }
+                let entry = by_part.entry(part).or_default();
+                entry.0.push(strong_label);
+                if entry.1.is_empty() {
+                    entry.1 = clauses;
+                }
+                entry.2.extend(nets);
+            }
+        }
+        set_drive(state, false);
     }
     let mut findings: Vec<LintFinding> = (by_part.into_iter())
         .map(|(part, (states, clauses, mut nets))| {
@@ -227,6 +262,32 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         });
     }
     NetLintReport { findings }
+}
+
+/// Move every logic output stamped at its card's weak-corner `ro` to its
+/// strong-corner `ro_strong` (`strong`), or back. False when no driver moved
+/// (no logic part, or none whose corners differ).
+fn set_drive(bound: &mut BoundBoard, strong: bool) -> bool {
+    let BoundBoard {
+        circuit, digital, ..
+    } = bound;
+    let mut any = false;
+    for d in digital.iter_mut() {
+        let (weak, hard) = (d.levels.ro, d.levels.ro_strong);
+        let (from, to) = if strong { (weak, hard) } else { (hard, weak) };
+        if (from - to).abs() <= f64::EPSILON * from.abs().max(1.0) {
+            continue;
+        }
+        // Only the legs stamped at the corner being left: a sink-only or
+        // custom-resistance leg is not this card's push-pull output.
+        for drv in d.drivers.values_mut() {
+            if (drv.ron - from).abs() <= f64::EPSILON * from.abs().max(1.0) {
+                drv.set_ron(circuit, to);
+                any = true;
+            }
+        }
+    }
+    any
 }
 
 /// Load every clocked register of every logic part with ones and drive the
