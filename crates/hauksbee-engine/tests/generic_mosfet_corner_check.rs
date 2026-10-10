@@ -56,6 +56,8 @@ fn a_full_gate_drive_passes_on_the_corner_condition() {
 fn a_gate_drive_inside_the_threshold_window_fails_citing_the_corner() {
     let doc = json("generic_pmos_switch_gate_2v5.kicad_pcb");
     assert_eq!(doc["verdict"], "fail", "{doc:#}");
+    // A condition qualifies a pass only; a fail carries none.
+    assert!(doc.get("verdict_conditions").is_none(), "{doc:#}");
     let findings = doc["findings"].as_array().expect("findings");
     let under: Vec<&serde_json::Value> = (findings.iter())
         .filter(|f| f["kind"] == "gate_underdrive")
@@ -85,6 +87,8 @@ fn the_web_report_carries_the_same_corner_verdicts() {
     assert!(pass.headline.contains(CONDITION), "{}", pass.headline);
     let fail = analyze("generic_pmos_switch_gate_2v5.kicad_pcb");
     assert_eq!(fail.serious, 1, "{:?}", fail.sections);
+    assert!(fail.verdict_conditions.is_empty());
+    assert!(!fail.headline.contains(CONDITION), "{}", fail.headline);
     assert!(
         fail.verdict_reason
             .as_deref()

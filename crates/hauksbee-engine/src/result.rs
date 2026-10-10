@@ -2317,7 +2317,8 @@ pub struct JsonReport {
     /// each part the board names only by class, whose assumed corners the run
     /// swept ("Q1 passes across assumed corners (...); put the MPN on Q1 to
     /// remove this assumption."). A pass with any is conditional on them,
-    /// never unconditional. Additive; omitted when empty.
+    /// never unconditional. Additive; omitted when empty or when the verdict
+    /// is not a pass (`verdict_reason` then says why).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
 }
@@ -2726,6 +2727,10 @@ impl JsonReport {
         }
         out.insert("serious_count".into(), serde_json::json!(serious));
         out.insert("actionable_count".into(), serde_json::json!(actionable));
+        // A condition qualifies a pass; a verdict that is not one says why instead.
+        if verdict != "pass" {
+            value.remove("verdict_conditions");
+        }
         out.append(&mut value);
         serde_json::to_string_pretty(&serde_json::Value::Object(out))
             .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"))

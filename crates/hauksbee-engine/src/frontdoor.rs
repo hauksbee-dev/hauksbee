@@ -641,7 +641,8 @@ pub struct WebReport {
     /// The assumptions a pass rests on beyond the checks (each class-only
     /// part whose assumed corners were swept), one sentence each: the same
     /// [`crate::evidence::BoardEvidence::conditions`] `--json` carries. A
-    /// pass with any is conditional on them. Absent when there are none.
+    /// pass with any is conditional on them. Absent when there are none or
+    /// the verdict is not a pass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
 }
@@ -665,6 +666,10 @@ impl WebReport {
         self.verdict_reason =
             VerdictCause::pick(failing, refused, blockers, self.run_level_undermined)
                 .map(VerdictCause::reason);
+        // A condition qualifies a pass; a verdict that is not one says why instead.
+        if self.verdict_reason.is_some() {
+            self.verdict_conditions.clear();
+        }
     }
 }
 
