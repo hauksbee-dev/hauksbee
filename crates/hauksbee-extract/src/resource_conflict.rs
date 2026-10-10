@@ -71,6 +71,12 @@ struct McuResources {
     /// has no fixed pin->instance conflicts in this class, so the check must
     /// never manufacture one for it.
     fully_routable: bool,
+    /// When set, the MCU has a software-programmable engine that can drive ANY
+    /// GPIO (RP2040 PIO), so a hardware-PWM channel collision is a firmware
+    /// constraint, not a board defect: one of the two functions can be generated
+    /// by that engine instead. The text (with its datasheet citation) is quoted
+    /// in the finding, which is then a warning rather than serious.
+    pwm_software_fallback: Option<String>,
     /// Minimum connected-pin count for a component to count as this MCU/module
     /// (guards against loose name matches on small parts). Optional.
     min_pins: Option<usize>,
@@ -136,6 +142,10 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
             .get("fully_routable")
             .and_then(toml::Value::as_bool)
             .unwrap_or(false);
+        let pwm_software_fallback = entry
+            .get("pwm_software_fallback")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let min_pins = entry
             .get("min_pins")
             .and_then(toml::Value::as_integer)
@@ -171,6 +181,7 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
             value_re,
             lib_re,
             fully_routable,
+            pwm_software_fallback,
             min_pins,
             pins,
         });
@@ -537,9 +548,24 @@ fn infer_target(
         // of the PWM-audio reconstruction path), not a bare parallel input. A
         // genuine two-terminal R/L/C bridge has no such ambiguity.
         let multi_channel = c.pins.iter().filter(|p| p.net.is_some()).count() > 2;
+        // When the part's gate pairing is known (pin names like 1A/1Y, or the
+        // standard quad-buffer pinout), leave ONLY through the output of the
+        // gate this net enters. Without it the walk could exit through another
+        // channel's output and report the wrong downstream net as evidence.
+        let paired = if multi_channel {
+            gate_outputs(c, net_id)
+        } else {
+            None
+        };
         for op in &c.pins {
             let Some(oid) = op.net else { continue };
             if oid == net_id {
+                continue;
+            }
+            if paired
+                .as_ref()
+                .is_some_and(|outs| !outs.contains(&op.number.as_str()))
+            {
                 continue;
             }
             // Skip a pad that lands on a rail/ground (a bypass cap leg, a buffer
@@ -549,7 +575,10 @@ fn infer_target(
                     continue;
                 }
             }
-            if multi_channel && !net_has_series_passive(board, oid, &c.reference) {
+            if multi_channel
+                && paired.is_none()
+                && !net_has_series_passive(board, oid, &c.reference)
+            {
                 continue;
             }
             if let Some((target, chain)) = infer_target(board, is_mcu, oid, depth + 1, seen) {
@@ -561,6 +590,78 @@ fn infer_target(
         }
     }
     None
+}
+
+/// The output pin numbers of the gates whose input is on `net_id`, for a
+/// multi-channel buffer. `None` when the part's gate pairing is unknown (the
+/// caller then falls back to its looser continuation rule); `Some(empty)` when
+/// it is known and `net_id` enters no gate input (it is an output or enable
+/// net), so the signal does not cross the part from here.
+///
+/// Pairing comes from the schematic pin names when present (`nA` -> `nY`,
+/// `An` -> `Yn`, single-gate `A` -> `Y`). A layout file carries no pin names, so
+/// for a 14-pin quad '125 buffer its standard pinout is used (1A=2->1Y=3,
+/// 2A=5->2Y=6, 3A=9->3Y=8, 4A=12->4Y=11: TI SN74LVC125A data sheet SCAS290T,
+/// Table 4-1 "Pin Functions", p. 3, for the D/DB/NS/PW and BQA/RGY packages).
+fn gate_outputs(c: &Component, net_id: i64) -> Option<Vec<&str>> {
+    let entry: Vec<&crate::Pin> = c.pins.iter().filter(|p| p.net == Some(net_id)).collect();
+    let named = |want: &str| {
+        c.pins
+            .iter()
+            .find(|p| p.function.eq_ignore_ascii_case(want))
+            .map(|p| p.number.as_str())
+    };
+    let gate_no = |n: &&str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    // The output a gate-input pin name pairs with (1A -> 1Y, A1 -> Y1, A -> Y).
+    let paired_name = |f: &str| {
+        let f = f.trim().to_ascii_uppercase();
+        if f == "A" {
+            Some("Y".to_string())
+        } else if let Some(n) = f.strip_suffix('A').filter(gate_no) {
+            Some(format!("{n}Y"))
+        } else {
+            f.strip_prefix('A').filter(gate_no).map(|n| format!("Y{n}"))
+        }
+    };
+    let names_known = c.pins.iter().any(|p| {
+        paired_name(&p.function)
+            .as_deref()
+            .and_then(named)
+            .is_some()
+    });
+    if names_known {
+        return Some(
+            entry
+                .iter()
+                .filter_map(|p| paired_name(&p.function).as_deref().and_then(named))
+                .collect(),
+        );
+    }
+    let v = c.value.to_ascii_lowercase();
+    let quad_buffer = v.contains("74")
+        && v.contains("125")
+        && !v.contains("1g")
+        && c.pins
+            .iter()
+            .all(|p| p.number.parse::<u8>().is_ok_and(|n| (1..=14).contains(&n)))
+        && c.pins.iter().all(|p| p.function.is_empty());
+    if !quad_buffer {
+        return None;
+    }
+    let mut out = Vec::new();
+    for p in &entry {
+        let o = match p.number.as_str() {
+            "2" => "3",
+            "5" => "6",
+            "9" => "8",
+            "12" => "11",
+            _ => continue,
+        };
+        if let Some(op) = c.pins.iter().find(|q| q.number == o) {
+            out.push(op.number.as_str());
+        }
+    }
+    Some(out)
 }
 
 /// Does `net_id` carry a two-terminal series passive (R/L/C) other than
@@ -728,8 +829,15 @@ fn check_resource_conflicts(
 }
 
 /// PWM slice+channel conflict: two pins demanding the SAME {slice,channel} for
-/// two DIFFERENT board functions. One channel can be driven out of exactly one
-/// pin at a time, so this is a hard "no valid assignment exists" -> High.
+/// two DIFFERENT board functions. One channel drives one waveform (the datasheet
+/// lets the same channel appear on two GPIOs, but then both carry the SAME
+/// signal), so the two functions cannot both use hardware PWM.
+///
+/// Severity: High ("no valid assignment exists") only when the MCU has no other
+/// way to produce the waveform on those pins. When the table declares a
+/// software-programmable engine that reaches every GPIO (RP2040 PIO), the pins
+/// are fine and the collision binds only firmware that insists on hardware PWM
+/// for both functions: a real constraint worth a warning, not a board defect.
 fn report_pwm_slice_conflicts(
     mcu: &Component,
     table: &McuResources,
@@ -757,17 +865,26 @@ fn report_pwm_slice_conflicts(
             })
             .collect::<Vec<_>>()
             .join("; and ");
+        let head = format!(
+            "{} ({}): two functions demand RP2040 PWM slice/channel {inst}, which outputs one waveform (on two pins it is the same signal) [RP2040 datasheet 4.5.2, Table 515, GPIO->slice = (n>>1)&7, ch A/B by parity]: {chain}",
+            mcu.reference, mcu.value
+        );
+        let (severity, message) = match &table.pwm_software_fallback {
+            Some(fallback) => (
+                Severity::Medium,
+                format!(
+                    "{head}. Both cannot use hardware PWM at once, so firmware must generate one of them another way: {fallback}. The board wiring itself can work; check that the firmware does this."
+                ),
+            ),
+            None => (Severity::High, head),
+        };
         report.findings.push(LintFinding {
             check: LintCheck::McuResourceConflict,
-            severity: Severity::High,
-            message: format!(
-                "{} ({}): two functions demand RP2040 PWM slice/channel {inst}, which can serve only one pin at a time [RP2040 datasheet 4.5.2, GPIO->slice = (n>>1)&7, ch A/B by parity]: {chain}",
-                mcu.reference, mcu.value
-            ),
+            severity,
+            message,
             refs: vec![mcu.reference.clone()],
             nets: ds.iter().map(|d| d.net.clone()).collect(),
         });
-        let _ = table;
     }
 }
 
@@ -1080,6 +1197,146 @@ mod tests {
             msgs(&no_dvi).is_empty(),
             "a single PWM demand must not fire"
         );
+    }
+
+    fn findings_with(text: &str, tables: &[McuResources]) -> Vec<LintFinding> {
+        let board = ExtractedBoard::from_kicad_netlist(text).expect("synthetic netlist parses");
+        let mut report = NetLintReport::default();
+        check_resource_conflicts(&board, tables, &mut report);
+        report.findings
+    }
+
+    #[test]
+    fn pwm_collision_with_pio_fallback_is_a_warning_naming_the_fallback() {
+        // RP2040: PIO reaches every GPIO, so the slice-6A collision is a firmware
+        // constraint. Still reported, but as a warning that names the remedy.
+        let f = findings_with(&conflict_net(), &load_resources());
+        assert_eq!(f.len(), 1, "{f:#?}");
+        assert_eq!(f[0].severity, Severity::Medium);
+        assert!(
+            f[0].message.contains("6A") && f[0].message.contains("PIO state machine"),
+            "{}",
+            f[0].message
+        );
+    }
+
+    #[test]
+    fn pwm_collision_without_software_fallback_stays_serious() {
+        // The same wiring on an MCU whose table declares no engine able to drive
+        // the pins another way: no valid assignment exists, so it is High.
+        let mut tables = load_resources();
+        for t in &mut tables {
+            t.pwm_software_fallback = None;
+        }
+        let f = findings_with(&conflict_net(), &tables);
+        assert_eq!(f.len(), 1, "{f:#?}");
+        assert_eq!(f[0].severity, Severity::High);
+        assert!(
+            !f[0].message.contains("PIO state machine"),
+            "{}",
+            f[0].message
+        );
+    }
+
+    /// A conflict board whose audio path crosses a quad '125 buffer: GP28 enters
+    /// gate 1 (pin 2 -> pin 3, then R1 -> left jack contact), while gate 4 (pin
+    /// 12 -> pin 11, then R2 -> right contact) carries an unrelated signal.
+    /// `named` adds schematic pin names (1A/1Y...); without them the walk must
+    /// fall back to the part's standard pinout.
+    fn buffered_audio_net(named: bool) -> String {
+        let pf = |n: &str| {
+            if named {
+                format!(" (pinfunction {n})")
+            } else {
+                String::new()
+            }
+        };
+        conflict_net()
+            .replace(
+                "(comp (ref R1) (value 270) (libsource (lib dev) (part R)))",
+                "(comp (ref R1) (value 270) (libsource (lib dev) (part R)))\n    (comp (ref R2) (value 270) (libsource (lib dev) (part R)))\n    (comp (ref U3) (value 74LVC125APW) (libsource (lib ic) (part 74LVC125)))",
+            )
+            .replace(
+                "(net (code 2) (name /PWM_L) (node (ref U1) (pin 34)) (node (ref R1) (pin 1)))",
+                &format!(
+                    "(net (code 2) (name /PWM_L) (node (ref U1) (pin 34)) (node (ref U3) (pin 2){}))\n    (net (code 4) (name /BUF_R) (node (ref U3) (pin 11){}) (node (ref R2) (pin 1)))\n    (net (code 5) (name /BUF_L) (node (ref U3) (pin 3){}) (node (ref R1) (pin 1)))\n    (net (code 6) (name /AUDIO_R) (node (ref R2) (pin 2)) (node (ref AUDIO1) (pin 3)))\n    (net (code 7) (name /OTHER) (node (ref U3) (pin 12){}))",
+                    pf("1A"),
+                    pf("4Y"),
+                    pf("1Y"),
+                    pf("4A")
+                ),
+            )
+    }
+
+    #[test]
+    fn buffer_crossing_follows_the_entered_gate_not_another_channel() {
+        for named in [true, false] {
+            let f = findings_with(&buffered_audio_net(named), &load_resources());
+            assert_eq!(f.len(), 1, "named={named}: {f:#?}");
+            let m = &f[0].message;
+            assert!(
+                m.contains("'/BUF_L'") && m.contains("/PWM_AUDIO_L"),
+                "named={named}: evidence must follow gate 1 to the left channel: {m}"
+            );
+            assert!(
+                !m.contains("/BUF_R") && !m.contains("/AUDIO_R"),
+                "named={named}: evidence jumped to another gate's output: {m}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_pairing_exits_only_the_entered_gate_and_never_from_an_output() {
+        // A quad buffer, pins 1..14, each on its own net (net id = pin number).
+        let quad = |named: bool| Component {
+            reference: "U9".into(),
+            value: "74HC125".into(),
+            pins: (1..=14)
+                .map(|n| crate::Pin {
+                    number: n.to_string(),
+                    net: Some(n),
+                    function: if named {
+                        [
+                            "1OE", "1A", "1Y", "2OE", "2A", "2Y", "GND", "3Y", "3A", "3OE", "4Y",
+                            "4A", "4OE", "VCC",
+                        ][usize::try_from(n - 1).unwrap()]
+                        .into()
+                    } else {
+                        String::new()
+                    },
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        for named in [true, false] {
+            let c = quad(named);
+            assert_eq!(
+                gate_outputs(&c, 9),
+                Some(vec!["8"]),
+                "named={named}: 3A -> 3Y"
+            );
+            assert_eq!(
+                gate_outputs(&c, 12),
+                Some(vec!["11"]),
+                "named={named}: 4A -> 4Y"
+            );
+            // Entering on an output (or enable) pin: known part, no crossing.
+            assert_eq!(
+                gate_outputs(&c, 6),
+                Some(vec![]),
+                "named={named}: 2Y is an output"
+            );
+            assert_eq!(
+                gate_outputs(&c, 1),
+                Some(vec![]),
+                "named={named}: 1OE is an enable"
+            );
+        }
+        // An unknown multi-pin part: pairing unknown, caller keeps its fallback.
+        let mut other = quad(false);
+        other.value = "SN65LVDS".into();
+        assert_eq!(gate_outputs(&other, 2), None);
     }
 
     #[test]

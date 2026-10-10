@@ -2794,10 +2794,13 @@ fn lint_abstention_hint(check: LintCheck) -> Option<&'static str> {
 #[must_use]
 pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
     if check == LintCheck::McuResourceConflict && severity != Severity::High {
-        return Some(
+        return Some(if severity == Severity::Medium {
+            "Generate one of the two signals with the MCU's programmable engine (e.g. RP2040 PIO) in firmware; \
+             otherwise move one function to a pin on a free hardware channel."
+        } else {
             "If deliberate (firmware drives the device another way), nothing needs to change; \
-             if the pin-locked peripheral was intended, move the device to its full fixed pin set.",
-        );
+             if the pin-locked peripheral was intended, move the device to its full fixed pin set."
+        });
     }
     // A Low strap finding is the lint's abstention, worded as unchecked (as in plain.rs).
     if check == LintCheck::StrapPin && severity == Severity::Low {

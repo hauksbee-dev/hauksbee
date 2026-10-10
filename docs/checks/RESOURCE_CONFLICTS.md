@@ -143,15 +143,24 @@ runner with no codex and no network. The live test
    control pins - see the kill below.)
 
 4. **Check feasibility.** A PWM slice+channel demanded by two *distinct*
-   functions has no valid assignment (one channel, one pin) -> **High**. A QSPI
+   functions cannot serve both from the PWM block (one channel drives one
+   waveform; RP2040 4.5.2 lets it appear on two GPIOs, but then both carry the
+   same signal). Whether that is a board defect depends on whether the MCU can
+   drive those pins another way. The table records this per MCU as
+   `pwm_software_fallback`: RP2040's PIO0/PIO1 connect to every GPIO
+   (datasheet 1.4.3, Table 2), so on RP2040 the collision is a firmware
+   constraint (generate one of the two signals with a PIO state machine, the
+   documented workaround for the Olimex issue) -> **Medium**, with the fallback
+   quoted in the finding. An MCU whose table declares no such fallback has no
+   valid assignment -> **High**. A QSPI
    group with >= 2 pads carrying two *different* non-QSPI functions has no
    assignment that serves both either -> **High**. A group whose >= 2 committed
    pads all belong to ONE self-consistent function is a weaker claim: nothing
    contends at runtime, firmware driving that device as plain SERCOM SPI works,
    and all the copper proves is that the QSPI controller can never reach those
-   pads -> **Low**, stated as exactly that. No medium tier is emitted:
-   contention on these instances is binary, so a half-conflict does not arise.
-   The tier was dropped rather than defined loosely.
+   pads -> **Low**, stated as exactly that. The QSPI group has no medium
+   tier: the QSPI controller cannot be emulated on other pads, so its
+   contention is binary.
 
 Reported through the same `NetLintReport`/`LintFinding` shape the connectivity
 lint uses (`LintCheck::McuResourceConflict`), so the CLI and callers treat it
@@ -170,7 +179,23 @@ Corpus-gated tests in
 `crates/hauksbee-extract/tests/resource_conflict_corpus.rs`
 (`HAUKSBEE_REQUIRE_CORPUS=1` makes a missing corpus a hard failure).
 
-### Olimex RP2040-PICO-PC: PWM slice 6A (FLAGGED, known issue #1)
+### Olimex RP2040-PICO-PC: PWM slice 6A (FLAGGED as a warning, known issue #1)
+
+Severity is **Medium** (a gating lint warning, not serious). The conflict is
+real: upstream issue #1 reports that stereo PWM audio does not work with the
+supplied PicoDVI code because GP12 and GP28 are both PWM 6A. The reporter's own
+fix is firmware-only (generate the DVI clock with a PIO state machine, then PWM
+audio on GP28 works), which matches RP2040 datasheet 1.4.3 (PIO reaches every
+GPIO). The board wiring is therefore usable as built; what it forces is a
+firmware choice, so "fix before ordering boards" would overstate it.
+
+The output below predates two changes: the severity (now `[medium]`, with the
+PIO fallback appended to the message) and the audio evidence chain. The old
+walk crossed the 74LVC125 (U3) between unrelated gates and reported the left
+channel arriving at `/PWM_AUDIO_R`; it now leaves only through the output of
+the gate the net enters (pin names when the file has them, else the standard
+quad-'125 pinout, TI SCAS290T Table 4-1), so the chain reads `/PWM_L -> U3 ->
+Net-(R18-Pad2) -> R18 -> Net-(C3-Pad2) -> C3 -> /PWM_AUDIO_L`.
 
 `hauksbee run .../RP2040-PICO-PC_rev_D.net --resources`:
 

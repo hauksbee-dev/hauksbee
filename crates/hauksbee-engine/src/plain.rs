@@ -1178,6 +1178,14 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A microcontroller has a fixed number of internal blocks (timers/PWM channels, communication units, pin groups). Two board features have been wired to pins that share one block, so the chip physically cannot run both at the same time: one feature will not work.".to_string(),
                 "Move one of the functions to a different pin that maps to a free internal block, or give up one of the two features. The chip's datasheet pin-mux table shows which pins share which block.".to_string(),
             ),
+            // Medium: two functions share one hardware channel, but the chip has
+            // a programmable engine that can drive either pin another way, so
+            // the wiring is fine and the constraint lands on the firmware.
+            LintCheck::McuResourceConflict if f.severity == Severity::Medium => (
+                format!("Two functions share one hardware channel of the microcontroller, so firmware must generate one of them another way ({parts}). {}", f.message),
+                "Two board features are wired to pins that share one internal hardware block, so both cannot use that block at the same time. This chip can also drive those pins from a programmable engine, so the board can still do both, but only if the firmware generates one of the two signals that way. Stock example code often does not.".to_string(),
+                "No board change is needed if the firmware generates one of the two signals with the chip's programmable engine (the finding names it). Otherwise move one function to a pin on a free hardware channel.".to_string(),
+            ),
             LintCheck::McuResourceConflict => (
                 format!("A pin-locked peripheral group of the microcontroller is committed to a single function ({parts}). {}", f.message),
                 "Some MCU peripherals only work on fixed pins. Wiring those pins to a different function is a legitimate design choice, but it permanently gives up the pin-locked peripheral for them; the netlist alone cannot tell whether that trade was intended.".to_string(),

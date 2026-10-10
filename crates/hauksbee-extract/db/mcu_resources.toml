@@ -41,6 +41,12 @@
 # ---------------------------------------------------------------------------
 [[mcu]]
 id = "rp2040_pico_module"
+# Every RP2040 GPIO can also be driven by PIO0/PIO1 (RP2040 datasheet build
+# 3184e62-clean, 1.4.3 "GPIO Functions", Table 2, pp. 13-14: "SIO, PIO0 and PIO1
+# can connect to all GPIO pins"), so two functions on one PWM channel is a
+# firmware constraint (generate one with a PIO state machine), not a board
+# defect. The check quotes this and reports a warning, not serious.
+pwm_software_fallback = "a PIO state machine can drive any RP2040 GPIO [RP2040 datasheet 1.4.3, Table 2: PIO0/PIO1 connect to all GPIO pins], e.g. a PIO-generated clock or PIO PWM/PDM audio"
 description = "RP2040 on a Raspberry-Pi-Pico-form 40-pin carrier module"
 # A real Pico-form module is a 40-pin part. The guard stops a loose name match on
 # a small part (e.g. a buffer carrying a `...RP2040-PICO-PC...-rescue` library id,
@@ -97,6 +103,12 @@ lib_re   = "(?i)(:RP2040_PLATFORM$|:RP_pico2040$|MCU_RaspberryPi:Pico|RaspberryP
 # ---------------------------------------------------------------------------
 [[mcu]]
 id = "rp2040_qfn56"
+# Every RP2040 GPIO can also be driven by PIO0/PIO1 (RP2040 datasheet build
+# 3184e62-clean, 1.4.3 "GPIO Functions", Table 2, pp. 13-14: "SIO, PIO0 and PIO1
+# can connect to all GPIO pins"), so two functions on one PWM channel is a
+# firmware constraint (generate one with a PIO state machine), not a board
+# defect. The check quotes this and reports a warning, not serious.
+pwm_software_fallback = "a PIO state machine can drive any RP2040 GPIO [RP2040 datasheet 1.4.3, Table 2: PIO0/PIO1 connect to all GPIO pins], e.g. a PIO-generated clock or PIO PWM/PDM audio"
 description = "RP2040 bare QFN-56 chip"
 min_pins = 30
 
