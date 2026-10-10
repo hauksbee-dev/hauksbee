@@ -933,6 +933,31 @@ mod tests {
         )
     }
 
+    /// Every physical part reports the part number its library device embeds,
+    /// with or without a value; a device that embeds none (`R`) reports
+    /// nothing, and supply symbols are not parts.
+    #[test]
+    fn every_physical_part_reports_its_library_device() {
+        let with_device = |device: &str| {
+            schematic("").replace(
+                r#"deviceset="R" device=""/>"#,
+                &format!(r#"deviceset="R" device="{device}" value="10k"/>"#),
+            )
+        };
+        let numbers = schematic_device_part_numbers(&with_device("-XQ1234UX-7")).expect("parses");
+        assert_eq!(numbers, vec![("R1".to_string(), "XQ1234UX-7".to_string())]);
+        let none = schematic_device_part_numbers(&with_device("")).expect("parses");
+        assert!(none.is_empty(), "{none:?}");
+        assert_eq!(
+            eagle_device_name("V_REG_AP2112", "K-3.3V", ""),
+            "V_REG_AP2112K-3.3V"
+        );
+        assert_eq!(
+            embedded_part_number("V_REG_AP2112", "K-3.3V", "").as_deref(),
+            Some("AP2112K-3.3V")
+        );
+    }
+
     /// The ties [`declared_net_ties`] reads from `text`, which must parse.
     fn ties_in(text: &str) -> Vec<DeclaredNetTie> {
         declared_net_ties(text).expect("parses")

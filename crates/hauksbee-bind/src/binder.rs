@@ -1415,24 +1415,120 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
     // decided nothing (unresolved, or only a guess), the field is tried the way
     // a BOM's part number is: standing in for a value that is not a magnitude.
     // The value keeps precedence wherever it reached a card itself. After the
-    // field, a part number the schematic's library device name embeds (an
-    // Eagle `MOSFET_PCH` / `-DMG2305UX-7` whose value is `20V/4.2A`) is tried
-    // the same way, on the same terms.
-    let mpn = mpn_properties(comp).find(|m| !m.eq_ignore_ascii_case(comp.value.trim()));
-    let device = (comp.properties.iter())
-        .filter(|(k, _)| k == hauksbee_extract::bom::LIBRARY_DEVICE_PROPERTY)
-        .map(|(_, v)| v.trim())
-        .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(comp.value.trim()));
-    for candidate in mpn.into_iter().chain(device) {
+    // field, the library part the schematic placed is tried on the same terms:
+    // the part number an Eagle device name embeds (`MOSFET_PCH` / `-DMG2305UX-7`
+    // under a `20V/4.2A` value) and the KiCad symbol name
+    // (`Regulator_Linear:AP2112K-3.3` under an `AP2112K` value), but only where
+    // the value cannot contradict them; see [`library_part_names`].
+    let mpn = mpn_properties(comp)
+        .find(|m| !m.eq_ignore_ascii_case(comp.value.trim()))
+        .map(|m| probe_with_mpn(comp, m));
+    let library = library_part_names(comp).into_iter().map(|name| {
+        let mut probe = comp.clone();
+        probe.value = name;
+        probe
+    });
+    for probe in mpn.into_iter().chain(library) {
         if !matches!(res.confidence, Confidence::Unresolved | Confidence::Guessed) {
             break;
         }
-        let after = record_resolution(lib, &probe_with_mpn(comp, candidate));
+        let after = record_resolution(lib, &probe);
         if identity_improves(&res, &after) {
             res = after;
         }
     }
     res
+}
+
+/// Part names the schematic library states for `comp`, as stand-ins for a
+/// value that resolved nothing, most specific first.
+///
+/// The sources are the part number the Eagle library device embeds (the
+/// [`hauksbee_extract::bom::LIBRARY_DEVICE_PROPERTY`] the board reader adopts,
+/// `AP2112K-3.3V` from `V_REG_AP2112` + `K-3.3V`) and the KiCad symbol name
+/// (`Regulator_Linear:AP2112K-3.3`). Neither is the value, and a symbol is
+/// often borrowed for a different part (an `AP2112K-3.3` symbol carrying an
+/// `RT9080` value), so a name is admitted only when the value cannot
+/// contradict it:
+///
+/// - the value is empty, or
+/// - the value, letters and digits only, is part-number shaped and contained in
+///   the name (`AP2112K` in `AP2112K-3.3`: the value dropped a suffix), or
+/// - the value is a rating string (`3.3V/600mA`, `20V/4.2A/52mΩ`), which names
+///   no part under any designator, or
+/// - the designator is an active IC and the value is only a voltage (`3.3V`,
+///   `3V3`: a regulator's output rating; on a `D` it is a zener's voltage).
+///
+/// A layout-only record's `lib_id` is its footprint, which names a package, not
+/// a part, so it is never offered. A name still prefixed with a library class
+/// (`V_REG_AP2112K-3.3V`) is offered whole and then from each `_` on.
+fn library_part_names(comp: &Component) -> Vec<String> {
+    let alnum = |s: &str| -> String {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_uppercase())
+            .collect()
+    };
+    let part_shaped = |s: &str| {
+        s.chars().any(|c| c.is_ascii_digit()) && s.chars().any(|c| c.is_ascii_alphabetic())
+    };
+    let symbol = Some(symbol_name(&comp.lib_id))
+        .filter(|_| comp.lib_id.contains(':') && comp.lib_id != comp.footprint)
+        .filter(|name| *name != symbol_name(&comp.footprint));
+    let device = (comp.properties.iter())
+        .filter(|(k, _)| k == hauksbee_extract::bom::LIBRARY_DEVICE_PROPERTY)
+        .map(|(_, v)| v.as_str());
+    let value = comp.value.trim();
+    let rating = is_rating_string(value)
+        || (is_voltage_rating(value)
+            && hauksbee_models::matcher::is_active_ic_ref(&comp.reference));
+    let admissible = |name: &str| {
+        let (name, value) = (alnum(name), alnum(value));
+        value.is_empty()
+            || (part_shaped(&value) && value.len() >= 4 && name.contains(&value))
+            || rating
+    };
+    let mut out: Vec<String> = Vec::new();
+    for name in device.chain(symbol).map(str::trim) {
+        if !part_shaped(name) || !admissible(name) || alnum(name) == alnum(value) {
+            continue;
+        }
+        let tails = name.match_indices('_').map(|(i, _)| &name[i + 1..]);
+        for candidate in std::iter::once(name).chain(tails) {
+            if part_shaped(candidate) && !out.iter().any(|o| o == candidate) {
+                out.push(candidate.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Is `value` only a voltage (`3.3V`, `3V3`, `5V`, `1.8`), the way a fixed
+/// regulator's value often states its output instead of its part number?
+fn is_voltage_rating(value: &str) -> bool {
+    let v = value.trim().to_ascii_uppercase();
+    let v = v.strip_suffix('V').unwrap_or(&v);
+    let mut parts = v.splitn(2, ['.', 'V']);
+    let whole = parts.next().unwrap_or_default();
+    let frac = parts.next();
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    digits(whole) && frac.is_none_or(digits)
+}
+
+/// Is `value` a `/`-separated list of ratings with units (`3.3V/600mA`,
+/// `20V/4.2A/52mΩ/1.4W`), the way some libraries describe a part instead of
+/// naming it? Every field must be a number followed by an optional SI prefix
+/// and a unit of voltage, current, power or resistance.
+fn is_rating_string(value: &str) -> bool {
+    let rated = |field: &str| {
+        let field = field.trim();
+        let unit = field.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+        let number = &field[..field.len() - unit.len()];
+        let unit = unit.trim_start_matches(['p', 'n', 'u', 'µ', 'm', 'k', 'K', 'M']);
+        number.chars().any(|c| c.is_ascii_digit())
+            && matches!(unit, "V" | "v" | "A" | "W" | "Ω" | "R" | "ohm" | "Ohm")
+    };
+    value.contains('/') && value.split('/').all(rated)
 }
 
 /// [`library_resolution`] from the record's own value, footprint and fields,
@@ -8953,6 +9049,59 @@ mod tests {
         assert!(!corners(&rated));
         let named = fet("AO3400A", "Device:Q_NMOS_GSD", "SOT-23", &[]);
         assert_eq!(named.model.as_ref().map(|m| &*m.id), Some("ao3400a"));
+    }
+
+    /// The schematic library part (a KiCad symbol, an Eagle device) identifies a
+    /// part whose value is a truncation of it or only a rating, and never one
+    /// whose value names a different part or a passive magnitude.
+    #[test]
+    fn library_part_names_stand_in_only_where_the_value_cannot_contradict() {
+        let lib = ModelLibrary::builtin();
+        let sot5 = || (1..=5).map(|n| pin(&n.to_string(), n)).collect::<Vec<_>>();
+        let symbol = |reference: &str, value: &str, lib_id: &str| {
+            let mut c = comp(reference, value);
+            c.lib_id = lib_id.into();
+            c.footprint = "Package_TO_SOT_SMD:SOT-23-5".into();
+            c.pins = sot5();
+            library_resolution(&lib, &c).model.map(|m| m.id)
+        };
+        let device = |reference: &str, value: &str, name: &str| {
+            let mut c = comp(reference, value);
+            c.lib_id = "SOT23-5".into();
+            c.footprint = "SOT23-5".into();
+            c.pins = sot5();
+            c.properties = vec![(
+                hauksbee_extract::bom::LIBRARY_DEVICE_PROPERTY.to_string(),
+                name.to_string(),
+            )];
+            library_resolution(&lib, &c).model.map(|m| m.id)
+        };
+        let ap = Some("ap2112k_3v3".to_string());
+        // The value dropped the voltage code the symbol keeps.
+        assert_eq!(symbol("U1", "AP2112K", "Regulator_Linear:AP2112K-3.3"), ap);
+        // An Eagle device behind a rating value, prefixed with a library class.
+        assert_eq!(device("U1", "3.3V", "V_REG_AP2112K-3.3V"), ap);
+        assert_eq!(device("U1", "3V3", "V_REG_AP2112K-3.3V"), ap);
+        assert_eq!(device("U1", "", "V_REG_AP2112K-3.3V"), ap);
+        // The Eagle reader's embedded part number under a rating string.
+        assert_eq!(device("U1", "3.3V/600mA", "AP2112K-3.3V"), ap);
+        assert!(is_rating_string("20V/4.2A/52mΩ/1.4W"));
+        assert!(!is_rating_string("100nF/50V") && !is_rating_string("10k/1%"));
+        // Controls: a borrowed symbol under another part's value, a device with
+        // no voltage code, a rating on a non-IC designator, and a layout-only
+        // record whose lib_id is its footprint.
+        let borrowed = symbol("U1", "RT9080-33GJ5", "Regulator_Linear:AP2112K-3.3");
+        assert_eq!(borrowed.as_deref(), Some("rt9080_3v3"));
+        assert_eq!(
+            symbol("U1", "XQ9-NOCARD", "Regulator_Linear:AP2112K-3.3"),
+            None
+        );
+        assert_eq!(device("U1", "3.3V", "V_REG_AP2112K"), None);
+        assert_eq!(device("D1", "3.3V", "V_REG_AP2112K-3.3V"), None);
+        assert_eq!(device("U1", "100nF", "V_REG_AP2112K-3.3V"), None);
+        assert_eq!(device("U1", "10k", "V_REG_AP2112K-3.3V"), None);
+        assert_eq!(device("U1", "100nF/50V", "V_REG_AP2112K-3.3V"), None);
+        assert_eq!(symbol("U1", "", "SOT-23-5"), None);
     }
 
     /// A part number held in a design FIELD under any common spelling identifies

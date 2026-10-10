@@ -428,10 +428,11 @@ impl ExtractedBoard {
             for (reference, number) in
                 eagle_sch::schematic_device_part_numbers(&text).unwrap_or_default()
             {
-                let is_ref = |c: &&mut Component| c.reference == reference;
-                if let Some(c) = self.components.iter_mut().find(is_ref) {
-                    let key = bom::LIBRARY_DEVICE_PROPERTY.to_string();
-                    c.properties.push((key, number));
+                let key = bom::LIBRARY_DEVICE_PROPERTY;
+                for c in (self.components.iter_mut()).filter(|c| c.reference == reference) {
+                    if !c.properties.iter().any(|(k, _)| k == key) {
+                        c.properties.push((key.to_string(), number.clone()));
+                    }
                 }
             }
             for (reference, pad, name, kind) in pads {
