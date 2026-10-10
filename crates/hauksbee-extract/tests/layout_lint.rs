@@ -312,3 +312,138 @@ fn identical_parts_and_case_or_spacing_differences_are_not_reported() {
     // A blank field on one side is missing data, not a disagreement.
     assert!(parity(&with_ic(""), &with_ic("TPS62130")).is_empty());
 }
+
+// --- What a value disagreement means electrically ---------------------------
+
+/// A board holding R9 plus one part `reference` carrying `value` and, when
+/// given, a manufacturer part number property.
+fn fields(reference: &str, value: &str, mpn: Option<&str>) -> String {
+    let mpn = mpn.map_or(String::new(), |m| format!(r#"(property "MPN" "{m}")"#));
+    let p = part(reference, 20.0, A, GND, "").replacen(
+        &format!("(property \"Reference\" \"{reference}\")"),
+        &format!("(property \"Reference\" \"{reference}\") (property \"Value\" \"{value}\") {mpn}"),
+        1,
+    );
+    format!("{}{p}", part("R9", 0.0, A, GND, ""))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    Nothing,
+    Note,
+    Warning,
+}
+
+fn outcome(found: &[LintFinding]) -> Outcome {
+    assert!(found.len() <= 1, "{found:?}");
+    match found.first().map(|f| f.severity) {
+        None => Outcome::Nothing,
+        Some(Severity::Low) => Outcome::Note,
+        Some(Severity::Medium) => Outcome::Warning,
+        Some(Severity::High) => panic!("a part identity mismatch must not be high: {found:?}"),
+    }
+}
+
+#[test]
+fn value_pairs_are_judged_by_electrical_meaning() {
+    use Outcome::{Note, Nothing, Warning};
+    // (reference, schematic value, layout value, outcome)
+    let table = [
+        // The same quantity with ratings, tolerance or dielectric on one side.
+        ("C1", "100uF 50V", "100uF/50V", Nothing),
+        ("R1", "100k 1%", "100k", Nothing),
+        ("L1", "33uH 2A", "33uH", Nothing),
+        ("C2", "10nf", "10n", Nothing),
+        ("C3", "1n 50V C0G", "1n", Nothing),
+        ("C4", "10nF", "10n", Nothing),
+        ("C5", "0.1uF", "100n", Nothing),
+        // A different primary quantity gates, in both directions.
+        ("R2", "12k", "5k6", Warning),
+        ("R3", "5k6", "12k", Warning),
+        ("C6", "100nF", "10nF", Warning),
+        ("C7", "10uF", "10uH", Warning),
+        // An extra word that is not a rating: the same value, one note.
+        ("RV1", "50k/log SPST", "50k/log", Note),
+        // Descriptions, codes and placeholders cannot be compared.
+        ("F1", "PTC 750mA / 33V", "1812L075/33DR", Note),
+        (
+            "J1",
+            "Conn 2x5 shrouded header",
+            "Pin header 2.54mm 2x5",
+            Note,
+        ),
+        ("U2", "CAT24M01YI-GT3", "C416112", Note),
+        ("FB1", "Ferrite Bead", "100MHz", Note),
+        ("R4", "1k", "?", Note),
+        ("R5", "?", "10k", Note),
+        // Different part numbers: both sides name a part, and not the same one.
+        ("U3", "CD74HCT640M", "74HCT245", Warning),
+        ("U4", "CAT24M01YI-GT3", "CAT24M01XI-T2", Warning),
+        ("U5", "TPS62130", "TPS62160", Warning),
+        // The same base part, different ordering or packaging.
+        ("U6", "CAT24M01YI-GT3", "CAT24M01YI-T2", Note),
+        ("U7", "SN74LVC1G14DBVR", "SN74LVC1G14DBVT", Note),
+        ("U8", "TPS62130RGTR", "tps62130rgtr", Nothing),
+        // Blank fields and case or spacing are not disagreements.
+        ("R6", "", "10k", Nothing),
+        ("R7", "10 K", "10k", Nothing),
+    ];
+    for (reference, schematic, layout, expected) in table {
+        let found = parity(
+            &fields(reference, layout, None),
+            &fields(reference, schematic, None),
+        );
+        assert_eq!(
+            outcome(&found),
+            expected,
+            "{reference}: schematic '{schematic}' vs layout '{layout}': {found:?}"
+        );
+        if let Some(f) = found.first() {
+            assert!(
+                f.message.contains(schematic.trim()) && f.message.contains(layout.trim()),
+                "the finding names both strings: {}",
+                f.message
+            );
+            assert_eq!(
+                f.message.contains("analysed the PCB's"),
+                expected == Warning,
+                "only a gating warning says the verdict used the PCB's part: {}",
+                f.message
+            );
+        }
+    }
+}
+
+#[test]
+fn a_note_names_the_extra_spec_it_found() {
+    let found = parity(
+        &fields("RV1", "50k/log", None),
+        &fields("RV1", "50k/log SPST", None),
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].message.contains("spst"), "{}", found[0].message);
+}
+
+#[test]
+fn part_number_properties_follow_the_same_boundary() {
+    use Outcome::{Note, Nothing, Warning};
+    // (schematic MPN, layout MPN, outcome), with an agreeing value field.
+    let table = [
+        ("CAT24M01YI-GT3", "CAT24M01XI-T2", Warning),
+        ("CD74HCT640M", "74HCT245", Warning),
+        ("CAT24M01YI-GT3", "CAT24M01YI-T2", Note),
+        ("CAT24M01YI-GT3", "cat24m01yi-gt3", Nothing),
+        ("CAT24M01YI-GT3", "C416112", Note),
+    ];
+    for (schematic, layout, expected) in table {
+        let found = parity(
+            &fields("U1", "EEPROM", Some(layout)),
+            &fields("U1", "EEPROM", Some(schematic)),
+        );
+        assert_eq!(
+            outcome(&found),
+            expected,
+            "MPN '{schematic}' vs '{layout}': {found:?}"
+        );
+    }
+}

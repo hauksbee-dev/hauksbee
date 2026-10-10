@@ -2198,7 +2198,7 @@ fn looks_like_mpn(s: &str) -> bool {
 /// families that have one: LCSC's `C` followed by digits only, Digi-Key's `-ND`
 /// suffix, and Mouser's `NNN-` numeric prefix. Matching a model regex against one
 /// of these is how a part binds to the wrong device.
-fn is_distributor_code(s: &str) -> bool {
+pub(crate) fn is_distributor_code(s: &str) -> bool {
     let up = s.trim().to_ascii_uppercase();
     // LCSC: C followed by four or more digits and nothing else.
     if let Some(rest) = up.strip_prefix('C') {

@@ -422,12 +422,211 @@ fn mpn_property(c: &Component) -> Option<&str> {
         .map(|(_, v)| v.trim())
 }
 
+/// What comparing one field of a reference across the two files concluded.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// The two sides name the same thing (or one side is blank).
+    Agree,
+    /// They cannot be shown to differ, but cannot be shown to agree either:
+    /// descriptive text, a distributor code, or the same part with different
+    /// ordering/packaging or an extra unrecognised spec. A low-severity note.
+    Unsure(String),
+    /// Both sides name a different electrical value or a different part: the
+    /// verdict analysed one of them, so this gates.
+    Differs,
+}
+
+/// The primary quantity of a value field: its leading token read by the
+/// project's one value parser, and the text left over after that token.
+struct Primary {
+    si: f64,
+    /// `Some` unit with the ohm spellings folded; `None` for a bare number,
+    /// which is a wildcard (`10n` and `10nF` are the same capacitor).
+    unit: Option<String>,
+    rest: String,
+}
+
+fn primary(s: &str) -> Option<Primary> {
+    let s = s.trim();
+    // The first token ends at a space or a `/`: "100uF 50V", "100uF/50V".
+    let end = s
+        .find(|c: char| c.is_whitespace() || c == '/')
+        .unwrap_or(s.len());
+    let token = s[..end].trim_end_matches(',');
+    let (parsed, rest) = match hauksbee_models::value::parse_value(token) {
+        Some(p) => (p, &s[end..]),
+        // A multi-token string the parser reads whole ("4,7 k") keeps no rest.
+        None => (hauksbee_models::value::parse_value(s)?, ""),
+    };
+    let unit = parsed.unit.map(|u| match u.as_str() {
+        "R" | "OHM" | "ohm" => "\u{03a9}".to_string(),
+        _ => u,
+    });
+    Some(Primary {
+        si: parsed.si,
+        unit,
+        rest: rest.to_string(),
+    })
+}
+
+/// Dielectric, temperature-class and chip-size words that qualify a passive.
+const SPEC_WORDS: [&str; 22] = [
+    "c0g", "np0", "npo", "x5r", "x6s", "x7r", "x7s", "x7t", "x8r", "y5v", "z5u", "u2j", "0201",
+    "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512", "smd",
+];
+
+/// Words that describe a rating, tolerance, dielectric, power or chip size
+/// rather than the part's primary quantity. They may sit on one side only.
+fn is_spec_token(token: &str) -> bool {
+    let t = token
+        .trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')' | '\u{b1}'))
+        .to_ascii_lowercase();
+    if t.is_empty() {
+        return true;
+    }
+    if t.ends_with('%') || t.ends_with("ppm") {
+        return true;
+    }
+    if SPEC_WORDS.contains(&t.as_str()) {
+        return true;
+    }
+    // A number with an electrical rating unit: 50v, 2a, 750ma, 0.25w, 100vdc.
+    let digits = t
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(t.len());
+    digits > 0
+        && matches!(
+            &t[digits..],
+            "" | "v" | "mv" | "kv" | "a" | "ma" | "ua" | "w" | "mw" | "vdc" | "vac" | "vrms"
+        )
+}
+
+/// The tokens of `rest` that are not a recognised rating/tolerance/dielectric.
+fn unrecognised_extras(rest: &str) -> BTreeSet<String> {
+    rest.split(|c: char| c.is_whitespace() || c == '/')
+        .filter(|t| !is_spec_token(t))
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// A part number reduced for comparison: upper case, no whitespace, and the
+/// `#...` lead-free/packaging tail some vendors append dropped.
+fn normalise_mpn(s: &str) -> String {
+    let s: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect();
+    s.split('#').next().unwrap_or("").to_string()
+}
+
+/// Does this text read as a single manufacturer part number: one token with a
+/// letter and a digit that no passive-value reading explains, and not a
+/// distributor's own order code?
+fn is_part_number(s: &str) -> bool {
+    let s = s.trim();
+    s.len() >= 5
+        && !s.contains(char::is_whitespace)
+        && s.chars().any(|c| c.is_ascii_alphabetic())
+        && s.chars().any(|c| c.is_ascii_digit())
+        && !crate::bom::is_distributor_code(s)
+        && primary(s).is_none()
+}
+
+/// Compare two part numbers. The boundary is the first `-` (or `/` or `,`):
+/// what precedes it is the base part with its variant letters (`CAT24M01YI`),
+/// what follows is the ordering/packaging tail (`-GT3`, `-T2`). Heads that
+/// differ are different parts, because variant letters before the hyphen carry
+/// temperature grade, interface or function (`...YI` vs `...XI`,
+/// `CD74HCT640` inverting vs `74HCT245` not). Equal heads with different tails
+/// are the same silicon in a different reel, tube or lead finish, and so only a
+/// note. A tail-less number may also differ from its twin only by one trailing
+/// reel code (`R`/`T`/`TR`: `...DBVR` vs `...DBVT`), accepted when at least six
+/// characters precede it so a short number cannot lose its last letter.
+fn compare_part_numbers(sch: &str, pcb: &str) -> Verdict {
+    let (a, b) = (normalise_mpn(sch), normalise_mpn(pcb));
+    if a == b {
+        return Verdict::Agree;
+    }
+    let split = |s: &str| -> (String, String) {
+        let i = s.find(['-', '/', ',']).unwrap_or(s.len());
+        (s[..i].to_string(), s[i..].to_string())
+    };
+    let reel_stripped = |h: &str| -> String {
+        for tail in ["TR", "R", "T"] {
+            if let Some(base) = h.strip_suffix(tail) {
+                if base.len() >= 6 {
+                    return base.to_string();
+                }
+            }
+        }
+        h.to_string()
+    };
+    let ((ha, ta), (hb, tb)) = (split(&a), split(&b));
+    if ha == hb || reel_stripped(&ha) == reel_stripped(&hb) {
+        let describe = |t: &str| {
+            if t.is_empty() {
+                "no suffix".to_string()
+            } else {
+                format!("suffix '{}'", t.trim_start_matches(['-', '/', ',']))
+            }
+        };
+        return Verdict::Unsure(format!(
+            "the same base part with different ordering or packaging ({} versus {})",
+            describe(&ta),
+            describe(&tb)
+        ));
+    }
+    Verdict::Differs
+}
+
+/// Compare the two value fields by what they mean electrically.
+///
+/// * Both lead with a passive magnitude: different magnitude (or an explicit
+///   F against H) is a disagreement; the same magnitude with ratings,
+///   tolerance or dielectric on one side only is not even a note; any other
+///   extra word on one side only (a switch, a taper) is a note naming it.
+/// * Both are part numbers: [`compare_part_numbers`].
+/// * Anything else (a description, a distributor code, `?`, a bare frequency
+///   against a description, a passive against a part number) cannot be
+///   compared, so it is a note naming both strings and never gates.
+fn compare_values(sch: &str, pcb: &str) -> Verdict {
+    if identity_key(sch) == identity_key(pcb) {
+        return Verdict::Agree;
+    }
+    if let (Some(s), Some(p)) = (primary(sch), primary(pcb)) {
+        let same_unit = s.unit == p.unit || s.unit.is_none() || p.unit.is_none();
+        let same_si = (s.si - p.si).abs() <= 1e-6 * s.si.abs().max(p.si.abs());
+        if !(same_unit && same_si) {
+            return Verdict::Differs;
+        }
+        let (se, pe) = (unrecognised_extras(&s.rest), unrecognised_extras(&p.rest));
+        let extra: Vec<&str> = se.symmetric_difference(&pe).map(String::as_str).collect();
+        return if extra.is_empty() {
+            Verdict::Agree
+        } else {
+            Verdict::Unsure(format!(
+                "the same value, with '{}' on one side only",
+                extra.join(" ")
+            ))
+        };
+    }
+    if is_part_number(sch) && is_part_number(pcb) {
+        return compare_part_numbers(sch, pcb);
+    }
+    Verdict::Unsure("one or both are descriptions, codes or placeholders".to_string())
+}
+
 /// Compare what each reference designator IS on the two sides: its value and,
 /// when both carry one, its part number. Connectivity can agree while the
 /// layout places a different part than the schematic names, and the verdict
-/// then silently analyses the layout's. Each disagreeing reference is one
-/// warning naming both and saying which the verdict used. Blank fields and
-/// differences of case or spacing are not disagreements.
+/// then silently analyses the layout's.
+///
+/// A disagreement that changes what was simulated (a different electrical
+/// value, or a different base part number) is one gating warning naming both
+/// and saying which the verdict used. A pair that merely cannot be compared
+/// (see [`compare_values`]) is one low-severity note naming both strings.
+/// Blank fields and differences of case or spacing are not disagreements.
 fn part_identity_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<LintFinding>) {
     let fitted = |b: &ExtractedBoard| -> BTreeMap<String, Component> {
         b.components
@@ -441,24 +640,51 @@ fn part_identity_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Ve
         let Some(sc) = sch_parts.get(&reference) else {
             continue;
         };
-        let differs = |a: &str, b: &str| {
-            let (a, b) = (identity_key(a), identity_key(b));
-            !a.is_empty() && !b.is_empty() && a != b
+        let blank = |a: &str, b: &str| a.trim().is_empty() || b.trim().is_empty();
+        let mut fields: Vec<(&str, &str, &str, Verdict)> = Vec::new();
+        if !blank(&sc.value, &pc.value) {
+            let v = compare_values(&sc.value, &pc.value);
+            fields.push(("value", sc.value.trim(), pc.value.trim(), v));
+        }
+        if let (Some(s), Some(p)) = (mpn_property(sc), mpn_property(&pc)) {
+            // Property part numbers are part numbers by construction, so a
+            // pair that does not read as one (a description in the MPN
+            // column) is only a note.
+            let v = if is_part_number(s) && is_part_number(p) {
+                compare_part_numbers(s, p)
+            } else if identity_key(s) == identity_key(p) {
+                Verdict::Agree
+            } else {
+                Verdict::Unsure("one or both are descriptions or codes".to_string())
+            };
+            fields.push(("part number", s, p, v));
+        }
+        let pick = fields
+            .iter()
+            .find(|f| f.3 == Verdict::Differs)
+            .or_else(|| fields.iter().find(|f| matches!(f.3, Verdict::Unsure(_))));
+        let Some((what, schematic, layout, verdict)) = pick else {
+            continue;
         };
-        let (what, schematic, layout) = if differs(&sc.value, &pc.value) {
-            ("value", sc.value.trim(), pc.value.trim())
-        } else {
-            match (mpn_property(sc), mpn_property(&pc)) {
-                (Some(s), Some(p)) if differs(s, p) => ("part number", s, p),
-                _ => continue,
-            }
+        let (severity, message) = match verdict {
+            Verdict::Differs => (
+                Severity::Medium,
+                format!(
+                    "{reference} has {what} '{schematic}' in the schematic but '{layout}' on the PCB. This verdict analysed the PCB's '{layout}'; if the schematic's part is the one to be fitted, update the PCB from the schematic and re-check."
+                ),
+            ),
+            Verdict::Unsure(why) => (
+                Severity::Low,
+                format!(
+                    "{reference} has {what} '{schematic}' in the schematic and '{layout}' on the PCB. They are not written the same way and cannot be matched automatically ({why}); check both name the same part."
+                ),
+            ),
+            Verdict::Agree => continue,
         };
         out.push(LintFinding {
             check: LintCheck::PcbSchematicMismatch,
-            severity: Severity::Medium,
-            message: format!(
-                "{reference} has {what} '{schematic}' in the schematic but '{layout}' on the PCB. This verdict analysed the PCB's '{layout}'; if the schematic's part is the one to be fitted, update the PCB from the schematic and re-check."
-            ),
+            severity,
+            message,
             refs: vec![reference.clone()],
             nets: Vec::new(),
         });
