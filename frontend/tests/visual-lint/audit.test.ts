@@ -146,6 +146,15 @@ test('a comfortable button, and an icon-only one, stay quiet', async () => {
   expect(rules(found)).not.toContain('control-label-overflows')
 })
 
+test('a screen-reader-only label inside an icon button is not a visible overflow', async () => {
+  const sr = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap'
+  const found = await audit(`
+    <div style="width:300px;position:relative">
+      <button style="height:32px;width:36px"><svg width="12" height="12"></svg><span style="${sr}">Analyze another board</span></button>
+    </div>`)
+  expect(rules(found)).not.toContain('control-label-overflows')
+})
+
 // ── 4. Out-of-flow boxes are checked, not exempt ───────────────────────────
 
 test('an absolutely positioned panel pushed off the window is caught', async () => {

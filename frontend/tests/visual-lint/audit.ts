@@ -325,12 +325,21 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
     if (scrolls(s.overflowX) || scrolls(s.overflowY)) continue // scrolls on purpose
     const label = (el.textContent ?? '').trim()
     if (!label) continue // an icon-only control has no label to clip
-    let rects: DOMRect[] = []
+    const rects: DOMRect[] = []
     try {
-      const range = document.createRange()
-      range.selectNodeContents(el)
-      rects = Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5)
-      range.detach()
+      // Measured child by child so a screen-reader-only span (the 1px clip
+      // pattern, whose text is laid out wide but never painted) is skipped,
+      // the same exemption rule 3 makes: the visible label is what must fit.
+      for (const child of Array.from(el.childNodes)) {
+        if (child instanceof Element) {
+          const cr = rect(child)
+          if (cr.width <= 4 && cr.height <= 4) continue
+        }
+        const range = document.createRange()
+        range.selectNodeContents(child)
+        rects.push(...Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5))
+        range.detach()
+      }
     } catch {
       continue
     }
