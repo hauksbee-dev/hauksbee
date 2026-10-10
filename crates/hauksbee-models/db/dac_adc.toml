@@ -312,3 +312,95 @@ basis = "TI SNAS449F 7.3 Supply Voltage VA 2.7 V to 5.5 V; 7.1 VA -0.3 V to 6.5 
 [models.coverage]
 implements = ["pin_roles", "supply_ranges", "absolute_ratings"]
 missing = ["dac_register", "i2c_slave", "vout_amplifier", "three_level_address", "power_down_modes"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DAC43204: TI 8-bit quad voltage/current-output smart DAC, WQFN-16 (RTE).
+#
+# Source: Texas Instruments "DACx3204 12-Bit, 10-Bit, and 8-Bit, Quad Voltage
+#   and Current Output Smart DACs With Auto-Detected I2C, PMBus, or SPI
+#   Interface", SLASEX3A (March 2021, revised December 2021). Figure 5-1 and
+#   Table 5-1 Pin Functions (p.3); 6.1 Absolute Maximum Ratings, 6.3 Recommended
+#   Operating Conditions and 6.4 Thermal Information (p.4); 6.5 IDD row (p.6);
+#   Package Option Addendum (DAC43204RTER / RTET, WQFN RTE 16).
+#
+# ONE PACKAGE: the family ships only in the RTE WQFN-16, so a bare DAC43204
+# names the pin map. The 10- and 12-bit DAC53204 / DAC63204 share it but are
+# different parts and are not matched here.
+#
+# IDENTITY ONLY. The DAC registers, the auto-detected I2C/PMBus/SPI interface,
+# the NVM, the GPIO functions, the internal reference and LDO, and the four
+# force-sense outputs are not modelled, so OUT0-OUT3 are not driven and the
+# part stays OPEN.
+[[models]]
+id = "dac43204"
+kind = "digital"
+description = "TI DAC43204 8-bit quad smart DAC, WQFN-16 RTE (identity, pin map, supply range and ratings; the DAC outputs are not modeled, the part stays OPEN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/dac43204.pdf"
+title = "Texas Instruments DAC63204, DAC53204, DAC43204 datasheet, SLASEX3A (revised December 2021)"
+locator = "Figure 5-1 and Table 5-1 Pin Functions p.3; 6.1, 6.3 and 6.4 p.4; 6.5 IDD row p.6; Package Option Addendum (RTE)"
+sha256 = "79cbaf6418c48bb38779765a8b2326303756dab20a325f3476bedb0bc829cbca"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "dac_output_behavior"
+reason = "the DAC registers, serial interface, NVM, GPIO functions, internal reference and LDO, and the force-sense outputs are not modelled; OUT0-OUT3 are not driven"
+[[models.source.pinout]]
+package = "RTE (WQFN)"
+pins = { "1" = "FB3", "2" = "OUT3", "3" = "OUT2", "4" = "FB2", "5" = "GPIO/SDO", "6" = "SCL/SYNC", "7" = "A0/SDI", "8" = "SDA/SCLK", "9" = "FB1", "10" = "OUT1", "11" = "OUT0", "12" = "FB0", "13" = "CAP", "14" = "AGND", "15" = "VDD", "16" = "VREF", "17" = "Thermal Pad" }
+
+[models.match]
+# DAC43204, DAC43204RTER, DAC43204RTET.
+value_re = "(?i)^DAC43204(RTE[RT]?)?$"
+
+[models.params]
+identity_only = true
+warning = "DAC43204 identity, WQFN-16 pin map, supply range and ratings are sourced; the DAC channels, serial interface, NVM and GPIO functions are not modeled, so OUT0-OUT3 are undriven and the part stays OPEN"
+unlocked_by = "a register model of the DACx3204 driving OUT0-OUT3 through the FBx force-sense loop"
+vih = 1.62        # 6.3 digital input high, 1.7 V < VDD <= 5.5 V
+vil = 0.4         # 6.3 digital input low
+supply_static_ua = 600.0   # 6.5 IDD 150 uA per channel typ, four channels on (ASSUMED all on)
+supply_pin = "15"
+gnd_pin    = "14"
+
+[models.pins]
+# Table 5-1, RTE WQFN-16.
+"1"  = "fb3"
+"2"  = "out3"      # (not driven)
+"3"  = "out2"      # (not driven)
+"4"  = "fb2"
+"5"  = "gpio"      # GPIO / SDO
+"6"  = "scl"       # SCL / SYNC
+"7"  = "a0"        # A0 / SDI; I2C address strap to VDD, AGND, SDA or SCL
+"8"  = "sda"       # SDA / SCLK
+"9"  = "fb1"
+"10" = "out1"      # (not driven)
+"11" = "out0"      # (not driven)
+"12" = "fb0"
+"13" = "cap"       # internal LDO bypass, ~1.5 uF to AGND
+"14" = "agnd"
+"15" = "vdd"
+"16" = "vref"      # external reference, or pulled up to VDD
+# Thermal pad: connect to AGND (Table 5-1), numbered 17 as KiCad's WQFN-16-1EP land is.
+"17" = "thermal_pad"   # Table 5-1: connect to AGND
+
+[models.ratings]
+max_voltage_v = 6.0            # 6.1 VDD to AGND
+max_pin_current_a = 0.01       # 6.1 current into any pin except OUTx
+max_junction_temp_c = 150.0    # 6.1
+theta_ja_c_per_w = 49.0        # 6.4 RthetaJA, RTE
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SLASEX3A 6.3 VDD 1.7 V to 5.5 V; 6.1 VDD -0.3 V to 6 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_ranges", "absolute_ratings"]
+missing = ["dac_registers", "serial_interface", "vout_iout_outputs", "nvm", "gpio_functions", "internal_reference", "four_level_address"]

@@ -51,3 +51,23 @@ fn dac081c081_binds_only_the_sot_order_code() {
         assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
     }
 }
+
+/// TI SLASEX3A Table 5-1, RTE WQFN-16; the 10- and 12-bit siblings are other
+/// parts and must not take this card.
+#[test]
+fn dac43204_takes_the_rte_map() {
+    for value in ["DAC43204", "DAC43204RTER", "DAC43204RTET"] {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_pin_map(
+            &m,
+            "dac43204",
+            &pins(
+                "1=fb3 2=out3 3=out2 4=fb2 5=gpio 6=scl 7=a0 8=sda 9=fb1 10=out1 11=out0 \
+                 12=fb0 13=cap 14=agnd 15=vdd 16=vref 17=thermal_pad",
+            ),
+        );
+    }
+    for other in ["DAC53204", "DAC63204RTER", "DAC43204W"] {
+        assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
+    }
+}
