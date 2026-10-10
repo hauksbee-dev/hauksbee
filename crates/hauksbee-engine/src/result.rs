@@ -2800,13 +2800,8 @@ fn lint_abstention_hint(check: LintCheck) -> Option<&'static str> {
     }
 }
 
-/// A concise suggested fix for a lint finding kind, for the machine-readable `fix` field.
-///
-/// `None` when no template applies. Severity disambiguates the resource-conflict
-/// check, whose low-severity form (a single function committed to a pin-locked
-/// group) has a different honest remedy than the serious two-function contention.
-#[must_use]
-pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
+/// The fix hints that depend on severity as well as the check kind.
+fn severity_specific_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
     if check == LintCheck::McuResourceConflict && severity != Severity::High {
         return Some(if severity == Severity::Medium {
             "Generate one of the two signals with the MCU's programmable engine (e.g. RP2040 PIO) in firmware; \
@@ -2817,8 +2812,20 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         });
     }
     // A Low strap finding is the lint's abstention, worded as unchecked (as in plain.rs).
-    if check == LintCheck::StrapPin && severity == Severity::Low {
-        return Some("Confirm the strap divider gives a clear reset level per the datasheet, or supply the missing model data the message names so the check can judge it.");
+    (check == LintCheck::StrapPin && severity == Severity::Low).then_some(
+        "Confirm the strap divider gives a clear reset level per the datasheet, or supply the missing model data the message names so the check can judge it.",
+    )
+}
+
+/// A concise suggested fix for a lint finding kind, for the machine-readable `fix` field.
+///
+/// `None` when no template applies. Severity disambiguates the resource-conflict
+/// check, whose low-severity form (a single function committed to a pin-locked
+/// group) has a different honest remedy than the serious two-function contention.
+#[must_use]
+pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
+    if let Some(hint) = severity_specific_fix_hint(check, severity) {
+        return Some(hint);
     }
     Some(match check {
         LintCheck::MissingI2cPullup => {
