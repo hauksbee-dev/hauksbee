@@ -4817,7 +4817,13 @@ reason = "ten and tdis (OE to Y), IOZ off-state current and the TTL-level additi
 # The GW (TSSOP5) and GV (SC-74A) packages share Table 3's numbering. The
 # 74HC1G125 (CMOS input levels, 2 V to 6 V) is a different part and is not
 # matched; neither are other vendors' HCT1G125 parts, whose tables were not read.
-value_re = "(?i)^74HCT1G125(GW|GV)?([.,-][A-Z0-9]+)?$"
+# DBV(R/T) is Texas Instruments' package code for the 5-lead SOT-23
+# (SN74AHCT1G125, SCLS378P, Table 4-1 Pin Functions p.3: 1 OE, 2 A, 3 GND, 4 Y,
+# 5 VCC; Package Option Addendum "SOT-23 (DBV) | 5"), the same lead count,
+# outline family and pad numbering as this card's SC-74A (SOT753) map, so a
+# "74HCT1G125DBV" spelling names this pinout. The electrical rows stay
+# Nexperia's HCT ones: ASSUMED for a part spelled with TI's package code.
+value_re = "(?i)^74HCT1G125(GW|GV|DBV[RT]?)?([.,-][A-Z0-9]+)?$"
 
 [models.params]
 voh = 4.4          # IO = -20 uA, VCC 4.5 V (Table 8)

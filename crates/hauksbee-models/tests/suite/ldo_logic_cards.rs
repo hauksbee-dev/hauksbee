@@ -112,7 +112,13 @@ fn single_gate_logic_pad_roles_follow_the_five_lead_tables() {
         assert_eq!(m.id, id, "{value}");
     }
     // Nexperia 74HC_HCT1G125 Rev. 8 Table 3: OE on pad 1; TTL thresholds (Table 8).
-    for value in ["74HCT1G125GW,125", "74HCT1G125GV"] {
+    // TI SCLS378P Table 4-1 gives the DBV (SOT-23-5) package the same five pads.
+    for value in [
+        "74HCT1G125GW,125",
+        "74HCT1G125GV",
+        "74HCT1G125DBV",
+        "74HCT1G125DBVR",
+    ] {
         let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
         assert_pin_map(&m, "74hct1g125", &pins("1=oe_n 2=a 3=gnd 4=y 5=vcc"));
         assert!((param(&m, "vih") - 2.0).abs() < 1e-9, "{value}: vih");
@@ -135,6 +141,9 @@ fn single_gate_logic_does_not_bind_other_packages_or_families() {
         "SN74AUP1G04DSFR",
         "74LVC1G18GW",
         "74HC1G125GW",
+        "74HC1G125DBV",
+        "74HCT1G125GM",
+        "74HCT1G125DCK",
         "74LVC1G00GW",
     ];
     for value in none {
