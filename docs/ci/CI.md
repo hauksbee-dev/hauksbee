@@ -1088,6 +1088,29 @@ Edges faster than the chunk alias on the poll bridge either way, so match the
 firmware switching rate to the chunk size (see `docs/cosim/MCU.md`
 limitations).
 
+Deadlines on a host-paced clock are not verdicts. The ESP32 QEMU backend runs
+without icount and credits simulated time from host wall-clock spans, so how
+much firmware runs in a simulated millisecond depends on the host: the Watchy
+v1.5 RES drive has measured 384-496 ms on one machine and 704-760 ms on
+another, either side of its 700 ms deadline. On such a core `boot_coverage`
+judges only whether the firmware drove the net to its level at all. A drive
+that never happens is still a hard FAIL. A drive that happens is a PASS whose
+detail gives the time as approximate and says the deadline was "not judged",
+and whose evidence carries a reduced-fidelity assumption, so it reads
+`evidence: qualified` on the terminal, JUnit, annotations, JSON and the web
+view. The same holds for the other firmware-time bounds on a firmware-driven
+net: a `toggle` `freq_hz` band or a `min_toggles` count above one, `pulse_width`
+`min`/`max`, and a `logic_level` `min_width_ms` or pulse count above one. simavr counts cycles and Renode
+advances virtual time per instruction, so their timing verdicts stay hard.
+
+```text
+[PASS] RES driven to >= 2.6 V within 700 ms of reset
+      control net 'RES' driven to >= 2.6 V at ~440 ms (approximate); the 700 ms
+      boot deadline and the hold through it not judged: MCU U1 runs on a
+      host-paced clock, ...
+      evidence: qualified
+```
+
 ## Schematic-stage CI
 
 **Catch it before you even lay out the board.** Point a spec's `board` at a

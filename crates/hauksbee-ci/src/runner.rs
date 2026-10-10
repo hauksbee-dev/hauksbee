@@ -372,6 +372,13 @@ pub struct RunOutcome {
     /// proof of Hi-Z). Keeps the "undriven" diagnosis from over-claiming on
     /// direction-blind backends.
     pub drive_direction_observable: bool,
+    /// References of the MCUs whose simulated time is credited from host
+    /// wall-clock spans (the ESP32 QEMU backend; see
+    /// `Mcu::clock_host_paced`). A firmware time on such a core moves with the
+    /// host's speed, so an assertion comparing one against a deadline or a time
+    /// bound leaves that comparison unjudged rather than issue a verdict a
+    /// faster or slower machine would flip. Empty on simavr and Renode runs.
+    pub host_paced_mcus: Vec<String>,
     /// Time (ms) of the first stress fault this run, if any.
     pub first_fault_ms: Option<f64>,
     /// Small-signal AC results (seed-independent; the same for every seed). The
@@ -2298,6 +2305,7 @@ fn run_one(
         boot_drop_after_cross_ms,
         driven_nets,
         drive_direction_observable,
+        host_paced_mcus: engine.scheduler().host_paced_mcus(),
         first_fault_ms,
         ac: None,
         analog_valid,

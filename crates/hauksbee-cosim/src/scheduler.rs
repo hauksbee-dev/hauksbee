@@ -2608,6 +2608,19 @@ impl Scheduler {
         self.per_mcu(|core| core.timing_limitation())
     }
 
+    /// References of the live MCUs whose simulated time is credited from host
+    /// wall-clock spans ([`Mcu::clock_host_paced`]), ordered by reference. A
+    /// firmware time on one of these depends on the machine that ran it, so a
+    /// caller judging such a time against a deadline must not issue a hard
+    /// verdict. Empty when every core counts its own time (simavr, Renode).
+    #[must_use]
+    pub fn host_paced_mcus(&self) -> Vec<String> {
+        self.per_mcu(|core| core.clock_host_paced().then_some(()))
+            .into_iter()
+            .map(|(reference, ())| reference)
+            .collect()
+    }
+
     /// Times an unserviced watchdog rebooted each MCU's core during this run,
     /// filtered to the nonzero. Not an error, a FINDING: an assertion that
     /// passed across a reboot was not measuring the run it claimed, because the
@@ -7938,6 +7951,9 @@ missing = ["measurement_registers"]
         fn timing_limitation(&self) -> Option<String> {
             self.bus_blind.then(|| TIMING_LIMITATION.to_string())
         }
+        fn clock_host_paced(&self) -> bool {
+            self.bus_blind
+        }
         fn watchdog_resets(&self) -> u64 {
             self.watchdog_resets
         }
@@ -9417,6 +9433,7 @@ data_out = ["io0"]
             timing_limitation_message(&limits[0].0, &limits[0].1),
             format!("MCU U1: {TIMING_LIMITATION}")
         );
+        assert_eq!(sched.host_paced_mcus(), vec!["U1".to_string()]);
     }
 
     #[test]
@@ -9440,6 +9457,7 @@ data_out = ["io0"]
         assert!(sched.watchdog_limitations().is_empty());
         assert!(sched.watchdog_resets().is_empty());
         assert!(sched.timing_limitations().is_empty());
+        assert!(sched.host_paced_mcus().is_empty());
     }
 
     fn attach_test_buses(sched: &mut Scheduler) {

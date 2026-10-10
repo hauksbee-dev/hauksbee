@@ -178,6 +178,31 @@ type FallbackWindow = (f64, f64, String);
 /// keeps only what no failure covers, and where members fell back differently
 /// it carries the latest rung of the scheduler's ladder any of them needed.
 /// An unknown method outranks them all, so the budget still refuses it.
+/// The condition a host-paced timing verdict rests on, as the existing
+/// reduced-fidelity assumption (the "conditional pass" channel), scoped to the
+/// one assertion it qualifies.
+fn host_paced_assumption(label: &str, paced: &assertions::HostPacedBound) -> Assumption {
+    let key = format!("host-paced/{label}");
+    let text = format!("the time measured against {}", paced.bound);
+    let mechanism = format!(
+        "the host-paced clock of MCU {}, which credits simulated time from host \
+         wall-clock spans (the same boot has measured about 2x apart on two machines), \
+         so the bound was left unjudged",
+        paced.mcus.join(", ")
+    );
+    Assumption::reduced_fidelity(
+        hauksbee_ir::evidence::AssumptionSource::Scheduler,
+        hauksbee_ir::evidence::Subject::new(&key, &text),
+        hauksbee_ir::evidence::Scope::Check {
+            check: "ci".into(),
+            kind: Some(label.to_string()),
+        },
+        &mechanism,
+        "judge this bound on a cycle-exact backend (simavr) or on hardware; the \
+         host-independent part of the assertion is still judged here",
+    )
+}
+
 fn ensemble_windows(outcomes: &[runner::RunOutcome]) -> (Vec<(f64, f64)>, Vec<FallbackWindow>) {
     use hauksbee_engine::scheduler::ChunkFallbackMethod as M;
     let ladder = [
@@ -459,6 +484,22 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         evidence = evidence
             .with_assumptions([assumption])
             .map_err(SpecError::invalid("building live-waiver evidence"))?;
+    }
+    // A time bound a host-paced MCU clock left unjudged is the condition the
+    // assertion's verdict rests on: a typed reduced-fidelity assumption scoped
+    // to that one assertion, so its evidence reads `qualified` on every
+    // surface rather than a bare PASS a faster or slower host could flip.
+    let mut seen_host_paced = std::collections::BTreeSet::new();
+    for result in &results {
+        let Some(paced) = &result.host_paced else {
+            continue;
+        };
+        if !seen_host_paced.insert(result.label.clone()) {
+            continue;
+        }
+        evidence = evidence
+            .with_assumptions([host_paced_assumption(&result.label, paced)])
+            .map_err(SpecError::invalid("building host-paced timing evidence"))?;
     }
 
     let (failed_windows, fallback_owned) = ensemble_windows(&outcomes);

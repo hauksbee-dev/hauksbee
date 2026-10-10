@@ -227,7 +227,7 @@ limitation rather than as a silicon-equivalent clock.
 | `renode:sifive_fe310` | `mtime` gate passes; instruction timing is not silicon-gated | `tests/clock_truth.rs` |
 | `renode:stm32g4` / `stm32f7` | clock-truth gate passes at the 16 MHz HSI reset default | SysTick fixture in `tests/clock_truth.rs`; firmware that raises the PLL (170 / 216 MHz) runs its SysTick delays 10.6x / 13.5x slow, stated as a timing limitation |
 | `renode:stm32l0` | clock-truth gate passes at 2 MHz, within 5% of the 2.097 MHz MSI default | SysTick fixture in `tests/clock_truth.rs`; 16x slow against a 32 MHz PLL, stated as a timing limitation |
-| `qemu:esp32` / `-s3` / `-c3` | approximate and host-load dependent | `tests/qemu_clock_truth.rs`; reports carry a timing limitation |
+| `qemu:esp32` / `-s3` / `-c3` | host-paced: approximate, about 2x apart across hosts for instruction-bound boot | `tests/qemu_clock_truth.rs`; reports carry a timing limitation, and time bounds are reported unjudged (conditional), never hard PASS/FAIL |
 
 The descriptor loader cross-checks each declared clock against its platform and
 refuses a mismatch or a Renode platform with no core-clock declaration
@@ -268,8 +268,13 @@ external-emulator runs before a scheduler exists; its live/CLI alternatives
 carry the limitation.
 
 - **ESP32 virtual time is wall-paced.** `-icount` is not used for the ESP32
-  machines because it prevents boot. QMP control-window timing is credited,
-  but host load still affects pacing; affected reports carry a limitation.
+  machines (see below). QMP control-window timing is credited from host
+  wall-clock spans, so how much firmware runs per simulated millisecond moves
+  with host speed and load: the Watchy v1.5 RES drive measured 384-496 ms on
+  one machine and 704-760 ms on another. Reports carry the limitation, and
+  hauksbee-ci leaves every deadline or time bound judged against a firmware
+  time on such a core unjudged (a conditional pass with a qualified evidence
+  map), while "driven at all" stays a hard verdict.
 - **F103 TIMx timing is not covered by the clock gate.** The platform keeps the
   timer model needed by supported CubeMX firmware while core/SysTick timing is
   checked. Firmware that uses TIMx as its time base must treat that path as

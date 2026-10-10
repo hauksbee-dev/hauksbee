@@ -570,8 +570,9 @@ pub trait Mcu {
     ///
     /// - `qemu:esp32*` paces virtual time by the host wall clock (no icount;
     ///   see the QEMU module notes), so virtual time is approximate and
-    ///   host-load dependent even though the cont→stop window itself is now
-    ///   measured as the host span from sending QMP `cont` to sending `stop`.
+    ///   host-speed dependent even though the cont→stop window itself is now
+    ///   measured as the host span from sending QMP `cont` to sending `stop`
+    ///   (see [`Mcu::clock_host_paced`]).
     /// - `renode:stm32f103` deliberately clocks its `TIMx` blocks at the
     ///   post-PLL 72 MHz against an 8 MHz reset-default core, so a bare-metal
     ///   `TIMx` time base runs 9x fast (stated in the descriptor).
@@ -581,6 +582,23 @@ pub trait Mcu {
     /// that emit it.
     fn timing_limitation(&self) -> Option<String> {
         None
+    }
+
+    /// Whether this core's simulated time is credited from HOST wall-clock
+    /// spans, so how far the firmware gets in a simulated millisecond depends
+    /// on the speed and load of the machine running it.
+    ///
+    /// Distinct from [`Mcu::timing_limitation`], which also covers a
+    /// deterministic, host-independent bias (the F103's 9x-fast `TIMx`). Only a
+    /// host-paced clock makes a firmware time flip with the host: the ESP32
+    /// QEMU backend (no icount) measured the same Watchy boot drive at 384 ms
+    /// on one machine and 760 ms on another. A verdict comparing such a time
+    /// against a deadline or a time bound is therefore not issued as a hard
+    /// PASS/FAIL; the time is reported as approximate instead. simavr counts
+    /// cycles and Renode advances virtual time per executed instruction, so
+    /// both keep the default `false`.
+    fn clock_host_paced(&self) -> bool {
+        false
     }
 
     /// Times an unserviced watchdog rebooted the core during this run.

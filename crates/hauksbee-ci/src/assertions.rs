@@ -77,6 +77,23 @@ pub struct AssertResult {
     /// which feeds waiver matching.
     #[serde(skip)]
     pub subject_peripheral: Option<String>,
+    /// The time bound a host-paced MCU clock left unjudged here (see
+    /// [`host_paced_time_bound`]). Not serialized: the run turns it into a
+    /// typed assumption on this assertion's evidence map, the one channel
+    /// every surface (terminal, `JUnit`, annotations, JSON, web) already
+    /// renders, so the condition a pass rests on is worded once.
+    #[serde(skip)]
+    pub host_paced: Option<HostPacedBound>,
+}
+
+/// A deadline or time bound that was NOT judged because the firmware time it
+/// compares was measured on a host-paced MCU clock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostPacedBound {
+    /// The bound, as a noun phrase: "the 700 ms boot deadline".
+    pub bound: String,
+    /// The MCU references whose clocks are host-paced.
+    pub mcus: Vec<String>,
 }
 
 impl AssertResult {
@@ -134,6 +151,12 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
             } else {
                 let mut result = evaluate_one(a, outcomes, mode, spec.frame_ms);
                 result.subject_peripheral = a.id.clone().filter(|_| a.kind == "peripheral");
+                result.host_paced = outcomes.iter().find_map(|out| {
+                    host_paced_time_bound(a, out).map(|bound| HostPacedBound {
+                        bound,
+                        mcus: out.host_paced_mcus.clone(),
+                    })
+                });
                 vec![result]
             };
             if a.times_startup() && spec.dc_initialised() {
@@ -696,7 +719,124 @@ pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64
 /// why): `why` is the observed-shortfall sentence a failing bound computes
 /// (`None` on a pass, and on kinds whose detail already IS the diagnosis,
 /// e.g. `boot_coverage`'s drive-state analysis).
+///
+/// A time bound this member's host-paced MCU clock cannot honestly judge (see
+/// [`host_paced_time_bound`]) is taken out before the check runs, so only the
+/// host-independent part of the assertion decides PASS or FAIL, and the detail
+/// says which bound went unjudged and why. `boot_coverage` does the same inside
+/// [`check_boot_coverage`], whose clauses are not separable bound fields.
 fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, Option<String>) {
+    let boot = matches!(a.kind.as_str(), "boot_coverage" | "boot-coverage");
+    match host_paced_time_bound(a, out) {
+        Some(bound) if !boot => {
+            let (ok, detail, why) = check_kind(&without_time_bound(a), out, frame_ms);
+            (ok, detail + &host_paced_note(&bound, out), why)
+        }
+        _ => check_kind(a, out, frame_ms),
+    }
+}
+
+/// Why firmware times on a host-paced clock are approximate, in the words
+/// every unjudged bound carries. The cross-host figure is measured (the Watchy
+/// v1.5 RES drive: 384-496 ms on one machine, 704-760 ms on another), see
+/// `hauksbee_mcu::qemu::TIMING_LIMITATION`.
+const HOST_PACED_WHY: &str = "so how far its firmware gets in a simulated millisecond \
+     depends on the host's speed and load (the same boot has measured about 2x apart on \
+     two machines)";
+
+/// The detail suffix naming a bound a host-paced clock left unjudged.
+fn host_paced_note(bound: &str, out: &RunOutcome) -> String {
+    format!(
+        "; {bound} not judged: MCU {} runs on a host-paced clock, {HOST_PACED_WHY}",
+        out.host_paced_mcus.join(", ")
+    )
+}
+
+/// The deadline or time bound in `a` that would compare a firmware time measured
+/// on a host-paced MCU clock, as a noun phrase, or `None` when every bound `a`
+/// carries is host-independent on this member.
+///
+/// A host-paced clock (`RunOutcome::host_paced_mcus`, the ESP32 QEMU backend)
+/// credits simulated time from host wall-clock spans, so the same firmware on
+/// the same board reaches the same event at a different simulated time on a
+/// faster or slower machine. A verdict comparing that time against a bound
+/// would be one a host's speed can flip, so the bound is reported unjudged and
+/// the rest of the assertion keeps its hard verdict:
+///
+/// - `boot_coverage`: the deadline (and the hold measured against it, and the
+///   order of a stress fault against the drive). Whether the net was driven
+///   to level at all stays judged.
+/// - `toggle` on a firmware-driven net: a `freq_hz` band, or a `min_toggles`
+///   count above one (a count over a fixed simulated window is a rate). That
+///   the net toggled at all stays judged.
+/// - `pulse_width` on a firmware-driven net: the `min`/`max` width bounds.
+///   The width is still measured and reported.
+/// - `logic_level` on a firmware-driven net: `min_width_ms`, and a
+///   `min_toggles` pulse count above one. The level itself stays judged.
+///
+/// Analog-only nets keep hard verdicts even on a board with a host-paced core:
+/// the solver's own time base is exact. Cycle-counting backends (simavr) and
+/// Renode, which advances virtual time per executed instruction, never land
+/// here.
+pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<String> {
+    if out.host_paced_mcus.is_empty() {
+        return None;
+    }
+    let firmware_net = a.net.as_ref().is_some_and(|n| out.driven_nets.contains(n));
+    match a.kind.as_str() {
+        "boot_coverage" | "boot-coverage" => {
+            let deadline = a.deadline_ms.unwrap_or(0.0);
+            let hold = match a.hold_ms {
+                None => " and the hold through it".to_string(),
+                Some(h) if h > 0.0 => format!(" and the {h} ms hold"),
+                Some(_) => String::new(),
+            };
+            Some(format!("the {deadline} ms boot deadline{hold}"))
+        }
+        "toggle" if firmware_net => match (a.min_toggles, a.freq_hz) {
+            (Some(n), _) if n > 1 => Some(format!("the {n}-toggle minimum over the run")),
+            (None, Some(f)) => Some(format!("the {f} Hz rate band")),
+            _ => None,
+        },
+        "pulse_width" if firmware_net && (a.min.is_some() || a.max.is_some()) => {
+            Some("the pulse-width bound".to_string())
+        }
+        "logic_level" if firmware_net => {
+            let width = a.min_width_ms.map(|w| format!("the {w} ms hold width"));
+            let pulses = a
+                .min_toggles
+                .filter(|n| *n > 1)
+                .map(|n| format!("the {n}-pulse minimum over the run"));
+            match (width, pulses) {
+                (Some(w), Some(p)) => Some(format!("{w} and {p}")),
+                (w, p) => w.or(p),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `a` with the bound [`host_paced_time_bound`] names taken out, leaving the
+/// host-independent claim: a toggle count becomes "toggled at all", a rate band
+/// becomes a measured rate, a width bound becomes a measured width, a hold width
+/// becomes a plain level.
+fn without_time_bound(a: &Assertion) -> Assertion {
+    let mut a = a.clone();
+    match a.kind.as_str() {
+        "toggle" if a.min_toggles.is_some() => a.min_toggles = Some(1),
+        "toggle" => a.freq_hz = None,
+        "pulse_width" => (a.min, a.max) = (None, None),
+        "logic_level" => {
+            a.min_width_ms = None;
+            a.min_toggles = a.min_toggles.map(|_| 1);
+        }
+        _ => {}
+    }
+    a
+}
+
+/// Dispatch one assertion kind's check (see [`check_seed`]).
+fn check_kind(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, Option<String>) {
     // Adapter for the kinds whose checks carry no separate `why`.
     fn plain((ok, detail): (bool, String)) -> (bool, String, Option<String>) {
         (ok, detail, None)
@@ -1101,7 +1241,18 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
 ///   - `h > 0`: hold continuously for `h` ms after the FIRST reach; a hold
 ///     window the simulation did not fully observe fails as unconfirmed rather
 ///     than passing on hope.
+///
+/// On a host-paced MCU clock the deadline is not judged at all (see
+/// [`boot_coverage_host_paced`]).
 fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    host_paced_time_bound(a, out).map_or_else(
+        || boot_coverage_against_deadline(a, out),
+        |bound| boot_coverage_host_paced(a, out, &bound),
+    )
+}
+
+/// [`check_boot_coverage`] on a clock whose times are the same on every host.
+fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.net.clone().unwrap_or_default();
     let level = a.min.unwrap_or(0.0);
     let deadline = a.deadline_ms.unwrap_or(0.0);
@@ -1234,6 +1385,57 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             )
         }
     }
+}
+
+/// Boot coverage when the firmware's time is measured on a host-paced MCU
+/// clock (see [`host_paced_time_bound`]).
+///
+/// Only the host-independent half is judged: whether the firmware drove the
+/// net to its level at all during the run. That is what the undriven negative
+/// control rests on, and no host speed turns a firmware that never drives the
+/// pin into one that does. The deadline, the hold measured against it, and the
+/// order of an early stress fault against the drive all compare a host-paced
+/// time, so they are reported with the measured time marked approximate and
+/// left to the evidence condition, never issued as a PASS or FAIL a faster or
+/// slower machine would flip.
+fn boot_coverage_host_paced(a: &Assertion, out: &RunOutcome, bound: &str) -> (bool, String) {
+    let net = a.net.clone().unwrap_or_default();
+    let level = a.min.unwrap_or(0.0);
+    let key = (net.clone(), level.to_bits());
+    let mcus = out.host_paced_mcus.join(", ");
+    let Some(tc) = out.boot_first_cross_ms.get(&key).copied() else {
+        let never = boot_below_threshold_msg(
+            &net,
+            level,
+            out.driven_nets.contains(&net),
+            out.drive_direction_observable,
+            boot_observed_range(&net, out),
+        );
+        return (
+            false,
+            format!(
+                "{never} (the {:.0} ms run is host-paced time on MCU {mcus}: a slower host \
+                 runs less of the firmware in it, so a drive that comes late may need a \
+                 longer duration_ms)",
+                out.sim_ms
+            ),
+        );
+    };
+    let mut detail = format!(
+        "control net '{net}' driven to >= {level} V at ~{tc:.0} ms (approximate){}",
+        host_paced_note(bound, out)
+    );
+    if let Some(td) = out.boot_drop_after_cross_ms.get(&key) {
+        let _ = write!(detail, "; it fell back below {level} V at ~{td:.0} ms");
+    }
+    if let Some(ft) = out.first_fault_ms.filter(|ft| *ft < tc - 1e-9) {
+        let _ = write!(
+            detail,
+            "; a stress fault fired at {ft:.2} ms, before the drive (their order is not \
+             judged on a host-paced clock)"
+        );
+    }
+    (true, detail)
 }
 
 /// Diagnosis for a boot-coverage net that never reached its required level.
@@ -2457,6 +2659,101 @@ mod tests {
         let short = boot_run(6.0, Some(2.0), None);
         let (ok, msg) = check_boot_coverage(&boot_assert(10.0, "hold_ms = 8.0"), &short);
         assert!(!ok && msg.contains("cannot be confirmed"), "{msg}");
+    }
+
+    /// `boot_run` on a board whose firmware runs on a host-paced clock (the
+    /// ESP32 QEMU backend), with the firmware driving `EN`.
+    fn host_paced(mut out: RunOutcome) -> RunOutcome {
+        out.host_paced_mcus = vec!["U1".to_string()];
+        out.driven_nets.insert("EN".to_string());
+        out
+    }
+
+    #[test]
+    fn host_paced_boot_coverage_never_judges_the_deadline_but_still_fails_undriven() {
+        // The same drive, early or late against the deadline: a host-paced time
+        // cannot decide either way, so both are the same conditional pass.
+        for cross in [5.0, 15.0] {
+            let out = host_paced(boot_run(100.0, Some(cross), None));
+            let (ok, msg) = check_boot_coverage(&boot_assert(10.0, ""), &out);
+            assert!(ok, "{msg}");
+            assert!(
+                msg.contains(&format!("at ~{cross:.0} ms (approximate)")),
+                "{msg}"
+            );
+            assert!(
+                msg.contains("the 10 ms boot deadline and the hold through it not judged"),
+                "{msg}"
+            );
+            assert!(msg.contains("MCU U1 runs on a host-paced clock"), "{msg}");
+            assert!(msg.contains("about 2x apart"), "{msg}");
+        }
+        // A drop inside the window is reported, not judged.
+        let out = host_paced(boot_run(100.0, Some(2.0), Some(7.0)));
+        let (ok, msg) = check_boot_coverage(&boot_assert(10.0, "hold_ms = 8.0"), &out);
+        assert!(
+            ok && msg.contains("the 10 ms boot deadline and the 8 ms hold"),
+            "{msg}"
+        );
+        assert!(msg.contains("fell back below 3 V at ~7 ms"), "{msg}");
+        // Never driven is host-independent: still a hard FAIL, with the hint
+        // that a slower host covers less firmware in the same run.
+        let out = host_paced(boot_run(100.0, None, None));
+        let (ok, msg) = check_boot_coverage(&boot_assert(10.0, ""), &out);
+        assert!(!ok, "{msg}");
+        assert!(msg.contains("host-paced time on MCU U1"), "{msg}");
+        assert!(!msg.contains("not judged"), "{msg}");
+        // The bound is named for the evidence condition.
+        let a = boot_assert(10.0, "hold_ms = 0.0");
+        assert_eq!(
+            host_paced_time_bound(&a, &out).as_deref(),
+            Some("the 10 ms boot deadline")
+        );
+    }
+
+    #[test]
+    fn a_clock_exact_backend_keeps_hard_boot_deadlines() {
+        // No host-paced MCU (simavr counts cycles, Renode advances virtual time
+        // per instruction): a late drive is a hard FAIL, as before.
+        let mut out = boot_run(100.0, Some(15.0), None);
+        out.driven_nets.insert("EN".to_string());
+        assert_eq!(host_paced_time_bound(&boot_assert(10.0, ""), &out), None);
+        let (ok, msg) = check_boot_coverage(&boot_assert(10.0, ""), &out);
+        assert!(!ok && !msg.contains("not judged"), "{msg}");
+        let (ok, msg, _) = check_seed(&boot_assert(20.0, ""), &out, 1.0);
+        assert!(ok && msg.contains("(<= 20 ms)"), "{msg}");
+    }
+
+    #[test]
+    fn host_paced_toggle_bounds_judge_only_that_the_net_switched() {
+        let toggle = |extra: &str| assertion(&format!("kind = \"toggle\"\nnet = \"EN\"\n{extra}"));
+        let mut out = host_paced(boot_run(100.0, None, None));
+        out.toggles.insert("EN".to_string(), 3);
+        // Three toggles against a minimum of ten: a rate over a host-paced
+        // window, so only "it toggled" is judged.
+        let (ok, msg, _) = check_seed(&toggle("min_toggles = 10"), &out, 1.0);
+        assert!(ok, "{msg}");
+        assert!(
+            msg.contains("the 10-toggle minimum over the run not judged"),
+            "{msg}"
+        );
+        // A net that never toggled still fails hard.
+        out.toggles.insert("EN".to_string(), 0);
+        let (ok, msg, _) = check_seed(&toggle("min_toggles = 10"), &out, 1.0);
+        assert!(!ok, "{msg}");
+        // A single-toggle claim has no time in it and stays exactly as before.
+        assert_eq!(
+            host_paced_time_bound(&toggle("min_toggles = 1"), &out),
+            None
+        );
+        // An analog-only net keeps its hard bound: the solver's time is exact.
+        out.driven_nets.clear();
+        assert_eq!(
+            host_paced_time_bound(&toggle("min_toggles = 10"), &out),
+            None
+        );
+        let (ok, _, _) = check_seed(&toggle("min_toggles = 10"), &out, 1.0);
+        assert!(!ok);
     }
 
     /// A run whose `load` scenario window on `VBUS` saw `samples`, with the

@@ -1272,14 +1272,19 @@ pub const WATCHDOG_LIMITATION: &str =
 /// not anything a descriptor declares. Each chunk credits the host span from
 /// sending `cont` to sending `stop` (`Qmp::run_for`), so the control-channel
 /// slack is credited and the post-freeze vCPU-parking wait is not; what remains systematic is TCG pace
-/// itself, which tracks the host wall clock only approximately and degrades
-/// under host load. A `const` so `hauksbee models lint` quotes the same
-/// sentence a run reports.
+/// itself: instruction-bound work (a boot) gets as far per credited
+/// millisecond as the host's TCG speed allows. Measured on the same firmware
+/// and board (the Watchy v1.5 RES drive), 384-496 ms on an M-series Mac and
+/// 704-760 ms on an x86-64 CI runner, so about 2x across hosts, not the "few
+/// percent" an earlier wording claimed. A `const` so `hauksbee models lint`
+/// quotes the same sentence a run reports.
 pub const TIMING_LIMITATION: &str =
     "ESP32 virtual time is paced by the host wall clock in this co-simulator \
-     (QEMU icount is unusable for ESP32 timing), so simulated time is approximate and \
-     host-load dependent: treat time-based results on this core as correct to \
-     within a few percent on an idle host, not as a clock.";
+     (QEMU runs without icount), so how much firmware runs in a simulated \
+     millisecond depends on the host's speed and load: the same boot has \
+     measured about 2x apart on two machines (384 ms vs 760 ms). Times on \
+     this core are approximate, so a deadline or time bound judged against \
+     them is reported as conditional, never as a hard PASS or FAIL.";
 
 impl Mcu for QemuBackend {
     fn load_firmware(&mut self, _path: &Path) -> Result<()> {
@@ -1322,6 +1327,13 @@ impl Mcu for QemuBackend {
     /// backend drives QEMU, not a per-part property. See [`TIMING_LIMITATION`].
     fn timing_limitation(&self) -> Option<String> {
         Some(TIMING_LIMITATION.to_string())
+    }
+
+    /// Always: each chunk credits the host span from QMP `cont` to `stop`
+    /// (see `run_seconds`), so instruction-bound firmware
+    /// progress per simulated millisecond is the host's TCG speed.
+    fn clock_host_paced(&self) -> bool {
+        true
     }
 
     /// No symbol table reaches QEMU (it boots a flash image), so "entry" here

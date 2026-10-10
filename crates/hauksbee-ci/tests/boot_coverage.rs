@@ -94,7 +94,65 @@ fn gate_driven_promptly_passes() {
         "names the control net: {}",
         bc.detail
     );
+    // simavr counts cycles, so the deadline is judged hard: the detail states
+    // the bound it met, with no host-paced condition.
+    assert!(
+        bc.detail.contains("(<= 20 ms)") && !bc.detail.contains("not judged"),
+        "a cycle-exact backend judges the deadline: {}",
+        bc.detail
+    );
+    assert!(bc.host_paced.is_none(), "simavr is not host-paced");
 }
+
+/// The same prompt drive against a deadline it misses is a hard FAIL on simavr:
+/// cycle-counted time is the same on every host, so the timing verdict stays a
+/// verdict (the ESP32 QEMU rows below are the host-paced contrast).
+#[cfg(feature = "avr")]
+#[test]
+fn simavr_keeps_hard_boot_deadline_verdicts() {
+    ensure_firmware("a");
+    let src = example("boot_gate_pass.toml");
+    let examples_dir = src.parent().expect("examples dir");
+    let text = std::fs::read_to_string(&src).expect("example spec reads");
+    let absolute = |rel: &str| {
+        let path = examples_dir.join(rel.trim_end_matches('"'));
+        path.canonicalize()
+            .expect("spec path resolves")
+            .display()
+            .to_string()
+    };
+    let mut spec = String::with_capacity(text.len());
+    for line in text.lines() {
+        let board = line.strip_prefix("board = \"");
+        let firmware = line.strip_prefix("firmware = \"");
+        let rewritten = match (board, firmware) {
+            (Some(rel), _) => format!("board = '{}'", absolute(rel)),
+            (None, Some(rel)) => format!("firmware = '{}'", absolute(rel)),
+            (None, None) if line.starts_with("deadline_ms = ") => {
+                format!("deadline_ms = {TOO_SOON_MS}")
+            }
+            (None, None) => line.to_string(),
+        };
+        spec.push_str(&rewritten);
+        spec.push('\n');
+    }
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("boot_gate_too_soon.toml");
+    std::fs::write(&path, spec).expect("spec writes");
+    let result = run(&support::run_config(path)).expect("spec runs");
+    let bc = support::row(&result, "kind:boot_coverage");
+    assert!(
+        !bc.passed && bc.detail.contains("boot deadline") && !bc.detail.contains("not judged"),
+        "a drive later than the deadline is a hard FAIL on simavr: {}",
+        bc.detail
+    );
+    assert!(bc.host_paced.is_none(), "simavr is not host-paced");
+}
+
+/// A deadline variant A's drive misses: the gate is first seen driven at the
+/// 1 ms frame (docs/ci/CI.md), later than this.
+#[cfg(feature = "avr")]
+const TOO_SOON_MS: f64 = 0.5;
 
 /// Variant B never drives the gate: the boot-coverage assertion FAILS, naming
 /// the control net that was left Hi-Z. This is the discriminating half - the
@@ -257,6 +315,31 @@ fn watchy_v15_display_res_driven_passes() {
         "names the RES net: {}",
         bc.detail
     );
+    // QEMU credits ESP32 time from host wall-clock spans, so the 700 ms deadline
+    // is a time a host's speed flips (measured 384-496 ms on one machine,
+    // 704-760 ms on another). The verdict judges only that RES was driven; the
+    // deadline is reported unjudged, and the pass is conditional on evidence.
+    assert!(
+        bc.detail.contains("(approximate)")
+            && bc
+                .detail
+                .contains("the 700 ms boot deadline and the hold through it not judged")
+            && bc.detail.contains("MCU U1 runs on a host-paced clock"),
+        "the deadline is reported unjudged, with the measured time approximate: {}",
+        bc.detail
+    );
+    let paced = bc
+        .host_paced
+        .as_ref()
+        .expect("a host-paced bound is recorded");
+    assert_eq!(paced.mcus, ["U1"]);
+    let human = result.render_human();
+    assert!(
+        human.contains("evidence: qualified")
+            && human.contains("the time measured against the 700 ms boot deadline")
+            && human.contains("host-paced clock of MCU U1"),
+        "the condition reaches the evidence every surface renders:\n{human}"
+    );
 }
 
 /// FAIL (negative control): firmware that drives GPIO2/4 but never GPIO9 leaves
@@ -281,6 +364,12 @@ fn watchy_v15_display_res_undriven_fails() {
     assert!(
         bc.detail.contains("RES") && bc.detail.to_uppercase().contains("NEVER"),
         "the failure names the undriven RES net: {}",
+        bc.detail
+    );
+    // Never driven is host-independent: a hard FAIL even on a host-paced clock.
+    assert!(
+        !bc.detail.contains("not judged"),
+        "undriven is judged, not left conditional: {}",
         bc.detail
     );
 }
