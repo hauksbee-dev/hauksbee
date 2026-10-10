@@ -211,6 +211,60 @@ impl<'a> VerdictCause<'a> {
             next.trim_end_matches('.')
         )
     }
+
+    /// [`Self::reason`], plus the coverage hole a failing or refused run would
+    /// otherwise hide. A run that stops on a finding (or on a refusal) while
+    /// key parts have no usable model still fails, but fixing that finding must
+    /// not read as "the rest of the board is fine": it was never judged. The
+    /// unmodelled cause already says this on its own, so it is left unchanged.
+    #[must_use]
+    pub fn reason_alongside(self, unmodelled: &[String]) -> String {
+        let reason = self.reason();
+        if unmodelled.is_empty() || matches!(self, Self::Unmodelled(_)) {
+            return reason;
+        }
+        format!(
+            "{reason} Also: {} key {} no usable model ({}), so the rest of the board is not vouched for.",
+            unmodelled.len(),
+            if unmodelled.len() == 1 { "part has" } else { "parts have" },
+            refs_summary(unmodelled)
+        )
+    }
+}
+
+/// The one machine verdict every human surface of a run must agree with.
+///
+/// Derived once, by [`JsonReport::run_verdict`] (the same derivation that fills
+/// the `verdict` and `verdict_reason` fields of `--json`), and handed to the
+/// triage headline and the closing `VERDICT:` line so neither can re-derive a
+/// different answer from the findings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunVerdict {
+    /// `"pass"` | `"fail"` | `"invalid"`, exactly as `--json` states it.
+    pub verdict: &'static str,
+    /// Why it is not a pass and what to do next ([`VerdictCause::reason`], plus
+    /// the unmodelled-parts caveat when the run failed over unmodelled parts).
+    pub reason: Option<String>,
+    /// The assumptions a pass rests on (empty unless the verdict is a pass).
+    pub conditions: Vec<String>,
+}
+
+impl Default for RunVerdict {
+    fn default() -> Self {
+        Self {
+            verdict: "pass",
+            reason: None,
+            conditions: Vec::new(),
+        }
+    }
+}
+
+impl RunVerdict {
+    /// Whether the run passed (the `ok` field of `--json`).
+    #[must_use]
+    pub fn is_pass(&self) -> bool {
+        self.verdict == "pass"
+    }
 }
 
 impl<'a> From<&'a Refusal> for VerdictCause<'a> {
@@ -2699,8 +2753,27 @@ impl JsonReport {
         (
             (verdict == "pass", verdict, serious, actionable),
             waived,
-            cause.map(VerdictCause::reason),
+            cause.map(|c| c.reason_alongside(&blockers)),
         )
+    }
+
+    /// The machine verdict as the human surfaces carry it: the SAME derivation
+    /// [`Self::to_json`] prints, so a triage headline or a closing `VERDICT:`
+    /// line built from this can never disagree with the `verdict` field.
+    #[must_use]
+    pub fn run_verdict(&self) -> RunVerdict {
+        let ((_, verdict, _, _), _, reason) =
+            self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
+        RunVerdict {
+            verdict,
+            reason,
+            // A condition qualifies a pass; a verdict that is not one says why instead.
+            conditions: if verdict == "pass" {
+                self.verdict_conditions.clone()
+            } else {
+                Vec::new()
+            },
+        }
     }
 
     /// Serialize to a pretty JSON string (stable, non-interactive output). The
@@ -3240,6 +3313,38 @@ mod tests {
             coverage: None,
         });
         assert_eq!(invalid.verdict().1, "invalid");
+    }
+
+    #[test]
+    fn a_failure_over_unmodelled_key_parts_keeps_the_fail_and_says_so() {
+        let mut report = JsonReport::new("b", summary_with(Vec::new(), vec![active_ic("U1")]))
+            .with_bind_verdict_gate();
+        report.findings = Some(fault_findings_json(&[fault(
+            "Q1",
+            crate::stress::FaultKind::Overcurrent,
+            true,
+        )]));
+        let run = report.run_verdict();
+        assert_eq!(
+            run.verdict, "fail",
+            "unmodelled parts must not demote a fail"
+        );
+        let why = run.reason.expect("fail carries a reason");
+        assert!(
+            why.starts_with("1 blocking problem(s)")
+                && why.contains("Also: 1 key part has no usable model (U1)")
+                && why.ends_with("so the rest of the board is not vouched for."),
+            "{why}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&report.to_json()).unwrap();
+        assert_eq!(json["verdict"], "fail");
+        assert_eq!(json["verdict_reason"].as_str(), Some(why.as_str()));
+        // The unmodelled-only cause already says it; it is not said twice.
+        let only = JsonReport::new("b", summary_with(Vec::new(), vec![active_ic("U1")]))
+            .with_bind_verdict_gate()
+            .run_verdict();
+        assert_eq!(only.verdict, "invalid");
+        assert!(!only.reason.unwrap().contains("Also:"));
     }
 
     #[test]

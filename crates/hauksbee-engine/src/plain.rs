@@ -495,15 +495,43 @@ impl OrderTriage {
         }
     }
 
-    pub(crate) fn render(&self) -> String {
+    /// The headline for a triage with nothing to list. It follows the run's
+    /// machine verdict ([`crate::result::RunVerdict`], the one `--json` prints),
+    /// so an empty triage can never say OK TO ORDER over a failed or
+    /// inconclusive run.
+    fn empty_headline(verdict: &crate::result::RunVerdict) -> String {
+        let reason = verdict.reason.as_deref().unwrap_or_default();
+        match verdict.verdict {
+            "pass" if verdict.conditions.is_empty() => {
+                "OK TO ORDER: nothing found that blocks ordering or needs inspecting first."
+                    .to_string()
+            }
+            "pass" => format!(
+                "OK TO ORDER, conditionally: nothing found that blocks ordering or needs \
+                 inspecting first; this rests on: {}",
+                verdict.conditions.join(" ")
+            ),
+            "fail" => format!("NOT OK TO ORDER: this run failed. {reason}"),
+            _ => format!(
+                "NOT CONCLUSIVE: nothing listed below blocks ordering, but the run cannot vouch \
+                 for this board. {reason}"
+            ),
+        }
+    }
+
+    pub(crate) fn render(&self, verdict: &crate::result::RunVerdict) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "== ORDER / DON'T-ORDER TRIAGE ==");
         // Three empty lists read as a missing answer, so a clean triage says
-        // so in one line and the empty buckets are left out.
+        // so in one line and the empty buckets are left out. A failed run says
+        // so in the same place even when the buckets below do not name its cause.
         if self.do_not_order.is_empty() && self.inspect.is_empty() {
+            let _ = writeln!(out, "{}", Self::empty_headline(verdict));
+        } else if verdict.verdict == "fail" && self.do_not_order.is_empty() {
             let _ = writeln!(
                 out,
-                "OK TO ORDER: nothing found that blocks ordering or needs inspecting first."
+                "NOT OK TO ORDER YET: this run failed. {}",
+                verdict.reason.as_deref().unwrap_or_default()
             );
         }
         Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
@@ -590,7 +618,17 @@ pub(crate) fn order_triage_with_rule_source(
         }),
     );
 
-    for (raw, finding) in lint.findings.iter().zip(&plain_netlint(lint).findings) {
+    // Anything the machine verdict gates on (`JsonFinding::gates`: a lint
+    // warning, any real SI finding) is at least an inspect item. Asking the
+    // same predicate the verdict asks is what keeps this headline from reading
+    // OK TO ORDER over a run whose `--json` verdict is `fail`.
+    let lint_json = crate::result::lint_findings_json(lint);
+    for ((raw, finding), json) in lint
+        .findings
+        .iter()
+        .zip(&plain_netlint(lint).findings)
+        .zip(&lint_json)
+    {
         let entry = TriageEntry::new(
             "lint",
             raw.check.as_str(),
@@ -603,20 +641,24 @@ pub(crate) fn order_triage_with_rule_source(
         );
         if finding.level == PlainLevel::Serious || (decoded && raw.severity != Severity::Low) {
             triage.do_not_order.push(entry);
-        } else if raw.check == LintCheck::UncheckedMcu {
+        } else if raw.check == LintCheck::UncheckedMcu || json.gates() {
             triage.inspect.push(entry);
         }
     }
 
-    for (raw, finding) in si.findings.iter().zip(&plain_si(si).findings) {
+    let si_json = crate::result::si_findings_json(si);
+    let si_real = si_json.iter().filter(|f| f.severity != "info");
+    for ((raw, finding), json) in si.findings_only().zip(&plain_si(si).findings).zip(si_real) {
+        let entry = TriageEntry::new(
+            "si",
+            raw.check.as_str(),
+            finding.what.clone(),
+            finding.loc_mm,
+        );
         if finding.level == PlainLevel::Serious {
-            let what = finding.what.clone();
-            triage.do_not_order.push(TriageEntry::new(
-                "si",
-                raw.check.as_str(),
-                what,
-                finding.loc_mm,
-            ));
+            triage.do_not_order.push(entry);
+        } else if json.gates() {
+            triage.inspect.push(entry);
         }
     }
 
@@ -2076,11 +2118,11 @@ mod tests {
         assert!(triage.inspect[0].statement.contains("PYRO4_FIRE"));
         assert_eq!(triage.checked_ok.len(), 1, "{triage:#?}");
         assert!(triage.checked_ok[0].statement.contains("USB-C CC"));
-        let rendered = triage.render();
+        let rendered = triage.render(&crate::result::RunVerdict::default());
         assert!(rendered.starts_with("== ORDER / DON'T-ORDER TRIAGE =="));
         assert!(rendered.contains("NOT COVERED: 7 parts lack"));
         assert!(!rendered.contains("OK TO ORDER"), "{rendered}");
-        let clean = OrderTriage::default().render();
+        let clean = OrderTriage::default().render(&crate::result::RunVerdict::default());
         assert!(
             clean.contains("\nOK TO ORDER: ") && !clean.contains(":\n"),
             "{clean}"

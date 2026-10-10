@@ -665,7 +665,7 @@ impl WebReport {
             .map_or(&[][..], |b| &b.active_path_unresolved);
         self.verdict_reason =
             VerdictCause::pick(failing, refused, blockers, self.run_level_undermined)
-                .map(VerdictCause::reason);
+                .map(|cause| cause.reason_alongside(blockers));
         // A condition qualifies a pass; a verdict that is not one says why instead.
         if self.verdict_reason.is_some() {
             self.verdict_conditions.clear();

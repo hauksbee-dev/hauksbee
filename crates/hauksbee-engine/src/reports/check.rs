@@ -10,7 +10,7 @@ use hauksbee_models::ModelLibrary;
 use crate::binder::bind_board;
 use crate::result::{
     lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured,
-    JsonReport, VerdictCause,
+    JsonReport, RunVerdict,
 };
 
 use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode, StaticInputs};
@@ -204,14 +204,23 @@ impl CheckReport<'_> {
                 .any(|short| short.severity == "serious")
         };
         let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
+        // The machine document, assembled for EVERY output mode: its verdict is
+        // the single derivation the plain triage headline and the closing
+        // VERDICT line read, so no human surface can say something the `--json`
+        // `verdict` field does not. Everything the verdict reads is attached
+        // here, before it is computed.
+        let mut jr = machine_report(
+            &bound.name,
+            &summary,
+            &drc_structured,
+            &actual_findings,
+            would_gate,
+        )
+        .with_inputs(input.inputs)
+        .with_evidence(&evidence);
+        let run_verdict = jr.run_verdict();
         match mode {
             OutputMode::Json => {
-                let mut jr = JsonReport::new(&bound.name, summary)
-                    .with_bind_verdict_gate()
-                    .with_surface_gate(would_gate)
-                    .with_inputs(input.inputs)
-                    .with_evidence(&evidence);
-                jr.drc = Some(drc_structured.clone());
                 jr.triage = Some(triage);
                 jr.clearance_rule_source = Some(provenance);
                 if unrouted {
@@ -220,14 +229,13 @@ impl CheckReport<'_> {
                 if !blockers.is_empty() {
                     jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
                 }
-                jr.findings = Some(actual_findings.clone());
                 // A green verdict that quietly dropped findings would be worse than
                 // no waivers at all, so the machine surface carries them too.
                 jr.waived = waived.iter().cloned().map(Into::into).collect();
                 println!("{}", jr.to_json());
             }
             OutputMode::Plain => {
-                print!("{}", triage.render());
+                print!("{}", triage.render(&run_verdict));
                 // Bind-role honesty (Marco): the plain persona surface must not hide
                 // that active ICs are unmodelled, otherwise `--check --plain` reads
                 // "healthy" while firmware/analog/AC/thermal on their nets are
@@ -332,15 +340,8 @@ impl CheckReport<'_> {
                 }
             }
         }
-        // Undermined run-level evidence (an input-coverage claim, never a
-        // finding's own badge) must reach the closing human verdict too: ending
-        // on "VERDICT: clean" under an undermined coverage claim is the same
-        // vacuous clean the JSON verdict refuses.
-        let coverage_undermined = crate::result::run_level_undermined(evidence.maps(), |a| {
-            actual_findings.iter().any(|f| f.message == a)
-        });
         if !matches!(mode, OutputMode::Json) {
-            let (serious, worth_a_look, first) =
+            let (serious, worth_a_look) =
                 verdict_counts(&drc_structured, &lint, &si, usbc.as_ref());
             print!(
                 "{}",
@@ -354,14 +355,9 @@ impl CheckReport<'_> {
             println!(
                 "\n{}",
                 verdict_line(
+                    &run_verdict,
                     (serious, worth_a_look),
-                    first
-                        .as_ref()
-                        .map(|(what, fix)| (what.as_str(), fix.as_str())),
-                    &blockers,
-                    coverage_undermined,
                     drc_structured.version_warning.as_deref(),
-                    evidence.conditions(),
                 )
             );
         }
@@ -376,31 +372,48 @@ impl CheckReport<'_> {
         // evidence or unbound verdict-critical parts), not on any undermined map:
         // a finding-backed badge must not exit 3 under --strict while the verdict
         // field says pass.
-        let strict_invalid = coverage_undermined || !blockers.is_empty();
-        if strict && strict_invalid {
+        if strict && run_verdict.verdict == "invalid" {
             super::exit_invalid_for_analysis(&blockers);
         }
         Ok(())
     }
 }
 
+/// The machine document for a `--check` run, minus its inputs and evidence:
+/// everything `JsonReport::verdict` reads about the findings, the bind summary
+/// and this surface's own strict gate. One constructor for the JSON output and
+/// for the verdict the plain triage and the closing line carry.
+fn machine_report(
+    board_name: &str,
+    summary: &BindSummary,
+    drc: &DrcStructured,
+    findings: &[crate::result::JsonFinding],
+    would_gate: bool,
+) -> JsonReport {
+    let mut jr = JsonReport::new(board_name, summary.clone())
+        .with_bind_verdict_gate()
+        .with_surface_gate(would_gate);
+    jr.drc = Some(drc.clone());
+    jr.findings = Some(findings.to_vec());
+    jr
+}
+
 /// Serious / worth-a-look counts across the whole `--check` suite, classified
 /// with the SAME plain-language templates the web and `--plain` surfaces use,
-/// so the closing verdict can never disagree with the section renderings. Also
-/// the first serious finding's words and fix, for the verdict's reason sentence.
+/// so the counts on the closing line match the section renderings. They are
+/// counts only: whether the run passed is decided by the shared machine verdict.
 fn verdict_counts(
     drc_structured: &DrcStructured,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
     usbc: Option<&crate::checks::usb_c::UsbcReport>,
-) -> (usize, usize, Option<(String, String)>) {
+) -> (usize, usize) {
     use crate::plain::PlainLevel;
     let drc_plain = crate::plain::plain_drc_structured(drc_structured);
     let lint_plain = crate::plain_netlint(lint);
     let si_plain = crate::plain_si(si);
     let mut serious = 0usize;
     let mut worth_a_look = 0usize;
-    let mut first = None;
     for f in drc_plain
         .findings
         .iter()
@@ -408,10 +421,7 @@ fn verdict_counts(
         .chain(&si_plain.findings)
     {
         match f.level {
-            PlainLevel::Serious => {
-                serious += 1;
-                first.get_or_insert_with(|| (f.what.clone(), f.fix.clone()));
-            }
+            PlainLevel::Serious => serious += 1,
             _ => worth_a_look += 1,
         }
     }
@@ -430,70 +440,60 @@ fn verdict_counts(
     if usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious) {
         serious += 1;
     }
-    (serious, worth_a_look, first)
+    (serious, worth_a_look)
 }
 
 /// The single closing verdict line for `--check` (U4).
 ///
-/// "clean" is only claimable when nothing serious was found AND no
-/// current-carrying / active part is unmodelled: over unmodelled critical
-/// parts a zero-serious suite is INCONCLUSIVE. Either way the line ends on the
-/// shared [`VerdictCause::reason`] sentence, the same one `--json`, the CI
-/// renderers and the web report carry.
+/// Its tag comes from the shared [`RunVerdict`] (the one `--json` prints), never
+/// from the counts on the line: "clean" is only claimable when the machine
+/// verdict is a pass, `failing` when it is `fail` (a serious finding OR a
+/// finding this surface's strict gate fails on) and `inconclusive` when it could
+/// not be judged. Either way the line ends on the shared
+/// [`crate::result::VerdictCause::reason`] sentence, the same one `--json`, the CI renderers and
+/// the web report carry, including its note that key parts were not modelled.
 fn verdict_line(
+    verdict: &RunVerdict,
     (serious, worth_a_look): (usize, usize),
-    first: Option<(&str, &str)>,
-    blockers: &[String],
-    coverage_undermined: bool,
     copper_unvalidated: Option<&str>,
-    conditions: &[String],
 ) -> String {
-    let failing = (serious > 0).then_some(VerdictCause::Failing {
-        count: serious,
-        first,
-    });
-    let cause = VerdictCause::pick(failing, None, blockers, coverage_undermined);
-    if let Some(reason) = copper_unvalidated {
-        // The copper caveat leads; a blocking cause still gets its sentence, so
-        // this line never hides the reason `--json` gives.
-        let also = cause.map_or_else(String::new, |c| format!(" Also: {}", c.reason()));
-        return if serious == 0 {
-            format!(
+    let Some(reason) = verdict.reason.as_deref() else {
+        let conditions = verdict.conditions.join(" ");
+        if let Some(copper) = copper_unvalidated {
+            let on = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!(" Conditions: {conditions}")
+            };
+            return format!(
                 "VERDICT: copper UNVALIDATED: {worth_a_look} potential issue(s); unmatched \
-                 copper findings remain tool-only and none counted as serious. Reason: {reason}{also}"
-            )
+                 copper findings remain tool-only and none counted as serious. Reason: {copper}{on}"
+            );
+        }
+        // A pass that rests on an assumption says so on the line itself.
+        return if conditions.is_empty() {
+            format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
         } else {
             format!(
-                "VERDICT: failing: {serious} serious issue(s); pair-specific oracle-confirmed \
-                 shorts count as serious, while unmatched copper findings remain UNVALIDATED \
-                 among {worth_a_look} worth-a-look issue(s). Reason: {reason}{also}"
+                "VERDICT: clean, conditionally: 0 serious, {worth_a_look} worth a look; {conditions}"
             )
         };
-    }
-    cause.map_or_else(
-        || {
-            // A pass that rests on an assumption says so on the line itself.
-            if conditions.is_empty() {
-                format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
-            } else {
-                format!(
-                    "VERDICT: clean, conditionally: 0 serious, {worth_a_look} worth a look; {}",
-                    conditions.join(" ")
-                )
-            }
-        },
-        |cause| {
-            let tag = if cause.is_invalid() {
-                "inconclusive"
-            } else {
-                "failing"
-            };
-            format!(
-                "VERDICT: {tag}: {serious} serious, {worth_a_look} worth a look; {}",
-                cause.reason()
-            )
-        },
-    )
+    };
+    let tag = if verdict.verdict == "invalid" {
+        "inconclusive"
+    } else {
+        "failing"
+    };
+    // The copper caveat is added to the verdict, never in place of it, so this
+    // line never hides the reason `--json` gives.
+    let copper = copper_unvalidated.map_or_else(String::new, |copper| {
+        format!(
+            " Copper from this board format is UNVALIDATED: unmatched copper findings remain \
+             tool-only and none counted as serious unless KiCad's own DRC confirms the exact net \
+             pair. Reason: {copper}"
+        )
+    });
+    format!("VERDICT: {tag}: {serious} serious, {worth_a_look} worth a look; {reason}{copper}")
 }
 
 /// Every gating subject across the aggregate suite, in report order
@@ -953,6 +953,272 @@ pub(crate) fn emit_combined_json_with_schematic(
 #[cfg(test)]
 mod tests {
     use super::render_waivers;
+    use crate::result::{lint_findings_json, si_findings_json, BindSummary, DrcStructured};
+    use hauksbee_bind::bind_report::UnresolvedActive;
+    use hauksbee_extract::{
+        DrcReport, LintCheck, LintFinding, NetLintReport, Severity, SiCheck, SiFinding, SiReport,
+        SiSeverity,
+    };
+
+    fn lint(check: LintCheck, severity: Severity, message: &str) -> LintFinding {
+        LintFinding {
+            check,
+            severity,
+            message: message.to_string(),
+            refs: vec!["U4".to_string()],
+            nets: Vec::new(),
+        }
+    }
+
+    fn unmodelled(refs: &[&str]) -> Vec<UnresolvedActive> {
+        refs.iter()
+            .map(|r| UnresolvedActive {
+                reference: (*r).to_string(),
+                value: "IC".to_string(),
+                reason: "no model; left open".to_string(),
+                unlocked_by: None,
+                consequence: "its nets are not driven".to_string(),
+                active_ic: true,
+            })
+            .collect()
+    }
+
+    fn bind(active: Vec<UnresolvedActive>) -> BindSummary {
+        BindSummary {
+            resolved: 1,
+            unresolved: active.len(),
+            non_ignored: 1,
+            critical_parts_bound: "1/1".to_string(),
+            critical_parts_bound_n: 1,
+            critical_parts_total: 1,
+            mcu_bound: false,
+            active_path_unresolved: active,
+            resolved_but_open_active: Vec::new(),
+        }
+    }
+
+    /// Everything one `--check` run says about its outcome, assembled with the
+    /// production functions `emit` calls, so the three can be compared.
+    struct Surfaces {
+        json_verdict: String,
+        json_reason: Option<String>,
+        triage: String,
+        line: String,
+    }
+
+    fn surfaces(
+        lint: &NetLintReport,
+        si: &SiReport,
+        unmodelled_parts: &[&str],
+        conditions: &[&str],
+        copper_unvalidated: Option<&str>,
+    ) -> Surfaces {
+        let drc = DrcStructured::from_report(&DrcReport {
+            clearance_mm: 0.2,
+            findings: Vec::new(),
+            primitive_count: 2,
+            version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
+            excluded: Vec::new(),
+        });
+        let provenance = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let summary = bind(unmodelled(unmodelled_parts));
+        let mut findings = lint_findings_json(lint);
+        findings.extend(si_findings_json(si));
+        let would_gate = super::super::lint_fails(lint) || super::super::si_fails(si);
+        let mut jr = super::machine_report("synthetic", &summary, &drc, &findings, would_gate);
+        jr.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
+        let run_verdict = jr.run_verdict();
+        let triage = crate::plain::order_triage_with_rule_source(
+            &drc,
+            &provenance,
+            lint,
+            si,
+            None,
+            true,
+            summary.unresolved,
+            true,
+        );
+        let (serious, worth) = super::verdict_counts(&drc, lint, si, None);
+        let json: serde_json::Value = serde_json::from_str(&jr.to_json()).unwrap();
+        Surfaces {
+            json_verdict: json["verdict"].as_str().unwrap().to_string(),
+            json_reason: json["verdict_reason"].as_str().map(str::to_string),
+            triage: triage.render(&run_verdict),
+            line: super::verdict_line(&run_verdict, (serious, worth), copper_unvalidated),
+        }
+    }
+
+    /// One row of the agreement table.
+    struct Row {
+        name: &'static str,
+        lint: Vec<LintFinding>,
+        si: Vec<SiFinding>,
+        unmodelled: &'static [&'static str],
+        conditions: &'static [&'static str],
+        copper_unvalidated: Option<&'static str>,
+        verdict: &'static str,
+        headline: &'static str,
+        line: &'static str,
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one table of rows")]
+    fn agreement_rows() -> Vec<Row> {
+        const FAILED: &str = "NOT OK TO ORDER YET: this run failed. ";
+        const COPPER: Option<&str> = Some("board newer than the validated KiCad format");
+        let warning = || {
+            lint(
+                LintCheck::PcbSchematicMismatch,
+                Severity::Medium,
+                "U4 has value 100n in the schematic but 10n on the PCB",
+            )
+        };
+        let serious = || lint(LintCheck::OutputContention, Severity::High, "two drivers");
+        let row = |name, verdict, headline, line| Row {
+            name,
+            lint: Vec::new(),
+            si: Vec::new(),
+            unmodelled: &[],
+            conditions: &[],
+            copper_unvalidated: None,
+            verdict,
+            headline,
+            line,
+        };
+        vec![
+            row("clean", "pass", "OK TO ORDER: ", "VERDICT: clean: "),
+            Row {
+                conditions: &["Q1 is judged at its assumed corners."],
+                ..row(
+                    "conditional pass",
+                    "pass",
+                    "OK TO ORDER, conditionally: ",
+                    "VERDICT: clean, conditionally: ",
+                )
+            },
+            Row {
+                lint: vec![warning()],
+                ..row("gating warning", "fail", FAILED, "VERDICT: failing: ")
+            },
+            Row {
+                si: vec![SiFinding {
+                    check: SiCheck::I2cRiseTime,
+                    severity: SiSeverity::Medium,
+                    message: "SDA rise time 1.4 us".to_string(),
+                    refs: vec!["R5".to_string()],
+                    nets: vec!["SDA".to_string()],
+                }],
+                ..row("gating SI finding", "fail", FAILED, "VERDICT: failing: ")
+            },
+            Row {
+                lint: vec![serious()],
+                ..row("serious", "fail", "DO NOT ORDER:", "VERDICT: failing: ")
+            },
+            Row {
+                unmodelled: &["U1", "U2"],
+                ..row(
+                    "unmodelled key parts",
+                    "invalid",
+                    "NOT CONCLUSIVE: ",
+                    "VERDICT: inconclusive: ",
+                )
+            },
+            Row {
+                lint: vec![warning()],
+                unmodelled: &["U1", "U2", "U3"],
+                ..row(
+                    "gating warning plus unmodelled key parts",
+                    "fail",
+                    FAILED,
+                    "VERDICT: failing: ",
+                )
+            },
+            Row {
+                lint: vec![serious()],
+                unmodelled: &["U1"],
+                ..row(
+                    "serious plus unmodelled key parts",
+                    "fail",
+                    "DO NOT ORDER:",
+                    "VERDICT: failing: ",
+                )
+            },
+            Row {
+                lint: vec![warning()],
+                copper_unvalidated: COPPER,
+                ..row(
+                    "gating warning on an unvalidated copper format",
+                    "fail",
+                    FAILED,
+                    "VERDICT: failing: ",
+                )
+            },
+            Row {
+                copper_unvalidated: COPPER,
+                ..row(
+                    "unvalidated copper format, nothing else",
+                    "pass",
+                    "OK TO ORDER: ",
+                    "VERDICT: copper UNVALIDATED: ",
+                )
+            },
+        ]
+    }
+
+    #[test]
+    fn json_verdict_triage_headline_and_verdict_line_agree() {
+        for row in agreement_rows() {
+            let got = surfaces(
+                &NetLintReport { findings: row.lint },
+                &SiReport { findings: row.si },
+                row.unmodelled,
+                row.conditions,
+                row.copper_unvalidated,
+            );
+            let name = row.name;
+            assert_eq!(got.json_verdict, row.verdict, "{name}: JSON verdict");
+            assert!(
+                got.triage.contains(&format!("\n{}", row.headline)),
+                "{name}: triage headline `{}` missing from\n{}",
+                row.headline,
+                got.triage
+            );
+            assert!(
+                got.line.starts_with(row.line),
+                "{name}: VERDICT line `{}` should start `{}`",
+                got.line,
+                row.line
+            );
+            if row.verdict == "pass" {
+                assert!(got.json_reason.is_none(), "{name}");
+                continue;
+            }
+            // Whatever the wording, a run that is not a pass never reads as one.
+            assert!(
+                !got.triage.contains("\nOK TO ORDER") && !got.line.contains("VERDICT: clean"),
+                "{name}: a {} run read as clean:\n{}\n{}",
+                row.verdict,
+                got.triage,
+                got.line
+            );
+            // The reason JSON gives is the reason the closing line gives.
+            let reason = got.json_reason.as_deref().expect("a non-pass states why");
+            assert!(got.line.contains(reason), "{name}: {}\n{reason}", got.line);
+            // A failure over unmodelled key parts keeps the fail and says the
+            // rest of the board is not vouched for, in JSON and in the line.
+            if row.verdict == "fail" && !row.unmodelled.is_empty() {
+                let list = row.unmodelled.join(", ");
+                for text in [reason, got.line.as_str()] {
+                    assert!(
+                        text.contains("no usable model")
+                            && text.contains(&list)
+                            && text.contains("the rest of the board is not vouched for"),
+                        "{name}: unmodelled parts hidden in:\n{text}"
+                    );
+                }
+            }
+        }
+    }
 
     /// E48: the full `--check` suite evaluates drc/lint/si waivers only, so
     /// its waiver section must not name a `ci` waiver stale: hauksbee-ci owns
