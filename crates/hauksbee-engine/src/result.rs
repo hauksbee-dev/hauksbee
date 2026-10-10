@@ -2313,6 +2313,13 @@ pub struct JsonReport {
     /// prints them. A pipeline can watch this array grow.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waived: Vec<JsonWaived>,
+    /// The assumptions a `pass` rests on beyond the checks, one sentence each:
+    /// each part the board names only by class, whose assumed corners the run
+    /// swept ("Q1 passes across assumed corners (...); put the MPN on Q1 to
+    /// remove this assumption."). A pass with any is conditional on them,
+    /// never unconditional. Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verdict_conditions: Vec<String>,
 }
 
 /// Machine-readable input inventory for BOM/placement-aware runs.
@@ -2439,6 +2446,7 @@ impl JsonReport {
             notes: Vec::new(),
             cosim: None,
             waived: Vec::new(),
+            verdict_conditions: Vec::new(),
         }
     }
 
@@ -2492,6 +2500,7 @@ impl JsonReport {
         self.inventory = evidence.inventory().to_vec();
         self.assumptions = evidence.assumptions().to_vec();
         self.evidence = evidence.maps().to_vec();
+        self.verdict_conditions = evidence.conditions().to_vec();
         self
     }
 
@@ -2888,6 +2897,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         }
         LintCheck::FloatingGate => {
             "Add a pull-up or pull-down resistor (about 100 kilohms) on the gate or select, to the level that is safe at power-up."
+        }
+        LintCheck::GateUnderdrive => {
+            "Put the transistor's part number on it so its real threshold is checked, or drive the gate past the class's maximum threshold (a level shifter or a logic-level part)."
         }
         LintCheck::I2cBusLoading => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."

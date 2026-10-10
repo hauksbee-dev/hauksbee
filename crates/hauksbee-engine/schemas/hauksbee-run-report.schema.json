@@ -2989,6 +2989,13 @@
       ],
       "type": "string"
     },
+    "verdict_conditions": {
+      "description": "The assumptions a `pass` rests on beyond the checks, one sentence each:\neach part the board names only by class, whose assumed corners the run\nswept (\"Q1 passes across assumed corners (...); put the MPN on Q1 to\nremove this assumption.\"). A pass with any is conditional on them,\nnever unconditional. Additive; omitted when empty.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "verdict_reason": {
       "description": "Present when verdict is not pass: the main reason and the next action, in one plain sentence.",
       "type": "string"

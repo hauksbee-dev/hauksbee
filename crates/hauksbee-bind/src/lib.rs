@@ -43,6 +43,7 @@ pub mod schematic_ties;
 pub mod shorts;
 pub mod stress;
 pub mod thermal;
+pub mod variant_sweep;
 pub mod waiver;
 
 /// Distinct process exit code for "the board is invalid for the analysis you

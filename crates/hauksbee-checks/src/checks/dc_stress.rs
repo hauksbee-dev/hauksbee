@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use hauksbee_bind::binder::{bind_board, BoundBoard};
 use hauksbee_bind::stress::{
-    bjt_currents, strip_unit_suffix, FaultEvent, FaultKind, RegulatorHeat, StressMonitor,
+    bjt_currents, strip_unit_suffix, FaultEvent, FaultKind, GateDrive, RegulatorHeat, StressMonitor,
 };
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_ir::{DeviceId, NodeId};
@@ -62,6 +62,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     // part -> (state labels, clauses); one finding per physical part.
     let mut by_part: BTreeMap<String, PartFaults> = BTreeMap::new();
     let mut unsolved = Vec::new();
+    let mut under: BTreeMap<String, (GateDrive, Vec<String>)> = BTreeMap::new();
     for (label, registers_high) in STATES {
         // The states run in order on the one bound board: the second starts
         // from the first's settled circuit and re-settles after its change.
@@ -73,7 +74,16 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             unsolved.push(label);
             continue;
         };
-        for (part, clauses, nets) in judge(state, &x) {
+        let (overstressed, under_driven) = judge(state, &x);
+        for (drive, nets) in under_driven {
+            let worst = under
+                .entry(drive.reference.clone())
+                .or_insert_with(|| (drive.clone(), nets));
+            if drive.vgs < worst.0.vgs {
+                worst.0 = drive;
+            }
+        }
+        for (part, clauses, nets) in overstressed {
             let entry = by_part.entry(part).or_default();
             entry.0.push(label);
             if entry.1.is_empty() {
@@ -99,6 +109,9 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             }
         })
         .collect();
+    findings.extend(
+        (under.into_values()).filter_map(|(drive, nets)| gate_underdrive(&bound, &drive, nets)),
+    );
     if !unsolved.is_empty() {
         findings.push(LintFinding {
             check: LintCheck::DcOverstress,
@@ -183,12 +196,79 @@ fn settle(bound: &mut BoundBoard) -> Option<(Workspace, Vec<f64>)> {
     Some((ws, x))
 }
 
+/// The finding for a class-only MOSFET (bound to an assumed corner set) that
+/// conducts with its gate below the class's maximum threshold: the corner
+/// bound here turns on, a part nearer another corner is not guaranteed to.
+/// Limited to corner sets on purpose: a named part's card is its own, and one
+/// biased near threshold (a linear stage) is the designer's choice, already
+/// disclosed as a gate-drive caveat on the co-sim run.
+fn gate_underdrive(
+    bound: &BoundBoard,
+    drive: &GateDrive,
+    nets: Vec<String>,
+) -> Option<LintFinding> {
+    let th = drive.th.filter(|_| drive.below_threshold())?;
+    let reference = strip_unit_suffix(&drive.reference);
+    let report = &bound.report;
+    let corners = (report.selections.iter())
+        .find(|(&i, s)| s.corners && report.rows.get(i).is_some_and(|r| r.reference == reference))
+        .map(|(_, s)| s)?;
+    let at = corners.bound()?;
+    let others: Vec<&str> = (corners.members.iter())
+        .map(|m| m.id.as_str())
+        .filter(|id| *id != at)
+        .collect();
+    let (vgs, spec) = (drive.vgs, drive.spec);
+    Some(LintFinding {
+        check: LintCheck::GateUnderdrive,
+        severity: Severity::High,
+        message: format!(
+            "{reference} has no part number, so it is bounded by assumed corners; at the corner \
+             {at} it conducts with |VGS| = {vgs:.2} V, below the {th:.2} V maximum VGS(th) of \
+             its class, so a part nearer {} is not guaranteed to turn on: put the MPN on \
+             {reference} to remove this assumption, or drive its gate to at least {spec:.2} V",
+            others.join(" or ")
+        ),
+        refs: vec![reference.to_string()],
+        nets,
+    })
+}
+
+/// What one settled state shows: the parts held past a rating there.
+type Judged = (
+    Vec<(String, Vec<String>, Vec<String>)>,
+    Vec<(GateDrive, Vec<String>)>,
+);
+
+/// Each part the monitor saw conducting under-driven, with its gate net.
+fn under_driven_gates(
+    bound: &BoundBoard,
+    monitor: &StressMonitor,
+) -> Vec<(GateDrive, Vec<String>)> {
+    let gate_net = |reference: &str| {
+        let meta = bound
+            .device_meta
+            .iter()
+            .find(|m| m.reference == reference)?;
+        match bound.circuit.devices.get(meta.device.0 as usize) {
+            Some(hauksbee_ir::Device::Mosfet { g, .. }) => (bound.net_nodes.iter())
+                .find(|(_, node)| *node == g)
+                .map(|(name, _)| name.clone()),
+            _ => None,
+        }
+    };
+    (monitor.under_driven().into_iter())
+        .map(|d| {
+            let nets = gate_net(&d.reference).into_iter().collect();
+            (d, nets)
+        })
+        .collect()
+}
+
 /// Run the stress monitor over one settled state: `(part, clauses, nets)` for
-/// every part that trips a rating.
-fn judge(
-    bound: &mut BoundBoard,
-    solved: &(Workspace, Vec<f64>),
-) -> Vec<(String, Vec<String>, Vec<String>)> {
+/// every part that trips a rating, and every MOSFET conducting under-driven
+/// with its gate net.
+fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
     let (ws, x) = solved;
     let layout = &ws.layout;
     let node_v = |n: NodeId| -> f64 {
@@ -218,6 +298,7 @@ fn judge(
         monitor.watch_regulator_heat(source, heat);
     }
     let faults = monitor.evaluate_steady(&mut bound.circuit, &node_v, &branch);
+    let under = under_driven_gates(bound, &monitor);
 
     let device_of: HashMap<&str, DeviceId> = (bound.device_meta.iter())
         .map(|m| (m.reference.as_str(), m.device))
@@ -240,7 +321,7 @@ fn judge(
         let (ic, ib) = bjt_currents(&bound.circuit, id, &node_v)?;
         Some((id, ic, ib))
     };
-    by_part
+    let overstressed = by_part
         .into_iter()
         .map(|(part, events)| {
             let mut worst: BTreeMap<u8, (&FaultEvent, f64, f64)> = BTreeMap::new();
@@ -284,7 +365,8 @@ fn judge(
                 .collect();
             (part, clauses, nets)
         })
-        .collect()
+        .collect();
+    (overstressed, under)
 }
 
 /// The rating a fault is judged against, coarsely: continuous and surge

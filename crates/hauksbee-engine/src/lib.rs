@@ -78,7 +78,7 @@ pub fn version_string() -> &'static str {
 pub use hauksbee_bind::{
     asbuilt, behavioral, bind_report, binder, board_input, component_evidence, digital, drivers,
     firmware_input, logic, occurrence, power_supply, rail_owner, schematic_ties, shorts, stress,
-    thermal, waiver,
+    thermal, variant_sweep, waiver,
 };
 pub use hauksbee_checks::{checks, dcpath, decoupling};
 pub use hauksbee_cosim::{engine, error_budget, execution, peripherals, responders, scheduler};

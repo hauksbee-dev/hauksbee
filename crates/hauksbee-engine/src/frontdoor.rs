@@ -638,6 +638,12 @@ pub struct WebReport {
     /// the CI report carry. Absent when nothing blocks the verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict_reason: Option<String>,
+    /// The assumptions a pass rests on beyond the checks (each class-only
+    /// part whose assumed corners were swept), one sentence each: the same
+    /// [`crate::evidence::BoardEvidence::conditions`] `--json` carries. A
+    /// pass with any is conditional on them. Absent when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verdict_conditions: Vec<String>,
 }
 
 impl WebReport {
@@ -1177,7 +1183,8 @@ fn analyze_normalized_with_context(
     // `engine_lint` chokepoint (connectivity + strap lint + MCU resource conflicts
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
-    let mut lint = crate::checks::engine_lint(board, lib);
+    // Swept across the assumed corners of class-only parts, as `--check` is.
+    let (mut lint, corner_plan) = crate::checks::engine_lint_swept(board, lib);
     lint.findings
         .extend(crate::checks::layout_lint(board, text_view, None).findings);
     let mut lint_plain = plain_netlint(&lint);
@@ -1271,6 +1278,7 @@ fn analyze_normalized_with_context(
         file_name,
         norm,
         bound,
+        corner_plan.as_ref(),
         schematic_ties,
         qualification,
         supporting_artifacts,
@@ -1334,6 +1342,11 @@ fn analyze_normalized_with_context(
     // run-level claim overrides the headline whenever nothing serious does.
     if serious == 0 && run_level_undermined {
         headline = "Evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.".to_string();
+    } else if serious == 0 && !evidence.conditions().is_empty() {
+        headline = format!(
+            "No blocking findings, on a condition: {}",
+            evidence.conditions().join(" ")
+        );
     } else if total == 0 && evidence.has_caveats() {
         headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();
     }
@@ -1399,6 +1412,7 @@ fn analyze_normalized_with_context(
             .collect(),
         component_assertions: component_assertion_capabilities(board, bound),
         supplies,
+        verdict_conditions: evidence.conditions().to_vec(),
         ..WebReport::default()
     };
     report.explain_verdict();
@@ -1410,6 +1424,7 @@ fn web_board_evidence(
     file_name: &str,
     norm: &crate::board_input::NormalizedBoard,
     bound: &BoundBoard,
+    corner_plan: Option<&crate::variant_sweep::CornerPlan>,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
     qualification: Option<&hauksbee_extract::DrcTieQualification>,
     supporting_artifacts: &[hauksbee_ir::evidence::ArtifactProvenance],
@@ -1418,9 +1433,14 @@ fn web_board_evidence(
     // that never ran is visible on the human report, not only in CI.
     let mut notes = norm.notes.clone();
     notes.extend(bound.power_coverage_gaps());
+    // The lint swept the corner sets: say so, not that one corner stood in.
+    let mut report = std::borrow::Cow::Borrowed(&bound.report);
+    if let Some(plan) = corner_plan {
+        plan.mark(report.to_mut());
+    }
     let evidence = crate::evidence::BoardEvidence::from_bound(
         &norm.board,
-        &bound.report,
+        &report,
         &notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )

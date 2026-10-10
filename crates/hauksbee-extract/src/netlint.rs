@@ -217,6 +217,11 @@ pub enum LintCheck {
     /// in reset or the cable is out. Produced by the engine-layer `node_drive`
     /// check.
     FloatingGate,
+    /// A MOSFET the board names only by class (no part number) that conducts,
+    /// at one of its assumed corners, with its gate driven below the class's
+    /// maximum threshold: whether it switches depends on which part is fitted.
+    /// Produced by the engine-layer `dc_stress` check.
+    GateUnderdrive,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -241,7 +246,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -271,6 +276,7 @@ impl LintCheck {
         Self::UnlimitedBaseDrive,
         Self::CapNoDcPath,
         Self::FloatingGate,
+        Self::GateUnderdrive,
     ];
 
     #[must_use]
@@ -305,6 +311,7 @@ impl LintCheck {
             Self::UnlimitedBaseDrive => "unlimited_base_drive",
             Self::CapNoDcPath => "cap_no_dc_path",
             Self::FloatingGate => "floating_gate",
+            Self::GateUnderdrive => "gate_underdrive",
         }
     }
 }

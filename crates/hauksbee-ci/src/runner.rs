@@ -23,7 +23,7 @@ use hauksbee_ir::evidence::{
 };
 use hauksbee_ir::{Device, NodeId, PwlPoint, SourceKind};
 use hauksbee_models::derating::MOUNTING_PROPERTY;
-use hauksbee_models::variants::{SELECT_PROPERTY, SWEEP_PROPERTY};
+use hauksbee_models::variants::SELECT_PROPERTY;
 use hauksbee_models::ModelLibrary;
 
 use crate::error::SpecError;
@@ -1400,10 +1400,8 @@ fn apply_plan(board: &mut ExtractedBoard, plan: &SeedPlan) {
         if let Some(sv) = plan.values.iter().find(|sv| sv.reference == reference) {
             comp.value = format!("{:?}", sv.si);
         }
-        let ids = plan.variants.iter().filter(|(r, _)| r == reference);
-        comp.properties
-            .extend(ids.map(|(_, id)| (SWEEP_PROPERTY.into(), id.clone())));
     }
+    hauksbee_engine::variant_sweep::pin(board, &plan.variants);
 }
 
 /// Cross the plans with each fitted part's undetermined same-pinout variant set
@@ -1414,16 +1412,9 @@ fn sweep_variants(
     lib: &ModelLibrary,
     plans: Vec<SeedPlan>,
 ) -> Vec<SeedPlan> {
-    use hauksbee_extract::assembly::AssemblyState;
     let board = apply_overrides(spec, base);
-    let open = |comp: &hauksbee_extract::Component| {
-        let part = AssemblyState::of(comp).fitted()?;
-        let s = hauksbee_engine::binder::resolve(lib, part).selection?;
-        let ids = s.survivors().map(|m| m.id.clone()).collect();
-        let open = s.determined.is_none() && s.same_pinout;
-        open.then(|| (comp.reference.clone(), ids))
-    };
-    let axes: Vec<(String, Vec<String>)> = board.components.iter().filter_map(open).collect();
+    let open = hauksbee_engine::variant_sweep::open_sets(&board, lib);
+    let axes: Vec<(String, Vec<String>)> = open.into_iter().map(|s| (s.reference, s.ids)).collect();
     crate::tolerance::with_variants(plans.clone(), &axes).unwrap_or(plans)
 }
 

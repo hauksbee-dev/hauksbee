@@ -108,6 +108,8 @@ mod extract_consent;
 mod failed_chunk_reason;
 #[path = "faults.rs"]
 mod faults;
+#[path = "generic_mosfet_corner_check.rs"]
+mod generic_mosfet_corner_check;
 #[path = "gerber_determinism.rs"]
 mod gerber_determinism;
 #[path = "hardware_history.rs"]

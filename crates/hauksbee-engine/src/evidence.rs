@@ -122,6 +122,9 @@ pub struct BoardEvidence {
     /// Each net to the nets a two-terminal part feeds from it that carry
     /// another part's `power_in` pin: a filtered supply (an RC-fed VIN).
     supply_taps: BTreeMap<String, BTreeSet<String>>,
+    /// What a pass on this board rests on beyond the checks themselves: each
+    /// class-only part whose assumed corners were swept, in words.
+    conditions: Vec<String>,
 }
 
 fn provenance_display_reference(reference: &str) -> String {
@@ -342,16 +345,37 @@ impl BoardEvidence {
     ) -> Result<Self, EvidenceError> {
         let (component_subjects, row_subjects) = component_occurrence_subjects(board, report);
         let mut assumptions = Vec::new();
+        let mut conditions = Vec::new();
         assumptions.extend(open_part_assumptions(report, &row_subjects));
         // A variant set the board could not narrow bound a same-pinout stand-in.
         for (&index, s) in &report.selections {
             let (row, subject) = (&report.rows[index], &row_subjects[index]);
             if let (None, Some(bound)) = (&s.determined, &row.model_id) {
                 let (ids, rows) = (s.ids(), s.widened.join(", "));
-                let a = if s.corners {
-                    Assumption::undetermined_corner(subject, &row.reference, bound, &ids)
-                } else {
-                    Assumption::undetermined_variant(subject, &row.reference, bound, &ids, &rows)
+                let a = match s.swept {
+                    Some(coverage) if s.corners => {
+                        let joint = coverage == hauksbee_models::variants::CornerCoverage::Joint;
+                        let how = if joint {
+                            ", swept jointly with the other class-only parts"
+                        } else {
+                            ""
+                        };
+                        let r = &row.reference;
+                        conditions.push(format!(
+                            "{r} passes across assumed corners ({ids}){how}; put the MPN on {r} to remove this assumption."
+                        ));
+                        Assumption::swept_corner(subject, r, &ids, joint)
+                    }
+                    _ if s.corners => {
+                        Assumption::undetermined_corner(subject, &row.reference, bound, &ids)
+                    }
+                    _ => Assumption::undetermined_variant(
+                        subject,
+                        &row.reference,
+                        bound,
+                        &ids,
+                        &rows,
+                    ),
                 };
                 assumptions.push(a);
             }
@@ -637,7 +661,15 @@ impl BoardEvidence {
             reader_cross_checks,
             supply_groups: report.supply_groups.clone(),
             supply_taps: supply_taps(board, &net_names),
+            conditions,
         })
+    }
+
+    /// The assumptions a pass on this board is conditional on, one sentence
+    /// each: empty when a pass is unconditional.
+    #[must_use]
+    pub fn conditions(&self) -> &[String] {
+        &self.conditions
     }
 
     /// Attach the exact board bytes the reader consumed. The SHA belongs to the

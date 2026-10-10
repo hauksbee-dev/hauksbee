@@ -85,8 +85,14 @@ impl CheckReport<'_> {
             } => (mode, verbose, oracle, quiet),
             CheckDisplay::CombinedJson => (OutputMode::Json, false, false, false),
         };
-        let bound = bind_board(board, lib);
+        let mut bound = bind_board(board, lib);
         let summary = BindSummary::from_report(&bound.report);
+        // The lint judges the board at every assumed corner of a class-only
+        // part; the evidence then says the result holds across them.
+        let (mut lint, corner_plan) = crate::checks::engine_lint_swept(board, lib);
+        if let Some(plan) = &corner_plan {
+            plan.mark(&mut bound.report);
+        }
         let evidence = input.evidence(&bound.report)?;
         let (clearance_input, mut drc) = input.drc()?;
         let evidence = evidence.with_custom_rules_coverage(
@@ -101,7 +107,6 @@ impl CheckReport<'_> {
         let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
         let evidence =
             super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
-        let mut lint = crate::checks::engine_lint(board, lib);
         lint.findings
             .extend(crate::checks::layout_lint(board, input.geo_text(), Some(board_path)).findings);
         // Route through the single SI chokepoint so this aggregate surface carries
@@ -351,6 +356,7 @@ impl CheckReport<'_> {
                     &blockers,
                     coverage_undermined,
                     drc_structured.version_warning.as_deref(),
+                    evidence.conditions(),
                 )
             );
         }
@@ -435,6 +441,7 @@ fn verdict_line(
     blockers: &[String],
     coverage_undermined: bool,
     copper_unvalidated: Option<&str>,
+    conditions: &[String],
 ) -> String {
     let failing = (serious > 0).then_some(VerdictCause::Failing {
         count: serious,
@@ -459,7 +466,17 @@ fn verdict_line(
         };
     }
     cause.map_or_else(
-        || format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look"),
+        || {
+            // A pass that rests on an assumption says so on the line itself.
+            if conditions.is_empty() {
+                format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
+            } else {
+                format!(
+                    "VERDICT: clean, conditionally: 0 serious, {worth_a_look} worth a look; {}",
+                    conditions.join(" ")
+                )
+            }
+        },
         |cause| {
             let tag = if cause.is_invalid() {
                 "inconclusive"

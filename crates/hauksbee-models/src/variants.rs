@@ -93,6 +93,21 @@ pub struct Selection {
     /// Every member is an assumed corner ([`VariantSpec::corner`]): the board
     /// names a class, not a part, so only a sweep across them can claim anything.
     pub corners: bool,
+    /// How a static run covered this corner set, once it judged the board at
+    /// every corner ([`CornerCoverage`]); `None` when only the stand-in ran.
+    pub swept: Option<CornerCoverage>,
+}
+
+/// How a static run swept a board's assumed-corner sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CornerCoverage {
+    /// Every combination of every set's corners was judged.
+    Exhaustive,
+    /// Too many sets to cross: corner k of every set was judged together (all
+    /// weak, all strong), so a fault needing one part weak and another strong
+    /// at once is not covered.
+    Joint,
 }
 
 impl Selection {
@@ -228,6 +243,7 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         same_pinout,
         widened: Vec::new(),
         corners: !siblings.is_empty() && siblings.iter().all(|e| is_corner(e)),
+        swept: None,
     }
 }
 

@@ -88,6 +88,7 @@ pub mod straps;
 pub(crate) mod test_support;
 pub mod usb_c;
 
+use hauksbee_bind::variant_sweep::CornerPlan;
 use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
@@ -139,6 +140,55 @@ pub(crate) fn resolved_components<'a>(
 /// those faults.
 #[must_use]
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    engine_lint_swept(board, lib).0
+}
+
+/// [`engine_lint`] judged at every assumed corner of the board's class-only
+/// parts (a generic MOSFET symbol with no part number binds a corner set).
+///
+/// The unpinned run judges each set at its stand-in; each further run of the
+/// [`CornerPlan`] pins the corners and adds the findings the stand-in run did
+/// not raise, naming the corners that raised them. So the result passes only
+/// if every corner does. Returns the plan, which the caller marks on its bind
+/// report so the evidence says the result holds across the corners, not at one.
+/// The sweep is bounded by the plan (exhaustive for a few sets, else joint),
+/// so its cost is a small constant number of extra lint passes.
+#[must_use]
+pub fn engine_lint_swept(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) -> (NetLintReport, Option<CornerPlan>) {
+    let mut report = engine_lint_at(board, lib);
+    let plan = CornerPlan::of(board, lib);
+    for run in plan.iter().flat_map(|p| &p.runs) {
+        let mut pinned = board.clone();
+        hauksbee_bind::variant_sweep::pin(&mut pinned, run);
+        let corners: Vec<String> = run.iter().map(|(r, id)| format!("{r} = {id}")).collect();
+        for mut finding in engine_lint_at(&pinned, lib).findings {
+            let seen = report.findings.iter().any(|f| {
+                f.check == finding.check && f.refs == finding.refs && f.nets == finding.nets
+            });
+            if seen {
+                continue;
+            }
+            let named = run
+                .iter()
+                .all(|(_, id)| finding.message.contains(id.as_str()));
+            if !named {
+                finding.message = format!(
+                    "{} (at the assumed corners {})",
+                    finding.message,
+                    corners.join(", ")
+                );
+            }
+            report.findings.push(finding);
+        }
+    }
+    (report, plan)
+}
+
+/// One [`engine_lint`] pass over `board` as it stands.
+fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
     report
         .findings

@@ -897,6 +897,37 @@ struct RunStats {
     heat_sum: (f64, f64),
 }
 
+/// A MOSFET that conducted below its card's RDS(on) test drive.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GateDrive {
+    pub reference: String,
+    /// The lowest gate drive (V, folded into N-channel space) it conducted at.
+    pub vgs: f64,
+    /// The card's `rds_on_vgs`.
+    pub spec: f64,
+    /// The card's `vgs_th_max`, when it states one.
+    pub th: Option<f64>,
+}
+
+impl GateDrive {
+    /// Whether the drive is below the maximum threshold: the datasheet does
+    /// not guarantee the part is on at all.
+    #[must_use]
+    pub fn below_threshold(&self) -> bool {
+        self.th.is_some_and(|th| self.vgs < th)
+    }
+}
+
+fn gate_drive(m: &DeviceMeta, s: &RunStats) -> Option<GateDrive> {
+    let (vgs, spec) = s.worst_vgs.zip(m.ratings.rds_on_vgs)?;
+    (vgs < spec * (1.0 - GATE_DRIVE_TOLERANCE)).then(|| GateDrive {
+        reference: m.reference.clone(),
+        vgs,
+        spec,
+        th: m.ratings.vgs_th_max,
+    })
+}
+
 impl RunStats {
     /// Add one chunk's deposit and return the average power (W) over the
     /// trailing [`TJ_AVG_S`] (all of it while the run is shorter).
@@ -1049,12 +1080,8 @@ impl StressMonitor {
                      lower-value feed network), then re-run",
                 ));
             }
-            let under_drive = s
-                .worst_vgs
-                .zip(rt.rds_on_vgs)
-                .filter(|(vgs, spec)| *vgs < spec * (1.0 - GATE_DRIVE_TOLERANCE));
-            if let Some((vgs, spec)) = under_drive {
-                let th = rt.vgs_th_max.unwrap_or(f64::NEG_INFINITY);
+            if let Some(GateDrive { vgs, spec, th, .. }) = gate_drive(m, s) {
+                let th = th.unwrap_or(f64::NEG_INFINITY);
                 let (id, fix) = (format!("{r}-gate-drive"), "drive the gate to at least the VGS the card specifies RDS(on) at (a gate driver or a level shifter), or fit a logic-level part, then re-run");
                 let gap = format!("{r} conducts at VGS = {vgs:.2} V, below the {spec:.2} V its datasheet specifies RDS(on) at, so its on-resistance at this drive is not guaranteed by the datasheet");
                 out.push(if vgs < th {
@@ -1077,6 +1104,15 @@ impl StressMonitor {
             }
         }
         out
+    }
+
+    /// Every MOSFET that conducted at a gate drive below the VGS its card
+    /// specifies RDS(on) at, with the lowest drive seen.
+    #[must_use]
+    pub fn under_driven(&self) -> Vec<GateDrive> {
+        (self.metas.iter().zip(&self.run))
+            .filter_map(|(m, s)| gate_drive(m, s))
+            .collect()
     }
 
     /// What a card's temperature-dependent ratings leave open in this run:

@@ -1320,6 +1320,34 @@ impl Assumption {
         )
     }
 
+    /// A class-only part's assumed corner set (`ids`) that the run SWEPT: the
+    /// board was judged with the part at every corner (`joint`: corner k of
+    /// every class-only part together, rather than every combination), so a
+    /// pass holds across the corners. Qualifying, not undermining: the result
+    /// still rests on the corners bounding the part actually fitted.
+    #[must_use]
+    pub fn swept_corner(subject: &str, reference: &str, ids: &str, joint: bool) -> Self {
+        let how = if joint {
+            ", judged jointly with the board's other class-only parts (all at their \
+             first corner, then all at the next), not in every combination"
+        } else {
+            ""
+        };
+        // Its own id subject: the part may carry another reduced-fidelity
+        // claim (an inferred pinout, say) under the bare reference.
+        Self::build(
+            AssumptionKind::ReducedFidelity,
+            AssumptionSource::Binder,
+            &format!("corners/{}", subject.trim()),
+            part_scope(subject),
+            format!("{reference} is judged at every assumed corner ({ids}){how}, not at one stand-in."),
+            format!("Nothing on the board names the part {reference} is, only its class, so the checks judged the board with it at each assumed corner the card lists ({ids})."),
+            format!("A result for {reference} holds for a part inside those corners; a fitted part outside them (a threshold or on-resistance the class bounds do not cover) is not judged."),
+            format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part"),
+            None,
+        )
+    }
+
     /// A pin's role was inferred from a package numbering convention (a pin rule
     /// or the card's package standard) rather than read from the schematic; `component_subject` is the occurrence-safe causal component id.
     #[must_use]
