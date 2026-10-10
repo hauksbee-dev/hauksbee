@@ -226,3 +226,89 @@ gnd_pin    = "2"
 [models.ratings]
 # Absolute Maximum Ratings.
 max_voltage_v = 7.0    # VDD
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DAC081C081CIMK: TI 8-bit I2C voltage-output DAC, SOT-23-6 (DDC).
+#
+# Source: Texas Instruments "DAC081C08x 8-Bit Micro Power Digital-to-Analog
+#   Converter With An I2C-Compatible Interface", SNAS449F (February 2008,
+#   revised May 2017). Section 6 Pin Configuration and Table 2 Pin Functions,
+#   SOT column (p.4); 7.1 Absolute Maximum Ratings (p.5); 7.3 Recommended
+#   Operating Conditions and 7.4 Thermal Information (p.6); 7.5 Electrical
+#   Characteristics, logic and power rows (p.8); 8.5.5 Table 3 Slave Addresses
+#   (p.24); 13 Package Option Addendum (CIMK / CIMKX = DDC, SOT-23-THIN, 6 pins).
+#
+# PACKAGE HAZARD. The WSON-6 (NGF, DAC081C081CISD) carries the same signals in
+# a different order (1 ADR0, 2 SCL, 3 SDA, 4 GND, 5 VA, 6 VOUT), and the
+# DAC081C085 is an 8-pin VSSOP with ADR1 and VREF. This card takes the DDC map
+# only, by the CIMK order code.
+#
+# IDENTITY ONLY. The output is the part's whole function and it is not modelled:
+# there is no 8-bit register, no I2C slave and no output amplifier, so VOUT is
+# not driven and the part stays OPEN. ADR0 is a THREE-level strap (GND, VA or
+# floating; Table 3: 0x0D, 0x0E, 0x0C), which the binder's address-select rows do
+# not express as "floating", so no register-map personality is attached either.
+[[models]]
+id = "dac081c081cimk"
+kind = "digital"
+description = "TI DAC081C081 8-bit I2C voltage-output DAC, SOT-23-6 DDC (identity, pin map, supply range and ratings; the DAC output is not modeled, the part stays OPEN)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/dac081c081.pdf"
+title = "Texas Instruments DAC081C081, DAC081C085 datasheet, SNAS449F (revised May 2017)"
+locator = "Section 6 and Table 2 Pin Functions, SOT column p.4; 7.1 p.5; 7.3 and 7.4 p.6; 7.5 logic and power rows p.8; 8.5.5 Table 3 p.24; Package Option Addendum (CIMK = DDC)"
+sha256 = "58c92fd6e815efd381f08c75d5d7a3342b6e6b1b7d3bd5824a8453223181adaf"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "dac_output_behavior"
+reason = "the DAC register, I2C slave and rail-to-rail output amplifier are not modelled; VOUT is not driven"
+[[models.source.pinout]]
+package = "DDC (SOT)"
+pins = { "1" = "VOUT", "2" = "VA", "3" = "GND", "4" = "SDA", "5" = "SCL", "6" = "ADR0" }
+
+[models.match]
+# DAC081C081CIMK, DAC081C081CIMKX, with a /NOPB or /G4 finish suffix.
+value_re = "(?i)^DAC081C081CIMKX?(/(NOPB|G4))?$"
+
+[models.params]
+identity_only = true
+warning = "DAC081C081 identity, SOT-23-6 pin map, supply range and ratings are sourced; the 8-bit DAC, its I2C slave and the VOUT amplifier are not modeled, so VOUT is undriven and the part stays OPEN"
+unlocked_by = "an I2C DAC register model driving VOUT from VA (the reference on this package)"
+# 7.5 logic rows are fractions of VA; the absolute values here are at VA = 3.3 V
+# (ASSUMED operating point; the card does not know the board's VA).
+vih = 2.31        # 0.7 x VA min (SCL, SDA)
+vil = 0.99        # 0.3 x VA max
+vol = 0.4         # SDA max at ISINK = 3 mA (open drain; no VOH)
+supply_static_ua = 105.0   # IST_VA-1 typ, VA = 2.7 to 3.6 V (156 max; 132 typ at 4.5 to 5.5 V)
+supply_pin = "2"
+gnd_pin    = "3"
+
+[models.pins]
+# Table 2, SOT column (DDC): 1 VOUT, 2 VA, 3 GND, 4 SDA, 5 SCL, 6 ADR0.
+"1" = "vout"    # analog output, 0 to VA (not driven)
+"2" = "va"      # supply, also the reference on this package
+"3" = "gnd"
+"4" = "sda"     # open drain, external pull-up to VA
+"5" = "scl"
+"6" = "adr0"    # three-level address strap: GND, VA or floating
+
+[models.ratings]
+max_voltage_v = 6.5            # VA and any input pin, 7.1
+max_pin_current_a = 0.01       # input current at any pin, 7.1
+max_junction_temp_c = 150.0    # 7.1
+theta_ja_c_per_w = 250.0       # 7.4 RthetaJA, DDC (SOT) package
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "va"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SNAS449F 7.3 Supply Voltage VA 2.7 V to 5.5 V; 7.1 VA -0.3 V to 6.5 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_ranges", "absolute_ratings"]
+missing = ["dac_register", "i2c_slave", "vout_amplifier", "three_level_address", "power_down_modes"]

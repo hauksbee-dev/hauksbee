@@ -25,3 +25,29 @@ fn ch340c_takes_the_sop16_map_with_nc_and_out() {
         assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
     }
 }
+
+/// TI SNAS449F pin table, SOT (DDC) column. The WSON order code and the
+/// DAC081C085 VSSOP order their pins differently and must not bind.
+#[test]
+fn dac081c081_binds_only_the_sot_order_code() {
+    for value in [
+        "DAC081C081CIMK",
+        "DAC081C081CIMK/NOPB",
+        "DAC081C081CIMKX/NOPB",
+    ] {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_pin_map(
+            &m,
+            "dac081c081cimk",
+            &pins("1=vout 2=va 3=gnd 4=sda 5=scl 6=adr0"),
+        );
+    }
+    for other in [
+        "DAC081C081CISD",
+        "DAC081C081",
+        "DAC081C085CIMM",
+        "DAC101C081CIMK",
+    ] {
+        assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
+    }
+}
