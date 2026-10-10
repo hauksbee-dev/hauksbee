@@ -129,9 +129,10 @@ fn assert_executed(report: &str, mcu: &str) {
 /// because the RFM12B/RFM69 module (U$14) on the SPI pins, the ISP header and
 /// the RJ45 one-wire jack have no models; the 3.3 V claim for the same reason
 /// (they hang off the rail the MCP1702 makes). The POST prompt does not come
-/// within the run: the sketch toggles the radio's chip select (D10, PB2)
-/// hundreds of thousands of times, polling a radio that is not simulated, so
-/// that claim is INVALID on U$14, not a FAIL.
+/// within the run: the sketch polls a radio that is not simulated, so that
+/// claim is INVALID on U$14, not a FAIL. The claim lists only the nets the
+/// RFM12B symbol can drive (SDO on D12/MISO, the open-collector IRQ on D2);
+/// its SEL (D10), SCK (D13) and SDI (D11) pins are inputs.
 #[cfg(feature = "avr")]
 #[test]
 #[ignore = "minutes of simavr emulation; needs the corpus and HAUKSBEE_REALFW_DIR"]
@@ -201,7 +202,7 @@ contains = "POST.....wait 10s"
         &report,
         "UART contains \"POST",
         "INVALID",
-        &["U$14 (RFM12B) has no model", "D10"],
+        &["U$14 (RFM12B) has no model", "D12/MISO", "D2"],
     );
 }
 
