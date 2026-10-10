@@ -2012,6 +2012,35 @@ disable = [
         assert_eq!(lc.output_enabled("1a1"), Some(false));
     }
 
+    /// SN74LVC8T245 Table 7-1: A drives with `OE_n` low and `DIR` low, B with
+    /// `OE_n` low and `DIR` high, neither with `OE_n` high; data follows `DIR`.
+    #[test]
+    fn lvc8t245_drives_by_dir_and_oe() {
+        let mut lc = card("SN74LVC8T245PWR");
+        let data = "a1_in=1 a8_in=0 b1_in=0 b8_in=1";
+        let cases = [
+            ("oe_n=0 dir=1", false, true),
+            ("oe_n=0 dir=0", true, false),
+            ("oe_n=1 dir=1", false, false),
+            ("oe_n=1 dir=0", false, false),
+        ];
+        for (controls, a_driven, b_driven) in cases {
+            tick(&mut lc, &format!("{controls} {data}"));
+            for pin in ["a1", "a8"] {
+                assert_eq!(lc.output_enabled(pin), Some(a_driven), "{controls}: {pin}");
+            }
+            for pin in ["b1", "b8"] {
+                assert_eq!(lc.output_enabled(pin), Some(b_driven), "{controls}: {pin}");
+            }
+        }
+        tick(&mut lc, &format!("oe_n=0 dir=1 {data}"));
+        assert_eq!(lc.output_level("b1"), Some(true));
+        assert_eq!(lc.output_level("b8"), Some(false));
+        tick(&mut lc, &format!("oe_n=0 dir=0 {data}"));
+        assert_eq!(lc.output_level("a1"), Some(false));
+        assert_eq!(lc.output_level("a8"), Some(true));
+    }
+
     /// Unwired `SRCLR_n` / `OE_n` read released / enabled.
     #[test]
     fn unwired_controls_read_released() {

@@ -5891,6 +5891,188 @@ outputs = ["1a1", "1a2", "1b1", "1b2", "2a1", "2a2", "2b1", "2b2"]
 implements = ["direction_control", "tristate_enable", "dual_supply_levels"]
 missing = ["propagation_timing", "enable_disable_timing", "output_drive_curve", "input_leakage", "off_state_output_current", "supply_current", "vcc_isolation"]
 
+# ── SN74LVC8T245: 8-bit dual-supply transceiver, 1.65 V to 5.5 V per port ───
+# Source: TI SN74LVC8T245 datasheet SCES584D (June 2005, revised May 2026),
+#   https://www.ti.com/lit/ds/symlink/sn74lvc8t245.pdf (sha256
+#   a2493b65471e5c873e3f71afbe152ac4d0f9233045c5ec289bda602a4b453cf0).
+#   Pin map: Figure 4-1 (DW, NS, DB, DBQ, DGV, PW, p.4) and Table 4-1 Pin
+#   Functions (p.5): 1 VCCA, 2 DIR, 3-10 A1-A8, 11-13 GND, 21-14 B1-B8, 22 OE,
+#   23-24 VCCB. Absolute maximum supply and I/O -0.5 to 6.5 V, continuous
+#   output current +/-50 mA: 5.1 (p.6). VCCA/VCCB 1.65 to 5.5 V and the VIH/VIL
+#   bands of data inputs (against VCCI) and control inputs (against VCCA): 5.3
+#   (p.7). VOH/VOL, ICCA + ICCB: 5.6 Electrical Characteristics (p.9). tpd:
+#   5.9 Switching Characteristics, VCCA = 3.3 V (p.11). Function: 7.4 and
+#   Table 7-1 (p.15): OE low, DIR low, B data to A; OE low, DIR high, A data
+#   to B; OE high, isolation. DIR and OE are supplied by VCCA (p.1, Table 4-1).
+# Both ports are bidirectional, so each carries an output and a sensed `*_in`
+# input, as the 74HCT245 card does.
+[[models]]
+id = "sn74lvc8t245"
+kind = "digital"
+description = "TI SN74LVC8T245 8-bit dual-supply translating bus transceiver, 3-state, 1.65 V to 5.5 V, SOIC/SO/SSOP/TVSOP/TSSOP-24"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc8t245.pdf"
+title = "TI SN74LVC8T245 8-bit dual-supply bus transceiver with configurable voltage translation and 3-state outputs (SCES584D), May 2026"
+locator = "Figure 4-1 p.4; Table 4-1 Pin Functions p.5; 5.1 Absolute Maximum Ratings p.6; 5.3 Recommended Operating Conditions p.7; 5.6 Electrical Characteristics p.9; 5.9 Switching Characteristics p.11; 7.4 and Table 7-1 Function Table p.15"
+sha256 = "a2493b65471e5c873e3f71afbe152ac4d0f9233045c5ec289bda602a4b453cf0"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "enable/disable times, Ioff and IOZ leakage, delta ICC and the VCC-isolation behaviour (outputs Hi-Z when either supply is below 100 mV) are not modelled; only the DC function table, the supply-referenced levels, the output resistance and the 3.3 V-to-3.3 V delay are"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "voh_above_4v5"
+reason = "5.6 gives VOH = VCCO - 0.1 V at -100 uA only for VCCO 1.65 V to 4.5 V; the VOH table stops at 4.5 V and is not extended, so a 5 V port reads the 4.4 V level"
+
+[models.match]
+# DW, NS, DB, DBQ, DGV and PW share Figure 4-1's numbering. The RHL VQFN adds a
+# thermal pad and is not matched; neither are other vendors' ordering codes
+# (Nexperia 74LVC8T245PW etc.), whose tables were not read. A trailing R or T
+# is tape and reel; the bare 74LVC8T245 marking is accepted too.
+value_re = "(?i)^(SN74LVC8T245(DW|NS|DB|DBQ|DGV|PW)?[RT]?|74LVC8T245)([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCCO - 0.1 V at IOH = -100 uA, VCCO 3.3 V (5.6)
+vol = 0.1          # IOL = 100 uA (5.6)
+vih = 2.0          # VCCI 3 V to 3.6 V (5.3)
+vil = 0.8
+# VCCO = 3 V: VOH 2.4 V min at IOH = -24 mA against the 2.9 V light-load
+# level, 0.5 V / 24 mA = 21 Ohm (VOL side: 0.55 V max at 24 mA, 23 Ohm) (5.6).
+ro = 21.0
+tpd_s = 6.3e-9     # A to B max, VCCA 3.3 V, VCCB 3.3 V (5.9)
+supply_static_ua = 12.0  # ICCA + ICCB max (5.6)
+supply_pin = "1"
+gnd_pin = "11"
+
+[models.levels]
+# 5.3, VIH/VIL of data inputs against VCCI and of control inputs against VCCA:
+# 0.65/0.35 x VCC at 1.65 to 1.95 V, 1.7/0.7 V at 2.3 to 2.7 V, 2/0.8 V at
+# 3 to 3.6 V, 0.7/0.3 x VCC at 4.5 to 5.5 V; gaps between bands interpolate.
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+# VOH = VCCO - 0.1 V at IOH = -100 uA, VCCO 1.65 V to 4.5 V (5.6).
+voh = [[1.65, 1.55], [4.5, 4.4]]
+
+[models.level_rails]
+# Table 4-1: the A ports, DIR and OE sit on VCCA, the B ports on VCCB.
+vcca = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "dir", "oe_n"]
+vccb = ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"]
+
+[models.pins]
+# Table 4-1.
+"1" = "vcca"
+"2" = "dir"
+"3" = "a1"
+"4" = "a2"
+"5" = "a3"
+"6" = "a4"
+"7" = "a5"
+"8" = "a6"
+"9" = "a7"
+"10" = "a8"
+"11" = "gnd"
+"12" = "gnd"
+"13" = "gnd"
+"21" = "b1"
+"20" = "b2"
+"19" = "b3"
+"18" = "b4"
+"17" = "b5"
+"16" = "b6"
+"15" = "b7"
+"14" = "b8"
+"22" = "oe_n"
+"23" = "vccb"
+"24" = "vccb"
+
+[models.ratings]
+max_pin_current_a = 0.05      # IO continuous output current, 5.1
+max_voltage_v = 6.5           # VCCA / VCCB, 5.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC8T245 SCES584D, 5.3 VCCA 1.65 V to 5.5 V; 5.1 VCCA -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC8T245 SCES584D, 5.3 VCCB 1.65 V to 5.5 V; 5.1 VCCB -0.5 V to 6.5 V"
+
+[models.logic]
+# Table 7-1: OE low and DIR low, B data to the A bus; OE low and DIR high, A
+# data to the B bus; OE high, both ports Hi-Z.
+inputs = ["dir", "oe_n",
+  "a1_in", "b1_in", "a2_in", "b2_in", "a3_in", "b3_in", "a4_in", "b4_in",
+  "a5_in", "b5_in", "a6_in", "b6_in", "a7_in", "b7_in", "a8_in", "b8_in"]
+outputs = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8",
+  "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"]
+[models.logic.sense]
+a1_in = "a1"
+b1_in = "b1"
+a2_in = "a2"
+b2_in = "b2"
+a3_in = "a3"
+b3_in = "b3"
+a4_in = "a4"
+b4_in = "b4"
+a5_in = "a5"
+b5_in = "b5"
+a6_in = "a6"
+b6_in = "b6"
+a7_in = "a7"
+b7_in = "b7"
+a8_in = "a8"
+b8_in = "b8"
+[models.logic.comb]
+a1 = "b1_in"
+a2 = "b2_in"
+a3 = "b3_in"
+a4 = "b4_in"
+a5 = "b5_in"
+a6 = "b6_in"
+a7 = "b7_in"
+a8 = "b8_in"
+b1 = "a1_in"
+b2 = "a2_in"
+b3 = "a3_in"
+b4 = "a4_in"
+b5 = "a5_in"
+b6 = "a6_in"
+b7 = "a7_in"
+b8 = "a8_in"
+[models.logic.tristate]
+a1 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a2 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a3 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a4 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a5 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a6 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a7 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+a8 = { enable = "dir", active = "low", and = [{ pin = "oe_n", active = "low" }] }
+b1 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b2 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b3 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b4 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b5 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b6 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b7 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+b8 = { enable = "dir", active = "high", and = [{ pin = "oe_n", active = "low" }] }
+
+[models.coverage]
+implements = ["direction_control", "tristate_enable", "dual_supply_levels"]
+missing = ["enable_disable_timing", "output_drive_curve", "input_leakage", "off_state_output_current", "ioff_leakage", "vcc_isolation"]
+
 # ── SN74LVC2G126: dual bus buffer, 3-state, active-HIGH enables ─────────────
 # Source: Texas Instruments SN74LVC2G126 datasheet SCES205N, April 1999,
 #   revised September 2020: 5 Pin Configuration and Functions (p.3), 6.1
