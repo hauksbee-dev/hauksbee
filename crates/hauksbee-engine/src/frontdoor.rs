@@ -1248,8 +1248,13 @@ fn analyze_normalized_with_context(
     }
 
     let usbc_reliable = crate::reports::usb_c::scoped_blockers(board, &verdict_blockers).is_empty();
+    // What an indicator MEANS is not judged without a stated outcome; the
+    // triage and the browser's notes both say so.
+    let indicators_not_judged = crate::checks::indicators::not_judged_note(
+        &crate::checks::indicators::indicator_traces(board, lib),
+    );
     let triage = (!is_gerber).then(|| {
-        crate::plain::order_triage_with_rule_source(
+        let mut triage = crate::plain::order_triage_with_rule_source(
             &drc_structured,
             clearance_rule_source
                 .as_ref()
@@ -1260,7 +1265,9 @@ fn analyze_normalized_with_context(
             usbc_reliable,
             bind_summary.unresolved,
             false,
-        )
+        );
+        triage.add_not_covered(indicators_not_judged.clone());
+        triage
     });
 
     let serious: usize = sections
@@ -1321,6 +1328,12 @@ fn analyze_normalized_with_context(
                       files' copper geometry. Clearance DRC and trace-geometry SI need \
                       the original layout file and were not run."
                 .to_string(),
+        });
+    }
+    if let Some(message) = indicators_not_judged {
+        notes.push(JsonNote {
+            kind: JsonNoteKind::Coverage,
+            message,
         });
     }
     if bind_web.active_path_open() {

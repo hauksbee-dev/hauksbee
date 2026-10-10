@@ -172,7 +172,7 @@ impl CheckReport<'_> {
         // under it these blockers exit 3, matching the verdict field.
         let blockers = crate::result::unmodelled_critical_refs(&summary);
         let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
-        let triage = crate::plain::order_triage_with_rule_source(
+        let mut triage = crate::plain::order_triage_with_rule_source(
             &drc_structured,
             &provenance,
             &lint,
@@ -182,6 +182,11 @@ impl CheckReport<'_> {
             summary.unresolved,
             true,
         );
+        // No outcome is stated on this surface, so what an indicator MEANS was
+        // not judged; say so instead of letting a clean triage imply it was.
+        triage.add_not_covered(crate::checks::indicators::not_judged_note(
+            &crate::checks::indicators::indicator_traces(board, lib),
+        ));
         // This surface's own exit gate, computed before anything renders so the
         // machine document can state the same outcome the exit code will. It is
         // wider than the `serious` severity on purpose (medium lint findings, any

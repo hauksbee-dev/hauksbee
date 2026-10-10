@@ -604,7 +604,95 @@ fn render_spec_at_with_run_hint(
         );
     }
 
+    write_indicator_outcomes(
+        &mut s,
+        &hauksbee_engine::checks::indicators::indicator_traces(&extracted, &lib),
+        vref,
+    );
     Ok(s)
+}
+
+/// One commented outcome per logic-driven indicator. Its meaning (which level
+/// of the source signal should light it) is the designer's to state: no check
+/// can tell an inverted indicator from an intended one, so the scaffold asks,
+/// with the polarity left for the user to confirm.
+fn write_indicator_outcomes(
+    s: &mut String,
+    traces: &[hauksbee_engine::checks::indicators::IndicatorTrace],
+    vref: f64,
+) {
+    if traces.is_empty() {
+        return;
+    }
+    s.push_str(
+        "\n# Indicator outcomes: what each LED MEANS is not checked unless you state it.\n\
+         # Each LED below is lit from a logic signal; an active-low signal through a\n\
+         # buffer (or an active-high one through an inverter) lights it on the wrong\n\
+         # state while every voltage stays in range. Sweep the source net and say\n\
+         # which way the LED's own net must move. Uncomment the [search] line once.\n\
+         # [search]\n",
+    );
+    let mut swept = std::collections::BTreeSet::new();
+    for t in traces {
+        let source = &t.source_net;
+        let lit_high = !t.sinks.unwrap_or(false);
+        // Asserted low and lit high: the LED net falls as the source rises.
+        let kind = if t.source_active_low == lit_high {
+            "decreases"
+        } else {
+            "increases"
+        };
+        let other = if kind == "decreases" {
+            "increases"
+        } else {
+            "decreases"
+        };
+        let polarity = if t.source_active_low {
+            format!("the name suggests {source} is active-low (asserted at 0 V)")
+        } else {
+            format!("the name gives no polarity; this assumes {source} is active-high")
+        };
+        let path = if t.stages.is_empty() {
+            format!("driven by {}", t.driver)
+        } else {
+            let stages: Vec<String> = t
+                .stages
+                .iter()
+                .rev()
+                .map(|st| {
+                    format!(
+                        "{} {}",
+                        st.reference,
+                        if st.inverting { "inverter" } else { "buffer" }
+                    )
+                })
+                .collect();
+            format!("via {}", stages.join(" -> "))
+        };
+        let _ = writeln!(
+            s,
+            "#\n# LED {led} should be lit when {source} is asserted; confirm whether {source} is active-low.\n\
+             #   {led} hangs off {net} ({path}); {polarity}.\n\
+             #   If it is not, change kind to \"{other}\".",
+            led = t.indicator,
+            net = t.indicator_net,
+        );
+        if swept.insert(source.clone()) {
+            let _ = writeln!(
+                s,
+                "# [[search.sweep]]\n# net = {}\n# volts = [0.0, {}]",
+                toml_path(source.clone()),
+                fmt1(vref)
+            );
+        }
+        let _ = writeln!(
+            s,
+            "# [[assert]]\n# name = {}\n# kind = \"{kind}\"\n# net = {}\n# along = {}",
+            toml_path(format!("{} lit when {source} is asserted", t.indicator)),
+            toml_path(t.indicator_net.clone()),
+            toml_path(source.clone()),
+        );
+    }
 }
 
 /// Round to one decimal place.

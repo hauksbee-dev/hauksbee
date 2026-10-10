@@ -31,6 +31,7 @@ mod gate_drive;
 mod generic_mosfet_corners;
 mod hook_gate_e2e;
 mod hwtrace;
+mod indicator_intent;
 mod init_scaffold;
 mod inkplate_class_demo;
 mod manifest_cli_contract;

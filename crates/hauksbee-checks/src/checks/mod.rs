@@ -75,6 +75,7 @@ pub mod dc_stress;
 pub mod device_decode;
 pub mod envelope;
 pub mod floating_inputs;
+pub mod indicators;
 pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;

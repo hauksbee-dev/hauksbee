@@ -577,7 +577,8 @@ fn has_integrated_i2c_pullups(c: &Component) -> bool {
 }
 
 /// Is this an LED (ref D* + value/lib hint, or explicit LED)?
-fn is_led(c: &Component) -> bool {
+#[must_use]
+pub fn is_led(c: &Component) -> bool {
     let lib = c.lib_id.to_ascii_lowercase();
     let val = c.value.to_ascii_lowercase();
     let r = ref_designator(&c.reference);

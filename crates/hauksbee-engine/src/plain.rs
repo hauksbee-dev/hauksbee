@@ -450,6 +450,15 @@ pub struct OrderTriage {
 }
 
 impl OrderTriage {
+    /// Append one sentence to the not-covered line (nothing for `None`).
+    pub(crate) fn add_not_covered(&mut self, note: Option<String>) {
+        let Some(note) = note else { return };
+        if !self.not_covered.is_empty() {
+            self.not_covered.push(' ');
+        }
+        self.not_covered.push_str(&note);
+    }
+
     /// One triage bucket; an empty bucket prints nothing (see `render`).
     fn write_bucket(out: &mut String, heading: &str, entries: &[TriageEntry]) {
         if !entries.is_empty() {

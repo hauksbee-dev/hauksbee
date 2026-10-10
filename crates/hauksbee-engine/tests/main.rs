@@ -122,6 +122,8 @@ mod i2c_sensor_cosim;
 mod i2c_sensor_cosim_qemu;
 #[path = "i2c_sensor_cosim_renode.rs"]
 mod i2c_sensor_cosim_renode;
+#[path = "indicator_not_judged.rs"]
+mod indicator_not_judged;
 #[path = "inhibitory_miswire.rs"]
 mod inhibitory_miswire;
 #[path = "interactive_coverage_parity.rs"]
