@@ -576,16 +576,57 @@ fn has_integrated_i2c_pullups(c: &Component) -> bool {
     FAMILIES.iter().any(|f| v.contains(f))
 }
 
-/// Is this an LED (ref D* + value/lib hint, or explicit LED)?
+/// Is this an LED? Either the record's own identity ([`is_led_identity`]) or
+/// the looser hints a name carries (ref `LED*`, a `D*` with an LED symbol,
+/// "led" anywhere in the library id or value).
+///
+/// This is the one LED test: the binder's generic-LED guess and the indicator
+/// tracer both start from [`is_led_identity`], so a part the binder models as
+/// an LED is always one the checks trace as an LED.
 #[must_use]
 pub fn is_led(c: &Component) -> bool {
     let lib = c.lib_id.to_ascii_lowercase();
     let val = c.value.to_ascii_lowercase();
     let r = ref_designator(&c.reference);
-    lib.contains("led")
+    is_led_identity(c)
+        || lib.contains("led")
         || val.contains("led")
         || (r.starts_with("LED"))
         || (r.starts_with('D') && lib.contains(":led"))
+}
+
+/// Does the record itself call this part an LED?
+///
+/// It does when it carries an LED symbol (`Device:LED`, `LED_Small`, a symbol
+/// in an `LED` library), an LED package (`LED_SMD:`, `LED_THT:`,
+/// `CHIPLED_0805`, `LEDs:LED_0603`, `PCM_LED_SMD_*`, `LED-1206`, `LED5MM`) or
+/// the value exactly `LED`.
+///
+/// Pad count, designator and wavelength are the caller's to judge; `OLED`
+/// modules and multi-die `LED3535` packages are not named by this test.
+#[must_use]
+pub fn is_led_identity(c: &Component) -> bool {
+    // A footprint word that is the LED package itself: `LED`, `LEDS`,
+    // `CHIPLED`, `LED5MM`; never `OLED` or a multi-die `LED3535`.
+    let package_word = |word: &str| {
+        let word = word.strip_prefix("CHIP").unwrap_or(word);
+        let rest = word.strip_prefix("LED").unwrap_or("-");
+        matches!(rest, "" | "S")
+            || rest
+                .strip_suffix("MM")
+                .is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+    };
+    let by_package = c
+        .footprint
+        .to_ascii_uppercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(package_word);
+    let (library, symbol) = c.lib_id.split_once(':').unwrap_or(("", &c.lib_id));
+    let symbol = symbol.to_ascii_uppercase();
+    let by_symbol = symbol == "LED"
+        || symbol.starts_with("LED_")
+        || ["LED", "LEDS"].contains(&library.to_ascii_uppercase().as_str());
+    by_symbol || by_package || c.value.trim().eq_ignore_ascii_case("LED")
 }
 
 /// True if the component looks like a bare connector / header / test point /

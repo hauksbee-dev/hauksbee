@@ -1081,39 +1081,106 @@ rs  = 6.0
 "K" = "cathode"
 "A" = "anode"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Generic LED (footprint-matched, when value alone is not enough)
-
 [models.ratings]
 max_current_a = 0.025
 max_surge_current_a = 0.1
 max_voltage_v = 5.0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic LED, colour and part unknown: an ASSUMED forward-voltage CORNER set.
+#
+# A part the board marks only as an LED (a `Device:LED` symbol, a CHIPLED_* /
+# LED_SMD / LED_THT package, or the value "LED") on two pads says nothing about
+# its colour, and the forward voltage is most of what an indicator circuit's
+# current depends on: a red AlInGaP die drops about 1.9 V, a blue or green
+# InGaN die 3.2 to 3.5 V. One typical card would let a guess pass or fail a
+# current claim the fitted part does not honour, so the binder binds this SET
+# (the binder re-resolves such a part with the canonical value "LED"):
+#   - hauksbee-ci sweeps both corners and passes a check only if each passes;
+#   - a plain run simulates the high-Vf corner (the weaker drive, sorted
+#     first) as the stand-in, records an UNDERMINING assumption naming both,
+#     and the DC stress pass judges ratings at both corners, saying which
+#     corner a finding holds at.
+#
+# Source for the range: Wurth Elektronik WL-SMCW SMT mono-colour chip LEDs,
+# 0603, datasheets 150060SS75000 (super red), 150060RS75000 (red),
+# 150060YS75000 (yellow), 150060VS75000 (yellow-green), 150060GS75000 (green)
+# and 150060BS75000 (blue), revision 002.009 (2019-02-26), "Electrical &
+# Optical Properties" and "Absolute Maximum Ratings": VF at IF = 20 mA is
+# 1.9 V typ (super red), 2.0 V typ / 2.4 V max (red, yellow, yellow-green) and
+# 3.2 V typ / 3.5 V max (green, blue); IF 30 mA continuous, IF peak 100 mA at
+# duty 1/10 and 1 kHz, VREV 5 V, for every colour.
+#   low-Vf corner : 1.9 V at 20 mA, the lowest VF printed (super red, typ).
+#   high-Vf corner: 3.5 V at 20 mA, the highest VF printed (blue/green, max).
+# The diode equation is FIT to those points (is from n and rs, VF at 20 mA);
+# no I-V curve is matched. Infrared and multi-die parts are outside the range
+# and the binder does not bind them here.
+
 [[models]]
-id = "led_generic"
+id = "led_generic_corner_high_vf"
 kind = "diode"
-description = "Generic LED matched by footprint prefix"
+description = "Generic LED, colour unknown: ASSUMED high forward-voltage corner (3.5 V at 20 mA, blue/green InGaN max)"
+variant_of = "led_generic"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
 
 [models.match]
-footprint_re = "^LED_THT:|^LED_SMD:"
+value_re = "(?i)^LED$"
 
 [models.params]
-# Conservative defaults: Vf ≈ 2 V red-ish (DC, legacy values, no located source)
-# Placeholder with no part number: not anchored to any datasheet, so the
-# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
-# (cjo = 0, tt = 0, no breakdown). The 5 V reverse limit stays as a rating.
-is  = 1.0e-20
-n   = 1.8
-rs  = 6.0
+# ASSUMED corner fit: VF = 3.5 V at 20 mA with n = 2.5, rs = 8 (is solved for it)
+is  = 7.2e-25
+n   = 2.5
+rs  = 8.0
+warning = "the board says only that this is an LED, not its colour or part number: simulated at ASSUMED forward-voltage corners (1.9 V to 3.5 V at 20 mA, red to blue/green, Wurth WL-SMCW 0603 family), not any one datasheet; put the colour or the manufacturer part number on the component to replace it"
 
 [models.pins]
 "K" = "cathode"
 "A" = "anode"
 
 [models.ratings]
-max_current_a = 0.025
-max_surge_current_a = 0.1
-max_voltage_v = 5.0
+max_current_a = 0.025        # ASSUMED, as the colour cards: under the family's 30 mA IF, for smaller indicator LEDs
+max_surge_current_a = 0.1    # IF peak, duty 1/10 at 1 kHz (every WL-SMCW colour)
+max_voltage_v = 5.0          # VREV, reverse current test voltage (every WL-SMCW colour)
+
+[models.variant]
+corner = true
+basis = "ASSUMED high-Vf corner: 3.5 V max at 20 mA, Wurth WL-SMCW 150060BS75000/150060GS75000"
+
+[[models]]
+id = "led_generic_corner_low_vf"
+kind = "diode"
+description = "Generic LED, colour unknown: ASSUMED low forward-voltage corner (1.9 V at 20 mA, super red AlInGaP typ)"
+variant_of = "led_generic"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
+[models.match]
+value_re = "(?i)^LED$"
+
+[models.params]
+# ASSUMED corner fit: VF = 1.9 V at 20 mA with n = 1.8, rs = 6 (is solved for it)
+is  = 4.9e-19
+n   = 1.8
+rs  = 6.0
+warning = "the board says only that this is an LED, not its colour or part number: simulated at ASSUMED forward-voltage corners (1.9 V to 3.5 V at 20 mA, red to blue/green, Wurth WL-SMCW 0603 family), not any one datasheet; put the colour or the manufacturer part number on the component to replace it"
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
+
+[models.ratings]
+max_current_a = 0.025        # ASSUMED, as the colour cards: under the family's 30 mA IF, for smaller indicator LEDs
+max_surge_current_a = 0.1    # IF peak, duty 1/10 at 1 kHz (every WL-SMCW colour)
+max_voltage_v = 5.0          # VREV, reverse current test voltage (every WL-SMCW colour)
+
+[models.variant]
+corner = true
+basis = "ASSUMED low-Vf corner: 1.9 V typ at 20 mA, Wurth WL-SMCW 150060SS75000"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Zener diodes, the 1N47xxA family: 1 W, DO-41 axial, Vz tolerance +/-5%.

@@ -228,7 +228,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(node_drive::node_drive_lint(board, lib).findings);
     report
         .findings
-        .extend(dc_stress::dc_stress_findings(bound).findings);
+        .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.

@@ -31,11 +31,112 @@ use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
 /// Bind `board`, solve its DC operating point, and report every part held
-/// past a rating there.
+/// past a rating there, at every assumed corner ([`dc_stress_at_corners`]).
 #[must_use]
 pub fn dc_stress_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let bound = bind_board(board, lib);
-    dc_stress_findings(bound)
+    dc_stress_at_corners(board, lib, bound)
+}
+
+/// [`dc_stress_findings`] at every ASSUMED corner of the class-only parts.
+///
+/// Class-only parts are a generic LED (forward-voltage corners) or a generic
+/// MOSFET (threshold corners); each is judged at every corner, not just at the
+/// stand-in corner `stand_in` was bound with.
+///
+/// The corners move together: the k-th pass binds every corner set at its
+/// k-th member (a set with fewer members stays at its last), so the extremes
+/// of the board's guesses are each judged once. A part overstressed at every
+/// corner is reported as the stand-in pass reports it. A part overstressed at
+/// only some corners is a conditional finding, at medium severity, naming the
+/// corner it holds at: whether it is real depends on the fitted part, which
+/// the board does not say.
+#[must_use]
+pub fn dc_stress_at_corners(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    stand_in: BoundBoard,
+) -> NetLintReport {
+    use hauksbee_models::variants::SWEEP_PROPERTY;
+    // (reference, member ids) of every undetermined corner set.
+    let sets: Vec<(String, Vec<String>)> = (stand_in.report.selections.iter())
+        .filter(|(_, s)| s.corners && s.determined.is_none())
+        .filter_map(|(&row, s)| {
+            let reference = stand_in.report.rows.get(row)?.reference.clone();
+            let ids: Vec<String> = s.survivors().map(|m| m.id.clone()).collect();
+            (ids.len() > 1).then_some((reference, ids))
+        })
+        .collect();
+    let corners = sets.iter().map(|(_, ids)| ids.len()).max().unwrap_or(1);
+    if corners < 2 {
+        return dc_stress_findings(stand_in);
+    }
+    let pick = |k: usize| -> Vec<(&str, &str)> {
+        (sets.iter())
+            .map(|(r, ids)| (r.as_str(), ids[k.min(ids.len() - 1)].as_str()))
+            .collect()
+    };
+    let mut passes = vec![dc_stress_findings(stand_in).findings];
+    for k in 1..corners {
+        let mut swept = board.clone();
+        for (reference, id) in pick(k) {
+            if let Some(c) = (swept.components.iter_mut()).find(|c| c.reference == reference) {
+                c.properties.push((SWEEP_PROPERTY.into(), id.into()));
+            }
+        }
+        passes.push(dc_stress_findings(bind_board(&swept, lib)).findings);
+    }
+    // part -> the corners it is overstressed at, and its first finding.
+    let mut by_part: BTreeMap<String, (Vec<usize>, LintFinding)> = BTreeMap::new();
+    let mut notes: Vec<LintFinding> = Vec::new();
+    for (k, findings) in passes.into_iter().enumerate() {
+        for f in findings {
+            match f.refs.first() {
+                // A gate under-drive already names its corner, and the swept
+                // lint ([`super::engine_lint_swept`]) judges the others: only
+                // the stand-in pass reports it, whole.
+                _ if f.check == LintCheck::GateUnderdrive && k > 0 => {}
+                Some(part)
+                    if f.severity == Severity::High && f.check == LintCheck::DcOverstress =>
+                {
+                    let entry = by_part.entry(part.clone()).or_insert((Vec::new(), f));
+                    entry.0.push(k);
+                }
+                _ if !notes.iter().any(|n| n.message == f.message) => notes.push(f),
+                _ => {}
+            }
+        }
+    }
+    let describe = |k: usize| {
+        let picked = pick(k);
+        let shown: Vec<String> = (picked.iter().take(4))
+            .map(|(r, id)| format!("{r} as {id}"))
+            .collect();
+        let more = picked.len().saturating_sub(4);
+        let more = if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        };
+        format!("{}{more}", shown.join(", "))
+    };
+    let mut findings: Vec<LintFinding> = (by_part.into_values())
+        .map(|(at, mut f)| {
+            if at.len() < corners {
+                let held: Vec<String> = at.iter().map(|&k| describe(k)).collect();
+                f.severity = Severity::Medium;
+                f.message = format!(
+                    "{} (CONDITIONAL: only at the assumed corner {}; the board names no part \
+                     for these, so the fitted parts decide whether it holds)",
+                    f.message,
+                    held.join(" / ")
+                );
+            }
+            f
+        })
+        .collect();
+    findings.extend(notes);
+    NetLintReport { findings }
 }
 
 /// The two resting states the pass judges. Combinational logic is settled

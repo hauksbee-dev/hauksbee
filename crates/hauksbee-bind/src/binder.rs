@@ -1580,15 +1580,19 @@ fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::R
             model.pins = pins;
         }
     }
-    // `led_generic` is a two-pad guess from the footprint: WS2812B/RGB parts are not it.
-    if res.model.as_ref().is_some_and(|m| m.id == "led_generic")
-        && logical_passive_pins(comp).map_or(0, |pins| pins.len()) > 2
-    {
+    // The generic LED corner set answers the value "LED" alone; only a plain
+    // two-pad LED takes it (a WS2812B/RGB part or a U-designated "LED" is not it).
+    let led = plain_led(comp);
+    if res.model.as_ref().is_some_and(is_generic_led) && !led {
         res = hauksbee_models::Resolution::unresolved(q.clone());
     }
+    // A card names the part unless it is the generic LED set itself, or only a
+    // connector/mechanical class: a panel-mount LED on a header footprint is
+    // still an LED.
+    let named = res.model.as_ref().is_some_and(|m| {
+        !is_generic_led(m) && !matches!(m.kind, ComponentKind::Ignore | ComponentKind::Connector)
+    }) || res.selection.as_ref().is_some_and(|s| !s.corners);
     // A colour-only value ("RED") is no part number: it takes that colour's LED card.
-    let named =
-        res.model.as_ref().is_some_and(|m| m.id != "led_generic") || res.selection.is_some();
     if let Some(card) = led_colour(comp).filter(|_| !named) {
         let mut by_colour = q.clone();
         (by_colour.value, by_colour.mpn) = (Some(format!("{card} LED")), None);
@@ -1601,6 +1605,18 @@ fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::R
             model.params.set_str("warning", note);
             (coloured.confidence, coloured.query) = (Confidence::Guessed, q);
             return coloured;
+        }
+    }
+    // Otherwise an LED the record names by nothing but being an LED binds the
+    // ASSUMED forward-voltage corner set (db/diodes.toml): its colour, and so
+    // most of its circuit's current, is unknown.
+    if led && !named {
+        let mut generic = q.clone();
+        (generic.value, generic.mpn) = (Some("LED".to_string()), None);
+        let mut set = lib.resolve(&generic);
+        if set.model.is_some() {
+            (set.confidence, set.query) = (Confidence::Guessed, q);
+            return set;
         }
     }
     // An open variant set is the library's answer too: no fallback may guess past it.
@@ -1641,14 +1657,16 @@ fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::R
 }
 
 /// The colour a bare-colour value ("RED", "MF-LED-0603-RED") names on a plain two-pad LED
-/// (a `D*`/`LED*` designator with an LED symbol or footprint), and the card word it binds
-/// to: orange and amber read as yellow, white as blue.
+/// (a `D*`/`LED*` designator with an LED symbol or footprint, or any designator
+/// [`plain_led`] accepts: a `TXLED` or `PWR` indicator is still an LED), and the card
+/// word it binds to: orange and amber read as yellow, white as blue.
 fn led_colour(comp: &Component) -> Option<&'static str> {
     let led = [&comp.lib_id, &comp.footprint]
         .iter()
         .any(|id| id.to_ascii_uppercase().contains("LED"));
     let pads = logical_passive_pins(comp).map_or(0, |pins| pins.len());
-    if !matches!(ref_prefix(&comp.reference).as_str(), "D" | "LED") || !led || pads > 2 {
+    let designated = matches!(ref_prefix(&comp.reference).as_str(), "D" | "LED") && led;
+    if !(designated || plain_led(comp)) || pads > 2 {
         return None;
     }
     let value = comp.value.to_ascii_uppercase();
@@ -1662,6 +1680,36 @@ fn led_colour(comp: &Component) -> Option<&'static str> {
             _ => None,
         });
     named.next().filter(|_| named.next().is_none())
+}
+
+/// Whether `model` is a member of the generic LED corner set
+/// (`variant_of = "led_generic"` in db/diodes.toml).
+fn is_generic_led(model: &ModelEntry) -> bool {
+    model.variant_of.as_deref() == Some("led_generic")
+}
+
+/// A plain two-terminal LED by the record's own identity: two logical pads
+/// and [`hauksbee_extract::is_led_identity`] (the one definition of what the
+/// record calls an LED, shared with the checks that trace indicators).
+///
+/// Never an IC designator (`U`/`IC`), and never an infrared part, whose
+/// forward voltage lies below the visible colours the generic corner set
+/// spans. The designator is otherwise free: indicator LEDs are often named for
+/// their job (`STAT`, `CHG`, `PWR`, `TXLED`). A header footprint does not veto
+/// it: a panel-mount LED is wired through one.
+fn plain_led(comp: &Component) -> bool {
+    let pads = logical_passive_pins(comp).map_or(0, |pins| pins.len());
+    if pads != 2 || hauksbee_models::matcher::is_active_ic_ref(&comp.reference) {
+        return false;
+    }
+    let infrared = [&comp.value, &comp.lib_id, &comp.footprint]
+        .iter()
+        .any(|s| {
+            s.to_ascii_uppercase()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|t| matches!(t, "IR" | "INFRARED"))
+        });
+    !infrared && hauksbee_extract::is_led_identity(comp)
 }
 
 /// The board's power tree by net name: the fed groups `domains` holds, the
@@ -10905,6 +10953,88 @@ style = "i2c_pointer"
         }
     }
 
+    /// A plain two-pad part the record calls an LED by symbol, package or the bare
+    /// value "LED" binds the ASSUMED forward-voltage corner set as a guess, whatever
+    /// its designator and even on a header footprint; a colour on a name-style
+    /// designator takes the colour card. A signal diode, a TVS, an infrared LED, a
+    /// multi-die part and a card that names the part never take the set.
+    #[test]
+    fn an_obvious_led_binds_the_generic_corner_set_and_a_diode_never_does() {
+        let lib = ModelLibrary::builtin();
+        let res = |r: &str, value: &str, lib_id: &str, fp: &str, pads: i64| {
+            let mut c = comp(r, value);
+            (c.lib_id, c.footprint) = (lib_id.into(), fp.into());
+            c.pins = (1..=pads).map(|n| pin(&n.to_string(), n)).collect();
+            library_resolution(&lib, &c)
+        };
+        let corners =
+            |r: &hauksbee_models::Resolution| r.selection.as_ref().is_some_and(|s| s.corners);
+        let header = "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical";
+        for (r, value, lib_id, fp) in [
+            // A panel-mount LED wired through a header.
+            ("D1", "LED", "Device:LED", header),
+            // An Eagle CHIPLED package under a name-style designator.
+            ("STAT", "", "", "adafruit:CHIPLED_0603"),
+            ("CHG", "CHG", "", "CHIPLED_0805_NOOUTLINE"),
+            // A KiCad PCM library footprint and an old KiCad 4 LED library.
+            ("PWR", "PWR", "", "PCM_LED_SMD_AKL:LED_0805_2012Metric"),
+            ("D5", "LED", "", "LEDs:LED_0603"),
+            ("LED2", "+3V3", "", "LED_THT:LED_D5.0mm"),
+            // The value alone.
+            ("D7", "led", "", "Custom:FOOT2"),
+        ] {
+            // The checks that trace indicators read the same part as an LED.
+            let mut c = comp(r, value);
+            (c.lib_id, c.footprint) = (lib_id.into(), fp.into());
+            assert!(hauksbee_extract::is_led(&c), "{r} {fp}: not seen as an LED");
+            let got = res(r, value, lib_id, fp, 2);
+            let model = got.model.as_ref().unwrap_or_else(|| panic!("{r} {fp}"));
+            assert_eq!(model.id, "led_generic_corner_high_vf", "{r} {fp}");
+            assert!(corners(&got), "{r}: {:?}", got.selection);
+            assert_eq!(got.confidence, Confidence::Guessed);
+            let s = got.selection.as_ref().expect("a corner set");
+            assert!(
+                s.determined.is_none() && s.members.len() == 2,
+                "{}",
+                s.listing()
+            );
+        }
+        // A name-style designator with a colour takes the colour card.
+        let colour = res("TXLED", "YELLOW", "", "CHIPLED_0805_NOOUTLINE", 2);
+        assert_eq!(colour.model.map(|m| m.id).as_deref(), Some("led_yellow"));
+        // Controls: a signal diode, a TVS, an infrared LED, a multi-die LED, an IC
+        // designator, an OLED module and a named diode card never take the set.
+        for (r, value, lib_id, fp, pads) in [
+            ("D3", "1N4148", "Device:D", "Diode_SMD:D_SOD-123", 2),
+            ("D4", "SMBJ5.0A", "Device:D_TVS", "Diode_SMD:D_SMB", 2),
+            ("D6", "D", "Device:D", "Diode_SMD:D_SOD-323", 2),
+            (
+                "D8",
+                "IR LED",
+                "Device:LED",
+                "LED_THT:LED_D5.0mm_IRBlack",
+                2,
+            ),
+            ("D9", "LED", "Device:LED_RGB", "LED_SMD:LED_RGB_5050-6", 4),
+            ("U1", "LED", "", "LED_SMD:LED_0603_1608Metric", 2),
+            ("DS1", "SSD1306", "", "Display:OLED-128O064D", 2),
+            (
+                "D10",
+                "1N4148W",
+                "Device:D",
+                "LED_SMD:LED_0603_1608Metric",
+                2,
+            ),
+        ] {
+            let got = res(r, value, lib_id, fp, pads);
+            assert!(
+                !got.model.as_ref().is_some_and(is_generic_led) && !corners(&got),
+                "{r} {value}: {:?}",
+                got.model.map(|m| m.id)
+            );
+        }
+    }
+
     /// A behaviorless `digital` entry stays open and explains why.
     #[test]
     fn a_logic_entry_that_models_only_a_pad_map_stays_open() {
@@ -11535,9 +11665,14 @@ style = "i2c_pointer"
         for name in ["LED_0603", "D_LED_0603", "LED_DRIVER"] {
             check("D9", "D", &format!("custom:{name}"), None);
         }
+        // The binder still binds such a part, as the generic LED corner set.
+        let mut led = comp("D9", "unknown");
+        led.footprint = "LED_SMD:LED_0603".into();
+        led.pins = vec![pin("1", 1), pin("2", 2)];
+        let res = library_resolution(&ModelLibrary::builtin(), &led);
         assert_eq!(
-            resolve_value(&ModelLibrary::builtin(), "unknown", "LED_SMD:LED_0603").id,
-            "led_generic"
+            res.model.map(|m| m.id).as_deref(),
+            Some("led_generic_corner_high_vf")
         );
     }
 
