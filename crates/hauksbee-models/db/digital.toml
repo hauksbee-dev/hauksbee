@@ -4566,6 +4566,86 @@ y = { enable = "oe_n", active = "low" }
 implements = ["buffer", "tristate_enable", "logic_levels"]
 missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
 
+# ── 74HCT1G125: single bus buffer, 3-state, TTL input levels, 4.5 V to 5.5 V ─
+# Source: Nexperia 74HC1G125; 74HCT1G125 product data sheet, Rev. 8,
+#   27 November 2023, https://assets.nexperia.com/documents/data-sheet/74HC_HCT1G125.pdf
+#   (sha256 4509747384292521d4e42ed04283e40fd1bbe969ad87232d5b5201afc7a8e14d).
+#   Pin map: 6.1 Pinning and Table 3 (p.2), the same for TSSOP5 (GW) and SC-74A
+#   (GV): 1 OE (active low), 2 A, 3 GND, 4 Y, 5 VCC. Function: Table 4 (p.3).
+#   Limiting values: Table 5 (p.3), VCC -0.5 to +7 V, IO +/-35 mA. 74HCT1G125
+#   VCC 4.5 to 5.5 V: Table 6 (p.3). VIH 2.0 V, VIL 0.8 V, VOH, VOL, ICC:
+#   Table 8 (p.5). tpd and CPD: Table 9 (p.6).
+[[models]]
+id = "74hct1g125"
+kind = "digital"
+description = "Nexperia 74HCT1G125 single bus buffer/line driver, 3-state, TTL input levels, TSSOP5 (GW) / SC-74A (GV)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://assets.nexperia.com/documents/data-sheet/74HC_HCT1G125.pdf"
+title = "Nexperia 74HC1G125; 74HCT1G125 bus buffer/line driver; 3-state, product data sheet Rev. 8, 27 November 2023"
+locator = "6.1 Pinning and Table 3 Pin description p.2; Table 4 Function table, Table 5 Limiting values and Table 6 Recommended operating conditions p.3; Table 8 Static characteristics 74HCT1G125 p.5; Table 9 Dynamic characteristics p.6"
+sha256 = "4509747384292521d4e42ed04283e40fd1bbe969ad87232d5b5201afc7a8e14d"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "enable_disable_timing"
+reason = "ten and tdis (OE to Y), IOZ off-state current and the TTL-level additional supply current (delta ICC) are not modelled; only the DC function table, the TTL input thresholds, the output levels and the A-to-Y delay are"
+
+[models.match]
+# The GW (TSSOP5) and GV (SC-74A) packages share Table 3's numbering. The
+# 74HC1G125 (CMOS input levels, 2 V to 6 V) is a different part and is not
+# matched; neither are other vendors' HCT1G125 parts, whose tables were not read.
+value_re = "(?i)^74HCT1G125(GW|GV)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IO = -20 uA, VCC 4.5 V (Table 8)
+vol = 0.1          # IO = 20 uA, VCC 4.5 V (Table 8)
+vih = 2.0          # VCC 4.5 V to 5.5 V (Table 8)
+vil = 0.8
+# VCC = 4.5 V, -40 to 85 C: VOH 3.84 V min at IO = -6 mA against the 4.4 V
+# light-load level, 0.56 V / 6 mA = 93 Ohm (VOL side: 0.33 V max at 6 mA,
+# 55 Ohm) (Table 8).
+ro = 93.0
+tpd_s = 11.0e-9    # A to Y typ, VCC 4.5 V, CL = 50 pF, 25 C (Table 9)
+supply_static_ua = 10.0  # ICC max, VCC 5.5 V, -40 to 85 C (Table 8)
+supply_cpd_pf = 27.0     # Table 9
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.pins]
+"1" = "oe_n"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035     # IO, Table 5
+max_voltage_v = 7.0           # VCC, Table 5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Nexperia 74HC_HCT1G125 Rev. 8, Table 6 74HCT1G125 VCC 4.5 V to 5.5 V; Table 5 VCC -0.5 V to +7.0 V"
+
+[models.logic]
+# Table 4: OE low passes A to Y; OE high puts Y in high impedance.
+inputs = ["a", "oe_n"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+[models.logic.tristate]
+y = { enable = "oe_n", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["enable_disable_timing", "output_drive_curve", "off_state_output_current", "additional_supply_current"]
+
 [[models]]
 id = "sn74lvc2g34"
 kind = "digital"
