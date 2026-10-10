@@ -276,3 +276,39 @@ fn a_layout_with_no_routing_at_all_is_one_blocking_finding_not_one_per_pad() {
     // Once routing has started, an open pad is a real finding.
     assert_eq!(high(&lint(&two_parts(GND_TRACK))).len(), 1);
 }
+
+// --- Part identity across the two files ------------------------------------
+
+/// R1, R2 and an IC U1 whose value field is `u1_value`.
+fn with_ic(u1_value: &str) -> String {
+    let u1 = part("U1", 20.0, A, GND, "").replacen(
+        "(property \"Reference\" \"U1\")",
+        &format!("(property \"Reference\" \"U1\") (property \"Value\" \"{u1_value}\")"),
+        1,
+    );
+    format!(
+        "{}{}{u1}",
+        part("R1", 0.0, A, GND, ""),
+        part("R2", 10.0, A, GND, "")
+    )
+}
+
+#[test]
+fn a_part_whose_value_differs_between_the_files_is_one_warning() {
+    let found = parity(&with_ic("TPS62130"), &with_ic("TPS62160"));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].severity, Severity::Medium);
+    assert_eq!(found[0].refs, vec!["U1".to_string()]);
+    let m = &found[0].message;
+    assert!(m.contains("'TPS62160' in the schematic"), "{m}");
+    assert!(m.contains("'TPS62130' on the PCB"), "{m}");
+    assert!(m.contains("analysed the PCB's 'TPS62130'"), "{m}");
+}
+
+#[test]
+fn identical_parts_and_case_or_spacing_differences_are_not_reported() {
+    assert!(parity(&with_ic("TPS62130"), &with_ic("TPS62130")).is_empty());
+    assert!(parity(&with_ic("tps62130 "), &with_ic("TPS 62130")).is_empty());
+    // A blank field on one side is missing data, not a disagreement.
+    assert!(parity(&with_ic(""), &with_ic("TPS62130")).is_empty());
+}

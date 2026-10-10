@@ -22,6 +22,7 @@ impl ExtractedBoard {
         copper_islands(layout_text, &mut report.findings);
         if let Some(sch) = schematic {
             schematic_parity(self, sch, &mut report.findings);
+            part_identity_parity(self, sch, &mut report.findings);
         }
         // Findings point at this board's nets; a name the netlist spells
         // differently stays in the message only.
@@ -400,6 +401,66 @@ fn schematic_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<Li
             ),
             refs: refs_of(&moved_owned),
             nets,
+        });
+    }
+}
+
+/// A part identity compared across the two files: lower case, whitespace
+/// dropped, so "10 k" and "10K" agree.
+fn identity_key(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A part's manufacturer part number property, when it carries one.
+fn mpn_property(c: &Component) -> Option<&str> {
+    c.properties
+        .iter()
+        .find(|(k, v)| crate::bom::is_mpn_property_key(k) && !v.trim().is_empty())
+        .map(|(_, v)| v.trim())
+}
+
+/// Compare what each reference designator IS on the two sides: its value and,
+/// when both carry one, its part number. Connectivity can agree while the
+/// layout places a different part than the schematic names, and the verdict
+/// then silently analyses the layout's. Each disagreeing reference is one
+/// warning naming both and saying which the verdict used. Blank fields and
+/// differences of case or spacing are not disagreements.
+fn part_identity_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<LintFinding>) {
+    let fitted = |b: &ExtractedBoard| -> BTreeMap<String, Component> {
+        b.components
+            .iter()
+            .filter(|c| !crate::dnp::unbought(c))
+            .map(|c| (c.reference.clone(), c.clone()))
+            .collect()
+    };
+    let sch_parts = fitted(sch);
+    for (reference, pc) in fitted(pcb) {
+        let Some(sc) = sch_parts.get(&reference) else {
+            continue;
+        };
+        let differs = |a: &str, b: &str| {
+            let (a, b) = (identity_key(a), identity_key(b));
+            !a.is_empty() && !b.is_empty() && a != b
+        };
+        let (what, schematic, layout) = if differs(&sc.value, &pc.value) {
+            ("value", sc.value.trim(), pc.value.trim())
+        } else {
+            match (mpn_property(sc), mpn_property(&pc)) {
+                (Some(s), Some(p)) if differs(s, p) => ("part number", s, p),
+                _ => continue,
+            }
+        };
+        out.push(LintFinding {
+            check: LintCheck::PcbSchematicMismatch,
+            severity: Severity::Medium,
+            message: format!(
+                "{reference} has {what} '{schematic}' in the schematic but '{layout}' on the PCB. This verdict analysed the PCB's '{layout}'; if the schematic's part is the one to be fitted, update the PCB from the schematic and re-check."
+            ),
+            refs: vec![reference.clone()],
+            nets: Vec::new(),
         });
     }
 }

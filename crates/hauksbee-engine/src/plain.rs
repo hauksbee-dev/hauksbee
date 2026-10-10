@@ -1151,6 +1151,13 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The pads are on the right net, but no track, via or copper pour actually reaches them. A board made from these files would leave the connection open: the ratsnest line the layout editor shows here was never routed.".to_string(),
                 "Route the missing connection (or extend the pour to it), refill the zones, and run the layout editor's DRC until it reports no unconnected items.".to_string(),
             ),
+            // Medium is the part-identity comparison: the wiring agrees but a
+            // reference names a different part in each file.
+            LintCheck::PcbSchematicMismatch if f.severity == Severity::Medium => (
+                f.message.clone(),
+                "The schematic and the layout disagree about which part this reference is. Only one of them can be what gets bought and fitted, and the check results describe the layout's part.".to_string(),
+                "Decide which part is right, make the schematic and layout agree (KiCad: Tools > Update PCB from Schematic), and re-check.".to_string(),
+            ),
             LintCheck::PcbSchematicMismatch => (
                 f.message.clone(),
                 "The layout is what gets manufactured. When it wires a pin differently from the schematic, the board does not match the design that was reviewed: a pin that should reach ground or a signal is left off it, or joined to the wrong one.".to_string(),
