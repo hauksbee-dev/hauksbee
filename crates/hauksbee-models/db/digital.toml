@@ -1563,9 +1563,10 @@ description = "CH340G USB-to-UART bridge, SOP-16, 5V operation, external 12MHz c
 
 [models.match]
 # The G suffix is required. The CH340C/N/K/E/X/B variants have integrated clocks
-# AND different packages and pinouts (SOP-16 with TNOW in place of R232, SOP-8,
-# ESSOP-10, MSOP-10), so binding them to this SOP-16 map would put roles on the
-# wrong pads. They resolve to nothing until they get their own entries.
+# and different pin maps (the SOP-16 C has NC/OUT# on the crystal pads, the
+# SOP-16 B RST#/TNOW; the N, K, E and X are SOP-8, ESSOP-10 and MSOP-10), so
+# binding them to this map would put roles on the wrong pads. The C has its own
+# entry below.
 value_re = "(?i)^CH340G([-_ ].*)?$"
 
 [models.params]
@@ -1608,6 +1609,119 @@ max_voltage_v = 6.0    # VCC abs max, Section 6.1
 # not a rating the part is destroyed by exceeding, and there is no package
 # current limit on the sheet. No junction-temperature or thermal-resistance
 # fields either; Section 6.1 gives only an ambient range (-40 to 85 C).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CH340C: WCH USB-to-UART bridge, SOP-16, internal clock (no crystal).
+#
+# Source: WCH "USB to Serial Port chip CH340 Datasheet" Version 3D,
+#   https://www.wch-ic.com/download/file?id=79 (sha256 below). Section 3
+#   Package table (p.2: CH340C is SOP-16, built-in clock); Section 4 Pin table,
+#   SOP16 column (pp.3-4); Section 5.1 (p.5: 5 V vs 3.3 V supply wiring);
+#   Section 6.1 Absolute maximum values (p.8); Section 6.2 5 V electrical
+#   parameters (p.8); Section 6.3 3.3 V electrical parameters (pp.8-9).
+#
+# SAME SOP-16 PAD MAP AS THE CH340G except pads 7 and 8: the G's XI/XO crystal
+# pins are NC ("must be suspended") and OUT# (a software-defined MODEM output,
+# active low) on the C. Pad 15 is R232 on both (the SOP16 column lists R232 for
+# CH340T/R/G/C; TNOW on pad 15 is the CH340B).
+#
+# TWO SUPPLY MODES, both tabulated: VCC = 5 V with V3 decoupled (Section 6.2,
+# VCC 4.0 to 5.3 V), or VCC tied to V3 at 3.3 V (Section 6.3, CH340C row 3.1 to
+# 3.6 V). The input and output levels are given at both points and are carried
+# as supply-dependent [models.levels] curves between them; values between the
+# two tabulated points are interpolated, which is ASSUMED (the sheet gives no
+# figure for VCC between 3.6 and 4.0 V, where neither mode is specified).
+#
+# DELIBERATELY NOT MODELLED: the USB device and the UART traffic (TXD, RTS#,
+# DTR#, OUT# carry no driver); the internal clock; the controllable RXD pull
+# and the R232 pull-down (Section 6.2/6.3 give them only as currents, IUP/IDN);
+# the lot-dependent OUT#-to-second-DTR# switch on pad 8 (Section 5.3); the
+# power-on reset.
+[[models]]
+id = "ch340c"
+kind = "digital"
+description = "WCH CH340C USB-to-UART bridge, SOP-16, internal clock (pad map, 3.3/5 V logic levels, supply ranges; no USB stack)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.wch-ic.com/download/file?id=79"
+title = "WCH CH340 Datasheet (USB to Serial Port chip CH340), Version 3D"
+locator = "Section 3 Package p.2; Section 4 Pin, SOP16 column pp.3-4; Section 5.1 p.5; Section 6.1 p.8; Section 6.2 p.8; Section 6.3 pp.8-9"
+sha256 = "4d7b150edfda88e44eb8f499c22693318666968125ff17f652ca9983d9929e5e"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_levels_between_modes"
+reason = "levels are tabulated only at VCC = 3.3 V (Section 6.3) and VCC = 5 V (Section 6.2); the curve between them is a linear interpolation"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "usb_uart_behavior"
+reason = "the USB device, UART traffic, internal clock, RXD/R232 internal pulls and power-on reset are not modelled"
+[[models.source.pinout]]
+package = "SOP-16 (CH340C)"
+pins = { "1" = "GND", "2" = "TXD", "3" = "RXD", "4" = "V3", "5" = "UD+", "6" = "UD-", "7" = "NC.", "8" = "OUT#", "9" = "CTS#", "10" = "DSR#", "11" = "RI#", "12" = "DCD#", "13" = "DTR#", "14" = "RTS#", "15" = "R232", "16" = "VCC" }
+
+[models.match]
+# CH340C only (SOP-16, internal clock). The N (SOP-8), K (ESSOP-10), E/X
+# (MSOP-10) and B (SOP-16 with RST#/TNOW in place of NC/R232) members have other
+# pin maps, Section 4.
+value_re = "(?i)^CH340C([-_ ].*)?$"
+
+[models.params]
+# Section 6.3 (VCC = V3 = 3.3 V) figures; [models.levels] carries both modes.
+voh       = 2.7      # VCC - 0.6 V min @ 2 mA sourced
+vol       = 0.5      # max @ 4 mA sunk
+vih       = 1.9      # min
+vil       = 0.8      # max
+supply_static_ua = 4000.0   # ICC typ at 3.3 V (12 mA max); 7 mA typ at 5 V
+supply_pin = "16"
+gnd_pin    = "1"
+identity_only = true
+warning = "CH340C identity, SOP-16 pin map, 3.3/5 V logic levels, supply range and ratings are sourced; the USB device and UART are not modeled (TXD, RTS#, DTR# and OUT# are undriven), so the part stays OPEN"
+unlocked_by = "a USB-to-UART bridge model that drives TXD and the MODEM outputs from host traffic"
+
+[models.levels]
+# Section 6.3 at VCC = 3.3 V and Section 6.2 at VCC = 5 V.
+vih = [[3.3, 1.9], [5.0, 2.3]]
+vil = [[3.3, 0.8], [5.0, 0.9]]
+voh = [[3.3, 2.7], [5.0, 4.4]]
+
+[models.pins]
+# Section 4, SOP16 column.
+"1"  = "gnd"
+"2"  = "txd"     # serial data out (not driven)
+"3"  = "rxd"     # serial data in, internal controllable pull
+"4"  = "v3"      # internal 3.3 V node: 0.1 uF to GND at 5 V, tied to VCC at 3.3 V
+"5"  = "ud_p"    # USB D+, no series resistor
+"6"  = "ud_n"    # USB D-
+"7"  = "nc"      # CH340C: empty pin, must be left floating
+"8"  = "out_n"   # MODEM general output, active low (not driven)
+"9"  = "cts_n"
+"10" = "dsr_n"
+"11" = "ri_n"
+"12" = "dcd_n"
+"13" = "dtr_n"   # (not driven)
+"14" = "rts_n"   # (not driven)
+"15" = "r232"    # auxiliary RS232 enable, active high, internal pull-down
+"16" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.0    # VCC abs max, Section 6.1
+# Section 6.1 operating ambient for CH340C/N/K/E/X/B is -20 to 70 C (the G is
+# -40 to 85 C); no junction or thermal figures are given.
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.1
+max_v = 5.3
+abs_max_v = 6.0
+basis = "WCH CH340 V3D Section 6.3 VCC 3.1 to 3.6 V (CH340C, V3 tied to VCC) and Section 6.2 VCC 4.0 to 5.3 V (V3 decoupled); Section 6.1 VCC -0.5 to 6.0 V. 3.6 to 4.0 V is in neither mode"
+
+[models.coverage]
+implements = ["pin_roles", "vcc_logic_levels", "operating_supply_current", "supply_ranges", "absolute_ratings"]
+missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "internal_clock", "rxd_r232_internal_pulls", "power_on_reset", "usb_suspend_current", "supply_mode_check"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CP2102: Silicon Labs USB-to-UART bridge, QFN-28, no external crystal.
