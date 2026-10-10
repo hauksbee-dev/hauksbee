@@ -504,12 +504,7 @@ fn is_tps25982(c: &Component) -> bool {
         return true;
     }
     c.properties.iter().any(|(key, value)| {
-        let key = key.to_ascii_lowercase().replace([' ', '-'], "_");
-        (key.contains("mpn")
-            || key.contains("manufacturer_part")
-            || key == "part_number"
-            || key == "mfr_part")
-            && is_tps25982_token(value)
+        hauksbee_extract::bom::is_mpn_property_key(key) && is_tps25982_token(value)
     })
 }
 

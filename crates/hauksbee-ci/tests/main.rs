@@ -28,6 +28,7 @@ mod firmware_input_ci;
 mod flagship_brownout;
 mod floating_net_verdict;
 mod gate_drive;
+mod generic_mosfet_corners;
 mod hook_gate_e2e;
 mod hwtrace;
 mod init_scaffold;

@@ -1300,6 +1300,26 @@ impl Assumption {
         )
     }
 
+    /// A part the board names only by class (a generic MOSFET symbol with no
+    /// part number), bound to a set of ASSUMED parameter corners: `bound` is the
+    /// corner a single run simulates, `ids` every corner. Undermining on its
+    /// own, because a result at one corner says nothing about the others; the
+    /// corner sweep `hauksbee-ci` runs is what can claim a pass.
+    #[must_use]
+    pub fn undetermined_corner(subject: &str, reference: &str, bound: &str, ids: &str) -> Self {
+        Self::build(
+            AssumptionKind::SubstituteModel,
+            AssumptionSource::Binder,
+            subject.trim(),
+            part_scope(subject),
+            format!("{reference} is simulated at the assumed corner {bound}, one of {ids}."),
+            format!("Nothing on the board names the part {reference} is, only its class, so its threshold and on-resistance are unknown; it is bounded by the assumed corner variants the card lists ({ids}) and {bound} stands in."),
+            format!("Every result touching {reference} describes one assumed corner; the fitted part may sit anywhere between the corners, so a result that holds here may not hold for it."),
+            format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part; `hauksbee-ci` simulates every corner and passes only if all pass"),
+            None,
+        )
+    }
+
     /// A pin's role was inferred from a package numbering convention (a pin rule
     /// or the card's package standard) rather than read from the schematic; `component_subject` is the occurrence-safe causal component id.
     #[must_use]

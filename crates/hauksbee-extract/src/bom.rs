@@ -1050,6 +1050,85 @@ pub const IDENTITY_SOURCE_PROPERTY: &str = "hauksbee_identity_source";
 /// [`crate::Component`] whose layout value was empty.
 pub const VALUE_PROPERTY: &str = "hauksbee_artifact_value";
 
+/// Whether a design property (a KiCad field, an Eagle attribute, an Altium
+/// parameter) names the part's MANUFACTURER PART NUMBER.
+///
+/// Designers spell this key many ways (`MPN`, `Manufacturer_Part_Number`,
+/// `PART_NUMBER`, `MANUFACTURER-PN`, `Manufacturer_No`, `MFR.Part #`, `mfg#`),
+/// so the key is normalised as a BOM header is (a `#` reads as "no") and then
+/// split into words. It is an MPN key when it says `mpn`, or when its words are
+/// an optional manufacturer prefix followed by a part-number phrase. A bare
+/// manufacturer NAME key (`Manufacturer`, `MFR`) is not one, and neither is a
+/// distributor or catalogue code (`LCSC Part #`, `Mouser Part Number`,
+/// `PROD_ID`, `SKU`): those name an order code, which never matches a model's
+/// part-number regex and would cost the bind a real MPN beside it could win.
+#[must_use]
+pub fn is_mpn_property_key(key: &str) -> bool {
+    let key = normalise_header(&key.replace('#', " no "));
+    let mut words: Vec<&str> = key.split('_').filter(|w| !w.is_empty()).collect();
+    // A numbered alternate (`Manufacturer_Part_Number_2`) is still an MPN key.
+    while words.len() > 1
+        && words
+            .last()
+            .is_some_and(|w| w.bytes().all(|b| b.is_ascii_digit()))
+    {
+        words.pop();
+    }
+    let distributor = |w: &str| {
+        matches!(
+            w,
+            "lcsc"
+                | "jlc"
+                | "jlcpcb"
+                | "digikey"
+                | "digi"
+                | "mouser"
+                | "arrow"
+                | "farnell"
+                | "newark"
+                | "element14"
+                | "rs"
+                | "tme"
+                | "octopart"
+                | "supplier"
+                | "distributor"
+                | "vendor"
+                | "sku"
+                | "prod"
+                | "sparkfun"
+                | "sf"
+                | "internal"
+                | "stock"
+        )
+    };
+    if words.iter().any(|w| distributor(w)) {
+        return false;
+    }
+    if words.iter().any(|w| w.starts_with("mpn")) {
+        return true;
+    }
+    let maker = |w: &str| {
+        matches!(
+            w,
+            "manufacturer" | "manufacturers" | "manuf" | "manf" | "mfr" | "mfg" | "mf" | "mfn"
+        )
+    };
+    let rest = words
+        .iter()
+        .position(|w| !maker(w))
+        .map_or(&[][..], |i| &words[i..]);
+    let has_maker = rest.len() < words.len();
+    match rest {
+        // "Part Number", "PartNo", "Part #", with or without a maker prefix.
+        ["part", "no" | "num" | "number"] | ["partnumber" | "partno" | "partnum" | "pn"] => true,
+        // "Manufacturer No", "MFR #", "mfg#", "Manufacturer Part": a bare number
+        // word or a bare "Part" means part number only under a maker prefix
+        // ("Part" alone is a reference column in Eagle).
+        ["no" | "num" | "number" | "part"] => has_maker,
+        _ => false,
+    }
+}
+
 // ── Tabular reading ─────────────────────────────────────────────────────────
 
 /// A delimiter-separated or fixed-width row.
@@ -2139,6 +2218,50 @@ fn is_distributor_code(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The MPN key spellings found on real designs are recognised; manufacturer
+    /// NAME keys, distributor and catalogue codes, and unrelated fields are not.
+    #[test]
+    fn mpn_property_keys_are_recognised_across_spellings() {
+        for key in [
+            "MPN",
+            "mpn1",
+            "Manufacturer_Part_Number",
+            "Manufacturer Part Number 2",
+            "MANUFACTURER-PN",
+            "PART_NUMBER",
+            "PartNumber",
+            "Part #",
+            "Manufacturer_No",
+            "MFR.Part #",
+            "MFR. Part#",
+            "mfg#",
+            "Mfg Part No.",
+            "mfr_part",
+            "Manufacturer Part",
+        ] {
+            assert!(is_mpn_property_key(key), "{key} should be an MPN key");
+        }
+        for key in [
+            "Manufacturer",
+            "MF",
+            "MFR",
+            "Part",
+            "Value",
+            "Footprint",
+            "LCSC Part #",
+            "JLCPCB Part",
+            "Mouser Part Number",
+            "Digi-Key_PN",
+            "PROD_ID",
+            "SKU",
+            "SF_ID",
+            "Supplier Part Number",
+            "Description",
+        ] {
+            assert!(!is_mpn_property_key(key), "{key} should not be an MPN key");
+        }
+    }
 
     #[test]
     fn sha256_matches_the_known_vector() {

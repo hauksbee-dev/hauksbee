@@ -1408,6 +1408,28 @@ fn model_cs_net(
 /// known-valid values and only `expect`s that they stay valid.
 #[must_use]
 pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
+    let res = record_resolution(lib, comp);
+    // A part-number FIELD on the design (`MPN`, `Manufacturer_No`, an Eagle
+    // `PART_NUMBER` attribute) reaches only the few cards written with an
+    // `mpn_re`; nearly every card matches on `value_re`. So where the value
+    // decided nothing (unresolved, or only a guess), the field is tried the way
+    // a BOM's part number is: standing in for a value that is not a magnitude.
+    // The value keeps precedence wherever it reached a card itself.
+    let Some(mpn) = mpn_properties(comp).find(|m| !m.eq_ignore_ascii_case(comp.value.trim()))
+    else {
+        return res;
+    };
+    let after = record_resolution(lib, &probe_with_mpn(comp, mpn));
+    if identity_improves(&res, &after) {
+        after
+    } else {
+        res
+    }
+}
+
+/// [`library_resolution`] from the record's own value, footprint and fields,
+/// without trying a part-number field in place of the value.
+fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
         non_empty(&comp.value),
@@ -1425,9 +1447,32 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
     }
     q.mpn = component_mpn(comp);
     let mut res = lib.resolve(&q);
-    // A KiCad generic transistor value ("Q_NPN_BCE") spells its symbol's pad order.
+    // A MOSFET named only by class binds that class's assumed-corner set, ahead
+    // of any package catch-all (which cannot tell N from P), but never ahead of
+    // a card that names the part.
+    let named = res
+        .provenance
+        .as_ref()
+        .is_some_and(|p| p.tier() != hauksbee_ir::evidence::ModelSourceTier::EstimatedFallback);
+    if let Some(class) = generic_mosfet_class(comp).filter(|_| !named) {
+        let mut by_class = q.clone();
+        (by_class.value, by_class.mpn) = (Some(class.to_string()), None);
+        let mut classed = lib.resolve(&by_class);
+        if classed.model.is_some() {
+            (classed.confidence, classed.query) = (Confidence::Guessed, q.clone());
+            res = classed;
+        }
+    }
+    // A KiCad generic transistor value ("Q_NPN_BCE") spells its symbol's pad
+    // order; for a class corner set, so does the symbol name itself
+    // (`Device:Q_PMOS_GSD`), and it wins: the netlist's pin numbers are the
+    // symbol's, whatever the value text says. A part's own card keeps its
+    // datasheet pinout.
+    let corners = res.selection.as_ref().is_some_and(|s| s.corners);
     if let Some(model) = res.model.as_mut() {
-        if let Some(pins) = generic_symbol_pins(&comp.value, model.kind) {
+        let symbol = Some(symbol_name(&comp.lib_id)).filter(|_| corners);
+        let mut spelled = symbol.into_iter().chain([comp.value.as_str()]);
+        if let Some(pins) = spelled.find_map(|name| generic_symbol_pins(name, model.kind)) {
             model.pins = pins;
         }
     }
@@ -1623,6 +1668,67 @@ fn generic_symbol_pins(
         .collect::<Option<std::collections::BTreeMap<_, _>>>()?;
     let roles: std::collections::BTreeSet<_> = pins.values().collect();
     (class_kind && (3..=4).contains(&pins.len()) && roles.len() == 3).then_some(pins)
+}
+
+/// The canonical generic-class value (`Q_NMOS` / `Q_PMOS`) of a MOSFET the
+/// component names only by class, never by part.
+///
+/// The class comes from KiCad's generic symbol name (`Q_PMOS_GSD`, in the value
+/// or as the `lib_id` symbol) or from a value that is only a class word
+/// (`PMOS`, `MOSFET_P`, `P-MOSFET`, `PFET`, `P-CH`). It is `None` when the
+/// component carries a part number anywhere: a filled MPN field, or a value
+/// that is neither blank nor a class word (`AO3400A`, a rating string). It is
+/// also `None` when two sources disagree on the polarity, since then the board
+/// contradicts itself and no class is safe to assume.
+fn generic_mosfet_class(comp: &Component) -> Option<&'static str> {
+    use ComponentKind::{Nmos, Pmos};
+    fn symbol(name: &str) -> Option<ComponentKind> {
+        let upper = name.trim().to_ascii_uppercase();
+        let rest = upper.strip_prefix("Q_")?;
+        let (class, order) = rest.split_once('_').unwrap_or((rest, ""));
+        let order_ok = order.is_empty()
+            || ((3..=4).contains(&order.len()) && order.chars().all(|c| "DGS".contains(c)));
+        match class {
+            "NMOS" if order_ok => Some(Nmos),
+            "PMOS" if order_ok => Some(Pmos),
+            _ => None,
+        }
+    }
+    /// What a value says about the part: nothing (blank or a bare `MOSFET`),
+    /// a polarity class word, or a part number (`Named`).
+    enum Value {
+        Silent,
+        Class(ComponentKind),
+        Named,
+    }
+    fn word(value: &str) -> Value {
+        let w: String = value.chars().filter(char::is_ascii_alphanumeric).collect();
+        let w = w.to_ascii_uppercase().replace("CHANNEL", "CH");
+        match w.as_str() {
+            "" | "MOSFET" | "FET" | "MOS" => Value::Silent,
+            "NMOS" | "NFET" | "NMOSFET" | "MOSFETN" | "NCH" | "NCHMOSFET" | "MOSFETNCH"
+            | "NCHFET" | "NCHMOS" => Value::Class(Nmos),
+            "PMOS" | "PFET" | "PMOSFET" | "MOSFETP" | "PCH" | "PCHMOSFET" | "MOSFETPCH"
+            | "PCHFET" | "PCHMOS" => Value::Class(Pmos),
+            _ => Value::Named,
+        }
+    }
+    if mpn_properties(comp).next().is_some() || !(3..=4).contains(&comp.pins.len()) {
+        return None;
+    }
+    let value = comp.value.trim().trim_matches('~');
+    // A value that is neither a generic name nor a class word names a part.
+    let by_value = match (symbol(value), word(value)) {
+        (Some(kind), _) | (None, Value::Class(kind)) => Some(kind),
+        (None, Value::Silent) => None,
+        (None, Value::Named) => return None,
+    };
+    let by_symbol = symbol(symbol_name(&comp.lib_id));
+    let kind = match (by_value, by_symbol) {
+        (Some(a), Some(b)) if a != b => return None,
+        (a, b) => a.or(b)?,
+    };
+    Some(if kind == Nmos { "Q_NMOS" } else { "Q_PMOS" })
 }
 
 /// A memory-card socket placed under any designator (a `U3` microSD socket is
@@ -2035,18 +2141,7 @@ fn mcu_identity_strings(comp: &Component) -> Vec<String> {
     if let Some(v) = non_empty(&comp.value) {
         out.push(v);
     }
-    for (k, v) in &comp.properties {
-        let key = k.to_ascii_lowercase().replace([' ', '-'], "_");
-        if key.contains("mpn")
-            || key.contains("manufacturer_part")
-            || key == "part_number"
-            || key == "mfr_part"
-        {
-            if let Some(v) = non_empty(v) {
-                out.push(v);
-            }
-        }
-    }
+    out.extend(mpn_properties(comp).map(str::to_string));
     // The symbol name only: the library nickname before the `:` names a
     // library, a sheet cache or a project (`ESP32-PoE_Rev_M1-cache:SN74LVC1G04`),
     // not the part, so it is no evidence of the part's family.
@@ -2378,21 +2473,25 @@ const ATMEGA328P_DIP28_PINS: [(&str, &str); 28] = [
 /// BOM supplied sits under the reserved [`hauksbee_extract::bom::MPN_PROPERTY`]
 /// key and is preferred over the heuristic scan, because the scan cannot tell a
 /// manufacturer part number from a distributor code and a board carrying both
-/// would lose the bind to the one that does not match.
+/// would lose the bind to the one that does not match. The scan takes the
+/// first NON-EMPTY MPN field: an empty `MPN` field ahead of a filled
+/// `Manufacturer_No` is no evidence and must not hide it.
 #[must_use]
 pub fn component_mpn(comp: &Component) -> Option<String> {
-    let mpn_key = |k: &str| {
-        let k = k.to_ascii_lowercase().replace([' ', '-'], "_");
-        k.contains("mpn")
-            || k.contains("manufacturer_part")
-            || k == "part_number"
-            || k == "mfr_part"
-    };
     (comp.properties.iter())
-        .find(|(k, _)| k == hauksbee_extract::bom::MPN_PROPERTY)
-        .or_else(|| comp.properties.iter().find(|(k, _)| mpn_key(k)))
-        .and_then(|(_, v)| non_empty(v.trim()))
+        .find(|(k, v)| k == hauksbee_extract::bom::MPN_PROPERTY && !v.trim().is_empty())
+        .map(|(_, v)| v.trim())
+        .or_else(|| mpn_properties(comp).next())
+        .map(str::to_string)
         .or_else(|| non_empty(&comp.value))
+}
+
+/// The component's non-empty manufacturer-part-number fields, in board order.
+fn mpn_properties(comp: &Component) -> impl Iterator<Item = &str> {
+    comp.properties
+        .iter()
+        .filter(|(k, v)| !v.trim().is_empty() && hauksbee_extract::bom::is_mpn_property_key(k))
+        .map(|(_, v)| v.trim())
 }
 
 fn non_empty(s: &str) -> Option<String> {
@@ -2452,11 +2551,7 @@ fn unresolved_outcome(
     // The table is consulted only HERE, after resolution has already failed, and it
     // contributes only this string: it cannot bind anything, and a stale entry for a
     // part that has since gained a real model is unreachable rather than wrong.
-    let mpn = comp
-        .properties
-        .iter()
-        .find(|(k, _)| k.to_ascii_lowercase().contains("mpn"))
-        .map_or("", |(_, v)| v.as_str());
+    let mpn = mpn_properties(comp).next().unwrap_or("");
     let abstention = lib.unmodelled().note_for(&comp.value, mpn);
     let reason = match (value_unresolved, abstention) {
         // The extractor's own explanation for a valueless part wins: it says the
@@ -8729,12 +8824,12 @@ mod tests {
             ),
             (
                 "Q_PMOS_GSD",
-                "generic_kicad_pmos_switch",
+                "generic_pmos_sot_corner_high_vth",
                 ["gate", "source", "drain"],
             ),
             (
                 "q_nmos_dgs",
-                "generic_kicad_nmos_switch",
+                "generic_nmos_sot_corner_high_vth",
                 ["drain", "gate", "source"],
             ),
         ] {
@@ -8761,6 +8856,128 @@ mod tests {
         assert!(generic_symbol_pins("Q_NPN_BBE", ComponentKind::BjtNpn).is_none());
         let tab = generic_symbol_pins("Q_NMOS_GDSD", ComponentKind::Nmos).expect("tab pad");
         assert_eq!(tab["4"], "drain");
+    }
+
+    /// A MOSFET the board names only by class binds that class's assumed
+    /// corner set, the envelope chosen by package, in the pad order its symbol
+    /// spells; a part number anywhere, or a value and symbol disagreeing on the
+    /// polarity, binds no class.
+    #[test]
+    fn a_mosfet_named_only_by_class_binds_its_corner_set_in_the_symbol_pad_order() {
+        let lib = ModelLibrary::builtin();
+        let fet = |value: &str, lib_id: &str, footprint: &str, props: &[(&str, &str)]| {
+            let mut c = comp("Q1", value);
+            (c.lib_id, c.footprint) = (lib_id.into(), footprint.into());
+            c.pins = vec![pin("1", 1), pin("2", 2), pin("3", 3)];
+            c.properties = props
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            library_resolution(&lib, &c)
+        };
+        let roles = |m: &ModelEntry| ["1", "2", "3"].map(|p| m.pins[p].clone()).to_vec();
+        let corners =
+            |r: &hauksbee_models::Resolution| r.selection.as_ref().is_some_and(|s| s.corners);
+        #[rustfmt::skip]
+        let classed = [
+            // A class word on a generic symbol in a power package: this bound the
+            // N-channel power catch-all before, on an id tie, for a P-channel part.
+            ("PMOS", "Device:Q_PMOS_GDS", "Package_TO_THT:TO-220-3_Vertical", "generic_pmos_power_corner_high_vth", ["gate", "drain", "source"]),
+            ("MOSFET_N", "Transistor_FET:Q_NMOS_GSD", "Package_TO_SOT_SMD:SOT-23", "generic_nmos_sot_corner_high_vth", ["gate", "source", "drain"]),
+            ("", "Device:Q_NMOS_SGD", "Custom:FET3", "generic_nmos_class_corner_high_vth", ["source", "gate", "drain"]),
+        ];
+        for (value, lib_id, footprint, id, want) in classed {
+            let res = fet(value, lib_id, footprint, &[]);
+            let model = res
+                .model
+                .as_ref()
+                .unwrap_or_else(|| panic!("{value} {lib_id}"));
+            assert_eq!(
+                (&*model.id, roles(model)),
+                (id, want.map(String::from).to_vec())
+            );
+            let s = res.selection.as_ref().expect("a corner set");
+            assert!(
+                s.corners && s.determined.is_none() && s.same_pinout,
+                "{}",
+                s.listing()
+            );
+            assert_eq!(s.members.len(), 2, "{}", s.listing());
+            assert_eq!(res.confidence, Confidence::Guessed);
+        }
+        // A class word with no symbol spells no pad order: the card keeps its
+        // electrode-letter pins and the package rule (a disclosed guess) maps pads.
+        let worded = fet("P-Channel MOSFET", "", "SOT-23", &[]);
+        let model = worded.model.expect("class word binds");
+        assert_eq!(model.id, "generic_pmos_sot_corner_high_vth");
+        assert_eq!(model.pins["G"], "gate");
+        // KiCad 10's unordered Device:Q_NMOS numbers its pads by electrode letter.
+        let mut lettered = comp("Q2", "Q_NMOS");
+        lettered.lib_id = "Device:Q_NMOS".into();
+        lettered.pins = vec![pin("D", 1), pin("G", 2), pin("S", 3)];
+        let model = library_resolution(&lib, &lettered)
+            .model
+            .expect("bare symbol");
+        assert_eq!(model.id, "generic_nmos_class_corner_high_vth");
+        assert_eq!(model.pins["G"], "gate");
+        // Controls: a part number, in an MPN field or the value, or a polarity
+        // the value and symbol dispute, binds no class corner.
+        let mpn = fet(
+            "MOSFET_P",
+            "Device:Q_PMOS_GSD",
+            "SOT-23",
+            &[("Part Number", "XQ-NOCARD-1")],
+        );
+        assert!(mpn.model.is_none() && !corners(&mpn));
+        let disputed = fet("PMOS", "Device:Q_NMOS_GSD", "SOT-23", &[]);
+        assert!(!corners(&disputed), "{:?}", disputed.model.map(|m| m.id));
+        let rated = fet("20V/4.2A", "", "SOT-23", &[]);
+        assert!(!corners(&rated));
+        let named = fet("AO3400A", "Device:Q_NMOS_GSD", "SOT-23", &[]);
+        assert_eq!(named.model.as_ref().map(|m| &*m.id), Some("ao3400a"));
+    }
+
+    /// A part number held in a design FIELD under any common spelling identifies
+    /// a part its value leaves anonymous; a catalogue code (`PROD_ID`) never
+    /// does, an empty MPN field does not hide a filled one, and a value that
+    /// reaches a card itself keeps precedence over the field.
+    #[test]
+    fn part_number_fields_identify_parts_the_value_does_not() {
+        let lib = ModelLibrary::builtin();
+        let bound = |value: &str, props: &[(&str, &str)]| {
+            let mut c = comp("Q1", value);
+            c.footprint = "SOT-23".into();
+            c.pins = vec![pin("1", 1), pin("2", 2), pin("3", 3)];
+            c.properties = props
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            library_resolution(&lib, &c).model.map(|m| m.id)
+        };
+        let ao = Some("ao3400a".to_string());
+        // An Eagle attribute, a nonstandard KiCad field and a `#` spelling.
+        assert_eq!(bound("XQ-17", &[("MANUFACTURER-PN", "AO3400A")]), ao);
+        assert_eq!(bound("XQ-17", &[("Manufacturer_No", "AO3400A")]), ao);
+        assert_eq!(bound("XQ-17", &[("MFR.Part #", "AO3400A")]), ao);
+        // The first FILLED field wins over an empty one ahead of it.
+        assert_eq!(
+            bound("XQ-17", &[("MPN", " "), ("PART_NUMBER", "AO3400A")]),
+            ao
+        );
+        // Controls: a catalogue code and a manufacturer name are not part numbers.
+        assert_ne!(bound("XQ-17", &[("PROD_ID", "AO3400A")]), ao);
+        assert_ne!(bound("XQ-17", &[("Manufacturer", "AO3400A")]), ao);
+        // A value that names a card keeps it.
+        assert_eq!(
+            bound("BSS138", &[("MPN", "AO3400A")]).as_deref(),
+            Some("bss138")
+        );
+        let mut c = comp("Q1", "XQ-17");
+        c.properties = vec![
+            ("MPN".into(), String::new()),
+            ("Manufacturer_No".into(), "AO3400A".into()),
+        ];
+        assert_eq!(component_mpn(&c).as_deref(), Some("AO3400A"));
     }
 
     /// A memory-card socket is a connector under any designator; an SD NAND chip

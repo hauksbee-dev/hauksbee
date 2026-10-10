@@ -348,8 +348,11 @@ impl BoardEvidence {
             let (row, subject) = (&report.rows[index], &row_subjects[index]);
             if let (None, Some(bound)) = (&s.determined, &row.model_id) {
                 let (ids, rows) = (s.ids(), s.widened.join(", "));
-                let a =
-                    Assumption::undetermined_variant(subject, &row.reference, bound, &ids, &rows);
+                let a = if s.corners {
+                    Assumption::undetermined_corner(subject, &row.reference, bound, &ids)
+                } else {
+                    Assumption::undetermined_variant(subject, &row.reference, bound, &ids, &rows)
+                };
                 assumptions.push(a);
             }
         }

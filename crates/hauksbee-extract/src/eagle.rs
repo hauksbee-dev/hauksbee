@@ -48,6 +48,17 @@ fn attribute_marks_dnp(name: &str, value: &str) -> bool {
         _ => false,
     }
 }
+/// An element `<attribute>` worth keeping as a component property: one with a
+/// non-empty value that is not the `NAME`/`VALUE` text placeholder (those
+/// repeat the element's own reference and value). Library attributes such as
+/// `MPN`, `PART_NUMBER` or `MANUFACTURER-PN` carry the part's identity when the
+/// value field holds a rating string or a stale part number; dropping them left
+/// the binder only the value to resolve against.
+fn element_property(name: &str, value: &str) -> Option<(String, String)> {
+    let value = value.trim();
+    let placeholder = name.eq_ignore_ascii_case("NAME") || name.eq_ignore_ascii_case("VALUE");
+    (!value.is_empty() && !placeholder).then(|| (name.to_string(), value.to_string()))
+}
 #[allow(clippy::too_many_lines, reason = "one streaming pass over the XML")]
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     type Pads = Vec<(String, f64, f64)>;
@@ -61,6 +72,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         rot_deg: f64,
         mirrored: bool,
         dnp: bool,
+        properties: Vec<(String, String)>,
     }
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
@@ -148,6 +160,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             dnp: a
                                 .get("populate")
                                 .is_some_and(|p| p.eq_ignore_ascii_case("no")),
+                            properties: Vec::new(),
                         });
                     }
                     b"attribute" if in_element => {
@@ -156,6 +169,9 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             (elements.last_mut(), a.get("name"), a.get("value"))
                         {
                             el.dnp |= attribute_marks_dnp(name, value);
+                            if let Some(prop) = element_property(name, value) {
+                                el.properties.push(prop);
+                            }
                         }
                     }
                     b"signal" => {
@@ -261,7 +277,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 footprint: el.package,
                 position: Some((el.x, el.y, el.rot_deg)),
                 layer: if el.mirrored { "B.Cu" } else { "F.Cu" }.to_string(),
-                properties: Vec::new(),
+                properties: el.properties,
                 dnp: el.dnp,
                 pins,
             }
@@ -476,5 +492,30 @@ mod tests {
         };
         assert!(dnp("U1") && dnp("U3"));
         assert!(!dnp("U2") && !dnp("U4") && !dnp("U5"));
+    }
+
+    /// Element attributes with a value reach the component's properties, so a
+    /// part number held in an `MPN`/`PART_NUMBER` attribute is visible to the
+    /// binder; the `NAME`/`VALUE` placeholders and empty attributes are not
+    /// copied.
+    #[test]
+    fn element_attributes_become_component_properties() {
+        let xml = r#"<eagle><drawing><board><libraries><library name="l"><packages><package name="P">
+<smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/></package></packages></library></libraries>
+<elements><element name="Q1" library="l" package="P" value="20V/4.2A" x="0" y="0">
+<attribute name="NAME" x="0" y="0" layer="25"/>
+<attribute name="VALUE" value="20V/4.2A" x="0" y="0" layer="27"/>
+<attribute name="PART_NUMBER" value=" PMV48XP "/>
+<attribute name="PROD_ID" value="TRANS-1234"/>
+<attribute name="SPICEPREFIX" value=""/>
+</element></elements><signals/></board></drawing></eagle>"#;
+        let board = extract(xml).unwrap();
+        assert_eq!(
+            board.components[0].properties,
+            vec![
+                ("PART_NUMBER".to_string(), "PMV48XP".to_string()),
+                ("PROD_ID".to_string(), "TRANS-1234".to_string()),
+            ]
+        );
     }
 }

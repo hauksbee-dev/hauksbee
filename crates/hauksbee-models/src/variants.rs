@@ -24,15 +24,28 @@ pub const LISTED: &str = "variants the card lists";
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VariantSpec {
-    /// Case-insensitive pattern for this member's orderable codes.
+    /// Case-insensitive pattern for this member's orderable codes (none for a
+    /// [`Self::corner`]).
+    #[serde(default)]
     pub orderable_re: String,
     /// The ordering-table codes, verbatim.
     #[serde(default)]
     pub orderable: Vec<String>,
     /// Package name, compared with the footprint's package family.
     pub package: Option<String>,
-    /// Where the datasheet prints this variant.
+    /// Where the datasheet prints this variant (for a corner: where its
+    /// assumed bounds come from).
     pub basis: String,
+    /// An assumed parameter CORNER of a part the board names only by class,
+    /// not an orderable variant: nothing on the board can pick one, so the set
+    /// is never determined by the board, only swept (or selected in a spec).
+    #[serde(default)]
+    pub corner: bool,
+}
+
+/// Whether `entry` is an assumed-parameter corner of a class set.
+fn is_corner(entry: &ModelEntry) -> bool {
+    entry.variant.as_ref().is_some_and(|v| v.corner)
 }
 
 /// One member's verdict: satisfied, contradicted or unknown.
@@ -77,6 +90,9 @@ pub struct Selection {
     pub same_pinout: bool,
     /// The stand-in's rows [`envelope`] widened, `param min .. typ .. max` each.
     pub widened: Vec<String>,
+    /// Every member is an assumed corner ([`VariantSpec::corner`]): the board
+    /// names a class, not a part, so only a sweep across them can claim anything.
+    pub corners: bool,
 }
 
 impl Selection {
@@ -141,7 +157,11 @@ pub fn package_family(package: &str) -> Option<&'static str> {
 }
 
 fn orderable_re(entry: &ModelEntry) -> Option<Regex> {
-    Regex::new(&format!("(?i){}", entry.variant.as_ref()?.orderable_re)).ok()
+    let pattern = &entry.variant.as_ref().filter(|v| !v.corner)?.orderable_re;
+    // An empty pattern would match every identity text, so it is no pattern.
+    (!pattern.is_empty())
+        .then(|| Regex::new(&format!("(?i){pattern}")).ok())
+        .flatten()
 }
 
 /// Score `siblings` (one `variant_of` family, sorted by id) against `q`: each
@@ -167,12 +187,16 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         let v = e.variant.clone().unwrap_or_default();
         let mut facts: Vec<(bool, String)> = Vec::new();
         facts.extend(picked.map(|id| (id == e.id, format!("{who} selects {id}"))));
+        // A corner is an assumption about an unnamed part, not a part: no code,
+        // package or pad on the board speaks for or against one.
+        let corner = is_corner(e);
+        let identity = identity.filter(|_| !corner);
         facts.extend(identity.map(|text| (hit(i, text), format!("code {text}"))));
         let package = v.package.as_deref().zip(footprint);
         let package = package.and_then(|(p, f)| Some((p, package_family(p)?, package_family(f)?)));
         let fits = |(p, want, got)| (want == got, format!("package {p}, {got} footprint"));
-        facts.extend(package.map(fits));
-        let absent = e.pins.keys().find(missing);
+        facts.extend(package.map(fits).filter(|_| !corner));
+        let absent = e.pins.keys().find(missing).filter(|_| !corner);
         facts.extend(absent.map(|pad| (false, format!("no pad {pad} on the footprint"))));
         let (held, broken): (Vec<_>, Vec<_>) = facts.into_iter().partition(|f| f.0);
         let (verdict, shown) = match (broken.is_empty(), held.is_empty()) {
@@ -203,6 +227,7 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         via,
         same_pinout,
         widened: Vec::new(),
+        corners: !siblings.is_empty() && siblings.iter().all(|e| is_corner(e)),
     }
 }
 
@@ -278,6 +303,22 @@ pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
             let (lead, ids) = (&siblings[0].id, differ.join(", "));
             out.push(format!("variant_of '{family}': {SET}, and {ids} differ from {lead}'s [models.match]: {SHARE}"));
         }
+        let corners = siblings.iter().filter(|e| is_corner(e)).count();
+        if corners > 0 {
+            if corners < siblings.len() {
+                out.push(format!("variant_of '{family}': {MIXED}"));
+            }
+            for e in siblings.iter().filter(|e| is_corner(e)) {
+                let v = e
+                    .variant
+                    .as_ref()
+                    .map_or_else(VariantSpec::default, Clone::clone);
+                if !v.orderable_re.is_empty() || !v.orderable.is_empty() || v.package.is_some() {
+                    out.push(format!("model '{}': {CORNER}", e.id));
+                }
+            }
+            continue;
+        }
         let family_re = first.value_re.as_ref().or(first.mpn_re.as_ref());
         let family_re = family_re.and_then(|p| Regex::new(&format!("(?i){p}")).ok());
         let patterns: Vec<Option<Regex>> = siblings.iter().map(|e| orderable_re(e)).collect();
@@ -318,6 +359,8 @@ const CODES: &str =
     "[models.variant] needs a valid orderable_re and its ordering-table codes in `orderable`";
 const OWN: &str =
     "must match its own orderable_re and the family match and no sibling's (also matches:";
+const MIXED: &str = "every member is an assumed corner (corner = true) or none is";
+const CORNER: &str = "an assumed corner names no orderable part: it takes no orderable_re, orderable codes or package";
 
 #[cfg(test)]
 mod tests {
@@ -437,6 +480,53 @@ mod tests {
         let model = lib.resolve(&q).model.unwrap();
         let got = Some((&*model.id, crate::validation::pin_standard(&model)));
         assert_eq!(got, Some(("xyz1234a", Some("JEDEC top view"))));
+    }
+
+    /// Assumed corners of a class: nothing on the board picks one (not a code,
+    /// a package or a pad its letter-keyed pins lack), so the set is never
+    /// determined but by a spec or a sweep; the lint keeps corners apart from
+    /// orderable variants.
+    #[test]
+    fn a_corner_set_is_undetermined_by_the_board_and_linted_apart() {
+        let corner = |id: &str, vto: f64| {
+            format!(
+                "[[models]]\nid = \"fet_{id}\"\nkind = \"nmos\"\nvariant_of = \"fet\"\n\
+                 [models.match]\nvalue_re = \"(?i)^Q_NMOS\"\n[models.params]\nvto = {vto}\nkp = 1.0\n\
+                 [models.pins]\n\"G\" = \"gate\"\n\"S\" = \"source\"\n\"D\" = \"drain\"\n\
+                 [models.variant]\ncorner = true\nbasis = \"assumed\"\n"
+            )
+        };
+        let set = corner("high", 3.0) + &corner("low", 0.4);
+        let lib = load(&set).unwrap();
+        let mut q = ComponentQuery::new(None, "Q_NMOS_GSD".to_string(), None);
+        q.pads = ["1", "2", "3"].map(String::from).to_vec();
+        q.mpn = Some("Q_NMOS_GSD".into());
+        q.footprint = Some("Package_SO:SOIC-8".into());
+        let res = lib.resolve(&q);
+        let s = res.selection.expect("a corner set");
+        assert!(
+            s.corners && s.same_pinout && s.determined.is_none(),
+            "{}",
+            s.listing()
+        );
+        assert_eq!(res.model.map(|m| m.id).as_deref(), Some("fet_high"));
+        q.properties.push((SWEEP_PROPERTY.into(), "fet_low".into()));
+        let swept = lib.resolve(&q);
+        assert_eq!(swept.model.map(|m| m.id).as_deref(), Some("fet_low"));
+
+        let lint_src = |src: &str| {
+            let file = toml::from_str::<crate::schema::DbFile>(src).unwrap();
+            lint(&file.models).join("\n")
+        };
+        assert_eq!(lint_src(&set), "");
+        let mixed = set.replacen(
+            "corner = true",
+            "orderable_re = \"^Q\"\norderable = [\"Q_NMOS\"]",
+            1,
+        );
+        assert!(lint_src(&mixed).contains(MIXED), "{}", lint_src(&mixed));
+        let coded = set.replacen("corner = true", "corner = true\norderable = [\"X1\"]", 1);
+        assert!(lint_src(&coded).contains(CORNER), "{}", lint_src(&coded));
     }
 
     #[test]
