@@ -61,8 +61,8 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
 use crate::decompose::conduction::ConductionGraph;
 use crate::decompose::rails::fragment_blocks;
-use crate::newton::{dc_operating_point, Workspace};
-use crate::options::{Partitioning, SolverOptions, StepControl};
+use crate::newton::{dc_operating_point, dc_polish, Workspace};
+use crate::options::{DcInit, Partitioning, SolverOptions, StepControl};
 use crate::orchestrate::{resample, uniform_grid};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
@@ -1749,19 +1749,31 @@ impl CaptureGroup<'_> {
         // claims CaptureGrid{dt}, and a march allowed to step coarser than the grid
         // it certifies undersamples its own claim. The bespoke precedent agrees:
         // stage A ran dt_max == sample_dt (both 2 us), not a multiple.
+        //
+        // WHERE the power-on happens follows the caller's `dc_init`. Under
+        // `FromZero` the caller asked for a power-on start, so the ramp runs
+        // inside the window. Otherwise the caller asked for a window that opens
+        // on the settled board, and a ramp inside the window is not that: every
+        // slow bias network (an RC-filtered comparator threshold, say) is still
+        // charging from 0 V when the window opens, and a comparator can fire on
+        // a threshold a fraction of its design value. The capture then powers
+        // up BEFORE the window instead ([`march_from_settled`]).
         let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
         let adaptive_once = || -> Option<Waveforms> {
             let ramp_window = (20.0 * dt).min(tstop / 10.0);
-            let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
             let mut aopts = sub_opts;
-            aopts.dc_init = crate::options::DcInit::FromZero;
             aopts.step = StepControl::Adaptive {
                 dt_initial: dt,
                 dt_min: 1e-12,
                 dt_max: dt,
             };
             let t0 = std::time::Instant::now();
-            let r = run_collect(&ramped, &aopts).ok();
+            let r = if sub_opts.dc_init == DcInit::FromZero {
+                let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
+                run_collect(&ramped, &aopts).ok()
+            } else {
+                march_from_settled(&cap, ramp_window, tstop, &aopts).ok()
+            };
             if dbg {
                 // Step census from the accepted grid: where the march spent its
                 // steps (the power-on bring-up inside the ramp window vs the
@@ -1840,6 +1852,108 @@ impl CaptureGroup<'_> {
             }
         }
     }
+}
+
+/// March `circuit` over `[0, tstop]` from the state it settles to BEFORE the
+/// window: the board powered up and left at its `t = 0` source values.
+///
+/// A physical board is powered long before anything is measured on it, so its
+/// bias networks sit at their steady state when the window opens. The cold DC
+/// homotopy is not trusted on an extracted capture (it can accept a
+/// nonphysical point), so the board is brought up the way it really comes up:
+/// every source frozen at its `t = 0` value, ramped from rest over
+/// `ramp_window` and marched a few ramp lengths at the window's own step
+/// bound, which puts every latch, hysteretic switch and comparator on the
+/// branch a real power-up picks. Plain Newton from that state ([`dc_polish`])
+/// then finishes the slow settling (an RC much longer than the bring-up would
+/// otherwise still be moving), staying in the power-up's basin. Should the
+/// polish not converge, the bring-up continues to a full window length at
+/// coarse steps and polishes again; a board that free-runs at its `t = 0`
+/// sources has no operating point, and the window then opens on the
+/// powered-up state as it stands. A stimulus that starts with the window (a
+/// step or PWL that is 0 at `t = 0`) is off throughout, as it is on the board.
+///
+/// The short first stage is a cost bound, not an approximation: the polish
+/// already owns every time constant longer than the bring-up, and a full
+/// window length at coarse steps is the expensive part on a large stiff
+/// capture (it backtracks its line search on nearly every step), so it runs
+/// only when the polish needs it.
+fn march_from_settled(
+    circuit: &Circuit,
+    ramp_window: f64,
+    tstop: f64,
+    window_opts: &SolverOptions,
+) -> SolveResult<Waveforms> {
+    let mut frozen = circuit.clone();
+    for dev in &mut frozen.devices {
+        if let Device::Vsource { kind, .. } | Device::Isource { kind, .. } = dev {
+            *kind = SourceKind::Dc(kind.dc_value());
+        }
+    }
+    let t_settle = std::time::Instant::now();
+    let mut x0: Vec<f64> = Vec::new();
+    // Accepted bring-up steps: the short first stage, then the coarse rest.
+    let mut steps = [0usize; 2];
+    let bring_up = (10.0 * ramp_window).min(tstop);
+    let mut settle_opts = *window_opts;
+    settle_opts.dc_init = DcInit::FromZero;
+    let ramped = super::staged::ramp_all_sources(&frozen, ramp_window);
+    let mut latch = Transient::new(settle_opts)
+        .run_streaming_seeded_with_diagnostics(&ramped, bring_up, None, |s| {
+            x0.clear();
+            x0.extend_from_slice(s.x);
+            steps[0] += 1;
+        })?
+        .switch_latch;
+    let mut ws = Workspace::new(circuit);
+    ws.set_switch_latch(latch.clone());
+    let mut polished = dc_polish(&mut ws, circuit, window_opts, &x0);
+    if !polished && bring_up < tstop {
+        let mut rest_opts = *window_opts;
+        rest_opts.dc_init = DcInit::Continue;
+        if let StepControl::Adaptive { dt_max, .. } = &mut rest_opts.step {
+            *dt_max = dt_max.max(tstop / 100.0);
+        }
+        let seed = x0.clone();
+        latch = Transient::new(rest_opts)
+            .with_switch_latch(latch)
+            .run_streaming_seeded_with_diagnostics(&frozen, tstop - bring_up, Some(&seed), |s| {
+                x0.clear();
+                x0.extend_from_slice(s.x);
+                steps[1] += 1;
+            })?
+            .switch_latch;
+        ws.set_switch_latch(latch.clone());
+        polished = dc_polish(&mut ws, circuit, window_opts, &x0);
+    }
+    let settle_s = t_settle.elapsed().as_secs_f64();
+    // The largest move the polish made, for the debug readout only.
+    let moved =
+        ws.x.iter()
+            .zip(&x0)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max);
+    if polished {
+        x0.clone_from(&ws.x);
+    }
+    let mut opts = *window_opts;
+    opts.dc_init = DcInit::Continue;
+    let t_window = std::time::Instant::now();
+    let r = Waveforms::collect_nodes(circuit.node_count(), |sink| {
+        Transient::new(opts)
+            .with_switch_latch(latch)
+            .run_streaming_seeded(circuit, tstop, Some(&x0), sink)
+    });
+    if std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok() {
+        eprintln!(
+            "  march_from_settled: settle+polish {settle_s:.2}s (steps: bring-up {}, coarse rest {}), \
+             polish converged={polished} (max|dx| {moved:.3e}), window {:.2}s",
+            steps[0],
+            steps[1],
+            t_window.elapsed().as_secs_f64()
+        );
+    }
+    r
 }
 
 /// Sample one (global) node from a capture run onto the uniform grid.
@@ -2294,6 +2408,125 @@ mod tests {
         assert_eq!(
             up_crossings(exec.waveforms.node(&c, "vsyn").unwrap(), 2.5),
             mono_vsyn
+        );
+    }
+
+    /// A generator whose drive starts WITH the window (a 2 mA step into a
+    /// leaky 2 nF membrane, comparator-reset near 1 V) sensed by an OUTPUT
+    /// comparator whose threshold `vth` is an RC-filtered divider of VDD:
+    /// `r_top`/`r_bot` with 1 nF, a time constant of 5-12 us against the 20 us
+    /// window, the shape of a filtered comparator-threshold network. The output
+    /// stage is [`generator_capture_fixture`]'s. Returns `(circuit, vspk, vdd)`.
+    fn rc_threshold_fixture(r_top: f64, r_bot: f64) -> (Circuit, NodeId, NodeId) {
+        let mut c = Circuit::new();
+        let vdd = c.node("VDD");
+        vdc(&mut c, "V_VDD", vdd, 5.0);
+        let vmem = c.node("vmem");
+        let step = vec![PwlPoint { t: 0.0, v: 0.0 }, PwlPoint { t: 50e-9, v: 2e-3 }];
+        c.add(Device::isource("IDRV", GND, vmem, SourceKind::Pwl(step)));
+        cap(&mut c, "Cmem", vmem, GND, 2e-9);
+        res(&mut c, "Rbias", vdd, vmem, 1e6);
+        res(&mut c, "Rleak", vmem, GND, 100e3);
+        let vref = c.node("vref");
+        vdc(&mut c, "Vref", vref, 1.0);
+        let vcmp = c.node("vcmp");
+        comparator(&mut c, "Kcmp", vcmp, vmem, vref, 1.0);
+        sw(&mut c, "SWr", vmem, GND, vcmp, (2.5, 1.5), 200.0);
+        let vth = c.node("vth");
+        res(&mut c, "Rtop", vdd, vth, r_top);
+        res(&mut c, "Rbot", vth, GND, r_bot);
+        cap(&mut c, "Cth", vth, GND, 1e-9);
+        let vko = c.node("vko");
+        comparator(&mut c, "Kout", vko, vmem, vth, 0.1);
+        let vspk = c.node("vspk");
+        res(&mut c, "R_str", vko, vspk, 1e3);
+        let vload = c.node("vload");
+        res(&mut c, "Rload", vspk, vload, 1e3);
+        res(&mut c, "RloadG", vload, vdd, 10e3);
+        let vref3 = c.node("vref3");
+        vdc(&mut c, "Vref3", vref3, 2.5);
+        let vsyn = c.node("vsyn");
+        comparator(&mut c, "Ksyn", vsyn, vspk, vref3, 0.1);
+        res(&mut c, "Rsyn", vsyn, GND, 1e3);
+        (c, vspk, vdd)
+    }
+
+    /// Output spikes of the generator-inclusive capture of `vspk` and of the
+    /// monolith, both under `dc_init`.
+    fn rc_threshold_spikes(r_top: f64, r_bot: f64, dc_init: DcInit) -> (usize, usize) {
+        let (c, vspk, vdd) = rc_threshold_fixture(r_top, r_bot);
+        let (dt, tstop) = (50e-9, 20e-6);
+        let opts = SolverOptions {
+            dc_init,
+            ..generator_opts(dt)
+        };
+        let mono = up_crossings(monolith(&c, &opts, tstop).node(&c, "vspk").unwrap(), 2.5);
+        let held = held_vdd(vdd, 5.0, dt, tstop);
+        let (exec, refusals) =
+            run_held(&c, &[vspk], &held, &CapturePolicy::default(), &opts, tstop);
+        let exec = exec.unwrap_or_else(|| panic!("capture must succeed: {refusals:?}"));
+        let o = exec.outcomes.iter().find(|o| o.node == vspk).unwrap();
+        assert!(o.capture_growth > 0 && o.accepted, "{o:?}");
+        let captured = up_crossings(&exec.waveforms.node_voltages[vspk.0 as usize], 2.5);
+        (captured, mono)
+    }
+
+    /// A window that opens on the SETTLED board (`DcInit::Solve`) must not see
+    /// the power-on: with the output threshold settled at 3.0 V, far above the
+    /// ~1 V membrane, the column is quiet in the monolith and must be quiet in
+    /// the generator-inclusive capture. Ramping the supplies inside the window
+    /// instead starts `vth` at 0 V, and the comparator fires on every membrane
+    /// cycle until `vth` (tau 12 us) climbs past the membrane peak. A
+    /// `FromZero` caller asked for exactly that power-on, and still gets it.
+    #[test]
+    fn settled_window_has_no_power_on_spikes() {
+        let (captured, mono) = rc_threshold_spikes(20e3, 30e3, DcInit::Solve);
+        assert_eq!(mono, 0, "the settled monolith column must be quiet");
+        assert_eq!(captured, 0, "the capture fired on a power-on threshold");
+
+        let (captured, mono) = rc_threshold_spikes(20e3, 30e3, DcInit::FromZero);
+        assert!(mono >= 1, "a power-on threshold must fire the monolith");
+        assert_eq!(captured, mono, "a FromZero capture keeps its power-on");
+    }
+
+    /// The control: with the threshold SETTLED at 0.6 V, below the membrane's
+    /// swing, the column genuinely fires on every cycle, and the settled
+    /// capture counts what the settled monolith counts.
+    #[test]
+    fn settled_window_still_spikes_on_a_low_threshold() {
+        let (captured, mono) = rc_threshold_spikes(44e3, 6e3, DcInit::Solve);
+        assert!(mono >= 3, "a 0.6 V threshold must fire (saw {mono})");
+        assert_eq!(captured, mono);
+    }
+
+    /// A generator that free-runs at its `t = 0` sources (the constant 2 mA
+    /// drive of [`generator_capture_fixture`]) has no operating point: the
+    /// settled-window path must not freeze it onto one. The polish fails, the
+    /// window opens on the powered-up state mid-oscillation, and the capture
+    /// keeps the oscillation's count (the window's phase can move it by one
+    /// against the from-rest monolith; the monolith itself refuses `Solve`
+    /// on this circuit, having no DC point to start from).
+    #[test]
+    fn settled_window_keeps_a_free_running_generator_running() {
+        let (c, vspk, vdd, hold_v) = generator_capture_fixture();
+        let (dt, tstop) = (50e-9, 20e-6);
+        let opts = SolverOptions {
+            dc_init: DcInit::Solve,
+            ..generator_opts(dt)
+        };
+        let mono = monolith(&c, &generator_opts(dt), tstop);
+        let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
+        assert!(mono_vspk >= 3, "the generator free-runs (saw {mono_vspk})");
+        let held = held_vdd(vdd, hold_v, dt, tstop);
+        let (exec, refusals) =
+            run_held(&c, &[vspk], &held, &CapturePolicy::default(), &opts, tstop);
+        let exec = exec.unwrap_or_else(|| panic!("capture must succeed: {refusals:?}"));
+        let o = exec.outcomes.iter().find(|o| o.node == vspk).unwrap();
+        assert!(o.capture_growth > 0 && o.accepted, "{o:?}");
+        let captured = up_crossings(&exec.waveforms.node_voltages[vspk.0 as usize], 2.5);
+        assert!(
+            captured.abs_diff(mono_vspk) <= 1,
+            "settled capture counted {captured}, the free-running monolith {mono_vspk}"
         );
     }
 

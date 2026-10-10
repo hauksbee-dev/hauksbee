@@ -1746,6 +1746,38 @@ pub fn dc_operating_point_seeded(
     dc_solve(ws, circuit, opts, use_ic, seed)
 }
 
+/// Polish `seed` into the DC operating point by plain Newton from it, and
+/// nothing else: no gmin or source stepping, no cold restart.
+///
+/// The root found is the one the seed's basin selects, so a seed reached by
+/// powering the circuit up physically keeps every multi-stable part (a latch,
+/// a hysteretic switch) on the branch the power-up chose. Returns whether
+/// Newton converged; on `false`, `ws.x` holds no usable point.
+pub fn dc_polish(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    seed: &[f64],
+) -> bool {
+    if seed.len() != ws.x.len() {
+        return false;
+    }
+    // The same `.ic` handling as every other DC entry point.
+    let use_ic = circuit.iter().any(|(_, d)| {
+        matches!(
+            d,
+            Device::Capacitor { ic: Some(_), .. } | Device::Inductor { ic: Some(_), .. }
+        )
+    });
+    ws.x.copy_from_slice(seed);
+    let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
+    let empty = ReactiveState::new(circuit.devices.len());
+    newton_solve(
+        ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, use_ic, opts.gmin, 1.0,
+    )
+    .converged
+}
+
 /// Copy each series-resistance BJT's EXTERNAL terminal voltages onto its
 /// device-private internal unknowns. `.nodeset` can only
 /// name netlist nodes, so a cold start would otherwise leave the intrinsic
@@ -3664,5 +3696,36 @@ mod tests {
         // its own stretched pulse, and recharged again.
         let trips = crate::test_fixtures::up_crossings(mem, 2.5);
         assert!(trips >= 2, "the loop oscillates: {trips} trip(s)");
+    }
+
+    /// `dc_polish` lands a bistable on the branch its seed sits in: a
+    /// comparator with positive feedback is stable both high and low, and a
+    /// seed near either rail polishes to that rail, never to the other one or
+    /// to the unstable midpoint. A seed of the wrong width is refused.
+    #[test]
+    fn dc_polish_stays_in_the_seed_basin() {
+        let mut c = Circuit::new();
+        let (out, fb, mid) = (c.node("out"), c.node("fb"), c.node("mid"));
+        vdc(&mut c, "VMID", mid, 2.5);
+        comparator(&mut c, "K", out, fb, mid, 0.1);
+        res(&mut c, "RF", out, fb, 1e3);
+        res(&mut c, "RM", fb, mid, 10e3);
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        let idx = |n: NodeId| ws.layout.node(n).expect("node unknown");
+        let (i_out, i_fb, i_mid) = (idx(out), idx(fb), idx(mid));
+        for (seed_out, rail) in [(4.6, 5.0), (0.4, 0.0)] {
+            let mut seed = vec![0.0; ws.x.len()];
+            seed[i_mid] = 2.5;
+            seed[i_out] = seed_out;
+            seed[i_fb] = 2.5 + (seed_out - 2.5) * 10.0 / 11.0;
+            assert!(dc_polish(&mut ws, &c, &opts, &seed), "seed {seed_out}");
+            assert!(
+                (ws.x[i_out] - rail).abs() < 1e-3,
+                "seed {seed_out} V polished to {} V, not the {rail} V rail",
+                ws.x[i_out]
+            );
+        }
+        assert!(!dc_polish(&mut ws, &c, &opts, &[0.0]));
     }
 }
