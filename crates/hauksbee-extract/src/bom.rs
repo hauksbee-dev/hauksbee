@@ -1046,6 +1046,13 @@ pub const MPN_PROPERTY: &str = "hauksbee_bom_mpn";
 /// that used BOM identity is attributable to the file that supplied it.
 pub const IDENTITY_SOURCE_PROPERTY: &str = "hauksbee_identity_source";
 
+/// Property key for a part number a schematic's library device name embeds.
+///
+/// An Eagle `MOSFET_PCH` / `-DMG2305UX-7`, for a part whose value is a rating
+/// string. A candidate identity only: the binder tries it where the value
+/// decided nothing and keeps it only if it identifies the part better.
+pub const LIBRARY_DEVICE_PROPERTY: &str = "hauksbee_library_device";
+
 /// Property key under which an artifact-supplied value string fills a
 /// [`crate::Component`] whose layout value was empty.
 pub const VALUE_PROPERTY: &str = "hauksbee_artifact_value";

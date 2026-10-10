@@ -1408,23 +1408,31 @@ fn model_cs_net(
 /// known-valid values and only `expect`s that they stay valid.
 #[must_use]
 pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
-    let res = record_resolution(lib, comp);
+    let mut res = record_resolution(lib, comp);
     // A part-number FIELD on the design (`MPN`, `Manufacturer_No`, an Eagle
     // `PART_NUMBER` attribute) reaches only the few cards written with an
     // `mpn_re`; nearly every card matches on `value_re`. So where the value
     // decided nothing (unresolved, or only a guess), the field is tried the way
     // a BOM's part number is: standing in for a value that is not a magnitude.
-    // The value keeps precedence wherever it reached a card itself.
-    let Some(mpn) = mpn_properties(comp).find(|m| !m.eq_ignore_ascii_case(comp.value.trim()))
-    else {
-        return res;
-    };
-    let after = record_resolution(lib, &probe_with_mpn(comp, mpn));
-    if identity_improves(&res, &after) {
-        after
-    } else {
-        res
+    // The value keeps precedence wherever it reached a card itself. After the
+    // field, a part number the schematic's library device name embeds (an
+    // Eagle `MOSFET_PCH` / `-DMG2305UX-7` whose value is `20V/4.2A`) is tried
+    // the same way, on the same terms.
+    let mpn = mpn_properties(comp).find(|m| !m.eq_ignore_ascii_case(comp.value.trim()));
+    let device = (comp.properties.iter())
+        .filter(|(k, _)| k == hauksbee_extract::bom::LIBRARY_DEVICE_PROPERTY)
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case(comp.value.trim()));
+    for candidate in mpn.into_iter().chain(device) {
+        if !matches!(res.confidence, Confidence::Unresolved | Confidence::Guessed) {
+            break;
+        }
+        let after = record_resolution(lib, &probe_with_mpn(comp, candidate));
+        if identity_improves(&res, &after) {
+            res = after;
+        }
     }
+    res
 }
 
 /// [`library_resolution`] from the record's own value, footprint and fields,
@@ -8978,6 +8986,42 @@ mod tests {
             ("Manufacturer_No".into(), "AO3400A".into()),
         ];
         assert_eq!(component_mpn(&c).as_deref(), Some("AO3400A"));
+    }
+
+    /// A part number the schematic's library device name embeds identifies a
+    /// part whose value is a rating string, on the MPN field's terms: only
+    /// where the value decided nothing, and only when it reaches a card.
+    #[test]
+    fn a_library_device_part_number_identifies_a_rating_string_value() {
+        let lib = ModelLibrary::builtin();
+        let key = hauksbee_extract::bom::LIBRARY_DEVICE_PROPERTY;
+        let bound = |value: &str, footprint: &str, device: &str| {
+            let mut c = comp("U1", value);
+            c.footprint = footprint.into();
+            c.pins = (1..=5).map(|n| pin(&n.to_string(), n)).collect();
+            c.properties = vec![(key.to_string(), device.to_string())];
+            library_resolution(&lib, &c).model.map(|m| m.id)
+        };
+        let ap = Some("ap2112k_3v3".to_string());
+        assert_eq!(bound("3.3V/600mA", "SOT-23-5", "AP2112K-3.3V"), ap);
+        assert_eq!(bound("", "SOT-23-5", "AP2112K-3.3V"), ap);
+        let mut fet = comp("Q1", "30V/5.7A");
+        fet.footprint = "SOT-23".into();
+        fet.pins = vec![pin("1", 1), pin("2", 2), pin("3", 3)];
+        fet.properties = vec![(key.to_string(), "AO3400A".to_string())];
+        let fet = library_resolution(&lib, &fet).model.map(|m| m.id);
+        assert_eq!(fet.as_deref(), Some("ao3400a"));
+        // Controls: a value that names a card keeps it, and a candidate that
+        // reaches no card changes nothing.
+        assert_eq!(
+            bound("MIC5205-3.3", "SOT-23-5", "AP2112K-3.3V").as_deref(),
+            bound("MIC5205-3.3", "SOT-23-5", "").as_deref()
+        );
+        assert_eq!(
+            bound("3.3V/600mA", "SOT-23-5", "XQ-NOCARD-1"),
+            bound("3.3V/600mA", "SOT-23-5", "")
+        );
+        assert!(!hauksbee_extract::bom::is_mpn_property_key(key));
     }
 
     /// A memory-card socket is a connector under any designator; an SD NAND chip

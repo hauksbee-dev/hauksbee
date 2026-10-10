@@ -185,6 +185,108 @@ pub fn schematic_blank_value_device_names(
     Ok(names)
 }
 
+/// The manufacturer part number embedded in each physical part's library
+/// device name, for parts that have one: `(reference, part number)`, sorted.
+///
+/// `SparkFun` style libraries put the part number in the device
+/// (`MOSFET_PCH` / `-DMG2305UX-7`) or across the deviceset and device
+/// (`V_REG_AP2112` + `K-3.3V`) and a rating string in the value
+/// (`20V/4.2A/52mΩ/1.4W`), which names no part. Each is only a candidate:
+/// the binder keeps it only where it identifies the part better than the
+/// value did.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
+pub fn schematic_device_part_numbers(text: &str) -> Result<Vec<(String, String)>, ExtractError> {
+    let mut found = parse(text)?.device_part_numbers;
+    found.sort();
+    Ok(found)
+}
+
+/// The part number an Eagle device name spells, if any.
+///
+/// The device (package variant) alone when it is one, else the full name with its leading class words
+/// (`MOSFET`, `V_REG`) dropped. `None` when neither looks like a part number
+/// (a value code, a package, a class word, a tolerance).
+#[must_use]
+pub fn embedded_part_number(deviceset: &str, device: &str, technology: &str) -> Option<String> {
+    let device = device.trim_matches(|c: char| c == '-' || c == '_');
+    if looks_like_part_number(device) {
+        return Some(device.to_string());
+    }
+    // The deviceset carries the number's head (`V_REG_AP2112` + `K-3.3V`)
+    // only when the device continues it: a device that is a package or a
+    // value code (`DFN8`, `3.3V`) appended to it spells nothing.
+    let continues = device.is_empty()
+        || (device.starts_with(|c: char| c.is_ascii_alphabetic()) && !is_shape_code(device));
+    if !continues {
+        return None;
+    }
+    let full = eagle_device_name(deviceset, device, technology);
+    // Drop leading letter-only words: the class the library files the part
+    // under, never part of the number.
+    let mut rest = full.as_str();
+    while let Some(i) = rest.find(['-', '_']) {
+        if !rest[..i].chars().all(|c| c.is_ascii_alphabetic()) {
+            break;
+        }
+        rest = &rest[i + 1..];
+    }
+    let rest = rest.trim_matches(|c: char| c == '-' || c == '_');
+    looks_like_part_number(rest).then(|| rest.to_string())
+}
+
+/// Package words that, followed by a pin count or size, name a shape.
+const SHAPE_WORDS: [&str; 26] = [
+    "SOT", "SOD", "SOIC", "SOP", "SSOP", "TSSOP", "MSOP", "QFN", "DFN", "QFP", "TQFP", "LQFP",
+    "BGA", "TO", "DPAK", "SMA", "SMB", "SMC", "EIA", "DO", "SMD", "PTH", "DIP", "CAP", "RES",
+    "LED",
+];
+
+/// Imperial chip sizes, which name a footprint whatever word they follow.
+const SIZE_CODES: [&str; 8] = [
+    "0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512",
+];
+
+/// Whether the first word of `text` is a package or size code (`SOT23`,
+/// `DFN8`, `EIA3216`, `0603`, `BLUE0603`) rather than a part's name.
+fn is_shape_code(text: &str) -> bool {
+    let first = first_word(text);
+    let word: String = first
+        .chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect();
+    let tail = &first[word.len()..];
+    let shape =
+        SHAPE_WORDS.contains(&word.as_str()) && tail.starts_with(|c: char| c.is_ascii_digit());
+    shape || SIZE_CODES.contains(&tail)
+}
+
+fn first_word(text: &str) -> String {
+    text.split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase()
+}
+
+/// Whether `text` reads as a manufacturer part number: one token of letters,
+/// digits and `-` `.` `/` `+` `#`, whose first word mixes letters and digits
+/// and starts with a letter (or is a JEDEC `1N`..`4N` number), and is not a
+/// package or size code.
+fn looks_like_part_number(text: &str) -> bool {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || "-./+#_".contains(c);
+    if text.len() < 4 || !text.chars().all(allowed) {
+        return false;
+    }
+    let first = first_word(text);
+    let letters = first.chars().any(|c| c.is_ascii_alphabetic());
+    let digits = first.chars().any(|c| c.is_ascii_digit());
+    let jedec = matches!(first.as_bytes(), [b'1'..=b'4', b'N', b'0'..=b'9', ..]);
+    let lead = first.starts_with(|c: char| c.is_ascii_alphabetic()) || jedec;
+    letters && digits && lead && !is_shape_code(text)
+}
+
 /// Eagle's full device name: `*` in the deviceset name takes the technology and
 /// `?` the device (package variant); with no `?` the device name is appended.
 fn eagle_device_name(deviceset: &str, device: &str, technology: &str) -> String {
@@ -351,6 +453,8 @@ struct Parsed {
     part_devices: HashMap<String, (LibraryId, String, String)>,
     /// Part name -> its library device name, for physical parts with no value.
     blank_value_device_names: Vec<(String, String)>,
+    /// Part name -> the part number its library device name embeds.
+    device_part_numbers: Vec<(String, String)>,
     device_pin_maps: DevicePinMaps,
     /// (library, symbol, pin) -> the pin's Eagle `direction`, when stated.
     pin_directions: HashMap<(LibraryId, String, String), String>,
@@ -383,6 +487,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
     // Physical part -> its selected library/deviceset/device mapping.
     let mut physical_part_devices: HashMap<String, (LibraryId, String, String)> = HashMap::new();
     let mut blank_value_device_names = Vec::new();
+    let mut device_part_numbers = Vec::new();
 
     let mut cur_library: Option<LibraryId> = None;
     let mut cur_symbol: Option<String> = None;
@@ -587,9 +692,14 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                             part_supply.insert(name.clone(), supply.clone());
                         } else {
                             let value = a.get("value").cloned().unwrap_or_default();
+                            let device = a.get("device").map_or("", String::as_str);
+                            let technology = a.get("technology").map_or("", String::as_str);
+                            if let Some(number) =
+                                embedded_part_number(deviceset, device, technology)
+                            {
+                                device_part_numbers.push((name.clone(), number));
+                            }
                             if value.trim().is_empty() {
-                                let device = a.get("device").map_or("", String::as_str);
-                                let technology = a.get("technology").map_or("", String::as_str);
                                 blank_value_device_names.push((
                                     name.clone(),
                                     eagle_device_name(deviceset, device, technology),
@@ -756,6 +866,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         physical_pin_nets,
         part_devices: physical_part_devices,
         blank_value_device_names,
+        device_part_numbers,
         device_pin_maps,
         pin_directions,
         gate_symbols: gate_symbol_of,

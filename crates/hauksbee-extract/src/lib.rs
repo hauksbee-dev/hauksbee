@@ -422,6 +422,17 @@ impl ExtractedBoard {
                     c.value = name;
                 }
             }
+            // A part number the library device name embeds, for a value that is
+            // a rating string (`20V/4.2A`): a candidate the binder may try.
+            for (reference, number) in
+                eagle_sch::schematic_device_part_numbers(&text).unwrap_or_default()
+            {
+                let is_ref = |c: &&mut Component| c.reference == reference;
+                if let Some(c) = self.components.iter_mut().find(is_ref) {
+                    let key = bom::LIBRARY_DEVICE_PROPERTY.to_string();
+                    c.properties.push((key, number));
+                }
+            }
             for (reference, pad, name, kind) in pads {
                 names.insert((reference, pad), (name, kind));
             }
@@ -1362,5 +1373,75 @@ mod schematic_pin_name_tests {
         std::fs::remove_file(&path).ok();
         let values: Vec<&str> = board.components.iter().map(|c| c.value.as_str()).collect();
         assert_eq!(values, ["74HCT245DW", "TINY85-MU", "OWN"]);
+    }
+
+    /// A rating-string value keeps its text, and the part number the library
+    /// device name embeds rides along as a candidate identity property.
+    #[test]
+    fn eagle_library_device_part_numbers_become_candidate_properties() {
+        let sch = r#"<?xml version="1.0"?>
+<eagle><drawing><schematic>
+<libraries><library name="l">
+  <symbols><symbol name="S"><pin name="A"/></symbol></symbols>
+  <devicesets><deviceset name="MOSFET_PCH"><gates><gate name="G" symbol="S"/></gates><devices>
+    <device name="-XQ1234UX-7" package="P"><connects><connect gate="G" pin="A" pad="1"/></connects>
+    </device></devices></deviceset>
+  <deviceset name="RESISTOR"><gates><gate name="G" symbol="S"/></gates><devices>
+    <device name="-0402T-1/16W-1%" package="P"><connects><connect gate="G" pin="A" pad="1"/></connects>
+    </device></devices></deviceset></devicesets>
+</library></libraries>
+<parts><part name="Q1" library="l" deviceset="MOSFET_PCH" device="-XQ1234UX-7" value="20V/4.2A"/>
+<part name="R1" library="l" deviceset="RESISTOR" device="-0402T-1/16W-1%" value="10k"/></parts>
+<sheets/>
+</schematic></drawing></eagle>"#;
+        let path = std::env::temp_dir().join(format!("hauksbee-devpn-{}.sch", std::process::id()));
+        std::fs::write(&path, sch).unwrap();
+        let mut board = ExtractedBoard {
+            name: "devpn".into(),
+            nets: Vec::new(),
+            components: [("Q1", "20V/4.2A"), ("R1", "10k")]
+                .iter()
+                .map(|(r, v)| part(r, v, "P", "P", vec![pin("1", Some(1))]))
+                .collect(),
+        };
+        board.adopt_schematic_pin_names(&path);
+        std::fs::remove_file(&path).ok();
+        let device = |r: &str| {
+            let c = board.components.iter().find(|c| c.reference == r).unwrap();
+            let key = crate::bom::LIBRARY_DEVICE_PROPERTY;
+            (
+                c.value.clone(),
+                c.properties
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|p| p.1.clone()),
+            )
+        };
+        assert_eq!(device("Q1"), ("20V/4.2A".into(), Some("XQ1234UX-7".into())));
+        assert_eq!(device("R1"), ("10k".into(), None));
+    }
+
+    /// The part number an Eagle device name spells, and the names that spell
+    /// none: package and value codes, tolerances, class words.
+    #[test]
+    fn embedded_part_numbers_skip_package_value_and_class_codes() {
+        let pn = crate::eagle_sch::embedded_part_number;
+        #[rustfmt::skip]
+        let cases = [
+            (("MOSFET_PCH", "-XQ2305UX-7", ""), Some("XQ2305UX-7")),
+            (("V_REG_XR2112", "K-3.3V", ""), Some("XR2112K-3.3V")),
+            (("DIODE-SCHOTTKY", "-XB20J", ""), Some("XB20J")),
+            (("MOSFET-NCH", "-2N7002PW", ""), Some("2N7002PW")),
+            (("0.1UF", "-0402T-16V-10%", ""), None),
+            (("PPTC", "_6V500MA", ""), None),
+            (("LED-BLUE", "0603", ""), None),
+            (("MCU", "1:1-LESS_PASTE", ""), None),
+            (("CONN", "-SMD-4.6X2.8MM", ""), None),
+            (("IC", "DFN8", ""), None),
+            (("LED", "1206", ""), None),
+        ];
+        for ((set, device, tech), want) in cases {
+            assert_eq!(pn(set, device, tech).as_deref(), want, "{set} {device}");
+        }
     }
 }
