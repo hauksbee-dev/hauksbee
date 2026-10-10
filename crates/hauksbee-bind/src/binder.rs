@@ -9419,6 +9419,43 @@ style = "i2c_pointer"
         assert!(warning.is_some_and(|w| w.contains("0x40 is assumed")));
     }
 
+    /// The BME280 attaches its chip-id register only when CSB selects I2C, at
+    /// the address SDO selects; CSB low (SPI) leaves it open.
+    #[test]
+    fn bme280_attaches_on_i2c_at_the_sdo_selected_address() {
+        let model = resolve_value(&ModelLibrary::builtin(), "BME280", "");
+        let mut component = comp("U4", "BME280");
+        // GND, CSB, SDI, SCK, SDO, VDDIO, GND, VDD.
+        let wire = |csb, sdo| {
+            pins_on(&[
+                ("1", 0),
+                ("2", csb),
+                ("3", 2),
+                ("4", 4),
+                ("5", sdo),
+                ("6", 3),
+                ("7", 0),
+                ("8", 3),
+            ])
+        };
+        for (sdo, address) in [(0, 0x76), (3, 0x77)] {
+            component.pins = wire(3, sdo);
+            let (outcome, warning, peripherals) = bind_peripheral(&component, &model);
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { .. }),
+                "{outcome:?} / {warning:?}"
+            );
+            assert_eq!(peripherals[0].i2c_address_override, Some(address));
+        }
+        component.pins = wire(0, 0);
+        let (outcome, _, peripherals) = bind_peripheral(&component, &model);
+        assert!(
+            matches!(outcome, BindOutcome::Unresolved { .. }),
+            "{outcome:?}"
+        );
+        assert!(peripherals.is_empty());
+    }
+
     #[test]
     fn digital_output_driver_honours_model_ro() {
         let mut model = resolve_value(&ModelLibrary::builtin(), "74HC595", "");

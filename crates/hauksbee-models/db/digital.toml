@@ -3327,15 +3327,16 @@ missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "gpio_alternate_fun
 # the volts are wrong by the ratio (on the margay datalogger's 3.3 V rail they
 # would be 2.64 V and 0.66 V).
 #
-# DELIBERATELY NOT MODELLED: the register map, therefore also the calibration
-# coefficients, the oversampling modes and the measurement itself. Nothing here
-# makes an I2C read return a pressure. The pathway is the declarative sensor
-# spec (`testdata/sensor-specs/`), exactly as the BMA423 entry says. Naming the
-# pads, the bus roles and the supply draw is all this claims to do.
+# MODELLED AS THE BMP280 BELOW IS: the chip-id register only (Section 5.4.1,
+# 0xD0 reads 0x60), attached when CSB resolves high (Section 6.1, I2C selected)
+# at the SDO-selected address (Section 6.2, 0x76 / 0x77). NOT MODELLED: the rest
+# of the register map, therefore the calibration coefficients, the oversampling
+# modes and the measurement itself. Nothing here makes an I2C read return a
+# pressure; the full declarative sensor spec is the pathway for that.
 [[models]]
 id = "bme280"
 kind = "digital"
-description = "Bosch BME280 humidity/pressure/temperature sensor, LGA-8 (pad map and VDDIO logic levels; no register map)"
+description = "Bosch BME280 humidity/pressure/temperature sensor, LGA-8 (pad map, VDDIO logic levels and chip-id register; no measurement)"
 
 [models.match]
 # The BMP280 (no humidity channel) and BME680 (gas) are different dies with
@@ -3343,9 +3344,6 @@ description = "Bosch BME280 humidity/pressure/temperature sensor, LGA-8 (pad map
 value_re = "(?i)^BME280([-_ ].*)?$"
 
 [models.params]
-identity_only = true
-warning = "bme280 has no generic executable device behavior; only identity and sourced metadata are available"
-unlocked_by = "a validated executable model for bme280"
 # Table 32, evaluated at the Table 1 typical VDDIO = 1.8 V. The datasheet states
 # all four as PERCENTAGES of VDDIO and never in volts, so these are those
 # percentages times 1.8; see the note above before trusting them on a board with
@@ -3392,13 +3390,53 @@ gnd_pin    = "1"           # GND
 # any interface pin. 4.25 V is the ceiling.
 max_voltage_v = 4.25
 
+# Section 6.1 (p.32): "If CSB is connected to VDDIO, the I2C interface is
+# active." Section 6.2 (p.32): SDO to GND gives 1110110 (0x76), SDO to VDDIO
+# gives 1110111 (0x77). A floating or pulled strap leaves the part open with a
+# named reason rather than a guessed address.
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BME280 chip-id subset"
+bus = "i2c"
+i2c_address = 0x76
+
+# Section 5.4.1 (p.27) and Table 18 Memory map: register 0xD0 "id",
+# chip_id = 0x60.
+[[sensor.register]]
+addr = 0xD0
+const = [0x60]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 1, VDD min
+idle_a = 0.0000036            # p.1 key features, 3.6 uA @ 1 Hz humidity, pressure and temperature
+read_a = 0.0000036
+write_a = 0.0000036
+low_power_a = 0.0000001       # Table 1, sleep current IDDSL typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "duty_cycled_supply_current", "absolute_ratings", "i2c_bus_mode_strap", "i2c_address_strap", "register_map_subset", "chip_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "spi_register_map", "calibration_coefficients", "humidity_data", "pressure_data", "temperature_data", "power_mode_state", "conversion_peak_current", "supply_domain_current_split"]
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
 [[models.source.references]]
-url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds001.pdf"
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf"
 title = "Bosch Sensortec BME280 Combined humidity and pressure sensor, BST-BME280-DS001-24, revision 1.24, February 2024"
-locator = "Table 1 Electrical parameter specification; Table 32 interface parameters; Table 35 Pin description"
+locator = "p.1 Key features; Table 1 Electrical parameter specification; Section 5.4.1 Register 0xD0 id and Table 18 Memory map p.27; Sections 6.1 Interface selection and 6.2 I2C Interface p.32; Table 32 interface parameters; Table 35 Pin description"
+sha256 = "a2ccdb449fec94380742fe8eec851a11d9bd4142252d332b34682b4deecd7d89"
 
 # Table 32 as printed, in fractions of VDDIO. The params above are these rows
 # evaluated at VDDIO = 1.8 V.
