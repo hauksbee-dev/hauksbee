@@ -5623,17 +5623,15 @@ impl Scheduler {
                     };
                     (name, i)
                 }
-                Device::Diode { name, a, k, model } => {
-                    let vt = hauksbee_ir::thermal_voltage_c(self.circuit.temp_c) * model.n;
-                    let i = if vt > 0.0 {
-                        (model.is_at(self.circuit.temp_c)
-                            * ((v(*a) - v(*k)) / vt).clamp(-100.0, 200.0).exp_m1())
-                        .abs()
-                    } else {
-                        0.0
-                    };
-                    (name, i)
-                }
+                // The terminals read the junction plus the `rs` drop, so the
+                // current comes from the junction the monitor recovers, not
+                // Shockley at the terminal voltage: that read a 24.5 mA LED
+                // (rs = 6 ohm) as a 0.58 A peak.
+                Device::Diode { name, a, k, model } => (
+                    name,
+                    hauksbee_bind::stress::diode_current(model, v(*a) - v(*k), self.circuit.temp_c)
+                        .abs(),
+                ),
                 _ => continue,
             };
             if i.is_finite() {
@@ -8603,6 +8601,38 @@ missing = ["measurement_registers"]
         // A second step must not inherit the first frame's peak.
         sched.step(1e-3);
         assert!((peak(&sched, "R1") - 0.0125).abs() < 5e-4);
+    }
+
+    /// An LED's frame peak is the current its series resistor carries, not
+    /// Shockley evaluated at the terminal voltage, which includes the card's
+    /// `rs` drop and read a 25 mA indicator as hundreds of milliamps.
+    #[test]
+    fn an_led_peak_is_its_series_resistor_current() {
+        let board = pcb_fixture(
+            &["", "GND", "+5V", "ANODE"],
+            &[
+                ("Resistor:R", "R1", "120", 110, &[(1, 0, 2), (2, 2, 3)]),
+                (
+                    "LED_THT:LED_D5.0mm",
+                    "D1",
+                    "RED_LED",
+                    120,
+                    &[(1, 0, 1), (2, 2, 3)],
+                ),
+            ],
+        );
+        let mut sched = board_scheduler(&board);
+        sched.step(1e-3);
+        let peak = |r: &str| sched.frame_peak_current()[r];
+        let (led, res) = (peak("D1"), peak("R1"));
+        assert!(
+            res > 0.015 && res < 0.03,
+            "R1 carries an indicator's current: {res}"
+        );
+        assert!(
+            (led - res).abs() < 0.02 * res,
+            "D1 peak {led} A vs R1 {res} A"
+        );
     }
 
     // ── AVR-bound electrical proofs (need the in-process simavr core) ────────

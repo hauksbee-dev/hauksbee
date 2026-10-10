@@ -2167,7 +2167,11 @@ fn bjt_terminal_currents(
 /// So recover the junction first, solving `vj + i(vj)*rs = vd` for `vj`.
 /// Newton on a monotone scalar, started from the terminal voltage, which is an
 /// upper bound: a handful of iterations and no allocation.
-fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
+///
+/// Public so every other reader of a solved diode current (the co-simulation's
+/// per-frame peak accumulator) reads the same number this monitor judges.
+#[must_use]
+pub fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     let vt = hauksbee_ir::thermal_voltage_c(temp_c) * model.n;
     if vt <= 0.0 {
         return 0.0;
