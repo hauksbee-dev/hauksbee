@@ -8147,21 +8147,80 @@ min_v = 2.7
 max_v = 5.5
 basis = "TI SBOS790A, Section 5.5, Operating supply range row"
 
-# Table 6-2 has 16 addresses from four levels on each of A0 and A1; the binder
-# can resolve only a two-level strap. A0 is therefore required at GND and A1
-# selects between its GND and VS rows: A1 = GND, A0 = GND is 1000000b (0x40);
-# A1 = VS, A0 = GND is 1000100b (0x44). Any other strap leaves the part unattached.
+# Table 6-2 has 16 addresses from four levels (GND, VS, SDA, SCL) on each of A0
+# and A1, all listed below as printed (binary 1000000 = 0x40 ... 1001111 =
+# 0x4F). A strap the binder cannot read as one of the four (floating, or on some
+# other net) binds the spec default 0x40 marked assumed.
 [models.peripheral]
 kind = "register_map"
-required_low_roles = ["a0"]
-address_select_role = "a1"
-address_when_low = 0x40
-address_when_high = 0x44
 spec_toml = '''
 [sensor]
 name = "INA233 TI_MFR_ID subset"
 bus = "i2c"
 i2c_address = 0x40
+
+# Table 4-1, DGS (VSSOP-10); the same pad map as [models.pins].
+[sensor.pins]
+1 = "a1"
+2 = "a0"
+3 = "alert"
+4 = "sda"
+5 = "scl"
+6 = "vdd"
+7 = "gnd"
+8 = "vbus"
+9 = "in_n"
+10 = "in_p"
+
+# Table 6-2 Address Pins and Target Addresses, rows in printed order.
+[[sensor.address_select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[sensor.address_select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[sensor.address_select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[sensor.address_select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[sensor.address_select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
 
 # Table 6-4 / Section 6.6.3.7: TI_MFR_ID (E0h) = 5449h, sent LSB first (6.5.6.2).
 [[sensor.register]]
@@ -8182,8 +8241,8 @@ write_a = 0.000310
 low_power_a = 0.000002        # Section 5.5, IQ power-down (shutdown) typ
 
 [models.coverage]
-implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "manufacturer_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
-missing = ["full_pmbus_command_set", "block_read_commands", "shunt_and_bus_measurement", "power_accumulator", "alert_engine", "four_level_address_pins", "sense_pin_ratings"]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "four_level_address_pins", "register_map_subset", "manufacturer_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_pmbus_command_set", "block_read_commands", "shunt_and_bus_measurement", "power_accumulator", "alert_engine", "sense_pin_ratings"]
 
 [models.source]
 tier = "curated-library"
@@ -8273,21 +8332,80 @@ max_v = 5.5
 abs_max_v = 6.0
 basis = "TI SLYS021A, Section 6.3 Recommended Operating Conditions, VS 2.7 V to 5.5 V; Section 6.1 Absolute Maximum Ratings, VS 6 V"
 
-# Table 7-2 has 16 addresses from four levels on each of A0 and A1; the binder
-# resolves only a two-level strap. A0 is therefore required at GND and A1
-# selects between its GND and VS rows: A1 = GND, A0 = GND is 1000000b (0x40);
-# A1 = VS, A0 = GND is 1000100b (0x44). Any other strap leaves the part unattached.
+# Table 7-2 has 16 addresses from four levels (GND, VS, SDA, SCL) on
+# each of A0 and A1, all listed below as printed (binary 1000000 = 0x40 ...
+# 1001111 = 0x4F). A strap the binder cannot read as one of the four
+# (floating, or on some other net) binds the spec default 0x40 marked assumed.
 [models.peripheral]
 kind = "register_map"
-required_low_roles = ["a0"]
-address_select_role = "a1"
-address_when_low = 0x40
-address_when_high = 0x44
 spec_toml = '''
 [sensor]
 name = "INA228 ID register subset"
 bus = "i2c"
 i2c_address = 0x40
+
+# Table 5-1, DGS (VSSOP-10); the same pad map as [models.pins].
+[sensor.pins]
+1 = "a1"
+2 = "a0"
+3 = "alert"
+4 = "sda"
+5 = "scl"
+6 = "vdd"
+7 = "gnd"
+8 = "vbus"
+9 = "in_n"
+10 = "in_p"
+
+# Table 7-2, rows in printed order (GND = "low", VS = "high").
+[[sensor.address_select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[sensor.address_select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[sensor.address_select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[sensor.address_select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[sensor.address_select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
 
 # Section 7.6.1.19: MANUFACTURER_ID (3Eh) = 5449h, MSB first (Section 7.5.1).
 [[sensor.register]]
@@ -8313,8 +8431,8 @@ write_a = 0.000640
 low_power_a = 0.0000028       # Section 6.5, IQSD shutdown typ (5 uA max)
 
 [models.coverage]
-implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "manufacturer_id_read", "device_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
-missing = ["full_register_map", "shunt_and_bus_measurement", "energy_and_charge_accumulators", "temperature_measurement", "alert_engine", "four_level_address_pins", "sense_pin_ratings", "power_on_reset_voltage"]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "four_level_address_pins", "register_map_subset", "manufacturer_id_read", "device_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["full_register_map", "shunt_and_bus_measurement", "energy_and_charge_accumulators", "temperature_measurement", "alert_engine", "sense_pin_ratings", "power_on_reset_voltage"]
 
 [models.source]
 tier = "curated-library"
@@ -8431,19 +8549,86 @@ max_v = 5.5
 abs_max_v = 7.0
 basis = "TI SBAS751B, Section 6.3 Recommended Operating Conditions, unipolar analog supply AVDD to AVSS 2.3 V to 5.5 V; Section 6.1, 7 V"
 
-# Table 14: A1 = DGND, A0 = DGND is 100 0000 (0x40); A1 = DVDD, A0 = DGND is
-# 100 0100 (0x44). Any other strap leaves the part unattached.
+# Table 14 has 16 addresses from four levels (DGND, DVDD, SDA, SCL) on
+# each of A0 and A1, all listed below as printed (binary 1000000 = 0x40 ...
+# 1001111 = 0x4F). A strap the binder cannot read as one of the four
+# (floating, or on some other net) binds the spec default 0x40 marked assumed.
 [models.peripheral]
 kind = "register_map"
-required_low_roles = ["a0"]
-address_select_role = "a1"
-address_when_low = 0x40
-address_when_high = 0x44
 spec_toml = '''
 [sensor]
 name = "ADS122C04 configuration registers"
 bus = "i2c"
 i2c_address = 0x40
+
+# Pin Functions table, TSSOP-16 (PW) column; the same pad map as [models.pins].
+[sensor.pins]
+1 = "a0"
+2 = "a1"
+3 = "reset_n"
+4 = "dgnd"
+5 = "avss"
+6 = "ain3"
+7 = "ain2"
+8 = "refn"
+9 = "refp"
+10 = "ain1"
+11 = "ain0"
+12 = "avdd"
+13 = "dvdd"
+14 = "drdy_n"
+15 = "sda"
+16 = "scl"
+
+# Table 14, rows in printed order (DGND = "low", DVDD = "high").
+[[sensor.address_select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[sensor.address_select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[sensor.address_select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[sensor.address_select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[sensor.address_select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
 
 # WREG rr (Section 8.5.3.7): command 0100 rr00, then one data byte.
 [[sensor.write_register]]
@@ -8510,8 +8695,8 @@ write_a = 0.000065
 low_power_a = 0.0000003       # Section 6.5, IDVDD power-down typ (5 uA max)
 
 [models.coverage]
-implements = ["pin_roles", "output_low_level", "digital_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "configuration_register_write_readback", "bus_coupled_active_current", "supply_voltage_gating"]
-missing = ["conversion_data", "rdata_command", "start_sync_powerdown_reset_commands", "chained_wreg_in_one_frame", "dont_care_command_bits", "reset_pin", "drdy_pin_and_bit", "crc_modes", "idacs", "analog_supply_current", "four_level_address_pins", "dvdd_relative_input_levels"]
+implements = ["pin_roles", "output_low_level", "digital_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "four_level_address_pins", "register_map_subset", "configuration_register_write_readback", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_data", "rdata_command", "start_sync_powerdown_reset_commands", "chained_wreg_in_one_frame", "dont_care_command_bits", "reset_pin", "drdy_pin_and_bit", "crc_modes", "idacs", "analog_supply_current", "dvdd_relative_input_levels"]
 
 [models.source]
 tier = "curated-library"
@@ -8584,19 +8769,87 @@ max_v = 5.5
 abs_max_v = 7.0
 basis = "TI SBAS751B, Section 6.3 Recommended Operating Conditions, unipolar analog supply AVDD to AVSS 2.3 V to 5.5 V; Section 6.1, 7 V"
 
-# Table 14: A1 = DGND, A0 = DGND is 100 0000 (0x40); A1 = DVDD, A0 = DGND is
-# 100 0100 (0x44). Any other strap leaves the part unattached.
+# Table 14 has 16 addresses from four levels (DGND, DVDD, SDA, SCL) on
+# each of A0 and A1, all listed below as printed (binary 1000000 = 0x40 ...
+# 1001111 = 0x4F). A strap the binder cannot read as one of the four
+# (floating, or on some other net) binds the spec default 0x40 marked assumed.
 [models.peripheral]
 kind = "register_map"
-required_low_roles = ["a0"]
-address_select_role = "a1"
-address_when_low = 0x40
-address_when_high = 0x44
 spec_toml = '''
 [sensor]
 name = "ADS122C04 configuration registers"
 bus = "i2c"
 i2c_address = 0x40
+
+# Pin Functions table, WQFN-16 (RTE) column; the same pad map as [models.pins].
+[sensor.pins]
+1 = "reset_n"
+2 = "dgnd"
+3 = "avss"
+4 = "ain3"
+5 = "ain2"
+6 = "refn"
+7 = "refp"
+8 = "ain1"
+9 = "ain0"
+10 = "avdd"
+11 = "dvdd"
+12 = "drdy_n"
+13 = "sda"
+14 = "scl"
+15 = "a0"
+16 = "a1"
+17 = "avss_ep"
+
+# Table 14, rows in printed order (DGND = "low", DVDD = "high").
+[[sensor.address_select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[sensor.address_select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[sensor.address_select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[sensor.address_select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[sensor.address_select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
 
 # WREG rr (Section 8.5.3.7): command 0100 rr00, then one data byte.
 [[sensor.write_register]]
@@ -8663,8 +8916,8 @@ write_a = 0.000065
 low_power_a = 0.0000003       # Section 6.5, IDVDD power-down typ (5 uA max)
 
 [models.coverage]
-implements = ["pin_roles", "output_low_level", "digital_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_subset", "configuration_register_write_readback", "bus_coupled_active_current", "supply_voltage_gating"]
-missing = ["conversion_data", "rdata_command", "start_sync_powerdown_reset_commands", "chained_wreg_in_one_frame", "dont_care_command_bits", "reset_pin", "drdy_pin_and_bit", "crc_modes", "idacs", "analog_supply_current", "four_level_address_pins", "dvdd_relative_input_levels"]
+implements = ["pin_roles", "output_low_level", "digital_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "four_level_address_pins", "register_map_subset", "configuration_register_write_readback", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_data", "rdata_command", "start_sync_powerdown_reset_commands", "chained_wreg_in_one_frame", "dont_care_command_bits", "reset_pin", "drdy_pin_and_bit", "crc_modes", "idacs", "analog_supply_current", "dvdd_relative_input_levels"]
 
 [models.source]
 tier = "curated-library"

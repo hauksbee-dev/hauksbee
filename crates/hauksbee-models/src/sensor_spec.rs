@@ -500,6 +500,11 @@ pub struct ProtocolSpec {
 pub enum StrapTie {
     Low,
     High,
+    /// Tied straight to the bus data line. Four-level address pins (TI's
+    /// `INA2xx` and `ADS1xxx` families) read SDA and SCL as two more levels.
+    Sda,
+    /// Tied straight to the bus clock line (see [`StrapTie::Sda`]).
+    Scl,
 }
 
 /// One `[[sensor.address_select]]` row: the strap levels that select `address`.

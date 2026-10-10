@@ -3173,6 +3173,16 @@ fn bind_model_peripheral(
                 _ if sensor.address_selects.is_empty() => None,
                 _ => sensor
                     .resolve_address(|role| {
+                        // A strap wired straight onto a bus line is at that line's
+                        // level, which a four-level address pin reads as such.
+                        let node = role_nets.get(role);
+                        let on = |bus: &String| node.is_some() && role_nets.get(bus) == node;
+                        if on(scl_role) {
+                            return Ok(StrapTie::Scl);
+                        }
+                        if on(sda_role) {
+                            return Ok(StrapTie::Sda);
+                        }
                         strap_level(role)
                             .map(|high| if high { StrapTie::High } else { StrapTie::Low })
                     })
@@ -9356,6 +9366,57 @@ style = "i2c_pointer"
         let (outcome, _, peripherals) = bind_peripheral(&component, &model);
         assert!(matches!(outcome, BindOutcome::Unresolved { .. }));
         assert!(peripherals.is_empty());
+    }
+
+    /// A four-level strap (GND, VS, SDA or SCL on each of A0 and A1) selects
+    /// one of sixteen addresses; a strap on any other net binds the spec
+    /// default, disclosed as assumed.
+    #[test]
+    fn four_level_address_straps_read_the_bus_lines_as_levels() {
+        let model = resolve_value(&ModelLibrary::builtin(), "INA233", "");
+        let mut component = comp("U3", "INA233");
+        // A1, A0, ALERT -> IRQ, SDA, SCL, VS, GND, VBUS, IN-, IN+.
+        let wire = |a1, a0| {
+            pins_on(&[
+                ("1", a1),
+                ("2", a0),
+                ("3", 5),
+                ("4", 2),
+                ("5", 4),
+                ("6", 3),
+                ("7", 0),
+                ("8", 3),
+                ("9", 3),
+                ("10", 3),
+            ])
+        };
+        for (a1, a0, address) in [
+            (0, 0, 0x40),
+            (0, 3, 0x41),
+            (3, 0, 0x44),
+            (3, 3, 0x45),
+            (2, 4, 0x4B),
+            (4, 2, 0x4E),
+            (4, 4, 0x4F),
+        ] {
+            component.pins = wire(a1, a0);
+            let (outcome, warning, peripherals) = bind_peripheral(&component, &model);
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { .. }),
+                "{outcome:?} / {warning:?}"
+            );
+            assert_eq!(
+                peripherals[0].i2c_address_override,
+                Some(address),
+                "a1 {a1} a0 {a0}"
+            );
+            assert_eq!(warning, None);
+        }
+        // Control: A0 on the alert line is none of the four levels.
+        component.pins = wire(0, 5);
+        let (_, warning, peripherals) = bind_peripheral(&component, &model);
+        assert_eq!(peripherals[0].i2c_address_override, Some(0x40));
+        assert!(warning.is_some_and(|w| w.contains("0x40 is assumed")));
     }
 
     #[test]
