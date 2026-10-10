@@ -102,6 +102,12 @@ pub struct CiResult {
     /// like `substitutions`, a GREEN over an un-run co-sim path must be
     /// qualified everywhere a pipeline reads.
     pub coverage_warnings: Vec<String>,
+    /// What a green verdict rests on beyond its assertions, one sentence each:
+    /// the open variant and corner sets (an LED the board names only by class,
+    /// say) the member sweep could not cross in full, so some part was judged
+    /// at a stand-in or a subset of its corners. The same field the engine's
+    /// run report carries; a pass with any is conditional, never clean.
+    pub verdict_conditions: Vec<String>,
     /// Per-MCU measured edge timestamp and guaranteed-pulse limits at the
     /// actual negotiated chunk. Present even when no strict timing request was
     /// declared, so a green report states what timing it covered.
@@ -322,6 +328,12 @@ pub struct CiJsonReport {
     /// Co-sim coverage holes: dropped ADC injections, never-exercised bus
     /// peripherals. Non-empty means part of the co-sim path never ran.
     pub coverage_warnings: Vec<String>,
+    /// The assumptions a pass rests on beyond its assertions, one sentence
+    /// each: open variant or corner sets the member sweep could not cross in
+    /// full (see `verdict_conditions` in the engine run report). A pass with
+    /// any is conditional, never clean. Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verdict_conditions: Vec<String>,
     /// Measured timing coverage per live MCU backend.
     pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
     /// Per-MCU execution evidence (see `hauksbee_engine::execution`).
@@ -568,6 +580,7 @@ impl CiResult {
             coverage: self.coverage.as_ref().map(EnsembleCoverage::describe),
             substitutions: self.substitutions.clone(),
             coverage_warnings: self.coverage_warnings.clone(),
+            verdict_conditions: self.verdict_conditions.clone(),
             timing_coverage: self.timing_coverage.clone(),
             execution: self.execution.clone(),
             timing_refusals: self.timing_refusals.clone(),
@@ -743,6 +756,7 @@ impl CiResult {
         }
         tagged("co-sim ran on a SUBSTITUTE chip", &self.substitutions)
             .chain(tagged("co-sim COVERAGE HOLE", &self.coverage_warnings))
+            .chain(tagged("CONDITION", &self.verdict_conditions))
             .chain(
                 self.timing_coverage
                     .iter()
@@ -757,6 +771,32 @@ impl CiResult {
             .chain(tagged("TIMING INVALID", &self.timing_refusals))
             .chain(tagged("waivers", &self.waiver_notes))
             .collect()
+    }
+
+    /// The leading word of the human verdict line.
+    fn verdict_word(&self, all_measured: bool) -> &'static str {
+        if self.analog_invalid() {
+            "INVALID (run or assertion evidence is not trustworthy)"
+        } else if !self.passed() {
+            "RED"
+        } else if all_measured {
+            "MEASURED"
+        } else if !self.verdict_conditions.is_empty() {
+            // The same word the engine's `--check` uses for a pass that rests
+            // on an assumption: green, but never unconditionally.
+            "GREEN, conditionally"
+        } else {
+            "GREEN"
+        }
+    }
+
+    /// What a passing GitHub rollup appends when the pass has conditions.
+    const fn condition_suffix(&self) -> &'static str {
+        if self.verdict_conditions.is_empty() {
+            ""
+        } else {
+            ", conditionally (see the CONDITION warning)"
+        }
     }
 
     #[must_use]
@@ -820,15 +860,7 @@ impl CiResult {
         // A run of nothing but measurements judged nothing, so it must not
         // borrow the word a run of held assertions earns.
         let all_measured = !self.results.is_empty() && self.results.iter().all(|r| r.measured);
-        let verdict = if self.analog_invalid() {
-            "INVALID (run or assertion evidence is not trustworthy)"
-        } else if !self.passed() {
-            "RED"
-        } else if all_measured {
-            "MEASURED"
-        } else {
-            "GREEN"
-        };
+        let verdict = self.verdict_word(all_measured);
         let waived = self.waived_count();
         let waived_note = if waived > 0 {
             format!(" ({waived} failure(s) waived, visible above)")
@@ -1099,6 +1131,7 @@ impl CiResult {
             .chain(assumptions)
             .chain(tagged("SUBSTITUTE MCU", &self.substitutions))
             .chain(tagged("COSIM COVERAGE HOLE", &self.coverage_warnings))
+            .chain(tagged("CONDITION", &self.verdict_conditions))
             .chain(tagged("WAIVERS", &self.waiver_notes))
             .map(|w| format!("::warning title=hauksbee-ci {w}"))
             .collect();
@@ -1121,7 +1154,12 @@ impl CiResult {
             );
         }
 
-        // The rollup: exactly one summary annotation, always emitted.
+        self.write_rollup(&mut out);
+        out
+    }
+
+    /// The rollup: exactly one summary annotation, always emitted.
+    fn write_rollup(&self, out: &mut String) {
         if let Some(refusal) = self.refusal() {
             let text = format!(
                 "{}; reason: {}",
@@ -1136,9 +1174,10 @@ impl CiResult {
         } else if self.passed() {
             let _ = writeln!(
                 out,
-                "::notice title=hauksbee-ci::{}/{} assertions passed",
+                "::notice title=hauksbee-ci::{}/{} assertions passed{}",
                 self.pass_count(),
-                self.results.len()
+                self.results.len(),
+                self.condition_suffix()
             );
         } else {
             let _ = writeln!(
@@ -1149,7 +1188,6 @@ impl CiResult {
                 gh_escape(&self.verdict_reason().unwrap_or_default())
             );
         }
-        out
     }
 
     /// Per-assertion `::error` cap: 8 verdicts + 1 overflow + 1 rollup fits

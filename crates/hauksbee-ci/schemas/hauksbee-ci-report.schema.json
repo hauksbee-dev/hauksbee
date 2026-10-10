@@ -595,6 +595,13 @@
           },
           "type": "array"
         },
+        "verdict_conditions": {
+          "description": "The assumptions a pass rests on beyond its assertions, one sentence\neach: open variant or corner sets the member sweep could not cross in\nfull (see `verdict_conditions` in the engine run report). A pass with\nany is conditional, never clean. Additive; omitted when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "verdict_reason": {
           "description": "Why the run is not green and what to do next, in one plain sentence;\nthe same text `run --json`, `--check` and the web report carry. Absent\nwhen every assertion held.",
           "type": [

@@ -50,6 +50,7 @@
 
 use crate::error::SpecError;
 use crate::spec::Spec;
+use hauksbee_engine::variant_sweep::OpenSet;
 use hauksbee_extract::ExtractedBoard;
 
 /// Full-factorial corner enumeration is capped at `2^CORNER_CAP` runs.
@@ -195,7 +196,9 @@ pub struct SeedPlan {
 /// Cross every plan with every combination of the undetermined variant sets.
 ///
 /// The sets are same-pinout `(reference, member ids)`, so the ensemble passes
-/// only if every member does. `None` above 2^[`CORNER_CAP`] runs: the part then keeps its flagged stand-in.
+/// only if every member does. `None` above 2^[`CORNER_CAP`] runs: the caller
+/// decides what covers the sets then ([`sweep_open_sets`]); it must never just
+/// keep the flagged stand-ins without saying so.
 #[must_use]
 pub fn with_variants(
     mut runs: Vec<SeedPlan>,
@@ -214,6 +217,281 @@ pub fn with_variants(
         }
     }
     Some(runs)
+}
+
+/// One member pin list: `(reference, member id)` per open set.
+type Pins = Vec<(String, String)>;
+
+/// How far a run got through its board's open variant and corner sets.
+///
+/// Everything here other than [`Self::is_full`] is coverage the run did NOT
+/// reach, kept so the report can say what a pass rests on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VariantCoverage {
+    /// How the assumed-corner sets were covered.
+    pub corners: CornerCover,
+    /// The assumed-corner sets' references.
+    pub corner_refs: Vec<String>,
+    /// The member each assumed-corner set binds when nothing pins it.
+    pub corner_stand_ins: Vec<String>,
+    /// Runs the full product of the corner sets would have been (saturating).
+    pub corner_product: u64,
+    /// Orderable-variant sets whose product exceeded the cap, so they ran only
+    /// as their stand-in variants.
+    pub variant_refs: Vec<String>,
+    /// Those sets' stand-in members.
+    pub variant_stand_ins: Vec<String>,
+    /// Runs the full product of the variant sets would have been (saturating).
+    pub variant_product: u64,
+}
+
+/// How the assumed-corner sets were covered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CornerCover {
+    /// Every combination ran (or there were no corner sets).
+    #[default]
+    Full,
+    /// Past the cap: all weak, all strong, and each set alone against the rest
+    /// (see [`boundary_patterns`] for what that does and does not bound).
+    Boundary,
+    /// Past the cap even for [`Self::Boundary`]: every set at corner k together.
+    Joint,
+    /// Nothing fit: every corner set ran only as its stand-in member.
+    StandIn,
+}
+
+impl VariantCoverage {
+    /// True when every combination of every open set ran, so the pass needs no
+    /// condition beyond what the checks themselves state.
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        self.corners == CornerCover::Full && self.variant_refs.is_empty()
+    }
+
+    /// What a pass rests on beyond its assertions: one sentence per group of
+    /// open sets the sweep did not cross in full, empty when it did.
+    #[must_use]
+    pub fn conditions(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let cap = 1u64 << CORNER_CAP;
+        let (refs, n) = (list(&self.corner_refs), self.corner_refs.len());
+        let fix = "put the manufacturer part number (or the colour) on each part to remove this assumption";
+        let over = format!(
+            "every combination would be {} runs, over the {cap}-run cap",
+            self.corner_product
+        );
+        match self.corners {
+            CornerCover::Full => {}
+            CornerCover::Boundary => out.push(format!(
+                "{refs} ({n} parts the board names only by class) passed at their assumed corners all weak, all strong, and each alone against the rest, not in every combination ({over}); a mix that is none of those is not judged; {fix}."
+            )),
+            CornerCover::Joint => out.push(format!(
+                "{refs} ({n} parts the board names only by class) passed only with every part at one assumed corner together (all weak, then all strong), not in every combination ({over}); {fix}."
+            )),
+            CornerCover::StandIn => out.push(format!(
+                "{refs} ({n} parts the board names only by class) were not swept across their assumed corners ({over}): each ran only as its stand-in ({}), the first corner the card lists, which bounds an assertion in one direction only, so a pass holds at that corner and not at the others; {fix}.",
+                list(&self.corner_stand_ins)
+            )),
+        }
+        if !self.variant_refs.is_empty() {
+            out.push(format!(
+                "{} have orderable variants the board does not pick, and crossing them would be {} runs, over the {cap}-run cap, so each ran only as its stand-in variant ({}); a pass holds for those variants and not the others; add `[[override]] ref=\"<ref>\" select=\"<variant>\"` to the spec, or put the orderable code in the BOM.",
+                list(&self.variant_refs),
+                self.variant_product,
+                list(&self.variant_stand_ins)
+            ));
+        }
+        out
+    }
+}
+
+/// A list for a sentence: the first few distinct items, then a count.
+fn list(items: &[String]) -> String {
+    const SHOWN: usize = 6;
+    let mut seen: Vec<&str> = Vec::new();
+    for item in items {
+        if !seen.contains(&item.as_str()) {
+            seen.push(item);
+        }
+    }
+    if seen.len() > SHOWN {
+        format!(
+            "{} and {} more",
+            seen[..SHOWN].join(", "),
+            seen.len() - SHOWN
+        )
+    } else {
+        seen.join(", ")
+    }
+}
+
+/// The plans crossed with the open sets, and how completely.
+#[derive(Debug, Clone)]
+pub struct VariantSweep {
+    pub plans: Vec<SeedPlan>,
+    pub coverage: VariantCoverage,
+}
+
+/// Cross every plan with the board's open variant and corner sets as far as
+/// the 2^[`CORNER_CAP`] run budget allows, and say how far that was.
+///
+/// Within the budget every combination runs and the coverage is full. Past it
+/// nothing is dropped silently:
+///
+/// * the orderable-variant sets (`corners == false`) are unordered, so no
+///   subset of them stands for the rest: past the cap they keep their flagged
+///   stand-in and the coverage names them;
+/// * the assumed-corner sets (`corners == true`, an LED whose colour the board
+///   does not name, say) are ordered by construction: each member is an
+///   assumed bound of one class, listed weak to strong, and the same index
+///   is the same side across sets. They fall back to a linear cover instead
+///   of the product, and then only if that fits: [`boundary_patterns`], then
+///   [`joint_patterns`] (all sets at one corner together), then the stand-in
+///   alone. Each fallback is reported by [`VariantCoverage::conditions`].
+#[must_use]
+pub fn sweep_open_sets(runs: Vec<SeedPlan>, sets: &[OpenSet]) -> VariantSweep {
+    let cap = 1usize << CORNER_CAP;
+    let (corners, variants): (Vec<&OpenSet>, Vec<&OpenSet>) = sets.iter().partition(|s| s.corners);
+    let axes = |sets: &[&OpenSet]| -> Vec<(String, Vec<String>)> {
+        (sets.iter())
+            .map(|s| (s.reference.clone(), s.ids.clone()))
+            .collect()
+    };
+    let product = |base: usize, sets: &[&OpenSet]| -> u64 {
+        (sets.iter()).fold(base as u64, |n, s| n.saturating_mul(s.ids.len() as u64))
+    };
+    let stand_ins = |sets: &[&OpenSet]| -> Vec<String> {
+        (sets.iter())
+            .filter_map(|s| s.ids.first().cloned())
+            .collect()
+    };
+    let refs =
+        |sets: &[&OpenSet]| -> Vec<String> { sets.iter().map(|s| s.reference.clone()).collect() };
+    let mut coverage = VariantCoverage::default();
+    let mut runs = runs;
+    if !variants.is_empty() {
+        if let Some(crossed) = with_variants(runs.clone(), &axes(&variants)) {
+            runs = crossed;
+        } else {
+            coverage.variant_refs = refs(&variants);
+            coverage.variant_stand_ins = stand_ins(&variants);
+            coverage.variant_product = product(runs.len(), &variants);
+        }
+    }
+    if corners.is_empty() {
+        return VariantSweep {
+            plans: runs,
+            coverage,
+        };
+    }
+    if let Some(crossed) = with_variants(runs.clone(), &axes(&corners)) {
+        return VariantSweep {
+            plans: crossed,
+            coverage,
+        };
+    }
+    coverage.corner_refs = refs(&corners);
+    coverage.corner_stand_ins = stand_ins(&corners);
+    coverage.corner_product = product(runs.len(), &corners);
+    let owned: Vec<OpenSet> = corners.iter().map(|s| (*s).clone()).collect();
+    let tiers = [
+        (boundary_patterns(&owned), CornerCover::Boundary),
+        (joint_patterns(&owned), CornerCover::Joint),
+    ];
+    let fits = |patterns: &Vec<Pins>| runs.len().saturating_mul(patterns.len()) <= cap;
+    let (plans, cover) = match tiers.iter().find(|(patterns, _)| fits(patterns)) {
+        Some((patterns, cover)) => (cross_patterns(&runs, patterns), *cover),
+        None => (runs, CornerCover::StandIn),
+    };
+    coverage.corners = cover;
+    VariantSweep { plans, coverage }
+}
+
+/// Every plan once per pin pattern, one seed's members adjacent.
+fn cross_patterns(runs: &[SeedPlan], patterns: &[Pins]) -> Vec<SeedPlan> {
+    let pinned = |plan: &SeedPlan, pins: &Pins| {
+        let mut plan = plan.clone();
+        plan.variants.extend(pins.iter().cloned());
+        plan
+    };
+    runs.iter()
+        .flat_map(|plan| patterns.iter().map(|pins| pinned(plan, pins)))
+        .collect()
+}
+
+/// Every set at its k-th member together, for each k up to the widest set (a
+/// narrower set holds its last member): all weak, then all strong.
+fn joint_patterns(sets: &[OpenSet]) -> Vec<Pins> {
+    let widest = sets.iter().map(|s| s.ids.len()).max().unwrap_or(0);
+    let at = |k: usize| -> Pins {
+        (sets.iter())
+            .filter_map(|s| {
+                Some((
+                    s.reference.clone(),
+                    s.ids.get(k).or_else(|| s.ids.last())?.clone(),
+                ))
+            })
+            .collect()
+    };
+    let mut out: Vec<Pins> = Vec::new();
+    for pins in (0..widest).map(at) {
+        if !out.contains(&pins) {
+            out.push(pins);
+        }
+    }
+    out
+}
+
+/// The linear cover of the assumed-corner sets: [`joint_patterns`] plus, for
+/// each set and each of its members, that member with every other set held
+/// all-first and then all-last. That is `widest + 2 * (total members)` runs
+/// instead of the product.
+///
+/// Why this bounds what CI asserts on. An assumed corner set is one class's
+/// assumed bounds (a generic LED's forward voltage, a generic FET's
+/// threshold): each member shifts one monotone characteristic of a part that
+/// sits on its own branch. What a CI assertion reads off such a board is
+/// either
+///
+/// * a quantity of one part's own branch (its current, the node it drives, its
+///   dissipation), which that part's corner moves one way and every OTHER
+///   part's corner moves the other way (a lighter or heavier load on the shared
+///   supply) or not at all: the worst case is that part at one member with the
+///   rest all at the opposite member, which is a `(set, member, rest
+///   all-first | all-last)` pattern; or
+/// * a shared quantity (the rail sagging under the combined load, the total
+///   current), which every part moves the same way: the worst case is all the
+///   parts at the same extreme, which is a joint pattern.
+///
+/// Where the premise fails this is a sample, not a bound: a quantity that is
+/// a DIFFERENCE of two parts' responses, or parts coupled through something
+/// other than a shared supply, can have its worst case at a mix that is in
+/// none of these patterns. So a pass swept this way is never reported clean:
+/// [`VariantCoverage::conditions`] says it was not every combination.
+fn boundary_patterns(sets: &[OpenSet]) -> Vec<Pins> {
+    type Rest = fn(&OpenSet) -> Option<&String>;
+    let mut out = joint_patterns(sets);
+    let rests: [Rest; 2] = [|t| t.ids.first(), |t| t.ids.last()];
+    for set in sets {
+        for id in &set.ids {
+            for rest in rests {
+                let pins: Pins = (sets.iter())
+                    .filter_map(|t| {
+                        let pick = if t.reference == set.reference {
+                            id
+                        } else {
+                            rest(t)?
+                        };
+                        Some((t.reference.clone(), pick.clone()))
+                    })
+                    .collect();
+                if !out.contains(&pins) {
+                    out.push(pins);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The ensemble execution mode.
@@ -839,6 +1117,135 @@ mod tests {
         assert_eq!(fifth, r#"[("U3", "b"), ("U4", "y")]"#);
         let wide = [("U3".to_string(), (0..1025).map(|i| i.to_string()).collect())];
         assert!(with_variants(plans, &wide).is_none());
+    }
+
+    fn open(reference: &str, ids: &[&str], corners: bool) -> OpenSet {
+        OpenSet {
+            reference: reference.into(),
+            ids: ids.iter().map(ToString::to_string).collect(),
+            corners,
+        }
+    }
+
+    /// `n` LED-like corner sets (high-Vf stand-in first), refs D1..Dn.
+    fn leds(n: usize) -> Vec<OpenSet> {
+        (1..=n)
+            .map(|i| open(&format!("D{i}"), &["led_high_vf", "led_low_vf"], true))
+            .collect()
+    }
+
+    /// Under the cap every combination of every set runs and nothing is
+    /// disclosed: the sweep claims what it did, so it needs no condition.
+    #[test]
+    fn open_sets_within_the_cap_are_crossed_in_full_with_no_condition() {
+        let plans = build_plans(Mode::MonteCarlo, 4, &[]).unwrap();
+        let mut sets = leds(3);
+        sets.push(open("U3", &["a", "b", "c"], false));
+        let swept = sweep_open_sets(plans, &sets);
+        assert_eq!(swept.plans.len(), 4 * 8 * 3);
+        assert!(swept.coverage.is_full(), "{:?}", swept.coverage);
+        assert!(swept.coverage.conditions().is_empty());
+        let distinct: std::collections::BTreeSet<_> =
+            swept.plans.iter().map(|p| (p.seed, &p.variants)).collect();
+        assert_eq!(distinct.len(), swept.plans.len());
+    }
+
+    /// Six LED sets and 24 seeds is 1536 members, over the cap: the corner
+    /// sets get the linear cover, which has the all-weak and all-strong
+    /// members, every part alone at each corner against the rest at either
+    /// extreme, and the run says it was not every combination.
+    #[test]
+    fn corner_sets_past_the_cap_get_the_linear_cover_and_say_so() {
+        fn pins(p: &SeedPlan) -> Vec<&str> {
+            p.variants.iter().map(|(_, id)| id.as_str()).collect()
+        }
+        let plans = build_plans(Mode::MonteCarlo, 24, &[]).unwrap();
+        let swept = sweep_open_sets(plans, &leds(6));
+        // 2 uniform members, then per set one corner alone against the rest at
+        // each extreme (the other two combinations are the uniform members).
+        let per_seed = 2 + 2 * 6;
+        assert_eq!(swept.plans.len(), 24 * per_seed);
+        assert_eq!(swept.coverage.corners, CornerCover::Boundary);
+        let seed0: Vec<Vec<&str>> = swept
+            .plans
+            .iter()
+            .filter(|p| p.seed == 0)
+            .map(pins)
+            .collect();
+        let uniform = |id: &'static str| vec![id; 6];
+        assert!(seed0.contains(&uniform("led_high_vf")), "stand-in member");
+        assert!(seed0.contains(&uniform("led_low_vf")), "all strong");
+        // D3 alone low against every other part high, and alone high against
+        // every other part low.
+        let mut low_alone = uniform("led_high_vf");
+        low_alone[2] = "led_low_vf";
+        let mut high_alone = uniform("led_low_vf");
+        high_alone[2] = "led_high_vf";
+        assert!(seed0.contains(&low_alone) && seed0.contains(&high_alone));
+        let said = swept.coverage.conditions();
+        assert_eq!(said.len(), 1, "{said:?}");
+        for needle in [
+            "D1, D2, D3, D4, D5, D6",
+            "all weak, all strong",
+            "not in every combination",
+            "1536 runs",
+        ] {
+            assert!(said[0].contains(needle), "{needle}: {}", said[0]);
+        }
+    }
+
+    /// When even the linear cover does not fit the budget the sets are swept
+    /// jointly; when nothing fits they keep the stand-in and the condition
+    /// says that, naming it, instead of passing as if they had been swept.
+    #[test]
+    fn corner_sets_degrade_to_joint_then_to_the_named_stand_in() {
+        let plans = build_plans(Mode::MonteCarlo, 24, &[]).unwrap();
+        let joint = sweep_open_sets(plans, &leds(30));
+        assert_eq!(joint.coverage.corners, CornerCover::Joint);
+        assert_eq!(joint.plans.len(), 24 * 2);
+        assert!(
+            joint.coverage.conditions()[0].contains("every part at one assumed corner together")
+        );
+        let plans = build_plans(Mode::MonteCarlo, 600, &[]).unwrap();
+        let stand_in = sweep_open_sets(plans, &leds(2));
+        assert_eq!(stand_in.coverage.corners, CornerCover::StandIn);
+        assert_eq!(
+            stand_in.plans.len(),
+            600,
+            "nothing pinned: the stand-in runs"
+        );
+        assert!(stand_in.plans.iter().all(|p| p.variants.is_empty()));
+        let said = stand_in.coverage.conditions().join(" ");
+        assert!(
+            said.contains("not swept") && said.contains("led_high_vf"),
+            "{said}"
+        );
+    }
+
+    /// An orderable-variant set is unordered, so no subset stands for the
+    /// rest: past the cap it keeps its stand-in and is named, while the corner
+    /// sets still get their cover.
+    #[test]
+    fn variant_sets_past_the_cap_are_named_not_sampled() {
+        let plans = build_plans(Mode::MonteCarlo, 2, &[]).unwrap();
+        let wide: Vec<String> = (0..600).map(|i| format!("v{i}")).collect();
+        let wide: Vec<&str> = wide.iter().map(String::as_str).collect();
+        let mut sets = vec![open("U1", &wide, false)];
+        sets.extend(leds(2));
+        let swept = sweep_open_sets(plans, &sets);
+        assert_eq!(swept.coverage.variant_refs, ["U1"]);
+        assert_eq!(swept.coverage.corners, CornerCover::Full);
+        assert_eq!(swept.plans.len(), 2 * 4);
+        assert!(swept
+            .plans
+            .iter()
+            .all(|p| p.variants.iter().all(|(r, _)| r != "U1")));
+        let said = swept.coverage.conditions();
+        assert_eq!(said.len(), 1);
+        assert!(
+            said[0].contains("U1") && said[0].contains("stand-in variant (v0)"),
+            "{said:?}"
+        );
     }
 
     /// `below` must be free of the modulo bias `next_u64() % n` carries: over

@@ -35,6 +35,8 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
   const overall = overallVerdict(result)
   const repeats = repeatedAssumptions(results)
   const uncovered = overall === 'passed' && reportSerious > 0
+  // A pass that rests on open parts the member sweep could not cross in full.
+  const conditional = overall === 'passed' && (result.verdict_conditions ?? []).some(c => c.trim() !== '')
   const noteLines = (key: string, lines: string[] | undefined, prefix: string, color: string) =>
     (lines ?? []).map((line, i) => (
       <div key={`${key}${i}`} className="mt-1 text-[12px]" style={{ color }}>
@@ -60,7 +62,9 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
         ) : (
           <>
             <div className="rounded-lg px-3 py-2.5 text-[14px] font-semibold" style={VERDICT_STYLE[uncovered ? 'invalid' : overall]}>
-              {uncovered ? 'These checks passed, but the board is not cleared.' : VERDICT_LINE[overall]}
+              {uncovered
+                ? 'These checks passed, but the board is not cleared.'
+                : conditional ? 'All checks passed, on a condition (below).' : VERDICT_LINE[overall]}
               {result.analog_abort && ' (analog solve aborted, results not trustworthy)'}
               {uncovered && (
                 <div className="text-[12px] font-normal mt-1" data-testid="checks-uncovered-serious" style={{ color: 'var(--warn-strong)' }}>
@@ -114,6 +118,7 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
             ))}
             {noteLines('s', result.substitutions, 'substitute core', 'var(--warn)')}
             {noteLines('c', result.coverage_warnings, 'coverage', 'var(--warn)')}
+            {noteLines('vc', result.verdict_conditions, 'on a condition', 'var(--warn)')}
             {(result.timing_coverage ?? []).map((t, i) => (
               <div key={`t${i}`} className="mt-1 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
                 timing {t.mcu_ref} ({t.backend}): edge ±{(t.timestamp_precision_s * 1e6).toFixed(3)} µs;

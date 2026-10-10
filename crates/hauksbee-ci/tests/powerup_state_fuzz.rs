@@ -65,7 +65,7 @@ fn boot_state_fuzz(
     nets: &[String],
     seeds: u32,
     asserts: &str,
-) {
+) -> hauksbee_ci::CiResult {
     hauksbee_testkit::scanned(&format!("{case} boot-state fuzz (nets found)"), nets.len());
     assert!(
         !nets.is_empty(),
@@ -95,37 +95,43 @@ fn boot_state_fuzz(
         "{case} boot-state fuzz must be GREEN across all seeds:\n{}",
         result.render_human()
     );
-    // Every boot seed runs once per combination of the board's open variant
-    // and corner sets (an LED bound to the assumed forward-voltage corners
-    // runs at each corner), and every one of those runs must hold: a boot
-    // state is safe only if it is safe whichever part is fitted.
-    let expected = expected_members(board, seeds);
+    // Every boot seed runs once per member of the board's open variant and
+    // corner sets (an LED bound to the assumed forward-voltage corners runs at
+    // each corner), and every one of those runs must hold: a boot state is safe
+    // only if it is safe whichever part is fitted. Past the run cap the sets
+    // get the linear cover instead of the product, and the pass says so.
+    let (expected, conditions) = expected_members(board, seeds);
     assert_eq!(
         result.seeds, expected,
-        "{case}: must hold across every boot seed ({seeds}) at each open-set combination"
+        "{case}: must hold across every boot seed ({seeds}) at each open-set member"
     );
+    assert_eq!(
+        result.verdict_conditions, conditions,
+        "{case}: a pass over a partly swept open set must say so"
+    );
+    assert_eq!(
+        result.render_json().contains("\"verdict_conditions\""),
+        !conditions.is_empty(),
+        "{case}: the JSON document carries the conditions exactly when there are some"
+    );
+    result
 }
 
-/// How many members a `seeds`-seed fuzz runs on `board`: each seed crossed
-/// with every combination of the board's open same-pinout variant and corner
-/// sets, as `hauksbee-ci` plans them. Past `2^CORNER_CAP` runs the runner keeps
-/// each open part's flagged stand-in instead (see
-/// [`hauksbee_ci::tolerance::with_variants`]), so every seed still runs once.
-/// Counted off the board independently of the run, so a run that skipped a seed
-/// or a corner cannot match it.
-fn expected_members(board: &Path, seeds: u32) -> u32 {
+/// How many members a `seeds`-seed fuzz runs on `board`, and the conditions
+/// its pass rests on: each seed crossed with the board's open same-pinout
+/// variant and corner sets, as `hauksbee-ci` plans them
+/// ([`hauksbee_ci::tolerance::sweep_open_sets`]). Counted off the board
+/// independently of the run, so a run that skipped a seed or a corner cannot
+/// match it.
+fn expected_members(board: &Path, seeds: u32) -> (u32, Vec<String>) {
     let extracted = hauksbee_extract::ExtractedBoard::from_kicad_schematic_path(board)
         .expect("corpus schematic reads");
     let lib = hauksbee_models::ModelLibrary::builtin();
-    let crossed = hauksbee_engine::variant_sweep::open_sets(&extracted, &lib)
-        .iter()
-        .try_fold(u64::from(seeds), |runs, set| {
-            let runs = runs * set.ids.len() as u64;
-            (runs <= 1 << hauksbee_ci::tolerance::CORNER_CAP).then_some(runs)
-        });
-    crossed.map_or(seeds, |runs| {
-        u32::try_from(runs).expect("capped run count fits u32")
-    })
+    let open = hauksbee_engine::variant_sweep::open_sets(&extracted, &lib);
+    let plans = vec![hauksbee_ci::tolerance::SeedPlan::default(); seeds as usize];
+    let swept = hauksbee_ci::tolerance::sweep_open_sets(plans, &open);
+    let members = u32::try_from(swept.plans.len()).expect("capped run count fits u32");
+    (members, swept.coverage.conditions())
 }
 
 /// `LumenPnP` motherboard: the low-side AO3400A MOSFET gates are driven by
@@ -235,7 +241,7 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
     .iter()
     .map(|s| (*s).to_string())
     .collect();
-    boot_state_fuzz(
+    let result = boot_state_fuzz(
         "reform_supervisor",
         &board,
         &[("VIN", 12.0), ("+5V", 5.0), ("+3V3", 3.3)],
@@ -243,4 +249,36 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
         24,
         "",
     );
+    // Six class-only LEDs (D8 D9 D11 D12 D22 D23), two assumed forward-voltage
+    // corners each: 24 seeds x 2^6 = 1536 runs is over the 1024-run cap. That
+    // used to run only the first-listed (high-Vf, least-current) stand-ins and
+    // say nothing. Now each seed runs the linear cover - all weak, all strong,
+    // each part flipped alone against the rest: 2 + 6 x 2 = 14 members - and
+    // the pass says it was not the full product.
+    assert_eq!(
+        result.seeds,
+        24 * 14,
+        "24 seeds x the 14-member linear cover"
+    );
+    let [condition] = result.verdict_conditions.as_slice() else {
+        panic!("one condition: {:?}", result.verdict_conditions);
+    };
+    for needle in [
+        "6 parts the board names only by class",
+        "all weak, all strong, and each alone against the rest",
+        "every combination would be 1536 runs, over the 1024-run cap",
+        "D8",
+        "D23",
+    ] {
+        assert!(
+            condition.contains(needle),
+            "{needle:?} missing: {condition}"
+        );
+    }
+    // Every surface carries it: the human log and the JSON document.
+    assert!(
+        result.render_human().contains("CONDITION: "),
+        "the human log must name the condition"
+    );
+    assert!(result.render_json().contains("\"verdict_conditions\""));
 }

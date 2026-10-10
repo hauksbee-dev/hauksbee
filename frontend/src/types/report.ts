@@ -711,6 +711,10 @@ export interface RunResponse {
   coverage?: string | null
   substitutions?: string[]
   coverage_warnings?: string[]
+  /** What a pass rests on beyond its assertions, one sentence each: open
+   *  variant or corner sets the member sweep could not cross in full. Omitted
+   *  when every combination ran. */
+  verdict_conditions?: string[]
   inventory?: ArtifactProvenance[]
   assumptions?: EvidenceAssumption[]
   evidence?: EvidenceMap[]

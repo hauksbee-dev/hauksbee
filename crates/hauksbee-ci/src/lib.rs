@@ -426,6 +426,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .with_assumptions([assumption])
             .map_err(SpecError::invalid("merging run evidence"))?;
     }
+    // Open variant and corner sets the member sweep could not cross in full
+    // qualify every assertion (board scope), and ride the verdict as its
+    // conditions, so a pass that leaned on a stand-in is never a clean one.
+    let verdict_conditions = union_across(&outcomes, |o| &o.verdict_conditions);
+    for condition in &verdict_conditions {
+        evidence = evidence
+            .with_assumptions([hauksbee_ir::evidence::Assumption::partial_member_sweep(
+                condition,
+            )])
+            .map_err(SpecError::invalid("recording the member-sweep coverage"))?;
+    }
     // The spec, and the waiver file beside the board when there is one, are
     // inputs this run consumed: inventory their exact bytes.
     let waiver_path = spec
@@ -713,6 +724,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         substitutions: union_across(&outcomes, |o| &o.substitutions),
         dead_rails: union_across(&outcomes, |o| &o.dead_rails),
         coverage_warnings: union_across(&outcomes, |o| &o.coverage_warnings),
+        verdict_conditions,
         timing_coverage,
         execution: execution_across(&outcomes),
         timing_refusals,

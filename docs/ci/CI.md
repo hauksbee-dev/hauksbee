@@ -468,6 +468,25 @@ toleranced components, corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max
 combinations, not fuzz seeds). Monte-Carlo does compose with `[fuzz]`.
 
+**Open variant and corner sets.** Every seed is also run once per member of
+each part the board leaves open: an orderable-variant set (a regulator whose
+suffix the BOM does not give) or an assumed-corner set (an LED the board names
+only by class, bound to assumed forward-voltage corners). Up to 2^10 = 1024
+members the product runs in full and the pass needs no qualifier. Past that
+nothing is dropped quietly. Assumed-corner sets are ordered (weak to strong),
+so they fall back to a linear cover: every part at the same corner together,
+plus each part at each corner against all the others weak and then all strong
+(`2 + 2n` runs per seed for `n` two-corner parts), then to the joint members
+alone if even that does not fit, then to the stand-in. Orderable-variant sets
+are unordered, so no subset stands for the rest and they keep their stand-in.
+Whatever ran short is a `verdict_conditions` entry in `--json`, a `CONDITION`
+line in the log, JUnit suite output and GitHub annotations, a board-scoped
+qualified assumption on every assertion's evidence, and turns the verdict line
+into `GREEN, conditionally`. The stand-in is the first member the card lists,
+which for an LED is the high-Vf (least current) corner: it bounds an
+under-drive claim and not an over-current one, so a stand-in-only pass never
+reads as a stress pass.
+
 **Reproducibility is doctrine.** Re-running a member reproduces it
 byte-identically, which is what makes a red build investigable. Every
 Monte-Carlo sampled value is a pure function of (seed, component reference,

@@ -49,6 +49,14 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
         let mut config = support::run_config(support::write_tmp("spec.toml", &spec));
         config.models_dir = models.parent().map(Into::into);
         let r = hauksbee_ci::run(&config).expect(case);
+        // Two variants x the seeds is far under the run cap: the whole product
+        // ran, so the verdict needs no condition and the JSON carries none.
+        assert!(
+            r.verdict_conditions.is_empty(),
+            "{case}: {:?}",
+            r.verdict_conditions
+        );
+        assert!(!r.render_json().contains("verdict_conditions"), "{case}");
         let row = support::row(&r, "vout");
         let got = (row.passed, row.invalid, r.seeds);
         assert_eq!(got, (passed, invalid, seeds), "{case}: {row:?}");

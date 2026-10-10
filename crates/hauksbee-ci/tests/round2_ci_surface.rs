@@ -102,6 +102,55 @@ fn ci_result(results: Vec<AssertResult>) -> CiResult {
     crate::support::ci_result(results, false)
 }
 
+/// A pass that rests on open parts the member sweep could not cross in full is
+/// conditional on every surface, in the same words, and an unconditional pass
+/// reads exactly as it did.
+#[test]
+fn a_pass_resting_on_a_partial_member_sweep_is_conditional_everywhere() {
+    let condition = "D1, D2 (2 parts the board names only by class) were not swept across \
+                     their assumed corners; each ran only as its stand-in (led_high_vf)";
+    let clean = ci_result(vec![result_named("a", true)]);
+    let mut conditional = ci_result(vec![result_named("a", true)]);
+    conditional.verdict_conditions = vec![condition.to_string()];
+
+    let human = conditional.render_human();
+    assert!(human.contains("GREEN, conditionally - 1/1"), "{human}");
+    assert!(
+        human.contains(&format!("CONDITION: {condition}")),
+        "{human}"
+    );
+    let plain = clean.render_human();
+    assert!(
+        plain.contains("GREEN - 1/1") && !plain.contains("CONDITION"),
+        "{plain}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&conditional.render_json()).unwrap();
+    assert_eq!(json["verdict_conditions"], serde_json::json!([condition]));
+    assert_eq!(json["passed"], true, "conditional, not failed: {json:#}");
+    let json: serde_json::Value = serde_json::from_str(&clean.render_json()).unwrap();
+    assert!(json.get("verdict_conditions").is_none(), "{json:#}");
+
+    let junit = conditional.render_junit();
+    assert!(
+        junit.contains(&format!("CONDITION: {condition}")),
+        "{junit}"
+    );
+    assert!(!clean.render_junit().contains("CONDITION"));
+
+    let gh = conditional.render_github_annotations();
+    assert!(
+        gh.contains("::warning title=hauksbee-ci CONDITION::"),
+        "{gh}"
+    );
+    assert!(gh.contains("assertions passed, conditionally"), "{gh}");
+    assert_eq!(
+        conditional.exit_code(),
+        0,
+        "a conditional pass still exits green"
+    );
+}
+
 #[test]
 fn passing_assertions_emit_no_per_assertion_notice_annotations() {
     // GitHub truncates at 10 notices per step; a 12-assertion green spec would

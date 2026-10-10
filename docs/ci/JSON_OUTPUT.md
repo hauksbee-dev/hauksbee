@@ -61,6 +61,7 @@ is present exactly for exit 3.
 | `coverage` | string or `null` | yes, nullable | the tolerance-ensemble coverage claim; `null` when the run was not an ensemble |
 | `substitutions` | array of string | yes, may be empty | MCUs co-simulated on a substitute core |
 | `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device, a watchdog that cannot bite, a watchdog that did, a backend whose simulated time carries a known systematic bias) |
+| `verdict_conditions` | array of string | when non-empty | what a green verdict rests on beyond its assertions: open variant or corner sets (an LED the board names only by class) the member sweep could not cross in full within the 1024-run cap, so some part was judged at a stand-in or a subset of its corners; omitted when every combination ran |
 | `timing_coverage` | array of object | yes, may be empty | per-MCU measured `timestamp_precision_s`, `minimum_guaranteed_pulse_s`, actual `chunk_s`, backend, and whether stamps are cycle-exact |
 | `timing_refusals` | array of string | yes, may be empty | explicit unrepresentable timing claims or replay limits; any entry makes the run INVALID |
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
@@ -96,7 +97,7 @@ questions and can disagree:
   finding about the board.
 
 A green run can still carry qualifiers. `substitutions`, `coverage_warnings`,
-and `dead_rails` non-empty each mean the verdict covers less than it looks like
+`verdict_conditions` and `dead_rails` non-empty each mean the verdict covers less than it looks like
 it does, and they are the reason a machine consumer should surface them rather
 than reduce the document to one boolean. `waiver_notes` non-empty means the
 board's waiver file needs attention.
@@ -218,7 +219,7 @@ added.
 - A new `kind` token, or new wording inside `detail`, `why`, `coverage`, or any
   of the qualifier arrays. These are human prose; do not parse or match them
   exactly.
-- A new element in any of `substitutions`, `coverage_warnings`, `dead_rails`,
+- A new element in any of `substitutions`, `coverage_warnings`, `verdict_conditions`, `dead_rails`,
   `waiver_notes`, because another applicable honesty qualifier may be reported.
 
 Write consumers that ignore unknown keys. The published schema deliberately

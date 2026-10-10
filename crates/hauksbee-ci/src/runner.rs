@@ -417,6 +417,11 @@ pub struct RunOutcome {
     pub interior: bool,
     /// The variant members this run simulated: see [`crate::tolerance::SeedPlan::variants`].
     pub variants: Vec<(String, String)>,
+    /// What a pass on this run rests on beyond its assertions: the open variant
+    /// and corner sets the member sweep could not cross in full
+    /// ([`crate::tolerance::VariantCoverage::conditions`]). The same sentences on
+    /// every member of a run; empty when every combination ran.
+    pub verdict_conditions: Vec<String>,
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
     /// every other analog aggregate). Empty when the spec has no hwtrace
@@ -832,7 +837,7 @@ pub fn run_spec_with_lib(
     check_component_refs(spec, &known_refs)?;
 
     let thresholds = after_ms_thresholds(spec);
-    let (plans, toleranced) = member_plans(spec, &base, lib, only_seed)?;
+    let (plans, toleranced, conditions) = member_plans(spec, &base, lib, only_seed)?;
 
     // Small-signal AC analysis linearises about the DC operating point. That
     // point is seed-independent only when NEITHER toleranced values NOR per-seed
@@ -890,6 +895,9 @@ pub fn run_spec_with_lib(
             }
             None => None,
         };
+        // Every member carries the run-level condition: a pass rests on it
+        // whichever member the report reads first.
+        outcome.verdict_conditions.clone_from(&conditions);
         outcomes.push(outcome);
     }
     Ok(outcomes)
@@ -1412,17 +1420,17 @@ fn apply_plan(board: &mut ExtractedBoard, plan: &SeedPlan) {
 }
 
 /// Cross the plans with each fitted part's undetermined same-pinout variant set
-/// ([`crate::tolerance::with_variants`]); past the cap the plans stand.
+/// ([`crate::tolerance::sweep_open_sets`]); past the run cap the sets get the
+/// coverage that fits, which the returned [`VariantSweep`] states.
 fn sweep_variants(
     spec: &Spec,
     base: &ExtractedBoard,
     lib: &ModelLibrary,
     plans: Vec<SeedPlan>,
-) -> Vec<SeedPlan> {
+) -> crate::tolerance::VariantSweep {
     let board = apply_overrides(spec, base);
     let open = hauksbee_engine::variant_sweep::open_sets(&board, lib);
-    let axes: Vec<(String, Vec<String>)> = open.into_iter().map(|s| (s.reference, s.ids)).collect();
-    crate::tolerance::with_variants(plans.clone(), &axes).unwrap_or(plans)
+    crate::tolerance::sweep_open_sets(plans, &open)
 }
 
 /// The run's production assumptions: the hollow-gate ones the caller already
@@ -2316,6 +2324,7 @@ fn run_one(
         sampled_values: plan.values.clone(),
         interior: plan.interior,
         variants: plan.variants.clone(),
+        verdict_conditions: Vec::new(),
         net_series,
         substitutions: engine
             .scheduler()
@@ -2368,7 +2377,7 @@ fn member_plans(
     base: &ExtractedBoard,
     lib: &ModelLibrary,
     only_seed: Option<u32>,
-) -> Result<(Vec<SeedPlan>, bool), SpecError> {
+) -> Result<(Vec<SeedPlan>, bool, Vec<String>), SpecError> {
     let tols = crate::tolerance::resolve(spec, base)?;
     let mode = if tols.is_empty() {
         crate::tolerance::Mode::MonteCarlo
@@ -2376,10 +2385,11 @@ fn member_plans(
         spec.ensemble_mode()?
     };
     let plans = crate::tolerance::build_plans(mode, spec.ensemble_seed_count(), &tols)?;
-    let plans = sweep_variants(spec, base, lib, plans);
-    let plans = crate::search::cross(plans, spec.search.as_ref());
+    let swept = sweep_variants(spec, base, lib, plans);
+    let conditions = swept.coverage.conditions();
+    let plans = crate::search::cross(swept.plans, spec.search.as_ref());
     let Some(k) = only_seed else {
-        return Ok((plans, !tols.is_empty()));
+        return Ok((plans, !tols.is_empty(), conditions));
     };
     let total = plans.len();
     let sel: Vec<_> = plans.into_iter().filter(|p| p.seed == k).collect();
@@ -2388,7 +2398,7 @@ fn member_plans(
             "--seed {k} is outside this spec's ensemble (members are 0..{total})"
         )));
     }
-    Ok((sel, !tols.is_empty()))
+    Ok((sel, !tols.is_empty(), conditions))
 }
 
 /// Run every plan through `one`, in order. A `[search]` grid and its culprit

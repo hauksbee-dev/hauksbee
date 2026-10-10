@@ -1295,7 +1295,7 @@ impl Assumption {
             format!("{reference} is simulated as variant {bound}, one of {ids}{hedge}."),
             format!("Nothing on the board says which of the variants the card lists ({ids}) is fitted; they share a pinout, so {bound} stands in."),
             format!("Every result touching {reference} describes {bound}; wherever the variants differ in values or output form, it may describe the wrong part."),
-            format!("add `[[override]] ref=\"{reference}\" select=\"{bound}\"` to the spec, or put the orderable code (with any gain-group suffix) in the part number or BOM; `hauksbee-ci` simulates every variant and passes only if all pass"),
+            format!("add `[[override]] ref=\"{reference}\" select=\"{bound}\"` to the spec, or put the orderable code (with any gain-group suffix) in the part number or BOM; `hauksbee-ci` simulates every variant and passes only if all pass, or names the variants it left unswept past its run cap"),
             None,
         )
     }
@@ -1315,7 +1315,7 @@ impl Assumption {
             format!("{reference} is simulated at the assumed corner {bound}, one of {ids}."),
             format!("Nothing on the board names the part {reference} is, only its class, so its threshold and on-resistance are unknown; it is bounded by the assumed corner variants the card lists ({ids}) and {bound} stands in."),
             format!("Every result touching {reference} describes one assumed corner; the fitted part may sit anywhere between the corners, so a result that holds here may not hold for it."),
-            format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part; `hauksbee-ci` simulates every corner and passes only if all pass"),
+            format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part; `hauksbee-ci` simulates every corner and passes only if all pass, or names the cover it fell back to past its run cap"),
             None,
         )
     }
@@ -1344,6 +1344,34 @@ impl Assumption {
             format!("Nothing on the board names the part {reference} is, only its class, so the checks judged the board with it at each assumed corner the card lists ({ids})."),
             format!("A result for {reference} holds for a part inside those corners; a fitted part outside them (a threshold or on-resistance the class bounds do not cover) is not judged."),
             format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part"),
+            None,
+        )
+    }
+
+    /// A CI run that could not cross every open variant or corner set of the
+    /// board with its seeds inside the run cap, so some parts ran at a stand-in
+    /// or a subset of their members: `condition` is the sentence saying which
+    /// and how far (the run's `verdict_conditions` entry). Board-wide and
+    /// qualifying, not undermining: the assertions ran, and a pass is
+    /// conditional on the parts the sweep did not cover.
+    #[must_use]
+    pub fn partial_member_sweep(condition: &str) -> Self {
+        Self::build(
+            AssumptionKind::ReducedFidelity,
+            AssumptionSource::Binder,
+            "member-sweep",
+            Scope::Board,
+            condition.to_string(),
+            "Crossing every open set with every boot or tolerance seed would exceed the CI run \
+             cap, so the sweep covered less than the full product."
+                .to_string(),
+            "A pass holds for the members that ran; a part fitted at a member that did not run \
+             is not judged."
+                .to_string(),
+            "name the fitted member of each part (a manufacturer part number or an `[[override]] \
+             select`) so there is nothing left to sweep, or cut the seeds or the open parts until \
+             the product fits"
+                .to_string(),
             None,
         )
     }
