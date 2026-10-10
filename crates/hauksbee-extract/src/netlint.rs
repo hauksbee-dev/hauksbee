@@ -37,9 +37,11 @@ pub struct LintFinding {
     pub nets: Vec<String>,
 }
 
-/// The word every low-severity abstention message carries when a check says it
-/// declined to judge (`... abstained: ...`). [`LintFinding::is_abstention`]
-/// keys on it for the checks whose abstentions share a kind with real findings.
+/// The word every low-severity abstention message carries.
+///
+/// A check that declined to judge says so (`... abstained: ...`), and
+/// [`LintFinding::is_abstention`] keys on it for the checks whose abstentions
+/// share a kind with real findings.
 pub const ABSTENTION_MARKER: &str = " abstained";
 
 /// How the layout lint's unfilled-zone note opens. That note says connectivity
@@ -49,7 +51,8 @@ pub const ZONES_NOT_FILLED_PREFIX: &str = "zones not filled";
 impl LintFinding {
     /// Whether this finding records what a check did NOT judge rather than a
     /// flaw it found: an MCU with no model, a strap divider it cannot evaluate,
-    /// an operating envelope / decode whose input level is unknown, or a
+    /// an operating envelope / decode whose input level is unknown, a rating
+    /// whose current path runs into a part with no working model, or a
     /// pour with no saved fill that connectivity cannot be read through.
     ///
     /// An abstention tells the reader where coverage ends and must stay visible,
@@ -65,7 +68,7 @@ impl LintFinding {
             LintCheck::UnroutedPad => {
                 self.severity == Severity::Low && self.message.starts_with(ZONES_NOT_FILLED_PREFIX)
             }
-            LintCheck::OperatingEnvelope | LintCheck::DeviceDecode => {
+            LintCheck::OperatingEnvelope | LintCheck::DeviceDecode | LintCheck::DcOverstress => {
                 self.severity == Severity::Low && self.message.contains(ABSTENTION_MARKER)
             }
             _ => false,

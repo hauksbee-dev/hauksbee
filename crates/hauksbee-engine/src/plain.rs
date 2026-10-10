@@ -1264,6 +1264,14 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Every chip pulls its supply current in short bursts each time it switches, faster than the regulator can respond. A small capacitor (about 100 nF) beside each chip's supply pin supplies those bursts, and a larger bulk capacitor (microfarads) on the rail refills them. With too few, the rail bounces on every edge: logic can double-clock and comparators chatter, and it looks like a firmware fault. The design files do not say where parts sit, so this is a count of capacitors against chips, not a layout check.".to_string(),
                 format!("Add about 100 nF from \"{net}\" to ground at each chip's supply pin, plus a bulk capacitor (for example 10 uF) where the rail enters the board or section."),
             ),
+            // The abstention is the pass saying a rating was never really
+            // tested, so it must not read as the overstress the arm below
+            // describes.
+            LintCheck::DcOverstress if f.is_abstention() => (
+                format!("A datasheet rating on {parts} could not be checked, so it is unverified, not known to be met."),
+                format!("The board's resting state was solved and every rated part held to its ratings there, but this part's current runs into a part with no working model: one the design files give no usable value or model for, left open, or a trimmer whose setting they do not give. The simulation carried no current (or a guessed one) through it, so a clean reading here proves nothing. Detail: {}", f.message),
+                "Give the part the detail names a model or a usable value (a card, a numeric resistance, the trimmer's setting), then re-check.".to_string(),
+            ),
             LintCheck::DcOverstress => (
                 format!("A part is pushed past its datasheet rating as soon as the board powers up. {}", f.message),
                 "This is the board's resting state, solved from the design: every part with a datasheet rating was held to it there. A part over its current, power or temperature rating in that state is overstressed the whole time the board is on; a transistor base or diode driven from a supply or logic output through too little resistance is the usual cause.".to_string(),

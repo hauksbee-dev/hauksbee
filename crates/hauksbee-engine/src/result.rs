@@ -2796,6 +2796,7 @@ fn lint_abstention_hint(check: LintCheck) -> Option<&'static str> {
         ),
         LintCheck::UnroutedPad => Some("Refill the zones (KiCad: B), save the board, and re-check so connectivity through the pours can be judged."),
         LintCheck::DeviceDecode => None,
+        LintCheck::DcOverstress => Some("Give the part the finding names a model or a usable value (a card, a numeric resistance, the trimmer's setting) so the rating can be judged, then re-check."),
         _ => lint_fix_hint(check, Severity::Low),
     }
 }

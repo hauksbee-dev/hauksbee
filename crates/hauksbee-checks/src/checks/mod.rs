@@ -63,6 +63,8 @@
 //! - [`dc_stress`]: every card rating (junction, channel and driver-pin
 //!   current, resistor wattage, junction temperature) judged at the board's
 //!   solved DC operating point by the co-simulation's own stress monitor.
+//! - [`open_paths`]: the rating claims that pass would read as met whose
+//!   current path runs into a part with no working model, as abstentions.
 
 pub mod ampacity;
 pub mod analog_inputs;
@@ -80,6 +82,7 @@ pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
 pub mod node_drive;
+pub mod open_paths;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
 pub mod ripple;

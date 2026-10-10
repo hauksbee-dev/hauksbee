@@ -154,6 +154,8 @@ mod nep_private_acceptance;
 mod netlist_drc_honesty;
 #[path = "no_firmware_no_avr.rs"]
 mod no_firmware_no_avr;
+#[path = "open_load_qualifiers.rs"]
+mod open_load_qualifiers;
 #[path = "package_fit_binding.rs"]
 mod package_fit_binding;
 #[path = "packaged_asset_sync.rs"]

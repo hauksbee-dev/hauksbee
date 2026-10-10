@@ -68,8 +68,9 @@ pub fn dc_stress_at_corners(
         })
         .collect();
     let corners = sets.iter().map(|(_, ids)| ids.len()).max().unwrap_or(1);
+    let qualified = super::open_paths::open_path_qualifiers(board, &stand_in);
     if corners < 2 {
-        return dc_stress_findings(stand_in);
+        return with_qualifiers(dc_stress_findings(stand_in).findings, qualified);
     }
     let pick = |k: usize| -> Vec<(&str, &str)> {
         (sets.iter())
@@ -136,6 +137,21 @@ pub fn dc_stress_at_corners(
         })
         .collect();
     findings.extend(notes);
+    with_qualifiers(findings, qualified)
+}
+
+/// `findings` plus each open-path abstention for a part they do not already
+/// report: a part over a rating is not news as "unverified".
+fn with_qualifiers(mut findings: Vec<LintFinding>, qualified: Vec<LintFinding>) -> NetLintReport {
+    let reported: Vec<String> = (findings.iter())
+        .filter(|f| f.severity != Severity::Low)
+        .flat_map(|f| f.refs.clone())
+        .collect();
+    findings.extend(
+        qualified
+            .into_iter()
+            .filter(|q| !q.refs.iter().any(|r| reported.contains(r))),
+    );
     NetLintReport { findings }
 }
 
