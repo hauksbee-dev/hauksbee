@@ -292,33 +292,116 @@ fn one_huge_host_write_arrives_complete_and_in_order() {
     assert_eq!(got, record, "and in the order the host sent them");
 }
 
-/// Dropping the endpoint hangs up any attached peer, so a host tool learns the
-/// session ended instead of hanging on a device that will never answer. There is
-/// no child process to reap here (nothing is spawned), only the master fd.
-#[test]
-fn dropping_the_endpoint_hangs_up_the_peer() {
-    let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
-    let mut peer = attach(&ep);
-    assert!(wait_for_event(&mut ep, PeerEvent::Attached));
-    drop(ep);
-
+/// Read the peer side until it reports a hang-up or `budget` runs out. A
+/// hang-up is end-of-file (what Linux and macOS both return here) or `EIO`
+/// (Linux's report of the same state on some kernel versions and paths).
+fn peer_sees_hangup(peer: &mut std::fs::File, budget: std::time::Duration) -> bool {
     let mut buf = [0u8; 8];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + budget;
     loop {
         match peer.read(&mut buf) {
-            Ok(0) => break,
-            Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
+            Ok(0) => return true,
+            Err(e) if e.raw_os_error() == Some(libc::EIO) => return true,
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "the peer never saw the hangup"
-                );
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             Err(e) => panic!("unexpected peer error: {e}"),
         }
     }
+}
+
+/// What a peer can observe once a pty's master has closed.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct AfterMasterClose {
+    /// The peer's read reported a hang-up (EOF or `EIO`).
+    peer_hung_up: bool,
+    /// The slave device node is gone from the filesystem.
+    node_removed: bool,
+}
+
+/// What a host tool sees when a pty it holds open loses its master, on THIS
+/// kernel, measured on a bare libc pty with no Hauksbee code involved.
+///
+/// Linux and macOS both hang the slave up (EOF on read, `POLLHUP`, `EIO` on
+/// write); Linux also removes the `/dev/pts` node, macOS keeps `/dev/ttysNNN`.
+/// gVisor (Modal's container runtime, also used by other hosted sandboxes)
+/// removes the node but never hangs the slave up: its reads return `EAGAIN`
+/// forever and it never polls readable, for every program that uses a pty.
+/// No master-side action can deliver a hang-up the kernel does not implement,
+/// so the endpoint is held to exactly what the kernel does for a bare pty.
+fn bare_pty_after_master_close() -> AfterMasterClose {
+    use std::os::unix::fs::OpenOptionsExt;
+    let (master, name) = unsafe {
+        let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(m >= 0, "posix_openpt");
+        assert_eq!(libc::grantpt(m), 0, "grantpt");
+        assert_eq!(libc::unlockpt(m), 0, "unlockpt");
+        let name = libc::ptsname(m);
+        assert!(!name.is_null(), "ptsname");
+        (
+            m,
+            std::ffi::CStr::from_ptr(name)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let mut peer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
+        .open(&name)
+        .unwrap_or_else(|e| panic!("open bare pty slave {name}: {e}"));
+    unsafe {
+        libc::close(master);
+    }
+    AfterMasterClose {
+        peer_hung_up: peer_sees_hangup(&mut peer, std::time::Duration::from_secs(5)),
+        node_removed: !std::path::Path::new(&name).exists(),
+    }
+}
+
+/// Dropping the endpoint hangs up any attached peer, so a host tool learns the
+/// session ended instead of hanging on a device that will never answer. There is
+/// no child process to reap here (nothing is spawned), only the master fd.
+///
+/// The defect this catches is the endpoint keeping the pty alive past its drop
+/// (a leaked master, or an internal slave fd left open), which leaves a host
+/// tool blocked forever. The peer must see exactly what it sees when a bare pty
+/// loses its master on the same kernel: a hang-up on Linux and macOS (the
+/// hard requirement there), and on a kernel that never hangs up even a bare pty
+/// (gVisor) the same non-hang-up plus the same device-node removal, which still
+/// proves the master was released.
+#[test]
+fn dropping_the_endpoint_hangs_up_the_peer() {
+    let bare = bare_pty_after_master_close();
+
+    let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+    let mut peer = attach(&ep);
+    let path = ep.endpoint().to_owned();
+    assert!(wait_for_event(&mut ep, PeerEvent::Attached));
+    drop(ep);
+
+    let endpoint = AfterMasterClose {
+        peer_hung_up: peer_sees_hangup(&mut peer, std::time::Duration::from_secs(5)),
+        node_removed: !std::path::Path::new(&path).exists(),
+    };
+    if bare.peer_hung_up {
+        assert!(endpoint.peer_hung_up, "the peer never saw the hangup");
+    } else {
+        eprintln!(
+            "this kernel never hangs up a bare pty's slave when its master closes \
+             (gVisor behaves so); holding the endpoint to the bare pty's behaviour"
+        );
+    }
+    assert_eq!(
+        endpoint, bare,
+        "after its drop the endpoint must look to a host tool exactly like a bare \
+         pty whose master closed on this kernel"
+    );
 }
 
 /// A host tool whose FIRST act after opening the port is to write a command
