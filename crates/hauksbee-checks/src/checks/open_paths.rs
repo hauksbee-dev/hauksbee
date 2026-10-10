@@ -18,7 +18,7 @@
 //! directly or through one series resistor, and every current-rated junction
 //! or channel (diode, LED, transistor) sharing a signal net with the open
 //! part. Rails and ground are not paths: every part touches them, and neither
-//! is a net with more than [`MAX_PATH_NET_PARTS`] fitted parts on it (a bus or
+//! is a net with more than four fitted parts on it (a bus or
 //! a shared control line, not a series load). A connector is never the open
 //! part: it is the board's edge, whose far side no board file describes. A
 //! resistor's own wattage is not qualified, so the note does not repeat on
