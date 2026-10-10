@@ -141,7 +141,21 @@ const settingsOrRefusal = async (sent: Promise<Response>): Promise<ExtractSettin
 export const api = {
   startup: () => getJson<Startup>('/api/startup'),
   liveStatus: () => getJson<LiveStatus>('/api/live/status'),
-  liveLaunch: (upload: FormData) => postForm<LiveLaunchResponse>('/api/live/launch', upload),
+  /** Launching replaces the one live session and the server closes every
+   *  socket attached to the old one. The page's `/ws` is held, and reattached
+   *  to the new session the moment the launch answers, so a command typed in
+   *  between goes to the new session rather than to a dying one. */
+  liveLaunch: async (upload: FormData) => {
+    sessionReplacing = true
+    try {
+      const launched = await postForm<LiveLaunchResponse>('/api/live/launch', upload)
+      settleLiveSockets(launched.ok)
+      return launched
+    } catch (e) {
+      settleLiveSockets(false)
+      throw e
+    }
+  },
   /** A bare board goes as its own bytes: a Blob body streams off disk, where
    *  `arrayBuffer()` would pull a 300 MB upload into the heap first. The
    *  companion form is the multipart route. The status is attached to a
@@ -221,8 +235,29 @@ export interface LiveSocket {
   close: () => void
 }
 
+/** How long a command waits for the socket to (re)open before it is dropped:
+ *  past that the user has moved on and replaying it would surprise them. A
+ *  launch of a big board can take most of this. */
+const QUEUED_COMMAND_TTL_MS = 30_000
+const QUEUED_COMMAND_MAX = 32
+
+/** A launch is replacing the live session (see `api.liveLaunch`). While true no
+ *  socket sends: whatever is open is attached to the session being torn down. */
+let sessionReplacing = false
+const liveSockets = new Set<(reattach: boolean) => void>()
+
+/** The launch answered: every socket either reattaches to the new session
+ *  (`true`) or, when the launch failed and the old session stands, carries on. */
+function settleLiveSockets(reattach: boolean): void {
+  sessionReplacing = false
+  for (const settle of liveSockets) settle(reattach)
+}
+
 /** Open /ws and keep it open: a dropped socket reconnects after two seconds
- *  until `close()`. Unparseable frames are dropped. */
+ *  until `close()`. Unparseable frames are dropped. A command sent while the
+ *  socket is connecting, between reconnects, or while a launch is replacing the
+ *  session is held and sent, in order, once the right socket is open, so the
+ *  first Play after a launch is not lost to that gap. */
 export function openLiveSocket(handlers: {
   onOpen: () => void
   onMessage: (msg: ServerMessage) => void
@@ -231,26 +266,58 @@ export function openLiveSocket(handlers: {
   let alive = true
   let ws: WebSocket | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  let queued: { msg: ClientMessage; at: number }[] = []
+  const isOpen = () => ws?.readyState === WebSocket.OPEN
+  const flush = () => {
+    const now = Date.now()
+    const due = queued.filter(q => now - q.at <= QUEUED_COMMAND_TTL_MS)
+    queued = []
+    for (const q of due) ws?.send(JSON.stringify(q.msg))
+  }
   const connect = () => {
     if (!alive) return
-    ws = new WebSocket(wsUrl())
-    ws.onopen = () => { if (alive) handlers.onOpen(); else ws?.close() }
-    ws.onmessage = (ev: MessageEvent) => {
+    const socket = new WebSocket(wsUrl())
+    ws = socket
+    socket.onopen = () => {
+      if (!alive) { socket.close(); return }
+      if (!sessionReplacing) flush()
+      handlers.onOpen()
+    }
+    socket.onmessage = (ev: MessageEvent) => {
       if (!alive) return
       try { handlers.onMessage(JSON.parse(ev.data as string) as ServerMessage) } catch { /* not a frame */ }
     }
-    ws.onclose = () => {
+    socket.onclose = () => {
       if (!alive) return
       handlers.onClose()
       timer = setTimeout(connect, 2000)
     }
-    ws.onerror = () => ws?.close()
+    socket.onerror = () => socket.close()
   }
+  const settle = (reattach: boolean) => {
+    if (!alive) return
+    if (!reattach) { if (isOpen()) flush(); return }
+    // Drop the socket that belongs to the replaced session without waiting for
+    // the server's close (or the two second timer) and attach to the new one.
+    if (timer) { clearTimeout(timer); timer = null }
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null
+      ws.close()
+      handlers.onClose()
+    }
+    connect()
+  }
+  liveSockets.add(settle)
   connect()
   return {
-    send: msg => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)) },
+    send: msg => {
+      if (!sessionReplacing && isOpen()) { ws?.send(JSON.stringify(msg)); return }
+      queued = [...queued, { msg, at: Date.now() }].slice(-QUEUED_COMMAND_MAX)
+    },
     close: () => {
       alive = false
+      queued = []
+      liveSockets.delete(settle)
       if (timer) clearTimeout(timer)
       ws?.close()
     },

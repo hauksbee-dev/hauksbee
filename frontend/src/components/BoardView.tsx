@@ -16,6 +16,7 @@ import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
 import { Callout, CopyButton, UploadBanners } from './ui'
 import { NoteBlock, SectionBlock } from './report/Findings'
+import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
 import { BoardMap } from './report/BoardMap'
@@ -101,20 +102,20 @@ export function BoardView({
 
   useEffect(() => {
     if (authoringSignal === 0) return
-    requestAnimationFrame(() => authoringRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+    requestAnimationFrame(() => centerInScroller(authoringRef.current))
   }, [authoringSignal])
   useEffect(() => setImportOverlay(false), [session.runEpoch])
 
   const locate = useCallback((x: number, y: number, label: string) => {
     focusSeq.current += 1
     setFocusPoint({ x, y, label, seq: focusSeq.current })
-    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    centerInScroller(mapRef.current)
   }, [])
   const importMarkers = useMemo(() => (importOverlay ? v.importMarkers : []), [importOverlay, v])
   const inspectImportNet = useCallback((net: string) => {
     setImportOverlay(true)
     setSelectedNet(net)
-    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    centerInScroller(mapRef.current)
   }, [setSelectedNet])
   const author = useCallback((component: ModelCoverageComponent) => {
     setAuthoringComponent(component)
@@ -196,8 +197,8 @@ export function BoardView({
           >
             {v.headline}
             {v.reason && (
-              <div className="text-[13px] mt-1.5" data-testid="report-verdict-reason" style={{ color: 'var(--silk)' }}>
-                {v.reason}
+              <div className="text-[13px] mt-1.5" data-testid="report-verdict-reason" title={v.reason} style={{ color: 'var(--silk)' }}>
+                {v.reasonBrief}
               </div>
             )}
             <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>

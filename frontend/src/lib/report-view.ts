@@ -240,6 +240,31 @@ export function reportVerdictHeadline(report: WebReport): string {
 
 const bindOpen = (r: WebReport) => !!r.bind?.active_path_unresolved?.length
 
+const BRIEF_MAX = 140
+
+/** The first sentence of `text`, capped at a word boundary. A sentence ends at
+ *  `. ` / `! ` / `? ` before a capital or bracket, so "4.5.2" and "e.g. x"
+ *  stay whole. */
+function firstSentence(text: string): string {
+  const end = text.search(/[.!?](?=\s+[A-Z(])/)
+  const sentence = (end < 0 ? text : text.slice(0, end)).trim().replace(/\.$/, '')
+  if (sentence.length <= BRIEF_MAX) return sentence
+  return `${sentence.slice(0, BRIEF_MAX).replace(/\s+\S*$/, '')}…`
+}
+
+/** The engine's reason sentence ("<what>; next: <fix>.") cut to a headline for
+ *  the verdict card: the first sentence of each half. The first finding's
+ *  full text (pad strings, net chains) stays in the findings list and in the
+ *  full reason, which the card keeps as its tooltip. */
+export function briefReason(reason: string): string {
+  const at = reason.lastIndexOf('; next: ')
+  if (at < 0) return firstSentence(reason)
+  const what = firstSentence(reason.slice(0, at))
+  const next = firstSentence(reason.slice(at + '; next: '.length))
+  const closed = (line: string) => (line.endsWith('…') ? line : `${line}.`)
+  return closed(next ? `${what}; next: ${next}` : what)
+}
+
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
 export interface ImportMarker {
@@ -255,6 +280,8 @@ export interface ReportView {
   headline: string
   /** The engine's one sentence: why this is not a pass, and the next action. */
   reason: string | null
+  /** [`briefReason`] of `reason`, for the verdict card. */
+  reasonBrief: string | null
   /** `board_name`, else the file name. */
   title: string
   /** "3 parts, 4 nets" */
@@ -292,6 +319,7 @@ export function reportView(r: WebReport): ReportView {
     palette: reportVerdictPalette(r),
     headline: reportVerdictHeadline(r),
     reason: r.verdict_reason ?? null,
+    reasonBrief: r.verdict_reason ? briefReason(r.verdict_reason) : null,
     title: r.board_name || r.file_name,
     sizeLine: `${plural(r.num_components, 'part')}, ${plural(r.num_nets, 'net')}`,
     unresolved,

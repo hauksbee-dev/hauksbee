@@ -65,8 +65,10 @@ await browserFlow({
 
   ok('the analysis is named from the deck itself',
     (await page.locator('[data-testid="deck-analysis"]').textContent())?.includes('AC') === true)
+  // The deck names its own `.print`, so the engine's one note is the nominal-values
+  // caveat (the old "no `.print` card" note is gone); both oracles carry it.
   ok("the solver's notes are shown beside the numbers",
-    (await page.locator('[data-testid="deck-notes"]').textContent())?.includes('.print') === true)
+    (await page.locator('[data-testid="deck-notes"]').textContent())?.includes('no uncertainty interval') === true)
   const firstCell = await page.locator('[data-testid="deck-result"] tbody tr').first().locator('td').first().textContent()
   ok("the table carries the sweep's own first x value",
     Number.parseFloat(firstCell ?? '') === Number.parseFloat(expectedCsv.split('\n')[1].split(',')[0]), firstCell ?? '')

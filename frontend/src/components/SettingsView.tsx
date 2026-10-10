@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, errorText } from '../lib/api'
+import { tildeHome } from '../lib/display-path'
 import type {
   ExtractAgentConfig, ExtractApiBackendConfig, ExtractBackendAvailability, ExtractBackendsConfig,
   ExtractPreset, ExtractResolved, ModelChoice, ExtractResolvedApi, ExtractSettings,
@@ -148,7 +149,8 @@ function sourceLine(data: ExtractSettings): string {
   if (src.kind === 'env') return `overridden by $${src.name} for this server process`
   if (src.kind === 'flag') return 'set by a command-line flag for this server process'
   if (src.kind === 'auto') return 'auto-detected, nothing saved yet'
-  return data.exists ? `from ${data.path}` : `from ${data.path} (nothing saved yet)`
+  const where = tildeHome(data.path)
+  return data.exists ? `from ${where}` : `from ${where} (nothing saved yet)`
 }
 
 function availabilityFor(data: ExtractSettings, backend: string): ExtractBackendAvailability | undefined {
@@ -499,7 +501,7 @@ export function SettingsView() {
             Reads datasheets with:{' '}
             <span style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{data.summary}</span>
           </div>
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }}>{sourceLine(data)}</div>
+          <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }} title={data.path}>{sourceLine(data)}</div>
         </div>
         <button
           type="button"
@@ -523,8 +525,8 @@ export function SettingsView() {
 
       {data.load_error && (
         <Callout tone="err" testId="settings-load-error" className="mt-3" title="The saved file could not be read">
-          <div>{data.load_error}</div>
-          <div className="mt-1" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>{data.path}</div>
+          <div>{tildeHome(data.load_error)}</div>
+          <div className="mt-1" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }} title={data.path}>{tildeHome(data.path)}</div>
         </Callout>
       )}
 
@@ -773,13 +775,13 @@ export function SettingsView() {
         </button>
         <span className="flex-1" />
         <span className="text-[11px] truncate max-w-full" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }} title={data.path}>
-          {data.path}
+          {tildeHome(data.path)}
         </span>
       </div>
 
       {saveState.phase === 'saved' && (
         <Callout tone="ok" testId="settings-saved" live className="mt-2.5 py-2 text-[12px]">
-          Saved to <span style={{ fontFamily: 'var(--font-mono)' }}>{saveState.path}</span>
+          Saved to <span style={{ fontFamily: 'var(--font-mono)' }} title={saveState.path}>{tildeHome(saveState.path)}</span>
         </Callout>
       )}
       {saveState.phase === 'error' && (

@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  assumptionsForEvidence, describeModelSource, fallbackWindowLine, overallVerdict, reportView, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
+  assumptionsForEvidence, briefReason, describeModelSource, fallbackWindowLine, overallVerdict, reportView, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
 } from '../src/lib/report-view'
 import type { WebReport, CheckResult, ErrorBudget, ModelOnPath, ModelUncertainty, RefusalContract, RunResponse } from '../src/types/report'
 
@@ -49,6 +49,18 @@ test('the verdict reason is the engine sentence, shown in the card and the expor
   const checksRun = readFileSync(new URL('../src/components/checks/RunResults.tsx', import.meta.url), 'utf8')
   expect(boardView).toContain('data-testid="report-verdict-reason"')
   expect(checksRun).toContain('result.verdict_reason')
+})
+
+test('the verdict card shows a headline of the reason, not the first finding in full', () => {
+  const reason = '1 blocking problem(s), first: Two functions need the same block (U3). U3 (2X(PN1X20(F-D-1X20-LF))): net \'/A\' -> R10 -> net \'/B\' reaches J1 (3.5mm/PJ-W47S); next: Move one of the functions to a free block, or give up one. The datasheet pin-mux table shows which pins share which block.'
+  const brief = briefReason(reason)
+  expect(brief).toBe('1 blocking problem(s), first: Two functions need the same block (U3); next: Move one of the functions to a free block, or give up one.')
+  expect(brief).not.toContain('PN1X20')
+  expect(briefReason('3 keys have no model (U1); next: draft them.')).toBe('3 keys have no model (U1); next: draft them.')
+  expect(briefReason('x '.repeat(200) + 'tail').length).toBeLessThan(150)
+  const base = { ok: true, file_name: 'b.kicad_pcb', num_components: 1, num_nets: 1, headline: 'h', serious: 1, total: 1, verdict_reason: reason } as WebReport
+  expect(reportView(base).reasonBrief).toBe(brief)
+  expect(reportView(base).reason).toBe(reason)
 })
 
 test('repeated caveats preserve their id but not their explanation', () => {

@@ -366,19 +366,20 @@ function Shell({ boot }: { boot: Boot }) {
               their words as the header narrows: the secondary one first (from
               `lg`), the primary CTA last (from `sm`). Icon-only, never a label
               the header cut in half: the words ride along as the accessible
-              name, and only as the name — a `title` carrying the same string
-              would make the button announce itself twice. */}
+              name (visually hidden text, not an `aria-label`, so the `title`
+              tooltip that names the glyph on hover or long-press matches the
+              name instead of adding a second description). */}
           {report && !session.busy && (
             <button
               type="button"
               data-testid="header-another-board"
               onClick={analyzeAnother}
-              aria-label="Analyze another board"
+              title="Analyze another board"
               className="hb-btn hb-press inline-flex items-center justify-center gap-2 px-2.5 lg:px-3 text-[12px] whitespace-nowrap shrink-0"
               style={{ height: 32 }}
             >
               <BoardTargetIcon size={14} />
-              <span className="hidden lg:inline">Analyze another board</span>
+              <span className="max-lg:sr-only">Analyze another board</span>
             </button>
           )}
 
@@ -388,14 +389,14 @@ function Shell({ boot }: { boot: Boot }) {
               data-testid="run-it"
               onClick={driveLive}
               disabled={session.launch.phase === 'launching'}
-              aria-label={liveLabel}
+              title={liveLabel}
               className="hb-btn-primary hb-press inline-flex items-center justify-center gap-2 px-2.5 sm:px-3.5 text-[12px] whitespace-nowrap shrink-0"
               style={{ height: 32 }}
             >
               {session.launch.phase === 'launching'
                 ? <span className="slot-spin" style={{ borderTopColor: 'var(--on-copper)' }} />
                 : <PlayIcon size={12} />}
-              <span className="hidden sm:inline">{liveLabel}</span>
+              <span className="max-sm:sr-only">{liveLabel}</span>
             </button>
           )}
         </header>

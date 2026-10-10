@@ -256,10 +256,22 @@ await browserFlow(flow, async (page, { base, browser }) => {
   ok('the resume card counts the composed checks', /2 checks composed/.test(resumeText))
   await shoot(page, '05-resume-offer')
 
+  // Resume probes `/boards/<file>` for the uploaded bytes. A real server holds
+  // them only for a LIVE or preloaded session (`run --serve`, a launched sim);
+  // plain analysis is stateless on purpose, so nothing is kept of a board that
+  // was only analyzed. The fixture server answers the probe as a live one would.
+  // So the contract under test is "Resume re-runs exactly when the server still
+  // holds the board, and otherwise says plainly that it is a stored report".
+  const probe = page.waitForResponse(res => /\/boards\/[^/]+$/.test(new URL(res.url()).pathname))
   await page.click('[data-testid="session-resume-open"]')
+  const bytesHeld = ((await (await probe).headerValue('content-type')) ?? '').startsWith('text/plain')
   await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
   const reanalyzed = await page.locator('[data-testid="restored-notice"]').count() === 0
-  ok('the live /boards route returns retained bytes and Resume re-runs them', reanalyzed)
+  ok(bytesHeld
+    ? 'the server holds the board, so Resume re-runs it'
+    : 'the server holds no board (analysis only), so Resume restores the stored report and says so',
+  reanalyzed === bytesHeld)
+  note(`/boards probe: ${bytesHeld ? 'bytes retained (live or fixture session)' : 'not retained (plain analysis)'}`)
   await shoot(page, '06-resumed-report')
 
   await page.click('[data-testid="nav-checks"]')
@@ -281,8 +293,10 @@ await browserFlow(flow, async (page, { base, browser }) => {
   const rh = readFileSync(restoredHtml, 'utf8')
   ok('a restored session still exports a full report',
     rh.includes('[[assert]]') && /class="card"/.test(rh))
-  ok('the re-analyzed export is not mislabeled as a stored report',
-    !/restored from a saved browser session/i.test(rh))
+  ok(bytesHeld
+    ? 'the re-analyzed export is not mislabeled as a stored report'
+    : 'the restored export says it came from a saved browser session',
+  /restored from a saved browser session/i.test(rh) === !bytesHeld)
 
   // ── 6. Named sessions: a second board, switch, rename, delete ───────────
   step('named sessions: a second board, the switcher, rename and delete')

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, errorText } from '../lib/api'
+import { tildeHome } from '../lib/display-path'
 import type { DepInfo } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 
@@ -20,9 +21,19 @@ type DepsFetch =
   | { phase: 'ready'; deps: DepInfo[] }
   | { phase: 'unavailable'; reason: string }
 
+/** The engine words some install hints for the terminal and the app alike ("in
+ *  the app use Install on the Environment page"). This IS the Environment page,
+ *  so say where the button is instead of naming the page we are on. */
+const inThisPage = (text: string) =>
+  text.replace(/in the app use Install on the\s+Environment page/g, 'use the Install button on this page')
+
+/** After this long the first probe is slow, not stuck: say so. */
+const SLOW_PROBE_MS = 4000
+
 export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) {
   const [fetchState, setFetchState] = useState<DepsFetch>({ phase: 'loading' })
   const [install, setInstall] = useState<InstallState>({ phase: 'idle' })
+  const [slowProbe, setSlowProbe] = useState(false)
 
   const fetchDeps = useCallback(async () => {
     try {
@@ -37,6 +48,11 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
   }, [])
 
   useEffect(() => { void fetchDeps() }, [fetchDeps])
+  useEffect(() => {
+    if (fetchState.phase !== 'loading') { setSlowProbe(false); return }
+    const timer = setTimeout(() => setSlowProbe(true), SLOW_PROBE_MS)
+    return () => clearTimeout(timer)
+  }, [fetchState.phase])
 
   const runInstall = useCallback(async (id: string) => {
     setInstall({ phase: 'running', id, log: [] })
@@ -102,6 +118,12 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
         <BusyLine className="justify-center mt-6" color="var(--silk-dim)">
           Checking local dependency paths ...
         </BusyLine>
+      )}
+      {fetchState.phase === 'loading' && slowProbe && (
+        <div className="text-[12px] text-center mt-2" data-testid="deps-slow" style={{ color: 'var(--silk-faint)' }}>
+          This is slower than usual. The check looks for each simulator on this machine, which can take
+          several seconds the first time; the list appears when it finishes.
+        </div>
       )}
 
       {fetchState.phase === 'unavailable' && (
@@ -197,12 +219,12 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
                     title={d.path}
                   >
-                    {d.path}
+                    {tildeHome(d.path)}
                   </div>
                 )}
                 {d.detail && (
                   <div className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-                    {d.detail}
+                    {inThisPage(tildeHome(d.detail))}
                   </div>
                 )}
                 {/* The cost, for a dep with no Install button. Rendering it

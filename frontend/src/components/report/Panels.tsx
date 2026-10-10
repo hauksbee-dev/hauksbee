@@ -245,7 +245,7 @@ export function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
       </div>
       {gaps.length > 0 && (
         <PanelFootnote>
-          {plural(gaps.length, 'component')} need more behaviour for a fuller claim.
+          {plural(gaps.length, 'component')} {gaps.length === 1 ? 'needs' : 'need'} more behaviour for a fuller claim.
           This list is deterministic and does not require an LLM; datasheet drafting below is optional.
         </PanelFootnote>
       )}

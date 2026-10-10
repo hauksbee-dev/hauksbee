@@ -56,6 +56,10 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
         const applied = appliedVolts(cfg)
         const state = supplyStates?.[net]
         const liveVolts = frame?.net_voltages?.[net]
+        // A rail drawing more than its own limit is a short or a gross
+        // overload, and the bare number does not say so (4.167 V, 833 A against
+        // a 10 A limit read as just another reading).
+        const overLimit = state !== undefined && cfg.currentLimit > 0 && Math.abs(state.current_a) > cfg.currentLimit
 
         return (
           <div
@@ -72,9 +76,22 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
               </span>
               <span className="text-[11px] shrink-0 tnum" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
                 {liveVolts !== undefined && <span style={{ color: 'var(--copper)' }}>{liveVolts.toFixed(3)} V</span>}
-                {state && <span> · {state.current_a.toFixed(3)} A</span>}
+                {state && (
+                  <span style={overLimit ? { color: 'var(--err-strong)' } : undefined}> · {state.current_a.toFixed(3)} A</span>
+                )}
               </span>
             </div>
+            {overLimit && state && (
+              <div
+                role="status"
+                data-testid={`rail-over-limit-${net}`}
+                className="text-[10px] leading-snug rounded-md px-2 py-1"
+                style={{ color: 'var(--err-strong)', background: 'var(--err-bg)', border: '1px solid var(--err-border)' }}
+              >
+                Over the {cfg.currentLimit} A limit ({Math.abs(state.current_a).toFixed(1)} A drawn): likely a
+                short or a gross overload.
+              </div>
+            )}
             {state && state.soc < 1 && (
               <div className="flex items-center gap-2">
                 <div className="h-1 rounded-full overflow-hidden flex-1" style={{ background: 'var(--surface-3)' }}>

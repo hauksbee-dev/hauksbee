@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ExtractReady, ModelCard, ModelSaveResult, WebOpenPart } from '../types/report'
 import { CheckIcon, WarningIcon } from './Icons'
 import { api, errorText } from '../lib/api'
+import { tildeHome } from '../lib/display-path'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ReviewCard } from './extract/ReviewCard'
 import { DEFAULT_ESTIMATE_SECS, ExtractProgress } from './extract/ExtractProgress'
@@ -477,7 +478,7 @@ export function DatasheetExtract({
                 className="mt-2.5 py-2.5 text-[12px]"
                 title={<span className="inline-flex items-center gap-1.5"><CheckIcon size={12} /> Saved</span>}
               >
-                <div style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>{flow.result.path}</div>
+                <div style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }} title={flow.result.path}>{tildeHome(flow.result.path ?? '')}</div>
                 {flow.result.note && (
                   <div className="mt-1" style={{ color: 'var(--silk-dim)' }}>{flow.result.note}</div>
                 )}

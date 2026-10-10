@@ -345,9 +345,11 @@ export default function SimView({
           )}
 
           {/* Board overlay hints. While an input has focus the keyboard
-              shortcuts are suppressed, so the hint dims and says why. */}
+              shortcuts are suppressed, so the hint dims and says why. On a
+              narrow canvas it lifts above the viewer's footprint/net count chip
+              (bottom-right) instead of wrapping underneath it. */}
           <div
-            className="absolute bottom-2 left-2 text-[10px] px-2 py-1 rounded pointer-events-none"
+            className="absolute bottom-9 md:bottom-2 left-2 max-w-[calc(100%-1rem)] text-[10px] px-2 py-1 rounded pointer-events-none"
             style={{
               background: 'var(--overlay-hint-bg)',
               color: inputFocused ? 'var(--overlay-hint-dim)' : 'var(--overlay-chip-text)',

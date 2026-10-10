@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebOpenPart } from '../types/report'
 import { api, errorText } from '../lib/api'
+import { tildeHome } from '../lib/display-path'
 
 // Write a part by hand, in hauksbee's native TOML, with the real validator
 // answering as you type.
@@ -226,8 +227,8 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
       else {
         setSaveMsg(j.coverage_note
-          ? `Saved to ${j.path ?? 'your model directory'}. Coverage unchanged: ${j.coverage_note} Re-analyzing this board now.`
-          : `Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
+          ? `Saved to ${j.path ? tildeHome(j.path) : 'your model directory'}. Coverage unchanged: ${j.coverage_note} Re-analyzing this board now.`
+          : `Saved to ${j.path ? tildeHome(j.path) : 'your model directory'}. Re-analyzing this board now.`)
         onSaved?.()
       }
     } catch (e) {

@@ -194,12 +194,12 @@ function bindHtml(report: WebReport, unresolved: string[]): string {
   if (!b) return ''
   const parts = b.open_parts ?? []
   const rows = parts.map(p => `<tr>
-      <td class="mono">${esc(p.reference)}</td>
-      <td class="mono">${esc(p.value)}</td>
-      <td>${esc(p.reason)}</td>
-      <td>${p.active_ic ? 'active IC' : 'passive'}</td>
-      <td>${p.bound ? 'bound, left open' : 'no model'}</td>
-      <td>${esc(p.consequence)}</td>
+      <td class="mono nw">${esc(p.reference)}</td>
+      <td class="mono col-val">${esc(p.value)}</td>
+      <td class="col-text">${esc(p.reason)}</td>
+      <td class="nw">${p.active_ic ? 'active IC' : 'passive'}</td>
+      <td class="nw">${p.bound ? 'bound, left open' : 'no model'}</td>
+      <td class="col-text">${esc(p.consequence)}</td>
     </tr>`).join('')
   return `<section>
     <h2>Model binding</h2>
@@ -451,6 +451,12 @@ th{
 }
 td{padding:.35rem .5rem;border-bottom:1px solid var(--rule);vertical-align:top;overflow-wrap:anywhere}
 .mono{font-family:var(--font-mono)}
+/* Table cells break anywhere, which lets auto table layout squeeze every column to a
+   letter wide on a phone. Short cells (refs, roles) never wrap and the prose
+   columns keep a readable floor, so the table scrolls sideways instead. */
+.nw{white-space:nowrap}
+.col-val{min-width:9rem}
+.col-text{min-width:14rem}
 .num{font-variant-numeric:tabular-nums}
 pre{
   background:var(--code-bg); border:1px solid var(--hairline); border-radius:8px;

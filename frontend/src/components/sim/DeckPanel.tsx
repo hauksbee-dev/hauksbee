@@ -14,6 +14,15 @@ import { errorText, isAbort } from '../../lib/api'
 /** Enough digits to be checkable, not so many that a row wraps on a phone. */
 const cell = (v: number) => (v === 0 ? '0' : Math.abs(v) >= 1e4 || Math.abs(v) < 1e-3 ? v.toExponential(4) : v.toPrecision(6))
 
+/** The y quantity named, not just its unit: "°" alone reads as a stray symbol. */
+const Y_AXIS_WORDS: Record<string, string> = {
+  ' dB': 'magnitude (dB)',
+  '°': 'phase (°)',
+  ' V': 'voltage (V)',
+  ' A': 'current (A)',
+}
+const yAxisWords = (yUnit: string) => Y_AXIS_WORDS[yUnit] ?? (yUnit.trim() || 'unitless')
+
 function Plot({ plot }: { plot: ScopePlot }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
@@ -35,11 +44,11 @@ function Plot({ plot }: { plot: ScopePlot }) {
   }, [plot])
   return (
     <div style={{ border: '1px solid var(--scope-edge)', borderRadius: 6, overflow: 'hidden', background: 'var(--scope-face)' }}>
-      <canvas ref={ref} height={200} role="img" aria-label={`${plot.xLabel}, y axis in ${plot.yUnit.trim() || 'unitless values'}`} style={{ display: 'block', width: '100%', height: 200 }} />
+      <canvas ref={ref} height={200} role="img" aria-label={`${plot.xLabel}, y axis: ${yAxisWords(plot.yUnit)}`} style={{ display: 'block', width: '100%', height: 200 }} />
       {/* The y quantity in words: the AC plot is dB, the table below it is the
           linear magnitude the CLI printed, and nothing else said so. */}
       <div className="px-2 py-1 text-[10px]" data-testid="plot-y-caption" style={{ color: 'var(--silk-faint)', borderTop: '1px solid var(--scope-edge)' }}>
-        y axis: {plot.yUnit.trim() || 'unitless'}{plot.yUnit === ' dB' && ' (20·log₁₀ of the magnitude in the table below)'}
+        y axis: {yAxisWords(plot.yUnit)}{plot.yUnit === ' dB' && ' (20·log₁₀ of the magnitude in the table below)'}
       </div>
     </div>
   )
