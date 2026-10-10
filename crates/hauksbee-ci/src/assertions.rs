@@ -77,8 +77,8 @@ pub struct AssertResult {
     /// which feeds waiver matching.
     #[serde(skip)]
     pub subject_peripheral: Option<String>,
-    /// The time bound a host-paced MCU clock left unjudged here (see
-    /// [`host_paced_time_bound`]). Not serialized: the run turns it into a
+    /// The time bound a host-paced MCU clock left unjudged here. Not
+    /// serialized: the run turns it into a
     /// typed assumption on this assertion's evidence map, the one channel
     /// every surface (terminal, `JUnit`, annotations, JSON, web) already
     /// renders, so the condition a pass rests on is worded once.
