@@ -608,11 +608,25 @@ chunk over RSP runs far too slow).
   pad leaves `pins_configured_output` until the firmware hands it back. Pads
   holding a SPI0/SPI1 memory-bus signal are QEMU's own flash attach and count
   for nothing. `Mcu::peripheral_routing_unobserved` says, per pad, why a
-  peripheral drive cannot be ruled out (on QEMU always: no build retains the
-  IO_MUX direct-function selection), and `Mcu::pin_can_drive` is false for the
+  peripheral drive cannot be ruled out, and `Mcu::pin_can_drive` is false for the
   descriptor's `[[soc.input_only]]` pads; the scheduler's
   `peripheral_pad_nets` turns both into the host-paced level rule in
   `docs/ci/CI.md`.
+  On QEMU every pad but the flash attach is undecided, because a pad can also
+  be driven past the matrix (ESP32 TRM v5.8 §6.4-6.5, Tables 6.10-1 and
+  6.11-1): by an IO_MUX direct function (`MCU_SEL` other than 2: U0TXD,
+  CLK_OUT1..3, HSPI/VSPI, SD, EMAC) or through the RTC IO mux (DAC1/DAC2 on
+  GPIO25/26, touch, RTC GPIO). The esp32 machine maps IO_MUX (0x3FF49000), RTC
+  IO (0x3FF48400) and SENS as unimplemented devices, on the release and the
+  patched build alike: writes are dropped and reads return zero (measured:
+  `gpio_config` writes 0x2000 to IO_MUX_GPIO4_REG, which reads back 0). So no
+  undriven pad is taken as idle; GPIO32/33, outside the polled bank, say so.
+  The residue: a pad the matrix shows on `GPIO_OUT` with its enable set is
+  trusted as GPIO-owned, as every enabled pad is while the matrix itself is
+  unseen. Firmware that leaves `MCU_SEL` at its reset function 0 (the direct
+  function on GPIO1, 3, 6-15) or switches a GPIO output pad to the DAC or RTC
+  GPIO without clearing `GPIO_ENABLE` gets the `GPIO_OUT` level, not the
+  pad's. Retaining IO_MUX and RTC IO in the QEMU patch would close it.
   Ordinary ESP-IDF firmware is therefore visible without any Hauksbee code.
   An unpatched binary fails closed to the compatibility RTC-RAM output mirror and
   prints that mailbox requirement; the edge-diff logic is identical.

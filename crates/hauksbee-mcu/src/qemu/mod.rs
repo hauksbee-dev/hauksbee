@@ -592,6 +592,54 @@ fn plain_gpio_pads(words: &[u32]) -> u32 {
         .fold(u32::MAX, |mask, (pad, _)| mask & !(1 << pad))
 }
 
+/// Why a drive on `pin` could go unreported, completing "the backend could not
+/// observe peripheral routing: ...", or `None` for a pad the matrix shows on
+/// the memory bus (`memory_bus`, bit n = pad n): QEMU's own flash attach.
+///
+/// A pad is driven three ways besides `GPIO_OUT` (ESP32 TRM v5.8 ch. 6): a
+/// peripheral through the GPIO matrix (§6.3, seen when `matrix_seen`); an
+/// `IO_MUX` direct function, `MCU_SEL` other than 2 (§6.4, Table 6.10-1:
+/// U0TXD, `CLK_OUT1..3`, HSPI/VSPI, SD, EMAC); and the RTC IO mux (§6.5,
+/// Table 6.11-1: `DAC_1`/`DAC_2` on GPIO25/26, touch, RTC GPIO). The esp32
+/// machine maps `IO_MUX` and RTC IO as unimplemented devices
+/// (`hw/xtensa/esp32.c` at Espressif QEMU 40edccac, which Hauksbee's patch
+/// leaves alone): writes are dropped and reads return zero, so the last two
+/// are never seen and every undriven pad may be driven. A pad the matrix shows
+/// on `GPIO_OUT` is trusted as GPIO-owned, as `poll_matrix_routing` trusts
+/// every pad while the matrix is unseen; docs/cosim/MCU.md has the residue.
+fn routing_blind_spot(
+    config: &QemuConfig,
+    matrix_seen: bool,
+    memory_bus: u32,
+    pin: PinId,
+) -> Option<&'static str> {
+    let Some(bank) = config
+        .banks
+        .iter()
+        .find(|b| b.letter == pin.port && pin.bit < b.width.min(32))
+    else {
+        return Some(
+            "the pad is outside the GPIO banks this backend polls, so neither its GPIO_OUT \
+             level nor a matrix, IO_MUX or RTC IO drive on it is observed",
+        );
+    };
+    if memory_bus & (1 << pin.bit) != 0 {
+        return None;
+    }
+    Some(
+        if matrix_seen && bank.peripheral_func_out_sel_reg.is_some() {
+            "this QEMU build reports GPIO-matrix routing, but no QEMU build retains the IO_MUX \
+         or RTC IO selection a pad's own UART, SPI, SD, EMAC or CLK_OUT signal, a DAC, a \
+         touch pad or an RTC GPIO output uses (both read as zero)"
+        } else {
+            "this QEMU build retains neither the GPIO-matrix output selection (a PWM, timer or \
+         RMT output) nor the IO_MUX or RTC IO selection (a pad's own UART, SPI or EMAC \
+         signal, a DAC, touch or RTC GPIO output); a build that reports the matrix comes \
+         from scripts/install-sims.sh --qemu-patched-source"
+        },
+    )
+}
+
 const fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
     ((new ^ prev) | (enable & !prev_enable)) & enable
 }
@@ -1576,35 +1624,11 @@ impl Mcu for QemuBackend {
         pins
     }
 
-    /// Every pad is unobserved: a peripheral reaches a pad either through the
-    /// GPIO matrix (seen only on a build that retains the output-select
-    /// words) or through an `IO_MUX` direct function (a pad's own SPI, UART, SD
-    /// or EMAC signal, which keeps `OUT_SEL` at 256 and which no QEMU build
-    /// retains), so no build can rule a peripheral drive out. The exception is
-    /// a pad the matrix shows on the memory bus: QEMU attaches its flash there
-    /// whatever the board's package, which says nothing either way about the
-    /// firmware, so it is not disclosed as a possible firmware drive.
+    /// See `routing_blind_spot`.
     fn peripheral_routing_unobserved(&self, pin: PinId) -> Option<String> {
         let memory_bus = self.memory_bus_now.get(&pin.port).copied().unwrap_or(0);
-        if pin.bit < 32 && memory_bus & (1 << pin.bit) != 0 {
-            return None;
-        }
-        let matrix = self.func_out_sel_observable
-            && self.config.banks.iter().any(|b| {
-                b.letter == pin.port
-                    && b.peripheral_func_out_sel_reg.is_some()
-                    && pin.bit < b.width.min(32)
-            });
-        Some(if matrix {
-            "this QEMU build reports GPIO-matrix routing, but no QEMU build retains the \
-             IO_MUX direct-function selection a pad's own SPI, UART, SD or EMAC signal uses"
-                .to_string()
-        } else {
-            "this QEMU build retains neither the GPIO-matrix output selection (a PWM, timer or \
-             RMT output) nor the IO_MUX direct-function selection; a build that reports the \
-             matrix comes from scripts/install-sims.sh --qemu-patched-source"
-                .to_string()
-        })
+        routing_blind_spot(&self.config, self.func_out_sel_observable, memory_bus, pin)
+            .map(str::to_string)
     }
 
     fn pin_can_drive(&self, pin: PinId) -> bool {
@@ -1898,6 +1922,28 @@ mod tests {
             words[pad] = sig;
         }
         assert_eq!(memory_bus_pads(&words), 1 << 6 | 1 << 9 | 1 << 17);
+    }
+
+    /// No QEMU build retains `IO_MUX` or RTC IO, so a plain GPIO pad (4), the
+    /// U0TXD/`CLK_OUT3` pad (1) and the `DAC_1` pad (25) all stay "may be
+    /// driven" even with the matrix seen; GPIO32 (`RTC_GPIO9`, `TOUCH9`; TRM
+    /// Table 6.11-1) sits outside the polled bank; only the flash attach is clear.
+    #[test]
+    fn io_mux_and_rtc_io_drives_are_never_ruled_out() {
+        let c = QemuConfig::esp32();
+        let pin = |port, bit| PinId { port, bit };
+        for bit in [1, 4, 25] {
+            let why = routing_blind_spot(&c, true, 0, pin('0', bit)).unwrap();
+            assert!(why.contains("IO_MUX") && why.contains("DAC"), "{why}");
+            let unpatched = routing_blind_spot(&c, false, 0, pin('0', bit)).unwrap();
+            assert!(unpatched.contains("--qemu-patched-source"), "{unpatched}");
+        }
+        assert_eq!(routing_blind_spot(&c, true, 1 << 9, pin('0', 9)), None);
+        let outside = routing_blind_spot(&c, true, u32::MAX, pin('1', 0)).unwrap();
+        assert!(outside.contains("outside the GPIO banks"), "{outside}");
+        // The S3 names no matrix block, so even a matrix-capable build is blind.
+        let s3 = routing_blind_spot(&QemuConfig::esp32s3(), true, 0, pin('0', 4)).unwrap();
+        assert!(s3.contains("retains neither"), "{s3}");
     }
 
     #[test]

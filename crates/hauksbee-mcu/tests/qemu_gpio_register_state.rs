@@ -130,6 +130,16 @@ fn plain_gpio_outputs_are_not_reported_as_routed_to_a_peripheral() {
     for _ in 0..50 {
         mcu.run_micros(20_000).expect("advance QEMU");
     }
+    // gpio_config() wrote MCU_SEL 2 (0x2000) into IO_MUX_GPIO4_REG (ESP-IDF
+    // v5.4 io_mux_reg.h: DR_REG_IO_MUX_BASE 0x3FF49000 + 0x48), but the esp32
+    // machine leaves IO_MUX unimplemented, so it reads zero and a direct
+    // function or RTC IO drive stays an unobserved blind spot on every pad.
+    // If this ever reads back, decode IO_MUX/RTC IO instead of disclosing it.
+    assert_eq!(mcu.debug_read_u32(0x3FF4_9048).unwrap(), 0);
+    for bit in [4, 25] {
+        let why = mcu.peripheral_routing_unobserved(PinId { port: '0', bit });
+        assert!(why.is_some_and(|w| w.contains("IO_MUX")), "GPIO{bit}");
+    }
     if !mcu.func_out_sel_observable() {
         assert!(
             mcu.pins_routed_to_peripheral().is_empty(),
