@@ -104,7 +104,7 @@ pub fn assert_green(result: &hauksbee_ci::CiResult, what: &str) {
 /// evidence under them is undermined, e.g. an open part on the path), and the
 /// run then exits 3. For use where a test needs a `bool` (a helper returning
 /// "did this hold"); prefer [`assert_row_green`] when asserting directly.
-pub fn row_is_green(row: &hauksbee_ci::assertions::AssertResult) -> bool {
+pub const fn row_is_green(row: &hauksbee_ci::assertions::AssertResult) -> bool {
     row.passed && !row.invalid
 }
 

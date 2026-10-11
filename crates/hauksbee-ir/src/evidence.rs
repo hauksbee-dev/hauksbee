@@ -1408,17 +1408,6 @@ impl Assumption {
         let kind = bound.map_or(AssumptionKind::OpenPart, |_| {
             AssumptionKind::ReducedFidelity
         });
-        let isolated = if plural {
-            format!(
-                "Nets through those {count} parts are isolated in simulation, so any current \
-                 path across them is missing from every result that depends on them."
-            )
-        } else {
-            format!(
-                "Nets through {reference} are isolated in simulation, so any current path \
-                 across it is missing from every result that depends on it."
-            )
-        };
         let mut built = Self::build(
             kind,
             AssumptionSource::Binder,
@@ -1440,13 +1429,7 @@ impl Assumption {
                 (false, _) => format!("{named} is treated as an open circuit."),
             },
             because,
-            bound.map_or(isolated, |bound| {
-                let it = if plural { "them" } else { "it" };
-                format!(
-                    "{}, so no result rests on {it}",
-                    bound.trim_end_matches('.')
-                )
-            }),
+            open_part_consequence(bound, count, &reference),
             // The "what to do" is the generic route ONLY when nobody has looked at
             // this part. When the library has looked and named the blocker, that
             // named input IS the next step, and printing "add a model to your models
@@ -4255,6 +4238,29 @@ impl EvidenceMap {
             }
         }
         Ok(())
+    }
+}
+
+/// What an open part costs the results: its nets are isolated, or, when `bound`
+/// shows the open circuit is exact, why no result rests on it.
+fn open_part_consequence(bound: Option<&str>, count: usize, reference: &str) -> String {
+    let plural = count > 1;
+    match bound {
+        Some(bound) => {
+            let it = if plural { "them" } else { "it" };
+            format!(
+                "{}, so no result rests on {it}",
+                bound.trim_end_matches('.')
+            )
+        }
+        None if plural => format!(
+            "Nets through those {count} parts are isolated in simulation, so any current \
+             path across them is missing from every result that depends on them."
+        ),
+        None => format!(
+            "Nets through {reference} are isolated in simulation, so any current path \
+             across it is missing from every result that depends on it."
+        ),
     }
 }
 
