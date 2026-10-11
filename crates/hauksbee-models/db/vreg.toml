@@ -312,6 +312,7 @@ iq_a      = 1.0e-4  # quiescent current typ 100 µA
 # chip has an output pulldown (§6.3.5) with no resistance printed: not modelled.
 en_on_v   = 1.6
 en_off_v  = 0.15
+i_shdn_a  = 1.25e-6  # TI LP2985 SLVS522S (May 2025) 5.5 Electrical Characteristics, IGND VON/OFF < 0.3 V, VIN = 16 V, TJ = 25 C: new chip 1.25 uA typ (1.75 max), legacy chip 0.01 uA typ (0.08 max); card names no silicon so the larger new-chip typ is carried, p.6
 
 [models.pins]
 "1" = "in"
@@ -1827,6 +1828,7 @@ iq_a      = 60.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
 # appears only as a graph title), so none is set.
 en_on_v  = 1.5
 en_off_v = 0.4
+i_shdn_a  = 1.0e-8  # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VCE in OFF mode, Diodes AP2125 DS38144 Rev. 2-2 AP2125-3.3 Electrical Characteristics p.8
 
 [models.pins]
 # Pin Descriptions, SOT-23-5/SC-70-5 column.
@@ -2073,6 +2075,7 @@ iq_a       = 25.0e-6  # IQ typ @ VEN = 5 V, IOUT = 0 (50 uA max; shutdown 0.7 uA
 # resistance is printed.
 en_on_v  = 1.6
 en_off_v = 0.6
+i_shdn_a  = 7.0e-7  # ISHDN "Shutdown Current" typ (1.5 uA max), VEN = 0 V, Richtek RT9013 DS9013-10 Electrical Characteristics p.3
 
 [models.pins]
 # Functional Pin Description, SOT-23-5 / SC-70-5 column (B = SOT-23-5).
@@ -2149,6 +2152,7 @@ iq_a       = 1.3e-6   # 6.5 IGND typ, IOUT = 0 mA, VOUT <= 3.3 V (2.05 uA max; s
 en_on_v        = 0.9
 en_off_v       = 0.4
 en_pull_up_a   = 3.0e-7
+i_shdn_a  = 1.5e-7  # ISHUTDOWN "Shutdown current" typ 150 nA, VEN <= 0.4 V, VIN = 2.7 V, TI TPS709 SBVS186H 6.5 Electrical Characteristics p.5
 
 [models.pins]
 # Table 5-1 Pin Functions, DBV column for TPS709 (not TPS709A/B).
@@ -2201,6 +2205,7 @@ iq_a      = 80.0e-6  # Ground Pin Current typ @ IL = 100 uA (125 uA max). The
 # pull is set; no discharge resistance is printed.
 en_on_v   = 2.0
 en_off_v  = 0.18
+i_shdn_a  = 1.0e-8  # IGND "Quiescent Current" typ (1 uA max), VEN <= 0.4 V (shutdown), Microchip MIC5205 DS20005785B Electrical Characteristics p.3
 
 [models.pins]
 # Table 3-1, SOT-23-5, FIXED version. On the adjustable part pin 4 is ADJ.
@@ -2455,6 +2460,7 @@ iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to
 en_on_v           = 1.0
 en_off_v          = 0.3
 en_discharge_ohms = 120.0
+i_shdn_a  = 1.0e-7  # ISHDN "Shutdown current" typ (1 uA max), VEN <= 0.4 V, 1.4 V <= VIN <= 5.5 V, TI TLV755P SBVS320D 5.5 Electrical Characteristics p.5
 
 [models.pins]
 # DBV (SOT-23-5) package.
@@ -3136,6 +3142,7 @@ iq_a      = 1.0e-6    # IGND typ at IOUT = 1 uA, TJ = 25 C (1.3 uA max)
 # the plain TPS7A0533DBV order code, which has no active discharge, so none set.
 en_on_v   = 0.9
 en_off_v  = 0.4
+i_shdn_a  = 1.0e-7  # ISHDN "Shutdown current" typ 100 nA (300 nA max), VEN = 0.4 V, 1.4 V <= VIN <= 5.5 V, TJ = 25 C, TI TPS7A05 SBVS254D 6.5 Electrical Characteristics p.7
 
 [models.pins]
 # Section 5 Pin Configuration and Functions, DBV column of the Pin Functions
@@ -4224,6 +4231,7 @@ iq_a=0.5e-6
 en_on_v=1.2
 en_off_v=0.4
 en_discharge_ohms=10e3
+i_shdn_a=1.8e-8  # ISHDN "Shutdown current (IGND)" typ 18 nA (130 nA max), VEN <= 0.4 V, 2.2 V <= VIN < 5.5 V, TJ = -40..100 C, TI TPS782 SBVS115D 6.5 Electrical Characteristics p.5
 [models.pins]
 "1"="in"
 "2"="gnd"
@@ -4260,6 +4268,7 @@ iq_a=0.5e-6
 en_on_v=1.2
 en_off_v=0.4
 en_discharge_ohms=10e3
+i_shdn_a=1.8e-8  # ISHDN "Shutdown current (IGND)" typ 18 nA (130 nA max), VEN <= 0.4 V, 2.2 V <= VIN < 5.5 V, TJ = -40..100 C, TI TPS782 SBVS115D 6.5 Electrical Characteristics p.5
 [models.pins]
 "1"="out"
 "2"="nc"
@@ -4298,6 +4307,7 @@ iq_a=1e-6
 # resistance is printed.
 en_on_v=0.7
 en_off_v=0.4
+i_shdn_a=1.0e-9  # IOFF "Shutdown current" typ 1 nA (200 nA max over -40..125 C), VIN input current in OFF mode, VEN = GND, ST STLQ015 DS6765 Rev 7 Table 4 Electrical characteristics pp.5-6 (text extract of the ST PDF)
 [models.pins]
 "1"="in"
 "2"="gnd"
@@ -4343,6 +4353,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4382,6 +4393,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4426,6 +4438,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4465,6 +4478,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4509,6 +4523,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4548,6 +4563,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4592,6 +4608,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4631,6 +4648,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4675,6 +4693,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4714,6 +4733,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4758,6 +4778,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4797,6 +4818,7 @@ warning="output-capacitor ESR stability also depends on the fitted BYP capacitan
 # 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4837,6 +4859,7 @@ iq_a=2e-6
 # VEN < VEN(LOW), so it is not an output discharge on disable: none is set.
 en_on_v=0.9
 en_off_v=0.4
+i_shdn_a=3.25e-7  # ISHUTDOWN "Shutdown current" typ 325 nA (600 nA max), VEN <= 0.4 V, VIN = 2.4 V, IOUT = 0, TI TPS7A26 SBVS290B 6.5 Electrical Characteristics p.5
 [models.pins]
 "1"="out"
 "2"="nc"
@@ -4947,6 +4970,7 @@ iq_a = 100.0e-6      # IGND typ at IOUT = 100 uA (180 uA max over temperature)
 # no discharge resistance is printed.
 en_on_v  = 2.0
 en_off_v = 0.18
+i_shdn_a  = 1.0e-8  # ISTD "Standby Current" typ (1 uA max), VEN <= 0.4 V (shutdown), Diodes AP2210 DS37517 Rev. 4-2 AP2210-3.3 Electrical Characteristics p.11
 
 [models.pins]
 "1" = "in"
@@ -5001,6 +5025,7 @@ iq_a = 90.0e-6       # IGND typ at IL = 100 uA (190 uA max over temperature)
 # resistance is printed.
 en_on_v = 2.0
 en_off_v = 0.4
+i_shdn_a  = 5.0e-8  # IGND "Quiescent Current" typ 0.05 uA (3 uA max), VENABLE <= 0.4 V, TJ = 25 C, MaxLinear SPX3819 Rev. 2.0.5 Electrical Specifications p.2
 
 [models.pins]
 "1" = "in"
@@ -5219,6 +5244,7 @@ dropout_v = 0.5     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C12
 en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C12 "Stand-by Current" ICEL, VCE = 0 V, typ column 0.1 uA, p.6
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -5269,6 +5295,7 @@ dropout_v = 0.4     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C18
 en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C18 "Stand-by Current" ICEL, VCE = 0 V, typ column 0.1 uA, p.6
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -5319,6 +5346,7 @@ dropout_v = 0.22     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDI
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C25
 en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C25 "Stand-by Current" ICEL, VCE = 0 V, typ column prints 0 uA; Features p.1 "Standby Current 0.1 uA (TYP.)" for the series is used, as 0 would understate drain, p.7
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -5369,6 +5397,7 @@ dropout_v = 0.22     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDI
 iq_a      = 50.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C28
 en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C28 "Stand-by Current" ICEL, VCE = 0 V, typ column prints 0 uA; Features p.1 "Standby Current 0.1 uA (TYP.)" for the series is used, as 0 would understate drain, p.7
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -5419,6 +5448,7 @@ dropout_v = 0.21     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDI
 iq_a      = 60.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C30
 en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C30 "Stand-by Current" ICEL, VCE = 0 V, typ column prints 0 uA; Features p.1 "Standby Current 0.1 uA (TYP.)" for the series is used, as 0 would understate drain, p.8
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -5469,6 +5499,7 @@ dropout_v = 0.26     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDI
 iq_a      = 60.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C33
 en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C33 "Stand-by Current" ICEL, VCE = 0 V, typ column 0.1 uA, p.8
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -5519,6 +5550,7 @@ dropout_v = 0.2     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
 en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C50
 en_off_v  = 0.7     # VCEL "Shut down" 0.7 V max, same table
+i_shdn_a  = 1.0e-7  # ME6211 V14 Electrical Characteristics ME6211C50 "Stand-by Current" ICEL, VCE = 0 V, typ column prints 0 uA; Features p.1 "Standby Current 0.1 uA (TYP.)" for the series is used, as 0 would understate drain, p.9
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
@@ -6227,6 +6259,7 @@ iq_a       = 29.0e-6   # Ground Current typ at 100 uA load (50 uA max)
 cout_min_f = 1.0e-6    # Output Capacitor: 1.0 uF or greater for stability
 en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
 en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
+i_shdn_a  = 1.0e-7  # Ground Current in Shutdown typ (5 uA max), VEN < 0.6 V, VIN = 16 V, Micrel MIC5225 M9999-072908-A Electrical Characteristics p.3
 
 [models.pins]
 "1" = "in"
@@ -6281,6 +6314,7 @@ iq_a       = 29.0e-6
 cout_min_f = 1.0e-6
 en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
 en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
+i_shdn_a  = 1.0e-7  # Ground Current in Shutdown typ (5 uA max), VEN < 0.6 V, VIN = 16 V, Micrel MIC5225 M9999-072908-A Electrical Characteristics p.3
 
 [models.pins]
 "1" = "in"
@@ -6346,6 +6380,7 @@ dropout_v = 0.1       # max at 150 mA (30 mV typ)
 iq_a      = 4.0e-4    # IGND "IOUT = 10mA (IQ)" typ, 5.5 p.5 (630 uA max new silicon)
 en_on_v   = 1.7       # VEN(high) EN pin high (enabled), 1.7 V min; TI SBVS034P 5.5 Electrical Characteristics p.5
 en_off_v  = 0.5       # VEN(low) EN pin low (shutdown), 0.5 V max, same table (IEN is leakage; no EN pull and no active output discharge stated)
+i_shdn_a  = 2.0e-8  # ISHDN "Shutdown current (IGND)" typ 0.02 uA (1 uA max, legacy and new silicon), VEN <= 0.5 V, VOUT <= VIN <= 5.5 V, TI TPS731 SBVS034P 5.5 Electrical Characteristics p.5
 
 [models.pins]
 "1" = "in"
