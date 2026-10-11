@@ -168,6 +168,43 @@ pub struct Symbolic {
     /// where a stale frozen order would otherwise abort a factorization the
     /// matrix actually admits.
     allow_dynamic: bool,
+    /// The structure of the last successful frozen factorization, so the next
+    /// one can skip the reachability searches (see [`Replay`]).
+    replay: Replay,
+}
+
+/// What a frozen factorization decided, recorded so the next refactor of the
+/// same pattern can replay it instead of rediscovering it.
+///
+/// Gilbert-Peierls spends most of a small circuit's factorization on
+/// bookkeeping: a depth-first search per column to find which earlier pivots
+/// reach it. That search depends only on the pattern, the pivot rows chosen
+/// so far, and which L entries came out nonzero, so as long as each column
+/// picks the same pivot row and produces the same L pattern as last time, the
+/// recorded reach order is exactly what the search would return. The replay
+/// re-checks both per column and abandons itself on any difference, leaving
+/// the full path to run from scratch. Every floating-point operation, and its
+/// order, is the full path's, so the factors are bit-identical.
+#[derive(Debug, Clone, Default)]
+struct Replay {
+    /// Whether the fields below describe the factors currently held.
+    valid: bool,
+    /// The CSC values those factors were computed from. A refactor whose
+    /// values are bit-identical is already done.
+    vals: Vec<f64>,
+    /// Per elimination step, the reach the search produced, concatenated in
+    /// search order; step `k` is `reach[reach_ptr[k]..reach_ptr[k + 1]]`.
+    reach: Vec<usize>,
+    reach_ptr: Vec<usize>,
+    /// Pivot row chosen at each step.
+    pivot_row: Vec<usize>,
+    /// L's pattern in original row numbers, CSC by step.
+    l_ptr: Vec<usize>,
+    l_rows: Vec<usize>,
+    /// TEST-ONLY tallies of `(unchanged skips, completed replays)`, so tests
+    /// can prove the shortcuts actually ran.
+    #[cfg(test)]
+    taken: (usize, usize),
 }
 
 /// Reusable dense work arrays for the Gilbert-Peierls inner loop.
@@ -229,6 +266,7 @@ impl Symbolic {
             csc_vals: vec![0.0; nnz],
             fill_map: Vec::new(),
             allow_dynamic: false,
+            replay: Replay::default(),
         }
     }
 
@@ -289,9 +327,12 @@ impl Symbolic {
     /// `false` if the frozen order leaves a column with no viable pivot.
     ///
     /// All scratch is reused across calls, so a transient step pays only for
-    /// the arithmetic, not for reallocation. This body is intentionally
-    /// unchanged from the original `refactor`: its floating-point operation
-    /// order is the `Partitioning::Off` bit-exactness contract.
+    /// the arithmetic, not for reallocation. The floating-point operation
+    /// order of [`Self::factor_full`] is the `Partitioning::Off` bit-exactness
+    /// contract; the two shortcuts taken first reproduce its factors exactly:
+    /// values bit-identical to the last successful factorization are already
+    /// factored, and otherwise [`Self::factor_replay`] re-runs the same
+    /// arithmetic along the recorded structure while it still applies.
     pub fn refactor_frozen(&mut self, m: &SparseMatrix) -> bool {
         let n = self.n;
         // Refresh the cached CSC values in place (structure is fixed).
@@ -310,6 +351,141 @@ impl Symbolic {
                 self.fill_map[c] += 1;
             }
         }
+        if self.replay.valid {
+            let unchanged = self.replay.vals.len() == self.csc_vals.len()
+                && self
+                    .replay
+                    .vals
+                    .iter()
+                    .zip(&self.csc_vals)
+                    .all(|(old, new)| old.to_bits() == new.to_bits());
+            if unchanged {
+                #[cfg(test)]
+                {
+                    self.replay.taken.0 += 1;
+                }
+                return true;
+            }
+            if self.factor_replay() {
+                self.replay.vals.copy_from_slice(&self.csc_vals);
+                #[cfg(test)]
+                {
+                    self.replay.taken.1 += 1;
+                }
+                return true;
+            }
+        }
+        self.factor_full()
+    }
+
+    /// Factor the cached CSC values along the recorded structure of the last
+    /// full factorization (see [`Replay`]). Returns `false`, having changed
+    /// nothing `factor_full` relies on, as soon as a column picks a different
+    /// pivot row or produces a different L pattern than recorded.
+    fn factor_replay(&mut self) -> bool {
+        let n = self.n;
+        let col_ptr = &self.csc_col_ptr;
+        let row_idx = &self.csc_row_idx;
+        let vals = &self.csc_vals;
+        let rec = &self.replay;
+
+        self.l.clear();
+        self.u.clear();
+        let mut sc = std::mem::take(&mut self.scratch);
+        let x = &mut sc.x;
+        let pivot_pos = &mut sc.pivot_pos;
+        for p in pivot_pos.iter_mut() {
+            *p = usize::MAX;
+        }
+
+        let mut followed = true;
+        'steps: for k in 0..n {
+            let col = self.perm[k];
+            for p in col_ptr[col]..col_ptr[col + 1] {
+                x[row_idx[p]] = vals[p];
+            }
+            let reach = &rec.reach[rec.reach_ptr[k]..rec.reach_ptr[k + 1]];
+
+            // Identical to `factor_full` from here on, minus the search.
+            for &i in reach.iter().rev() {
+                if let Some(step) = pivot_index(i, pivot_pos) {
+                    let xi = x[i];
+                    if xi != 0.0 {
+                        let (ls, le) = (self.l.col_ptr[step], self.l.col_ptr[step + 1]);
+                        for p in ls..le {
+                            x[self.l.row_idx[p]] -= self.l.vals[p] * xi;
+                        }
+                    }
+                }
+            }
+
+            let mut piv_row = usize::MAX;
+            let mut piv_val = 0.0f64;
+            for &i in reach {
+                if pivot_pos[i] == usize::MAX && x[i].abs() > piv_val {
+                    piv_val = x[i].abs();
+                    piv_row = i;
+                }
+            }
+            if piv_row != rec.pivot_row[k] {
+                for &i in reach {
+                    x[i] = 0.0;
+                }
+                followed = false;
+                break 'steps;
+            }
+            let pivot = x[piv_row];
+            pivot_pos[piv_row] = k;
+            self.pivot_row[k] = piv_row;
+            self.diag[k] = pivot;
+
+            let expected_l = &rec.l_rows[rec.l_ptr[k]..rec.l_ptr[k + 1]];
+            let mut emitted_l = 0usize;
+            for &i in reach {
+                let xi = x[i];
+                if i != piv_row {
+                    let step = pivot_pos[i];
+                    if step != usize::MAX {
+                        self.u.row_idx.push(step);
+                        self.u.vals.push(xi);
+                    } else if xi != 0.0 {
+                        followed &= expected_l.get(emitted_l) == Some(&i);
+                        emitted_l += 1;
+                        self.l.row_idx.push(i);
+                        self.l.vals.push(xi / pivot);
+                    }
+                }
+                x[i] = 0.0;
+            }
+            if !followed || emitted_l != expected_l.len() {
+                followed = false;
+                break 'steps;
+            }
+            self.u.col_ptr.push(self.u.row_idx.len());
+            self.l.col_ptr.push(self.l.row_idx.len());
+        }
+
+        if followed {
+            for ri in &mut self.l.row_idx {
+                *ri = pivot_pos[*ri];
+            }
+            for k in 0..n {
+                self.row_pos[self.pivot_row[k]] = k;
+            }
+        }
+        self.scratch = sc;
+        followed
+    }
+
+    /// The Gilbert-Peierls factorization proper: discover each column's
+    /// structure by depth-first search, then compute it. On success, records
+    /// that structure for [`Self::factor_replay`].
+    fn factor_full(&mut self) -> bool {
+        let n = self.n;
+        self.replay.valid = false;
+        self.replay.reach.clear();
+        self.replay.reach_ptr.clear();
+        self.replay.reach_ptr.push(0);
         let col_ptr = &self.csc_col_ptr;
         let row_idx = &self.csc_row_idx;
         let vals = &self.csc_vals;
@@ -342,6 +518,8 @@ impl Symbolic {
                     dfs_reach(i, pivot_pos, &self.l, marked, stack, cursor, reach);
                 }
             }
+            self.replay.reach.extend_from_slice(reach);
+            self.replay.reach_ptr.push(self.replay.reach.len());
 
             // Solve L (lower part) against the scattered column: apply each
             // earlier pivot row present in the reach, in elimination order.
@@ -409,6 +587,15 @@ impl Symbolic {
             self.l.col_ptr.push(self.l.row_idx.len());
         }
 
+        // Record the structure for the next refactor before L's rows leave
+        // original numbering.
+        let rec = &mut self.replay;
+        rec.pivot_row.clone_from(&self.pivot_row);
+        rec.l_ptr.clone_from(&self.l.col_ptr);
+        rec.l_rows.clone_from(&self.l.row_idx);
+        rec.vals.clone_from(&self.csc_vals);
+        rec.valid = true;
+
         // Remap L's stored original rows to elimination steps now that every
         // row has a pivot position.
         for ri in &mut self.l.row_idx {
@@ -450,6 +637,9 @@ impl Symbolic {
         // count (product of remaining row and column nonzeros).
         const PIVOT_THRESH: f64 = 0.1;
         let n = self.n;
+        // The factors and column order about to be written are not the ones
+        // the recorded frozen structure describes.
+        self.replay.valid = false;
         if n == 0 {
             self.l.clear();
             self.u.clear();
@@ -1241,6 +1431,116 @@ mod tests {
             xa.iter().zip(&xf).all(|(p, q)| p.to_bits() == q.to_bits()),
             "{xa:?} vs {xf:?}"
         );
+    }
+
+    /// Everything a factorization hands `solve`, with floats as raw bits.
+    type Fingerprint = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<u64>, [Vec<usize>; 4], [Vec<u64>; 2]);
+
+    fn fingerprint(s: &Symbolic) -> Fingerprint {
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        (
+            s.perm.clone(),
+            s.pivot_row.clone(),
+            s.row_pos.clone(),
+            bits(&s.diag),
+            [
+                s.l.col_ptr.clone(),
+                s.l.row_idx.clone(),
+                s.u.col_ptr.clone(),
+                s.u.row_idx.clone(),
+            ],
+            [bits(&s.l.vals), bits(&s.u.vals)],
+        )
+    }
+
+    /// A refactor that skips unchanged values or replays the recorded
+    /// structure produces exactly the factors a fresh factorization does,
+    /// including across a pivot change, an entry that cancels to zero, and a
+    /// singular matrix in the middle of the sequence.
+    #[test]
+    #[allow(clippy::cast_precision_loss)] // indices < 16 seed the values
+    fn replayed_refactors_match_a_fresh_factorization_bit_for_bit() {
+        const N: usize = 6;
+        let mut pattern = Vec::new();
+        for i in 0..N {
+            pattern.push((i, i));
+            if i + 1 < N {
+                pattern.extend([(i, i + 1), (i + 1, i)]);
+            }
+        }
+        pattern.extend([(0, N - 1), (N - 1, 0), (1, 4), (4, 1)]);
+        let base = |scale: f64| -> Vec<f64> {
+            pattern
+                .iter()
+                .enumerate()
+                .map(|(k, &(r, c))| {
+                    let v = if r == c { 4.0 } else { -1.0 } + 0.01 * k as f64;
+                    v * scale
+                })
+                .collect()
+        };
+        let tiny_diagonal = || -> Vec<f64> {
+            pattern
+                .iter()
+                .zip(base(1.0))
+                .map(|(&(r, c), v)| if r == c { v * 1e-9 } else { v })
+                .collect()
+        };
+        let with_zero = |at: (usize, usize)| -> Vec<f64> {
+            pattern
+                .iter()
+                .zip(base(1.1))
+                .map(|(&rc, v)| if rc == at { 0.0 } else { v })
+                .collect()
+        };
+        let singular: Vec<f64> = pattern
+            .iter()
+            .zip(base(1.0))
+            .map(|(&(_, c), v)| if c == 2 { 0.0 } else { v })
+            .collect();
+        let steps = [
+            base(1.0),
+            base(1.01),
+            base(1.01),
+            tiny_diagonal(),
+            tiny_diagonal(),
+            base(1.0),
+            with_zero((1, 0)),
+            with_zero((3, 2)),
+            base(0.97),
+            singular,
+            base(1.0),
+            base(1.02),
+        ];
+        let build = |vals: &[f64]| {
+            let mut m = SparseMatrix::new(N);
+            for (&(r, c), &v) in pattern.iter().zip(vals) {
+                m.touch(r, c);
+                m.add(r, c, v);
+            }
+            m
+        };
+        let mut warm = build(&steps[0]).factorize_symbolic();
+        for (k, vals) in steps.iter().enumerate() {
+            let m = build(vals);
+            let mut cold = m.factorize_symbolic();
+            let ok = cold.refactor_frozen(&m);
+            assert_eq!(warm.refactor_frozen(&m), ok, "step {k}");
+            if ok {
+                assert_eq!(fingerprint(&warm), fingerprint(&cold), "step {k}");
+                let b: Vec<f64> = (0..N).map(|i| i as f64 - 2.5).collect();
+                let (mut xw, mut xc) = (b.clone(), b);
+                warm.solve(&mut xw, &mut [0.0; N]);
+                cold.solve(&mut xc, &mut [0.0; N]);
+                assert!(
+                    xw.iter().zip(&xc).all(|(p, q)| p.to_bits() == q.to_bits()),
+                    "step {k}"
+                );
+            }
+        }
+        let (skips, replays) = warm.replay.taken;
+        assert!(skips >= 2, "unchanged values were refactored ({skips})");
+        assert!(replays >= 2, "the recorded structure was never replayed ({replays})");
     }
 
     /// The dynamic path matches the frozen path on well-conditioned systems,
