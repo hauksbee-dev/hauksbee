@@ -541,14 +541,24 @@ virtual time, block until done, then exchange GPIO/UART. QEMU is driven
 with **QMP `cont` -> bounded wall window -> QMP `stop`**, the QMP analogue
 of Renode's `RunFor`.
 
-The theoretically ideal primitive is `-icount shift=N`, which makes virtual
-time a deterministic function of executed instructions (bit-exact
-reproducibility). **We tested it, and it does not work on the Espressif
-esp32 (Xtensa) machine:** with `-icount` at any shift (4/6/8/auto), with or
-without `sleep=off`, the esp32 machine produces ZERO UART output in a 15 s
-wall window, versus ~1 s to the "hello from esp32" banner with no icount.
-icount on these Xtensa machines is undocumented by Espressif and
-empirically breaks boot, so it stays off.
+The theoretically ideal primitive is `-icount shift=N`, which would make
+virtual time a deterministic function of executed instructions (bit-exact
+reproducibility). **We tested it on the Espressif esp32 (Xtensa) machine, and
+it does not deliver that:**
+
+- At a fixed shift (2 and 4 measured) the machine does boot and reach the
+  Watchy RES drive, but 11-51 s of wall time later against about 1 s with no
+  icount, and a short 15 s wall window sees no UART output at all. `shift=0`
+  never starts (no UART, the cycle counter stays at 0).
+- The result is not deterministic against the QMP `cont`/`stop` pattern: the
+  same mode and window reached RES at 167 M, 171 M and 1195 M cycles on three
+  runs, with different UART byte counts. The guest's path still depends on when
+  the host stops and resumes it, so crediting time from the virtual clock would
+  not give a repeatable RES time.
+- `shift=auto` is fast (3-4 s) but retunes the shift to keep virtual time near
+  real time, so it is host-paced again.
+
+So icount buys neither determinism nor speed here, and it stays off.
 
 Determinism without icount comes from the guest's own deterministic
 peripheral timers (FreeRTOS tick, UART baud generator), sampled only at
@@ -1243,12 +1253,14 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
   GPIO input is still injected through `hauksbee_gpio_in`: the fork drops writes
   to `GPIO_IN_REG`, so arbitrary firmware cannot yet consume host-driven pins.
 
-- **No `-icount` on the Xtensa esp32 machine.** Measured: `-icount` (any
-  shift, with/without `sleep=off`) prevents the esp32/esp32s3 machines from
-  booting (zero UART in 15 s). The lockstep therefore uses QMP stop/cont
-  over the free-running virtual clock; timing runs wall-bounded, not
-  instruction-counted, so determinism runs logic-level (stable banner +
-  toggle count) rather than bit-exact. The RISC-V esp32c3 machine
+- **No `-icount` on the Xtensa esp32 machine.** Measured: `-icount` makes the
+  esp32 boot non-deterministically (the same mode and window reached the Watchy
+  RES drive at 167 M, 171 M and 1195 M cycles on three runs) and 11-51 s of wall
+  time slower at a fixed shift than without it (about 1 s); `shift=0` never
+  starts, and `shift=auto` is fast but host-paced by design. The lockstep
+  therefore uses QMP stop/cont over the free-running virtual clock; timing runs
+  wall-bounded, not instruction-counted, so determinism runs logic-level (stable
+  banner + toggle count) rather than bit-exact. The RISC-V esp32c3 machine
   tolerates icount per Espressif's docs, but the backend keeps the same
   icount-free mechanism for uniformity.
 
