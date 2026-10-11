@@ -41,6 +41,7 @@ Never treat exit 3 as green or as an ordinary failure.
 Trust the JSON `passed` field only together with `run_valid`. `hauksbee-ci
 run --json` reports `passed` (the process verdict, false on exit 3),
 `assertions_passed`, and `run_valid` as separate fields.
+A pass with a non-empty `verdict_conditions` is conditional: the sweep it rests on was partial. Report each condition with the pass and never call it an unconditional pass.
 
 ## JSON output shapes
 
@@ -131,7 +132,7 @@ Use an absolute path for `command` if `hauksbee-mcp` is not on the client's
 | tool | arguments | returns |
 |---|---|---|
 | `analyze_board` | `board_path`, `firmware_path?`, `schematic_path?` | the front-door report JSON (headline, `serious`/`total`, per-section findings, `bind` coverage, `nets`, `supplies`, `notes`, and `cosim` when firmware ran) |
-| `run_checks` | `board_path`, `spec_toml`, `firmware_path?`, `schematic_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]}` |
+| `run_checks` | `board_path`, `spec_toml`, `firmware_path?`, `schematic_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, verdict_conditions, results[]}` |
 | `list_capabilities` | none | the scope table as data: report kinds, assertion kinds, board/firmware formats, and MCU backend availability probed on this machine with the engine's own discovery (doctor-style `builtin/ok/absent/disabled`) |
 | `model_coverage` | `board_path`, `models_dir?` | the same staged per-device identity/executable/declared coverage used by CLI and browser, plus a read-only next action that says model preparation requires approval |
 | `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
