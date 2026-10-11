@@ -1,6 +1,6 @@
 # hauksbee-ci GitHub Action
 
-A composite action that runs [`hauksbee-ci`](https://docs.hauksbee.dev/docs/ci/ci) on your
+A composite action that runs [`hauksbee-ci`](https://hauksbee-docs.eoghancollins0.workers.dev/docs/ci/ci) on your
 board and firmware, so every layout change boots the firmware on the emulated
 PCB and asserts the rails come up, the UART says hello, and the LED blinks,
 before anything reaches a bench.
@@ -8,8 +8,9 @@ before anything reaches a bench.
 ## Usage
 
 In your hardware repo, add `.github/workflows/hauksbee-ci.yml`. No secret and
-no token are needed: the Action, its release assets, and its images are
-public.
+no token are needed: the Action and its source are public. No release (and so
+no prebuilt binary or image) is published yet; until one is, leave
+`hauksbee-version` out and the Action builds `hauksbee-ref` from source.
 
 ```yaml
 permissions:
@@ -23,16 +24,16 @@ steps:
   - uses: hauksbee-dev/hauksbee/integrations/github-action@REPLACE_WITH_RELEASE_COMMIT_SHA
     with:
       hauksbee-ref: REPLACE_WITH_RELEASE_COMMIT_SHA
-      hauksbee-version: v0.1.0-beta.6
+      # hauksbee-version: REPLACE_WITH_RELEASE_TAG   # set once a release is published
       spec: ci/power-up.toml          # your checked-in hauksbee-ci spec
       junit: hauksbee-ci-results.xml   # JUnit XML written here (optional)
 ```
 
-Pin the `@ref` to the release's full commit SHA, never `main` or a tag: a tag
-can move after review, while an object ID cannot redirect the Action code.
-Pass the same SHA as `hauksbee-ref` and the human release tag as
-`hauksbee-version`; the Action refuses assets whose tag does not resolve to
-that SHA.
+Pin the `@ref` to a full commit SHA (the release's, once one exists), never
+`main` or a tag: a tag can move after review, while an object ID cannot
+redirect the Action code. Pass the same SHA as `hauksbee-ref`. Once a release
+exists, also pass its tag as `hauksbee-version`; the Action refuses assets whose
+tag does not resolve to that SHA.
 
 Set `timeout-minutes` on every consumer job (the generated workflow uses 45).
 Spec duration and ensemble size are intentionally user-controlled; without a

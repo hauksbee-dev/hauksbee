@@ -34,7 +34,7 @@ own contract.
 | 0 | Green: every assertion held (or every failure has an active waiver). | Pass, or any report without `--strict`. |
 | 1 | Red: an assertion failed and no active waiver covers it (the JSON says which and on which seed). | Input error: the board could not be read, or a co-sim backend is missing. |
 | 2 | Input error: bad spec, missing board, unknown net, a usage error, or a `--junit`/`--sarif` path that could not be written. | Usage error, or gating findings under `--strict` (`verdict: "fail"`). |
-| 3 | Invalid for analysis: the analog solve aborted, an assertion's window overlapped a failed solve span, or an assertion's evidence is `undermined` (for example an unmodelled active part that can drive the asserted net). | Invalid for analysis: `verdict: "invalid"` under `--strict`, firmware on a board with no bound processor, or a `--thermal` run with partial coverage (`--no-strict-thermal` opts out). |
+| 3 | Invalid for analysis: the analog solve aborted, an assertion's window overlapped a failed solve span, an assertion's evidence is `undermined` (for example an unmodelled active part that can drive the asserted net), or a host-paced clock (ESP32 QEMU) cannot judge the claim: firmware content that is absent at the end of the run, or a level that holds only inside its window (`INVALID: host-paced clock:`). | Invalid for analysis: `verdict: "invalid"` under `--strict`, firmware on a board with no bound processor, or a `--thermal` run with partial coverage (`--no-strict-thermal` opts out). |
 
 Never treat exit 3 as green or as an ordinary failure.
 

@@ -16,13 +16,16 @@ stronger conclusion instead of guessing.
 
 ## Install and first run
 
-During beta, use only the exact prerelease link and checksum supplied with the
-invitation. A macOS app is offered only after its same-source signing and
-notarisation gates pass. The engine runs locally; optional datasheet drafting
-has the separate privacy boundary described in [BETA](../BETA.md#privacy).
+No binary release is published yet, so build from source (below). A macOS app
+is offered only after its same-source signing and notarisation gates pass. The
+engine runs locally; optional datasheet drafting sends datasheet text to the
+backend you chose, after a consent notice (see
+[choosing a backend](models/MODELS.md#choosing-a-backend)).
 
-After a stable release is published, the convenience installer downloads
-(`hauksbee`, `hauksbee-ci`, `hauksbee-mcp`), verifying checksums:
+Once a release is published, the convenience installer downloads
+(`hauksbee`, `hauksbee-ci`, `hauksbee-mcp`) and verifies checksums; until then
+it exits with an error. It installs the latest release unless you pass
+`--version vX.Y.Z`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
@@ -31,12 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/
 Windows x64 uses the PowerShell twin
 (`irm .../scripts/get-hauksbee.ps1 | iex`), and CI can pull
 the public GHCR package after it is published; see
-[DOCKER](ci/DOCKER.md). During the private beta those raw URLs need
-credentials, so use the authenticated installer commands in the
-[README](../README.md) instead.
+[DOCKER](ci/DOCKER.md).
 
-From a macOS/Linux checkout, check simulator prerequisites, then build and
-install the web front door and binaries:
+To build from source, from a macOS/Linux checkout, check simulator
+prerequisites, then build and install the web front door and binaries:
 
 ```bash
 scripts/install-sims.sh --check
@@ -127,8 +128,9 @@ disconnected rather than silently guessed. The report says "N% resolved"
 that gap needs model data and no recompile. Start with the board itself:
 
 ```bash
-hauksbee models resolve board.kicad_pcb --json
-hauksbee models new U3 --board board.kicad_pcb --out models/u3.toml
+hauksbee models coverage board.kicad_pcb --json
+hauksbee models new U3 --board board.kicad_pcb \
+  --kind vreg --out models/u3.toml   # pick the kind from the datasheet
 hauksbee models lint models/u3.toml
 hauksbee run board.kicad_pcb --models-dir models --report --plain
 ```
@@ -162,6 +164,4 @@ board, write a CI spec, debug a RED run, firmware co-sim, model a board) are in
 ## Going deeper
 
 [`docs/DOCS_MAP.md`](DOCS_MAP.md) maps every doc in the shipped set to the
-question it answers. The development tree also carries internal working notes
-(plans, hunt logs, teaching drafts) that the map deliberately does not index and
-a release does not carry.
+question it answers.

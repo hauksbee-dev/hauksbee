@@ -184,9 +184,12 @@ and `renode:sifive_fe310` (`mtime`) by the clock-truth gates, after each
 descriptor was corrected to declare the part's clock instead of the stock
 platform's. Firmware sleeping 20 ms costs 20 ms of simulated time there. The
 `qemu:esp32` family remains the exception: its virtual time is paced against
-the wall clock, so a frequency or deadline assertion there is approximate and
-host-load dependent, and every affected run states that on its report
-surfaces. See `docs/about/LIMITATIONS.md`.
+the wall clock, so deadline and other time bounds on firmware-driven nets are
+reported but not judged there: a drive that happens is a conditional PASS,
+content that never appears is INVALID (exit 3), and a net the firmware never
+drives is a FAIL. Every affected run states that on its report surfaces. See
+`docs/about/LIMITATIONS.md` and the host-paced clock section of
+`docs/ci/CI.md`.
 
 Coverage in one sentence: **co-sim covers AVR (via libsimavr, in-process),
 STM32 / nRF52 / RISC-V (via Renode), and the full ESP32 family (via Espressif

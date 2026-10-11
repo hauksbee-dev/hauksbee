@@ -159,6 +159,15 @@ remains approximate and degrades under host load. Affected runs carry a
 `timing_limitation`. STM32F103 TIMx blocks stay at the post-PLL 72 MHz required
 by stock HAL projects, and those runs disclose that constraint.
 
+Because of that, a CI spec does not judge firmware-time bounds on an ESP32 core.
+A `boot_coverage` deadline, a `toggle` frequency band, a `pulse_width` bound, or
+an `after_ms` window on a firmware-driven net is reported as "not judged", and a
+run that passes only on that basis is a conditional GREEN. A `uart` or
+`peripheral` assertion whose content is absent, or a level that holds only
+inside its window, is INVALID (exit 3) rather than FAIL. A net the firmware never
+drives, or a bus never exercised, still FAILs. See "Deadlines on a host-paced
+clock are not verdicts" in [CI](../ci/CI.md).
+
 ### Parallel EEPROM programming models digital busy status, not charge-pump physics
 
 The built-in AT28C256 path models the real bidirectional bus, final stored

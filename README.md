@@ -12,19 +12,27 @@ A design-rule checker checks geometry against rules. A schematic simulator execu
 
 ## Get Hauksbee
 
-Beta testers should use the exact `v0.1.0-beta.6` release link supplied with
-their invitation once that release is published. Do not substitute the stable
-`latest` URL. Verify the source commit and checksum as described in
-[BETA](BETA.md#getting-a-beta-build). A macOS app is distributed only after its
-same-source signing and notarisation gates pass.
+No binary release is published yet, so build from source. From a checkout of
+this repository on macOS/Linux:
 
-After the first stable release, `Hauksbee.app` will also be available from the
-[stable release page](https://github.com/hauksbee-dev/hauksbee/releases/latest).
-Ordinary analysis is local; optional datasheet drafting has the separate
-[privacy boundary](BETA.md#privacy).
+```bash
+scripts/install-sims.sh --check   # reports which simulator backends are missing
+scripts/install.sh
+```
 
-The convenience installers below follow the stable release channel. Beta users
-must instead use their exact tag and source commit:
+`scripts/install.sh` checks the Rust, Bun, clang/libclang, and libsimavr
+prerequisites, builds the default shape, and installs `hauksbee`, `hauksbee-ci`,
+and `hauksbee-mcp`; external simulators use `scripts/install-sims.sh`. Windows
+x64 uses the permissive build documented in
+[START_HERE](docs/START_HERE.md#install-and-first-run). Signing, notarisation,
+and artifact provenance are release gates; see
+[release and licensing](docs/about/release-and-licensing.md).
+
+Once a release is published, the installers below fetch the latest release and
+check each asset against the `.sha256` sidecar published beside it. Until then
+they exit with an error. Hauksbee is pre-1.0, so you may prefer to pin a tag:
+add `-s -- --version vX.Y.Z` after `bash` (PowerShell: download the script and
+pass `-Version vX.Y.Z`).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
@@ -36,17 +44,19 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
 ```
 
+Once a release exists, `Hauksbee.app` will also be on the
+[release page](https://github.com/hauksbee-dev/hauksbee/releases/latest); a
+macOS app is published only after its same-source signing and notarisation
+gates pass. Ordinary analysis is local. The optional datasheet drafting sends
+the datasheet's text to the LLM backend you chose, only after an explicit
+consent notice (see
+[choosing a backend](docs/models/MODELS.md#choosing-a-backend)); nothing is
+ever attached to an issue automatically.
+
 Once the public GHCR package is published, CI images are available as `:slim`
 (static checks + AVR co-sim) and `:full` (adds Renode, Espressif QEMU, and
-autorouting). Beta builds use immutable version/digest references, not floating
-tags. See [DOCKER](docs/ci/DOCKER.md).
-
-On macOS/Linux, `scripts/install.sh` checks the Rust, Bun, clang/libclang, and
-libsimavr prerequisites and builds the default shape; external simulators use
-`scripts/install-sims.sh`. Windows x64 uses the permissive build documented in
-[START_HERE](docs/START_HERE.md#install-and-first-run). Signing, notarisation,
-and artifact provenance are release gates; see
-[release and licensing](docs/about/release-and-licensing.md).
+autorouting). Use immutable version/digest references, not floating tags. See
+[DOCKER](docs/ci/DOCKER.md).
 
 ## Five kinds of evidence, one engine
 
@@ -84,7 +94,7 @@ hauksbee run --example blinky --check --plain
 hauksbee serve
 ```
 
-The second command runs the analysis surface (`hauksbee check <board>` is shorthand for `hauksbee run --check <board>`). `hauksbee serve` opens the same engine through the local browser UI (the same page the app opens), with sample boards, a checks composer, live 2D copper, probes, and report export. Captured first-run transcripts are retained under [`examples/sessions/`](examples/sessions/).
+The second command runs every static check on the bundled blinky board and prints a plain-language verdict (`hauksbee check <board>` is shorthand for `hauksbee run --check <board>`). `hauksbee serve` opens the same engine through the local browser UI (the same page the app opens), with sample boards, a checks composer, live 2D copper, probes, and report export. Captured first-run transcripts are retained under [`examples/sessions/`](examples/sessions/).
 
 ## Every input an authority
 
@@ -162,7 +172,7 @@ hauksbee models lint models/u3.toml
 hauksbee run board.kicad_pcb --models-dir models --report --plain
 ```
 
-`models prepare` is local and approval-gated: it inventories the connected active devices, shows the exact pack paths it would create, defaults to no, and does not fetch a datasheet, call an LLM, or install a pack. `models new` starts from one board identity and refuses to guess the IC's behaviour. `models lint` applies the same schema and behavioural validation used by binding. `models resolve` then proves which source and layer won; the full report proves whether the declared pin roles actually connected. Model packs can be installed, listed, overridden, and removed without editing the built-in database.
+`models prepare` is local and approval-gated: it inventories the connected active devices, shows the exact pack paths it would create, defaults to no, and does not fetch a datasheet, call an LLM, or install a pack. `models new` starts from one board identity and refuses to guess the IC's behaviour. `models lint` applies the same schema and behavioural validation used by binding. `hauksbee models resolve board.kicad_pcb` then shows which source and layer won; the full report shows whether the declared pin roles actually connected. Model packs can be installed, listed, overridden, and removed without editing the built-in database.
 
 The report separates the stages: a device can be extracted from CAD, matched to an exact identity/pin map, carry safe static contracts, and still lack the executable behaviour needed by analog or firmware simulation. `critical_parts_bound` is the last of those stages (executable behavioural-model coverage), not a claim that the other critical parts failed to parse.
 
@@ -183,11 +193,15 @@ UART boot is not promoted to a GPIO claim. A mailbox-backed peripheral is not pr
 The extracted board is editable, not a terminal report:
 
 ```bash
-hauksbee to-code board.kicad_pcb > board.hbee
-hauksbee check-code board.hbee
-hauksbee from-code board.hbee --output rebuilt.kicad_pcb
-hauksbee merge-ses rebuilt.kicad_pcb routed.ses --output routed.kicad_pcb
+hauksbee to-code board.kicad_pcb --out board.board
+hauksbee check-code board.board
+hauksbee from-code board.board --out rebuilt.kicad_pcb --route-dsn board.dsn
+# route board.dsn with any Specctra router, then merge its SES output:
+hauksbee merge-ses board.board routed.ses --out routed.kicad_pcb
 ```
+
+`from-code --route` autoroutes in one step instead; the `--route-dsn` and
+`merge-ses` pair is for routing externally.
 
 See [BOARD_AS_CODE](docs/ingest/BOARD_AS_CODE.md) for the preserved topology, current identity limits, and round-trip gates.
 
@@ -205,11 +219,15 @@ The manifest binds input bytes, directories, model sources, tool/build revisions
 
 CI is one consumer of the engine rather than its definition. Specs can assert voltage, toggles, boot coverage, rail windows, faults, temperature, protection trips, peripherals, model coverage, AC gain or phase margin, and hardware-trace features, with scenarios and fuzzed initial states. The exact schema and runnable examples are in [CI](docs/ci/CI.md) and [EXAMPLES](docs/ci/EXAMPLES.md).
 
+This is the shipped `crates/hauksbee-ci/examples/boot_gate_pass.toml`. Its
+`board` and `firmware` paths are relative to the spec file, not to the directory
+you run from:
+
 ```toml
 name = "boot_coverage: MOSFET gate driven promptly"
 board = "boards/boot_gate.kicad_pcb"
 firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"
-mcu = "atmega328p"
+mcu = "atmega328p"   # informational; the core comes from the board
 duration_ms = 50
 
 [[supply]]
@@ -227,12 +245,14 @@ deadline_ms = 20.0
 kind = "no_faults"
 ```
 
-Run it locally or in CI:
+From a checkout of this repository (a spec of your own works the same way):
 
 ```bash
-hauksbee-ci check ci/boot.toml
-hauksbee-ci run ci/boot.toml --json --junit out.xml
+hauksbee-ci check crates/hauksbee-ci/examples/boot_gate_pass.toml
+hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass.toml --json --junit out.xml
 ```
+
+`hauksbee-ci run --example blinky` runs a bundled spec without a checkout.
 
 ### Fits into an existing repository
 

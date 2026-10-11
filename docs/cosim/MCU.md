@@ -43,7 +43,7 @@ executing as though the supply held.
 `on_pin_change` reports output edges, and the scheduler can collapse them and
 react on the *next* analog chunk. That is too coarse for a firmware that
 bit-bangs a clock and `digitalRead`s the resulting serial-out bit in the SAME
-tight loop, e.g. the Tarski `_ReadShiftRegisterWord`, which for 16 bits does
+tight loop, e.g. a routine that bit-bangs a 16-bit shift-register read, which does
 `digitalRead(MISO)` then pulses SCLK with back-to-back, sub-µs
 `digitalWrite`s. By the time the chunk ends, the firmware has already
 finished reading. Injecting MISO once per chunk would read `0x0000`: the
@@ -227,7 +227,7 @@ limitation rather than as a silicon-equivalent clock.
 | `renode:sifive_fe310` | `mtime` gate passes; instruction timing is not silicon-gated | `tests/clock_truth.rs` |
 | `renode:stm32g4` / `stm32f7` | clock-truth gate passes at the 16 MHz HSI reset default | SysTick fixture in `tests/clock_truth.rs`; firmware that raises the PLL (170 / 216 MHz) runs its SysTick delays 10.6x / 13.5x slow, stated as a timing limitation |
 | `renode:stm32l0` | clock-truth gate passes at 2 MHz, within 5% of the 2.097 MHz MSI default | SysTick fixture in `tests/clock_truth.rs`; 16x slow against a 32 MHz PLL, stated as a timing limitation |
-| `qemu:esp32` / `-s3` / `-c3` | host-paced: approximate, about 2x apart across hosts for instruction-bound boot | `tests/qemu_clock_truth.rs`; reports carry a timing limitation, and time bounds are reported unjudged (conditional), never hard PASS/FAIL |
+| `qemu:esp32` / `-s3` / `-c3` | host-paced: approximate, about 2x apart across hosts for instruction-bound boot | `tests/qemu_clock_truth.rs`; reports carry a timing limitation, and time bounds are reported unjudged (conditional), never hard PASS/FAIL; a net never driven or a bus never exercised still FAILs |
 
 The descriptor loader cross-checks each declared clock against its platform and
 refuses a mismatch or a Renode platform with no core-clock declaration

@@ -30,7 +30,7 @@ Controls drive nets the same way the power supplies and GPIO drivers already
 do: an ideal `Vsource` behind a series resistor, or a switchable contact
 resistor. Updating the control between chunks just mutates that device's
 value. MNA resolves contention with everything else on the net. This is the
-Tarski trick the whole engine builds on, reused here: behavioral sources
+approach the whole engine builds on, reused here: behavioral sources
 update between chunks, and the linear solve stays unchanged.
 
 A `PeripheralSet` owns the attached peripherals plus a time-sorted

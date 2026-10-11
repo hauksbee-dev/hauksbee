@@ -2,7 +2,7 @@
 # Every line is commented with what it does. Uncomment and tune, then run:
 #   hauksbee-ci run ./cane.toml
 # The board, MCU, supplies and rails below were detected from the board.
-# Full assertion catalog (https://docs.hauksbee.dev/docs/ci/ci): voltage, uart, toggle, no_faults,
+# Full assertion catalog (https://hauksbee-docs.eoghancollins0.workers.dev/docs/ci/ci): voltage, uart, toggle, no_faults,
 #   max_current, max_temp, rail_window, protection_trip, boot_coverage,
 #   phase_margin, ac_gain, peripheral, hwtrace, model_coverage.
 
@@ -70,7 +70,7 @@ kind = "no_faults"
 # burst, a motor kick, an inrush)? This is the transient/brownout check:
 # there is NO `run --transient` flag; it lives here. A [[profile]] shapes
 # the load current, a [[scenario]] attaches it to a supply net, and the
-# rail_window assert bounds the rail while it runs. See https://docs.hauksbee.dev/docs/checks/transients.
+# rail_window assert bounds the rail while it runs. See https://hauksbee-docs.eoghancollins0.workers.dev/docs/checks/transients.
 # [[profile]]
 # id = "load_step"
 # [[profile.segment]]

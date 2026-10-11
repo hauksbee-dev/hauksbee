@@ -313,7 +313,7 @@ ESP32 boards are the meaningful negatives: the MCU IS matched (verified via the
 `resource_probe` example) and the check still finds nothing, so the silence is a
 true negative, not a failure to match.
 
-### The Tarski meta-lesson, earned twice
+### Presume the tool is wrong first, earned twice
 
 The first runs on the Olimex board were silent for the *wrong* reasons, and
 chasing that to ground (presume the tool is broken first) exposed two real

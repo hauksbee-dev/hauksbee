@@ -89,7 +89,7 @@ to come back as a *report*, with parts invented out of binary noise.
 
 ```
 $ hauksbee run braids_v50.brd --report
-error: 'braids_v50.brd': this is an Eagle drawing in the pre-Eagle-6 BINARY format, which hauksbee does not read. Eagle 6 moved the .brd and .sch formats to XML, and the XML form is what hauksbee reads: open this file once in Eagle 6 or later, or in Fusion 360 Electronics, re-save it, and retry with the re-saved file. Anything that opens the pre-6 binary format and writes Eagle XML or a KiCad board will do; failing that, the design's gerbers are the other way in. See https://docs.hauksbee.dev/docs/ingest/eagle
+error: 'braids_v50.brd': this is an Eagle drawing in the pre-Eagle-6 BINARY format, which hauksbee does not read. Eagle 6 moved the .brd and .sch formats to XML, and the XML form is what hauksbee reads: open this file once in Eagle 6 or later, or in Fusion 360 Electronics, re-save it, and retry with the re-saved file. Anything that opens the pre-6 binary format and writes Eagle XML or a KiCad board will do; failing that, the design's gerbers are the other way in. See https://hauksbee-docs.eoghancollins0.workers.dev/docs/ingest/eagle
 ```
 
 A file that is no board format at all gets the accepted-format list instead,

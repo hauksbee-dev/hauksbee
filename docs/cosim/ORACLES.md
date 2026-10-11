@@ -7,8 +7,7 @@ these honest, we cross-check the results against independent, authoritative
 tools we call **oracles**. hauksbee uses an oracle only for *verification*,
 never at runtime: hauksbee's whole point is that it needs no EDA tool to
 produce a verdict. The oracle is how we prove that verdict is right, and how
-the Tarski meta-lesson ("presume a hauksbee defect until disproven") gets
-judged.
+the rule "presume a hauksbee defect until disproven" gets judged.
 
 ## Why oracles are NOT bundled into hauksbee
 

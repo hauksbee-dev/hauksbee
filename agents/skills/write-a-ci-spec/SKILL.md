@@ -110,7 +110,7 @@ Exit codes for `hauksbee-ci run` (different from `hauksbee run`):
 | 0 | GREEN: every assertion held, or every failure is covered by an active waiver |
 | 1 | RED: an assertion failed with no active waiver |
 | 2 | spec or board error, usage error, or an output file that could not be written |
-| 3 | INVALID: an aborted solve, a window over a failed solve span, or an assertion whose evidence is `undermined` (for example an unmodelled active part that can drive the asserted net) |
+| 3 | INVALID: an aborted solve, a window over a failed solve span, an assertion whose evidence is `undermined` (for example an unmodelled active part that can drive the asserted net), or a host-paced clock (ESP32 QEMU) cannot judge the claim: firmware content that is absent at the end of the run, or a level that holds only inside its window (`INVALID: host-paced clock:`) |
 
 In `--json`, read `passed`, `assertions_passed`, and `run_valid` together.
 On exit 3, `assertions_passed` can be `true` while `passed` and `run_valid`

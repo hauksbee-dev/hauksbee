@@ -1430,7 +1430,7 @@ The detail for each follows.
 | 0 | every assertion held, or every failure is covered by an active waiver (GREEN) |
 | 1 | at least one assertion failed and no active waiver covers it (RED) |
 | 2 | spec / board error (desynced spec, missing board, bad TOML), a usage error, or a requested output file (`--junit`, `--sarif`) that could not be written |
-| 3 | invalid for analysis: the analog solve aborted, an assertion's evaluation window overlapped a failed solve span, or an assertion's evidence is `undermined`, so the result is not trustworthy and the run refuses to pretend |
+| 3 | invalid for analysis: the analog solve aborted, an assertion's evaluation window overlapped a failed solve span, an assertion's evidence is `undermined`, or a host-paced clock (ESP32 QEMU) cannot judge the claim: firmware content that is absent at the end of the run, or a level that holds only inside its window (`INVALID: host-paced clock:`); the result is not trustworthy and the run refuses to pretend |
 
 `undermined` is not a flag anyone opts into; it is derived from the assumptions
 on an assertion's own causal path, and two of those kinds are worth naming here
