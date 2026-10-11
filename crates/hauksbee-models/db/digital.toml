@@ -9897,8 +9897,10 @@ missing = ["dominant_transmit", "bus_levels", "vref_output", "silent_mode", "tim
 # ── CH340X USB-to-UART bridge (MSOP-10) ──────────────────────────────────────
 # Source: WCH CH340 datasheet V3D (CH340DS1), sha256
 # 4d7b150edfda88e44eb8f499c22693318666968125ff17f652ca9983d9929e5e.
-# p.3 pin table (MSOP-10 column; the E/X variants carry RTS# on pin 4 and
-# TNOW/DTR# on pin 6, as the board symbol draws it); Section 6.1 absolute
+# pp.3-4 pin table (ESSOP10 column: UD+ 1, UD- 2, GND 3, DTR# 4, CTS# 5, RTS# 6,
+# VCC 7, TXD 8, RXD 9, V3 10; for the CH340X the table and Section 5.3 make pin 6
+# TNOW, switchable to DTR#, and the board symbol draws pin 4 as RTS#, so the two
+# modem-output pads 4 and 6 are named neutrally); Section 6.1 absolute
 # maximum VCC 6.0 V; Section 6.2 (5 V) ICC 7 mA typ / 20 max; Section 6.3
 # (3.3 V, VCC 3.1-3.6 V) ICC 4 mA typ / 12 max. The card interpolates the
 # typical supply current linearly between the 3.3 V and 5 V rows.
@@ -9908,7 +9910,7 @@ kind = "digital"
 description = "CH340X USB-to-UART bridge, MSOP-10 (supply draw only)"
 
 [models.match]
-value_re = "(?i)^CH340[XE]$"
+value_re = "(?i)^CH340X$"
 
 [models.params]
 icc_3v3_a = 0.004
@@ -9920,9 +9922,9 @@ warning = "source-bound supply model only: the typical supply current (4 mA at 3
 "1" = "ud_p"
 "2" = "ud_m"
 "3" = "gnd"
-"4" = "rts_n"
+"4" = "modem_out4"
 "5" = "cts_n"
-"6" = "dtr_n"
+"6" = "tnow_dtr_n"
 "7" = "vcc"
 "8" = "txd"
 "9" = "rxd"
@@ -9944,7 +9946,7 @@ validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://www.wch-ic.com/download/file?id=79"
 title = "WCH CH340 Datasheet (USB to Serial Port chip CH340), Version 3D"
-locator = "Section 4 Pin, MSOP-10 column p.3; Section 6.1 p.8 absolute maximum; Sections 6.2 and 6.3 pp.8-9 supply current"
+locator = "Section 4 Pin, ESSOP10 column pp.3-4; Section 6.1 p.8 absolute maximum; Sections 6.2 and 6.3 pp.8-9 supply current"
 sha256 = "4d7b150edfda88e44eb8f499c22693318666968125ff17f652ca9983d9929e5e"
 [[models.source.uncertainty]]
 status = "interval"
