@@ -43,9 +43,15 @@ fn spawn(command: &str, args: &[&str]) -> Option<Child> {
 }
 
 /// A command's stdout, or `None` if it fails to start or outlives `secs` (killed).
+/// Stdout is drained as it comes, so a long report cannot fill the pipe and stall.
 fn output(command: &str, args: &[&str], secs: u64) -> Option<String> {
     let mut child = spawn(command, args)?;
     drop(child.stdin.take());
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).ok().map(|_| text)
+    });
     let deadline = Instant::now() + Duration::from_secs(secs);
     while child.try_wait().ok()?.is_none() {
         if Instant::now() > deadline {
@@ -55,9 +61,7 @@ fn output(command: &str, args: &[&str], secs: u64) -> Option<String> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let mut text = String::new();
-    child.stdout.take()?.read_to_string(&mut text).ok()?;
-    Some(text)
+    reader.join().ok()?
 }
 
 /// How a Claude Code CLI bills: an `ANTHROPIC_API_KEY` or an API-key sign-in
@@ -97,7 +101,8 @@ pub fn billing_from_claude_status(status: &Value) -> Billing {
 #[must_use]
 pub fn read(tool: &str, command: &str) -> Option<Reading> {
     let reading = match tool {
-        "claude-code" => output(command, &["-p", "/usage"], 60).map(|t| parse_claude_usage(&t)),
+        // `/usage` also summarises local session history: ~30 s idle, more under load.
+        "claude-code" => output(command, &["-p", "/usage"], 120).map(|t| parse_claude_usage(&t)),
         "codex" => read_codex(command).map(|v| parse_codex_limits(&v)),
         _ => None,
     };
