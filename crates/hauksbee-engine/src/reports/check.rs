@@ -779,8 +779,8 @@ pub(crate) fn drc_gate_fails(
 ///
 /// Every section of this report can come back healthy on a board with a real
 /// fault in it, because these checks read the copper and the netlist and never
-/// run the board. The flagship regression this project was built around is
-/// exactly that shape: a rail that collapses on a fuzzed power-up, invisible to
+/// run the board. The regression this project was built around is exactly
+/// that shape: a rail that collapses on a fuzzed power-up, invisible to
 /// any static check and found only by booting the firmware against the solved
 /// circuit.
 ///

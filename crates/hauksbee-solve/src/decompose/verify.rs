@@ -152,7 +152,7 @@ pub struct TearCertificate {
     /// True when a monolithic oracle exists (the fused solve converges), so
     /// the numeric tear-vs-monolith gate can actually run. False means the
     /// certificate rests on the structural proofs alone, which is the honest
-    /// statement for boards like the flagship whose monolith never converges.
+    /// statement for large boards whose monolith never converges.
     /// Set by the orchestrator once it has tried; None until then.
     pub monolith_checkable: Option<bool>,
     /// Sense boundaries that could NOT be certified (a sensed node owned by
@@ -292,8 +292,8 @@ impl Decomposition {
     /// nodes the run-time environment drives (co-simmed MCU pins, bench
     /// stimuli), which the netlist alone cannot know are driven. A sensed
     /// node in this list is certified by declaration instead of flagged as a
-    /// floating sense net (the analysis probe's finding 2: `ENABLE_MEAS` nets
-    /// on the flagship are firmware-driven, conducted by nothing in an
+    /// floating sense net (the analysis probe's finding 2: enable/measure nets
+    /// on a large board can be firmware-driven, conducted by nothing in an
     /// analysis-only bind). The certificate records the trust explicitly in
     /// `exogenous_boundaries`, and any executor must actually drive every
     /// node recorded there or refuse to run.
@@ -371,7 +371,7 @@ impl Decomposition {
         // (the free-tear path covers inter-group edges; intra-group sensing
         // needs no tear), (b) absorbed into the senser by the driver pass, or
         // (c) a torn balance rail. Anything else is a floating sense net: the
-        // exact failure shape of the STEP-1 dead-membrane bug, and the reason
+        // exact failure shape of the STEP-1 dead-integrator bug, and the reason
         // this check exists.
         // "Conducted" covers more than it may look like: an ideal source is a
         // device with conduction terminals, so a source-pinned node is owned
@@ -379,7 +379,7 @@ impl Decomposition {
         // whose nodes are conducted by the driver group, so it cannot rescue
         // an unconducted node. What remains uncertifiable is a sensed node no
         // device conducts and no rail tear owns: a genuinely floating sense
-        // net, which is the STEP-1 dead-membrane failure shape.
+        // net, which is the STEP-1 dead-integrator failure shape.
         let torn_rails: std::collections::BTreeSet<NodeId> = records
             .iter()
             .filter(|r| matches!(r.kind, TearKind::Balance | TearKind::Stiff))

@@ -4,7 +4,7 @@
 //! The hunt: a board control net whose logic level is *undefined* at power-on
 //! (an MCU GPIO that is Hi-Z at reset driving a gate/enable, a latch output with
 //! no reset) that, in some boot state, collapses a rail or drives a part beyond
-//! its rating. This is the Tarski-brownout class (`flagship_brownout.rs`): one
+//! its rating. This is the brownout class seen on the large internal test board: one
 //! undefined boot bit, compound interactions, a rail down.
 //!
 //! Method, per board: identify the genuinely-undefined boot control nets

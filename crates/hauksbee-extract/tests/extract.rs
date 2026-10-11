@@ -184,7 +184,7 @@ fn tarski_netlist() {
     let board = ExtractedBoard::from_kicad_netlist(&src).unwrap();
     assert_eq!(board.components.len(), 3442);
     assert!(board.nets.len() > 2000, "got {}", board.nets.len());
-    // The known Tarski structure: 90 shift registers, 19 comparators.
+    // The known structure of this netlist (shift registers and comparators).
     let count = |pred: &dyn Fn(&hauksbee_extract::Component) -> bool| {
         board.components.iter().filter(|c| pred(c)).count()
     };

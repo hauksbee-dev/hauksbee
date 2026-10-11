@@ -202,7 +202,7 @@ fn connected_components(nl: &Netlist, comps: &[usize], cut: &HashSet<NetId>) -> 
 ///
 /// A block above `cfg.max_block_size` is several functional blocks daisy-chained
 /// through shared routing/signal nets. On this kind of board the discriminator
-/// is not fanout (a synapse's internal junction and a bridging net can both be
+/// is not fanout (a block's internal junction and a bridging net can both be
 /// 2-pin) but **geometry**: a real functional block's internal nets are
 /// physically compact (sub-millimetre to a few mm, pads of adjacent parts),
 /// whereas a net that bridges two distant blocks spans tens of millimetres. We

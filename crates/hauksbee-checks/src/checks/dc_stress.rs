@@ -4,10 +4,11 @@
 //! card's ratings, but only while a co-simulation runs. A static check never
 //! got that far, and on a large board the co-simulation may not either, so an
 //! overstress the board sits in from the moment it powers up went unreported.
-//! The Tarski inhibitory cell is the case that found it: a weight switch
-//! drives a transistor's base from a 5 V rail through nothing but its own
-//! channel, so about 250 mA flows through the base-emitter junction in either
-//! switch state. A solved cell flagged it; `check` printed a clean verdict.
+//! A switched-mirror cell on the large internal test board is the case that
+//! found it: an analog switch drives a transistor's base from a supply rail
+//! through nothing but its own channel, so a large current flows through the
+//! base-emitter junction in either switch state. A solved cell flagged it;
+//! `check` printed a clean verdict.
 //!
 //! This check binds the board, solves its DC operating point once, and runs
 //! the same monitor over that state as a steady state (see

@@ -35,7 +35,7 @@ build.
 ## The DSL
 
 A line-oriented, AI- and human-editable format. Repeated hardware blocks the
-decompiler found (a synapse instanced 90 times, a neuron a dozen) become `fn`
+decompiler found (one sub-circuit instanced many times, another a dozen) become `fn`
 blocks. `main` declares the nets and instantiates the blocks, with every
 component carrying its concrete pads and per-pad net assignments:
 
@@ -268,7 +268,7 @@ fn main {
     pin J1 edge left             # hold connector J1 against the left edge
     pin J2 edge right
     lock U5                      # never move the MCU; keep its placement
-    space fn block_synapse 8     # every synapse instance gets 8 mm clear
+    space fn block_cell 8        # every block_cell instance gets 8 mm clear
     # ... the nets and comps
 }
 ```
@@ -285,7 +285,7 @@ comp TP1 lib "TestPoint:TestPoint_Pad_D1" val "TP" layer "F.Cu" at 0 0 rot 0 {
 }
 
 fn main {
-    space fn block_synapse 8      # every synapse instance gets 8 mm breathing room
+    space fn block_cell 8         # every block_cell instance gets 8 mm breathing room
     # ... the rest of the board
 }
 ```

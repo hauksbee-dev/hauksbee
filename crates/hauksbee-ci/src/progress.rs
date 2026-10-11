@@ -1,7 +1,7 @@
 //! Say what a run is doing while it does it.
 //!
 //! A co-simulation is minutes of work with nothing to show until it finishes:
-//! on the flagship board a newcomer's first run takes over three minutes. A
+//! on a large board a newcomer's first run takes minutes. A
 //! silent process that runs that long is indistinguishable from a hung one, and
 //! the reasonable thing for a first-time user to do with a hung process is kill
 //! it.

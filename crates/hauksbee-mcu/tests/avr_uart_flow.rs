@@ -1,6 +1,6 @@
 //! UART RX flow control and core reset, against a real emulated `ATmega328P`.
 //!
-//! Guards two defects on the flagship AVR + host-serial path:
+//! Guards two defects on the AVR + host-serial path:
 //!
 //! 1. simavr's RX fifo is 64 bytes, so raising every byte onto `UART_IRQ_INPUT`
 //!    at a single sim instant loses byte 65 onward of any host record and

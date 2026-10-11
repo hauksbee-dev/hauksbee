@@ -13,7 +13,7 @@
 //!    `digital` event layer, NOT solved in MNA.
 //!
 //! The [`scheduler::Scheduler`] steps all three in lockstep chunks
-//! (generalizing the Tarski-Emulator pattern); [`peripherals`] and
+//! (generalizing an earlier board-specific emulator's lockstep pattern); [`peripherals`] and
 //! [`responders`] are the sensors, actuators and bit-banged bus slaves that
 //! hang off the MCU pins; and [`engine::HauksbeeEngine`] exposes the whole
 //! thing behind `hauksbee-frontdoor-api`'s `Engine` trait.

@@ -227,10 +227,10 @@ pub fn comparator_relaxation(c: &mut Circuit, tag: &str, tpd_s: f64) -> (NodeId,
 ///
 /// `K1` is [`comparator_relaxation`] (tag `1`); its output drives `K2`'s
 /// inverting input directly against 2.5 V, so `o2` is high through `K1`'s
-/// ~4 us low phase; `o2` charges an integrate-and-fire membrane `m` (2 kOhm,
+/// ~4 us low phase; `o2` charges an integrate-and-fire node `m` (2 kOhm,
 /// 1 nF) into `K3` (trip 2.1 V rising, 1.9 V falling), whose fire is
 /// stretched through a diode onto `s` (10 kOhm, 10 pF) and closes a 10 ohm
-/// reset switch across its own membrane, as a spiking neuron does.
+/// reset switch across its own integrator, as a self-resetting oscillator does.
 #[must_use]
 pub fn comparator_cascade(tpd_s: f64) -> Circuit {
     let mut c = Circuit::new();

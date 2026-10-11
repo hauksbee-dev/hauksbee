@@ -1,7 +1,7 @@
 //! Power-ramp (pseudo-transient continuation) gates for the `FromZero` /
 //! `Ramped` power-on start.
 //!
-//! The motivating case (ledger e57c0f0, `tarski_general_e2e.rs`): on the flagship,
+//! The motivating case (ledger e57c0f0): on a large multi-stage board,
 //! some solve groups have NO reachable DC operating point (self-resetting
 //! oscillator shapes), so the honest way to carry them is to power on: sources
 //! ramp from zero, the state integrates from zero, and there is no DC solve to

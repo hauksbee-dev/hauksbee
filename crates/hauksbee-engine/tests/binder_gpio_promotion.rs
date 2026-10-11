@@ -1,11 +1,11 @@
 //! Dynamic promotion of analog-capable MCU pins (05-cosim-fidelity §4.1,
-//! closes `TARSKI_RESULTS` §5.2).
+//! closes a gap found on the large internal test board).
 //!
 //! On the Arduino Nano the analog header A0..A5 are dual-purpose: ADC channels
-//! that are also ordinary GPIO on PC0..PC5. The Tarski board drives A2 = OE'_S
-//! and A3 = SRCLR'_S as DIGITAL control for the 74HC595 chain. Claiming any
+//! that are also ordinary GPIO on PC0..PC5. A board may drive some of them
+//! as DIGITAL control (output enable, clear) for a 74HC595 chain. Claiming any
 //! "a0".."a7" role as an ADC channel and stamping no output driver leaves those
-//! nets floating, and a floating-low SRCLR'_S holds the whole chain cleared.
+//! nets floating, and a floating-low clear line holds the whole chain cleared.
 //!
 //! The fix binds an analog-capable pin BOTH ways: it keeps the ADC channel
 //! mapping AND stamps a tri-stated GPIO driver. The driver starts disabled (a

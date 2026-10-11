@@ -23,9 +23,9 @@
 //!     against the CORRECTED ratio, because only that is a claim about the
 //!     solver, and only that is honest to market.
 //!   * Accuracy against ngspice is a claim on the rectifier and NOT a claim on
-//!     the synapse array. The two engines' voltage-switch models have different
+//!     the switched-mirror array. The two engines' voltage-switch models have different
 //!     mid-transition conductance shapes, which on a 10 µs edge into a high-gain
-//!     current mirror skews the membrane's turn-off by microseconds. That
+//!     current mirror skews the integrator's turn-off by microseconds. That
 //!     disagreement is real (it survives a 50x finer time grid and is identical
 //!     with partitioning off, so it is not a grid or a decomposition artifact).
 //!     It is therefore reported as a disclosed DRIFT CEILING, not as agreement,
@@ -70,7 +70,7 @@ const RECTIFIER_SPEEDUP_FLOOR: f64 = 3.0;
 /// Measured 1.9e-3.
 const RECTIFIER_NGSPICE_BOUND: f64 = 1e-2;
 
-/// Startup-corrected speedup floor, 90-block synapse array, 400 µs.
+/// Startup-corrected speedup floor, 90-block switched-mirror array, 400 µs.
 /// Measured 10.4-16.7x corrected (10.6-17.0x raw).
 const SYNAPSE_SPEEDUP_FLOOR: f64 = 3.5;
 /// Ceiling on the DISCLOSED disagreement with ngspice on `v(mem0)`. Not an
@@ -80,7 +80,7 @@ const SYNAPSE_NGSPICE_DRIFT_CEILING: f64 = 12.0;
 /// Worst relative error of the partitioned solve against our own monolithic
 /// reference, over the WHOLE `v(mem0)` waveform. An ACCURACY CLAIM. Measured
 /// 2.0e-3, which is a different and stricter measure than the 1e-7 the docs
-/// quote: that figure is the FINAL membrane value (gated separately below).
+/// quote: that figure is the FINAL integrator value (gated separately below).
 /// A worst-case over a switching edge is dominated by a sub-step timing
 /// difference in where the two paths place the transition, not by drift in the
 /// settled answer.
@@ -397,7 +397,7 @@ fn measure_synapse(bin: &std::path::Path, startup: Duration, blocks: usize) -> C
         .expect("monolithic reference solves");
     let mono_series = series(&mono, &syn.circuit, "mem0");
     let self_rel = oracle::worst_rel_error(&ours_series, &mono_series);
-    // The settled answer, compared across every block's membrane rather than
+    // The settled answer, compared across every block's integrator rather than
     // just mem0: a decomposition that is exact on one block and wrong on the
     // ninetieth is not exact.
     let mut self_final_rel = 0.0f64;

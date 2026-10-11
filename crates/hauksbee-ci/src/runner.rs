@@ -1259,8 +1259,8 @@ fn merge_protection_trip_nets(windows: &mut [ScenarioWindow], asserts: &[crate::
 /// Runs post-bind (the bound circuit is what decides trackability), before the
 /// engine is built, so the spec is rejected up front rather than reported green.
 ///
-/// A multi-unit package (a resistor array RN1, a transistor array IC3906)
-/// stamps per-unit devices and metas (`RN1_e1`, `IC3906_q0`), never the bare
+/// A multi-unit package (a resistor array RN1, a transistor array U3)
+/// stamps per-unit devices and metas (`RN1_e1`, `U3_q0`), never the bare
 /// ref, so both gates accept a bare ref whose units are tracked, through the
 /// same unit-key test the assertion consumers use ([`key_belongs_to_ref`]).
 fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), SpecError> {

@@ -81,7 +81,7 @@ struct Board {
 }
 
 /// The gated board set: the §4 benchmark subset at smoke scale (the 5-minute
-/// marches and the flagship full inference stay out). `rc_ladder_1k` plus the
+/// marches and full-board runs stay out). `rc_ladder_1k` plus the
 /// mirror array at 24/90/240, both torn and monolithic.
 fn boards() -> Vec<Board> {
     let mut v = Vec::new();

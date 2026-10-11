@@ -104,7 +104,7 @@ fn rc_ladder_1000_stages_10k_steps() {
     println!("  NOTE: a single 1000-stage ladder is one large linear island; the sparse");
     println!("  MNA engine is already O(n)/step on its tridiagonal pattern, so Auto keeps");
     println!("  it monolithic. The closed-form exponential wins on MANY SMALL islands");
-    println!("  (see synapse_array) and on equal-accuracy-fewer-steps (below).");
+    println!("  (see the mirror-array benchmark) and on equal-accuracy-fewer-steps (below).");
 
     assert!(
         max_abs < 1e-6,
@@ -117,7 +117,7 @@ fn rc_ladder_1000_stages_10k_steps() {
 /// size, so it reaches the monolithic trapezoidal solution's accuracy with far
 /// fewer steps. Here a single-pole RC: the exponential path takes 50 giant
 /// steps and still matches a 5000-step monolithic run to <1e-3, a 100x step
-/// reduction. This is the Tarski trick's actual leverage.
+/// reduction. This is the closed-form trick's actual leverage.
 #[test]
 #[ignore = "benchmark: prints timings, run on demand"]
 fn small_rc_exact_with_fewer_steps() {
@@ -215,7 +215,7 @@ fn rectifier_wallclock_vs_ngspice() {
     }
 }
 
-// --- synapse array: the partitioning win ------------------------------------
+// --- mirror array: the partitioning win ------------------------------------
 
 #[test]
 #[ignore = "benchmark: prints timings, run on demand"]
@@ -238,7 +238,7 @@ fn synapse_array_partitioned_vs_monolithic() {
     let (mono, mono_t) = run(Partitioning::Off);
     let (parted, part_t) = run(Partitioning::Auto);
 
-    // Accuracy: membrane voltages, partitioned vs monolithic.
+    // Accuracy: load-node voltages, partitioned vs monolithic.
     let mut max_rel = 0.0f64;
     for name in &syn.membrane_nodes {
         let a = mono.final_node(c, name).unwrap_or(0.0);
@@ -257,7 +257,7 @@ fn synapse_array_partitioned_vs_monolithic() {
         "  speedup    : {:.2}x",
         mono_t.as_secs_f64() / part_t.as_secs_f64()
     );
-    println!("  max rel error (membranes, partitioned vs monolithic): {max_rel:.3e}");
+    println!("  max rel error (load nodes, partitioned vs monolithic): {max_rel:.3e}");
 
     // ngspice on the same generated netlist.
     let ngspice = "/opt/homebrew/bin/ngspice";

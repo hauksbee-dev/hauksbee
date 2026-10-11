@@ -197,7 +197,7 @@ deck here at all.
 - **rlc_series**: series RLC underdamped step response
 - **s8050_datasheet_point**: S8050 NPN at the datasheet's 50 mA VBE test point
 - **schottky_1n5817_two_points**: 1N5817 at 1.0 A and 3.1 A, the two forward points Vishay 88525 publishes
-- **switch_bjt_mirror_membrane**: Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block synapse deck, held on both flat regions and cross-checked through both edges.
+- **switch_bjt_mirror_membrane**: Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block switched-mirror deck, held on both flat regions and cross-checked through both edges.
 - **switch_gate_drive_edge**: Relay gating an RC gate load: turn-on instant and gate rise against the closed form v(g) = 5*(1 - exp(-(t - 10.6us)/11us)).
 - **switch_sw_thresholds**: SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH.
 - **temp_diode_tc_85**: Diode drops and a TC1 divider at .temp 85: IS(T), Vt(T) and R(T) against exact closed forms.

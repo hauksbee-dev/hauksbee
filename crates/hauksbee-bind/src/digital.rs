@@ -159,14 +159,14 @@ impl LogicLevels {
 }
 
 /// The `[models.logic]` spec of the cross-coupled NOR SR latch the binder
-/// synthesizes for a 74HC02 latch pair (the Tarski spike recorder).
+/// synthesizes for a 74HC02 latch pair (a pulse-capture register).
 ///
 /// Roles `set` (active-high SET), `reset` (active-high RESET), output `q`
 /// (`qb` is the internal cross-couple node, unwired on the board).
 /// Active-LOW Q semantics: at reset Q is HIGH (idle), a SET pulse drives Q
 /// LOW and the cross-couple HOLDS it LOW until the next RESET, so the
 /// firmware-driven 74HC165 readback samples the level the real board's latch
-/// Q presents (idle HIGH -> 0xFFC0, captured spike LOW). The cross-coupled
+/// Q presents (idle HIGH, captured pulse LOW). The cross-coupled
 /// `comb` pair resolves by the evaluator's fixpoint machinery; `init` seeds
 /// the cleared power-on state (a symmetric seed would be the classic SR
 /// metastability).
@@ -784,7 +784,7 @@ impl DigitalComponent {
 /// across). Chips not reachable from any head form their own singleton chains.
 ///
 /// This is the single source of truth for chain ordering, shared by the
-/// scheduler's edge-driven chain controllers and the `tarski_inference` example.
+/// scheduler's edge-driven chain controllers and the inference examples.
 pub fn order_595_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
     order_serial_chains(digital, DigitalComponent::chains_as_595, "qh_serial", "ser")
 }
@@ -860,8 +860,7 @@ fn order_serial_chains(
 
 /// Flattened head-to-tail order of every 74HC595 chip, all chains concatenated.
 ///
-/// Kept for the `tarski_inference` example's single-chain verification (the
-/// board has exactly one 90-chip chain). The scheduler uses
+/// Kept for single-chain verification on boards with exactly one chain. The scheduler uses
 /// [`order_595_chains`] instead so independent chains stay separate.
 #[must_use]
 pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
@@ -1311,8 +1310,8 @@ mod tests {
     const Q_OUTPUTS: [&str; 8] = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"];
 
     /// An `n`-chip 74HC595 daisy chain (shared `SRCLK/RCLK/SRCLR_n`, each
-    /// `qh_serial` feeding the next ser) bound to the Tarski GPIO map: SRCLK on
-    /// PB5, RCLK on PD6, `SRCLR_n` on PC3, SER on PB3.
+    /// `qh_serial` feeding the next ser) bound to a typical AVR GPIO map (SRCLK,
+    /// RCLK, `SRCLR_n` and SER each on a fixed port pin).
     fn build_chain(circuit: &mut Circuit, n: usize) -> (Vec<DigitalComponent>, Hc595Chain) {
         let model = model("74HC595");
         let shift_clk = circuit.node("SRCLK");
@@ -1686,7 +1685,7 @@ mod tests {
         assert!(chips[0].drivers.values().all(|d| d.enabled));
     }
 
-    /// The Tarski 2-chip 165 read chain: U15002 (head) feeds MISO, U15001 is
+    /// A 2-chip 165 read chain: the head chip feeds MISO, the other is
     /// upstream. Parallel inputs in `*_hi` are driven to 5 V, the rest to GND.
     fn build_165_chain(
         circuit: &mut Circuit,
@@ -1792,7 +1791,7 @@ mod tests {
         assert!(chain.pos < 16);
     }
 
-    /// 74HC02 NOR SR spike latch: idle Q HIGH, a SET pulse drives Q LOW and
+    /// 74HC02 NOR SR pulse latch: idle Q HIGH, a SET pulse drives Q LOW and
     /// holds it, RESET returns Q HIGH.
     #[test]
     fn nor_latch_spike_polarity_idle_high_spike_low_held() {

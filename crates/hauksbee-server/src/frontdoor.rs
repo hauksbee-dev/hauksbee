@@ -65,8 +65,8 @@ fn reject_cross_site(headers: &HeaderMap) -> Option<JsonResponse> {
     })
 }
 
-/// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
-/// timid cap (the 3,443-component Tarski `InputSystem` .`kicad_pcb` is 44 MiB), and
+/// Largest board upload accepted (256 MiB). Real large layouts blow past a
+/// timid cap (a 3,000-component internal test board's .`kicad_pcb` is tens of MiB), and
 /// the server is localhost-only, so the limit exists solely to stop a
 /// pathological upload from exhausting memory. When it does trip, axum answers
 /// with a plain-text 413 ("Failed to buffer the request body"), which is why

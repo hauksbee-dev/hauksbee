@@ -53,7 +53,7 @@ export function useBoardPointer({
   // pan (travelled). Null once a second finger lands: a pinch is never a tap.
   const touchStart = useRef<{ x: number; y: number } | null>(null)
 
-  // Computed once per board: a 3,000-part flagship must not rebuild the part
+  // Computed once per board: a 3,000-part board must not rebuild the part
   // extents on every click.
   const boxes = useMemo(() => (board ? footprintHitBoxes(board) : []), [board])
 

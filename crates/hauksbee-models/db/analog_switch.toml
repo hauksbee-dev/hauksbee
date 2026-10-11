@@ -200,7 +200,7 @@ basis = "TI SN74LVC1G3157 SCES424O, Recommended Operating Conditions, VCC 1.65 V
 # WHAT THAT COSTS DEPENDS ON THE BOARD, and it is worth being exact rather than
 # dramatic about it. Where a board grounds BOTH pads, the two roles land on the same
 # node and the transposition is invisible; the only board in this tree that fits the
-# part (Tarski's input system, 19 instances of it as a membrane-reset switch) does
+# part (a large internal test board, using it as a comparator-driven reset switch) does
 # exactly that, so its behaviour is unchanged by this correction. Where a board uses
 # pad 2 as a signal, which is the ordinary use of a BILATERAL switch and the reason
 # the pin exists, the old map stamped a ~7 Ohm switch from pad 1 onto the GROUND

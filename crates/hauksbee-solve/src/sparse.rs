@@ -1189,8 +1189,8 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
 
     // The next pivot is the live vertex of least degree, the lowest index on a
     // tie: exactly the first element of this `(degree, vertex)` set. A linear
-    // scan per elimination made the ordering O(n^2) and, on the ~800-IC Tarski
-    // board, half of every co-simulation chunk's wall time.
+    // scan per elimination made the ordering O(n^2) and, on a board with
+    // hundreds of ICs, half of every co-simulation chunk's wall time.
     let mut queue: std::collections::BTreeSet<(usize, usize)> = (0..n)
         .filter(|&v| !eliminated[v])
         .map(|v| (deg[v], v))

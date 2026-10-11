@@ -5,7 +5,7 @@
 //! fixtures) and the plan's named high-Z sense-net stress fixture with bypass
 //! OFF (the reference) and ON, on identical fixed-step grids so the accepted
 //! samples align one-to-one, and assert the waveforms agree within the
-//! reltol-scaled convergence tolerance. The stiff flagship-shaped fixture
+//! reltol-scaled convergence tolerance. The stiff large-board-shaped fixture
 //! (the `linesearch_fixture` board, TransientDyn-armed, adaptive) is compared
 //! on its physics verdicts (spike count, spike times) because an adaptive
 //! grid legitimately re-times under any iterate-path change.
@@ -145,7 +145,7 @@ fn mirror_array_240_bypass_matches_reference() {
     mirror_array_gate(240, 60e-6);
 }
 
-/// The flagship-shaped stiff fixture (the `linesearch_fixture` board:
+/// The large-board-shaped stiff fixture (the `linesearch_fixture` board:
 /// integrate-and-fire relaxation oscillator, SPDT pair, `TransientDyn` armed,
 /// staged regularizers + event retry + Armijo line search, `FromZero`,
 /// adaptive). This board exists in `tests/linesearch_fixture.rs`, which must
@@ -185,9 +185,9 @@ fn spiking_board() -> Circuit {
         (10.0, 1e9),
     );
     crate::shared::add_resistor(&mut c, "RD", com, NodeId::GROUND, 50.0);
-    // A junction on the membrane so the stiff path has a bypassable device
-    // in it (the linesearch fixture itself is diode-free; the flagship board
-    // is not). Anode at the 1 V rail, cathode at the membrane: reverse-biased
+    // A junction on the integrator so the stiff path has a bypassable device
+    // in it (the linesearch fixture itself is diode-free; real boards
+    // are not). Anode at the 1 V rail, cathode at the integrator: reverse-biased
     // (quiescent) for the whole inter-spike charge, conducting only in the
     // brief post-reset dip below ~0.45 V; the quiescent-most-of-the-time
     // shape bypass targets, without clamping the firing ramp.
@@ -298,9 +298,9 @@ fn stiff_fixture_bypass_preserves_spike_train() {
 }
 
 /// Gate (c): the plan's named high-Z stress fixture, a weakly-driven
-/// sense net in the W1 §2.4 dead-membrane shape. A fixed source behind a
-/// large series resistance charges a membrane cap THROUGH A DIODE; the
-/// membrane's only other connection is a 1 GΩ leak, so near the comparator
+/// sense net in the W1 §2.4 dead-integrator shape. A fixed source behind a
+/// large series resistance charges an integrator cap THROUGH A DIODE; the
+/// integrator's only other connection is a 1 GΩ leak, so near the comparator
 /// threshold every accepted step moves the node by far less than bypasstol,
 /// a tiny terminal move that carries the entire signal (the diode's charge
 /// current IS the information). If bypass ever wrongly froze that current,
@@ -379,9 +379,9 @@ fn high_z_verdict(c: &Circuit, wf: &Waveforms) -> (usize, Option<f64>, f64) {
 
 #[test]
 fn high_z_sense_net_verdict_unchanged() {
-    // Super-threshold drive: the membrane must cross 0.4 V and fire once.
+    // Super-threshold drive: the integrator must cross 0.4 V and fire once.
     // Sub-threshold drive (0.35 V < the 0.4 V threshold, whatever the diode
-    // drops): the membrane can never reach threshold, never fires.
+    // drops): the integrator can never reach threshold, never fires.
     for (drive, should_fire) in [(1.2, true), (0.35, false)] {
         let c = high_z_board(drive);
         let mk = |bypass| SolverOptions {

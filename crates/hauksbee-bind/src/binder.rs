@@ -163,7 +163,7 @@ pub struct BoundBoard {
     /// node that occupies `NodeId(0)` in the circuit. Indexing it by `NodeId.0`
     /// is therefore OFF BY ONE and relabels every node as its successor, which
     /// is exactly what produced a spurious "comparator +IN -> SCL" mis-wiring
-    /// claim on the Tarski board. To turn a `NodeId` back into a net name, use
+    /// claim on the large internal test board. To turn a `NodeId` back into a net name, use
     /// [`Circuit::node_name`] (the circuit's authoritative reverse map).
     pub net_names: Vec<String>,
     pub digital: Vec<DigitalComponent>,
@@ -2488,8 +2488,8 @@ fn pin_role_summary(pins: &std::collections::BTreeMap<String, String>) -> String
 
 /// Datasheet-grounded SPICE parameters for a generic 1N4148 small-signal
 /// switching diode, used by the value-"D" diode fallback. Values are the
-/// canonical Philips/Vishay 1N4148 model (the part on Tarski is LCSC C2099 =
-/// JSCJ 1N4148W in SOD-323, a standard 1N4148-family switching diode):
+/// canonical Philips/Vishay 1N4148 model (e.g. LCSC C2099 = JSCJ 1N4148W in SOD-323,
+/// a standard 1N4148-family switching diode):
 ///   IS=4.352e-9 A, N=1.906, RS=0.6458 Ohm, CJO=7.048e-13 F, VJ=0.869 V,
 ///   M=0.0306, TT=3.48e-9 s, BV=110 V.
 /// Source: Philips/Vishay 1N4148 .MODEL card (the de-facto reference set,
@@ -6445,7 +6445,7 @@ fn bind_mcp4728_dac(
 ) -> (BindOutcome, Option<String>) {
     // Output series resistance: datasheet ROUT ~1 Ω (normal mode). A small,
     // non-zero value keeps the MNA well-conditioned while presenting a stiff
-    // source onto the synapse set-point nets.
+    // source onto the set-point nets.
     let rout = model.params.get_f64("rout").unwrap_or(1.0);
     let vref = model.params.get_f64("vref_int").unwrap_or(2.048);
     let gain = model.params.get_f64("gain").unwrap_or(2.0).round() as u8;
@@ -6548,7 +6548,7 @@ fn bind_digital(
     roles: &HashMap<String, NodeId>,
     digital: &mut Vec<DigitalComponent>,
 ) -> Result<(), String> {
-    // A quad/dual NOR gate (74HC02) wired as cross-coupled SR spike latches: if
+    // A quad/dual NOR gate (74HC02) wired as cross-coupled SR pulse-capture latches: if
     // any gate pair forms a NOR latch (one gate's output net == the other gate's
     // input net and vice-versa), bind one NorLatch behavioral component per latch
     // and return. Falls through to the generic buffer path if no latch found.
@@ -6651,14 +6651,13 @@ fn bind_digital(
     }
 }
 
-/// Detect and bind cross-coupled NOR SR latches on a 74HC02 (the Tarski spike
-/// recorder). Each gate `g<n>` has output role `g<n>y` and input roles `g<n>a`,
+/// Detect and bind cross-coupled NOR SR latches on a 74HC02 (a pulse-capture
+/// register). Each gate `g<n>` has output role `g<n>y` and input roles `g<n>a`,
 /// `g<n>b`. A latch is a pair of gates (gQ, gQb) where `gQ.y == gQb.<one input>`
 /// and `gQb.y == gQ.<one input>` (the cross-couple). For the latch:
-///   - `reset` = the gate whose NON-cross-couple input net name contains "RESET"
-///     (`RESET_SR`), that gate's output is Qb (internal);
-///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
-///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
+///   - `reset` = the gate whose NON-cross-couple input net name contains "RESET", that gate's output is Qb (internal);
+///   - the OTHER gate is the Q gate: its non-cross input is `set` (the pulse input),
+///     its output net is `q` (the observable output, wired to a shift register input).
 ///
 /// Stamps a Thevenin driver on the `q` net and pushes one [`DigitalComponent`]
 /// (the builtin NOR-latch spec) per latch. Returns true if ≥1 latch was bound.
@@ -6883,9 +6882,9 @@ fn bind_mcu(
     // pin's first firmware drive (its first `on_pin_change` edge, or a
     // `pins_configured_output` direction report), promoting the pin to a GPIO
     // output. No bind-time usage heuristic is needed: the firmware's actual
-    // pinMode decides. This is what un-floats OE'_S / SRCLR'_S (Tarski A2/A3):
-    // firmware driving an A-pin digitally now has a driver to enable, where a
-    // floating-low SRCLR'_S would have held the whole 74HC595 chain cleared.
+    // pinMode decides. This is what un-floats shift-register OE / SRCLR pins wired to
+    // analog-capable pins: firmware driving an A-pin digitally now has a
+    // driver to enable, where a floating-low SRCLR would have held the whole 74HC595 chain cleared.
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
     let mut adc_pin = HashMap::new();

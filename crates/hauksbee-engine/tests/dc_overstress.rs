@@ -1,4 +1,4 @@
-//! Ratings judged at the DC operating point (gap G8 from the Tarski board).
+//! Ratings judged at the DC operating point (gap G8 from the large internal test board).
 //!
 //! A logic output driving an NPN base through 47 ohm pushes far more current
 //! out of the gate's output than its 25 mA rating while the junction clamps

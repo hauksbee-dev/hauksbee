@@ -6,7 +6,7 @@
 //!
 //! * **Linear islands** ([`LinearIsland`]) advance by the cached matrix
 //!   exponential, exact for the fixed step, one dense mat-vec per step. This is
-//!   the Tarski closed-form trick generalized to an arbitrary linear subnetwork.
+//!   a closed-form linear-island trick generalized to an arbitrary linear subnetwork.
 //! * **Nonlinear islands** are extracted into a small sub-circuit (boundary
 //!   nodes become pinned voltage sources carrying the exchanged value) and
 //!   solved with the existing MNA + Newton engine on their *own* small matrix,
@@ -109,9 +109,9 @@ const SMALL_ISLAND_STATES: usize = 48;
 /// If, after tearing a shunt-fed rail, the largest nonlinear block is still
 /// bigger than this, the tear did not genuinely fragment the core (something
 /// else, e.g. an analog-switch mesh, keeps it fused). Tearing then buys nothing
-/// and we fall back to the monolithic path. Sized well above a real per-neuron
-/// block (~65 devices on the Tarski board) but far below the fused 5k-device
-/// island, so the win is taken only when it is real.
+/// and we fall back to the monolithic path. Sized well above a typical repeated
+/// per-channel cell (tens of devices) but far below a fused island of thousands
+/// of devices, so the win is taken only when it is real.
 const TEAR_MAX_BLOCK_DEVICES: usize = 600;
 
 /// Sweep-count cap for the convergence-gated Jacobi relaxation.
@@ -288,8 +288,8 @@ impl PartitionedTransient {
         }
         // Detect shunt-fed rail tears first; if any, the analysis splits the
         // array into per-block islands that couple only through the scalar rail
-        // voltage (bordered-block-diagonal). This is what unfuses the Tarski
-        // synapse array (one ANALOG_VDD rail behind a 1 kΩ sense shunt).
+        // voltage (bordered-block-diagonal). This is what unfuses a large
+        // current-mirror array (one shared supply rail behind a sense shunt).
         let mut part = Partition::analyze_with_tears(circuit);
 
         // A tear only helps if it actually FRAGMENTS the fused core into small
@@ -328,8 +328,8 @@ impl PartitionedTransient {
             .unwrap_or(0);
 
         // A large nonlinear island that survived tearing must be cold-seeded by
-        // the partitioned path every chunk. On a stiff diode-laden core (e.g. the
-        // Tarski synapse array + pulse-stretcher diodes) that cold seed needs the
+        // the partitioned path every chunk. On a stiff diode-laden core (e.g. a large
+        // current-mirror array + pulse-stretcher diodes) that cold seed needs the
         // monolithic staged-DC homotopy, which the per-island path does not run.
         // Routing such a board to the monolithic reference is EXACT (Off is
         // bit-identical) and is where the staged convergence aid lives, so defer
@@ -898,7 +898,7 @@ impl PartitionedTransient {
     /// Seed every island from a DC operating point and fill the exchange buffer.
     ///
     /// The primary path is a monolithic whole-circuit DC solve, distributed to
-    /// the islands. When that DC does not exist (the flagship mega group's
+    /// the islands. When that DC does not exist (a very large fused group's
     /// collapse, #59), the whole-circuit solve is exactly the thing this engine
     /// was torn to avoid, so it falls back to a DECOMPOSED seed
     /// ([`Self::seed_decomposed`]): boundary estimates into the exchange buffer,

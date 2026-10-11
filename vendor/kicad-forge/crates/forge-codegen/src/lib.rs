@@ -1,7 +1,7 @@
 //! Decompile a KiCad board into code.
 //!
 //! The vision: a board is a *program* that rebuilds it. Hardware blocks that
-//! repeat (a synapse circuit instanced hundreds of times, a neuron circuit
+//! repeat (one sub-circuit instanced hundreds of times, another
 //! instanced a dozen) become **functions** called with different placements;
 //! instances that deviate from their cluster's template stand out as explicit
 //! anomalies. This serves both programmatic board generation and anomaly

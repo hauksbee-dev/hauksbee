@@ -12,8 +12,8 @@ categories.workspace = true
 rust-version.workspace = true
 description = "Integration heart: binds an extracted board to models and co-simulates analog + MCU + digital"
 # Board-specific probes and suites remain useful in the development tree but
-# are not part of the publishable engine package. The reusable Tarski library
-# surface lives in the private `hauksbee-tarski` workspace crate.
+# are not part of the publishable engine package. The reusable board-specific
+# library surface lives in a separate private workspace crate.
 
 [features]
 # Propagate the MCU backend choices. All on by default so the engine runs AVR,

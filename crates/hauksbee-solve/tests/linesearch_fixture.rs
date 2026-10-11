@@ -1,17 +1,17 @@
 //! Line-search-armed determinism fixture: the bitwise regression witness for
 //! optimization work inside `newton_solve`'s Armijo/staged machinery.
 //!
-//! The flagship general path marches its joint capture with
+//! The large-board general path marches its joint capture with
 //! `Strategy::TransientDyn` granted (which arms the staged regularizers, the
 //! event-freeze retry AND the global Armijo line search) plus the SPDT
 //! break-before-make and control-gm device knobs. Any "this optimization is
 //! bit-identical" claim about that machinery needs a fast fixture that
 //! exercises the same code paths and reduces the whole waveform to one
 //! comparable line. This board is an integrate-and-fire relaxation
-//! oscillator: a membrane cap charged by a current source fires a hysteretic
+//! oscillator: an integrator cap charged by a current source fires a hysteretic
 //! comparator whose output flips an SPDT pair (binder-style `_s0`/`_s1` legs
 //! sharing the common node, so the BBM winner-take-all path runs), shorting
-//! the membrane through a fast discharge leg. No consistent DC exists (the
+//! the integrator through a fast discharge leg. No consistent DC exists (the
 //! usual self-resetting shape), so it powers on `FromZero` like the capture
 //! recipe and spikes repeatedly; comparator flips guarantee the event/backtrack
 //! paths see real work.
@@ -35,7 +35,7 @@ use hauksbee_testkit::circuits::{comparator, idc, vswitch};
 /// Integrate-and-fire relaxation oscillator with a binder-style SPDT pair.
 fn spiking_board() -> Circuit {
     let mut c = Circuit::new();
-    let m = c.node("m"); // membrane
+    let m = c.node("m"); // integrator
     let th = c.node("th"); // comparator threshold
     let spk = c.node("spk"); // comparator output
     let spkb = c.node("spkb"); // inverted comparator output (idle-leg select)
@@ -44,7 +44,7 @@ fn spiking_board() -> Circuit {
 
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 2.5);
     add_vdc(&mut c, "VRAIL", rail, NodeId::GROUND, 1.0);
-    // Charge current into the membrane.
+    // Charge current into the integrator.
     idc(&mut c, "IIN", NodeId::GROUND, m, 5e-5);
     add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
     // Leak sized so the open-gate equilibrium (5 V) sits ABOVE threshold:
@@ -55,7 +55,7 @@ fn spiking_board() -> Circuit {
     // Complementary select for the idle leg. The two throws must be driven by
     // OPPOSITE controls (as real SPDT select wiring is): with a shared control
     // the BBM winner-take-all margins tie exactly (the sibling margin is
-    // span-absolute), the discharge leg gets halved forever, and the membrane
+    // span-absolute), the discharge leg gets halved forever, and the integrator
     // servos at threshold instead of firing; measured on the first cut of this
     // fixture.
     comparator(&mut c, "K2", spkb, th, m, 0.4);
@@ -80,7 +80,7 @@ fn spiking_board() -> Circuit {
         (3.0, 2.0),
         (10.0, 1e9),
     );
-    // Discharge path: membrane -> s1 -> com -> RD -> ground, tau ~ 60 ns
+    // Discharge path: integrator -> s1 -> com -> RD -> ground, tau ~ 60 ns
     // (the fast post-flip transient the event/LTE machinery must track).
     add_resistor(&mut c, "RD", com, NodeId::GROUND, 50.0);
     c
@@ -122,15 +122,15 @@ fn march() -> Waveforms {
                 .unwrap_or(2e-6),
         },
         dc_init: DcInit::FromZero,
-        // The flagship spike-path bundle, typed since the env migration.
+        // The stiff pulse-path bundle, typed since the env migration.
         ladder: RobustnessLadder::none().with(Strategy::TransientDyn),
         event_retry: EventRetryTuning {
             smooth_comparator_first: true,
             ..Default::default()
         },
         effects: DeviceEffects {
-            // The flagship substrate drops the switch control tangent (the
-            // torn-column high-Z boundary problem); typed since the env
+            // The stiff-path substrate drops the switch control tangent (the
+            // torn-stage high-Z boundary problem); typed since the env
             // migration.
             switch_ctrl_gm: false,
             ..Default::default()
@@ -144,8 +144,8 @@ fn march() -> Waveforms {
 
 #[test]
 fn armed_march_is_deterministic_and_spikes() {
-    // The flagship general path's numerical substrate (tarski_general_e2e.rs
-    // sets these as its own configuration); TRANSIENT_DYN is what arms the
+    // The large-board general path's numerical substrate (its own tests set
+    // these as their configuration); TRANSIENT_DYN is what arms the
     // line search this fixture exists to witness.
 
     let wf = march();

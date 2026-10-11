@@ -3,16 +3,16 @@
 //! The rail pass ([`super::rails`]) finds nodes that are stiff because a supply
 //! feeds them through one series impedance; the feedforward pass
 //! ([`super::feedforward`]) finds boundaries that carry information but no
-//! current. Between the two sits a shape neither catches. On the flagship
-//! Tarski board the ten output columns fuse through nine hidden `V_out` nets,
+//! current. Between the two sits a shape neither catches. On a large
+//! multi-channel board the channels can fuse through shared internal nets,
 //! and the route-4 mechanics come straight off that shape. Those nets are
-//! CONDUCTED on both sides: the neuron drives them and the synapse ladders
+//! CONDUCTED on both sides: an upstream stage drives them and mirror ladders
 //! draw from them. So
 //! they are not sense-only (free-tear discovery walks right past them) and they
 //! are not shunt-fed rails (no single series feed pins them). They are the
 //! canonical stiff node: a high-fanout conducted node whose voltage barely
 //! moves, and holding it fragments an otherwise-monolithic block into the
-//! per-column solves the bespoke `tarski_decomp` stage A/B achieved by hand.
+//! per-channel solves an earlier hand-built stage A/B decomposition achieved by hand.
 //!
 //! ## What this pass does
 //!
@@ -60,9 +60,9 @@ pub struct StiffPolicy {
     /// (devices); a smaller block cannot repay a capture/replay boundary, so
     /// probing it is wasted work. Default 64: below this a stiff-tear boundary
     /// (one capture solve of the fan-out, one replay per downstream block) does
-    /// not amortize against just solving the block whole, and the flagship's
-    /// worth-tearing blocks are the ~436-device output columns, orders of
-    /// magnitude above the floor. This is the emergent successor to the
+    /// not amortize against just solving the block whole, and the worth-tearing
+    /// blocks on large boards are hundreds of devices, well
+    /// above the floor. This is the emergent successor to the
     /// bespoke path's tuned `TEAR_MAX_BLOCK_DEVICES`: a size the cost model
     /// respects, not a threshold it obeys.
     pub min_block_devices: usize,

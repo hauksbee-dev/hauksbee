@@ -1,5 +1,5 @@
 # The deck the accuracy campaign was opened on: a relay's edge amplified by a
-# current mirror into a slewing membrane.
+# current mirror into a slewing RC load.
 #
 # The bar on the waveform as a whole is set by ngspice's switch-event timing, not
 # by either engine's device physics. ngspice does not bisect to a switch threshold:
@@ -19,7 +19,7 @@
 # the settled ON plateau (the operating point of the closed-switch circuit, which
 # agrees with ngspice's own `.op` of the same circuit to seven digits).
 analysis = "tran"
-description = "Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block synapse deck, held on both flat regions and cross-checked through both edges."
+description = "Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block switched-mirror deck, held on both flat regions and cross-checked through both edges."
 full_scale = 5.0
 
 [[probe]]

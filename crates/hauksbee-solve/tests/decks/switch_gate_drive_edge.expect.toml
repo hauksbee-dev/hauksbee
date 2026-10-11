@@ -1,12 +1,12 @@
 # A relay's turn-on instant, read off a gate-drive RC, against the closed form.
 #
 # The CLOSED FORM is the gate here, and the oracle is the backstop. That ordering
-# is not a preference, it is what the synapse investigation established: on a
+# is not a preference, it is what the switched-mirror investigation established: on a
 # switching edge, ngspice does not bisect to the switch threshold. It closes the
 # relay at whatever timepoint it first notices the crossing and integrates the
 # whole straddling step already closed, so its answer carries an event-timing
 # error of order (its max step) x (the waveform's slew). Refining ngspice's own
-# grid on the synapse deck moved it 10x toward our answer (87.5 mV -> 8.5 mV as
+# grid on the switched-mirror deck moved it 10x toward our answer (87.5 mV -> 8.5 mV as
 # tmax went 1 us -> 1 ns), which is the sense in which it was the one that was
 # wrong. A deck with an exact answer should assert against the exact answer.
 analysis = "tran"

@@ -1,8 +1,8 @@
 //! Conduction-graph analysis: who is electrically fused to whom.
 //!
 //! The single most important primitive of the tearing engine, generalized from
-//! the hand-written `conduction_terminals` that made the Tarski feedforward
-//! decomposition exact.
+//! an earlier hand-written `conduction_terminals` that made a board-specific
+//! feedforward decomposition exact.
 //!
 //! ## Why two kinds of terminal
 //!

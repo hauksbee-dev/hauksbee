@@ -110,7 +110,7 @@ fn schematic_example_spec_passes() {
     assert_eq!(result.results.len(), 2);
 }
 
-/// The flagship guarantee: the same spec body, once against the `.kicad_sch`
+/// The headline guarantee: the same spec body, once against the `.kicad_sch`
 /// and once against the `.kicad_pcb`, returns the same per-assertion verdict.
 #[test]
 fn schematic_and_pcb_agree() {

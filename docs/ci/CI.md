@@ -612,7 +612,7 @@ culprits = 3                    # optional; 0 skips the ranking reruns
 net   = "VCC"
 volts = [4.75, 5.0]             # force the net to each value
 [[search.sweep]]
-net  = "I_SYN"
+net  = "I_IN"
 amps = [4.19e-6, 6e-6]          # or inject each current into it
 
 [[assert]]
@@ -669,7 +669,7 @@ along = "V_SET"                 # a [[search.sweep]] net with 2+ values
 after_ms = 0.05
 
 # [FAIL] a higher input code fires faster
-#       U1 is 12k Hz at V_SET=0V but 4k Hz at V_SET=2V; 2 of 2 neighbouring pair(s) violate [with I_SYN=6uA]
+#       U1 is 12k Hz at V_SET=0V but 4k Hz at V_SET=2V; 2 of 2 neighbouring pair(s) violate [with I_IN=6uA]
 ```
 
 #### Asking for a number: measurements

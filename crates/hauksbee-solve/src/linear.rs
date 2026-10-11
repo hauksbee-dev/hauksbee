@@ -1,5 +1,5 @@
 //! Linear-island fast path: state-space `x' = A x + B u` advanced by a cached
-//! matrix exponential; the Tarski closed-form trick, generalized.
+//! matrix exponential; a closed-form linear-island trick, generalized.
 //!
 //! A purely linear island (resistors, capacitors, inductors, current sources)
 //! has a finite-dimensional linear state: every capacitor contributes its

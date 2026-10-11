@@ -2,7 +2,7 @@
 //!
 //! An astable comparator loop (a diode-steered relaxation oscillator, and a
 //! cascade where its flips drive a second comparator that feeds a
-//! self-resetting integrate-and-fire neuron) flips many times per chunk and
+//! self-resetting integrate-and-fire stage) flips many times per chunk and
 //! across chunk boundaries. Every chunk must be carried by the PRIMARY march,
 //! continued from the previous chunk's end state: no failed chunk and no
 //! fallback rung. The solve-level edge and period checks for the same boards

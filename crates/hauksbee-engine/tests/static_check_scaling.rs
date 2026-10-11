@@ -1,6 +1,6 @@
 //! The static check must scale with the board, not with its square.
 //!
-//! `hauksbee check` on the ~800-IC Tarski board went from a few seconds to
+//! `hauksbee check` on a large internal board of hundreds of ICs went from a few seconds to
 //! about 42 s when the DC-operating-point rating check landed. The DC solve was
 //! not the cost: the check had become quadratic in the part count (every bind
 //! re-resolved every part against the whole library, three binds per check,

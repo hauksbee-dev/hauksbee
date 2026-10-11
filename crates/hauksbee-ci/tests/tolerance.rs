@@ -184,7 +184,7 @@ fn corners_land_on_the_analytic_envelope() {
 
 // ── Nominal-passes / ensemble-fails + isolation re-run (gate b) ────────────
 
-/// The flagship shape: nominal (seed 0) passes the [2.4, 2.6] window, the
+/// The headline shape: nominal (seed 0) passes the [2.4, 2.6] window, the
 /// ensemble fails on some sampled seed, and re-running that seed in isolation
 /// reproduces its sampled values and measurement bit-for-bit.
 #[test]

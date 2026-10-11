@@ -1,7 +1,7 @@
 //! simavr-backed AVR emulation.
 //!
 //! [`AvrMcu`] wraps a `simavr` `avr_t` instance and exposes the generic
-//! [`Mcu`] trait.  All Tarski-specific logic lives in higher layers; this
+//! [`Mcu`] trait.  All board-specific logic lives in higher layers; this
 //! module only deals in plain IRQ hooks and byte streams. It is the only
 //! cycle-exact backend: simavr's C hooks fire synchronously inside `avr_run`,
 //! so every reported edge carries its true `avr->cycle` stamp.

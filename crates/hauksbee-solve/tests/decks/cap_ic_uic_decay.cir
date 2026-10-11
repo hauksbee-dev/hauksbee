@@ -4,8 +4,8 @@ A capacitor's own IC= under uic, discharging through a resistor
 * lines. The corpus had no deck asserting that, and the gap hid a real defect:
 * device IC= values were being ignored entirely, so a node a deck had DECLARED to
 * start at 5 V started at 0 and charged up through whatever path it had. On the
-* 90-block synapse array that alone put 2.82 V where ngspice read 5.00 V at
-* t = 39 us, a 44% error on a quantity the deck states outright.
+* 90-block switched current-mirror array that alone put 2.82 V where ngspice
+* read 5.00 V at t = 39 us, a 44% error on a quantity the deck states outright.
 *
 * The board shape it stands for: any pre-charged rail or held-up node at the
 * moment a sequence begins. A supply that a model says starts at 5 V and actually

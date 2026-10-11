@@ -87,7 +87,7 @@ impl Edge {
 /// A reusable block: the slot layout shared by every instance of a cluster.
 ///
 /// The block records, per slot, the expected part type and pad shapes so the
-/// code reads as a real function ("a synapse is a BCM857BS plus a switch plus
+/// code reads as a real function ("a stage is a transistor pair plus a switch plus
 /// six resistors"). The concrete per-instance components live in the
 /// [`Stmt::Instance`] that calls the block, so anomalies (a wrong-value part)
 /// remain visible at the call site rather than being smoothed into the

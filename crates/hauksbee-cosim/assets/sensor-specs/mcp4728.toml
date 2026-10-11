@@ -3,8 +3,8 @@
 # Part: Microchip MCP4728, quad 12-bit voltage-output DAC with internal
 #       reference and EEPROM.
 # Bus:  I2C. Factory 7-bit address 0x60 (A2=A1=A0 programmed 0); a board with
-#       several parts re-programs the low address bits (the Tarski board runs
-#       three at 0x60/0x61/0x62). The engine overrides `i2c_address` per
+#       several parts re-programs the low address bits (e.g. three parts at
+#       0x60/0x61/0x62). The engine overrides `i2c_address` per
 #       instance, so this spec always declares the factory 0x60.
 # Ref:  Microchip datasheet DS22187E. Section/table numbers below.
 #
@@ -64,7 +64,7 @@ channels    = 4      # DAC channels A..D
 # ── Per-channel state ─────────────────────────────────────────────────────────
 # Defaults are the factory-unprogrammed power-on state the hand-coded model
 # used: code 0 (VOUT ≈ 0 V), normal power mode, internal VREF 2.048 V with
-# gain 2 (the Tarski board configuration; the engine overrides vref/gain per
+# gain 2 (a common board configuration; the engine overrides vref/gain per
 # instance from the binder's resolved model params).
 
 [[sensor.state]]

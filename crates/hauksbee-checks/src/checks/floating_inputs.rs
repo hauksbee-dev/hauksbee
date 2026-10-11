@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn no_connect_flagged_inputs_on_a_74hc165_are_one_finding() {
         // Seven data inputs flagged no-connect on their own KiCad nets, the
-        // Tarski U15001 shape; everything else is driven or tied.
+        // shape of a partly used shift register; everything else is driven or tied.
         let mut extra = vec![(4, "LOAD"), (5, "CLK"), (6, "D6"), (7, "D7")];
         let open = ["10", "11", "12", "13", "14", "3", "4"];
         let names: Vec<String> = open

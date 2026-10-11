@@ -13,7 +13,7 @@
 //! condition (brick voltage, pack voltage, system load, sleep leak) applied in
 //! the test. The behavioural device itself is bound by the ordinary pipeline
 //! from the real netlist; only the rails/loads are added, exactly as
-//! `hardware_history.rs` does for the Tarski board.
+//! `hardware_history.rs` does for the large internal test board.
 
 use std::path::PathBuf;
 

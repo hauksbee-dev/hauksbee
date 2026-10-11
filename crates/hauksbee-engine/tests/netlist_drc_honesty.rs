@@ -1,6 +1,6 @@
 //! A netlist has no copper, so DRC must not report a clean bill on it.
 //!
-//! Found by running the flagship board in the way a newcomer would: upload it,
+//! Found by running a large internal test board in the way a newcomer would: upload it,
 //! read the report. Every section came back healthy, including "no copper
 //! spacing problems found" on a `.net` file that contains no copper at all.
 //! The clearance sweep had examined zero primitives. A reader takes "healthy"

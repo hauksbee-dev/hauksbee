@@ -2247,7 +2247,7 @@ fn unit_note(noun: &str, key: &str, reference: &str) -> String {
 /// Does a per-device map key (or fault component name) belong to `reference`?
 /// True for the bare ref itself and for any of its per-unit keys: a multi-unit
 /// package stamps one device per unit with a `_q<N>` / `_s<N>` suffix
-/// ("`IC3906_q2`", "`SW1_s0`"), so per-unit producers (`peak_temp_c`, faults) never
+/// ("`U3_q2`", "`SW1_s0`"), so per-unit producers (`peak_temp_c`, faults) never
 /// record the bare package ref. Mirrors the binder's suffix rule; the runner's
 /// trackability gate uses this same test to accept a bare ref whose units are
 /// monitored, so the consumers here match exactly the keys the gate admitted,

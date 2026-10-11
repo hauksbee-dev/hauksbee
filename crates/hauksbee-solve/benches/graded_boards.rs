@@ -151,7 +151,7 @@ fn run_mirror_planned(c: &Circuit, part: Partitioning) -> Waveforms {
 /// ~4.9988 V. A torn solve that dropped block currents from the balance would
 /// leave the rail pinned at 5.0; a broken solve would NaN or collapse it. So the
 /// load-bearing assert is "rail sags, but only a little": strictly below 5 V and
-/// above 4.99. Membranes sit near 0 V here (tiny mirror currents), so we only
+/// above 4.99. Load nodes sit near 0 V here (tiny mirror currents), so we only
 /// assert they are finite and bounded into the rail.
 fn assert_mirror_sane(c: &Circuit, wf: &Waveforms) {
     let rail = wf.final_node(c, "ANALOG_VDD").expect("rail node present");

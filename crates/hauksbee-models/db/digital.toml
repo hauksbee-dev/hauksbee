@@ -387,18 +387,17 @@ outputs = ["y1", "y2", "y3"]
 [[models]]
 id = "74hc02"
 kind = "digital"
-description = "74HC02 quad 2-input NOR gate (used as cross-coupled SR spike latches on Tarski)"
+description = "74HC02 quad 2-input NOR gate (also used as cross-coupled NOR set/reset latches)"
 
 [models.match]
 value_re = "(?i)^(SN)?74HC02"
 
 [models.params]
-# Source: TI 74HC02 datasheet (SCLS050). Quad 2-input NOR. On the Tarski Spike
-# Recorder the four gates are wired in cross-coupled PAIRS as NOR set/reset
-# latches (one latch per output neuron); the binder detects the cross-couple and
-# emits a NorLatch behavioral component per latch (set = SPIKE<n>, reset =
-# RESET_SR, q = L<n>). At reset Q is HIGH (idle, active-low readback => 0xFFC0);
-# a captured spike pulls Q LOW and the cross-couple holds it until RESET_SR.
+# Source: TI 74HC02 datasheet (SCLS050). Quad 2-input NOR. Where the four gates
+# are wired in cross-coupled PAIRS they form NOR set/reset latches; the binder
+# detects the cross-couple and emits a NorLatch behavioral component per latch.
+# At reset Q is HIGH (idle); a captured set pulse pulls Q LOW and the
+# cross-couple holds it until the reset input is asserted.
 voh       = 4.4
 vol       = 0.1
 vih       = 3.15
@@ -422,7 +421,7 @@ vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
 voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
 
 [models.pins]
-# Gate pinout as wired on the Tarski board (verified against the netlist):
+# Gate pinout (verified against a real netlist):
 # gate1 out=1 in=2,3 ; gate2 out=4 in=5,6 ; gate3 out=10 in=8,9 ; gate4 out=13 in=11,12.
 "1"  = "g1y"
 "2"  = "g1a"

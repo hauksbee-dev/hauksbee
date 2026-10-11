@@ -41,8 +41,8 @@ fn scheduler(board: BoundBoard, opts: SolverOptions, force_be: bool) -> Schedule
 }
 
 /// An integrate-and-fire relaxation loop with a resting DC point: a pulsed
-/// charge current drives a 1 nF membrane into a hysteretic comparator whose
-/// output flips an SPDT switch pair, shorting the membrane through a fast
+/// charge current drives a 1 nF integrator into a hysteretic comparator whose
+/// output flips an SPDT switch pair, shorting the integrator through a fast
 /// discharge leg (1 ohm switch into 1 ohm, a ~2 ns time constant). The rest
 /// state (pulse low) has a clean DC solution, so the chunk's operating point
 /// converges; the FIRE inside the chunk is what a fixed 100 ns primary cannot
@@ -186,8 +186,8 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
         "chunk-end error estimate must be positive and below the signal scale, got {est}"
     );
 
-    // The membrane voltage in the rescued window is a real number, not a
-    // stale hold: the rest membrane is ~0 V pre-pulse, and the chunk end sits
+    // The integrator voltage in the rescued window is a real number, not a
+    // stale hold: the rest integrator is ~0 V pre-pulse, and the chunk end sits
     // mid-oscillation well above it (measured 2.70 V; asserted loosely, the
     // point is that the fallback PRODUCED a solved trajectory).
     let m = sched.net_voltage("m").expect("membrane net exists");

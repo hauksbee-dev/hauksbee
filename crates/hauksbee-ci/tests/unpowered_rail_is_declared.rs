@@ -1,5 +1,21 @@
 //! A rail nobody could put a voltage to must be declared, not solved around.
 //!
+//! Found by uploading a large internal test board as a newcomer would:
+//! `hauksbee-ci init` then `hauksbee-ci run`, no edits. The board has several
+//! supply-ish nets. One of them, an analog supply, names a supply but not a voltage, so the binder
+//! declines to guess (right: inventing 5 V would overdrive every part on it)
+//! and the net sits at 0 V. The run then solved the whole board around a dead
+//! rail and reported, with no qualification of any kind:
+//!
+//!     [FAIL] no stress faults raised
+//!           2 fault(s); first: <a sense resistor> overpower at <a time>
+//!
+//! A named accusation against one specific resistor, at a named
+//! millisecond, derived from an operating point that does not exist. Powering
+//! the rail makes it vanish. A first-time user has no way to tell that report
+//! from a true one, and this is the asymmetry that matters: a missed fault
+//! costs them a bug, a confident false one costs them the tool.
+//!
 //! So the rule these tests hold: if a supply-named net carrying a rail's worth
 //! of parts is powered by nothing, every surface says so, and says so before
 //! the results it undermines.

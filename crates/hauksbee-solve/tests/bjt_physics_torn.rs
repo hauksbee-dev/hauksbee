@@ -10,12 +10,12 @@
 //! zero charge history every step is the failure mode the diode arc's §3.1
 //! mirror arms guard against).
 //!
-//! This builds the flagship rail-tear shape, PNP mirrors with emitters on a
+//! This builds the large-board rail-tear shape, PNP mirrors with emitters on a
 //! shunt-fed `ANALOG_VDD`, but with models carrying rb/re/rc AND cje/cjc/tf,
 //! so the torn path exercises internal-node sub-layouts and both charge banks
 //! at once (PNP polarity also pins the charge sign-folding). The tear must
 //! fire, the array must fragment, and the torn transient must match the
-//! monolithic reference at every membrane, reference and rail node.
+//! monolithic reference at every load, reference and rail node.
 
 use crate::shared::tight_opts;
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
@@ -56,7 +56,7 @@ fn build_array(n: usize) -> (Circuit, Vec<String>) {
         bjt(&mut c, &format!("Q1_{k}"), rref, rref, avdd, &model);
         let mem = c.node(&format!("mem{k}"));
         bjt(&mut c, &format!("Q2_{k}"), mem, rref, avdd, &model);
-        // Membrane RC load, so the mirror current integrates into a real
+        // Load RC, so the mirror current integrates into a real
         // waveform and the charge banks see moving junction voltages.
         add_resistor(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);
         add_capacitor(

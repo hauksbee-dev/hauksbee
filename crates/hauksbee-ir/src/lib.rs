@@ -168,8 +168,8 @@ impl Supply {
     /// A plain current source here would pull a `hi` pin nothing feeds to
     /// `-quiescent_a / gmin`, billions of volts below ground, and the solve
     /// would be refused; on a rail fed only through resistors it drags the rail
-    /// volts negative (the Tarski board's unfed `ANALOG_VDD` sat at -16 V under
-    /// nineteen comparators). Around 0 V this is a conductance of
+    /// volts negative (an unfed analog supply on a large board sat many volts
+    /// below ground under a bank of comparators). Around 0 V this is a conductance of
     /// `quiescent_a / QUIESCENT_KNEE_V`, the part's bias circuitry out of
     /// headroom, so an unfed supply rests at 0 V; a reversed one returns at
     /// most `quiescent_a`, as the substrate junction would conduct. From 1.5 V

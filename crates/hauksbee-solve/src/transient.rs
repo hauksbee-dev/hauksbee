@@ -382,7 +382,7 @@ impl Transient {
         // rung is bit-identical when never reached), so ordinary B-decks pay
         // one residual evaluation per iteration and stubborn ones get the
         // globalization instead of a dt_min death. Decks WITHOUT a B-source
-        // take the `false` branch and stay bit-identical (the flagship
+        // take the `false` branch and stay bit-identical (the large-board
         // fixture hash pins that). Heavier rungs (TransientDyn, staged
         // regularizers) stay caller-granted; the corpus converges without
         // them, and a non-converged march still REFUSES loudly with the
@@ -442,7 +442,7 @@ impl Transient {
             // are part of what `uic` MEANS in SPICE, not an optional extra: "the
             // initial conditions given on the capacitor and inductor lines and on
             // .ic lines are used". Ignoring them was a wrong ANSWER, not a
-            // convergence choice. On the synapse block's membrane
+            // convergence choice. On a switched-mirror deck's integrator node
             // (`CM0 mem0 0 1n IC=5`) ngspice starts at 5.000 V while we started
             // at 0 and charged up through the 47 kΩ pull-up, so the whole
             // pre-stimulus window read 5*(1-exp(-t/47µs)) instead of a flat 5 V:
@@ -505,23 +505,23 @@ impl Transient {
         if staged || transient_dyn {
             // Arm the staged regularizers (negligible branch series R + node
             // damping + node-block convergence) AND the VSwitch/diode control
-            // limiting (which is gated on branch_reg>0). On the synapse spike
-            // path the per-step Newton fails right at the spike-gate switch flip
-            // (a multi-decade conductance snap as a neuron V_out climbs through
+            // limiting (which is gated on branch_reg>0). On a gated pulse
+            // path the per-step Newton fails right at the gating-switch flip
+            // (a multi-decade conductance snap as a control node climbs through
             // the switch transition); the control limiting tracks the switch
             // through that transition. Armed when the DC needed staging OR when
             // the caller grants Strategy::TransientDyn even on a cleanly-DC-solved but
-            // dynamically-stiff march (the RAMP-from-rest spike case).
+            // dynamically-stiff march (the RAMP-from-rest pulse case).
             ws.set_staged_branch_reg(1e-2);
             // Arm the per-step transient event-freeze retry: when a bare per-step
-            // Newton fails (the spike-gate SPDT flip), retry the step with the
+            // Newton fails (the gating SPDT flip), retry the step with the
             // comparator+switch states frozen Gauss-Seidel + break-before-make
             // before cutting the timestep. Gated behind Strategy::TransientDyn (the
-            // explicit spike-path opt-in) so an ordinary staged board (e.g. the
+            // explicit pulse-path opt-in) so an ordinary staged board (e.g. the
             // DAC-rail co-sim, which needs the staged regularizers but whose
             // per-step Newton converges on the bare path) keeps its exact prior
             // behaviour and timing -- the retry only fires for callers chasing
-            // the spike transient. The retry itself is a no-op unless the bare
+            // the pulse transient. The retry itself is a no-op unless the bare
             // step actually fails, so even when armed it never changes a step
             // that already converged.
             if transient_dyn {
@@ -530,7 +530,7 @@ impl Transient {
                 // Arm the GLOBAL Armijo line-search in the per-step Newton on the
                 // same stiff-board opt-in. It is the globalization for the
                 // post-reset traveling fused-mesh limit cycle (a huge Newton
-                // correction whose maxdV rotates across synapse-mesh / BJT-mirror
+                // correction whose maxdV rotates across switch-mesh / BJT-mirror
                 // nodes, which per-node oscillation damping cannot catch). A no-op
                 // on steps that already converge (alpha=1 full step), so it never
                 // changes an already-good step; it only backtracks the overshoot.
@@ -676,8 +676,8 @@ impl Transient {
         // Newton converges to the same operating point within tolerance from
         // either seed, and every safety mechanism (Armijo line search, staged
         // damping, stall bail, event retry, step cut) still guards the path.
-        // SCOPE: only the TransientDyn-armed ADAPTIVE march (the flagship
-        // spike-path bundle, which is physics-gated, never bit-pinned); every
+        // SCOPE: only the TransientDyn-armed ADAPTIVE march (the large-board
+        // pulse-path bundle, which is physics-gated, never bit-pinned); every
         // fixed-step march and every unarmed path keeps the previous-point
         // seed bit-identically.
         //
@@ -813,8 +813,8 @@ impl Transient {
 
             let mut converged = r.converged;
             let used_event = if !converged && ws.tran_event() {
-                // The bare per-step Newton limit-cycled (the spike-gate SPDT flip
-                // under synapse current, or the refractory reset). Retry this step
+                // The bare per-step Newton limit-cycled (the gating SPDT flip
+                // under mirror current, or a comparator-driven reset). Retry this step
                 // through the event-freeze loop: freeze comparator+switch states
                 // per inner solve, re-derive Gauss-Seidel with break-before-make,
                 // until consistent. Re-seed ws.x to the accepted point first so the
@@ -824,11 +824,11 @@ impl Transient {
                 let had_dyn = ws.symbolic.allow_dynamic();
                 ws.symbolic.set_allow_dynamic(true);
                 // Two-mode retry. The smooth-comparator pass resolves the
-                // membrane-crosses-UP fire (the output comparator's C_adapt
+                // integrator-crosses-UP fire (the output comparator's C_adapt
                 // feedback needs a continuous transfer there); the frozen pass
-                // resolves the refractory-reset discharge (the smooth comparator's
-                // high gain re-couples the collapsing membrane into the
-                // spike->switch loop and diverges, so the comparator must be
+                // resolves the reset discharge (the smooth comparator's
+                // high gain re-couples the collapsing integrator into the
+                // pulse->switch loop and diverges, so the comparator must be
                 // frozen like every other discrete state). The tuning option,
                 // when set, tries the smooth mode FIRST (the historical default
                 // for the FIRE step); either way the other mode is tried if the
@@ -916,7 +916,7 @@ impl Transient {
             }
 
             // Also skip LTE rejection for an event-resolved step: the reactive
-            // curvature across a comparator/switch flip is huge (the spike edge),
+            // curvature across a comparator/switch flip is huge (the pulse edge),
             // so the LTE estimate would reject and shrink dt forever right at the
             // event the loop just resolved. Accept the event step (the event loop
             // converged it to a true root at t+h); the next ordinary step resumes
@@ -932,12 +932,12 @@ impl Transient {
                     // reached at a tiny h (the bare-Newton step-cut shrank dt while
                     // approaching the discontinuity); continuing at h*0.5 would
                     // leave dt microscopic, and a microscopic dt makes the reactive
-                    // companion conductance (C/dt, e.g. the 10 nF output membrane /
+                    // companion conductance (C/dt, e.g. a nF-scale output integrator /
                     // dt) astronomically stiff -- which is exactly what makes the
                     // FOLLOW-ON step's Newton singular and re-opens the wall right
-                    // after the refractory switch closes. Resume at ~the post-flip
-                    // physical time constant (the membrane discharge RC ~ 70 ns
-                    // through the 7 Ohm switch), tracked but not microscopic; LTE
+                    // after the reset switch closes. Resume at ~the post-flip
+                    // physical time constant (the integrator discharge RC
+                    // through the switch on-resistance), tracked but not microscopic; LTE
                     // grows it back once the fast tail passes. Floored to a sane
                     // value, never below half the current h (so a genuinely fine
                     // flip step doesn't get coarsened).

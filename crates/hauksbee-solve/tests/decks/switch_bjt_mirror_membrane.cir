@@ -1,5 +1,5 @@
 Relay gating a BJT current mirror into an RC load: the 7.1-relative deck
-* This is one block of the 90-block synapse array, reduced to the smallest circuit
+* This is one block of a 90-block switched current-mirror array, reduced to the smallest circuit
 * that still reproduces the divergence the accuracy campaign was opened on. The
 * full array disagreed with ngspice by 7.1 RELATIVE on v(mem0); this one block
 * reproduced 6.65, which is what established the divergence as a per-block model

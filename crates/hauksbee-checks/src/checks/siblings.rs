@@ -2,7 +2,7 @@
 //! from its twins.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
-//! A board that stamps the same subcircuit many times (a synapse, an LED
+//! A board that stamps the same subcircuit many times (a mirror cell, an LED
 //! driver channel, a sensor tile) has one right wiring and many copies of it.
 //! A copy that deviates is almost never a design choice: it is the one cell
 //! where a pin swap, a wrong net label or a mirrored footprint slipped in, and
@@ -21,7 +21,7 @@
 //!   or more members reads as a bus.
 //! - A group is a **repeated cell** only when at least `MIN_CELLS` anchors
 //!   exist and one whole-part signature covers at least 85 % of them. Several
-//!   well-populated variants (two neuron types, odd and even channels) fail
+//!   well-populated variants (two cell types, odd and even channels) fail
 //!   that test and the check stays silent.
 //! - An **outlier** differs from the majority on at least two pads, which is
 //!   what a swap or a mis-assigned pair looks like. A lone differing pad is

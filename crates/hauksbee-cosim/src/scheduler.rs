@@ -1,7 +1,7 @@
 //! The co-simulation scheduler.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/scheduler.md.
 //!
-//! Generalizes the Tarski-Emulator lockstep pattern. Each call to
+//! Generalizes an earlier board-specific emulator's lockstep pattern. Each call to
 //! [`Scheduler::step`] advances wall-clock `dt` in fixed sub-chunks (default
 //! 100 µs). Per chunk:
 //!
@@ -583,7 +583,7 @@ pub struct Scheduler {
     /// responder (the read-direction analogue of `chains`). Wrapped in
     /// Arc<Mutex<>> because the responder closure owns a clone. Each shares the
     /// `input_volts` snapshot the scheduler refreshes from the last solve so the
-    /// 165 captures the latest spike-latch states on its PL load.
+    /// 165 captures the latest pulse-latch states on its PL load.
     hc165_chains: Vec<Arc<Mutex<hauksbee_bind::digital::Hc165Chain>>>,
     /// Per-MCU synchronous input-responder registries: the
     /// multiplexer that shares each MCU's single `on_input_responder` slot
@@ -603,19 +603,19 @@ pub struct Scheduler {
     /// solve) sees the previous chunk's settled latch voltages.
     input_volts: Arc<Mutex<Vec<f64>>>,
     /// Forced node-voltage overrides applied to `node_volts` AFTER each chunk's
-    /// analog solve. Used by the firmware-driven Tarski inference to drive the 10
-    /// output SPIKE nets from the EXACT feedforward decomposition (the monolith
-    /// does not converge); the genuine per-column spikes the decomposition
-    /// produces are presented on the SPIKE nets so the on-board 74HC02 NOR
+    /// analog solve. Used by firmware-driven inference runs to drive output
+    /// nets from an EXACT feedforward decomposition (when the monolith
+    /// does not converge); the pulses the decomposition
+    /// produces are presented on those nets so on-board NOR
     /// latches capture them and the firmware's 165 readback reflects them. Empty
     /// on every other board (no override). Keyed by `NodeId.0`. The value is
     /// `(high_volts, low_volts, t_start, t_end)`: the node is held at
     /// `high_volts` while `t_start <= sim_time < t_end`, else `low_volts`. A
     /// time-unbounded override uses `t_start=-inf, t_end=+inf` (always high). The
-    /// time window lets the firmware-driven inference present each output column's
-    /// SPIKE net HIGH for a sim-time fraction proportional to its decomposed spike
-    /// count, so the firmware's per-sample RESET_SR-gated latch reads accumulate a
-    /// count that tracks the decomposed RATE (not just a binary "spiked at all").
+    /// time window lets the firmware-driven inference present each output
+    /// net HIGH for a sim-time fraction proportional to its decomposed pulse
+    /// count, so the firmware's per-sample reset-gated latch reads accumulate a
+    /// count that tracks the decomposed RATE (not just a binary "fired at all").
     forced_node_volts: HashMap<NodeId, (f64, f64, f64, f64)>,
     /// Per-run count of chunks whose analog transient solve failed to converge.
     /// A failed chunk holds/recovers stale voltages (see `solve_chunk`'s `Err`
@@ -1966,7 +1966,7 @@ impl Scheduler {
     /// Build the edge-driven 74HC165 read chains (one per physical chain whose
     /// PL / CLK / QH→MISO pins bind to an MCU's GPIO) and register each with
     /// that MCU's input-responder registry. The responder fires on every PL /
-    /// SCLK edge during the MCU's run: the chain samples the spike-latch inputs
+    /// SCLK edge during the MCU's run: the chain samples the pulse-latch inputs
     /// on a PL load and presents the next QH bit on MISO, returning the (MISO
     /// pin, level) to drive immediately. This closes the readback inside the
     /// firmware's own bit-bang loop.
@@ -3372,7 +3372,7 @@ impl Scheduler {
 
         // Refresh the snapshot the edge-driven 74HC165 read chains sample on a
         // PL load (it fires inside the MCU run below, so it must reflect the
-        // PREVIOUS chunk's settled spike-latch voltages).
+        // PREVIOUS chunk's settled pulse-latch voltages).
         if !self.hc165_chains.is_empty() {
             let mut snap = self.input_volts.lock_or_recover();
             snap.clear();
@@ -4905,11 +4905,11 @@ impl Scheduler {
             self.record_failed_chunk(chunk, failure_reason);
         }
 
-        // Apply any forced node-voltage overrides (the firmware-driven Tarski
-        // inference drives the output SPIKE nets from the exact feedforward
-        // decomposition here, since the monolith does not converge). These land
+        // Apply any forced node-voltage overrides (a firmware-driven inference
+        // run drives output nets from an exact feedforward
+        // decomposition here, when the monolith does not converge). These land
         // in `node_volts` so the on-board NOR latches sample them next chunk.
-        // Each override is time-gated to `sim_time` so a column is HIGH only for
+        // Each override is time-gated to `sim_time` so a net is HIGH only for
         // its decomposed rate fraction of the window.
         if !self.forced_node_volts.is_empty() {
             let t = self.sim_time;
@@ -5027,8 +5027,8 @@ impl Scheduler {
 
     /// Force a net to `high_volts` while `t_start <= sim_time < t_end`, else
     /// `low_volts`. Returns false if the net does not exist. Used to drive an
-    /// output SPIKE net HIGH for a sim-time window proportional to its decomposed
-    /// spike count (rate-coded firmware-driven inference).
+    /// output net HIGH for a sim-time window proportional to its decomposed
+    /// pulse count (rate-coded firmware-driven inference).
     pub fn force_net_voltage_windowed(
         &mut self,
         net: &str,

@@ -2,7 +2,7 @@
 
 hauksbee was built for a board it cannot publish. That board belongs to
 Tarski, not to this project. So its netlists, as-built overlay, firmware
-images, and synapse map are absent from the release mirror, and so is
+images, and connection maps are absent from the release mirror, and so is
 every test that reads them.
 
 This page makes that omitted coverage explicit.
@@ -14,17 +14,17 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
 |---|---|---|
-| `tarski_firmware_cosim` | 13 | Firmware co-simulation end to end: real ELF on an emulated MCU driving a 3.4k-device analogue mesh |
+| `tarski_firmware_cosim` | 13 | Firmware co-simulation end to end: real ELF on an emulated MCU driving a large analogue mesh |
 | `tarski_bind` | 5 | Binder against a board with socketed and do-not-populate parts |
 | `tarski_full` | 4 | Whole-board extract, bind, check, report |
 | `tarski_general_e2e` | 4 | The general decomposition layer carrying a real torn solve |
 | `tarski_private_acceptance` | 4 | Runtime-only release-candidate bind, preparation certificate, firmware transport and decomposed inference acceptance without publishing the input |
 | `tarski_595_chain` | 3 | Shift-register chain decode under firmware |
-| `tarski_revision_identity` | 2 | As-built preparation, cut selection and weight routing surviving KiCad re-annotation |
+| `tarski_revision_identity` | 2 | As-built preparation, cut selection and signal routing surviving KiCad re-annotation |
 | `tarski_stretcher_transient` | 3 | Pulse-stretcher transient against measured hardware |
 | `tarski_staged_replay` | 7 | Ordered as-built rework replay against the private board and its firmware |
 | `flagship_brownout` | 3 | The brownout CI scenario, red and repaired |
-| `tarski_outcome_search` | 2 | Outcome search on the neuron cell: three intended outcomes violated with culprits, and the repaired cell passing |
+| `tarski_outcome_search` | 2 | Outcome search on a board cell: intended outcomes violated with culprits, and the repaired cell passing |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |
 | `asbuilt_equivalence` | 5 | That the declarative as-built overlay reproduces the imperative rework it replaced |
 | `boardcode_miswire` | 2 | Round-trip through the board-as-code form |
@@ -36,7 +36,7 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `tarski_static_lints` | 2 | Static lints run against the private board's netlist, including the miswired-sibling, base-drive, discharge-path and floating-gate lints |
 | `tarski_dc_overstress` | 1 | Part ratings judged at the private board's DC operating point |
 | `nep_private_acceptance` | 2 | Cycle-exact AT28C256 page-program rejection and corrected-firmware positive control for a second private board, both driven by the board owner's real host tool |
-| `stretcher_transient` | 2 | Private neuron topology and comparator/stretcher rework, not an independent numerical fixture |
+| `stretcher_transient` | 2 | Private circuit topology and rework, not an independent numerical fixture |
 | `bug_hunt_physics` | 6 | Timing values and calibrated expectations from the private layout |
 | `avr_mcu_tests` | 6 | AVR execution against firmware from the private T1-devboard repository |
 

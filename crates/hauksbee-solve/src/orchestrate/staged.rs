@@ -181,7 +181,7 @@ pub fn run_staged(
     // trusts that the run-time environment drives them. This executor has no
     // drive plumbing for them yet (it lands with the co-sim e2e), and running
     // anyway would float exactly the nets the declaration promised were
-    // driven: the dead-membrane bug wearing a certificate. Refuse instead.
+    // driven: the dead-integrator bug wearing a certificate. Refuse instead.
     if !decomp.certificate.exogenous_boundaries.is_empty() {
         let names: Vec<_> = decomp
             .certificate
@@ -219,7 +219,7 @@ pub fn run_staged(
     // consumer group's device list by iterating this map, so its order is the
     // order absorbed devices are pushed into the sub-circuit, which sets node
     // creation order, which the solver SEES (LU pivots, Newton convergence
-    // paths, and thus the last-bit accepted values, and on the flagship even
+    // paths, and thus the last-bit accepted values, and on large boards even
     // WHICH group hits a DC non-convergence). Circuit construction order must
     // be deterministic; HashMap iteration order is not. Keyed by driver group,
     // sorted, so two runs build byte-identical sub-circuits.
@@ -335,7 +335,7 @@ pub fn run_staged(
             // nominations include genuine supply RAILS (a stiff node that is
             // also a balance-tear candidate, ANY decision), those rails want the
             // EXACT scalar KCL balance, not Gauss-Seidel relaxation (they are
-            // load-dependent and limit-cycle, the flagship's ANALOG_VDD/+5V).
+            // load-dependent and limit-cycle, e.g. a post-regulator analog supply or +5V).
             // The composed executor hands the rails to the partitioned balance
             // engine and relaxes the plain SIGNAL cuts on top of it. Running
             // plain relaxation on the rails first would burn a full round budget
@@ -418,8 +418,8 @@ pub fn run_staged(
                     torn_groups.push(g);
                 } else {
                     // The refusal summary rides into any later fused-path
-                    // error: three flagship runs could not see WHY the
-                    // mega group fell through, because the fused DC error
+                    // error: several long runs on a large board could not see WHY a
+                    // fused group fell through, because the fused DC error
                     // masked the stiff refusal that caused it.
                     stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
                     stiff_outcomes.extend(refusals.into_iter().map(|o| {
@@ -432,7 +432,7 @@ pub fn run_staged(
             let (wf, torn, ramped) = match stiff_run {
                 Some(wf) => (wf, false, false),
                 None => solve_group(&sub, imposed, &group_opts, tstop).map_err(|e| {
-                    // Name the group: a half-hour flagship run whose error
+                    // Name the group: a half-hour run on a large board whose error
                     // says only "group 3" costs another half-hour run to
                     // learn what group 3 is. Devices and a name sample turn
                     // the next failure into a standalone fixture.
@@ -618,7 +618,7 @@ fn solve_group(
                 StepControl::Adaptive { .. } => return Err(e),
             };
             // A LADDER of ramp windows, quasi-static first, step-like last.
-            // Provenance: the flagship's group 2 died at t=134us of a 200us
+            // Provenance: on a large board one group died partway through a long
             // ramp: a slow ramp DWELLS in the worst bias region (junctions at
             // their knees, comparators at threshold) and a fixed-step Newton
             // can stall there, while a fast ramp snaps through it and lets
@@ -815,8 +815,8 @@ pub struct GroupDcProbe {
 ///
 /// Exists because a failing group
 /// deep inside a half-hour staged run is unidentifiable at acceptable cost
-/// without it (the flagship burned two runs learning that). Groups larger
-/// than `size_cap` are enumerated but not solved (the flagship's mega group
+/// without it (a large board burned two runs learning that). Groups larger
+/// than `size_cap` are enumerated but not solved (a very large fused group
 /// is the known DC-collapse case and takes minutes to fail; probing it tells
 /// nothing new).
 #[must_use]

@@ -60,11 +60,11 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 
 /// Build an `n`-block current-mirror array sharing a SHUNT-FED analog rail.
 ///
-/// +5V --[`R_shunt` 1k]-- `ANALOG_VDD` --(per block: mirror emitters + membrane R)
+/// +5V --[`R_shunt` 1k]-- `ANALOG_VDD` --(per block: mirror emitters + load R)
 /// Each block: ref resistor -> diode-connected Q1 mirror reference -> Q2 mirror
-/// output charges a membrane RC pulled up to `ANALOG_VDD`. Bias is quasi-static
-/// (DC drive) so the array reaches a steady operating point, exactly like an
-/// inference window with latched weights.
+/// output charges an RC load pulled up to `ANALOG_VDD`. Bias is quasi-static
+/// (DC drive) so the array reaches a steady operating point, exactly like a
+/// steady-state window with latched mirror references.
 ///
 /// This is the fixture from `tests/rail_tear.rs`: the rail is NOT an ideal
 /// source, it is fed from +5 V through a 1 kOhm sense shunt, so the rail sags
@@ -73,7 +73,7 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 /// reproduce, and what makes the array a clean scaling sweep (24/90/240) on
 /// identical topology.
 ///
-/// Returns the circuit plus the list of membrane node names, so a caller can
+/// Returns the circuit plus the list of load-node names, so a caller can
 /// probe the per-block outputs.
 #[must_use]
 pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
@@ -98,7 +98,7 @@ pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
     let mut membranes = Vec::new();
     for k in 0..n {
         // A current mirror whose transistor EMITTERS sit on the shared rail, the
-        // way the Tarski PNP mirrors hang 720 emitters off ANALOG_VDD. Each block
+        // way large PNP mirror arrays hang many emitters off one supply rail. Each block
         // therefore draws real supply current through the shunt, so the rail sags
         // with the total array load - the exact coupling we must reproduce.
         // Reference leg: rail -> RR -> diode-connected mirror reference.
@@ -106,10 +106,10 @@ pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
         res(&mut c, &format!("RR{k}"), avdd, rref, 10e3);
         // Diode-connected reference transistor with emitter on the rail.
         bjt(&mut c, &format!("Q1_{k}"), rref, rref, avdd, &model);
-        // Mirror output transistor, emitter on the rail, collector -> membrane.
+        // Mirror output transistor, emitter on the rail, collector -> load node.
         let mem = c.node(&format!("mem{k}"));
         bjt(&mut c, &format!("Q2_{k}"), mem, rref, avdd, &model);
-        // Membrane RC to ground.
+        // Load RC to ground.
         res(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);
         cap_ic(&mut c, &format!("CM{k}"), mem, NodeId::GROUND, 1e-9, 0.0);
         membranes.push(format!("mem{k}"));

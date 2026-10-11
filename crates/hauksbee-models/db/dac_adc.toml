@@ -22,7 +22,7 @@ scl_pin    = "2"
 # Supply pins
 supply_pin = "1"          # VDD
 gnd_pin    = "10"         # VSS
-# Pad->role map matching the Tarski netlist symbol numbering (KiCad Analog_DAC
+# Pad->role map matching the KiCad netlist symbol numbering (Analog_DAC
 # library): VDD=1, SCL=2, SDA=3, LDAC=4, RDY/BSY=5, VOUTA..D=6..9, VSS=10.
 # Schematic pinfunctions (VOUTA..VOUTD/SDA/SCL/~{LDAC}) override this when
 # present, so this map only matters for PCB-only extraction.

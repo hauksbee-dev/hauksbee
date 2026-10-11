@@ -39,19 +39,19 @@ pub fn rectifier_opts() -> SolverOptions {
     }
 }
 
-// --- the synapse array -------------------------------------------------------
+// --- the mirror array -------------------------------------------------------
 
-/// An `n`-block synapse array as both a [`Circuit`] and the equivalent `.cir`,
+/// An `n`-block current-mirror array as both a [`Circuit`] and the equivalent `.cir`,
 /// built in one pass so the two representations cannot drift apart.
 ///
 /// Each block: a phase-staggered pulse drives a voltage switch that gates a
-/// reference current into an NPN mirror, whose output charges an RC membrane.
+/// reference current into an NPN mirror, whose output charges an RC load.
 /// Every block hangs off the shared, source-pinned VCC rail, which is what makes
 /// the array decompose into independent islands.
 pub struct Synapse {
     pub netlist: String,
     pub circuit: Circuit,
-    /// `mem0..mem{n-1}`, in block order: the membrane nodes a probe reads.
+    /// `mem0..mem{n-1}`, in block order: the load nodes a probe reads.
     pub membrane_nodes: Vec<String>,
 }
 

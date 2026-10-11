@@ -4,7 +4,7 @@
 //! switch-control nets from conduction reachability thereby also excludes the
 //! little Thevenin drivers (`Vdrv` behind `Rdrv`) that *hold* those nets at
 //! their latched values. The sense nets float, every magnitude switch sits at
-//! its band centre, and no synapse current reaches any membrane: a dead board,
+//! its band centre, and no mirror current reaches any integrator node: a dead board,
 //! from dropping two-device islands.
 //!
 //! ## Why absorption is exact, and when

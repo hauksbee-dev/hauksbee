@@ -90,7 +90,7 @@ struct ProbeExpect {
 /// One closed-form expectation: at sweep point `at` (seconds for `tran`, volts for
 /// `dc`, hertz for `ac`), the probe must equal `value`.
 ///
-/// Analytic expectations outrank a second implementation: the synapse oracle's
+/// Analytic expectations outrank a second implementation: a switched-mirror oracle deck's
 /// switch-straddling timestep caused an 87.5 mV error; refining its grid improved
 /// it 10x. These are model-equation checks, not physical measurements.
 #[derive(Deserialize)]

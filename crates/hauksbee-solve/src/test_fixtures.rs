@@ -108,7 +108,7 @@ pub fn swing(v: &[f64]) -> f64 {
     v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
 }
 
-/// Up-crossings of `level`: one per spike.
+/// Up-crossings of `level`: one per pulse.
 pub fn up_crossings(v: &[f64], level: f64) -> usize {
     v.windows(2)
         .filter(|w| w[0] < level && w[1] >= level)

@@ -785,7 +785,7 @@ pub fn plain_drc_structured_with_rule_source(
     // clearance sweep examines zero primitives and finds zero problems. Left
     // alone, that rendered "Looks healthy: no copper spacing problems found",
     // which a reader takes as "your copper is fine". It was never looked at.
-    // Found by running the flagship board in as a newcomer would, where the
+    // Found by running a large internal test board in as a newcomer would, where the
     // whole report came back clean on input that has no copper in it.
     //
     // Guarded on the primitive count rather than the file extension, so this

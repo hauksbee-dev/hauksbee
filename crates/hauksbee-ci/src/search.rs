@@ -151,7 +151,7 @@ pub struct Condition {
 }
 
 impl Condition {
-    /// `V_SET1=2V` / `OUTPUT_I1=6uA`: the net's last path segment.
+    /// `V_SET=2V` / `LOAD_I=6uA`: the net's last path segment.
     #[must_use]
     pub fn describe(&self) -> String {
         let unit = if self.amps { "A" } else { "V" };

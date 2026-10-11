@@ -42,7 +42,7 @@
 //! then `cut`, then `lift`, then `jumper`, then `fit` (a rework part is
 //! soldered onto the board the earlier steps produced). All are pure [`BoundBoard`]
 //! mutations, no transient, no DC, preserving the prep-stays-solve-free
-//! invariant `tarski_prep` established.
+//! invariant the earlier hand-written preparation code established.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -60,7 +60,7 @@ use crate::binder::BoundBoard;
 ///
 /// Must clear the binder's node namespace entirely,
 /// [`apply`](AsBuiltOverlay::apply) fails loudly if any bound node reaches
-/// it. The value is the historical base `tarski_prep::fault1_cut` used,
+/// it. The value is the historical base the earlier hand-written surgery used,
 /// kept so the overlay's result is byte-identical to the proven imperative
 /// surgery.
 pub const FLOAT_NODE_BASE: u32 = 800_000;

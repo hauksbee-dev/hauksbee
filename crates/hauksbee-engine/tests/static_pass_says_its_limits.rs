@@ -1,9 +1,9 @@
 //! A clean static report must say what it did not check.
 //!
-//! Found by running the flagship board the way a newcomer would: upload it,
+//! Found by running a large internal test board the way a newcomer would: upload it,
 //! read the report. Every part bound, every section came back healthy, and
 //! nothing anywhere mentioned that a whole class of fault was still unexamined.
-//! The flagship regression this project was built around is precisely that
+//! The regression this project was built around is precisely that
 //! class: a rail that collapses on a fuzzed power-up, invisible to any static
 //! check.
 //!

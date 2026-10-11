@@ -82,7 +82,7 @@ pub struct Island {
     pub boundary_in: Vec<NodeId>,
 }
 
-/// A shunt-fed rail tear: an internal supply rail node (e.g. `ANALOG_VDD`) that
+/// A shunt-fed rail tear: an internal supply rail node (e.g. a post-regulator analog supply) that
 /// is fed from a pinned source rail (e.g. `+5V`) through a *single* series
 /// resistor, a current-sense shunt or supply impedance, and is shared by many
 /// otherwise-independent nonlinear blocks (the current-mirror emitters).
@@ -105,7 +105,7 @@ pub struct RailTear {
     /// Series resistance of the shunt (Ω).
     pub r_shunt: f64,
     /// Other linear devices that also tie to the rail and have a free (non-rail,
-    /// non-pinned) terminal, e.g. membrane pull-up resistors. These couple only
+    /// non-pinned) terminal, e.g. integrator pull-up resistors. These couple only
     /// through the rail voltage and are accounted for via their islands' boundary
     /// currents. A rail load with NO free terminal (e.g. a rail-to-ground bypass
     /// capacitor) would be dropped by the island analysis and its current lost,
@@ -139,8 +139,8 @@ impl Partition {
 
     /// Analyze a circuit into islands, additionally detecting and cutting
     /// shunt-fed supply-rail tear nodes (see `RailTear`). This is what unlocks
-    /// the Tarski synapse array: every current mirror shares one `ANALOG_VDD`
-    /// rail fed through a 1 kΩ sense shunt, which otherwise fuses the whole
+    /// large current-mirror arrays: when every mirror shares one analog supply
+    /// rail fed through a sense shunt, the shared rail otherwise fuses the whole
     /// array into one giant nonlinear island.
     #[must_use]
     pub fn analyze_with_tears(circuit: &Circuit) -> Self {
@@ -512,7 +512,7 @@ const TEAR_MIN_NONLINEAR_FANOUT: usize = 8;
 /// for tear-detection purposes. This catches the binder's supply representation,
 /// where an ideal `Vsource` sits behind a ~1 mΩ series resistor (`STIFF_R_OHMS`)
 /// feeding the named rail net. It is deliberately far smaller than a real sense
-/// shunt (the Tarski analog rail is fed through 1 kΩ), so a genuine shunt is
+/// shunt (a sense shunt is typically ohms to kilohms), so a genuine shunt is
 /// never mistaken for a stiff leg.
 const STIFF_SUPPLY_R: f64 = 1.0;
 
@@ -634,7 +634,7 @@ fn detect_rail_tears(circuit: &Circuit) -> Vec<RailTear> {
             continue;
         }
         let (feed, shunt, r_shunt) = shunt_links[rail][0];
-        // Other linear loads tied to the rail (e.g. membrane pull-up resistors)
+        // Other linear loads tied to the rail (e.g. integrator pull-up resistors)
         // are recorded for diagnostics; they live in their blocks' islands and
         // are accounted for through the rail voltage automatically, UNLESS a
         // device

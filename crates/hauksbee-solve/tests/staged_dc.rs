@@ -1,15 +1,16 @@
 //! Staged-DC convergence fallback on a stiff diode-laden network.
 //!
-//! The pulse-stretcher pathology that collapses the Tarski cold DC solve, in
-//! miniature: stretch nodes that hang off an ideal driver through reverse-biased
+//! The pulse-stretcher pathology that collapses the cold DC solve on a large
+//! board, in miniature: stretch nodes that hang off an ideal driver through reverse-biased
 //! signal diodes and a DC-open cap, so each is floating (gmin-defined) and the
 //! cold Jacobian is ill-conditioned. The test checks the full diode circuit
 //! converges to a finite, self-consistent operating point and that it matches
 //! the diodes-off relaxed reference where that reference is physically valid
 //! (the rail, and the floating nodes both solvers pin near 0).
 //!
-//! The staged path's load-bearing proof on the real board is the Tarski DC
-//! probe (`ANALOG_VDD`: 0 V collapse -> 5.0 V); this test guards the mechanism in
+//! The staged path's load-bearing proof on the real board is a DC probe of
+//! its analog supply rail (collapse to 0 V before, correct rail voltage after);
+//! this test guards the mechanism in
 //! isolation and that it does not regress the ordinary diode solve.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
@@ -24,8 +25,8 @@ fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let rail = c.node("RAIL");
     add_vdc(&mut c, "VR", rail, NodeId::GROUND, 5.0);
     // Ideal driver held LOW at rest (a comparator output before it fires); the
-    // stretch diodes hang off it through an output resistance, the Tarski
-    // PinDriver topology that produced the singular Vsource branch.
+    // stretch diodes hang off it through an output resistance, the
+    // pin-driver topology that produced the singular Vsource branch.
     let drv_hidden = c.node("DRV_H");
     let drv = c.node("DRV");
     add_vdc(&mut c, "VDRV", drv_hidden, NodeId::GROUND, 0.0);
@@ -91,7 +92,7 @@ fn stiff_diode_dc_converges_to_finite_physical_root() {
 /// above threshold by a bias diode, plus a population of decoy switches near
 /// their knees. Self-deciding (the tanh + control tangent), the switch's on/off
 /// chatters between staged outer passes on this stiff core, mirroring the
-/// 4320-switch Tarski mesh limit cycle. The event-freeze outer loop holds each
+/// limit cycle of a large analog-switch mesh. The event-freeze outer loop holds each
 /// switch's state fixed per inner solve and re-derives it between solves, so it
 /// settles to a consistent root. There is a single physical root: the switch is
 /// biased ON, so out latches to the conducting divider value.
@@ -158,7 +159,7 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
 /// Jacobian. This stresses the new `VSwitch` tangent on a circuit that also carries
 /// the staged-DC diode pathology (floating reverse-diode cap node), and confirms
 /// the switch settles on its negative-feedback knee with the rail/out KCL closed.
-/// (The full event-freeze outer loop's load-bearing proof is the real Tarski
+/// (The full event-freeze outer loop's load-bearing proof is the real large
 /// board; this miniature converges on the homotopy ladder, so it guards the
 /// Jacobian + diode interaction without depending on the staged event path. The
 /// ladder grants enable the dynamic-pivot LU + event loop so the path is

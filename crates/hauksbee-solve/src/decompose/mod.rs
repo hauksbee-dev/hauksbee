@@ -11,7 +11,7 @@
 //! the upstream waveform replayed as a source, exactly.
 //!
 //! This module family makes the circuit itself say where it tears, from
-//! topology and stamps alone. It replaces the board-specific `tarski_decomp`
+//! topology and stamps alone. It replaces an earlier board-specific
 //! implementation, whose net-name lists and tuned constants proved the concept
 //! on one board and generalized to none.
 //!
@@ -24,7 +24,7 @@
 //! * [`rails`]: stiff-rail detection with a cost-model decision (and the
 //!   convergence-escalation override) for balance-tear candidates.
 //! * [`stiff`]: stiff-node tear candidates, the conducted-both-sides cut
-//!   nodes (the flagship's hidden `V_out` nets) that neither free-tear
+//!   nodes (internal output nets driven by one stage and loaded by the next) that neither free-tear
 //!   discovery nor the rail pass can see. Detection only nominates; the
 //!   orchestrator measures stiffness at capture time.
 //! * [`drivers`]: the absorption pass that copies small linear driver groups

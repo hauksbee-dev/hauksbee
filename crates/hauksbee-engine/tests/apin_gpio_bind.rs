@@ -2,11 +2,11 @@
 //! style, complementing the module-level "a2" coverage in
 //! `binder_gpio_promotion.rs`).
 //!
-//! On the `ATmega328P` A0..A5 are PC0..PC5, dual-purpose ADC/GPIO. The Tarski
-//! board drives A2 = OE'_S and A3 = SRCLR'_S as digital control for the 74HC595
-//! chain. The original binder claimed any analog-capable role as an ADC channel
+//! On the `ATmega328P` A0..A5 are PC0..PC5, dual-purpose ADC/GPIO. A board
+//! may drive some of them as digital control (output enable, clear) for a
+//! 74HC595 chain. The original binder claimed any analog-capable role as an ADC channel
 //! before checking GPIO, so those pins got no output driver and floated,
-//! holding the 595 chain cleared. Under dynamic promotion (05-cosim-fidelity
+//! holding the chain cleared. Under dynamic promotion (05-cosim-fidelity
 //! §4.1) every A-pin binds BOTH ways: the ADC channel mapping stays AND a
 //! tri-stated (disabled, electrically inert) GPIO driver is stamped; the
 //! scheduler enables the driver on the pin's first firmware drive.

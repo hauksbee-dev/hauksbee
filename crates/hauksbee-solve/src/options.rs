@@ -247,9 +247,9 @@ pub struct DeviceEffects {
     /// Stamp the switch control-node transconductance (the Newton tangent
     /// coupling the through-current to the control voltage). Not required for
     /// correctness (the same root is reached without it, with more
-    /// iterations); on a torn column whose gate control is a high-Z boundary
-    /// node the summed back-coupling throttles the control's slew (measured
-    /// ~15x slower than its RC), so such callers set this `false`.
+    /// iterations); on a torn stage whose gate control is a high-Z boundary
+    /// node the summed back-coupling throttles the control's slew (far
+    /// slower than its RC), so such callers set this `false`.
     #[serde(default = "default_true")]
     pub switch_ctrl_gm: bool,
     /// Gain (1/V) of the smooth logistic comparator transfer the STAGED solve
@@ -267,12 +267,12 @@ pub struct DeviceEffects {
     /// says how abruptly the conductance crosses one of them. It exists because a
     /// literal step is worse on both counts that matter: no real switch is
     /// discontinuous, and a flat pin costs the per-step Newton its continuous path
-    /// through the transition (measured: a hard pin handed the synapse mirror's
+    /// through the transition (measured: a hard pin handed a BJT mirror's
     /// cold diode-connected base a 0.69 V jump in a single step and it settled at
     /// a false root).
     ///
-    /// The default 0.01 is a timing error of `0.01*|von-voff| / dv_ctrl_dt`: on the
-    /// synapse deck's `SW(VT=1.5 VH=1.0)` band driven by a 0.3 V/µs edge, 20 mV of
+    /// The default 0.01 is a timing error of `0.01*|von-voff| / dv_ctrl_dt`: on a
+    /// switched-mirror deck's `SW(VT=1.5 VH=1.0)` band driven by a 0.3 V/µs edge, 20 mV of
     /// ramp is 67 ns of switching-instant uncertainty against a 400 µs march.
     /// Shrink it for a sharper edge, at the cost of a stiffer step; a value at or
     /// below zero is treated as the smallest usable ramp rather than a step.
@@ -338,7 +338,7 @@ pub enum Strategy {
     /// tolerance was never met (the diode-mesh limit-cycle backstop; a sub-nA
     /// residual IS an operating point).
     ResidualAccept,
-    /// The stiff-transient bundle the spike-path marches need: staged
+    /// The stiff-transient bundle the pulse-path marches need: staged
     /// regularizers on every step, the per-step event-freeze retry, and the
     /// Armijo line search. Granted as one unit because stiff marches need all
     /// three together; a later round may split it.
@@ -394,7 +394,7 @@ impl RobustnessLadder {
     }
 
     /// The full ladder in canonical order: every escalation the solver has.
-    /// This is the substrate the flagship spike paths run on.
+    /// This is the substrate the stiff pulse-path marches run on.
     #[must_use]
     pub fn full() -> Self {
         let mut l = Self::none();
@@ -458,12 +458,12 @@ pub struct EventRetryTuning {
     /// its tail, so it legitimately needs more than the outer budget).
     pub inner_max_newton: Option<usize>,
     /// Switch-flip budget per Gauss-Seidel pass: large enough to flip a
-    /// neuron's whole gate fan-out in one pass, small enough to stop discrete
+    /// cell's whole gate fan-out in one pass, small enough to stop discrete
     /// thrash.
     pub flip_budget: usize,
     /// Try the SMOOTH-comparator retry mode before the frozen mode (the
-    /// membrane-crosses-up FIRE regime prefers smooth, the refractory reset
-    /// prefers frozen; both are always tried, this is only the order).
+    /// integrator-crosses-up FIRE regime prefers smooth, a comparator-driven
+    /// reset prefers frozen; both are always tried, this is only the order).
     pub smooth_comparator_first: bool,
 }
 

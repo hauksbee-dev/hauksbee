@@ -35,7 +35,7 @@
 
 # ── 2-pin diodes ──────────────────────────────────────────────────────────────
 # KiCad's stock "Device:D" Sim.Pins is "1=K 2=A": pad 1 is the cathode, pad 2 is
-# the anode. Confirmed against the Tarski netlist, where the D_stretch parts
+# the anode. Confirmed against a large internal test netlist, where the diodes
 # carry `(pin "1") (pinfunction "K")` and `(pin "2") (pinfunction "A")`. This is
 # the standard KiCad small-signal / rectifier diode numbering (SOD/SMA/SMB/MELF/
 # DO bodies all share it).

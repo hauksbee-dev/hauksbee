@@ -148,8 +148,8 @@ pub struct StampCtx<'a> {
     /// the self-deciding behaviour bit-identical.
     pub cmp_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
     /// Optional FROZEN analog-switch on/off decisions (keyed by device id),
-    /// supplied only by the staged-DC event-driven outer loop. The 4320
-    /// SN74LVC1G3157 switches that fuse the Tarski synapse mesh each carry a
+    /// supplied only by the staged-DC event-driven outer loop. The many analog
+    /// switches that fuse a switched current-mirror mesh each carry a
     /// tanh-blended conductance whose control node sits near the transition for
     /// a coupled core; left self-deciding, the inner Newton limit-cycles as the
     /// switch flips on/off every iteration. When present, each switch's
@@ -2476,8 +2476,8 @@ pub fn vswitch_ramp(
         //
         // It also makes the residual timing error one-signed: the switch can
         // now only ever act LATE, by at most `w / dv_ctrl_dt`, never early.
-        // Turning on early is the failure that cost 7.1 relative on the
-        // synapse array, because it hands the load current before the circuit
+        // Turning on early is the failure that cost a large relative error on a
+        // switched-mirror array, because it hands the load current before the circuit
         // being modelled would have.
         let w = (transition_frac * (von - voff).abs()).max(1e-12)
             * if von >= voff { 1.0 } else { -1.0 };
@@ -2569,11 +2569,11 @@ fn stamp_vswitch<S: StampSink>(
     // The full band is emphatically NOT the transition width, which is the bug
     // this replaces: `VH` is a hysteresis HALF-WIDTH, so ramping across
     // `[VT-VH, VT+VH]` put the 50%-conductance point at `VT` and started
-    // conducting a whole `VH` early. Measured on the synapse deck's
+    // conducting a whole `VH` early. Measured on a switched-mirror deck's
     // `SW(VT=1.5 VH=1.0)` with a 10 us 0->3 V edge: ngspice closes at
     // vctrl = 2.5 V and opens at 0.5 V, while the band-wide ramp was effectively
     // closed by ~1.6 V and open again by ~1.4 V, landing both edges ~3 us early.
-    // On a membrane slewing at 0.43 V/us that was the 7.1-relative divergence.
+    // On a slewing integrator node that was a large relative divergence.
     let latched = crate::stamp::vswitch_latched(ctx.opts, ctx.switch_latch, id);
     let frac = ctx.opts.effects.switch_transition_frac;
     let (_, _, ramp_off, ramp_on) = vswitch_ramp(vctrl_raw, von, voff, latched, frac);
@@ -2583,8 +2583,8 @@ fn stamp_vswitch<S: StampSink>(
     // log-interpolated conductance spans many decades (ron ~ ohms, roff ~ 1e9), so
     // a single Newton iteration that moves the control voltage across the
     // transition makes gsw jump multiple decades at once. On a switch carrying
-    // real current (a synapse spike-gate whose control is a climbing neuron
-    // V_out) that snap destabilizes the coupled solve and the per-step Newton
+    // real current (a gating switch whose control is a slowly climbing
+    // node) that snap destabilizes the coupled solve and the per-step Newton
     // fails right at the flip. Mirroring pn-junction limiting for diodes, bound
     // the per-iteration movement to about one transition width, anchored on the
     // previous iterate. branch_reg == 0 (every normal solve) keeps vctrl unlimited
@@ -2609,13 +2609,12 @@ fn stamp_vswitch<S: StampSink>(
     // entering throw closes. The bare smooth-tanh model breaks this -- at the
     // SELECT transition MID-band BOTH complementary legs sit at the geometric-mean
     // conductance sqrt(ron*roff) (~70-200 kohm), so the common node `a` is
-    // simultaneously low-Z to BOTH throws. In the Tarski synapse spike-gate the two
-    // throws are the output membrane (s1) and a fixed rail (s0 = GND on the
-    // excitatory leg, +5P on the inhibitory leg). Both legs half-on therefore wires
-    // the rail straight onto the membrane through `a`, injecting a WEIGHT-INDEPENDENT
-    // common-mode current (the +5P throw of the inhibitory gate pulls `a` to ~3 V
-    // and the half-on s1 dumps ~20 uA into the membrane regardless of the latched
-    // synapse weight) -- the over-firing pedestal. Enforcing break-before-make:
+    // simultaneously low-Z to BOTH throws. In a gated current-mirror stage the two
+    // throws are an integrator node (s1) and a fixed rail (s0 = GND or a supply).
+    // Both legs half-on therefore wires the rail straight onto the integrator
+    // through `a`, injecting a CONTROL-INDEPENDENT common-mode current that
+    // the latched gating state does not account for -- a spurious pedestal.
+    // Enforcing break-before-make:
     // WINNER-TAKE-ALL between the two throws by their SELECT margin: the throw
     // whose control sits FURTHER past its own threshold is the selected one and
     // keeps (most of) its conductance; the LOSER is driven toward roff. With
@@ -2623,9 +2622,9 @@ fn stamp_vswitch<S: StampSink>(
     //   s_eff  = s * sigmoid(K*(margin_self - margin_sib))
     // a cleanly selected throw (margin_self >> margin_sib) is unchanged, the
     // opposite throw collapses to roff, and AT the exact crossover both halve --
-    // so the rail throw never bridges to the membrane throw, while the GENUINELY
-    // selected throw (the spike-gate s1 once the climbing hidden V_out passes the
-    // band centre) still conducts the weighted synapse current. This is the
+    // so the rail throw never bridges to the integrator throw, while the GENUINELY
+    // selected throw (s1 once its slowly climbing control passes the
+    // band centre) still conducts the gated current. This is the
     // analog realisation of the same on-margin tie-break the frozen event path
     // (`eval_switch_states`) uses, made smooth/differentiable for the per-step
     // Newton. K sets the transition sharpness (effects.spdt_bbm_k, default 6).
@@ -2673,12 +2672,12 @@ fn stamp_vswitch<S: StampSink>(
     // The control-node transconductance is a Newton TANGENT (it makes each switch
     // Newton-linearized rather than a Picard fixed point); it is not required for
     // correctness -- the same root is reached without it, just with more
-    // iterations. For a torn feedforward column whose spike-gate control is a
-    // HIGH-Z boundary node (the captured hidden V_out, driven through an external
-    // RC, drawing zero conduction current), summing this term across the ~20
-    // switch legs on that one control node with the large mirror voltage
-    // `vab≈4.5 V` couples back into the iterative solution and throttles the
-    // control's slew so the gate never closes (measured: V_out charges ~15x
+    // iterations. For a torn feedforward stage whose gating-switch control is a
+    // HIGH-Z boundary node (a captured node driven through an external
+    // RC, drawing zero conduction current), summing this term across the many
+    // switch legs on that one control node with a large mirror voltage
+    // across them couples back into the iterative solution and throttles the
+    // control's slew so the gate never closes (the node charges far
     // slower than its R*C). effects.switch_ctrl_gm = false drops the
     // back-coupling so the control node is purely exogenous; the conductance
     // stamp + the switch's own a/b dynamics still track the flip. The default
@@ -2979,8 +2978,8 @@ struct Swing {
 /// The pin is a Newton unknown, not a value held at the iterate: a rail fed
 /// through a shunt is anything but stiff next to the 1 ohm stage, and holding
 /// it explicit turns the rail/output loop into a fixed-point iteration that
-/// cycles forever at the tolerance (measured on the Tarski board's starved
-/// `ANALOG_VDD`: plain Newton parked on an 8.6 uV / 8.6 uA two-cycle). A stage
+/// cycles forever at the tolerance (measured on a starved analog
+/// supply rail: plain Newton parked on a micro-volt-scale two-cycle). A stage
 /// without supply pins, or whose supply sits outside its levels, keeps the
 /// card's fixed levels and stamps exactly as before.
 fn comparator_swing(
@@ -3050,12 +3049,13 @@ const COMPARATOR_GOUT: f64 = 1.0;
 /// rail whatever the input does next, unless it recrosses the OTHER trip a
 /// whole band away. The smooth staged transfer (a 2 mV-wide logistic of the
 /// input) has no such memory. Inside one Newton solve it is a linear amplifier
-/// of gain ~2500, so a comparator whose output resets its own input (a neuron
-/// whose fire closes the switch that discharges its membrane, any relaxation
-/// oscillator) found a REGULATING root with the output parked mid-swing, and
+/// of gain ~2500, so a comparator whose output resets its own input (a
+/// pulse generator whose output closes the switch that discharges its
+/// integrator, any relaxation oscillator) found a REGULATING root with the output parked mid-swing, and
 /// the march crawled through it at 0.1 ns steps until its Newton budget ran out
-/// (measured: nine Tarski hidden neurons held at 1.93 V with their inputs 3.5
-/// mV over threshold, ~4400 steps, then the fallback ladder for ~360 s more).
+/// (observed on a large board: several such stages held mid-swing with their
+/// inputs a few mV over threshold until the step budget ran out, then the
+/// fallback ladder ran for minutes more).
 /// Reading the hysteresis side from the iterate instead has no root at all:
 /// the trip jumps the whole band as the output passes mid-swing.
 ///
@@ -3070,8 +3070,8 @@ const COMPARATOR_GOUT: f64 = 1.0;
 /// `tpd_s / 2`, then slews linearly across its swing in `tpd_s`, so it passes
 /// mid-swing `tpd_s` after the decision. A decision that reverts inside the
 /// hold never reaches the output (an input pulse too short for the part to
-/// answer), and a longer one keeps its width, shifted by the delay: a neuron's
-/// fire holds its output for the delay after its membrane has started to
+/// answer), and a longer one keeps its width, shifted by the delay: a relaxation
+/// oscillator's output holds for the delay after its integrator has started to
 /// reset, as the real part does. The card gives no edge time; the slew over
 /// `tpd_s` is a bounded slope that keeps the output stage continuous for the
 /// march, not a datasheet rise time. A part without a stated delay steps at

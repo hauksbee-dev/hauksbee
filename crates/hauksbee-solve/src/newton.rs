@@ -62,8 +62,8 @@ pub struct Workspace {
     /// Per-node consecutive-oscillation counter: how many iterations in a row a
     /// node's undamped step has reversed sign. Used by the staged-DC adaptive
     /// damping to damp a persistently-oscillating node PROGRESSIVELY harder (a
-    /// fixed fraction can sustain a stubborn 2-cycle, the measured refractory-reset
-    /// follow-on limit cycle on the synapse-mesh / BJT-mirror nodes). Allocated
+    /// fixed fraction can sustain a stubborn 2-cycle, the follow-on limit cycle
+    /// after a comparator-driven reset on a switch-mesh / BJT-mirror node). Allocated
     /// once; only touched on the staged path (`branch_reg>0`).
     osc_count: Vec<u32>,
     /// True when every device is linear, so one solve per step is exact and
@@ -722,7 +722,7 @@ pub fn newton_solve(
             // GMIN STEPPING on the failed step. `.op` has this rung and the
             // per-step transient Newton did not, and a relay flip is exactly the
             // step that needs it: a node that was floating at millivolts has to
-            // move a full junction drop at once (the synapse mirror's cold
+            // move a full junction drop at once (a BJT mirror's cold
             // diode-connected base, 5 mV -> 692 mV). A large gmin puts a real
             // conductance across every junction, which conditions that jump;
             // walking it back down carries the solution with it, so each rung
@@ -848,8 +848,9 @@ fn newton_solve_core(
     // infinity-norm). Gated behind Strategy::LineSearch; OFF by default so
     // every existing per-step path is bit-identical. This is the textbook
     // globalization for a traveling overshoot in a stiff mesh (the measured
-    // refractory-reset follow-on limit cycle: a huge Newton correction that pins
-    // maxdV on a DIFFERENT synapse-mesh/BJT-mirror node each iteration, which the
+    // follow-on limit cycle after a comparator-driven reset: a huge Newton
+    // correction that pins maxdV on a DIFFERENT switch-mesh/BJT-mirror node each
+    // iteration, which the
     // per-node oscillation damping cannot catch because the offending node moves).
     // On each Newton step compute the full step dx, then backtrack alpha in
     // {1, 0.5, 0.25, ...} until ||F(x + alpha*dx)||_inf < (1 - c*alpha)||F(x)||_inf
@@ -1293,7 +1294,7 @@ fn newton_solve_core(
         // circuit is then smooth and converges monotonically-but-slowly (the
         // diode/BJT-mirror tail is linear), so a flat window is "still working",
         // not a limit cycle. Bailing there wrongly fails the event-freeze inner
-        // solve right at the spike-gate flip. With the states self-deciding
+        // solve right at the gating-switch flip. With the states self-deciding
         // (no freeze) the early bail is the correct limit-cycle guard.
         let frozen = ws.cmp_freeze.is_some() || ws.switch_freeze.is_some();
         if branch_reg > 0.0 && !frozen {
@@ -1385,8 +1386,8 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
             // non-trivial.
             let oscillating = prev * full < 0.0 && prev.abs() > 1e-9 && full.abs() > 1e-9;
             // PROGRESSIVE damping: a fixed fraction (0.25) breaks a transient
-            // 2-cycle but can SUSTAIN a stubborn one (the measured
-            // refractory-reset follow-on limit cycle, where a synapse-mesh /
+            // 2-cycle but can SUSTAIN a stubborn one (the follow-on limit cycle
+            // after a comparator-driven reset, where a switch-mesh /
             // BJT-mirror node and its neighbour flip-flop at the step cap for
             // hundreds of iterations and never decay). Each consecutive
             // oscillation halves the node's damping again (0.25, 0.125, ...),
@@ -1586,7 +1587,7 @@ fn residual_rel_inf_norm_at(
     // staged_branch_reg for the whole march, and that swaps the comparator
     // stamp from the bang-bang rail to the smooth high-gain logistic; a servo
     // root of the smooth system (the fixture oscillator's fire step rests its
-    // membrane exactly where the comparator output half-opens the discharge
+    // integrator exactly where the comparator output half-opens the discharge
     // gate) has a mid-rail comparator output. Re-stamping that root with
     // branch_reg = 0 judges it against the bang-bang transfer and reads a
     // rail-sized "imbalance" (relative residual exactly 1.0) at a true root of
@@ -1971,7 +1972,7 @@ fn dc_solve(
     // EXACT to solver tolerance: the relaxed solve only seeds the starting
     // guess (the final root is set by the full, unmodified diode equations).
     // The gmin floor STAGED_GMIN injects at most ~1e-7 S * 5 V of leakage per
-    // node, orders of magnitude below the µA-scale synapse / mirror currents
+    // node, orders of magnitude below the µA-scale mirror currents
     // that set every meaningful node, and well inside reltol + vntol. Nodes
     // that are genuinely floating at DC (cap + reverse diode only) have no
     // physically-defined DC voltage anyway; the gmin floor pins them to ~0,
@@ -1982,7 +1983,7 @@ fn dc_solve(
     // The staged path solves a diode-laden board whose conducting junctions can
     // make the frozen elimination order hit a singular pivot. The dynamic
     // re-pivot fallback dissolves that LU singularity, but on a board whose
-    // spike-output nodes are defined only dynamically it cannot reach a static
+    // pulse-output nodes are defined only dynamically it cannot reach a static
     // root and just adds cost, so it is OPT-IN (Strategy::DynamicPivot); the
     // default keeps the frozen-singular -> adopt-the-relaxed-point behaviour
     // bit-for-bit. Restored to off before every return so the workspace-reused
@@ -2027,9 +2028,9 @@ fn dc_solve(
     // diode / DC-open cap can make the Newton map limit-cycle: successive
     // iterates flip-flop by a small but >vntol amount forever, so the increment
     // test never passes even though the actual KCL imbalance F = g*x - rhs is at
-    // the gmin floor (a genuine root). For a torn feedforward column (one output
-    // neuron of the spiking net: BJT mirrors off a stiff rail + SPDT switches +
-    // one comparator/RC-stretcher) that limit cycle parks at a sub-nA residual.
+    // the gmin floor (a genuine root). For a torn feedforward stage (one output
+    // output stage of a relaxation-oscillator net: BJT mirrors off a stiff rail +
+    // SPDT switches + one comparator/RC-stretcher) that limit cycle parks at a sub-nA residual.
     // Under Strategy::ResidualAccept, check the real residual on the current
     // iterate and accept it as a root if it is below opts.residual_accept_tol
     // (default 1e-9 A). This is physically honest: a sub-nA KCL residual *is*
@@ -2097,7 +2098,7 @@ fn gmin_ladder(
 /// point it reached in `ws.x`: the full root when a rung converges, else the
 /// relaxed power-on point, which is a genuinely converged DC solution of the
 /// relaxed circuit AND the physically correct power-on state (every stretch
-/// cap discharged, every signal diode reverse-biased before the first spike);
+/// cap discharged, every signal diode reverse-biased before the first pulse);
 /// the caller's transient then integrates the full circuit forward from it and
 /// the operating point relaxes to its true steady state over the march.
 ///
@@ -2107,7 +2108,7 @@ fn gmin_ladder(
 ///    plain solve stalls when bang-bang comparators limit-cycle as the analog
 ///    core settles, so each discrete state is frozen per inner solve and
 ///    re-derived Gauss-Seidel until consistent, a TRUE root of the full
-///    circuit. Gated because on a board whose spike-output nodes are defined
+///    circuit. Gated because on a board whose pulse-output nodes are defined
 ///    only dynamically it cannot converge and just burns time;
 /// 3. the diode saturation-current continuation (warm-started log ramp of
 ///    `is`, tracking the solution branch to the real device);
@@ -2204,8 +2205,8 @@ const CMP_CONSISTENCY_SOLVES: usize = 96;
 /// equation, and is what a bistable loop settles on: the seed's decisions
 /// select one of its states, deterministically.
 ///
-/// An astable loop has no such fixed point. A relaxation oscillator (a spiking
-/// neuron: a comparator whose output, stretched through a diode onto an RC,
+/// An astable loop has no such fixed point. A relaxation oscillator (a
+/// comparator-driven pulse generator: a comparator whose output, stretched through a diode onto an RC,
 /// closes a switch that resets the comparator's own input) is inconsistent in
 /// both states, high resets the input that holds it high, low lets it charge
 /// past the threshold, and the outer loop cycles. The comparators whose
@@ -2450,7 +2451,7 @@ impl SpdtPairs {
 /// BREAK-BEFORE-MAKE: for the two complementary legs of one SPDT (paired in
 /// `pairs`), both legs are NEVER allowed ON in the same frozen state. During the
 /// flip the smooth tanh conductance of each leg would otherwise make the common
-/// node simultaneously low-Z to BOTH throws (GND and the output membrane); the
+/// node simultaneously low-Z to BOTH throws (GND and the output integrator); the
 /// multi-decade conductance snap that makes the per-step Newton matrix singular.
 /// When both legs of a pair evaluate ON, the leg whose control sits LESS firmly
 /// in its on-region is forced OFF (break) so the other can make. The
@@ -2575,8 +2576,8 @@ fn staged_event_solve(
 /// Event-driven TRANSIENT step solve: [`event_solve`] at `t+dt` with the real
 /// integration step's reactive companion, so the converged fixed point is a
 /// genuine root of the FULL nonlinear circuit AT t+dt. Where the bare per-step
-/// [`newton_solve`] limit-cycles at a comparator/switch flip (the synapse
-/// spike-gate SPDT snapping multiple conductance decades while it carries real
+/// [`newton_solve`] limit-cycles at a comparator/switch flip (a gating
+/// SPDT snapping multiple conductance decades while it carries real
 /// mirror current), this converges the step; `false` (with `ws.x` left at the
 /// last inner iterate) sends the caller to a step cut.
 ///
@@ -2586,9 +2587,9 @@ fn staged_event_solve(
 /// its own threshold node) stalls right at the crossing when pinned to a rail;
 /// left SELF-DECIDING through the smooth high-gain logistic transfer (the
 /// `branch_reg>0` path, which has a real tangent) it tracks its flip
-/// continuously while the switch mesh stays frozen. A refractory reset is the
+/// continuously while the switch mesh stays frozen. A comparator-driven reset is the
 /// opposite regime: the smooth comparator's ~2000 V^-1 gain couples the
-/// collapsing membrane straight back into the fast positive-feedback discharge
+/// collapsing integrator straight back into the fast positive-feedback discharge
 /// loop and diverges, so there the comparator must be frozen.
 ///
 /// GMIN FLOOR: high-impedance mesh nodes (mirror bases, off-switch internal
@@ -2598,7 +2599,7 @@ fn staged_event_solve(
 /// 1e-7 S leak across 5 V is 0.5 uA, below the signal currents, so only the
 /// genuinely-floating nodes are pinned). Frozen regime only: the smooth pass
 /// converges on the bare `opts.gmin`, and the floor there perturbs a
-/// membrane-near-threshold operating point enough to break the crossing it is
+/// integrator-near-threshold operating point enough to break the crossing it is
 /// meant to resolve.
 #[allow(clippy::too_many_arguments)]
 pub fn newton_solve_event(
@@ -2656,11 +2657,11 @@ struct EventSolve<'a> {
     /// state at once can cycle (the measured "369 flips don't settle"); a
     /// bounded re-derivation, taking the most-committed switches first, walks
     /// the discrete state toward consistency instead of thrashing. Too small
-    /// a budget splits a fired neuron's ganged spike-gates across passes and
+    /// a budget splits a fired cell's ganged gate switches across passes and
     /// leaves an inconsistent intermediate the inner solve fights, so the
-    /// default (typed tuning, `event_retry.flip_budget`) covers a neuron's
+    /// default (typed tuning, `event_retry.flip_budget`) covers a cell's
     /// whole gate fan-out; the DC loop flips unboundedly. Comparators (few,
-    /// and the spike driver) are never throttled.
+    /// and the pulse driver) are never throttled.
     flip_budget: usize,
     max_passes: usize,
 }
@@ -2670,7 +2671,7 @@ struct EventSolve<'a> {
 /// switch states are frozen for each inner Newton solve (the comparators are
 /// bang-bang and every analog switch carries a tanh conductance whose control
 /// sits near transition for the coupled core, so both must be held for the
-/// inner circuit to be smooth: otherwise a flipping switch flips the synapse
+/// inner circuit to be smooth: otherwise a flipping switch flips the mirror
 /// current that flips a comparator that flips the switch, the measured limit
 /// cycle), then every state is re-derived from the converged inner solution
 /// (`eval_comparator_states`, `eval_switch_states` with break-before-make) and
@@ -2895,8 +2896,8 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     // intrinsic mesh: `series_resistance` is relaxed OFF,
     // which pins each internal unknown behind a unit diagonal and puts the
     // Gummel-Poon cores back on the external nodes, the base-topology system
-    // the cold ladder is known to converge (measured on the flagship board:
-    // with the intrinsic rb/rc/re mesh live, cold source-stepping limit-cycles
+    // the cold ladder is known to converge (observed on a large
+    // mirror-heavy board: with the intrinsic rb/rc/re mesh live, cold source-stepping limit-cycles
     // on the mirror pairs' internal nodes at scale ~0.2 and the whole staged
     // DC dies). The full-toggle solve then warm-starts from this converged
     // point with the internal unknowns seeded from their external terminals,
@@ -3539,7 +3540,7 @@ mod tests {
         );
     }
 
-    /// A spike stretcher in a relaxation loop: a comparator fires through
+    /// A pulse stretcher in a relaxation loop: a comparator fires through
     /// 1 kOhm and a diode into a stretch cap, and the stretched pulse closes a
     /// switch that discharges the comparator's own input. The loop has no
     /// self-consistent DC state: high output discharges the input that holds
@@ -3547,8 +3548,7 @@ mod tests {
     /// rung of the ladder that lets the comparator decide each iteration
     /// chatters its output rail to rail; the staged ladder used to end on its
     /// relaxed (diodes-open) seed, a point whose diode carried 4.95 V forward
-    /// and whose KCL residual was e^100-sized (the Tarski board's hidden-layer
-    /// neurons, ~1.7e35 A).
+    /// and whose KCL residual was e^100-sized.
     fn stretcher_relaxation_loop() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
         let (vs, refn, mem) = (c.node("VS"), c.node("REF"), c.node("MEM"));
@@ -3683,7 +3683,7 @@ mod tests {
     /// select, the stretched pulse decays and opens the reset, and the loop
     /// oscillates from there (period ~70 us: the input's 100 us RC to the
     /// 2.5 V trip).
-    /// `TransientDyn` is the spike paths' own grant, which the comparator
+    /// `TransientDyn` is the pulse paths' own grant, which the comparator
     /// flips need.
     #[test]
     fn transient_releases_a_pinned_comparator_and_the_loop_oscillates() {

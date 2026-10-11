@@ -12,9 +12,8 @@
 //! no conduction path B→A (impossible by construction, distinct conduction
 //! components share no conduction path at all) and no sense edge B→A (a
 //! comparator in A watching a node in B would make the coupling
-//! bidirectional). This is the Tarski STEP-0 gate as an algorithm: the
-//! exhaustive net sweep that proves the hidden and output comparator families
-//! disjoint. Here the sweep is
+//! bidirectional). This is an exhaustive net sweep (once done by hand on one board to prove
+//! two comparator families disjoint) as an algorithm. Here the sweep is
 //! a strongly-connected-components pass over the island digraph: islands in
 //! the same SCC are genuinely coupled and stay fused into one solve;
 //! condensation edges between distinct components are one-directional *by

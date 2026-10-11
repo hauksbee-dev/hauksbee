@@ -1,7 +1,7 @@
 //! Comparator output transitions in the primary adaptive march.
 //!
 //! A comparator whose flip feeds back to its own input (a relaxation
-//! oscillator, an integrate-and-fire neuron whose fire resets its membrane) or
+//! oscillator, an integrate-and-fire oscillator whose output resets its integrator) or
 //! drives another comparator's input must march through every flip on the
 //! plain adaptive solve, under the Newton budget the co-sim scheduler gives a
 //! chunk, and put each edge where the circuit puts it. Both boards here are
@@ -146,7 +146,7 @@ fn each_edge_lands_one_propagation_delay_after_its_trip() {
     }
 }
 
-/// The membrane's fires and its lowest voltage within `window` of each.
+/// The integrator's fires and its lowest voltage within `window` of each.
 fn fires_and_resets(w: &Waveforms, c: &Circuit, window: f64) -> Vec<(f64, f64)> {
     let m = w.node(c, "m").unwrap();
     crossings(w.node(c, "o3").unwrap(), &w.time, 2.5, true)
@@ -161,9 +161,9 @@ fn fires_and_resets(w: &Waveforms, c: &Circuit, window: f64) -> Vec<(f64, f64)> 
         .collect()
 }
 
-/// `K3` fires several times in each of `K2`'s high phases (the membrane
+/// `K3` fires several times in each of `K2`'s high phases (the integrator
 /// charges toward 5 V with a 2 us time constant and trips at 2.1 V, a ~4 us
-/// phase), and each fire resets its own membrane.
+/// phase), and each fire resets its own integrator.
 fn assert_neuron_fires(w: &Waveforms, c: &Circuit) {
     let phases = crossings(w.node(c, "o2").unwrap(), &w.time, 2.5, true).len();
     let fires = fires_and_resets(w, c, 300e-9);
@@ -175,7 +175,7 @@ fn assert_neuron_fires(w: &Waveforms, c: &Circuit) {
     for (t_fire, reset) in fires {
         assert!(
             reset < 0.5,
-            "fire at {t_fire:.4e} s resets the membrane, min {reset:.3} V"
+            "fire at {t_fire:.4e} s resets the integrator, min {reset:.3} V"
         );
     }
 }

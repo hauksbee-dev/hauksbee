@@ -14,7 +14,7 @@
 //! Both backends present the identical lockstep surface (`run_micros`, GPIO/
 //! ADC/UART exchange via [`PinId`] and byte streams), so the engine scheduler
 //! couples to either without change. All board-specific logic (MCP4728 decode,
-//! 74HC595 readback, neuron simulation) lives in higher-level crates; this
+//! 74HC595 readback) lives in higher-level crates; this
 //! crate is pure emulation plumbing.
 //!
 //! # Licensing note

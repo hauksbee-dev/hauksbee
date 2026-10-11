@@ -35,7 +35,7 @@
 //!
 //! ## Stacked feeds
 //!
-//! Real supplies cascade (source -> +5V -> 1k shunt -> `ANALOG_VDD`), and
+//! Real supplies cascade (source -> +5V -> sense shunt -> analog supply), and
 //! single-hop detection (feed must be source-pinned) stops one hop short of
 //! the rail that fragments the board. Discovery is therefore transitive: a
 //! discovered rail is a valid feed for the next hop, walked to a fixpoint.
@@ -278,7 +278,7 @@ pub fn detect_balance_tears(
     // current from every block's books) is closed at the source: the island
     // analysis gives such devices BOUNDARY-ONLY islands whose currents the
     // balance reads like any block's (`partition.rs`, the analysis-probe
-    // finding about the flagship's rail decoupling). Tear shunts remain the
+    // finding about rail decoupling on a large board). Tear shunts remain the
     // one exception and are excluded from that pass because their currents
     // are the analytic balance terms themselves.
 
@@ -403,7 +403,7 @@ pub(crate) fn fragment_blocks(
     // Iterate the island's own device list: the ids are right there, and a
     // whole-circuit scan with a linear membership test made every call
     // O(circuit x island). The stiff-node probe loop calls this hundreds of
-    // times on the flagship's fused island, where that product was minutes
+    // times on a large fused island, where that product was minutes
     // of analysis time (review finding on the detection commit).
     for &id in &graph.islands[island] {
         let dev = &circuit.devices[id.0 as usize];

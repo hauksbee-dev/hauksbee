@@ -17,7 +17,7 @@
 //!    sources stamped into the circuit.
 //!
 //! The [`scheduler::Scheduler`] steps all three in lockstep chunks
-//! (generalizing the Tarski-Emulator pattern), and [`engine::HauksbeeEngine`]
+//! (generalizing an earlier board-specific emulator's lockstep pattern), and [`engine::HauksbeeEngine`]
 //! exposes the whole thing behind `hauksbee-server`'s `Engine` trait.
 //!
 //! The implementation is layered across four crates so an edit rebuilds one
