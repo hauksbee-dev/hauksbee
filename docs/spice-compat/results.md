@@ -116,7 +116,7 @@ deck here at all.
 |  |  | `V(coll)` | 3.324e-7 | 1.0e-5 | 30x | op | PASS |
 | schottky_1n5817_two_points | op | `V(v1a)` | 9.271e-9 | 1.0e-6 | 108x | op | PASS |
 |  |  | `V(v31a)` | 2.887e-8 | 1.0e-6 | 35x | op | PASS |
-| switch_bjt_mirror_membrane | tran | `V(mem0)` | 5.428e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
+| switch_bjt_mirror_hold_cap | tran | `V(mem0)` | 5.428e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
 |  |  | `V(mem0) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
 |  |  | `V(mem0) vs closed form` | 1.630e-8 | 1.0e-6 | 61x | t=2.000e-5 | PASS |
 |  |  | `V(mem0) vs closed form` | 2.805e-7 | 2.0e-3 | 7129x | t=6.000e-5 | PASS |
@@ -197,7 +197,7 @@ deck here at all.
 - **rlc_series**: series RLC underdamped step response
 - **s8050_datasheet_point**: S8050 NPN at the datasheet's 50 mA VBE test point
 - **schottky_1n5817_two_points**: 1N5817 at 1.0 A and 3.1 A, the two forward points Vishay 88525 publishes
-- **switch_bjt_mirror_membrane**: Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block switched-mirror deck, held on both flat regions and cross-checked through both edges.
+- **switch_bjt_mirror_hold_cap**: Relay gating a BJT current mirror into a 1nF hold capacitor: the reduced one-block switched-mirror deck, held on both flat regions and cross-checked through both edges.
 - **switch_gate_drive_edge**: Relay gating an RC gate load: turn-on instant and gate rise against the closed form v(g) = 5*(1 - exp(-(t - 10.6us)/11us)).
 - **switch_sw_thresholds**: SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH.
 - **temp_diode_tc_85**: Diode drops and a TC1 divider at .temp 85: IS(T), Vt(T) and R(T) against exact closed forms.

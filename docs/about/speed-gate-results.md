@@ -12,11 +12,11 @@ Oracle: ngspice-45.2. ngspice process-start floor: 9.280 ms, measured as the min
 | case | hauksbee | steps | ngspice (raw) | ngspice (solver only) | speedup raw | speedup corrected | floor | vs ngspice | kind | bound | vs own monolith (waveform) | vs own monolith (settled) | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | half-wave rectifier, 5 ms tran | 1.327 ms | 1125 | 18.070 ms | 8.790 ms | 13.61x | 6.62x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
-| synapse array, 90 blocks, 400 us tran | 61.390 ms | 401 | 567.324 ms | 558.044 ms | 9.24x | 9.09x | 3.50x | 1.876e0 | disclosed drift | 1.200e1 | 6.030e-9 (bound 1.000e-2) | 9.081e-15 (bound 1.000e-5) | PASS |
+| bjt mirror array, 90 blocks, 400 us tran | 61.390 ms | 401 | 567.324 ms | 558.044 ms | 9.24x | 9.09x | 3.50x | 1.876e0 | disclosed drift | 1.200e1 | 6.030e-9 (bound 1.000e-2) | 9.081e-15 (bound 1.000e-5) | PASS |
 
 Accuracy against ngspice is measured on the oracle's own `.print tran` table, sampled at the oracle's time points with linear interpolation into ours, relative to `max(|oracle|, 1% of full scale)` so a zero crossing cannot manufacture an infinite error.
 
 A row marked `agreement` is a claim that the two engines match, enforced by its bound. A row marked `disclosed drift` is a known disagreement with a documented modelling cause: the bound stops it widening, and the project must never present such a row as ngspice agreement.
 
 - **half-wave rectifier, 5 ms tran**: accuracy is v(out) against ngspice's own .print tran table.
-- **synapse array, 90 blocks, 400 us tran**: NOT an ngspice agreement claim: the two voltage-switch models have different mid-transition conductance shapes, which skews the membrane turn-off on a 10 us edge. The claim here is partitioned vs our own monolithic reference.
+- **bjt mirror array, 90 blocks, 400 us tran**: NOT an ngspice agreement claim: the two voltage-switch models have different mid-transition conductance shapes, which skews the hold-node turn-off on a 10 us edge. The claim here is partitioned vs our own monolithic reference.

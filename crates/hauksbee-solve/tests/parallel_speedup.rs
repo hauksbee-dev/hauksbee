@@ -51,7 +51,7 @@ fn timed(
 }
 
 fn assert_mirror_sane(c: &Circuit, wf: &Waveforms) {
-    let rail = wf.final_node(c, "ANALOG_VDD").expect("rail present");
+    let rail = wf.final_node(c, "VDD_A").expect("rail present");
     assert!(
         rail.is_finite() && rail > 4.99 && rail < 5.0,
         "rail out of sane sag window: {rail}"

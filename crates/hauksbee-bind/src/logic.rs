@@ -2100,7 +2100,7 @@ disable = [
     }
 
     #[test]
-    fn nor_latch_matches_spike_recorder_truth_table() {
+    fn nor_latch_matches_pulse_recorder_truth_table() {
         let mut lc = compile(
             r#"
 inputs  = ["set", "reset"]

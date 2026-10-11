@@ -48,20 +48,20 @@ pub fn rectifier_opts() -> SolverOptions {
 /// reference current into an NPN mirror, whose output charges an RC load.
 /// Every block hangs off the shared, source-pinned VCC rail, which is what makes
 /// the array decompose into independent islands.
-pub struct Synapse {
+pub struct MirrorArray {
     pub netlist: String,
     pub circuit: Circuit,
-    /// `mem0..mem{n-1}`, in block order: the load nodes a probe reads.
-    pub membrane_nodes: Vec<String>,
+    /// `hold0..hold{n-1}`, in block order: the load nodes a probe reads.
+    pub hold_nodes: Vec<String>,
 }
 
 #[allow(clippy::cast_precision_loss)] // block index k < n, tiny
-pub fn build_synapse_array(n: usize) -> Synapse {
+pub fn build_bjt_mirror_array(n: usize) -> MirrorArray {
     let mut c = Circuit::new();
     let vcc = c.node("vcc");
     vdc(&mut c, "VCC", vcc, 5.0);
-    let mut net = String::from("synapse array\nVCC vcc 0 DC 5\n");
-    let mut membrane_nodes = Vec::new();
+    let mut net = String::from("bjt mirror array\nVCC vcc 0 DC 5\n");
+    let mut hold_nodes = Vec::new();
     let model = BjtModel {
         polarity: Polarity::N,
         is: 1e-15,
@@ -120,31 +120,31 @@ pub fn build_synapse_array(n: usize) -> Synapse {
         bjt(&mut c, &format!("Q1_{k}"), rref, rref, GND, &model);
         let _ = writeln!(net, "Q1_{k} ref{k} ref{k} 0 QMOD");
 
-        let mem = c.node(&format!("mem{k}"));
-        bjt(&mut c, &format!("Q2_{k}"), mem, rref, GND, &model);
-        let _ = writeln!(net, "Q2_{k} mem{k} ref{k} 0 QMOD");
+        let hold = c.node(&format!("hold{k}"));
+        bjt(&mut c, &format!("Q2_{k}"), hold, rref, GND, &model);
+        let _ = writeln!(net, "Q2_{k} hold{k} ref{k} 0 QMOD");
 
-        res(&mut c, &format!("RM{k}"), vcc, mem, 47e3);
-        let _ = writeln!(net, "RM{k} vcc mem{k} 47k");
-        cap_ic(&mut c, &format!("CM{k}"), mem, GND, 1e-9, 5.0);
-        let _ = writeln!(net, "CM{k} mem{k} 0 1n IC=5");
-        membrane_nodes.push(format!("mem{k}"));
+        res(&mut c, &format!("RH{k}"), vcc, hold, 47e3);
+        let _ = writeln!(net, "RH{k} vcc hold{k} 47k");
+        cap_ic(&mut c, &format!("CH{k}"), hold, GND, 1e-9, 5.0);
+        let _ = writeln!(net, "CH{k} hold{k} 0 1n IC=5");
+        hold_nodes.push(format!("hold{k}"));
     }
 
     net.push_str(".model SMOD SW(VT=1.5 VH=1.0 RON=10 ROFF=1e9)\n");
     net.push_str(".model QMOD NPN(IS=1e-15 BF=150 VAF=80 NF=1.0)\n");
     net.push_str(".tran 1u 400u uic\n");
-    net.push_str(".print tran v(mem0)\n");
+    net.push_str(".print tran v(hold0)\n");
     net.push_str(".options reltol=1e-4\n.end\n");
 
-    Synapse {
+    MirrorArray {
         netlist: net,
         circuit: c,
-        membrane_nodes,
+        hold_nodes,
     }
 }
 
-pub fn synapse_opts() -> SolverOptions {
+pub fn mirror_array_opts() -> SolverOptions {
     SolverOptions {
         integration: Integration::Trapezoidal,
         step: StepControl::Fixed { dt: 1e-6 },

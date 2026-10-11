@@ -288,7 +288,7 @@ pub fn pnp_blocks(
         .collect()
 }
 
-/// The shunt-fed PNP array: +5V -> `r_shunt` -> `ANALOG_VDD` -> `n` blocks.
+/// The shunt-fed PNP array: +5V -> `r_shunt` -> `VDD_A` -> `n` blocks.
 /// Returns `(circuit, rail, feed, shunt device, blocks)`.
 #[must_use]
 pub fn shunt_array(
@@ -298,7 +298,7 @@ pub fn shunt_array(
     let mut c = Circuit::new();
     let p5 = c.node("+5V");
     vdc(&mut c, "V5", p5, 5.0);
-    let rail = c.node("ANALOG_VDD");
+    let rail = c.node("VDD_A");
     let shunt = res(&mut c, "R_shunt", p5, rail, r_shunt);
     let blocks = pnp_blocks(&mut c, "", rail, n, GND, 100e3, 10e3);
     (c, rail, p5, shunt, blocks)

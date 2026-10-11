@@ -7,7 +7,7 @@
 //! samples align one-to-one, and assert the waveforms agree within the
 //! reltol-scaled convergence tolerance. The stiff large-board-shaped fixture
 //! (the `linesearch_fixture` board, TransientDyn-armed, adaptive) is compared
-//! on its physics verdicts (spike count, spike times) because an adaptive
+//! on its physics verdicts (pulse count, pulse times) because an adaptive
 //! grid legitimately re-times under any iterate-path change.
 //!
 //! The OFF side of gate (b), bypass Off must not move a single ULP, is
@@ -87,7 +87,7 @@ fn rc_ladder_bypass_on_is_bit_identical() {
 /// accepted waveforms with bypass ON must match the no-bypass reference to
 /// reltol at every node and sample.
 fn mirror_array_gate(blocks: usize, tstop: f64) -> (f64, f64) {
-    let (mut c, _membranes) = build_shunt_array(blocks);
+    let (mut c, _hold_nodes) = build_shunt_array(blocks);
     // Modulate the +5 V supply (±0.5 V, 20 us period): the quasi-static DC
     // drive converges every step in <= 2 Newton iterations, and bypass never
     // skips before iteration 3; the gate would be vacuously bit-identical.
@@ -151,7 +151,7 @@ fn mirror_array_240_bypass_matches_reference() {
 /// adaptive). This board exists in `tests/linesearch_fixture.rs`, which must
 /// stay the only test in its binary; the construction is replicated verbatim
 /// here.
-fn spiking_board() -> Circuit {
+fn relaxation_oscillator_board() -> Circuit {
     let mut c = Circuit::new();
     let m = c.node("m");
     let th = c.node("th");
@@ -162,7 +162,7 @@ fn spiking_board() -> Circuit {
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 2.5);
     add_vdc(&mut c, "VRAIL", rail, NodeId::GROUND, 1.0);
     idc(&mut c, "IIN", NodeId::GROUND, m, 5e-5);
-    add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
+    add_capacitor(&mut c, "CI", m, NodeId::GROUND, 1e-9, None);
     crate::shared::add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
     comparator(&mut c, "K1", spk, m, th, 0.4);
     comparator(&mut c, "K2", spkb, th, m, 0.4);
@@ -188,7 +188,7 @@ fn spiking_board() -> Circuit {
     // A junction on the integrator so the stiff path has a bypassable device
     // in it (the linesearch fixture itself is diode-free; real boards
     // are not). Anode at the 1 V rail, cathode at the integrator: reverse-biased
-    // (quiescent) for the whole inter-spike charge, conducting only in the
+    // (quiescent) for the whole inter-pulse charge, conducting only in the
     // brief post-reset dip below ~0.45 V; the quiescent-most-of-the-time
     // shape bypass targets, without clamping the firing ramp.
     diode(
@@ -205,8 +205,8 @@ fn spiking_board() -> Circuit {
     c
 }
 
-fn spiking_march(bypass: NewtonBypass) -> (Circuit, Waveforms) {
-    let c = spiking_board();
+fn pulsing_march(bypass: NewtonBypass) -> (Circuit, Waveforms) {
+    let c = relaxation_oscillator_board();
     let opts = SolverOptions {
         step: StepControl::Adaptive {
             dt_initial: 1e-6,
@@ -244,19 +244,19 @@ fn crossings(t: &[f64], v: &[f64], thresh: f64) -> Vec<f64> {
 }
 
 /// Gate (b), ON side: the stiff fixture with bypass ON must reproduce the
-/// no-bypass physics, same spike count, spike times within a small fraction
+/// no-bypass physics, same pulse count, pulse times within a small fraction
 /// of the ~25 us period. (The OFF side, bit-identity of the reference path,
 /// is the linesearch fixture's own hash, untouched by this arc.)
 #[test]
-fn stiff_fixture_bypass_preserves_spike_train() {
-    let (c, wf_off) = spiking_march(NewtonBypass::Off);
-    let (_c2, wf_on) = spiking_march(NewtonBypass::On);
+fn stiff_fixture_bypass_preserves_pulse_train() {
+    let (c, wf_off) = pulsing_march(NewtonBypass::Off);
+    let (_c2, wf_on) = pulsing_march(NewtonBypass::On);
     let spk_off = wf_off.node(&c, "spk").expect("spk");
     let spk_on = wf_on.node(&c, "spk").expect("spk");
     let x_off = crossings(&wf_off.time, spk_off, 2.5);
     let x_on = crossings(&wf_on.time, spk_on, 2.5);
     println!(
-        "stiff fixture: spikes off={} on={} first-spike off={:?} on={:?}",
+        "stiff fixture: pulses off={} on={} first-pulse off={:?} on={:?}",
         x_off.len(),
         x_on.len(),
         x_off.first(),
@@ -265,19 +265,19 @@ fn stiff_fixture_bypass_preserves_spike_train() {
     assert_eq!(
         x_off.len(),
         x_on.len(),
-        "bypass changed the spike count: {} vs {}",
+        "bypass changed the pulse count: {} vs {}",
         x_off.len(),
         x_on.len()
     );
-    // First spike: the pre-drift verdict, held tight.
+    // First pulse: the pre-drift verdict, held tight.
     let (t0_off, t0_on) = (x_off[0], x_on[0]);
     assert!(
         (t0_off - t0_on).abs() <= 1e-7,
-        "bypass moved the FIRST spike: {t0_off} vs {t0_on}"
+        "bypass moved the FIRST pulse: {t0_off} vs {t0_on}"
     );
-    // Later spikes: a self-resetting relaxation loop accumulates phase drift
-    // under ANY iterate-path change (the fixture's own doctrine; its spike
-    // count is asserted as a band, never as exact times). Bound each spike's
+    // Later pulses: a self-resetting relaxation loop accumulates phase drift
+    // under ANY iterate-path change (the fixture's own doctrine; its pulse
+    // count is asserted as a band, never as exact times). Bound each pulse's
     // shift as a fraction of its own elapsed time (phase drift), not as an
     // absolute window.
     let mut worst_frac = 0.0f64;
@@ -287,12 +287,12 @@ fn stiff_fixture_bypass_preserves_spike_train() {
         worst_frac = worst_frac.max((a - b).abs() / a.max(1e-12));
     }
     println!(
-        "stiff fixture: worst spike-time shift {worst_dt:.3e}s ({:.2}% phase drift)",
+        "stiff fixture: worst pulse-time shift {worst_dt:.3e}s ({:.2}% phase drift)",
         worst_frac * 100.0
     );
     assert!(
         worst_frac <= 0.05,
-        "bypass drifted a spike by {:.2}% of its elapsed time (> 5%)",
+        "bypass drifted a pulse by {:.2}% of its elapsed time (> 5%)",
         worst_frac * 100.0
     );
 }
@@ -311,7 +311,7 @@ fn high_z_board(drive_v: f64) -> Circuit {
     let mut c = Circuit::new();
     let drv = c.node("drv");
     let a = c.node("a");
-    let mem = c.node("mem");
+    let integ = c.node("integ");
     let out = c.node("out");
     let th = c.node("th");
     add_vdc(&mut c, "VDRV", drv, NodeId::GROUND, drive_v);
@@ -322,18 +322,18 @@ fn high_z_board(drive_v: f64) -> Circuit {
         &mut c,
         "D1",
         a,
-        mem,
+        integ,
         DiodeModel {
             is: 4.352e-9,
             n: 1.906,
             ..DiodeModel::default()
         },
     );
-    add_capacitor(&mut c, "CM", mem, NodeId::GROUND, 1e-9, Some(0.0));
+    add_capacitor(&mut c, "CI", integ, NodeId::GROUND, 1e-9, Some(0.0));
     // The high-Z anchor: 1 GΩ to ground. Charging current is nA-scale.
-    crate::shared::add_resistor(&mut c, "RLEAK", mem, NodeId::GROUND, 1e9);
+    crate::shared::add_resistor(&mut c, "RLEAK", integ, NodeId::GROUND, 1e9);
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 0.4);
-    comparator(&mut c, "K1", out, mem, th, 0.1);
+    comparator(&mut c, "K1", out, integ, th, 0.1);
     // The masked-convergence stressor: an UNRELATED stiff junction branch on
     // the same board. The Newton iterations are GLOBAL (one monolithic
     // matrix), so this sine-walked diode forces 3+ iterations on every step,
@@ -373,8 +373,8 @@ fn high_z_board(drive_v: f64) -> Circuit {
 fn high_z_verdict(c: &Circuit, wf: &Waveforms) -> (usize, Option<f64>, f64) {
     let out = wf.node(c, "out").expect("out");
     let x = crossings(&wf.time, out, 2.5);
-    let mem_final = wf.final_node(c, "mem").unwrap();
-    (x.len(), x.first().copied(), mem_final)
+    let integ_final = wf.final_node(c, "integ").unwrap();
+    (x.len(), x.first().copied(), integ_final)
 }
 
 #[test]
@@ -394,11 +394,11 @@ fn high_z_sense_net_verdict_unchanged() {
         let tstop = 20e-3;
         let wf_off = run(&c, mk(NewtonBypass::Off), tstop);
         let wf_on = run(&c, mk(NewtonBypass::On), tstop);
-        let (n_off, t_off, mem_off) = high_z_verdict(&c, &wf_off);
-        let (n_on, t_on, mem_on) = high_z_verdict(&c, &wf_on);
+        let (n_off, t_off, integ_off) = high_z_verdict(&c, &wf_off);
+        let (n_on, t_on, integ_on) = high_z_verdict(&c, &wf_on);
         println!(
             "high-Z drive={drive}V: fires off={n_off}@{t_off:?} on={n_on}@{t_on:?} \
-             mem_final off={mem_off:.6} on={mem_on:.6}"
+             integ_final off={integ_off:.6} on={integ_on:.6}"
         );
         assert_eq!(
             n_off == 1,

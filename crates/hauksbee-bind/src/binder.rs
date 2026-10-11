@@ -7618,7 +7618,7 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
 /// True when a net names itself a supply but carries no magnitude anyone can
 /// read off the name, so [`power_rail_voltage`] correctly declines to guess one.
 ///
-/// `ANALOG_VDD`, bare `VDD`, bare `VEE`, `AVDD`: every one is a supply, and not
+/// `VDD_A`, bare `VDD`, bare `VEE`, `AVDD`: every one is a supply, and not
 /// one of them says what voltage. Inventing a number would overdrive or
 /// underdrive every part on the net, so the binder leaves them unresolved and
 /// they sit at 0 V. That is the right call and it is invisible, which is the
@@ -7658,7 +7658,7 @@ const DEAD_RAIL_MIN_PARTS: usize = 6;
 /// Nets that name themselves a supply, carry a rail's worth of parts, and are
 /// powered by nothing.
 ///
-/// The binder refuses to guess a voltage for `ANALOG_VDD` or a bare `VDD`,
+/// The binder refuses to guess a voltage for `VDD_A` or a bare `VDD`,
 /// which is right: inventing one would over- or under-drive every part on the
 /// net. But the net then sits at 0 V, the operating point around it is fiction,
 /// and the stress monitor reports on that fiction with the same confidence it
@@ -10405,7 +10405,7 @@ style = "i2c_pointer"
                 ("out".to_string(), circuit.node("OUT")),
                 ("in_plus".to_string(), circuit.node("P")),
                 ("in_minus".to_string(), circuit.node("N")),
-                ("vcc".to_string(), circuit.node("ANALOG_VDD")),
+                ("vcc".to_string(), circuit.node("VDD_A")),
                 ("vss".to_string(), NodeId::GROUND),
             ]);
             let power_nets = rails.iter().map(|(n, v)| ((*n).to_string(), *v)).collect();
@@ -10425,7 +10425,7 @@ style = "i2c_pointer"
                 })
                 .expect("a comparator is stamped")
         };
-        let (lo, hi) = levels(&[("ANALOG_VDD", 4.5)]);
+        let (lo, hi) = levels(&[("VDD_A", 4.5)]);
         assert!(
             (hi - 4.45).abs() < 1e-12 && (lo - 0.05).abs() < 1e-12,
             "{lo} {hi}"

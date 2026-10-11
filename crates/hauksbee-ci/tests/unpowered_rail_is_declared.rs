@@ -26,10 +26,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// A board with two supply-ish nets: `VCC` (5 V by convention, so it resolves)
-/// and `ANALOG_VDD` (a supply with no readable magnitude). Enough parts hang off
-/// `ANALOG_VDD` for it to read as a rail rather than a signal.
+/// and `VDD_A` (a supply with no readable magnitude). Enough parts hang off
+/// `VDD_A` for it to read as a rail rather than a signal.
 fn board_with_a_nameless_rail(dir: &Path) -> PathBuf {
-    two_rail_board(dir.join("nameless_rail.net"), "VCC", "ANALOG_VDD")
+    two_rail_board(dir.join("nameless_rail.net"), "VCC", "VDD_A")
 }
 
 /// A KiCad netlist of eight 10k resistors, each from `rail` (pin 2) to
@@ -96,13 +96,13 @@ fn a_rail_with_no_readable_voltage_is_named_in_every_surface() {
 
     assert_eq!(
         result.dead_rails,
-        vec!["ANALOG_VDD".to_string()],
-        "ANALOG_VDD is a supply with no magnitude and nothing feeds it"
+        vec!["VDD_A".to_string()],
+        "VDD_A is a supply with no magnitude and nothing feeds it"
     );
 
     let human = result.render_human();
     assert!(
-        human.contains("UNPOWERED RAIL: ANALOG_VDD"),
+        human.contains("UNPOWERED RAIL: VDD_A"),
         "the terminal report names it:\n{human}"
     );
     // Position is the point. A reader who meets a named component fault first
@@ -122,13 +122,13 @@ fn a_rail_with_no_readable_voltage_is_named_in_every_surface() {
     let json: serde_json::Value = serde_json::from_str(&result.render_json()).expect("json parses");
     assert_eq!(
         json["dead_rails"],
-        serde_json::json!(["ANALOG_VDD"]),
+        serde_json::json!(["VDD_A"]),
         "a tool reading --json gets the same qualification a person does"
     );
 
     let junit = result.render_junit();
     assert!(
-        junit.contains("UNPOWERED RAIL: ANALOG_VDD"),
+        junit.contains("UNPOWERED RAIL: VDD_A"),
         "a dashboard reader who only sees the JUnit tab gets it too:\n{junit}"
     );
 
@@ -148,12 +148,12 @@ fn powering_the_rail_clears_the_warning() {
     let spec = spec_for(
         dir.path(),
         &board,
-        "\n[[supply]]\nnet = \"ANALOG_VDD\"\nkind = \"ideal\"\nvolts = 3.3\n",
+        "\n[[supply]]\nnet = \"VDD_A\"\nkind = \"ideal\"\nvolts = 3.3\n",
     );
     let result = run(&spec);
     assert!(
         result.dead_rails.is_empty(),
-        "the spec powers ANALOG_VDD, so nothing is dead: {:?}",
+        "the spec powers VDD_A, so nothing is dead: {:?}",
         result.dead_rails
     );
     assert!(
@@ -184,7 +184,7 @@ fn the_scaffold_asks_about_the_rail_it_cannot_resolve() {
     let board = board_with_a_nameless_rail(dir.path());
     let toml = hauksbee_ci::init::render_spec(&board).expect("scaffold");
     assert!(
-        toml.contains("# net = \"ANALOG_VDD\""),
+        toml.contains("# net = \"VDD_A\""),
         "the starter spec offers a commented supply for it:\n{toml}"
     );
     assert!(
@@ -194,7 +194,7 @@ fn the_scaffold_asks_about_the_rail_it_cannot_resolve() {
     // It must stay commented: the scaffold does not know the voltage, and a
     // guessed number that runs is worse than a blank that does not.
     assert!(
-        !toml.contains("\nnet = \"ANALOG_VDD\""),
+        !toml.contains("\nnet = \"VDD_A\""),
         "it must not invent a voltage and enable it:\n{toml}"
     );
 }
@@ -251,11 +251,11 @@ fn the_scaffolds_questions_cover_every_rail_the_first_run_warns_about() {
 
 #[test]
 fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
-    // ANALOG_VDD names no voltage, but an AMS1117-3.3 makes it from VCC. It is
+    // VDD_A names no voltage, but an AMS1117-3.3 makes it from VCC. It is
     // powered; calling it dead would send the user to declare a supply there,
     // which the runner refuses as a fight with the regulator.
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = two_rail_board(dir.path().join("regulated.net"), "VCC", "ANALOG_VDD");
+    let path = two_rail_board(dir.path().join("regulated.net"), "VCC", "VDD_A");
     let net = std::fs::read_to_string(&path).expect("read board");
     let net = net
         .replace(
@@ -269,8 +269,8 @@ fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
             "(name \"VCC\")\n      (node (ref \"U1\") (pin \"3\"))\n",
         )
         .replace(
-            "(name \"ANALOG_VDD\")\n",
-            "(name \"ANALOG_VDD\")\n      (node (ref \"U1\") (pin \"2\"))\n",
+            "(name \"VDD_A\")\n",
+            "(name \"VDD_A\")\n      (node (ref \"U1\") (pin \"2\"))\n",
         )
         .replace(
             "  ))\n",
@@ -279,10 +279,10 @@ fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
     std::fs::write(&path, net).expect("write board");
     let result = run(&spec_for(dir.path(), &path, ""));
     assert!(
-        !result.dead_rails.iter().any(|n| n == "ANALOG_VDD"),
-        "U1 drives ANALOG_VDD: {:?}",
+        !result.dead_rails.iter().any(|n| n == "VDD_A"),
+        "U1 drives VDD_A: {:?}",
         result.dead_rails
     );
     let toml = hauksbee_ci::init::render_spec(&path).expect("scaffold");
-    assert!(!toml.contains("net = \"ANALOG_VDD\""), "{toml}");
+    assert!(!toml.contains("net = \"VDD_A\""), "{toml}");
 }

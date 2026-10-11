@@ -1007,7 +1007,7 @@
           "default": null
         },
         "ref": {
-          "description": "Reference designator, e.g. \"`R_Shunt15301`\".",
+          "description": "Reference designator, e.g. \"`R_SHUNT1`\".",
           "type": "string"
         },
         "select": {

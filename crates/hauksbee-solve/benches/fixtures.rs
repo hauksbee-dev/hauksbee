@@ -60,9 +60,9 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 
 /// Build an `n`-block current-mirror array sharing a SHUNT-FED analog rail.
 ///
-/// +5V --[`R_shunt` 1k]-- `ANALOG_VDD` --(per block: mirror emitters + load R)
+/// +5V --[`R_shunt` 1k]-- `VDD_A` --(per block: mirror emitters + load R)
 /// Each block: ref resistor -> diode-connected Q1 mirror reference -> Q2 mirror
-/// output charges an RC load pulled up to `ANALOG_VDD`. Bias is quasi-static
+/// output charges an RC load pulled up to `VDD_A`. Bias is quasi-static
 /// (DC drive) so the array reaches a steady operating point, exactly like a
 /// steady-state window with latched mirror references.
 ///
@@ -81,11 +81,11 @@ pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
     let p5 = c.node("+5V");
     vdc(&mut c, "V5", p5, 5.0);
     // The defining element: the sense shunt feeding the analog rail.
-    let avdd = c.node("ANALOG_VDD");
+    let avdd = c.node("VDD_A");
     res(&mut c, "R_shunt", p5, avdd, 1e3);
 
-    // PNP high-side mirror: emitters on the rail, like the board's ANALOG_VDD
-    // current mirrors.
+    // PNP high-side mirror: emitters on the rail, like a high-side
+    // mirror array on a shared rail.
     let model = BjtModel {
         polarity: Polarity::P,
         is: 1e-15,
@@ -95,7 +95,7 @@ pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
         ..BjtModel::default()
     };
 
-    let mut membranes = Vec::new();
+    let mut hold_nodes = Vec::new();
     for k in 0..n {
         // A current mirror whose transistor EMITTERS sit on the shared rail, the
         // way large PNP mirror arrays hang many emitters off one supply rail. Each block
@@ -107,12 +107,12 @@ pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
         // Diode-connected reference transistor with emitter on the rail.
         bjt(&mut c, &format!("Q1_{k}"), rref, rref, avdd, &model);
         // Mirror output transistor, emitter on the rail, collector -> load node.
-        let mem = c.node(&format!("mem{k}"));
-        bjt(&mut c, &format!("Q2_{k}"), mem, rref, avdd, &model);
+        let hold = c.node(&format!("hold{k}"));
+        bjt(&mut c, &format!("Q2_{k}"), hold, rref, avdd, &model);
         // Load RC to ground.
-        res(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);
-        cap_ic(&mut c, &format!("CM{k}"), mem, NodeId::GROUND, 1e-9, 0.0);
-        membranes.push(format!("mem{k}"));
+        res(&mut c, &format!("RH{k}"), hold, NodeId::GROUND, 47e3);
+        cap_ic(&mut c, &format!("CH{k}"), hold, NodeId::GROUND, 1e-9, 0.0);
+        hold_nodes.push(format!("hold{k}"));
     }
-    (c, membranes)
+    (c, hold_nodes)
 }

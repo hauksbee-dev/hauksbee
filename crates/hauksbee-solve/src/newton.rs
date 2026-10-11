@@ -3551,14 +3551,14 @@ mod tests {
     /// and whose KCL residual was e^100-sized.
     fn stretcher_relaxation_loop() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
-        let (vs, refn, mem) = (c.node("VS"), c.node("REF"), c.node("MEM"));
+        let (vs, refn, integ) = (c.node("VS"), c.node("REF"), c.node("INTEG"));
         let (cmp, anode, vout) = (c.node("CMP"), c.node("A"), c.node("VOUT"));
         vdc(&mut c, "V5", vs, 5.0);
         vdc(&mut c, "VREF", refn, 2.5);
         c.add(Device::Comparator {
             name: "K".into(),
             out: cmp,
-            inp: mem,
+            inp: integ,
             inn: refn,
             out_lo: 0.05,
             out_hi: 4.95,
@@ -3581,9 +3581,9 @@ mod tests {
         diode(&mut c, "Dstretch", anode, vout, model);
         cap(&mut c, "Cstretch", vout, GND, 10e-12);
         res(&mut c, "Rstretch", vout, GND, 150e3);
-        res(&mut c, "Rmem", vs, mem, 100e3);
-        cap(&mut c, "Cmem", mem, GND, 1e-9);
-        sw(&mut c, "Sreset", mem, GND, vout, (1.75, 1.25), 6.0);
+        res(&mut c, "Rint", vs, integ, 100e3);
+        cap(&mut c, "Cint", integ, GND, 1e-9);
+        sw(&mut c, "Sreset", integ, GND, vout, (1.75, 1.25), 6.0);
         (c, vout)
     }
 
@@ -3614,8 +3614,8 @@ mod tests {
         assert!(pinned < 1e-6, "not a root with K pinned: {pinned:e} A");
         let free = ws.dc_residual_inf_norm(&c, &opts);
         assert!(free > 1.0, "K's inputs agree with its pin: {free:e} A");
-        let mem = node_v(&ws, c.find_node("MEM").unwrap());
-        assert!(node_v(&ws, vout) > 1.75 && mem < 2.5, "{mem} V");
+        let integ = node_v(&ws, c.find_node("INTEG").unwrap());
+        assert!(node_v(&ws, vout) > 1.75 && integ < 2.5, "{integ} V");
     }
 
     /// A second comparator that only FOLLOWS the loop (it reads the stretched
@@ -3696,13 +3696,13 @@ mod tests {
             .run(&c, 150e-6)
             .expect("march from the pinned root");
         let v = &w.node_voltages[vout.0 as usize];
-        let mem = &w.node_voltages[c.find_node("MEM").unwrap().0 as usize];
+        let integ = &w.node_voltages[c.find_node("INTEG").unwrap().0 as usize];
         let v_min = v.iter().copied().fold(f64::INFINITY, f64::min);
-        assert!(v[0] > 1.75, "starts on the pinned spike: {}", v[0]);
+        assert!(v[0] > 1.75, "starts on the pinned pulse: {}", v[0]);
         assert!(v_min < 1.25, "released, the reset opens: {v_min}");
         // Twice through the trip: the input recharged, fired, was reset by
         // its own stretched pulse, and recharged again.
-        let trips = crate::test_fixtures::up_crossings(mem, 2.5);
+        let trips = crate::test_fixtures::up_crossings(integ, 2.5);
         assert!(trips >= 2, "the loop oscillates: {trips} trip(s)");
     }
 

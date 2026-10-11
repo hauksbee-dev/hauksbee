@@ -388,7 +388,7 @@ fn refusal_and_abort_documents_validate() {
             chunk_s: 0.001,
         }],
         timing_refusals: vec!["PWL replay budget exceeded".to_string()],
-        dead_rails: vec!["ANALOG_VDD".to_string()],
+        dead_rails: vec!["VDD_A".to_string()],
         waiver_notes: vec!["waiver for max_temp on R1 lapsed on 2026-01-01".to_string()],
         ..Default::default()
     };

@@ -15,7 +15,7 @@ describe("parseToml", () => {
     expect(doc.errors).toEqual([]);
     expect(doc.root.name).toBe("power-up sanity");
     expect(doc.root.duration_ms).toBe(500);
-    expect(doc.root.suppress_rail).toEqual(["ANALOG_VDD"]);
+    expect(doc.root.suppress_rail).toEqual(["VDD_A"]);
 
     const supplies = doc.root.supply as TomlTable[];
     expect(supplies).toHaveLength(2);

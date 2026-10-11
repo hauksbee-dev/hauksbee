@@ -42,7 +42,7 @@ use super::floating_inputs::is_cmos_logic_value;
 /// Forward drive (V) across a base-emitter junction that counts as conducting:
 /// one junction drop plus margin.
 const JUNCTION_DRIVE_V: f64 = 0.9;
-/// Level assumed for a supply whose name carries no voltage (`ANALOG_VDD`).
+/// Level assumed for a supply whose name carries no voltage (`VDD_A`).
 const UNNAMED_SUPPLY_V: f64 = 3.3;
 /// Nets listed in one finding.
 const MAX_NETS: usize = 8;

@@ -81,6 +81,6 @@ fn cascaded_comparator_chunks_march_on_the_primary_alone() {
     let (lo, hi) = span(&sched, "m");
     assert!(
         lo < 1.0 && hi > 1.5 && hi < 2.2,
-        "the membrane charges and resets: {lo:.3}..{hi:.3} V"
+        "the integrator node charges and resets: {lo:.3}..{hi:.3} V"
     );
 }

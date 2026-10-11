@@ -19,7 +19,7 @@ import hauksbee_ci_core as core  # noqa: E402
 SAMPLE_JUNIT = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="hauksbee-ci" tests="2" failures="1" time="0.10">
   <testsuite name="brownout" tests="2" failures="1" time="0.10">
-    <testcase classname="voltage" name="ANALOG_VDD comes up">
+    <testcase classname="voltage" name="VDD_A comes up">
       <failure message="seed 1: min=0.759V (&gt;= 4.9V)">seed 1: min=0.759V (&gt;= 4.9V)</failure>
     </testcase>
     <testcase classname="uart" name="UART says hello">
@@ -34,7 +34,7 @@ def test_parse_junit_splits_pass_and_fail():
     results = core.parse_junit(SAMPLE_JUNIT)
     assert len(results) == 2
     fail, ok = results
-    assert fail.name == "ANALOG_VDD comes up"
+    assert fail.name == "VDD_A comes up"
     assert fail.passed is False
     assert "0.759V" in fail.detail
     assert ok.name == "UART says hello"
@@ -123,7 +123,7 @@ def test_format_report_readable():
     ci = core.CiRun(passed=False, results=results)
     text = core.format_report(ci)
     assert "[FAIL]" in text and "[PASS]" in text
-    assert "ANALOG_VDD comes up" in text
+    assert "VDD_A comes up" in text
 
 
 def test_find_specs_collects_and_dedupes_toml():

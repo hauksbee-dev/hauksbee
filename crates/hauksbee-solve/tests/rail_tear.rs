@@ -35,12 +35,12 @@ struct Transientish(hauksbee_solve::Waveforms);
 /// the rail-tear partition, and return the worst node-voltage disagreement plus
 /// both wall times. `blocks` sets the array size; `tstop` the run length.
 fn solve_both(blocks: usize, tstop: f64) -> (f64, f64, f64, usize, usize) {
-    let (c, membranes) = build_shunt_array(blocks);
+    let (c, hold_nodes) = build_shunt_array(blocks);
     let dt = 1e-6;
 
     // The tear must be detected and the array must fragment per-block.
     let part = hauksbee_solve::Partition::analyze_with_tears(&c);
-    assert_eq!(part.tears.len(), 1, "expected exactly one ANALOG_VDD tear");
+    assert_eq!(part.tears.len(), 1, "expected exactly one VDD_A tear");
     let nl_islands = part.islands.iter().filter(|i| !i.linear).count();
     assert!(
         nl_islands >= blocks,
@@ -50,8 +50,8 @@ fn solve_both(blocks: usize, tstop: f64) -> (f64, f64, f64, usize, usize) {
     let (mono, mono_t) = run(&c, Partitioning::Off, tstop, dt);
     let (parted, part_t) = run(&c, Partitioning::Auto, tstop, dt);
 
-    let mut names: Vec<String> = membranes;
-    names.push("ANALOG_VDD".to_string());
+    let mut names: Vec<String> = hold_nodes;
+    names.push("VDD_A".to_string());
     for k in 0..blocks {
         names.push(format!("ref{k}"));
     }
@@ -95,7 +95,7 @@ fn rail_tear_matches_monolithic_exactly() {
 fn rail_with_ground_bypass_cap_is_not_torn() {
     let (mut c, _m) = build_shunt_array(24);
     // Add a decoupling cap directly from the rail to ground.
-    let avdd = c.node("ANALOG_VDD");
+    let avdd = c.node("VDD_A");
     add_capacitor(&mut c, "C_byp", avdd, NodeId::GROUND, 100e-9, Some(0.0));
     let part = hauksbee_solve::Partition::analyze_with_tears(&c);
     assert_eq!(
@@ -110,14 +110,14 @@ fn rail_with_ground_bypass_cap_is_not_torn() {
     let (auto, _at) = run(&c, Partitioning::Auto, 30e-6, dt);
     let mut max_abs = 0.0f64;
     for k in 0..24 {
-        for nm in [format!("mem{k}"), format!("ref{k}")] {
+        for nm in [format!("hold{k}"), format!("ref{k}")] {
             let a = mono.0.final_node(&c, &nm).unwrap_or(0.0);
             let b = auto.0.final_node(&c, &nm).unwrap_or(0.0);
             max_abs = max_abs.max((a - b).abs());
         }
     }
-    let a = mono.0.final_node(&c, "ANALOG_VDD").unwrap_or(0.0);
-    let b = auto.0.final_node(&c, "ANALOG_VDD").unwrap_or(0.0);
+    let a = mono.0.final_node(&c, "VDD_A").unwrap_or(0.0);
+    let b = auto.0.final_node(&c, "VDD_A").unwrap_or(0.0);
     max_abs = max_abs.max((a - b).abs());
     assert!(
         max_abs <= 1e-6,

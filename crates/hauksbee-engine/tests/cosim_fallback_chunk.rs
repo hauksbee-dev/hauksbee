@@ -190,10 +190,10 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
     // stale hold: the rest integrator is ~0 V pre-pulse, and the chunk end sits
     // mid-oscillation well above it (measured 2.70 V; asserted loosely, the
     // point is that the fallback PRODUCED a solved trajectory).
-    let m = sched.net_voltage("m").expect("membrane net exists");
+    let m = sched.net_voltage("m").expect("integrator net exists");
     assert!(
         m > 0.5,
-        "the rescued chunk carries a solved membrane voltage, got {m}"
+        "the rescued chunk carries a solved integrator voltage, got {m}"
     );
 }
 

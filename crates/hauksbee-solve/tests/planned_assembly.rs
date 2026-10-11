@@ -58,7 +58,7 @@ fn planned_matches_interpreted_rc_ladder() {
 /// a hub-shaped rail row.
 #[test]
 fn planned_matches_interpreted_mirror_array() {
-    let (c, _membranes) = build_shunt_array(24);
+    let (c, _hold_nodes) = build_shunt_array(24);
     assert_planned_matches("mirror_24/mono", &c, Partitioning::Off, 1e-6, 60e-6);
 }
 
@@ -68,7 +68,7 @@ fn planned_matches_interpreted_mirror_array() {
 /// free and still match their interpreted counterpart to tolerance.
 #[test]
 fn planned_matches_interpreted_partitioned_islands() {
-    let (c, _membranes) = build_shunt_array(24);
+    let (c, _hold_nodes) = build_shunt_array(24);
     assert_planned_matches("mirror_24/torn", &c, Partitioning::Auto, 1e-6, 60e-6);
 }
 

@@ -116,7 +116,7 @@ fn build_rc_fan(n: usize) -> Circuit {
 #[test]
 fn mirror_arrays_bit_identical_across_thread_counts() {
     for &blocks in &[24usize, 90, 240] {
-        let (c, _membranes) = build_shunt_array(blocks);
+        let (c, _hold_nodes) = build_shunt_array(blocks);
         // Short but real march: enough steps for the rail balance to work
         // per step; the property is per-step, not per-duration.
         check_board(&format!("mirror_array/{blocks}"), &c, 20e-6, 1e-6);
@@ -144,7 +144,7 @@ fn rc_ladder_bit_identical_across_thread_counts() {
 /// that must be exactly as thread-count-invariant as the interpreted path.
 #[test]
 fn planned_assembly_islands_bit_identical_across_thread_counts() {
-    let (c, _membranes) = build_shunt_array(90);
+    let (c, _hold_nodes) = build_shunt_array(90);
     let dt = 1e-6;
     let tstop = 20e-6;
     let planned = |parallel: ParallelPolicy| {

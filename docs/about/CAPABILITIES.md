@@ -483,7 +483,7 @@ volts = 5.0
 
 [[assert]]
 kind = "voltage"
-net  = "ANALOG_VDD"
+net  = "VDD_A"
 min  = 4.9
 after_ms = 50
 ```

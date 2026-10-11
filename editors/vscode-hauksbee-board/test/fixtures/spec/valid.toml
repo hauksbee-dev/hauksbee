@@ -3,7 +3,7 @@ board = "boards/blinky.kicad_pcb"
 firmware = "../../../../../testdata/firmware/esp32_blinky/flash.bin"
 duration_ms = 500
 frame_ms = 1.0
-suppress_rail = ["ANALOG_VDD"]
+suppress_rail = ["VDD_A"]
 
 [[supply]]
 net = "+5V"
@@ -23,7 +23,7 @@ net = "WSEL"
 volts = 5.0
 
 [[override]]
-ref = "R_Shunt15301"
+ref = "R_SHUNT1"
 value = "0.05"
 tolerance = 5.0
 distribution = "gaussian"
@@ -51,7 +51,7 @@ start_ms = 10
 
 [[assert]]
 kind = "voltage"
-net = "ANALOG_VDD"
+net = "VDD_A"
 min = 4.9
 after_ms = 50
 

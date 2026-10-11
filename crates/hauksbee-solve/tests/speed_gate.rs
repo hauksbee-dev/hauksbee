@@ -44,7 +44,7 @@ mod cases;
 #[path = "support/oracle.rs"]
 mod oracle;
 
-use cases::{build_synapse_array, rectifier_opts, synapse_opts, RECTIFIER_DECK};
+use cases::{build_bjt_mirror_array, mirror_array_opts, rectifier_opts, RECTIFIER_DECK};
 use hauksbee_solve::{Partitioning, Transient};
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -72,23 +72,23 @@ const RECTIFIER_NGSPICE_BOUND: f64 = 1e-2;
 
 /// Startup-corrected speedup floor, 90-block switched-mirror array, 400 µs.
 /// Measured 10.4-16.7x corrected (10.6-17.0x raw).
-const SYNAPSE_SPEEDUP_FLOOR: f64 = 3.5;
-/// Ceiling on the DISCLOSED disagreement with ngspice on `v(mem0)`. Not an
+const MIRROR_ARRAY_SPEEDUP_FLOOR: f64 = 3.5;
+/// Ceiling on the DISCLOSED disagreement with ngspice on `v(hold0)`. Not an
 /// agreement claim: see the module docs on the switch-model difference. It is
 /// gated so the disagreement cannot silently grow. Measured 7.2.
-const SYNAPSE_NGSPICE_DRIFT_CEILING: f64 = 12.0;
+const MIRROR_ARRAY_NGSPICE_DRIFT_CEILING: f64 = 12.0;
 /// Worst relative error of the partitioned solve against our own monolithic
-/// reference, over the WHOLE `v(mem0)` waveform. An ACCURACY CLAIM. Measured
+/// reference, over the WHOLE `v(hold0)` waveform. An ACCURACY CLAIM. Measured
 /// 2.0e-3, which is a different and stricter measure than the 1e-7 the docs
 /// quote: that figure is the FINAL integrator value (gated separately below).
 /// A worst-case over a switching edge is dominated by a sub-step timing
 /// difference in where the two paths place the transition, not by drift in the
 /// settled answer.
-const SYNAPSE_SELF_BOUND: f64 = 1e-2;
-/// Relative error of the FINAL `v(mem0)` value, partitioned vs monolithic: the
+const MIRROR_ARRAY_SELF_BOUND: f64 = 1e-2;
+/// Relative error of the FINAL `v(hold0)` value, partitioned vs monolithic: the
 /// settled-answer figure the docs quote as ~1e-7. An ACCURACY CLAIM.
 /// Measured below 1e-6.
-const SYNAPSE_SELF_FINAL_BOUND: f64 = 1e-5;
+const MIRROR_ARRAY_SELF_FINAL_BOUND: f64 = 1e-5;
 
 /// What an accuracy number against ngspice means for a case.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -233,7 +233,7 @@ fn faster_than_ngspice_on_the_marketed_cases() {
 
     let cases = vec![
         measure_rectifier(&bin, startup),
-        measure_synapse(&bin, startup, 90),
+        measure_mirror_array(&bin, startup, 90),
     ];
 
     for c in &cases {
@@ -371,49 +371,49 @@ fn measure_rectifier(bin: &std::path::Path, startup: Duration) -> Case {
     }
 }
 
-fn measure_synapse(bin: &std::path::Path, startup: Duration, blocks: usize) -> Case {
-    let syn = build_synapse_array(blocks);
-    let opts = synapse_opts();
-    let _ = Transient::new(opts).run(&syn.circuit, 400e-6);
+fn measure_mirror_array(bin: &std::path::Path, startup: Duration, blocks: usize) -> Case {
+    let arr = build_bjt_mirror_array(blocks);
+    let opts = mirror_array_opts();
+    let _ = Transient::new(opts).run(&arr.circuit, 400e-6);
     let mut ours = Duration::from_secs(3600);
     let mut wf = None;
     for _ in 0..REPEATS {
         let t0 = Instant::now();
         let w = Transient::new(opts)
-            .run(&syn.circuit, 400e-6)
-            .expect("synapse array solves");
+            .run(&arr.circuit, 400e-6)
+            .expect("bjt mirror array solves");
         ours = ours.min(t0.elapsed());
         wf = Some(w);
     }
     let wf = wf.expect("REPEATS is at least one");
-    let ours_series = series(&wf, &syn.circuit, "mem0");
+    let ours_series = series(&wf, &arr.circuit, "hold0");
 
     // The array's actual marketed accuracy figure: the partitioned solve against
     // our own monolithic reference. Untimed, so it does not pollute the ratio.
     let mut mono_opts = opts;
     mono_opts.partitioning = Partitioning::Off;
     let mono = Transient::new(mono_opts)
-        .run(&syn.circuit, 400e-6)
+        .run(&arr.circuit, 400e-6)
         .expect("monolithic reference solves");
-    let mono_series = series(&mono, &syn.circuit, "mem0");
+    let mono_series = series(&mono, &arr.circuit, "hold0");
     let self_rel = oracle::worst_rel_error(&ours_series, &mono_series);
     // The settled answer, compared across every block's integrator rather than
-    // just mem0: a decomposition that is exact on one block and wrong on the
+    // just hold0: a decomposition that is exact on one block and wrong on the
     // ninetieth is not exact.
     let mut self_final_rel = 0.0f64;
     for k in 0..blocks {
-        let name = format!("mem{k}");
-        let a = mono.final_node(&syn.circuit, &name).unwrap_or(0.0);
-        let b = wf.final_node(&syn.circuit, &name).unwrap_or(0.0);
+        let name = format!("hold{k}");
+        let a = mono.final_node(&arr.circuit, &name).unwrap_or(0.0);
+        let b = wf.final_node(&arr.circuit, &name).unwrap_or(0.0);
         self_final_rel = self_final_rel.max((a - b).abs() / a.abs().max(0.1));
     }
 
-    let (stdout, raw) = oracle::run_ngspice_best_of(bin, &syn.netlist, REPEATS)
-        .expect("ngspice runs the synapse array");
+    let (stdout, raw) = oracle::run_ngspice_best_of(bin, &arr.netlist, REPEATS)
+        .expect("ngspice runs the bjt mirror array");
     let want = oracle::parse_tran_table(&stdout);
     assert!(
         want.len() > 100,
-        "ngspice produced no usable v(mem0) table for the synapse array ({} rows): the \
+        "ngspice produced no usable v(hold0) table for the bjt mirror array ({} rows): the \
          oracle is not answering, so no speed claim can be made from this run",
         want.len()
     );
@@ -421,9 +421,9 @@ fn measure_synapse(bin: &std::path::Path, startup: Duration, blocks: usize) -> C
 
     let solver = solver_time(raw, startup);
     Case {
-        name: "synapse array, 90 blocks, 400 us tran",
+        name: "bjt mirror array, 90 blocks, 400 us tran",
         note: "NOT an ngspice agreement claim: the two voltage-switch models have \
-               different mid-transition conductance shapes, which skews the membrane \
+               different mid-transition conductance shapes, which skews the hold-node \
                turn-off on a 10 us edge. The claim here is partitioned vs our own \
                monolithic reference",
         ours,
@@ -432,14 +432,14 @@ fn measure_synapse(bin: &std::path::Path, startup: Duration, blocks: usize) -> C
         ngspice_solver: solver,
         speedup_raw: raw.as_secs_f64() / ours.as_secs_f64(),
         speedup_corrected: solver.as_secs_f64() / ours.as_secs_f64(),
-        speedup_floor: SYNAPSE_SPEEDUP_FLOOR,
+        speedup_floor: MIRROR_ARRAY_SPEEDUP_FLOOR,
         ngspice_rel,
-        ngspice_bound: SYNAPSE_NGSPICE_DRIFT_CEILING,
+        ngspice_bound: MIRROR_ARRAY_NGSPICE_DRIFT_CEILING,
         ngspice_kind: NgspiceAccuracy::DisclosedDrift,
         self_rel: Some(self_rel),
-        self_bound: SYNAPSE_SELF_BOUND,
+        self_bound: MIRROR_ARRAY_SELF_BOUND,
         self_final_rel: Some(self_final_rel),
-        self_final_bound: SYNAPSE_SELF_FINAL_BOUND,
+        self_final_bound: MIRROR_ARRAY_SELF_FINAL_BOUND,
     }
 }
 

@@ -7906,7 +7906,7 @@ missing = ["measurement_registers"]
         use hauksbee_frontdoor_api::engine::Engine;
         const PADS: &[(u8, u8, usize)] = &[(1, 0, 2), (2, 2, 1)];
         let refs: Vec<String> = (1..=6).map(|i| format!("R{i}")).collect();
-        for (rail, dead) in [("ANALOG_VDD", true), ("VDD_3V3", false)] {
+        for (rail, dead) in [("VDD_A", true), ("VDD_3V3", false)] {
             let parts: Vec<FixturePart<'_>> = (refs.iter().zip(100..))
                 .map(|(r, x)| ("Resistor:R", r.as_str(), "10k", x, PADS))
                 .collect();

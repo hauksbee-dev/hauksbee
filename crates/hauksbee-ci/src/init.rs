@@ -422,7 +422,7 @@ fn render_spec_at_with_run_hint(
         }
     }
     // Rails whose name says "supply" and nothing else. Nobody can read a voltage
-    // off ANALOG_VDD or bare VDD, so the binder refuses to invent one and the net
+    // off VDD_A or bare VDD, so the binder refuses to invent one and the net
     // sits at 0 V. Leaving that for the user to discover means their first run
     // solves a board with a rail dead and reports whatever that implies. Only the
     // person who drew the schematic knows the number, so the scaffold asks rather

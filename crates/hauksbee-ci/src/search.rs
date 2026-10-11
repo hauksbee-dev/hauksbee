@@ -1182,12 +1182,12 @@ mod tests {
             .enumerate()
             .map(|(k, v)| (f64::from(u8::try_from(k).unwrap()), v))
             .collect();
-        let partial = resets("U1", "/a/MEM", 0.1, &[1, 4], &plus);
+        let partial = resets("U1", "/a/INTEG", 0.1, &[1, 4], &plus);
         assert!(!partial.passed);
         assert!((partial.measured - 0.5).abs() < 1e-12);
-        assert!(partial.detail.contains("MEM resets only to 0.500 V"));
+        assert!(partial.detail.contains("INTEG resets only to 0.500 V"));
         assert!(partial.why.unwrap().contains("reset is partial"));
-        let full = resets("U1", "/a/MEM", 0.1, &[1], &plus[..3]);
+        let full = resets("U1", "/a/INTEG", 0.1, &[1], &plus[..3]);
         assert!(full.passed && full.why.is_none(), "{}", full.detail);
     }
 

@@ -11,7 +11,7 @@
 //! mirror arms guard against).
 //!
 //! This builds the large-board rail-tear shape, PNP mirrors with emitters on a
-//! shunt-fed `ANALOG_VDD`, but with models carrying rb/re/rc AND cje/cjc/tf,
+//! shunt-fed `VDD_A`, but with models carrying rb/re/rc AND cje/cjc/tf,
 //! so the torn path exercises internal-node sub-layouts and both charge banks
 //! at once (PNP polarity also pins the charge sign-folding). The tear must
 //! fire, the array must fragment, and the torn transient must match the
@@ -46,30 +46,30 @@ fn build_array(n: usize) -> (Circuit, Vec<String>) {
     let mut c = Circuit::new();
     let p5 = c.node("+5V");
     add_vdc(&mut c, "V5", p5, NodeId::GROUND, 5.0);
-    let avdd = c.node("ANALOG_VDD");
+    let avdd = c.node("VDD_A");
     add_resistor(&mut c, "R_shunt", p5, avdd, 1e3);
     let model = series_charge_model();
-    let mut membranes = Vec::new();
+    let mut hold_nodes = Vec::new();
     for k in 0..n {
         let rref = c.node(&format!("ref{k}"));
         add_resistor(&mut c, &format!("RR{k}"), avdd, rref, 10e3);
         bjt(&mut c, &format!("Q1_{k}"), rref, rref, avdd, &model);
-        let mem = c.node(&format!("mem{k}"));
-        bjt(&mut c, &format!("Q2_{k}"), mem, rref, avdd, &model);
+        let hold = c.node(&format!("hold{k}"));
+        bjt(&mut c, &format!("Q2_{k}"), hold, rref, avdd, &model);
         // Load RC, so the mirror current integrates into a real
         // waveform and the charge banks see moving junction voltages.
-        add_resistor(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);
+        add_resistor(&mut c, &format!("RH{k}"), hold, NodeId::GROUND, 47e3);
         add_capacitor(
             &mut c,
-            &format!("CM{k}"),
-            mem,
+            &format!("CH{k}"),
+            hold,
             NodeId::GROUND,
             1e-9,
             Some(0.0),
         );
-        membranes.push(format!("mem{k}"));
+        hold_nodes.push(format!("hold{k}"));
     }
-    (c, membranes)
+    (c, hold_nodes)
 }
 
 fn run(c: &Circuit, part: Partitioning, tstop: f64, dt: f64) -> hauksbee_solve::Waveforms {
@@ -81,13 +81,13 @@ fn run(c: &Circuit, part: Partitioning, tstop: f64, dt: f64) -> hauksbee_solve::
 #[test]
 fn torn_series_r_bjt_matches_monolithic() {
     let blocks = 12;
-    let (c, membranes) = build_array(blocks);
+    let (c, hold_nodes) = build_array(blocks);
 
     // The tear must fire and fragment the array (same predicate the rail-tear
     // suite pins), proving the series-R BJTs did not confuse the partitioner:
     // their internal unknowns are layout-private and invisible to it.
     let part = hauksbee_solve::Partition::analyze_with_tears(&c);
-    assert_eq!(part.tears.len(), 1, "expected exactly one ANALOG_VDD tear");
+    assert_eq!(part.tears.len(), 1, "expected exactly one VDD_A tear");
     let nl_islands = part.islands.iter().filter(|i| !i.linear).count();
     assert!(
         nl_islands >= blocks,
@@ -99,8 +99,8 @@ fn torn_series_r_bjt_matches_monolithic() {
     let mono = run(&c, Partitioning::Off, tstop, dt);
     let torn = run(&c, Partitioning::Auto, tstop, dt);
 
-    let mut names: Vec<String> = membranes;
-    names.push("ANALOG_VDD".to_string());
+    let mut names: Vec<String> = hold_nodes;
+    names.push("VDD_A".to_string());
     for k in 0..blocks {
         names.push(format!("ref{k}"));
     }

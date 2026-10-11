@@ -175,10 +175,10 @@ fn v10_empty_net_name_means_no_net() {
 }
 
 #[test]
-fn tarski_netlist() {
+fn large_board_netlist_when_present() {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_inputsystem.net");
     let Ok(src) = std::fs::read_to_string(p) else {
-        eprintln!("tarski netlist missing; skipping");
+        eprintln!("large board netlist missing; skipping");
         return;
     };
     let board = ExtractedBoard::from_kicad_netlist(&src).unwrap();

@@ -101,8 +101,8 @@ pub struct StiffOutcome {
     /// The relaxation residual between the final two train-driven iterates
     /// at this boundary, time-shift-tolerant by one grid step (each sample
     /// compares against the other iterate's neighbouring cells): the
-    /// capture-grid claim's own metric, and the reason spiking trains can
-    /// converge instead of reading a one-cell spike shift as volts.
+    /// capture-grid claim's own metric, and the reason pulsing trains can
+    /// converge instead of reading a one-cell pulse shift as volts.
     pub sag_v: f64,
     /// The tolerance it was judged against (10 x reltol x Vnom).
     pub tol_v: f64,
@@ -663,8 +663,8 @@ pub fn execute_stiff_group_held_capped(
                     // step: each sample compares against the other iterate's
                     // neighbouring cells and keeps the smallest difference. This
                     // is the capture-grid claim's own metric (a replayed boundary
-                    // is exact up to the grid), and it is what lets spiking
-                    // trains converge: a spike whose timing shifts by one cell
+                    // is exact up to the grid), and it is what lets pulsing
+                    // trains converge: a pulse whose timing shifts by one cell
                     // between iterates is the same physics, but a pointwise
                     // metric reads it as volts of divergence, which is exactly
                     // how a large fused group can refuse at the full window
@@ -738,7 +738,7 @@ pub fn execute_stiff_group_held_capped(
     // ---- assembly: every block reads from one owning final-round run ------
     // Ownership follows the GROWN capture set, so a pulled-in generator block is
     // read from the candidate that pulled it (its integrator now carries the real
-    // spiking waveform, not a static rest value). Runs are keyed by CLUSTER
+    // pulsing waveform, not a static rest value). Runs are keyed by CLUSTER
     // representative: a merged block reads from the joint run that solved it.
     let mut block_owner: HashMap<usize, u32> = HashMap::new();
     for cluster in &clusters {
@@ -1146,7 +1146,7 @@ pub fn execute_composed_group(
         let vnom = rest.get(&c.0).map_or(0.0, |v| v.abs()).max(1.0);
         // Quiet-basin telemetry (pure diagnostics, no behavior change): a
         // converged train that is essentially FLAT may have relaxed into a
-        // quiet basin instead of the true spiking answer (the
+        // quiet basin instead of the true pulsing answer (the
         // known hazard for self-resetting generators); flag it so the outcome table names the candidates.
         let train = &signal_trains[&c.0];
         let ptp = train.iter().copied().fold(f64::MIN, f64::max)
@@ -1807,7 +1807,7 @@ impl CaptureGroup<'_> {
         // GROWN captures march ADAPTIVELY FIRST, not as a rescue. A grown capture
         // contains a self-resetting generator loop, and a fixed grid does not just
         // risk failing on its reset events: it can "succeed" while MANUFACTURING
-        // spikes: under identical imposed trains the spike count a fixed grid
+        // pulses: under identical imposed trains the pulse count a fixed grid
         // reports changes with the step size, while the adaptive march gives a
         // stable count. The fixed-grid count is grid chatter, not
         // physics, so a fixed "success" on a generator loop cannot be trusted
@@ -1969,7 +1969,7 @@ fn sample_node(wf: &Waveforms, g2l: &HashMap<u32, u32>, node: NodeId, grid: &[f6
 /// One-grid-step time-shift-tolerant residual between two iterates of a
 /// boundary train: max over samples of the smallest difference against the
 /// other iterate's neighbouring cells. See the call site for why pointwise
-/// comparison is the wrong metric on spiking trains.
+/// comparison is the wrong metric on pulsing trains.
 fn shifted_residual(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
     let mut worst = 0.0f64;
@@ -2084,7 +2084,7 @@ mod tests {
         let mut c = Circuit::new();
         let p5 = c.node("+5V");
         vdc(&mut c, "V5", p5, 5.0);
-        let rail = c.node("ANALOG_VDD");
+        let rail = c.node("VDD_A");
         let shunt = res(&mut c, "R_shunt", p5, rail, 100.0);
         let vd = c.node("vd");
         vpulse(&mut c, "VD", vd, (0.0, 2.0), 1e-6, (1e-6, 1e-6), 2e-6);
@@ -2298,38 +2298,38 @@ mod tests {
     }
 
     /// A self-resetting relaxation oscillator (IDAC into an integrator cap, a
-    /// comparator-driven reset switch) whose spiking output `vspk` is produced
+    /// comparator-driven reset switch) whose pulsing output `vpls` is produced
     /// by an OUTPUT comparator that only SENSES the integrator, through a
-    /// passive hop. The integrator is same-island-but-not-adjacent to `vspk`
-    /// (tied in via a weak bias to VDD). Returns `(circuit, vspk, vdd, hold_v)`.
+    /// passive hop. The integrator is same-island-but-not-adjacent to `vpls`
+    /// (tied in via a weak bias to VDD). Returns `(circuit, vpls, vdd, hold_v)`.
     fn generator_capture_fixture() -> (Circuit, NodeId, NodeId, f64) {
         let mut c = Circuit::new();
         let vdd = c.node("VDD");
         vdc(&mut c, "V_VDD", vdd, 5.0);
-        let vmem = c.node("vmem");
-        idc(&mut c, "IDRV", GND, vmem, 2e-3);
-        cap(&mut c, "Cmem", vmem, GND, 2e-9);
-        res(&mut c, "Rbias", vdd, vmem, 1e6);
+        let vint = c.node("vint");
+        idc(&mut c, "IDRV", GND, vint, 2e-3);
+        cap(&mut c, "Cint", vint, GND, 2e-9);
+        res(&mut c, "Rbias", vdd, vint, 1e6);
         let vref = c.node("vref");
         vdc(&mut c, "Vref", vref, 1.0);
         let vcmp = c.node("vcmp");
-        comparator(&mut c, "Kcmp", vcmp, vmem, vref, 1.0);
-        sw(&mut c, "SWr", vmem, GND, vcmp, (2.5, 1.5), 200.0);
+        comparator(&mut c, "Kcmp", vcmp, vint, vref, 1.0);
+        sw(&mut c, "SWr", vint, GND, vcmp, (2.5, 1.5), 200.0);
         let vref2 = c.node("vref2");
         vdc(&mut c, "Vref2", vref2, 0.6);
         let vko = c.node("vko");
-        comparator(&mut c, "Kout", vko, vmem, vref2, 0.1);
-        let vspk = c.node("vspk");
-        res(&mut c, "R_str", vko, vspk, 1e3);
+        comparator(&mut c, "Kout", vko, vint, vref2, 0.1);
+        let vpls = c.node("vpls");
+        res(&mut c, "R_str", vko, vpls, 1e3);
         let vload = c.node("vload");
-        res(&mut c, "Rload", vspk, vload, 1e3);
+        res(&mut c, "Rload", vpls, vload, 1e3);
         res(&mut c, "RloadG", vload, vdd, 10e3);
         let vref3 = c.node("vref3");
         vdc(&mut c, "Vref3", vref3, 2.5);
-        let vsyn = c.node("vsyn");
-        comparator(&mut c, "Ksyn", vsyn, vspk, vref3, 0.1);
-        res(&mut c, "Rsyn", vsyn, GND, 1e3);
-        (c, vspk, vdd, 5.0)
+        let vsink = c.node("vsink");
+        comparator(&mut c, "Ksink", vsink, vpls, vref3, 0.1);
+        res(&mut c, "Rsink", vsink, GND, 1e3);
+        (c, vpls, vdd, 5.0)
     }
 
     fn generator_opts(dt: f64) -> SolverOptions {
@@ -2364,30 +2364,30 @@ mod tests {
     }
 
     /// Plain adjacency leaves the sense-driven output FLAT; the
-    /// generator-inclusive capture makes it spike, matching the monolith's
-    /// spike count on the output net and the sense-gated load.
+    /// generator-inclusive capture makes it pulse, matching the monolith's
+    /// pulse count on the output net and the sense-gated load.
     #[test]
-    fn generator_inclusive_capture_makes_the_output_spike() {
-        let (c, vspk, vdd, hold_v) = generator_capture_fixture();
+    fn generator_inclusive_capture_makes_the_output_pulse() {
+        let (c, vpls, vdd, hold_v) = generator_capture_fixture();
         let (dt, tstop) = (50e-9, 20e-6);
         let opts = generator_opts(dt);
         let mono = monolith(&c, &opts, tstop);
-        let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
-        let mono_vsyn = up_crossings(mono.node(&c, "vsyn").unwrap(), 2.5);
+        let mono_vpls = up_crossings(mono.node(&c, "vpls").unwrap(), 2.5);
+        let mono_vsink = up_crossings(mono.node(&c, "vsink").unwrap(), 2.5);
         assert!(
-            mono_vspk >= 3,
-            "oscillator must spike in the monolith (saw {mono_vspk})"
+            mono_vpls >= 3,
+            "oscillator must pulse in the monolith (saw {mono_vpls})"
         );
-        assert_eq!(mono_vspk, mono_vsyn);
+        assert_eq!(mono_vpls, mono_vsink);
         let held = held_vdd(vdd, hold_v, dt, tstop);
 
         let off = CapturePolicy {
             max_growth_blocks: 0,
             ..CapturePolicy::default()
         };
-        let (neg, _) = run_held(&c, &[vspk], &held, &off, &opts, tstop);
+        let (neg, _) = run_held(&c, &[vpls], &held, &off, &opts, tstop);
         if let Some(exec) = &neg {
-            let ptp = swing(&exec.waveforms.node_voltages[vspk.0 as usize]);
+            let ptp = swing(&exec.waveforms.node_voltages[vpls.0 as usize]);
             assert!(
                 ptp < 0.5,
                 "load-only capture must relax FLAT (saw ptp {ptp:.3} V)"
@@ -2395,21 +2395,21 @@ mod tests {
         }
 
         let default = CapturePolicy::default();
-        let (exec, refusals) = run_held(&c, &[vspk], &held, &default, &opts, tstop);
+        let (exec, refusals) = run_held(&c, &[vpls], &held, &default, &opts, tstop);
         let exec = exec
             .unwrap_or_else(|| panic!("generator-inclusive capture must succeed: {refusals:?}"));
         let o = exec
             .outcomes
             .iter()
-            .find(|o| o.node == vspk)
-            .expect("vspk outcome");
+            .find(|o| o.node == vpls)
+            .expect("vpls outcome");
         assert!(o.capture_growth > 0 && o.accepted, "{o:?}");
-        let vspk_wf = &exec.waveforms.node_voltages[vspk.0 as usize];
-        assert!(swing(vspk_wf) > 1.0);
-        assert_eq!(up_crossings(vspk_wf, 2.5), mono_vspk);
+        let vpls_wf = &exec.waveforms.node_voltages[vpls.0 as usize];
+        assert!(swing(vpls_wf) > 1.0);
+        assert_eq!(up_crossings(vpls_wf, 2.5), mono_vpls);
         assert_eq!(
-            up_crossings(exec.waveforms.node(&c, "vsyn").unwrap(), 2.5),
-            mono_vsyn
+            up_crossings(exec.waveforms.node(&c, "vsink").unwrap(), 2.5),
+            mono_vsink
         );
     }
 
@@ -2418,58 +2418,58 @@ mod tests {
     /// comparator whose threshold `vth` is an RC-filtered divider of VDD:
     /// `r_top`/`r_bot` with 1 nF, a time constant of 5-12 us against the 20 us
     /// window, the shape of a filtered comparator-threshold network. The output
-    /// stage is [`generator_capture_fixture`]'s. Returns `(circuit, vspk, vdd)`.
+    /// stage is [`generator_capture_fixture`]'s. Returns `(circuit, vpls, vdd)`.
     fn rc_threshold_fixture(r_top: f64, r_bot: f64) -> (Circuit, NodeId, NodeId) {
         let mut c = Circuit::new();
         let vdd = c.node("VDD");
         vdc(&mut c, "V_VDD", vdd, 5.0);
-        let vmem = c.node("vmem");
+        let vint = c.node("vint");
         let step = vec![PwlPoint { t: 0.0, v: 0.0 }, PwlPoint { t: 50e-9, v: 2e-3 }];
-        c.add(Device::isource("IDRV", GND, vmem, SourceKind::Pwl(step)));
-        cap(&mut c, "Cmem", vmem, GND, 2e-9);
-        res(&mut c, "Rbias", vdd, vmem, 1e6);
-        res(&mut c, "Rleak", vmem, GND, 100e3);
+        c.add(Device::isource("IDRV", GND, vint, SourceKind::Pwl(step)));
+        cap(&mut c, "Cint", vint, GND, 2e-9);
+        res(&mut c, "Rbias", vdd, vint, 1e6);
+        res(&mut c, "Rleak", vint, GND, 100e3);
         let vref = c.node("vref");
         vdc(&mut c, "Vref", vref, 1.0);
         let vcmp = c.node("vcmp");
-        comparator(&mut c, "Kcmp", vcmp, vmem, vref, 1.0);
-        sw(&mut c, "SWr", vmem, GND, vcmp, (2.5, 1.5), 200.0);
+        comparator(&mut c, "Kcmp", vcmp, vint, vref, 1.0);
+        sw(&mut c, "SWr", vint, GND, vcmp, (2.5, 1.5), 200.0);
         let vth = c.node("vth");
         res(&mut c, "Rtop", vdd, vth, r_top);
         res(&mut c, "Rbot", vth, GND, r_bot);
         cap(&mut c, "Cth", vth, GND, 1e-9);
         let vko = c.node("vko");
-        comparator(&mut c, "Kout", vko, vmem, vth, 0.1);
-        let vspk = c.node("vspk");
-        res(&mut c, "R_str", vko, vspk, 1e3);
+        comparator(&mut c, "Kout", vko, vint, vth, 0.1);
+        let vpls = c.node("vpls");
+        res(&mut c, "R_str", vko, vpls, 1e3);
         let vload = c.node("vload");
-        res(&mut c, "Rload", vspk, vload, 1e3);
+        res(&mut c, "Rload", vpls, vload, 1e3);
         res(&mut c, "RloadG", vload, vdd, 10e3);
         let vref3 = c.node("vref3");
         vdc(&mut c, "Vref3", vref3, 2.5);
-        let vsyn = c.node("vsyn");
-        comparator(&mut c, "Ksyn", vsyn, vspk, vref3, 0.1);
-        res(&mut c, "Rsyn", vsyn, GND, 1e3);
-        (c, vspk, vdd)
+        let vsink = c.node("vsink");
+        comparator(&mut c, "Ksink", vsink, vpls, vref3, 0.1);
+        res(&mut c, "Rsink", vsink, GND, 1e3);
+        (c, vpls, vdd)
     }
 
-    /// Output spikes of the generator-inclusive capture of `vspk` and of the
+    /// Output pulses of the generator-inclusive capture of `vpls` and of the
     /// monolith, both under `dc_init`.
-    fn rc_threshold_spikes(r_top: f64, r_bot: f64, dc_init: DcInit) -> (usize, usize) {
-        let (c, vspk, vdd) = rc_threshold_fixture(r_top, r_bot);
+    fn rc_threshold_pulses(r_top: f64, r_bot: f64, dc_init: DcInit) -> (usize, usize) {
+        let (c, vpls, vdd) = rc_threshold_fixture(r_top, r_bot);
         let (dt, tstop) = (50e-9, 20e-6);
         let opts = SolverOptions {
             dc_init,
             ..generator_opts(dt)
         };
-        let mono = up_crossings(monolith(&c, &opts, tstop).node(&c, "vspk").unwrap(), 2.5);
+        let mono = up_crossings(monolith(&c, &opts, tstop).node(&c, "vpls").unwrap(), 2.5);
         let held = held_vdd(vdd, 5.0, dt, tstop);
         let (exec, refusals) =
-            run_held(&c, &[vspk], &held, &CapturePolicy::default(), &opts, tstop);
+            run_held(&c, &[vpls], &held, &CapturePolicy::default(), &opts, tstop);
         let exec = exec.unwrap_or_else(|| panic!("capture must succeed: {refusals:?}"));
-        let o = exec.outcomes.iter().find(|o| o.node == vspk).unwrap();
+        let o = exec.outcomes.iter().find(|o| o.node == vpls).unwrap();
         assert!(o.capture_growth > 0 && o.accepted, "{o:?}");
-        let captured = up_crossings(&exec.waveforms.node_voltages[vspk.0 as usize], 2.5);
+        let captured = up_crossings(&exec.waveforms.node_voltages[vpls.0 as usize], 2.5);
         (captured, mono)
     }
 
@@ -2481,12 +2481,12 @@ mod tests {
     /// cycle until `vth` (tau 12 us) climbs past the integrator peak. A
     /// `FromZero` caller asked for exactly that power-on, and still gets it.
     #[test]
-    fn settled_window_has_no_power_on_spikes() {
-        let (captured, mono) = rc_threshold_spikes(20e3, 30e3, DcInit::Solve);
+    fn settled_window_has_no_power_on_pulses() {
+        let (captured, mono) = rc_threshold_pulses(20e3, 30e3, DcInit::Solve);
         assert_eq!(mono, 0, "the settled monolith column must be quiet");
         assert_eq!(captured, 0, "the capture fired on a power-on threshold");
 
-        let (captured, mono) = rc_threshold_spikes(20e3, 30e3, DcInit::FromZero);
+        let (captured, mono) = rc_threshold_pulses(20e3, 30e3, DcInit::FromZero);
         assert!(mono >= 1, "a power-on threshold must fire the monolith");
         assert_eq!(captured, mono, "a FromZero capture keeps its power-on");
     }
@@ -2495,8 +2495,8 @@ mod tests {
     /// swing, the channel genuinely fires on every cycle, and the settled
     /// capture counts what the settled monolith counts.
     #[test]
-    fn settled_window_still_spikes_on_a_low_threshold() {
-        let (captured, mono) = rc_threshold_spikes(44e3, 6e3, DcInit::Solve);
+    fn settled_window_still_pulses_on_a_low_threshold() {
+        let (captured, mono) = rc_threshold_pulses(44e3, 6e3, DcInit::Solve);
         assert!(mono >= 3, "a 0.6 V threshold must fire (saw {mono})");
         assert_eq!(captured, mono);
     }
@@ -2510,25 +2510,25 @@ mod tests {
     /// on this circuit, having no DC point to start from).
     #[test]
     fn settled_window_keeps_a_free_running_generator_running() {
-        let (c, vspk, vdd, hold_v) = generator_capture_fixture();
+        let (c, vpls, vdd, hold_v) = generator_capture_fixture();
         let (dt, tstop) = (50e-9, 20e-6);
         let opts = SolverOptions {
             dc_init: DcInit::Solve,
             ..generator_opts(dt)
         };
         let mono = monolith(&c, &generator_opts(dt), tstop);
-        let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
-        assert!(mono_vspk >= 3, "the generator free-runs (saw {mono_vspk})");
+        let mono_vpls = up_crossings(mono.node(&c, "vpls").unwrap(), 2.5);
+        assert!(mono_vpls >= 3, "the generator free-runs (saw {mono_vpls})");
         let held = held_vdd(vdd, hold_v, dt, tstop);
         let (exec, refusals) =
-            run_held(&c, &[vspk], &held, &CapturePolicy::default(), &opts, tstop);
+            run_held(&c, &[vpls], &held, &CapturePolicy::default(), &opts, tstop);
         let exec = exec.unwrap_or_else(|| panic!("capture must succeed: {refusals:?}"));
-        let o = exec.outcomes.iter().find(|o| o.node == vspk).unwrap();
+        let o = exec.outcomes.iter().find(|o| o.node == vpls).unwrap();
         assert!(o.capture_growth > 0 && o.accepted, "{o:?}");
-        let captured = up_crossings(&exec.waveforms.node_voltages[vspk.0 as usize], 2.5);
+        let captured = up_crossings(&exec.waveforms.node_voltages[vpls.0 as usize], 2.5);
         assert!(
-            captured.abs_diff(mono_vspk) <= 1,
-            "settled capture counted {captured}, the free-running monolith {mono_vspk}"
+            captured.abs_diff(mono_vpls) <= 1,
+            "settled capture counted {captured}, the free-running monolith {mono_vpls}"
         );
     }
 
@@ -2536,34 +2536,34 @@ mod tests {
     /// sets overlap, so the executor must solve them jointly as one cluster.
     #[test]
     fn overlapping_grown_captures_merge_and_match() {
-        let (mut c, vspk, vdd, hold_v) = generator_capture_fixture();
-        let vmem = c.node("vmem");
+        let (mut c, vpls, vdd, hold_v) = generator_capture_fixture();
+        let vint = c.node("vint");
         let vref4 = c.node("vref4");
         vdc(&mut c, "Vref4", vref4, 0.6);
         let vko2 = c.node("vko2");
-        comparator(&mut c, "Kout2", vko2, vmem, vref4, 0.1);
-        let vspk2 = c.node("vspk2");
-        res(&mut c, "R_str2", vko2, vspk2, 1e3);
+        comparator(&mut c, "Kout2", vko2, vint, vref4, 0.1);
+        let vpls2 = c.node("vpls2");
+        res(&mut c, "R_str2", vko2, vpls2, 1e3);
         let vload2 = c.node("vload2");
-        res(&mut c, "Rload2", vspk2, vload2, 1e3);
+        res(&mut c, "Rload2", vpls2, vload2, 1e3);
         res(&mut c, "RloadG2", vload2, vdd, 10e3);
 
         let (dt, tstop) = (50e-9, 20e-6);
         let opts = generator_opts(dt);
         let mono = monolith(&c, &opts, tstop);
-        let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
-        assert!(mono_vspk >= 3);
+        let mono_vpls = up_crossings(mono.node(&c, "vpls").unwrap(), 2.5);
+        assert!(mono_vpls >= 3);
         assert_eq!(
-            mono_vspk,
-            up_crossings(mono.node(&c, "vspk2").unwrap(), 2.5)
+            mono_vpls,
+            up_crossings(mono.node(&c, "vpls2").unwrap(), 2.5)
         );
         let held = held_vdd(vdd, hold_v, dt, tstop);
 
         let default = CapturePolicy::default();
-        let (exec, refusals) = run_held(&c, &[vspk, vspk2], &held, &default, &opts, tstop);
+        let (exec, refusals) = run_held(&c, &[vpls, vpls2], &held, &default, &opts, tstop);
         let exec =
             exec.unwrap_or_else(|| panic!("merged generator captures must succeed: {refusals:?}"));
-        for cand in [vspk, vspk2] {
+        for cand in [vpls, vpls2] {
             let o = exec
                 .outcomes
                 .iter()
@@ -2573,7 +2573,7 @@ mod tests {
             assert!(o.note.contains("merged capture"), "{o:?}");
             assert_eq!(
                 up_crossings(&exec.waveforms.node_voltages[cand.0 as usize], 2.5),
-                mono_vspk
+                mono_vpls
             );
         }
     }

@@ -22,7 +22,7 @@ fn value_d_diode_binds_conducting_1n4148() {
     // resistors so the nets exist and are non-trivial.
     let net = r#"(export (version "E")
   (components
-    (comp (ref "D_stretch601")
+    (comp (ref "D_STRETCH")
       (value "D")
       (footprint "Diode_SMD:D_SOD-323")
       (libsource (lib "Device") (part "D") (description "Diode")))
@@ -31,10 +31,10 @@ fn value_d_diode_binds_conducting_1n4148() {
       (footprint "Resistor_SMD:R_0402_1005Metric")))
   (nets
     (net (code "1") (name "ANODE_NET")
-      (node (ref "D_stretch601") (pin "2") (pinfunction "A") (pintype "passive"))
+      (node (ref "D_STRETCH") (pin "2") (pinfunction "A") (pintype "passive"))
       (node (ref "R1") (pin "1") (pintype "passive")))
     (net (code "2") (name "CATHODE_NET")
-      (node (ref "D_stretch601") (pin "1") (pinfunction "K") (pintype "passive"))
+      (node (ref "D_STRETCH") (pin "1") (pinfunction "K") (pintype "passive"))
       (node (ref "R1") (pin "2") (pintype "passive")))))
 "#;
     let board = ExtractedBoard::from_auto(net).expect("parse netlist");
@@ -46,7 +46,7 @@ fn value_d_diode_binds_conducting_1n4148() {
         .devices
         .iter()
         .find_map(|d| match d {
-            Device::Diode { name, model, a, k } if name == "D_stretch601" => Some((*model, *a, *k)),
+            Device::Diode { name, model, a, k } if name == "D_STRETCH" => Some((*model, *a, *k)),
             _ => None,
         })
         .expect("value-\"D\" diode must bind to a Device::Diode (not OPEN)");

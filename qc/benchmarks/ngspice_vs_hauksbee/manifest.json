@@ -13,10 +13,10 @@
       "notes": "Supply, nonlinear diode, reservoir capacitor, and resistive load; the same board power path used by the engine simulation fixture. diode.lib is resolved from the source directory."
     },
     {
-      "id": "bjt_mirror_membrane",
-      "source": "crates/hauksbee-solve/tests/decks/switch_bjt_mirror_membrane.cir",
-      "source_sha256": "2e6764844417b8f48157b4a93099c9399b0391981bc0f509a5d8315f89c3b566",
-      "probes": ["v(mem0)"],
+      "id": "bjt_mirror_hold_cap",
+      "source": "crates/hauksbee-solve/tests/decks/switch_bjt_mirror_hold_cap.cir",
+      "source_sha256": "60bfcb17afa05e963eae66a1f92dfeca1320f5744220a54b58a537edd2fb9c62",
+      "probes": ["v(hold0)"],
       "class": "disclosed_drift",
       "settled_fraction": 0.1,
       "notes": "Gated supply, BJT mirror, and RC load. The disclosed class prevents ngspice's switch-event grid from being presented as an accuracy agreement claim."

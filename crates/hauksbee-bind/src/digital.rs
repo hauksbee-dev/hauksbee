@@ -1794,10 +1794,10 @@ mod tests {
     /// 74HC02 NOR SR pulse latch: idle Q HIGH, a SET pulse drives Q LOW and
     /// holds it, RESET returns Q HIGH.
     #[test]
-    fn nor_latch_spike_polarity_idle_high_spike_low_held() {
+    fn nor_latch_pulse_polarity_idle_high_pulse_low_held() {
         let mut circuit = Circuit::new();
-        let set_n = circuit.node("SPIKE1");
-        let reset_n = circuit.node("RESET_SR");
+        let set_n = circuit.node("PULSE_OUT");
+        let reset_n = circuit.node("RESET_LATCH");
         let q_n = circuit.node("L1");
         let levels = LogicLevels::from_params(&ModelEntry::default());
         let r = roles(&[("set", set_n), ("reset", reset_n), ("q", q_n)]);
@@ -1817,13 +1817,13 @@ mod tests {
 
         assert!(q(&latch), "power-on idle Q HIGH");
         latch.tick(&mut circuit, &make_v(false, true));
-        assert!(q(&latch), "RESET with no spike holds idle");
+        assert!(q(&latch), "RESET with no pulse holds idle");
         latch.tick(&mut circuit, &make_v(false, false));
         assert!(q(&latch), "hold");
         latch.tick(&mut circuit, &make_v(true, false));
         assert!(!q(&latch), "a SET pulse drives Q LOW");
         latch.tick(&mut circuit, &make_v(false, false));
-        assert!(!q(&latch), "held LOW after the spike clears");
+        assert!(!q(&latch), "held LOW after the pulse clears");
         latch.tick(&mut circuit, &make_v(false, true));
         assert!(q(&latch), "RESET returns idle HIGH");
     }

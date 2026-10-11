@@ -739,7 +739,7 @@ impl CiResult {
     /// than adding to them. A rail sitting at 0 V because nobody could work out
     /// its voltage makes the operating point around it fiction, and the stress
     /// monitor will report on that fiction as confidently as on a real
-    /// overload. Someone who reads "`R_Shunt15301` overpower" first and the
+    /// overload. Someone who reads "`R_SHUNT1` overpower" first and the
     /// caveat afterwards has already believed the accusation.
     fn dead_rail_banner(&self) -> String {
         if self.dead_rails.is_empty() {

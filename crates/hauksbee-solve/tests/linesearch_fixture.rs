@@ -7,13 +7,13 @@
 //! break-before-make and control-gm device knobs. Any "this optimization is
 //! bit-identical" claim about that machinery needs a fast fixture that
 //! exercises the same code paths and reduces the whole waveform to one
-//! comparable line. This board is an integrate-and-fire relaxation
+//! comparable line. This board is an integrating relaxation
 //! oscillator: an integrator cap charged by a current source fires a hysteretic
 //! comparator whose output flips an SPDT pair (binder-style `_s0`/`_s1` legs
 //! sharing the common node, so the BBM winner-take-all path runs), shorting
 //! the integrator through a fast discharge leg. No consistent DC exists (the
 //! usual self-resetting shape), so it powers on `FromZero` like the capture
-//! recipe and spikes repeatedly; comparator flips guarantee the event/backtrack
+//! recipe and pulses repeatedly; comparator flips guarantee the event/backtrack
 //! paths see real work.
 //!
 //! The hash printed here is compared ACROSS COMMITS (run with --nocapture):
@@ -33,12 +33,12 @@ use hauksbee_solve::{
 use hauksbee_testkit::circuits::{comparator, idc, vswitch};
 
 /// Integrate-and-fire relaxation oscillator with a binder-style SPDT pair.
-fn spiking_board() -> Circuit {
+fn relaxation_oscillator_board() -> Circuit {
     let mut c = Circuit::new();
     let m = c.node("m"); // integrator
     let th = c.node("th"); // comparator threshold
-    let spk = c.node("spk"); // comparator output
-    let spkb = c.node("spkb"); // inverted comparator output (idle-leg select)
+    let pls = c.node("pls"); // comparator output
+    let plsb = c.node("plsb"); // inverted comparator output (idle-leg select)
     let com = c.node("com"); // SPDT common node
     let rail = c.node("rail"); // idle-leg bias
 
@@ -51,32 +51,32 @@ fn spiking_board() -> Circuit {
     // firing is guaranteed, so there is no DC fixed point and the board is
     // the honest FromZero shape.
     add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
-    comparator(&mut c, "K1", spk, m, th, 0.4);
+    comparator(&mut c, "K1", pls, m, th, 0.4);
     // Complementary select for the idle leg. The two throws must be driven by
     // OPPOSITE controls (as real SPDT select wiring is): with a shared control
     // the BBM winner-take-all margins tie exactly (the sibling margin is
     // span-absolute), the discharge leg gets halved forever, and the integrator
     // servos at threshold instead of firing; measured on the first cut of this
     // fixture.
-    comparator(&mut c, "K2", spkb, th, m, 0.4);
+    comparator(&mut c, "K2", plsb, th, m, 0.4);
     // SPDT: names differ only in the `_s0`/`_s1` suffix and share the common
     // node `com`, exactly the shape `SpdtPairs::analyze` pairs up, so the
     // break-before-make winner-take-all code runs on every stamp.
     vswitch(
         &mut c,
-        "GATE_s1", // discharge leg: on while the spike is high
+        "GATE_s1", // discharge leg: on while the pulse is high
         com,
         m,
-        (spk, NodeId::GROUND),
+        (pls, NodeId::GROUND),
         (3.0, 2.0),
         (10.0, 1e9),
     );
     vswitch(
         &mut c,
-        "GATE_s0", // idle leg: on while the spike is low
+        "GATE_s0", // idle leg: on while the pulse is low
         com,
         rail,
-        (spkb, NodeId::GROUND),
+        (plsb, NodeId::GROUND),
         (3.0, 2.0),
         (10.0, 1e9),
     );
@@ -107,7 +107,7 @@ fn wf_hash(wf: &Waveforms) -> u64 {
 }
 
 fn march() -> Waveforms {
-    let c = spiking_board();
+    let c = relaxation_oscillator_board();
     let opts = SolverOptions {
         // The capture recipe's adaptive envelope at the fixture's time scale.
         step: StepControl::Adaptive {
@@ -143,36 +143,36 @@ fn march() -> Waveforms {
 }
 
 #[test]
-fn armed_march_is_deterministic_and_spikes() {
+fn armed_march_is_deterministic_and_pulses() {
     // The large-board general path's numerical substrate (its own tests set
     // these as their configuration); TRANSIENT_DYN is what arms the
     // line search this fixture exists to witness.
 
     let wf = march();
-    let c = spiking_board();
-    // Debug estate for fixture surgery: a coarse (t, m, spk) trace.
+    let c = relaxation_oscillator_board();
+    // Debug estate for fixture surgery: a coarse (t, m, pls) trace.
     if std::env::var("HAUKSBEE_FIXTURE_TRACE").is_ok() {
         let m = wf.node(&c, "m").unwrap();
-        let s = wf.node(&c, "spk").unwrap();
+        let s = wf.node(&c, "pls").unwrap();
         let n = wf.time.len();
         eprintln!("samples={n} t_end={:.3e}", wf.time.last().unwrap());
         for k in (0..n).step_by((n / 40).max(1)) {
-            eprintln!("t={:.3e} m={:.4} spk={:.4}", wf.time[k], m[k], s[k]);
+            eprintln!("t={:.3e} m={:.4} pls={:.4}", wf.time[k], m[k], s[k]);
         }
     }
-    let spk = wf.node(&c, "spk").expect("spk waveform");
-    let spikes = spk.windows(2).filter(|w| w[0] <= 2.5 && w[1] > 2.5).count();
+    let pls = wf.node(&c, "pls").expect("pls waveform");
+    let pulses = pls.windows(2).filter(|w| w[0] <= 2.5 && w[1] > 2.5).count();
     // Burst-count band, NOT an exact count: this is a self-resetting loop, so
-    // its coarse-grid spike count is integrator-sensitive (the grid study's
+    // its coarse-grid pulse count is integrator-sensitive (the grid study's
     // lesson). Measured refinement study (HAUKSBEE_FIXTURE_DT_MAX): the count
     // CONVERGES to 12 at dt_max 1e-7 under both the raw-second-difference LTE
     // and the divided-difference LTE; at the default coarse dt_max the two
     // estimators counted 13 and 15. The band accepts that whole small-burst
     // class and still catches the real failure modes (a dead oscillator, the
-    // BBM servo latch-up, or chatter manufacturing tens of spikes).
+    // BBM servo latch-up, or chatter manufacturing tens of pulses).
     assert!(
-        (8..=18).contains(&spikes),
-        "spike count {spikes} left the fixture's converged small-burst band \
+        (8..=18).contains(&pulses),
+        "pulse count {pulses} left the fixture's converged small-burst band \
          (refinement study: converges to 12, coarse grids count 12-15)"
     );
     assert!(
@@ -190,7 +190,7 @@ fn armed_march_is_deterministic_and_spikes() {
     );
     // The cross-commit witness line (run with --nocapture and compare).
     println!(
-        "linesearch fixture: wf fnv1a=0x{h1:016x} samples={} spikes={spikes}",
+        "linesearch fixture: wf fnv1a=0x{h1:016x} samples={} pulses={pulses}",
         wf.time.len()
     );
 }

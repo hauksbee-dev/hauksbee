@@ -154,15 +154,15 @@ fn run_mirror_planned(c: &Circuit, part: Partitioning) -> Waveforms {
 /// above 4.99. Load nodes sit near 0 V here (tiny mirror currents), so we only
 /// assert they are finite and bounded into the rail.
 fn assert_mirror_sane(c: &Circuit, wf: &Waveforms) {
-    let rail = wf.final_node(c, "ANALOG_VDD").expect("rail node present");
-    let mem0 = wf.final_node(c, "mem0").expect("mem0 node present");
+    let rail = wf.final_node(c, "VDD_A").expect("rail node present");
+    let hold0 = wf.final_node(c, "hold0").expect("hold0 node present");
     assert!(
         rail.is_finite() && rail > 4.99 && rail < 5.0,
         "rail out of sane sag window: {rail}"
     );
     assert!(
-        mem0.is_finite() && (-1e-2..=5.0).contains(&mem0),
-        "membrane out of sane window: {mem0}"
+        hold0.is_finite() && (-1e-2..=5.0).contains(&hold0),
+        "hold node out of sane window: {hold0}"
     );
 }
 
@@ -175,7 +175,7 @@ fn bench_mirror_array(cr: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(6));
     for &n in &MIRROR_SIZES {
-        let (c, _membranes) = build_shunt_array(n);
+        let (c, _hold_nodes) = build_shunt_array(n);
         // Torn (Partitioning::Auto) and monolithic (Off) as SEPARATE ids so the
         // ratio between them is visible straight out of criterion's report.
         group.bench_function(format!("{n}/torn"), |b| {
@@ -223,11 +223,11 @@ fn bench_dc_mirror(cr: &mut Criterion) {
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(6));
-    let (mut c, _membranes) = build_shunt_array(240);
+    let (mut c, _hold_nodes) = build_shunt_array(240);
     let o = opts(Partitioning::Off, MIRROR_DT);
     // `node` is idempotent for an existing name: this returns the rail's id
     // without adding anything, so we can map it into the unknown vector below.
-    let rail_id = c.node("ANALOG_VDD");
+    let rail_id = c.node("VDD_A");
     group.bench_function("dc_mirror_240", |b| {
         b.iter(|| {
             let mut ws = Workspace::new(black_box(&c));

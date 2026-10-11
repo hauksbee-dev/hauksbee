@@ -164,7 +164,7 @@ fn fires_and_resets(w: &Waveforms, c: &Circuit, window: f64) -> Vec<(f64, f64)> 
 /// `K3` fires several times in each of `K2`'s high phases (the integrator
 /// charges toward 5 V with a 2 us time constant and trips at 2.1 V, a ~4 us
 /// phase), and each fire resets its own integrator.
-fn assert_neuron_fires(w: &Waveforms, c: &Circuit) {
+fn assert_relaxation_stage_fires(w: &Waveforms, c: &Circuit) {
     let phases = crossings(w.node(c, "o2").unwrap(), &w.time, 2.5, true).len();
     let fires = fires_and_resets(w, c, 300e-9);
     assert!(
@@ -207,7 +207,7 @@ fn a_flip_driving_another_comparator_marches_through_the_cascade() {
             );
         }
     }
-    assert_neuron_fires(&w, &c);
+    assert_relaxation_stage_fires(&w, &c);
 }
 
 #[test]
@@ -219,5 +219,5 @@ fn an_undelayed_cascade_marches_on_the_primary_solve_too() {
     let e1 = crossings(w.node(&c, "out1").unwrap(), &w.time, 2.5, true);
     let e2 = crossings(w.node(&c, "o2").unwrap(), &w.time, 2.5, false);
     assert!(e1.len() >= 10 && e1.len() == e2.len(), "{e1:?} vs {e2:?}");
-    assert_neuron_fires(&w, &c);
+    assert_relaxation_stage_fires(&w, &c);
 }

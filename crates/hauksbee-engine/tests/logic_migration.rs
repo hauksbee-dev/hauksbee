@@ -180,8 +180,8 @@ fn nor_latch_golden_trajectory_from_byte_exact_proof() {
     let model = builtin("74HC595"); // levels source only
     let levels = LogicLevels::from_params(&model);
     let mut circuit = Circuit::new();
-    let set_n = circuit.node("SPIKE1");
-    let reset_n = circuit.node("RESET_SR");
+    let set_n = circuit.node("PULSE_OUT");
+    let reset_n = circuit.node("RESET_LATCH");
     let q_n = circuit.node("L1");
     let mut roles = HashMap::new();
     roles.insert("set".to_string(), set_n);

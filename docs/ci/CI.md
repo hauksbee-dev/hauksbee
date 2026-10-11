@@ -128,7 +128,7 @@ part value plus the routing entries decide.
 
 A spec is TOML, designed to be pleasant to hand-write. Unknown keys, unknown
 nets, and unknown component references are loud errors, and a misspelled net
-name lists its near-matches ("did you mean `ANALOG_VDD`?").
+name lists its near-matches ("did you mean `VDD_A`?").
 
 ### Top level
 
@@ -350,7 +350,7 @@ regulator you want to exercise), suppress its auto-rail so the droop or collapse
 is visible:
 
 ```toml
-suppress_rail = ["ANALOG_VDD"]
+suppress_rail = ["VDD_A"]
 ```
 
 ### Component overrides: `[[override]]`
@@ -360,7 +360,7 @@ change the wrong part to the right one and re-run the same assertions.
 
 ```toml
 [[override]]
-ref = "R_Shunt15301"
+ref = "R_SHUNT1"
 value = "0.05"            # the documented milliohm sense shunt
 ```
 
@@ -424,7 +424,7 @@ declare its own spread, and then the `value` becomes the nominal:
 
 ```toml
 [[override]]
-ref = "R_Shunt15301"
+ref = "R_SHUNT1"
 value = "0.05"
 tolerance = 1.0            # the repaired shunt is a ±1% part
 ```
@@ -534,7 +534,7 @@ loader rejects it). Each `kind`:
 ```toml
 [[assert]]
 kind = "voltage"
-net = "ANALOG_VDD"
+net = "VDD_A"
 min = 4.9            # and/or max
 after_ms = 50        # only sample at/after this time
 ```
@@ -588,7 +588,7 @@ card or a threshold the cards do not state.
 ```toml
 [[assert]]
 kind = "logic_level"
-net = "SPIKE"
+net = "PULSE_OUT"
 min_width_ms = 0.001    # VIH held for 1 us
 min_toggles = 3         # in at least 3 separate pulses (default 1)
 # min = 2.0             # optional: this level instead of the cards' VIH

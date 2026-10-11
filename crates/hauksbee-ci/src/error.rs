@@ -174,7 +174,7 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
 /// So: within two edits, and the designator's first letter has to match. That
 /// first letter is the component CLASS, the one character of a reference nobody
 /// fat-fingers into a different one, and it is what makes `R99 -> D1` obviously
-/// not a typo while `R_Shnt15301 -> R_Shunt15301` obviously is.
+/// not a typo while `R_SHNT1 -> R_SHUNT1` obviously is.
 #[must_use]
 pub fn near_refs(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let class = designator_class(target);
@@ -199,7 +199,7 @@ pub fn near_refs(target: &str, known: &[String], limit: usize) -> Vec<String> {
 }
 
 /// The component-class letter of a reference designator, lowercased: `r` of
-/// `R99` and of `R_Shunt15301`, `u` of `U1`. `None` for anything that does not
+/// `R99` and of `R_SHUNT1`, `u` of `U1`. `None` for anything that does not
 /// start with a letter.
 fn designator_class(r: &str) -> Option<char> {
     r.trim()
@@ -296,12 +296,12 @@ mod tests {
 
     #[test]
     fn net_suggestions_are_close_named_and_never_the_empty_net() {
-        let known = names(&["", "ANALOG_VDD", "+5V", "GND", "DIGITAL_VDD"]);
+        let known = names(&["", "VDD_A", "+5V", "GND", "DIGITAL_VDD"]);
         assert_eq!(
-            near_matches("ANALOG_VDDD", &known, 3)
+            near_matches("VDD_AA", &known, 3)
                 .first()
                 .map(String::as_str),
-            Some("ANALOG_VDD")
+            Some("VDD_A")
         );
         // KiCad's unnamed "no net" bucket must not leak (it renders as a bare comma).
         let s = near_matches("+5W", &known, 5);
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn ref_suggestions_stay_inside_the_designator_family() {
         // A net-name cutoff would offer D1 and U1 for R99; neither is a plausible typo of an R.
-        let known = names(&["D1", "U1", "R1", "R9", "C7", "R_Shunt15301"]);
+        let known = names(&["D1", "U1", "R1", "R9", "C7", "R_SHUNT1"]);
         let s = near_refs("R99", &known, 3);
         assert!(!s.iter().any(|r| r == "D1" || r == "U1"), "{s:?}");
         assert_eq!(
@@ -331,10 +331,7 @@ mod tests {
             near_refs("Q3", &known, 3).is_empty(),
             "no family on the board, no suggestion"
         );
-        assert_eq!(
-            near_refs("R_Shunt15302", &known, 3),
-            names(&["R_Shunt15301"])
-        );
+        assert_eq!(near_refs("R_SHUNT2", &known, 3), names(&["R_SHUNT1"]));
     }
 
     #[test]

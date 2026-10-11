@@ -1120,7 +1120,7 @@ mod tests {
         let mut c = Circuit::new();
         let p5 = c.node("+5V");
         vdc(&mut c, "V5", p5, 5.0);
-        let rail = c.node("ANALOG_VDD");
+        let rail = c.node("VDD_A");
         res(&mut c, "R_shunt", p5, rail, 1e3);
         let blocks = pnp_blocks(&mut c, "", rail, 24, GND, 100e3, 10e3);
         // Re-route block 0's base return through the caller's network.
@@ -1168,7 +1168,7 @@ mod tests {
             "bypass cap current leaked from the balance books",
         );
         assert!(
-            swing(staged.waveforms.node(&c, "ANALOG_VDD").unwrap()) > 1e-3,
+            swing(staged.waveforms.node(&c, "VDD_A").unwrap()) > 1e-3,
             "rail never moved"
         );
     }

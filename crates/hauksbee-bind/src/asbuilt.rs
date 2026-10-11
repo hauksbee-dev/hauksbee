@@ -1390,7 +1390,7 @@ ref = "R1"
 was = { ohms = 1000.0 }
 set = { ohms = 0.001 }
 [[replace]]
-ref = "NEURON_SWITCH1"
+ref = "ANALOG_SWITCH1"
 set = { von = 3.6, voff = 3.4 }
 [[jumper]]
 from = "A"
@@ -1416,7 +1416,7 @@ ohms = 4700.0
         assert!(report
             .lines
             .iter()
-            .any(|l| l.contains("NEURON_SWITCH1") && l.contains("not represented")));
+            .any(|l| l.contains("ANALOG_SWITCH1") && l.contains("not represented")));
         // A `was` that disagrees with the board leaves the part as designed.
         let mut other = board.clone();
         other.components[1].value = "10k".into();

@@ -219,16 +219,16 @@ fn rectifier_wallclock_vs_ngspice() {
 
 #[test]
 #[ignore = "benchmark: prints timings, run on demand"]
-fn synapse_array_partitioned_vs_monolithic() {
+fn bjt_mirror_array_partitioned_vs_monolithic() {
     let blocks = 90;
-    let syn = cases::build_synapse_array(blocks);
-    let c = &syn.circuit;
+    let arr = cases::build_bjt_mirror_array(blocks);
+    let c = &arr.circuit;
     let tstop = 400e-6;
 
     let run = |part: Partitioning| {
         let opts = SolverOptions {
             partitioning: part,
-            ..cases::synapse_opts()
+            ..cases::mirror_array_opts()
         };
         let t0 = Instant::now();
         let wf = Transient::new(opts).run(c, tstop).unwrap();
@@ -240,7 +240,7 @@ fn synapse_array_partitioned_vs_monolithic() {
 
     // Accuracy: load-node voltages, partitioned vs monolithic.
     let mut max_rel = 0.0f64;
-    for name in &syn.membrane_nodes {
+    for name in &arr.hold_nodes {
         let a = mono.final_node(c, name).unwrap_or(0.0);
         let b = parted.final_node(c, name).unwrap_or(0.0);
         let denom = a.abs().max(0.1);
@@ -248,7 +248,7 @@ fn synapse_array_partitioned_vs_monolithic() {
     }
 
     println!(
-        "=== synapse array: {blocks} blocks, {} fixed steps ===",
+        "=== bjt mirror array: {blocks} blocks, {} fixed steps ===",
         mono.time.len()
     );
     println!("  monolithic : {mono_t:.3?}");
@@ -262,8 +262,8 @@ fn synapse_array_partitioned_vs_monolithic() {
     // ngspice on the same generated netlist.
     let ngspice = "/opt/homebrew/bin/ngspice";
     if std::path::Path::new(ngspice).exists() {
-        let path = std::env::temp_dir().join("hauksbee_synapse.cir");
-        std::fs::write(&path, &syn.netlist).unwrap();
+        let path = std::env::temp_dir().join("hauksbee_bjt_mirror_array.cir");
+        std::fs::write(&path, &arr.netlist).unwrap();
         let t1 = Instant::now();
         let _ = std::process::Command::new(ngspice)
             .arg("-b")
@@ -284,7 +284,7 @@ fn synapse_array_partitioned_vs_monolithic() {
 
     assert!(
         max_rel < 5e-3,
-        "partitioned synapse diverged: {max_rel:.3e}"
+        "partitioned bjt mirror array diverged: {max_rel:.3e}"
     );
 }
 

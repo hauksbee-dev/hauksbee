@@ -19,11 +19,11 @@
 //! net = "WSEL"
 //! volts = 5.0
 //!
-//! suppress_rail = ["ANALOG_VDD"]              # feed these nets through the
+//! suppress_rail = ["VDD_A"]              # feed these nets through the
 //!                                             # board only (no auto rail)
 //!
 //! [[override]]                                # 0+ component value overrides
-//! ref = "R_Shunt15301"
+//! ref = "R_SHUNT1"
 //! value = "0.05"
 //!
 //! [fuzz]                                      # optional initial-state fuzzing
@@ -31,7 +31,7 @@
 //!
 //! [[assert]]                                  # 1+ assertions
 //! kind = "voltage"
-//! net = "ANALOG_VDD"
+//! net = "VDD_A"
 //! min = 4.9
 //! after_ms = 50
 //! ```
@@ -1020,7 +1020,7 @@ impl SensorAttach {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
-    /// Reference designator, e.g. "`R_Shunt15301`".
+    /// Reference designator, e.g. "`R_SHUNT1`".
     #[serde(rename = "ref")]
     pub reference: String,
     /// The replacement value string, spelled the way the board file would spell

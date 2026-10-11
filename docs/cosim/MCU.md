@@ -70,7 +70,7 @@ pulled 74HC595 controls, supplied non-GPIO nodes, and any node another MCU,
 edge-driven device, or analogue component can influence stay on the ordinary
 tick path.
 The engine installs an edge-driven `Hc165Chain` here: on
-the PL falling edge it latches the parallel inputs (the spike latches) into
+the PL falling edge it latches the parallel inputs (the input latches) into
 a QH-emit bit sequence, and on each SCLK rising edge it presents the next
 bit on MISO. This is the read-direction analogue of the edge-driven
 `Hc595Chain` write path. Both resolve the bit-banged clock per edge, not per
