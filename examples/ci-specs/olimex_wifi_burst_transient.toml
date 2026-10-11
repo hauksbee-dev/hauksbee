@@ -2,7 +2,7 @@
 # supply must NOT brown out the 3V3 rail.
 #
 #   hauksbee-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
-#   echo $?   # 0: the stiff wall supply rides the burst train
+#   echo $?   # 3 today: INVALID, see below
 #
 # This is the dynamic side of hauksbee-ci: a static DC check cannot see a rail
 # sag, because the sag only happens during a current transient. Here a periodic
@@ -12,11 +12,18 @@
 # above 3.0 V and never dip below 3.1 V for more than 5 ms.
 #
 # The board is the real Olimex ESP32-EVB (REV-L) schematic from the corpus. It
-# is wall/USB powered through a 3A-class LDO with bulk caps, so it is robustly
-# supplied and the burst should pass. This is the calibration counterpart to a
-# brownout failure: it passing is what lets a genuine brownout (on a weak
-# supply) be trusted as a real failure and not a too-pessimistic model. See the
-# integration test crates/hauksbee-ci/tests/olimex_burst_calibration.rs.
+# is wall/USB powered: +5V feeds its TPS62A02 buck (U2), which makes +3.3V
+# behind bulk caps, so it is robustly supplied and the burst should pass. This
+# is the calibration counterpart to a brownout failure: it passing is what lets
+# a genuine brownout (on a weak supply) be trusted as a real failure and not a
+# too-pessimistic model. See the integration test
+# crates/hauksbee-ci/tests/olimex_burst_calibration.rs.
+#
+# Today both assertions hold numerically (the rail stays near 3.28 V through
+# every burst) but the run exits 3, INVALID: parts on or near the rail (a
+# BAT54A dual Schottky, the VS1838B IR receiver, the relays, the battery
+# connector and the Ethernet jack) have no model yet and are left open, and
+# the report names each one. It exits 0 once those parts are modelled.
 #
 # Corpus-gated: needs <repo>/board-corpus/olimex_esp32, from
 # `scripts/fetch-corpus.sh --only olimex_esp32`.
@@ -26,20 +33,16 @@ board = "../../board-corpus/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sc
 duration_ms = 40
 frame_ms = 0.2
 
-# A stiff wall adapter on each rail (low output resistance, small ripple).
-[[supply]]
-net = "+3.3V"
-kind = "wall"
-volts = 3.3
-r_out_ohms = 0.1
-ripple_vpp = 0.02
-ripple_hz = 100.0
-
+# A stiff wall adapter on +5V (low output resistance, small ripple). The
+# board's own buck makes +3.3V from it; a supply on +3.3V would fight U2 and
+# hide the burst current, and the spec loader rejects one.
 [[supply]]
 net = "+5V"
 kind = "wall"
 volts = 5.0
 r_out_ohms = 0.1
+ripple_vpp = 0.02
+ripple_hz = 100.0
 
 # Turn the board's decoupling caps from ideal to honest (ESR/ESL inferred from
 # each cap's footprint + value), so the rail's transient response is realistic.
