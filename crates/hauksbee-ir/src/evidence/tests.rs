@@ -943,9 +943,11 @@ fn assumption_json_shape_is_the_published_one() {
     // No expiry on a run-derived assumption, and the field is absent
     // rather than null: the common shape stays small.
     assert!(v.get("expires").is_none());
+    assert_eq!(v["term"], "open_part");
+    assert_eq!(v["remedy"]["type"], "add_model");
     assert_eq!(
         v.as_object().unwrap().keys().count(),
-        8,
+        10,
         "the assumption shape gained or lost a field; the report schema \
              bumps exactly once, in the rendering phase"
     );
@@ -1562,4 +1564,109 @@ fn open_parts_downgrade_needs_no_other_undermining_kind() {
         .assuming_open_parts_high_impedance(&registry, today())
         .unwrap();
     assert_eq!(map.status(), EvidenceStatus::Undermined);
+}
+
+// ── glossary terms and typed remedies ───────────────────────────────
+
+#[test]
+fn every_kind_maps_to_a_term_its_assumptions_carry() {
+    for kind in AssumptionKind::iter() {
+        assert!(!kind.term().entry().short.is_empty(), "{kind:?}");
+    }
+    for a in all_kinds() {
+        let refined = matches!(
+            (a.kind(), a.term()),
+            (
+                AssumptionKind::SubstituteModel | AssumptionKind::ReducedFidelity,
+                Term::AssumedCorner
+            ) | (AssumptionKind::ReducedFidelity, Term::ExecutablePartial)
+        );
+        assert!(refined || a.term() == a.kind().term(), "{}", a.id());
+        assert!(!a.cli_hint().is_empty(), "{}", a.id());
+    }
+    // Refinements name the narrower term, never a different kind's.
+    let corner = Assumption::undetermined_corner("D3", "D3", "led_hi", "led_hi, led_lo");
+    assert_eq!(corner.term(), Term::AssumedCorner);
+    assert_eq!(
+        corner.remedy(),
+        &Remedy::SetPartNumber {
+            reference: "D3".into()
+        }
+    );
+    let limit = Assumption::operating_limit_violated("U3", "U3", "below minimum load", "add load");
+    assert_eq!(limit.term(), Term::OperatingLimit);
+}
+
+#[test]
+fn every_open_part_cause_maps_to_a_remedy() {
+    let reason = |cause: OpenPartCause| {
+        match cause {
+        OpenPartCause::NoModel => "no model matched".to_string(),
+        OpenPartCause::DuplicateDesignator => format!(
+            "{}: records named 'C2' were kept distinct: footprints differ (CP_6.3x5.4 vs 0805); left open",
+            Assumption::DUPLICATE_DESIGNATOR_REASON
+        ),
+        OpenPartCause::AmbiguousReference => {
+            "ambiguous inferred reference without an authoritative source UID; left open"
+                .to_string()
+        }
+        OpenPartCause::NamedBlocker => format!(
+            "the card has no curve{}a datasheet with the curve",
+            Assumption::UNLOCKED_BY_MARKER
+        ),
+    }
+    };
+    for cause in OpenPartCause::iter() {
+        let a = Assumption::open_part("C2@conflict-2", "100u", &reason(cause));
+        assert_eq!(OpenPartCause::of(&reason(cause)), cause);
+        let expected = match cause {
+            OpenPartCause::NoModel => Remedy::AddModel {
+                reference: "C2@conflict-2".into(),
+            },
+            // F5: renaming, not a model, closes a duplicate designator.
+            OpenPartCause::DuplicateDesignator => Remedy::RenameDuplicate {
+                reference: "C2".into(),
+                conflict: "footprints differ (CP_6.3x5.4 vs 0805)".into(),
+            },
+            OpenPartCause::AmbiguousReference | OpenPartCause::NamedBlocker => Remedy::Other,
+        };
+        assert_eq!(a.remedy(), &expected, "{cause:?}");
+        if cause == OpenPartCause::DuplicateDesignator {
+            assert!(
+                a.replacement().contains("rename one"),
+                "{}",
+                a.replacement()
+            );
+            assert!(!a.replacement().contains("Add a model"));
+        }
+    }
+}
+
+#[test]
+fn remedies_serialize_tagged_and_print_one_line() {
+    let a = Assumption::not_exercised(
+        AssumptionSource::Scheduler,
+        Subject::new("regulator/U2", "the +5V regulator U2"),
+        Scope::Board,
+        "input /VIN has no independent DC support",
+        "",
+    )
+    .with_remedy(Remedy::AddSupply {
+        net: "/VIN".into(),
+        volts_hint: Some(5.6),
+    });
+    let json = serde_json::to_value(&a).unwrap();
+    assert_eq!(json["term"], "not_exercised");
+    assert_eq!(json["remedy"]["type"], "add_supply");
+    assert_eq!(json["remedy"]["net"], "/VIN");
+    assert_eq!(
+        a.cli_hint(),
+        "add [[supply]] net = \"/VIN\" volts = <your supply V, at least 5.60> to the spec"
+    );
+    let other = Assumption::open_part("R7", "", "ambiguous inferred reference");
+    assert_eq!(
+        serde_json::to_value(other.remedy()).unwrap()["type"],
+        "other"
+    );
+    assert_eq!(other.cli_hint(), other.replacement());
 }

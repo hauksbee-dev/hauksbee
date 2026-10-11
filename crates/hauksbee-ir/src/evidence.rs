@@ -56,6 +56,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
+use crate::glossary::Term;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -388,6 +389,152 @@ impl AssumptionKind {
     pub fn slug(self) -> String {
         self.as_str().replace('_', "-")
     }
+
+    /// The glossary term a reader sees for this kind. A constructor may refine
+    /// it (an assumed corner is a `SubstituteModel` kind), never contradict it.
+    #[must_use]
+    pub const fn term(self) -> Term {
+        match self {
+            Self::OpenPart => Term::OpenPart,
+            Self::SubstituteModel => Term::SubstituteModel,
+            Self::InferredPinRole => Term::InferredPinRole,
+            Self::DefaultParameter => Term::DefaultParameter,
+            Self::FittedByDefault => Term::FittedByDefault,
+            Self::NotChecked => Term::NotChecked,
+            Self::NotExercised => Term::NotExercised,
+            Self::ReducedFidelity => Term::ReducedFidelity,
+            Self::OperatingLimitViolated => Term::OperatingLimit,
+            Self::ParserLimitation => Term::ParserLimitation,
+            Self::Waived => Term::Waived,
+        }
+    }
+}
+
+/// What a reader does to close an assumption, as data.
+///
+/// The web app turns it into a button, the CLI into a command
+/// ([`Remedy::cli_hint`]). The prose
+/// [`Assumption::replacement`] stays the fallback, and `Other` means "follow
+/// the prose".
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Remedy {
+    /// Declare a supply on `net` in the spec. `volts_hint` is the least the
+    /// part behind it needs, when known.
+    AddSupply {
+        net: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "f64")]
+        volts_hint: Option<f64>,
+    },
+    /// Write or draft a model for the part.
+    AddModel { reference: String },
+    /// Put the manufacturer part number on the part.
+    SetPartNumber { reference: String },
+    /// Mark the part not fitted.
+    MarkDnp { reference: String },
+    /// Two different parts share `reference`; rename one in the design.
+    /// `conflict` says how they differ.
+    RenameDuplicate { reference: String, conflict: String },
+    /// Give the spec firmware to run.
+    AddFirmware,
+    /// Supply a BOM that marks the parts that are not fitted.
+    AddBom,
+    /// Install a simulator backend (`hauksbee install <id>`).
+    InstallBackend { id: String },
+    /// Put the project's rules file (e.g. `.kicad_pro`) beside the board.
+    ProvideProjectRules { file: String },
+    /// No typed action: follow the assumption's `replacement` sentence.
+    Other,
+}
+
+impl Remedy {
+    /// The one-line command or edit for a terminal, or `None` for
+    /// [`Remedy::Other`] (print the replacement sentence instead).
+    #[must_use]
+    pub fn cli_hint(&self) -> Option<String> {
+        Some(match self {
+            Self::AddSupply { net, volts_hint } => {
+                let volts = volts_hint.map_or_else(
+                    || "<your supply V>".to_string(),
+                    |v| format!("<your supply V, at least {v:.2}>"),
+                );
+                format!("add [[supply]] net = \"{net}\" volts = {volts} to the spec")
+            }
+            Self::AddModel { reference } => format!(
+                "give {reference} a model: hauksbee models new {reference} --board <board> \
+                 (or draft it from its datasheet with hauksbee models extract)"
+            ),
+            Self::SetPartNumber { reference } => format!(
+                "put the manufacturer part number on {reference} (its value or MPN field) and \
+                 re-export"
+            ),
+            Self::MarkDnp { reference } => {
+                format!("mark {reference} DNP in your design or BOM if the board does not fit it")
+            }
+            Self::RenameDuplicate { reference, .. } => format!(
+                "two different parts are both called {reference}: rename one in your design and \
+                 re-export"
+            ),
+            Self::AddFirmware => "add firmware = \"path/to/app.elf\" to the spec".to_string(),
+            Self::AddBom => "pass a BOM that marks unfitted parts: --bom bom.csv".to_string(),
+            Self::InstallBackend { id } => format!("hauksbee install {id}"),
+            Self::ProvideProjectRules { file } => {
+                format!("put the project's {file} next to the board file and rerun")
+            }
+            Self::Other => return None,
+        })
+    }
+}
+
+/// Why an open part has no model, read from the binder's reason. It picks the
+/// remedy: a duplicate designator is fixed by renaming, not by a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+enum OpenPartCause {
+    /// Nothing in the library matched (the ordinary case).
+    NoModel,
+    /// Two records share the designator with different identities.
+    DuplicateDesignator,
+    /// The designator was inferred and nothing backs it.
+    AmbiguousReference,
+    /// The library named what blocks a model ([`Assumption::UNLOCKED_BY_MARKER`]).
+    NamedBlocker,
+}
+
+impl OpenPartCause {
+    fn of(reason: &str) -> Self {
+        let r = reason.trim_start().to_ascii_lowercase();
+        if reason.contains(Assumption::UNLOCKED_BY_MARKER) {
+            Self::NamedBlocker
+        } else if r.starts_with(Assumption::DUPLICATE_DESIGNATOR_REASON) {
+            Self::DuplicateDesignator
+        } else if r.starts_with("ambiguous inferred reference") {
+            Self::AmbiguousReference
+        } else {
+            Self::NoModel
+        }
+    }
+
+    /// The typed action for this cause; `subject` is the raw designator,
+    /// `reference` its prose form.
+    fn remedy(self, subject: &str, reference: &str, reason: &str) -> Remedy {
+        match self {
+            Self::DuplicateDesignator => Remedy::RenameDuplicate {
+                reference: duplicate_name(reference).to_string(),
+                conflict: fragment(
+                    reason
+                        .split_once("kept distinct:")
+                        .map_or(reason, |(_, how)| how)
+                        .trim_end_matches("; left open"),
+                ),
+            },
+            Self::NoModel if !subject.is_empty() => Remedy::AddModel {
+                reference: reference.to_string(),
+            },
+            _ => Remedy::Other,
+        }
+    }
 }
 
 /// Which stage of the run raised the assumption. Mirrors the pipeline, so a
@@ -598,6 +745,9 @@ pub struct Assumption {
     collision_base_id: AssumptionId,
     /// What kind of gap this is. Drives [`EvidenceStatus`].
     kind: AssumptionKind,
+    /// The glossary term a reader sees: the kind's, or a constructor's
+    /// narrower one (`assumed_corner`).
+    term: Term,
     /// Which pipeline stage raised it.
     source: AssumptionSource,
     /// What it taints.
@@ -611,6 +761,8 @@ pub struct Assumption {
     /// The replacement path: what a user does so this stops being an
     /// assumption. Always actionable, never "n/a".
     replacement: String,
+    /// The same path as a typed action; `other` means follow `replacement`.
+    remedy: Remedy,
     /// Waived assumptions only: the `YYYY-MM-DD` the waiver lapses. `None` for
     /// every run-derived kind, since an expiry on a machine observation would
     /// mean nothing.
@@ -721,6 +873,14 @@ fn or_else(s: &str, fallback: &str) -> String {
     }
 }
 
+/// The designator two parts share: the extractor renames the second copy
+/// `C2@conflict-2`, but the design calls both `C2`.
+fn duplicate_name(reference: &str) -> &str {
+    reference
+        .split_once("@conflict-")
+        .map_or(reference, |(name, _)| name)
+}
+
 /// What an assumption is about, in the two forms an assumption needs it.
 ///
 /// The `key` goes into the id (short, stable, slug-shaped, because ids are
@@ -817,6 +977,42 @@ impl Assumption {
         self.expires.as_deref()
     }
 
+    /// The glossary term a reader sees for this assumption.
+    #[must_use]
+    pub const fn term(&self) -> Term {
+        self.term
+    }
+
+    /// What closes it, as a typed action.
+    #[must_use]
+    pub const fn remedy(&self) -> &Remedy {
+        &self.remedy
+    }
+
+    /// Attach the typed action a producer knows and the constructor could not
+    /// (the regulator input net that needs a supply, say). The prose
+    /// `replacement` is unchanged and stays the fallback.
+    #[must_use]
+    pub fn with_remedy(mut self, remedy: Remedy) -> Self {
+        self.remedy = remedy;
+        self
+    }
+
+    /// A constructor's narrower term for its kind.
+    const fn with_term(mut self, term: Term) -> Self {
+        self.term = term;
+        self
+    }
+
+    /// The one line a terminal prints as the fix: the remedy's command, or the
+    /// replacement sentence when the remedy is [`Remedy::Other`].
+    #[must_use]
+    pub fn cli_hint(&self) -> String {
+        self.remedy
+            .cli_hint()
+            .unwrap_or_else(|| self.replacement.clone())
+    }
+
     /// Give one of several unequal claims sharing a producer's base id a stable,
     /// content-derived identity. Producers normally keep the concise
     /// `kind:subject` id. The post-bind merge calls this only after observing an
@@ -904,12 +1100,14 @@ impl Assumption {
             id: id.clone(),
             collision_base_id: id,
             kind,
+            term: kind.term(),
             source,
             scope,
             statement,
             because,
             consequence,
             replacement,
+            remedy: Remedy::Other,
             expires,
         };
         built.checked()
@@ -923,6 +1121,12 @@ impl Assumption {
     /// A reason that does not contain it is an ordinary one and is passed through
     /// whole.
     pub const UNLOCKED_BY_MARKER: &'static str = " Unlocked by: ";
+
+    /// How an open part's reason starts when two records share its designator
+    /// with different identities (the extractor's duplicate-designator
+    /// refusal). [`Assumption::open_part`] reads it to offer a rename, not a
+    /// model.
+    pub const DUPLICATE_DESIGNATOR_REASON: &'static str = "ambiguous duplicate designator";
 
     /// Marks a bind warning as a PARTIAL-MODEL disclosure, so it becomes evidence
     /// rather than only a line on the bind report.
@@ -1020,6 +1224,7 @@ impl Assumption {
             ),
             None,
         )
+        .with_term(Term::ExecutablePartial)
     }
 
     /// A datasheet operating requirement this run MEASURED as violated (a
@@ -1032,6 +1237,7 @@ impl Assumption {
         let part = or_else(reference, "an unnamed part");
         let mut built = Self::partial_model_for_component(subject, reference, "", gap, fix);
         built.kind = AssumptionKind::OperatingLimitViolated;
+        built.term = built.kind.term();
         built.id = AssumptionId::new(built.kind, subject); // named subject, no disambiguator
         built.collision_base_id = built.id.clone();
         built.statement = sentence(&format!("{part} is operated outside a limit its card sets"));
@@ -1117,6 +1323,7 @@ impl Assumption {
         //
         // Everything else, including every generic reason and every extractor
         // explanation, contains no marker and takes the `None` arm untouched.
+        let cause = OpenPartCause::of(reason);
         let (reason, unlocked_by) = match reason.split_once(Self::UNLOCKED_BY_MARKER) {
             Some((because, unlock)) => (because.trim(), Some(unlock.trim())),
             None => (reason, None),
@@ -1207,6 +1414,11 @@ impl Assumption {
             // sentence above just explained is not yet possible.
             match (unlocked_by, plural) {
                 (Some(unlock), _) => unlock.to_string(),
+                (None, _) if cause == OpenPartCause::DuplicateDesignator => format!(
+                    "Two different parts are both called {}; rename one in your design and \
+                     re-export.",
+                    duplicate_name(&reference)
+                ),
                 (None, true) => format!(
                     "Add models for those {count} parts to your models directory, or mark them \
                      DNP if the board does not fit them."
@@ -1230,6 +1442,7 @@ impl Assumption {
             built.id = built.id.with_ordinal(n);
             built.collision_base_id = built.id.clone();
         }
+        built.remedy = cause.remedy(&subject, &reference, reason);
         built.checked()
     }
 
@@ -1252,7 +1465,7 @@ impl Assumption {
         let reference = or_else(reference, "an unnamed part");
         let requested = or_else(requested, "the part the board asks for");
         let stand_in = or_else(stand_in, "a stand-in model");
-        Self::build(
+        let built = Self::build(
             AssumptionKind::SubstituteModel,
             source,
             &subject,
@@ -1271,7 +1484,13 @@ impl Assumption {
                  run binds the part the board actually carries."
             ),
             None,
-        )
+        );
+        // A substitute MCU core is closed by an SoC descriptor, not a part model.
+        if source == AssumptionSource::Binder {
+            built.with_remedy(Remedy::AddModel { reference })
+        } else {
+            built
+        }
     }
 
     /// An orderable-variant set the board could not narrow to one member, all
@@ -1298,6 +1517,7 @@ impl Assumption {
             format!("add `[[override]] ref=\"{reference}\" select=\"{bound}\"` to the spec, or put the orderable code (with any gain-group suffix) in the part number or BOM; `hauksbee-ci` simulates every variant and passes only if all pass, or names the variants it left unswept past its run cap"),
             None,
         )
+        .with_remedy(Remedy::SetPartNumber { reference: reference.to_string() })
     }
 
     /// A part the board names only by class (a generic MOSFET symbol with no
@@ -1318,6 +1538,8 @@ impl Assumption {
             format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part; `hauksbee-ci` simulates every corner and passes only if all pass, or names the cover it fell back to past its run cap"),
             None,
         )
+        .with_term(Term::AssumedCorner)
+        .with_remedy(Remedy::SetPartNumber { reference: reference.to_string() })
     }
 
     /// A class-only part's assumed corner set (`ids`) that the run SWEPT: the
@@ -1346,6 +1568,8 @@ impl Assumption {
             format!("put the manufacturer part number on {reference} (its value or an MPN field) so the run binds that part"),
             None,
         )
+        .with_term(Term::AssumedCorner)
+        .with_remedy(Remedy::SetPartNumber { reference: reference.to_string() })
     }
 
     /// A CI run that could not cross every open variant or corner set of the
@@ -1483,6 +1707,7 @@ impl Assumption {
                 .to_string(),
             None,
         )
+        .with_remedy(Remedy::AddBom)
     }
 
     /// A whole check could not run on this input class. `because` and

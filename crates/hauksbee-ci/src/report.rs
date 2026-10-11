@@ -318,6 +318,10 @@ pub struct CiJsonReport {
     /// when every assertion held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict_reason: Option<String>,
+    /// Plain-English explanations of the terms this report uses (its verdict
+    /// and each assumption's `term`), from `hauksbee_ir::glossary`, so every
+    /// surface explains them in the same words.
+    pub glossary: Vec<hauksbee_ir::glossary::TermEntry>,
     /// How many ensemble members ran (fuzz seeds, or tolerance members).
     pub seeds: u32,
     /// Wall-clock duration of the run, in seconds.
@@ -594,6 +598,7 @@ impl CiResult {
             analog_abort: self.analog_abort,
             refusal: self.refusal(),
             verdict_reason: self.verdict_reason(),
+            glossary: self.glossary(),
             seeds: self.seeds,
             elapsed_s: self.elapsed.as_secs_f64(),
             coverage: self.coverage.as_ref().map(EnsembleCoverage::describe),
@@ -628,6 +633,21 @@ impl CiResult {
                 })
                 .collect(),
         }
+    }
+
+    /// The glossary rows for the verdict and every assumption this run carries.
+    fn glossary(&self) -> Vec<hauksbee_ir::glossary::TermEntry> {
+        use hauksbee_ir::{
+            evidence::Assumption,
+            glossary::{for_terms, Term},
+        };
+        let verdict = match self.exit_code() {
+            0 if self.verdict_conditions.is_empty() => Term::Pass,
+            0 => Term::ConditionalPass,
+            1 => Term::Fail,
+            _ => Term::Invalid,
+        };
+        for_terms(std::iter::once(verdict).chain(self.assumptions.iter().map(Assumption::term)))
     }
 
     /// Machine-readable run result (the `--json` surface, and what the web

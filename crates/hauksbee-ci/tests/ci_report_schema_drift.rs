@@ -405,5 +405,9 @@ fn refusal_and_abort_documents_validate() {
         assert_eq!(parsed["run_valid"], json!(false), "{shape} is not valid");
         assert_eq!(parsed["passed"], json!(false), "{shape} is never green");
         assert_eq!(parsed["schema_version"], json!(CI_REPORT_SCHEMA_VERSION));
+        // The document explains its own verdict in the shared glossary words.
+        let invalid = &parsed["glossary"][0];
+        assert_eq!(invalid["term"], json!("invalid"), "{shape}");
+        assert!(invalid["short"].as_str().unwrap().contains("refused"));
     }
 }

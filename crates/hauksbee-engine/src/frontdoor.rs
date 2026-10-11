@@ -592,6 +592,9 @@ pub struct WebReport {
     /// First-class assumptions from the same evidence object as CLI JSON/plain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    /// Plain-English explanations of the terms `assumptions` use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub glossary: Vec<hauksbee_ir::glossary::TermEntry>,
     /// Per-net evidence maps derived from actual board incidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<hauksbee_ir::evidence::EvidenceMap>,
@@ -1507,6 +1510,12 @@ fn analyze_normalized_with_context(
         model_coverage: Some(crate::commands::models::coverage_snapshot(board, lib)),
         inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
+        glossary: hauksbee_ir::glossary::for_terms(
+            evidence
+                .assumptions()
+                .iter()
+                .map(hauksbee_ir::evidence::Assumption::term),
+        ),
         evidence: evidence.maps().to_vec(),
         notes,
         nets,

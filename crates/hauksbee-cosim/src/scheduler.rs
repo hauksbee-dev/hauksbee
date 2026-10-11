@@ -5431,13 +5431,25 @@ impl Scheduler {
             );
             let scope = Scope::Nets(NetScope::new(taint_nets, None)?);
             out.push(match because {
-                Some(because) => Assumption::not_exercised(
-                    AssumptionSource::Scheduler,
-                    subject,
-                    scope,
-                    because,
-                    "give the regulator input its headroom from a declared supply and start a fresh run",
-                ),
+                Some(because) => {
+                    let a = Assumption::not_exercised(
+                        AssumptionSource::Scheduler,
+                        subject,
+                        scope,
+                        because,
+                        "give the regulator input its headroom from a declared supply and start a fresh run",
+                    );
+                    // An unpowered input is closed by a declared supply; a sag or an
+                    // over-rating is a design question the prose answers.
+                    if taint.is_none_or(|t| t.reason.contains("no independent DC support")) {
+                        let volts_hint = (reg.adj_return.is_none() && reg.min_in_v.is_finite())
+                            .then_some(reg.min_in_v);
+                        let net = self.net_name_of(reg.input.0);
+                        a.with_remedy(hauksbee_ir::evidence::Remedy::AddSupply { net, volts_hint })
+                    } else {
+                        a
+                    }
+                }
                 None => Assumption::reduced_fidelity(
                     AssumptionSource::Scheduler,
                     subject,

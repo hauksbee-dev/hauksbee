@@ -217,6 +217,14 @@
           ],
           "description": "What kind of gap this is. Drives [`EvidenceStatus`]."
         },
+        "remedy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Remedy"
+            }
+          ],
+          "description": "The same path as a typed action; `other` means follow `replacement`."
+        },
         "replacement": {
           "description": "The replacement path: what a user does so this stops being an\nassumption. Always actionable, never \"n/a\".",
           "type": "string"
@@ -240,17 +248,27 @@
         "statement": {
           "description": "What is being taken as true, one sentence, present tense.",
           "type": "string"
+        },
+        "term": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Term"
+            }
+          ],
+          "description": "The glossary term a reader sees: the kind's, or a constructor's\nnarrower one (`assumed_corner`)."
         }
       },
       "required": [
         "id",
         "kind",
+        "term",
         "source",
         "scope",
         "statement",
         "because",
         "consequence",
-        "replacement"
+        "replacement",
+        "remedy"
       ],
       "type": "object"
     },
@@ -527,6 +545,13 @@
           "format": "int32",
           "type": "integer"
         },
+        "glossary": {
+          "description": "Plain-English explanations of the terms this report uses (its verdict\nand each assumption's `term`), from `hauksbee_ir::glossary`, so every\nsurface explains them in the same words.",
+          "items": {
+            "$ref": "#/definitions/TermEntry"
+          },
+          "type": "array"
+        },
         "inventory": {
           "description": "Exact files this run consumed (board, firmware, spec, models), with\ncontent hashes: the input inventory the evidence maps refer to.",
           "items": {
@@ -634,6 +659,7 @@
         "run_valid",
         "exit_code",
         "analog_abort",
+        "glossary",
         "seeds",
         "elapsed_s",
         "coverage",
@@ -1438,6 +1464,177 @@
       ],
       "type": "object"
     },
+    "Remedy": {
+      "description": "What a reader does to close an assumption, as data.\n\nThe web app turns it into a button, the CLI into a command\n([`Remedy::cli_hint`]). The prose\n[`Assumption::replacement`] stays the fallback, and `Other` means \"follow\nthe prose\".",
+      "oneOf": [
+        {
+          "description": "Declare a supply on `net` in the spec. `volts_hint` is the least the\npart behind it needs, when known.",
+          "properties": {
+            "net": {
+              "type": "string"
+            },
+            "type": {
+              "const": "add_supply",
+              "type": "string"
+            },
+            "volts_hint": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "net"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Write or draft a model for the part.",
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "add_model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Put the manufacturer part number on the part.",
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "set_part_number",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Mark the part not fitted.",
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "mark_dnp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Two different parts share `reference`; rename one in the design.\n`conflict` says how they differ.",
+          "properties": {
+            "conflict": {
+              "type": "string"
+            },
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "rename_duplicate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference",
+            "conflict"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Give the spec firmware to run.",
+          "properties": {
+            "type": {
+              "const": "add_firmware",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Supply a BOM that marks the parts that are not fitted.",
+          "properties": {
+            "type": {
+              "const": "add_bom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Install a simulator backend (`hauksbee install <id>`).",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "install_backend",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Put the project's rules file (e.g. `.kicad_pro`) beside the board.",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provide_project_rules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "file"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No typed action: follow the assumption's `replacement` sentence.",
+          "properties": {
+            "type": {
+              "const": "other",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Residual": {
       "description": "The final accepted Newton residual, worst node.",
       "properties": {
@@ -1561,6 +1758,73 @@
         "$ref": "#/definitions/EntityRef"
       },
       "type": "array"
+    },
+    "Term": {
+      "description": "A term a report can show a reader.\n\nThe wire name (`snake_case`) is what report JSON and the web app key on.\nDeclaration order is display order; `Term::iter()` lists every term (for a\nfull glossary endpoint).",
+      "oneOf": [
+        {
+          "enum": [
+            "pass",
+            "fail",
+            "invalid",
+            "open_part",
+            "substitute_model",
+            "reduced_fidelity",
+            "assumed_corner",
+            "not_exercised",
+            "not_checked",
+            "inferred_pin_role",
+            "default_parameter",
+            "fitted_by_default",
+            "operating_limit",
+            "parser_limitation",
+            "waived",
+            "default_rules",
+            "identity_only",
+            "executable_partial",
+            "scope_unspecified",
+            "report_only_exit"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "conditional_pass",
+          "description": "A pass that holds only under the listed assumptions (\"qualified\").",
+          "type": "string"
+        }
+      ]
+    },
+    "TermEntry": {
+      "description": "One glossary row: a term's display label, what it means, and what to do.",
+      "properties": {
+        "label": {
+          "description": "How the term is displayed, e.g. `INVALID`.",
+          "type": "string"
+        },
+        "short": {
+          "description": "What it means, in one or two plain sentences.",
+          "type": "string"
+        },
+        "term": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Term"
+            }
+          ],
+          "description": "The wire name, e.g. `invalid`."
+        },
+        "what_to_do": {
+          "description": "What the reader does about it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "term",
+        "label",
+        "short",
+        "what_to_do"
+      ],
+      "type": "object"
     },
     "TimeWindow": {
       "description": "A sim-time window, seconds, half-open `[start_s, end_s)`.",
