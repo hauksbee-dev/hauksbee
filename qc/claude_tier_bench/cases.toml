@@ -1,0 +1,105 @@
+# Public datasheets whose reviewed cards already exist in crates/hauksbee-models/db.
+# Every url is copied from the card itself: its [[models.source.references]] url, or,
+# where the card carries none (url_from = "comment"), the datasheet URL its own
+# source comment names. `part` is a real orderable number the card's match rule
+# accepts. `kind` is the card's own kind (what `--kind` is given). Scoring reads the
+# reference from db/<db> by `card` id; test_score.py checks all of this stays true.
+schema_version = 1
+
+[[cases]]
+part = "AP2125K-3.3TRG1"
+kind = "vreg"
+db = "vreg.toml"
+card = "ap2125k_3v3"
+url = "https://www.diodes.com/assets/Datasheets/AP2125.pdf"
+why = "LDO; tricky pins: the K suffix is SOT-25 and the N suffix is SOT-89, with different pin orders in one sheet"
+
+[[cases]]
+part = "TPS70918DBVR"
+kind = "vreg"
+db = "vreg.toml"
+card = "tps70918_dbv"
+url = "https://www.ti.com/lit/ds/symlink/tps709.pdf"
+why = "fixed-output LDO family sheet; the DBV SOT-23-5 pin map and the fixed-voltage suffix must be picked out"
+
+[[cases]]
+part = "TLV6001IDCKR"
+kind = "opamp"
+db = "opamp_comparator.toml"
+card = "tlv6001_dck"
+url = "https://www.ti.com/lit/ds/symlink/tlv6001.pdf"
+why = "op-amp; tricky pins: DBV (SOT-23-5) and DCK (SC70-5) pinouts differ and the part number selects DCK"
+
+[[cases]]
+part = "TLV3601IDBVR"
+kind = "comparator"
+db = "opamp_comparator.toml"
+card = "tlv3601"
+url = "https://www.ti.com/lit/ds/symlink/tlv3601.pdf"
+why = "fast comparator, SOT-23-5 / SC70-5; propagation delay and supply rows"
+
+[[cases]]
+part = "CD74HC4066"
+kind = "analog_switch"
+db = "analog_switch.toml"
+card = "cd74hc4066"
+url = "https://www.ti.com/lit/ds/symlink/cd74hc4066.pdf"
+why = "quad bilateral switch; 14 pins with four unrelated channels and control pins out of order"
+
+[[cases]]
+part = "DMG3415U"
+kind = "pmos"
+db = "mosfet.toml"
+card = "dmg3415u"
+url = "https://www.diodes.com/datasheet/download/DMG3415U.pdf"
+why = "P-MOSFET in SOT-23; pad numbering G/S/D is printed as lead names only"
+
+[[cases]]
+part = "2N7002"
+kind = "nmos"
+db = "mosfet.toml"
+card = "2n7002"
+url = "https://assets.nexperia.com/documents/data-sheet/2N7002.pdf"
+url_from = "comment"
+why = "N-MOSFET; tricky pins: one sheet covers SOT-23, SOT-323 and dual SOT-363 variants"
+
+[[cases]]
+part = "BC847"
+kind = "bjt_npn"
+db = "bjt.toml"
+card = "bc847"
+url = "https://assets.nexperia.com/documents/data-sheet/BC847X_SER.pdf"
+url_from = "comment"
+why = "NPN BJT series sheet; hFE bins and many package pin maps, the card is the bare SOT-23 BC847"
+
+[[cases]]
+part = "BAV99"
+kind = "diode"
+db = "diodes.toml"
+card = "bav99"
+url = "https://assets.nexperia.com/documents/data-sheet/BAV99.pdf"
+why = "dual series diode SOT-23; tricky pins: BAV70/BAT54x siblings share the package with other pin roles"
+
+[[cases]]
+part = "SN74LVC1T45"
+kind = "digital"
+db = "digital.toml"
+card = "sn74lvc1t45"
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1t45.pdf"
+why = "dual-supply level shifter (VCCA/VCCB); DBV, DCK, DRL and DPK packages with different pin orders"
+
+[[cases]]
+part = "74LVC1G125"
+kind = "digital"
+db = "digital.toml"
+card = "74lvc1g125"
+url = "https://assets.nexperia.com/documents/data-sheet/74LVC1G125.pdf"
+why = "single tri-state buffer with active-low enable; many 5-pin package variants in one sheet"
+
+[[cases]]
+part = "DAC081C081CIMK"
+kind = "digital"
+db = "dac_adc.toml"
+card = "dac081c081cimk"
+url = "https://www.ti.com/lit/ds/symlink/dac081c081.pdf"
+why = "I2C DAC (MCU-adjacent); 6-pin DDC SOT with an address-select pin; the card cites a per-package pinout table"
