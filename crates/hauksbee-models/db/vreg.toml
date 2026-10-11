@@ -3288,13 +3288,28 @@ dropout_v = 0.2      # Vdif2 typ @ IOUT = 100 mA (250 mV max). Vdif1 is 60 mV ty
                      # at 30 mA; the 100 mA figure is the useful one for a 150 mA
                      # part, and the datasheet tabulates none at 150 mA.
 iq_a      = 7.0e-5   # IDD typ, B type (100 uA max); standby is 0.01 uA typ
+# CE pin (active high on the B type; the binder gates the output on it from these
+# fields). Torex XC6204/XC6205 ETR03004-011d, ELECTRICAL CHARACTERISTICS, XC6204A, B
+# Type (p.5): VCEH "CE H Voltage" 1.6 V min at Ta = 25 C, 1.7 V min over
+# -40..85 C; VCEL "CE L Voltage" 0.25 V max at 25 C, 0.20 V max over -40..85 C. The
+# over-temperature pair is carried so the on and off levels hold at every
+# temperature (the -40..85 C columns are marked designed values, note *5).
+en_on_v   = 1.7
+en_off_v  = 0.20
+# No en_pull_*: the B type is "no pull-down resistor built-in" (Ordering
+# Information, p.3), and its ICEH/ICEL are +-0.10 uA input leakage, not a pull.
+# No en_open: Operational Explanation, CE Pin (p.18) says the standard B type
+# "will become unstable with the CE pin open", which is not an off or on state.
+# No en_discharge_ohms: in shutdown VOUT is pulled to VSS "via R1 & R2" (p.18),
+# the feedback divider, and no resistance value is printed.
+i_shdn_a  = 1.0e-8   # ISTBY "Standby Current" typ 0.01 uA (0.10 uA max), VIN = VOUT(T)+1.0 V, VCE = VSS, Ta = 25 C, B type, Torex XC6204/XC6205 ETR03004-011d Electrical Characteristics XC6204A, B Type p.5
 
 [models.pins]
 # PIN ASSIGNMENT, SOT-89-5 column. READ THE PACKAGE HAZARD NOTE ABOVE before
 # reusing this map: the SOT-25 form of the same part swaps pads 1 and 4.
 "1" = "nc"
 "2" = "gnd"    # VSS, the wide centre tab on this package
-"3" = "en"     # CE, active high on the B type; the output is gated on it from the binder default levels (no datasheet read)
+"3" = "en"     # CE, active high on the B type; the output is gated on it from en_on_v / en_off_v (Pin Assignment and Functions, p.4)
 "4" = "in"     # VIN
 "5" = "out"    # VOUT
 
@@ -3379,7 +3394,9 @@ basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Diss
 # analog.com refused the fetch. ADI has since reissued the sheet under its own
 # numbering and this entry has NOT been diffed against that reissue. The pin map
 # below is independently corroborated (see the pin note), but the numbers are
-# only as current as a 2000-vintage document.
+# only as current as a 2000-vintage document. The SHDN fields were later read from
+# the Analog Devices Rev. C reissue (analog.com lt1461.pdf, 18 pp.); the same pass
+# found the dropout, IQ and short-circuit rows above unchanged in that reissue.
 #
 # `kind = "vreg"` for the reason the MAX6070 entry in db/power_ics.toml sets out:
 # a series reference is a regulator whose distinguishing feature is accuracy, and
@@ -3402,10 +3419,20 @@ basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Diss
 #
 # SHDN GATING: this pin is active LOW (shutdown), so it is named `shdn` and NOT
 # `en`; the output is on while the pin is high, so `en_on_level` is left at its
-# on-high default. The binder gates the output on it, but this card states NO
-# `en_*` fields because no LT1461 datasheet could be fetched to read the
-# shutdown thresholds from, so the gate uses the binder's generic default levels,
-# disclosed as assumed (a partial model).
+# on-high default. The binder gates the output on it from the thresholds below,
+# read from the Analog Devices LT1461 Rev. C datasheet (the ADI reissue of 1461f):
+#   VIH "Logic High Input Voltage" 2.4 V min, VIL "Logic Low Input Voltage"
+#   0.5 V typ / 0.8 V max, both the over-temperature rows of the Shutdown Pin
+#   block of the ELECTRICAL CHARACTERISTICS table (p.4); the 0.8 V maximum is the
+#   off level carried;
+#   open pin: Applications Information, Shutdown (p.11) says the part "operates
+#   normally with Pin 3 open", so `en_open = "on"`;
+#   shutdown current: "Shutdown Current", RL = 1k, 25 uA typ / 35 uA max at 25 C
+#   (55 uA max over temperature), p.4. This is a supply current drawn while shut
+#   down, not a leakage: the datasheet states "a maximum supply current of 35 uA"
+#   in shutdown (p.11).
+# The input currents (2 uA typ / 15 uA max at 2.4 V; 4 uA max at 0.8 V, p.4) are
+# input bias, not a pull, so no en_pull_* is set; no discharge resistance is printed.
 #
 # DELIBERATELY NOT MODELLED: the initial accuracy and drift, and the four DNC
 # pads (which the datasheet says must be left unconnected, not grounded).
@@ -3436,6 +3463,10 @@ value_re = "(?i)^LT1461[A-D][ICHX]?S8[-_ ]?3[._]3$"
 vout      = 3.3       # 3.300 V; +/-0.04% max initial on the A grade
 dropout_v = 0.4       # max at IOUT = 10 mA. See the note above.
 iq_a      = 3.5e-5    # IQ typ 35 uA at 25 C (50 uA max at 25 C, 70 uA over temp)
+en_on_v   = 2.4       # Shutdown Pin "Logic High Input Voltage" 2.4 V min over temp, Analog Devices LT1461 Rev. C Electrical Characteristics p.4
+en_off_v  = 0.8       # Shutdown Pin "Logic Low Input Voltage" 0.8 V max (0.5 V typ) over temp, same table p.4
+en_open   = "on"      # Applications Information, Shutdown p.11: "operates normally with Pin 3 open or greater than or equal to 2.4V"
+i_shdn_a  = 2.5e-5    # "Shutdown Current" typ 25 uA (35 uA max), RL = 1k, TA = 25 C, Analog Devices LT1461 Rev. C Electrical Characteristics p.4
 
 [models.pins]
 # PACKAGE/ORDER INFORMATION, S8. Corroborated by the MWGEN-G1's own pin functions,
@@ -4349,15 +4380,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4389,15 +4422,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4434,15 +4469,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4474,15 +4511,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4519,15 +4558,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4559,15 +4600,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4604,15 +4647,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4644,15 +4689,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4689,15 +4736,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4729,15 +4778,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4774,15 +4825,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4814,15 +4867,17 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
 # SHDN pin (active high; the binder gates the output on it from these fields).
-# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
-# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
-# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
-# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
-# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
-# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+# ADI/Linear LT1763 1763fh (ADI PDF), Electrical Characteristics p.5, Shutdown
+# Threshold (the l-marked over-temperature rows, all variants): VOUT = Off to On
+# 0.8 V typ, 2 V max; VOUT = On to Off 0.25 V min, 0.65 V typ. SHDN pin current
+# (0.1 uA at VSHDN = 0 V, 1 uA at 20 V, p.5) is bias, not a pull; no discharge
+# resistance is printed.
 en_on_v=2.0
 en_off_v=0.25
-i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max (typ/max placement read from a text extract of 1763fh, PDF not fetchable; Features say < 1 uA), p.6
+# Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
+# state if the SHDN pin is not connected, so the open-pin state is stated (off).
+en_open="off"
+i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
 "2"="out"
