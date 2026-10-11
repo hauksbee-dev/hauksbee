@@ -119,7 +119,9 @@ exact commit recorded in `required-simulator-versions.env`, applies
 `qemu-patches/esp32-gpio-register-state.patch`, builds both system binaries,
 and instantiates live ESP32, ESP32-S3, and ESP32-C3 machines to require paired
 `gpio-out`/`gpio-enable` QOM capabilities before installing it under
-`~/.hauksbee-qemu-esp-patched`. Hauksbee distributes
+`~/.hauksbee-qemu-esp-patched`. It needs git, a C compiler, pkg-config, ninja,
+glib, pixman, libgcrypt and libslirp (macOS: `brew install ninja glib pixman
+libgcrypt libslirp pkgconf`). Hauksbee distributes
 the patch and recipe, not the resulting QEMU binary. GPIO output from ordinary
 ESP-IDF firmware then reaches co-sim; GPIO input, SAR ADC, and I2C/SPI byte
 interception remain explicit mailbox contracts.

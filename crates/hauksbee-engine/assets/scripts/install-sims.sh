@@ -978,6 +978,7 @@ install_qemu_patched_source() {
   for tool in git cc pkg-config; do
     have "$tool" || die "$tool is required for --qemu-patched-source"
   done
+  have ninja || die "ninja is required for --qemu-patched-source (macOS: brew install ninja; Debian/Ubuntu: apt install ninja-build)"
   make_tmpdir source_root
   mkdir -p "$source_root/qemu"
   git -C "$source_root/qemu" init -q
