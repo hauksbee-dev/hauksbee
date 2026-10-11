@@ -476,6 +476,74 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
         self.assertIn("board_fixture_references", builder)
 
+    def test_mirror_message_rewrites_are_public_and_applied(self) -> None:
+        namespace = {"__file__": str(ROOT / "scripts/mirror_content.py")}
+        exec((ROOT / "scripts/mirror_content.py").read_text(), namespace)
+        table_path = ROOT / "scripts/mirror-message-rewrites.json"
+        raw = json.loads(table_path.read_text())
+        table = namespace["message_rewrites"](str(table_path))
+        self.assertEqual(set(raw), set(table))
+        self.assertTrue(table, "the rewrite table is empty")
+
+        # The callback, as filter-repo compiles it, with the table loaded.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            body = (ROOT / "scripts/mirror-message-callback.py").read_text()
+            scope = {}
+            exec("def callback(message):\n" + textwrap.indent(body, "    "), scope)
+            callback = scope["callback"]
+            for key, entry in raw.items():
+                self.assertRegex(key, r"\A[0-9a-f]{64}\Z")
+                new = table[key]
+                self.assertTrue(new.endswith(b"\n") and not new.endswith(b"\n\n"), key)
+                # Already in public vocabulary: the ordinary rules leave it alone,
+                # and filter-repo's commit-id translation has nothing to rewrite.
+                self.assertEqual(callback(new), new, key)
+                self.assertNotRegex(new.decode(), r"\b[0-9a-f]{7,40}\b", key)
+                self.assertNotRegex(
+                    new.decode(), r"(?i)oracle|hidden neuron|\bdigit\s*\d|O2\b|R_Shunt|ANALOG_VDD",
+                    key)
+                # Keyed on the bytes the callback really receives, wherever the
+                # development commit it was written for is present.
+                found = subprocess.run(["git", "cat-file", "commit", entry["commit"]],
+                                       cwd=ROOT, capture_output=True)
+                if found.returncode == 0:
+                    original = found.stdout.split(b"\n\n", 1)[1]
+                    self.assertEqual(hashlib.sha256(original).hexdigest(), key)
+                    self.assertEqual(callback(original), new, key)
+        finally:
+            sys.path.remove(str(ROOT / "scripts"))
+
+        unapplied = namespace["unapplied_rewrites"]
+        old, new = b"private subject\n", b"public subject\n"
+        small = {hashlib.sha256(old).hexdigest(): new}
+        self.assertEqual(unapplied([b"x\n", new], small), [])
+        self.assertEqual(unapplied([b"x\n"], small), list(small))  # never landed
+        self.assertEqual(unapplied([old, new], small), list(small))  # original survived
+
+        paths = namespace["board_history_paths"](
+            ["testdata/oracle_digit3.json", "crates/galvani-ci/tests/flagship.rs",
+             "crates/hauksbee-tarski/src/lib.rs", "testdata/oracle_digits.md",
+             "crates/galvani-ci/tests/flagship.rs.bak", ""],
+            ["crates/galvani-ci/tests/flagship.rs", "crates/hauksbee-tarski"],
+            ["*oracle_digit*.json"],
+        )
+        self.assertEqual(paths, ["crates/galvani-ci/tests/flagship.rs",
+                                 "crates/hauksbee-tarski/src/lib.rs",
+                                 "testdata/oracle_digit3.json"])
+
+        builder = (ROOT / "scripts/build-public-mirror.sh").read_text()
+        exclude = builder.split("\nEXCLUDE=(", 1)[1].split("\n)", 1)[0]
+        self.assertIn("scripts/mirror-message-rewrites.json", exclude.split())
+        board_glob = builder.split("\nBOARD_GLOB=(", 1)[1].split("\n)", 1)[0]
+        self.assertIn("'*oracle_digit*.json'", board_glob)
+        self.assertIn('EXCLUDE+=("${BOARD_HISTORY_EXCLUDE[@]}")', builder)
+        self.assertIn("board_history_paths(", builder)
+        self.assertIn("unapplied_rewrites(", builder)
+        # The pre-rename spellings stay out of the disclosure count's list.
+        board_exclude = builder.split("\nBOARD_EXCLUDE=(", 1)[1].split("\n)", 1)[0]
+        self.assertNotIn("crates/galvani-", board_exclude)
+
     def test_mirror_content_preserves_public_bytes(self) -> None:
         namespace = {}
         exec((ROOT / "scripts/mirror_content.py").read_text(), namespace)
