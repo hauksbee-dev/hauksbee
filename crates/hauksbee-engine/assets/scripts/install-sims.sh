@@ -943,7 +943,11 @@ patched_qemu_payload_matches() {
 install_qemu_patched_source() {
   local patch_file patch_sha marker target source_root candidate
   local xtensa_bin riscv_bin configured_sha
+  # A bundle ships the patch beside this script; a source checkout runs this
+  # packaged copy through scripts/install-sims.sh, with the patch in scripts/.
   patch_file="$SCRIPT_DIR/qemu-patches/esp32-gpio-register-state.patch"
+  [ -f "$patch_file" ] \
+    || patch_file="$SCRIPT_DIR/../../../../scripts/qemu-patches/esp32-gpio-register-state.patch"
   [ -f "$patch_file" ] || die "reviewed QEMU GPIO patch missing: $patch_file"
   [ -n "${QEMU_COMMIT:-}" ] || die "QEMU_COMMIT is not pinned in $VERSIONS_FILE"
   patch_sha="$(sha256_file "$patch_file")" \
