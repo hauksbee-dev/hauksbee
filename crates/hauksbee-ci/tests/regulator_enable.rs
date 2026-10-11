@@ -399,6 +399,51 @@ fn an_open_en_pin_with_no_stated_pull_is_assumed_on_and_says_so() {
     );
 }
 
+#[test]
+fn an_open_en_pin_the_datasheet_states_off_holds_the_rail_off() {
+    let card = format!("{EN_HIGH}\nen_open = \"off\"");
+    let cause = "its EN pin is left open and the datasheet states an open EN pin is off";
+    // Unconnected, and on a net nothing else touches: both read the same.
+    for en in [None, Some("EN_NC")] {
+        let result = run_ldo("SYNTH-LDO-OFF", "en", &card, en);
+        assert_rail_held_off(&result, cause);
+        let json = result.render_json();
+        assert!(
+            !json.contains("card states no internal pull"),
+            "a stated open state is not a disclosed assumption:\n{json}"
+        );
+    }
+    // An on-low SHDN pin the datasheet says is off when open.
+    let shdn = "en_on_level = \"low\"\nen_on_v = 0.4\nen_off_v = 1.5\nen_open = \"off\"";
+    let result = run_ldo("SYNTH-LDO-SHDN-OFF", "shdn", shdn, None);
+    assert_rail_held_off(
+        &result,
+        "its SHDN pin is left open and the datasheet states an open SHDN pin is off",
+    );
+}
+
+#[test]
+fn an_open_en_pin_the_datasheet_states_on_leaves_the_rail_up_without_a_caveat() {
+    let card = format!("{EN_HIGH}\nen_open = \"on\"");
+    let result = run_ldo("SYNTH-LDO-ON", "en", &card, None);
+    assert_rail_up(&result, "the datasheet says an open pin is on");
+    let json = result.render_json();
+    assert!(
+        !json.contains("card states no internal pull"),
+        "a stated open state carries no assumption caveat:\n{json}"
+    );
+}
+
+#[test]
+fn an_open_en_pin_with_a_pull_ignores_a_consistent_en_open() {
+    let down = format!("{EN_HIGH}\nen_pull_down_ohms = 3.0e6\nen_open = \"off\"");
+    let off = run_ldo("SYNTH-LDO-PD-OFF", "en", &down, None);
+    assert_rail_held_off(
+        &off,
+        "its EN pin is left open and the card's internal pull-down holds it off",
+    );
+}
+
 /// EN fed from `+5V` through `top` over `bottom` to GND.
 fn divider_run(top: &str, bottom: &str) -> CiResult {
     let dir = tempfile::tempdir().expect("tempdir");

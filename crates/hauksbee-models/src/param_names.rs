@@ -216,6 +216,9 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "en_pull_down_a",
             "en_pull_up_a",
             "en_discharge_ohms",
+            // The state the datasheet states for an open pin when it prints no
+            // pull value (`"off"` or `"on"`).
+            "en_open",
             // The supply current from IN while the enable holds the part off
             // (the datasheet's I_SHDN); the card's `iq_a` is the on-state figure.
             "i_shdn_a",
@@ -302,7 +305,8 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     ron ohm switch on-resistance; roff ohm switch off-resistance; vth V control threshold; \
     vih V input high threshold; vil V input low threshold; voh V output high level; \
     vol V output low level; ro ohm output resistance; \
-    en_on_level - the enable-pin level (high or low) that turns a regulator on";
+    en_on_level - the enable-pin level (high or low) that turns a regulator on; \
+    en_open - the state (off or on) the datasheet states for an open enable pin";
 
 fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
     GLOSSARY.split(';').filter_map(|e| {

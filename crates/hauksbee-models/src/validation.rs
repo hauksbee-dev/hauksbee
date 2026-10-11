@@ -167,7 +167,7 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     if entry.kind != ComponentKind::Vreg
         || !KEYS
             .iter()
-            .chain(&["i_shdn_a"])
+            .chain(&["i_shdn_a", "en_open"])
             .any(|k| params.0.contains_key(*k))
     {
         return;
@@ -224,6 +224,33 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     p.require(pulls <= 1, || {
         "a vreg enable pin has at most one internal pull ('en_pull_*')".into()
     });
+    // The datasheet's stated open-pin state, for a card that prints no pull
+    // value: it may not contradict a pull the card does state (an open pin
+    // follows its pull, so a pull toward the off level cannot read as on).
+    if params.0.contains_key("en_open") {
+        let open = params.get_str("en_open");
+        p.require(matches!(open, Some("off" | "on")), || {
+            "param 'en_open' must be \"off\" or \"on\"".into()
+        });
+        let has = |k: &str| params.0.contains_key(k);
+        let pull_up = if has("en_pull_up_ohms") || has("en_pull_up_a") {
+            Some(true)
+        } else if has("en_pull_down_ohms") || has("en_pull_down_a") {
+            Some(false)
+        } else {
+            None
+        };
+        if let (Some(up), Some(open @ ("off" | "on"))) = (pull_up, open) {
+            // A pull-up holds an on-high pin on; a pull-down an on-low pin on.
+            let pull_holds_on = up == (level != Some("low"));
+            p.require(pull_holds_on == (open == "on"), || {
+                format!(
+                    "param 'en_open' = \"{open}\" contradicts the card's internal pull-{}",
+                    if up { "up" } else { "down" }
+                )
+            });
+        }
+    }
     for key in &KEYS[3..] {
         if params.0.contains_key(*key) {
             p.require(params.get_f64(key).is_some_and(positive_finite), || {
@@ -1962,6 +1989,38 @@ mod tests {
         rejects(
             &en("en", &[("en_discharge_ohms", 0.0)], None),
             "positive finite",
+        );
+        // The stated open-pin state: a word, on a card that names the pin, and
+        // never against a pull the card also states.
+        let open = |role: &str, params: &[(&str, f64)], level: Option<&str>, state: &str| {
+            let mut e = en(role, params, level);
+            e.params.set_str("en_open", state);
+            e
+        };
+        accepts(&open("en", &[], None, "off"));
+        accepts(&open("en", &[], None, "on"));
+        accepts(&open("shdn", &[], Some("low"), "off"));
+        accepts(&open("en", &[("en_pull_down_ohms", 3e6)], None, "off"));
+        accepts(&open("en", &[("en_pull_up_a", 1e-6)], None, "on"));
+        accepts(&open(
+            "shdn",
+            &[("en_pull_down_a", 1e-6)],
+            Some("low"),
+            "on",
+        ));
+        rejects(&open("en", &[], None, "floating"), "\"off\" or \"on\"");
+        rejects(&open("nc", &[], None, "off"), "'en' or 'shdn' role");
+        rejects(
+            &open("en", &[("en_pull_up_a", 1e-6)], None, "off"),
+            "contradicts the card's internal pull-up",
+        );
+        rejects(
+            &open("en", &[("en_pull_down_ohms", 3e6)], None, "on"),
+            "contradicts the card's internal pull-down",
+        );
+        rejects(
+            &open("shdn", &[("en_pull_down_a", 1e-6)], Some("low"), "off"),
+            "contradicts the card's internal pull-down",
         );
     }
 

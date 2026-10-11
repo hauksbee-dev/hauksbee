@@ -2205,7 +2205,11 @@ iq_a      = 80.0e-6  # Ground Pin Current typ @ IL = 100 uA (125 uA max). The
 # pull is set; no discharge resistance is printed.
 en_on_v   = 2.0
 en_off_v  = 0.18
-i_shdn_a  = 1.0e-8  # IGND "Quiescent Current" typ (1 uA max), VEN <= 0.4 V (shutdown), Microchip MIC5205 DS20005785B Electrical Characteristics p.3
+# Table 3-1 Pin Description (p.9): "EN  Enable/Shutdown (Input): CMOS compatible
+# input. Logic-high = enable, logic-low or open = shutdown". The open state is
+# stated, so en_open is set (still no pull value).
+en_open   = "off"
+i_shdn_a  = 1.0e-8 # IGND "Quiescent Current" typ (1 uA max), VEN <= 0.4 V (shutdown), Microchip MIC5205 DS20005785B Electrical Characteristics p.3
 
 [models.pins]
 # Table 3-1, SOT-23-5, FIXED version. On the adjustable part pin 4 is ADJ.
@@ -5025,7 +5029,11 @@ iq_a = 90.0e-6       # IGND typ at IL = 100 uA (190 uA max over temperature)
 # resistance is printed.
 en_on_v = 2.0
 en_off_v = 0.4
-i_shdn_a  = 5.0e-8  # IGND "Quiescent Current" typ 0.05 uA (3 uA max), VENABLE <= 0.4 V, TJ = 25 C, MaxLinear SPX3819 Rev. 2.0.5 Electrical Specifications p.2
+# Pin Description p.3 (SOT-23 column): "Enable(input). CMOS compatible control
+# input. Logic high - enable; logic low or open = shutdown". The datasheet states
+# the open-pin state but no pull value, so en_open is set and no pull is.
+en_open = "off"
+i_shdn_a  = 5.0e-8 # IGND "Quiescent Current" typ 0.05 uA (3 uA max), VENABLE <= 0.4 V, TJ = 25 C, MaxLinear SPX3819 Rev. 2.0.5 Electrical Specifications p.2
 
 [models.pins]
 "1" = "in"
@@ -6259,6 +6267,7 @@ iq_a       = 29.0e-6   # Ground Current typ at 100 uA load (50 uA max)
 cout_min_f = 1.0e-6    # Output Capacitor: 1.0 uF or greater for stability
 en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
 en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
+en_open    = "off"     # Pin Description p.2: "EN ... Enable (Input): Logic Low or Open = Shutdown; Logic High = Enable." (states the open state, no pull value); Micrel M9999-072908-A
 i_shdn_a  = 1.0e-7  # Ground Current in Shutdown typ (5 uA max), VEN < 0.6 V, VIN = 16 V, Micrel MIC5225 M9999-072908-A Electrical Characteristics p.3
 
 [models.pins]
@@ -6314,6 +6323,7 @@ iq_a       = 29.0e-6
 cout_min_f = 1.0e-6
 en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
 en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
+en_open    = "off"     # Pin Description p.2: "EN ... Enable (Input): Logic Low or Open = Shutdown; Logic High = Enable." (states the open state, no pull value); Micrel M9999-072908-A
 i_shdn_a  = 1.0e-7  # Ground Current in Shutdown typ (5 uA max), VEN < 0.6 V, VIN = 16 V, Micrel MIC5225 M9999-072908-A Electrical Characteristics p.3
 
 [models.pins]

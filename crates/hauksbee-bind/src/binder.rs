@@ -10228,8 +10228,11 @@ style = "i2c_pointer"
             let [vout, min_in_v, max_in_v] = [vout, min_in_v, max_in_v].map(parse);
             let (card, dropout_v) = ((card != "-").then_some(card), dropout_v.parse().ok());
             let mut circuit = Circuit::new();
+            // A card with an enable pin has it tied to IN (on), so the rail is
+            // the plain ungated stamp this test is about.
             let roles = HashMap::from([
                 ("in".into(), circuit.node("IN")),
+                ("en".into(), circuit.node("IN")),
                 ("out".into(), circuit.node(out)),
                 ("gnd".into(), circuit.node(gnd)),
             ]);

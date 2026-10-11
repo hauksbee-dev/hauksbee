@@ -16,7 +16,9 @@
 //! or nothing when the card states none (said as a partial model).
 //!
 //! The card supplies the levels (`en_on_v`/`en_off_v`), the polarity
-//! (`en_on_level`), an internal pull and an active discharge; without levels the
+//! (`en_on_level`), an internal pull (or, when the datasheet prints no pull
+//! value, the open-pin state it states as `en_open`) and an active discharge;
+//! without levels the
 //! gate uses [`DEFAULT_ON_V`]/[`DEFAULT_OFF_V`] and says so as a partial model.
 //!
 //! A pin whose level the board fixes needs no solve to read, and is decided
@@ -155,6 +157,20 @@ impl Pull {
     }
 }
 
+/// Why an open pin holds the part off: the card's pull, or, with no pull value
+/// printed, the open-pin state the datasheet states (`en_open`).
+fn open_held_off(pin: &str, pull: Option<Pull>) -> String {
+    pull.map_or_else(
+        || format!("its {pin} pin is left open and the datasheet states an open {pin} pin is off"),
+        |p| {
+            format!(
+                "its {pin} pin is left open and the card's internal {} holds it off",
+                p.word()
+            )
+        },
+    )
+}
+
 /// What the binder does with one regulator's enable pin.
 pub struct Plan {
     /// The pin as the card names it (`EN`, `SHDN`), for the notes.
@@ -231,22 +247,26 @@ impl Plan {
             gate: Some(g),
             caveat,
         };
-        // With nothing on the pin, the card's pull decides; with no pull the
-        // datasheet does not say, so the rail is assumed on and that is said.
-        let open = |control: NodeId| match pull {
-            Some(p) if p.up() == on_high => {
+        // With nothing on the pin, the card's pull decides; with no pull, the
+        // datasheet's stated open-pin state (`en_open`) decides; with neither
+        // the datasheet does not say, so the rail is assumed on and that is said.
+        let open = |control: NodeId| match (pull, params.get_str("en_open")) {
+            (Some(p), _) if p.up() == on_high => {
                 if control == NodeId::GROUND {
                     Self::ungated(pin, None)
                 } else {
                     gated(gate(control, None), None)
                 }
             }
-            Some(p) => {
-                let why = format!(
-                    "its {pin} pin is left open and the card's internal {} holds it off",
-                    p.word()
-                );
-                let mut g = gate(control, Some(why));
+            (Some(_), _) | (None, Some("off")) => {
+                // A stated state with no pull has nothing to stamp on a board
+                // node, so the gate reads GND whatever the pin is wired to.
+                let control = if pull.is_some() {
+                    control
+                } else {
+                    NodeId::GROUND
+                };
+                let mut g = gate(control, Some(open_held_off(pin, pull)));
                 if control == NodeId::GROUND {
                     // No board node to read: the gate reads 0 V as an on-high
                     // pin's off level, whichever way the part is wired.
@@ -254,7 +274,8 @@ impl Plan {
                 }
                 gated(g, None)
             }
-            None => Self::ungated(
+            (None, Some("on")) => Self::ungated(pin, None),
+            (None, _) => Self::ungated(
                 pin,
                 Some(format!(
                     "{}{who}: its {pin} pin is left open and the card states no internal pull, \
