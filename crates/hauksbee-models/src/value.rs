@@ -158,6 +158,32 @@ pub fn parse_frequency_hz(s: &str) -> Option<f64> {
     Some(if milli { p.si * 1e9 } else { p.si })
 }
 
+/// The first current token (`0.5A`, `750mA`) of a fuse or polyfuse value in amperes:
+/// `"6V 0.5A"`, `"PTC 750mA / 33V"` and `"500mA"` give 0.5, 0.75 and 0.5.
+///
+/// Whitespace and `/` separate tokens, so a voltage or word beside the rating is
+/// skipped. A fuse value states one current, its hold (or rated) current.
+///
+/// ```
+/// use hauksbee_models::value::parse_current_rating_a;
+/// assert_eq!(parse_current_rating_a("6V 0.5A"), Some(0.5));
+/// assert_eq!(parse_current_rating_a("PTC 750mA / 33V"), Some(0.75));
+/// assert_eq!(parse_current_rating_a("Fuse"), None);
+/// ```
+#[must_use]
+pub fn parse_current_rating_a(s: &str) -> Option<f64> {
+    s.split(|c: char| c.is_whitespace() || c == '/')
+        .find_map(|token| {
+            let t = token.to_ascii_uppercase();
+            let (number, scale) = match t.strip_suffix("MA") {
+                Some(n) => (n, 1e-3),
+                None => (t.strip_suffix('A')?, 1.0),
+            };
+            let amps = number.parse::<f64>().ok()? * scale;
+            (amps.is_finite() && amps > 0.0).then_some(amps)
+        })
+}
+
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
 /// 2N3904, 3N201): exactly one leading digit, then `N`/`n`, then 3 or more serial
 /// digits and nothing else. The 3-digit floor keeps genuine RKM nano values

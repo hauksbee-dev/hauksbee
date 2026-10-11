@@ -551,6 +551,10 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
         let (ic, ib) = bjt_currents(&bound.circuit, id, &node_v)?;
         Some((id, ic, ib))
     };
+    let trips: std::collections::HashSet<&str> = (bound.device_meta.iter())
+        .filter(|m| m.ratings.trips_over_current)
+        .map(|m| m.reference.as_str())
+        .collect();
     let overstressed = by_part
         .into_iter()
         .map(|(part, events)| {
@@ -584,8 +588,15 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
                             format!(" (base {}, collector {})", amps(ib), amps(ic))
                         })
                         .unwrap_or_default();
+                    // A fuse's current rating is its hold current: past it the part
+                    // trips, so say what that does to the rail, not just "over".
+                    let rated = if kind_class(f.kind) == 0 && trips.contains(f.component.as_str()) {
+                        "hold current: the fuse trips and the rail it feeds collapses"
+                    } else {
+                        "rating"
+                    };
                     format!(
-                        "{} {} {}{detail}, over its {} rating",
+                        "{} {} {}{detail}, over its {} {rated}",
                         f.component,
                         verb(f.kind),
                         quantity(f.kind, f.value),
@@ -644,6 +655,7 @@ fn quantity(kind: FaultKind, v: f64) -> String {
 mod tests {
     use super::*;
     use crate::checks::test_support::{board, part};
+    use hauksbee_extract::Component;
 
     /// An XC6206-3.3 (200 mA) fed from +5V and loading its 3.3 V rail with
     /// `pixels` chained WS2812Bs: 0.6 mA each as declared, 36.6 mA at full white.
@@ -700,5 +712,82 @@ mod tests {
             "{}",
             found[0].message
         );
+    }
+
+    /// +5V through a series part (a fuse, or a resistor ahead of a diode) into
+    /// a load, on a rail the board powers by name.
+    fn series_path(series: Component, load: Component) -> NetLintReport {
+        let nets = [(1, "GND"), (2, "+5V"), (3, "/MID")];
+        dc_stress_lint(&board(&nets, vec![series, load]), &ModelLibrary::builtin())
+    }
+
+    fn findings_on<'a>(r: &'a NetLintReport, reference: &str) -> Vec<&'a LintFinding> {
+        (r.findings.iter())
+            .filter(|f| f.refs.iter().any(|x| x == reference))
+            .collect()
+    }
+
+    /// A diode `value` fed from +5V through a resistor of `ohms`.
+    fn diode_at(value: &str, ohms: &str) -> NetLintReport {
+        let r = part("R1", ohms, &[("1", 2), ("2", 3)]);
+        series_path(r, part("D1", value, &[("A", 3), ("K", 1)]))
+    }
+
+    /// Legal control: about 100 mA is inside the SOD-523 part's 125 mA.
+    #[test]
+    fn small_signal_diode_in_sod523_passes_at_100ma() {
+        let report = diode_at("1N4148WT", "43R");
+        assert!(
+            findings_on(&report, "D1").is_empty(),
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// Faulty: about 200 mA is past 125 mA, which the DO-35 card's 300 mA let through.
+    #[test]
+    fn small_signal_diode_in_sod523_fails_at_200ma() {
+        let report = diode_at("1N4148WT", "22R");
+        assert_eq!(
+            findings_on(&report, "D1").len(),
+            1,
+            "{:#?}",
+            report.findings
+        );
+        let do35 = diode_at("1N4148", "22R");
+        assert!(findings_on(&do35, "D1").is_empty(), "{:#?}", do35.findings);
+    }
+
+    /// `value` on a fuse footprint feeding a load of `ohms` from +5V.
+    fn fuse_at(value: &str, ohms: &str) -> NetLintReport {
+        let mut f = part("F1", value, &[("1", 2), ("2", 3)]);
+        f.footprint = "Fuse:Fuse_1206_3216Metric".into();
+        series_path(f, part("R1", ohms, &[("1", 3), ("2", 1)]))
+    }
+
+    /// Legal control: 0.3 A through a polyfuse, however its rating is spelled.
+    #[test]
+    fn polyfuse_below_hold_current_passes() {
+        for value in ["500mA", "6V 0.5A", "PTC 750mA / 33V"] {
+            let report = fuse_at(value, "16R");
+            assert!(
+                findings_on(&report, "F1").is_empty(),
+                "{value}: {:#?}",
+                report.findings
+            );
+        }
+    }
+
+    /// Faulty: 1 A through it trips it and takes the rail down, and the finding says so.
+    #[test]
+    fn polyfuse_above_hold_current_reports_a_trip() {
+        for value in ["500mA", "6V 0.5A", "PTC 750mA / 33V"] {
+            let report = fuse_at(value, "4R7");
+            let found = findings_on(&report, "F1");
+            assert_eq!(found.len(), 1, "{value}: {:#?}", report.findings);
+            let message = &found[0].message;
+            assert!(message.contains("hold current"), "{message}");
+            assert!(message.contains("trips"), "{message}");
+        }
     }
 }

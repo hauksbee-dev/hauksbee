@@ -7,10 +7,14 @@ kind = "diode"
 description = "1N4148 small-signal switching diode, DO-35"
 
 [models.match]
-# Same small-signal switching die across SMD packages: 1N4148W (SOD-123),
-# 1N4148WS (SOD-323), 1N4148WT, 1N4148-7-F. The distinct parts 1N4448 / 1N4150
-# / 1N914 differ before the suffix and are correctly rejected.
-value_re = "(?i)^1N4148[A-Z0-9-]*$"
+# The DO-35 part and its tape/grade suffixes (1N4148TR, 1N4148-T, 1N4148A, ...).
+# A suffix that starts with W is an SMD package (1N4148W SOD-123, 1N4148WS
+# SOD-323, 1N4148WT SOD-523) with its own, lower, current and power ratings: those
+# have their own cards below, and the 1n4148w_unlisted_package fallback, so a W
+# variant never inherits the DO-35 300 mA / 440 mW figures from this card. The
+# distinct parts 1N4448 / 1N4150 / 1N914 differ before the suffix and are
+# correctly rejected.
+value_re = "(?i)^1N4148([A-VX-Z0-9-][A-Z0-9-]*)?$"
 
 [models.params]
 # Source for the dynamic params: Vishay "1N4148 Small Signal Fast Switching
@@ -80,6 +84,366 @@ max = 350.0
 unit = "K/W"
 conditions = "l = 4 mm, TL = constant"
 basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Thermal Characteristics, RthJA @ l = 4 mm, TL = constant"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1N4148 SMD package variants and LL4148 (MiniMELF). Same switching die as the
+# DO-35 card above, but each package prints its own, lower, current and power
+# ratings. DC params (is, n, rs) are the same legacy values as the 1n4148 card.
+# max_current_a is the printed AVERAGE rectified/forward current row, the rating a
+# steady DC load (duty 1) is held to; the larger continuous-IF row is kept as
+# data. max_voltage_v is the DC reverse voltage VR, not the repetitive peak.
+
+[[models]]
+id = "1n4148w"
+kind = "diode"
+description = "1N4148W small-signal switching diode, SOD-123 (also 1N4148WQ and -7-F / -E3-08 ordering codes)"
+
+[models.match]
+value_re = "(?i)^1N4148WQ?([-_][A-Z0-9_-]+)?$"
+
+[models.params]
+# Dynamic params: Vishay 1N4148W, document 86356, Rev. 1.0, 16-Nov-2023, page 2
+# ELECTRICAL CHARACTERISTICS: CD max 1.5 pF at VF = VR = 0 V; trr max 4 ns at
+# IF = 10 mA, iR = 1 mA, VR = 6 V, RL = 100 Ohm (used directly as tt, no stored-charge fit).
+# bv: Diodes Inc. DS30086 Rev. 31-2 (Sep 2024) p. 2, V(BR)R min 100 V at IR = 1.0 uA.
+is  = 2.52e-9   # legacy, see the 1n4148 card
+n   = 1.752
+rs  = 0.568
+cjo = 1.5e-12
+tt  = 4.0e-9
+bv  = 100.0
+ibv = 1.0e-6
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.25       # IF(AV), Vishay 86356 p. 1 (Diodes Inc. DS30086 prints only IFM 300 mA)
+max_surge_current_a = 2.0  # IFSM tp = 1 us
+max_power_w = 0.28         # Ptot on FR-4 with the recommended soldering footprint (380 mW is the infinite-heatsink row)
+max_voltage_v = 75.0       # VR
+theta_ja_c_per_w = 440.0   # RthJA, JEDEC 51-3 FR-4 board, recommended footprint (86356 p. 2)
+max_junction_temp_c = 150.0
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average rectified current"
+rating = "max_current_a"
+max = 0.25
+unit = "A"
+conditions = "half wave rectification, resistive load, f >= 50 Hz, Tamb = 25 °C, infinite heatsink"
+basis = "Vishay 1N4148W doc. 86356 Rev. 1.0 (16-Nov-2023), page 1, Absolute Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IF continuous forward current"
+max = 0.3
+unit = "A"
+conditions = "Tamb = 25 °C, infinite heatsink"
+basis = "Vishay 1N4148W doc. 86356 Rev. 1.0 (16-Nov-2023), page 1, Absolute Maximum Ratings, IF"
+[[models.source.characteristic]]
+parameter = "Ptot power dissipation"
+rating = "max_power_w"
+max = 0.28
+unit = "W"
+conditions = "on FR-4 board with recommended soldering footprint, Tamb = 25 °C"
+basis = "Vishay 1N4148W doc. 86356 Rev. 1.0 (16-Nov-2023), page 1, Absolute Maximum Ratings, Ptot"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage"
+rating = "max_voltage_v"
+max = 75.0
+unit = "V"
+conditions = "Tamb = 25 °C"
+basis = "Vishay 1N4148W doc. 86356 Rev. 1.0 (16-Nov-2023), page 1, Absolute Maximum Ratings, VR"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient air"
+rating = "theta_ja_c_per_w"
+max = 440.0
+unit = "K/W"
+conditions = "JEDEC 51-3 FR-4 board with recommended soldering footprint"
+basis = "Vishay 1N4148W doc. 86356 Rev. 1.0 (16-Nov-2023), page 2, Thermal Characteristics, RthJA"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4148ws"
+kind = "diode"
+description = "1N4148WS small-signal switching diode, SOD-323 (also 1N4148WSQ and ordering-code suffixes)"
+
+[models.match]
+value_re = "(?i)^1N4148WSQ?([-_][A-Z0-9_-]+)?$"
+
+[models.params]
+# Vishay 1N4148WS, document 86455, Rev. 1.2, 03-Mar-2026, page 2 ELECTRICAL
+# CHARACTERISTICS: CD max 1.5 pF at VF = VR = 0 V; trr max 4 ns at IF = 10 mA,
+# iR = 1 mA, VR = 6 V, RL = 100 Ohm (used directly as tt). The sheet prints no
+# V(BR) row; VRRM 100 V is a guaranteed lower bound on breakdown.
+is  = 2.52e-9   # legacy, see the 1n4148 card
+n   = 1.752
+rs  = 0.568
+cjo = 1.5e-12
+tt  = 4.0e-9
+bv  = 100.0
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.15       # IF(AV), Vishay 86455 p. 1
+max_surge_current_a = 2.0  # IFSM tp = 1 us
+max_power_w = 0.2          # Ptot
+max_voltage_v = 75.0       # VR
+max_junction_temp_c = 150.0
+# No RthJA is printed (only RthJL 625 K/W, infinite heatsink), so the thermal
+# monitor derives theta_JA from the SOD-323 footprint class.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average rectified current"
+rating = "max_current_a"
+max = 0.15
+unit = "A"
+conditions = "half wave rectification, resistive load, f >= 50 Hz, Tamb = 25 °C, infinite heatsink"
+basis = "Vishay 1N4148WS doc. 86455 Rev. 1.2 (03-Mar-2026), page 1, Absolute Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IF continuous forward current"
+max = 0.25
+unit = "A"
+conditions = "Tamb = 25 °C, infinite heatsink"
+basis = "Vishay 1N4148WS doc. 86455 Rev. 1.2 (03-Mar-2026), page 1, Absolute Maximum Ratings, IF"
+[[models.source.characteristic]]
+parameter = "Ptot power dissipation"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "Tamb = 25 °C, infinite heatsink"
+basis = "Vishay 1N4148WS doc. 86455 Rev. 1.2 (03-Mar-2026), page 1, Absolute Maximum Ratings, Ptot"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage"
+rating = "max_voltage_v"
+max = 75.0
+unit = "V"
+conditions = "Tamb = 25 °C"
+basis = "Vishay 1N4148WS doc. 86455 Rev. 1.2 (03-Mar-2026), page 1, Absolute Maximum Ratings, VR"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4148wt"
+kind = "diode"
+description = "1N4148WT small-signal switching diode, SOD-523 (also 1N4148WTQ and -7 / -13 ordering codes)"
+
+[models.match]
+value_re = "(?i)^1N4148WTQ?([-_][A-Z0-9_-]+)?$"
+
+[models.params]
+# Diodes Inc. 1N4148WT, document DS30396 Rev. 14-2 (August 2015), page 2
+# Electrical Characteristics: V(BR)R min 75 V at IR = 1.0 uA; CT max 2.0 pF at
+# VR = 0, 1 MHz; trr max 4 ns at IF = IR = 10 mA, IRR = 0.1 x IR, RL = 100 Ohm
+# (used directly as tt). Rev. 19 (April 2021) prints the same IO and PD.
+is  = 2.52e-9   # legacy, see the 1n4148 card
+n   = 1.752
+rs  = 0.568
+cjo = 2.0e-12
+tt  = 4.0e-9
+bv  = 75.0
+ibv = 1.0e-6
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.125      # IO average rectified output current (IFM 250 mA is kept as data)
+max_surge_current_a = 2.0  # IFSM @ t = 1.0 us
+max_power_w = 0.15         # PD on FR-4 with the recommended pad layout
+max_voltage_v = 80.0       # VR
+theta_ja_c_per_w = 833.0   # RthJA
+max_junction_temp_c = 150.0
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 0.125
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFM forward continuous current"
+max = 0.25
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Maximum Ratings, IFM"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.15
+unit = "W"
+conditions = "FR-4 PC board with recommended pad layout (note 6), TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Thermal Characteristics, PD"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage"
+rating = "max_voltage_v"
+max = 80.0
+unit = "V"
+conditions = "TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Maximum Ratings, VR"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient air"
+rating = "theta_ja_c_per_w"
+max = 833.0
+unit = "K/W"
+conditions = "FR-4 PC board with recommended pad layout (note 6)"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Thermal Characteristics, RthJA"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4148w_unlisted_package"
+kind = "diode"
+description = "1N4148W-family part in a package suffix this library does not list: smallest listed package's ratings assumed"
+
+[models.match]
+# Any 1N4148W... value the exact cards above do not claim (an unknown package
+# letter, a distributor suffix glued on). The W-family is the SMD range, whose
+# ratings fall with the package, so the safe assumption is the smallest listed
+# one (SOD-523, DS30396). Written as `[W]` and an unanchored tail so its pattern
+# scores below the exact cards and they win wherever they match.
+value_re = "(?i)^1N4148[W][A-Z0-9_-]*"
+
+[models.params]
+is  = 2.52e-9   # legacy, see the 1n4148 card
+n   = 1.752
+rs  = 0.568
+cjo = 2.0e-12
+tt  = 4.0e-9
+bv  = 75.0
+ibv = 1.0e-6
+warning = "the value names a 1N4148W-family part in a package this library does not list: judged at ASSUMED ratings of the smallest listed package (SOD-523 1N4148WT, 125 mA, 150 mW, Diodes Inc. DS30396 Rev. 14-2), not the DO-35 300 mA; put the exact ordering code on the component to replace it"
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.125      # assumed: IO of the smallest listed package
+max_surge_current_a = 2.0
+max_power_w = 0.15         # assumed: PD of the smallest listed package
+max_voltage_v = 75.0       # lowest VR printed across the W family (Vishay W/WS)
+theta_ja_c_per_w = 833.0
+max_junction_temp_c = 150.0
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current (assumed from the smallest listed package)"
+rating = "max_current_a"
+max = 0.125
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "PD power dissipation (assumed from the smallest listed package)"
+rating = "max_power_w"
+max = 0.15
+unit = "W"
+conditions = "FR-4 PC board with recommended pad layout (note 6), TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Thermal Characteristics, PD"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient air (assumed from the smallest listed package)"
+rating = "theta_ja_c_per_w"
+max = 833.0
+unit = "K/W"
+conditions = "FR-4 PC board with recommended pad layout (note 6)"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Thermal Characteristics, RthJA"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage (lowest printed across the W family)"
+rating = "max_voltage_v"
+max = 75.0
+unit = "V"
+conditions = "Tamb = 25 °C"
+basis = "Vishay 1N4148W doc. 86356 Rev. 1.0 (16-Nov-2023), page 1, Absolute Maximum Ratings, VR"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ll4148"
+kind = "diode"
+description = "LL4148 small-signal switching diode, MiniMELF (SOD-80)"
+
+[models.match]
+value_re = "(?i)^LL4148([-_][A-Z0-9_-]+)?$"
+
+[models.params]
+# Vishay LL4148, LL4448, document 85557, Rev. 2.2, 25-Jun-2024, page 2 ELECTRICAL
+# CHARACTERISTICS: V(BR) min 100 V at IR = 100 uA; CD max 4 pF at VR = 0 V, 1 MHz;
+# trr max 8 ns at IF = IR = 10 mA, iR = 1 mA (electrical data identical to the
+# 1N4148, so tt = 8 ns / ln(1 + 10/10) as on that card).
+is  = 2.52e-9   # legacy, see the 1n4148 card
+n   = 1.752
+rs  = 0.568
+cjo = 4.0e-12
+tt  = 1.154e-8
+bv  = 100.0
+ibv = 1.0e-4
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.15       # IF(AV) at VR = 0 (IF continuous 300 mA is kept as data)
+max_surge_current_a = 2.0  # IFSM tp = 1 us
+max_power_w = 0.5          # Ptot, valid with electrodes at ambient temperature
+max_voltage_v = 75.0       # VR
+theta_ja_c_per_w = 300.0   # RthJA
+max_junction_temp_c = 175.0
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward current"
+rating = "max_current_a"
+max = 0.15
+unit = "A"
+conditions = "VR = 0, Tamb = 25 °C"
+basis = "Vishay LL4148 doc. 85557 Rev. 2.2 (25-Jun-2024), page 1, Absolute Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IF forward continuous current"
+max = 0.3
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Vishay LL4148 doc. 85557 Rev. 2.2 (25-Jun-2024), page 1, Absolute Maximum Ratings, IF"
+[[models.source.characteristic]]
+parameter = "Ptot power dissipation"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "electrodes kept at ambient temperature, Tamb = 25 °C"
+basis = "Vishay LL4148 doc. 85557 Rev. 2.2 (25-Jun-2024), page 1, Absolute Maximum Ratings, Ptot"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage"
+rating = "max_voltage_v"
+max = 75.0
+unit = "V"
+conditions = "Tamb = 25 °C"
+basis = "Vishay LL4148 doc. 85557 Rev. 2.2 (25-Jun-2024), page 1, Absolute Maximum Ratings, VR"
+[[models.source.characteristic]]
+parameter = "RthJA junction to ambient air"
+rating = "theta_ja_c_per_w"
+max = 300.0
+unit = "K/W"
+conditions = "electrodes kept at ambient temperature"
+basis = "Vishay LL4148 doc. 85557 Rev. 2.2 (25-Jun-2024), page 1, Thermal Characteristics, RthJA"
 
 # ─────────────────────────────────────────────────────────────────────────────
 

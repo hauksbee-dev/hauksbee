@@ -1139,11 +1139,20 @@ fn gather_device_meta(
                 .derating
                 .fitted(&comp.reference, &comp.footprint, mounting);
             let roles = role_node_map(comp, &m, node_of);
+            // A fuse or polyfuse limits by its hold current: the card's, else the
+            // one its value states ("6V 0.5A"), so a load past it is a trip.
+            let mut ratings = m.ratings.clone();
+            if m.passive_class == Some(hauksbee_models::schema::PassiveClass::Fuse) {
+                ratings.trips_over_current = true;
+                ratings.max_current_a = ratings
+                    .max_current_a
+                    .or_else(|| hauksbee_models::value::parse_current_rating_a(&comp.value));
+            }
             by_ref.insert(
                 comp.reference.clone(),
                 CompInfo {
                     kind: m.kind,
-                    ratings: m.ratings.clone(),
+                    ratings,
                     derating,
                     footprint: comp.footprint.clone(),
                     roles,

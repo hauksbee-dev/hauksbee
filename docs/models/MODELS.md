@@ -734,6 +734,20 @@ measurements):
 | 1N4148 (D)   | Vf 0.688 V @ 10.1 mA          | Vf max 1.0 V @ 10 mA (real ~0.7 V) |
 | AMS1117-3.3  | Vout 3.300 V @ 33 mA load     | 3.300 V (3.201..3.399 V)         |
 
+## Package variants and fuse hold current
+
+A part number whose suffix names a smaller package must not inherit the larger
+package's ratings. The 1N4148 DO-35 card takes only the tape and grade suffixes;
+1N4148W (SOD-123), 1N4148WS (SOD-323), 1N4148WT (SOD-523) and LL4148 (MiniMELF)
+carry their own, and a `1N4148W...` value none of them claims binds
+`1n4148w_unlisted_package`, which assumes the smallest listed package's ratings and
+says so in its bind warning.
+
+A fuse or polyfuse (`passive_class = "fuse"`) is held to its hold current: the
+card's `max_current_a`, else the current in its value (`6V 0.5A`, `PTC 750mA / 33V`,
+`500mA`). DC stress reports a load past it as a trip, since the rail the part feeds
+collapses.
+
 ## Power-FET and AFE model coverage
 
 ### Generic power-FET fallbacks (catch-all by footprint)

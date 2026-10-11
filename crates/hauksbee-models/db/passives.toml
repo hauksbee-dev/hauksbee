@@ -523,6 +523,12 @@ ohms = 0.150
 "1" = "a"
 "2" = "b"
 
+[models.ratings]
+# IH 0.50 A (hold current, per the Littelfuse 0805L datasheet Rev 03/22/17 cited
+# above): the most the part carries without tripping at 20 C. DC stress reports a
+# load past it as a trip.
+max_current_a = 0.5
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -570,6 +576,10 @@ ohms = 0.090
 [models.pins]
 "1" = "a"
 "2" = "b"
+
+[models.ratings]
+# IH 0.75 A (hold current, Bel Fuse 0ZCJ datasheet cited above), as on the 0805L050.
+max_current_a = 0.75
 
 # ─────────────────────────────────────────────────────────────────────────────
 

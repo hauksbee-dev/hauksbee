@@ -1215,6 +1215,12 @@ pub struct Ratings {
     /// is not guaranteed to be enhanced at all, so conducting there breaks a limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vgs_th_max: Option<f64>,
+
+    /// Set by the binder, never by a card: `max_current_a` is a fuse's or
+    /// polyfuse's hold current, so a load past it trips the part and the rail
+    /// it feeds collapses, which the DC stress finding says in those words.
+    #[serde(skip)]
+    pub trips_over_current: bool,
 }
 
 /// Severity requested by a sourced operating-envelope entry.
