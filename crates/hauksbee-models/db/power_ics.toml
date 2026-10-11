@@ -1377,9 +1377,11 @@ missing = ["smart_reset_timer", "recovery_timer", "low_voltage_input_ignore", "o
 #
 # EN: the binder gates the output on this pin, but the card states NO `en_*`
 # fields, so the gate uses the binder's generic default levels, disclosed as
-# assumed. The part's logic levels are ratiometric to VIN (a fraction of the supply),
-# which `en_on_v`/`en_off_v` (absolute volts) cannot express, and the Analog
-# Devices/Maxim MAX6070 datasheet (19-6355) could not be fetched to read them.
+# assumed. The part's logic levels are ratiometric to VIN: VIH = 0.7 x VIN and
+# VIL = 0.3 x VIN (MAX6070/MAX6071 19-6355 Rev 20, 1.8 V option table p.4), which
+# `en_on_v`/`en_off_v` (absolute volts) cannot express. Shutdown (p.21) leaves
+# the output on a typically 200 kOhm load to ground; EN has no pull (IEN is
+# +/-1 uA bias) and the pin description (p.19) states no open-pin state.
 [[models]]
 id = "max6070_1v8"
 kind = "vreg"
@@ -1405,6 +1407,11 @@ dropout_v = 0.11      # FAMILY figure at IOUT = 10 mA, not the 1.8 V row (which
                       # the datasheet omits). See the note above.
 iq_a      = 1.3e-4    # IIN typ 130 uA at 25 C (200 uA max at 25 C, 260 uA max
                       # over temperature)
+i_shdn_a  = 6.0e-6    # ISD, 6 uA max: the only shutdown figure in the 1.8 V
+                      # option table (p.4); the 2.5/3.0/3.3 V tables (p.6-9)
+                      # give 0.6 uA typ and p.21 says "less than 1uA"
+en_discharge_ohms = 2.0e5  # output's resistive load to ground in shutdown,
+                           # typically 200 kOhm (p.21)
 
 [models.pins]
 # Pin Description, MAX6070 column, 6-pin SOT23. Cross-checked against the margay
