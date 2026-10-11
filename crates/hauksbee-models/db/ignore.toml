@@ -531,3 +531,71 @@ value_re = "(?i)^H?N2x20$"
 # named so that the binder has a pad map, and the rest are the net's business.
 "1" = "p1"
 "2" = "p2"
+
+# ── Olimex ESP32-EVB REV-L connectors (no datasheet obtained) ────────────────
+#
+# The three parts below are connectors whose vendor part codes (a LiPo header, a
+# magnetics-integrated RJ45 jack and a mini-USB receptacle) the generic
+# connector identities do not recognise. No manufacturer datasheet could be
+# obtained for any of them, so each card says only what the schematic itself
+# asserts: the pad strings and the signal names printed on the board's own
+# library symbols (OLIMEX_Connectors BAT_CON, RJLBC-060TC1_GND, USB-MINI in
+# ESP32-EVB_Rev_L.kicad_sch). No ratings are stated because none were sourced; a
+# connector is a boundary and what flows through it is the scenario's business.
+
+[[models]]
+id = "olimex_lipo_bat_con_dw02r"
+kind = "connector"
+description = "LiPo battery connector DW02R (2-way, Olimex BAT_CON symbol)"
+
+[models.match]
+value_re = "(?i)^DW02R$"
+
+[models.pins]
+# The symbol numbers the two pads 1 and 2 as passive; polarity is the net's
+# business and is not asserted here.
+"1" = "p1"
+"2" = "p2"
+
+[[models]]
+id = "rjlbc_060tc1_rj45_magjack"
+kind = "connector"
+description = "RJLBC-060TC1 RJ45 jack with integrated 10/100 magnetics and two LEDs"
+
+[models.match]
+value_re = "(?i)^RJLBC-060TC1(\\(LPJ4013EDNL\\))?$"
+
+[models.pins]
+# Pad names as printed on the Olimex RJLBC-060TC1_GND symbol: the four media
+# pairs (TD+/TD-/RD+/RD-), the centre tap COM, the unused pin 6, the green and
+# yellow LED anodes and cathodes, and the two shield pads.
+"1"    = "td_p"
+"2"    = "td_n"
+"3"    = "com"
+"6"    = "nc"
+"7"    = "rd_p"
+"8"    = "rd_n"
+"AG1"  = "led_green_a"
+"KG1"  = "led_green_k"
+"AY1"  = "led_yellow_a"
+"KY1"  = "led_yellow_k"
+"GND1" = "shield1"
+"GND2" = "shield2"
+
+[[models]]
+id = "usb_mini_b_misb_swmm_5b_lf"
+kind = "connector"
+description = "Mini-USB B receptacle MISB-SWMM-5B-LF"
+
+[models.match]
+value_re = "(?i)^MISB-SWMM-5B-LF$"
+
+[models.pins]
+# Olimex USB-MINI symbol: 1 VBUS, 2 D-, 3 D+, 4 ID, 5 GND; the four shell tabs
+# all carry the pad string "0".
+"1" = "vbus"
+"2" = "dm"
+"3" = "dp"
+"4" = "id"
+"5" = "gnd"
+"0" = "shell"
