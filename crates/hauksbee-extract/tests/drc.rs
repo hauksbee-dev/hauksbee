@@ -675,3 +675,80 @@ fn project_exclusion_needs_the_same_type_items_and_position() {
         assert!(report.excluded.is_empty(), "{entry}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fine-pitch pads on a rotated footprint (the USB-C receptacle shape). A pad's
+// `(at x y ANGLE)` is its absolute board orientation, so a connector placed at
+// 270 degrees with 0.3 x 1.45 mm pads on a 0.5 mm pitch is clear only when each
+// pad carries that 270. The same pads written with angle 0 stand 1.45 mm long
+// along the row and overlap their neighbours: genuine copper contact, which is
+// what the Board-as-Code compiler drew for a decompiled board before it kept
+// the footprint rotation on its pads.
+// ---------------------------------------------------------------------------
+
+/// A three-pad row (nets A, B, GND) on a connector placed at `footprint_rot`,
+/// every pad written with `pad_angle`.
+fn fine_pitch_row(footprint_rot: u32, pad_angle: u32) -> String {
+    let pad = |name: &str, x: f64, net: u32| {
+        format!(
+            "    (pad \"{name}\" smd rect (at {x} -4 {pad_angle}) (size 0.3 1.45) \
+             (layers \"F.Cu\") (net {net}))\n"
+        )
+    };
+    format!(
+        "  (footprint \"lib:fine\" (layer \"F.Cu\") (at 100 50 {footprint_rot})\n    \
+         (property \"Reference\" \"J1\" (at 0 0))\n{}{}{}  )\n",
+        pad("B8", -0.5, 1),
+        pad("A5", 0.0, 2),
+        pad("A7", 0.5, 3),
+    )
+}
+
+#[test]
+fn fine_pitch_pads_on_a_rotated_footprint_with_their_absolute_angle_are_clear() {
+    let report = drc(&fine_pitch_row(270, 270));
+    assert_eq!(report.short_count(), 0, "{:?}", report.findings);
+    assert_eq!(
+        report.clearance_violations().count(),
+        0,
+        "{:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn the_same_pads_left_unrotated_under_a_rotated_footprint_do_overlap() {
+    // The faulty control: that geometry really does touch, so it stays a short.
+    let report = drc(&fine_pitch_row(270, 0));
+    assert!(report.short_count() >= 1, "{:?}", report.findings);
+}
+
+#[test]
+fn stacked_same_net_pads_of_one_footprint_are_not_a_short() {
+    // A1 and B12 of a USB-C receptacle sit at one position on one net.
+    let items = r#"
+  (footprint "lib:usbc" (layer "F.Cu") (at 100 50 270)
+    (property "Reference" "J2" (at 0 0))
+    (pad "A1" smd rect (at -3.25 -4.045 270) (size 0.6 1.45) (layers "F.Cu") (net 1))
+    (pad "B12" smd rect (at -3.25 -4.045 270) (size 0.6 1.45) (layers "F.Cu") (net 1))
+  )
+"#;
+    assert_eq!(drc(items).short_count(), 0);
+}
+
+#[test]
+fn a_foreign_footprint_pad_on_a_fine_pitch_pad_is_still_a_short() {
+    // J1 at (100, 50) turned 270: its pad at local (0, -4) lands on (104, 50).
+    // A test point of another footprint and net sits right on it.
+    let items = r#"
+  (footprint "lib:fine" (layer "F.Cu") (at 100 50 270)
+    (property "Reference" "J1" (at 0 0))
+    (pad "A5" smd rect (at 0 -4 270) (size 0.3 1.45) (layers "F.Cu") (net 2))
+  )
+  (footprint "lib:test_point" (layer "F.Cu") (at 104 50)
+    (property "Reference" "TP1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 0.6 0.6) (layers "F.Cu") (net 1))
+  )
+"#;
+    assert_short(&drc(items), "A", "B");
+}

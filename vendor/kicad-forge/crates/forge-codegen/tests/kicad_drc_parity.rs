@@ -54,6 +54,7 @@ fn comp_from_library(
             shape,
             at: (atl.arg_f64(0)?, atl.arg_f64(1)?),
             size: (szl.arg_f64(0)?, szl.arg_f64(1)?),
+            rot: atl.arg_f64(2).unwrap_or(0.0),
             drill: pad.find("drill").and_then(|d| d.arg_f64(0)),
             layers: pad
                 .find("layers")

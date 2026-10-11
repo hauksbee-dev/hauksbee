@@ -1370,11 +1370,9 @@ impl PlacedPadGeo {
 ///  * `hauksbee-extract`'s DRC pad outline transform, which rotates the outline
 ///    by the pad angle alone for the same stated reason.
 ///
-/// Our own two producers happen to write `0` here: the builder hard-codes a zero
-/// pad angle (`forge_model::FootprintBuilder::add_pad`) and the decompiler drops
-/// the pad angle when it lowers a board to code. That is self-consistent under
-/// the absolute reading (an unrotated body on a rotated placement), so the
-/// generated path is unaffected while imported KiCad boards now read correctly.
+/// Our own producers write the same absolute angle: the compiler stores the
+/// footprint rotation plus the DSL's pad-relative `rot`, and the decompiler
+/// keeps the part of the pad angle that differs from the footprint's.
 fn pad_board_angle_deg(_frot: f64, prot: f64) -> f64 {
     prot
 }

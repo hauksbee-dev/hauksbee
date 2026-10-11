@@ -154,7 +154,7 @@ fn read_comps(pcb: &Pcb) -> Vec<Comp> {
             let net = pad
                 .net()
                 .and_then(|(_, name)| if name.is_empty() { None } else { Some(name) });
-            let (px, py, _) = pad.at();
+            let (px, py, prot) = pad.at();
             pads.push(Pad {
                 number: pad.number(),
                 kind: pad_kind_str(&pad),
@@ -175,6 +175,9 @@ fn read_comps(pcb: &Pcb) -> Vec<Comp> {
                         (w, h)
                     }
                 },
+                // A KiCad pad angle is absolute (footprint rotation folded in),
+                // so the DSL keeps only the part that differs from the footprint.
+                rot: relative_pad_rot(prot, rot),
                 drill: pad.drill(),
                 layers: {
                     let l = pad.layers();
@@ -206,6 +209,20 @@ fn read_comps(pcb: &Pcb) -> Vec<Comp> {
         });
     }
     out
+}
+
+/// A pad's rotation relative to its footprint, in (-180, 180] degrees, with
+/// float noise snapped to zero.
+fn relative_pad_rot(pad_abs: f64, footprint: f64) -> f64 {
+    let mut r = (pad_abs - footprint).rem_euclid(360.0);
+    if r > 180.0 {
+        r -= 360.0;
+    }
+    if r.abs() < 1e-6 {
+        0.0
+    } else {
+        r
+    }
 }
 
 fn pad_kind_str(pad: &forge_model::Pad) -> String {
@@ -381,9 +398,14 @@ fn emit_pad(s: &mut String, p: &Pad, indent: usize) {
         Some(d) => format!(" drill {}", fnum(d)),
         None => String::new(),
     };
+    let rot = if p.rot == 0.0 {
+        String::new()
+    } else {
+        format!(" rot {}", fnum(p.rot))
+    };
     let _ = writeln!(
         s,
-        "{pad}pad {} {} {} at {} {} size {} {}{} layers [{}] {}",
+        "{pad}pad {} {} {} at {} {} size {} {}{}{} layers [{}] {}",
         quote(&p.number),
         p.kind,
         p.shape,
@@ -391,6 +413,7 @@ fn emit_pad(s: &mut String, p: &Pad, indent: usize) {
         fnum(p.at.1),
         fnum(p.size.0),
         fnum(p.size.1),
+        rot,
         drill,
         p.layers.join(" "),
         net,

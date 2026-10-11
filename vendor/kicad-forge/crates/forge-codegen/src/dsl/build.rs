@@ -110,8 +110,12 @@ fn build_footprint(c: &Comp, net_id: &HashMap<String, i64>) -> FootprintBuilder 
     for p in &c.pads {
         let net = p.net.as_ref().map(|n| (net_id[n], n.as_str()));
         let layers: Vec<&str> = p.layers.iter().map(|s| s.as_str()).collect();
+        // KiCad stores a pad's angle as its absolute board orientation, so the
+        // footprint rotation is part of it; writing only the pad-relative part
+        // leaves every pad of a rotated footprint unrotated.
+        let abs_rot = (c.rot + p.rot).rem_euclid(360.0);
         fb = fb.add_pad(
-            &p.number, &p.kind, &p.shape, p.at, p.size, p.drill, layers, net,
+            &p.number, &p.kind, &p.shape, p.at, abs_rot, p.size, p.drill, layers, net,
         );
     }
     fb

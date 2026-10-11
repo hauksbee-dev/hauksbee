@@ -176,6 +176,11 @@ pub struct Pad {
     /// Local offset from the footprint origin `(x, y)`.
     pub at: (f64, f64),
     pub size: (f64, f64),
+    /// Pad rotation in degrees RELATIVE to the footprint's own rotation (0 for
+    /// almost every pad). The `size` is in the pad's own frame, so a footprint
+    /// placed at 90 or 270 degrees only keeps its true copper outline if the
+    /// compiled pad carries the footprint rotation plus this.
+    pub rot: f64,
     pub drill: Option<f64>,
     pub layers: Vec<String>,
     /// Net name; `None` for an unconnected pad.

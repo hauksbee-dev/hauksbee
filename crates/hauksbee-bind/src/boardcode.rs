@@ -107,6 +107,7 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program>
                     shape: "rect".to_string(),
                     at,
                     size: (1.0, 1.0),
+                    rot: 0.0,
                     drill: None,
                     layers: vec!["F.Cu".to_string()],
                     net,

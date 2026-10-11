@@ -396,6 +396,10 @@ fn parse_pad(toks: &[String], ln: usize) -> Result<Pad, ParseError> {
     }
     let (ax, ay) = kv_xy(toks, "at", ln)?;
     let (sw, sh) = kv_xy(toks, "size", ln)?;
+    let rot = kv(toks, "rot", ln)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
     let drill = kv(toks, "drill", ln).ok().and_then(|s| s.parse().ok());
     let layers = bracket_list(toks, "layers", ln)?;
     // `nonet` must be a *bare* token (a quoted "nonet" net name carries the
@@ -411,6 +415,7 @@ fn parse_pad(toks: &[String], ln: usize) -> Result<Pad, ParseError> {
         shape,
         at: (ax, ay),
         size: (sw, sh),
+        rot,
         drill,
         layers,
         net,
