@@ -124,6 +124,43 @@ pub fn assert_row_green(row: &hauksbee_ci::assertions::AssertResult, what: &str)
     );
 }
 
+/// Assert one row is honestly INVALID: the numbers are in range (`passed`) but
+/// its evidence is undermined, and the undermined evidence cites an assumption
+/// whose id starts with `cause` (for example `open-part:U2` or
+/// `operating-limit-violated:U2-logic-level-X-VCC`).
+///
+/// Row-level counterpart of [`assert_invalid_by_open_parts`]: it pins today's
+/// verdict and names the cause, so the test must become [`assert_row_green`]
+/// once the cause is closed.
+pub fn assert_row_invalid_citing(result: &hauksbee_ci::CiResult, name: &str, cause: &str) {
+    let report = result.render_human();
+    let r = row(result, name);
+    assert!(
+        r.passed && r.invalid,
+        "'{}' expected passed+INVALID: {r:?}\n{report}",
+        r.label
+    );
+    let map = result
+        .evidence
+        .iter()
+        .find(|m| m.assertion() == r.label)
+        .unwrap_or_else(|| panic!("no evidence map for '{}'\n{report}", r.label));
+    assert!(
+        map.is_undermined(),
+        "'{}' INVALID without undermined evidence\n{report}",
+        r.label
+    );
+    let cited = map
+        .assumptions()
+        .iter()
+        .any(|id| id.as_str().starts_with(cause));
+    assert!(
+        cited,
+        "'{}': not undermined by an assumption starting '{cause}'\n{report}",
+        r.label
+    );
+}
+
 /// Assert the run is INVALID (exit 3) *only* because parts with no model are
 /// open on the asserted paths, while the numeric judgement (`passed()`) holds.
 ///

@@ -430,7 +430,8 @@ fn ramp_ms_models_a_cold_power_on_and_its_absence_is_declared() {
     };
     let bracket = format!("{}{}", level(12.5), level(16.0));
     let ramped = rc_delay_run("ramped", "ramp_ms = 0.5\n", &bracket);
-    let held = |r: &hauksbee_ci::CiResult, label: &str| support::row_is_green(support::row(r, label));
+    let held =
+        |r: &hauksbee_ci::CiResult, label: &str| support::row_is_green(support::row(r, label));
     // Deliberate negative: before the crossing the level is a numeric miss.
     let missed = |r: &hauksbee_ci::CiResult, label: &str| !support::row(r, label).passed;
     assert!(

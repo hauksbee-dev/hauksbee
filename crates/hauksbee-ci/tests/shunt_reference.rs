@@ -77,7 +77,11 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
         // The starved boards are honestly INVALID (the row's numbers can pass
         // while the IKmin violation undermines them); every other board's row
         // must be fully valid, so a pass below is a green one.
-        assert_eq!(row.invalid, flag, "{case}: INVALID exactly when starved: {}", row.detail);
+        assert_eq!(
+            row.invalid, flag,
+            "{case}: INVALID exactly when starved: {}",
+            row.detail
+        );
     }
     row.passed
 }

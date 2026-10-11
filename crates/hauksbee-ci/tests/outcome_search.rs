@@ -97,7 +97,13 @@ fn a_weak_logic_high_names_the_divider_that_starves_it() {
     // is INVALID rather than RED; the outcome row still carries the search.
     let r = run("outcome gate", "68k", "10k");
     assert!(!r.passed(), "{}", r.render_human());
-    support::assert_row_green(support::row(&r, "trips"), &r.render_human());
+    // Honestly INVALID: the search reading is in range, but U2's input never
+    // reaches VIH, so the run is undermined by the card's logic-level limit.
+    support::assert_row_invalid_citing(
+        &r,
+        "trips",
+        "operating-limit-violated:U2-logic-level-X-VCC",
+    );
     let gate = why(&r, "gate");
     assert!(gate.contains("X peaks at 2.4"), "{gate}");
     assert!(gate.contains("U2"), "{gate}");

@@ -94,7 +94,10 @@ fn the_rating_row_for_the_stated_ambient_decides_and_a_default_is_disclosed() {
     let (cool, json) = run_with(CARD, "ambient_c = 25.0");
     assert_row_green(
         &cool.results[0],
-        &format!("11 mA is under the 12 mA row at 25 C: {}", cool.render_human()),
+        &format!(
+            "11 mA is under the 12 mA row at 25 C: {}",
+            cool.render_human()
+        ),
     );
     assert_eq!(ambient_ids(&json), 0, "a stated ambient is no assumption");
 

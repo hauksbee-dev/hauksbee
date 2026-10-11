@@ -540,7 +540,10 @@ fn a_firmware_gpio_on_en_brings_the_rail_up_after_it_goes_high() {
     let up = support::row(&result, "up after the GPIO");
     support::assert_row_green(up, &format!("the rail comes up once PB5 is high\n{human}"));
     let long = support::row(&result, "not off for long");
-    support::assert_row_green(long, &format!("and it was not off for the whole run\n{human}"));
+    support::assert_row_green(
+        long,
+        &format!("and it was not off for the whole run\n{human}"),
+    );
     let off = support::row(&result, "off until the GPIO");
     // Deliberate negative: the rail is off for longer than the 115 ms window allows.
     assert!(

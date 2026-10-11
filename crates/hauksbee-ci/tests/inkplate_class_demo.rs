@@ -110,9 +110,10 @@ for_max_ms = 1.0
     let result = run_body("battery.toml", &body);
     eprintln!("BATTERY side:\n{}", result.render_human());
 
-    // The protection_trip assertion must PASS (it DID trip): the headline.
-    let trip = support::row(&result, "kind:protection_trip");
-    support::assert_row_green(trip, "expected the LiPo protection to TRIP on cold-boot inrush");
+    // The protection_trip assertion holds (it DID trip): the headline. Model gap:
+    // U2 (MCP1700) has no model, so the row is INVALID, not green, until modelled
+    // (then `assert_row_green`).
+    support::assert_row_invalid_citing(&result, "kind:protection_trip", "open-part:U2");
     // The rail_window asserts the rail must NOT stay below 3.0 V for > 1 ms.
     // On the battery side it collapses for far longer once protection latches,
     // so this assertion FAILS by design: that red is the brownout being caught.
@@ -155,11 +156,10 @@ scenario = "coldboot"
     );
     let result = run_body("scoped_trip.toml", &body);
     eprintln!("SCOPED-TRIP side:\n{}", result.render_human());
+    // Model gap: U2 (MCP1700) has no model, so the honoured trip is INVALID, not
+    // green, until modelled (then `assert_row_green`).
+    support::assert_row_invalid_citing(&result, "kind:protection_trip", "open-part:U2");
     let trip = support::row(&result, "kind:protection_trip");
-    support::assert_row_green(
-        trip,
-        "a scenario-scoped protection_trip must be honored without a matching rail_window",
-    );
     // And the detail must reflect a real TRIP inside the window, not the old
     // "nothing to trip" miss.
     assert!(
