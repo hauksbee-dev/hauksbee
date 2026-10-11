@@ -237,6 +237,51 @@ fn push_model_rows(
     Ok(())
 }
 
+/// The worst-case bound that makes the open part `reference` unable to change
+/// any result, or `None` when it stays critical. One rule, sound for ANY part:
+///
+/// **Single ground terminal.** A geometric reader (schematic or layout, which
+/// places every pin or pad of the part) put every pin on one pad of one
+/// canonical ground net, which the binder fuses onto the reference node. A
+/// one-terminal element closes no loop on the board, and any path it opens off
+/// the board (a shield, a heatsink, a battery's negative contact) lands on node
+/// 0 and needs a second terminal on another net, a part that stays critical.
+/// So whatever it is, the board sees exactly the open circuit the run simulated.
+///
+/// Everything else stays critical, deliberately: a designator used twice (which
+/// part is it?), a pin with no position (a netlist lists only connected pins, so
+/// one listed pin does not mean one terminal), a pin with no known net, a single
+/// pad on any other net (an off-board contact, wire pad or antenna feed may carry
+/// current from outside), several pads on one net (a charged part shorted by
+/// copper is stressed where no check sees it), and every clamp, connector or
+/// active part, whose worst case nothing on an open part bounds.
+fn open_part_bound(board: &ExtractedBoard, reference: &str) -> Option<String> {
+    let reference = reference.trim();
+    let mut named = board
+        .components
+        .iter()
+        .filter(|c| c.reference.trim() == reference);
+    let (part, None) = (named.next()?, named.next()) else {
+        return None;
+    };
+    let first = part.pins.first()?;
+    let net = first.net?;
+    let ground =
+        |n: &hauksbee_extract::Net| n.id == net && crate::binder::is_canonical_ground(&n.name);
+    let single = board.nets.iter().any(ground)
+        && part
+            .pins
+            .iter()
+            .all(|p| p.net == Some(net) && p.number == first.number && p.position.is_some());
+    single.then(|| {
+        format!(
+            "{reference} has a single terminal (pad {}) on ground, so it closes no current path \
+             and holds no voltage across itself, whatever the part is",
+            first.number
+        )
+    })
+}
+
 /// The open-part assumptions for one bind report: one per DISTINCT claim, not
 /// one per unresolved row.
 ///
@@ -259,7 +304,11 @@ fn push_model_rows(
 /// copy of the id crate's normalisation rules, so the two cannot drift. Ordering
 /// is bind-row order, which follows `board.components`, so the ids are identical
 /// on every run of the same input.
-fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<Assumption> {
+fn open_part_assumptions(
+    report: &BindReport,
+    row_subjects: &[String],
+    row_bounds: &[Option<String>],
+) -> Vec<Assumption> {
     // The claim a row makes, keyed by EVERY sentence a reader would see plus the id.
     // Two rows merge only when a reader could not tell the resulting entries apart.
     //
@@ -270,7 +319,8 @@ fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<As
     // Keyed on statement and because alone, those merged and only the first row's
     // unlocking input reached the report, which loses the one thing the reader could
     // have acted on for the second part.
-    type Claim = (AssumptionId, String, String, String, String);
+    // A worst-case bound changes what the claim asserts, so it is part of the key.
+    type Claim = (AssumptionId, String, String, String, String, Option<String>);
     let mut order: Vec<Claim> = Vec::new();
     let mut groups: BTreeMap<Claim, (usize, String, String, String, Vec<String>)> = BTreeMap::new();
     for (row_index, row) in report.rows.iter().enumerate() {
@@ -284,6 +334,7 @@ fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<As
             probe.because().to_string(),
             probe.consequence().to_string(),
             probe.replacement().to_string(),
+            row_bounds.get(row_index).cloned().flatten(),
         );
         if let Some((count, _, _, _, subjects)) = groups.get_mut(&key) {
             *count += 1;
@@ -319,8 +370,18 @@ fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<As
             *next += 1;
             *next
         });
-        out.push(Assumption::open_part_group_for_components(
-            reference, value, reason, *count, ordinal, subjects,
+        let claim = (reference.as_str(), value.as_str(), reason.as_str());
+        out.push(key.5.as_deref().map_or_else(
+            || {
+                Assumption::open_part_group_for_components(
+                    reference, value, reason, *count, ordinal, subjects,
+                )
+            },
+            |bound| {
+                Assumption::bounded_open_part_group_for_components(
+                    claim, *count, ordinal, subjects, bound,
+                )
+            },
         ));
     }
     out
@@ -346,7 +407,10 @@ impl BoardEvidence {
         let (component_subjects, row_subjects) = component_occurrence_subjects(board, report);
         let mut assumptions = Vec::new();
         let mut conditions = Vec::new();
-        assumptions.extend(open_part_assumptions(report, &row_subjects));
+        let row_bounds: Vec<Option<String>> = (report.rows.iter())
+            .map(|row| open_part_bound(board, &row.reference))
+            .collect();
+        assumptions.extend(open_part_assumptions(report, &row_subjects, &row_bounds));
         // A variant set the board could not narrow bound a same-pinout stand-in.
         for (&index, s) in &report.selections {
             let (row, subject) = (&report.rows[index], &row_subjects[index]);
@@ -2610,6 +2674,57 @@ mod tests {
             .find(|a| a.statement().contains("X1"))
             .expect("X1 assumption");
         assert!(!x1.because().contains("X1 (PART):"), "{}", x1.because());
+    }
+
+    /// Only a part a geometric reader placed with one terminal on ground is
+    /// bounded; an unplaced pin, a non-ground pad, a second terminal or a reused
+    /// designator keeps it critical.
+    #[test]
+    fn only_a_single_placed_terminal_bounds_an_open_part() {
+        use hauksbee_ir::evidence::AssumptionKind::{OpenPart, ReducedFidelity};
+        let part = |reference: &str, pads: &[(&str, i64)], placed: bool| Component {
+            reference: reference.to_string(),
+            value: "MYSTERY".to_string(),
+            pins: (pads.iter())
+                .map(|&(number, net)| Pin {
+                    number: number.to_string(),
+                    net: Some(net),
+                    position: placed.then_some((0.0, 0.0)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let board = board(
+            "bounds",
+            &[(1, "GND"), (2, "B")],
+            vec![
+                part("U1", &[("1", 1)], true),
+                part("U2", &[("1", 1)], false),
+                part("U3", &[("1", 1), ("2", 2)], true),
+                part("U4", &[("1", 1), ("2", 1)], true),
+                part("U5", &[("1", 1)], true),
+                part("U5", &[("1", 2)], true),
+                part("U6", &[("1", 2)], true),
+            ],
+        );
+        let refs = ["U1", "U2", "U3", "U4", "U5", "U5", "U6"];
+        let rows = refs
+            .iter()
+            .map(|r| unresolved(r, "MYSTERY", "No model"))
+            .collect();
+        let evidence = evidence(&board, &report(rows));
+        let kind = |r: &str| {
+            let found = evidence
+                .assumptions()
+                .iter()
+                .find(|a| a.statement().contains(r));
+            found.map(Assumption::kind)
+        };
+        assert_eq!(kind("U1"), Some(ReducedFidelity));
+        for critical in ["U2", "U3", "U4", "U5", "U6"] {
+            assert_eq!(kind(critical), Some(OpenPart), "{critical}");
+        }
     }
 
     fn two_open_parts() -> BoardEvidence {

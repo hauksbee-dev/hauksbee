@@ -190,7 +190,10 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         16,
         &(rail_holds("VDC", 23.0, 25.0) + &rail_holds("+3.3V", 3.2, 3.4)),
         // Model gap: the TMC2226 stepper drivers and the TPS54560 buck hang off
-        // these rails with no model. GREEN once they are modelled.
+        // these rails with no model, and stay critical as active parts. The
+        // open TVS/ESD parts beside them (PESD24BS3, SMF28A, SM712, SRV05-4)
+        // stay critical too: no card states an open part's standoff or
+        // polarity, so nothing bounds what it clamps. GREEN once all are modelled.
         &["U6", "U7", "U8", "U9", "U10", "U11", "U16"],
     );
 }
@@ -263,7 +266,9 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
         "",
         // Model gap: `no_faults` spans the whole board and ~30 parts have no
         // model, among them the supervisor U18 and the regulators U7, U9, U12
-        // and U14. GREEN once they are modelled.
+        // and U14, which stay critical as active parts. The open ESD arrays
+        // (SP0503BAHT, TPD6E05U06) stay critical too: no card states an open
+        // part's standoff or polarity. GREEN once all of them are modelled.
         &["U18", "U7", "U9", "U12", "U14"],
     );
     // Six class-only LEDs (D8 D9 D11 D12 D22 D23), two assumed forward-voltage

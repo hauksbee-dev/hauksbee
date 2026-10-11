@@ -1314,6 +1314,36 @@ impl Assumption {
         ordinal: Option<usize>,
         component_subjects: &[String],
     ) -> Self {
+        let claim = (reference, value, reason);
+        Self::open_part_claim(claim, count, ordinal, component_subjects, None)
+    }
+
+    /// [`Self::open_part_group_for_components`] for open parts whose WORST CASE
+    /// the producer has bounded so tightly that no result can rest on them (a
+    /// part whose one terminal is on ground carries no current, whatever it is).
+    /// They stay disclosed, as a reduced-fidelity qualification that states `bound` as its
+    /// consequence, instead of undermining every assertion they touch. The
+    /// producer owns soundness: `bound` must hold for ANY part with this
+    /// connectivity, never only for what the part is believed to be.
+    #[must_use]
+    pub fn bounded_open_part_group_for_components(
+        (reference, value, reason): (&str, &str, &str),
+        count: usize,
+        ordinal: Option<usize>,
+        component_subjects: &[String],
+        bound: &str,
+    ) -> Self {
+        let claim = (reference, value, reason);
+        Self::open_part_claim(claim, count, ordinal, component_subjects, Some(bound))
+    }
+
+    fn open_part_claim(
+        (reference, value, reason): (&str, &str, &str),
+        count: usize,
+        ordinal: Option<usize>,
+        component_subjects: &[String],
+        bound: Option<&str>,
+    ) -> Self {
         // A NAMED ABSTENTION arrives as one string carrying both halves, joined by
         // [`UNLOCKED_BY_MARKER`]: the binder has one `reason` channel to the report
         // and the two halves belong in two different fields here, so the split
@@ -1375,8 +1405,22 @@ impl Assumption {
                 SubjectSet::new(components).expect("filtered component identities are non-empty"),
             )
         };
+        let kind = bound.map_or(AssumptionKind::OpenPart, |_| {
+            AssumptionKind::ReducedFidelity
+        });
+        let isolated = if plural {
+            format!(
+                "Nets through those {count} parts are isolated in simulation, so any current \
+                 path across them is missing from every result that depends on them."
+            )
+        } else {
+            format!(
+                "Nets through {reference} are isolated in simulation, so any current path \
+                 across it is missing from every result that depends on it."
+            )
+        };
         let mut built = Self::build(
-            AssumptionKind::OpenPart,
+            kind,
             AssumptionSource::Binder,
             &subject,
             scope,
@@ -1396,17 +1440,13 @@ impl Assumption {
                 (false, _) => format!("{named} is treated as an open circuit."),
             },
             because,
-            if plural {
+            bound.map_or(isolated, |bound| {
+                let it = if plural { "them" } else { "it" };
                 format!(
-                    "Nets through those {count} parts are isolated in simulation, so any current \
-                     path across them is missing from every result that depends on them."
+                    "{}, so no result rests on {it}",
+                    bound.trim_end_matches('.')
                 )
-            } else {
-                format!(
-                    "Nets through {reference} are isolated in simulation, so any current path \
-                     across it is missing from every result that depends on it."
-                )
-            },
+            }),
             // The "what to do" is the generic route ONLY when nobody has looked at
             // this part. When the library has looked and named the blocker, that
             // named input IS the next step, and printing "add a model to your models

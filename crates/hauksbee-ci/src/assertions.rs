@@ -22,15 +22,18 @@ pub struct AssertResult {
     /// The assertion kind, as the spec's `kind` token (`voltage`, `uart`,
     /// `blink`, `no_faults`, `hwtrace`, ...).
     pub kind: String,
-    /// Did the assertion hold on every ensemble member. False on an ordinary
-    /// red, on a waived red, and on an INVALID result.
+    /// Did the numbers hold on every ensemble member. False on an ordinary red
+    /// and a waived red; read [`Self::invalid`] first, since it is not the verdict.
     pub passed: bool,
     /// A THIRD outcome distinct from pass/fail: the assertion could not
     /// be honestly evaluated because its analog evaluation window overlaps a
     /// chunk the solver failed on, so the samples there are held-stale. When
-    /// `invalid` is true, `passed` is always false, but this is NOT an ordinary
-    /// failure: the run exits 3 (invalid-for-analysis) rather than 1, even below
-    /// the consecutive-abort threshold. A normal pass or fail leaves it `false`.
+    /// `invalid` is true, `passed` keeps only its numeric meaning: a stale span or
+    /// timing refusal forces it false, but an evidence-undermined row (an open part
+    /// on its causal path) keeps `passed == true` if the numbers held. Either way
+    /// this is NOT an ordinary failure: the run exits 3 (invalid-for-analysis)
+    /// rather than 1, even below the consecutive-abort threshold. A normal pass or
+    /// fail leaves it `false`.
     pub invalid: bool,
     /// One-line detail (the measured value, the offending seed, etc).
     pub detail: String,

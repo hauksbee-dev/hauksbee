@@ -40,6 +40,7 @@ mod mcu_descriptor_dir;
 mod multiunit_keying;
 mod olimex_burst_calibration;
 mod open_driver_validity;
+mod open_part_criticality;
 mod outcome_search;
 mod packaged_asset_sync;
 mod peripherals;
