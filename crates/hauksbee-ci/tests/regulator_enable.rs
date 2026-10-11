@@ -156,6 +156,125 @@ fn run_ldo(value: &str, role: &str, en: &str, pin: Option<&str>) -> CiResult {
     run(&spec(dir.path(), &board, "duration_ms = 3", ""), &models)
 }
 
+/// The card's supply current follows the enable. U1 hangs off `+5V` through a
+/// sense resistor on a `VIN` node, so the voltage there reads the input
+/// current, `5 - sense * I(IN)`, and a window on it pins that current. The
+/// 330 R load takes 10 mA from a live 3.3 V rail and nothing from a dead one.
+/// `extra` parts hang on the board beside them.
+fn input_current_run(
+    (value, role, card, pin): (&str, &str, &str, Option<&str>),
+    (sense, extra): (&str, &[Part<'_>]),
+    (min, max): (f64, f64),
+) -> CiResult {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let models = models_dir(dir.path(), value, role, card);
+    let mut pads = vec![("1", "VIN"), ("2", "GND"), ("5", "VOUT")];
+    pads.extend(pin.map(|net| ("3", net)));
+    let mut parts: Vec<Part<'_>> = vec![
+        ("U1", value, SOT25, &pads),
+        ("C1", "1uF", C0603, &[("1", "VOUT"), ("2", "GND")]),
+        ("R1", "330", R0603, &[("1", "VOUT"), ("2", "GND")]),
+        ("R4", sense, R0603, &[("1", "+5V"), ("2", "VIN")]),
+    ];
+    parts.extend_from_slice(extra);
+    let board = dir.path().join("board.net");
+    netlist(&board, &parts);
+    let window = format!(
+        "[[assert]]\nname = \"IN current\"\nkind = \"voltage\"\nnet = \"VIN\"\n\
+         min = {min}\nmax = {max}\nafter_ms = 1.0\n"
+    );
+    run(
+        &spec(dir.path(), &board, "duration_ms = 3", &window),
+        &models,
+    )
+}
+
+/// The input window held: its row passed, else the detail says what it read.
+fn assert_input_current(result: &CiResult, why: &str) {
+    let row = support::row(result, "IN current");
+    assert!(
+        row.passed,
+        "{why}: {}\n{}",
+        row.detail,
+        result.render_human()
+    );
+}
+
+/// EN fed from the supply through a 100k/100k divider (2.5 V, past the 1.5 V on
+/// level): nothing fixes the pin, so the enable switches on the solve.
+const EN_DIVIDER: [Part<'static>; 2] = [
+    ("R2", "100k", R0603, &[("1", "+5V"), ("2", "EN")]),
+    ("R3", "100k", R0603, &[("1", "EN"), ("2", "GND")]),
+];
+
+/// 5 V less 100 R * (10 mA load + 50 uA `iq_a`).
+const ON_WINDOW: (f64, f64) = (3.9945, 3.9955);
+/// 5 V less 100 kR * (0.2 uA shutdown current + the open switch's ~5 nA leak).
+const SHUTDOWN_WINDOW: (f64, f64) = (4.9780, 4.9805);
+
+/// What the part leaves the VIN node at: its shutdown current when EN holds it
+/// off, `iq_a` plus the load when on.
+#[test]
+fn the_supply_current_follows_the_enable() {
+    let card = format!("{EN_HIGH}\ni_shdn_a = 2.0e-7");
+    let part = |pin| ("SYNTH-LDO-SD", "en", card.as_str(), pin);
+    // The old stamp drew the whole 50 uA with EN low: 5 V across 100 kR,
+    // VIN near 0.
+    let off = input_current_run(part(Some("GND")), ("100k", &[]), SHUTDOWN_WINDOW);
+    assert_input_current(&off, "EN held low draws only the shutdown current");
+    assert_eq!(off.dead_rails, ["VOUT"], "the rail is off, not the input");
+
+    // Switched on by a divider the solve reads: the load plus iq_a, shutdown
+    // current included in it.
+    let on = input_current_run(part(Some("EN")), ("100", &EN_DIVIDER), ON_WINDOW);
+    assert_input_current(&on, "EN high draws the load plus iq_a");
+    assert!(on.dead_rails.is_empty(), "{:?}", on.dead_rails);
+    assert!(
+        !on.render_json().contains("shutdown supply current"),
+        "a card that states the shutdown current is not caveated"
+    );
+
+    // An active-low SHDN pin: tied to its input it is off, to GND it is on.
+    let low = "en_on_level = \"low\"\nen_on_v = 0.4\nen_off_v = 1.5\ni_shdn_a = 2.0e-7";
+    let part = |pin| ("SYNTH-LDO-SDL", "shdn", low, pin);
+    let off = input_current_run(part(Some("VIN")), ("100k", &[]), SHUTDOWN_WINDOW);
+    assert_input_current(&off, "SHDN tied to IN draws only the shutdown current");
+    let on = input_current_run(part(Some("GND")), ("100", &[]), ON_WINDOW);
+    assert_input_current(&on, "SHDN low draws the load plus iq_a");
+}
+
+#[test]
+fn a_card_with_no_shutdown_current_draws_none_off_and_says_so() {
+    let part = |pin| ("SYNTH-LDO-NOSD", "en", EN_HIGH, pin);
+    // Nothing to draw: VIN stays at the supply, less a leak of a few nA
+    // across 100 kR.
+    let off = input_current_run(part(Some("GND")), ("100k", &[]), (4.9985, 5.0001));
+    assert_input_current(&off, "no shutdown figure, so IN draws none while off");
+    let json = off.render_json();
+    assert!(
+        json.contains("states no shutdown supply current (`i_shdn_a`)")
+            && json.contains("IN is assumed to draw 0 A while its EN pin holds the part off"),
+        "the assumption is disclosed:\n{json}"
+    );
+    // On, the same card draws its full iq_a.
+    let on = input_current_run(part(Some("EN")), ("100", &EN_DIVIDER), ON_WINDOW);
+    assert_input_current(&on, "EN high draws the load plus iq_a");
+}
+
+#[test]
+fn a_regulator_with_no_enable_modelled_draws_its_iq_as_before() {
+    // The card names no enable pin (pad 3 is `nc`): the old stamp, the same
+    // 10.05 mA, and no shutdown disclosure.
+    let part = ("SYNTH-LDO-NOEN", "nc", "", None);
+    let on = input_current_run(part, ("100", &[]), ON_WINDOW);
+    assert_input_current(&on, "iq_a is drawn as always");
+    let json = on.render_json();
+    assert!(
+        !json.contains("shutdown"),
+        "no enable, no shutdown caveat:\n{json}"
+    );
+}
+
 /// The rail is up, and nothing calls it dead.
 fn assert_rail_up(result: &CiResult, why: &str) {
     let row = support::row(result, "VOUT regulated");

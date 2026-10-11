@@ -1246,6 +1246,7 @@ dropout_v = 0.53     # VDROP max @ rated 600 mA, 3 V <= VOUT
 # Source: Richtek RT9080 DS9080-09, Typical Application and stability guidance: COUT = 1 uF ceramic.
 cout_min_f = 1.0e-6
 iq_a      = 2.0e-6   # IQ typ @ ILOAD = 0 mA, VIN >= VOUT + VDROP (max is 4 uA)
+i_shdn_a  = 1.0e-7   # ISHDN "Shutdown GND Current" typ, VEN = 0 V (0.5 uA max), Richtek DS9080-09 Section 14 Electrical Characteristics p.6
 # EN pin (active high; the binder gates the output on it from these fields).
 # Richtek DS9080-09 (December 2024), Section 14 Electrical Characteristics (p.6),
 # VVIN = 5 V: VEN_R rising threshold 0.9 V min, VEN_F falling threshold 0.4 V max
@@ -1573,6 +1574,7 @@ dropout_v = 0.4      # VDROP max @ rated 600 mA, AP2112-3.3 Electrical Character
 cout_min_f = 1.0e-6
 iq_a      = 55.0e-6  # IQ typ @ VIN=4.3 V, IOUT=0 (80 uA max; ISTD 0.01 uA typ
                      # in shutdown)
+i_shdn_a  = 1.0e-8   # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VEN in OFF mode, DS39724 Rev. 2-2 AP2112-3.3 Electrical Characteristics p.8
 # EN pin (active high; the binder gates the output on it from these fields).
 # Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics
 # (p.8): VIH "Enable logic high, regulator on" 1.5 V min; VIL "Enable logic low,
@@ -1668,6 +1670,7 @@ vout       = 3.3      # AP2112-3.3 Electrical Characteristics, VIN = 4.3 V, 1 mA
 dropout_v  = 0.4      # VDROP max @ IOUT = 600 mA (250 mV typ; 200 mV max @ 300 mA)
 cout_min_f = 1.0e-6   # Typical Applications Circuit and Note 4: 1.0 uF X7R/X5R ceramic
 iq_a       = 55.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (80 uA max)
+i_shdn_a   = 1.0e-8   # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VEN in OFF mode, DS39724 Rev. 2-2 AP2112-3.3 Electrical Characteristics p.8
 # EN pin (active high; the binder gates the output on it from these fields).
 # Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics
 # (p.8): VIH "Enable logic high, regulator on" 1.5 V min; VIL "Enable logic low,
@@ -1760,6 +1763,7 @@ vout       = 3.3      # AP2114-3.3 EC, +-1.5%
 dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
 cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"
 iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
+i_shdn_a   = 1.0e-8   # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VEN in OFF mode, AP2114-3.3 Electrical Characteristics p.12
 # EN pin (active high; the binder gates the output on it from these fields).
 # AP2114 data sheet Rev. 2.2 (Jan. 2013), AP2114-3.3 Electrical Characteristics
 # (p.12): VIH "Enable logic high, regulator on" 1.5 V min; VIL "Enable logic low,
@@ -1900,6 +1904,7 @@ vout       = 3.3      # Electrical Characteristics, +-2%, VIN = VOUT + 1 V, 1 mA
 dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA, VOUT = 2.5-4.2 V row (170 mV typ)
 cout_min_f = 1.0e-6   # Application Information, Output Capacitor: stable with 1 uF or higher X7R/X5R
 iq_a       = 60.0e-6  # IQ typ @ VIN = VOUT + 1 V, IOUT = 0 (90 uA max)
+i_shdn_a   = 1.0e-7   # ISTD "Standby Current" typ (1.0 uA max), VSHUTDOWN in off mode, DS36478 Rev. 7-2 Electrical Characteristics p.5
 # Shutdown (enable) pin, active high; the binder gates the output on it from
 # these fields. Diodes AP2127 DS36478 Rev. 7-2 (Dec. 2017), Electrical
 # Characteristics (p.5): Shutdown High Voltage 1.5 V min; Shutdown Low Voltage
@@ -6896,6 +6901,7 @@ value_re = "(?i)^XC6220B331MR(?:-?G)?$"
 vout      = 3.3      # nominal; VOUT(E) 3.267..3.333 V in HS mode @ IOUT = 30 mA
 dropout_v = 0.655    # Vdif2 MAX @ IOUT = 1000 mA (E-2); Vdif1 60 typ / 95 max mV @ 300 mA
 iq_a      = 8.0e-6   # ISS2 typ, PS mode @ IOUT = 0.1 mA (18 uA max; HS mode ISS1 50 uA typ)
+i_shdn_a  = 1.0e-8   # ISTBY "Stand-by Current" typ (+-0.1 uA limit), VIN = 6.0 V, VCE = VSS, Torex ETR03041-016b ELECTRICAL CHARACTERISTICS p.5
 en_on_v   = 1.2      # VCEH min, Torex ETR03041-016b ELECTRICAL CHARACTERISTICS p.6 (6.0 V max)
 en_off_v  = 0.4      # VCEL max, same table p.6
 en_discharge_ohms = 460.0  # RDCHG typ, B/D type, VIN = 6.0 V, VOUT = 5.0 V, VCE = VSS, p.6 (note *4)
@@ -7145,6 +7151,7 @@ mpn_re = "(?i)^TLV75733PDBV[RT]?$"
 vout = 3.3            # fixed 3.3 V option (code 33)
 dropout_v = 0.475     # VDO MAX, IOUT = 1 A, 3.3 V <= VOUT < 5.0 V, TJ -40..125 C
 iq_a = 25.0e-6        # IGND typ at TJ = 25 C, IOUT = 1 mA (31 uA max)
+i_shdn_a = 1.0e-7     # ISHDN typ (1 uA max), VEN <= 0.4 V, 1.45 V <= VIN <= 5.5 V, 5.5 Electrical Characteristics p.5
 cout_min_f = 1.0e-6   # 5.3 Recommended Operating Conditions, COUT min
 en_on_v = 1.0         # VHI, EN pin high voltage (enabled), 5.5 Electrical Characteristics p.6
 en_off_v = 0.3        # VLO max, same table p.6
@@ -7263,6 +7270,7 @@ mpn_re = "(?i)^TLV75718PDBV[RT]?$"
 vout = 1.8            # fixed 1.8 V option (code 18)
 dropout_v = 0.800     # VDO MAX, IOUT = 1 A, 1.8 V <= VOUT < 2.5 V, TJ -40..125 C
 iq_a = 25.0e-6        # IGND typ at TJ = 25 C, IOUT = 1 mA (31 uA max)
+i_shdn_a = 1.0e-7     # ISHDN typ (1 uA max), VEN <= 0.4 V, 1.45 V <= VIN <= 5.5 V, 5.5 Electrical Characteristics p.5
 cout_min_f = 1.0e-6   # 5.3 Recommended Operating Conditions, COUT min
 en_on_v = 1.0         # VHI, EN pin high voltage (enabled), 5.5 Electrical Characteristics p.6
 en_off_v = 0.3        # VLO max, same table p.6
@@ -7475,6 +7483,7 @@ mpn_re = "(?i)^LP3855EMPX?-ADJ(/NOPB)?$"
 vref = 1.216          # VADJ typ
 dropout_v = 0.435     # SOT-223 dropout max at IL = 1.5 A, full temperature
 iq_a = 3.0e-3         # IGND normal operation typ (10 mA max over temperature)
+i_shdn_a = 1.0e-8     # shutdown mode quiescent current, typically 10 nA with SD pulled low, SNVS244F Features and Description p.1
 cout_min_f = 10.0e-6  # Application Hints, minimum stable output capacitance 10 uF
 en_on_v = 2.0         # VSDT rising (until output = ON), 2 V in the Min column; SNVS244F Electrical Characteristics p.4
 en_off_v = 0.3        # VSDT falling (until output = OFF), 0.3 V in the Max column; same table p.4
@@ -7554,6 +7563,7 @@ vout       = 3.3      # [1] AP2112-3.3 EC (±1.5%); [2] Section 14 ±2% at 1 mA
 dropout_v  = 0.53     # [2] Section 14 VDROP max, ILOAD = 600 mA, VOUT >= 3 V (AP2112: 0.4 V max)
 cout_min_f = 1.0e-6   # [1] Note 4 1.0 uF ceramic; [2] Section 8 "1uF or larger ceramic (0.7uF effective)"
 iq_a       = 55.0e-6  # [1] IQ typ, VIN = 4.3 V (80 uA max); [2] RT9080 IQ 2 uA typ, so the larger is carried
+i_shdn_a   = 1.0e-7   # the larger of [1] ISTD 0.01 uA typ (p.8) and [2] ISHDN 0.1 uA typ, VEN = 0 V (Section 14 Electrical Characteristics p.6)
 en_on_v    = 1.5      # worst case of both: [1] VIH 1.5 V min (p.8) vs [2] VEN_R 0.9 V min (Section 14 p.6); the higher guarantees both parts are on
 en_off_v   = 0.4      # worst case of both: [1] VIL 0.4 V max (p.8) and [2] VEN_F 0.4 V max (Section 14 p.6); equal
 en_discharge_ohms = 80.0  # both parts discharge: [1] RDCHG 60 Ohm typ (p.8), [2] RDISCHG 80 Ohm typ (Section 14 p.6); the weaker (larger) is carried

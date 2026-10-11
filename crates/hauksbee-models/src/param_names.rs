@@ -216,6 +216,9 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "en_pull_down_a",
             "en_pull_up_a",
             "en_discharge_ohms",
+            // The supply current from IN while the enable holds the part off
+            // (the datasheet's I_SHDN); the card's `iq_a` is the on-state figure.
+            "i_shdn_a",
         ],
         // `swing_*`: output-swing headrooms from the V-/V+ PINS, which bind the
         // rails to the supply nets (`rail_*` then only a fallback).

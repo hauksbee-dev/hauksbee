@@ -4765,7 +4765,7 @@ fn bind_vreg(
     }
     // The enable pin switches the rail (see `vreg_enable`): the source returns
     // to a private node the gate closes to GND.
-    let enable = crate::vreg_enable::Plan::new(
+    let mut enable = crate::vreg_enable::Plan::new(
         comp,
         model,
         roles,
@@ -4805,14 +4805,9 @@ fn bind_vreg(
     // Iq leaves the part's GND pin and returns through IN for a negative
     // regulator (its input is the negative rail), so it is drawn from that rail
     // too: the card states it as a magnitude, the polarity follows `vout`.
+    // The enable pin picks between that and the card's shutdown current.
     if let Some(amps) = model.params.get_f64("iq_a").filter(|i| i.is_finite()) {
-        let name = format!("Iq_{}", comp.reference);
-        helpers.push(supply_draw(
-            circuit,
-            name,
-            (input, gnd),
-            amps.copysign(vout),
-        ));
+        helpers.extend(enable.quiescent(circuit, comp, model, (input, gnd), amps.copysign(vout)));
     }
     let (gate, gated, [enable_caveat, held_off]) =
         enable.stamp(circuit, comp, (input, out, gnd, ret), Some(vout));
@@ -5471,7 +5466,7 @@ fn bind_adj_vreg(
     // A grounded part's enable gates the VCVS's return, as `bind_vreg` gates
     // its source's (see `vreg_enable`). An LM317-class part has no return to
     // gate: an enable on such a card stays unmodelled, and says so.
-    let enable = grounded.then(|| {
+    let mut enable = grounded.then(|| {
         crate::vreg_enable::Plan::new(
             comp,
             model,
@@ -5505,21 +5500,12 @@ fn bind_adj_vreg(
     let ends = (input, out, ret);
     let (draw, pass_level) = pass_draw(circuit, &comp.reference, ends, (source, vref), dropout_v);
     let mut helpers = vec![draw];
-    // IADJ leaves the ADJ pin; a grounded part's quiescent current runs IN -> GND.
-    // Both are magnitudes on the card; a negative regulator (`vref` < 0) draws
-    // them the other way, as `bind_vreg`'s Iq does.
-    for (prefix, key, to, on) in [("Iadj", "iadj_a", adj, true), ("Iq", "iq_a", gnd, grounded)] {
-        let Some(amps) = model.params.get_f64(key).filter(|i| on && i.is_finite()) else {
-            continue;
-        };
-        let name = format!("{prefix}_{}", comp.reference);
-        let amps = amps.copysign(vref);
-        helpers.push(if prefix == "Iq" {
-            supply_draw(circuit, name, (input, to), amps)
-        } else {
-            circuit.add(Device::isource(name, input, to, SourceKind::Dc(amps)))
-        });
-    }
+    helpers.extend(adj_supply_draws(
+        circuit,
+        (comp, model),
+        enable.as_mut(),
+        ((input, adj, gnd), vref),
+    ));
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
         source,
@@ -5550,6 +5536,34 @@ fn bind_adj_vreg(
         },
         merge_bind_warnings(join_caveats(comp, caveats), held_off),
     )
+}
+
+/// An adjustable regulator's supply draws. IADJ leaves the ADJ pin; a grounded
+/// part's quiescent current runs IN -> GND, through its enable's `plan` (a
+/// grounded part always has one). Both are magnitudes on the card; a negative
+/// regulator (`vref` < 0) draws them the other way, as `bind_vreg`'s Iq does.
+fn adj_supply_draws(
+    circuit: &mut Circuit,
+    (comp, model): (&Component, &ModelEntry),
+    plan: Option<&mut crate::vreg_enable::Plan>,
+    ((input, adj, gnd), vref): ((NodeId, NodeId, NodeId), f64),
+) -> Vec<DeviceId> {
+    let amps = |key| {
+        model
+            .params
+            .get_f64(key)
+            .filter(|i| i.is_finite())
+            .map(|i| i.copysign(vref))
+    };
+    let mut draws = Vec::new();
+    if let Some(amps) = amps("iadj_a") {
+        let name = format!("Iadj_{}", comp.reference);
+        draws.push(circuit.add(Device::isource(name, input, adj, SourceKind::Dc(amps))));
+    }
+    if let (Some(amps), Some(plan)) = (amps("iq_a"), plan) {
+        draws.extend(plan.quiescent(circuit, comp, model, (input, gnd), amps));
+    }
+    draws
 }
 
 /// Stamp `plan` for the regulator just pushed onto `regulators` and record

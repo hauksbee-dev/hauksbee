@@ -11,6 +11,10 @@
 //! holds the state between the guaranteed-off and guaranteed-on levels, so a
 //! slow edge does not chatter.
 //!
+//! The part's own supply current follows the same switch ([`Plan::quiescent`]):
+//! on, IN draws the card's `iq_a`; off, only its shutdown current `i_shdn_a`,
+//! or nothing when the card states none (said as a partial model).
+//!
 //! The card supplies the levels (`en_on_v`/`en_off_v`), the polarity
 //! (`en_on_level`), an internal pull and an active discharge; without levels the
 //! gate uses [`DEFAULT_ON_V`]/[`DEFAULT_OFF_V`] and says so as a partial model.
@@ -175,6 +179,18 @@ struct Gate {
     held_off: Option<String>,
 }
 
+impl Gate {
+    /// The switch's control pair and the sign that carries the thresholds: the
+    /// pin against GND for an `on`-high reading, the reverse for an on-low one.
+    const fn sense(&self, gnd: NodeId, on: bool) -> (NodeId, NodeId, f64) {
+        if on {
+            (self.control, gnd, 1.0)
+        } else {
+            (gnd, self.control, -1.0)
+        }
+    }
+}
+
 impl Plan {
     /// Read the card and the board around the pin. `components` and `node_of`
     /// are the binder's; `circuit` is only read, for net names.
@@ -310,6 +326,87 @@ impl Plan {
         }
     }
 
+    /// Stamp the regulator's supply current from `input` to `gnd`, `amps` being
+    /// the card's `iq_a` signed for the rail's polarity, and give the sources
+    /// to register as the stamp's helpers.
+    ///
+    /// Ungated, that is the one `Iq_<ref>` draw. Gated, the draw splits:
+    /// `i_shdn_a` flows always (the part's shutdown current), and the rest,
+    /// `iq_a - i_shdn_a`, flows through a switch `Sq_<ref>` on the same pin,
+    /// levels and latch as the pass element's, so the sum is `iq_a` on and
+    /// `i_shdn_a` off. A card with no `i_shdn_a` draws nothing off, and says so.
+    pub fn quiescent(
+        &mut self,
+        circuit: &mut Circuit,
+        comp: &Component,
+        model: &ModelEntry,
+        (input, gnd): (NodeId, NodeId),
+        amps: f64,
+    ) -> Vec<DeviceId> {
+        use crate::binder::supply_draw;
+        let r = &comp.reference;
+        let Some(g) = &self.gate else {
+            return vec![supply_draw(circuit, format!("Iq_{r}"), (input, gnd), amps)];
+        };
+        let shutdown = model
+            .params
+            .get_f64("i_shdn_a")
+            .filter(|i| i.is_finite() && *i >= 0.0 && *i < amps.abs())
+            .map(|i| i.copysign(amps));
+        // The switched part ends on a private node the switch closes to GND.
+        // Off, the draw's own fade (it needs a supply across it) takes the
+        // current to nothing as that node rises to IN.
+        let tail = circuit.node(&format!("{r}_vreg_iq"));
+        let (cp, cn, s) = g.sense(gnd, g.on_high);
+        circuit.add(Device::VSwitch {
+            name: format!("Sq_{r}"),
+            a: tail,
+            b: gnd,
+            ctrl_p: cp,
+            ctrl_n: cn,
+            von: s * g.on_v,
+            voff: s * g.off_v,
+            ron: GATE_RON,
+            roff: GATE_ROFF,
+        });
+        let mut helpers = vec![supply_draw(
+            circuit,
+            format!("Iq_{r}"),
+            (input, tail),
+            amps - shutdown.unwrap_or(0.0),
+        )];
+        let Some(shutdown) = shutdown else {
+            let said = format!(
+                "the card states no shutdown supply current (`i_shdn_a`), so IN is assumed to \
+                 draw 0 A while its {} pin holds the part off; a real part draws its datasheet \
+                 shutdown current",
+                self.pin
+            );
+            let first = format!(
+                "{}{} ({}): {said}",
+                Assumption::PARTIAL_MODEL_MARKER,
+                comp.reference,
+                comp.value
+            );
+            self.caveat = Some(
+                self.caveat
+                    .take()
+                    .map_or(first, |c| format!("{c}; also {said}")),
+            );
+            return helpers;
+        };
+        // A stated zero is a statement, and needs no source.
+        if shutdown.abs() > 0.0 {
+            helpers.push(supply_draw(
+                circuit,
+                format!("Ishdn_{r}"),
+                (input, gnd),
+                shutdown,
+            ));
+        }
+        helpers
+    }
+
     /// Stamp the gate, the pull and the discharge. `ret` is what
     /// [`Self::source_return`] returned. Gives the gate (if any), a short label
     /// for the bind row, and the notes for the bind report: the caveat, then
@@ -326,15 +423,8 @@ impl Plan {
         };
         let r = &comp.reference;
         let (pin, control) = (self.pin, g.control);
-        // The switch conducts when V(cp) - V(cn) passes `von`: the pin against
-        // GND for an on-high pin, the reverse for an on-low one.
-        let sense = |on: bool| {
-            if on {
-                (control, gnd, 1.0)
-            } else {
-                (gnd, control, -1.0)
-            }
-        };
+        // The switch conducts when V(cp) - V(cn) passes `von`.
+        let sense = |on: bool| g.sense(gnd, on);
         let (cp, cn, s) = sense(g.on_high);
         let switch = circuit.add(Device::VSwitch {
             name: format!("Sen_{r}"),

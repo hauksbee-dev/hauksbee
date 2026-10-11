@@ -164,7 +164,12 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
         "en_discharge_ohms",
     ];
     let params = &entry.params;
-    if entry.kind != ComponentKind::Vreg || !KEYS.iter().any(|k| params.0.contains_key(*k)) {
+    if entry.kind != ComponentKind::Vreg
+        || !KEYS
+            .iter()
+            .chain(&["i_shdn_a"])
+            .any(|k| params.0.contains_key(*k))
+    {
         return;
     }
     p.require(has_role(entry, "en") || has_role(entry, "shdn"), || {
@@ -200,6 +205,17 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
                 if low { "low" } else { "high" }
             )
         });
+    }
+    // The shutdown supply current is what IN draws with the part off, so it
+    // sits below the on-state `iq_a` (the binder draws the difference when on).
+    if params.0.contains_key("i_shdn_a") {
+        let iq = params.get_f64("iq_a");
+        p.require(
+            params
+                .get_f64("i_shdn_a")
+                .is_some_and(|i| i.is_finite() && i >= 0.0 && iq.is_some_and(|q| i < q)),
+            || "param 'i_shdn_a' must be finite, at least 0 and below 'iq_a'".into(),
+        );
     }
     let pulls = KEYS[3..7]
         .iter()
@@ -1914,6 +1930,15 @@ mod tests {
             &[("en_pull_down_ohms", 3e6), ("en_discharge_ohms", 60.0)],
             None,
         ));
+        accepts(&en("en", &[("i_shdn_a", 1e-7)], None));
+        accepts(&en("en", &[("i_shdn_a", 0.0)], None));
+        rejects(&en("en", &[("i_shdn_a", 1e-4)], None), "below 'iq_a'");
+        rejects(&en("en", &[("i_shdn_a", 2e-4)], None), "below 'iq_a'");
+        rejects(&en("en", &[("i_shdn_a", -1e-7)], None), "below 'iq_a'");
+        rejects(
+            &en("nc", &[("i_shdn_a", 1e-7)], None),
+            "'en' or 'shdn' role",
+        );
         rejects(&en("nc", &levels, None), "'en' or 'shdn' role");
         rejects(&en("en", &[("en_on_v", 1.5)], None), "need both");
         rejects(
