@@ -454,6 +454,9 @@ export interface ExtractAgentConfig {
   permission_mode?: string
   profile?: string
   extra_args?: string[]
+  /** Models tried in order when the previous tier fails. Absent = the backend's
+   *  built-in ladder; `[]` = never escalate. */
+  escalate?: string[]
 }
 
 export type ExtractCodexBackendConfig = ExtractAgentConfig
@@ -487,6 +490,9 @@ export interface ExtractResolvedAgent {
   permission_mode?: string
   profile?: string | null
   extra_args: string[]
+  /** The effective ladder after the first model (always an array). Absent only
+   *  from an older server. */
+  escalate?: string[]
 }
 
 export type ExtractResolvedCodex = ExtractResolvedAgent
@@ -533,12 +539,26 @@ export interface ExtractPreset {
   api_base: string
   api_key_env: string
   recommended: boolean
+  /** The models tried after `model` fails, in order. Absent from an older server. */
+  escalate?: string[]
+  /** A caution the server attaches to this preset, shown as written. */
+  badge?: string
 }
 
 /** One picker entry; the note is the server's single wording for CLI and web. */
 export interface ModelChoice {
   name: string
   note: string
+  /** Tokens of context each stage may use; non-zero means the model runs the
+   *  staged harness. 0 or absent = unbounded. */
+  context_budget?: number
+  /** Short display name for ladders ("Haiku 5.5"), chosen by the server. */
+  label?: string
+  /** A caution the server attaches to this tier, shown as written (for
+   *  example "below Luna baseline"). */
+  badge?: string
+  /** True for the model the server would run when none is chosen. */
+  default?: boolean
 }
 
 export interface ExtractOptions {
@@ -726,3 +746,47 @@ export interface RunResponse {
   timing_refusals?: string[]
   results?: CheckResult[]
 }
+
+/** Plan usage as percent of a subscription's limits, for one moment. */
+export interface PlanWindows {
+  week: number | null
+  /** The 5-hour window. */
+  session: number | null
+}
+
+/** How the server says a run is billed. Dollars are meaningful only for
+ *  "metered" (per-token API billing); "plan" is a subscription login (Claude
+ *  plan, ChatGPT plan); "unknown" means the server could not tell. The page
+ *  works none of this out itself. */
+export type ActivityBilling = 'metered' | 'plan' | 'unknown'
+
+
+/** One live event from a running extraction, delivered on the SSE stream as an
+ *  `activity: <json>` line. `t` is seconds since the run started. */
+export type ActivityEvent =
+  | {
+      t: number; kind: 'tier'; model: string; tier: number; tiers: number; harness: string; budget: number
+      /** Display name and caution for this tier, when the server sends them. */
+      label?: string; badge?: string
+    }
+  | { t: number; kind: 'stage'; stage: string; attempt: number; attempts: number }
+  | { t: number; kind: 'read'; path: string; page?: number }
+  | { t: number; kind: 'tool'; name: string; detail?: string }
+  | {
+      t: number; kind: 'usage'; model: string; context: number; input: number; output: number
+      cache_read: number; cache_write: number
+      /** Null unless `billing` is "metered". */
+      cost_usd: number | null
+      total_tokens: number
+      total_cost_usd: number | null
+      billing?: ActivityBilling | string
+    }
+  /** Sent once at the end of a subscription run: plan usage before and after. */
+  | {
+      t: number; kind: 'plan'; tool?: string; available: boolean
+      before?: PlanWindows; after?: PlanWindows
+    }
+  | { t: number; kind: 'validator'; ok: boolean; error?: string }
+  | { t: number; kind: 'escalate'; from: string; to: string; reason: string }
+  | { t: number; kind: 'final'; model: string; tier: number; tiers: number; escalations: string[]; confidence: string }
+  | { t: number; kind: 'note'; text: string }

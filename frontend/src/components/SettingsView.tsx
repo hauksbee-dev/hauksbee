@@ -7,6 +7,8 @@ import type {
 } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ChevronDownIcon, ChevronRightIcon } from './Icons'
+import { budgetLabel } from './extract/activity'
+import { escalateFromText, escalateToText, labelMap, ladderLabel } from './extract/escalate'
 
 // The Settings view: one section for now, "Datasheet extraction", configuring
 // which LLM backend `hauksbee models extract` (and the board panel's "draft a
@@ -37,6 +39,8 @@ interface DraftAgent {
   permission_mode: string
   profile: string
   extra_args: string
+  /** Comma-separated model ids; blank = default ladder, `none` = no escalation. */
+  escalate: string
 }
 
 interface Draft {
@@ -57,6 +61,7 @@ const agentDraft = (config?: ExtractAgentConfig): DraftAgent => ({
   permission_mode: config?.permission_mode ?? '',
   profile: config?.profile ?? '',
   extra_args: (config?.extra_args ?? []).join(' '),
+  escalate: escalateToText(config?.escalate),
 })
 
 const draftFromConfig = (config: ExtractBackendsConfig): Draft => ({
@@ -87,6 +92,8 @@ const configFromDraft = (draft: Draft): ExtractBackendsConfig => {
     }
     const args = draft[backend].extra_args.trim().split(/\s+/).filter(Boolean)
     if (args.length) agent.extra_args = args
+    const escalate = escalateFromText(draft[backend].escalate)
+    if (escalate) agent.escalate = escalate
     if (Object.keys(agent).length) config[backend] = agent
   }
 
@@ -111,7 +118,8 @@ function draftArgs(config: ExtractBackendsConfig, saved?: ExtractBackendsConfig)
     if (!obj) return
     for (const [k, v] of Object.entries(obj)) {
       if (v === undefined || v === null || v === '') continue
-      if (Array.isArray(v)) { if (v.length) args.push(`${prefix}.${k}=${v.join(' ')}`) }
+      if (k === 'escalate' && Array.isArray(v)) args.push(`${prefix}.${k}=${v.length ? v.join(',') : 'none'}`)
+      else if (Array.isArray(v)) { if (v.length) args.push(`${prefix}.${k}=${v.join(' ')}`) }
       else args.push(`${prefix}.${k}=${v}`)
     }
   }
@@ -137,11 +145,25 @@ function resolvedBlock(resolved: ExtractResolved, backend: string) {
   }
 }
 
+/** The effective escalation ladder (after the first model) of an agent backend. */
+function resolvedEscalate(resolved: ExtractResolved, backend: string): string[] | undefined {
+  switch (backend) {
+    case 'codex': return resolved.codex.escalate
+    case 'claude-code': return resolved.claude_code.escalate
+    case 'agy': return resolved.agy.escalate
+    default: return undefined
+  }
+}
+
 function presetMatchesResolved(preset: ExtractPreset, resolved: ExtractResolved): boolean {
   if (preset.backend !== resolved.backend) return false
   if (preset.backend === 'api') return preset.model === resolved.api.model && preset.api_base === resolved.api.base_url
   const { model, effort } = resolvedBlock(resolved, preset.backend)
-  return preset.model === model && preset.effort === effort
+  if (preset.model !== model || preset.effort !== effort) return false
+  // Presets that differ only in their ladder (Haiku alone vs Haiku, Sonnet,
+  // Opus) are told apart when both sides report one.
+  const have = resolvedEscalate(resolved, preset.backend)
+  return !preset.escalate || !have || preset.escalate.join(',') === have.join(',')
 }
 
 function sourceLine(data: ExtractSettings): string {
@@ -217,11 +239,21 @@ function ModelPicks({ picks, current, hintable, onPick }: {
         >
           <span style={{ fontFamily: 'var(--font-mono)', color: p.name === current ? 'var(--copper-hi)' : 'var(--silk)' }}>{p.name}</span>
           {p.note && <span> &mdash; {p.note}</span>}
+          {p.badge && (
+            <span data-testid={`settings-model-badge-${p.name}`} style={{ color: 'var(--warn, var(--copper-hi))' }}>
+              {' '}&middot; {p.badge}
+            </span>
+          )}
+          {budgetLabel(p.context_budget) && (
+            <span data-testid={`settings-model-harness-${p.name}`} style={{ color: 'var(--copper-hi)' }}>
+              {' '}&middot; {budgetLabel(p.context_budget)}
+            </span>
+          )}
         </button>
       ))}
       {!listed && hintable && picks.length > 0 && (
         <span className="text-[11px]" data-testid="settings-model-hint" style={{ color: 'var(--silk-faint)' }}>
-          {current} is not in the current list and is used as written; {picks[0].name} is recommended.
+          {current} is not in the current list and is used as written; {(picks.find(p => p.default) ?? picks[0]).name} is recommended.
         </span>
       )}
     </div>
@@ -259,8 +291,10 @@ function Segmented<T extends string>({ options, value, onChange, testIdPrefix, l
   )
 }
 
-function PresetCard({ preset, availability, customCommand, active, busy, onUse }: {
+function PresetCard({ preset, labels, availability, customCommand, active, busy, onUse }: {
   preset: ExtractPreset
+  /** Display names for the preset's backend's models, from the server. */
+  labels: Record<string, string>
   customCommand?: string
   availability?: ExtractBackendAvailability
   active: boolean
@@ -269,7 +303,7 @@ function PresetCard({ preset, availability, customCommand, active, busy, onUse }
 }) {
   const monoLine = preset.backend === 'api'
     ? [preset.api_base, preset.model].filter(Boolean).join(' · ')
-    : `${preset.backend} · ${preset.model}${preset.effort ? ` · ${preset.effort} effort` : ''}`
+    : `${preset.backend} · ${preset.escalate?.length ? ladderLabel(preset.model, preset.escalate, labels) : preset.model}${preset.effort ? ` · ${preset.effort} effort` : ''}`
   return (
     <div
       data-testid={`settings-preset-${preset.id}`}
@@ -280,7 +314,14 @@ function PresetCard({ preset, availability, customCommand, active, busy, onUse }
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>{preset.label}</span>
+        <span className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
+          {preset.label}
+          {preset.badge && (
+            <span data-testid={`settings-preset-${preset.id}-badge`} className="ml-2 text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--warn, var(--copper-hi))' }}>
+              {preset.badge}
+            </span>
+          )}
+        </span>
         {preset.recommended && availability?.available && (
           <span className="text-[9px] font-bold tracking-widest uppercase shrink-0 whitespace-nowrap" style={{ color: 'var(--copper-hi)' }}>
             Recommended
@@ -479,6 +520,7 @@ export function SettingsView() {
     ...selectedAgent, extraArgs: selectedAgent.extra_args, permission: selectedAgent.permission_mode,
     setModel: setAgent('model'), setEffort: setAgent('effort'), setCommand: setAgent('command'),
     setExtraArgs: setAgent('extra_args'), setPermission: setAgent('permission_mode'), setProfile: setAgent('profile'),
+    setEscalate: setAgent('escalate'),
   }
 
   return (
@@ -564,6 +606,7 @@ export function SettingsView() {
             <PresetCard
               key={preset.id}
               preset={preset}
+              labels={labelMap(data.options.models[preset.backend])}
               availability={data.backends.find(b => b.backend === preset.backend)}
               customCommand={resolvedBlock(data.resolved, preset.backend).command === data.keys.find(k => k.key === `${preset.backend}.command`)?.default
                 ? undefined : resolvedBlock(data.resolved, preset.backend).command}
@@ -671,6 +714,23 @@ export function SettingsView() {
                 />
               </Field>
             </div>
+            <Field
+              label="Escalate to"
+              hint={
+                <>
+                  Models tried in order when a tier fails; comma-separated. Blank = the default
+                  ladder, <code className="hb-inline">none</code> = never escalate.{' '}
+                  <span data-testid="settings-escalate-effective">
+                    In effect: {resolvedEscalate(data.resolved, selectedBackend)?.length
+                      ? ladderLabel(resolvedForSelected.model, resolvedEscalate(data.resolved, selectedBackend), labelMap(data.options.models[selectedBackend]))
+                      : 'no escalation'}.
+                  </span>
+                </>
+              }
+            >
+              <MonoInput testId="settings-escalate" width="30rem" value={fields.escalate}
+                placeholder={escalateToText(resolvedEscalate(data.resolved, selectedBackend))} onChange={fields.setEscalate} />
+            </Field>
           </div>
         )}
 

@@ -66,6 +66,92 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   await page.waitForSelector('[role="progressbar"][aria-valuenow="100"]', { timeout: 120_000 })
   ok('the finished draft shows a full bar', (await status.innerText()) === 'Drafted')
   await shoot(page, '00d-extract-done')
+
+  // ── 0b. The live agent panel follows `activity:` events ─────────────────
+  step('extraction: activity events fill the agent panel and stay out of the log')
+  const activity = (e: object) => ({ event: 'log', data: `activity: ${JSON.stringify(e)}` })
+  const usage = (extra: object) => activity({
+    t: 3, kind: 'usage', model: 'claude-haiku-5-5', context: 9000, input: 1, output: 1, cache_read: 0, cache_write: 0,
+    cost_usd: 0.004, total_tokens: 12345, total_cost_usd: 0.0123, ...extra,
+  })
+  /** Runs one extraction against a canned stream that ends in an error, so the
+   *  panel and the log are both on screen, and returns the panel. */
+  const runCanned = async (frames: { event: string; data: string }[]) => {
+    await page.route('**/api/models/extract', route => route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+      body: frames.map(f => `event: ${f.event}\ndata: ${f.data}\n\n`).join(''),
+    }))
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
+    await page.setInputFiles('#board-file', join(repo, 'crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb'))
+    await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
+    await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
+    await page.click('[data-testid="extract-consent-accept"]')
+    await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))
+    await page.click('[data-testid="extract-run"]')
+    await page.waitForSelector('[data-testid="extract-failed"]', { timeout: 15_000 })
+    await page.unroute('**/api/models/extract')
+    return page.locator('[data-testid="agent-activity"]')
+  }
+  const tail = [{ event: 'error', data: 'the fixture stops here' }]
+  const spendOf = async (panel: ReturnType<typeof page.locator>) =>
+    (await panel.locator('[data-testid="agent-activity-spend"]').innerText()).replace(/\s+/g, ' ')
+
+  const panel = await runCanned([
+    { event: 'log', data: 'phase: reading the datasheet' },
+    activity({ t: 0.5, kind: 'tier', model: 'claude-haiku-5-5', tier: 1, tiers: 3, harness: 'staged', budget: 100000, label: 'Haiku 5.5', badge: 'below Luna baseline' }),
+    activity({ t: 1, kind: 'stage', stage: 'locate', attempt: 1, attempts: 2 }),
+    activity({ t: 2, kind: 'read', path: 'pages/p7.png', page: 7 }),
+    { event: 'log', data: 'activity: {this is not json' },
+    usage({ billing: 'metered' }),
+    activity({ t: 4, kind: 'validator', ok: false, error: 'pin 3 missing' }),
+    activity({ t: 5, kind: 'escalate', from: 'claude-haiku-5-5', to: 'claude-sonnet-5-5', reason: 'validator failed' }),
+    activity({ t: 6, kind: 'tier', model: 'claude-sonnet-5-5', tier: 2, tiers: 3, harness: 'single', budget: 0 }),
+    ...tail,
+  ])
+  const panelText = await panel.innerText()
+  ok('the panel shows the current tier and harness', /claude-sonnet-5-5/.test(panelText) && /tier 2 of 3/.test(panelText), panelText)
+  ok('the panel lists the page read', (await panel.locator('[data-testid="agent-activity-pages"]').innerText()).includes('7'))
+  ok('API billing shows tokens and the list-price dollar cost', /12\.3k tokens/.test(panelText) && panelText.includes('$0.0123 list price'), panelText)
+  ok('the panel shows the escalation', /claude-haiku-5-5\s*→\s*claude-sonnet-5-5: validator failed/.test(
+    await panel.locator('[data-testid="agent-activity-escalations"]').innerText()))
+  ok('no activity line leaks into the plain log', !(await page.locator('body').innerText()).includes('activity: '))
+  await shoot(page, '00e-agent-activity')
+
+  // A tier the server labels and flags shows both, as sent.
+  const flagged = await runCanned([
+    activity({ t: 0.5, kind: 'tier', model: 'claude-haiku-5-5', tier: 1, tiers: 2, harness: 'staged', budget: 100000, label: 'Haiku 5.5', badge: 'below Luna baseline' }),
+    ...tail,
+  ])
+  const tierText = await flagged.locator('[data-testid="agent-activity-tier"]').innerText()
+  ok('a server label and baseline badge are shown as sent', tierText.includes('Haiku 5.5') && tierText.includes('below Luna baseline'), tierText)
+
+  // Every billing state: dollars only for metered billing, never as a fallback.
+  // The server also leaves cost null unless metered; a stray number is still not shown.
+  const plan = (extra: object) => activity({
+    t: 9, kind: 'plan', tool: 'claude', available: true,
+    before: { week: 46, session: 4 }, after: { week: 47, session: 6 }, ...extra,
+  })
+  const billingStates: { name: string; frames: { event: string; data: string }[]; shows: RegExp; never?: RegExp }[] = [
+    { name: 'metered billing', frames: [usage({ billing: 'metered' })], shows: /\$0\.0123 list price/, never: /from your plan|Plan usage/ },
+    { name: 'a plan run with both windows', frames: [usage({ billing: 'plan', cost_usd: null, total_cost_usd: null }), plan({})],
+      shows: /from your plan.*Plan usage: week 46% \u2192 47% \(\+1\), 5-hour 4% \u2192 6% \(\+2\)/, never: /\$/ },
+    { name: 'a plan run with the 5-hour window missing', frames: [usage({ billing: 'plan' }), plan({ before: { week: 46, session: null }, after: { week: 47, session: null } })],
+      shows: /Plan usage: week 46% \u2192 47% \(\+1\)/, never: /\$|5-hour/ },
+    { name: 'a plan run whose usage is unavailable', frames: [usage({ billing: 'plan' }), plan({ available: false, before: undefined, after: undefined })],
+      shows: /from your plan.*usage unavailable/, never: /\$|%/ },
+    { name: 'a plan run before its plan event', frames: [usage({ billing: 'plan' })], shows: /from your plan/, never: /\$|%/ },
+    { name: 'a server that says billing is unknown', frames: [usage({ billing: 'unknown' })], shows: /billing unknown/, never: /\$/ },
+    { name: 'a server that reports a cost but no billing mode', frames: [usage({})], shows: /billing unknown/, never: /\$/ },
+  ]
+  for (const { name, frames: stateFrames, shows, never } of billingStates) {
+    const p = await runCanned([...stateFrames, ...tail])
+    const spend = await spendOf(p)
+    ok(`${name}: ${shows}`, shows.test(spend) && (!never || !never.test(spend)), spend)
+    await shoot(page, `00f-spend-${name.replace(/[^a-z]+/gi, '-').toLowerCase()}`)
+  }
   if (process.env.HB_E2E_EXTRACT_ONLY) return
 
   // ── 1. Open the page, read the summary ──────────────────────────────────
@@ -157,6 +243,27 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   ok('the API backend has no permission selector',
     await page.locator('[data-testid="settings-permission-mode"]').count() === 0)
   await shoot(page, '05-codex-permission-saved')
+
+  // ── 5b. Escalation ladder: shown on presets, editable on agent backends ──
+  step('the escalate ladder shows on a preset and is editable')
+  const ladderPreset = await page.locator('[data-testid="settings-preset-claude-code"]').innerText()
+  ok('the balanced preset names its ladder', /Haiku 5\.5 → Sonnet 5\.5 → Opus 5\.5/.test(ladderPreset), ladderPreset)
+  ok('a preset the server flags shows its baseline badge as sent',
+    (await page.locator('[data-testid="settings-preset-claude-code-haiku-badge"]').innerText()).toLowerCase().includes('below luna baseline'))
+  await page.click('[data-testid="settings-backend-claude-code"]')
+  ok('a model the server flags shows its badge',
+    (await page.locator('[data-testid="settings-model-badge-claude-haiku-5-5"]').innerText()).includes('below Luna baseline'))
+  ok('a harnessed model is marked with its stage size',
+    (await page.locator('[data-testid="settings-model-pick-claude-haiku-5-5"]').innerText()).includes('harnessed: ~100k-token stages'))
+  const escalate = page.locator('[data-testid="settings-escalate"]')
+  await escalate.fill('claude-sonnet-5-5, claude-opus-5-5')
+  ok('the terminal line spells the ladder comma-separated',
+    (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('claude-code.escalate=claude-sonnet-5-5,claude-opus-5-5'))
+  await escalate.fill('none')
+  ok('the word none is the terminal spelling of an empty ladder',
+    (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('claude-code.escalate=none'))
+  await shoot(page, '05b-escalate')
+  await escalate.fill('')
 
   // ── 6. Test backend streams and reports ─────────────────────────────────
   step('Test backend streams a reply')

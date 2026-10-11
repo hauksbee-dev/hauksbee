@@ -6,6 +6,8 @@ import { tildeHome } from '../lib/display-path'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ReviewCard } from './extract/ReviewCard'
 import { DEFAULT_ESTIMATE_SECS, ExtractProgress } from './extract/ExtractProgress'
+import { AgentActivity } from './extract/AgentActivity'
+import { type ActivityState, applyActivityLine, initialActivity } from './extract/activity'
 
 // Drafting a device model from a datasheet, offered where the user learns they
 // need one: the report's list of parts that could not be bound.
@@ -30,10 +32,10 @@ import { DEFAULT_ESTIMATE_SECS, ExtractProgress } from './extract/ExtractProgres
 type Flow =
   | { step: 'consent' }
   | { step: 'attach' }
-  | { step: 'running'; log: string[]; phase: string; estimate: number; started: number }
+  | { step: 'running'; log: string[]; phase: string; estimate: number; started: number; activity: ActivityState }
   | { step: 'review'; card: ModelCard; started: number; finished: number }
   | { step: 'saved'; card: ModelCard; result: ModelSaveResult }
-  | { step: 'failed'; message: string; log: string[] }
+  | { step: 'failed'; message: string; log: string[]; activity?: ActivityState }
 
 type Ready =
   | { phase: 'loading' }
@@ -100,11 +102,19 @@ export function DatasheetExtract({
 
   const run = useCallback(async () => {
     if (!active || !file) return
-    const live = { step: 'running' as const, log: [] as string[], phase: 'sending the datasheet', estimate: DEFAULT_ESTIMATE_SECS, started: Date.now() }
+    const live = { step: 'running' as const, log: [] as string[], phase: 'sending the datasheet', estimate: DEFAULT_ESTIMATE_SECS, started: Date.now(), activity: initialActivity() }
     setFlow({ ...live })
     // `phase: ` and `estimate: <secs>` lines drive the progress bar; heartbeats
     // are redundant beside its clock, so only the phases stay in the log.
+    // `activity: <json>` lines feed the live agent panel and never the log; a
+    // malformed one is dropped.
     const append = (line: string) => {
+      const activity = applyActivityLine(live.activity, line)
+      if (activity) {
+        live.activity = activity
+        setFlow({ ...live })
+        return
+      }
       const [, key, value] = /^(phase|estimate): (.*)$/.exec(line) ?? []
       if (key === 'estimate') live.estimate = Number(value) || live.estimate
       else if (!line.startsWith('still working')) live.log = [...live.log, line]
@@ -126,11 +136,11 @@ export function DatasheetExtract({
             settled = true
             setFlow({ step: 'review', card: JSON.parse(data) as ModelCard, started: live.started, finished: Date.now() })
           } catch {
-            setFlow({ step: 'failed', message: 'the server sent a model card this page could not read', log: live.log })
+            setFlow({ step: 'failed', message: 'the server sent a model card this page could not read', log: live.log, activity: live.activity })
           }
         } else if (event === 'error') {
           settled = true
-          setFlow({ step: 'failed', message: data, log: live.log })
+          setFlow({ step: 'failed', message: data, log: live.log, activity: live.activity })
         }
       })
       if (!settled) {
@@ -138,10 +148,11 @@ export function DatasheetExtract({
           step: 'failed',
           message: 'the connection closed before the extraction reported a result. It may still be running on the server.',
           log: live.log,
+          activity: live.activity,
         })
       }
     } catch (e) {
-      setFlow({ step: 'failed', message: `the extraction request failed: ${errorText(e)}`, log: live.log })
+      setFlow({ step: 'failed', message: `the extraction request failed: ${errorText(e)}`, log: live.log, activity: live.activity })
     }
   }, [active, file, part, kind, model])
 
@@ -453,6 +464,7 @@ export function DatasheetExtract({
               <div className="mt-2.5">
                 <ExtractProgress phase={flow.phase} estimate={flow.estimate} started={flow.started} />
                 <div className="mt-1.5"><LogWell lines={flow.log} testId="extract-log" maxHeight={160} /></div>
+                <AgentActivity activity={flow.activity} />
                 <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
                   Keep this panel open. Closing the page cannot cancel work already sent to the model service.
                 </div>
@@ -491,6 +503,7 @@ export function DatasheetExtract({
             {flow.step === 'failed' && (
               <div className="mt-2.5">
                 <LogWell lines={flow.log} maxHeight={140} />
+                {flow.activity && <AgentActivity activity={flow.activity} />}
                 <Callout tone="err" testId="extract-failed" live className="mt-1.5 py-2 text-[12px] whitespace-pre-wrap">
                   {flow.message}
                 </Callout>

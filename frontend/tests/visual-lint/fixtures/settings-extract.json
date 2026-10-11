@@ -5,20 +5,65 @@
     "backend": "claude-code",
     "retries": 2,
     "timeout_secs": 600,
-    "codex": { "model": "", "effort": "", "permission_mode": "", "profile": "", "extra_args": [] },
-    "claude-code": { "model": "claude-opus-5-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
-    "agy": { "model": "", "effort": "", "permission_mode": "", "extra_args": [] },
-    "api": { "base_url": "", "model": "", "api_key_env": "" }
+    "codex": {
+      "model": "",
+      "effort": "",
+      "permission_mode": "",
+      "profile": "",
+      "extra_args": []
+    },
+    "claude-code": {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "permission_mode": "acceptEdits",
+      "extra_args": []
+    },
+    "agy": {
+      "model": "",
+      "effort": "",
+      "permission_mode": "",
+      "extra_args": []
+    },
+    "api": {
+      "base_url": "",
+      "model": "",
+      "api_key_env": ""
+    }
   },
   "resolved": {
     "backend": "claude-code",
-    "backend_source": { "kind": "config" },
+    "backend_source": {
+      "kind": "config"
+    },
     "retries": 2,
     "timeout_secs": 600,
-    "codex": { "model": "gpt-6.1-sol", "effort": "high", "permission_mode": "workspace-write", "profile": null, "extra_args": [] },
-    "claude_code": { "model": "claude-opus-5-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
-    "agy": { "model": "gemini-3.8-flash", "effort": "high", "permission_mode": "accept-edits", "extra_args": [] },
-    "api": { "base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "api_key_env": "OPENAI_API_KEY" },
+    "codex": {
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "permission_mode": "workspace-write",
+      "profile": null,
+      "extra_args": [],
+      "escalate": []
+    },
+    "claude_code": {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "permission_mode": "acceptEdits",
+      "extra_args": [],
+      "escalate": []
+    },
+    "agy": {
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "permission_mode": "accept-edits",
+      "extra_args": [],
+      "escalate": []
+    },
+    "api": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6.1-sol",
+      "api_key_env": "OPENAI_API_KEY"
+    },
     "env_overrides": []
   },
   "summary": "Claude Code (claude-opus-5-5, high effort)",
@@ -63,25 +108,57 @@
   "presets": [
     {
       "id": "claude-code",
+      "label": "Claude Code · Haiku 5.5, escalating",
+      "summary": "Starts cheap in a staged harness and moves up only when a tier fails. Signs in with your Claude account (`claude login`).",
+      "backend": "claude-code",
+      "model": "claude-haiku-5-5",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": true,
+      "escalate": [
+        "claude-sonnet-5-5",
+        "claude-opus-5-5"
+      ]
+    },
+    {
+      "id": "claude-code-haiku",
+      "label": "Claude Code · Haiku 5.5 → Sonnet on failure, high effort",
+      "summary": "Cheapest: Haiku in the staged harness, with Sonnet as the only fallback.",
+      "backend": "claude-code",
+      "model": "claude-haiku-5-5",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": false,
+      "badge": "below Luna baseline",
+      "escalate": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "id": "claude-code-sonnet",
+      "label": "Claude Code · Sonnet 5.5, high effort",
+      "summary": "Faster and cheaper than Opus; fine for simple passives and well-scanned datasheets.",
+      "backend": "claude-code",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": false,
+      "escalate": []
+    },
+    {
+      "id": "claude-code-opus",
       "label": "Claude Code · Opus 5.5, high effort",
-      "summary": "Strongest reading of pin maps. Signs in with your Claude account (`claude login`).",
+      "summary": "Strongest reading of pin maps, one model, no escalation.",
       "backend": "claude-code",
       "model": "claude-opus-5-5",
       "effort": "high",
       "api_base": "",
       "api_key_env": "",
-      "recommended": true
-    },
-    {
-      "id": "claude-code-fast",
-      "label": "Claude Code · Sonnet 5.5, medium effort",
-      "summary": "Faster and cheaper; fine for simple passives and well-scanned datasheets.",
-      "backend": "claude-code",
-      "model": "claude-sonnet-5-5",
-      "effort": "medium",
-      "api_base": "",
-      "api_key_env": "",
-      "recommended": false
+      "recommended": false,
+      "escalate": []
     },
     {
       "id": "agy",
@@ -125,7 +202,10 @@
       "effort": "high",
       "api_base": "",
       "api_key_env": "",
-      "recommended": false
+      "recommended": false,
+      "escalate": [
+        "gpt-6.1-sol"
+      ]
     },
     {
       "id": "openai",
@@ -163,55 +243,201 @@
   ],
   "options": {
     "efforts": {
-      "claude-code": ["low", "medium", "high", "xhigh", "max"],
-      "agy": ["low", "medium", "high"],
-      "codex": ["minimal", "low", "medium", "high", "xhigh"]
+      "claude-code": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "agy": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "codex": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     "permission_modes": {
-      "claude-code": ["acceptEdits", "auto", "bypassPermissions", "dontAsk", "manual", "plan"],
-      "agy": ["accept-edits", "plan"],
-      "codex": ["read-only", "workspace-write", "approve-for-me", "danger-full-access"]
+      "claude-code": [
+        "acceptEdits",
+        "auto",
+        "bypassPermissions",
+        "dontAsk",
+        "manual",
+        "plan"
+      ],
+      "agy": [
+        "accept-edits",
+        "plan"
+      ],
+      "codex": [
+        "read-only",
+        "workspace-write",
+        "approve-for-me",
+        "danger-full-access"
+      ]
     },
     "models": {
       "claude-code": [
-        { "name": "claude-opus-5-5", "note": "Recommended: most accurate" },
-        { "name": "claude-sonnet-5-5", "note": "Faster and cheaper; fine for simple parts" },
-        { "name": "claude-fable-5-1", "note": "" }
+        {
+          "name": "claude-haiku-5-5",
+          "label": "Haiku 5.5",
+          "badge": "below Luna baseline",
+          "note": "Cheapest; runs in small staged steps",
+          "context_budget": 100000
+        },
+        {
+          "name": "claude-opus-5-5",
+          "label": "Opus 5.5",
+          "default": true,
+          "note": "Recommended: most accurate",
+          "context_budget": 0
+        },
+        {
+          "name": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5",
+          "note": "Faster and cheaper; fine for simple parts",
+          "context_budget": 0
+        },
+        {
+          "name": "claude-fable-5-1",
+          "note": ""
+        }
       ],
       "agy": [
-        { "name": "gemini-3.8-flash", "note": "Recommended: fast and accurate" },
-        { "name": "gemini-3.1-pro", "note": "Slower, stronger tier for dense datasheets" }
+        {
+          "name": "gemini-3.8-flash",
+          "note": "Recommended: fast and accurate"
+        },
+        {
+          "name": "gemini-3.1-pro",
+          "note": "Slower, stronger tier for dense datasheets"
+        }
       ],
       "codex": [
-        { "name": "gpt-6.1-sol", "note": "Recommended: most accurate" },
-        { "name": "gpt-6-luna", "note": "Very good for most circuit extraction, and much cheaper" }
+        {
+          "name": "gpt-6.1-sol",
+          "note": "Recommended: most accurate"
+        },
+        {
+          "name": "gpt-6-luna",
+          "note": "Very good for most circuit extraction, and much cheaper"
+        }
       ],
       "api": [
-        { "name": "gpt-6.1-sol", "note": "Recommended: most accurate" },
-        { "name": "gpt-6-luna", "note": "Very good for most circuit extraction, and much cheaper" }
+        {
+          "name": "gpt-6.1-sol",
+          "note": "Recommended: most accurate"
+        },
+        {
+          "name": "gpt-6-luna",
+          "note": "Very good for most circuit extraction, and much cheaper"
+        }
       ]
     }
   },
   "keys": [
-    { "key": "backend", "help": "codex | claude-code | agy | api (blank = auto-detect)", "default": "auto" },
-    { "key": "retries", "help": "how many times to retry a failed extraction call", "default": "2" },
-    { "key": "timeout_secs", "help": "how long to wait for one extraction call", "default": "600" },
-    { "key": "codex.model", "help": "the codex model to use", "default": "gpt-6.1-sol" },
-    { "key": "codex.effort", "help": "minimal | low | medium | high | xhigh", "default": "high" },
-    { "key": "codex.permission_mode", "help": "read-only | workspace-write | approve-for-me | danger-full-access", "default": "workspace-write" },
-    { "key": "codex.profile", "help": "a named codex profile, if you use one", "default": "" },
-    { "key": "codex.extra_args", "help": "extra arguments passed through to codex", "default": "" },
-    { "key": "claude-code.model", "help": "the Claude Code model to use", "default": "claude-opus-5-5" },
-    { "key": "claude-code.effort", "help": "low | medium | high | xhigh | max", "default": "high" },
-    { "key": "claude-code.permission_mode", "help": "acceptEdits | auto | bypassPermissions | dontAsk | manual | plan", "default": "acceptEdits" },
-    { "key": "claude-code.extra_args", "help": "extra arguments passed through to claude", "default": "" },
-    { "key": "agy.model", "help": "the agy model to use", "default": "gemini-3.8-flash" },
-    { "key": "agy.effort", "help": "low | medium | high", "default": "high" },
-    { "key": "agy.permission_mode", "help": "accept-edits | plan", "default": "accept-edits" },
-    { "key": "agy.extra_args", "help": "extra arguments passed through to agy", "default": "" },
-    { "key": "api.base_url", "help": "the OpenAI-compatible base URL", "default": "https://api.openai.com/v1" },
-    { "key": "api.model", "help": "the model name to send", "default": "gpt-6.1-sol" },
-    { "key": "api.api_key_env", "help": "the NAME of an environment variable holding the key", "default": "OPENAI_API_KEY" }
+    {
+      "key": "backend",
+      "help": "codex | claude-code | agy | api (blank = auto-detect)",
+      "default": "auto"
+    },
+    {
+      "key": "retries",
+      "help": "how many times to retry a failed extraction call",
+      "default": "2"
+    },
+    {
+      "key": "timeout_secs",
+      "help": "how long to wait for one extraction call",
+      "default": "600"
+    },
+    {
+      "key": "codex.model",
+      "help": "the codex model to use",
+      "default": "gpt-6.1-sol"
+    },
+    {
+      "key": "codex.effort",
+      "help": "minimal | low | medium | high | xhigh",
+      "default": "high"
+    },
+    {
+      "key": "codex.permission_mode",
+      "help": "read-only | workspace-write | approve-for-me | danger-full-access",
+      "default": "workspace-write"
+    },
+    {
+      "key": "codex.profile",
+      "help": "a named codex profile, if you use one",
+      "default": ""
+    },
+    {
+      "key": "codex.extra_args",
+      "help": "extra arguments passed through to codex",
+      "default": ""
+    },
+    {
+      "key": "claude-code.model",
+      "help": "the Claude Code model to use",
+      "default": "claude-opus-5-5"
+    },
+    {
+      "key": "claude-code.effort",
+      "help": "low | medium | high | xhigh | max",
+      "default": "high"
+    },
+    {
+      "key": "claude-code.permission_mode",
+      "help": "acceptEdits | auto | bypassPermissions | dontAsk | manual | plan",
+      "default": "acceptEdits"
+    },
+    {
+      "key": "claude-code.extra_args",
+      "help": "extra arguments passed through to claude",
+      "default": ""
+    },
+    {
+      "key": "agy.model",
+      "help": "the agy model to use",
+      "default": "gemini-3.8-flash"
+    },
+    {
+      "key": "agy.effort",
+      "help": "low | medium | high",
+      "default": "high"
+    },
+    {
+      "key": "agy.permission_mode",
+      "help": "accept-edits | plan",
+      "default": "accept-edits"
+    },
+    {
+      "key": "agy.extra_args",
+      "help": "extra arguments passed through to agy",
+      "default": ""
+    },
+    {
+      "key": "api.base_url",
+      "help": "the OpenAI-compatible base URL",
+      "default": "https://api.openai.com/v1"
+    },
+    {
+      "key": "api.model",
+      "help": "the model name to send",
+      "default": "gpt-6.1-sol"
+    },
+    {
+      "key": "api.api_key_env",
+      "help": "the NAME of an environment variable holding the key",
+      "default": "OPENAI_API_KEY"
+    }
   ],
   "consent_notice": "This sends the datasheet to an LLM backend: whichever is configured for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend show` or the Settings page says which). The API gets the extracted text. An agent CLI runs a model with a shell on a scratch copy of the PDF, its text and page images, and whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude Code out of your home and temporary directories and off the web, but Antigravity, or Codex in another sandbox mode, can read anything your account can. Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\"."
 }
