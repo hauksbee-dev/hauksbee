@@ -786,6 +786,13 @@ carry their own, and a `1N4148W...` value none of them claims binds
 `1n4148w_unlisted_package`, which assumes the smallest listed package's ratings and
 says so in its bind warning.
 
+A small-signal diode card's `max_current_a` is the printed average forward current
+(IF(AV) or IO), the limit a steady load is held to, and `max_voltage_v` the DC
+reverse voltage VR. The continuous-IF row and the repetitive-peak rows (IFRM,
+VRRM) sit above them on these sheets, so they stay as untagged data rows rather
+than becoming the rating: the 1N4148 DO-35 card is 150 mA and 75 V, not 300 mA
+and 100 V.
+
 A fuse or polyfuse (`passive_class = "fuse"`) is held to its hold current: the
 card's `max_current_a`, else the current in its value (`6V 0.5A`, `PTC 750mA / 33V`,
 `500mA`). DC stress reports a load past it as a trip, since the rail the part feeds

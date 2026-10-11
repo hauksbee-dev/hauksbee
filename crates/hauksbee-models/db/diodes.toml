@@ -11,7 +11,7 @@ description = "1N4148 small-signal switching diode, DO-35"
 # A suffix that starts with W is an SMD package (1N4148W SOD-123, 1N4148WS
 # SOD-323, 1N4148WT SOD-523) with its own, lower, current and power ratings: those
 # have their own cards below, and the 1n4148w_unlisted_package fallback, so a W
-# variant never inherits the DO-35 300 mA / 440 mW figures from this card. The
+# variant never inherits the DO-35 150 mA / 440 mW figures from this card. The
 # distinct parts 1N4448 / 1N4150 / 1N914 differ before the suffix and are
 # correctly rejected.
 value_re = "(?i)^1N4148([A-VX-Z0-9-][A-Z0-9-]*)?$"
@@ -38,25 +38,58 @@ ibv = 1.0e-4    # the V(BR) test current, IR = 100 uA
 "K" = "cathode"
 
 [models.ratings]
-max_current_a = 0.3        # IF forward continuous current at Tamb = 25 C (81857 Rev. 1.6; IFRM is 500 mA)
+max_current_a = 0.15       # IF(AV) average forward current, VR = 0 (81857 Rev. 1.6 p.1). The 300 mA IF row and the 500 mA IFRM row are kept as data: neither is a steady-state limit
 max_surge_current_a = 2.0  # IFSM 1us
 max_power_w = 0.44         # Ptot at l = 4 mm, TL = 45 C, the least favourable tagged row (500 mW at TL <= 25 C)
-max_voltage_v = 100.0      # VRRM
+max_voltage_v = 75.0       # VR continuous reverse voltage (81857 p.1); VRRM 100 V is the repetitive PEAK, not a steady limit
 theta_ja_c_per_w = 350.0   # RthJA at l = 4 mm, TL = constant (81857 Rev. 1.6, Thermal Characteristics)
 max_junction_temp_c = 175.0 # Tj (81857 Rev. 1.6, Thermal Characteristics)
 
-# Printed rating rows (Vishay 81857 Rev. 1.6, fetched 2026-09-28). IF(AV) 150 mA
-# (VR = 0) is kept as data: the card rates DC current by IF.
+# Printed rating rows (Vishay 81857 Rev. 1.6, page 1 Absolute Maximum Ratings,
+# re-read 2026-10-11 from the manufacturer PDF). The steady-state current limit is
+# the AVERAGE forward current IF(AV) = 150 mA, the same row the SMD and MiniMELF
+# cards below use. The sheet also prints IF = 300 mA ("forward continuous
+# current", Tamb = 25 C only, no duty or mounting qualifier) and IFRM = 500 mA
+# (repetitive PEAK): both are above what a steady DC load may be held to, so
+# they are data here. The schema has no repetitive-peak rating key; IFRM is
+# carried as an untagged row and IFSM as max_surge_current_a. (Earlier this card
+# rated DC current by the 300 mA IF row, which passed a steady 200 mA load that
+# the part's own average rating forbids.)
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
 [[models.source.characteristic]]
-parameter = "IF forward continuous current"
+parameter = "IF(AV) average forward current"
 rating = "max_current_a"
+max = 0.15
+unit = "A"
+conditions = "VR = 0, Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), page 1, Absolute Maximum Ratings, IF(AV) @ VR = 0"
+[[models.source.characteristic]]
+parameter = "IF forward continuous current"
 max = 0.3
 unit = "A"
 conditions = "Tamb = 25 °C"
-basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, IF @ Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), page 1, Absolute Maximum Ratings, IF @ Tamb = 25 °C"
+[[models.source.characteristic]]
+parameter = "IFRM repetitive peak forward current"
+max = 0.5
+unit = "A"
+conditions = "Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), page 1, Absolute Maximum Ratings, IFRM"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage"
+rating = "max_voltage_v"
+max = 75.0
+unit = "V"
+conditions = "Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), page 1, Absolute Maximum Ratings, VR"
+[[models.source.characteristic]]
+parameter = "V(BR) breakdown voltage"
+min = 100.0
+unit = "V"
+conditions = "IR = 100 µA, tp/T = 0.01, tp = 0.3 ms, Tamb = 25 °C"
+basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), page 2, Electrical Characteristics, V(BR)"
 [[models.source.characteristic]]
 parameter = "Ptot power dissipation"
 rating = "max_power_w"
@@ -71,12 +104,6 @@ max = 0.44
 unit = "W"
 conditions = "l = 4 mm, TL = 45 °C"
 basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, Ptot @ l = 4 mm, TL = 45 °C"
-[[models.source.characteristic]]
-parameter = "IF(AV) average forward current"
-max = 0.15
-unit = "A"
-conditions = "VR = 0, Tamb = 25 °C"
-basis = "Vishay 1N4148 doc. 81857 Rev. 1.6 (07-Nov-2024), Absolute Maximum Ratings, IF(AV) @ VR = 0"
 [[models.source.characteristic]]
 parameter = "RthJA junction to ambient air"
 rating = "theta_ja_c_per_w"
@@ -302,6 +329,12 @@ max = 833.0
 unit = "K/W"
 conditions = "FR-4 PC board with recommended pad layout (note 6)"
 basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Thermal Characteristics, RthJA"
+[[models.source.characteristic]]
+parameter = "V(BR)R reverse breakdown voltage"
+min = 75.0
+unit = "V"
+conditions = "IR = 1.0 µA, TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Electrical Characteristics, V(BR)R (Rev. 22-2 prints the same)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -324,9 +357,9 @@ n   = 1.752
 rs  = 0.568
 cjo = 2.0e-12
 tt  = 4.0e-9
-bv  = 75.0
+bv  = 75.0      # V(BR)R min 75 V at IR = 1.0 uA, DS30396 p.2 (SOD-523): the lowest breakdown any W package guarantees; the SOD-123 card uses its own 100 V
 ibv = 1.0e-6
-warning = "the value names a 1N4148W-family part in a package this library does not list: judged at ASSUMED ratings of the smallest listed package (SOD-523 1N4148WT, 125 mA, 150 mW, Diodes Inc. DS30396 Rev. 14-2), not the DO-35 300 mA; put the exact ordering code on the component to replace it"
+warning = "the value names a 1N4148W-family part in a package this library does not list: judged at ASSUMED ratings of the smallest listed package (SOD-523 1N4148WT, 125 mA, 150 mW, Diodes Inc. DS30396 Rev. 14-2), not the DO-35 150 mA; put the exact ordering code on the component to replace it"
 
 [models.pins]
 "A" = "anode"
@@ -364,6 +397,12 @@ max = 833.0
 unit = "K/W"
 conditions = "FR-4 PC board with recommended pad layout (note 6)"
 basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Thermal Characteristics, RthJA"
+[[models.source.characteristic]]
+parameter = "V(BR)R reverse breakdown voltage (assumed from the smallest listed package; the lowest guaranteed across the W family, Diodes Inc. DS30086 prints 100 V min for SOD-123)"
+min = 75.0
+unit = "V"
+conditions = "IR = 1.0 µA, TA = 25 °C"
+basis = "Diodes Inc. 1N4148WT doc. DS30396 Rev. 14-2 (August 2015), page 2, Electrical Characteristics, V(BR)R (Rev. 22-2 prints the same)"
 [[models.source.characteristic]]
 parameter = "VR reverse voltage (lowest printed across the W family)"
 rating = "max_voltage_v"
@@ -3540,6 +3579,17 @@ footprint_re = "(?ix)(SOT-?23|SC-?59|TO-?236)([-_]?3)?(_HandSolder\\w*)?$"
 [models.params]
 bv  = 3.0       # VZ typ at IZ = 100 uA, 6.11/6.12 Electrical Characteristics (all grades)
 ibv = 1.0e-4    # the IZ at which VZ and its tolerance are specified
+# Forward parameters: the same shared FIT as the 1N47xxA Zener family above, not
+# a datasheet read. SLOS456Q prints no forward voltage, no forward curve and no
+# SPICE card (checked 2026-10-11: the only forward-direction facts are the
+# -10 mA absolute-maximum cathode current and the parasitic pin-2/pin-3 Schottky
+# note), so no is/n/rs can be grounded in the sheet. The fit puts VF near 0.7 V
+# at the 10 mA the part may carry forward, which is all it claims. The params
+# are required by the diode kind rules and were absent, which made
+# `hauksbee models lint` report an error on this card.
+is  = 1.0e-9      # forward fit shared with the 1N47xxA family (no datasheet row)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit
 
 [models.pins]
 # Table 5-1 Pin Functions, DBZ column: CATHODE 1, ANODE 2, pin 3 "*" (must

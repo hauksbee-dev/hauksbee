@@ -744,7 +744,7 @@ mod tests {
         );
     }
 
-    /// Faulty: about 200 mA is past 125 mA, which the DO-35 card's 300 mA let through.
+    /// Faulty: about 200 mA is past 125 mA, which the old DO-35 300 mA row let through.
     #[test]
     fn small_signal_diode_in_sod523_fails_at_200ma() {
         let report = diode_at("1N4148WT", "22R");
@@ -754,8 +754,31 @@ mod tests {
             "{:#?}",
             report.findings
         );
-        let do35 = diode_at("1N4148", "22R");
-        assert!(findings_on(&do35, "D1").is_empty(), "{:#?}", do35.findings);
+    }
+
+    /// Faulty: a steady ~200 mA through a DO-35 1N4148 is past its 150 mA
+    /// average forward current IF(AV) (Vishay 81857 p.1). The card used to rate
+    /// DC current by the 300 mA continuous-IF row and called this board fine.
+    #[test]
+    fn do35_1n4148_fails_at_a_steady_200ma() {
+        let report = diode_at("1N4148", "22R");
+        assert_eq!(
+            findings_on(&report, "D1").len(),
+            1,
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// Legal control: about 100 mA is inside the DO-35 part's 150 mA.
+    #[test]
+    fn do35_1n4148_passes_at_100ma() {
+        let report = diode_at("1N4148", "43R");
+        assert!(
+            findings_on(&report, "D1").is_empty(),
+            "{:#?}",
+            report.findings
+        );
     }
 
     /// `value` on a fuse footprint feeding a load of `ohms` from +5V.

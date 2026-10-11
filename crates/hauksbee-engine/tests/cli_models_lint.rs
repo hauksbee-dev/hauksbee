@@ -90,6 +90,31 @@ fn builtin_digital_db_lints_clean() {
     assert!(out.contains(": clean"), "clean summary line:\n{out}");
 }
 
+/// The shipping diode db lints with no ERROR (the LM4040 reference once lacked
+/// is/n/rs) and the 1N4148 family raises no warning: the unlisted-package
+/// fallback's bv once equalled its VR row.
+#[test]
+fn builtin_diode_db_lints_without_errors_on_the_4148_and_lm4040_cards() {
+    let db = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-models/db/diodes.toml");
+    let (code, out) = lint(&db);
+    assert_eq!(
+        code, 0,
+        "builtin diodes.toml must lint without errors:\n{out}"
+    );
+    assert!(out.contains(" 0 finding(s)"), "no finding line:\n{out}");
+    for line in out.lines() {
+        assert!(
+            !(line.contains("ERROR") || (line.contains("4148") && line.contains("warning"))),
+            "unexpected lint line: {line}"
+        );
+    }
+    assert!(out.contains("model 'lm4040_30_dbz': ok"), "{out}");
+    assert!(
+        out.contains("model '1n4148w_unlisted_package': ok"),
+        "{out}"
+    );
+}
+
 #[test]
 fn lint_refuses_a_model_with_no_real_match_rule() {
     let dir = tempfile::tempdir().unwrap();
