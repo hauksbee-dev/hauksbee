@@ -46,7 +46,7 @@
 //! granularity, whether the sim is keeping up or starved tenfold; a starved
 //! run just takes longer in wall time to play the schedule out. The
 //! granularity caveat is honest, not decorative: stamps carry the wall time a
-//! chunk was OBSERVED, the endpoint is polled between 5 ms throttle naps, and
+//! chunk was OBSERVED, the throttle naps wake as soon as host bytes arrive, and
 //! a chunk arriving while `engine.step` is executing is stamped when the step
 //! returns — so a slow step under load can late-stamp an arrival by
 //! `scale * step_wall`. That residual is millisecond-scale where the old
@@ -600,13 +600,18 @@ pub fn run_session(
         // after that, one compressed wall mapping spans every observed or
         // unobserved handoff.
         //
-        // The endpoint is polled BETWEEN naps, with the naps kept short. A
-        // scaled schedule can spend tens of wall milliseconds per frame
-        // sleeping, and a multi-process host's close-then-reopen gap can fit
-        // inside one long nap: the session then never observes
-        // the detach/attach pair, undercounting attaches and mis-anchoring
-        // the new peer. Polling here also stamps bytes closer to their true
-        // arrival than a once-per-frame read would.
+        // The nap blocks in the endpoint's own wait, which returns the moment
+        // host bytes or a hangup arrive, so each chunk is stamped when it
+        // lands rather than at the end of a fixed slice, and an attached but
+        // silent peer costs one readiness check per nap instead of a full
+        // probe (read, liveness poll, read) every frame: a nap that saw
+        // nothing ready and holds no buffered bytes skips the probe, since it
+        // could only report what the last one did. A scaled schedule can
+        // spend tens of wall milliseconds per frame here, and a multi-process
+        // host's close-then-reopen gap must not hide inside that: the hangup
+        // ends the wait at once, and while detached the wait is capped at a
+        // short slice so the next attach is observed too, keeping the
+        // detach/attach pair (and the attach count and anchoring) visible.
         //
         // The naps READ and STAMP but never DELIVER: `take_due` runs at the
         // loop top only, so a chunk stamped mid-nap reaches the firmware at
@@ -623,7 +628,10 @@ pub fn run_session(
                 if ahead <= 0.0 {
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_secs_f64(ahead.min(0.005)));
+                let news = endpoint.wait_for_peer(std::time::Duration::from_secs_f64(ahead));
+                if !news && endpoint.pending_from_peer() == 0 {
+                    continue;
+                }
                 report_events(&mut endpoint, &mut summary, announce);
                 let wall_nap = run_started.elapsed().as_secs_f64();
                 if endpoint.peer_attached() != was_attached {

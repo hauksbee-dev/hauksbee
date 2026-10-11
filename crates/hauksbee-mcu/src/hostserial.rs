@@ -123,6 +123,16 @@ pub enum PeerEvent {
 /// practical headroom without letting a forgotten session grow without bound.
 pub const BACKLOG_CAP: usize = 64 * 1024;
 
+/// The longest [`HostSerial::wait_for_peer`] sleeps when it has nothing to
+/// wait on.
+///
+/// That is a detached pty, or any endpoint on a platform without `poll`, so a
+/// new peer is noticed within this much wall time. Short enough that a
+/// multi-process host closing one tool and opening the next is seen as a
+/// detach and an attach, long enough that an idle endpoint costs nothing
+/// measurable.
+pub const ATTACH_PROBE_SLICE: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// How many drain-then-poll rounds the liveness probe tolerates before
 /// concluding that a peer which keeps the queue full is simply attached.
 /// The probe is pty-based, so only the Unix build reads this.
@@ -623,6 +633,69 @@ impl HostSerial {
         }
     }
 
+    /// Wait up to `timeout` for something the session should act on, returning
+    /// early when it may have arrived: host bytes, a hangup, or (TCP) a
+    /// connection waiting to be accepted. This replaces sleep-then-probe in a
+    /// caller's idle time, so a host byte is picked up when it lands rather
+    /// than at the end of a fixed nap.
+    ///
+    /// Returns `false` only when the endpoint's fd was checked and nothing
+    /// was ready on it: no input, no hangup, no pending connection. A probe
+    /// ([`Self::poll_peer`], [`Self::read_from_peer`]) would then find nothing
+    /// new beyond bytes already buffered ([`Self::pending_from_peer`]), so a
+    /// caller may skip it and an attached, silent peer costs one `poll` per
+    /// wait instead of a full probe. `true` means "probe now"; it is a hint,
+    /// not a promise that anything is readable. A detached pty cannot be
+    /// waited on (its armed `POLLHUP` is permanently ready, and nothing
+    /// signals a new open), so it, and every endpoint on a platform without
+    /// `poll`, sleeps at most [`ATTACH_PROBE_SLICE`] and returns `true`.
+    #[must_use]
+    pub fn wait_for_peer(&self, timeout: std::time::Duration) -> bool {
+        #[cfg(unix)]
+        if let Some(fd) = self.wakeup_fd() {
+            // `poll` counts whole milliseconds. Round the wait DOWN, so the
+            // caller's deadline is never overshot; a sub-millisecond wait
+            // sleeps instead and then checks readiness without blocking.
+            let ms = timeout.as_millis();
+            if ms == 0 {
+                std::thread::sleep(timeout);
+            }
+            let mut p = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one valid pollfd on an fd this endpoint owns, bounded
+            // timeout. Only a clean timeout (0) reports "nothing ready"; any
+            // event (POLLHUP and POLLERR are always reported) or error,
+            // EINTR included, hands control back to the caller's probe.
+            let ready = unsafe {
+                libc::poll(
+                    &raw mut p,
+                    1,
+                    libc::c_int::try_from(ms).unwrap_or(libc::c_int::MAX),
+                )
+            };
+            return ready != 0;
+        }
+        std::thread::sleep(timeout.min(ATTACH_PROBE_SLICE));
+        true
+    }
+
+    /// The fd whose readability means "probe now", or `None` when there is
+    /// nothing that can be waited on (see [`Self::wait_for_peer`]).
+    #[cfg(unix)]
+    fn wakeup_fd(&self) -> Option<libc::c_int> {
+        use std::os::fd::AsRawFd;
+        match &self.inner {
+            Inner::Pty { master, .. } => self.attached.then_some(*master),
+            Inner::Tcp {
+                peer: Some(stream), ..
+            } => Some(stream.as_raw_fd()),
+            Inner::Tcp { listener, .. } => Some(listener.as_raw_fd()),
+        }
+    }
+
     /// How many bytes are still waiting for the peer.
     #[must_use]
     pub fn pending_to_peer(&self) -> usize {
@@ -1099,6 +1172,74 @@ mod tests {
         second.read_exact(&mut received).expect("retained output");
         assert_eq!(&received, b"retained");
         assert_eq!(ep.stats().to_peer, b"retained".len() as u64);
+    }
+
+    /// The idle wait wakes on host bytes instead of sleeping its whole
+    /// timeout, still sleeps when an attached peer is silent, and never
+    /// blocks past a short slice while nobody is attached (a new attach could
+    /// not end the wait). It reports "nothing ready" only for a silent,
+    /// attached peer, sub-millisecond waits included. Bounds are loose: only
+    /// the shape is asserted.
+    #[cfg(unix)]
+    #[test]
+    fn pty_idle_wait_wakes_on_host_bytes_and_caps_detached_naps() {
+        use std::time::{Duration, Instant};
+
+        let _quiesce = quiesce_spawns();
+        let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
+        let started = Instant::now();
+        assert!(ep.wait_for_peer(Duration::from_secs(5)), "detached: probe");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a detached pty must hand back control to probe for an attach"
+        );
+
+        let mut peer = open_pty_peer(&ep, "peer");
+        await_attach(&mut ep, 1);
+        let started = Instant::now();
+        assert!(!ep.wait_for_peer(Duration::from_millis(60)), "silent peer");
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "an attached, silent peer is waited on, not spun on"
+        );
+        assert!(
+            !ep.wait_for_peer(Duration::from_micros(300)),
+            "a sub-millisecond wait still checks readiness"
+        );
+
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            peer.write_all(b"x").expect("peer write");
+            peer
+        });
+        let started = Instant::now();
+        assert!(
+            ep.wait_for_peer(Duration::from_secs(5)),
+            "host bytes: probe"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "host bytes end the wait"
+        );
+        let peer = writer.join().expect("writer");
+        let mut got = Vec::new();
+        for _ in 0..200 {
+            got.extend(ep.read_from_peer());
+            if !got.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(got, b"x");
+
+        drop(peer);
+        let started = Instant::now();
+        assert!(ep.wait_for_peer(Duration::from_secs(5)), "hangup: probe");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a hangup ends the wait too"
+        );
+        assert!(ep.poll_peer().contains(&PeerEvent::Detached));
     }
 
     #[cfg(unix)]
