@@ -162,6 +162,194 @@ fn board_stem(board: &Path) -> String {
         .to_string()
 }
 
+/// One `[[supply]]` the starter spec declares, as data: the CLI scaffold writes
+/// it as TOML and the web builder (`hauksbee-ci init --json`) seeds its rows
+/// from the same list, so both start from one spec.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ScaffoldSupply {
+    pub net: String,
+    /// `usb` or `bench`; the scaffold never declares an `ideal` source.
+    pub kind: &'static str,
+    pub volts: f64,
+    /// The negotiated profile of a `usb` source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usb: Option<&'static str>,
+    /// The fold-back limit of a `bench` source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_limit_a: Option<f64>,
+    /// Why it is declared: `rail` (the board names it) or `regulator_input`
+    /// (a regulator's input has no other DC support).
+    pub origin: &'static str,
+}
+
+impl ScaffoldSupply {
+    fn rail(net: &str, volts: f64) -> Self {
+        let usb = is_usb_port_rail(net, volts);
+        Self {
+            net: net.to_string(),
+            kind: if usb { "usb" } else { "bench" },
+            volts,
+            usb: usb.then_some(USB_PROFILE),
+            current_limit_a: (!usb).then_some(BENCH_LIMIT_A),
+            origin: "rail",
+        }
+    }
+
+    const fn regulator_input(net: String, volts: f64) -> Self {
+        Self {
+            net,
+            kind: "bench",
+            volts,
+            usb: None,
+            current_limit_a: Some(BENCH_LIMIT_A),
+            origin: "regulator_input",
+        }
+    }
+
+    /// The `[[supply]]` block; `annotated` adds the teaching comments.
+    fn toml_block(&self, annotated: bool) -> String {
+        let note = |c: &'static str| if annotated { c } else { "" };
+        let net = &self.net;
+        let mut out = if self.origin == "regulator_input" {
+            format!(
+                "[[supply]]\nnet = \"{net}\"{}\n",
+                note("                   # detected regulator input; set your adapter voltage")
+            )
+        } else {
+            format!(
+                "[[supply]]\nnet = \"{net}\"{}\n{}",
+                note("                   # detected supply rail"),
+                note(
+                    "# cold power-on: set ramp_ms (in ms) to bring this rail up from 0 V \
+                     instead of starting it settled, so power-on RC timing is simulated\n"
+                ),
+            )
+        };
+        if let Some(profile) = self.usb {
+            let _ = writeln!(
+                out,
+                "kind = \"usb\"{}\nusb = \"{profile}\"{}",
+                note("                     # the name and the 5 V say this rail is a USB port"),
+                note("               # what the port negotiates: 5v0.5a | 5v1.5a | 5v3a"),
+            );
+        } else {
+            let limit = self.current_limit_a.unwrap_or(BENCH_LIMIT_A);
+            let _ = writeln!(
+                out,
+                "kind = \"bench\"\nvolts = {}\ncurrent_limit_a = {limit:.1}{}",
+                fmt1(self.volts),
+                note("            # what the source delivers before it folds back; set yours"),
+            );
+        }
+        out
+    }
+}
+
+/// What `hauksbee-ci init` detects on a board, before it is written as TOML.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Scaffold {
+    pub supplies: Vec<ScaffoldSupply>,
+}
+
+/// Detect the starter spec's supplies for `board` without writing anything.
+///
+/// The rails the board names, then any regulator input those leave without DC
+/// support, each seeded as a bench source for the user to adjust.
+///
+/// # Errors
+///
+/// Any error from loading `board` (`runner::load_board`).
+pub fn scaffold(board: &Path) -> Result<Scaffold, SpecError> {
+    let extracted = runner::load_board(board)?;
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    let bound = bind_board(&extracted, &lib);
+    let rails: Vec<(String, f64)> = bound
+        .supplies
+        .iter()
+        .map(|leg| (leg.net_name.clone(), leg.supply.nominal_volts()))
+        .collect();
+    Ok(Scaffold {
+        supplies: scaffold_supplies(board, rails),
+    })
+}
+
+/// The detected rails, sorted, then the regulator inputs they leave unpowered.
+/// Seeding one input can expose the regulator behind it, so the probe repeats
+/// until the list stops growing (bounded: a cascade is a few stages deep).
+fn scaffold_supplies(board: &Path, mut rails: Vec<(String, f64)>) -> Vec<ScaffoldSupply> {
+    rails.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut supplies: Vec<ScaffoldSupply> = rails
+        .iter()
+        .map(|(net, v)| ScaffoldSupply::rail(net, *v))
+        .collect();
+    for _ in 0..4 {
+        // One input per pass, the one that wants the most volts: a cascade's
+        // first stage (12 V into a 5 V regulator feeding a 3.3 V one) is the
+        // highest, and powering it powers the stages behind it, which must not
+        // also get a source of their own on the regulator's output.
+        let volts = |hint: Option<f64>| hint.map_or(9.0, f64::ceil);
+        let Some((net, hint)) = unsupported_regulator_inputs(board, &supplies)
+            .into_iter()
+            .max_by(|a, b| volts(a.1).total_cmp(&volts(b.1)))
+        else {
+            break;
+        };
+        // The least the regulators need, rounded up to a whole volt; with no
+        // figure, a 9 V adapter is the usual guess.
+        supplies.push(ScaffoldSupply::regulator_input(net, volts(hint)));
+    }
+    supplies
+}
+
+/// Regulator inputs the draft `supplies` leave without DC support, with the
+/// most input voltage any regulator on that net needs. A 1 ms run of the draft
+/// reports them as `AddSupply` remedies, so this is the verdict a real run
+/// would reach; a draft that cannot be probed reports none.
+fn unsupported_regulator_inputs(
+    board: &Path,
+    supplies: &[ScaffoldSupply],
+) -> Vec<(String, Option<f64>)> {
+    use hauksbee_ir::evidence::Remedy;
+    let abs = std::fs::canonicalize(board).unwrap_or_else(|_| board.to_path_buf());
+    let mut text = format!(
+        "name = \"scaffold probe\"\nboard = {}\nduration_ms = 1\n",
+        toml_path(abs.display().to_string())
+    );
+    for s in supplies {
+        text.push('\n');
+        text.push_str(&s.toml_block(false));
+    }
+    text.push_str("\n[[assert]]\nkind = \"no_faults\"\n");
+    let Ok(mut spec) = toml::from_str::<crate::spec::Spec>(&text) else {
+        return Vec::new();
+    };
+    spec.normalize();
+    let Ok(outcomes) = spec.validate().and_then(|()| runner::run_spec(&spec)) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, Option<f64>)> = Vec::new();
+    for a in outcomes
+        .iter()
+        .filter_map(|o| o.evidence.as_ref())
+        .flat_map(hauksbee_engine::BoardEvidence::assumptions)
+    {
+        let Remedy::AddSupply { net, volts_hint } = a.remedy() else {
+            continue;
+        };
+        let volts_hint = *volts_hint;
+        match found.iter_mut().find(|(n, _)| n == net) {
+            Some((_, hint)) => {
+                *hint = match (*hint, volts_hint) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+            None => found.push((net.clone(), volts_hint)),
+        }
+    }
+    found
+}
+
 /// Render the starter spec's TOML text for `board`.
 ///
 /// The `board = "..."` reference is written relative to the board's own
@@ -259,12 +447,19 @@ fn render_spec_at_with_run_hint(
     // The board's own detected supplies: the binder stamps one supply leg per
     // rail it found, at that rail's nominal voltage. Reuse them verbatim so the
     // scaffold powers exactly what a run would.
-    let mut supplies: Vec<(String, f64)> = bound
-        .supplies
+    let scaffolded = scaffold_supplies(
+        board,
+        bound
+            .supplies
+            .iter()
+            .map(|leg| (leg.net_name.clone(), leg.supply.nominal_volts()))
+            .collect(),
+    );
+    let supplies: Vec<(String, f64)> = scaffolded
         .iter()
-        .map(|leg| (leg.net_name.clone(), leg.supply.nominal_volts()))
+        .filter(|s| s.origin == "rail")
+        .map(|s| (s.net.clone(), s.volts))
         .collect();
-    supplies.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Rail-looking nets, from the shared rail-name helper rather than a fresh
     // heuristic: every non-ground net the binder recognises as a supply rail,
@@ -393,33 +588,14 @@ fn render_spec_at_with_run_hint(
          # across its cable, so the rail can move and the check can fire.\n",
     );
     // Supplies (enabled): one leg per detected rail, modelled BEHAVIORALLY.
-    if supplies.is_empty() {
+    if scaffolded.is_empty() {
         s.push_str(
             "# No supply rail was detected; add one the board is fed from:\n\
              # [[supply]]\n# net = \"+5V\"\n# kind = \"bench\"\n# volts = 5.0\n# current_limit_a = 2.0\n",
         );
     }
-    for (net, v) in &supplies {
-        let _ = writeln!(
-            s,
-            "[[supply]]\nnet = \"{net}\"                   # detected supply rail\n\
-             # cold power-on: set ramp_ms (in ms) to bring this rail up from 0 V \
-             instead of starting it settled, so power-on RC timing is simulated"
-        );
-        if is_usb_port_rail(net, *v) {
-            let _ = writeln!(
-                s,
-                "kind = \"usb\"                     # the name and the 5 V say this rail is a USB port\n\
-                 usb = \"{USB_PROFILE}\"               # what the port negotiates: 5v0.5a | 5v1.5a | 5v3a"
-            );
-        } else {
-            let _ = writeln!(
-                s,
-                "kind = \"bench\"\nvolts = {}\n\
-                 current_limit_a = {BENCH_LIMIT_A:.1}            # what the source delivers before it folds back; set yours",
-                fmt1(*v)
-            );
-        }
+    for supply in &scaffolded {
+        s.push_str(&supply.toml_block(true));
     }
     // Rails whose name says "supply" and nothing else. Nobody can read a voltage
     // off VDD_A or bare VDD, so the binder refuses to invent one and the net
@@ -514,7 +690,7 @@ fn render_spec_at_with_run_hint(
     // because the supply above is behavioral.
     let (derived, source_fed): (Vec<_>, Vec<_>) = rails
         .iter()
-        .partition(|(net, _)| !supplies.iter().any(|(s, _)| s == net));
+        .partition(|(net, _)| !scaffolded.iter().any(|s| &s.net == net));
     s.push_str(
         "# voltage: a rail stays within bounds (min = worst dip, max = worst rise).\n\
          # Uncomment the rails you want gated and tune the tolerance.\n",

@@ -11,7 +11,7 @@ import { VerdictBadge } from '../../motion'
 /** One labelled builder input. `width` is what the value wants; on a narrow
  *  column it is a ceiling and the field takes what is left rather than pushing
  *  the row off the card. */
-export function Field({ label, value, onChange, width = 90, placeholder, invalid, list }: {
+export function Field({ label, value, onChange, width = 90, placeholder, invalid, list, testId }: {
   label: string
   value: string
   onChange: (v: string) => void
@@ -21,6 +21,7 @@ export function Field({ label, value, onChange, width = 90, placeholder, invalid
   invalid?: boolean
   /** Id of a datalist to complete from (the shared net picker). */
   list?: string
+  testId?: string
 }) {
   return (
     <label
@@ -31,6 +32,7 @@ export function Field({ label, value, onChange, width = 90, placeholder, invalid
       <input
         className={`hb-input tnum min-w-0${list ? ' flex-1' : ''}`}
         aria-invalid={invalid || undefined}
+        data-testid={testId}
         list={list}
         style={{
           // With a picker the field grows into the row and `width` caps it;

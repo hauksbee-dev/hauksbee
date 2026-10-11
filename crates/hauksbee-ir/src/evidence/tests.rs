@@ -1670,3 +1670,22 @@ fn remedies_serialize_tagged_and_print_one_line() {
     );
     assert_eq!(other.cli_hint(), other.replacement());
 }
+
+#[test]
+fn an_open_part_whose_value_says_not_fitted_gets_mark_dnp() {
+    for value in ["DNP", "dnp 10k", "NC", "Do Not Populate", "not fitted"] {
+        let a = Assumption::open_part("R9", value, "no model matched");
+        assert_eq!(
+            a.remedy(),
+            &Remedy::MarkDnp {
+                reference: "R9".into()
+            },
+            "{value}"
+        );
+    }
+    // Values that merely contain those letters are real parts.
+    for value in ["NCP1117", "100nF", "10k"] {
+        let a = Assumption::open_part("R9", value, "no model matched");
+        assert!(matches!(a.remedy(), Remedy::AddModel { .. }), "{value}");
+    }
+}

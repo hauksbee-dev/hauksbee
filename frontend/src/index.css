@@ -629,3 +629,11 @@ code.hb-inline {
 }
 .run-dot { animation: runpulse 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .run-dot { animation: none; } }
+
+/* The button the next click belongs on, after a remedy was applied. */
+@keyframes runnudge {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--copper) 55%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--copper) 0%, transparent); }
+}
+.run-nudge { animation: runnudge 1.2s ease-out 3; }
+@media (prefers-reduced-motion: reduce) { .run-nudge { animation: none; outline: 2px solid var(--copper); } }

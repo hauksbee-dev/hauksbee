@@ -129,7 +129,9 @@ pub fn api_routes_with_design(analyze: DesignAnalyzer, sim: DeckSimulator) -> Ro
 /// the analysis routes.
 pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
     with_upload_guard(
-        Router::new().route("/api/check", post(check_handler)),
+        Router::new()
+            .route("/api/check", post(check_handler))
+            .route("/api/ci/scaffold", post(scaffold_handler)),
         check,
     )
 }
@@ -950,6 +952,31 @@ async fn check_handler(
         parts
             .into_design_upload()
             .map(|upload| check(upload, &spec))
+            .map_err(str::to_string)
+    })
+    .await
+    {
+        Ok(json) => json_ok(json),
+        Err(response) => response,
+    }
+}
+
+/// POST `/api/ci/scaffold`: the same upload as `/api/check`, without a spec.
+/// Answers the starter supplies the CLI's `hauksbee-ci init` would declare for
+/// this board (`{ok, supplies}`), so the builder and the CLI start from one spec.
+async fn scaffold_handler(
+    State(check): State<Arc<DesignCheckRunner>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> JsonResponse {
+    let parts = match guarded_upload(&headers, &mut multipart).await {
+        Ok(parts) => parts,
+        Err(response) => return response,
+    };
+    match run_blocking("the scaffold task", move || {
+        parts
+            .into_design_upload()
+            .map(|upload| check(upload, hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC))
             .map_err(str::to_string)
     })
     .await

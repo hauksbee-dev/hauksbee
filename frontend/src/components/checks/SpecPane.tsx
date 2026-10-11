@@ -4,6 +4,7 @@ import { tomlToBuilder } from '../../lib/check-spec'
 import type { BuilderState } from '../../lib/check-spec'
 import { RunResults } from './RunResults'
 import type { RunResponse } from '../../types/report'
+import type { RemedyActions } from './Remedies'
 
 // The right-hand column: the spec TOML as it currently stands, the run/download
 // actions, the run's verdict, and the GitHub CI setup. What this pane shows IS
@@ -12,7 +13,7 @@ import type { RunResponse } from '../../types/report'
 
 export function SpecPane({
   specText, specStem, specFileName, builtToml, rawMode, rawText, setRawText,
-  onLeaveRawMode, onEnterRawMode, stale, running, canRun, onRun,
+  onLeaveRawMode, onEnterRawMode, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun,
   validationCount, result, runKey, workflowYml, reportSerious,
 }: {
   specText: string
@@ -29,6 +30,13 @@ export function SpecPane({
   stale: boolean
   running: boolean
   canRun: boolean
+  /** The starter supplies are still on their way: a run now would not be the first one. */
+  preparing?: boolean
+  /** A remedy changed the spec: point at Run, the only thing that re-judges. */
+  pulseRun?: boolean
+  remedyActions?: RemedyActions
+  /** The model editor a remedy opened, shown under the verdict. */
+  remedyEditor?: React.ReactNode
   onRun: () => void
   /** Rows the preflight refused, for the "nothing was run" line. */
   validationCount: number
@@ -130,12 +138,12 @@ export function SpecPane({
         <button
           type="button"
           data-testid="run-checks"
-          disabled={!canRun || running}
+          disabled={!canRun || running || preparing}
           onClick={onRun}
-          className="hb-btn-primary hb-press px-4 py-2 text-[13px] inline-flex items-center gap-2"
+          className={`hb-btn-primary hb-press px-4 py-2 text-[13px] inline-flex items-center gap-2${pulseRun && !running ? ' run-nudge' : ''}`}
         >
           {running && <span className="slot-spin" style={{ borderTopColor: 'var(--on-copper)' }} />}
-          {running ? 'Running…' : 'Run these checks now'}
+          {running ? 'Running…' : preparing ? 'Preparing…' : pulseRun ? 'Run the checks again' : 'Run these checks now'}
         </button>
         <button
           type="button"
@@ -168,7 +176,10 @@ export function SpecPane({
         </div>
       )}
 
-      {result && <RunResults result={result} runKey={runKey} stale={stale} rawMode={rawMode} reportSerious={reportSerious} />}
+      {result && <RunResults
+        result={result} runKey={runKey} stale={stale} rawMode={rawMode} reportSerious={reportSerious}
+        remedyActions={remedyActions} remedyEditor={remedyEditor}
+      />}
 
       {/* GitHub CI setup: the two files and where they go. */}
       {ciOpen && (

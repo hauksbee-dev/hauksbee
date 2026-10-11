@@ -465,6 +465,7 @@ function Shell({ boot }: { boot: Boot }) {
                 liveActionResult={liveActionResult}
                 onSummary={setChecksSummary}
                 onSpec={setSpec}
+                onModelSaved={session.reanalyzeCurrent}
               />
             </div>
           )}

@@ -276,6 +276,11 @@ struct InitArgs {
     /// <board-stem>.toml inside it. Default: the current directory.
     #[arg(long, value_name = "PATH")]
     out: Option<PathBuf>,
+
+    /// Print the supplies the starter spec would declare as one JSON object
+    /// and write no file (the web app seeds its Power supplies from this).
+    #[arg(long, conflicts_with = "out")]
+    json: bool,
 }
 
 fn main() -> ExitCode {
@@ -564,6 +569,15 @@ fn cmd_init(args: InitArgs) -> ExitCode {
     let Some(board) = args.board else {
         return report(Err(suggest_board_in_cwd()));
     };
+    if args.json {
+        return report(
+            hauksbee_ci::init::scaffold(&board)
+                .map(|found| {
+                    serde_json::json!({ "ok": true, "supplies": found.supplies }).to_string()
+                })
+                .map_err(anyhow::Error::from),
+        );
+    }
     report(
         hauksbee_ci::init::init_to(&board, args.out.as_deref())
             .map(|path| {

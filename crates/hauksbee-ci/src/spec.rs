@@ -1615,7 +1615,7 @@ impl Spec {
     /// Wraps [`Spec::validate_all`]: one error comes back as itself, several
     /// come back as one [`SpecError::Many`], so callers holding a `Result` see
     /// every independent finding in one invocation.
-    fn validate(&self) -> Result<(), SpecError> {
+    pub(crate) fn validate(&self) -> Result<(), SpecError> {
         SpecError::from_many(self.validate_all())
     }
 

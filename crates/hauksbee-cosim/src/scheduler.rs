@@ -5474,11 +5474,20 @@ impl Scheduler {
                         "give the regulator input its headroom from a declared supply and start a fresh run",
                     );
                     // An unpowered input is closed by a declared supply; a sag or an
-                    // over-rating is a design question the prose answers.
-                    if taint.is_none_or(|t| t.reason.contains("no independent DC support")) {
+                    // over-rating is a design question the prose answers. An input
+                    // that is another regulator's output rail is powered by powering
+                    // that one, so only the first stage of a cascade is asked for.
+                    let net = self.net_name_of(reg.input.0);
+                    let fed_by_regulator = self.regulators.iter().any(|other| {
+                        let (p, n, _) = regulation::terminals(&self.circuit, other);
+                        other.reference != reg.reference
+                            && self.net_name_of(if p.is_ground() { n.0 } else { p.0 }) == net
+                    });
+                    if !fed_by_regulator
+                        && taint.is_none_or(|t| t.reason.contains("no independent DC support"))
+                    {
                         let volts_hint = (reg.adj_return.is_none() && reg.min_in_v.is_finite())
                             .then_some(reg.min_in_v);
-                        let net = self.net_name_of(reg.input.0);
                         a.with_remedy(hauksbee_ir::evidence::Remedy::AddSupply { net, volts_hint })
                     } else {
                         a

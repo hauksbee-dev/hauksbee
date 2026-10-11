@@ -403,3 +403,107 @@ fn init_refuses_to_overwrite_an_existing_spec() {
         "the refusal names the reason, got: {err}"
     );
 }
+
+/// stormduino feeds two LDOs from /VIN, which only an open P-FET connects to
+/// the USB rail: with no source on /VIN a first run is INVALID. The scaffold
+/// declares one (and none on the +5V rail U2 makes, which would fight it), so
+/// the first spec is judged.
+#[test]
+fn init_powers_a_regulator_input_nothing_else_supplies() {
+    let board = repo("examples/board-as-code/stormduino.board");
+    let scaffold = hauksbee_ci::init::scaffold(&board).expect("scaffold the board");
+    let nets: Vec<(&str, &str)> = scaffold
+        .supplies
+        .iter()
+        .map(|s| (s.net.as_str(), s.origin))
+        .collect();
+    assert_eq!(
+        nets,
+        [("/VBUS", "rail"), ("/VIN", "regulator_input")],
+        "the USB rail, then the one input that needs a source: {:?}",
+        scaffold.supplies
+    );
+    let vin = &scaffold.supplies[1];
+    assert_eq!(vin.kind, "bench");
+    assert!(
+        vin.volts >= 6.0,
+        "above the AMS1117-5.0 dropout, got {} V",
+        vin.volts
+    );
+
+    let text = hauksbee_ci::init::render_spec(&board).expect("render the starter");
+    assert!(
+        text.contains("# detected regulator input; set your adapter voltage"),
+        "the seeded input says what to change, got:\n{text}"
+    );
+    let spec_path =
+        std::env::temp_dir().join(format!("hauksbee_ci_init_{}_vin.toml", std::process::id()));
+    std::fs::write(&spec_path, &text).unwrap();
+    let spec = Spec::load(&spec_path).expect("the scaffold with its regulator input loads");
+    assert!(
+        spec.supplies.iter().any(|s| s.net == "/VIN"),
+        "/VIN is a live supply"
+    );
+}
+
+/// `init --json` is what the web builder seeds its supply rows from: the same
+/// list, as data, with no file written.
+#[test]
+fn init_json_lists_the_supplies_and_writes_nothing() {
+    let board = copy_board_to_tempdir(&repo("examples/board-as-code/stormduino.board"), "json");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
+        .args(["init", "--json"])
+        .arg(&board)
+        .output()
+        .expect("run hauksbee-ci init --json");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON document");
+    assert_eq!(doc["ok"], true);
+    let supplies = doc["supplies"].as_array().expect("a supplies array");
+    assert!(
+        supplies.iter().any(|s| s["net"] == "/VIN"
+            && s["kind"] == "bench"
+            && s["origin"] == "regulator_input"),
+        "{doc}"
+    );
+    assert!(
+        !board.with_extension("toml").exists(),
+        "--json is a query: it must not write the spec"
+    );
+}
+
+/// With nothing powering /VIN, the run asks for ONE supply: the +5V rail U2
+/// makes feeds U3, and a source there would fight U2's output, so only the
+/// first stage of the cascade is asked for.
+#[test]
+fn an_unpowered_cascade_asks_for_its_first_stage_only() {
+    use hauksbee_ir::evidence::Remedy;
+    let board = repo("examples/board-as-code/stormduino.board");
+    let text = format!(
+        "name = \"bare\"\nboard = \"{}\"\nduration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
+        board.display()
+    );
+    let path = std::env::temp_dir().join(format!("hauksbee_ci_bare_{}.toml", std::process::id()));
+    std::fs::write(&path, text).unwrap();
+    let spec = Spec::load(&path).expect("a bare spec loads");
+    let outcomes = hauksbee_ci::runner::run_spec(&spec).expect("it runs");
+    let asked: Vec<String> = outcomes
+        .iter()
+        .filter_map(|o| o.evidence.as_ref())
+        .flat_map(|e| e.assumptions().iter())
+        .filter_map(|a| match a.remedy() {
+            Remedy::AddSupply { net, .. } => Some(net.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        ["/VIN"],
+        "only the cascade's first stage is asked for"
+    );
+}

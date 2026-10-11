@@ -517,8 +517,9 @@ impl OpenPartCause {
     }
 
     /// The typed action for this cause; `subject` is the raw designator,
-    /// `reference` its prose form.
-    fn remedy(self, subject: &str, reference: &str, reason: &str) -> Remedy {
+    /// `reference` its prose form. A part whose value already says it is not
+    /// fitted (`DNP`, `NC`, `not fitted`) needs no model, only the fact stated.
+    fn remedy(self, subject: &str, reference: &str, value: &str, reason: &str) -> Remedy {
         match self {
             Self::DuplicateDesignator => Remedy::RenameDuplicate {
                 reference: duplicate_name(reference).to_string(),
@@ -529,12 +530,33 @@ impl OpenPartCause {
                         .trim_end_matches("; left open"),
                 ),
             },
+            Self::NoModel if !subject.is_empty() && says_not_fitted(value) => Remedy::MarkDnp {
+                reference: reference.to_string(),
+            },
             Self::NoModel if !subject.is_empty() => Remedy::AddModel {
                 reference: reference.to_string(),
             },
             _ => Remedy::Other,
         }
     }
+}
+
+/// Does a part value read as "this position is not populated"?
+fn says_not_fitted(value: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    let first = v
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or("");
+    matches!(first, "dnp" | "dni" | "nc" | "nostuff")
+        || [
+            "not fitted",
+            "not populated",
+            "do not populate",
+            "do not fit",
+        ]
+        .iter()
+        .any(|phrase| v.contains(phrase))
 }
 
 /// Which stage of the run raised the assumption. Mirrors the pipeline, so a
@@ -1465,7 +1487,7 @@ impl Assumption {
             built.id = built.id.with_ordinal(n);
             built.collision_base_id = built.id.clone();
         }
-        built.remedy = cause.remedy(&subject, &reference, reason);
+        built.remedy = cause.remedy(&subject, &reference, &value, reason);
         built.checked()
     }
 

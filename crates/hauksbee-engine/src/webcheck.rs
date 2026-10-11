@@ -508,11 +508,22 @@ pub fn run_web_check_design(
         return err_json(&format!("could not stage the spec: {e}"));
     }
 
+    // A spec body that is only the scaffold marker asks for the board's
+    // starter supplies instead of a run.
+    if spec_fragment.trim() == hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC {
+        let board_path = dir.join(&board_file);
+        return run_ci_json(&["init".as_ref(), board_path.as_os_str(), "--json".as_ref()]);
+    }
+    run_ci_json(&["run".as_ref(), spec_path.as_os_str(), "--json".as_ref()])
+}
+
+/// Spawn `hauksbee-ci <args>` (which prints one JSON object), drain it under
+/// the check deadline, and relay that object, or an `{"ok":false,...}` that
+/// carries the real failure.
+fn run_ci_json(args: &[&std::ffi::OsStr]) -> String {
     let bin = ci_binary();
     let child = std::process::Command::new(&bin)
-        .arg("run")
-        .arg(&spec_path)
-        .arg("--json")
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn();
@@ -657,6 +668,40 @@ kind = "no_faults"
             "no_faults holds on the demo board: {json}"
         );
         assert!(v["results"].as_array().is_some_and(|r| !r.is_empty()));
+    }
+
+    /// The scaffold marker asks the CI binary for `init --json` instead of a
+    /// run, and the answer is the supply list the builder seeds from.
+    #[test]
+    fn web_scaffold_asks_the_ci_binary_for_its_init_supplies() {
+        let _serial = serial_guard();
+        let ci = ["release", "debug"]
+            .iter()
+            .map(|p| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("../../target/{p}/hauksbee-ci"))
+            })
+            .find(|p| p.is_file());
+        let Some(ci) = ci else {
+            eprintln!("skipping web_scaffold e2e (no hauksbee-ci built)");
+            return;
+        };
+        std::env::set_var("HAUKSBEE_CI_BIN", &ci);
+        let json = run_web_check(
+            "boot_gate.kicad_pcb",
+            BOOT_GATE.as_bytes(),
+            None,
+            hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC,
+        );
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["ok"], true, "scaffold succeeds: {json}");
+        assert!(
+            v["supplies"]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|x| x["net"] == "+5V")),
+            "the +5V rail is among the supplies: {json}"
+        );
     }
 
     #[test]

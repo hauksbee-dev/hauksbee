@@ -5,7 +5,7 @@
 
 import type {
   DepInfo, ExtractBackendsConfig, ExtractReady, ExtractSettings, LiveLaunchResponse, LiveStatus,
-  ModelSaveResult, RunResponse, SensorCatalogEntry, Startup, WebReport,
+  ModelSaveResult, RunResponse, ScaffoldResponse, SensorCatalogEntry, Startup, WebReport,
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
 import { buildBoardUpload, type SupplementalDesignFiles } from './board-upload'
@@ -188,6 +188,9 @@ export const api = {
   },
   /** hauksbee-ci reports its refusals in the body, so a non-2xx is parsed too. */
   check: (upload: FormData) => postForm<RunResponse>('/api/check', upload),
+  /** The starter spec's supplies for an uploaded board: the answer of
+   *  `hauksbee-ci init`, so the builder starts from what the CLI would write. */
+  scaffold: (upload: FormData, signal?: AbortSignal) => postForm<ScaffoldResponse>('/api/ci/scaffold', upload, signal),
   sensorSpecs: (signal: AbortSignal) => getJson<{ entries?: SensorCatalogEntry[] }>('/api/sensor-specs', { signal }),
   deps: () => getJson<{ deps?: DepInfo[] }>('/api/deps'),
   depsInstall: (id: string, onFrame: (frame: SseFrame) => void) =>

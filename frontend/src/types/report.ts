@@ -188,7 +188,25 @@ export interface EvidenceAssumption {
   consequence: string
   replacement: string
   expires?: string
+  /** The glossary term the sentence is an instance of (wire name). */
+  term?: string
+  /** What closes the gap, as data (from hauksbee-ir `Remedy`). */
+  remedy?: Remedy
 }
+
+/** `Remedy` on the wire: tagged by `type`. `other` means "follow the
+ *  assumption's `replacement` sentence". */
+export type Remedy =
+  | { type: 'add_supply'; net: string; volts_hint?: number }
+  | { type: 'add_model'; reference: string }
+  | { type: 'set_part_number'; reference: string }
+  | { type: 'mark_dnp'; reference: string }
+  | { type: 'rename_duplicate'; reference: string; conflict: string }
+  | { type: 'add_firmware' }
+  | { type: 'add_bom' }
+  | { type: 'install_backend'; id: string }
+  | { type: 'provide_project_rules'; file: string }
+  | { type: 'other' }
 
 export interface ErrorBudgetWindow {
   start_s: number
@@ -721,6 +739,24 @@ export interface CheckResult {
   evidence?: EvidenceMap
 }
 
+/** One supply `hauksbee-ci init` would declare for a board. */
+export interface ScaffoldSupply {
+  net: string
+  kind: 'usb' | 'bench'
+  volts: number
+  usb?: string
+  current_limit_a?: number
+  /** `rail` (the board names it) or `regulator_input` (nothing else powers it). */
+  origin: 'rail' | 'regulator_input'
+}
+
+/** What `POST /api/ci/scaffold` answers with. */
+export interface ScaffoldResponse {
+  ok: boolean
+  error?: string
+  supplies?: ScaffoldSupply[]
+}
+
 /** What `POST /api/check` answers with. Errors arrive in the body, so a
  *  non-2xx status is still parsed rather than replaced with a status line. */
 export interface RunResponse {
@@ -745,6 +781,8 @@ export interface RunResponse {
   timing_coverage?: WebTimingCoverage[]
   timing_refusals?: string[]
   results?: CheckResult[]
+  /** What the verdict and each assumption's terms mean, from hauksbee-ir. */
+  glossary?: Array<{ term: string; label: string; short: string; what_to_do: string }>
 }
 
 /** Plan usage as percent of a subscription's limits, for one moment. */

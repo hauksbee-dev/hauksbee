@@ -1,4 +1,5 @@
 import { parse as parseToml } from 'smol-toml'
+import type { ScaffoldSupply } from '../types/report'
 
 // The checks spec, as a data model: the builder's rows, the TOML they compose
 // into, and the round-trip back. The Checks view renders these; nothing here
@@ -7,6 +8,26 @@ import { parse as parseToml } from 'smol-toml'
 export interface SupplyRow {
   net: string
   volts: string
+  /** The source behind the rail; absent means an ideal one (rows saved before
+   *  kinds existed). The scaffold seeds `bench` and `usb`, as `hauksbee-ci init`. */
+  kind?: 'ideal' | 'bench' | 'usb'
+  /** A usb source's negotiated profile, e.g. `5v1.5a`. */
+  usb?: string
+  /** A bench source's fold-back current, in A. */
+  limit?: string
+}
+
+export const USB_PROFILES = ['5v0.5a', '5v1.5a', '5v3a']
+
+/** Builder rows for the supplies `hauksbee-ci init` declares. */
+export function scaffoldRows(supplies: ScaffoldSupply[]): SupplyRow[] {
+  return supplies.map(s => ({
+    net: s.net,
+    volts: String(s.volts),
+    kind: s.kind,
+    ...(s.usb ? { usb: s.usb } : {}),
+    ...(s.current_limit_a ? { limit: String(s.current_limit_a) } : {}),
+  }))
 }
 
 /** A visual co-sim interaction. These are the three controls that can attach
@@ -104,6 +125,8 @@ export interface BuilderState {
   sensors: SensorRow[]
   checks: CheckRow[]
   overrides: OverrideRow[]
+  /** References left open as not fitted (`no_fit`). */
+  noFit: string[]
 }
 
 /** An `[[override]]`: `select` settles an open variant selection for `ref`. */
@@ -371,7 +394,11 @@ function numOr(v: string): string | null {
 /** One [[supply]] block, or nothing for a row with no net. */
 export function supplyToml(s: SupplyRow): string {
   if (!s.net.trim()) return ''
-  return `\n[[supply]]\nnet = ${tomlString(s.net.trim())}\nkind = "ideal"\nvolts = ${numOr(s.volts) ?? '5.0'}\n`
+  const kind = s.kind ?? 'ideal'
+  const head = `\n[[supply]]\nnet = ${tomlString(s.net.trim())}\nkind = "${kind}"\n`
+  if (kind === 'usb') return `${head}usb = ${tomlString(s.usb || USB_PROFILES[1])}\n`
+  const limit = kind === 'bench' && numOr(s.limit ?? '') ? `current_limit_a = ${numOr(s.limit ?? '')}\n` : ''
+  return `${head}volts = ${numOr(s.volts) ?? '5.0'}\n${limit}`
 }
 
 export function peripheralToml(p: PeripheralRow): string {
@@ -437,9 +464,11 @@ export function buildToml(
   checks: CheckRow[],
   sensors: SensorRow[] = [],
   overrides: OverrideRow[] = [],
+  noFit: string[] = [],
 ): string {
   const dur = numOr(duration)
   return `name = ${tomlString(name)}\n${dur ? `duration_ms = ${dur}\n` : ''}`
+    + (noFit.length ? `no_fit = [${noFit.map(tomlString).join(', ')}]\n` : '')
     + supplies.map(supplyToml).join('')
     + peripherals.map(peripheralToml).join('')
     + sensors.map(sensorToml).join('')
@@ -451,7 +480,7 @@ export function buildToml(
 // outside these sets (an assertion scenario, a ripple spec, a sensor...) would
 // be silently destroyed on the way back to the builder, so its presence makes
 // tomlToBuilder refuse the conversion.
-const SUPPLY_FIELDS = new Set(['net', 'kind', 'volts'])
+const SUPPLY_FIELDS = new Set(['net', 'kind', 'volts', 'usb', 'current_limit_a'])
 const PERIPHERAL_FIELDS = new Set([
   'id', 'type', 'net', 'to', 'waveform', 'offset', 'amplitude', 'freq_hz',
   'bounce_ms', 'initial', 'event',
@@ -470,13 +499,21 @@ export function tomlToBuilder(raw: string): BuilderState | null {
   } catch {
     return null
   }
-  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'peripheral', 'sensor', 'assert', 'override', 'board', 'firmware', 'mcu'])
+  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'peripheral', 'sensor', 'assert', 'override', 'board', 'firmware', 'mcu', 'no_fit'])
   if (Object.keys(doc).some(k => !KNOWN.has(k))) return null
+  const noFit = Array.isArray(doc.no_fit) ? doc.no_fit : []
+  if (doc.no_fit !== undefined && !noFit.every(r => typeof r === 'string')) return null
   const supplies: SupplyRow[] = []
   for (const s of (doc.supply as Record<string, unknown>[] | undefined) ?? []) {
     if (Object.keys(s).some(k => !SUPPLY_FIELDS.has(k))) return null
-    if (s.kind && s.kind !== 'ideal') return null
-    supplies.push({ net: String(s.net ?? ''), volts: String(s.volts ?? '') })
+    if (s.kind && !['ideal', 'bench', 'usb'].includes(String(s.kind))) return null
+    supplies.push({
+      net: String(s.net ?? ''),
+      volts: String(s.volts ?? ''),
+      ...(s.kind && s.kind !== 'ideal' ? { kind: s.kind as SupplyRow['kind'] } : {}),
+      ...(s.usb !== undefined ? { usb: String(s.usb) } : {}),
+      ...(s.current_limit_a !== undefined ? { limit: String(s.current_limit_a) } : {}),
+    })
   }
   const peripherals: PeripheralRow[] = []
   let peripheralId = 1
@@ -544,6 +581,7 @@ export function tomlToBuilder(raw: string): BuilderState | null {
     sensors,
     checks,
     overrides,
+    noFit: noFit as string[],
   }
 }
 

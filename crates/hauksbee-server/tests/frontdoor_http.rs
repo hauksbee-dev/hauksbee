@@ -258,6 +258,42 @@ async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
     );
 }
 
+/// The Checks view asks for the starter spec with the same upload as a run;
+/// the runner is told so by the marker body, and the board bytes arrive intact.
+#[tokio::test]
+async fn scaffold_route_hands_the_runner_the_scaffold_marker() {
+    let check: frontdoor::DesignCheckRunner = Arc::new(|upload, spec| {
+        format!(
+            "{{\"ok\":true,\"scaffold\":{},\"board_len\":{}}}",
+            spec == hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC,
+            upload.board.bytes.len()
+        )
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+
+    let boundary = "----hauksbee-scaffold-boundary";
+    let board = b"<eagle><drawing><board/></drawing></eagle>";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "design.brd", board),
+            (
+                "spec",
+                "spec.toml",
+                hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC.as_bytes(),
+            ),
+        ],
+    );
+    let req = multipart_post("/api/ci/scaffold", boundary, body.len());
+    let resp = support::http(addr, &req, &body).await;
+    assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
+    assert!(resp.contains("\"scaffold\":true"), "{resp}");
+    assert!(
+        resp.contains(&format!("\"board_len\":{}", board.len())),
+        "{resp}"
+    );
+}
+
 #[tokio::test]
 async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
     let launch: frontdoor::DesignLiveLauncher = Arc::new(|upload| match upload.schematic {

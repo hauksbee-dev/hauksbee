@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CheckResult, QueuedLiveRegisterMap, QueuedRequest, RunResponse, SensorCatalogEntry, WebReport } from '../types/report'
+import type { CheckResult, QueuedLiveRegisterMap, QueuedRequest, Remedy, RunResponse, SensorCatalogEntry, WebReport } from '../types/report'
 import type { ActionResultMsg } from '../types/protocol'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
@@ -13,7 +13,7 @@ import {
   assertToml, buildToml, CHECK_KINDS, componentCapabilityIssues, CONSTRAINT_KEYS,
   emptyCheck, emptyPeripheral, emptySensor, normalizeSavedCheck, peripheralIssues,
   peripheralToml, railPolarity, rowIssues, sensorIssues, sensorToml, supplyToml,
-  overrideToml, upsertOverride,
+  overrideToml, scaffoldRows, upsertOverride, USB_PROFILES,
 } from '../lib/check-spec'
 import type {
   BuilderState, CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
@@ -23,6 +23,12 @@ import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
 import { AssertionGroups, hasNoGroups } from './checks/AssertionGroups'
 import { SpecPane } from './checks/SpecPane'
+import type { RemedyActions } from './checks/Remedies'
+import { WritePart } from './WritePart'
+
+/** The spec body that asks `/api/ci/scaffold` for the starter spec rather than
+ *  a run; the server does not read it as TOML. */
+const SCAFFOLD_SPEC = '# hauksbee:scaffold'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -54,6 +60,7 @@ interface SavedChecksState {
   peripherals?: PeripheralRow[]
   sensors?: SensorRow[]
   overrides?: OverrideRow[]
+  noFit?: string[]
   checks?: CheckRow[]
   rawMode?: boolean
   rawText?: string
@@ -148,6 +155,7 @@ export function ChecksView({
   liveActionResult,
   onSummary,
   onSpec,
+  onModelSaved,
 }: {
   report: WebReport
   boardFile: File | null
@@ -182,6 +190,9 @@ export function ChecksView({
    *  saved session. Reported rather than recomposed there: the exported spec must
    *  be the same bytes this pane shows and the Download button writes. */
   onSpec: (s: { toml: string; fileName: string } | null) => void
+  /** A model written from a "write a model" remedy was saved: the shell
+   *  re-analyzes the board so the next run sees it. */
+  onModelSaved?: () => void
 }) {
   const storageKey = checksStorageKey(report)
   // Restore this board's saved session in the state initializers. Because the
@@ -214,6 +225,19 @@ export function ChecksView({
       ? savedArray(saved?.supplies)
       : (report.supplies ?? []).map(s => ({ net: s.net, volts: String(s.volts) }))),
   )
+  // What the first render seeded, so the scaffold below replaces it only if
+  // nobody has edited the rows while it was on its way.
+  const seededSupplies = useRef(supplies)
+  const [noFit, setNoFit] = useState<string[]>(() => savedArray(saved?.noFit))
+  // A board with no saved supplies starts from `hauksbee-ci init`'s own list
+  // (rails, plus the input of any regulator nothing else powers). Run waits for
+  // it, so the first run is the one the CLI would make.
+  const [scaffolding, setScaffolding] = useState(
+    () => !!boardFile && !(saved?.rawMode && typeof saved.rawText === 'string') && savedArray(saved?.supplies).length === 0,
+  )
+  // Remedy state: the model editor opened for a part, and the Run button's pulse.
+  const [modelFor, setModelFor] = useState<{ reference: string; signal: number } | null>(null)
+  const [pulseRun, setPulseRun] = useState(false)
   const [peripherals, setPeripherals] = useState<PeripheralRow[]>(() => savedArray(saved?.peripherals))
   const [sensors, setSensors] = useState<SensorRow[]>(() => savedArray(saved?.sensors))
   const [checks, setChecks] = useState<CheckRow[]>(initialChecks)
@@ -276,9 +300,25 @@ export function ChecksView({
     return () => abort.abort()
   }, [])
 
+  // Mount only: the view remounts per board, and the scaffold is that board's.
+  useEffect(() => {
+    if (!scaffolding || !boardFile) return
+    const abort = new AbortController()
+    void api.scaffold(buildCheckUpload(boardFile, null, schematicFile, SCAFFOLD_SPEC, supplementalFiles), abort.signal)
+      .then(answer => {
+        if (!answer.ok || !answer.supplies?.length) return
+        const rows = scaffoldRows(answer.supplies)
+        setSupplies(current => (current === seededSupplies.current ? rows : current))
+      })
+      .catch(() => undefined) // the report's own rails stay: a scaffold is a convenience
+      .finally(() => { if (!abort.signal.aborted) setScaffolding(false) })
+    return () => abort.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const builtToml = useMemo(
-    () => buildToml(specName, duration, supplies, peripherals, checks, sensors, overrides),
-    [specName, duration, supplies, peripherals, checks, sensors, overrides],
+    () => buildToml(specName, duration, supplies, peripherals, checks, sensors, overrides, noFit),
+    [specName, duration, supplies, peripherals, checks, sensors, overrides, noFit],
   )
   const effectiveToml = rawMode ? rawText : builtToml
   const firmwareForRun = includeFirmware ? firmwareFile : null
@@ -305,9 +345,9 @@ export function ChecksView({
   // Auto-save (the "things auto load in future" contract).
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, overrides, rawMode, rawText, includeFirmware }))
+      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, overrides, noFit, rawMode, rawText, includeFirmware }))
     } catch { /* storage full/blocked: the session still works */ }
-  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, overrides, rawMode, rawText, includeFirmware])
+  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, overrides, noFit, rawMode, rawText, includeFirmware])
 
   // Report the run summary to the shell's chips; a stale or failed run
   // reports nothing rather than a number that no longer matches the spec.
@@ -541,6 +581,7 @@ export function ChecksView({
       setSensors(parsed.sensors)
       setChecks(parsed.checks)
       setOverrides(parsed.overrides)
+      setNoFit(parsed.noFit)
       nextId.current = parsed.checks.reduce((m, c) => Math.max(m, c.id), 0) + 1
       nextPeripheralId.current = parsed.peripherals.reduce((m, p) => Math.max(m, p.rowId), 0) + 1
       nextSensorId.current = parsed.sensors.reduce((m, s) => Math.max(m, s.rowId), 0) + 1
@@ -568,6 +609,82 @@ export function ChecksView({
    *  fails closed: an offer that cannot be evaluated is not made. */
   const componentCan = (ref: string, kind: string) =>
     (report.component_assertions?.[ref] ?? []).includes(kind)
+
+  // One click per remedy. Each edits the same rows (or raw text) a hand edit
+  // would, so the spec pane shows exactly what the click did, and then points
+  // at the Run button: the verdict is only ever re-judged by a run.
+  useEffect(() => {
+    if (!pulseRun) return
+    const timer = window.setTimeout(() => setPulseRun(false), 5000)
+    return () => window.clearTimeout(timer)
+  }, [pulseRun])
+
+  const remedyActions = useMemo<RemedyActions>(() => {
+    const flagRerun = () => setPulseRun(true)
+    const stored = (net: string) => rawMode
+      ? rawText.includes(`net = ${JSON.stringify(net)}`)
+      : supplies.some(s => s.net.trim() === net)
+    const left = (reference: string) => rawMode
+      ? new RegExp(`^\\s*no_fit\\s*=\\s*\\[[^\\]]*${JSON.stringify(reference)}`, 'm').test(rawText)
+      : noFit.includes(reference)
+    return {
+      addSupply: (net, hint) => {
+        if (!stored(net)) {
+          const row: SupplyRow = {
+            net, volts: hint && hint > 0 ? String(Math.ceil(hint)) : '9', kind: 'bench', limit: '2.0',
+          }
+          if (rawMode) setRawText(text => `${text}${supplyToml(row)}`)
+          else setSupplies(rows => rows.some(s => s.net.trim() === net) ? rows : [...rows, row])
+        }
+        flagRerun()
+        // The new row is not in the DOM until React commits it.
+        window.setTimeout(() => {
+          const row = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="supply-row"]'))
+            .find(el => el.dataset.net === net)
+          const volts = row?.querySelector<HTMLInputElement>('[data-testid="supply-volts"]')
+          volts?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          volts?.focus({ preventScroll: true })
+          volts?.select()
+        }, 60)
+      },
+      markNotFitted: reference => {
+        if (rawMode) {
+          setRawText(text => /^\s*no_fit\s*=\s*\[/m.test(text)
+            ? text.replace(/^(\s*no_fit\s*=\s*\[)/m, `$1${JSON.stringify(reference)}, `)
+            : `no_fit = [${JSON.stringify(reference)}]\n${text}`)
+        } else {
+          setNoFit(list => list.includes(reference) ? list : [...list, reference])
+        }
+        flagRerun()
+      },
+      openModel: reference => setModelFor(current => ({ reference, signal: (current?.signal ?? 0) + 1 })),
+      applied: (remedy: Remedy) => {
+        // Only meaningful while the spec differs from the run that asked for it.
+        if (!stale) return false
+        if (remedy.type === 'add_supply') return stored(remedy.net)
+        if (remedy.type === 'mark_dnp') return left(remedy.reference)
+        return false
+      },
+    }
+  }, [rawMode, rawText, supplies, noFit, stale])
+
+  // The editor a "write a model" remedy opens, in place under the verdict.
+  // `suggested` is memoized: WritePart re-prepares its draft whenever it changes.
+  const modelPart = useMemo(() => {
+    if (!modelFor) return undefined
+    const part = report.components?.find(c => c.reference === modelFor.reference)
+    return { reference: modelFor.reference, value: part?.value ?? '' }
+  }, [modelFor, report.components])
+  const modelEditor = modelFor && modelPart ? (
+    <div className="mt-3" data-testid="remedy-model-editor">
+      <WritePart
+        onSaved={onModelSaved}
+        suggested={modelPart}
+        openSignal={`${modelFor.reference}:${modelFor.signal}`}
+        boardLabel={report.file_name}
+      />
+    </div>
+  ) : null
 
   /** The copper offer chips above the builder, from the board selection. */
   const quickAdd = (testid: string, label: React.ReactNode, onClick: () => void) => (
@@ -671,7 +788,12 @@ export function ChecksView({
                     const patch = (next: Partial<SupplyRow>) =>
                       setSupplies(ss => ss.map((x, j) => (j === i ? { ...x, ...next } : x)))
                     return (
-                      <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5">
+                      <div
+                        key={i}
+                        data-testid="supply-row"
+                        data-net={s.net.trim()}
+                        className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5"
+                      >
                         <input
                           className="hb-input min-w-0 flex-1"
                           style={{ maxWidth: 180 }}
@@ -680,7 +802,31 @@ export function ChecksView({
                           placeholder="net (e.g. +5V)"
                           onChange={e => patch({ net: e.target.value })}
                         />
-                        <Field label="volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />
+                        <select
+                          className="hb-input"
+                          aria-label={`source behind ${s.net || 'this supply'}`}
+                          value={s.kind ?? 'ideal'}
+                          onChange={e => patch({ kind: e.target.value as SupplyRow['kind'] })}
+                        >
+                          <option value="ideal">ideal</option>
+                          <option value="bench">bench supply</option>
+                          <option value="usb">USB port</option>
+                        </select>
+                        {s.kind === 'usb' ? (
+                          <select
+                            className="hb-input"
+                            aria-label="USB profile"
+                            value={s.usb ?? USB_PROFILES[1]}
+                            onChange={e => patch({ usb: e.target.value })}
+                          >
+                            {USB_PROFILES.map(p => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                        ) : (
+                          <Field label="volts" testId="supply-volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />
+                        )}
+                        {s.kind === 'bench' && (
+                          <Field label="limit (A)" value={s.limit ?? ''} width={60} onChange={limit => patch({ limit })} />
+                        )}
                         <RemoveButton
                           className="text-[12px] shrink-0"
                           onClick={() => setSupplies(ss => ss.filter((_, j) => j !== i))}
@@ -808,6 +954,10 @@ export function ChecksView({
             stale={stale}
             running={running}
             canRun={!!boardFile}
+            preparing={scaffolding}
+            pulseRun={pulseRun}
+            remedyActions={remedyActions}
+            remedyEditor={modelEditor}
             onRun={() => void runChecks()}
             validationCount={validation.size}
             result={result}
