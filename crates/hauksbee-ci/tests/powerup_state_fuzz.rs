@@ -55,6 +55,10 @@ fn rail_holds(net: &str, min: f64, max: f64) -> String {
 /// across the undefined range (0 / 3.3 V) over `seeds` members, and require
 /// `asserts` plus `no_faults` to hold on EVERY member.
 ///
+/// `open_gap` names the unmodelled parts that today make the run INVALID rather
+/// than green (empty: the run must be GREEN); see
+/// [`support::assert_invalid_by_open_parts`].
+///
 /// A fuzz over zero nets passes every assertion without exercising anything,
 /// which is the vacuous green this suite exists to refuse, so an empty net list
 /// fails rather than reporting a covered negative.
@@ -65,6 +69,7 @@ fn boot_state_fuzz(
     nets: &[String],
     seeds: u32,
     asserts: &str,
+    open_gap: &[&str],
 ) -> hauksbee_ci::CiResult {
     hauksbee_testkit::scanned(&format!("{case} boot-state fuzz (nets found)"), nets.len());
     assert!(
@@ -90,11 +95,14 @@ fn boot_state_fuzz(
         fuzzed.join(", "),
     );
     let result = run_body(&format!("{case}.toml"), &body);
-    assert!(
-        result.passed(),
-        "{case} boot-state fuzz must be GREEN across all seeds:\n{}",
-        result.render_human()
-    );
+    if open_gap.is_empty() {
+        support::assert_green(
+            &result,
+            &format!("{case} boot-state fuzz must be GREEN across all seeds"),
+        );
+    } else {
+        support::assert_invalid_by_open_parts(&result, open_gap);
+    }
     // Every boot seed runs once per member of the board's open variant and
     // corner sets (an LED bound to the assumed forward-voltage corners runs at
     // each corner), and every one of those runs must hold: a boot state is safe
@@ -181,6 +189,9 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         &gates,
         16,
         &(rail_holds("VDC", 23.0, 25.0) + &rail_holds("+3.3V", 3.2, 3.4)),
+        // Model gap: the TMC2226 stepper drivers and the TPS54560 buck hang off
+        // these rails with no model. GREEN once they are modelled.
+        &["U6", "U7", "U8", "U9", "U10", "U11", "U16"],
     );
 }
 
@@ -206,6 +217,9 @@ fn olimex_evb_relay_boot_states_are_safe() {
         &["GPIO32/REL1".to_string(), "GPIO33/REL2".to_string()],
         8,
         &(rail_holds("+3.3V", 3.2, 3.4) + &rail_holds("+5V", 4.9, 5.1)),
+        // Model gap: the IR receiver U7, the Schottky D10 and the relays REL1 and
+        // REL2 are unmodelled. GREEN once they are modelled.
+        &["D10", "U7", "REL1", "REL2"],
     );
 }
 
@@ -248,6 +262,10 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
         &enables,
         24,
         "",
+        // Model gap: `no_faults` spans the whole board and ~30 parts have no
+        // model, among them the supervisor U18 and the regulators U7, U9, U12
+        // and U14. GREEN once they are modelled.
+        &["U18", "U7", "U9", "U12", "U14"],
     );
     // Six class-only LEDs (D8 D9 D11 D12 D22 D23), two assumed forward-voltage
     // corners each: 24 seeds x 2^6 = 1536 runs is over the 1024-run cap. That

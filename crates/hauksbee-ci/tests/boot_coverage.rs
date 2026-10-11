@@ -81,10 +81,9 @@ fn which_avr_gcc() -> bool {
 fn gate_driven_promptly_passes() {
     ensure_firmware("a");
     let result = run(&support::run_config(example("boot_gate_pass.toml"))).expect("PASS spec runs");
-    assert!(
-        result.passed(),
-        "variant A drives the gate within the deadline, so all assertions pass:\n{}",
-        result.render_human()
+    support::assert_green(
+        &result,
+        "variant A drives the gate within the deadline, so all assertions pass",
     );
     // The boot-coverage assertion is present and green.
     let bc = support::row(&result, "kind:boot_coverage");

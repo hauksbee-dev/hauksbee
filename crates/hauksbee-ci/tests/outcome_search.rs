@@ -293,7 +293,7 @@ fn a_relation_across_conditions_names_the_pair_that_breaks_it() {
 #[test]
 fn a_board_that_meets_its_outcomes_passes_silently() {
     let r = run("outcome repaired", "68k", "47k");
-    assert!(r.passed(), "{}", r.render_human());
+    support::assert_green(&r, "board meeting its outcomes");
     assert!(
         r.results.iter().all(|row| row.why.is_none()),
         "{}",

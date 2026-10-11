@@ -48,11 +48,7 @@ fn lm75_run(case: &str, spec: &str, expect: &str) -> Option<hauksbee_ci::CiResul
         return None;
     }
     let result = run(&support::run_config(example(spec))).expect("the spec loads and runs");
-    assert!(
-        result.passed(),
-        "{case}: {expect}:\n{}",
-        result.render_human()
-    );
+    support::assert_green(&result, &format!("{case}: {expect}"));
     eprintln!("{case}: PASS: {expect}, via the Renode I2C bridge");
     Some(result)
 }

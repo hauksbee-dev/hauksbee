@@ -179,11 +179,7 @@ fn demo_firmware_blink_uart_and_rail_all_pass() {
     // + no faults. Slower (1 s of simulated time) but exercises the MCU.
     let result =
         run(&support::run_config(support::example("blinky.toml"))).expect("blinky spec runs");
-    assert!(
-        result.passed(),
-        "blinky must pass all assertions:\n{}",
-        result.render_human()
-    );
+    support::assert_green(&result, "blinky must pass all assertions");
     assert_eq!(result.results.len(), 4);
 }
 
@@ -223,10 +219,9 @@ fn main {
         ),
     );
     let result = run(&support::run_config(p)).expect(".board spec runs");
-    assert!(
-        result.passed(),
-        "the supplied rail on the compiled .board must hold 3.3 V:\n{}",
-        result.render_human()
+    support::assert_green(
+        &result,
+        "the supplied rail on the compiled .board must hold 3.3 V",
     );
 }
 

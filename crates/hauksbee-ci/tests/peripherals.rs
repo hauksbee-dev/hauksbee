@@ -23,11 +23,7 @@ fn ci_button_press_drives_a_net() {
         ..Default::default()
     };
     let result = run(&cfg).expect("run button_press spec");
-    assert!(
-        result.passed(),
-        "button-press spec should be green:\n{}",
-        result.render_human()
-    );
+    support::assert_green(&result, "button-press spec");
     // Specifically: the toggle assertion must be present and pass (proves the
     // net moved in response to the timed button).
     assert!(
@@ -113,11 +109,7 @@ max = 25
         ..Default::default()
     };
     let result = run(&cfg).expect("run vcd spec");
-    assert!(
-        result.passed(),
-        "vcd-sink spec should be green:\n{}",
-        result.render_human()
-    );
+    support::assert_green(&result, "vcd-sink spec");
 
     // The VCD file must exist and be well-formed.
     let vcd = std::fs::read_to_string(&vcd_out).expect("VCD written");

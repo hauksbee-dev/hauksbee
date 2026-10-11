@@ -141,6 +141,8 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
     );
 
     let result = ci_result(results, true);
+    // Deliberately numeric: every assertion passed, yet the tripped abort makes
+    // the run INVALID (exit 3), which is exactly the gap `assert_green` guards.
     assert!(result.passed(), "every assertion passed");
     assert_eq!(
         result.exit_code(),

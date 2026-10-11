@@ -69,6 +69,9 @@ fn pic_programmer_dir() -> PathBuf {
     .unwrap_or_default()
 }
 
+/// The `pic_programmer` parts with no model, open on its VCC rail.
+const PIC_PROGRAMMER_OPEN: &[&str] = &["U1", "U4", "U5", "U6"];
+
 /// The shared assertion body, parameterised on the board path. Identical for
 /// the schematic and the PCB so the only variable is which stage we run at.
 fn spec_body(board: &std::path::Path) -> String {
@@ -102,11 +105,10 @@ fn schematic_example_spec_passes() {
         return;
     };
     let result = run(&support::run_config(spec.path().to_path_buf())).expect("schematic spec runs");
-    assert!(
-        result.passed(),
-        "schematic-stage CI must be GREEN:\n{}",
-        result.render_human()
-    );
+    // Model gap: the LT1373 (U4), both PICs and the 24Cxx EEPROM have no model,
+    // so they are open on the VCC rail and the run is INVALID, not green. The
+    // numbers hold (VCC in range, no faults). `assert_green` once modelled.
+    support::assert_invalid_by_open_parts(&result, PIC_PROGRAMMER_OPEN);
     assert_eq!(result.results.len(), 2);
 }
 
@@ -143,10 +145,12 @@ fn schematic_and_pcb_agree() {
         );
     }
 
-    // And both must actually be green (a vacuous agreement on two RED runs
-    // would also satisfy the loop above).
-    assert!(sch_res.passed(), "schematic run must be GREEN");
-    assert!(pcb_res.passed(), "pcb run must be GREEN");
+    // And both must hold numerically (a vacuous agreement on two RED runs would
+    // also satisfy the loop above), and be INVALID for the same model gap
+    // (see `schematic_example_spec_passes`); `assert_green` once modelled.
+    assert_eq!(sch_res.exit_code(), pcb_res.exit_code());
+    support::assert_invalid_by_open_parts(&sch_res, PIC_PROGRAMMER_OPEN);
+    support::assert_invalid_by_open_parts(&pcb_res, PIC_PROGRAMMER_OPEN);
 }
 
 /// Pointing the spec at a sub-sheet (`pic_sockets.kicad_sch`, which is
@@ -208,9 +212,9 @@ fn hierarchy_subsheet_components_are_loaded() {
     // untracked-kind case silently passing green, that silent pass was bug #18
     // and is now a loud rejection.)
     match run(&support::run_config(spec)) {
-        Ok(res) => assert!(
-            res.passed(),
-            "sub-sheet component must be present and within its ceiling"
+        Ok(res) => support::assert_green(
+            &res,
+            "sub-sheet component must be present and within its ceiling",
         ),
         Err(e) => {
             let msg = e.to_string();

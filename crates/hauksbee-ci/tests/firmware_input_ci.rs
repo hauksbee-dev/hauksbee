@@ -66,11 +66,7 @@ deadline_ms = 20.0
     .unwrap();
 
     let result = run(&support::run_config(dir.join("spec.toml"))).expect("zip firmware spec runs");
-    assert!(
-        result.passed(),
-        "the zipped hex boots and drives the gate:\n{}",
-        result.render_human()
-    );
+    support::assert_green(&result, "the zipped hex boots and drives the gate");
 }
 
 /// A `firmware` directory with neither a platformio.ini nor a built artifact

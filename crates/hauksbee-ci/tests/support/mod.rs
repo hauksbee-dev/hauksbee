@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -64,6 +65,71 @@ pub fn ci_result(
         seeds: 1,
         analog_abort,
         ..Default::default()
+    }
+}
+
+/// Assert the run is GREEN as a user sees it: exit code 0.
+///
+/// `CiResult::passed()` is only the numeric judgement. It stays true when an
+/// assertion's evidence is undermined (INVALID, exit 3), so a test claiming
+/// "green" must check `exit_code()`. On failure this prints the verdict, every
+/// INVALID row's reason and the full human report.
+pub fn assert_green(result: &hauksbee_ci::CiResult, what: &str) {
+    if result.exit_code() == 0 {
+        return;
+    }
+    let invalid: String = result
+        .results
+        .iter()
+        .filter(|r| r.invalid)
+        .fold(String::new(), |mut out, r| {
+            let _ = write!(out, "\n  INVALID {}: {}", r.label, r.detail);
+            out
+        });
+    panic!(
+        "{what}: not green, exit {} (passed()={}, refusal: {:?}){invalid}\n{}",
+        result.exit_code(),
+        result.passed(),
+        result.verdict_reason(),
+        result.render_human()
+    );
+}
+
+/// Assert the run is INVALID (exit 3) *only* because parts with no model are
+/// open on the asserted paths, while the numeric judgement (`passed()`) holds.
+///
+/// For a board with a known model gap: it pins today's honest verdict and
+/// names the cause, so the test must become `assert_green` once the part is
+/// modelled. Every evidence-undermined assertion must cite at least one of
+/// `parts` and no critical cause other than an open part.
+pub fn assert_invalid_by_open_parts(result: &hauksbee_ci::CiResult, parts: &[&str]) {
+    use hauksbee_ir::evidence::AssumptionKind::{
+        DefaultParameter, InferredPinRole, OpenPart, ReducedFidelity,
+    };
+    let report = result.render_human();
+    assert_eq!(result.exit_code(), 3, "expected INVALID (exit 3)\n{report}");
+    assert!(result.passed() && !result.analog_abort, "numeric judgement\n{report}");
+    let undermined: Vec<_> = result.evidence.iter().filter(|m| m.is_undermined()).collect();
+    assert!(!undermined.is_empty(), "INVALID without undermined evidence\n{report}");
+    for map in undermined {
+        let cited: Vec<_> = map
+            .assumptions()
+            .iter()
+            .filter_map(|id| result.assumptions.iter().find(|a| a.id() == id))
+            .collect();
+        assert!(
+            cited.iter().all(|a| matches!(
+                a.kind(),
+                OpenPart | ReducedFidelity | DefaultParameter | InferredPinRole
+            )),
+            "{}: INVALID for a cause other than an open part\n{report}",
+            map.assertion()
+        );
+        let named = cited.iter().any(|a| {
+            a.kind() == OpenPart
+                && parts.iter().any(|p| a.id().as_str() == format!("open-part:{p}"))
+        });
+        assert!(named, "{}: not undermined by any of {parts:?}\n{report}", map.assertion());
     }
 }
 
