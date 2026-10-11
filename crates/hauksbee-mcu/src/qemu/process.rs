@@ -30,7 +30,7 @@
 
 use crate::children::{home_dir, which};
 use crate::external::{env_override, first_accepted, EmulatorProcess};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -97,7 +97,7 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     if let Some(found) = first_accepted(candidates, is_esp_fork) {
         return Ok(found);
     }
-    bail!(
+    Err(crate::BackendNotInstalled(format!(
         "Espressif QEMU ({}) not found. One-click installs exist: run \
          `hauksbee install esp-qemu`, or in the app use Install on the \
          Environment page. Manual routes: unpack the fork's prebuilt binary \
@@ -109,7 +109,8 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
          mainline qemu-system-xtensa has no esp32 machine and will not work.",
         arch.binary_name(),
         arch.env_override()
-    )
+    ))
+    .into())
 }
 
 /// The conventional unpacked locations for the fork under one home directory:

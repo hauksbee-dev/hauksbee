@@ -305,6 +305,7 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
             }
         }
         SpecError::Io(m) => diags.push(Diagnostic::new("io", m.clone())),
+        SpecError::BackendMissing(m) => diags.push(Diagnostic::new("backend-missing", m.clone())),
         SpecError::Toml { message, .. } => {
             diags.push(Diagnostic::new("toml-parse", message.clone()));
         }

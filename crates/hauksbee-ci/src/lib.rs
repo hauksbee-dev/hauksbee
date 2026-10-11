@@ -704,7 +704,26 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             let listed = |a: &&Assumption| a.because().contains(hauksbee_models::variants::LISTED);
             let variant = map.assumptions().iter().filter_map(cited).find(listed);
             let why = variant.map(|a| format!(" {} Unlocked by: {}", a.because(), a.replacement()));
-            if !result.detail.starts_with("INVALID evidence:") {
+            let no_firmware = map.assumptions().iter().filter_map(cited).any(|a| {
+                // The assumption capitalises its reason when it renders it.
+                a.because()
+                    .to_ascii_lowercase()
+                    .contains(&runner::NO_FIRMWARE_BECAUSE.to_ascii_lowercase())
+            });
+            if no_firmware {
+                // The MCU never ran, so what was read off it (an empty UART, zero
+                // edges) is the idle core, not a verdict on any firmware. State
+                // the fix instead of sending the reader to debug firmware.
+                if !result.detail.starts_with(runner::NO_FIRMWARE_DETAIL) {
+                    result.detail = format!(
+                        "{}{}; {}. (idle-MCU reading: {})",
+                        runner::NO_FIRMWARE_DETAIL,
+                        runner::NO_FIRMWARE_BECAUSE,
+                        runner::NO_FIRMWARE_FIX,
+                        result.detail
+                    );
+                }
+            } else if !result.detail.starts_with("INVALID evidence:") {
                 result.detail = format!(
                     "INVALID evidence: this assertion rests on a critical unresolved assumption.{} {}",
                     why.unwrap_or_default(),

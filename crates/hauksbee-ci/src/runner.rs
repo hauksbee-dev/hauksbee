@@ -1457,6 +1457,80 @@ fn sweep_variants(
     crate::tolerance::sweep_open_sets(plans, &open)
 }
 
+/// Why an assertion that rests on firmware is not judged when the spec names none.
+pub(crate) const NO_FIRMWARE_BECAUSE: &str = "the MCU never ran: this spec has no firmware";
+
+/// The fix for [`NO_FIRMWARE_BECAUSE`], shown wherever the verdict is.
+pub(crate) const NO_FIRMWARE_FIX: &str =
+    "add `firmware = \"path/to/app.elf\"` to the spec, or drop the UART/toggle asserts";
+
+/// How an assertion left unexercised for want of firmware opens its detail;
+/// the report's refusal footer recognises it by this prefix.
+pub(crate) const NO_FIRMWARE_DETAIL: &str = "INVALID: not exercised, ";
+
+/// Does this assertion claim something only executing firmware can produce?
+///
+/// A UART line, a boot trace, bus traffic and a hardware trace exist only if
+/// the MCU ran. A pin toggle or pulse width does too, unless the net is one no
+/// MCU pad can move (`mcu_nets` is every net a pad sits on or could drive
+/// through the board), in which case a spec stimulus or an oscillator part can
+/// produce it with no firmware.
+fn rests_on_firmware(
+    assertion: &crate::spec::Assertion,
+    mcu_nets: &std::collections::HashSet<String>,
+) -> bool {
+    match assertion.kind.as_str() {
+        "uart" | "boot_coverage" | "boot-coverage" | "peripheral" | "hwtrace" => true,
+        "toggle" | "pulse_width" => assertion
+            .net
+            .as_ref()
+            .is_some_and(|net| mcu_nets.contains(net)),
+        _ => false,
+    }
+}
+
+/// A spec with no `firmware` never starts the MCU, so every assertion that
+/// rests on the firmware having run is NOT EXERCISED, not failed: the core did
+/// nothing, and "UART is empty" or "0 edges" says nothing about any firmware.
+/// Each such assertion gets a critical assumption, which makes it INVALID
+/// (exit 3) with the fix stated, instead of a red that sends the reader to debug
+/// firmware they never loaded.
+fn no_firmware_assumptions(
+    spec: &Spec,
+    sched: &hauksbee_engine::scheduler::Scheduler,
+) -> Vec<Assumption> {
+    if spec.firmware.is_some() || sched.idle_mcu_refs().is_empty() {
+        return Vec::new();
+    }
+    // The net walk is only needed to judge a toggle or pulse width; skip it for
+    // a spec that has none (it is not free on a large board).
+    let needs_nets = spec
+        .asserts
+        .iter()
+        .any(|a| matches!(a.kind.as_str(), "toggle" | "pulse_width"));
+    let mcu_nets: std::collections::HashSet<String> = if needs_nets {
+        sched.mcu_reachable_nets().into_iter().collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+    spec.asserts
+        .iter()
+        .filter(|assertion| rests_on_firmware(assertion, &mcu_nets))
+        .map(|assertion| {
+            Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::new("firmware/none", "the firmware (this spec names none)"),
+                Scope::Check {
+                    check: "ci".into(),
+                    kind: Some(assertion.label()),
+                },
+                NO_FIRMWARE_BECAUSE,
+                NO_FIRMWARE_FIX,
+            )
+        })
+        .collect()
+}
+
 /// The run's production assumptions: the hollow-gate ones the caller already
 /// derived, plus every place the co-sim silently did less than it appears to.
 ///
@@ -1518,6 +1592,7 @@ fn production_assumptions(
             ));
         }
     }
+    production_assumptions.extend(no_firmware_assumptions(spec, engine.scheduler()));
     for bus in engine.scheduler().unexercised_buses() {
         for assertion in spec
             .asserts
@@ -1940,8 +2015,14 @@ fn run_one(
         .map(|m| m.backend.clone())
         .collect();
 
-    let mut engine = HauksbeeEngine::from_bound(bound, firmware, "/ci")
-        .map_err(SpecError::invalid("building engine"))?;
+    let mut engine = HauksbeeEngine::from_bound(bound, firmware, "/ci").map_err(|e| {
+        // A missing emulator is an install, not a flaw in the spec.
+        e.downcast_ref::<hauksbee_mcu::BackendNotInstalled>()
+            .map_or_else(
+                || SpecError::Invalid(format!("building engine: {e}")),
+                |missing| SpecError::BackendMissing(missing.0.clone()),
+            )
+    })?;
     engine.scheduler_mut().watch_steps(&watch);
 
     // Ambient for the steady-state junction-temperature estimate (max_temp).

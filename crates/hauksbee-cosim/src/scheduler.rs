@@ -594,6 +594,10 @@ pub struct Scheduler {
     /// warning; a CI `peripheral` assertion against one of these FAILS rather
     /// than passing on the slave's untouched default state.
     unexercised_buses: Vec<UnexercisedBus>,
+    /// MCUs the board carries that were left out of this run because no
+    /// firmware was given, each with the nodes of its GPIO pads. They never
+    /// execute, so nothing in the run is a reading of what they would do.
+    idle_mcus: Vec<IdleMcu>,
     /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
     /// granularity inside the owning MCU's run loop via its synchronous input
     /// responder (the read-direction analogue of `chains`). Wrapped in
@@ -867,6 +871,13 @@ impl ScopedMcuSubstitution {
     pub const fn assumption(&self) -> &Assumption {
         &self.assumption
     }
+}
+
+/// An MCU the board carries that no firmware was given for, so it never ran.
+#[derive(Debug, Clone)]
+struct IdleMcu {
+    reference: String,
+    gpio_nodes: Vec<NodeId>,
 }
 
 /// A bus peripheral bound on a platform that models no matching bus controller.
@@ -1393,6 +1404,7 @@ impl Scheduler {
         let mut substitutions = Vec::new();
         let mut scoped_substitutions = Vec::new();
         let mut clock_fuse_findings = Vec::new();
+        let mut idle_mcus = Vec::new();
         for binding in mcus {
             let evidence_subject = mcu_subjects
                 .next()
@@ -1404,6 +1416,20 @@ impl Scheduler {
             // backend. Firmware-backed runs still instantiate the selected
             // backend below and retain their fail-closed feature checks.
             if firmware.is_none() {
+                let gpio_nodes = binding
+                    .role_nets
+                    .iter()
+                    .filter(|(role, _)| {
+                        gpio_of_role(role, binding.module)
+                            .or_else(|| apin_gpio_of_role(role, binding.module))
+                            .is_some()
+                    })
+                    .map(|(_, &node)| node)
+                    .collect();
+                idle_mcus.push(IdleMcu {
+                    reference: binding.reference.clone(),
+                    gpio_nodes,
+                });
                 continue;
             }
             // Detect (and warn about) a chip substitution before the core is
@@ -1506,6 +1532,7 @@ impl Scheduler {
             scoped_substitutions,
             clock_fuse_findings,
             unexercised_buses: Vec::new(),
+            idle_mcus,
             hc165_chains: Vec::new(),
             responder_registries: Vec::new(),
             parallel_memory_drives: Vec::new(),
@@ -3131,6 +3158,13 @@ impl Scheduler {
     #[must_use]
     pub const fn mcu_count(&self) -> usize {
         self.mcus.len()
+    }
+
+    /// References of the MCUs the board carries that never ran because the run
+    /// was given no firmware.
+    #[must_use]
+    pub fn idle_mcu_refs(&self) -> Vec<String> {
+        self.idle_mcus.iter().map(|m| m.reference.clone()).collect()
     }
 
     /// Reference strings of the live MCUs (for serial routing).
@@ -6334,6 +6368,42 @@ impl Scheduler {
                 };
                 Some((name.clone(), of))
             })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Every net an MCU GPIO pad sits on, plus every net a pad could move
+    /// through the board (the same walk as [`Self::firmware_influenced_nets`]),
+    /// whether or not any firmware ran. This is the topological answer to
+    /// "could firmware have driven this net?", used to tell a pin-toggle claim
+    /// that rests on firmware execution from one a spec stimulus can satisfy.
+    #[must_use]
+    pub fn mcu_reachable_nets(&self) -> Vec<String> {
+        let live = self
+            .gpio_nets_where(|_, _, _, _| true)
+            .into_iter()
+            .filter_map(|name| self.net_nodes.get(&name).copied());
+        let idle = self
+            .idle_mcus
+            .iter()
+            .flat_map(|m| m.gpio_nodes.iter().copied());
+        let seeds: Vec<NodeId> = live.chain(idle).collect();
+        if seeds.is_empty() {
+            return Vec::new();
+        }
+        let reached: std::collections::HashSet<NodeId> = self
+            .influence_graph()
+            .reach(&seeds)
+            .into_iter()
+            .map(|(node, _)| node)
+            .chain(seeds.iter().copied())
+            .collect();
+        let mut out: Vec<String> = self
+            .net_nodes
+            .iter()
+            .filter(|(_, node)| reached.contains(node))
+            .map(|(name, _)| name.clone())
             .collect();
         out.sort();
         out

@@ -20,6 +20,10 @@ pub enum SpecError {
         message: String,
     },
     Invalid(String),
+    /// The spec is fine but an emulator it needs (Renode, Espressif QEMU) is not
+    /// installed here, so nothing ran and nothing was judged. The message names
+    /// the install command. Not a spec error: the spec author has nothing to fix.
+    BackendMissing(String),
     /// The solver deliberately refused or failed an analysis. Keep the typed
     /// source so the CLI can distinguish honesty refusals from malformed specs
     /// without parsing the message.
@@ -44,6 +48,11 @@ impl fmt::Display for SpecError {
                 write!(f, "could not parse spec {file}: {message}")
             }
             Self::Invalid(m) => write!(f, "invalid spec: {m}"),
+            Self::BackendMissing(m) => write!(
+                f,
+                "INVALID: nothing was run or judged, because the emulator this spec needs \
+                 is not installed here. {m}"
+            ),
             Self::Solver { context, source } => {
                 write!(f, "invalid spec: {context}: {source}")
             }
@@ -116,7 +125,8 @@ impl SpecError {
             Self::Solver {
                 source: hauksbee_solve::SolveError::Refused { .. },
                 ..
-            } => hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS,
+            }
+            | Self::BackendMissing(_) => hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS,
             Self::Many(errors) => errors.iter().map(Self::exit_code).max().unwrap_or(2),
             _ => 2,
         }
@@ -253,6 +263,19 @@ pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_emulator_is_invalid_not_an_invalid_spec() {
+        let e = SpecError::BackendMissing("run `hauksbee install renode`".into());
+        assert_eq!(
+            e.exit_code(),
+            hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
+        );
+        let text = e.to_string();
+        assert!(text.starts_with("INVALID"), "{text}");
+        assert!(!text.contains("invalid spec"), "{text}");
+        assert!(text.contains("hauksbee install renode"), "{text}");
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(std::string::ToString::to_string).collect()

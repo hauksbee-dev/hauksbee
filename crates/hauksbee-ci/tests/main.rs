@@ -38,6 +38,7 @@ mod manifest_cli_contract;
 #[cfg(feature = "renode")]
 mod mcu_descriptor_dir;
 mod multiunit_keying;
+mod no_firmware_spec;
 mod olimex_burst_calibration;
 mod open_driver_validity;
 mod open_part_criticality;

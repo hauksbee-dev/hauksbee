@@ -459,6 +459,7 @@ impl CiResult {
             let hit = |r: &&AssertResult| r.invalid && hit(r);
             self.results.iter().filter(hit).count()
         };
+        let no_firmware = count(&|r| r.detail.starts_with(crate::runner::NO_FIRMWARE_DETAIL));
         let evidence = count(&open_part);
         let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
         let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
@@ -466,8 +467,13 @@ impl CiResult {
             format!(
                 "a converged analog solve through the run; the consecutive-failure abort tripped and {invalid} assertion(s) were marked INVALID"
             )
-        } else if evidence + timing + paced == invalid {
+        } else if no_firmware + evidence + timing + paced == invalid {
             let mut parts = Vec::new();
+            if no_firmware > 0 {
+                parts.push(format!(
+                    "firmware that runs on the MCU; {no_firmware} assertion(s) rest on it and this spec names none"
+                ));
+            }
             if evidence > 0 {
                 parts.push(format!(
                     "every critical assumption under those assertions closed; {evidence} assertion(s) rest on an unresolved (open) part or a violated datasheet limit"
@@ -505,7 +511,9 @@ impl CiResult {
         let next = self.results.iter().find(|r| r.invalid).map_or_else(
             || "inspect the first analog non-convergence diagnosis in the job log, fix its named net/device, then rerun the same spec".to_string(),
             |r| {
-                let (before, after) = if r.detail.contains(" regulation of ") {
+                let (before, after) = if r.detail.starts_with(crate::runner::NO_FIRMWARE_DETAIL) {
+                    ("read the fix under", "; this spec has no firmware, so add `firmware = \"path/to/app.elf\"` to it or drop the UART/toggle asserts")
+                } else if r.detail.contains(" regulation of ") {
                     ("read the regulator reason under", ": declare a [[supply]] on that regulator's input net with the headroom it names (or fit a lower-dropout part)")
                 } else if open_part(r) {
                     ("close the assumption named under", " (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names)")

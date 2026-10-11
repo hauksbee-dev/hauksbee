@@ -17,7 +17,7 @@
 
 use crate::children::{home_dir, which};
 use crate::external::{env_override, first_accepted, EmulatorProcess};
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -38,13 +38,15 @@ pub fn find_renode() -> Result<PathBuf> {
     if let Some(found) = first_accepted(conventional_candidates(), |_| true) {
         return Ok(found);
     }
-    bail!(
+    Err(crate::BackendNotInstalled(
         "Renode not found. One-click installs exist: run `hauksbee install \
          renode`, or in the app use Install on the Environment page. Manual \
          routes: install it (https://renode.io) and either put `renode` on \
          PATH, set HAUKSBEE_RENODE to the binary, or extract the portable \
          build to ~/renode-portable."
+            .to_string(),
     )
+    .into())
 }
 
 /// All conventional install locations for the current environment: the

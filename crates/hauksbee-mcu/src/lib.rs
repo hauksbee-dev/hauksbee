@@ -179,6 +179,23 @@ pub use qemu::{QemuBackend, QemuConfig};
 
 pub use soc::{Backend, SocConfig, SocError};
 
+/// An emulator backend this machine does not have installed (Renode, Espressif
+/// QEMU). Its message already names the install command.
+///
+/// A distinct type, not a bare message, so a caller can tell "the spec is wrong"
+/// from "the tool the spec needs is not here" without matching on prose: the
+/// first is the author's to fix, the second is an install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendNotInstalled(pub String);
+
+impl std::fmt::Display for BackendNotInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BackendNotInstalled {}
+
 /// Immutable simavr source revision linked into a provenance-bound AVR build.
 ///
 /// Ordinary local system-library builds may not carry this optional identity;
