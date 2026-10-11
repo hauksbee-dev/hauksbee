@@ -28,6 +28,16 @@ peripheral_func_out_sel_reg = 0x3ff4_4530
 in_reg = 0x5000_0004
 width = 32
 
+# IO_MUX (DR_REG_IO_MUX_BASE) and RTC IO (DR_REG_RTCIO_BASE), ESP32 TRM v5.8
+# tables 6.12-2/6.12-3: a pad's MCU_SEL direct function, RTC mux, DAC or touch
+# channel takes it off the GPIO matrix. Read only when both live objects expose
+# word0 (Hauksbee's patch; the upstream machine maps them as unimplemented).
+[soc.banks.pad_mux]
+io_mux_reg = 0x3ff4_9000
+rtc_io_reg = 0x3ff4_8400
+io_mux_qom_path = "/machine/soc/iomux"
+rtc_io_qom_path = "/machine/soc/rtcio"
+
 # GPIO34..39 (port '1' bits 2..7 in the flat 0..31 / 32+ numbering) have no
 # output driver. ESP-IDF soc/esp32/include/soc/soc_caps.h: "GPIO >= 34 are
 # input only", SOC_GPIO_VALID_OUTPUT_GPIO_MASK clears BIT34..BIT39. (The S3

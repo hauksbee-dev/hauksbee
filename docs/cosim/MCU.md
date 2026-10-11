@@ -612,21 +612,28 @@ chunk over RSP runs far too slow).
   descriptor's `[[soc.input_only]]` pads; the scheduler's
   `peripheral_pad_nets` turns both into the host-paced level rule in
   `docs/ci/CI.md`.
-  On QEMU every pad but the flash attach is undecided, because a pad can also
-  be driven past the matrix (ESP32 TRM v5.8 §6.4-6.5, Tables 6.10-1 and
-  6.11-1): by an IO_MUX direct function (`MCU_SEL` other than 2: U0TXD,
-  CLK_OUT1..3, HSPI/VSPI, SD, EMAC) or through the RTC IO mux (DAC1/DAC2 on
-  GPIO25/26, touch, RTC GPIO). The esp32 machine maps IO_MUX (0x3FF49000), RTC
-  IO (0x3FF48400) and SENS as unimplemented devices, on the release and the
-  patched build alike: writes are dropped and reads return zero (measured:
-  `gpio_config` writes 0x2000 to IO_MUX_GPIO4_REG, which reads back 0). So no
-  undriven pad is taken as idle; GPIO32/33, outside the polled bank, say so.
-  The residue: a pad the matrix shows on `GPIO_OUT` with its enable set is
-  trusted as GPIO-owned, as every enabled pad is while the matrix itself is
-  unseen. Firmware that leaves `MCU_SEL` at its reset function 0 (the direct
-  function on GPIO1, 3, 6-15) or switches a GPIO output pad to the DAC or RTC
-  GPIO without clearing `GPIO_ENABLE` gets the `GPIO_OUT` level, not the
-  pad's. Retaining IO_MUX and RTC IO in the QEMU patch would close it.
+  A pad can also be driven past the matrix (ESP32 TRM v5.8 §6.4-6.5, Tables
+  6.10-1 and 6.11-1): by an IO_MUX direct function (`MCU_SEL` other than 2,
+  or 0 where Function 0 is not GPIO: U0TXD, U0RXD, CLK_OUT1..3, HSPI/VSPI,
+  SD, JTAG, EMAC) or through the RTC IO mux (DAC1/DAC2 on GPIO25/26, touch,
+  RTC GPIO, ULP, RTC I2C). The upstream esp32 machine maps IO_MUX
+  (0x3FF49000), RTC IO (0x3FF48400) and SENS as unimplemented devices that
+  drop writes and read zero. The classic-ESP32 patch replaces the first two
+  with register files that retain writes from the documented reset values
+  (TRM Tables 6.12-2/6.12-3 and Registers 6.33-6.53; the RTC IO field
+  defaults from ESP-IDF `rtc_io_reg.h`), each with a read-only `word0` QOM
+  property; nothing behind them (drive, DAC, touch, pulls) is emulated, and
+  SENS stays unimplemented. When both `[soc.banks.pad_mux]` objects carry
+  `word0`, every poll also reads the IO_MUX words and the RTC IO DAC/touch
+  words: a pad a direct function, the RTC mux, a powered DAC or a touch
+  channel owns leaves the poll's `GPIO_ENABLE` (its `GPIO_OUT` bit never
+  reaches it), and is latched for the run as unobserved with that reason.
+  With the matrix and both blocks seen, any other pad with no drive evidence
+  is reported observed: nothing drives it. A build without the blocks keeps
+  every pad but the flash attach undecided, naming IO_MUX and RTC IO; GPIO32/33,
+  outside the polled bank, say so. The DAC level is not reported (it also
+  depends on SENS, which reads zero), and a pad's internal pulls are not
+  modelled as drive.
   Ordinary ESP-IDF firmware is therefore visible without any Hauksbee code.
   An unpatched binary fails closed to the compatibility RTC-RAM output mirror and
   prints that mailbox requirement; the edge-diff logic is identical.

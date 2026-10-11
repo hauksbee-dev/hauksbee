@@ -124,7 +124,12 @@ glib, pixman, libgcrypt and libslirp (macOS: `brew install ninja glib pixman
 libgcrypt libslirp pkgconf`). Hauksbee distributes
 the patch and recipe, not the resulting QEMU binary. GPIO output from ordinary
 ESP-IDF firmware then reaches co-sim; GPIO input, SAR ADC, and I2C/SPI byte
-interception remain explicit mailbox contracts.
+interception remain explicit mailbox contracts. On the classic ESP32 the patch
+also retains the IO_MUX and RTC IO registers, so a pad that a direct function,
+a DAC, touch or the RTC mux owns is reported unobserved instead of carrying its
+`GPIO_OUT` level (see MCU.md). The marker records the patch hash, so an install
+built from an earlier patch is refused: move `~/.hauksbee-qemu-esp-patched`
+aside and rerun.
 
 In a **source checkout**, the dedicated source-patch acceptance is intentionally
 separate from the ordinary prebuilt-QEMU suite. It idempotently verifies/builds

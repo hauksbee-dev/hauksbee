@@ -254,10 +254,33 @@ pub struct GpioBank {
     /// [`QemuBackend::pins_routed_to_peripheral`]).
     #[serde(default)]
     pub peripheral_func_out_sel_reg: Option<u32>,
+    /// The `IO_MUX` and RTC IO blocks that can take this bank's pads off the
+    /// GPIO matrix, or `None` when not described (see [`PadMuxBlocks`]).
+    #[serde(default)]
+    pub pad_mux: Option<PadMuxBlocks>,
     /// Address of this bank's input-injection word (host -> firmware).
     pub in_reg: u32,
     /// Number of valid bits in this bank.
     pub width: u8,
+}
+
+/// A classic ESP32 bank's `IO_MUX` and RTC IO blocks, and their live QOM objects.
+///
+/// `IO_MUX` holds `MCU_SEL` per pad; RTC IO the RTC mux, DAC and touch per RTC
+/// pad. Each object's `word0` property proves the model retains writes; the
+/// upstream esp32 machine maps both as unimplemented devices that read zero.
+/// The per-pad layout decoded from them (`foreign_pads`) is the classic
+/// ESP32's only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadMuxBlocks {
+    /// `IO_MUX` base (`PIN_CTRL`), 0x3FF49000.
+    pub io_mux_reg: u32,
+    /// RTC IO base (`RTCIO_RTC_GPIO_OUT_REG`), 0x3FF48400.
+    pub rtc_io_reg: u32,
+    /// QOM path of the `IO_MUX` model.
+    pub io_mux_qom_path: String,
+    /// QOM path of the RTC IO model.
+    pub rtc_io_qom_path: String,
 }
 
 /// Per-part QEMU configuration: enough to boot a machine and bridge it.
@@ -592,25 +615,84 @@ fn plain_gpio_pads(words: &[u32]) -> u32 {
         .fold(u32::MAX, |mask, (pad, _)| mask & !(1 << pad))
 }
 
+/// `IO_MUX` word offset of pads 0..=27 from the block base (ESP32 TRM v5.8
+/// Table 6.12-2; ESP-IDF v5.5 `soc/esp32/register/soc/io_mux_reg.h`
+/// `PERIPHS_IO_MUX_*_U`, which adds GPIO24 at 0x90). Pads 28-31 do not exist.
+const IO_MUX_PAD_OFFSET: [u8; 28] = [
+    0x44, 0x88, 0x40, 0x84, 0x48, 0x6c, 0x60, 0x64, 0x68, 0x54, 0x58, 0x5c, 0x34, 0x38, 0x30, 0x3c,
+    0x4c, 0x50, 0x70, 0x74, 0x78, 0x7c, 0x80, 0x8c, 0x90, 0x24, 0x28, 0x2c,
+];
+/// Words read from the `IO_MUX` base: `PIN_CTRL` through GPIO24 (0x90).
+const IO_MUX_WORDS: usize = 0x94 / 4;
+/// Pads whose Function 0 is `GPIOn` as well as Function 2 (TRM Table 6.10-1;
+/// ESP-IDF `FUNC_GPIOn_GPIOn_0`): 0, 2, 4, 5 and 16-27. On the rest, U0TXD,
+/// U0RXD, the SD and the JTAG pads, `MCU_SEL` 0 (the reset value, Register
+/// 6.34) is a direct function.
+const F0_IS_GPIO: u32 = 0x0FFF_0035;
+/// RTC IO words read from `RTCIO_PAD_DAC1_REG` (base + 0x84) through
+/// `RTCIO_TOUCH_PAD7_REG` (+ 0xB0), TRM Table 6.12-3.
+const RTC_IO_FIRST: u32 = 0x84;
+const RTC_IO_WORDS: usize = 12;
+/// Per RTC pad of the low bank: its word index from [`RTC_IO_FIRST`], the bits
+/// that hand it to the RTC side, and the pad. `PAD_DAC1/2` (GPIO25/26): bit 17
+/// `MUX_SEL`, bit 18 `XPD_DAC`, bit 10 `DAC_XPD_FORCE`; `TOUCH_PADn` (TOUCH0-7
+/// on GPIO4, 0, 2, 15, 13, 12, 14, 27, Table 6.11-1): bit 19 `MUX_SEL`, bit 20
+/// `XPD` (TRM Registers 6.49-6.53; ESP-IDF `rtc_io_reg.h`). `MUX_SEL` routes
+/// the pad to the RTC block (RTC GPIO, ULP, RTC I2C); a powered DAC or touch
+/// channel drives it whatever the mux says.
+const RTC_PAD_OWNERS: [(usize, u32, u8); 10] = [
+    (0, 0x0006_0400, 25),
+    (1, 0x0006_0400, 26),
+    (4, 0x0018_0000, 4),
+    (5, 0x0018_0000, 0),
+    (6, 0x0018_0000, 2),
+    (7, 0x0018_0000, 15),
+    (8, 0x0018_0000, 13),
+    (9, 0x0018_0000, 12),
+    (10, 0x0018_0000, 14),
+    (11, 0x0018_0000, 27),
+];
+
+/// The pads (bit n = pad n) that something other than the GPIO matrix owns:
+/// an `IO_MUX` direct function (`MCU_SEL`, bits [14:12], other than 2, or 0
+/// where Function 0 is not GPIO; TRM §6.2.2, Register 6.34) or the RTC side
+/// (see [`RTC_PAD_OWNERS`]). Such a pad's `GPIO_OUT` bit never reaches it.
+/// `io_mux` starts at the `IO_MUX` base, `rtc_io` at [`RTC_IO_FIRST`]; a word
+/// past either slice counts the pad as owned elsewhere.
+fn foreign_pads(io_mux: &[u32], rtc_io: &[u32]) -> u32 {
+    let mux = IO_MUX_PAD_OFFSET.iter().enumerate().filter(|&(pad, &off)| {
+        io_mux.get(usize::from(off) / 4).is_none_or(|w| {
+            let sel = (w >> 12) & 7;
+            sel != 2 && (sel != 0 || F0_IS_GPIO & (1 << pad) == 0)
+        })
+    });
+    let rtc = RTC_PAD_OWNERS
+        .iter()
+        .filter(|&&(i, bits, _)| rtc_io.get(i).is_none_or(|w| w & bits != 0))
+        .map(|&(_, _, pad)| usize::from(pad));
+    mux.map(|(pad, _)| pad)
+        .chain(rtc)
+        .fold(0, |m, pad| m | 1 << pad)
+}
+
 /// Why a drive on `pin` could go unreported, completing "the backend could not
-/// observe peripheral routing: ...", or `None` for a pad the matrix shows on
-/// the memory bus (`memory_bus`, bit n = pad n): QEMU's own flash attach.
+/// observe peripheral routing: ...", or `None` when any drive on it would be
+/// seen, or it is QEMU's own flash attach (`memory_bus`, bit n = pad n).
 ///
 /// A pad is driven three ways besides `GPIO_OUT` (ESP32 TRM v5.8 ch. 6): a
 /// peripheral through the GPIO matrix (§6.3, seen when `matrix_seen`); an
-/// `IO_MUX` direct function, `MCU_SEL` other than 2 (§6.4, Table 6.10-1:
-/// U0TXD, `CLK_OUT1..3`, HSPI/VSPI, SD, EMAC); and the RTC IO mux (§6.5,
-/// Table 6.11-1: `DAC_1`/`DAC_2` on GPIO25/26, touch, RTC GPIO). The esp32
-/// machine maps `IO_MUX` and RTC IO as unimplemented devices
-/// (`hw/xtensa/esp32.c` at Espressif QEMU 40edccac, which Hauksbee's patch
-/// leaves alone): writes are dropped and reads return zero, so the last two
-/// are never seen and every undriven pad may be driven. A pad the matrix shows
-/// on `GPIO_OUT` is trusted as GPIO-owned, as `poll_matrix_routing` trusts
-/// every pad while the matrix is unseen; docs/cosim/MCU.md has the residue.
+/// `IO_MUX` direct function, `MCU_SEL` other than GPIO (§6.4, Table 6.10-1:
+/// U0TXD, `CLK_OUT1..3`, HSPI/VSPI, SD, JTAG, EMAC); and the RTC IO mux (§6.5,
+/// Table 6.11-1: `DAC_1`/`DAC_2` on GPIO25/26, touch, RTC GPIO). The upstream
+/// esp32 machine maps `IO_MUX` and RTC IO as unimplemented devices that read
+/// zero; Hauksbee's patch retains them, which the live probe reports as
+/// `pads_seen`. With both seen, a pad is unobserved only while `foreign`
+/// (latched [`foreign_pads`]) says a direct function or the RTC side owns it.
 fn routing_blind_spot(
     config: &QemuConfig,
-    matrix_seen: bool,
+    (matrix_seen, pads_seen): (bool, bool),
     memory_bus: u32,
+    foreign: u32,
     pin: PinId,
 ) -> Option<&'static str> {
     let Some(bank) = config
@@ -626,18 +708,25 @@ fn routing_blind_spot(
     if memory_bus & (1 << pin.bit) != 0 {
         return None;
     }
-    Some(
-        if matrix_seen && bank.peripheral_func_out_sel_reg.is_some() {
-            "this QEMU build reports GPIO-matrix routing, but no QEMU build retains the IO_MUX \
-         or RTC IO selection a pad's own UART, SPI, SD, EMAC or CLK_OUT signal, a DAC, a \
-         touch pad or an RTC GPIO output uses (both read as zero)"
-        } else {
-            "this QEMU build retains neither the GPIO-matrix output selection (a PWM, timer or \
+    let matrix = matrix_seen && bank.peripheral_func_out_sel_reg.is_some();
+    if matrix && pads_seen && bank.pad_mux.is_some() {
+        return (foreign & (1 << pin.bit) != 0).then_some(
+            "the pad's IO_MUX selects a direct function (UART, SPI, SD, JTAG, EMAC or \
+             CLK_OUT), or the RTC IO side owns it (RTC GPIO, ULP, RTC I2C, touch or a DAC), \
+             and this backend does not model that drive",
+        );
+    }
+    Some(if matrix {
+        "this QEMU build reports GPIO-matrix routing but does not retain the IO_MUX or RTC IO \
+         selection a pad's own UART, SPI, SD, EMAC or CLK_OUT signal, a DAC, a touch pad or \
+         an RTC GPIO output uses (both read as zero); rebuild it with \
+         scripts/install-sims.sh --qemu-patched-source"
+    } else {
+        "this QEMU build retains neither the GPIO-matrix output selection (a PWM, timer or \
          RMT output) nor the IO_MUX or RTC IO selection (a pad's own UART, SPI or EMAC \
-         signal, a DAC, touch or RTC GPIO output); a build that reports the matrix comes \
-         from scripts/install-sims.sh --qemu-patched-source"
-        },
-    )
+         signal, a DAC, touch or RTC GPIO output); a build that reports them comes from \
+         scripts/install-sims.sh --qemu-patched-source"
+    })
 }
 
 const fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
@@ -676,6 +765,13 @@ pub struct QemuBackend {
     /// Without it the matrix registers read back as zero whatever the firmware
     /// wrote, so they are never consulted.
     func_out_sel_observable: bool,
+    /// Whether every described `IO_MUX`/RTC IO block's live QOM object
+    /// carries `word0`, the patch's proof that it retains writes.
+    pad_mux_observable: bool,
+    /// Pads each bank has ever had owned by an `IO_MUX` direct function or
+    /// the RTC side (bit n = pad n; see [`foreign_pads`]). Latched like
+    /// `routed_pads`.
+    foreign_pads: HashMap<char, u32>,
     /// Pads each bank has ever had a peripheral output routed onto while
     /// enabled (bit n = pad n). Latched: a PWM waveform that ran during the run
     /// stays a firmware-driven net after the firmware stops it.
@@ -911,6 +1007,20 @@ impl QemuBackend {
             );
         }
 
+        let pad_mux_observable = gpio_output_observation
+            == GpioOutputObservation::PeripheralRegisters
+            && config.banks.iter().any(|b| b.pad_mux.is_some())
+            && config
+                .banks
+                .iter()
+                .filter_map(|b| b.pad_mux.as_ref())
+                .all(|p| {
+                    [&p.io_mux_qom_path, &p.rtc_io_qom_path].iter().all(|path| {
+                        qmp.qom_get(path, "word0")
+                            .is_ok_and(|v| v.parse::<u32>().is_ok())
+                    })
+                });
+
         let last_out = config.banks.iter().map(|b| (b.letter, 0u32)).collect();
         let initial_enable =
             if gpio_output_observation == GpioOutputObservation::PeripheralRegisters {
@@ -944,6 +1054,8 @@ impl QemuBackend {
             last_enable,
             gpio_output_observation,
             func_out_sel_observable,
+            pad_mux_observable,
+            foreign_pads: HashMap::new(),
             routed_pads: HashMap::new(),
             memory_bus_now: HashMap::new(),
             in_shadow,
@@ -1024,7 +1136,7 @@ impl QemuBackend {
                     // GPIO_OUT drives only the pads whose matrix selects it;
                     // the rest belong to a peripheral (the boot ROM leaves the
                     // flash pads enabled on SPIQ..SPICS0, holding GPIO_OUT 0).
-                    raw & self.poll_matrix_routing(bank, raw)?
+                    raw & self.poll_matrix_routing(bank, raw)? & !self.poll_pad_mux(bank)?
                 }
                 // Mailbox firmware publishes only levels. Preserve the old
                 // behavior while reporting direction as unobservable.
@@ -1067,6 +1179,25 @@ impl QemuBackend {
             .insert(bank.letter, memory_bus_pads(&words));
         *self.routed_pads.entry(bank.letter).or_insert(0) |= routed;
         Ok(plain_gpio_pads(&words))
+    }
+
+    /// Read the bank's `IO_MUX` and RTC IO words (two `xp` round trips) and
+    /// latch the pads a direct function or the RTC side owns; returns those
+    /// owned now, whose `GPIO_OUT` bit does not reach the pad. None (0) until
+    /// the capability probe succeeded, since the blocks then read zero.
+    fn poll_pad_mux(&mut self, bank: &GpioBank) -> Result<u32> {
+        let Some(blocks) = bank.pad_mux.as_ref().filter(|_| self.pad_mux_observable) else {
+            return Ok(0);
+        };
+        let (mux, rtc) = (blocks.io_mux_reg, blocks.rtc_io_reg + RTC_IO_FIRST);
+        let io_mux = self.qmp.read_words(mux, IO_MUX_WORDS);
+        let rtc_io = self.qmp.read_words(rtc, RTC_IO_WORDS);
+        let foreign = foreign_pads(
+            &io_mux.with_context(|| format!("reading IO_MUX at {mux:#x} over QMP"))?,
+            &rtc_io.with_context(|| format!("reading RTC IO at {rtc:#x} over QMP"))?,
+        );
+        *self.foreign_pads.entry(bank.letter).or_insert(0) |= foreign;
+        Ok(foreign)
     }
 
     /// Advance the guest by ~`seconds` of virtual time, then exchange state.
@@ -1414,6 +1545,13 @@ impl QemuBackend {
         self.func_out_sel_observable
     }
 
+    /// Whether the running QEMU retains the `IO_MUX` and RTC IO blocks, so a
+    /// pad's direct-function or RTC ownership is decoded, not assumed.
+    #[must_use]
+    pub const fn pad_mux_observable(&self) -> bool {
+        self.pad_mux_observable
+    }
+
     /// Write a guest physical word (gdbstub `M` packet). See [`Self::debug_read_u32`].
     ///
     /// # Errors
@@ -1627,8 +1765,14 @@ impl Mcu for QemuBackend {
     /// See `routing_blind_spot`.
     fn peripheral_routing_unobserved(&self, pin: PinId) -> Option<String> {
         let memory_bus = self.memory_bus_now.get(&pin.port).copied().unwrap_or(0);
-        routing_blind_spot(&self.config, self.func_out_sel_observable, memory_bus, pin)
-            .map(str::to_string)
+        // A bank never polled has shown nothing, so every pad stays unruled-out.
+        let foreign = self
+            .foreign_pads
+            .get(&pin.port)
+            .copied()
+            .unwrap_or(u32::MAX);
+        let seen = (self.func_out_sel_observable, self.pad_mux_observable);
+        routing_blind_spot(&self.config, seen, memory_bus, foreign, pin).map(str::to_string)
     }
 
     fn pin_can_drive(&self, pin: PinId) -> bool {
@@ -1924,26 +2068,89 @@ mod tests {
         assert_eq!(memory_bus_pads(&words), 1 << 6 | 1 << 9 | 1 << 17);
     }
 
-    /// No QEMU build retains `IO_MUX` or RTC IO, so a plain GPIO pad (4), the
-    /// U0TXD/`CLK_OUT3` pad (1) and the `DAC_1` pad (25) all stay "may be
-    /// driven" even with the matrix seen; GPIO32 (`RTC_GPIO9`, `TOUCH9`; TRM
-    /// Table 6.11-1) sits outside the polled bank; only the flash attach is clear.
+    /// `IO_MUX` words with every pad's `MCU_SEL` at `sel`, and the RTC IO
+    /// words at their reset values (ESP-IDF `rtc_io_reg.h` defaults: DRV 2 on
+    /// the DAC pads, the touch DAC/DRV fields; nothing routed to RTC).
+    fn pad_blocks(sel: u32) -> (Vec<u32>, Vec<u32>) {
+        let rtc = [
+            0x8000_0000,
+            0x8000_0000,
+            0x8410_0010,
+            0x6600_0000,
+            0x5200_0000,
+        ];
+        let mut rtc_io = rtc.to_vec();
+        rtc_io.extend([0x4a00_0000; 7]);
+        (vec![sel << 12 | 0xa00; IO_MUX_WORDS], rtc_io)
+    }
+
+    /// `MCU_SEL` 2 is the GPIO matrix everywhere; 0 is GPIO only where Function
+    /// 0 is (TRM Table 6.10-1), so the reset state leaves U0TXD (1), U0RXD (3),
+    /// the SD pads (6-11) and JTAG (12-15) on their direct functions.
     #[test]
-    fn io_mux_and_rtc_io_drives_are_never_ruled_out() {
+    fn mcu_sel_decides_whether_the_gpio_matrix_owns_a_pad() {
+        let (mut mux, rtc) = pad_blocks(2);
+        assert_eq!(foreign_pads(&mux, &rtc), 0);
+        let (reset, _) = pad_blocks(0);
+        assert_eq!(foreign_pads(&reset, &rtc), 1 << 1 | 1 << 3 | 0xFFC0);
+        mux[0x48 / 4] = 1 << 12 | 0xa00; // GPIO4 on HSPIHD (Function 1)
+        mux[0x88 / 4] = 0; // U0TXD back on its reset UART function
+        assert_eq!(foreign_pads(&mux, &rtc), 1 << 4 | 1 << 1);
+        // A short read never decodes as GPIO-owned.
+        assert_eq!(foreign_pads(&mux[..0x48 / 4], &rtc) & 1 << 4, 1 << 4);
+    }
+
+    /// The RTC side takes a pad by `MUX_SEL` (RTC GPIO, ULP, RTC I2C) or by a
+    /// powered DAC (`XPD_DAC`, `DAC_XPD_FORCE`) or touch channel (`XPD`).
+    #[test]
+    fn rtc_mux_dac_and_touch_take_a_pad_off_the_gpio_matrix() {
+        let (mux, reset) = pad_blocks(2);
+        for (word, bit, pad) in [
+            (0, 18, 25),
+            (0, 10, 25),
+            (1, 17, 26),
+            (4, 19, 4),
+            (11, 20, 27),
+        ] {
+            let mut rtc = reset.clone();
+            rtc[word] |= 1 << bit;
+            assert_eq!(foreign_pads(&mux, &rtc), 1 << pad, "word {word} bit {bit}");
+        }
+        assert_eq!(foreign_pads(&mux, &reset[..4]), 0x0800_F015); // touch words unread
+    }
+
+    /// With the matrix and both pad blocks seen, only a pad a direct function
+    /// or the RTC side owned stays "may be driven"; a build without the pad
+    /// blocks still names them; GPIO32 (`RTC_GPIO9`, `TOUCH9`) sits outside the
+    /// polled bank; the flash attach is always clear.
+    #[test]
+    fn io_mux_and_rtc_io_drives_are_ruled_out_only_when_seen() {
         let c = QemuConfig::esp32();
         let pin = |port, bit| PinId { port, bit };
-        for bit in [1, 4, 25] {
-            let why = routing_blind_spot(&c, true, 0, pin('0', bit)).unwrap();
-            assert!(why.contains("IO_MUX") && why.contains("DAC"), "{why}");
-            let unpatched = routing_blind_spot(&c, false, 0, pin('0', bit)).unwrap();
-            assert!(unpatched.contains("--qemu-patched-source"), "{unpatched}");
+        let foreign = 1 << 1 | 1 << 25;
+        assert_eq!(
+            routing_blind_spot(&c, (true, true), 0, foreign, pin('0', 4)),
+            None
+        );
+        for bit in [1, 25] {
+            let why = routing_blind_spot(&c, (true, true), 0, foreign, pin('0', bit)).unwrap();
+            assert!(why.contains("IO_MUX selects a direct function"), "{why}");
         }
-        assert_eq!(routing_blind_spot(&c, true, 1 << 9, pin('0', 9)), None);
-        let outside = routing_blind_spot(&c, true, u32::MAX, pin('1', 0)).unwrap();
+        for bit in [1, 4, 25] {
+            let why = routing_blind_spot(&c, (true, false), 0, 0, pin('0', bit)).unwrap();
+            assert!(why.contains("IO_MUX") && why.contains("DAC"), "{why}");
+            let unpatched = routing_blind_spot(&c, (false, true), 0, 0, pin('0', bit)).unwrap();
+            assert!(unpatched.contains("retains neither"), "{unpatched}");
+        }
+        assert_eq!(
+            routing_blind_spot(&c, (true, true), 1 << 9, u32::MAX, pin('0', 9)),
+            None
+        );
+        let outside = routing_blind_spot(&c, (true, true), u32::MAX, 0, pin('1', 0)).unwrap();
         assert!(outside.contains("outside the GPIO banks"), "{outside}");
-        // The S3 names no matrix block, so even a matrix-capable build is blind.
-        let s3 = routing_blind_spot(&QemuConfig::esp32s3(), true, 0, pin('0', 4)).unwrap();
-        assert!(s3.contains("retains neither"), "{s3}");
+        // The S3 names no matrix or pad blocks, so even a capable build is blind.
+        let s3 = routing_blind_spot(&QemuConfig::esp32s3(), (true, true), 0, 0, pin('0', 4));
+        assert!(s3.unwrap().contains("retains neither"));
     }
 
     #[test]

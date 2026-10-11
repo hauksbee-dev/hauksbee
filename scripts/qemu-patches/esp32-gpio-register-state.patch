@@ -145,6 +145,147 @@ diff --git a/hw/gpio/esp32_gpio.c b/hw/gpio/esp32_gpio.c
  }
  
  static Property esp32_gpio_properties[] = {
+@@ -95,9 +201,140 @@
+     .class_size = sizeof(Esp32GpioClass),
+ };
+ 
++/*
++ * IO_MUX words 0x00..0x90 (ESP32 TRM v5.8 Table 6.12-2, plus GPIO24 at 0x90
++ * from ESP-IDF soc/esp32/register/soc/io_mux_reg.h).  PIN_CTRL resets to 0
++ * (Register 6.33).  A pad word (Register 6.34) resets to MCU_SEL 0 and
++ * FUN_DRV 2 with IE/WPU/WPD from Table 6.10-1's Reset column (0: 0x800,
++ * 1: 0xa00, 2: 0xa80, 3: 0xb00); GPIO34-39 have FUN_DRV 0, and GPIO20/24,
++ * absent from that table, keep the register's own reset.
++ */
++static const uint32_t esp32_io_mux_reset[ESP32_PAD_REGS_MAX] = {
++    0x000,                                      /* 0x00 PIN_CTRL */
++    0x000, 0x000, 0x000, 0x000, 0x000, 0x000,   /* 0x04 GPIO36-39, 34, 35 */
++    0x800, 0x800, 0x800, 0x800, 0x800,          /* 0x1c GPIO32, 33, 25-27 */
++    0xb00, 0xa80, 0xa80, 0xb00,                 /* 0x30 MTMS MTDI MTCK MTDO */
++    0xa80, 0xb00, 0xa80, 0xa00, 0xa00,          /* 0x40 GPIO2, 0, 4, 16, 17 */
++    0xb00, 0xb00, 0xb00, 0xb00, 0xb00, 0xb00,   /* 0x54 SD_DATA2/3 CMD CLK DATA0/1 */
++    0xb00, 0xa00, 0xa00, 0x800, 0xa00, 0xa00,   /* 0x6c GPIO5, 18-22 */
++    0xb00, 0xb00, 0xa00, 0x800,                 /* 0x84 U0RXD U0TXD GPIO23 GPIO24 */
++};
++
++/*
++ * RTC IO words 0x00..0xc8 (TRM v5.8 Table 6.12-3); reset values are the
++ * field defaults in ESP-IDF soc/esp32/register/soc/rtc_io_reg.h, which match
++ * TRM Registers 6.49-6.53 (DRV 2 on the DAC and 32K pads, touch DAC/DRV).
++ */
++static const uint32_t esp32_rtc_io_reset[ESP32_PAD_REGS_MAX] = {
++    [0x84 / 4] = 0x80000000, 0x80000000,        /* PAD_DAC1, PAD_DAC2 */
++    0x84100010, 0x66000000,                     /* XTAL_32K_PAD, TOUCH_CFG */
++    0x52000000, 0x4a000000, 0x52000000, 0x4a000000, 0x52000000, /* TOUCH_PAD0-4 */
++    0x52000000, 0x4a000000, 0x42000000, 0x02000000, 0x02000000, /* TOUCH_PAD5-9 */
++    [0xc8 / 4] = 0x01603160,                    /* DATE */
++};
++
++static unsigned int esp32_pad_regs_count(Esp32PadRegsState *s)
++{
++    return s->rtc_io ? ESP32_PAD_REGS_MAX : 0x94 / 4;
++}
++
++static uint64_t esp32_pad_regs_read(void *opaque, hwaddr addr, unsigned int size)
++{
++    Esp32PadRegsState *s = ESP32_PAD_REGS(opaque);
++    unsigned int i = addr / 4;
++
++    if (i >= esp32_pad_regs_count(s)) {
++        return 0;
++    }
++    return extract32(s->regs[i], (addr & 3) * 8, size * 8);
++}
++
++static void esp32_pad_regs_write(void *opaque, hwaddr addr, uint64_t value,
++                                 unsigned int size)
++{
++    Esp32PadRegsState *s = ESP32_PAD_REGS(opaque);
++    unsigned int i = addr / 4;
++    uint32_t v;
++
++    if (i >= esp32_pad_regs_count(s)) {
++        return;
++    }
++    v = deposit32(s->regs[i], (addr & 3) * 8, size * 8, value);
++    if (s->rtc_io) {
++        switch (i * 4) {
++        case 0x04: case 0x10: case 0x1c:    /* RTC_GPIO_OUT/ENABLE/STATUS_W1TS */
++            s->regs[i - 1] |= v;
++            return;
++        case 0x08: case 0x14: case 0x20:    /* ..._W1TC */
++            s->regs[i - 2] &= ~v;
++            return;
++        case 0x24:                          /* RTC_GPIO_IN: read-only */
++            return;
++        }
++    }
++    s->regs[i] = v;
++}
++
++static const MemoryRegionOps esp32_pad_regs_ops = {
++    .read = esp32_pad_regs_read,
++    .write = esp32_pad_regs_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++};
++
++static void esp32_pad_regs_reset_hold(Object *obj, ResetType type)
++{
++    Esp32PadRegsState *s = ESP32_PAD_REGS(obj);
++
++    memcpy(s->regs, s->rtc_io ? esp32_rtc_io_reset : esp32_io_mux_reset,
++           sizeof(s->regs));
++}
++
++static void esp32_pad_regs_realize(DeviceState *dev, Error **errp)
++{
++    Esp32PadRegsState *s = ESP32_PAD_REGS(dev);
++
++    /* The same spans the machine mapped as unimplemented devices. */
++    memory_region_init_io(&s->iomem, OBJECT(dev), &esp32_pad_regs_ops, s,
++                          TYPE_ESP32_PAD_REGS, s->rtc_io ? 0x400 : 0x2000);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
++    esp32_pad_regs_reset_hold(OBJECT(dev), RESET_TYPE_COLD);
++}
++
++static void esp32_pad_regs_init(Object *obj)
++{
++    Esp32PadRegsState *s = ESP32_PAD_REGS(obj);
++
++    /* Capability marker: present only on a model that retains writes. */
++    object_property_add_uint32_ptr(obj, "word0", &s->regs[0],
++                                   OBJ_PROP_FLAG_READ);
++}
++
++static Property esp32_pad_regs_properties[] = {
++    DEFINE_PROP_BOOL("rtc-io", Esp32PadRegsState, rtc_io, false),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void esp32_pad_regs_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    RESETTABLE_CLASS(klass)->phases.hold = esp32_pad_regs_reset_hold;
++    dc->realize = esp32_pad_regs_realize;
++    device_class_set_props(dc, esp32_pad_regs_properties);
++}
++
++static const TypeInfo esp32_pad_regs_info = {
++    .name = TYPE_ESP32_PAD_REGS,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(Esp32PadRegsState),
++    .instance_init = esp32_pad_regs_init,
++    .class_init = esp32_pad_regs_class_init,
++};
++
+ static void esp32_gpio_register_types(void)
+ {
+     type_register_static(&esp32_gpio_info);
++    type_register_static(&esp32_pad_regs_info);
+ }
+ 
+ type_init(esp32_gpio_register_types)
 diff --git a/include/hw/gpio/esp32_gpio.h b/include/hw/gpio/esp32_gpio.h
 --- a/include/hw/gpio/esp32_gpio.h
 +++ b/include/hw/gpio/esp32_gpio.h
@@ -195,7 +336,7 @@ diff --git a/include/hw/gpio/esp32_gpio.h b/include/hw/gpio/esp32_gpio.h
  #define ESP32_STRAP_MODE_FLASH_BOOT 0x12
  #define ESP32_STRAP_MODE_UART_BOOT  0x0f
  
-@@ -20,6 +57,9 @@
+@@ -20,8 +57,31 @@
      MemoryRegion iomem;
      qemu_irq irq;
      uint32_t strap_mode;
@@ -205,3 +346,80 @@ diff --git a/include/hw/gpio/esp32_gpio.h b/include/hw/gpio/esp32_gpio.h
  } Esp32GpioState;
  
  typedef struct Esp32GpioClass {
+     SysBusDeviceClass parent_class;
+ } Esp32GpioClass;
++
++/*
++ * The classic ESP32's IO_MUX (0x3FF49000) and RTC IO (0x3FF48400) blocks as
++ * plain register files: writes are retained and read back from the
++ * documented reset values, so a host can see which pads an IO_MUX direct
++ * function, the RTC mux, a DAC or a touch channel owns.  Nothing behind the
++ * registers (pad drive, DAC, touch, pulls) is emulated.  "rtc-io" selects
++ * the RTC IO layout (W1TS/W1TC words, read-only RTC_GPIO_IN).
++ */
++#define TYPE_ESP32_PAD_REGS "esp32.padregs"
++#define ESP32_PAD_REGS(obj) OBJECT_CHECK(Esp32PadRegsState, (obj), TYPE_ESP32_PAD_REGS)
++#define ESP32_PAD_REGS_MAX 51
++
++typedef struct Esp32PadRegsState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion iomem;
++    bool rtc_io;
++    uint32_t regs[ESP32_PAD_REGS_MAX];
++} Esp32PadRegsState;
+diff --git a/hw/xtensa/esp32.c b/hw/xtensa/esp32.c
+--- a/hw/xtensa/esp32.c
++++ b/hw/xtensa/esp32.c
+@@ -161,6 +161,7 @@
+     }
+     if (s->requested_reset & ESP32_SOC_RESET_RTC) {
+         device_cold_reset(DEVICE(&s->rtc_cntl));
++        device_cold_reset(DEVICE(&s->rtcio));
+     }
+     if (s->requested_reset & ESP32_SOC_RESET_PERIPH) {
+         device_cold_reset(DEVICE(&s->dport));
+@@ -168,6 +169,7 @@
+         device_cold_reset(DEVICE(&s->aes));
+         device_cold_reset(DEVICE(&s->rsa));
+         device_cold_reset(DEVICE(&s->gpio));
++        device_cold_reset(DEVICE(&s->iomux));
+         for (int i = 0; i < ESP32_UART_COUNT; ++i) {
+             device_cold_reset(DEVICE(&s->uart[i]));
+         }
+@@ -517,9 +519,12 @@
+     memory_region_add_subregion_overlap(sys_mem, esp32_memmap[ESP32_MEMREGION_FRAMEBUF].base, &s->rgb.vram, 0);
+ 
+     esp32_soc_add_unimp_device(sys_mem, "esp32.analog", DR_REG_ANA_BASE, 0x1000);
+-    esp32_soc_add_unimp_device(sys_mem, "esp32.rtcio", DR_REG_RTCIO_BASE, 0x400);
++    qdev_prop_set_bit(DEVICE(&s->rtcio), "rtc-io", true);
++    qdev_realize(DEVICE(&s->rtcio), &s->rtc_bus, &error_fatal);
++    esp32_soc_add_periph_device(sys_mem, &s->rtcio, DR_REG_RTCIO_BASE);
+     esp32_soc_add_unimp_device(sys_mem, "esp32.rtcio", DR_REG_SENS_BASE, 0x400);
+-    esp32_soc_add_unimp_device(sys_mem, "esp32.iomux", DR_REG_IO_MUX_BASE, 0x2000);
++    qdev_realize(DEVICE(&s->iomux), &s->periph_bus, &error_fatal);
++    esp32_soc_add_periph_device(sys_mem, &s->iomux, DR_REG_IO_MUX_BASE);
+     esp32_soc_add_unimp_device(sys_mem, "esp32.hinf", DR_REG_HINF_BASE, 0x1000);
+     esp32_soc_add_unimp_device(sys_mem, "esp32.slc", DR_REG_SLC_BASE, 0x1000);
+     esp32_soc_add_unimp_device(sys_mem, "esp32.slchost", DR_REG_SLCHOST_BASE, 0x1000);
+@@ -597,6 +602,8 @@
+     object_property_add_alias(obj, "serial2", OBJECT(&s->uart[2]), "chardev");
+ 
+     object_initialize_child(obj, "gpio", &s->gpio, TYPE_ESP32_GPIO);
++    object_initialize_child(obj, "iomux", &s->iomux, TYPE_ESP32_PAD_REGS);
++    object_initialize_child(obj, "rtcio", &s->rtcio, TYPE_ESP32_PAD_REGS);
+ 
+     object_initialize_child(obj, "dport", &s->dport, TYPE_ESP32_DPORT);
+ 
+diff --git a/include/hw/xtensa/esp32.h b/include/hw/xtensa/esp32.h
+--- a/include/hw/xtensa/esp32.h
++++ b/include/hw/xtensa/esp32.h
+@@ -37,6 +37,8 @@
+     Esp32TWAIState twai;
+     ESP32UARTState uart[ESP32_UART_COUNT];
+     Esp32GpioState gpio;
++    Esp32PadRegsState iomux;
++    Esp32PadRegsState rtcio;
+     Esp32RngState rng;
+     Esp32RtcCntlState rtc_cntl;
+     Esp32FrcTimerState frc_timer[ESP32_FRC_COUNT];
