@@ -46,6 +46,7 @@ use hauksbee_models::sensor_spec::{
 };
 
 use hauksbee_bind::drivers::PinDriver;
+use hauksbee_ir::NodeId;
 
 use super::i2c::I2cSlave;
 use super::spi::SpiSlave;
@@ -620,6 +621,25 @@ impl RegisterMapSensor {
         false
     }
 
+    /// The board nodes this sensor's outputs drive: one per output that has a
+    /// net driver attached, deduplicated. An output with no driver drives
+    /// nothing.
+    #[must_use]
+    pub fn driven_nodes(&self) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = Vec::new();
+        for n in self
+            .outputs
+            .iter()
+            .filter_map(|o| o.driver.as_ref())
+            .map(|d| d.net)
+        {
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        out
+    }
+
     /// Evaluate an output law's current voltage by name (whether or not a
     /// driver is bound).
     #[must_use]
@@ -834,6 +854,10 @@ impl I2cSlave for RegisterMapSensor {
         self.i2c_address
     }
 
+    fn driven_nodes(&self) -> Vec<NodeId> {
+        Self::driven_nodes(self)
+    }
+
     #[allow(clippy::cast_possible_truncation)] // physical temperatures in m°C fit i32 (as saturates)
     fn temperature_mc(&self) -> Option<i32> {
         self.modeled_temperature_c()
@@ -1015,6 +1039,10 @@ impl I2cSlave for RegisterMapSensor {
 impl SpiSlave for RegisterMapSensor {
     fn spi_mode(&self) -> u8 {
         self.spi_mode
+    }
+
+    fn driven_nodes(&self) -> Vec<NodeId> {
+        Self::driven_nodes(self)
     }
 
     fn transfer(&mut self, mosi: u8) -> u8 {

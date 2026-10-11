@@ -69,12 +69,21 @@
 
 use std::collections::HashMap;
 
+use hauksbee_ir::NodeId;
+
 use super::{AsAny, BusActivity, Peripheral, TickCtx};
 
 /// A device on the SPI bus that exchanges one byte per transfer.
 pub trait SpiSlave: AsAny + Send {
     /// Exchange a byte: receive the firmware's MOSI byte, return MISO.
     fn transfer(&mut self, mosi: u8) -> u8;
+
+    /// Board nodes this device sets the level of in response to bus writes
+    /// (an output pin driven through an attached net driver). Empty for a
+    /// slave that only answers reads or holds storage.
+    fn driven_nodes(&self) -> Vec<NodeId> {
+        Vec::new()
+    }
 
     /// Chip-select ASSERTED (active-low falling edge): begin a fresh transaction
     /// by resetting the command state machine to its start-of-transaction state.
@@ -317,6 +326,9 @@ pub struct SpiBus {
     /// See [`Scheduler::attach_spi_bus`].
     selected: bool,
     powered: bool,
+    /// The board nodes the bus's signal pins (clock, data, chip select) sit
+    /// on, when known; see [`SpiBus::signal_nodes`].
+    signal_nodes: Vec<NodeId>,
 }
 
 impl SpiBus {
@@ -335,7 +347,32 @@ impl SpiBus {
             // `set_cs_pin(Some)` flips it to start deselected until its CS asserts.
             selected: true,
             powered: true,
+            signal_nodes: Vec::new(),
         }
+    }
+
+    /// Record the board nodes this bus's signal pins sit on, adding to any
+    /// already known (duplicates and ground are dropped).
+    pub fn add_signal_nodes(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
+        for n in nodes {
+            if !n.is_ground() && !self.signal_nodes.contains(&n) {
+                self.signal_nodes.push(n);
+            }
+        }
+    }
+
+    /// The board nodes of the bus's signal pins, in the order recorded. Empty
+    /// when the attaching code did not know them.
+    #[must_use]
+    pub fn signal_nodes(&self) -> &[NodeId] {
+        &self.signal_nodes
+    }
+
+    /// Every board node the slave sets the level of in response to firmware
+    /// writes (see [`SpiSlave::driven_nodes`]).
+    #[must_use]
+    pub fn driven_nodes(&self) -> Vec<NodeId> {
+        self.slave.driven_nodes()
     }
 
     /// The declared SPI clock mode (0..=3) of this bus's slave, cached from

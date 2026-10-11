@@ -793,6 +793,14 @@ impl AsBuiltOverlay {
             for drv in dac.vout_drivers.iter_mut().flatten() {
                 drv.net = remap(drv.net);
             }
+            for n in &mut dac.bus_nodes {
+                *n = remap(*n);
+            }
+        }
+        for p in &mut bound.peripherals {
+            for n in &mut p.bus_nodes {
+                *n = remap(*n);
+            }
         }
         for leg in &mut bound.supplies {
             leg.net = remap(leg.net);
@@ -1290,6 +1298,7 @@ mod tests {
             vref: 3.3,
             gain: 1,
             vout_drivers: [Some(drv(n)), None, None, None],
+            bus_nodes: Vec::new(),
         };
 
         // A digital buffer whose input role `a0` and output driver `y0` both

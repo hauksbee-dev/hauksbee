@@ -118,6 +118,10 @@ pub struct DacBinding {
     /// VOUT channel A..D -> stamped driver (None if that channel net is
     /// unconnected / tied to ground on this board).
     pub vout_drivers: [Option<PinDriver>; 4],
+    /// The board nodes on the part's bus pins (`sda`, `scl`): where firmware's
+    /// writes to the DAC enter the board. Ground and unconnected pins are
+    /// absent.
+    pub bus_nodes: Vec<NodeId>,
 }
 
 /// Firmware-visible peripheral discovered from a resolved model card. The
@@ -140,6 +144,10 @@ pub struct PeripheralBinding {
     /// current/power-gating claim; protocol behavior remains usable but cannot
     /// be promoted to bus-coupled electrical behavior in model coverage.
     pub power: Option<BoundPeripheralPower>,
+    /// The board nodes on the part's bus pins (I2C `scl`/`sda`; SPI clock,
+    /// data and chip select): where firmware's writes enter the board.
+    /// Ground and unconnected pins are absent.
+    pub bus_nodes: Vec<NodeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -3399,6 +3407,33 @@ fn bind_model_peripheral(
         }
     };
 
+    let bus_roles: Vec<&str> = match &spec {
+        PeripheralSpec::I2cEeprom { .. } => vec!["scl", "sda"],
+        PeripheralSpec::SpiNorFlash {
+            cs_role,
+            clk_role,
+            mosi_role,
+            miso_role,
+            ..
+        } => [cs_role, clk_role, mosi_role, miso_role]
+            .map(String::as_str)
+            .to_vec(),
+        PeripheralSpec::RegisterMap {
+            scl_role,
+            sda_role,
+            cs_role,
+            clk_role,
+            mosi_role,
+            miso_role,
+            ..
+        } => match sensor.as_ref().map(|s| s.bus) {
+            Some(Bus::Spi) => [cs_role, clk_role, mosi_role, miso_role]
+                .map(String::as_str)
+                .to_vec(),
+            _ => [scl_role, sda_role].map(String::as_str).to_vec(),
+        },
+    };
+    let bus_nodes = bus_nodes_of(role_nets, &bus_roles);
     Ok(PeripheralBinding {
         reference: comp.reference.clone(),
         spec,
@@ -3406,7 +3441,20 @@ fn bind_model_peripheral(
         i2c_address_override,
         i2c_address_assumed,
         power,
+        bus_nodes,
     })
+}
+
+/// The distinct non-ground nodes the named bus `roles` are wired to, in the
+/// order named; a role with no connection is skipped.
+fn bus_nodes_of(role_nets: &HashMap<String, NodeId>, roles: &[&str]) -> Vec<NodeId> {
+    let mut out: Vec<NodeId> = Vec::new();
+    for node in roles.iter().filter_map(|r| role_nets.get(*r)) {
+        if !node.is_ground() && !out.contains(node) {
+            out.push(*node);
+        }
+    }
+    out
 }
 
 /// Map each connected pin to its model role string.
@@ -6503,6 +6551,7 @@ fn bind_mcp4728_dac(
         vref,
         gain,
         vout_drivers,
+        bus_nodes: bus_nodes_of(roles, &["sda", "scl"]),
     });
     (
         BindOutcome::Behavioral {

@@ -431,3 +431,74 @@ fn host_paced_windowed_level_downstream_of_firmware_is_conditional_or_refused() 
     assert!(results[0].passed && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
+
+/// [`firmware_level_run`] read on `VOUT`, a DAC output the firmware sets by
+/// writing the I2C bus whose `SDA` it drives (no MCU pin drives `VOUT`).
+fn dac_output_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
+    let mut out = firmware_level_run(whole, after, host_paced);
+    out.driven_nets.remove("EN");
+    out.driven_nets.insert("SDA".to_string());
+    for thr in [0.0_f64, 50.0] {
+        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
+        out.windows.insert(("VOUT".to_string(), thr.to_bits()), win);
+    }
+    out.influenced_nets
+        .insert("VOUT".to_string(), "SDA".to_string());
+    out
+}
+
+/// A windowed level on a DAC output the firmware writes over a bus is as
+/// host-dependent as one on a pin it drives: a conditional GREEN naming the
+/// bus net on a host-paced clock, a refusal when only the window passes, and a
+/// hard verdict on a clock-exact backend.
+#[test]
+fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refused() {
+    let spec = load_spec(
+        "host_paced_dac.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nname=\"setpoint\"\nkind=\"voltage\"\n\
+         net=\"VOUT\"\nmin=3.0\nafter_ms=50\n",
+    );
+    let results = evaluate(&spec, &[dac_output_run((3.3, 3.3), (3.3, 3.3), true)]);
+    assert!(results[0].passed, "{}", results[0].detail);
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(
+        human.contains(
+            "CONDITION: setpoint: the 50 ms after_ms window on 'VOUT', downstream of \
+             firmware-driven 'SDA' was not judged"
+        ),
+        "{human}"
+    );
+
+    // The level holds only inside the window: a host-paced run cannot say
+    // when the DAC was written, so the claim is refused.
+    let results = evaluate(&spec, &[dac_output_run((0.0, 3.3), (3.3, 3.3), true)]);
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    assert!(
+        results[0]
+            .detail
+            .contains("'VOUT' is downstream of firmware-driven 'SDA'"),
+        "{}",
+        results[0].detail
+    );
+    assert_eq!(ci_result(results, false).exit_code(), 3);
+
+    // A clock-exact backend orders the DAC write in simulated time: hard.
+    let results = evaluate(&spec, &[dac_output_run((0.0, 3.3), (3.3, 3.3), false)]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+
+    // Without the walk's attribution the same net keeps its hard verdict,
+    // which is what the scheduler's seeds change.
+    let mut bare = dac_output_run((0.0, 3.3), (3.3, 3.3), true);
+    bare.influenced_nets.clear();
+    let results = evaluate(&spec, &[bare]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+}

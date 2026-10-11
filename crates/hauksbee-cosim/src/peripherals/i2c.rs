@@ -31,6 +31,7 @@
 
 use std::collections::HashMap;
 
+use hauksbee_ir::NodeId;
 use hauksbee_mcu::I2cEvent;
 
 use super::{AsAny, BusActivity, Peripheral, TickCtx};
@@ -79,6 +80,14 @@ pub trait I2cSlave: AsAny + Send {
         BusActivity::default()
     }
 
+    /// Board nodes this device sets the level of in response to bus writes
+    /// (a DAC's output nets, through the net drivers attached to it). Empty
+    /// for a slave that only answers reads or holds storage. The scheduler
+    /// reads it to know which nets the firmware moves through this bus.
+    fn driven_nodes(&self) -> Vec<NodeId> {
+        Vec::new()
+    }
+
     /// If this is a temperature sensor, its current reading in milli-degrees
     /// Celsius. Lets a backend that runs the firmware against a real emulated
     /// I2C device (the QEMU ESP32 `tmp105`) push the modeled temperature into
@@ -110,12 +119,17 @@ pub struct I2cBus {
     /// Below a model card's source-bound operating threshold the bus device is
     /// electrically off: it does not ACK, mutate storage, or return data.
     powered: bool,
+    /// The board nodes the bus's signal pins (SDA, SCL) sit on, when the
+    /// binder or the attaching code knew them. Names where firmware's writes
+    /// to this bus enter the board; see [`I2cBus::signal_nodes`].
+    signal_nodes: Vec<NodeId>,
 }
 
 impl I2cBus {
     #[must_use]
     pub fn new(id: &str) -> Self {
         Self {
+            signal_nodes: Vec::new(),
             id: id.to_string(),
             active: None,
             txn_addrs: Vec::new(),
@@ -133,6 +147,36 @@ impl I2cBus {
 
     pub fn add_slave(&mut self, slave: Box<dyn I2cSlave>) {
         self.slaves.push(slave);
+    }
+
+    /// Record the board nodes this bus's signal pins (SDA, SCL) sit on,
+    /// adding to any already known (duplicates and ground are dropped).
+    pub fn add_signal_nodes(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
+        for n in nodes {
+            if !n.is_ground() && !self.signal_nodes.contains(&n) {
+                self.signal_nodes.push(n);
+            }
+        }
+    }
+
+    /// The board nodes of the bus's signal pins, in the order recorded. Empty
+    /// when the attaching code did not know them.
+    #[must_use]
+    pub fn signal_nodes(&self) -> &[NodeId] {
+        &self.signal_nodes
+    }
+
+    /// Every board node a slave on this bus sets the level of in response to
+    /// firmware writes (see [`I2cSlave::driven_nodes`]), deduplicated.
+    #[must_use]
+    pub fn driven_nodes(&self) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = Vec::new();
+        for n in self.slaves.iter().flat_map(|s| s.driven_nodes()) {
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        out
     }
 
     /// 7-bit addresses currently modeled on this bus.

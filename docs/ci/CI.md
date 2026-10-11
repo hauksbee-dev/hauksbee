@@ -1161,9 +1161,12 @@ rule. "Firmware-driven" means an MCU pin net the firmware drove during the run,
 the same evidence the `toggle` and `pulse_width` rules use, or a net
 downstream of one: a net the firmware moves through the board without driving
 it (a MOSFET or load-switch output, a regulator's rail through an enable pin
-the firmware drives, a logic stage's output), whose not-judged bound names the
-driven net it follows, for these rules and the timing rules above alike. A rail
-an independent source holds is not downstream of a pull-up beside it, and the
+the firmware drives, a logic stage's output, an output a bus peripheral sets when
+the firmware writes it, such as a DAC's output and what an op-amp buffers from
+it, named after the bus net the firmware drove), whose not-judged bound names the
+driven net it follows, for these rules and the timing rules above alike. A 0 V
+current-sense source in series with a feed is a wire to this walk. A rail an
+independent source holds is not downstream of a pull-up beside it, and the
 MCU's own supply is not downstream of the current its pins draw. Where the
 window starts in the firmware's progress depends on the host, so the window is
 "not judged" and the `min`/`max` level is read over every sample of the run:

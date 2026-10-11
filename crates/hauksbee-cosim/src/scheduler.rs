@@ -1686,6 +1686,7 @@ impl Scheduler {
 
         let mut bus = I2cBus::new("MCP4728_BUS");
         for d in dacs {
+            bus.add_signal_nodes(d.bus_nodes.iter().copied());
             let mut slave = RegisterMapSensor::from_toml(MCP4728_SPEC)
                 .expect("shipped mcp4728.toml spec must validate");
             slave.set_i2c_address(d.address);
@@ -1718,6 +1719,7 @@ impl Scheduler {
             let reference = peripheral.reference;
             let power = peripheral.power.as_ref();
             let cs_net = peripheral.cs_net;
+            let bus_nodes = peripheral.bus_nodes.clone();
             match peripheral.spec {
                 PeripheralSpec::I2cEeprom {
                     address,
@@ -1728,7 +1730,8 @@ impl Scheduler {
                     let slave = Eeprom24c::new(address, size_bytes)
                         .with_word_address_bytes(word_address_bytes)
                         .with_page_size(page_size);
-                    let bus = I2cBus::new(&reference).with_slave(Box::new(slave));
+                    let mut bus = I2cBus::new(&reference).with_slave(Box::new(slave));
+                    bus.add_signal_nodes(bus_nodes);
                     self.attach_powered_i2c(&reference, power, bus);
                 }
                 PeripheralSpec::SpiNorFlash {
@@ -1744,7 +1747,8 @@ impl Scheduler {
                         .try_into()
                         .expect("validated SPI NOR JEDEC ID has exactly three bytes");
                     let flash = SpiNorFlash::new(size_bytes, page_size, sector_size, id, spi_mode);
-                    let bus = SpiBus::new(&reference, Box::new(flash));
+                    let mut bus = SpiBus::new(&reference, Box::new(flash));
+                    bus.add_signal_nodes(bus_nodes);
                     self.attach_powered_spi(&reference, power, bus, cs_net, None);
                 }
                 PeripheralSpec::RegisterMap {
@@ -1759,11 +1763,13 @@ impl Scheduler {
                     }
                     match sensor.bus() {
                         Bus::I2c => {
-                            let bus = I2cBus::new(&reference).with_slave(Box::new(sensor));
+                            let mut bus = I2cBus::new(&reference).with_slave(Box::new(sensor));
+                            bus.add_signal_nodes(bus_nodes);
                             self.attach_powered_i2c(&reference, power, bus);
                         }
                         Bus::Spi => {
-                            let bus = SpiBus::new(&reference, Box::new(sensor));
+                            let mut bus = SpiBus::new(&reference, Box::new(sensor));
+                            bus.add_signal_nodes(bus_nodes);
                             self.attach_powered_spi(
                                 &reference,
                                 power,
@@ -2890,6 +2896,9 @@ impl Scheduler {
             Some(pins.cs_n),
             crate::peripherals::CsProvenance::BitBangPins,
         );
+        let nets = [pins.sclk, pins.mosi, pins.miso, pins.cs_n]
+            .map(|pin| self.mcus[mi].binding.gpio_drivers[&pin].net);
+        bus.lock_or_recover().add_signal_nodes(nets);
         let responder = crate::responders::BitBangSpiResponder::new(bus.clone(), pins);
         self.responder_registry(mi)
             .lock_or_recover()
@@ -2937,6 +2946,8 @@ impl Scheduler {
                 self.mcus[mi].binding.reference,
             );
         }
+        let nets = [scl, sda].map(|pin| self.mcus[mi].binding.gpio_drivers[&pin].net);
+        bus.lock_or_recover().add_signal_nodes(nets);
         let responder = crate::responders::SoftI2cResponder::new(bus.clone(), scl, sda);
         self.responder_registry(mi)
             .lock_or_recover()
@@ -6144,22 +6155,33 @@ impl Scheduler {
     /// an unmodelled part (any pin into its drive-capable pins), and from a
     /// simple regulator's enable or shutdown pin into its output: the stamp
     /// does not read the enable, but on the real board whatever drives it
-    /// switches the rail. The walk stops where the regulation taint walk
-    /// stops (ground, declared supplies, the terminals of trusted voltage
-    /// sources), so a rail an independent source holds is not reached through
-    /// a pull-up beside it, and it never crosses an MCU: a supply pin's draw
-    /// is a load on the rail, not a way to move it.
+    /// switches the rail. The outputs a bus peripheral sets when the firmware
+    /// writes it (a DAC's output nets, from `I2cBus::driven_nodes` and its SPI
+    /// counterpart) are seeds of their own, named after the bus's signal net
+    /// the firmware drove (see `bus_driven_outputs`). The walk stops where the
+    /// regulation taint walk stops (ground, declared supplies, the terminals
+    /// of trusted voltage sources), except that a 0 V source in series
+    /// between two live nodes (a current-sense ammeter) is a wire to it, so a
+    /// rail an independent source holds is not reached through a pull-up
+    /// beside it, and it never crosses an MCU: a supply pin's draw is a load
+    /// on the rail, not a way to move it.
     #[must_use]
     pub fn firmware_influenced_nets(&self) -> Vec<(String, String)> {
         let driven = self.firmware_driven_nets();
         // Each driven node once, under the first driven net name on it.
-        let mut seeds: Vec<(NodeId, &str)> = Vec::new();
+        let mut seeds: Vec<(NodeId, String)> = Vec::new();
         for name in &driven {
             if let Some(&node) = self.net_nodes.get(name) {
                 if !seeds.iter().any(|(n, _)| *n == node) {
-                    seeds.push((node, name));
+                    seeds.push((node, name.clone()));
                 }
             }
+        }
+        // Outputs a bus peripheral sets in response to firmware writes join
+        // the walk as seeds of their own, and are listed in the result.
+        let bus_outputs = self.bus_driven_outputs(&driven, &seeds);
+        for (node, from) in &bus_outputs {
+            seeds.push((*node, from.clone()));
         }
         if seeds.is_empty() {
             return Vec::new();
@@ -6210,17 +6232,74 @@ impl Scheduler {
         }
         let starts: Vec<NodeId> = seeds.iter().map(|(n, _)| *n).collect();
         let reached: HashMap<NodeId, NodeId> = graph.reach(&starts).into_iter().collect();
-        let origin = |seed: NodeId| seeds.iter().find(|(n, _)| *n == seed).map(|(_, s)| *s);
+        let origin = |seed: NodeId| {
+            seeds
+                .iter()
+                .find(|(n, _)| *n == seed)
+                .map(|(_, s)| s.clone())
+        };
         // Every board name on a reached node: two names can share one node.
         let mut out: Vec<(String, String)> = self
             .net_nodes
             .iter()
             .filter_map(|(name, node)| {
-                let of = origin(*reached.get(node)?)?;
-                Some((name.clone(), of.to_string()))
+                let of = match reached.get(node) {
+                    Some(seed) => origin(*seed)?,
+                    None => bus_outputs.iter().find(|(n, _)| n == node)?.1.clone(),
+                };
+                Some((name.clone(), of))
             })
             .collect();
         out.sort();
+        out
+    }
+
+    /// The nodes the attached bus peripherals drive in response to firmware
+    /// writes (a DAC's output nets), each with the net it is attributed to:
+    /// the bus's own signal net the firmware drove, else its first signal net,
+    /// else the first firmware-driven net, else the bus's id. A node an MCU pin
+    /// already drives (`seeds`) is left out, and so is everything when no MCU
+    /// runs, since nothing then writes to a bus.
+    fn bus_driven_outputs(
+        &self,
+        driven: &[String],
+        seeds: &[(NodeId, String)],
+    ) -> Vec<(NodeId, String)> {
+        use crate::peripherals::Peripheral as _;
+        if self.mcus.is_empty() {
+            return Vec::new();
+        }
+        // (id, signal nodes, driven nodes) of every attached bus.
+        let mut buses: Vec<(String, Vec<NodeId>, Vec<NodeId>)> = Vec::new();
+        for bus in &self.i2c_buses {
+            let b = bus.lock_or_recover();
+            let id = b.id().to_string();
+            buses.push((id, b.signal_nodes().to_vec(), b.driven_nodes()));
+        }
+        for bus in &self.spi_buses {
+            let b = bus.lock_or_recover();
+            let id = b.id().to_string();
+            buses.push((id, b.signal_nodes().to_vec(), b.driven_nodes()));
+        }
+        let mut out: Vec<(NodeId, String)> = Vec::new();
+        for (id, signals, outputs) in buses {
+            let signal_net = |n: &NodeId| self.net_name_for(*n).map(str::to_string);
+            let by_firmware = signals
+                .iter()
+                .find(|n| seeds.iter().any(|(s, _)| s == *n))
+                .and_then(signal_net);
+            let from = by_firmware
+                .or_else(|| signals.first().and_then(signal_net))
+                .or_else(|| driven.first().cloned())
+                .unwrap_or(id);
+            for node in outputs {
+                let taken =
+                    seeds.iter().any(|(s, _)| *s == node) || out.iter().any(|(s, _)| *s == node);
+                if !node.is_ground() && !taken {
+                    out.push((node, from.clone()));
+                }
+            }
+        }
         out
     }
 
@@ -10267,6 +10346,190 @@ data_out = ["io0"]
         assert_eq!(
             sched.firmware_influenced_nets(),
             pairs(&[("GATE", "GPIO"), ("LOAD", "GPIO")])
+        );
+    }
+
+    /// A scheduler over `circuit` with one mock MCU whose pins sit on the nets
+    /// named in `pins`, and the nets named in `driven` already written by the
+    /// firmware.
+    fn influence_sched(
+        circuit: Circuit,
+        net_nodes: HashMap<String, NodeId>,
+        pins: &[((char, u8), &str)],
+        driven: &[(char, u8)],
+    ) -> Scheduler {
+        let nodes: Vec<(_, NodeId)> = pins.iter().map(|(p, n)| (*p, net_nodes[*n])).collect();
+        let bound = bound_board("influence", circuit, net_nodes, Vec::new(), Vec::new());
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let drivers = tristated_drivers(&mut sched, &nodes);
+        let mut mcu = binding("U1", "qemu:test", drivers);
+        for ((port, bit), node) in &nodes {
+            mcu.role_nets
+                .insert(format!("p{}{bit}", port.to_ascii_lowercase()), *node);
+        }
+        push_core(&mut sched, dir_core(true), mcu);
+        for pin in driven {
+            sched.mcus[0].last_levels.insert(*pin, true);
+        }
+        sched
+    }
+
+    fn named(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+            .collect()
+    }
+
+    /// A DAC on an I2C bus sets its output net when the firmware writes it, so
+    /// that net moves with the firmware's timing although no MCU pin drives it,
+    /// and so does everything an op-amp buffer passes it to; a rail a real
+    /// source holds stays out. Naming follows the bus net the firmware drove,
+    /// then the bus's first signal net.
+    #[test]
+    fn a_dac_output_and_the_buffer_behind_it_follow_the_i2c_writes_that_set_it() {
+        use crate::peripherals::register_map::tests::MINI_DAC_SPEC;
+        let mut circuit = Circuit::new();
+        let mut net_nodes = HashMap::new();
+        let mut net = |name: &str| {
+            let id = circuit.node(name);
+            net_nodes.insert(name.to_string(), id);
+            id
+        };
+        let [sda, scl, vout, buf, load, vref] =
+            ["SDA", "SCL", "VOUT", "BUF", "LOAD", "VREF"].map(&mut net);
+        let gnd = NodeId::GROUND;
+        circuit.add(Device::vsource("Vref", vref, gnd, SourceKind::Dc(2.5)));
+        // A unity-gain buffer from the DAC output, loaded to ground and to the
+        // held reference.
+        circuit.add(Device::OpAmp {
+            name: "U2".into(),
+            out: buf,
+            inp: vout,
+            inn: buf,
+            reference: None,
+            gain: 1e5,
+            pole_hz: None,
+            slew: None,
+            rail_lo: hauksbee_ir::Rail::fixed(0.0),
+            rail_hi: hauksbee_ir::Rail::fixed(5.0),
+            supply: hauksbee_ir::Supply::default(),
+        });
+        circuit.add(Device::resistor("R_LOAD", buf, load, 100.0));
+        circuit.add(Device::resistor("R_PD", load, gnd, 10e3));
+        circuit.add(Device::resistor("R_REF", load, vref, 100e3));
+        let pins = [(('B', 0), "SDA"), (('B', 1), "SCL")];
+        let mut sched = influence_sched(circuit, net_nodes, &pins, &[]);
+        let driver =
+            hauksbee_bind::drivers::PinDriver::stamp(&mut sched.circuit, vout, "VOUT", "dac", 1.0);
+        let mut sensor = RegisterMapSensor::from_toml(MINI_DAC_SPEC).expect("spec");
+        assert!(sensor.attach_output_driver_for_channel(0, driver));
+        let mut bus = I2cBus::new("DAC").with_slave(Box::new(sensor));
+        bus.add_signal_nodes([sda, scl]);
+        sched.i2c_buses.push(Arc::new(Mutex::new(bus)));
+
+        // The firmware has not touched any pin: the bus net still names it.
+        assert!(sched.firmware_driven_nets().is_empty());
+        let by = |net: &str| named(&[("BUF", net), ("LOAD", net), ("VOUT", net)]);
+        assert_eq!(sched.firmware_influenced_nets(), by("SDA"));
+
+        // A driven SCL is the bus net the firmware drove.
+        sched.mcus[0].last_levels.insert(('B', 1), true);
+        assert_eq!(sched.firmware_influenced_nets(), by("SCL"));
+
+        // SDA driven as well: the first of the bus's nets the firmware drove.
+        sched.mcus[0].last_levels.insert(('B', 0), true);
+        assert_eq!(sched.firmware_influenced_nets(), by("SDA"));
+
+        // No MCU runs, so nothing writes the bus.
+        sched.mcus.clear();
+        sched.responder_registries.clear();
+        assert!(sched.firmware_influenced_nets().is_empty());
+    }
+
+    /// The binder hands the scheduler a DAC's bus pins and output nets, so a
+    /// board with a real MCP4728 on it gets its VOUT net seeded from the nets
+    /// the bus is wired to, with no part name known to the influence walk.
+    #[test]
+    fn a_bound_dac_seeds_its_vout_net_from_its_bus_nets() {
+        let text = pcb_fixture(
+            &["", "GND", "+3V3", "SCL", "SDA", "VOUT"],
+            &[
+                (
+                    "Analog_DAC:MCP4728",
+                    "U1",
+                    "MCP4728",
+                    100,
+                    &[(1, 1, 2), (2, 2, 3), (3, 3, 4), (6, 6, 5), (10, 10, 1)],
+                ),
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 5), (2, 2, 1)]),
+            ],
+        );
+        let mut sched = board_scheduler(&text);
+        let (sda, scl, vout) = (
+            sched.net_nodes["SDA"],
+            sched.net_nodes["SCL"],
+            sched.net_nodes["VOUT"],
+        );
+        assert_eq!(sched.i2c_buses.len(), 1, "the DAC's bus attaches");
+        let bus = sched.i2c_buses[0].lock().unwrap();
+        assert_eq!(bus.signal_nodes(), [sda, scl]);
+        assert_eq!(bus.driven_nodes(), [vout]);
+        drop(bus);
+        // No MCU, no firmware writes to the bus.
+        assert!(sched.firmware_influenced_nets().is_empty());
+        let drivers = tristated_drivers(&mut sched, &[(('B', 0), sda), (('B', 1), scl)]);
+        let mut mcu = binding("U9", "qemu:test", drivers);
+        mcu.role_nets
+            .extend([("pb0".to_string(), sda), ("pb1".to_string(), scl)]);
+        push_core(&mut sched, dir_core(true), mcu);
+        sched.mcus[0].last_levels.insert(('B', 0), true);
+        assert_eq!(sched.firmware_influenced_nets(), named(&[("VOUT", "SDA")]));
+    }
+
+    /// A 0 V current-sense ammeter in series with a feed is a wire to the
+    /// influence walk (the taint walk still stops at it), while a rail a real
+    /// source holds, reached through a pull-up beside the load, stays out.
+    #[test]
+    fn firmware_influence_passes_a_zero_volt_series_ammeter_but_not_a_held_rail() {
+        let mut circuit = Circuit::new();
+        let mut net_nodes = HashMap::new();
+        let mut net = |name: &str| {
+            let id = circuit.node(name);
+            net_nodes.insert(name.to_string(), id);
+            id
+        };
+        let [gpio, a, b, load, bus] = ["GPIO", "A", "B", "LOAD", "BUS"].map(&mut net);
+        let gnd = NodeId::GROUND;
+        circuit.add(Device::vsource("Vbus", bus, gnd, SourceKind::Dc(5.0)));
+        circuit.add(Device::resistor("R1", gpio, a, 100.0));
+        circuit.add(Device::vsource("Vport_U9", a, b, SourceKind::Dc(0.0)));
+        circuit.add(Device::resistor("R2", b, load, 100.0));
+        circuit.add(Device::resistor("R3", load, bus, 10e3));
+        let mut sched = influence_sched(circuit, net_nodes, &[(('B', 0), "GPIO")], &[('B', 0)]);
+        let (_, walk) = sched.taint_walk();
+        assert!(
+            walk.stops().contains(&a) && walk.stops().contains(&b),
+            "the regulation walk keeps stopping at the ammeter"
+        );
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            named(&[("A", "GPIO"), ("B", "GPIO"), ("LOAD", "GPIO")])
+        );
+        // The same board with the ammeter wired to ground is a held node.
+        let ammeter = sched
+            .circuit
+            .devices
+            .iter_mut()
+            .find(|d| d.name() == "Vport_U9")
+            .expect("the ammeter");
+        let Device::Vsource { n, .. } = ammeter else {
+            panic!("the ammeter is a voltage source");
+        };
+        *n = gnd;
+        assert!(
+            sched.firmware_influenced_nets().is_empty(),
+            "a 0 V source to ground holds its node"
         );
     }
 
