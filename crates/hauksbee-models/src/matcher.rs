@@ -82,9 +82,7 @@ impl CompiledEntry {
         // part, so it matches if either spelling does.
         let bare = strip_package_suffix(&value);
         let re_ok = |re: &Option<Regex>, text: &str| re.as_ref().is_none_or(|re| re.is_match(text));
-        let value_ok = |re: &Option<Regex>| {
-            re_ok(re, &value) || bare.is_some_and(|b| re_ok(re, b))
-        };
+        let value_ok = |re: &Option<Regex>| re_ok(re, &value) || bare.is_some_and(|b| re_ok(re, b));
         // Named source properties: every authored rule is required, and a
         // missing property is not evidence, so it cannot match.
         let properties_ok = self.property_res.iter().all(|(expected_key, regex)| {
@@ -367,7 +365,9 @@ fn strip_package_suffix(value: &str) -> Option<&str> {
         )
         .expect("static package regex")
     });
-    re.captures(value).and_then(|c| c.get(1)).map(|m| m.as_str())
+    re.captures(value)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str())
 }
 
 fn normalise_property_key(s: &str) -> String {
