@@ -157,7 +157,7 @@ pub fn intent_condition(traces: &[IndicatorTrace]) -> Option<String> {
     Some(format!(
         "Indicator polarity versus intent was not checked for {listed}: the hardware sets \
          which level lights {them}, and no stated outcome says which should; state it as an \
-         outcome (`hauksbee-ci init` scaffolds one) to remove this condition."
+         outcome (hauksbee-ci init scaffolds one) to remove this condition."
     ))
 }
 

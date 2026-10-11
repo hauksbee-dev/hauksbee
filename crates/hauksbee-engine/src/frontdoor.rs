@@ -741,6 +741,11 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
                     "OK to order, conditionally: the static checks found nothing that blocks \
                      ordering; this rests on: {conditions}"
                 )
+            } else if current == overall_headline(0, 0, true, false) {
+                format!(
+                    "OK to order, conditionally: nothing found blocks ordering (see the \
+                     heads-up note below); this rests on: {conditions}"
+                )
             } else {
                 format!("{current} OK to order, conditionally; this rests on: {conditions}")
             }

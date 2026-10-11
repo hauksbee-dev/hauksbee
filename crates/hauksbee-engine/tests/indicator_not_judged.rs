@@ -194,7 +194,8 @@ fn a_hardware_fixed_indicator_makes_the_pass_conditional_on_every_surface() {
     assert_eq!(web.verdict, "pass");
     assert_eq!(web.verdict_conditions, conditions);
     assert!(
-        web.headline.contains("OK to order, conditionally")
+        web.headline.starts_with("OK to order, conditionally: ")
+            && !web.headline.contains('`')
             && web
                 .headline
                 .ends_with(&format!("this rests on: {}", conditions[0])),
