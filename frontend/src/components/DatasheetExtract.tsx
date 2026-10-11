@@ -33,7 +33,7 @@ type Flow =
   | { step: 'consent' }
   | { step: 'attach' }
   | { step: 'running'; log: string[]; phase: string; estimate: number; started: number; activity: ActivityState }
-  | { step: 'review'; card: ModelCard; started: number; finished: number }
+  | { step: 'review'; card: ModelCard; started: number; finished: number; activity?: ActivityState }
   | { step: 'saved'; card: ModelCard; result: ModelSaveResult }
   | { step: 'failed'; message: string; log: string[]; activity?: ActivityState }
 
@@ -134,7 +134,7 @@ export function DatasheetExtract({
         else if (event === 'card') {
           try {
             settled = true
-            setFlow({ step: 'review', card: JSON.parse(data) as ModelCard, started: live.started, finished: Date.now() })
+            setFlow({ step: 'review', card: JSON.parse(data) as ModelCard, started: live.started, finished: Date.now(), activity: live.activity })
           } catch {
             setFlow({ step: 'failed', message: 'the server sent a model card this page could not read', log: live.log, activity: live.activity })
           }
@@ -472,6 +472,8 @@ export function DatasheetExtract({
             )}
 
             {flow.step === 'review' && <ExtractProgress phase="" estimate={1} started={flow.started} finished={flow.finished} />}
+            {/* Which tier wrote the draft, why it escalated, and what it used of the plan. */}
+            {flow.step === 'review' && flow.activity && <AgentActivity activity={flow.activity} />}
             {flow.step === 'review' && (
               <ReviewCard
                 card={flow.card}

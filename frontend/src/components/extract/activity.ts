@@ -180,7 +180,11 @@ export function describeEvent(e: ActivityEvent): string {
     case 'tool':
       return `${str(v.name, 'tool')}${v.detail ? `: ${str(v.detail)}` : ''}`
     case 'usage':
-      return `${formatTokens(num(v.total_tokens))} tokens, context ${formatTokens(num(v.context))}`
+      // A turn's context reading and a finished call's totals arrive as separate events.
+      return [
+        typeof v.total_tokens === 'number' ? `${formatTokens(v.total_tokens)} tokens so far` : '',
+        typeof v.context === 'number' ? `context ${formatTokens(v.context)}` : '',
+      ].filter(Boolean).join(', ') || 'usage'
     case 'plan':
       return planLine(planFrom(v))
     case 'validator':

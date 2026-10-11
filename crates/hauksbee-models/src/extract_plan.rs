@@ -166,6 +166,40 @@ pub fn parse_codex_limits(limits: &Value) -> Reading {
     r
 }
 
+/// A plan run's tool, CLI command and the reading taken before its first call.
+type Pending = (String, String, Option<Reading>);
+
+static PENDING: std::sync::Mutex<Option<Pending>> = std::sync::Mutex::new(None);
+
+fn pending() -> std::sync::MutexGuard<'static, Option<Pending>> {
+    PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Before an extraction's first plan-billed call: read the plan once, so the
+/// whole extraction (kind identification included) is measured by [`end`].
+pub fn begin(tool: &str, command: &str) {
+    if pending().is_none() {
+        let before = read(tool, command);
+        *pending() = Some((tool.to_string(), command.to_string(), before));
+    }
+}
+
+/// Drops a reading left by an extraction that never reached [`end`].
+pub fn clear() {
+    *pending() = None;
+}
+
+/// After the extraction: read the plan again and report the change (`None`
+/// when no plan-billed call was made). Clears the pending reading.
+#[must_use]
+pub fn end() -> Option<String> {
+    let (tool, command, before) = pending().take()?;
+    let after = read(&tool, &command);
+    Some(report(&tool, before, after))
+}
+
 /// The run's share of the plan, as one line and a `plan` activity event, from
 /// readings before and after (`None`: unavailable). Only for a plan run.
 #[must_use]

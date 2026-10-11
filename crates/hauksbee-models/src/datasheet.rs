@@ -336,7 +336,12 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 /// written.
 pub fn run(args: Args) -> Result<PathBuf> {
     crate::extract_usage::reset();
+    crate::extract_plan::clear();
     let outcome = run_inner(args);
+    if let Some(line) = crate::extract_plan::end() {
+        say!("[model-extract] {line}");
+        crate::extract_usage::note_plan(line);
+    }
     let cost = crate::extract_usage::summary();
     if !cost.is_empty() {
         say!("[model-extract] {cost}");
@@ -2705,16 +2710,11 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         Backend::ClaudeCode => crate::extract_plan::claude_billing(&command),
         _ => crate::extract_usage::Billing::Unknown,
     };
-    let plan = billing == crate::extract_usage::Billing::Plan;
-    let before = plan.then(|| crate::extract_plan::read(chosen.name(), &command));
-    let out = run_ladder(&resolved, &base_prompt, reply, &ws, &ladder, billing);
-    if let Some(before) = before {
-        let after = crate::extract_plan::read(chosen.name(), &command);
-        let line = crate::extract_plan::report(chosen.name(), before, after);
-        say!("[model-extract] {line}");
-        crate::extract_usage::note_plan(line);
+    // `run` reads the plan again when the extraction ends.
+    if billing == crate::extract_usage::Billing::Plan {
+        crate::extract_plan::begin(chosen.name(), &command);
     }
-    out
+    run_ladder(&resolved, &base_prompt, reply, &ws, &ladder, billing)
 }
 
 /// The escalation ladder over `ladder`'s models in one sandbox (see `call_backend`).
@@ -2754,6 +2754,10 @@ fn run_ladder(
             tiers > 1,
         );
         let done = |(raw, t): (String, Option<TimedOut>), n: usize, why: &[String]| {
+            // A kind identification answers one word: no card, no provenance line.
+            if reply.table().is_empty() {
+                return Ok((raw, t));
+            }
             let raw = harness::finish(
                 &raw,
                 ws.path(),
