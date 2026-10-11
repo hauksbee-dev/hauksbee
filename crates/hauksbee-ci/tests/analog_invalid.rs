@@ -290,3 +290,85 @@ fn host_paced_uart_miss_is_invalid_and_the_refusal_names_the_clock() {
     assert!(!results[0].invalid && !results[0].passed);
     assert_eq!(ci_result(results, false).exit_code(), 1);
 }
+
+/// A 200 ms run on which firmware on host-paced MCU `U1` drives `EN`: `whole`
+/// is its (min, max) over the run, `after` its (min, max) from 50 ms on, and it
+/// ends at the `after` max.
+fn firmware_level_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
+    let mut out = outcome_with("EN", whole.1, 200.0, true, vec![], false);
+    for (thr, (min_v, max_v)) in [(0.0_f64, whole), (50.0, after)] {
+        out.windows.insert(
+            ("EN".to_string(), thr.to_bits()),
+            NetWindow {
+                min_v,
+                max_v,
+                last_v: after.1,
+                samples: 10,
+            },
+        );
+    }
+    out.driven_nets.insert("EN".to_string());
+    if host_paced {
+        out.host_paced_mcus = vec!["U1".to_string()];
+    }
+    out
+}
+
+/// A level asserted after a simulated-time window start on a firmware-driven
+/// net, on a host-paced clock: a pass is conditional and the condition reaches
+/// the run verdict; a level that holds only inside the window refuses (exit 3)
+/// with the host-paced refusal; and a clock-exact run judges the window.
+#[test]
+fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
+    let spec = load_spec(
+        "host_paced_level.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nname=\"EN high\"\nkind=\"voltage\"\n\
+         net=\"EN\"\nmin=3.0\nafter_ms=50\n",
+    );
+    let results = evaluate(&spec, &[firmware_level_run((3.3, 3.3), (3.3, 3.3), true)]);
+    assert!(results[0].passed, "{}", results[0].detail);
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(
+        human.contains("CONDITION: EN high: the 50 ms after_ms window was not judged"),
+        "{human}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&result.render_json()).expect("the report is JSON");
+    assert!(
+        json["verdict_conditions"][0]
+            .as_str()
+            .is_some_and(|c| c.contains("host-paced clock")),
+        "{json:#}"
+    );
+
+    let results = evaluate(&spec, &[firmware_level_run((0.0, 3.3), (3.3, 3.3), true)]);
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    let result = ci_result(results, false);
+    assert_eq!(result.exit_code(), 3);
+    let refusal = result.refusal().expect("an INVALID assertion refuses");
+    assert!(
+        refusal
+            .missing_prerequisite
+            .contains("simulated-time window"),
+        "{}",
+        refusal.missing_prerequisite
+    );
+    assert!(
+        refusal.next_action.contains("drop the time window"),
+        "{}",
+        refusal.next_action
+    );
+
+    // The same waveform on a clock-exact backend: the window is judged, PASS.
+    let results = evaluate(&spec, &[firmware_level_run((0.0, 3.3), (3.3, 3.3), false)]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+}

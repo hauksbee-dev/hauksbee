@@ -596,7 +596,7 @@
           "type": "array"
         },
         "verdict_conditions": {
-          "description": "The assumptions a pass rests on beyond its assertions, one sentence\neach: open variant or corner sets the member sweep could not cross in\nfull (see `verdict_conditions` in the engine run report). A pass with\nany is conditional, never clean. Additive; omitted when empty.",
+          "description": "The assumptions a pass rests on beyond its assertions, one sentence\neach: open variant or corner sets the member sweep could not cross in\nfull (see `verdict_conditions` in the engine run report), and each\npassing assertion's time bound a host-paced MCU clock left unjudged. A\npass with any is conditional, never clean. Additive; omitted when empty.",
           "items": {
             "type": "string"
           },

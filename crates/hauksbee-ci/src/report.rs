@@ -105,8 +105,9 @@ pub struct CiResult {
     /// What a green verdict rests on beyond its assertions, one sentence each:
     /// the open variant and corner sets (an LED the board names only by class,
     /// say) the member sweep could not cross in full, so some part was judged
-    /// at a stand-in or a subset of its corners. The same field the engine's
-    /// run report carries; a pass with any is conditional, never clean.
+    /// at a stand-in or a subset of its corners; and each passing assertion's
+    /// time bound a host-paced MCU clock left unjudged. The same field the
+    /// engine's run report carries; a pass with any is conditional, never clean.
     pub verdict_conditions: Vec<String>,
     /// Per-MCU measured edge timestamp and guaranteed-pulse limits at the
     /// actual negotiated chunk. Present even when no strict timing request was
@@ -330,8 +331,9 @@ pub struct CiJsonReport {
     pub coverage_warnings: Vec<String>,
     /// The assumptions a pass rests on beyond its assertions, one sentence
     /// each: open variant or corner sets the member sweep could not cross in
-    /// full (see `verdict_conditions` in the engine run report). A pass with
-    /// any is conditional, never clean. Additive; omitted when empty.
+    /// full (see `verdict_conditions` in the engine run report), and each
+    /// passing assertion's time bound a host-paced MCU clock left unjudged. A
+    /// pass with any is conditional, never clean. Additive; omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
     /// Measured timing coverage per live MCU backend.
@@ -465,7 +467,7 @@ impl CiResult {
             }
             if paced > 0 {
                 parts.push(format!(
-                    "a run long enough for the host-paced firmware to get there, or a backend whose clock does not depend on the host; {paced} assertion(s) were left unjudged"
+                    "a run long enough for the host-paced firmware to get there, a claim that does not hang on where a simulated-time window falls in the firmware's progress, or a backend whose clock does not depend on the host; {paced} assertion(s) were left unjudged"
                 ));
             }
             parts.join("; ")
@@ -495,7 +497,7 @@ impl CiResult {
                 } else if open_part(r) {
                     ("close the assumption named under", " (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names)")
                 } else if r.detail.contains("INVALID: host-paced clock:") {
-                    ("read the host-paced clock note under", "; raise duration_ms, or judge it on simavr, Renode or hardware")
+                    ("read the host-paced clock note under", "; raise duration_ms or drop the time window it names, or judge it on simavr, Renode or hardware")
                 } else if r.detail.starts_with("INVALID: timing coverage refusal:") {
                     ("read the timing refusal under", "; run on a backend that measures it, or drop the timing claim")
                 } else {

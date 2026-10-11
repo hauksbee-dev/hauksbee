@@ -540,7 +540,9 @@ after_ms = 50        # only sample at/after this time
 ```
 
 A `min` checks the worst (lowest) the net dipped to in the window. A `max`
-checks the worst (highest) it rose to.
+checks the worst (highest) it rose to. On a net that firmware drives from a
+host-paced ESP32 core, `after_ms` is not judged and the level is read over the
+whole run instead; see "Deadlines on a host-paced clock are not verdicts" below.
 
 **`pulse_width`**: the width, in milliseconds, of the first COMPLETE pulse on a
 net at or after `after_ms`. The threshold and the interpolated crossing times
@@ -1123,7 +1125,10 @@ that never happens is still a hard FAIL. A drive that happens is a PASS whose
 detail gives the time as approximate and says the deadline was "not judged",
 and whose evidence carries a reduced-fidelity assumption, so it reads
 `evidence: qualified` on the terminal, JUnit, annotations, JSON and the web
-view. The same holds for the other firmware-time bounds on a firmware-driven
+view. The unjudged bound is also a condition of the run's verdict: a
+`verdict_conditions` entry in `--json` and a `CONDITION` line naming the
+assertion and the bound, and the verdict line reads `GREEN, conditionally`.
+The same holds for the other firmware-time bounds on a firmware-driven
 net: a `toggle` `freq_hz` band or a `min_toggles` count above one, `pulse_width`
 `min`/`max`, and a `logic_level` `min_width_ms` or pulse count above one. simavr
 counts cycles and Renode advances virtual time per instruction, so their timing
@@ -1149,6 +1154,32 @@ the host:
   never exercised, an unknown peripheral id or field, and a `boot_coverage` net
   the firmware never drives. A `uart` assertion that names an `mcu` which is not
   host-paced keeps its hard verdict whatever else on the board is.
+
+A level asserted inside a simulated-time window on a firmware-driven net (a
+`voltage` with `after_ms`, a `rail_window` with a `scenario`) follows the same
+rule. "Firmware-driven" means an MCU pin net the firmware drove during the run,
+the same evidence the `toggle` and `pulse_width` rules use. Where the window
+starts in the firmware's progress depends on the host, so the window is "not
+judged" and the `min`/`max` level is read over every sample of the run:
+
+- A level that holds over the whole run is a PASS. Its detail reads
+  `EN over the whole 200 ms run: ...` and names the window as not judged, and
+  the pass is conditional, as above.
+- A level that holds only inside the window (the window leaves out an earlier
+  excursion) or does not hold inside it is **INVALID** (exit 3), with the
+  `INVALID: host-paced clock:` detail. On a real chip the window may start
+  before or after the firmware brings the net into range, so neither verdict
+  would be honest. Assert the level over the whole run, assert the drive with
+  `boot_coverage` (its deadline is disclosed, not judged), or judge it on
+  simavr, Renode or hardware.
+- A `rail_window`'s dip, spike, recovery and settling budgets on such a net are
+  firmware-paced times and are not judged. One with only those budgets and no
+  `min`/`max` level has nothing left to judge and is INVALID. One with no
+  `scenario` reads its level over the whole run anyway, so its level verdict
+  stays hard.
+- A net the firmware never drove keeps its hard verdict, as does a net no MCU
+  drives at all (a regulator output, a divider): the solver's own time base is
+  exact, so `after_ms` skips a rail's ramp exactly as on any backend.
 
 ```text
 [PASS] RES driven to >= 2.6 V within 700 ms of reset

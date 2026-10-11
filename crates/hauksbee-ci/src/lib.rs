@@ -713,6 +713,13 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             }
         }
     }
+    // A pass that left a host-paced time bound unjudged is a conditional pass
+    // of the whole run, not only of its own evidence row: the condition rides
+    // the verdict every surface leads with ("GREEN, conditionally", the JSON
+    // `verdict_conditions`). Added after the member-sweep assumptions above,
+    // which are built from the sweep's own sentences only.
+    let mut verdict_conditions = verdict_conditions;
+    verdict_conditions.extend(assertions::host_paced_conditions(&results));
     Ok(CiResult {
         spec_name: spec.name.clone(),
         board: spec.board.display().to_string(),

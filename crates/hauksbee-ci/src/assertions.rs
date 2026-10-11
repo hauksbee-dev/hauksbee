@@ -96,6 +96,31 @@ pub struct HostPacedBound {
     pub mcus: Vec<String>,
 }
 
+/// The verdict conditions host-paced MCU clocks put on the passes in `results`.
+///
+/// One sentence per passing result whose time bound such a clock left
+/// unjudged, naming the assertion, the bound and the clock. A failing or
+/// INVALID result qualifies no pass, so it adds none.
+#[must_use]
+pub fn host_paced_conditions(results: &[AssertResult]) -> Vec<String> {
+    results
+        .iter()
+        .filter(|r| r.passed && !r.invalid)
+        .filter_map(|r| {
+            r.host_paced.as_ref().map(|paced| {
+                format!(
+                    "{}: {} was not judged, because MCU {} runs on a host-paced clock that \
+                     credits simulated time from host wall-clock spans; the rest of the \
+                     assertion held",
+                    r.label,
+                    paced.bound,
+                    paced.mcus.join(", ")
+                )
+            })
+        })
+        .collect()
+}
+
 impl AssertResult {
     /// A neutral result for one assertion: an unwaived, unexplained, non-invalid
     /// failure with no failing member and no subjects. Every construction site
@@ -152,10 +177,10 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
                 let mut result = evaluate_one(a, outcomes, mode, spec.frame_ms);
                 result.subject_peripheral = a.id.clone().filter(|_| a.kind == "peripheral");
                 // An unjudged (INVALID) result has no verdict to qualify, and a
-                // content kind's hard failure (a bus never exercised, a bad
-                // regex) names no time bound it left unjudged.
-                let qualifies = !result.invalid
-                    && (result.passed || !matches!(a.kind.as_str(), "uart" | "peripheral"));
+                // hard failure of a kind whose miss is otherwise unjudged (a bus
+                // never exercised, a bad regex) names no time bound it left
+                // unjudged.
+                let qualifies = !result.invalid && (result.passed || !unjudged_when_missed(a));
                 result.host_paced = qualifies
                     .then(|| {
                         outcomes.iter().find_map(|out| {
@@ -422,7 +447,9 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Opti
     // Content the firmware had not produced by the end of a host-paced run is not
     // evidence against it: the same firmware may need longer in simulated time on
     // a slower host.
-    if let Some(reason) = host_paced_unjudged_reason(a, out) {
+    if let Some(reason) =
+        host_paced_unjudged_reason(a, out).or_else(|| host_paced_level_reason(a, out, frame_ms))
+    {
         return Some(reason);
     }
     // An absent open driver cannot make a failure real; a pass stands on the stated
@@ -714,6 +741,10 @@ fn stale_overlap(a: &Assertion, out: &RunOutcome) -> Option<((f64, f64), (f64, f
 pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
+        // On a host-paced clock a firmware-driven net's level is judged over the
+        // whole run (see `host_paced_level_claim`), so that is the span a failed
+        // chunk must not overlap.
+        "voltage" if host_paced_level_claim(a, out).is_some() => Some((0.0, end)),
         "voltage" | "pulse_width" | "logic_level" | "fires" | "increases" | "decreases" => {
             Some((a.after_ms.unwrap_or(0.0) / 1000.0, end))
         }
@@ -744,11 +775,14 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
     let boot = matches!(a.kind.as_str(), "boot_coverage" | "boot-coverage");
     match host_paced_time_bound(a, out) {
         Some(bound) if !boot => {
-            let (ok, detail, why) = check_kind(&without_time_bound(a), out, frame_ms);
-            // A content kind's failure is a hard one (the window it would have
-            // been unjudged in is handled before this point, see
-            // [`host_paced_unjudged_reason`]), so only its pass carries the note.
-            if ok || !is_content_kind(a) {
+            let (ok, detail, why) = host_paced_level_claim(a, out).map_or_else(
+                || check_kind(&without_time_bound(a), out, frame_ms),
+                |level| check_level_over_run(&level, out),
+            );
+            // Such a kind's miss is unjudged before this point (see
+            // [`host_paced_unjudged_reason`]), so a failure here is a hard one
+            // and only a pass carries the note.
+            if ok || !unjudged_when_missed(a) {
                 (ok, detail + &host_paced_note(&bound, out), why)
             } else {
                 (ok, detail, why)
@@ -795,6 +829,13 @@ fn host_paced_note(bound: &str, out: &RunOutcome) -> String {
 ///   The width is still measured and reported.
 /// - `logic_level` on a firmware-driven net: `min_width_ms`, and a
 ///   `min_toggles` pulse count above one. The level itself stays judged.
+/// - `voltage` on a firmware-driven net: an `after_ms` window start. Where it
+///   falls in the firmware's progress depends on the host, so the `min`/`max`
+///   level is judged over every sample of the run instead (see
+///   [`host_paced_level_claim`]).
+/// - `rail_window` on a firmware-driven net: a `scenario` window and the dip,
+///   spike, recovery and settling time bounds. The level is judged over the
+///   whole run, as for `voltage`.
 ///
 /// Analog-only nets keep hard verdicts even on a board with a host-paced core:
 /// the solver's own time base is exact. Cycle-counting backends (simavr) and
@@ -834,6 +875,11 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
                 (w, p) => w.or(p),
             }
         }
+        "voltage" if firmware_net => a
+            .after_ms
+            .filter(|t| *t > 0.0)
+            .map(|t| format!("the {t} ms after_ms window")),
+        "rail_window" if firmware_net => rail_window_time_bound(a),
         "uart" if host_paced_reads_text(a, out) => Some(format!(
             "the {} ms window the text had to appear in",
             out.sim_ms
@@ -846,13 +892,158 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
     }
 }
 
-/// Kinds whose verdict is about content the firmware produced (what it
-/// printed, what it wrote to a bus peripheral) in the run's window, not about a
-/// measured time. On a host-paced clock their pass stands on the content and
-/// discloses the window; their miss is unjudged (see
-/// [`host_paced_unjudged_reason`]).
-fn is_content_kind(a: &Assertion) -> bool {
-    matches!(a.kind.as_str(), "uart" | "peripheral")
+/// Assertions whose verdict on a host-paced clock is about content the firmware
+/// produced (what it printed, what it wrote to a bus peripheral, the level it
+/// held a net at from a window start on) rather than about a measured time.
+/// Their pass stands on the content and discloses the time bound; their miss is
+/// unjudged (see [`host_paced_unjudged_reason`]).
+fn unjudged_when_missed(a: &Assertion) -> bool {
+    matches!(a.kind.as_str(), "uart" | "peripheral") || level_window(a).is_some()
+}
+
+/// The simulated-time window a `voltage` or `rail_window` level is read in, as
+/// the words that complete "judged ...": `after 50 ms`, `in the scenario 'load'
+/// window`. `None` when the level is read over the whole run.
+fn level_window(a: &Assertion) -> Option<String> {
+    match a.kind.as_str() {
+        "voltage" => a
+            .after_ms
+            .filter(|t| *t > 0.0)
+            .map(|t| format!("after {t} ms")),
+        "rail_window" => a
+            .scenario
+            .as_ref()
+            .map(|id| format!("in the scenario '{id}' window")),
+        _ => None,
+    }
+}
+
+/// The time bounds a `rail_window` carries, as one noun phrase: its scenario
+/// window and its [`rail_budgets`].
+fn rail_window_time_bound(a: &Assertion) -> Option<String> {
+    let window = a
+        .scenario
+        .as_ref()
+        .map(|id| format!("the scenario '{id}' window"));
+    let budgets = match rail_budgets(a).as_slice() {
+        [] => None,
+        [one] => Some(format!("the {one} bound")),
+        many => Some(format!("the {} bounds", many.join(" and "))),
+    };
+    match (window, budgets) {
+        (Some(w), Some(b)) => Some(format!("{w} and {b}")),
+        (w, b) => w.or(b),
+    }
+}
+
+/// The `rail_window` time budgets complete enough to be checked (the same
+/// pairings [`rail_durations`] reads), by name.
+fn rail_budgets(a: &Assertion) -> Vec<&'static str> {
+    [
+        (a.dip_below.and(a.for_max_ms), "dip duration"),
+        (
+            a.dip_below.and(a.recover_to).and(a.recover_within_ms),
+            "recovery time",
+        ),
+        (a.spike_above.and(a.spike_for_max_ms), "spike duration"),
+        (
+            a.spike_above.and(a.settle_to).and(a.settle_within_ms),
+            "settling time",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(set, name)| set.map(|_| name))
+    .collect()
+}
+
+/// The level claim left to judge when a host-paced clock leaves a `voltage` or
+/// `rail_window` assertion's time bound unjudged (see
+/// [`host_paced_time_bound`]): its `min`/`max` as a plain `voltage` assertion
+/// with no window, so it is read over every sample of the run. `None` when the
+/// assertion is not one of those kinds or every bound it carries is
+/// host-independent here.
+///
+/// The firmware's progress at any simulated time depends on the host, so a
+/// window that starts at a simulated time (an `after_ms`, a scenario) may start
+/// before or after the firmware event it stands for on a real chip. Only a level
+/// that holds on every sample, wherever the window falls, is a pass no host speed
+/// can flip.
+fn host_paced_level_claim(a: &Assertion, out: &RunOutcome) -> Option<Assertion> {
+    level_window(a)?;
+    host_paced_time_bound(a, out)?;
+    Some(Assertion {
+        kind: "voltage".to_string(),
+        net: a.net.clone(),
+        min: a.min,
+        max: a.max,
+        ..Assertion::default()
+    })
+}
+
+/// [`check_voltage`] on a [`host_paced_level_claim`], its detail saying the
+/// level was read over the whole run rather than over the unjudged window.
+fn check_level_over_run(level: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
+    let (ok, detail, why) = check_voltage(level, out);
+    let net = level.net.as_deref().unwrap_or_default();
+    let detail = detail.strip_prefix(&format!("{net}: ")).map_or_else(
+        || detail.clone(),
+        |rest| format!("{net} over the whole {} ms run: {rest}", out.sim_ms),
+    );
+    (ok, detail, why)
+}
+
+/// Why a `voltage` or `rail_window` assertion on a firmware-driven net cannot be
+/// judged on a host-paced member, or `None` when it can: its
+/// [`host_paced_level_claim`] holds over the whole run, or it has no window and
+/// its level is read over the whole run anyway (an unscoped `rail_window`, whose
+/// failing level is as hard a FAIL as a `voltage` with no `after_ms`).
+fn host_paced_level_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Option<String> {
+    if !matches!(a.kind.as_str(), "voltage" | "rail_window") {
+        return None;
+    }
+    let bound = host_paced_time_bound(a, out)?;
+    let net = a.net.as_deref().unwrap_or_default();
+    let driver = format!(
+        "'{net}' is driven by firmware on MCU {}, which runs on a host-paced clock, \
+         {HOST_PACED_WHY}",
+        out.host_paced_mcus.join(", ")
+    );
+    if a.min.is_none() && a.max.is_none() && !rail_budgets(a).is_empty() {
+        // Nothing but time budgets: with them unjudged nothing is left, and a
+        // "measured" pass would claim what the run cannot.
+        return Some(format!(
+            "host-paced clock: {driver}, so {bound} cannot be judged, and that is every bound \
+             this assertion carries: nothing is left to judge. It is neither a pass nor a \
+             fail. Add a min or max level, or judge the timing on a cycle-exact backend \
+             (simavr or Renode) or on hardware."
+        ));
+    }
+    let cause =
+        format!("{driver}, so where {bound} falls in the firmware's progress depends on the host");
+    let level = host_paced_level_claim(a, out)?;
+    let window = level_window(a)?;
+    let (ok, over_run, _) = check_level_over_run(&level, out);
+    if ok {
+        return None;
+    }
+    let (in_window, windowed, _) = check_kind(&without_time_bound(a), out, frame_ms);
+    let what = if in_window {
+        format!(
+            "Judged {window}, the level holds ({windowed}), but only because the window leaves \
+             out an excursion earlier in the run ({over_run})"
+        )
+    } else {
+        format!(
+            "Judged {window}, the level does not hold ({windowed}), and on a real chip that \
+             window may start after the firmware has brought the net into range"
+        )
+    };
+    Some(format!(
+        "host-paced clock: {cause}. {what}. That is not evidence the board or firmware is \
+         wrong and it is not a pass, so it is not judged. Assert the level over the whole run \
+         (drop the window), assert the drive with boot_coverage (its deadline is disclosed, \
+         not judged), or judge it on a cycle-exact backend (simavr or Renode) or on hardware."
+    ))
 }
 
 /// Whether a `uart` assertion reads text from an MCU on a host-paced clock: the
@@ -924,13 +1115,20 @@ fn host_paced_unjudged_reason(a: &Assertion, out: &RunOutcome) -> Option<String>
 /// `a` with the bound [`host_paced_time_bound`] names taken out, leaving the
 /// host-independent claim: a toggle count becomes "toggled at all", a rate band
 /// becomes a measured rate, a width bound becomes a measured width, a hold width
-/// becomes a plain level.
+/// becomes a plain level, and a rail window keeps its level bounds without its
+/// time budgets.
 fn without_time_bound(a: &Assertion) -> Assertion {
     let mut a = a.clone();
     match a.kind.as_str() {
         "toggle" if a.min_toggles.is_some() => a.min_toggles = Some(1),
         "toggle" => a.freq_hz = None,
         "pulse_width" => (a.min, a.max) = (None, None),
+        "rail_window" => {
+            a.for_max_ms = None;
+            a.recover_within_ms = None;
+            a.spike_for_max_ms = None;
+            a.settle_within_ms = None;
+        }
         "logic_level" => {
             a.min_width_ms = None;
             a.min_toggles = a.min_toggles.map(|_| 1);
@@ -3132,6 +3330,253 @@ mod tests {
         // Inside the band it passes, as before.
         let in_band = assertion("kind = \"toggle\"\nnet = \"EN\"\nfreq_hz = 1000.0");
         assert!(check_seed(&in_band, &out, 0.01).0);
+    }
+
+    /// A 200 ms run whose net `net` spanned `whole` = (min, max, last) volts
+    /// over the run and `after` from 50 ms on, on a host-paced clock or a
+    /// clock-exact one, with the firmware driving `net` or not.
+    fn level_run(
+        net: &str,
+        whole: (f64, f64, f64),
+        after: (f64, f64, f64),
+        host_paced: bool,
+        driven: bool,
+    ) -> RunOutcome {
+        let mut out = RunOutcome {
+            sim_ms: 200.0,
+            ..Default::default()
+        };
+        for (thr, (min_v, max_v, last_v)) in [(0.0_f64, whole), (50.0, after)] {
+            out.windows.insert(
+                (net.to_string(), thr.to_bits()),
+                NetWindow {
+                    min_v,
+                    max_v,
+                    last_v,
+                    samples: 10,
+                },
+            );
+        }
+        if host_paced {
+            out.host_paced_mcus = vec!["U1".to_string()];
+        }
+        if driven {
+            out.driven_nets.insert(net.to_string());
+        }
+        out
+    }
+
+    fn en_after_50ms() -> Assertion {
+        assertion("kind = \"voltage\"\nnet = \"EN\"\nmin = 3.0\nafter_ms = 50.0")
+    }
+
+    const HIGH: (f64, f64, f64) = (3.3, 3.3, 3.3);
+    /// Low until the firmware drove it, then high to the end of the run.
+    const RISES: (f64, f64, f64) = (0.0, 3.3, 3.3);
+    /// High for a while, then low at the end of the run.
+    const FALLS: (f64, f64, f64) = (0.0, 3.3, 0.0);
+
+    #[test]
+    fn host_paced_firmware_level_that_holds_all_run_passes_with_the_window_unjudged() {
+        let out = level_run("EN", HIGH, HIGH, true, true);
+        let a = en_after_50ms();
+        assert_eq!(
+            host_paced_time_bound(&a, &out).as_deref(),
+            Some("the 50 ms after_ms window")
+        );
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        let (ok, msg, _) = check_seed(&a, &out, 1.0);
+        assert!(ok, "{msg}");
+        assert!(
+            msg.starts_with("EN over the whole 200 ms run: min=3.300V (>= 3V)"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("the 50 ms after_ms window not judged: MCU U1 runs on a host-paced clock"),
+            "{msg}"
+        );
+        // The pass is conditional, and the condition reaches the run verdict.
+        let spec: Spec = toml::from_str(
+            "board = \"b.kicad_pcb\"\nduration_ms = 200\n[[assert]]\nkind = \"voltage\"\n\
+             net = \"EN\"\nmin = 3.0\nafter_ms = 50.0\n",
+        )
+        .expect("spec shape");
+        let results = evaluate(&spec, std::slice::from_ref(&out));
+        assert!(
+            results[0].passed && !results[0].invalid,
+            "{}",
+            results[0].detail
+        );
+        let paced = results[0].host_paced.as_ref().expect("a conditional pass");
+        assert_eq!(paced.mcus, ["U1"]);
+        let conditions = host_paced_conditions(&results);
+        assert_eq!(conditions.len(), 1, "{conditions:?}");
+        assert!(
+            conditions[0].contains("the 50 ms after_ms window was not judged")
+                && conditions[0].contains("MCU U1 runs on a host-paced clock"),
+            "{conditions:?}"
+        );
+    }
+
+    #[test]
+    fn host_paced_firmware_level_that_holds_only_inside_the_window_is_invalid() {
+        // High from 50 ms on, low before: the pass would rest on where 50 ms
+        // falls in the firmware's progress, which the host decides.
+        let out = level_run("EN", RISES, HIGH, true, true);
+        let a = en_after_50ms();
+        let reason = member_invalid_reason(&a, &out, 1.0).expect("unjudged");
+        assert!(
+            reason.starts_with("host-paced clock: 'EN' is driven by firmware on MCU U1"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("Judged after 50 ms, the level holds")
+                && reason.contains("leaves out an excursion earlier in the run")
+                && reason.contains("min=0.000V < required 3V"),
+            "{reason}"
+        );
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.invalid && !r.passed, "{}", r.detail);
+        assert!(
+            r.detail.contains("INVALID: host-paced clock:"),
+            "{}",
+            r.detail
+        );
+        // An INVALID result names no condition: it qualifies no pass.
+        assert!(host_paced_conditions(std::slice::from_ref(&r)).is_empty());
+
+        // Out of range inside the window too: still not a FAIL, the window may
+        // start before the firmware gets there on a slower host.
+        let out = level_run("EN", FALLS, FALLS, true, true);
+        let reason = member_invalid_reason(&a, &out, 1.0).expect("unjudged");
+        assert!(
+            reason.contains("Judged after 50 ms, the level does not hold"),
+            "{reason}"
+        );
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.invalid && !r.passed, "{}", r.detail);
+    }
+
+    #[test]
+    fn host_paced_net_the_firmware_never_drove_keeps_its_hard_fail() {
+        // Never driven is host-independent, as for boot_coverage.
+        let low = (0.0, 0.0, 0.0);
+        let out = level_run("EN", low, low, true, false);
+        let a = en_after_50ms();
+        assert_eq!(host_paced_time_bound(&a, &out), None);
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.passed && !r.invalid, "{}", r.detail);
+        assert!(!r.detail.contains("not judged"), "{}", r.detail);
+        assert!(r.detail.contains("EN after 50ms"), "{}", r.detail);
+    }
+
+    #[test]
+    fn host_paced_pure_analog_rail_keeps_its_windowed_verdict() {
+        // A regulator output no MCU pin drives: the solver's time base is exact,
+        // so `after_ms` skips its ramp exactly as on any backend.
+        let a = assertion("kind = \"voltage\"\nnet = \"VREG\"\nmin = 3.2\nafter_ms = 50.0");
+        let out = level_run("VREG", RISES, HIGH, true, false);
+        assert_eq!(host_paced_time_bound(&a, &out), None);
+        assert_eq!(analog_eval_window(&a, &out), Some((0.05, 0.2)));
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.passed && !r.invalid, "{}", r.detail);
+        assert!(
+            r.detail.starts_with("VREG after 50ms: min=3.300V"),
+            "{}",
+            r.detail
+        );
+        assert!(!r.detail.contains("not judged"), "{}", r.detail);
+        let out = level_run("VREG", FALLS, FALLS, true, false);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.passed && !r.invalid, "{}", r.detail);
+    }
+
+    #[test]
+    fn a_clock_exact_backend_keeps_hard_windowed_level_verdicts() {
+        // simavr and Renode count their own time: the same firmware-driven net
+        // passes on its window and fails out of it, with nothing unjudged.
+        let a = en_after_50ms();
+        let out = level_run("EN", RISES, HIGH, false, true);
+        assert_eq!(host_paced_time_bound(&a, &out), None);
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.passed && !r.detail.contains("not judged"), "{}", r.detail);
+        assert!(r.detail.starts_with("EN after 50ms:"), "{}", r.detail);
+        let out = level_run("EN", FALLS, FALLS, false, true);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.passed && !r.invalid, "{}", r.detail);
+    }
+
+    /// A host-paced run whose firmware drives `EN`, with a `load` scenario
+    /// window on it that saw `scoped` volts and a whole run spanning `whole`.
+    fn en_rail_run(scoped: &[(f64, f64)], whole: (f64, f64, f64)) -> RunOutcome {
+        let mut out = level_run("EN", whole, whole, true, true);
+        let mut win = RailWindow::new();
+        for &(t, v) in scoped {
+            win.observe(t, v);
+        }
+        out.rail_windows
+            .insert(("load".to_string(), "EN".to_string()), win);
+        out
+    }
+
+    #[test]
+    fn host_paced_rail_window_on_a_firmware_net_follows_the_level_rule() {
+        let a = assertion(
+            "kind = \"rail_window\"\nnet = \"EN\"\nscenario = \"load\"\nmin = 3.0\n\
+             dip_below = 3.1\nfor_max_ms = 1.0",
+        );
+        let in_band = [(0.10, 3.3), (0.11, 3.3)];
+        // In range all run: PASS, the scenario window and the dip budget unjudged.
+        let out = en_rail_run(&in_band, HIGH);
+        assert_eq!(
+            host_paced_time_bound(&a, &out).as_deref(),
+            Some("the scenario 'load' window and the dip duration bound")
+        );
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        let (ok, msg, _) = check_seed(&a, &out, 1.0);
+        assert!(ok, "{msg}");
+        assert!(msg.starts_with("EN over the whole 200 ms run:"), "{msg}");
+        assert!(
+            msg.contains("the scenario 'load' window and the dip duration bound not judged"),
+            "{msg}"
+        );
+        // In range only inside the scenario window: INVALID.
+        let out = en_rail_run(&in_band, RISES);
+        let reason = member_invalid_reason(&a, &out, 1.0).expect("unjudged");
+        assert!(
+            reason.contains("Judged in the scenario 'load' window, the level holds"),
+            "{reason}"
+        );
+        // Nothing but a time budget on a firmware net: nothing is left to judge.
+        let budget_only =
+            assertion("kind = \"rail_window\"\nnet = \"EN\"\ndip_below = 3.1\nfor_max_ms = 1.0");
+        let reason = member_invalid_reason(&budget_only, &en_rail_run(&in_band, HIGH), 1.0)
+            .expect("nothing left to judge");
+        assert!(reason.contains("nothing is left to judge"), "{reason}");
+        // With no window, the level is read over the whole run anyway: a hard
+        // FAIL that names the budget it left unjudged.
+        let unscoped = assertion(
+            "kind = \"rail_window\"\nnet = \"EN\"\nmin = 3.0\ndip_below = 3.1\nfor_max_ms = 1.0",
+        );
+        let mut out = en_rail_run(&in_band, FALLS);
+        out.rail_windows.insert(
+            (String::new(), "EN".to_string()),
+            out.rail_windows[&("load".to_string(), "EN".to_string())].clone(),
+        );
+        out.rail_windows
+            .get_mut(&(String::new(), "EN".to_string()))
+            .expect("inserted")
+            .observe(0.19, 0.0);
+        assert_eq!(member_invalid_reason(&unscoped, &out, 1.0), None);
+        let r = evaluate_one(&unscoped, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.passed && !r.invalid, "{}", r.detail);
+        assert!(
+            r.detail.contains("the dip duration bound not judged"),
+            "{}",
+            r.detail
+        );
     }
 
     /// A run whose `load` scenario window on `VBUS` saw `samples`, with the
