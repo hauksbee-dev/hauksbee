@@ -527,6 +527,28 @@ pub trait Mcu {
         Vec::new()
     }
 
+    /// `None` when a peripheral output driving `pin` would show up in this
+    /// backend's reports ([`Mcu::pins_routed_to_peripheral`],
+    /// [`Mcu::pins_configured_output`] or the edges it synthesises); otherwise
+    /// why it would not, and what (if anything) would let it, as a clause
+    /// completing "the backend could not observe peripheral routing: ...".
+    /// Some means a PWM, timer, RMT or other peripheral waveform could drive
+    /// the pad with nothing reported, so the pad's absence from the driven
+    /// set is not evidence the firmware left it alone.
+    ///
+    /// Default: unobserved, since a backend that does not say cannot be
+    /// trusted to see it.
+    fn peripheral_routing_unobserved(&self, _pin: PinId) -> Option<String> {
+        Some("this backend reports no peripheral-to-pad routing".to_string())
+    }
+
+    /// Whether `pin` has an output driver at all. Default true; a pad the
+    /// part's descriptor marks input-only (no output stage in silicon)
+    /// returns false, so no firmware can drive it.
+    fn pin_can_drive(&self, _pin: PinId) -> bool {
+        true
+    }
+
     // ---- Co-sim coverage honesty ----
 
     /// ADC channels whose [`Mcu::set_analog_in`] injections were DROPPED because

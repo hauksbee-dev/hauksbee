@@ -6302,6 +6302,151 @@ impl Scheduler {
         if seeds.is_empty() {
             return Vec::new();
         }
+        let starts: Vec<NodeId> = seeds.iter().map(|(n, _)| *n).collect();
+        let reached: HashMap<NodeId, NodeId> =
+            self.influence_graph().reach(&starts).into_iter().collect();
+        let origin = |seed: NodeId| {
+            seeds
+                .iter()
+                .find(|(n, _)| *n == seed)
+                .map(|(_, s)| s.clone())
+        };
+        // Every board name on a reached node: two names can share one node.
+        let mut out: Vec<(String, String)> = self
+            .net_nodes
+            .iter()
+            .filter_map(|(name, node)| {
+                let of = match reached.get(node) {
+                    Some(seed) => origin(*seed)?,
+                    None => bus_outputs.iter().find(|(n, _)| n == node)?.1.clone(),
+                };
+                Some((name.clone(), of))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// MCU pads a peripheral output drives, or may drive, with a waveform the
+    /// co-sim does not model, and every net that follows one through the
+    /// board, keyed by net (sorted).
+    ///
+    /// Two kinds of pad. One the backend reports a peripheral output routed
+    /// onto ([`Mcu::pins_routed_to_peripheral`]): already firmware-driven, it
+    /// carries no GPIO level (the backend drops its stale latch), and the nets
+    /// behind it are in [`Self::firmware_influenced_nets`]. And, on a
+    /// host-paced core, an output-capable pad with no drive evidence whose
+    /// backend cannot observe peripheral routing for it
+    /// ([`Mcu::peripheral_routing_unobserved`]): a PWM, timer, RMT or bus
+    /// output could move it with nothing reported, so its absence from the
+    /// driven set proves nothing. Pads that cannot drive
+    /// ([`Mcu::pin_can_drive`]) and pads wired to nothing but MCU pins are left
+    /// out, and the rest seed the influence walk, so an RC filter behind one
+    /// is listed under it. A clock-exact core keeps its hard verdicts, so it
+    /// adds no unobserved pad.
+    #[must_use]
+    pub fn peripheral_pad_nets(&self) -> Vec<(String, PeripheralPad)> {
+        let driven = self.firmware_driven_nets();
+        let wired = self.nodes_wired_beyond_mcu_pins();
+        let mut pads: Vec<(NodeId, PeripheralPad)> = Vec::new();
+        for m in &self.mcus {
+            let routed = m.core.pins_routed_to_peripheral();
+            let paced = m.core.clock_host_paced();
+            for (role, &node) in &m.binding.role_nets {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
+                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
+                else {
+                    continue;
+                };
+                let (Some(net), pin) = (self.net_name_for(node), PinId { port, bit }) else {
+                    continue;
+                };
+                let unobserved = if routed.contains(&pin) {
+                    None
+                } else if paced
+                    && m.core.pin_can_drive(pin)
+                    && wired.contains(&node)
+                    && !driven.iter().any(|d| d == net)
+                {
+                    let Some(why) = m.core.peripheral_routing_unobserved(pin) else {
+                        continue;
+                    };
+                    Some(why)
+                } else {
+                    continue;
+                };
+                let pin = role.clone();
+                let mcu = m.binding.reference.clone();
+                let net = net.to_string();
+                pads.push((
+                    node,
+                    PeripheralPad {
+                        net,
+                        mcu,
+                        pin,
+                        unobserved,
+                    },
+                ));
+            }
+        }
+        pads.sort_by(|a, b| (&a.1.net, &a.1.pin).cmp(&(&b.1.net, &b.1.pin)));
+        let blind: Vec<NodeId> = pads
+            .iter()
+            .filter(|(_, p)| p.unobserved.is_some())
+            .map(|(n, _)| *n)
+            .collect();
+        let reached: HashMap<NodeId, NodeId> = if blind.is_empty() {
+            HashMap::new()
+        } else {
+            self.influence_graph().reach(&blind).into_iter().collect()
+        };
+        let mut out: Vec<(String, PeripheralPad)> = self
+            .net_nodes
+            .iter()
+            .filter_map(|(name, node)| {
+                let seed = reached.get(node).unwrap_or(node);
+                let pad = pads.iter().find(|(n, _)| n == seed)?;
+                Some((name.clone(), pad.1.clone()))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Nodes something other than an MCU pin driver touches: a circuit
+    /// device, or a pin of a logic, behavioural or unmodelled part.
+    fn nodes_wired_beyond_mcu_pins(&self) -> std::collections::HashSet<NodeId> {
+        let legs: std::collections::HashSet<DeviceId> = self
+            .mcus
+            .iter()
+            .flat_map(|m| m.binding.gpio_drivers.values())
+            .flat_map(|d| [d.vsource, d.resistor])
+            .collect();
+        let mut out: std::collections::HashSet<NodeId> = self
+            .circuit
+            .iter()
+            .filter(|(id, _)| !legs.contains(id))
+            .flat_map(|(_, d)| d.nodes())
+            .collect();
+        out.extend(self.digital.iter().flat_map(|d| d.roles.values().copied()));
+        out.extend(
+            self.behavioral
+                .iter()
+                .flat_map(hauksbee_bind::BehavioralDevice::role_nodes),
+        );
+        out.extend(
+            self.open_parts
+                .iter()
+                .flat_map(|p| p.pins.iter().map(|(n, _)| *n)),
+        );
+        out
+    }
+
+    /// The graph [`Self::firmware_influenced_nets`] walks: the bound
+    /// circuit's devices, the logic, behavioural and unmodelled parts the
+    /// scheduler evaluates, and each simple regulator's enable into its
+    /// output, stopping where the regulation taint walk stops.
+    fn influence_graph(&self) -> crate::influence::Influence {
         let (_, walk) = self.taint_walk();
         let helpers: Vec<DeviceId> = self
             .regulators
@@ -6346,28 +6491,7 @@ impl Scheduler {
                 }
             }
         }
-        let starts: Vec<NodeId> = seeds.iter().map(|(n, _)| *n).collect();
-        let reached: HashMap<NodeId, NodeId> = graph.reach(&starts).into_iter().collect();
-        let origin = |seed: NodeId| {
-            seeds
-                .iter()
-                .find(|(n, _)| *n == seed)
-                .map(|(_, s)| s.clone())
-        };
-        // Every board name on a reached node: two names can share one node.
-        let mut out: Vec<(String, String)> = self
-            .net_nodes
-            .iter()
-            .filter_map(|(name, node)| {
-                let of = match reached.get(node) {
-                    Some(seed) => origin(*seed)?,
-                    None => bus_outputs.iter().find(|(n, _)| n == node)?.1.clone(),
-                };
-                Some((name.clone(), of))
-            })
-            .collect();
-        out.sort();
-        out
+        graph
     }
 
     /// The nodes the attached bus peripherals drive in response to firmware
@@ -7527,6 +7651,23 @@ pub enum LevelProvenance {
     Unobservable,
 }
 
+/// An MCU pad whose drive comes from a peripheral output the co-sim does not
+/// model as a level (see [`Scheduler::peripheral_pad_nets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeripheralPad {
+    /// The pad's own net.
+    pub net: String,
+    /// The MCU's reference.
+    pub mcu: String,
+    /// The pad's pin role, e.g. `gpio25`.
+    pub pin: String,
+    /// `None` when the backend saw a peripheral output routed onto the pad;
+    /// otherwise why the backend could not observe peripheral routing for it
+    /// (see `Mcu::peripheral_routing_unobserved`), so the firmware only *may*
+    /// drive it.
+    pub unobserved: Option<String>,
+}
+
 /// Whether a backend STRING names a core that can report pin drive direction,
 /// decided from static data (no emulator is spawned).
 ///
@@ -8123,6 +8264,11 @@ missing = ["measurement_registers"]
         /// Pins the core reports as routed to a peripheral output (a PWM, timer
         /// or RMT waveform through a pin matrix), latched.
         routed: Vec<(char, u8)>,
+        /// Pins with no output stage (`pin_can_drive` false).
+        input_only: Vec<(char, u8)>,
+        /// Reports peripheral routing for every pin (the trait default is
+        /// blind).
+        routing_seen: bool,
         /// Implements the synchronous single-slot input responder hooks.
         legacy: bool,
         responder_installs: Arc<std::sync::atomic::AtomicUsize>,
@@ -8244,6 +8390,12 @@ missing = ["measurement_registers"]
                 .iter()
                 .map(|&(port, bit)| hauksbee_mcu::PinId { port, bit })
                 .collect()
+        }
+        fn peripheral_routing_unobserved(&self, _pin: hauksbee_mcu::PinId) -> Option<String> {
+            (!self.routing_seen).then(|| "the mock reports no routing".to_string())
+        }
+        fn pin_can_drive(&self, pin: hauksbee_mcu::PinId) -> bool {
+            !self.input_only.contains(&(pin.port, pin.bit))
         }
         fn i2c_bus_modeled(&self) -> bool {
             !self.bus_blind
@@ -10784,6 +10936,99 @@ data_out = ["io0"]
         sched.mcus[0].i2c_events.store(4, Ordering::Relaxed);
         sched.mcus[0].spi_events.store(4, Ordering::Relaxed);
         assert!(sched.firmware_driven_nets().is_empty());
+    }
+
+    /// On a host-paced core whose backend cannot see peripheral routing, an
+    /// output-capable pad with no drive evidence may still carry a PWM or
+    /// timer waveform, so it and the RC filter behind it are listed under the
+    /// pad. A pad that cannot drive (input-only), one wired to nothing else,
+    /// and one the firmware already drove are left out, as is everything on a
+    /// clock-exact core or a backend that observes routing. A pad the backend
+    /// saw routed is listed as observed, and its filter follows it as an
+    /// ordinary firmware-influenced net.
+    #[test]
+    fn unobserved_peripheral_pads_on_a_host_paced_core_seed_the_walk() {
+        let mut circuit = Circuit::new();
+        let mut net_nodes = HashMap::new();
+        let mut net = |name: &str| {
+            let id = circuit.node(name);
+            net_nodes.insert(name.to_string(), id);
+            id
+        };
+        let [a, filt, b, input_only, _lonely, drv, rail, other] = [
+            "LINE_A", "FILT", "LINE_B", "IN_ONLY", "LONELY", "DRV", "RAIL", "OTHER",
+        ]
+        .map(&mut net);
+        let gnd = NodeId::GROUND;
+        circuit.add(Device::vsource("Vrail", rail, gnd, SourceKind::Dc(3.3)));
+        circuit.add(Device::resistor("R_RC", a, filt, 10e3));
+        circuit.add(Device::capacitor("C_RC", filt, gnd, 1e-6));
+        circuit.add(Device::resistor("R_B", b, gnd, 10e3));
+        circuit.add(Device::resistor("R_IN", input_only, gnd, 10e3));
+        circuit.add(Device::resistor("R_DRV", drv, gnd, 10e3));
+        circuit.add(Device::resistor("R_PU", rail, other, 10e3));
+        circuit.add(Device::resistor("R_PD", other, gnd, 10e3));
+        let pins = [
+            (('B', 1), "LINE_A"),
+            (('B', 2), "LINE_B"),
+            (('B', 3), "IN_ONLY"),
+            (('B', 4), "LONELY"),
+            (('B', 5), "DRV"),
+        ];
+        let mut sched = influence_sched(circuit, net_nodes, &pins, &[('B', 5)]);
+        let core = |bus_blind: bool, routing_seen: bool, routed: Vec<(char, u8)>| MockCore {
+            bus_blind,
+            routing_seen,
+            routed,
+            input_only: vec![('B', 3)],
+            ..Default::default()
+        };
+        let pad = |net: &str, pin: &str, unobserved: bool| PeripheralPad {
+            net: net.to_string(),
+            mcu: "U1".to_string(),
+            pin: pin.to_string(),
+            unobserved: unobserved.then(|| "the mock reports no routing".to_string()),
+        };
+        let listed = |sched: &Scheduler| -> Vec<(String, String, bool)> {
+            sched
+                .peripheral_pad_nets()
+                .into_iter()
+                .map(|(n, p)| (n, p.net, p.unobserved.is_some()))
+                .collect()
+        };
+        let row = |n: &str, of: &str, blind: bool| (n.to_string(), of.to_string(), blind);
+
+        sched.mcus[0].core = Box::new(core(true, false, Vec::new()));
+        assert_eq!(
+            listed(&sched),
+            [
+                row("FILT", "LINE_A", true),
+                row("LINE_A", "LINE_A", true),
+                row("LINE_B", "LINE_B", true),
+            ]
+        );
+        assert_eq!(sched.peripheral_pad_nets()[1].1, pad("LINE_A", "pb1", true));
+        // Observation only: no driver is enabled and no net becomes driven.
+        assert_eq!(sched.firmware_driven_nets(), ["DRV"]);
+
+        // A clock-exact core keeps hard verdicts; a backend that sees routing
+        // has nothing unobserved to report.
+        sched.mcus[0].core = Box::new(core(false, false, Vec::new()));
+        assert!(sched.peripheral_pad_nets().is_empty());
+        sched.mcus[0].core = Box::new(core(true, true, Vec::new()));
+        assert!(sched.peripheral_pad_nets().is_empty());
+
+        // A pad seen routed is a driven, observed peripheral pad; its filter
+        // follows it through the ordinary influence walk.
+        sched.mcus[0].core = Box::new(core(true, true, vec![('B', 1)]));
+        assert_eq!(listed(&sched), [row("LINE_A", "LINE_A", false)]);
+        assert_eq!(
+            sched.peripheral_pad_nets()[0].1,
+            pad("LINE_A", "pb1", false)
+        );
+        assert!(sched
+            .firmware_influenced_nets()
+            .contains(&("FILT".to_string(), "LINE_A".to_string())));
     }
 
     /// A PWM, timer or RMT output reaches its pad through the pin matrix, not

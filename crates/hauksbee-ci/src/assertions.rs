@@ -5,6 +5,7 @@
 
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
+use hauksbee_engine::scheduler::PeripheralPad;
 use std::fmt::Write as _;
 
 /// The result of one assertion across all seeds.
@@ -871,34 +872,91 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
         _ => {
             let fw = firmware_net(a, out)?;
             let bound = net_time_bound(a)?;
-            Some(match fw {
-                FirmwareNet::Driven => bound,
-                FirmwareNet::Downstream { net, of } => {
-                    format!("{bound} on '{net}', downstream of firmware-driven '{of}'")
+            Some(match (fw.of, fw.pad) {
+                (None, None) => bound,
+                (Some(of), None) => {
+                    format!(
+                        "{bound} on '{}', downstream of firmware-driven '{of}'",
+                        fw.net
+                    )
                 }
+                (_, Some(pad)) => format!("{bound} on '{}', {}", fw.net, fw.pad_clause(pad)),
             })
         }
     }
 }
 
 /// How the firmware moves the net an assertion reads.
-enum FirmwareNet<'a> {
-    /// An MCU pin drove it (`RunOutcome::driven_nets`).
-    Driven,
-    /// No MCU pin drives it, but it follows firmware-driven `of` through the
-    /// board (`RunOutcome::influenced_nets`).
-    Downstream { net: &'a str, of: &'a str },
+struct FirmwareNet<'a> {
+    net: &'a str,
+    /// The firmware-driven net `net` follows through the board
+    /// (`RunOutcome::influenced_nets`), or `None` when an MCU pin drives
+    /// `net` itself (`RunOutcome::driven_nets`).
+    of: Option<&'a str>,
+    /// The MCU pad whose unmodelled peripheral output drives, or may drive,
+    /// the net (`RunOutcome::peripheral_pad_nets`).
+    pad: Option<&'a PeripheralPad>,
 }
 
-/// Whether the firmware moves `a`'s net, directly or through the board.
+impl FirmwareNet<'_> {
+    /// How `pad` moves the net, completing "'NET' ...": the pad itself or a
+    /// net downstream of it, and what drives it unmodelled.
+    fn pad_clause(&self, pad: &PeripheralPad) -> String {
+        let place = if pad.net == self.net {
+            format!("MCU {} pad {}", pad.mcu, pad.pin)
+        } else {
+            format!(
+                "downstream of MCU {} pad {} ('{}')",
+                pad.mcu, pad.pin, pad.net
+            )
+        };
+        pad.unobserved.as_ref().map_or_else(
+            || {
+                format!(
+                    "{place}, driven by a peripheral output the firmware routed there, whose \
+                     waveform the co-simulation does not model"
+                )
+            },
+            |why| {
+                format!(
+                    "{place}, which the firmware may drive through a peripheral output (PWM, \
+                     timer, RMT, a bus with no attached model): the backend could not observe \
+                     peripheral routing on this pad ({why})"
+                )
+            },
+        )
+    }
+}
+
+/// Whether the firmware moves `a`'s net, directly or through the board, or,
+/// for a level judged in a window, may move it through a peripheral output
+/// the backend could not observe.
 fn firmware_net<'a>(a: &'a Assertion, out: &'a RunOutcome) -> Option<FirmwareNet<'a>> {
     let net = a.net.as_deref()?;
+    let pad_on = |n: &str| out.peripheral_pad_nets.get(n).filter(|p| p.net == n);
     if out.driven_nets.contains(net) {
-        return Some(FirmwareNet::Driven);
+        let pad = pad_on(net);
+        return Some(FirmwareNet { net, of: None, pad });
     }
-    out.influenced_nets
+    if let Some(of) = out.influenced_nets.get(net) {
+        let pad = pad_on(of);
+        return Some(FirmwareNet {
+            net,
+            of: Some(of),
+            pad,
+        });
+    }
+    level_window(a)?;
+    let pad = out
+        .peripheral_pad_nets
         .get(net)
-        .map(|of| FirmwareNet::Downstream { net, of })
+        .filter(|p| p.unobserved.is_some())?;
+    let of = (pad.net != net).then_some(pad.net.as_str());
+    Some(FirmwareNet {
+        net,
+        of,
+        pad: Some(pad),
+    })
 }
 
 /// The time bound a per-net kind carries that compares a firmware time, as a
@@ -1047,14 +1105,19 @@ fn host_paced_level_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Op
     let bound = net_time_bound(a)?;
     let net = a.net.as_deref().unwrap_or_default();
     let mcus = out.host_paced_mcus.join(", ");
-    let driver = match firmware_net(a, out)? {
-        FirmwareNet::Driven => format!(
+    let fw = firmware_net(a, out)?;
+    let driver = match (fw.of, fw.pad) {
+        (None, None) => format!(
             "'{net}' is driven by firmware on MCU {mcus}, which runs on a host-paced clock, \
              {HOST_PACED_WHY}"
         ),
-        FirmwareNet::Downstream { of, .. } => format!(
+        (Some(of), None) => format!(
             "'{net}' is downstream of firmware-driven '{of}' (driven by firmware on MCU \
              {mcus}, which runs on a host-paced clock, {HOST_PACED_WHY})"
+        ),
+        (_, Some(pad)) => format!(
+            "'{net}' is {}, and MCU {mcus} runs on a host-paced clock, {HOST_PACED_WHY}",
+            fw.pad_clause(pad)
         ),
     };
     if a.min.is_none() && a.max.is_none() && !rail_budgets(a).is_empty() {

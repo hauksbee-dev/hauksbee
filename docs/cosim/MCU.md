@@ -604,6 +604,15 @@ chunk over RSP runs far too slow).
   `Mcu::pins_routed_to_peripheral`, which the scheduler counts as firmware-driven
   although `GPIO_OUT` and `GPIO_ENABLE` never show that waveform. A patched
   build without the property leaves the matrix unobserved and says so on stderr.
+  A routed pad's `GPIO_OUT` bit is a stale latch: it publishes no edge and the
+  pad leaves `pins_configured_output` until the firmware hands it back. Pads
+  holding a SPI0/SPI1 memory-bus signal are QEMU's own flash attach and count
+  for nothing. `Mcu::peripheral_routing_unobserved` says, per pad, why a
+  peripheral drive cannot be ruled out (on QEMU always: no build retains the
+  IO_MUX direct-function selection), and `Mcu::pin_can_drive` is false for the
+  descriptor's `[[soc.input_only]]` pads; the scheduler's
+  `peripheral_pad_nets` turns both into the host-paced level rule in
+  `docs/ci/CI.md`.
   Ordinary ESP-IDF firmware is therefore visible without any Hauksbee code.
   An unpatched binary fails closed to the compatibility RTC-RAM output mirror and
   prints that mailbox requirement; the edge-diff logic is identical.

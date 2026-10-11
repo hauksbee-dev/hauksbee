@@ -643,3 +643,99 @@ fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
     assert!(results[0].passed && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
+
+/// [`firmware_level_run`] read on `FILT`, an RC filter behind `PWM_OUT`, an
+/// output-capable pad of host-paced `U1` with no drive evidence, on a backend
+/// that cannot observe peripheral routing: the scheduler lists the pad and the
+/// nets behind it in `peripheral_pad_nets`, unobserved.
+fn unobserved_pad_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
+    let mut out = firmware_level_run(whole, after, host_paced);
+    out.driven_nets.clear();
+    for thr in [0.0_f64, 50.0] {
+        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
+        out.windows.insert(("FILT".to_string(), thr.to_bits()), win);
+    }
+    let pad = hauksbee_engine::scheduler::PeripheralPad {
+        net: "PWM_OUT".to_string(),
+        mcu: "U1".to_string(),
+        pin: "GPIO5".to_string(),
+        unobserved: Some(
+            "a build that reports the matrix comes from scripts/install-sims.sh \
+             --qemu-patched-source"
+                .to_string(),
+        ),
+    };
+    for net in ["PWM_OUT", "FILT"] {
+        out.peripheral_pad_nets.insert(net.to_string(), pad.clone());
+    }
+    out
+}
+
+/// A windowed level behind a pad the firmware may drive through a peripheral
+/// output the backend could not observe: a whole-run pass is a conditional
+/// GREEN naming the pad; a pass only inside the window is INVALID (exit 3),
+/// never a hard FAIL, with the pad, the blind spot and the remedy in the
+/// reason; a clock-exact backend keeps the hard verdict; and a pad the
+/// scheduler did not list (input-only, unwired or already driven) is unaffected.
+#[test]
+fn host_paced_windowed_level_behind_an_unobserved_pad_is_conditional_or_refused() {
+    let spec = load_spec(
+        "host_paced_unobserved_pad.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nname=\"filtered\"\nkind=\"voltage\"\n\
+         net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
+    );
+    let results = evaluate(&spec, &[unobserved_pad_run((3.3, 3.3), (3.3, 3.3), true)]);
+    assert!(results[0].passed, "{}", results[0].detail);
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(
+        human.contains(
+            "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of MCU U1 \
+             pad GPIO5 ('PWM_OUT')"
+        ),
+        "{human}"
+    );
+
+    // The level holds only inside the window: INVALID, not a hard FAIL.
+    let results = evaluate(&spec, &[unobserved_pad_run((0.0, 3.3), (3.3, 3.3), true)]);
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    for part in [
+        "'FILT' is downstream of MCU U1 pad GPIO5 ('PWM_OUT')",
+        "the backend could not observe peripheral routing on this pad",
+        "scripts/install-sims.sh --qemu-patched-source",
+        "host-paced clock",
+    ] {
+        assert!(
+            results[0].detail.contains(part),
+            "{part}: {}",
+            results[0].detail
+        );
+    }
+    let result = ci_result(results, false);
+    assert_eq!(result.exit_code(), 3);
+    let json = result.render_json();
+    assert!(
+        json.contains("scripts/install-sims.sh --qemu-patched-source"),
+        "{json}"
+    );
+
+    // A clock-exact backend orders the pad's output in simulated time: hard.
+    let results = evaluate(&spec, &[unobserved_pad_run((0.0, 3.3), (3.3, 3.3), false)]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+
+    // An input-only pad has no output driver, so the scheduler lists nothing
+    // for it: the windowed claim keeps its hard verdict on a host-paced clock.
+    let mut input_only = unobserved_pad_run((0.0, 3.3), (3.3, 3.3), true);
+    input_only.peripheral_pad_nets.clear();
+    let results = evaluate(&spec, &[input_only]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+}

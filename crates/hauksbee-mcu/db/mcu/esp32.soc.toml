@@ -28,6 +28,14 @@ peripheral_func_out_sel_reg = 0x3ff4_4530
 in_reg = 0x5000_0004
 width = 32
 
+# GPIO34..39 (port '1' bits 2..7 in the flat 0..31 / 32+ numbering) have no
+# output driver. ESP-IDF soc/esp32/include/soc/soc_caps.h: "GPIO >= 34 are
+# input only", SOC_GPIO_VALID_OUTPUT_GPIO_MASK clears BIT34..BIT39. (The S3
+# and C3 headers say no GPIO is input-only.)
+[[soc.input_only]]
+letter = "1"
+bits = [2, 3, 4, 5, 6, 7]
+
 [soc.i2c]
 # The Espressif ESP32-family machines expose these QOM bus paths; the machine
 # auto-instantiates a tmp105 at 0x48 on i2c0. i2c1 is searched too.

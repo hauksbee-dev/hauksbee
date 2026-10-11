@@ -703,7 +703,7 @@ impl crate::renode::RenodeConfig {
 #[cfg(feature = "qemu")]
 mod qemu_schema {
     use super::SocError;
-    use crate::qemu::{GpioBank, QemuArch, QemuConfig};
+    use crate::qemu::{GpioBank, InputOnlyPins, QemuArch, QemuConfig};
 
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -732,6 +732,8 @@ mod qemu_schema {
         pub banks: Vec<GpioBank>,
         #[serde(default)]
         pub i2c: QemuBusTable,
+        #[serde(default)]
+        pub input_only: Vec<InputOnlyPins>,
     }
 
     #[derive(Debug, Default, serde::Deserialize)]
@@ -772,6 +774,7 @@ mod qemu_schema {
                 mcu_label: self.mcu_label,
                 gpio_qom_path: self.gpio_qom_path,
                 i2c_buses: self.i2c.buses,
+                input_only: self.input_only,
             })
         }
     }

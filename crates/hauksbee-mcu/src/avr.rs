@@ -1281,6 +1281,17 @@ impl Mcu for AvrMcu {
         true
     }
 
+    /// The AVR's timer compare outputs (PWM) and SPI master outputs reach a pad
+    /// only once its `DDR` bit is set (the `ATmega328P` datasheet: "The Data
+    /// Direction Register bit for the `OC0x` pin (`DDR_OC0x`) must be set as
+    /// output before the `OC0x` value is visible on the pin"; SPI `MOSI`/`SCK`
+    /// direction is "user defined"), and `DDR` is what `pins_configured_output` reports. The USART
+    /// transmitter and TWI override DDR, and the scheduler counts those pads
+    /// from the bytes and bus events this core delivers.
+    fn peripheral_routing_unobserved(&self, _pin: PinId) -> Option<String> {
+        None
+    }
+
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating volts-to-mV
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
         let millivolts = (volts * 1000.0).round() as u32;

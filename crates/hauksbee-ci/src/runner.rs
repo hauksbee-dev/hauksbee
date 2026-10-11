@@ -370,6 +370,13 @@ pub struct RunOutcome {
     /// `firmware_influenced_nets`. On a host-paced clock a time bound on one
     /// of these is as host-dependent as on the driven net itself.
     pub influenced_nets: HashMap<String, String>,
+    /// Nets an MCU pad's peripheral output drives or may drive unmodelled,
+    /// each mapped to that pad: pads a peripheral output is routed onto, and,
+    /// on a host-paced core whose backend cannot observe peripheral routing,
+    /// output-capable pads with no drive evidence and the nets behind them.
+    /// From the scheduler's `peripheral_pad_nets`. A windowed level on one of
+    /// these is judged over the whole run like one on a firmware-driven net.
+    pub peripheral_pad_nets: HashMap<String, hauksbee_engine::scheduler::PeripheralPad>,
     /// Whether every MCU backend in this run can report pin drive *direction*.
     /// True for the in-process AVR backend (reads DDR) and for Renode parts
     /// whose `SoC` descriptor maps each port's direction register (STM32F103
@@ -2274,6 +2281,11 @@ fn run_one(
         .firmware_influenced_nets()
         .into_iter()
         .collect();
+    let peripheral_pad_nets = engine
+        .scheduler()
+        .peripheral_pad_nets()
+        .into_iter()
+        .collect();
     let drive_direction_observable = engine.scheduler().drive_direction_observable();
 
     let protection_tripped_scoped = scope_protection_trips(&protection_trip_t, &scenario_windows);
@@ -2332,6 +2344,7 @@ fn run_one(
         boot_drop_after_cross_ms,
         driven_nets,
         influenced_nets,
+        peripheral_pad_nets,
         drive_direction_observable,
         host_paced_mcus: engine.scheduler().host_paced_mcus(),
         first_fault_ms,

@@ -298,6 +298,20 @@ pub struct QemuConfig {
     /// it (e.g. the ESP32 machine's built-in `tmp105` on `i2c0`). Empty disables
     /// the I2C-device bridge.
     pub i2c_buses: Vec<String>,
+    /// Pads with no output stage in silicon, per port letter: no firmware can
+    /// drive them, so they are never counted as possibly driven by a
+    /// peripheral the backend cannot see. From `[[soc.input_only]]`.
+    #[serde(default)]
+    pub input_only: Vec<InputOnlyPins>,
+}
+
+/// One port's input-only pads (`[[soc.input_only]]` in a `*.soc.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputOnlyPins {
+    /// The [`PinId`] port letter.
+    pub letter: char,
+    /// Bit indices within that port.
+    pub bits: Vec<u8>,
 }
 
 /// The source from which GPIO output edges are observed in this QEMU process.
@@ -530,6 +544,17 @@ const fn is_memory_bus_signal(out_sel: u32) -> bool {
     matches!(out_sel, 0..=7 | 128..=131)
 }
 
+/// The pads (bit n set for pad n) whose `OUT_SEL` carries a memory-bus signal
+/// (see [`is_memory_bus_signal`]): QEMU's flash attach, not the firmware.
+fn memory_bus_pads(words: &[u32]) -> u32 {
+    words
+        .iter()
+        .take(32)
+        .enumerate()
+        .filter(|&(_, &word)| is_memory_bus_signal(word & FUNC_OUT_SEL_MASK))
+        .fold(0, |mask, (pad, _)| mask | 1 << pad)
+}
+
 /// The pads (bit n set for pad n) whose output is a peripheral's waveform
 /// rather than the plain `GPIO_OUT` latch: `OUT_SEL` is neither 256 nor a
 /// memory-bus signal (see [`is_memory_bus_signal`]), and the pad's output is
@@ -607,6 +632,10 @@ pub struct QemuBackend {
     /// enabled (bit n = pad n). Latched: a PWM waveform that ran during the run
     /// stays a firmware-driven net after the firmware stops it.
     routed_pads: HashMap<char, u32>,
+    /// Pads carrying a memory-bus signal as of the last poll (bit n = pad n):
+    /// QEMU's own flash attach, so neither drive evidence nor an unobserved
+    /// peripheral the firmware chose.
+    memory_bus_now: HashMap<char, u32>,
     /// Current driven IN register per bank letter (what we poke for inputs).
     in_shadow: HashMap<char, u32>,
     /// True once mailbox-aware firmware raises [`mailbox::MAGIC`], or ordinary
@@ -868,6 +897,7 @@ impl QemuBackend {
             gpio_output_observation,
             func_out_sel_observable,
             routed_pads: HashMap::new(),
+            memory_bus_now: HashMap::new(),
             in_shadow,
             boot_complete: false,
             i2c_temp_paths: HashMap::new(),
@@ -985,6 +1015,8 @@ impl QemuBackend {
             format!("reading the GPIO matrix output-select block at {reg:#x} over QMP")
         })?;
         let routed = peripheral_routed_pads(&words, enable);
+        self.memory_bus_now
+            .insert(bank.letter, memory_bus_pads(&words));
         *self.routed_pads.entry(bank.letter).or_insert(0) |= routed;
         Ok(plain_gpio_pads(&words))
     }
@@ -1544,6 +1576,45 @@ impl Mcu for QemuBackend {
         pins
     }
 
+    /// Every pad is unobserved: a peripheral reaches a pad either through the
+    /// GPIO matrix (seen only on a build that retains the output-select
+    /// words) or through an `IO_MUX` direct function (a pad's own SPI, UART, SD
+    /// or EMAC signal, which keeps `OUT_SEL` at 256 and which no QEMU build
+    /// retains), so no build can rule a peripheral drive out. The exception is
+    /// a pad the matrix shows on the memory bus: QEMU attaches its flash there
+    /// whatever the board's package, which says nothing either way about the
+    /// firmware, so it is not disclosed as a possible firmware drive.
+    fn peripheral_routing_unobserved(&self, pin: PinId) -> Option<String> {
+        let memory_bus = self.memory_bus_now.get(&pin.port).copied().unwrap_or(0);
+        if pin.bit < 32 && memory_bus & (1 << pin.bit) != 0 {
+            return None;
+        }
+        let matrix = self.func_out_sel_observable
+            && self.config.banks.iter().any(|b| {
+                b.letter == pin.port
+                    && b.peripheral_func_out_sel_reg.is_some()
+                    && pin.bit < b.width.min(32)
+            });
+        Some(if matrix {
+            "this QEMU build reports GPIO-matrix routing, but no QEMU build retains the \
+             IO_MUX direct-function selection a pad's own SPI, UART, SD or EMAC signal uses"
+                .to_string()
+        } else {
+            "this QEMU build retains neither the GPIO-matrix output selection (a PWM, timer or \
+             RMT output) nor the IO_MUX direct-function selection; a build that reports the \
+             matrix comes from scripts/install-sims.sh --qemu-patched-source"
+                .to_string()
+        })
+    }
+
+    fn pin_can_drive(&self, pin: PinId) -> bool {
+        !self
+            .config
+            .input_only
+            .iter()
+            .any(|p| p.letter == pin.port && p.bits.contains(&pin.bit))
+    }
+
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         // Drive the firmware-visible input by poking GPIO_IN_REG. Maintain a
         // shadow so we set/clear exactly the addressed bit.
@@ -1821,6 +1892,15 @@ mod tests {
     }
 
     #[test]
+    fn memory_bus_pads_are_the_flash_attach() {
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        for (pad, sig) in [(6, 0), (9, 3), (17, 130), (5, 71)] {
+            words[pad] = sig;
+        }
+        assert_eq!(memory_bus_pads(&words), 1 << 6 | 1 << 9 | 1 << 17);
+    }
+
+    #[test]
     fn plain_gpio_selections_are_not_routed() {
         // Reset state and an IDF-configured plain output: OUT_SEL = 256, with
         // and without the OEN_SEL / inversion bits.
@@ -1849,6 +1929,39 @@ mod tests {
         // probe still gates the whole block, since zeros prove nothing.
         let words = [0u32; 32];
         assert_eq!(peripheral_routed_pads(&words, 0), 0);
+    }
+
+    /// A pad the firmware moved from `GPIO_OUT` to a peripheral output keeps
+    /// its stale `GPIO_OUT` bit; no edge may stamp that latch as its level.
+    /// Handed back to `GPIO_OUT`, an enabled pad republishes its latch.
+    #[test]
+    fn a_routed_pad_publishes_no_edge_from_its_stale_latch() {
+        let both = 1 << 5 | 1 << 2;
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        words[5] = 71; // LEDC on pad 5, GPIO_OUT bit 5 left set
+        let enable = both & plain_gpio_pads(&words);
+        assert_eq!(observable_gpio_changes(0, both, 0, enable), 1 << 2);
+        // Pad 5 handed back to GPIO_OUT with nothing else changing: its
+        // enable rises in the masked word, so its latch is republished.
+        let back = both & plain_gpio_pads(&[FUNC_OUT_SEL_GPIO; 32]);
+        assert_eq!(observable_gpio_changes(both, both, enable, back), 1 << 5);
+    }
+
+    /// GPIO34..39 have no output driver (ESP-IDF `soc_caps.h`: "GPIO >= 34
+    /// are input only"), carried as data in the descriptor at port '1' bits
+    /// 2..7; the S3 and C3 descriptors mark none.
+    #[test]
+    fn the_descriptor_marks_input_only_pads() {
+        let only = &QemuConfig::esp32().input_only;
+        assert_eq!(
+            only,
+            &[InputOnlyPins {
+                letter: '1',
+                bits: vec![2, 3, 4, 5, 6, 7]
+            }]
+        );
+        assert!(QemuConfig::esp32s3().input_only.is_empty());
+        assert!(QemuConfig::esp32c3().input_only.is_empty());
     }
 
     #[test]

@@ -1195,6 +1195,21 @@ window starts in the firmware's progress depends on the host, so the window is
   the firmware drives can move (an always-on regulator output, a divider off a
   held rail): the solver's own time base is exact, so `after_ms` skips a rail's
   ramp exactly as on any backend.
+- A pad whose peripheral output the backend cannot see counts too. On a
+  host-paced core whose backend cannot observe peripheral routing, every
+  output-capable MCU pad with no drive evidence that is wired to anything, and
+  every net downstream of one, may carry a PWM, timer, RMT or unmodelled-bus
+  waveform. A windowed level there is read over the whole run: a whole-run
+  pass is a conditional PASS naming the pad, and a pass only inside the window
+  is INVALID (never a FAIL), naming the pad and why the backend could not see
+  its routing. No QEMU build sees an IO_MUX direct function (a pad's own SPI,
+  UART, SD or EMAC signal), so every QEMU ESP32 pad qualifies; a build without
+  the GPIO-matrix patch is also blind to PWM, timer and RMT outputs, and the
+  reason gives `scripts/install-sims.sh --qemu-patched-source` as its remedy.
+  Input-only pads (`[[soc.input_only]]`, ESP32 GPIO34-39), unwired pads, and
+  pads QEMU itself attaches to the flash bus are left out. A pad the matrix
+  shows routed is firmware-driven as above, and its stale `GPIO_OUT` bit is not
+  read as its level.
 
 ```text
 [PASS] RES driven to >= 2.6 V within 700 ms of reset

@@ -246,6 +246,7 @@ drive direction can use MMIO.
 | `expected_e_machine` | yes | `EM_*` name | The ISA gate |
 | `mcu_label` | yes | string | The human name |
 | `[[soc.banks]]` | no | table array | `letter`, peripheral/fallback addresses, `width` |
+| `[[soc.input_only]]` | no | table array | `letter`, `bits`: pads with no output driver (ESP32 GPIO34-39), never treated as a possible unobserved peripheral output |
 | `[soc.i2c].buses` | no | array of strings | Mailbox bus names |
 
 ### What the loader checks, and what it does not
