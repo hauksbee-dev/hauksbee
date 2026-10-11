@@ -127,7 +127,7 @@ the same validation, and the same retry-with-feedback loop:
 
 | backend | requirement | default model / effort | flags |
 |---------|-------------|-------------------------|-------|
-| `claude-code` | `claude` CLI in PATH, signed in | `claude-opus-5-5`, high | `--backend claude-code`, `--model`, `--effort` |
+| `claude-code` | `claude` CLI in PATH, signed in | `claude-haiku-5-5` → `claude-sonnet-5-5` → `claude-opus-5-5`, high | `--backend claude-code`, `--model`, `--effort` |
 | `agy` | `agy` CLI in PATH, signed in (Antigravity) | `gemini-3.8-flash`, high | `--backend agy`, `--model`, `--effort` |
 | `codex` | `codex` CLI in PATH, signed in | `gpt-6.1-sol`, high | `--backend codex`, `--model`, `--effort` |
 | `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `gpt-6.1-sol` | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
@@ -178,9 +178,50 @@ hauksbee models backend reset      # delete the file, back to every default
 hauksbee models backend path       # print the config path
 ```
 
-Presets (`models backend presets`): `claude-code`, `claude-code-fast`, `agy`,
-`agy-pro`, `codex`, `openai`, `openrouter`, `ollama`. Applying one changes the
-backend and its model/effort, preserving advanced settings and other backends.
+Presets (`models backend presets`): `claude-code`, `claude-code-haiku`,
+`claude-code-sonnet`, `claude-code-opus`, `agy`, `agy-pro`, `codex`, `codex-luna`,
+`openai`, `openrouter`, `ollama`. Applying one changes the backend and its
+model/effort/escalation, preserving advanced settings and other backends.
+
+### Tiers and escalation
+
+An agent backend runs a ladder: `<backend>.model` first, then each model in
+`<backend>.escalate` (`HAUKSBEE_<CLAUDE|CODEX|AGY>_ESCALATE`, comma-separated;
+`none` = never). The next tier runs only when a tier's draft still fails
+validation after its retries, the run times out or passes its context budget,
+the agent writes `low` to `confidence.txt`, or the pin map is left unresolved.
+A doubtful but valid draft is kept as the fallback if every stronger tier fails.
+The card's first line records the tier (`# extracted by claude-code
+claude-haiku-5-5 (tier 1 of 3)`) and each escalation's reason. An explicit
+`--model` (or the web page's model field) runs that model alone.
+
+The Claude Code default (`claude-code` preset) is the balanced ladder Haiku 5.5 →
+Sonnet 5.5 → Opus 5.5; `codex-luna` escalates Luna to Sol. The cheapest Claude
+preset, `claude-code-haiku`, also escalates (to Sonnet on failure): no Claude tier
+below the codex gpt-6-luna baseline is the default or is offered without a
+stronger fallback, and the benchmark checks both against Luna. A model with a
+context budget (Haiku: 100k tokens) runs the staged harness
+(`extract_harness.rs`): a locate agent reads `page-index.md` and only the pages
+it needs and writes compact `notes.md` (package, pin map, key pages and values,
+ambiguities); a fresh draft agent writes the card from the notes; a validator
+failure goes to a fresh fix agent as `previous.toml`. Each agent is killed if its
+streamed context passes the budget. `HAUKSBEE_EXTRACT_HARNESS=staged|single`
+forces the harness on or off. The default ladder is provisional until
+`qc/claude_tier_bench` measures it; that benchmark's recommendation decides it.
+
+**What a run costs.** Billing follows how the CLI is signed in, never a setting:
+an API key (`ANTHROPIC_API_KEY`, or `claude auth status` / `codex login status`
+naming one) is metered and shown in list-price dollars; a subscription sign-in
+(claude.ai, ChatGPT) shows no dollars but the run's share of the plan: the
+weekly and 5-hour usage read before and after (`claude -p /usage`; codex's
+`account/rateLimits/read`), whole percents and account-wide. A failed reading is
+"usage unavailable", an unrecognised sign-in "billing unknown"; neither shows
+dollars.
+
+`HAUKSBEE_EXTRACT_EVENTS=<file>` appends the run's activity feed (tier, stage,
+pages read, tokens, billing and metered cost so far, validator verdicts,
+escalations, the closing `plan` reading)
+as JSONL; the web extraction streams the same events as `activity:` lines.
 
 For a CLI-compatible wrapper, set `<backend>.command` to its executable name or
 path (not a shell command), or use `HAUKSBEE_CLAUDE_COMMAND`, `HAUKSBEE_AGY_COMMAND`,
@@ -697,9 +738,10 @@ The extractor fails loudly and usefully:
   the call is retried once on the same prompt, spending one of the extraction's
   `retries` attempts. The retry is announced on stderr like any other retry
   (`attempt N stalled: ... retrying once`); a second stall fails the
-  extraction. Never a different provider. claude-code and agy print only at the
-  end of a run, so they have no event stream to watch and are not covered;
-  `timeout_secs` still bounds them.
+  extraction. Never a different provider. agy prints only at the end of a run
+  and claude-code streams once per turn (a long turn is normal), so neither is
+  covered; `timeout_secs` still bounds them, and the staged harness's context
+  budget bounds a budgeted Claude model.
 - **Empty / prose reply**: rejected with "empty reply" or "no [[models]]
   table" rather than a confusing TOML parse error.
 - **Wrong kind**: a diode card returned for a `bjt_npn` request is rejected

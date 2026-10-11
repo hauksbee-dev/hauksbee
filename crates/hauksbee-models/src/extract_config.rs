@@ -67,11 +67,22 @@ const LLM_API_KEY_ENV: &str = "HAUKSBEE_LLM_API_KEY";
 pub struct ModelChoice {
     pub name: &'static str,
     pub note: &'static str,
+    /// Tokens of context one agent of the staged harness may hold (0 = one
+    /// unbounded agent). A small model reads a datasheet well in short, focused
+    /// stages and badly in one long session; see `extract_harness`.
+    pub context_budget: u64,
 }
 
 const fn choice(name: &'static str, note: &'static str) -> ModelChoice {
-    ModelChoice { name, note }
+    ModelChoice {
+        name,
+        note,
+        context_budget: 0,
+    }
 }
+
+/// The staged-harness budget a model runs with when nothing overrides it.
+pub const HARNESS_BUDGET: u64 = 100_000;
 
 const MOST_ACCURATE: &str = "Recommended: most accurate";
 const BUDGET: &str = "Very good for most circuit extraction, and much cheaper";
@@ -106,6 +117,10 @@ pub struct AgentSpec {
     /// Models worth offering in a picker. Free text is always allowed too:
     /// vendors ship new names faster than this list can follow.
     pub models: &'static [ModelChoice],
+    /// Models tried in order after `model` when a tier fails (validator
+    /// failure after retries, a timeout or context budget, low self-reported
+    /// confidence, an unresolved pin map). Empty: one tier.
+    pub escalate: &'static [&'static str],
 }
 
 /// Codex and the OpenAI-compatible API share one list: Sol first, Luna as the budget pick.
@@ -119,7 +134,7 @@ pub const AGENTS: [AgentSpec; 3] = [
     AgentSpec {
         backend: Backend::ClaudeCode,
         env_prefix: "HAUKSBEE_CLAUDE",
-        model: "claude-opus-5-5",
+        model: BALANCED_CLAUDE[0],
         effort: "high",
         permission_mode: "acceptEdits",
         efforts: &["low", "medium", "high", "xhigh", "max"],
@@ -132,13 +147,19 @@ pub const AGENTS: [AgentSpec; 3] = [
             "plan",
         ],
         models: &[
-            choice("claude-opus-5-5", MOST_ACCURATE),
+            ModelChoice {
+                name: "claude-haiku-5-5",
+                note: "Cheapest; runs in short ~100k-token stages (locate, draft, fix)",
+                context_budget: HARNESS_BUDGET,
+            },
             choice(
                 "claude-sonnet-5-5",
-                "Faster and cheaper; fine for simple parts",
+                "Faster and cheaper than Opus; one session",
             ),
+            choice("claude-opus-5-5", "Strongest single model; one session"),
             choice("claude-fable-5-1", ""),
         ],
+        escalate: BALANCED_CLAUDE.split_at(1).1,
     },
     AgentSpec {
         backend: Backend::Agy,
@@ -155,6 +176,7 @@ pub const AGENTS: [AgentSpec; 3] = [
                 "Slower, stronger tier for dense datasheets",
             ),
         ],
+        escalate: &[],
     },
     AgentSpec {
         backend: Backend::Codex,
@@ -171,8 +193,35 @@ pub const AGENTS: [AgentSpec; 3] = [
             "danger-full-access",
         ],
         models: OPENAI_MODELS,
+        escalate: &[],
     },
 ];
+
+/// The balanced Claude Code ladder: harnessed Haiku first, Sonnet then Opus
+/// only when a tier fails or doubts its own pin map. Provisional until
+/// `qc/claude_tier_bench` measures it against the single-model tiers; the
+/// benchmark's recommendation is what this constant should hold.
+const BALANCED_CLAUDE: &[&str] = &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
+
+/// Chooses the harness for one run: `staged`, `single`, or `auto` (the default).
+pub const ENV_HARNESS: &str = "HAUKSBEE_EXTRACT_HARNESS";
+
+/// The context budget `model` runs with: `HAUKSBEE_EXTRACT_HARNESS=single`
+/// turns the staged harness off, `staged` forces it on, anything else follows
+/// the model's own [`ModelChoice::context_budget`].
+#[must_use]
+pub fn context_budget(host: &dyn Host, model: &str) -> u64 {
+    let listed = AGENTS.iter().flat_map(|a| a.models);
+    let own = listed
+        .filter(|m| m.name == model)
+        .map(|m| m.context_budget)
+        .max();
+    match host.var(ENV_HARNESS).as_deref().map(str::trim) {
+        Some("single") => 0,
+        Some("staged") => own.filter(|b| *b > 0).unwrap_or(HARNESS_BUDGET),
+        _ => own.unwrap_or(0),
+    }
+}
 
 /// The spec for an agent backend; `None` for the API.
 #[must_use]
@@ -267,6 +316,10 @@ pub struct AgentConfig {
     /// Extra arguments appended to the command line, verbatim.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
+    /// Models to escalate to, in order; `None` takes the backend's own ladder
+    /// and an empty list never escalates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escalate: Option<Vec<String>>,
 }
 
 /// `[api]`: an OpenAI-compatible chat-completions endpoint.
@@ -280,6 +333,15 @@ pub struct ApiConfig {
     /// The NAME of the environment variable holding the key. Never the key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
+}
+
+/// A comma- or space-separated model list; `none` is the empty list.
+fn model_list(text: &str) -> Vec<String> {
+    let names = text
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
+    names.filter(|m| *m != "none").map(str::to_string).collect()
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
@@ -349,6 +411,12 @@ impl ExtractConfig {
             tidy(&mut s.permission_mode);
             tidy(&mut s.profile);
             s.extra_args.retain(|x| !x.trim().is_empty());
+            if let Some(list) = &mut s.escalate {
+                for m in list.iter_mut() {
+                    *m = m.trim().to_string();
+                }
+                list.retain(|m| !m.is_empty());
+            }
         }
         tidy(&mut self.api.base_url);
         tidy(&mut self.api.model);
@@ -390,6 +458,9 @@ impl ExtractConfig {
                 "{name}.command must be an executable name or path without control characters"
             );
             check_model(&format!("{name}.model"), s.model.as_ref())?;
+            for m in s.escalate.iter().flatten() {
+                check_model(&format!("{name}.escalate"), Some(m))?;
+            }
             check_choice(&format!("{name}.effort"), s.effort.as_ref(), a.efforts)?;
             check_choice(
                 &format!("{name}.permission_mode"),
@@ -456,6 +527,15 @@ impl ExtractConfig {
                     "extra_args",
                     "extra CLI arguments, space-separated".into(),
                     "",
+                ),
+                (
+                    "escalate",
+                    "models tried next when a tier fails, comma-separated (none = never)".into(),
+                    if a.escalate.is_empty() {
+                        "none"
+                    } else {
+                        "built-in ladder"
+                    },
                 ),
             ] {
                 if field != "profile" || a.backend == Backend::Codex {
@@ -559,6 +639,7 @@ impl ExtractConfig {
             "extra_args" => {
                 agent.extra_args = value.split_whitespace().map(str::to_string).collect();
             }
+            "escalate" => agent.escalate = opt.as_deref().map(model_list),
             _ => return Err(unknown()),
         }
         Ok(())
@@ -607,6 +688,7 @@ impl ExtractConfig {
         if let Some(agent) = self.agent_mut(preset.backend) {
             agent.model = Some(preset.model.to_string());
             agent.effort = Some(preset.effort.to_string());
+            agent.escalate = Some(preset.escalate.iter().map(ToString::to_string).collect());
         } else {
             self.api.model = Some(preset.model.to_string());
             self.api.base_url = Some(preset.api_base.to_string());
@@ -650,6 +732,20 @@ impl ExtractConfig {
                     .unwrap_or_else(|| spec.permission_mode.to_string()),
                 profile: env(&format!("{}_PROFILE", spec.env_prefix)).or_else(|| s.profile.clone()),
                 extra_args: s.extra_args.clone(),
+                escalate: env(&format!("{}_ESCALATE", spec.env_prefix))
+                    .map(|v| model_list(&v))
+                    .or_else(|| s.escalate.clone())
+                    .unwrap_or_else(|| {
+                        // A model chosen by env or file without its own
+                        // ladder means that model alone, not the default ladder.
+                        let chosen = env(&format!("{}_MODEL", spec.env_prefix)).is_some()
+                            || s.model.is_some();
+                        if chosen {
+                            Vec::new()
+                        } else {
+                            spec.escalate.iter().map(ToString::to_string).collect()
+                        }
+                    }),
             }
         };
 
@@ -754,6 +850,10 @@ pub const KNOWN_ENV_VARS: &[&str] = &[
     "HAUKSBEE_API_KEY_ENV",
     "HAUKSBEE_EXTRACT_TIMEOUT_SECS",
     "HAUKSBEE_EXTRACT_IDLE_SECS",
+    "HAUKSBEE_CLAUDE_ESCALATE",
+    "HAUKSBEE_AGY_ESCALATE",
+    "HAUKSBEE_CODEX_ESCALATE",
+    ENV_HARNESS,
     ENV_CONFIG_PATH,
 ];
 
@@ -780,6 +880,8 @@ pub struct Preset {
     pub backend: Backend,
     pub model: &'static str,
     pub effort: &'static str,
+    /// Models tried next when a tier fails; agent presets only.
+    pub escalate: &'static [&'static str],
     /// API presets only.
     pub api_base: &'static str,
     pub api_key_env: &'static str,
@@ -804,6 +906,7 @@ const fn agent_preset(
         backend,
         model,
         effort,
+        escalate: &[],
         api_base: "",
         api_key_env: "",
         recommended,
@@ -825,6 +928,7 @@ const fn api_preset(
         backend: Backend::Api,
         model,
         effort: "",
+        escalate: &[],
         api_base,
         api_key_env,
         recommended: false,
@@ -836,23 +940,50 @@ pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
 
-static PRESETS: [Preset; 9] = [
+static PRESETS: [Preset; 11] = [
+    Preset {
+        escalate: AGENTS[0].escalate,
+        ..agent_preset(
+            "claude-code",
+            "Claude Code · Haiku 5.5 → Sonnet → Opus, high effort",
+            "Balanced: harnessed Haiku first; Sonnet, then Opus, only when a draft fails or doubts its pin map. Signs in with your Claude account.",
+            Backend::ClaudeCode,
+            DEFAULT_CLAUDE_MODEL,
+            DEFAULT_CLAUDE_EFFORT,
+            true,
+        )
+    },
+    // The lowest tier escalates on failure: until `qc/claude_tier_bench` shows
+    // harnessed Haiku alone at or above the codex gpt-6-luna baseline, it is
+    // not offered without a Sonnet fallback.
+    Preset {
+        escalate: &["claude-sonnet-5-5"],
+        ..agent_preset(
+            "claude-code-haiku",
+            "Claude Code · Haiku 5.5 → Sonnet on failure, high effort",
+            "Cheapest: short ~100k-token Haiku stages; Sonnet only when a draft fails or doubts its pin map. Not yet benchmarked against the Luna baseline.",
+            Backend::ClaudeCode,
+            "claude-haiku-5-5",
+            "high",
+            false,
+        )
+    },
     agent_preset(
-        "claude-code",
-        "Claude Code · Opus 5.5, high effort",
-        "Strongest reading of pin maps. Signs in with your Claude account (`claude login`).",
-        Backend::ClaudeCode,
-        DEFAULT_CLAUDE_MODEL,
-        DEFAULT_CLAUDE_EFFORT,
-        true,
-    ),
-    agent_preset(
-        "claude-code-fast",
-        "Claude Code · Sonnet 5.5, medium effort",
-        "Faster and cheaper; fine for simple parts with a numbered pinout.",
+        "claude-code-sonnet",
+        "Claude Code · Sonnet 5.5 only, high effort",
+        "One Sonnet session per datasheet: mid cost, no escalation.",
         Backend::ClaudeCode,
         "claude-sonnet-5-5",
-        "medium",
+        "high",
+        false,
+    ),
+    agent_preset(
+        "claude-code-opus",
+        "Claude Code · Opus 5.5 only, high effort",
+        "One Opus session per datasheet: the strongest single reading of pin maps, and the dearest.",
+        Backend::ClaudeCode,
+        "claude-opus-5-5",
+        "high",
         false,
     ),
     agent_preset(
@@ -882,15 +1013,18 @@ static PRESETS: [Preset; 9] = [
         DEFAULT_CODEX_EFFORT,
         true,
     ),
-    agent_preset(
-        "codex-luna",
-        "Codex · gpt-6-luna, high effort",
-        "Much cheaper, and very good for most circuit extraction; Sol reads the hardest pin maps better.",
-        Backend::Codex,
-        "gpt-6-luna",
-        "high",
-        false,
-    ),
+    Preset {
+        escalate: &["gpt-6.1-sol"],
+        ..agent_preset(
+            "codex-luna",
+            "Codex · gpt-6-luna → gpt-6.1-sol, high effort",
+            "Much cheaper, and very good for most circuit extraction; escalates to Sol when a draft fails or doubts its pin map.",
+            Backend::Codex,
+            "gpt-6-luna",
+            "high",
+            false,
+        )
+    },
     api_preset(
         "openai",
         "OpenAI API · gpt-6.1-sol",
@@ -1007,6 +1141,8 @@ pub struct ResolvedAgent {
     pub permission_mode: String,
     pub profile: Option<String>,
     pub extra_args: Vec<String>,
+    /// The models tried after `model`, in order.
+    pub escalate: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1070,8 +1206,10 @@ impl Resolved {
         let backend = self.backend;
         match self.agent_mut(backend) {
             Some(a) => {
+                // A model named for this run is that model alone, not a ladder.
                 if let Some(m) = chosen(model) {
                     a.model = m;
+                    a.escalate.clear();
                 }
                 if let Some(e) = chosen(effort) {
                     a.effort = e;
@@ -1083,6 +1221,27 @@ impl Resolved {
                 }
             }
         }
+    }
+
+    /// Every model the active backend may run, in escalation order, first once each.
+    #[must_use]
+    pub fn ladder(&self) -> Vec<String> {
+        let rest = self.agent(self.backend).map(|a| a.escalate.clone());
+        let mut ladder = vec![self.model().to_string()];
+        for m in rest.unwrap_or_default() {
+            if !ladder.contains(&m) {
+                ladder.push(m);
+            }
+        }
+        ladder
+    }
+
+    /// These settings with the active backend running `model`, alone.
+    #[must_use]
+    pub fn with_model(&self, model: &str) -> Self {
+        let mut tier = self.clone();
+        tier.override_model(Some(model), None);
+        tier
     }
 
     /// The command override, if this protocol is run through a custom wrapper.
@@ -1105,9 +1264,10 @@ impl Resolved {
     /// Tell every consent surface exactly what is about to read the datasheet.
     #[must_use]
     pub fn summary(&self) -> String {
+        let models = self.ladder().join(" → ");
         let detail = self.effort().map_or_else(
             || format!("{} at {}", self.model(), self.api.base_url),
-            |effort| format!("{}, {effort} effort", self.model()),
+            |effort| format!("{models}, {effort} effort"),
         );
         let routing = self
             .custom_command(self.backend)
@@ -1367,7 +1527,7 @@ mod tests {
         for (backend, model, effort, permission) in [
             (
                 Backend::ClaudeCode,
-                "claude-opus-5-5",
+                "claude-haiku-5-5",
                 "high",
                 "acceptEdits",
             ),
@@ -1381,7 +1541,21 @@ mod tests {
             );
         }
         assert_eq!((r.retries, r.timeout_secs), (2, 900));
-        assert!(r.summary().contains("-opus-5-5, high effort; file tools"));
+        assert!(r.summary().contains(
+            "claude-haiku-5-5 → claude-sonnet-5-5 → claude-opus-5-5, high effort; file tools"
+        ));
+        assert_eq!(r.ladder().len(), 3);
+        // A model chosen in the file without its own ladder runs alone.
+        let mut cfg = ExtractConfig::default();
+        cfg.set("claude-code.model", "claude-opus-5-5").unwrap();
+        let r = cfg.resolve(&FakeHost::new(&[], &["claude"]), None);
+        assert_eq!(r.ladder(), ["claude-opus-5-5"]);
+        cfg.set("claude-code.escalate", "claude-fable-5-1").unwrap();
+        let r = cfg.resolve(&FakeHost::new(&[], &["claude"]), None);
+        assert_eq!(r.ladder(), ["claude-opus-5-5", "claude-fable-5-1"]);
+        let env = [("HAUKSBEE_CLAUDE_ESCALATE", "none")];
+        let r = cfg.resolve(&FakeHost::new(&env, &["claude"]), None);
+        assert_eq!(r.ladder(), ["claude-opus-5-5"]);
         for a in AGENTS {
             assert_eq!(
                 r.agent(a.backend).unwrap().command,
@@ -1523,7 +1697,11 @@ mod tests {
                 cfg.claude_code.model.as_deref(),
                 cfg.claude_code.effort.as_deref()
             ),
-            (Some("claude-opus-5-5"), Some("high"))
+            (Some("claude-haiku-5-5"), Some("high"))
+        );
+        assert_eq!(
+            cfg.claude_code.escalate.as_deref().map(<[String]>::len),
+            Some(2)
         );
         assert_eq!(cfg.codex.model.as_deref(), Some("keep-me"));
 

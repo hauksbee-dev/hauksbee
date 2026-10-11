@@ -1,9 +1,10 @@
 //! What an extraction cost: tokens per backend call and an estimated list price.
 //!
 //! Only some backends say. `codex exec --json` ends each turn with a
-//! `turn.completed` event carrying token counts, and an OpenAI-compatible API
-//! reply has a `usage` object; `claude -p --output-format text` and `agy` print
-//! none. A call whose usage is unknown is reported as unknown and never counted
+//! `turn.completed` event carrying token counts, an OpenAI-compatible API
+//! reply has a `usage` object, and `claude -p --output-format stream-json` ends
+//! with a `result` event whose `modelUsage` gives tokens and a list-price cost
+//! per model; `agy` prints none. A call whose usage is unknown is reported as unknown and never counted
 //! as zero, so a total over some unknown calls is a floor, and says so.
 //!
 //! Prices are USD per million tokens (input, cached input, output) at the
@@ -43,20 +44,38 @@ const LIST_PRICES: &[(&str, Price)] = &[
 pub enum Billing {
     /// Billed per token at list price; `fast` doubles it.
     Metered { fast: bool },
-    /// Drawn from a `ChatGPT` plan's Codex allowance: no per-call charge.
+    /// Drawn from a subscription plan (`ChatGPT` for codex, Claude for Claude
+    /// Code): no per-call charge, so no dollar figure.
     Plan,
+    /// How the CLI is signed in could not be told: no dollar figure either.
+    Unknown,
 }
 
-/// How a codex CLI bills: `codex login status` names a `ChatGPT` sign-in, else metered.
+impl Billing {
+    /// The activity-event name: `metered`, `plan` or `unknown`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Metered { .. } => "metered",
+            Self::Plan => "plan",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// How a codex CLI bills: `codex login status` names a `ChatGPT` sign-in
+/// (plan) or an API key (metered); anything else is unknown.
 #[must_use]
 pub fn codex_billing(command: &str, extra_args: &[String]) -> Billing {
-    let chatgpt = login_status(command).is_some_and(|text| text.contains("ChatGPT"));
-    if chatgpt {
+    let status = login_status(command).unwrap_or_default();
+    if status.contains("ChatGPT") {
         Billing::Plan
-    } else {
+    } else if status.to_ascii_lowercase().contains("api key") {
         Billing::Metered {
             fast: fast_tier(extra_args),
         }
+    } else {
+        Billing::Unknown
     }
 }
 
@@ -103,8 +122,12 @@ struct Ledger {
     tokens: Usage,
     /// Summed cost of the known metered calls; `None` once any has no price.
     cost: Option<f64>,
-    /// Known calls drawn from a plan rather than metered.
+    /// Known calls drawn from a plan (or of unknown billing) rather than metered.
     plan: usize,
+    /// Where the non-metered calls' usage went (see `source`).
+    source: Option<&'static str>,
+    /// The run's share of a subscription plan, once read (see `extract_plan`).
+    plan_note: Option<String>,
 }
 
 static LEDGER: Mutex<Option<Ledger>> = Mutex::new(None);
@@ -118,6 +141,11 @@ pub fn reset() {
     *ledger() = None;
 }
 
+/// Attach the run's plan-usage line (see `extract_plan::report`) to the summary.
+pub fn note_plan(line: String) {
+    ledger().get_or_insert_with(Ledger::default).plan_note = Some(line);
+}
+
 /// The summed `turn.completed` usage in a codex `--json` stream (`None` when it has none).
 #[must_use]
 pub fn from_codex_events(stdout: &str) -> Option<Usage> {
@@ -128,6 +156,36 @@ pub fn from_codex_events(stdout: &str) -> Option<Usage> {
     turns
         .filter_map(|e| usage_object(&e["usage"], "input_tokens", "output_tokens"))
         .reduce(add)
+}
+
+/// Per-model tokens, and Claude Code's own list-price cost, from its
+/// `stream-json` `result` event.
+///
+/// The cost is kept only for a first-party Claude
+/// model it prices at list (`costBasis: "list"`): a gateway model routed
+/// through Claude Code is priced from its tokens here instead, because Claude
+/// Code prices names it does not know at Opus-class rates.
+#[must_use]
+pub fn from_claude_result(result: &Value) -> Vec<(String, Usage, Option<f64>)> {
+    let models = result["modelUsage"].as_object().into_iter().flatten();
+    models
+        .map(|(name, m)| {
+            let n = |k: &str| m[k].as_u64().unwrap_or(0);
+            let cached = n("cacheReadInputTokens");
+            let input = n("inputTokens") + cached + n("cacheCreationInputTokens");
+            let listed = name.starts_with("claude-") && m["costBasis"] == "list";
+            let usage = Usage {
+                input,
+                cached,
+                output: n("outputTokens"),
+            };
+            (
+                name.clone(),
+                usage,
+                m["costUSD"].as_f64().filter(|_| listed),
+            )
+        })
+        .collect()
 }
 
 /// The `usage` of a chat-completions reply.
@@ -189,6 +247,45 @@ fn describe(u: Usage) -> String {
 
 /// Record one backend call (`None` = it reported no usage) and say what it cost.
 pub fn record(tool: &str, model: &str, billing: Billing, usage: Option<Usage>) {
+    record_priced(tool, model, billing, usage, None);
+}
+
+/// [`record`], with the list-price cost the backend itself reported for a
+/// metered call (`None`: price it from [`LIST_PRICES`]). Also sends a `usage`
+/// activity event carrying the run's totals so far.
+pub fn record_priced(
+    tool: &str,
+    model: &str,
+    billing: Billing,
+    usage: Option<Usage>,
+    reported: Option<f64>,
+) {
+    let line = ledger_line(tool, model, billing, usage, reported);
+    crate::extract_progress::say(&format!("[model-extract] {line}"));
+    let (u, l) = (
+        usage.unwrap_or_default(),
+        ledger().clone().unwrap_or_default(),
+    );
+    let call = usage.and_then(|u| reported.or_else(|| price(model, false).map(|p| cost(u, p))));
+    let call = call.filter(|_| matches!(billing, Billing::Metered { .. }));
+    crate::extract_progress::event(
+        "usage",
+        serde_json::json!({
+            "model": model, "billing": billing.name(),
+            "input": u.input, "output": u.output, "cache_read": u.cached,
+            "cost_usd": call, "total_tokens": l.tokens.input + l.tokens.output,
+            "total_cost_usd": l.cost.filter(|_| l.plan < l.known),
+        }),
+    );
+}
+
+fn ledger_line(
+    tool: &str,
+    model: &str,
+    billing: Billing,
+    usage: Option<Usage>,
+    reported: Option<f64>,
+) -> String {
     let mut guard = ledger();
     let l = guard.get_or_insert_with(|| Ledger {
         cost: Some(0.0),
@@ -205,16 +302,15 @@ pub fn record(tool: &str, model: &str, billing: Billing, usage: Option<Usage>) {
             l.tokens = add(l.tokens, u);
             let Billing::Metered { fast } = billing else {
                 l.plan += 1;
-                let line = format!(
-                    "{tool} call {}: {}, from your ChatGPT plan's Codex usage (no per-call charge)",
-                    l.calls,
-                    describe(u)
+                let from = source(tool, billing);
+                l.source = Some(
+                    l.source
+                        .filter(|s| *s != from)
+                        .map_or(from, |_| source("", Billing::Unknown)),
                 );
-                drop(guard);
-                crate::extract_progress::say(&format!("[model-extract] {line}"));
-                return;
+                return format!("{tool} call {}: {}, {from}", l.calls, describe(u));
             };
-            let priced = price(model, fast).map(|p| cost(u, p));
+            let priced = reported.or_else(|| price(model, fast).map(|p| cost(u, p)));
             l.cost = l.cost.zip(priced).map(|(a, b)| a + b);
             let spend = priced.map_or_else(
                 || format!("cost unknown (no list price for {model}; set HAUKSBEE_LLM_PRICE=in,cached,out in USD per million tokens)"),
@@ -224,15 +320,37 @@ pub fn record(tool: &str, model: &str, billing: Billing, usage: Option<Usage>) {
         }
     };
     drop(guard);
-    crate::extract_progress::say(&format!("[model-extract] {line}"));
+    line
 }
 
-/// The one-line cost of the whole extraction so far (empty before any call).
+/// Where a non-metered call's usage goes.
+fn source(tool: &str, billing: Billing) -> &'static str {
+    match (billing, tool) {
+        (Billing::Plan, "codex") => "from your ChatGPT plan's Codex usage (no per-call charge)",
+        (Billing::Plan, _) => "from your Claude plan's usage (no per-call charge)",
+        _ => "billing unknown (could not tell an API key from a plan sign-in; no dollar figure)",
+    }
+}
+
+/// The one-line cost of the whole extraction so far (empty before any call),
+/// with the plan-usage line after it for a subscription run.
 #[must_use]
 pub fn summary() -> String {
     let Some(l) = ledger().clone() else {
         return String::new();
     };
+    let line = summary_of(&l);
+    match l.plan_note {
+        Some(note) if !line.is_empty() => format!("{line}; {note}"),
+        Some(note) => note,
+        None => line,
+    }
+}
+
+fn summary_of(l: &Ledger) -> String {
+    if l.calls == 0 {
+        return String::new();
+    }
     if l.known == 0 {
         return format!(
             "cost: unknown ({} call(s), none reported token usage)",
@@ -245,10 +363,8 @@ pub fn summary() -> String {
         } else {
             String::new()
         };
-        return format!(
-            "usage: {}, from your ChatGPT plan's Codex allowance (no per-call charge; gpt-6-luna uses less of it than gpt-6.1-sol){part}",
-            describe(l.tokens)
-        );
+        let from = l.source.unwrap_or_default();
+        return format!("usage: {}, {from}{part}", describe(l.tokens));
     }
     let money = l.cost.map_or_else(
         || "cost unknown".to_string(),

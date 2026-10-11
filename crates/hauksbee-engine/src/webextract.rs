@@ -464,9 +464,15 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     });
     // Polled each second: a phase or estimate change goes out as a `phase: ` /
     // `estimate: <secs>` line the page reads for its progress bar.
+    // Each activity event (tier, stage, pages read, tokens, validator,
+    // escalation) goes out as an `activity: <json>` line for the agent view.
     let (started, mut beat, mut shown) = (Instant::now(), Instant::now(), (String::new(), 0));
     let incomplete = loop {
-        match rx.recv_timeout(Duration::from_secs(1)) {
+        let outcome = rx.recv_timeout(Duration::from_secs(1));
+        for event in extract_progress::drain_events() {
+            progress(&format!("activity: {event}"));
+        }
+        match outcome {
             Ok(Ok(warning)) => break warning,
             Ok(Err(e)) => {
                 say_cost(progress);

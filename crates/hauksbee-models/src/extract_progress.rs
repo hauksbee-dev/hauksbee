@@ -6,6 +6,11 @@
 //! web server by polling [`snapshot`] into its stream. Process-wide, because one
 //! extraction runs per process (the server holds a slot for exactly that).
 //!
+//! It also keeps the run's activity feed: structured [`event`]s (tier, stage,
+//! pages read, tokens and cost so far, validator verdicts, escalations) that the
+//! web stream forwards as `activity: <json>` lines and `HAUKSBEE_EXTRACT_EVENTS`
+//! appends to a JSONL file, so a person can watch what the agent is doing.
+//!
 //! The estimate is the median of recent completed runs (one stuck run drags a
 //! mean for weeks), each scaled by relative page count within 0.5-2x, kept
 //! beside the backend config. With no history it is a typical agent run.
@@ -24,6 +29,9 @@ struct State {
     estimate: u64,
     /// A spinner line is on screen and must be erased before anything prints.
     drawn: bool,
+    /// Events not yet taken by [`drain_events`], oldest first, at most [`KEEP_EVENTS`].
+    events: Vec<String>,
+    started: Option<Instant>,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -31,7 +39,13 @@ static STATE: Mutex<State> = Mutex::new(State {
     pages: 0,
     estimate: DEFAULT_SECS,
     drawn: false,
+    events: Vec::new(),
+    started: None,
 });
+
+/// Appends every activity event to this file as JSONL, for scripts and benchmarks.
+pub const ENV_EVENTS: &str = "HAUKSBEE_EXTRACT_EVENTS";
+const KEEP_EVENTS: usize = 500;
 
 fn state() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
@@ -40,11 +54,47 @@ fn state() -> MutexGuard<'static, State> {
 /// A new run: forget the previous one's phase and page count.
 pub fn start() {
     pages(0);
+    {
+        let mut s = state();
+        s.events.clear();
+        s.started = Some(Instant::now());
+    }
     phase("reading the datasheet");
 }
 
 pub fn phase(now: impl Into<String>) {
     state().phase = now.into();
+}
+
+/// Record one activity event: `fields` (a JSON object) with `kind` and `t`,
+/// the seconds since [`start`], added.
+pub fn event(kind: &str, fields: serde_json::Value) {
+    let mut s = state();
+    let t = s.started.get_or_insert_with(Instant::now).elapsed();
+    let mut value =
+        serde_json::json!({ "t": (t.as_secs_f64() * 10.0).round() / 10.0, "kind": kind });
+    if let (Some(all), serde_json::Value::Object(more)) = (value.as_object_mut(), fields) {
+        all.extend(more);
+    }
+    let line = value.to_string();
+    if let Some(path) = std::env::var_os(ENV_EVENTS) {
+        use std::io::Write as _;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path);
+        let _ = file.and_then(|mut f| writeln!(f, "{line}"));
+    }
+    if s.events.len() >= KEEP_EVENTS {
+        s.events.remove(0);
+    }
+    s.events.push(line);
+}
+
+/// Take the events recorded since the last call, oldest first.
+#[must_use]
+pub fn drain_events() -> Vec<String> {
+    std::mem::take(&mut state().events)
 }
 
 /// The datasheet's page count, once known (0 = unknown); rescales the estimate.

@@ -1,0 +1,331 @@
+//! The staged harness and the escalation ladder around an agent extraction.
+//!
+//! A small model reads a datasheet well in short, focused sessions and badly in
+//! one long one: by the time it has paged through forty pages of PDF its context
+//! is full of curves it never needed. So a model with a context budget
+//! ([`crate::extract_config::ModelChoice::context_budget`]) runs in stages, each
+//! a fresh agent in the same sandbox, each killed if its context passes the budget:
+//!
+//! 1. **locate**: from `page-index.md` and only the pages it names, write
+//!    `notes.md`: the package, the pin map, the key pages and values, and what
+//!    is ambiguous. Compact notes, not a transcript, are what the next agent gets.
+//! 2. **draft**: the full extraction prompt plus those notes; writes `model.toml`.
+//! 3. **fix**: a draft the validator refuses goes to a fresh agent as
+//!    `previous.toml` with the error, rather than redoing the reading.
+//!
+//! Every tier, staged or not, then faces the same gates as before (validation,
+//! retries with feedback, review before save). A tier that still fails, runs out
+//! of time or budget, reports low confidence, or leaves its pin map unresolved
+//! hands over to the next model in the ladder ([`crate::extract_config::Resolved::ladder`]),
+//! which inherits the notes; the card records which tier wrote it and why each
+//! escalation happened.
+
+use std::fmt::Write as _;
+use std::path::Path;
+
+use serde_json::{json, Value};
+
+use crate::extract_progress::event;
+
+pub const NOTES: &str = "notes.md";
+pub const CONFIDENCE: &str = "confidence.txt";
+pub const PREVIOUS: &str = "previous.toml";
+
+/// An agent run stopped by its stream watcher (its context passed the budget).
+#[derive(Debug, Clone)]
+pub struct Stopped(pub String);
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stopped: {}", self.0)
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+/// Reads an agent's stdout line by line while it runs; `Some(reason)` stops it.
+pub type Watch = Box<dyn FnMut(&str) -> Option<String> + Send>;
+
+/// The watcher for one run: activity events and the context budget.
+///
+/// Events come from Claude Code's `stream-json` (and codex's `--json`) lines;
+/// the budget (0 = none) is checked on every assistant turn, whose usage says
+/// how full the context now is.
+#[must_use]
+pub fn watch(model: &str, budget: u64) -> Watch {
+    let model = model.to_string();
+    Box::new(move |line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        if v["type"] == "item.started" && v["item"]["type"] == "command_execution" {
+            tool_event("shell", &json!({ "command": v["item"]["command"] }));
+        }
+        if v["type"] != "assistant" {
+            return None;
+        }
+        for c in v["message"]["content"].as_array().into_iter().flatten() {
+            if c["type"] == "tool_use" {
+                tool_event(c["name"].as_str().unwrap_or("tool"), &c["input"]);
+            }
+        }
+        let u = &v["message"]["usage"];
+        let keys = [
+            "input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ];
+        let context: u64 = keys.iter().filter_map(|k| u[k].as_u64()).sum();
+        if context > 0 {
+            event("usage", json!({ "model": model, "context": context }));
+        }
+        (budget > 0 && context > budget)
+            .then(|| format!("{model} passed its {budget}-token context budget ({context} tokens)"))
+    })
+}
+
+fn tool_event(name: &str, input: &Value) {
+    let detail = ["file_path", "command", "pattern"]
+        .iter()
+        .find_map(|k| input[k].as_str())
+        .unwrap_or_default();
+    let base = detail.rsplit('/').next().unwrap_or(detail);
+    let page = base
+        .split_once("page-")
+        .and_then(|(_, rest)| rest.split('.').next()?.parse::<usize>().ok());
+    if name == "Read" {
+        event("read", json!({ "path": base, "page": page }));
+    } else {
+        let short: String = detail.chars().take(100).collect();
+        event("tool", json!({ "name": name, "detail": short }));
+    }
+}
+
+/// The last `result` event of a Claude Code `stream-json` run.
+#[must_use]
+pub fn claude_result(stdout: &str) -> Option<Value> {
+    let events = stdout.lines().rev();
+    let mut parsed = events.filter_map(|l| serde_json::from_str::<Value>(l).ok());
+    parsed.find(|e| e["type"] == "result")
+}
+
+/// `pages/page-NNN.txt` per page and `page-index.md` listing each page's topics
+/// and first line, so a staged agent opens two pages, not forty.
+pub fn write_pages<'a>(dir: &Path, pages: impl Iterator<Item = (usize, &'a str, Vec<&'a str>)>) {
+    let mut index = String::from(
+        "# Page index\n\nEach page's text is pages/page-NNN.txt; rendered pages are page-NNN.png.\n\n\
+         | page | topics found | first line |\n|---|---|---|\n",
+    );
+    let _ = std::fs::create_dir_all(dir.join("pages"));
+    for (n, text, topics) in pages {
+        let _ = std::fs::write(dir.join(format!("pages/page-{n:03}.txt")), text);
+        let first = text.lines().map(str::trim).find(|l| !l.is_empty());
+        let first: String = first.unwrap_or_default().chars().take(70).collect();
+        let first = first.replace('|', "/");
+        let _ = writeln!(index, "| {n} | {} | {first} |", topics.join(", "));
+    }
+    let _ = std::fs::write(dir.join("page-index.md"), index);
+}
+
+/// The first stage: find the facts and hand off compact notes.
+#[must_use]
+pub fn locate_prompt(part: &str, kind: &str, needs: &str) -> String {
+    format!(
+        "You are the first of several short agents drafting a Hauksbee model card for {part} \
+         (kind `{kind}`). Your only job is to LOCATE the facts and hand off compact notes; a \
+         later agent writes the card from them.\n\n\
+         Files in your working directory: `page-index.md` lists every PDF page with the topics \
+         found on it and its first line; `pages/page-NNN.txt` is each page's text; \
+         `page-NNN.png` are renders of the most relevant pages. Your context is small: do NOT \
+         open `datasheet.pdf` or `datasheet.txt` whole. When a page you need has no image, \
+         render just that page: `pdftoppm -png -r 150 -f N -l N -singlefile datasheet.pdf page-NNN`. \
+         Use only files in your working directory.\n\n\
+         The card will need: {needs}\n\n\
+         Write `{NOTES}` (under 150 lines) with exactly these sections:\n\
+         ## Part and package: the orderable code(s) that are {part}, the package each uses, \
+         and which package the card should model.\n\
+         ## Pin map: a table `pin | name | function` for that package, read off the pinout \
+         image AND the pin-function table (say on which pages, and whether they agree).\n\
+         ## Key pages: page numbers of the absolute maximum ratings, recommended operating \
+         conditions, electrical characteristics, pin functions or package drawing, and any \
+         function table or programming equation.\n\
+         ## Key values: up to 40 lines `name = value unit (min/typ/max, conditions, page N)`.\n\
+         ## Ambiguities: anything unresolved (package variants with different pinouts, an \
+         unclear variant, a missing table).\n\
+         End with one line `CONFIDENCE: high`, `medium` or `low` (low when the pin map or \
+         package is ambiguous). Do not write model.toml."
+    )
+}
+
+/// What a drafting agent is told about the notes already in the sandbox:
+/// for a staged draft they are its map; for an escalated tier they are a
+/// cheaper pass's map, to verify rather than trust.
+#[must_use]
+pub fn handoff(dir: &Path, staged: bool, escalated_because: Option<&str>) -> String {
+    let notes = std::fs::read_to_string(dir.join(NOTES)).unwrap_or_default();
+    let notes: String = notes.chars().take(12_000).collect();
+    let mut out = String::new();
+    if let Some(why) = escalated_because {
+        let _ = write!(
+            out,
+            "\n\n## Escalated\n\nA cheaper model already tried this part and was escalated \
+             because: {why}. Do the extraction yourself; anything it left is a lead to check.",
+        );
+    }
+    if !notes.trim().is_empty() {
+        let trust = if staged {
+            "A locating agent read the datasheet first. Its notes are your map: open the pages \
+             they name (page-NNN.png, or pages/page-NNN.txt where there is no image) and check \
+             each value you use against its page. Your context is small: do not open \
+             datasheet.pdf or datasheet.txt whole; this overrides the instruction above."
+        } else {
+            "Notes from the cheaper pass, a map only: verify the pin map and every value \
+             against the pages yourself."
+        };
+        let _ = write!(out, "\n\n## Handoff notes ({NOTES})\n\n{trust}\n\n{notes}");
+    }
+    if staged {
+        let _ = write!(
+            out,
+            "\n\nIf `{PREVIOUS}` exists it is the last draft, which failed the check quoted \
+             below: start from it, fix exactly what failed, re-read only the pages the fix \
+             needs, and write the whole corrected table to model.toml."
+        );
+    }
+    out
+}
+
+/// Asked of every tier of a ladder: the self-report the next tier is chosen on.
+pub const CONFIDENCE_CLAUSE: &str = "\n\nFinally write `confidence.txt`: its first line one \
+    word, `high`, `medium` or `low`; its second line why. Say `low` when the pin map or package \
+    variant is ambiguous or a required value had to be abstained from for want of a readable \
+    table; a cheaper model saying low hands the part to a stronger one, which is the right \
+    outcome, not a failure.";
+
+/// The tier's own confidence: (`high`/`medium`/`low`/`unknown`, its reason).
+#[must_use]
+pub fn confidence(dir: &Path) -> (String, String) {
+    let text = std::fs::read_to_string(dir.join(CONFIDENCE)).unwrap_or_default();
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let word = lines.next().unwrap_or_default().to_ascii_lowercase();
+    let level = ["high", "medium", "low"]
+        .into_iter()
+        .find(|l| word.starts_with(l));
+    let why: String = lines.next().unwrap_or_default().chars().take(200).collect();
+    (level.unwrap_or("unknown").to_string(), why)
+}
+
+/// Why a valid draft should still go to a stronger tier, if it should.
+#[must_use]
+pub fn doubt(dir: &Path, pins: Option<String>) -> Option<String> {
+    if let Some(warning) = pins {
+        return Some(format!("pin map unresolved: {warning}"));
+    }
+    let (level, why) = confidence(dir);
+    (level == "low").then(|| format!("self-reported low confidence: {why}"))
+}
+
+/// The first line of an error, short enough for an event or a card comment.
+#[must_use]
+pub fn reason(e: &anyhow::Error) -> String {
+    let text = format!("{e:#}");
+    let first = text.lines().next().unwrap_or_default();
+    first.chars().take(240).collect()
+}
+
+/// Record and announce the tier that produced the answer, and stamp it on the card.
+#[must_use]
+pub fn finish(
+    raw: &str,
+    dir: &Path,
+    who: (&str, &str),
+    tier: (usize, usize),
+    why: &[String],
+) -> String {
+    let (backend, model) = who;
+    let (level, _) = confidence(dir);
+    event(
+        "final",
+        json!({ "model": model, "tier": tier.0, "tiers": tier.1, "escalations": why, "confidence": level }),
+    );
+    let escalated = why.iter().fold(String::new(), |mut s, w| {
+        let _ = write!(s, "; escalated: {w}");
+        s
+    });
+    let line = format!(
+        "{backend} {model} (tier {} of {}){escalated}",
+        tier.0, tier.1
+    );
+    crate::extract_progress::say(&format!(
+        "[model-extract] final tier: {line}; confidence {level}"
+    ));
+    let line = line.replace('\n', " ");
+    format!("# extracted by {line}\n{raw}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_watcher_stops_a_run_past_its_budget_and_names_pages_read() {
+        let mut w = watch("claude-haiku-5-5", 1000);
+        let turn = |ctx: u64| {
+            json!({"type": "assistant", "message": {
+                "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/w/page-004.png"}}],
+                "usage": {"input_tokens": 2, "cache_read_input_tokens": ctx}}})
+            .to_string()
+        };
+        assert_eq!(w("not json"), None);
+        assert_eq!(w(&turn(500)), None);
+        let stop = w(&turn(5000)).unwrap();
+        assert!(
+            stop.contains("1000-token context budget (5002 tokens)"),
+            "{stop}"
+        );
+        assert!(
+            watch("m", 0)(&turn(5_000_000)).is_none(),
+            "no budget, no stop"
+        );
+    }
+
+    #[test]
+    fn confidence_doubt_and_the_result_event_are_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(confidence(dir.path()).0, "unknown");
+        assert_eq!(doubt(dir.path(), None), None);
+        std::fs::write(
+            dir.path().join(CONFIDENCE),
+            "LOW.\nSOT-23 pinout differs by suffix\n",
+        )
+        .unwrap();
+        assert_eq!(
+            doubt(dir.path(), None).unwrap(),
+            "self-reported low confidence: SOT-23 pinout differs by suffix"
+        );
+        let pins = doubt(dir.path(), Some("pad 7 unknown".into())).unwrap();
+        assert!(pins.starts_with("pin map unresolved"));
+        let out = "{\"type\":\"system\"}\n{\"type\":\"result\",\"result\":\"done\"}\n";
+        assert_eq!(claude_result(out).unwrap()["result"], "done");
+        let card = finish(
+            "[[models]]\n",
+            dir.path(),
+            ("claude-code", "m"),
+            (2, 3),
+            &["x".into()],
+        );
+        assert!(card
+            .starts_with("# extracted by claude-code m (tier 2 of 3); escalated: x\n[[models]]"));
+    }
+
+    #[test]
+    fn the_page_index_names_every_page_and_its_topics() {
+        let dir = tempfile::tempdir().unwrap();
+        let pages = [
+            (1, "  \nLM358 | dual op amp\nmore", vec![]),
+            (2, "Pin Functions", vec!["pins"]),
+        ];
+        write_pages(dir.path(), pages.into_iter());
+        let index = std::fs::read_to_string(dir.path().join("page-index.md")).unwrap();
+        assert!(index.contains("| 1 |  | LM358 / dual op amp |") && index.contains("| 2 | pins |"));
+        assert!(dir.path().join("pages/page-002.txt").is_file());
+    }
+}

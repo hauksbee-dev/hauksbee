@@ -51,6 +51,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 
 use crate::extract_config::{self, ProcessHost, Resolved, ResolvedApi};
+use crate::extract_harness as harness;
 use crate::extract_output as output;
 use crate::extract_progress as progress;
 use crate::schema::{ComponentKind, ModelEntry};
@@ -303,6 +304,16 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
         .as_deref()
         .map(|pages| category_disclosures(pages, &selected_pages))
         .unwrap_or_default();
+    // Per-page text and an index, for a staged agent that must not read it all.
+    let topics = |text: &str| -> Vec<&'static str> {
+        let found = PAGE_TOPICS.iter().filter(|t| topic_score(text, t.2) > 0);
+        found.map(|t| t.0).collect()
+    };
+    let indexed = page_text.iter().flatten();
+    harness::write_pages(
+        dir.path(),
+        indexed.map(|p| (p.number, p.text.as_str(), topics(&p.text))),
+    );
 
     Ok(Workspace {
         pdf: copied,
@@ -2642,19 +2653,16 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         );
     }
 
-    let tool = match chosen {
-        Backend::Api => {
-            let request = ApiRequest::prepare(&resolved.api)?;
-            let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
-                let (text, usage) = request.send_with_usage(p)?;
-                let metered = crate::extract_usage::Billing::Metered { fast: false };
-                crate::extract_usage::record("api", &request.model, metered, usage);
-                Ok(extract_toml_block(&text, reply.table()))
-            });
-            return raw.map(|raw| (raw, None));
-        }
-        agent => resolved.agent(agent).expect("agent").command.as_str(),
-    };
+    if chosen == Backend::Api {
+        let request = ApiRequest::prepare(&resolved.api)?;
+        let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
+            let (text, usage) = request.send_with_usage(p)?;
+            let metered = crate::extract_usage::Billing::Metered { fast: false };
+            crate::extract_usage::record("api", &request.model, metered, usage);
+            Ok(extract_toml_block(&text, reply.table()))
+        });
+        return raw.map(|raw| (raw, None));
+    }
     require_tool(&resolved)?;
 
     // An agent backend reads the sandboxed PDF, text dump and page renders
@@ -2678,18 +2686,180 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         String::new()
     };
     let base_prompt = format!("{agent_prompt}\n\n{clause}{agy_note}");
+    // The escalation ladder: each tier a model, the next tried only when this
+    // one fails, times out, doubts itself or leaves its pin map unresolved. A
+    // kind identification is one cheap call on the first model.
+    let ladder = if reply.table().is_empty() {
+        vec![resolved.model().to_string()]
+    } else {
+        resolved.ladder()
+    };
+    // A subscription run is reported as its share of the plan's limits, read
+    // before and after; dollars only for a metered (API-key) run.
+    let command = resolved.agent(chosen).expect("agent").command.clone();
+    let billing = match chosen {
+        Backend::Codex => {
+            let a = resolved.agent(chosen).expect("agent");
+            crate::extract_usage::codex_billing(&a.command, &a.extra_args)
+        }
+        Backend::ClaudeCode => crate::extract_plan::claude_billing(&command),
+        _ => crate::extract_usage::Billing::Unknown,
+    };
+    let plan = billing == crate::extract_usage::Billing::Plan;
+    let before = plan.then(|| crate::extract_plan::read(chosen.name(), &command));
+    let out = run_ladder(&resolved, &base_prompt, reply, &ws, &ladder, billing);
+    if let Some(before) = before {
+        let after = crate::extract_plan::read(chosen.name(), &command);
+        let line = crate::extract_plan::report(chosen.name(), before, after);
+        say!("[model-extract] {line}");
+        crate::extract_usage::note_plan(line);
+    }
+    out
+}
+
+/// The escalation ladder over `ladder`'s models in one sandbox (see `call_backend`).
+fn run_ladder(
+    resolved: &Resolved,
+    base_prompt: &str,
+    reply: Reply<'_>,
+    ws: &Workspace,
+    ladder: &[String],
+    billing: crate::extract_usage::Billing,
+) -> Result<(String, Option<TimedOut>)> {
+    let chosen = resolved.backend;
+    let (tiers, mut why, mut fallback) = (ladder.len(), Vec::<String>::new(), None);
+    for (i, model) in ladder.iter().enumerate() {
+        let tier = resolved.with_model(model);
+        let staged = !reply.table().is_empty();
+        let budget = extract_config::context_budget(&ProcessHost, model) * u64::from(staged);
+        let harness_name = if budget > 0 { "staged" } else { "single" };
+        progress::event(
+            "tier",
+            serde_json::json!({"model": model, "tier": i + 1, "tiers": tiers, "harness": harness_name, "budget": budget}),
+        );
+        if tiers > 1 {
+            say!(
+                "[model-extract] tier {} of {tiers}: {model} ({harness_name})",
+                i + 1
+            );
+        }
+        let last = i + 1 == tiers;
+        let ran = run_tier(
+            &tier,
+            (base_prompt, billing),
+            reply,
+            ws,
+            budget,
+            why.last(),
+            tiers > 1,
+        );
+        let done = |(raw, t): (String, Option<TimedOut>), n: usize, why: &[String]| {
+            let raw = harness::finish(
+                &raw,
+                ws.path(),
+                (chosen.name(), &ladder[n]),
+                (n + 1, tiers),
+                why,
+            );
+            Ok((raw, t))
+        };
+        let reason = match ran {
+            Ok(answer) if last => return done(answer, i, &why),
+            Ok(answer) => {
+                let pins = match reply {
+                    Reply::Model { part, kind } => parse_and_validate_reply(&answer.0, part, kind)
+                        .ok()
+                        .and_then(|e| crate::validation::unknown_pads_warning(&e)),
+                    _ => None,
+                };
+                let timed = answer
+                    .1
+                    .as_ref()
+                    .map(|t| format!("{t}; its last lint-clean draft is the fallback"));
+                match timed.or_else(|| harness::doubt(ws.path(), pins)) {
+                    None => return done(answer, i, &why),
+                    Some(doubt) => {
+                        fallback = Some((answer, i, why.clone()));
+                        doubt
+                    }
+                }
+            }
+            Err(e) if last => {
+                return match fallback {
+                    Some((answer, n, earlier)) => {
+                        let mut why = earlier;
+                        why.push(format!(
+                            "{} failed too ({})",
+                            ladder[i],
+                            harness::reason(&e)
+                        ));
+                        done(answer, n, &why)
+                    }
+                    None => Err(e),
+                };
+            }
+            Err(e) => harness::reason(&e),
+        };
+        let next = &ladder[i + 1];
+        say!("[model-extract] escalating from {model} to {next}: {reason}");
+        progress::event(
+            "escalate",
+            serde_json::json!({"from": model, "to": next, "reason": reason}),
+        );
+        why.push(reason);
+    }
+    unreachable!("the last tier returns")
+}
+
+/// One model's attempt at the extraction in the shared sandbox: the staged
+/// harness when `budget` is set (locate, then draft and fix, each a fresh agent
+/// bounded to `budget` tokens of context), else one agent with the full prompt.
+fn run_tier(
+    resolved: &Resolved,
+    (base_prompt, billing): (&str, crate::extract_usage::Billing),
+    reply: Reply<'_>,
+    ws: &Workspace,
+    budget: u64,
+    escalated_because: Option<&String>,
+    laddered: bool,
+) -> Result<(String, Option<TimedOut>)> {
+    let chosen = resolved.backend;
+    let tool = resolved.agent(chosen).expect("agent").command.as_str();
+    let staged = budget > 0;
+    let _ = std::fs::remove_file(ws.path().join(harness::CONFIDENCE));
+    let run = |p: &str| run_and_record(resolved, p, ws, budget, billing);
+    if staged && !ws.path().join(harness::NOTES).is_file() {
+        if let Reply::Model { part, kind } | Reply::Sensor { part, kind } = reply {
+            progress::phase("locating the pin map and key tables");
+            progress::event(
+                "stage",
+                serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
+            );
+            run(&harness::locate_prompt(
+                part,
+                kind,
+                required_params_for_kind(kind),
+            ))?;
+            if !ws.path().join(harness::NOTES).is_file() {
+                bail!("the locating agent wrote no {}", harness::NOTES);
+            }
+        }
+    }
+    let mut prompt = base_prompt.to_string();
+    if !reply.table().is_empty() {
+        prompt += &harness::handoff(ws.path(), staged, escalated_because.map(String::as_str));
+    }
+    if laddered || staged {
+        prompt += harness::CONFIDENCE_CLAUSE;
+    }
     let mut timed_out = None;
-    let billing = resolved
-        .agent(chosen)
-        .filter(|_| chosen == Backend::Codex)
-        .map(|a| crate::extract_usage::codex_billing(&a.command, &a.extra_args));
-    let raw = validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
-        let _ = std::fs::remove_file(ws.answer_path());
-        let ran = run_agent_once(&resolved, p, &ws);
-        let usage = ran.as_ref().ok().filter(|_| chosen == Backend::Codex);
-        let usage = usage.and_then(|out| crate::extract_usage::from_codex_events(out));
-        let billing = billing.unwrap_or(crate::extract_usage::Billing::Metered { fast: false });
-        crate::extract_usage::record(chosen.name(), resolved.model(), billing, usage);
+    let raw = validated_attempts(resolved.retries, &prompt, reply, tool, |p| {
+        let answer = ws.answer_path();
+        if staged && answer.is_file() {
+            let _ = std::fs::rename(&answer, ws.path().join(harness::PREVIOUS));
+        }
+        let _ = std::fs::remove_file(answer);
+        let ran = run(p);
         let stdout = match ran {
             // A killed run keeps its draft only if it passes the finished-answer check.
             Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
@@ -2707,12 +2877,6 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
         // that says "here is the TOML" twice yields two candidates.
-        // Codex's stdout is a JSONL event stream, so its prose lives in last-message.txt.
-        let stdout = if chosen == Backend::Codex {
-            std::fs::read_to_string(ws.path().join("last-message.txt")).unwrap_or_default()
-        } else {
-            stdout
-        };
         let text = std::fs::read_to_string(ws.answer_path())
             .ok()
             .filter(|t| !t.trim().is_empty())
@@ -2720,6 +2884,54 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         Ok(extract_toml_block(&text, reply.table()))
     });
     raw.map(|raw| (raw, timed_out))
+}
+
+/// One agent run, its usage recorded, returning the agent's final prose: codex
+/// and Claude Code stream JSONL events, so theirs is `last-message.txt` and the
+/// `result` event's text respectively.
+fn run_and_record(
+    resolved: &Resolved,
+    prompt: &str,
+    ws: &Workspace,
+    budget: u64,
+    billing: crate::extract_usage::Billing,
+) -> Result<String> {
+    use crate::extract_usage as usage;
+    let (chosen, model) = (resolved.backend, resolved.model());
+    let ran = run_agent_budgeted(resolved, prompt, ws, budget);
+    let stdout = ran.as_ref().map(String::as_str).unwrap_or_default();
+    match chosen {
+        Backend::ClaudeCode => {
+            let result = harness::claude_result(stdout);
+            let per_model = result
+                .as_ref()
+                .map(usage::from_claude_result)
+                .unwrap_or_default();
+            if per_model.is_empty() {
+                usage::record(chosen.name(), model, billing, None);
+            }
+            for (name, used, cost) in per_model {
+                usage::record_priced(chosen.name(), &name, billing, Some(used), cost);
+            }
+            let text = result.as_ref().and_then(|r| r["result"].as_str());
+            let text = text.map_or_else(|| stdout.to_string(), str::to_string);
+            ran.map(|_| text)
+        }
+        Backend::Codex => {
+            usage::record(
+                chosen.name(),
+                model,
+                billing,
+                usage::from_codex_events(stdout),
+            );
+            let last = std::fs::read_to_string(ws.path().join("last-message.txt"));
+            ran.map(|_| last.unwrap_or_default())
+        }
+        _ => {
+            usage::record(chosen.name(), model, billing, None);
+            ran
+        }
+    }
 }
 
 /// Fetch, validate, and retry with feedback: one loop for every backend.
@@ -2747,6 +2959,15 @@ fn validated_attempts(
             _ => "redrafting with the checker's feedback",
         };
         progress::phase(format!("{doing} (attempt {attempt} of {})", retries + 1));
+        let stage = match (attempt, reply) {
+            (_, Reply::Word) => "identify",
+            (1, _) => "draft",
+            _ => "fix",
+        };
+        progress::event(
+            "stage",
+            serde_json::json!({"stage": stage, "attempt": attempt, "attempts": retries + 1}),
+        );
         let fetched = match fetch(&prompt) {
             // One idle kill per extraction call is retried, on the same prompt,
             // spending an attempt like any other retry; a second stall fails.
@@ -2769,7 +2990,13 @@ fn validated_attempts(
             raw.len(),
             started.elapsed().as_secs_f64()
         );
-        match reply.check(&raw) {
+        let checked = reply.check(&raw);
+        let error = checked.as_ref().err().map(harness::reason);
+        progress::event(
+            "validator",
+            serde_json::json!({"ok": error.is_none(), "error": error}),
+        );
+        match checked {
             Ok(()) => return Ok(raw),
             Err(e) if attempt <= retries => {
                 say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
@@ -3246,6 +3473,21 @@ fn agent_path(ws: &Workspace) -> Result<std::ffi::OsString> {
 /// Fails for the API backend, when the executable is missing, and when the run
 /// fails or times out.
 pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
+    run_agent_budgeted(resolved, prompt, ws, 0)
+}
+
+/// [`run_agent_once`], stopped with [`harness::Stopped`] once a streamed turn
+/// shows more than `budget` tokens of context (0 = no budget).
+///
+/// # Errors
+///
+/// As [`run_agent_once`], and when the budget is passed.
+pub fn run_agent_budgeted(
+    resolved: &Resolved,
+    prompt: &str,
+    ws: &Workspace,
+    budget: u64,
+) -> Result<String> {
     let backend = resolved.backend;
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
@@ -3288,7 +3530,8 @@ pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Resu
             cmd.args([
                 "-p",
                 "--output-format",
-                "text",
+                "stream-json",
+                "--verbose",
                 "--permission-mode",
                 &a.permission_mode,
             ])
@@ -3327,10 +3570,12 @@ pub fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Resu
         prompt,
         &log,
         Duration::from_secs(resolved.timeout_secs),
-        // Only codex streams events; claude and agy print once at the end, so
-        // their silence is normal and a watchdog would kill every healthy run.
+        // Codex streams an event per step; claude streams one per turn, and a
+        // long turn (a whole TOML table written at high effort) is a normal
+        // silence, as agy's single print is, so only codex gets the watchdog.
         (backend == Backend::Codex && resolved.idle_secs > 0)
             .then(|| Duration::from_secs(resolved.idle_secs)),
+        Some(harness::watch(&a.model, budget)),
     )?;
     if backend == Backend::Agy {
         agy_denial(&stdout, &log, ws)?;
@@ -3483,6 +3728,7 @@ fn run_cli_agent(
     log: &Path,
     timeout: Duration,
     idle: Option<Duration>,
+    watch: Option<harness::Watch>,
 ) -> Result<String> {
     std::fs::write(ws.path().join("prompt.md"), prompt)
         .context("writing the prompt into the sandbox")?;
@@ -3505,7 +3751,7 @@ fn run_cli_agent(
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(AGENT_POINTER);
     }
-    wait_for_cli_backend(child, tool, log, timeout, idle)
+    wait_for_cli_backend(child, tool, log, (timeout, idle), watch)
 }
 
 /// The stdin instruction every agent run receives. The pages are on disk
@@ -3532,24 +3778,36 @@ fn wait_for_cli_backend(
     mut child: Child,
     tool: &str,
     log_path: &Path,
-    timeout: Duration,
-    idle: Option<Duration>,
+    (timeout, idle): (Duration, Option<Duration>),
+    mut watch: Option<harness::Watch>,
 ) -> Result<String> {
     use std::io::Read;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     let start = Instant::now();
     let beat = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(Mutex::new(None::<String>));
     let mut pipe = child.stdout.take().context("capturing agent stdout")?;
     let reader = {
-        let beat = Arc::clone(&beat);
+        let (beat, stop) = (Arc::clone(&beat), Arc::clone(&stop));
         std::thread::spawn(move || {
             let (mut out, mut buf) = (Vec::new(), [0u8; 8192]);
+            let mut line_start = 0;
             while let Ok(n) = pipe.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
                 out.extend_from_slice(&buf[..n]);
+                // Each complete line goes to the watcher, which may ask for a stop.
+                while let Some(end) = out[line_start..].iter().position(|b| *b == b'\n') {
+                    let line = String::from_utf8_lossy(&out[line_start..line_start + end]);
+                    if let Some(why) = watch.as_mut().and_then(|w| w(&line)) {
+                        *stop
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
+                    }
+                    line_start += end + 1;
+                }
                 let millis = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 beat.store(millis, Ordering::Relaxed);
             }
@@ -3570,6 +3828,14 @@ fn wait_for_cli_backend(
         if Instant::now() >= deadline {
             kill_process_tree(&mut child);
             return Err(TimedOut(tool.to_string(), timeout.as_secs(), None).into());
+        }
+        let stopped = stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(why) = stopped {
+            kill_process_tree(&mut child);
+            return Err(harness::Stopped(why).into());
         }
         if idle.is_some_and(|limit| silent >= limit) {
             kill_process_tree(&mut child);
@@ -4861,7 +5127,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                 [
                     "-p",
                     "--output-format",
-                    "text",
+                    "stream-json",
+                    "--verbose",
                     "--permission-mode",
                     mode,
                     "--model",
@@ -5094,8 +5361,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let dir = tempfile::tempdir().unwrap();
         let [pdf, agent, draft, cfg] = ["a.pdf", "agent", "draft", "c"].map(|f| dir.path().join(f));
         let event = r#"{"type":"turn.completed","usage":{"input_tokens":1000000,"cached_input_tokens":0,"output_tokens":100000}}"#;
-        let script =
-            format!("#!/bin/sh\n[ \"$1\" = login ] && exit 0\ncat >/dev/null\ncp {draft:?} model.toml\necho '{event}'\n");
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = login ] && echo 'Logged in using an API key' && exit 0\ncat >/dev/null\ncp {draft:?} model.toml\necho '{event}'\n"
+        );
         let bad =
             "[[models]]\nid = \"tp\"\nkind = \"digital\"\n[models.source]\nidentity_only = true\n";
         for (path, text) in [
@@ -5153,6 +5421,137 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let spaced = Path::new("/tmp/a b/it's.toml");
         let tail = rejected_tail("", Some(&(spaced.into(), "/x.toml".into())));
         assert!(tail.contains(r"lint '/tmp/a b/it'\''s.toml'"), "{tail}");
+    }
+
+    /// Fake Claude Code for the ladder: every call logs its `--model`, writes
+    /// the locate notes and a valid card, and reports usage in a `result`
+    /// event; a model named in `doubtful` says `low` confidence, one in `bad`
+    /// writes an invalid card. Returns the run, the models called in order,
+    /// the plan/usage summary and the activity events.
+    #[cfg(unix)]
+    fn run_ladder_fake(
+        escalate: &str,
+        doubtful: &str,
+        bad: &str,
+    ) -> (Result<String>, Vec<String>, String, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let (dir, ex) = (tempfile::tempdir().unwrap(), FORMAT_EXAMPLES[0]);
+        let [pdf, agent, draft, cfg, log, events] =
+            ["a.pdf", "agent", "draft", "c", "log", "events"].map(|f| dir.path().join(f));
+        let result = r#"{"type":"result","result":"done","modelUsage":{"MODEL":{"inputTokens":1000,"outputTokens":100,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.01,"costBasis":"list"}}}"#;
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = auth ] && echo '{{\"loggedIn\":true,\"authMethod\":\"api_key\"}}' && exit 0\n\
+             cat >/dev/null\nm=; p=; for a in \"$@\"; do [ \"$p\" = --model ] && m=$a; p=$a; done\necho \"$m\" >> {log:?}\n\
+             printf '## Pin map\\n1 VCC\\n' > notes.md\ncp {draft:?} model.toml\necho high > confidence.txt\n\
+             case \" {doubtful} \" in *\" $m \"*) printf 'low\\npin 3 unclear\\n' > confidence.txt;; esac\n\
+             case \" {bad} \" in *\" $m \"*) printf '[[models]]\\nid = 1\\n' > model.toml;; esac\n\
+             echo '{result}' | sed \"s/MODEL/$m/\"\n"
+        );
+        for (path, text) in [
+            (&pdf, "%PDF-1.4\n"),
+            (&cfg, ""),
+            (&agent, script.as_str()),
+            (&draft, ex.card),
+        ] {
+            std::fs::write(path, text).unwrap();
+        }
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [
+            (extract_config::ENV_CONFIG_PATH, cfg.to_str().unwrap()),
+            ("HAUKSBEE_CLAUDE_COMMAND", agent.to_str().unwrap()),
+            ("HAUKSBEE_CLAUDE_ESCALATE", escalate),
+            (
+                crate::extract_progress::ENV_EVENTS,
+                events.to_str().unwrap(),
+            ),
+        ];
+        for (k, v) in env {
+            std::env::set_var(k, v);
+        }
+        let out = tempfile::tempdir_in(dir.path()).unwrap();
+        let args = Args::new(pdf, ex.part.into(), ex.kind.into());
+        let args = args
+            .backend(Some(Backend::ClaudeCode))
+            .out_dir(Some(out.path().into()));
+        let ran = run(args).map(|_| {
+            let file = out
+                .path()
+                .join(format!("{}.toml", sanitise_filename(ex.part)));
+            std::fs::read_to_string(file).unwrap_or_default()
+        });
+        let summary = crate::extract_usage::summary();
+        for (k, _) in env {
+            std::env::remove_var(k);
+        }
+        let models = std::fs::read_to_string(&log).unwrap_or_default();
+        let events = std::fs::read_to_string(&events).unwrap_or_default();
+        (
+            ran,
+            models.lines().map(str::to_string).collect(),
+            summary,
+            events,
+        )
+    }
+
+    /// The default ladder: a harnessed Haiku that doubts its pin map hands the
+    /// part to Sonnet, whose card is kept and says which tier wrote it and why.
+    #[cfg(unix)]
+    #[test]
+    fn a_doubtful_haiku_draft_escalates_and_the_card_names_its_tier() {
+        let (ran, models, summary, events) = run_ladder_fake("", "claude-haiku-5-5", "");
+        let card = ran.unwrap();
+        // Haiku runs a locate stage then a draft; Sonnet reuses the notes.
+        assert_eq!(
+            models,
+            ["claude-haiku-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"]
+        );
+        assert!(card.starts_with("# extracted by claude-code claude-sonnet-5-5 (tier 2 of 3); escalated: self-reported low confidence: pin 3 unclear"), "{card}");
+        assert!(
+            summary.contains('$') && !summary.contains("plan"),
+            "{summary}"
+        );
+        for kind in [
+            "\"tier\"",
+            "\"stage\"",
+            "\"usage\"",
+            "\"escalate\"",
+            "\"final\"",
+        ] {
+            assert!(events.contains(kind), "{kind} missing: {events}");
+        }
+    }
+
+    /// When the stronger tier fails outright, the doubtful but valid draft is
+    /// the result and the card says the escalation failed too.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_last_tier_falls_back_to_the_doubtful_draft() {
+        let (ran, models, _, _) =
+            run_ladder_fake("claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5-5");
+        let card = ran.unwrap();
+        assert_eq!(
+            models.iter().filter(|m| *m == "claude-sonnet-5-5").count(),
+            3,
+            "{models:?}"
+        );
+        assert!(
+            card.starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 2)"),
+            "{card}"
+        );
+        assert!(
+            card.lines()
+                .next()
+                .unwrap()
+                .contains("claude-sonnet-5-5 failed too"),
+            "{card}"
+        );
+        // A confident first tier stops there.
+        let (ran, models, _, _) = run_ladder_fake("", "", "");
+        assert!(ran
+            .unwrap()
+            .starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)\n"));
+        assert_eq!(models.len(), 2);
     }
 
     /// Fake codex for the idle watchdog: attempt 1 stalls (with a helper
