@@ -23,6 +23,7 @@
 //! reproducible given the same firmware and board.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource};
@@ -349,6 +350,15 @@ struct LiveMcu {
     digital_in_levels: HashMap<(char, u8), bool>,
     /// UART bytes this core transmitted over the run (execution evidence).
     uart_bytes: u64,
+    /// Hardware I2C events (start, address, byte, stop) this core's backend
+    /// delivered to the bus handler over the run. Shared with the `on_i2c`
+    /// closure, which counts every event whether or not a modelled slave
+    /// answers it, because the TWI block drove SDA and SCL either way.
+    i2c_events: Arc<AtomicU64>,
+    /// Hardware SPI events (byte transfers, chip-select deasserts) this core's
+    /// backend delivered to the bus handler over the run; shared with the
+    /// `on_spi` closure like [`Self::i2c_events`].
+    spi_events: Arc<AtomicU64>,
     /// Firmware output edges per pin over the run (execution evidence).
     pin_toggles: std::collections::BTreeMap<(char, u8), u64>,
     /// Reset line and supply pads, watched across the run.
@@ -552,6 +562,12 @@ pub struct Scheduler {
     i2c_buses: Vec<Arc<Mutex<I2cBus>>>,
     /// SPI bus slaves, shared with each MCU's `on_spi` callback.
     spi_buses: Vec<Arc<Mutex<SpiBus>>>,
+    /// The subset of `i2c_buses` reached through a backend's hardware I2C
+    /// handler (`attach_i2c_bus`), as opposed to a soft bus on GPIO pins.
+    hw_i2c_buses: Vec<Arc<Mutex<I2cBus>>>,
+    /// The subset of `spi_buses` reached through a backend's hardware SPI
+    /// handler (`attach_spi_bus`, `attach_spi_bus_on`).
+    hw_spi_buses: Vec<Arc<Mutex<SpiBus>>>,
     /// Model-owned bus peripherals whose protocol activity is projected into
     /// the analogue supply network using source-bound idle/read/write current
     /// envelopes and rail-voltage power gating.
@@ -1482,6 +1498,8 @@ impl Scheduler {
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
+            hw_i2c_buses: Vec::new(),
+            hw_spi_buses: Vec::new(),
             model_peripheral_power: Vec::new(),
             spi_controller_map: HashMap::new(),
             substitutions,
@@ -2700,7 +2718,8 @@ impl Scheduler {
             g.id().to_string()
         };
         self.record_bus_if_unexercised(&id, "I2C", None);
-        self.i2c_buses.push(bus);
+        self.i2c_buses.push(bus.clone());
+        self.hw_i2c_buses.push(bus);
         // The AVR core's `on_i2c` closure and `set_i2c_slave_addresses` are
         // SINGLE-SLOT replacers, so a per-bus closure would let a second attach
         // overwrite the first bus's dispatcher and drop its addresses from the
@@ -2716,7 +2735,9 @@ impl Scheduler {
         for m in &mut self.mcus {
             m.core.set_i2c_slave_addresses(&addresses);
             let buses = all.clone();
+            let events = m.i2c_events.clone();
             m.core.on_i2c(Box::new(move |ev| {
+                events.fetch_add(1, Ordering::Relaxed);
                 let addr = match ev {
                     hauksbee_mcu::I2cEvent::Start { addr, .. }
                     | hauksbee_mcu::I2cEvent::Write { addr, .. }
@@ -2750,7 +2771,8 @@ impl Scheduler {
             cs.map_or(CsProvenance::SpecDeclared, |c| c.provenance),
         );
         self.register_cs_frame(&bus, cs.map(|c| c.pin), cs.and_then(|c| c.net));
-        self.spi_buses.push(bus);
+        self.spi_buses.push(bus.clone());
+        self.hw_spi_buses.push(bus);
         // Rebuild a MULTIPLEXING `on_spi` across ALL attached buses. `on_spi` is
         // a single-slot replacer on the AVR core, so a per-bus closure would let
         // a second attach overwrite the first bus's transfer path and send every
@@ -2761,7 +2783,11 @@ impl Scheduler {
         let all: Vec<Arc<Mutex<SpiBus>>> = self.spi_buses.clone();
         for m in &mut self.mcus {
             let buses = all.clone();
-            m.core.on_spi(Box::new(move |ev| dispatch_spi(&buses, &ev)));
+            let events = m.spi_events.clone();
+            m.core.on_spi(Box::new(move |ev| {
+                events.fetch_add(1, Ordering::Relaxed);
+                dispatch_spi(&buses, &ev)
+            }));
         }
     }
 
@@ -2786,9 +2812,11 @@ impl Scheduler {
         for m in &mut self.mcus {
             let b = bus.clone();
             let ctrl = controller.to_string();
+            let events = m.spi_events.clone();
             m.core.on_spi_controller(
                 &ctrl,
                 Box::new(move |ev| {
+                    events.fetch_add(1, Ordering::Relaxed);
                     let mut guard = b.lock_or_recover();
                     if ev.deselect {
                         guard.note_backend_deselect();
@@ -2802,7 +2830,8 @@ impl Scheduler {
         self.spi_controller_map
             .insert(controller.to_string(), bus.clone());
         self.register_cs_frame(&bus, cs.map(|c| c.pin), cs.and_then(|c| c.net));
-        self.spi_buses.push(bus);
+        self.spi_buses.push(bus.clone());
+        self.hw_spi_buses.push(bus);
     }
 
     /// Install the live CS-framing hook for `bus` on whichever MCU actually
@@ -6144,29 +6173,70 @@ impl Scheduler {
         let mut out = self.gpio_nets_where(|mi, m, pin, _| {
             m.last_levels.contains_key(&pin) || configured[mi].contains(&pin)
         });
-        out.extend(self.uart_tx_nets());
+        out.extend(self.peripheral_driven_nets());
         out.sort();
         out.dedup();
         out
     }
 
-    /// The nets of MCU UART transmit pins on a core that sent UART bytes: the
-    /// UART block, not the GPIO output register, drives such a pin, so a
-    /// backend that reports no pin write or direction for it would otherwise
-    /// leave a line the firmware demonstrably drove out of the driven set, and
-    /// with it everything an RC or level shifter takes from that line. The
-    /// byte count is per core, not per UART, so a second, silent UART's TX net
-    /// is listed too, which errs toward judging a time bound there over the
-    /// whole run.
-    fn uart_tx_nets(&self) -> Vec<String> {
+    /// The nets of pins a peripheral block drives, for peripherals the core
+    /// reported activity on: a UART transmit line on a core that sent bytes, an
+    /// I2C clock and data line on a core whose backend delivered I2C events, an
+    /// SPI clock and data-out line on a core that delivered SPI events.
+    ///
+    /// The peripheral, not the GPIO output register, drives such a pin, so a
+    /// backend that reports no pin write or direction for it (a pin-muxed UART,
+    /// the TWI block's open-drain override, an alternate-function SPI pad)
+    /// would otherwise leave a line the firmware demonstrably drove out of the
+    /// driven set, and with it everything an RC or level shifter takes from
+    /// that line. Two sources feed each peripheral: the pin roles the binder
+    /// tagged with the signal (`_txd`, `_sda`, `_scl`, `_sck`, `_mosi`), and
+    /// the signal nets of the hardware buses attached to the board (which names
+    /// the nets on a part whose pins carry no signal suffix). Counts are per
+    /// core, not per peripheral instance, so a second, silent UART, I2C or SPI
+    /// block's lines are listed too, which errs toward judging a time bound
+    /// there over the whole run.
+    fn peripheral_driven_nets(&self) -> Vec<String> {
         let mut out = Vec::new();
-        for m in self.mcus.iter().filter(|m| m.uart_bytes > 0) {
+        let mut push_roles = |m: &LiveMcu, wanted: &dyn Fn(&str) -> bool| {
             for (role, &node) in &m.binding.role_nets {
-                if is_uart_tx_role(role) && gpio_of_role(role, m.binding.module).is_some() {
+                if wanted(role) && gpio_of_role(role, m.binding.module).is_some() {
                     if let Some(name) = self.net_name_for(node) {
                         out.push(name.to_string());
                     }
                 }
+            }
+        };
+        let busy = |counter: &Arc<AtomicU64>| counter.load(Ordering::Relaxed) > 0;
+        for m in &self.mcus {
+            if m.uart_bytes > 0 {
+                push_roles(m, &is_uart_tx_role);
+            }
+            if busy(&m.i2c_events) {
+                push_roles(m, &|r| role_has_token(r, &["sda", "scl"]));
+            }
+            if busy(&m.spi_events) {
+                push_roles(m, &|r| role_has_token(r, &["sck", "mosi"]));
+            }
+        }
+        if self.mcus.iter().any(|m| busy(&m.i2c_events)) {
+            for bus in &self.hw_i2c_buses {
+                let nodes = bus.lock_or_recover().signal_nodes().to_vec();
+                out.extend(
+                    nodes
+                        .into_iter()
+                        .filter_map(|n| self.net_name_for(n).map(str::to_string)),
+                );
+            }
+        }
+        if self.mcus.iter().any(|m| busy(&m.spi_events)) {
+            for bus in &self.hw_spi_buses {
+                let nodes = bus.lock_or_recover().signal_nodes().to_vec();
+                out.extend(
+                    nodes
+                        .into_iter()
+                        .filter_map(|n| self.net_name_for(n).map(str::to_string)),
+                );
             }
         }
         out
@@ -7637,6 +7707,14 @@ fn is_uart_tx_role(role: &str) -> bool {
     role.to_ascii_lowercase().contains("_txd")
 }
 
+/// Whether a pin role carries one of the peripheral-signal `tokens` as a whole
+/// `_`-separated word (`pc4_adc4_sda` has `sda`; `pd5_t1_oc0b` does not).
+fn role_has_token(role: &str, tokens: &[&str]) -> bool {
+    role.to_ascii_lowercase()
+        .split('_')
+        .any(|word| tokens.contains(&word))
+}
+
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
 fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMcu {
     let shared = Arc::new(Mutex::new(McuShared::default()));
@@ -7718,6 +7796,8 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         responder_input_pins: std::collections::HashSet::new(),
         digital_in_levels: HashMap::new(),
         uart_bytes: 0,
+        i2c_events: Arc::new(AtomicU64::new(0)),
+        spi_events: Arc::new(AtomicU64::new(0)),
         pin_toggles: std::collections::BTreeMap::new(),
         rails,
     }
@@ -10621,6 +10701,116 @@ data_out = ["io0"]
         roles.remove("pb1_txd");
         roles.insert("pb1".to_string(), node);
         assert!(sched.firmware_driven_nets().is_empty());
+    }
+
+    /// Build a scheduler whose MCU has two lines (`LINE_A` with an RC filter
+    /// behind it, `LINE_B` into a resistor) carrying the roles in `roles` (net,
+    /// role), plus an unrelated divider, for the peripheral-activity tests.
+    fn peripheral_sched(roles: &[(&str, &str)]) -> Scheduler {
+        let mut circuit = Circuit::new();
+        let mut net_nodes = HashMap::new();
+        let mut net = |name: &str| {
+            let id = circuit.node(name);
+            net_nodes.insert(name.to_string(), id);
+            id
+        };
+        let [a, b, filt, other, rail] = ["LINE_A", "LINE_B", "FILT", "OTHER", "RAIL"].map(&mut net);
+        let gnd = NodeId::GROUND;
+        circuit.add(Device::vsource("Vrail", rail, gnd, SourceKind::Dc(3.3)));
+        circuit.add(Device::resistor("R_RC", a, filt, 10e3));
+        circuit.add(Device::capacitor("C_RC", filt, gnd, 1e-6));
+        circuit.add(Device::resistor("R_B", b, gnd, 10e3));
+        circuit.add(Device::resistor("R_PU", rail, other, 10e3));
+        circuit.add(Device::resistor("R_PD", other, gnd, 10e3));
+        let pins = [(('B', 1), "LINE_A"), (('B', 2), "LINE_B")];
+        let mut sched = influence_sched(circuit, net_nodes, &pins, &[]);
+        let (node_a, node_b) = (sched.net_nodes["LINE_A"], sched.net_nodes["LINE_B"]);
+        let tagged = &mut sched.mcus[0].binding.role_nets;
+        tagged.clear();
+        for (net, role) in roles {
+            let node = if *net == "LINE_A" { node_a } else { node_b };
+            tagged.insert((*role).to_string(), node);
+        }
+        sched
+    }
+
+    /// The TWI block, not the GPIO register, drives SDA and SCL, so a backend
+    /// that reports no pin write for them leaves the bus lines out of the
+    /// driven set although the firmware talked on the bus; the RC behind SCL
+    /// then moves with the firmware's timing. A core with no I2C events, and a
+    /// pin whose role is not an I2C signal, stay out.
+    #[test]
+    fn an_i2c_line_the_firmware_talked_on_is_driven_and_seeds_the_walk() {
+        let sched = peripheral_sched(&[("LINE_A", "pc5_adc5_scl"), ("LINE_B", "pc4_adc4_sda")]);
+        assert!(sched.firmware_driven_nets().is_empty());
+        assert!(sched.firmware_influenced_nets().is_empty());
+
+        sched.mcus[0].i2c_events.store(4, Ordering::Relaxed);
+        assert_eq!(sched.firmware_driven_nets(), ["LINE_A", "LINE_B"]);
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            named(&[("FILT", "LINE_A")])
+        );
+
+        // SPI activity does not make an I2C-only pair driven, and a role that
+        // merely contains the letters is not a signal word.
+        let sched = peripheral_sched(&[("LINE_A", "pb1_sdaish"), ("LINE_B", "pd5_t1_oc0b")]);
+        sched.mcus[0].i2c_events.store(4, Ordering::Relaxed);
+        sched.mcus[0].spi_events.store(4, Ordering::Relaxed);
+        assert!(sched.firmware_driven_nets().is_empty());
+    }
+
+    /// An SPI clock and data-out pad is driven by the SPI block: counted once
+    /// the core delivered SPI events. Data-in (MISO) is the peripheral's, so it
+    /// does not join, and I2C events alone leave the SPI pad out.
+    #[test]
+    fn an_spi_clock_and_data_out_line_the_firmware_clocked_is_driven() {
+        let sched = peripheral_sched(&[("LINE_A", "pb5_sck"), ("LINE_B", "pb4_miso")]);
+        assert!(sched.firmware_driven_nets().is_empty());
+        sched.mcus[0].spi_events.store(2, Ordering::Relaxed);
+        assert_eq!(sched.firmware_driven_nets(), ["LINE_A"]);
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            named(&[("FILT", "LINE_A")])
+        );
+        sched.mcus[0].spi_events.store(0, Ordering::Relaxed);
+        sched.mcus[0].i2c_events.store(2, Ordering::Relaxed);
+        assert!(sched.firmware_driven_nets().is_empty());
+    }
+
+    /// A part whose pins carry no signal suffix (an ESP32 pad is just
+    /// `gpioNN`) still has its bus lines counted: the hardware bus knows the
+    /// nets its signals sit on. A soft bus on GPIO pins is not a hardware bus,
+    /// so activity on the hardware one does not count its lines.
+    #[test]
+    fn a_hardware_bus_names_its_signal_nets_when_the_pins_carry_no_signal_role() {
+        let mut sched = peripheral_sched(&[("LINE_A", "gpio21"), ("LINE_B", "gpio22")]);
+        let (node_a, node_b) = (sched.net_nodes["LINE_A"], sched.net_nodes["LINE_B"]);
+        let mut i2c = I2cBus::new("I2C0");
+        i2c.add_signal_nodes([node_a]);
+        let i2c = Arc::new(Mutex::new(i2c));
+        sched.hw_i2c_buses.push(i2c.clone());
+        sched.i2c_buses.push(i2c);
+        let mut soft = I2cBus::new("SOFT");
+        soft.add_signal_nodes([node_b]);
+        sched.i2c_buses.push(Arc::new(Mutex::new(soft)));
+
+        assert!(sched.firmware_driven_nets().is_empty());
+        sched.mcus[0].i2c_events.store(1, Ordering::Relaxed);
+        assert_eq!(sched.firmware_driven_nets(), ["LINE_A"]);
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            named(&[("FILT", "LINE_A")])
+        );
+
+        let mut sched = peripheral_sched(&[("LINE_A", "gpio18"), ("LINE_B", "gpio19")]);
+        let node_b = sched.net_nodes["LINE_B"];
+        let mut spi = SpiBus::new("SPI", Box::new(crate::peripherals::Spi25Eeprom::new(256)));
+        spi.add_signal_nodes([node_b]);
+        sched.hw_spi_buses.push(Arc::new(Mutex::new(spi)));
+        assert!(sched.firmware_driven_nets().is_empty());
+        sched.mcus[0].spi_events.store(1, Ordering::Relaxed);
+        assert_eq!(sched.firmware_driven_nets(), ["LINE_B"]);
     }
 
     // ── Thermal integration through the real march ───────────────────────────

@@ -574,3 +574,72 @@ fn host_paced_windowed_level_behind_a_uart_tx_line_is_conditional_or_refused() {
     assert!(results[0].passed && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
+
+/// [`uart_filter_run`] with the filter behind `I2C_SCL`, a bus clock line the
+/// hardware I2C block drove (the scheduler counts it once the core delivered
+/// I2C events, whether or not the backend reported a GPIO write for it).
+fn i2c_filter_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
+    let mut out = uart_filter_run(whole, after, host_paced);
+    out.driven_nets.remove("UART_TX");
+    out.driven_nets.insert("I2C_SCL".to_string());
+    out.influenced_nets
+        .insert("FILT".to_string(), "I2C_SCL".to_string());
+    out
+}
+
+/// A windowed level behind an I2C clock line is as host-dependent as one
+/// behind a GPIO: a conditional GREEN naming the bus net on a host-paced
+/// clock, a refusal when only the window passes, a hard verdict on a
+/// clock-exact backend, and a hard verdict again when the walk did not reach
+/// the net.
+#[test]
+fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
+    let spec = load_spec(
+        "host_paced_i2c_rc.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nname=\"filtered\"\nkind=\"voltage\"\n\
+         net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
+    );
+    let results = evaluate(&spec, &[i2c_filter_run((3.3, 3.3), (3.3, 3.3), true)]);
+    assert!(results[0].passed, "{}", results[0].detail);
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(
+        human.contains(
+            "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of \
+             firmware-driven 'I2C_SCL' was not judged"
+        ),
+        "{human}"
+    );
+
+    // The level holds only inside the window: refused, not passed.
+    let results = evaluate(&spec, &[i2c_filter_run((0.0, 3.3), (3.3, 3.3), true)]);
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    assert!(
+        results[0]
+            .detail
+            .contains("'FILT' is downstream of firmware-driven 'I2C_SCL'"),
+        "{}",
+        results[0].detail
+    );
+    assert_eq!(ci_result(results, false).exit_code(), 3);
+
+    // A clock-exact backend orders the bus events in simulated time: hard.
+    let results = evaluate(&spec, &[i2c_filter_run((0.0, 3.3), (3.3, 3.3), false)]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+
+    // Legal control: the same windowed claim on a net the walk did not reach
+    // keeps its hard verdict on a host-paced clock.
+    let mut other = i2c_filter_run((0.0, 3.3), (3.3, 3.3), true);
+    other.influenced_nets.clear();
+    let results = evaluate(&spec, &[other]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+}
