@@ -9,7 +9,7 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**96 tests: 90 in the 25 absent files below, plus 6 removed from files that
+**95 tests: 90 in the 25 absent files below, plus 5 removed from files that
 otherwise ship. Also absent: 11 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
@@ -40,7 +40,7 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `bug_hunt_physics` | 6 | Timing values and calibrated expectations from the private layout |
 | `avr_mcu_tests` | 6 | AVR execution against firmware from the private T1-devboard repository |
 
-The six tests missing from files that otherwise ship are in
+The five tests missing from files that otherwise ship are in
 `spec_and_assertions`, `cli_boardcode`, `extract`, `unpowered_rail_is_declared`
 and `hauksbee-cosim`'s `scheduler`. The scheduler test requires the private NEP
 board and is ignored by default; its presence is not a public test pass. Those files keep the
