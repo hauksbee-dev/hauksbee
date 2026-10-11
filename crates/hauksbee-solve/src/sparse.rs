@@ -135,7 +135,7 @@ impl SparseMatrix {
 
 /// Reusable factorization state: the frozen column ordering plus numeric
 /// factors recomputed by [`Self::refactor`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Symbolic {
     n: usize,
     /// Column elimination order: `perm[k]` is the original column factorized
@@ -171,6 +171,19 @@ pub struct Symbolic {
     /// The structure of the last successful frozen factorization, so the next
     /// one can skip the reachability searches (see [`Replay`]).
     replay: Replay,
+    /// Whether `perm` is still the pattern's own minimum-degree order, i.e. no
+    /// dynamic re-pivot has replaced it. Only such an analysis is what a fresh
+    /// [`SparseMatrix::factorize_symbolic`] of the same pattern would return,
+    /// so only it may be parked for reuse (see [`Self::park`]).
+    pattern_order: bool,
+}
+
+/// Analyses parked per thread for reuse by the next analysis of the same
+/// pattern, most recently parked last.
+const PARKED_LEN: usize = 4;
+
+thread_local! {
+    static PARKED: std::cell::RefCell<Vec<Symbolic>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// What a frozen factorization decided, recorded so the next refactor of the
@@ -238,11 +251,13 @@ impl DynCsc {
 impl Symbolic {
     fn analyze(m: &SparseMatrix) -> Self {
         let n = m.n;
-        let perm = cached_min_degree_order(ordering_adjacency(m), n);
-
         // Build the fixed CSC structure once: column pointers and row indices
         // come straight from the matrix pattern; values are refreshed later.
         let (csc_col_ptr, csc_row_idx, _) = m.to_csc();
+        if let Some(parked) = Self::unpark(&csc_col_ptr, &csc_row_idx) {
+            return parked;
+        }
+        let perm = cached_min_degree_order(ordering_adjacency(m), n);
         let nnz = csc_row_idx.len();
 
         Self {
@@ -267,7 +282,53 @@ impl Symbolic {
             fill_map: Vec::new(),
             allow_dynamic: false,
             replay: Replay::default(),
+            pattern_order: true,
         }
+    }
+
+    /// Keep this analysis on the current thread so the next
+    /// [`SparseMatrix::factorize_symbolic`] of the same pattern reuses it
+    /// instead of recomputing it.
+    ///
+    /// A co-simulation builds a fresh solver workspace for every chunk of an
+    /// unchanging circuit; reusing the analysis saves the ordering and CSC
+    /// setup, and carries the last factorization's recorded structure so the
+    /// chunk's first refactor replays it rather than searching from scratch.
+    /// Everything carried over is either a pure function of the pattern (the
+    /// order, the CSC structure) or state a refactor already overwrites or
+    /// verifies (factors, scratch, the replay record), so later results are
+    /// bit-identical to a fresh analysis. An analysis whose order a dynamic
+    /// re-pivot replaced is not what a fresh one would be, and is dropped.
+    pub fn park(mut self) {
+        if !self.pattern_order {
+            return;
+        }
+        self.allow_dynamic = false;
+        // `try_with`: a workspace dropped during thread teardown has nowhere
+        // to park, which is fine.
+        let _ = PARKED.try_with(|parked| {
+            let mut parked = parked.borrow_mut();
+            parked
+                .retain(|p| p.csc_col_ptr != self.csc_col_ptr || p.csc_row_idx != self.csc_row_idx);
+            if parked.len() >= PARKED_LEN {
+                parked.remove(0);
+            }
+            parked.push(self);
+        });
+    }
+
+    /// Take back a parked analysis of exactly this pattern, if any.
+    fn unpark(col_ptr: &[usize], row_idx: &[usize]) -> Option<Self> {
+        PARKED
+            .try_with(|parked| {
+                let mut parked = parked.borrow_mut();
+                let at = parked
+                    .iter()
+                    .rposition(|p| p.csc_col_ptr == col_ptr && p.csc_row_idx == row_idx)?;
+                Some(parked.remove(at))
+            })
+            .ok()
+            .flatten()
     }
 
     /// Enable/disable the dynamic-pivot fallback (off by default). The staged-DC
@@ -328,11 +389,12 @@ impl Symbolic {
     ///
     /// All scratch is reused across calls, so a transient step pays only for
     /// the arithmetic, not for reallocation. The floating-point operation
-    /// order of [`Self::factor_full`] is the `Partitioning::Off` bit-exactness
-    /// contract; the two shortcuts taken first reproduce its factors exactly:
-    /// values bit-identical to the last successful factorization are already
-    /// factored, and otherwise [`Self::factor_replay`] re-runs the same
-    /// arithmetic along the recorded structure while it still applies.
+    /// order of the full left-looking factorization is the `Partitioning::Off`
+    /// bit-exactness contract; the two shortcuts taken first reproduce its
+    /// factors exactly: values bit-identical to the last successful
+    /// factorization are already factored, and otherwise the same arithmetic
+    /// re-runs along the last factorization's recorded structure while each
+    /// column still picks the same pivot row and L pattern.
     pub fn refactor_frozen(&mut self, m: &SparseMatrix) -> bool {
         let n = self.n;
         // Refresh the cached CSC values in place (structure is fixed).
@@ -638,8 +700,9 @@ impl Symbolic {
         const PIVOT_THRESH: f64 = 0.1;
         let n = self.n;
         // The factors and column order about to be written are not the ones
-        // the recorded frozen structure describes.
+        // the recorded frozen structure describes, nor the pattern's own order.
         self.replay.valid = false;
+        self.pattern_order = false;
         if n == 0 {
             self.l.clear();
             self.u.clear();
@@ -1434,7 +1497,14 @@ mod tests {
     }
 
     /// Everything a factorization hands `solve`, with floats as raw bits.
-    type Fingerprint = (Vec<usize>, Vec<usize>, Vec<usize>, Vec<u64>, [Vec<usize>; 4], [Vec<u64>; 2]);
+    type Fingerprint = (
+        Vec<usize>,
+        Vec<usize>,
+        Vec<usize>,
+        Vec<u64>,
+        [Vec<usize>; 4],
+        [Vec<u64>; 2],
+    );
 
     fn fingerprint(s: &Symbolic) -> Fingerprint {
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
@@ -1474,7 +1544,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(k, &(r, c))| {
-                    let v = if r == c { 4.0 } else { -1.0 } + 0.01 * k as f64;
+                    let v = 0.01f64.mul_add(k as f64, if r == c { 4.0 } else { -1.0 });
                     v * scale
                 })
                 .collect()
@@ -1540,7 +1610,59 @@ mod tests {
         }
         let (skips, replays) = warm.replay.taken;
         assert!(skips >= 2, "unchanged values were refactored ({skips})");
-        assert!(replays >= 2, "the recorded structure was never replayed ({replays})");
+        assert!(
+            replays >= 2,
+            "the recorded structure was never replayed ({replays})"
+        );
+    }
+
+    /// A parked analysis comes back only for its own pattern, carries its
+    /// recorded structure into the next factorization with factors identical
+    /// to a cold one, and is never parked once a dynamic re-pivot replaced
+    /// its order.
+    #[test]
+    fn parked_analysis_is_reused_only_for_its_own_pattern_and_order() {
+        let spd = |scale: f64| {
+            let mut m = SparseMatrix::new(3);
+            for &(r, c, v) in SPD_3 {
+                m.add(r, c, v * scale);
+            }
+            m
+        };
+        let (first, next) = (spd(1.0), spd(1.5));
+        // The cold reference is analyzed before anything is parked.
+        let mut cold = next.factorize_symbolic();
+        assert!(cold.refactor_frozen(&next));
+
+        let mut warm = first.factorize_symbolic();
+        assert!(warm.refactor_frozen(&first));
+        warm.set_allow_dynamic(true);
+        warm.park();
+
+        // A different pattern does not take it.
+        let mut other = SparseMatrix::new(3);
+        other.add(0, 0, 1.0);
+        other.add(1, 1, 1.0);
+        other.add(2, 2, 1.0);
+        assert!(!other.factorize_symbolic().replay.valid);
+
+        let mut reused = next.factorize_symbolic();
+        assert!(reused.replay.valid, "the parked analysis was not reused");
+        assert!(
+            !reused.allow_dynamic,
+            "a reused analysis starts frozen-only"
+        );
+        assert!(reused.refactor_frozen(&next));
+        assert_eq!(
+            reused.replay.taken.1, 1,
+            "the first refactor did not replay"
+        );
+        assert_eq!(fingerprint(&reused), fingerprint(&cold));
+
+        // Its parking slot is now empty, and a re-pivoted order is not parked.
+        reused.pattern_order = false;
+        reused.park();
+        assert!(!next.factorize_symbolic().replay.valid);
     }
 
     /// The dynamic path matches the frozen path on well-conditioned systems,

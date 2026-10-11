@@ -207,6 +207,14 @@ pub struct Workspace {
     stall_norm_probe: Option<Vec<(f64, f64)>>,
 }
 
+/// Park the analysis for the next workspace of the same pattern on this
+/// thread (see [`Symbolic::park`]): a co-simulation builds one per chunk.
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        std::mem::take(&mut self.symbolic).park();
+    }
+}
+
 impl Workspace {
     /// Arm/disarm the per-step transient event-freeze retry. Set by the transient
     /// driver only on a board that needed the staged DC (or via `TRANSIENT_DYN`);
@@ -3660,7 +3668,7 @@ mod tests {
             seed[ws.layout.node(refn).unwrap()] = 2.5;
             seed[ws.layout.node(inp).unwrap()] = vin;
             let pins = comparator_consistency_solve(&mut ws, &c, &opts, &solve, &seed, false);
-            (pins, node_v(&ws, out), ws.x)
+            (pins, node_v(&ws, out), std::mem::take(&mut ws.x))
         };
         let (pins, high, x) = run(3.0);
         assert_eq!(pins, Some(vec![]));
