@@ -43,12 +43,7 @@ fn multi_board_reference_models_declare_runs_and_omissions() {
             "open_drain_output_without_fabricated_high_drive",
             "smart_reset_timer",
         ),
-        (
-            "RT908033",
-            "rt9080_3v3",
-            "nominal_dc_regulation",
-            "enable_gating",
-        ),
+        ("RT908033", "rt9080_3v3", "enable_gating", "current_limit"),
         (
             "USBLC6-2P6",
             "usblc6_2",

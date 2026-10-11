@@ -466,6 +466,8 @@ pub struct RunOutcome {
     /// fiction, so every analog number in this outcome has to be read knowing
     /// they were dead.
     pub dead_rails: Vec<String>,
+    /// `NET: sentence` for each dead rail a held-off regulator explains.
+    pub dead_rail_causes: Vec<String>,
     /// Ids of bus peripherals that were bound but NEVER exercised (their
     /// platform models no matching bus controller). A `peripheral` assertion
     /// against one of these ids FAILS loudly instead of green-passing on the
@@ -1862,6 +1864,11 @@ fn run_one(
     // is unpowered for the whole run, and any analog number below has to be
     // read knowing it.
     let dead_rails = bias_bound(&mut bound, &board, spec, &drives)?;
+    let dead_rail_causes = hauksbee_engine::held_off_rails(&bound)
+        .into_iter()
+        .filter(|(net, _)| dead_rails.contains(net))
+        .map(|(net, why)| format!("{net}: {why}"))
+        .collect();
     let (mut probe, watch) = crate::search::prepare(spec, &board, &mut bound, plan);
     // A ramped rail is a COLD power-on, which a stamped leg cannot express: it
     // sits at its setpoint from t=0 and the operating point pre-charges every
@@ -2364,6 +2371,7 @@ fn run_one(
             .chain(engine.scheduler().timing_refusals().iter().cloned())
             .collect(),
         dead_rails,
+        dead_rail_causes,
         unexercised_bus_ids: engine
             .scheduler()
             .unexercised_buses()

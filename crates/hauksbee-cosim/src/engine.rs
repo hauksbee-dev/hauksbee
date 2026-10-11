@@ -29,7 +29,7 @@ use hauksbee_solve::{Integration, SolverOptions, StepControl};
 use crate::peripherals::{CsProvenance, I2cBus, RegisterMapSensor, ResolvedCs, SpiBus};
 use crate::scheduler::Scheduler;
 use hauksbee_bind::bind_report::BindReport;
-use hauksbee_bind::binder::{bind_board, unpowered_supply_nets, BoundBoard};
+use hauksbee_bind::binder::{bind_board, held_off_rails, unpowered_supply_nets, BoundBoard};
 use hauksbee_bind::power_supply::{Chemistry, PowerSupply, UsbSpec};
 
 /// Analog chunk for boards whose MCU runs on an external emulator (Renode or
@@ -121,14 +121,26 @@ impl HauksbeeEngine {
         board_url: &str,
     ) -> anyhow::Result<Self> {
         use hauksbee_ir::evidence::{AssumptionSource, Scope, Subject};
+        let held_off = held_off_rails(&bound);
         let dead_rails = unpowered_supply_nets(board, &bound, &[]).into_iter().map(|net| {
-            Assumption::not_exercised(
-                AssumptionSource::Binder,
-                Subject::new(&net, &format!("supply rail {net}")),
-                Scope::Board,
-                "it names a supply but not a voltage, so nothing powered it and it sat at 0 V",
-                "name the net with its voltage (VDD_3V3) or give it a [[supply]] in a hauksbee-ci spec",
-            )
+            let text = format!("supply rail {net}");
+            let subject = Subject::new(&net, &text);
+            match held_off.iter().find(|(rail, _)| *rail == net) {
+                Some((_, why)) => Assumption::not_exercised(
+                    AssumptionSource::Binder,
+                    subject,
+                    Scope::Board,
+                    &format!("{why}, so it sat at 0 V"),
+                    "drive the regulator's enable pin to its on level if this rail should be up",
+                ),
+                None => Assumption::not_exercised(
+                    AssumptionSource::Binder,
+                    subject,
+                    Scope::Board,
+                    "it names a supply but not a voltage, so nothing powered it and it sat at 0 V",
+                    "name the net with its voltage (VDD_3V3) or give it a [[supply]] in a hauksbee-ci spec",
+                ),
+            }
         });
         let board_caveats = dead_rails.collect();
         let mut engine = Self::from_bound(bound, firmware, board_url)?;

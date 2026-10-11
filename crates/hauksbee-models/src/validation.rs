@@ -147,6 +147,76 @@ fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
     }
 }
 
+/// The enable-pin fields of a simple (ideal-source) regulator, read by the
+/// binder's enable gate. Thresholds come as a pair ordered for the polarity
+/// (guaranteed off on the far side of guaranteed on, so the gap between them is
+/// the band the gate holds its state across), at most one internal pull, and
+/// only on a card whose pin map names the `en` or `shdn` pin they describe.
+fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
+    const KEYS: [&str; 8] = [
+        "en_on_v",
+        "en_off_v",
+        "en_on_level",
+        "en_pull_down_ohms",
+        "en_pull_up_ohms",
+        "en_pull_down_a",
+        "en_pull_up_a",
+        "en_discharge_ohms",
+    ];
+    let params = &entry.params;
+    if entry.kind != ComponentKind::Vreg || !KEYS.iter().any(|k| params.0.contains_key(*k)) {
+        return;
+    }
+    p.require(has_role(entry, "en") || has_role(entry, "shdn"), || {
+        "enable params ('en_*') need an 'en' or 'shdn' role in [models.pins]".into()
+    });
+    p.require(entry.behavioral.converter.is_none(), || {
+        "enable params ('en_*') are the simple regulator's; a converter states \
+         [models.behavioral.converter.enable] instead"
+            .into()
+    });
+    let level = params.get_str("en_on_level");
+    p.require(
+        !params.0.contains_key("en_on_level") || matches!(level, Some("high" | "low")),
+        || "param 'en_on_level' must be \"high\" or \"low\"".into(),
+    );
+    let (on, off) = (params.get_f64("en_on_v"), params.get_f64("en_off_v"));
+    p.require(on.is_some() == off.is_some(), || {
+        "vreg enable thresholds need both 'en_on_v' and 'en_off_v'".into()
+    });
+    for (key, v) in [("en_on_v", on), ("en_off_v", off)] {
+        if let Some(v) = v {
+            p.require(v.is_finite() && v.abs() <= 60.0, || {
+                format!("param '{key}' = {v} must be a finite voltage within 60 V")
+            });
+        }
+    }
+    if let (Some(on), Some(off)) = (on, off) {
+        let low = level == Some("low");
+        p.require(if low { on <= off } else { off <= on }, || {
+            format!(
+                "param 'en_off_v' = {off} must sit on the off side of 'en_on_v' = {on} \
+                 for an output that turns on {}",
+                if low { "low" } else { "high" }
+            )
+        });
+    }
+    let pulls = KEYS[3..7]
+        .iter()
+        .filter(|k| params.0.contains_key(**k))
+        .count();
+    p.require(pulls <= 1, || {
+        "a vreg enable pin has at most one internal pull ('en_pull_*')".into()
+    });
+    for key in &KEYS[3..] {
+        if params.0.contains_key(*key) {
+            p.require(params.get_f64(key).is_some_and(positive_finite), || {
+                format!("param '{key}' must be a positive finite number")
+            });
+        }
+    }
+}
+
 /// A programmed-current or behavioural vreg (charger, pmic) may abstain on an
 /// `iq_a` or `dropout_v` printed as no single value by an `unknown` source
 /// record; the rows stay characteristics. The binder then stamps no Iq and
@@ -647,6 +717,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             }
         }
         validate_vreg_capacitor_params(entry, &mut p);
+        validate_vreg_enable_params(entry, &mut p);
         // Logic levels on any kind: a Schmitt VT+/VT- swap inverts every input.
         let levels = [("vil", "vih"), ("vol", "voh")];
         for (lo, hi) in rules.ordered.iter().chain(&levels) {
@@ -1811,6 +1882,62 @@ mod tests {
 
     fn accepts(e: &ModelEntry) {
         assert!(validate(e).is_ok(), "{:?}", validate(e));
+    }
+
+    /// The simple regulator's enable fields: paired, ordered for the polarity,
+    /// one pull at most, and only on a card that names the pin.
+    #[test]
+    fn vreg_enable_fields_are_paired_ordered_and_need_the_pin() {
+        let en = |role: &str, params: &[(&str, f64)], level: Option<&str>| {
+            let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-4)];
+            p.extend_from_slice(params);
+            let mut e = entry(ComponentKind::Vreg, &p);
+            pins(
+                &mut e,
+                &[("1", "in"), ("2", "gnd"), ("3", role), ("5", "out")],
+            );
+            if let Some(level) = level {
+                e.params.set_str("en_on_level", level);
+            }
+            e
+        };
+        let levels = [("en_on_v", 1.5), ("en_off_v", 0.4)];
+        accepts(&en("en", &levels, None));
+        accepts(&en("en", &levels, Some("high")));
+        accepts(&en(
+            "shdn",
+            &[("en_on_v", 0.4), ("en_off_v", 1.5)],
+            Some("low"),
+        ));
+        accepts(&en(
+            "en",
+            &[("en_pull_down_ohms", 3e6), ("en_discharge_ohms", 60.0)],
+            None,
+        ));
+        rejects(&en("nc", &levels, None), "'en' or 'shdn' role");
+        rejects(&en("en", &[("en_on_v", 1.5)], None), "need both");
+        rejects(
+            &en("en", &[("en_on_v", 0.4), ("en_off_v", 1.5)], None),
+            "off side",
+        );
+        rejects(&en("shdn", &levels, Some("low")), "off side");
+        rejects(&en("en", &levels, Some("rising")), "\"high\" or \"low\"");
+        rejects(
+            &en("en", &[("en_on_v", 90.0), ("en_off_v", 0.4)], None),
+            "within 60 V",
+        );
+        rejects(
+            &en(
+                "en",
+                &[("en_pull_down_ohms", 3e6), ("en_pull_up_a", 1e-6)],
+                None,
+            ),
+            "at most one internal pull",
+        );
+        rejects(
+            &en("en", &[("en_discharge_ohms", 0.0)], None),
+            "positive finite",
+        );
     }
 
     /// Refused: a merged unit role, a swapped Schmitt pair, a rail at a supply.

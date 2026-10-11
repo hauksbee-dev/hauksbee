@@ -730,6 +730,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         coverage,
         substitutions: union_across(&outcomes, |o| &o.substitutions),
         dead_rails: union_across(&outcomes, |o| &o.dead_rails),
+        dead_rail_causes: union_across(&outcomes, |o| &o.dead_rail_causes),
         coverage_warnings: union_across(&outcomes, |o| &o.coverage_warnings),
         verdict_conditions,
         timing_coverage,

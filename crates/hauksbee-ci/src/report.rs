@@ -124,8 +124,12 @@ pub struct CiResult {
     /// format, ahead of the assertion list: with a rail dead the operating
     /// point is fiction, so this changes how every result below it reads, and a
     /// reader who meets it after a named component fault has already believed
-    /// the fault.
+    /// the fault. Also the output rail of every regulator the board holds off
+    /// by its enable pin, whose cause is in `dead_rail_causes`.
     pub dead_rails: Vec<String>,
+    /// `NET: sentence` for each dead rail the board explains (a regulator
+    /// held off by its enable pin).
+    pub dead_rail_causes: Vec<String>,
     /// Waiver-file housekeeping notes (a lapsed waiver whose finding gates
     /// again, an active waiver that matched nothing, a malformed file that was
     /// ignored). Surfaced on every format like `coverage_warnings`: a board
@@ -343,10 +347,15 @@ pub struct CiJsonReport {
     pub execution: Vec<hauksbee_engine::execution::ExecutionEvidence>,
     /// Explicit reasons timing evidence was invalidated.
     pub timing_refusals: Vec<String>,
-    /// Nets that name themselves a supply but that nothing powered. Non-empty
-    /// means the operating point every result below was solved around is
-    /// fiction.
+    /// Nets that name themselves a supply but that nothing powered, and the
+    /// output rails of regulators the board holds off. Non-empty means every
+    /// result below was solved with these rails at 0 V.
     pub dead_rails: Vec<String>,
+    /// Why a `dead_rails` entry is dead when the board says so (a regulator
+    /// held off by its enable pin), as `NET: sentence`. A net absent here
+    /// names a supply but not a voltage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dead_rail_causes: Vec<String>,
     /// Waiver-file housekeeping: a lapsed waiver, an active waiver that matched
     /// nothing, a malformed file that was ignored.
     pub waiver_notes: Vec<String>,
@@ -595,6 +604,7 @@ impl CiResult {
             execution: self.execution.clone(),
             timing_refusals: self.timing_refusals.clone(),
             dead_rails: self.dead_rails.clone(),
+            dead_rail_causes: self.dead_rail_causes.clone(),
             waiver_notes: self.waiver_notes.clone(),
             inventory: self.inventory.clone(),
             assumptions: self.assumptions.clone(),
@@ -738,13 +748,32 @@ impl CiResult {
         let mut s = String::from("\n  UNPOWERED RAIL: ");
         s.push_str(&self.dead_rails.join(", "));
         s.push('\n');
-        s.push_str(
-            "        These nets name a supply but not a voltage, so nothing powered\n\
-             \x20       them and they sat at 0 V. Every analog result below was solved\n\
-             \x20       around that, so a fault it names may be an artifact rather than\n\
-             \x20       a finding about your board. Add a [[supply]] for each, then run\n\
-             \x20       again before acting on anything here.\n",
-        );
+        let explained = |net: &String| {
+            let mine = |c: &&String| {
+                c.strip_prefix(net.as_str())
+                    .is_some_and(|r| r.starts_with(": "))
+            };
+            self.dead_rail_causes.iter().any(|c| mine(&c))
+        };
+        for cause in &self.dead_rail_causes {
+            let _ = writeln!(s, "        {cause}.");
+        }
+        if !self.dead_rail_causes.is_empty() {
+            s.push_str(
+                "        The board holds these regulators off, so their rails sat at 0 V\n\
+                 \x20       and every result below was solved with them dead. If the board\n\
+                 \x20       is meant to run with them on, check their enable wiring.\n",
+            );
+        }
+        if self.dead_rails.iter().any(|n| !explained(n)) {
+            s.push_str(
+                "        These nets name a supply but not a voltage, so nothing powered\n\
+                 \x20       them and they sat at 0 V. Every analog result below was solved\n\
+                 \x20       around that, so a fault it names may be an artifact rather than\n\
+                 \x20       a finding about your board. Add a [[supply]] for each, then run\n\
+                 \x20       again before acting on anything here.\n",
+            );
+        }
         s
     }
 
@@ -1023,13 +1052,15 @@ impl CiResult {
         // A dead rail rides the same suite-level channel: a dashboard reader who
         // only ever sees the JUnit tab must not read a fault as a finding when
         // the operating point it came from had a rail at 0 V.
-        if !self.dead_rails.is_empty() {
-            let _ = writeln!(
-                out,
-                "    <system-out>UNPOWERED RAIL: {} sat at 0 V; \
-                 any analog result here may be an artifact</system-out>",
-                xml_escape(&self.dead_rails.join(", "))
-            );
+        let dead = (!self.dead_rails.is_empty()).then(|| {
+            format!(
+                "{} sat at 0 V; any analog result here may be an artifact",
+                self.dead_rails.join(", ")
+            )
+        });
+        for note in dead.iter().chain(&self.dead_rail_causes) {
+            let note = xml_escape(note);
+            let _ = writeln!(out, "    <system-out>UNPOWERED RAIL: {note}</system-out>");
         }
         // The honesty notes ride the suite-level channel, so a dashboard-only
         // reader sees the same qualifications the log carries.
@@ -1124,9 +1155,15 @@ impl CiResult {
             });
         let warnings: Vec<String> = (!self.dead_rails.is_empty())
             .then(|| {
+                let why = if self.dead_rail_causes.is_empty() {
+                    "no voltage could be read from the name and no [[supply]] fed it".to_string()
+                } else {
+                    self.dead_rail_causes.join("; ")
+                };
                 format!(
-                    "UNPOWERED RAIL::{} sat at 0 V (no voltage could be read from the name and no [[supply]] fed it); any analog result above may be an artifact",
-                    gh_escape(&self.dead_rails.join(", "))
+                    "UNPOWERED RAIL::{} sat at 0 V ({}); any analog result above may be an artifact",
+                    gh_escape(&self.dead_rails.join(", ")),
+                    gh_escape(&why)
                 )
             })
             .into_iter()

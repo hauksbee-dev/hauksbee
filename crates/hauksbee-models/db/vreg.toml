@@ -304,6 +304,14 @@ vout      = 3.3
 dropout_v = 0.254
 cout_min_f = 1.0e-6
 iq_a      = 1.0e-4  # quiescent current typ 100 µA
+# ON/OFF pin (active high), TI LP2985 SLVS522S §5.5 Electrical Characteristics
+# (p.7), VON/OFF over -40..125 C: High = Output ON 1.6 V min (legacy and new chip),
+# Low = Output OFF 0.15 V max (legacy and new chip). The typical 25 C rows (0.55 /
+# 1.4 V legacy, 0.72 / 0.85 V new) are looser guarantees and are not used. ION/OFF
+# is an input bias current, not an internal pull, so no pull is stated. The new
+# chip has an output pulldown (§6.3.5) with no resistance printed: not modelled.
+en_on_v   = 1.6
+en_off_v  = 0.15
 
 [models.pins]
 "1" = "in"
@@ -1211,18 +1219,11 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 #
 # DELIBERATELY NOT MODELLED, because the `vreg` kind has nowhere to put them
 # and inventing a place would be worse than the gap:
-#   - The EN input. `bind_vreg` stamps an unconditional ideal source on the
-#     output net; it never reads an enable. The pin map below names pad 3 "en"
-#     so the role is at least visible in the bind report, but the model does NOT
-#     gate on it. On Watchy EN is tied to the same net as VIN (Net-(D1-K)), so
-#     the part is unconditionally enabled and the model matches the board; on a
-#     board that sequences EN it would NOT, and that is a real limitation.
 #   - Current limit (610 mA min / 1100 mA typ). `max_current_a` below carries
 #     the 600 mA continuous output rating, which is the figure the stress
 #     monitor should judge against; the foldback behaviour itself is not
 #     modelled because the ideal-source vreg path has no CC mode.
-#   - Line/load regulation, PSRR, output noise, active discharge (RDISCHG),
-#     over-temperature protection. The output is an ideal 3.3 V source, so all
+#   - Line/load regulation, PSRR, output noise, over-temperature protection. The output is an ideal 3.3 V source, so all
 #     of these are exactly zero / absent in simulation rather than wrong.
 [[models]]
 id = "rt9080_3v3"
@@ -1245,6 +1246,16 @@ dropout_v = 0.53     # VDROP max @ rated 600 mA, 3 V <= VOUT
 # Source: Richtek RT9080 DS9080-09, Typical Application and stability guidance: COUT = 1 uF ceramic.
 cout_min_f = 1.0e-6
 iq_a      = 2.0e-6   # IQ typ @ ILOAD = 0 mA, VIN >= VOUT + VDROP (max is 4 uA)
+# EN pin (active high; the binder gates the output on it from these fields).
+# Richtek DS9080-09 (December 2024), Section 14 Electrical Characteristics (p.6),
+# VVIN = 5 V: VEN_R rising threshold 0.9 V min, VEN_F falling threshold 0.4 V max
+# (only these bounds are printed); Section 17.4 (p.12) says the same: below 0.4 V
+# off, above 0.9 V on. IEN (0.1 uA max at 5.5 V) is leakage, not a pull, and
+# Section 18.1 says not to leave EN floating, so no pull is stated.
+# RDISCHG = 80 Ohm typ at EN = 0 V, VVOUT = 0.1 V (Section 14, p.6; Section 17.7).
+en_on_v           = 0.9
+en_off_v          = 0.4
+en_discharge_ohms = 80.0
 
 [models.pins]
 # TSOT-23-5, datasheet Section 7 Pin Configuration / Section 8 Functional Pin
@@ -1296,8 +1307,8 @@ package = "ZQFN-4L 1x1"
 basis = "Richtek RT9080 datasheet DS9080-09 (December 2024), Section 13 Thermal Information, θJA (JEDEC standard), ZQFN-4L 1x1"
 
 [models.coverage]
-implements = ["nominal_dc_regulation", "dropout_headroom", "quiescent_current", "continuous_current_rating", "junction_temperature_estimate"]
-missing = ["enable_gating", "current_limit", "load_dependent_dropout", "line_and_load_regulation", "psrr", "output_noise", "active_discharge", "thermal_shutdown"]
+implements = ["nominal_dc_regulation", "dropout_headroom", "quiescent_current", "continuous_current_rating", "junction_temperature_estimate", "enable_gating", "active_discharge"]
+missing = ["current_limit", "load_dependent_dropout", "line_and_load_regulation", "psrr", "output_noise", "thermal_shutdown"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # XC6206-3.3: Torex 200 mA, 1 uA-IQ CMOS LDO in SOT-23. The MCP1700-class part
@@ -1562,6 +1573,15 @@ dropout_v = 0.4      # VDROP max @ rated 600 mA, AP2112-3.3 Electrical Character
 cout_min_f = 1.0e-6
 iq_a      = 55.0e-6  # IQ typ @ VIN=4.3 V, IOUT=0 (80 uA max; ISTD 0.01 uA typ
                      # in shutdown)
+# EN pin (active high; the binder gates the output on it from these fields).
+# Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics
+# (p.8): VIH "Enable logic high, regulator on" 1.5 V min; VIL "Enable logic low,
+# regulator off" 0.4 V max; RPD "EN Pull Down Resistor" 3.0 MOhm typ (pull to
+# GND); RDCHG "VOUT Discharge Resistor", "Set EN pin at Low", 60 Ohm typ.
+en_on_v           = 1.5
+en_off_v          = 0.4
+en_pull_down_ohms = 3.0e6
+en_discharge_ohms = 60.0
 
 [models.pins]
 # Pin Descriptions table, SOT25.
@@ -1648,6 +1668,15 @@ vout       = 3.3      # AP2112-3.3 Electrical Characteristics, VIN = 4.3 V, 1 mA
 dropout_v  = 0.4      # VDROP max @ IOUT = 600 mA (250 mV typ; 200 mV max @ 300 mA)
 cout_min_f = 1.0e-6   # Typical Applications Circuit and Note 4: 1.0 uF X7R/X5R ceramic
 iq_a       = 55.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (80 uA max)
+# EN pin (active high; the binder gates the output on it from these fields).
+# Diodes AP2112 DS39724 Rev. 2-2 (June 2017), AP2112-3.3 Electrical Characteristics
+# (p.8): VIH "Enable logic high, regulator on" 1.5 V min; VIL "Enable logic low,
+# regulator off" 0.4 V max; RPD "EN Pull Down Resistor" 3.0 MOhm typ (pull to
+# GND); RDCHG "VOUT Discharge Resistor", "Set EN pin at Low", 60 Ohm typ.
+en_on_v           = 1.5
+en_off_v          = 0.4
+en_pull_down_ohms = 3.0e6
+en_discharge_ohms = 60.0
 
 [models.pins]
 # Pin Descriptions table, SOT25 column.
@@ -1731,6 +1760,15 @@ vout       = 3.3      # AP2114-3.3 EC, +-1.5%
 dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
 cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"
 iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
+# EN pin (active high; the binder gates the output on it from these fields).
+# AP2114 data sheet Rev. 2.2 (Jan. 2013), AP2114-3.3 Electrical Characteristics
+# (p.12): VIH "Enable logic high, regulator on" 1.5 V min; VIL "Enable logic low,
+# regulator off" 0.4 V max; RPD "EN Pull Down Resistor" 3.0 MOhm typ (pull to
+# GND); RDCHG "VOUT Discharge Resistor", "Set EN pin at Low", 60 Ohm typ.
+en_on_v           = 1.5
+en_off_v          = 0.4
+en_pull_down_ohms = 3.0e6
+en_discharge_ohms = 60.0
 
 [models.pins]
 # Pin Descriptions, SOIC-8 (Fixed) column.
@@ -1777,6 +1815,14 @@ vout      = 3.3      # AP2125-3.3 EC, 3.234 to 3.366 V, VIN = 4.3 V, 1 mA <= IOU
 dropout_v = 0.3      # VDROP max @ IOUT = 300 mA (200 mV typ)
 iq_a      = 60.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
 # cout_min_f absent: the sheet tests at COUT = 1 uF but states no minimum.
+# CE pin (active high; the binder gates the output on it from these fields).
+# Diodes AP2125 DS38144 Rev. 2-2 (May 2016), AP2125-3.3 Electrical
+# Characteristics (p.8): CE "High" voltage 1.5 V min, CE "Low" voltage 0.4 V max.
+# Pin Descriptions (p.2): "Logic high=enable, logic low=shutdown". The sheet
+# states no internal pull on CE and no discharge resistance (the "auto-discharge"
+# appears only as a graph title), so none is set.
+en_on_v  = 1.5
+en_off_v = 0.4
 
 [models.pins]
 # Pin Descriptions, SOT-23-5/SC-70-5 column.
@@ -1854,6 +1900,16 @@ vout       = 3.3      # Electrical Characteristics, +-2%, VIN = VOUT + 1 V, 1 mA
 dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA, VOUT = 2.5-4.2 V row (170 mV typ)
 cout_min_f = 1.0e-6   # Application Information, Output Capacitor: stable with 1 uF or higher X7R/X5R
 iq_a       = 60.0e-6  # IQ typ @ VIN = VOUT + 1 V, IOUT = 0 (90 uA max)
+# Shutdown (enable) pin, active high; the binder gates the output on it from
+# these fields. Diodes AP2127 DS36478 Rev. 7-2 (Dec. 2017), Electrical
+# Characteristics (p.5): Shutdown High Voltage 1.5 V min; Shutdown Low Voltage
+# 0.5 V max; Shutdown Pull Down Resistance 3 MOhm typ (pull to GND); VOUT
+# Discharge MOSFET RDS(ON) 60 Ohm typ, "Shutdown Input Voltage Low" (Auto
+# discharge with Shutdown Version, p.13).
+en_on_v           = 1.5
+en_off_v          = 0.5
+en_pull_down_ohms = 3.0e6
+en_discharge_ohms = 60.0
 
 [models.pins]
 # Pin Descriptions, SOT-23-5 column (pin 4 is NC on fixed parts).
@@ -2003,6 +2059,15 @@ vout       = 3.3      # fixed-output code 33; accuracy +-2 % at IOUT = 10 mA
 dropout_v  = 0.4      # VDROP max @ IOUT = 500 mA, 2.7 V <= VIN <= 5.5 V (250 mV typ)
 cout_min_f = 1.0e-6   # Features: "Output only 1uF capacitor required for stability"
 iq_a       = 25.0e-6  # IQ typ @ VEN = 5 V, IOUT = 0 (50 uA max; shutdown 0.7 uA typ)
+# EN pin (active high; the binder gates the output on it from these fields).
+# Richtek DS9013-10 (April 2011), Electrical Characteristics (p.4), EN Threshold
+# Voltage: Logic-High VIH 1.6 V min, Logic-Low VIL 0.6 V max. Enable pin current
+# IEN (0.1 uA typ) is bias, not a pull, and the Enable section says EN cannot be
+# left floating; the "Rpull_down 100k" in the Typical Application Circuit (p.2)
+# is drawn outside the IC block, so no internal pull is set. No discharge
+# resistance is printed.
+en_on_v  = 1.6
+en_off_v = 0.6
 
 [models.pins]
 # Functional Pin Description, SOT-23-5 / SC-70-5 column (B = SOT-23-5).
@@ -2069,6 +2134,16 @@ vout       = 1.8      # nomenclature code 18; DC output accuracy +-2 % (VOUT < 3
 dropout_v  = 0.9      # DERIVED: VIN(min) 2.7 V - 1.8 V; 6.5 Note 3, VDO undefined below VOUT = 2.8 V
 cout_min_f = 2.2e-6   # Table 5-1, OUT: "2.2-uF or greater ceramic capacitor ... to assure stability"
 iq_a       = 1.3e-6   # 6.5 IGND typ, IOUT = 0 mA, VOUT <= 3.3 V (2.05 uA max; shutdown 150 nA typ)
+# EN pin (active high; the binder gates the output on it from these fields).
+# TI SBVS186H, 6.5 Electrical Characteristics (p.5): VEN(HI) "Device enabled"
+# 0.9 V min; VEN(LOW) "Device disabled" 0.4 V max. 7.4 Device Functional Modes
+# (p.13): "EN is pulled high by a 300-nA current source; therefore, EN can be
+# left floating to enable the device", so the pull is a 300 nA current source
+# from the rail. No discharge resistance is printed (OUT is high impedance when
+# disabled).
+en_on_v        = 0.9
+en_off_v       = 0.4
+en_pull_up_a   = 3.0e-7
 
 [models.pins]
 # Table 5-1 Pin Functions, DBV column for TPS709 (not TPS709A/B).
@@ -2111,6 +2186,16 @@ iq_a      = 80.0e-6  # Ground Pin Current typ @ IL = 100 uA (125 uA max). The
                      # datasheet's ground current rises with load (600 uA typ at
                      # 50 mA, 1300 uA at 150 mA); the no-load figure is the one
                      # `iq_a` means. Shutdown IGND is 0.01 uA typ.
+# EN pin (active high; the binder gates the output on it from these fields).
+# Microchip MIC5205 DS20005785B (Feb. 2022), Table 1-1 Electrical Characteristics
+# (continued), ENABLE Input (p.4), bold = -40..125 C: VIH "Regulator enabled"
+# 2.0 V min; VIL "Regulator shutdown" 0.4 V max at 25 C and 0.18 V max over
+# temperature, the lower used so the off level holds at every temperature. The
+# pin description says "logic-low or open = shutdown" (an unvalued pull) and IIH
+# (5 uA typ at 2 V) is an input current the sheet does not call a pull, so no
+# pull is set; no discharge resistance is printed.
+en_on_v   = 2.0
+en_off_v  = 0.18
 
 [models.pins]
 # Table 3-1, SOT-23-5, FIXED version. On the adjustable part pin 4 is ADJ.
@@ -2356,6 +2441,15 @@ dropout_v = 0.238    # VDO max @ 500 mA, -40..125 C, 3.3 V DBV (non-DYD), §5.5
 cout_min_f = 1.0e-6
 iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to
                      # +85 C). Shutdown ISHDN is 0.1 uA typ.
+# EN pin (active high; the binder gates the output on it from these fields).
+# TI TLV755P SBVS320D (Sept. 2024), 5.5 Electrical Characteristics (p.6): VHI "EN
+# pin high voltage (enabled)" 1 V min; VLO "EN pin low voltage (enabled)" 0.3 V
+# max; RPULLDOWN "Pulldown resistance" 120 Ohm typ at VIN = 5.5 V, the output
+# discharge pulldown active when disabled (6.3.2 Enable, p.12). IEN (10 nA
+# typ) is leakage, so no EN pull is set.
+en_on_v           = 1.0
+en_off_v          = 0.3
+en_discharge_ohms = 120.0
 
 [models.pins]
 # DBV (SOT-23-5) package.
@@ -3002,13 +3096,11 @@ basis = "TI TPS797xx SLVS332J (December 2016), 6.4 Thermal Information, RθJA, D
 # Every other vreg entry in this file carries a typical, so the difference is
 # called out to stop it being read as one.
 #
-# DELIBERATELY NOT MODELLED: the EN pin gates nothing (`bind_vreg` has no
-# enable), the current limit has no CC mode to live in, and the pin-4 NC is
-# named `nc` so no binder mistakes it for a feedback or ground pad. On the
-# margay datalogger EN is driven by the MCU to switch the auxiliary rail, so a
-# simulation of that board sees the auxiliary 3.3 V rail as always present. That
-# is the single biggest gap in this entry and it is the vreg kind's, not the
-# datasheet's.
+# The binder gates the output on the EN pin from the `en_*` fields below, so on
+# the margay datalogger, where EN is driven by the MCU to switch the auxiliary
+# rail, the rail follows that net. DELIBERATELY NOT MODELLED: the current limit
+# has no CC mode to live in, and the pin-4 NC is named `nc` so no binder mistakes
+# it for a feedback or ground pad.
 [[models]]
 id = "tps7a0533"
 kind = "vreg"
@@ -3031,6 +3123,14 @@ value_re = "(?i)^TPS7A0533DBV(R)?$"
 vout      = 3.3       # 3.3 V option, +/-1% at 25 C
 dropout_v = 0.235     # VDO MAX at IOUT = 200 mA, VOUT = 3.3 V, DBV package
 iq_a      = 1.0e-6    # IGND typ at IOUT = 1 uA, TJ = 25 C (1.3 uA max)
+# EN pin (active high; the binder gates the output on it from these fields).
+# TI TPS7A05 SBVS254D (Aug. 2019), 6.5 Electrical Characteristics (p.8): VEN(HI)
+# "EN pin logic high voltage" 0.9 V min; VEN(LO) "EN pin logic low voltage" 0.4 V
+# max (TJ = -40..125 C). IEN (10 nA at 5.5 V) is leakage, not a pull. RPULLDOWN
+# 120 Ohm (7.3.2 Active Discharge, p.19) is "P version only"; this card matches
+# the plain TPS7A0533DBV order code, which has no active discharge, so none set.
+en_on_v   = 0.9
+en_off_v  = 0.4
 
 [models.pins]
 # Section 5 Pin Configuration and Functions, DBV column of the Pin Functions
@@ -3040,7 +3140,7 @@ iq_a      = 1.0e-6    # IGND typ at IOUT = 1 uA, TJ = 25 C (1.3 uA max)
 # net, pad 5 on the regulated auxiliary rail, pad 4 unconnected.
 "1" = "in"
 "2" = "gnd"
-"3" = "en"    # named for the report; NOT gated, see above
+"3" = "en"    # active high; the output is gated on it, see en_* above
 "4" = "nc"    # not internally connected
 "5" = "out"
 
@@ -3123,9 +3223,13 @@ basis = "TI TPS7A05 SBVS254D (August 2019), 6.4 Thermal Information, RθJA, DBV"
 #   VIN       = 2 to 10 V operating, 12 V absolute maximum
 #   Pd        = 500 mW (SOT-89-5 bare), 1300 mW PCB-mounted
 #
-# DELIBERATELY NOT MODELLED: the CE pin gates nothing (bind_vreg has no enable),
-# so all three of the MWGEN-G1's rails are unconditionally present in simulation
-# even though the board sequences them; the +/-2% window, load regulation and the
+# CE GATING: the binder gates the output on the CE pin (B type, active high). This
+# card states NO `en_*` fields because no Torex XC6204 datasheet could be fetched
+# to read VCEH/VCEL, a CE pull or a discharge from, so the gate uses the binder's
+# generic default levels, disclosed as assumed (a partial model), rather than
+# numbers recalled from memory.
+#
+# DELIBERATELY NOT MODELLED: the +/-2% window, load regulation and the
 # 100 dB ripple rejection are absent because the output is an ideal source; and
 # the foldback current limiter has no CC mode to live in. `max_current_a` carries
 # the 150 mA output rating rather than the 300 mA limiter, which is the figure a
@@ -3174,7 +3278,7 @@ iq_a      = 7.0e-5   # IDD typ, B type (100 uA max); standby is 0.01 uA typ
 # reusing this map: the SOT-25 form of the same part swaps pads 1 and 4.
 "1" = "nc"
 "2" = "gnd"    # VSS, the wide centre tab on this package
-"3" = "en"     # CE, active high on the B type; named for the report, NOT gated
+"3" = "en"     # CE, active high on the B type; the output is gated on it from the binder default levels (no datasheet read)
 "4" = "in"     # VIN
 "5" = "out"    # VOUT
 
@@ -3280,11 +3384,15 @@ basis = "Torex XC6204/XC6205 ETR03004-011d, ABSOLUTE MAXIMUM RATINGS, Power Diss
 # 50 mA and the sheet's 50 mA row is 1.5 V, so this card must not be used as a
 # guaranteed 50 mA headroom check. The 0 mA figure of 60 mV would flatter it.
 #
-# DELIBERATELY NOT MODELLED: the SHDN pin (bind_vreg has no enable, and this pin
-# is active LOW, so it is named `shdn` and NOT `en` — mapping it to an enable role
-# would invert its sense the moment anything gates on it), the initial accuracy
-# and drift, and the four DNC pads (which the datasheet says must be left
-# unconnected, not grounded).
+# SHDN GATING: this pin is active LOW (shutdown), so it is named `shdn` and NOT
+# `en`; the output is on while the pin is high, so `en_on_level` is left at its
+# on-high default. The binder gates the output on it, but this card states NO
+# `en_*` fields because no LT1461 datasheet could be fetched to read the
+# shutdown thresholds from, so the gate uses the binder's generic default levels,
+# disclosed as assumed (a partial model).
+#
+# DELIBERATELY NOT MODELLED: the initial accuracy and drift, and the four DNC
+# pads (which the datasheet says must be left unconnected, not grounded).
 [[models]]
 id = "lt1461a_3v3"
 kind = "vreg"
@@ -3320,7 +3428,7 @@ iq_a      = 3.5e-5    # IQ typ 35 uA at 25 C (50 uA max at 25 C, 70 uA over temp
 "1" = "nc"     # DNC. The datasheet says only "DO NOT CONNECT"; it does not say
                # what happens if the pad is grounded, so neither does this.
 "2" = "in"     # VIN
-"3" = "shdn"   # active-LOW shutdown. Named `shdn`, not `en`; see the note above.
+"3" = "shdn"   # active-LOW shutdown (on while high). Named `shdn`, not `en`; gated from binder default levels, see the note above.
 "4" = "gnd"
 "5" = "nc2"    # DNC
 "6" = "out"    # VOUT
@@ -4100,6 +4208,17 @@ vout=3.3
 dropout_v=0.25 # guaranteed max at 150 mA, SBVS115D §6.5
 cout_min_f=1e-6 # ceramic, SBVS115D §5 and §7.1
 iq_a=0.5e-6
+# EN pin (active high; the binder gates the output on it from these fields).
+# TI TPS782 SBVS115D (Jan. 2015), 5 Pin Configuration and Functions, EN (p.3): "Drive this
+# pin over 1.2 V to turn on the regulator. Drive this pin below 0.4 V to put the
+# regulator into shutdown mode" (the Electrical Characteristics table prints no
+# VEN(HI)/VEN(LO) row; the shutdown-time test also uses VEN = 1.2 V and 0.4 V).
+# IEN (40 nA max at 5.5 V) is leakage, so no EN pull is set. Active VOUT
+# pulldown (7.3.2, p.10; only while VIN > 2.2 V): 10 kOhm as labelled in the 7.2
+# Functional Block Diagram (p.10); no resistance in the text or tables.
+en_on_v=1.2
+en_off_v=0.4
+en_discharge_ohms=10e3
 [models.pins]
 "1"="in"
 "2"="gnd"
@@ -4125,6 +4244,17 @@ vout=3.3
 dropout_v=0.25
 cout_min_f=1e-6
 iq_a=0.5e-6
+# EN pin (active high; the binder gates the output on it from these fields).
+# TI TPS782 SBVS115D (Jan. 2015), 5 Pin Configuration and Functions, EN (p.3): "Drive this
+# pin over 1.2 V to turn on the regulator. Drive this pin below 0.4 V to put the
+# regulator into shutdown mode" (the Electrical Characteristics table prints no
+# VEN(HI)/VEN(LO) row; the shutdown-time test also uses VEN = 1.2 V and 0.4 V).
+# IEN (40 nA max at 5.5 V) is leakage, so no EN pull is set. Active VOUT
+# pulldown (7.3.2, p.10; only while VIN > 2.2 V): 10 kOhm as labelled in the 7.2
+# Functional Block Diagram (p.10); no resistance in the text or tables.
+en_on_v=1.2
+en_off_v=0.4
+en_discharge_ohms=10e3
 [models.pins]
 "1"="out"
 "2"="nc"
@@ -4154,6 +4284,15 @@ cout_min_f=0.47e-6
 cout_esr_min_ohm=0.056
 cout_esr_max_ohm=6.0
 iq_a=1e-6
+# EN pin (active high; the binder gates the output on it from these fields).
+# ST STLQ015 DS6765 Rev 7 (Feb. 2020), Table 4 Electrical characteristics (pp.5-6),
+# VEN rows, VIN = 1.5..5.5 V: enable input logic high 0.7 V (min), enable input
+# logic low 0.4 V (max). Read from the text extract of the ST PDF (column
+# placement lost in the extract; the low row is the max, the high row the min).
+# IEN (1 nA typ, 200 nA max at 5.5 V) is leakage, not a pull; no discharge
+# resistance is printed.
+en_on_v=0.7
+en_off_v=0.4
 [models.pins]
 "1"="in"
 "2"="gnd"
@@ -4190,6 +4329,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4220,6 +4368,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4255,6 +4412,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4285,6 +4451,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4320,6 +4495,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4350,6 +4534,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4385,6 +4578,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4415,6 +4617,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4450,6 +4661,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4480,6 +4700,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4515,6 +4744,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="out"
 "2"="sense"
@@ -4545,6 +4783,15 @@ cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depend
 # No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
 iq_a=30e-6
 warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+# SHDN pin (active high; the binder gates the output on it from these fields).
+# ADI/Linear LT1763 1763fh Electrical Characteristics, Shutdown Threshold (all
+# variants, over temperature): VOUT Off-to-On 2 V max (0.8 V typ), VOUT On-to-Off
+# 0.25 V min (0.65 V typ). Read from a text extract of 1763fh (the PDF could not
+# be fetched): the 0.25/0.8/0.65/2 values are unambiguous, their row assignment is
+# the only ordering consistent with hysteresis. SHDN pin current (0.1 uA at 0 V,
+# 1 uA at 20 V) is bias, not a pull; no discharge resistance is printed.
+en_on_v=2.0
+en_off_v=0.25
 [models.pins]
 "1"="nc"
 "2"="out"
@@ -4577,6 +4824,14 @@ vout=3.3
 dropout_v=0.59 # guaranteed max at rated 500 mA, SBVS290B §6.5
 cout_min_f=1e-6 # effective minimum, SBVS290B §6.3 (50% nominal derating assumed)
 iq_a=2e-6
+# EN pin (active high; the binder gates the output on it from these fields).
+# TI TPS7A26 SBVS290B (Oct. 2019), 6.5 Electrical Characteristics (p.5): VEN(HI)
+# "Device enabled" 0.9 V min; VEN(LOW) "Device disabled" 0.4 V max. IEN (10 nA at
+# 18 V) is leakage and the pin table (p.3) says "Do not float this pin", so no
+# pull is set. The active overshoot pulldown (7.3.7, p.15) is disabled while
+# VEN < VEN(LOW), so it is not an output discharge on disable: none is set.
+en_on_v=0.9
+en_off_v=0.4
 [models.pins]
 "1"="out"
 "2"="nc"
@@ -4677,6 +4932,16 @@ footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
 vout = 3.3
 dropout_v = 0.5      # VDROP max at IOUT = 300 mA, -40 to 125 C (400 mV at 25 C)
 iq_a = 100.0e-6      # IGND typ at IOUT = 100 uA (180 uA max over temperature)
+# EN pin (active high; the binder gates the output on it from these fields).
+# Diodes AP2210 DS37517 Rev. 4-2 (Mar. 2021), AP2210-3.3 Electrical
+# Characteristics (Cont.) (p.12): VIH "Enable Input Logic-high Voltage,
+# Regulator enabled" 2.0 V min; VIL "Enable Input Logic-low Voltage, Regulator
+# shutdown" 0.4 V max at 25 C and 0.18 V max over -40..125 C, the lower used so
+# the off level holds at every temperature. IIH (5 uA typ at VEN >= 2 V) is
+# an input current the sheet does not attribute to a pull, so no pull is set;
+# no discharge resistance is printed.
+en_on_v  = 2.0
+en_off_v = 0.18
 
 [models.pins]
 "1" = "in"
@@ -4723,11 +4988,19 @@ footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
 vout = 3.3
 dropout_v = 0.7      # max at IL = 500 mA over the junction range (550 mV at 25 C)
 iq_a = 90.0e-6       # IGND typ at IL = 100 uA (190 uA max over temperature)
+# EN pin (active high; the binder gates the output on it from these fields).
+# MaxLinear SPX3819 Rev. 2.0.5 (Dec 2019), Electrical Specifications p.3: "Input
+# Voltage Level Logic High (VIH)" 2 V min (ON), "Logic Low (VIL)" 0.4 V max (OFF).
+# The ENABLE Input Current rows are bias, and the pin table's "logic low or open
+# = shutdown" (p.3) states a pull with no value, so no pull is set; no discharge
+# resistance is printed.
+en_on_v = 2.0
+en_off_v = 0.4
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"
+"3" = "en"          # active high; the output is gated on it, see en_* above
 "4" = "byp"          # fixed versions; ADJ on the adjustable part
 "5" = "out"
 
@@ -4900,8 +5173,10 @@ theta_ja_c_per_w = 180.0     # 3LD SOT-89, EIA/JEDEC JESD51-7
 # x0.98 .. x1.02 of nominal at IOUT = 30 mA. Absolute maximum VIN is 6.5 V
 # (2.0 V to 6.0 V operating); Pd is 300 mW for SOT23 and 250 mW for SOT353.
 # CE: VCEH 1.0 V min starts the part, VCEL 0.5 V max (0.7 V for the C50) shuts
-# it down; the pad is named `en` for the report and NOT gated, as on the other
-# enable-pin cards here.
+# it down (Electrical Characteristics, per-voltage tables p.6-9, Microne V14).
+# The binder gates the output on this pin from `en_on_v` / `en_off_v`. The
+# datasheet states no internal CE pull resistor/current and no output discharge
+# value, so none is modelled.
 # DELIBERATELY NOT MODELLED: foldback current limit (ISHORT 110-150 mA typ),
 # load and line regulation, PSRR, output noise, standby current, thermal limits.
 
@@ -4937,12 +5212,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 1.2      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.5     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 280 mV typ @ 100 mA)
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C12
+en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -4985,12 +5262,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 1.8      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.4     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 200 mV typ @ 100 mA)
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C18
+en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -5033,12 +5312,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 2.5      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.22     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 110 mV typ @ 100 mA)
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C25
+en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -5081,12 +5362,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 2.8      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.22     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 110 mV typ @ 100 mA)
 iq_a      = 50.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C28
+en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -5129,12 +5412,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 3.0      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.21     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 100 mV typ @ 100 mA)
 iq_a      = 60.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C30
+en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -5177,12 +5462,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 3.3      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.26     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 120 mV typ @ 100 mA)
 iq_a      = 60.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C33
+en_off_v  = 0.5     # VCEL "Shut down" 0.5 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -5225,12 +5512,14 @@ footprint_re = "(?i)(SOT[-_ ]?23[-_ ]?5|SOT[-_ ]?353|SC[-_ ]?70[-_ ]?5)([^0-9]|$
 vout      = 5.0      # VOUT(T); effective output is x0.98 .. x1.02 @ IOUT = 30 mA
 dropout_v = 0.2     # VDIF2 TYPICAL @ IOUT = 200 mA (no maximum is printed; VDIF1 is 100 mV typ @ 100 mA)
 iq_a      = 40.0e-6   # ISS typ @ VIN = VOUT + 1 V, no load (no maximum is printed)
+en_on_v   = 1.0     # VCEH "Start up" 1.0 V min, Microne ME6211 V14 Electrical Characteristics ME6211C50
+en_off_v  = 0.7     # VCEL "Shut down" 0.7 V max, same table
 
 [models.pins]
 # SOT23-5 / SOT353, Pin Assignment table, ME6211CXXG column.
 "1" = "in"     # VIN
 "2" = "gnd"    # VSS
-"3" = "en"     # CE, active high; named for the report, NOT gated
+"3" = "en"     # CE, active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"    # VOUT
 
@@ -5931,11 +6220,13 @@ vout       = 3.3
 dropout_v  = 0.45      # max at 150 mA over temperature (310 mV typ)
 iq_a       = 29.0e-6   # Ground Current typ at 100 uA load (50 uA max)
 cout_min_f = 1.0e-6    # Output Capacitor: 1.0 uF or greater for stability
+en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
+en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"
+"3" = "en"    # active high; the output is gated on it, see en_* above
 "4" = "nc"    # ADJ on the adjustable part
 "5" = "out"
 
@@ -5983,11 +6274,13 @@ vout       = 5.0
 dropout_v  = 0.45
 iq_a       = 29.0e-6
 cout_min_f = 1.0e-6
+en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
+en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"
+"3" = "en"    # active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"
 
@@ -6046,11 +6339,13 @@ value_re = "(?i)^TPS73101(DBV[RT]?)?$"
 vref      = 1.204
 dropout_v = 0.1       # max at 150 mA (30 mV typ)
 iq_a      = 4.0e-4    # IGND "IOUT = 10mA (IQ)" typ, 5.5 p.5 (630 uA max new silicon)
+en_on_v   = 1.7       # VEN(high) EN pin high (enabled), 1.7 V min; TI SBVS034P 5.5 Electrical Characteristics p.5
+en_off_v  = 0.5       # VEN(low) EN pin low (shutdown), 0.5 V max, same table (IEN is leakage; no EN pull and no active output discharge stated)
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"
+"3" = "en"    # active high; the output is gated on it, see en_* above
 "4" = "fb"
 "5" = "out"
 
@@ -6576,8 +6871,10 @@ missing = ["current_limit_foldback", "thermal_limit", "line_load_regulation", "t
 # DELIBERATELY NOT MODELLED: bind_vreg stamps an ideal DC source, so Green
 # Operation (HS/PS auto-switching at IGO/IGOR), the +/-1% / +/-2% accuracy
 # windows, load/line regulation, the 1.2 A current limit and 180 mA foldback,
-# the 700 mA inrush limiter, CL auto-discharge, CE gating and thermal shutdown
-# are absent rather than wrong.
+# the 700 mA inrush limiter and thermal shutdown are absent rather than wrong.
+# The binder gates the output on CE from `en_on_v` / `en_off_v` and, when
+# disabled, discharges it through `en_discharge_ohms` (RDCHG, B type). The B type
+# has no CE pull-down resistor, so no `en_pull_*` key is set.
 #
 # Corrections vs the unreviewed LLM draft: pin map and VOUT/dropout values were
 # right; added the merged-cell provenance for E-1/E-2, the 250 mW bare-IC
@@ -6599,12 +6896,15 @@ value_re = "(?i)^XC6220B331MR(?:-?G)?$"
 vout      = 3.3      # nominal; VOUT(E) 3.267..3.333 V in HS mode @ IOUT = 30 mA
 dropout_v = 0.655    # Vdif2 MAX @ IOUT = 1000 mA (E-2); Vdif1 60 typ / 95 max mV @ 300 mA
 iq_a      = 8.0e-6   # ISS2 typ, PS mode @ IOUT = 0.1 mA (18 uA max; HS mode ISS1 50 uA typ)
+en_on_v   = 1.2      # VCEH min, Torex ETR03041-016b ELECTRICAL CHARACTERISTICS p.6 (6.0 V max)
+en_off_v  = 0.4      # VCEL max, same table p.6
+en_discharge_ohms = 460.0  # RDCHG typ, B/D type, VIN = 6.0 V, VOUT = 5.0 V, VCE = VSS, p.6 (note *4)
 
 [models.pins]
 # SOT-25, PIN ASSIGNMENT (p.3).
 "1" = "in"    # VIN
 "2" = "gnd"   # VSS
-"3" = "en"    # CE, ON/OFF control (B type: no internal pull-down; do not leave open)
+"3" = "en"    # CE, ON/OFF control, gated by the binder from en_* above (B type: no internal pull-down; do not leave open)
 "4" = "nc"    # NC
 "5" = "out"   # VOUT
 
@@ -6755,8 +7055,8 @@ max_v = 6.5
 basis = "Torex ETR03041-016b, ABSOLUTE MAXIMUM RATINGS, CE Input Voltage VSS - 0.3 to 6.5 V (p.4); a stress bound, not a logic range"
 
 [models.coverage]
-implements = ["fixed_output_regulation", "dropout_headroom", "quiescent_current", "input_supply_range"]
-missing = ["green_mode_transitions", "enable_gating", "current_limit", "foldback", "inrush_current_prevention", "cl_auto_discharge", "thermal_shutdown", "load_dependent_dropout", "line_and_load_regulation"]
+implements = ["fixed_output_regulation", "dropout_headroom", "quiescent_current", "input_supply_range", "enable_gating", "cl_auto_discharge"]
+missing = ["green_mode_transitions", "current_limit", "foldback", "inrush_current_prevention", "thermal_shutdown", "load_dependent_dropout", "line_and_load_regulation"]
 
 # ── TLV75733P (fixed 3.3 V LDO, SOT-23-5 DBV) ───────────────────────────────
 # TI TLV757P 1 A low-IQ LDO, 3.3 V fixed option, DBV (SOT-23-5) package, as
@@ -6795,11 +7095,18 @@ missing = ["green_mode_transitions", "enable_gating", "current_limit", "foldback
 #
 # Board check: U20/U24 symbol pins 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT on footprint
 # Package_TO_SOT_SMD:SOT-23-5, matching Table 4-1 DBV. EN is tied to IN on this
-# board, so the ungated EN pin (the vreg kind has no enable) costs nothing here.
+# board, so the EN gate is always on here.
 #
-# DELIBERATELY NOT MODELLED: soft start, EN gating, foldback current limit
-# (ICL 1.2 A min, ISC 755 mA typ), active output discharge (95 Ω, P version),
-# UVLO (1.3 V typ rising), thermal shutdown, PSRR, noise, line/load regulation.
+# EN (SBVS322C 5.5 Electrical Characteristics p.6): VHI 1 V (EN pin high voltage,
+# enabled, the Min column) and VLO 0.3 V max. The binder gates the output on EN
+# from `en_on_v` / `en_off_v`. IEN (10 nA) is leakage, so no EN pull is set.
+# The P version actively discharges the output when disabled: RPULLDOWN 95 Ohm
+# typ at VIN = 3.3 V (5.5 table, p.6); 6.3.2 text p.12 says 120 Ohm, the table
+# row is used. `en_discharge_ohms` carries it.
+#
+# DELIBERATELY NOT MODELLED: soft start, foldback current limit
+# (ICL 1.2 A min, ISC 755 mA typ), UVLO (1.3 V typ rising), thermal shutdown,
+# PSRR, noise, line/load regulation.
 [[models]]
 id = "tlv75733p_dbv"
 kind = "vreg"
@@ -6839,12 +7146,15 @@ vout = 3.3            # fixed 3.3 V option (code 33)
 dropout_v = 0.475     # VDO MAX, IOUT = 1 A, 3.3 V <= VOUT < 5.0 V, TJ -40..125 C
 iq_a = 25.0e-6        # IGND typ at TJ = 25 C, IOUT = 1 mA (31 uA max)
 cout_min_f = 1.0e-6   # 5.3 Recommended Operating Conditions, COUT min
-warning = "[partial model] TLV75733P nominal 3.3 V DC rail and sourced ratings are modeled; EN gating, soft start, foldback current limit, active discharge, UVLO, thermal shutdown and line/load regulation are not modeled"
+en_on_v = 1.0         # VHI, EN pin high voltage (enabled), 5.5 Electrical Characteristics p.6
+en_off_v = 0.3        # VLO max, same table p.6
+en_discharge_ohms = 95.0  # RPULLDOWN typ, VIN = 3.3 V, P version, p.6 (6.3.2 text p.12 says 120 Ohm)
+warning = "[partial model] TLV75733P nominal 3.3 V DC rail and sourced ratings are modeled; soft start, foldback current limit, UVLO, thermal shutdown and line/load regulation are not modeled"
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"    # named for the report; NOT gated
+"3" = "en"    # EN, active high; the output is gated on it, see en_* above
 "4" = "nc"    # no internal connection
 "5" = "out"
 
@@ -6863,8 +7173,8 @@ abs_max_v = 6.0
 basis = "TI TLV757P SBVS322C, 5.3 Recommended Operating Conditions, VIN 1.45 V to 5.5 V; 5.1 Absolute Maximum Ratings, VIN -0.3 V to 6.0 V"
 
 [models.coverage]
-implements = ["fixed_output_voltage", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum"]
-missing = ["enable_gating", "soft_start", "foldback_current_limit", "active_output_discharge", "undervoltage_lockout", "thermal_shutdown", "psrr", "line_regulation", "load_regulation"]
+implements = ["fixed_output_voltage", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum", "enable_gating", "active_output_discharge"]
+missing = ["soft_start", "foldback_current_limit", "undervoltage_lockout", "thermal_shutdown", "psrr", "line_regulation", "load_regulation"]
 
 # ── TLV75718P (fixed 1.8 V LDO, SOT-23-5 DBV) ───────────────────────────────
 # TI TLV757P 1 A low-IQ LDO, 1.8 V fixed option, DBV (SOT-23-5) package, as
@@ -6903,11 +7213,18 @@ missing = ["enable_gating", "soft_start", "foldback_current_limit", "active_outp
 #
 # Board check: U21/U28 symbol pins 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT on footprint
 # Package_TO_SOT_SMD:SOT-23-5, matching Table 4-1 DBV. EN is tied to IN on this
-# board, so the ungated EN pin (the vreg kind has no enable) costs nothing here.
+# board, so the EN gate is always on here.
 #
-# DELIBERATELY NOT MODELLED: soft start, EN gating, foldback current limit
-# (ICL 1.2 A min, ISC 755 mA typ), active output discharge (95 Ω, P version),
-# UVLO (1.3 V typ rising), thermal shutdown, PSRR, noise, line/load regulation.
+# EN (SBVS322C 5.5 Electrical Characteristics p.6): VHI 1 V (EN pin high voltage,
+# enabled, the Min column) and VLO 0.3 V max. The binder gates the output on EN
+# from `en_on_v` / `en_off_v`. IEN (10 nA) is leakage, so no EN pull is set.
+# The P version actively discharges the output when disabled: RPULLDOWN 95 Ohm
+# typ at VIN = 3.3 V (5.5 table, p.6); 6.3.2 text p.12 says 120 Ohm, the table
+# row is used. `en_discharge_ohms` carries it.
+#
+# DELIBERATELY NOT MODELLED: soft start, foldback current limit
+# (ICL 1.2 A min, ISC 755 mA typ), UVLO (1.3 V typ rising), thermal shutdown,
+# PSRR, noise, line/load regulation.
 [[models]]
 id = "tlv75718p_dbv"
 kind = "vreg"
@@ -6947,12 +7264,15 @@ vout = 1.8            # fixed 1.8 V option (code 18)
 dropout_v = 0.800     # VDO MAX, IOUT = 1 A, 1.8 V <= VOUT < 2.5 V, TJ -40..125 C
 iq_a = 25.0e-6        # IGND typ at TJ = 25 C, IOUT = 1 mA (31 uA max)
 cout_min_f = 1.0e-6   # 5.3 Recommended Operating Conditions, COUT min
-warning = "[partial model] TLV75718P nominal 1.8 V DC rail and sourced ratings are modeled; EN gating, soft start, foldback current limit, active discharge, UVLO, thermal shutdown and line/load regulation are not modeled"
+en_on_v = 1.0         # VHI, EN pin high voltage (enabled), 5.5 Electrical Characteristics p.6
+en_off_v = 0.3        # VLO max, same table p.6
+en_discharge_ohms = 95.0  # RPULLDOWN typ, VIN = 3.3 V, P version, p.6 (6.3.2 text p.12 says 120 Ohm)
+warning = "[partial model] TLV75718P nominal 1.8 V DC rail and sourced ratings are modeled; soft start, foldback current limit, UVLO, thermal shutdown and line/load regulation are not modeled"
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"    # named for the report; NOT gated
+"3" = "en"    # EN, active high; the output is gated on it, see en_* above
 "4" = "nc"    # no internal connection
 "5" = "out"
 
@@ -6971,8 +7291,8 @@ abs_max_v = 6.0
 basis = "TI TLV757P SBVS322C, 5.3 Recommended Operating Conditions, VIN 1.45 V to 5.5 V; 5.1 Absolute Maximum Ratings, VIN -0.3 V to 6.0 V"
 
 [models.coverage]
-implements = ["fixed_output_voltage", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum"]
-missing = ["enable_gating", "soft_start", "foldback_current_limit", "active_output_discharge", "undervoltage_lockout", "thermal_shutdown", "psrr", "line_regulation", "load_regulation"]
+implements = ["fixed_output_voltage", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum", "enable_gating", "active_output_discharge"]
+missing = ["soft_start", "foldback_current_limit", "undervoltage_lockout", "thermal_shutdown", "psrr", "line_regulation", "load_regulation"]
 
 # ── TPS563200 (adjustable buck, SOT-23-6 DDC) ───────────────────────────────
 # TI 3 A, 4.5-17 V synchronous buck, D-CAP2, 650 kHz, DDC (SOT-23-6).
@@ -7114,9 +7434,17 @@ missing = ["switching_ripple", "compensation_stability", "soft_start", "eco_mode
 # No θJA is stated for SOT-223 (only TO-220 50 C/W and DDPAK 60 C/W in the
 # abs-max footnote), so `theta_ja_c_per_w` is deliberately absent.
 #
-# DELIBERATELY NOT MODELLED: SD gating (threshold 1.3 V typ, 2 V max rising),
-# the 3.2 A short-circuit limit and overtemperature protection, line/load
-# regulation, PSRR, and the COUT ESR stability window (Figure 18).
+# SD (Electrical Characteristics p.4, Shutdown Input): VSDT rising from 0.3 V
+# until output ON: 1.3 V typ, 2 V in the Min column; falling from 2.0 V until
+# output OFF: 1.3 V typ, 0.3 V in the Max column. The binder gates the output on
+# SD from `en_on_v` = 2.0 and `en_off_v` = 0.3 (the guaranteed-on and
+# guaranteed-off levels). SD has no internal pull: the Shutdown Operation text
+# (p.11) asks for an EXTERNAL 10 kOhm pull-up, so no `en_pull_*` key is set. No
+# output discharge is stated.
+#
+# DELIBERATELY NOT MODELLED: the 3.2 A short-circuit limit and overtemperature
+# protection, line/load regulation, PSRR, and the COUT ESR stability window
+# (Figure 18).
 [[models]]
 id = "lp3855_adj_sot223"
 kind = "vreg"
@@ -7148,10 +7476,12 @@ vref = 1.216          # VADJ typ
 dropout_v = 0.435     # SOT-223 dropout max at IL = 1.5 A, full temperature
 iq_a = 3.0e-3         # IGND normal operation typ (10 mA max over temperature)
 cout_min_f = 10.0e-6  # Application Hints, minimum stable output capacitance 10 uF
-warning = "[partial model] LP3855-ADJ board-divider DC rail and sourced ratings are modeled; SD gating, current limit, thermal protection, line/load regulation and the COUT ESR stability window are not modeled; no SOT-223 thermal resistance is published"
+en_on_v = 2.0         # VSDT rising (until output = ON), 2 V in the Min column; SNVS244F Electrical Characteristics p.4
+en_off_v = 0.3        # VSDT falling (until output = OFF), 0.3 V in the Max column; same table p.4
+warning = "[partial model] LP3855-ADJ board-divider DC rail and sourced ratings are modeled; current limit, thermal protection, line/load regulation and the COUT ESR stability window are not modeled; no SOT-223 thermal resistance is published"
 
 [models.pins]
-"1" = "en"    # SD: pulled low = shutdown, so high enables; named, NOT gated
+"1" = "en"    # SD: low = shutdown, so high enables; the output is gated on it, see en_* above
 "2" = "in"
 "3" = "out"
 "4" = "fb"    # ADJ
@@ -7171,8 +7501,8 @@ abs_max_v = 7.5
 basis = "TI LP3855-ADJ SNVS244F, Recommended Operating Conditions, input supply voltage 2.5 V to 7.0 V (min is the greater of VOUT + VDROPOUT and 2.5 V); Absolute Maximum Ratings, input supply voltage (survival) -0.3 V to +7.5 V"
 
 [models.coverage]
-implements = ["board_feedback_divider", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum"]
-missing = ["shutdown_gating", "current_limit", "thermal_shutdown", "line_regulation", "load_regulation", "psrr", "cout_esr_window", "thermal_resistance"]
+implements = ["board_feedback_divider", "dropout", "quiescent_current", "input_supply_range", "output_capacitance_minimum", "shutdown_gating"]
+missing = ["current_limit", "thermal_shutdown", "line_regulation", "load_regulation", "psrr", "cout_esr_window", "thermal_resistance"]
 
 # ── "AP2112/RT9080-3.3": either-part 3.3 V LDO, SOT-23-5 ──────────────────────
 # Adafruit's BOM value for a footprint that may be stuffed with EITHER a Diodes
@@ -7224,11 +7554,15 @@ vout       = 3.3      # [1] AP2112-3.3 EC (±1.5%); [2] Section 14 ±2% at 1 mA
 dropout_v  = 0.53     # [2] Section 14 VDROP max, ILOAD = 600 mA, VOUT >= 3 V (AP2112: 0.4 V max)
 cout_min_f = 1.0e-6   # [1] Note 4 1.0 uF ceramic; [2] Section 8 "1uF or larger ceramic (0.7uF effective)"
 iq_a       = 55.0e-6  # [1] IQ typ, VIN = 4.3 V (80 uA max); [2] RT9080 IQ 2 uA typ, so the larger is carried
+en_on_v    = 1.5      # worst case of both: [1] VIH 1.5 V min (p.8) vs [2] VEN_R 0.9 V min (Section 14 p.6); the higher guarantees both parts are on
+en_off_v   = 0.4      # worst case of both: [1] VIL 0.4 V max (p.8) and [2] VEN_F 0.4 V max (Section 14 p.6); equal
+en_discharge_ohms = 80.0  # both parts discharge: [1] RDCHG 60 Ohm typ (p.8), [2] RDISCHG 80 Ohm typ (Section 14 p.6); the weaker (larger) is carried
+# No EN pull key: [1] states a 3.0 MOhm pull-down but [2] states none (its IEN is leakage), so the pull is not shared.
 
 [models.pins]
 "1" = "in"
 "2" = "gnd"
-"3" = "en"
+"3" = "en"    # active high; the output is gated on it, see en_* above
 "4" = "nc"
 "5" = "out"
 

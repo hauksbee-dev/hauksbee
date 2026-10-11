@@ -4763,10 +4763,21 @@ fn bind_vreg(
             join_caveats(comp, caveats),
         );
     }
+    // The enable pin switches the rail (see `vreg_enable`): the source returns
+    // to a private node the gate closes to GND.
+    let enable = crate::vreg_enable::Plan::new(
+        comp,
+        model,
+        roles,
+        (components, circuit),
+        node_of,
+        (input, gnd),
+    );
+    let ret = enable.source_return(circuit, &comp.reference, gnd);
     let source_id = circuit.add(Device::vsource(
         format!("Vreg_{}", comp.reference),
         out,
-        gnd,
+        ret,
         SourceKind::Dc(vout),
     ));
     // The headroom the ideal source assumes: the card's widest output endpoint
@@ -4803,6 +4814,8 @@ fn bind_vreg(
             amps.copysign(vout),
         ));
     }
+    let (gate, gated, [enable_caveat, held_off]) =
+        enable.stamp(circuit, comp, (input, out, gnd, ret), Some(vout));
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
         source: source_id,
@@ -4814,38 +4827,7 @@ fn bind_vreg(
         helpers,
         pass_level: Some(pass_level),
         enable: enable_nodes(roles),
-    });
-    // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
-    // rather than making each entry repeat the sentence.
-    //
-    // Nothing above reads an `en` or `shdn` role. The stamp is an unconditional ideal
-    // source, so a regulator held OFF by its enable still presents its output rail at
-    // full voltage, and the board reads as having a rail it does not have. That is
-    // the silent-wrongness direction: the rail is asserted, not withheld.
-    //
-    // Keyed on the ENTRY's pin map, not on the resolved roles, because an enable pad
-    // the board left unconnected produces the same asserted rail and deserves the
-    // same caveat. Emitted here rather than in the database so that every regulator
-    // entry, including ones added later, is covered by construction; when `bind_vreg`
-    // learns to gate on the enable this block is what to delete.
-    let names_an_enable = model
-        .pins
-        .values()
-        .any(|r| matches!(r.as_str(), "en" | "shdn"));
-    let enable_warning = names_an_enable.then(|| {
-        format!(
-            "{}{} ({}): its {} pin is not modelled; the output rail is stamped as an \
-             unconditional ideal source, so a board that holds this regulator OFF \
-             still reads as having this rail present at {vout:.2} V",
-            Assumption::PARTIAL_MODEL_MARKER,
-            comp.reference,
-            comp.value,
-            if model.pins.values().any(|r| r == "shdn") {
-                "shutdown"
-            } else {
-                "enable"
-            },
-        )
+        gate,
     });
     // SEVERAL caveats can apply to one regulator and there is one channel, so they
     // are joined rather than one silently winning. Each is a full sentence already;
@@ -4864,16 +4846,19 @@ fn bind_vreg(
     let caveats = [
         vreg_stability_warning(comp, model, (out, gnd), components, node_of),
         entry_warning(comp, model),
-        enable_warning,
+        enable_caveat,
         port_caveat,
     ];
+    let source = gated.map_or_else(|| "source".to_string(), |g| format!("source, {g}"));
     let device = port_label.map_or_else(
-        || format!("vreg {vout:.1}V source"),
-        |port| format!("vreg {vout:.1}V source; {port}"),
+        || format!("vreg {vout:.1}V {source}"),
+        |port| format!("vreg {vout:.1}V {source}; {port}"),
     );
+    // A held-off rail is a finding about the board, not a gap in the model, so
+    // it rides after the caveats rather than taking their marker.
     (
         BindOutcome::Behavioral { device },
-        join_caveats(comp, caveats),
+        merge_bind_warnings(join_caveats(comp, caveats), held_off),
     )
 }
 
@@ -5006,7 +4991,7 @@ const SUPPLY_FADE_V: f64 = 1.0;
 /// Used for regulators only. Op-amps and comparators carry their draw on
 /// their own device instead (`Supply::quiescent_draw`), which adds no device
 /// and no matrix slot per part.
-fn supply_draw(
+pub(crate) fn supply_draw(
     circuit: &mut Circuit,
     name: String,
     (hi, lo): (NodeId, NodeId),
@@ -5025,8 +5010,8 @@ fn supply_draw(
     })
 }
 
-/// The non-ground board nodes on a regulator's `en` / `shdn` pins: the
-/// stamp ignores them (see `SimpleRegulator::enable`).
+/// The non-ground board nodes on a regulator's `en` / `shdn` pins (see
+/// `SimpleRegulator::enable`).
 fn enable_nodes(roles: &HashMap<String, NodeId>) -> Vec<NodeId> {
     ["en", "shdn"]
         .iter()
@@ -5433,8 +5418,8 @@ fn port_heat(circuit: &Circuit) -> Vec<(DeviceId, NodeId, DeviceId)> {
 /// GND, so MNA gives `Vout = Vref*(1 + R1/R2)` with R1 on OUT-FB. One divider
 /// is a different rail under each law, so the card's pin map decides which.
 ///
-/// The enable caveat `bind_vreg` emits does not apply: an adjustable
-/// three-terminal part has no enable pin to leave unmodelled.
+/// A grounded part's `en`/`shdn` pin gates the VCVS's return to GND, the way
+/// `bind_vreg` gates its source's (see `vreg_enable`).
 fn bind_adj_vreg(
     comp: &Component,
     model: &ModelEntry,
@@ -5483,6 +5468,22 @@ fn bind_adj_vreg(
     } else {
         (adj, adj)
     };
+    // A grounded part's enable gates the VCVS's return, as `bind_vreg` gates
+    // its source's (see `vreg_enable`). An LM317-class part has no return to
+    // gate: an enable on such a card stays unmodelled, and says so.
+    let enable = grounded.then(|| {
+        crate::vreg_enable::Plan::new(
+            comp,
+            model,
+            roles,
+            (components, circuit),
+            node_of,
+            (input, gnd),
+        )
+    });
+    let gate_ret = enable
+        .as_ref()
+        .map_or(gnd, |e| e.source_return(circuit, &comp.reference, gnd));
     let source = circuit.add(Device::vsource(
         format!("Vref_{}", comp.reference),
         out,
@@ -5493,7 +5494,7 @@ fn bind_adj_vreg(
         circuit.add(Device::Vcvs {
             name: format!("Evreg_{}", comp.reference),
             p: low,
-            n: gnd,
+            n: gate_ret,
             cp: out,
             cn: adj,
             gain: 1.0,
@@ -5533,16 +5534,63 @@ fn bind_adj_vreg(
         helpers,
         pass_level: Some(pass_level),
         enable: enable_nodes(roles),
+        gate: None,
     });
+    let nodes = (input, out, gnd, gate_ret);
+    let (gated, [enable_caveat, held_off]) =
+        gate_last_regulator(enable, (circuit, regulators), comp, model, nodes);
+    let caveats = [
+        vreg_stability_warning(comp, model, (out, gnd), components, node_of),
+        entry_warning(comp, model),
+        enable_caveat,
+    ];
     (
         BindOutcome::Analog {
-            device: format!("vreg {vref:.3}V adjustable reference"),
+            device: format!("vreg {vref:.3}V adjustable reference{gated}"),
         },
-        merge_bind_warnings(
-            vreg_stability_warning(comp, model, (out, gnd), components, node_of),
-            entry_warning(comp, model),
-        ),
+        merge_bind_warnings(join_caveats(comp, caveats), held_off),
     )
+}
+
+/// Stamp `plan` for the regulator just pushed onto `regulators` and record
+/// its gate there. Gives the bind row's label suffix and the enable notes; a
+/// part with no plan gets the not-modelled disclosure when its card names a pin.
+fn gate_last_regulator(
+    plan: Option<crate::vreg_enable::Plan>,
+    (circuit, regulators): (&mut Circuit, &mut [SimpleRegulator]),
+    comp: &Component,
+    model: &ModelEntry,
+    nodes: (NodeId, NodeId, NodeId, NodeId),
+) -> (String, [Option<String>; 2]) {
+    let (gate, gated, enable_notes) = plan.map_or_else(
+        || (None, None, [ungated_enable_caveat(comp, model), None]),
+        |plan| plan.stamp(circuit, comp, nodes, None),
+    );
+    if let Some(reg) = regulators.last_mut() {
+        reg.gate = gate;
+    }
+    (
+        gated.map_or_else(String::new, |g| format!(", {g}")),
+        enable_notes,
+    )
+}
+
+/// The disclosure for an enable pin no stamp reads: the card names one, but the
+/// part's shape leaves the gate nothing to switch (an LM317-class adjustable
+/// with no return of its own), so the rail stays unconditional.
+fn ungated_enable_caveat(comp: &Component, model: &ModelEntry) -> Option<String> {
+    let role = ["en", "shdn"]
+        .into_iter()
+        .find(|r| model.pins.values().any(|v| v == r))?;
+    Some(format!(
+        "{}{} ({}): its {} pin is not modelled; the output rail is stamped as an \
+         unconditional source, so a board that holds this regulator OFF still reads as \
+         having this rail present",
+        Assumption::PARTIAL_MODEL_MARKER,
+        comp.reference,
+        comp.value,
+        role.to_ascii_uppercase()
+    ))
 }
 
 /// A TL431-class adjustable SHUNT reference, from four primitives the IR
@@ -7618,6 +7666,10 @@ const DEAD_RAIL_MIN_PARTS: usize = 6;
 /// a run where the rails were dead. Naming the dead rails is what lets a reader
 /// tell that report from a true one.
 ///
+/// A regulator the board statically holds off ([`held_off_rails`]) leaves its
+/// output rail just as dead, whatever the net is called, so those rails are
+/// named here too unless `also_powered` lists them.
+///
 /// Returns the net names, ordered, deduped.
 #[must_use]
 pub fn unpowered_supply_nets(
@@ -7673,9 +7725,39 @@ pub fn unpowered_supply_nets(
         })
         .map(|net| net.name.clone())
         .collect();
+    // A regulator the board holds off powers nothing, whatever its rail is
+    // called and however few parts hang off it.
+    out.extend(
+        held_off_rails(bound)
+            .into_iter()
+            .map(|(net, _)| net)
+            .filter(|net| !powered.contains(net.as_str())),
+    );
     out.sort();
     out.dedup();
     out
+}
+
+/// The output net of each simple regulator the board holds off (its enable
+/// pin tied or pulled to its off level with nothing to move it; see
+/// [`crate::vreg_enable`]), with the sentence saying why.
+#[must_use]
+pub fn held_off_rails(bound: &BoundBoard) -> Vec<(String, String)> {
+    bound
+        .report
+        .regulators
+        .iter()
+        .filter_map(|reg| {
+            let why = reg.gate.as_ref()?.held_off.as_ref()?;
+            let Some(Device::Vsource { p, .. }) = bound.circuit.devices.get(reg.source.0 as usize)
+            else {
+                return None;
+            };
+            let net = bound.circuit.node_name(*p).to_string();
+            let because = format!("{} is held off: {why}", reg.reference);
+            Some((net, because))
+        })
+        .collect()
 }
 
 /// Extract a rail magnitude from a voltage token embedded MID-name, for
@@ -10997,10 +11079,10 @@ style = "i2c_pointer"
             .map(|(pad, _)| pad.as_str())
     }
 
-    /// A regulator whose entry names an enable, wired OFF, must say the enable
-    /// is not modelled; a three-terminal regulator stays silent.
+    /// A regulator whose entry names an enable, wired OFF, says the board holds
+    /// it off and its rail is unpowered; a three-terminal regulator stays silent.
     #[test]
-    fn a_regulator_says_its_enable_is_not_modelled_and_a_plain_one_says_nothing() {
+    fn a_regulator_wired_off_says_its_rail_is_held_off_and_a_plain_one_says_nothing() {
         let lib = ModelLibrary::builtin();
         for (value, expects_enable_caveat) in [("XC6204B332MR", true), ("LM7805", false)] {
             let mut model = resolve_value(&lib, value, "");
@@ -11036,9 +11118,15 @@ style = "i2c_pointer"
                 "{value}: {outcome:?}"
             );
             if expects_enable_caveat {
-                let w = warning.unwrap_or_else(|| panic!("{value} must disclose its enable"));
-                assert!(w.starts_with(Assumption::PARTIAL_MODEL_MARKER), "{w}");
-                assert!(w.contains("not modelled") && w.contains("OFF"), "{w}");
+                let w = warning.unwrap_or_else(|| panic!("{value} must say it is held off"));
+                assert!(
+                    w.contains("held off: its EN pin is tied to GND") && w.contains("unpowered"),
+                    "{w}"
+                );
+                assert!(
+                    !w.contains("not modelled"),
+                    "the enable is modelled now: {w}"
+                );
             } else {
                 assert!(warning.is_none(), "{value}: {warning:?}");
             }

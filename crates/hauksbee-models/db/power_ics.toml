@@ -1373,8 +1373,13 @@ missing = ["smart_reset_timer", "recovery_timer", "low_voltage_input_ignore", "o
 # no device. On a board that ties them together (the margay datalogger does, at
 # the pad) the two are one node and nothing is lost; on a board that runs a real
 # Kelvin connection, the sense leg is not part of the loop here. Also absent: the
-# EN pin (bind_vreg has no enable, so the reference is always on), the FILTER pin's
-# noise-bandwidth network, and every accuracy and drift figure above.
+# FILTER pin's noise-bandwidth network, and every accuracy and drift figure above.
+#
+# EN: the binder gates the output on this pin, but the card states NO `en_*`
+# fields, so the gate uses the binder's generic default levels, disclosed as
+# assumed. The part's logic levels are ratiometric to VIN (a fraction of the supply),
+# which `en_on_v`/`en_off_v` (absolute volts) cannot express, and the Analog
+# Devices/Maxim MAX6070 datasheet (19-6355) could not be fetched to read them.
 [[models]]
 id = "max6070_1v8"
 kind = "vreg"
@@ -1408,7 +1413,7 @@ iq_a      = 1.3e-4    # IIN typ 130 uA at 25 C (200 uA max at 25 C, 260 uA max
 # are shorted together on the VREF net exactly as the datasheet instructs.
 "1" = "filter"   # 0.1 uF to ground for high-frequency bypass; leave open if unused
 "2" = "gnd"
-"3" = "en"       # drive high to enable; NOT gated by bind_vreg, see above
+"3" = "en"       # drive high to enable; gated by the binder from its default levels, see above
 "4" = "in"
 "5" = "outs"     # reference sense output; carries a role and no device
 "6" = "out"      # OUTF, the force output: the pin the ideal source is stamped on

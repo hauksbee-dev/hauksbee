@@ -5414,8 +5414,11 @@ impl Scheduler {
                     subject,
                     scope,
                     &format!(
+                        // The enable pin is not in this list: the binder gates the
+                        // rail on it, and discloses the variants it cannot read
+                        // on the part itself.
                         "an ideal source held at its setpoint (input headroom checked against \
-                         declared dropout only; input current, current limit, enable, thermal and \
+                         declared dropout only; input current, current limit, thermal and \
                          startup are not modelled){}",
                         if reg.dropout_v.is_some() { "" } else { UNVERIFIED_HEADROOM }
                     ),
@@ -10298,6 +10301,7 @@ data_out = ["io0"]
                 helpers: Vec::new(),
                 pass_level: None,
                 enable,
+                gate: None,
             });
             sched.reg_supported.push(true);
         }

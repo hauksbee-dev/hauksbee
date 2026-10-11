@@ -214,11 +214,15 @@ pub struct SimpleRegulator {
     /// the scheduler sets it each chunk to the mean current `source` delivered
     /// over the previous one. `None` when nothing draws on the input.
     pub pass_level: Option<hauksbee_ir::DeviceId>,
-    /// The board nodes on the part's enable or shutdown pins (`en`, `shdn`),
-    /// which the stamp does NOT read: `source` is unconditional. Kept so a pass
-    /// that asks what can switch this rail on the real board (whatever drives
-    /// these pins can) does not have to re-derive the pin map.
+    /// The board nodes on the part's enable or shutdown pins (`en`, `shdn`).
+    /// Kept so a pass that asks what can switch this rail on the real board
+    /// (whatever drives these pins can) does not have to re-derive the pin map.
     pub enable: Vec<hauksbee_ir::NodeId>,
+    /// The switch those pins drive, when they switch the rail: `source` then
+    /// returns to a private node and `gate.ret` is the part's GND (see
+    /// [`crate::vreg_enable`]). `None` is an unconditional rail (no pin, or one
+    /// the board ties on).
+    pub gate: Option<crate::vreg_enable::EnableGate>,
 }
 
 impl BindReport {

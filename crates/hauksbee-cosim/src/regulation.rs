@@ -27,14 +27,16 @@ pub type Verdict = Result<f64, String>;
 /// `(output, return, signed setpoint)` read back from the stamped source.
 ///
 /// NaN when it is no longer a DC source, which no headroom check can pass. On
-/// an adjustable regulator the source's `n` is ADJ or a private node, so the
-/// board return the card named is returned in its place: everything downstream
-/// measures the rail and its headroom against the same node.
+/// an adjustable regulator the source's `n` is ADJ or a private node, and on an
+/// enable-gated one it is the gate's private return, so the board return the
+/// card named is returned in its place: everything downstream measures the
+/// rail and its headroom against the same node.
 #[must_use]
 pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f64) {
     match &circuit.devices[reg.source.0 as usize] {
         Device::Vsource { p, n, kind, .. } => {
-            let n = reg.adj_return.unwrap_or(*n);
+            let gate = reg.gate.as_ref().map(|g| g.ret);
+            let n = reg.adj_return.or(gate).unwrap_or(*n);
             match kind {
                 SourceKind::Dc(v) => (*p, n, *v),
                 _ => (*p, n, f64::NAN),
@@ -347,6 +349,7 @@ mod tests {
             helpers: Vec::new(),
             pass_level: None,
             enable: Vec::new(),
+            gate: None,
         };
         let ok = |v| super::headroom_ok(&reg, v);
         assert_eq!([3.6, 18.0, 21.0].map(ok), [false, true, false]);

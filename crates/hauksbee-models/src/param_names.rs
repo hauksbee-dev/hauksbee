@@ -204,6 +204,18 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "iktest_a",
             "ikmax_a",
             "ikmin_a",
+            // A simple regulator's enable or shutdown pin (`en`/`shdn` role):
+            // guaranteed-on and guaranteed-off levels against the part's GND,
+            // which level turns the output on, the internal pull an open pin
+            // follows, and the active output discharge while it is off.
+            "en_on_v",
+            "en_off_v",
+            "en_on_level",
+            "en_pull_down_ohms",
+            "en_pull_up_ohms",
+            "en_pull_down_a",
+            "en_pull_up_a",
+            "en_discharge_ohms",
         ],
         // `swing_*`: output-swing headrooms from the V-/V+ PINS, which bind the
         // rails to the supply nets (`rail_*` then only a fallback).
@@ -286,7 +298,8 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     ron_ohms ohm output on-resistance (VOL / IOL); leak_s S output-off conductance (IOH / VOH); \
     ron ohm switch on-resistance; roff ohm switch off-resistance; vth V control threshold; \
     vih V input high threshold; vil V input low threshold; voh V output high level; \
-    vol V output low level; ro ohm output resistance";
+    vol V output low level; ro ohm output resistance; \
+    en_on_level - the enable-pin level (high or low) that turns a regulator on";
 
 fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
     GLOSSARY.split(';').filter_map(|e| {
@@ -313,8 +326,19 @@ pub fn param_unit(name: &str) -> Option<&'static str> {
 /// the typ.
 #[must_use]
 pub fn row_column(name: &str) -> &'static str {
-    const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi"];
-    const MAX: &[&str] = &["vil", "vol", "out_lo", "rail_lo", "vol_v", "voh_drop_v"];
+    // A regulator enable's guaranteed-on level reads like a VIH (the min of its
+    // row) and its guaranteed-off level like a VIL (the max), for the on-high
+    // pins every card with such rows has.
+    const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi", "en_on_v"];
+    const MAX: &[&str] = &[
+        "vil",
+        "vol",
+        "out_lo",
+        "rail_lo",
+        "vol_v",
+        "voh_drop_v",
+        "en_off_v",
+    ];
     const MAX_HEADROOM: &[&str] = &["dropout_v", "swing_lo", "swing_hi"];
     let has = |word| name.split('_').any(|w| w == word);
     if MIN.contains(&name) || has("min") {

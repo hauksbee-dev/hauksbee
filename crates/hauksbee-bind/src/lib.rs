@@ -44,6 +44,7 @@ pub mod shorts;
 pub mod stress;
 pub mod thermal;
 pub mod variant_sweep;
+pub mod vreg_enable;
 pub mod waiver;
 
 /// Distinct process exit code for "the board is invalid for the analysis you
@@ -56,8 +57,8 @@ pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use bind_report::{BindOutcome, BindReport, BindRow, BindSummary, UnresolvedActive};
 pub use binder::{
-    bind_board, bind_board_driven, bind_board_with, is_ground, names_a_supply_of_unknown_voltage,
-    power_rail_voltage, unpowered_supply_nets, BoundBoard,
+    bind_board, bind_board_driven, bind_board_with, held_off_rails, is_ground,
+    names_a_supply_of_unknown_voltage, power_rail_voltage, unpowered_supply_nets, BoundBoard,
 };
 pub use board_input::{BoardInputError, InputKind, NormalizedBoard};
 pub use boardcode::{
