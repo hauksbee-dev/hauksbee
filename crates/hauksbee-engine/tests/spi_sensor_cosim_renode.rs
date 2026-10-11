@@ -9,13 +9,16 @@
 //! sweeps the channel-0 voltage across the threshold, and asserts the FLAG net
 //! follows. It is the SPI analogue of `i2c_sensor_cosim.rs`.
 //!
-//! ## Current status
+//! ## What the tests check
 //!
-//! The Renode `on_spi` hook is a documented no-op (see `hauksbee-mcu/src/renode/mod.rs`):
-//! SPI peripheral interception is not yet wired for the Renode backend. These tests
-//! will FAIL with a FLAG-stuck-LOW assertion until the bridge is implemented. That
-//! is intentional -- the tests exercise the full co-sim contract so they go green
-//! only when the bridge truly works.
+//! The Renode backend's `on_spi` hook is implemented (see `hauksbee-mcu/src/renode/mod.rs`):
+//! it routes the first configured SPI controller through a bridge that forwards each
+//! firmware transfer to the attached `SpiBus`, so the modelled MCP3008 answers the
+//! firmware's reads. The tests check that FLAG follows the ADC input: LOW at 0.8 V,
+//! HIGH at 2.5 V, and switching across the 1.65 V threshold in a sweep. A FLAG stuck
+//! LOW at every input points at the bridge not reaching the ADC, not at the threshold
+//! logic. When Renode or the firmware ELF is missing, each test prints a `SKIP:` line
+//! and returns without asserting.
 
 #![cfg(feature = "renode")]
 
