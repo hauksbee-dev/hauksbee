@@ -151,12 +151,21 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
             } else {
                 let mut result = evaluate_one(a, outcomes, mode, spec.frame_ms);
                 result.subject_peripheral = a.id.clone().filter(|_| a.kind == "peripheral");
-                result.host_paced = outcomes.iter().find_map(|out| {
-                    host_paced_time_bound(a, out).map(|bound| HostPacedBound {
-                        bound,
-                        mcus: out.host_paced_mcus.clone(),
+                // An unjudged (INVALID) result has no verdict to qualify, and a
+                // content kind's hard failure (a bus never exercised, a bad
+                // regex) names no time bound it left unjudged.
+                let qualifies = !result.invalid
+                    && (result.passed || !matches!(a.kind.as_str(), "uart" | "peripheral"));
+                result.host_paced = qualifies
+                    .then(|| {
+                        outcomes.iter().find_map(|out| {
+                            host_paced_time_bound(a, out).map(|bound| HostPacedBound {
+                                bound,
+                                mcus: out.host_paced_mcus.clone(),
+                            })
+                        })
                     })
-                });
+                    .flatten();
                 vec![result]
             };
             if a.times_startup() && spec.dc_initialised() {
@@ -409,6 +418,12 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Opti
              {TJ_IMPOSSIBLE_C:.0} C melting point; no part holds that temperature, so the \
              power behind it is not a physical result."
         ));
+    }
+    // Content the firmware had not produced by the end of a host-paced run is not
+    // evidence against it: the same firmware may need longer in simulated time on
+    // a slower host.
+    if let Some(reason) = host_paced_unjudged_reason(a, out) {
+        return Some(reason);
     }
     // An absent open driver cannot make a failure real; a pass stands on the stated
     // assumption that the part leaves the net alone (the refinement words it).
@@ -730,7 +745,14 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
     match host_paced_time_bound(a, out) {
         Some(bound) if !boot => {
             let (ok, detail, why) = check_kind(&without_time_bound(a), out, frame_ms);
-            (ok, detail + &host_paced_note(&bound, out), why)
+            // A content kind's failure is a hard one (the window it would have
+            // been unjudged in is handled before this point, see
+            // [`host_paced_unjudged_reason`]), so only its pass carries the note.
+            if ok || !is_content_kind(a) {
+                (ok, detail + &host_paced_note(&bound, out), why)
+            } else {
+                (ok, detail, why)
+            }
         }
         _ => check_kind(a, out, frame_ms),
     }
@@ -812,8 +834,91 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
                 (w, p) => w.or(p),
             }
         }
+        "uart" if host_paced_reads_text(a, out) => Some(format!(
+            "the {} ms window the text had to appear in",
+            out.sim_ms
+        )),
+        "peripheral" if peripheral_reads_content(a, out) => Some(format!(
+            "the {} ms window the peripheral state had to be reached in",
+            out.sim_ms
+        )),
         _ => None,
     }
+}
+
+/// Kinds whose verdict is about content the firmware produced (what it
+/// printed, what it wrote to a bus peripheral) in the run's window, not about a
+/// measured time. On a host-paced clock their pass stands on the content and
+/// discloses the window; their miss is unjudged (see
+/// [`host_paced_unjudged_reason`]).
+fn is_content_kind(a: &Assertion) -> bool {
+    matches!(a.kind.as_str(), "uart" | "peripheral")
+}
+
+/// Whether a `uart` assertion reads text from an MCU on a host-paced clock: the
+/// named MCU when `mcu` is set, else any MCU on the board (the assertion reads
+/// every MCU's output together).
+fn host_paced_reads_text(a: &Assertion, out: &RunOutcome) -> bool {
+    a.mcu.as_ref().map_or_else(
+        || !out.host_paced_mcus.is_empty(),
+        |m| out.host_paced_mcus.contains(m),
+    )
+}
+
+/// Whether a `peripheral` check reaches a content comparison (EEPROM bytes, or a
+/// state field the peripheral has) rather than failing for a reason no host
+/// speed changes: a bus never exercised, no such peripheral, no such field.
+fn peripheral_reads_content(a: &Assertion, out: &RunOutcome) -> bool {
+    let id = a.id.clone().unwrap_or_default();
+    if out.host_paced_mcus.is_empty() || out.unexercised_bus_ids.contains(&id) {
+        return false;
+    }
+    out.peripherals.get(&id).is_some_and(|snap| {
+        a.bytes.is_some()
+            || a.field
+                .as_ref()
+                .is_some_and(|f| snap.fields.contains_key(f))
+    })
+}
+
+/// The reason a content assertion's MISS cannot be judged on a host-paced MCU
+/// clock, or `None` when it is judged (content present, a non-host-paced run, or
+/// a failure no host speed changes).
+///
+/// A run on such a clock covers a host-dependent amount of firmware in its
+/// simulated window (the same boot has measured about 2x apart on two machines),
+/// so text the firmware had not printed by the end of the run may be text a real
+/// chip prints in time: neither a PASS nor a FAIL. It is INVALID, the same
+/// "cannot be judged" the code already gives a held-stale analog window.
+///
+/// Nothing a run reports today proves the firmware had run to completion (a
+/// parked program counter is also where an idle `FreeRTOS` core waiting out a
+/// long `delay` sits), so no miss is promoted back to a FAIL on a host-paced
+/// clock; simavr and Renode count their own time and keep the hard verdict.
+fn host_paced_unjudged_reason(a: &Assertion, out: &RunOutcome) -> Option<String> {
+    let (what, detail) = match a.kind.as_str() {
+        "uart" if host_paced_reads_text(a, out) && uart_missing(a, out) => {
+            ("the UART text", check_uart(a, out).1)
+        }
+        "peripheral" if peripheral_reads_content(a, out) => {
+            let (ok, detail) = check_peripheral(a, out);
+            if ok {
+                return None;
+            }
+            ("the peripheral state", detail)
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "host-paced clock: {what} was not there at the end of the {} ms run, but MCU {} runs \
+         on a host-paced clock, {HOST_PACED_WHY}, so a slower host may simply not have run \
+         the firmware that far in this window. That is not evidence the firmware is wrong and \
+         it is not a pass, so it is not judged ({detail}). Raise duration_ms until the \
+         firmware is expected to be there with room to spare, or judge it on a cycle-exact \
+         backend (simavr or Renode) or on hardware.",
+        out.sim_ms,
+        out.host_paced_mcus.join(", ")
+    ))
 }
 
 /// `a` with the bound [`host_paced_time_bound`] names taken out, leaving the
@@ -1697,18 +1802,35 @@ fn subject_refs_for(a: &Assertion, outcomes: &[RunOutcome]) -> Vec<String> {
     refs
 }
 
-fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
-    // Concatenate the requested MCU's UART, or all MCUs if unspecified, in a
-    // STABLE (sorted-by-key) order: iterating a HashMap's values put the
-    // streams in nondeterministic order, so an anchored/boundary-spanning
-    // match (`^BOOT`) flaked run to run.
-    let text: String = a.mcu.as_ref().map_or_else(
+/// The text a `uart` assertion reads: the requested MCU's UART, or every MCU's
+/// concatenated in a STABLE (sorted-by-key) order. Iterating a `HashMap`'s values
+/// put the streams in nondeterministic order, so an anchored/boundary-spanning
+/// match (`^BOOT`) flaked run to run.
+fn uart_text(a: &Assertion, out: &RunOutcome) -> String {
+    a.mcu.as_ref().map_or_else(
         || {
             let sorted: std::collections::BTreeMap<_, _> = out.uart.iter().collect();
             sorted.into_values().map(String::as_str).collect()
         },
         |m| out.uart.get(m).cloned().unwrap_or_default(),
-    );
+    )
+}
+
+/// True when a well-formed `uart` assertion's text is not in the output (a bad
+/// regex or an assertion with neither field is a spec error, not a miss).
+fn uart_missing(a: &Assertion, out: &RunOutcome) -> bool {
+    let text = uart_text(a, out);
+    if let Some(needle) = &a.contains {
+        return !text.contains(needle);
+    }
+    a.matches
+        .as_ref()
+        .and_then(|re| regex::Regex::new(re).ok())
+        .is_some_and(|rx| !rx.is_match(&text))
+}
+
+fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let text = uart_text(a, out);
     let preview = truncate(&text.replace(['\r', '\n'], "·"), 60);
 
     if let Some(needle) = &a.contains {
@@ -2754,6 +2876,262 @@ mod tests {
         );
         let (ok, _, _) = check_seed(&toggle("min_toggles = 10"), &out, 1.0);
         assert!(!ok);
+    }
+
+    /// A 200 ms run whose MCU `U1` printed `text`, on a host-paced clock or not.
+    fn uart_run(text: &str, host_paced: bool) -> RunOutcome {
+        let mut out = RunOutcome {
+            sim_ms: 200.0,
+            ..Default::default()
+        };
+        out.uart.insert("U1".to_string(), text.to_string());
+        if host_paced {
+            out.host_paced_mcus = vec!["U1".to_string()];
+        }
+        out
+    }
+
+    fn uart_assertions() -> [Assertion; 2] {
+        [
+            assertion("kind = \"uart\"\ncontains = \"boot ok\""),
+            assertion("kind = \"uart\"\nmatches = \"^boot (ok|fine)\""),
+        ]
+    }
+
+    #[test]
+    fn host_paced_uart_text_that_appeared_passes_and_names_the_window_unjudged() {
+        let out = uart_run("boot ok\r\n", true);
+        for a in uart_assertions() {
+            assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+            let (ok, msg, _) = check_seed(&a, &out, 1.0);
+            assert!(ok, "{msg}");
+            assert!(msg.contains("UART=\"boot ok"), "{msg}");
+            assert!(
+                msg.contains("the 200 ms window the text had to appear in not judged"),
+                "{msg}"
+            );
+            assert!(msg.contains("MCU U1 runs on a host-paced clock"), "{msg}");
+            assert!(msg.contains("about 2x apart"), "{msg}");
+            let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+            assert!(r.passed && !r.invalid, "{}", r.detail);
+        }
+    }
+
+    #[test]
+    fn host_paced_uart_text_that_never_appeared_is_unjudged_not_failed() {
+        // The firmware may only be slow on this host: neither FAIL nor PASS.
+        let out = uart_run("ROM banner only\r\n", true);
+        for a in uart_assertions() {
+            let reason = member_invalid_reason(&a, &out, 1.0).expect("a host-paced miss");
+            assert!(
+                reason.starts_with("host-paced clock: the UART text"),
+                "{reason}"
+            );
+            assert!(
+                reason.contains("MCU U1 runs on a host-paced clock"),
+                "{reason}"
+            );
+            assert!(
+                reason.contains("not evidence the firmware is wrong"),
+                "{reason}"
+            );
+            let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+            assert!(r.invalid && !r.passed, "{}", r.detail);
+            assert!(
+                r.detail.contains("INVALID: host-paced clock:"),
+                "{}",
+                r.detail
+            );
+            // What was printed stays in the detail, so the reader sees the output.
+            assert!(r.detail.contains("ROM banner only"), "{}", r.detail);
+        }
+        // A named MCU that is not host-paced keeps its hard verdict, whatever
+        // else on the board is.
+        let mut out = uart_run("", false);
+        out.uart.insert("U2".to_string(), "idle".to_string());
+        out.host_paced_mcus = vec!["U1".to_string()];
+        let a = assertion("kind = \"uart\"\nmcu = \"U2\"\ncontains = \"boot ok\"");
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        assert_eq!(host_paced_time_bound(&a, &out), None);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.invalid && !r.passed, "{}", r.detail);
+    }
+
+    #[test]
+    fn a_clock_exact_backend_keeps_hard_uart_verdicts() {
+        for a in uart_assertions() {
+            let hit = uart_run("boot ok", false);
+            assert_eq!(host_paced_time_bound(&a, &hit), None);
+            let r = evaluate_one(&a, std::slice::from_ref(&hit), None, 1.0);
+            assert!(r.passed && !r.detail.contains("not judged"), "{}", r.detail);
+            let miss = uart_run("nothing yet", false);
+            assert_eq!(member_invalid_reason(&a, &miss, 1.0), None);
+            let r = evaluate_one(&a, std::slice::from_ref(&miss), None, 1.0);
+            assert!(!r.passed && !r.invalid, "{}", r.detail);
+            assert!(r.detail.contains("does NOT"), "{}", r.detail);
+        }
+    }
+
+    /// `evaluate`'s record of the bound a host-paced clock left unjudged: it
+    /// qualifies a UART pass, and it is absent from an unjudged miss.
+    #[test]
+    fn host_paced_uart_pass_records_the_bound_and_a_miss_does_not() {
+        let spec: Spec = toml::from_str(
+            "board = \"b.kicad_pcb\"\nduration_ms = 200\n[[assert]]\nkind = \"uart\"\ncontains = \"boot ok\"\n",
+        )
+        .expect("spec shape");
+        let hit = evaluate(&spec, &[uart_run("boot ok", true)]);
+        assert!(hit[0].passed);
+        let paced = hit[0].host_paced.as_ref().expect("the pass is qualified");
+        assert_eq!(paced.mcus, ["U1"]);
+        assert!(paced.bound.contains("200 ms window"), "{}", paced.bound);
+        let miss = evaluate(&spec, &[uart_run("nope", true)]);
+        assert!(miss[0].invalid && miss[0].host_paced.is_none());
+        let control = evaluate(&spec, &[uart_run("boot ok", false)]);
+        assert!(control[0].passed && control[0].host_paced.is_none());
+    }
+
+    /// A 200 ms run with an EEPROM `ee` holding "Hi" and a sensor `s` reading
+    /// `temp_c` 31, on a host-paced clock or not.
+    fn peripheral_run(host_paced: bool) -> RunOutcome {
+        let mut out = RunOutcome {
+            sim_ms: 200.0,
+            ..Default::default()
+        };
+        out.peripherals.insert(
+            "ee".to_string(),
+            PeripheralSnapshot {
+                bytes: b"Hi".to_vec(),
+                ..Default::default()
+            },
+        );
+        out.peripherals.insert(
+            "s".to_string(),
+            PeripheralSnapshot {
+                fields: HashMap::from([("temp_c".to_string(), 31.0)]),
+                ..Default::default()
+            },
+        );
+        if host_paced {
+            out.host_paced_mcus = vec!["U1".to_string()];
+        }
+        out
+    }
+
+    #[test]
+    fn host_paced_peripheral_content_passes_and_names_the_window_unjudged() {
+        let out = peripheral_run(true);
+        for src in [
+            "kind = \"peripheral\"\nid = \"ee\"\nbytes = \"48 69\"",
+            "kind = \"peripheral\"\nid = \"s\"\nfield = \"temp_c\"\nmin = 30.0\nmax = 32.0",
+        ] {
+            let a = assertion(src);
+            assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+            let (ok, msg, _) = check_seed(&a, &out, 1.0);
+            assert!(ok, "{msg}");
+            assert!(
+                msg.contains(
+                    "the 200 ms window the peripheral state had to be reached in not judged"
+                ),
+                "{msg}"
+            );
+            assert!(msg.contains("MCU U1 runs on a host-paced clock"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn host_paced_peripheral_content_that_is_missing_is_unjudged_not_failed() {
+        let out = peripheral_run(true);
+        for src in [
+            "kind = \"peripheral\"\nid = \"ee\"\nbytes = \"de ad\"",
+            "kind = \"peripheral\"\nid = \"s\"\nfield = \"temp_c\"\nmin = 40.0",
+        ] {
+            let a = assertion(src);
+            let reason = member_invalid_reason(&a, &out, 1.0).expect("a host-paced miss");
+            assert!(
+                reason.starts_with("host-paced clock: the peripheral state"),
+                "{reason}"
+            );
+            let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+            assert!(r.invalid && !r.passed, "{}", r.detail);
+        }
+        // Failures no host speed changes stay hard: a bus never exercised, no
+        // such peripheral, no such field.
+        let mut out = peripheral_run(true);
+        out.unexercised_bus_ids.insert("ee".to_string());
+        for src in [
+            "kind = \"peripheral\"\nid = \"ee\"\nbytes = \"48 69\"",
+            "kind = \"peripheral\"\nid = \"gone\"\nbytes = \"48 69\"",
+            "kind = \"peripheral\"\nid = \"s\"\nfield = \"nope\"\nmin = 1.0",
+        ] {
+            let a = assertion(src);
+            assert_eq!(member_invalid_reason(&a, &out, 1.0), None, "{src}");
+            assert_eq!(host_paced_time_bound(&a, &out), None, "{src}");
+            let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+            assert!(!r.invalid && !r.passed, "{src}: {}", r.detail);
+        }
+    }
+
+    #[test]
+    fn a_clock_exact_backend_keeps_hard_peripheral_verdicts() {
+        let out = peripheral_run(false);
+        let hit = assertion("kind = \"peripheral\"\nid = \"ee\"\nbytes = \"48 69\"");
+        assert_eq!(host_paced_time_bound(&hit, &out), None);
+        let r = evaluate_one(&hit, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.passed && !r.detail.contains("not judged"), "{}", r.detail);
+        let miss = assertion("kind = \"peripheral\"\nid = \"ee\"\nbytes = \"de ad\"");
+        let r = evaluate_one(&miss, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.passed && !r.invalid, "{}", r.detail);
+    }
+
+    /// A 1 kHz, 50% duty square wave on `EN` sampled every 10 us for 10.7 ms,
+    /// driven by firmware on a host-paced clock or on an exact one.
+    fn square_run(host_paced_clock: bool) -> RunOutcome {
+        let mut out = RunOutcome {
+            sim_ms: 10.7,
+            ..Default::default()
+        };
+        out.net_series
+            .insert("EN".to_string(), wave(0.5, 0.0, 0.0, 1e-5, 1070));
+        out.toggles.insert("EN".to_string(), 21);
+        if host_paced_clock {
+            host_paced(out)
+        } else {
+            out.driven_nets.insert("EN".to_string());
+            out
+        }
+    }
+
+    #[test]
+    fn host_paced_frequency_and_pulse_width_bounds_are_measured_not_judged() {
+        let out = square_run(true);
+        // 2 kHz wanted, 1 kHz measured: a hard FAIL on an exact clock, but the
+        // rate comes off a host-paced clock, so it is reported and not judged.
+        let freq = assertion("kind = \"toggle\"\nnet = \"EN\"\nfreq_hz = 2000.0");
+        let (ok, msg, _) = check_seed(&freq, &out, 0.01);
+        assert!(ok, "{msg}");
+        assert!(msg.contains("the 2000 Hz rate band not judged"), "{msg}");
+        // A 0.5 ms pulse against a 0.3 ms ceiling: the width is still measured.
+        let width = assertion("kind = \"pulse_width\"\nnet = \"EN\"\nmax = 0.3");
+        let (ok, msg, _) = check_seed(&width, &out, 0.01);
+        assert!(ok, "{msg}");
+        assert!(msg.contains("0.5000 ms"), "{msg}");
+        assert!(msg.contains("the pulse-width bound not judged"), "{msg}");
+    }
+
+    #[test]
+    fn a_clock_exact_backend_keeps_hard_frequency_and_pulse_width_verdicts() {
+        let out = square_run(false);
+        let freq = assertion("kind = \"toggle\"\nnet = \"EN\"\nfreq_hz = 2000.0");
+        assert_eq!(host_paced_time_bound(&freq, &out), None);
+        let (ok, msg, _) = check_seed(&freq, &out, 0.01);
+        assert!(!ok && !msg.contains("not judged"), "{msg}");
+        let width = assertion("kind = \"pulse_width\"\nnet = \"EN\"\nmax = 0.3");
+        let (ok, msg, _) = check_seed(&width, &out, 0.01);
+        assert!(!ok && !msg.contains("not judged"), "{msg}");
+        // Inside the band it passes, as before.
+        let in_band = assertion("kind = \"toggle\"\nnet = \"EN\"\nfreq_hz = 1000.0");
+        assert!(check_seed(&in_band, &out, 0.01).0);
     }
 
     /// A run whose `load` scenario window on `VBUS` saw `samples`, with the

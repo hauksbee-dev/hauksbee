@@ -714,15 +714,21 @@ mcu = "U1"                      # optional; defaults to all MCUs
 This `mcu` (which MCU's UART to read, by reference) is load-bearing, unlike
 the top-level `mcu` key, which is an informational note nothing reads.
 
+On a host-paced ESP32 core, text that never appeared is INVALID rather than a
+FAIL (the firmware may only be slow on this host), and text that did appear is a
+PASS that names the run window as not judged; see "Deadlines on a host-paced
+clock" below. simavr and Renode keep the hard verdict.
+
 **`toggle`**: a net toggles at an expected frequency (a blink check) or a
 minimum number of times. A COUNT is trustworthy on every backend. A FREQUENCY
 rests on the backend's clock rate matching the part, which is measured on
 `simavr:atmega328p` and every Renode platform (the clock-truth gates: SysTick
 on the STM32/nRF parts, `mtime` on the FE310, stock pico-sdk timing on the
 RP2040). The ESP32 family is the exception: its virtual time is wall-paced
-and host-load dependent, the run says so as a timing coverage warning, and a
-minimum count is the sturdier assertion there. `docs/about/LIMITATIONS.md`
-tells the full clock story.
+and host-load dependent, the run says so as a timing coverage warning, and on a
+firmware-driven net a `freq_hz` band (or a count above one) is reported but not
+judged; only "it toggled at all" keeps a hard verdict (see "Deadlines on a
+host-paced clock" below). `docs/about/LIMITATIONS.md` tells the full clock story.
 
 ```toml
 [[assert]]
@@ -1119,8 +1125,30 @@ and whose evidence carries a reduced-fidelity assumption, so it reads
 `evidence: qualified` on the terminal, JUnit, annotations, JSON and the web
 view. The same holds for the other firmware-time bounds on a firmware-driven
 net: a `toggle` `freq_hz` band or a `min_toggles` count above one, `pulse_width`
-`min`/`max`, and a `logic_level` `min_width_ms` or pulse count above one. simavr counts cycles and Renode
-advances virtual time per instruction, so their timing verdicts stay hard.
+`min`/`max`, and a `logic_level` `min_width_ms` or pulse count above one. simavr
+counts cycles and Renode advances virtual time per instruction, so their timing
+verdicts stay hard.
+
+The assertions that read what the firmware produced in the run's window follow
+the same rule, because how much firmware fits in a simulated window moves with
+the host:
+
+- A `uart` or `peripheral` (`bytes`, or a `field` range) assertion whose content
+  is there is a PASS on that content. Its detail names the run window as "not
+  judged" and its evidence is `qualified`, since a slower host might not have got
+  that far.
+- The same assertion whose content is NOT there is **INVALID** (exit 3), not a
+  FAIL and not a PASS: the firmware may simply not have run that far in this
+  host's window, so its silence is not evidence against it. The detail starts
+  `INVALID: host-paced clock:`, quotes what was printed, and says to raise
+  `duration_ms` or judge the claim on simavr, Renode or hardware. No miss is
+  promoted back to a FAIL on a host-paced clock, because a run reports nothing
+  that proves the firmware had run to completion (a parked program counter is
+  also where an idle RTOS core sits).
+- A failure no host speed changes stays a hard FAIL: a `peripheral` whose bus was
+  never exercised, an unknown peripheral id or field, and a `boot_coverage` net
+  the firmware never drives. A `uart` assertion that names an `mcu` which is not
+  host-paced keeps its hard verdict whatever else on the board is.
 
 ```text
 [PASS] RES driven to >= 2.6 V within 700 ms of reset

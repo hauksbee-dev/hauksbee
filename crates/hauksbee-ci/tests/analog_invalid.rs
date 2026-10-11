@@ -245,3 +245,48 @@ fn abort_with_an_invalid_assertion_does_not_double_count_in_junit() {
     );
     assert!(xml.contains("errors=\"1\""), "{xml}");
 }
+
+/// A UART assertion whose text is missing at the end of a run on a host-paced
+/// MCU clock is neither a PASS nor a FAIL: it is INVALID (exit 3), and the
+/// refusal says to lengthen the run or change backend, not "inspect the failed
+/// analog window".
+#[test]
+fn host_paced_uart_miss_is_invalid_and_the_refusal_names_the_clock() {
+    let spec = load_spec(
+        "host_paced_uart.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nkind=\"uart\"\ncontains=\"boot ok\"\n",
+    );
+    let mut out = outcome_with("n1", 5.0, 200.0, true, vec![], false);
+    out.host_paced_mcus = vec!["U1".to_string()];
+    out.uart
+        .insert("U1".to_string(), "ROM banner only".to_string());
+    let results = evaluate(&spec, &[out.clone()]);
+    let r = &results[0];
+    assert!(r.invalid && !r.passed, "{}", r.detail);
+    assert!(
+        r.detail.contains("INVALID: host-paced clock:"),
+        "{}",
+        r.detail
+    );
+
+    let result = ci_result(results, false);
+    assert_eq!(result.exit_code(), 3);
+    let refusal = result.refusal().expect("an INVALID assertion refuses");
+    assert!(
+        refusal.missing_prerequisite.contains("host-paced firmware")
+            && !refusal.missing_prerequisite.contains("analog solve"),
+        "{}",
+        refusal.missing_prerequisite
+    );
+    assert!(
+        refusal.next_action.contains("duration_ms") && refusal.next_action.contains("simavr"),
+        "{}",
+        refusal.next_action
+    );
+
+    // The same silence on a clock-exact backend is a plain FAIL, exit 1.
+    out.host_paced_mcus.clear();
+    let results = evaluate(&spec, &[out]);
+    assert!(!results[0].invalid && !results[0].passed);
+    assert_eq!(ci_result(results, false).exit_code(), 1);
+}

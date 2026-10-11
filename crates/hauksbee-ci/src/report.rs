@@ -446,11 +446,12 @@ impl CiResult {
         };
         let evidence = count(&open_part);
         let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
+        let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
         let missing = if self.analog_abort {
             format!(
                 "a converged analog solve through the run; the consecutive-failure abort tripped and {invalid} assertion(s) were marked INVALID"
             )
-        } else if evidence + timing == invalid {
+        } else if evidence + timing + paced == invalid {
             let mut parts = Vec::new();
             if evidence > 0 {
                 parts.push(format!(
@@ -460,6 +461,11 @@ impl CiResult {
             if timing > 0 {
                 parts.push(format!(
                     "a backend that can measure the requested timing; {timing} assertion(s) were refused"
+                ));
+            }
+            if paced > 0 {
+                parts.push(format!(
+                    "a run long enough for the host-paced firmware to get there, or a backend whose clock does not depend on the host; {paced} assertion(s) were left unjudged"
                 ));
             }
             parts.join("; ")
@@ -488,6 +494,8 @@ impl CiResult {
                     ("read the regulator reason under", ": declare a [[supply]] on that regulator's input net with the headroom it names (or fit a lower-dropout part)")
                 } else if open_part(r) {
                     ("close the assumption named under", " (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names)")
+                } else if r.detail.contains("INVALID: host-paced clock:") {
+                    ("read the host-paced clock note under", "; raise duration_ms, or judge it on simavr, Renode or hardware")
                 } else if r.detail.starts_with("INVALID: timing coverage refusal:") {
                     ("read the timing refusal under", "; run on a backend that measures it, or drop the timing claim")
                 } else {
