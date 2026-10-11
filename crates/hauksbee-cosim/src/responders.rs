@@ -146,19 +146,34 @@ pub trait InputResponder: Send {
 /// [`InputResponder`]s, dispatching each output edge only to the responders
 /// keyed on that pin.
 ///
-/// A pin miss is one `HashMap` lookup and an early return, so a busy
-/// non-protocol pin (a status LED toggling in the firmware's hot loop) costs
-/// nothing.
+/// A pin miss is one binary search over the watched pins and an early return,
+/// so a busy non-protocol pin (a status LED toggling in the firmware's hot
+/// loop) costs nothing.
 /// Multiple responders may watch the same pin (e.g. two protocols sharing a
 /// clock line); their drives concatenate in registration order.
+///
+/// Pin-keyed state lives in small vectors sorted by pin rather than hash maps:
+/// dispatch runs inside every firmware port write, a board watches tens of
+/// pins at most, and hashing a `(char, u8)` key per edge and per drive was the
+/// largest single cost of a bus-heavy co-simulation.
 #[derive(Default)]
 pub struct ResponderRegistry {
     responders: Vec<Box<dyn InputResponder>>,
-    /// pin -> indices into `responders` watching it.
-    by_pin: HashMap<(char, u8), Vec<usize>>,
-    /// Persistent ownership by responder source, then resolved wired-AND state.
-    drives: HashMap<(char, u8), HashMap<usize, bool>>,
-    resolved: HashMap<(char, u8), Option<bool>>,
+    /// pin -> indices into `responders` watching it, sorted by pin.
+    by_pin: Vec<(GpioPin, Vec<usize>)>,
+    /// Persistent ownership by responder source and the resolved wired-AND
+    /// state of every input pin a responder has ever driven, sorted by pin.
+    inputs: Vec<(GpioPin, InputOwnership)>,
+}
+
+/// Which responders currently drive one MCU input pin, and the level the
+/// registry last reported for it.
+#[derive(Default)]
+struct InputOwnership {
+    /// `(responder index, level)`, one entry per driving responder.
+    owners: Vec<(usize, bool)>,
+    /// Last reported resolution (`None` = released).
+    resolved: Option<bool>,
 }
 
 impl ResponderRegistry {
@@ -171,20 +186,32 @@ impl ResponderRegistry {
     pub fn register(&mut self, responder: Box<dyn InputResponder>) {
         let idx = self.responders.len();
         for pin in responder.watched_pins() {
-            self.by_pin.entry(pin).or_default().push(idx);
+            match self.by_pin.binary_search_by_key(&pin, |entry| entry.0) {
+                Ok(at) => self.by_pin[at].1.push(idx),
+                Err(at) => self.by_pin.insert(at, (pin, vec![idx])),
+            }
         }
         self.responders.push(responder);
+    }
+
+    /// Indices of the responders watching `pin`, in registration order.
+    fn watchers(&self, pin: GpioPin) -> Option<&[usize]> {
+        self.by_pin
+            .binary_search_by_key(&pin, |entry| entry.0)
+            .ok()
+            .map(|at| self.by_pin[at].1.as_slice())
     }
 
     /// Route one GPIO output edge to every responder watching `pin`,
     /// concatenating their input-pin drives. This is the body of the single
     /// closure the scheduler installs via `Mcu::on_input_responder_batch`.
     pub fn dispatch(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
-        let Some(indices) = self.by_pin.get(&pin) else {
+        let Some(indices) = self.watchers(pin) else {
             return Vec::new();
         };
+        let indices = indices.to_vec();
         let mut updates = Vec::new();
-        for &i in indices {
+        for i in indices {
             updates.extend(
                 self.responders[i]
                     .on_edge(pin, high)
@@ -200,6 +227,31 @@ impl ResponderRegistry {
         self.dispatch_batch_at(&[(pin, high)], cycle)
     }
 
+    /// Group `items` by the responders watching each item's pin: every
+    /// watching responder in ascending index, with its items in input order.
+    fn group_by_responder<T: Copy>(
+        &self,
+        items: &[T],
+        pin: impl Fn(&T) -> GpioPin,
+    ) -> Vec<(usize, Vec<T>)> {
+        let mut routed: Vec<(usize, T)> = Vec::new();
+        for item in items {
+            if let Some(indices) = self.watchers(pin(item)) {
+                routed.extend(indices.iter().map(|&i| (i, *item)));
+            }
+        }
+        // Stable, so each responder keeps its items in arrival order.
+        routed.sort_by_key(|&(i, _)| i);
+        let mut grouped: Vec<(usize, Vec<T>)> = Vec::new();
+        for (i, item) in routed {
+            match grouped.last_mut() {
+                Some((last, group)) if *last == i => group.push(item),
+                _ => grouped.push((i, vec![item])),
+            }
+        }
+        grouped
+    }
+
     /// Cycle-stamped dispatch for every edge from one atomic GPIO-port update.
     /// Each responder receives its watched subset once, after all levels in
     /// that update are known.
@@ -208,19 +260,8 @@ impl ResponderRegistry {
         edges: &[((char, u8), bool)],
         cycle: u64,
     ) -> Vec<InputDrive> {
-        let mut by_responder: std::collections::BTreeMap<usize, Vec<(GpioPin, bool)>> =
-            std::collections::BTreeMap::new();
-        for &(pin, high) in edges {
-            let Some(indices) = self.by_pin.get(&pin) else {
-                continue;
-            };
-            for &i in indices {
-                by_responder.entry(i).or_default().push((pin, high));
-            }
-        }
-
         let mut updates = Vec::new();
-        for (i, responder_edges) in by_responder {
+        for (i, responder_edges) in self.group_by_responder(edges, |edge| edge.0) {
             updates.extend(
                 self.responders[i]
                     .on_edges_at(&responder_edges, cycle)
@@ -236,17 +277,8 @@ impl ResponderRegistry {
         changes: &[((char, u8), bool, bool)],
         cycle: u64,
     ) -> Vec<InputDrive> {
-        let mut by_responder: std::collections::BTreeMap<usize, Vec<(GpioPin, bool, bool)>> =
-            std::collections::BTreeMap::new();
-        for &change in changes {
-            if let Some(indices) = self.by_pin.get(&change.0) {
-                for &index in indices {
-                    by_responder.entry(index).or_default().push(change);
-                }
-            }
-        }
         let mut updates = Vec::new();
-        for (i, responder_changes) in by_responder {
+        for (i, responder_changes) in self.group_by_responder(changes, |change| change.0) {
             updates.extend(
                 self.responders[i]
                     .on_directions_at(&responder_changes, cycle)
@@ -258,16 +290,31 @@ impl ResponderRegistry {
     }
 
     fn resolve_updates(&mut self, updates: Vec<(usize, InputDrive)>) -> Vec<InputDrive> {
-        let mut touched = Vec::new();
+        if updates.is_empty() {
+            return Vec::new();
+        }
+        let mut touched = Vec::with_capacity(updates.len());
         for (source, update) in updates {
-            let owners = self.drives.entry(update.pin).or_default();
-            match update.level {
-                Some(level) => {
-                    owners.insert(source, level);
+            let at = match self
+                .inputs
+                .binary_search_by_key(&update.pin, |entry| entry.0)
+            {
+                Ok(at) => at,
+                Err(at) => {
+                    self.inputs
+                        .insert(at, (update.pin, InputOwnership::default()));
+                    at
                 }
-                None => {
-                    owners.remove(&source);
+            };
+            let owners = &mut self.inputs[at].1.owners;
+            let held = owners.iter().position(|&(owner, _)| owner == source);
+            match (update.level, held) {
+                (Some(level), Some(slot)) => owners[slot].1 = level,
+                (Some(level), None) => owners.push((source, level)),
+                (None, Some(slot)) => {
+                    owners.swap_remove(slot);
                 }
+                (None, None) => {}
             }
             touched.push(update.pin);
         }
@@ -275,18 +322,18 @@ impl ResponderRegistry {
         touched.dedup();
         let mut out = Vec::new();
         for pin in touched {
+            let Ok(at) = self.inputs.binary_search_by_key(&pin, |entry| entry.0) else {
+                continue;
+            };
+            let input = &mut self.inputs[at].1;
             // Multiple open-drain responders are safe: any LOW owner wins. A
             // HIGH owner can never mask another source's LOW assertion.
-            let next = self
-                .drives
-                .get(&pin)
-                .filter(|owners| !owners.is_empty())
-                .map(|owners| owners.values().all(|&level| level));
-            let previous = self.resolved.get(&pin).copied().flatten();
-            if previous == next {
+            let next =
+                (!input.owners.is_empty()).then(|| input.owners.iter().all(|&(_, level)| level));
+            if input.resolved == next {
                 continue;
             }
-            self.resolved.insert(pin, next);
+            input.resolved = next;
             out.push(next.map_or_else(
                 || InputDrive::release(pin),
                 |level| InputDrive::drive(pin, level),
