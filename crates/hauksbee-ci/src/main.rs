@@ -59,9 +59,10 @@ enum Command {
     ///
     /// Exit codes (the pipeline contract): 0 every assertion held (GREEN);
     /// 1 at least one assertion failed (RED); 2 spec/board error (bad TOML,
-    /// missing board, unknown net); 3 invalid for analysis (the analog solve
-    /// aborted, so the result is not trustworthy and the run refuses to
-    /// pretend).
+    /// missing board, unknown net); 3 invalid for analysis (the result
+    /// cannot be trusted: an aborted analog solve, undermined evidence, or a
+    /// host-paced-clock claim that cannot be judged, such as absent firmware
+    /// output or a level that holds only inside its window).
     ///
     /// Sibling contract: `hauksbee run` numbers 1 and 2 differently there
     /// (1 = input error: the board could not be read; 2 = usage error, or
@@ -109,7 +110,10 @@ enum Command {
     /// an existing spec.
     ///
     /// Example:
-    ///   cd ci && hauksbee-ci init ../`hardware/board.kicad_pcb`
+    ///   cd ci && hauksbee-ci init ../hardware/board.kicad_pcb
+    // clap prints this doc as --help, where backticks would be pasted into a shell.
+    #[allow(clippy::doc_markdown)]
+    #[command(verbatim_doc_comment)]
     Init(InitArgs),
 
     /// Install the pre-commit gate into this repository.

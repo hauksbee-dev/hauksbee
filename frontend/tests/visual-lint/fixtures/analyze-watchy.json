@@ -38,17 +38,17 @@
     {
      "what": "A high-speed trace pair (DP / DN) is off its impedance target (W~0.150 mm, S~0.350 mm microstrip -> Zdiff ~ 146 ohm [target 90 ohm, USB differential]: estimate +62% from target).",
      "why": "Fast links like USB (90 ohm differential) or Ethernet need their traces to present a specific impedance so the signal does not reflect off the wire and smear. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup; it is informational, not a confirmed failure, but a value well off target on a real high-speed net can make the link marginal or fail to enumerate.",
-     "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in https://docs.hauksbee.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
+     "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in https://hauksbee-docs.eoghancollins0.workers.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
     },
     {
      "what": "A high-speed trace pair (USB_D+ / USB_D-) is off its impedance target (W~0.150 mm, S~0.152 mm microstrip -> Zdiff ~ 122 ohm [target 90 ohm, USB differential]: estimate +35% from target).",
      "why": "Fast links like USB (90 ohm differential) or Ethernet need their traces to present a specific impedance so the signal does not reflect off the wire and smear. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup; it is informational, not a confirmed failure, but a value well off target on a real high-speed net can make the link marginal or fail to enumerate.",
-     "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in https://docs.hauksbee.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
+     "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in https://hauksbee-docs.eoghancollins0.workers.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
     },
     {
      "what": "A single-ended trace (Net-(U4-LNA_IN/RF)) is off its impedance target (W~0.320 mm microstrip -> Z0 ~ 63 ohm [target 50 ohm, single-ended]: estimate +25% from target).",
      "why": "A 50 ohm single-ended line is the convention for an RF or antenna feed: the trace has to present that impedance end to end or part of the signal reflects back instead of reaching the antenna, costing range and sensitivity. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup.",
-     "fix": "If this is not a controlled-impedance RF path, this estimate is informational. If it is: widen or narrow the trace for your actual layer stackup so the estimate lands near 50 ohm (the formulas are in https://docs.hauksbee.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
+     "fix": "If this is not a controlled-impedance RF path, this estimate is informational. If it is: widen or narrow the trace for your actual layer stackup so the estimate lands near 50 ohm (the formulas are in https://hauksbee-docs.eoghancollins0.workers.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
     }
    ]
   }

@@ -1,5 +1,5 @@
 {
-  "base": "https://docs.hauksbee.dev",
+  "base": "https://hauksbee-docs.eoghancollins0.workers.dev",
   "rule": "route = \"/\" + lowercase(repoRelativePath without .md); special cases below win",
   "specialCases": {
     "README.md": "/",

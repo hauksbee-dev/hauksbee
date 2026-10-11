@@ -14,16 +14,18 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// CI for hardware: hand it a PCB and it tells you what blows up before you fab.
+/// Execute the system your design files already contain.
 ///
-/// Point `hauksbee` at any board file (`KiCad`, Eagle, IPC-D-356, or gerbers) and
-/// it extracts the circuit, binds device models, runs the static checks, and can
-/// co-simulate the firmware on an emulated MCU. Start with `run --report`.
+/// Point `hauksbee` at a board file (`KiCad`, Eagle, Altium, IPC-2581, ODB++,
+/// IPC-D-356, gerbers, or Board-as-Code) and it extracts the circuit, binds
+/// device models, runs the static checks, and can co-simulate the firmware on
+/// an emulated MCU. CI is one consumer of the engine (`hauksbee-ci`). Start
+/// with `run --report`.
 #[derive(Parser)]
 #[command(
     name = "hauksbee",
     version = hauksbee_engine::version_string(),
-    about = "CI for hardware: hand it a PCB; it tells you what blows up before you order boards.",
+    about = "Execute the system your design files already contain: board, fab, assembly and firmware evidence in, evidence-labelled verdicts out.",
     long_about = None,
     // No propagate_version: with it, `hauksbee run --version` reported itself
     // as "hauksbee-run", a binary that does not exist. `hauksbee --version` is

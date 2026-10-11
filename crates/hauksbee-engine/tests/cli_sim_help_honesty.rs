@@ -61,7 +61,7 @@ fn sim_help_states_the_working_capabilities() {
     // an installed user can actually open (round 3 moved every help doc
     // pointer off repo-relative paths).
     assert!(
-        help.contains("docs.hauksbee.dev/docs/spice-compat/compatibility"),
+        help.contains("hauksbee-docs.eoghancollins0.workers.dev/docs/spice-compat/compatibility"),
         "help should cross-link the compatibility statement URL"
     );
 }

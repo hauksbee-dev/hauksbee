@@ -123,7 +123,7 @@ if (-not $Prefix) {
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 if ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
     Write-Error ("No prebuilt hauksbee binary for Windows/$arch (contracted: windows-x86_64). " +
-        "Build from source: https://github.com/$Repo#quickstart")
+        "Build from source: https://github.com/$Repo#get-hauksbee")
     exit 1
 }
 $AssetSuffix = "windows-x86_64"

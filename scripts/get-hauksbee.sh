@@ -170,7 +170,7 @@ case "${OS}" in
     # the binary itself, so refuse up front and point at the source build.
     if { ldd --version 2>&1 | grep -qi musl; } || ls /lib/ld-musl-* >/dev/null 2>&1; then
       echo "This system uses musl libc; the prebuilt binaries are glibc-linked and will not run." >&2
-      echo "Build from source instead: https://github.com/${REPO}#quickstart" >&2
+      echo "Build from source instead: https://github.com/${REPO}#get-hauksbee" >&2
       exit 1
     fi
     # The release matrix (release.yml) builds all four promised targets natively:
@@ -180,7 +180,7 @@ case "${OS}" in
       aarch64|arm64)   ASSET_SUFFIX="linux-aarch64" ;;
       *)
         echo "No prebuilt hauksbee binary for Linux/${ARCH} (prebuilt: Linux x86_64/aarch64, macOS arm64/x86_64)." >&2
-        echo "Build from source: https://github.com/${REPO}#quickstart" >&2
+        echo "Build from source: https://github.com/${REPO}#get-hauksbee" >&2
         exit 1
         ;;
     esac
@@ -199,14 +199,14 @@ case "${OS}" in
       x86_64)  ASSET_SUFFIX="darwin-x86_64" ;;
       *)
         echo "No prebuilt hauksbee binary for macOS/${ARCH} (prebuilt: macOS arm64/x86_64, Linux x86_64/aarch64)." >&2
-        echo "Build from source: https://github.com/${REPO}#quickstart" >&2
+        echo "Build from source: https://github.com/${REPO}#get-hauksbee" >&2
         exit 1
         ;;
     esac
     ;;
   *)
     echo "Unsupported OS: ${OS}" >&2
-    echo "Build from source: https://github.com/${REPO}#quickstart" >&2
+    echo "Build from source: https://github.com/${REPO}#get-hauksbee" >&2
     exit 1
     ;;
 esac
