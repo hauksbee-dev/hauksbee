@@ -1158,9 +1158,15 @@ the host:
 A level asserted inside a simulated-time window on a firmware-driven net (a
 `voltage` with `after_ms`, a `rail_window` with a `scenario`) follows the same
 rule. "Firmware-driven" means an MCU pin net the firmware drove during the run,
-the same evidence the `toggle` and `pulse_width` rules use. Where the window
-starts in the firmware's progress depends on the host, so the window is "not
-judged" and the `min`/`max` level is read over every sample of the run:
+the same evidence the `toggle` and `pulse_width` rules use, or a net
+downstream of one: a net the firmware moves through the board without driving
+it (a MOSFET or load-switch output, a regulator's rail through an enable pin
+the firmware drives, a logic stage's output), whose not-judged bound names the
+driven net it follows, for these rules and the timing rules above alike. A rail
+an independent source holds is not downstream of a pull-up beside it, and the
+MCU's own supply is not downstream of the current its pins draw. Where the
+window starts in the firmware's progress depends on the host, so the window is
+"not judged" and the `min`/`max` level is read over every sample of the run:
 
 - A level that holds over the whole run is a PASS. Its detail reads
   `EN over the whole 200 ms run: ...` and names the window as not judged, and
@@ -1177,9 +1183,10 @@ judged" and the `min`/`max` level is read over every sample of the run:
   `min`/`max` level has nothing left to judge and is INVALID. One with no
   `scenario` reads its level over the whole run anyway, so its level verdict
   stays hard.
-- A net the firmware never drove keeps its hard verdict, as does a net no MCU
-  drives at all (a regulator output, a divider): the solver's own time base is
-  exact, so `after_ms` skips a rail's ramp exactly as on any backend.
+- A net the firmware never drove keeps its hard verdict, as does a net nothing
+  the firmware drives can move (an always-on regulator output, a divider off a
+  held rail): the solver's own time base is exact, so `after_ms` skips a rail's
+  ramp exactly as on any backend.
 
 ```text
 [PASS] RES driven to >= 2.6 V within 700 ms of reset

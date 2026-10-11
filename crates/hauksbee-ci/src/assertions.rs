@@ -837,6 +837,11 @@ fn host_paced_note(bound: &str, out: &RunOutcome) -> String {
 ///   spike, recovery and settling time bounds. The level is judged over the
 ///   whole run, as for `voltage`.
 ///
+/// Every bound on a firmware-driven net is equally host-dependent on a net
+/// downstream of one (see [`firmware_net`]): a load switch's output, a
+/// regulator's rail through its enable. Such a bound names the net and the
+/// driven net it follows.
+///
 /// Analog-only nets keep hard verdicts even on a board with a host-paced core:
 /// the solver's own time base is exact. Cycle-counting backends (simavr) and
 /// Renode, which advances virtual time per executed instruction, never land
@@ -845,7 +850,6 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
     if out.host_paced_mcus.is_empty() {
         return None;
     }
-    let firmware_net = a.net.as_ref().is_some_and(|n| out.driven_nets.contains(n));
     match a.kind.as_str() {
         "boot_coverage" | "boot-coverage" => {
             let deadline = a.deadline_ms.unwrap_or(0.0);
@@ -856,15 +860,61 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
             };
             Some(format!("the {deadline} ms boot deadline{hold}"))
         }
-        "toggle" if firmware_net => match (a.min_toggles, a.freq_hz) {
+        "uart" if host_paced_reads_text(a, out) => Some(format!(
+            "the {} ms window the text had to appear in",
+            out.sim_ms
+        )),
+        "peripheral" if peripheral_reads_content(a, out) => Some(format!(
+            "the {} ms window the peripheral state had to be reached in",
+            out.sim_ms
+        )),
+        _ => {
+            let fw = firmware_net(a, out)?;
+            let bound = net_time_bound(a)?;
+            Some(match fw {
+                FirmwareNet::Driven => bound,
+                FirmwareNet::Downstream { net, of } => {
+                    format!("{bound} on '{net}', downstream of firmware-driven '{of}'")
+                }
+            })
+        }
+    }
+}
+
+/// How the firmware moves the net an assertion reads.
+enum FirmwareNet<'a> {
+    /// An MCU pin drove it (`RunOutcome::driven_nets`).
+    Driven,
+    /// No MCU pin drives it, but it follows firmware-driven `of` through the
+    /// board (`RunOutcome::influenced_nets`).
+    Downstream { net: &'a str, of: &'a str },
+}
+
+/// Whether the firmware moves `a`'s net, directly or through the board.
+fn firmware_net<'a>(a: &'a Assertion, out: &'a RunOutcome) -> Option<FirmwareNet<'a>> {
+    let net = a.net.as_deref()?;
+    if out.driven_nets.contains(net) {
+        return Some(FirmwareNet::Driven);
+    }
+    out.influenced_nets
+        .get(net)
+        .map(|of| FirmwareNet::Downstream { net, of })
+}
+
+/// The time bound a per-net kind carries that compares a firmware time, as a
+/// noun phrase, when its net is one the firmware moves (see
+/// [`host_paced_time_bound`]).
+fn net_time_bound(a: &Assertion) -> Option<String> {
+    match a.kind.as_str() {
+        "toggle" => match (a.min_toggles, a.freq_hz) {
             (Some(n), _) if n > 1 => Some(format!("the {n}-toggle minimum over the run")),
             (None, Some(f)) => Some(format!("the {f} Hz rate band")),
             _ => None,
         },
-        "pulse_width" if firmware_net && (a.min.is_some() || a.max.is_some()) => {
+        "pulse_width" if a.min.is_some() || a.max.is_some() => {
             Some("the pulse-width bound".to_string())
         }
-        "logic_level" if firmware_net => {
+        "logic_level" => {
             let width = a.min_width_ms.map(|w| format!("the {w} ms hold width"));
             let pulses = a
                 .min_toggles
@@ -875,19 +925,11 @@ pub(crate) fn host_paced_time_bound(a: &Assertion, out: &RunOutcome) -> Option<S
                 (w, p) => w.or(p),
             }
         }
-        "voltage" if firmware_net => a
+        "voltage" => a
             .after_ms
             .filter(|t| *t > 0.0)
             .map(|t| format!("the {t} ms after_ms window")),
-        "rail_window" if firmware_net => rail_window_time_bound(a),
-        "uart" if host_paced_reads_text(a, out) => Some(format!(
-            "the {} ms window the text had to appear in",
-            out.sim_ms
-        )),
-        "peripheral" if peripheral_reads_content(a, out) => Some(format!(
-            "the {} ms window the peripheral state had to be reached in",
-            out.sim_ms
-        )),
+        "rail_window" => rail_window_time_bound(a),
         _ => None,
     }
 }
@@ -1001,13 +1043,20 @@ fn host_paced_level_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Op
     if !matches!(a.kind.as_str(), "voltage" | "rail_window") {
         return None;
     }
-    let bound = host_paced_time_bound(a, out)?;
+    host_paced_time_bound(a, out)?;
+    let bound = net_time_bound(a)?;
     let net = a.net.as_deref().unwrap_or_default();
-    let driver = format!(
-        "'{net}' is driven by firmware on MCU {}, which runs on a host-paced clock, \
-         {HOST_PACED_WHY}",
-        out.host_paced_mcus.join(", ")
-    );
+    let mcus = out.host_paced_mcus.join(", ");
+    let driver = match firmware_net(a, out)? {
+        FirmwareNet::Driven => format!(
+            "'{net}' is driven by firmware on MCU {mcus}, which runs on a host-paced clock, \
+             {HOST_PACED_WHY}"
+        ),
+        FirmwareNet::Downstream { of, .. } => format!(
+            "'{net}' is downstream of firmware-driven '{of}' (driven by firmware on MCU \
+             {mcus}, which runs on a host-paced clock, {HOST_PACED_WHY})"
+        ),
+    };
     if a.min.is_none() && a.max.is_none() && !rail_budgets(a).is_empty() {
         // Nothing but time budgets: with them unjudged nothing is left, and a
         // "measured" pass would claim what the run cannot.
@@ -3577,6 +3626,158 @@ mod tests {
             "{}",
             r.detail
         );
+    }
+
+    /// [`level_run`] on `LOAD`, a load-switch output no MCU pin drives but
+    /// that follows firmware-driven `GATE`.
+    fn load_switch_run(
+        whole: (f64, f64, f64),
+        after: (f64, f64, f64),
+        host_paced: bool,
+    ) -> RunOutcome {
+        let mut out = level_run("LOAD", whole, after, host_paced, false);
+        out.driven_nets.insert("GATE".to_string());
+        out.influenced_nets
+            .insert("LOAD".to_string(), "GATE".to_string());
+        out
+    }
+
+    fn load_after_50ms() -> Assertion {
+        assertion("kind = \"voltage\"\nnet = \"LOAD\"\nmin = 3.0\nafter_ms = 50.0")
+    }
+
+    #[test]
+    fn host_paced_level_downstream_of_a_firmware_net_passes_only_conditionally() {
+        let out = load_switch_run(HIGH, HIGH, true);
+        let a = load_after_50ms();
+        assert_eq!(
+            host_paced_time_bound(&a, &out).as_deref(),
+            Some("the 50 ms after_ms window on 'LOAD', downstream of firmware-driven 'GATE'")
+        );
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        let (ok, msg, _) = check_seed(&a, &out, 1.0);
+        assert!(ok, "{msg}");
+        assert!(
+            msg.starts_with("LOAD over the whole 200 ms run: min=3.300V (>= 3V)"),
+            "{msg}"
+        );
+        let spec: Spec = toml::from_str(
+            "board = \"b.kicad_pcb\"\nduration_ms = 200\n[[assert]]\nkind = \"voltage\"\n\
+             net = \"LOAD\"\nmin = 3.0\nafter_ms = 50.0\n",
+        )
+        .expect("spec shape");
+        let results = evaluate(&spec, std::slice::from_ref(&out));
+        assert!(
+            results[0].passed && !results[0].invalid,
+            "{}",
+            results[0].detail
+        );
+        let conditions = host_paced_conditions(&results);
+        assert_eq!(conditions.len(), 1, "{conditions:?}");
+        assert!(
+            conditions[0].contains(
+                "the 50 ms after_ms window on 'LOAD', downstream of firmware-driven 'GATE' \
+                 was not judged"
+            ) && conditions[0].contains("MCU U1 runs on a host-paced clock"),
+            "{conditions:?}"
+        );
+    }
+
+    #[test]
+    fn host_paced_level_downstream_of_a_firmware_net_is_invalid_when_only_the_window_passes() {
+        let a = load_after_50ms();
+        // High from 50 ms on, low before: the window decides the pass.
+        let out = load_switch_run(RISES, HIGH, true);
+        let reason = member_invalid_reason(&a, &out, 1.0).expect("unjudged");
+        assert!(
+            reason.starts_with(
+                "host-paced clock: 'LOAD' is downstream of firmware-driven 'GATE' (driven by \
+                 firmware on MCU U1, which runs on a host-paced clock"
+            ),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("so where the 50 ms after_ms window falls in the firmware's progress")
+                && reason.contains("Judged after 50 ms, the level holds"),
+            "{reason}"
+        );
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.invalid && !r.passed, "{}", r.detail);
+        // Out of range in the window too: not a FAIL either.
+        let out = load_switch_run(FALLS, FALLS, true);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.invalid && !r.passed, "{}", r.detail);
+    }
+
+    #[test]
+    fn a_clock_exact_backend_keeps_hard_verdicts_downstream_of_firmware_too() {
+        let a = load_after_50ms();
+        let out = load_switch_run(RISES, HIGH, false);
+        assert_eq!(host_paced_time_bound(&a, &out), None);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.passed && !r.invalid, "{}", r.detail);
+        assert!(r.detail.starts_with("LOAD after 50ms:"), "{}", r.detail);
+        assert!(!r.detail.contains("not judged"), "{}", r.detail);
+        let out = load_switch_run(FALLS, FALLS, false);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(!r.passed && !r.invalid, "{}", r.detail);
+    }
+
+    #[test]
+    fn host_paced_rail_window_on_a_regulator_rail_the_firmware_enables_follows_the_level_rule() {
+        // VSW is a regulator output whose enable EN the firmware drives: its
+        // scenario window is placed in host-paced firmware progress.
+        let a = assertion(
+            "kind = \"rail_window\"\nnet = \"VSW\"\nscenario = \"load\"\nmin = 3.0\n\
+             dip_below = 3.1\nfor_max_ms = 1.0",
+        );
+        let in_band = [(0.10, 3.3), (0.11, 3.3)];
+        let mut out = level_run("VSW", RISES, RISES, true, false);
+        out.driven_nets.insert("EN".to_string());
+        out.influenced_nets
+            .insert("VSW".to_string(), "EN".to_string());
+        let mut win = RailWindow::new();
+        for &(t, v) in &in_band {
+            win.observe(t, v);
+        }
+        out.rail_windows
+            .insert(("load".to_string(), "VSW".to_string()), win);
+        assert_eq!(
+            host_paced_time_bound(&a, &out).as_deref(),
+            Some(
+                "the scenario 'load' window and the dip duration bound on 'VSW', downstream of \
+                 firmware-driven 'EN'"
+            )
+        );
+        let reason = member_invalid_reason(&a, &out, 1.0).expect("unjudged");
+        assert!(
+            reason.contains("'VSW' is downstream of firmware-driven 'EN'")
+                && reason.contains("Judged in the scenario 'load' window, the level holds"),
+            "{reason}"
+        );
+        // The same rail with no firmware upstream is a held rail: hard verdict.
+        out.influenced_nets.clear();
+        assert_eq!(host_paced_time_bound(&a, &out), None);
+        assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
+        let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
+        assert!(r.passed && !r.invalid, "{}", r.detail);
+        assert!(!r.detail.contains("not judged"), "{}", r.detail);
+    }
+
+    #[test]
+    fn host_paced_rate_band_downstream_of_a_firmware_net_is_unjudged() {
+        // An LED cathode switched by a transistor the firmware toggles blinks
+        // at the firmware's host-paced rate, like the GPIO itself.
+        let a = assertion("kind = \"toggle\"\nnet = \"LED_K\"\nfreq_hz = 2.0");
+        let mut out = level_run("LED_K", FALLS, FALLS, true, false);
+        out.influenced_nets
+            .insert("LED_K".to_string(), "LED_CTL".to_string());
+        assert_eq!(
+            host_paced_time_bound(&a, &out).as_deref(),
+            Some("the 2 Hz rate band on 'LED_K', downstream of firmware-driven 'LED_CTL'")
+        );
+        out.host_paced_mcus.clear();
+        assert_eq!(host_paced_time_bound(&a, &out), None);
     }
 
     /// A run whose `load` scenario window on `VBUS` saw `samples`, with the

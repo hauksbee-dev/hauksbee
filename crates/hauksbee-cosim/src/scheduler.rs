@@ -6132,6 +6132,98 @@ impl Scheduler {
         })
     }
 
+    /// Board nets no MCU pin drives whose level the firmware can still move,
+    /// each paired with the firmware-driven net (see
+    /// [`Self::firmware_driven_nets`]) it is downstream of, sorted by net.
+    ///
+    /// A directed walk from the driven nets through the bound circuit (a gate
+    /// into its channel, a switch's control into its contacts, a passive end to
+    /// end, an amplifier's inputs into its output), through the logic parts the
+    /// scheduler evaluates (any pin into its outputs), through a behavioural
+    /// power device (any pin into its other pins and the rails it holds) and
+    /// an unmodelled part (any pin into its drive-capable pins), and from a
+    /// simple regulator's enable or shutdown pin into its output: the stamp
+    /// does not read the enable, but on the real board whatever drives it
+    /// switches the rail. The walk stops where the regulation taint walk
+    /// stops (ground, declared supplies, the terminals of trusted voltage
+    /// sources), so a rail an independent source holds is not reached through
+    /// a pull-up beside it, and it never crosses an MCU: a supply pin's draw
+    /// is a load on the rail, not a way to move it.
+    #[must_use]
+    pub fn firmware_influenced_nets(&self) -> Vec<(String, String)> {
+        let driven = self.firmware_driven_nets();
+        // Each driven node once, under the first driven net name on it.
+        let mut seeds: Vec<(NodeId, &str)> = Vec::new();
+        for name in &driven {
+            if let Some(&node) = self.net_nodes.get(name) {
+                if !seeds.iter().any(|(n, _)| *n == node) {
+                    seeds.push((node, name));
+                }
+            }
+        }
+        if seeds.is_empty() {
+            return Vec::new();
+        }
+        let (_, walk) = self.taint_walk();
+        let helpers: Vec<DeviceId> = self
+            .regulators
+            .iter()
+            .flat_map(|r| r.helpers.iter().copied())
+            .collect();
+        let mut graph = crate::influence::Influence::new(&self.circuit, &helpers, walk.stops());
+        for reg in &self.regulators {
+            let (out, _, _) = regulation::terminals(&self.circuit, reg);
+            for en in &reg.enable {
+                graph.force(*en, out);
+            }
+        }
+        for d in &self.digital {
+            for from in d.roles.values() {
+                for drv in d.drivers.values() {
+                    graph.link(*from, drv.net);
+                }
+            }
+        }
+        for b in &self.behavioral {
+            // Unknown pin roles err toward influence: any pin but the one it
+            // takes power from can steer its state machine, and with it the
+            // rails it holds.
+            let input = b.converter_in_node();
+            let held = b.driven_nodes();
+            for from in b.role_nodes().filter(|n| Some(*n) != input) {
+                for to in b.role_nodes() {
+                    graph.link(from, to);
+                }
+                for to in &held {
+                    graph.force(from, *to);
+                }
+            }
+        }
+        for part in &self.open_parts {
+            for (from, _) in &part.pins {
+                for (to, drives) in &part.pins {
+                    if *drives {
+                        graph.link(*from, *to);
+                    }
+                }
+            }
+        }
+        let starts: Vec<NodeId> = seeds.iter().map(|(n, _)| *n).collect();
+        let reached: HashMap<NodeId, NodeId> = graph.reach(&starts).into_iter().collect();
+        let origin = |seed: NodeId| seeds.iter().find(|(n, _)| *n == seed).map(|(_, s)| *s);
+        // Every board name on a reached node: two names can share one node.
+        let mut out: Vec<(String, String)> = self
+            .net_nodes
+            .iter()
+            .filter_map(|(name, node)| {
+                let of = origin(*reached.get(node)?)?;
+                Some((name.clone(), of.to_string()))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
     /// MCU GPIO nets whose pin the firmware actively configured as an OUTPUT
     /// (DDR set, by latest direction). A net high in this set is a strong
     /// push-pull drive; a net high but NOT in it is a weak internal pull-up.
@@ -10064,6 +10156,117 @@ data_out = ["io0"]
         assert!(
             clause.contains("was driven to") && !clause.contains("PASSIVELY"),
             "{clause}"
+        );
+    }
+
+    /// Firmware reaches what its pins control (a MOSFET load switch's output,
+    /// a regulator's rail through its enable, a load on that rail) and not what
+    /// feeds it: a pull-up to a held rail does not move the rail, and the MCU's
+    /// own supply net, which its pin drivers draw from, is a load, not a path.
+    #[test]
+    fn firmware_influence_follows_control_paths_and_stops_at_held_rails() {
+        let mut circuit = Circuit::new();
+        let mut net_nodes = HashMap::new();
+        let mut net = |name: &str| {
+            let id = circuit.node(name);
+            net_nodes.insert(name.to_string(), id);
+            id
+        };
+        let [gpio, gate, load, vin, v3v3, vdd_mcu, avdd, en2, vsw, sense] = [
+            "GPIO", "GATE", "LOAD", "VIN", "V3V3", "VDD_MCU", "AVDD", "EN2", "VSW", "SENSE",
+        ]
+        .map(&mut net);
+        let gnd = NodeId::GROUND;
+        // VIN: an independent supply. V3V3: an always-on regulator from VIN
+        // that feeds the MCU through a ferrite (VDD_MCU) and an RC-filtered
+        // analogue rail (AVDD). VSW: a second regulator whose enable EN2 the
+        // firmware drives, loaded by SENSE.
+        circuit.add(Device::vsource("Vin", vin, gnd, SourceKind::Dc(5.0)));
+        let reg_u2 = circuit.add(Device::vsource("Vreg_U2", v3v3, gnd, SourceKind::Dc(3.3)));
+        let reg_u3 = circuit.add(Device::vsource("Vreg_U3", vsw, gnd, SourceKind::Dc(1.8)));
+        for (name, a, b, ohms) in [
+            ("FB1", v3v3, vdd_mcu, 0.1),
+            ("R_AVDD", v3v3, avdd, 10.0),
+            ("R_GATE", gpio, gate, 100.0),
+            ("R_PD", gate, gnd, 100e3),
+            ("R_PU", gpio, v3v3, 10e3),
+            ("R_LOAD", vin, load, 50.0),
+            ("R_SENSE", vsw, sense, 1e3),
+            ("R_SENSE_PD", sense, gnd, 1e3),
+        ] {
+            circuit.add(Device::resistor(name, a, b, ohms));
+        }
+        circuit.add(Device::capacitor("C_AVDD", avdd, gnd, 1e-6));
+        circuit.add(Device::Mosfet {
+            name: "Q1".into(),
+            d: load,
+            g: gate,
+            s: gnd,
+            b: None,
+            model: hauksbee_ir::MosfetModel::default(),
+        });
+        let bound = bound_board("influence", circuit, net_nodes, Vec::new(), Vec::new());
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        for (reference, source, enable) in [("U2", reg_u2, vec![]), ("U3", reg_u3, vec![en2])] {
+            sched.regulators.push(SimpleRegulator {
+                reference: reference.into(),
+                source,
+                input: vin,
+                min_in_v: 0.0,
+                max_in_v: f64::INFINITY,
+                dropout_v: None,
+                adj_return: None,
+                helpers: Vec::new(),
+                pass_level: None,
+                enable,
+            });
+            sched.reg_supported.push(true);
+        }
+        let mut drivers = HashMap::new();
+        for (pin, node, tag) in [(('B', 0), gpio, "GPIO"), (('B', 1), en2, "EN2")] {
+            let mut drv = hauksbee_bind::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                node,
+                tag,
+                tag,
+                hauksbee_bind::drivers::DEFAULT_RO,
+            );
+            drv.route_supply(&mut sched.circuit, tag, vdd_mcu, gnd);
+            drivers.insert(pin, drv);
+        }
+        let mut mcu = binding("U1", "qemu:test", drivers);
+        mcu.role_nets.extend([
+            ("pb0".to_string(), gpio),
+            ("pb1".to_string(), en2),
+            ("vdd".to_string(), vdd_mcu),
+        ]);
+        push_core(&mut sched, dir_core(true), mcu);
+        // Nothing driven yet: nothing is downstream of firmware.
+        assert!(sched.firmware_influenced_nets().is_empty());
+        sched.mcus[0].last_levels.insert(('B', 0), true);
+        sched.mcus[0].last_levels.insert(('B', 1), true);
+        assert_eq!(sched.firmware_driven_nets(), ["EN2", "GPIO"]);
+        let pairs = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+                .collect()
+        };
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            pairs(&[
+                ("GATE", "GPIO"),
+                ("LOAD", "GPIO"),
+                ("SENSE", "EN2"),
+                ("VSW", "EN2"),
+            ]),
+            "V3V3, VDD_MCU, AVDD and VIN are held or fed, never controlled"
+        );
+
+        // Without the enable, U3's rail is as held as U2's.
+        sched.regulators[1].enable.clear();
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            pairs(&[("GATE", "GPIO"), ("LOAD", "GPIO")])
         );
     }
 

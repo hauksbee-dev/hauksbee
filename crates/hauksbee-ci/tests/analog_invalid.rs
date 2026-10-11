@@ -372,3 +372,62 @@ fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
     assert!(results[0].passed && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
+
+/// [`firmware_level_run`] read on `LOAD`, a load-switch output the firmware
+/// moves through `EN` without driving it.
+fn load_switch_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
+    let mut out = firmware_level_run(whole, after, host_paced);
+    for thr in [0.0_f64, 50.0] {
+        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
+        out.windows.insert(("LOAD".to_string(), thr.to_bits()), win);
+    }
+    out.influenced_nets
+        .insert("LOAD".to_string(), "EN".to_string());
+    out
+}
+
+/// A windowed level on a net downstream of a firmware-driven GPIO (a MOSFET
+/// load switch's output) follows the host-paced level rule end to end: a
+/// conditional GREEN whose condition names the driven net, a refusal when only
+/// the window passes, and a hard verdict on a clock-exact backend.
+#[test]
+fn host_paced_windowed_level_downstream_of_firmware_is_conditional_or_refused() {
+    let spec = load_spec(
+        "host_paced_downstream.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nname=\"load on\"\nkind=\"voltage\"\n\
+         net=\"LOAD\"\nmin=3.0\nafter_ms=50\n",
+    );
+    let results = evaluate(&spec, &[load_switch_run((3.3, 3.3), (3.3, 3.3), true)]);
+    assert!(results[0].passed, "{}", results[0].detail);
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(
+        human.contains(
+            "CONDITION: load on: the 50 ms after_ms window on 'LOAD', downstream of \
+             firmware-driven 'EN' was not judged"
+        ),
+        "{human}"
+    );
+
+    let results = evaluate(&spec, &[load_switch_run((0.0, 3.3), (3.3, 3.3), true)]);
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    assert!(
+        results[0]
+            .detail
+            .contains("'LOAD' is downstream of firmware-driven 'EN'"),
+        "{}",
+        results[0].detail
+    );
+    assert_eq!(ci_result(results, false).exit_code(), 3);
+
+    let results = evaluate(&spec, &[load_switch_run((0.0, 3.3), (3.3, 3.3), false)]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+}

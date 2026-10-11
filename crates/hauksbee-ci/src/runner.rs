@@ -363,6 +363,13 @@ pub struct RunOutcome {
     /// boot-coverage result say "driven but never exceeded X V" instead of
     /// falsely claiming the pin was left Hi-Z / undefined.
     pub driven_nets: std::collections::HashSet<String>,
+    /// Nets no MCU pin drives whose level the firmware can still move (a
+    /// MOSFET load switch's output, a regulator's rail through its enable, a
+    /// logic stage's output), each mapped to the firmware-driven net in
+    /// `driven_nets` it is downstream of. From the scheduler's
+    /// `firmware_influenced_nets`. On a host-paced clock a time bound on one
+    /// of these is as host-dependent as on the driven net itself.
+    pub influenced_nets: HashMap<String, String>,
     /// Whether every MCU backend in this run can report pin drive *direction*.
     /// True for the in-process AVR backend (reads DDR) and for Renode parts
     /// whose `SoC` descriptor maps each port's direction register (STM32F103
@@ -2255,6 +2262,11 @@ fn run_one(
         .firmware_driven_nets()
         .into_iter()
         .collect();
+    let influenced_nets: HashMap<String, String> = engine
+        .scheduler()
+        .firmware_influenced_nets()
+        .into_iter()
+        .collect();
     let drive_direction_observable = engine.scheduler().drive_direction_observable();
 
     let protection_tripped_scoped = scope_protection_trips(&protection_trip_t, &scenario_windows);
@@ -2312,6 +2324,7 @@ fn run_one(
         boot_first_cross_ms,
         boot_drop_after_cross_ms,
         driven_nets,
+        influenced_nets,
         drive_direction_observable,
         host_paced_mcus: engine.scheduler().host_paced_mcus(),
         first_fault_ms,

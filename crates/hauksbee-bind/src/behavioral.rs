@@ -1204,6 +1204,11 @@ impl BehavioralDevice {
         self.converter.as_ref().map(|c| c.out_node)
     }
 
+    /// Every board node one of this device's pins is wired to.
+    pub fn role_nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.role_nodes.values().copied()
+    }
+
     /// The converter's input node: where it takes the power it delivers.
     #[must_use]
     pub fn converter_in_node(&self) -> Option<NodeId> {

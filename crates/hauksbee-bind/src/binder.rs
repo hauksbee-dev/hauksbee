@@ -4765,6 +4765,7 @@ fn bind_vreg(
         adj_return: None,
         helpers,
         pass_level: Some(pass_level),
+        enable: enable_nodes(roles),
     });
     // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
     // rather than making each entry repeat the sentence.
@@ -4974,6 +4975,16 @@ fn supply_draw(
             .expect("supply draw expression compiles"),
         deps: vec![BDep::Volt(hi), BDep::Volt(lo)],
     })
+}
+
+/// The non-ground board nodes on a regulator's `en` / `shdn` pins: the
+/// stamp ignores them (see `SimpleRegulator::enable`).
+fn enable_nodes(roles: &HashMap<String, NodeId>) -> Vec<NodeId> {
+    ["en", "shdn"]
+        .iter()
+        .filter_map(|r| roles.get(*r).copied())
+        .filter(|n| !n.is_ground())
+        .collect()
 }
 
 /// Headroom over which a linear regulator's input draw fades out when its card
@@ -5473,6 +5484,7 @@ fn bind_adj_vreg(
         adj_return: Some(gnd),
         helpers,
         pass_level: Some(pass_level),
+        enable: enable_nodes(roles),
     });
     (
         BindOutcome::Analog {

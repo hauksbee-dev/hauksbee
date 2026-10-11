@@ -261,6 +261,14 @@ impl Walk {
         Self { stop, next }
     }
 
+    /// The nodes this walk never enters: ground, the declared supply nets and
+    /// the terminals of every still-trusted voltage source. Something holds
+    /// each of them independently of what is wired to it.
+    #[must_use]
+    pub fn stops(&self) -> &[NodeId] {
+        &self.stop
+    }
+
     fn reach(&self, mut seen: Vec<NodeId>) -> Vec<NodeId> {
         let mut at = 0;
         while let Some(node) = seen.get(at).copied() {
@@ -338,6 +346,7 @@ mod tests {
             adj_return: None,
             helpers: Vec::new(),
             pass_level: None,
+            enable: Vec::new(),
         };
         let ok = |v| super::headroom_ok(&reg, v);
         assert_eq!([3.6, 18.0, 21.0].map(ok), [false, true, false]);
