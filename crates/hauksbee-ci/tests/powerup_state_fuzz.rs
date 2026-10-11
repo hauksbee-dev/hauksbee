@@ -217,9 +217,8 @@ fn olimex_evb_relay_boot_states_are_safe() {
         &["GPIO32/REL1".to_string(), "GPIO33/REL2".to_string()],
         8,
         &(rail_holds("+3.3V", 3.2, 3.4) + &rail_holds("+5V", 4.9, 5.1)),
-        // Model gap: the IR receiver U7, the Schottky D10 and the relays REL1 and
-        // REL2 are unmodelled. GREEN once they are modelled.
-        &["D10", "U7", "REL1", "REL2"],
+        // Every part binds (the Olimex peripheral cards), so the run is GREEN.
+        &[],
     );
 }
 
