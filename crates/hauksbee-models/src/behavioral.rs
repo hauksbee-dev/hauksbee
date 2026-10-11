@@ -245,6 +245,12 @@ pub struct ProfiledLoad {
     /// Ordered current waveform segments.
     #[serde(default, rename = "segment", skip_serializing_if = "Vec::is_empty")]
     pub segments: Vec<Segment>,
+    /// The most this load draws in a state that data or firmware sets and the
+    /// board cannot show (an addressable LED latched full white). Runs keep the
+    /// segments; the DC stress pass also judges every such load at this level,
+    /// and a fault found only there is reported as conditional on that state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_state_max_a: Option<f64>,
 }
 
 /// How a pin behaves while a given state is active. Overrides the pin's default
@@ -625,6 +631,12 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         p.require(!load.segments.is_empty(), || {
             format!("{what}: no segments declared")
         });
+        if let Some(max) = load.unknown_state_max_a {
+            let floor = load.segments.iter().map(|s| s.level_a).fold(0.0, f64::max);
+            p.require(max.is_finite() && max >= floor, || {
+                format!("{what}: unknown_state_max_a must be finite and at least every segment's level_a")
+            });
+        }
         for (j, s) in load.segments.iter().enumerate() {
             let seg = format!("{what} segment {j}");
             p.nonneg(format!("{seg}: level_a"), s.level_a);
@@ -877,6 +889,7 @@ mod tests {
             return_pin: Some("gnd".into()),
             start_s: 0.001,
             seed: 7,
+            unknown_state_max_a: None,
             segments: vec![Segment {
                 level_a: 0.040,
                 rise_s: 0.001,
@@ -886,6 +899,10 @@ mod tests {
                 jitter_s: 0.001,
             }],
         });
+        clean(&b);
+        b.profiled_loads[0].unknown_state_max_a = Some(0.039);
+        flags(&b, "unknown_state_max_a");
+        b.profiled_loads[0].unknown_state_max_a = Some(0.040);
         clean(&b);
         b.profiled_loads[0].segments[0].level_a = -1.0;
         b.profiled_loads[0].segments[0].jitter_s = 0.100;

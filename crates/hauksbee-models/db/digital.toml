@@ -2063,86 +2063,211 @@ disable = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ADDRESSABLE RGB LEDs DELIBERATELY LEFT UNRESOLVED. This is the single largest
-# honest gap in the corpus, so it is worth writing down properly rather than
-# leaving as a silent absence.
+# ADDRESSABLE RGB LEDs: BOUND AS SUPPLY LOADS, DATA PATH NOT MODELLED.
 #
-# The corpus carries about 250 instances of integrated-controller RGB LEDs:
-# YS-SK6812MINI-E (92 on the Corne keyboards), SK6805-EC15 (85 on MNT Reform),
-# YS-SK6812MINI (58 on Lily58), WS2812-2020 (13 on the SparkFun Thing Plus
-# RP2040). Every datasheet in the family was obtained and read: Worldsemi
-# WS2812B (Adafruit mirror, undated) and WS2812B-V5/W (Modify Record V1.0
-# 2017-05-23 through V6.1 2022-09-08); Opsco SPC/SK6812MINI-E Rev. 02
-# (2019-01-18), SPC/SK6812MINI Rev. 01 (2015-07-22) and SK6805-EC15 Rev. 04
-# (2019-01-18).
+# The corpus carries about 250 integrated-controller RGB LEDs: YS-SK6812MINI-E
+# (92 on the Corne keyboards), SK6805-EC15 (85 on MNT Reform), YS-SK6812MINI on
+# an SK6812MINI-E footprint (58 on Lily58 Pro V2), WS2812B (8 on the LumenPnP
+# ring light), WS2812-2020 (13 on the SparkFun Thing Plus RP2040). Left open
+# they drew nothing, so a board with dozens of pixels could brown out its rail
+# while every rail and power check read no load: a false-safe. The three cards
+# below close that for the parts whose sheets were read for this; the others
+# stay unresolved (see the end of this block).
 #
-# THE `digital` KIND REQUIRES voh AND vol, AND NOT ONE OF THESE DATASHEETS
-# PUBLISHES EITHER. That is the immediate blocker and it is a documentary fact,
-# not a search failure: every sheet in the family has a switching-characteristics
-# table with a DIN-to-DOUT delay (tPLZ 300 ns max on the WS2812B, TPLH/TPHL
-# 500 ns max on the SK parts) and no output-level row at all. The closest thing
-# any of them gives is the plain SK6812MINI's DOUT DRIVE CURRENTS (IDOH 49 mA
-# typ, IDOL -50 mA typ), which are currents, not levels.
+# WHAT IS MODELLED: the supply. Each pixel is a `profiled_loads` sink from VDD to
+# GND at the published static current, so DC solves, runs and rail assertions
+# carry it. What the pixel draws once lit depends on the 24-bit word it latched,
+# which the board cannot show and no sheet relates to an average current, so
+# the card ALSO states `unknown_state_max_a`, all three channels full on plus
+# the static current. The DC stress pass judges every such load there as its own
+# state, and a rating exceeded only there is reported CONDITIONAL (medium), the
+# same footing a class-only part's assumed corner gets: quiescent alone would be
+# a false-safe, full white as the nominal would fail every keyboard whose
+# firmware caps brightness. A hauksbee-ci run keeps the quiescent draw; a
+# scenario that knows the firmware's colours attaches a load profile instead.
 #
-# AND EVEN WITH THEM THE DATA PATH COULD NOT BE MODELLED, which is the deeper
-# reason. DOUT is not DIN delayed; it is DIN with this pixel's own 24 bits
-# stripped off the front. Every sheet in the family says so in near-identical
-# words, and the "Data transmission method" waveform in each one draws it
-# explicitly: D1 sees "first 24bit / second 24bit / third 24bit...", D2 sees only
-# "second 24bit / third 24bit...", D3 only "third 24bit...". Reproducing that
-# needs a bit counter and a 24-bit latch. There is no combinational path from the
-# input pin to the output pin at all, so no `[models.logic]` block can express
-# this part, and writing `dout = din` would be a straightforward falsehood that
-# happens to lint clean.
+# WHAT IS NOT: the data path, for two documentary reasons.
+#   - DOUT IS NOT DIN DELAYED. It is DIN with this pixel's own 24 bits stripped
+#     off the front (each sheet's "data transmission method" figure: D1 sees
+#     first/second/third 24 bit, D2 only second/third, D3 only third). No
+#     [models.logic] relation can express that, and `dout = din` would be a
+#     falsehood that lints clean. DOUT is therefore left undriven, and a
+#     downstream pixel's DIN reads whatever else is on its net.
+#   - NO SHEET PUBLISHES VOH/VOL for DOUT. The plain SK6812MINI prints DOUT drive
+#     currents (IDOH 49 mA typ, IDOL -50 mA typ), which are currents, not levels.
+# DIN is a high-impedance input: input current ±1 µA max (WS2812B p.3, WS2812B
+# V5 p.2), so stamping nothing on it IS its DC load. Its thresholds are
+# published but deliberately not carried yet (they disagree within the family:
+# 0.7 x VDD on the SK6812MINI-E and the undated WS2812B, 2.7 V min on the
+# WS2812B V5, absolute 3.4 V min on the plain SK6812MINI at VDD = 5 V), so no
+# level check runs on DIN. Each card's `warning` says all of this on every
+# surface, and its coverage lists what is missing.
 #
-# The supply draw has the same shape of problem. The idle figure IS published and
-# is usable (0.6 mA typ quiescent on the WS2812B-V5/W; 1 mA typ "static power
-# consumption" on all three SK parts), but the moment a channel lights the
-# constant-current sink for it turns on (12 mA per channel on the WS2812B-V5/W
-# and SK6812MINI-E, 5 mA on the SK6805-EC15, so 36 mA and 15 mA respectively with
-# all three channels full on), and WHICH channels are on is a function of the
-# 24-bit word this particular pixel latched, which depends on how many upstream
-# pixels already consumed bits off the shared line. No sheet publishes a
-# duty-cycle-to-average-current relation. So a chain's current draw is knowable
-# only by simulating the protocol.
+# THE PINOUTS ARE NOT INTERCHANGEABLE ACROSS THIS FAMILY, which is a real trap:
+#   WS2812B (5050):            1=VDD 2=DOUT 3=VSS 4=DIN
+#   SK6812MINI-E (3528-shaped): 1=VDD 2=DOUT 3=GND 4=DIN
+#   plain SK6812MINI (5050-shaped, Rev. 01, an older, physically different part
+#   despite the name): 1=DOUT 2=VSS 3=DIN 4=VDD, rotated relative to the -E.
+#   SK6805-EC15 (not carded here): 1=DIN 2=VDD 3=DOUT 4=GND.
+# So the two SK6812MINI cards match on the FOOTPRINT as well as the value: Lily58
+# Pro V2 values its parts "YS-SK6812MINI" on a `yuchi_kbd:SK6812MINI-E` land,
+# and binding the plain map there would swap supply and data.
 #
-# WHAT WOULD FIX IT: a kind for a part that presents a supply load and passes a
-# serial stream through without a boolean relation between its pins, i.e. a
-# stateful-load kind. That is an engine change, not a database entry, and it
-# would immediately pay for itself on ~250 corpus instances plus every LED strip
-# anyone has ever put on a hobby board. Two things to carry over when it exists:
+# THE INPUT THRESHOLDS ALSO DISAGREE WITHIN THE FAMILY (not carried yet, so DIN
+# is unchecked): SK6812MINI-E and SK6805-EC15 give VIH 0.7 x VDD / VIL 0.3 x VDD;
+# WS2812B-V5/W gives VIH 0.63 x VDD min and VIL 0.7 V max; the plain SK6812MINI
+# gives absolute volts, VIH 3.4 V min / VIL 1.6 V max at VDD = 5 V.
 #
-#   - THE PINOUTS ARE NOT INTERCHANGEABLE ACROSS THIS FAMILY, which is a real
-#     trap. WS2812B (5050): 1=VDD 2=DOUT 3=VSS 4=DIN. SK6812MINI-E (3528-shaped,
-#     Rev. 02): 1=VDD 2=DOUT 3=GND 4=DIN. Plain SK6812MINI (5050-shaped,
-#     Rev. 01, an older and physically different part despite the name):
-#     1=DOUT 2=VSS 3=DIN 4=VDD, i.e. rotated relative to the -E. SK6805-EC15:
-#     1=DIN 2=VDD 3=DOUT 4=GND. Four parts, four pin maps.
-#   - THE INPUT THRESHOLDS ALSO DISAGREE WITHIN THE FAMILY. SK6812MINI-E and
-#     SK6805-EC15 give VIH 0.7 x VDD / VIL 0.3 x VDD; WS2812B-V5/W gives VIH
-#     0.63 x VDD min and VIL 0.7 V max; the plain SK6812MINI gives ABSOLUTE
-#     volts, VIH 3.4 V min / VIL 1.6 V max at VDD = 5 V. Not a transcription
-#     slip: the -E and the non-E sheets genuinely specify these differently.
-#
-# WHY AN `identity_only` PAD-MAP CARD DOES NOT HELP (checked 2026-10-11): the
-# validator states that an identity-only digital card exists "so binding leaves
-# the part open" (validation.rs, digital_has_behavior check), so such a card
-# would record the pinout and still leave all ~250 instances OPEN on a board.
-# It would add a second place to keep four non-interchangeable pin maps in step
-# with nothing that consumes them, so none is written. The pin maps above were
-# re-read on 2026-10-11 against the Opsco SK6812MINI Rev. 01 sheet (1=DOUT
-# 2=VSS 3=DIN 4=VDD), the Opsco SK6812MINI-E Rev. 04 sheet (1=VDD 2=DOUT 3=GND
-# 4=DIN; supply +3.7 to +5.5 V) and the Worldsemi WS2812B sheet (1=VDD 2=DOUT
-# 3=VSS 4=DIN; supply +3.5 to +5.3 V). The SK6805-EC15 sheet could not be
-# re-fetched in that pass (the Opsco mirrors found carried the EC10/SIDE parts,
-# not the EC15), so its map stays as recorded from the Rev. 04 sheet read earlier.
-#
-# WS2812-2020 additionally could not be sourced at all: every mirror of the
-# 2020-package datasheet either 403'd, sat behind a lead-capture form, or served
-# HTML instead of the PDF. A distributor spec table gives the timing and the
-# luminous intensities but NOT the pin-number-to-signal map, and the 2020
-# footprint is not the 5050 one, so even the pinout is unknown for that part.
-# It stays unresolved on the stronger ground that nothing about it was verified.
+# STILL UNRESOLVED: SK6805-EC15 and WS2812-2020 (every 2020-package datasheet
+# mirror 403'd, sat behind a form or served HTML; its pin map was never sourced),
+# and the 3535/1515 packages on the Adafruit Eagle boards.
+
+[[models]]
+id = "ws2812b"
+kind = "digital"
+description = "Worldsemi WS2812B addressable RGB LED, 5050: VDD supply load (static + full-on corner); data path not modelled"
+
+[models.match]
+# The 5050 part only: WS2812B-2020, -3535 and -1515 are other packages and maps.
+value_re = "(?i)^WS2812B(-?V5)?$"
+footprint_re = "(?i)(5\\.0x5\\.0|5050)"
+
+[models.params]
+warning = "addressable LED bound as a supply load only: it draws its 0.6 mA static current here, and up to 36.6 mA (all three channels full on, judged as a conditional DC state) once firmware lights it; DOUT is not driven (it re-sends DIN minus this pixel's 24 bits, which no logic relation expresses) and DIN thresholds are not checked"
+
+[models.pins]
+# Undated Worldsemi WS2812B sheet p.2 "PIN function"; WS2812B Ver. No. V5 p.2 "PIN Function" (same map).
+"1" = "vdd"
+"2" = "dout"
+"3" = "vss"
+"4" = "din"
+
+[models.ratings]
+# Power supply voltage +3.5 to +5.3 V (undated sheet p.2) and +3.7 to +5.3 V (V5 p.2), Absolute Maximum Ratings.
+max_voltage_v = 5.3
+
+[[models.behavioral.profiled_loads]]
+name = "pixel"
+supply_pin = "vdd"
+return_pin = "vss"
+# V5 p.3 LED Characteristics: working current 12 mA per channel (the brightness
+# and wavelength rows' condition), x3 channels, plus the 0.6 mA quiescent.
+unknown_state_max_a = 0.0366
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.0006     # V5 p.3 LED Characteristics header, "Quiescent Current: 0.6mA"
+
+[models.coverage]
+implements = ["pin_roles", "absolute_ratings", "quiescent_supply_current", "full_on_supply_current"]
+missing = ["data_protocol", "dout_drive", "din_input_thresholds", "pwm_supply_ripple", "supply_range"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn.sparkfun.com/datasheets/BreakoutBoards/WS2812B.pdf"
+title = "Worldsemi WS2812B Intelligent control LED integrated light source (undated; same bytes as the Adafruit mirror)"
+locator = "p.2 PIN function, Absolute Maximum Ratings; p.3 Electrical Characteristics (II, VIH, VIL, CI); p.4 Data transmission method"
+sha256 = "670517e400d01f76e91187e173c9bb105e5470741604f81243364c5f13d37448"
+[[models.source.references]]
+url = "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8880/WS2812B.pdf"
+title = "Worldsemi WS2812B Intelligent control LED integrated light source, Ver. No. V5 (DigiKey copy)"
+locator = "p.2 PIN Function, Absolute Maximum Ratings, Electrical Characteristics; p.3 LED Characteristics (Quiescent Current 0.6 mA, working current 12 mA)"
+sha256 = "0d91e6c904115d76e05c99cc59a7bee6396b2f5d7915965983cedf5c68c147b3"
+
+# ─────────────────────────────────────────────────────────────────────────────
+[[models]]
+id = "sk6812mini_e"
+kind = "digital"
+description = "Opsco SK6812MINI-E addressable RGB LED, 3.2x2.8 mm: VDD supply load (static + full-on corner); data path not modelled"
+
+[models.match]
+# The FOOTPRINT decides the package (see the pinout note above); the value may
+# be the bare family name, as on Lily58 Pro V2.
+value_re = "(?i)^(YS-)?SK6812[-_ ]?MINI([-_ ]?E)?$"
+footprint_re = "(?i)SK6812[-_ ]?MINI[-_ ]?E"
+
+[models.params]
+warning = "addressable LED bound as a supply load only: it draws its 1 mA static current here, and up to 37 mA (all three channels full on at the 12 mA current code, judged as a conditional DC state) once firmware lights it; DOUT is not driven (it re-sends DIN minus this pixel's 24 bits, which no logic relation expresses) and DIN thresholds are not checked"
+
+[models.pins]
+# SPC/SK6812MINI-E Rev. 04 p.4, section 5 PIN configuration.
+"1" = "vdd"
+"2" = "dout"
+"3" = "gnd"
+"4" = "din"
+
+[models.ratings]
+max_voltage_v = 5.5   # Rev. 04 p.5, section 8 Electrical parameters, VDD +3.7 to +5.5 V
+
+[[models.behavioral.profiled_loads]]
+name = "pixel"
+supply_pin = "vdd"
+return_pin = "gnd"
+# Rev. 04 p.5: the part is sold in "5/12MA current version"s and the value does
+# not say which; the 12 mA code is the corner (3 x 12 mA), plus the 1 mA IDD.
+unknown_state_max_a = 0.037
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.001      # Rev. 04 p.6, section 10, Static power consumption IDD 1 mA typ
+
+[models.coverage]
+implements = ["pin_roles", "absolute_ratings", "quiescent_supply_current", "full_on_supply_current"]
+missing = ["data_protocol", "dout_drive", "din_input_thresholds", "pwm_supply_ripple", "supply_range", "current_code_variant"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://akizukidenshi.com/goodsaffix/SK6812MINI-E.pdf"
+title = "Opsco SPC/SK6812MINI-E Rev. No. 04 (2019-12-30), 3.2x2.8x1.78 mm 0.2W intelligent external control SMD LED (Akizuki copy)"
+locator = "p.4 section 5 PIN configuration; p.5 section 7 naming (5/12 mA current version), section 8 Electrical parameters; p.6 section 10 IC electrical parameters (IDD, VIH, VIL)"
+sha256 = "7c0b43f48b3530429b25dbd29dd3db591d8dad415cecf2be7bd962f1ae58a63f"
+
+# ─────────────────────────────────────────────────────────────────────────────
+[[models]]
+id = "sk6812mini"
+kind = "digital"
+description = "Opsco SK6812MINI (plain, Rev. 01, 3.5x3.7 mm) addressable RGB LED: VDD supply load (static + full-on corner); data path not modelled"
+
+[models.match]
+# Only on a footprint naming the plain SK6812MINI: an -E land after the name
+# belongs to the card above, whose pin map is rotated from this one.
+value_re = "(?i)^(YS-)?SK6812[-_ ]?MINI$"
+footprint_re = "(?i)SK6812[-_ ]?MINI($|[^-_ eE]|[-_ ][^eE])"
+
+[models.params]
+warning = "addressable LED bound as a supply load only: it draws its 1 mA static current here, and up to 40 mA (its 0.2 W package rating at VDD = 5 V, judged as a conditional DC state; the sheet prints no per-channel current) once firmware lights it; DOUT is not driven (it re-sends DIN minus this pixel's 24 bits, which no logic relation expresses) and DIN thresholds are not checked"
+
+[models.pins]
+# SPC/SK6812MINI Rev. 01 p.3, section 5 PIN configuration.
+"1" = "dout"
+"2" = "vss"
+"3" = "din"
+"4" = "vdd"
+
+[models.ratings]
+max_voltage_v = 5.5   # Rev. 01 p.4, section 7, VDD +3.5 to +5.5 V
+
+[[models.behavioral.profiled_loads]]
+name = "pixel"
+supply_pin = "vdd"
+return_pin = "vss"
+# Rev. 01 p.1 "0.2Watt Power" at the p.4 VDD = 5.0 V condition: 40 mA. The
+# sheet prints no channel current (its 13 mA is a rise/fall test condition).
+unknown_state_max_a = 0.040
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.001      # Rev. 01 p.4, section 8, Static power consumption IDD 1 mA typ
+
+[models.coverage]
+implements = ["pin_roles", "absolute_ratings", "quiescent_supply_current", "full_on_supply_current"]
+missing = ["data_protocol", "dout_drive", "din_input_thresholds", "pwm_supply_ripple", "supply_range", "per_channel_current"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+title = "Opsco SPC/SK6812MINI Rev. No. 01 (2015-07-22), 3.5x3.7x0.95 mm Top SMD 0.2 W integrated light source intelligent control LED (local copy)"
+locator = "p.1 description (0.2 Watt); p.3 section 5 PIN configuration; p.4 sections 7 and 8 (VDD range, IDD, IDOH/IDOL, VIH/VIL)"
+sha256 = "046a262bfd8c54c733ee2f583b6a60a01a34dec93b2cc53f4fe23d922b459ecb"
 
 # ─────────────────────────────────────────────────────────────────────────────
 

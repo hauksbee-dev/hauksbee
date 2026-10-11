@@ -245,18 +245,31 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         }
         set_drive(state, false);
     }
-    let mut findings: Vec<LintFinding> = (by_part.into_iter())
-        .map(|(part, (states, clauses, mut nets))| {
+    let conditional = unknown_state_faults(&mut bound, &by_part);
+    let rows = (by_part.into_iter().map(|row| (row, Severity::High)))
+        .chain(conditional.into_iter().map(|row| (row, Severity::Medium)));
+    let mut findings: Vec<LintFinding> = rows
+        .map(|((part, (states, clauses, mut nets)), severity)| {
             nets.sort();
             nets.dedup();
-            LintFinding {
-                check: LintCheck::DcOverstress,
-                severity: Severity::High,
-                message: format!(
+            let message = if severity == Severity::High {
+                format!(
                     "{part} is overstressed with the board at rest, {}: {}",
                     states.join(" and "),
                     clauses.join("; ")
-                ),
+                )
+            } else {
+                format!(
+                    "{part} is overstressed only {UNKNOWN_STATE}: {} (CONDITIONAL: the board \
+                     does not show that state, so the firmware decides whether it is reached; \
+                     with the loads at their declared draw it is within its ratings)",
+                    clauses.join("; ")
+                )
+            };
+            LintFinding {
+                check: LintCheck::DcOverstress,
+                severity,
+                message,
                 refs: vec![part],
                 nets,
             }
@@ -305,6 +318,44 @@ fn set_drive(bound: &mut BoundBoard, strong: bool) -> bool {
         }
     }
     any
+}
+
+/// The state [`set_unknown_state_loads`] judges, as findings name it.
+const UNKNOWN_STATE: &str = "with every data-set load at its card's unknown-state maximum (an \
+     addressable LED latched full white)";
+
+/// Hold every model-owned load that declares `unknown_state_max_a` at it
+/// (`worst`), or release it. False when the board has no such load.
+fn set_unknown_state_loads(bound: &mut BoundBoard, worst: bool) -> bool {
+    let BoundBoard {
+        circuit,
+        behavioral,
+        ..
+    } = bound;
+    (behavioral.iter_mut()).fold(false, |any, d| {
+        d.set_unknown_state_loads(circuit, worst) | any
+    })
+}
+
+/// The state data or firmware sets and the board cannot show: every load
+/// declaring `unknown_state_max_a` held there, judged, then released. The
+/// parts over a rating there but not `at_rest` are conditional on that state.
+fn unknown_state_faults(
+    bound: &mut BoundBoard,
+    at_rest: &BTreeMap<String, PartFaults>,
+) -> BTreeMap<String, PartFaults> {
+    let mut conditional = BTreeMap::new();
+    if set_unknown_state_loads(bound, true) {
+        if let Some(x) = settle(bound) {
+            for (part, clauses, nets) in judge(bound, &x).0 {
+                if !at_rest.contains_key(&part) {
+                    conditional.insert(part, (vec![UNKNOWN_STATE], clauses, nets));
+                }
+            }
+        }
+        set_unknown_state_loads(bound, false);
+    }
+    conditional
 }
 
 /// Load every clocked register of every logic part with ones and drive the
@@ -586,5 +637,68 @@ fn quantity(kind: FaultKind, v: f64) -> String {
         FaultKind::Overpower => format!("{:.0} mW", v * 1e3),
         FaultKind::Overvoltage | FaultKind::ReverseBias | FaultKind::Short => format!("{v:.2} V"),
         FaultKind::Overtemperature => format!("{v:.0} C"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::checks::test_support::{board, part};
+
+    /// An XC6206-3.3 (200 mA) fed from +5V and loading its 3.3 V rail with
+    /// `pixels` chained WS2812Bs: 0.6 mA each as declared, 36.6 mA at full white.
+    fn ldo_with_pixels(pixels: i64) -> NetLintReport {
+        let mut parts = vec![part("U1", "XC6206P332MR", &[("1", 1), ("2", 3), ("3", 2)])];
+        let mut nets = vec![
+            (1, "GND".to_string()),
+            (2, "+5V".into()),
+            (3, "+3V3".into()),
+        ];
+        for i in 0..pixels {
+            let din = 10 + i;
+            let pads = [("1", 3), ("2", din + 1), ("3", 1), ("4", din)];
+            let mut led = part(&format!("D{i}"), "WS2812B", &pads);
+            led.footprint = "LED_SMD:LED_WS2812B_PLCC4_5.0x5.0mm_P3.2mm".into();
+            parts.push(led);
+            nets.push((din, format!("/D{i}")));
+        }
+        nets.push((10 + pixels, "/DOUT".into()));
+        let nets: Vec<(i64, &str)> = nets.iter().map(|(i, n)| (*i, n.as_str())).collect();
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
+    }
+
+    fn on_regulator(r: &NetLintReport) -> Vec<&LintFinding> {
+        r.findings
+            .iter()
+            .filter(|f| f.refs.iter().any(|x| x == "U1"))
+            .collect()
+    }
+
+    /// Legal control: three pixels (110 mA at full white) stay inside the
+    /// LDO's 200 mA even in the unknown state, so nothing fires.
+    #[test]
+    fn few_pixels_on_a_stiff_rail_pass() {
+        let report = ldo_with_pixels(3);
+        assert!(on_regulator(&report).is_empty(), "{:#?}", report.findings);
+    }
+
+    /// Faulty: ten pixels draw 6 mA as declared but 366 mA at full white,
+    /// past the LDO's 200 mA: one conditional finding naming that state.
+    #[test]
+    fn many_pixels_on_a_weak_regulator_fire_conditionally() {
+        let report = ldo_with_pixels(10);
+        let found = on_regulator(&report);
+        assert_eq!(found.len(), 1, "{:#?}", report.findings);
+        assert_eq!(found[0].severity, Severity::Medium);
+        assert!(
+            found[0].message.contains(UNKNOWN_STATE),
+            "{}",
+            found[0].message
+        );
+        assert!(
+            found[0].message.contains("CONDITIONAL"),
+            "{}",
+            found[0].message
+        );
     }
 }

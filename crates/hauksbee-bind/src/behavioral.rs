@@ -363,6 +363,8 @@ struct ProfiledLoadLeg {
     seed: u64,
     last_i_a: f64,
     peak_i_a: f64,
+    /// The card's `unknown_state_max_a`: its draw in a state the board cannot show.
+    unknown_state_max_a: Option<f64>,
 }
 
 /// The stamped converter realisation.
@@ -950,6 +952,7 @@ impl BehavioralDevice {
                 seed: load.seed,
                 last_i_a: initial_i,
                 peak_i_a: initial_i,
+                unknown_state_max_a: load.unknown_state_max_a,
             });
         }
     }
@@ -1495,6 +1498,24 @@ impl BehavioralDevice {
         }
     }
 
+    /// Hold every load that declares `unknown_state_max_a` at that level
+    /// (`worst`) or back at its last profile current, for a DC pass that judges
+    /// the state the board cannot show. False when no load declares one.
+    pub fn set_unknown_state_loads(&mut self, circuit: &mut Circuit, worst: bool) -> bool {
+        let mut any = false;
+        for load in &self.profiled_loads {
+            if let Some(max) = load.unknown_state_max_a {
+                set_source_dc(
+                    circuit,
+                    load.source,
+                    if worst { max } else { load.last_i_a },
+                );
+                any = true;
+            }
+        }
+        any
+    }
+
     /// Update each model-owned current sink for the next solve.
     fn update_profiled_loads(&mut self, circuit: &mut Circuit, t_end: f64) {
         for load in &mut self.profiled_loads {
@@ -1859,6 +1880,7 @@ mod tests {
                 return_pin: Some("gnd".into()),
                 start_s: 0.0,
                 seed: 0,
+                unknown_state_max_a: Some(0.3),
                 segments: vec![
                     Segment {
                         level_a: 0.010,
@@ -1895,19 +1917,26 @@ mod tests {
         assert_eq!(dev.state(), "idle");
         dev.update(&mut circuit, &zero, 0.0005, 0.0006);
         assert_eq!(dev.state(), "busy");
-        let current = circuit
-            .devices
-            .iter()
-            .find_map(|device| match device {
-                Device::Isource { name, kind, p, n } if name == "Ibeh_U1_load_core" => {
-                    assert_eq!(*p, vdd);
-                    assert_eq!(*n, NodeId::GROUND);
-                    Some(kind.eval(0.0))
-                }
-                _ => None,
-            })
-            .expect("profile current source exists");
-        assert!((current - 0.250).abs() < 1e-12, "current={current}");
+        let current = |circuit: &Circuit| {
+            circuit
+                .devices
+                .iter()
+                .find_map(|device| match device {
+                    Device::Isource { name, kind, p, n } if name == "Ibeh_U1_load_core" => {
+                        assert_eq!(*p, vdd);
+                        assert_eq!(*n, NodeId::GROUND);
+                        Some(kind.eval(0.0))
+                    }
+                    _ => None,
+                })
+                .expect("profile current source exists")
+        };
+        assert!((current(&circuit) - 0.250).abs() < 1e-12);
+        // The unknown-state corner swaps in the card's maximum and back.
+        assert!(dev.set_unknown_state_loads(&mut circuit, true));
+        assert!((current(&circuit) - 0.3).abs() < 1e-12);
+        dev.set_unknown_state_loads(&mut circuit, false);
+        assert!((current(&circuit) - 0.250).abs() < 1e-12);
     }
 
     /// The USBLC6 clamp shape compiles: pin voltages become dependency slots

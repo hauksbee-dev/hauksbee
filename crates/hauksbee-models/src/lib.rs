@@ -1665,4 +1665,39 @@ mod tests {
         let s = report.to_string();
         assert!(s.contains("R1") && s.contains("UNRESOLVED"));
     }
+
+    /// Addressable LEDs bind by value AND footprint: the SK6812MINI and its
+    /// -E sibling share a value spelling but not a pinout, and a WS2812B card
+    /// must not take the 2020 package's different pin map.
+    #[test]
+    fn addressable_leds_resolve_by_package() {
+        let l = lib();
+        let id = |value: &str, fp: &str| {
+            let q = ComponentQuery {
+                value: Some(value.into()),
+                footprint: Some(fp.into()),
+                ..Default::default()
+            };
+            l.resolve(&q).model.map(|m| m.id)
+        };
+        let ws = "LED_SMD:LED_WS2812B_PLCC4_5.0x5.0mm_P3.2mm";
+        assert_eq!(id("WS2812B", ws).as_deref(), Some("ws2812b"));
+        assert_eq!(
+            id("YS-SK6812MINI", "yuchi_kbd:SK6812MINI-E").as_deref(),
+            Some("sk6812mini_e")
+        );
+        let mini = "LED_SMD:LED_SK6812MINI_PLCC4_3.5x3.5mm_P1.75mm";
+        assert_eq!(id("SK6812MINI", mini).as_deref(), Some("sk6812mini"));
+        for (value, fp) in [
+            ("SK6812MINI-E", mini),
+            ("WS2812B", "LED_SMD:LED_WS2812B-2020_PLCC4_2.0x2.0mm"),
+        ] {
+            let got = id(value, fp);
+            assert!(
+                !got.as_deref()
+                    .is_some_and(|m| m.starts_with("ws2812") || m.starts_with("sk6812")),
+                "{value} {fp}: {got:?}"
+            );
+        }
+    }
 }

@@ -468,6 +468,28 @@ drive a conservative rail/protection test, while a firmware-dependent workload
 remains an explicit scenario input instead of being disguised as universal
 part behavior.
 
+A load whose draw is set by data the board cannot show (an addressable LED's
+colour, latched by firmware) declares its idle/quiescent draw as the segment
+and the datasheet full-on draw as `unknown_state_max_a` (optional, at least
+every segment's `level_a`):
+
+```toml
+[[models.behavioral.profiled_loads]]
+name = "pixel"
+supply_pin = "vdd"
+return_pin = "vss"
+unknown_state_max_a = 0.0366   # 3 x 12 mA channels + 0.6 mA, full white
+
+[[models.behavioral.profiled_loads.segment]]
+level_a = 0.0006               # quiescent, all channels off
+```
+
+Runs and the DC operating point use the segments. The DC stress check also
+settles the board once with every such load at its maximum; a part
+overstressed only there is a medium-severity CONDITIONAL finding naming that
+state, not a pass and not a high-severity failure, because whether the state
+is reached is up to firmware.
+
 Exact source citations belong in the card, not only in prose:
 
 ```toml
