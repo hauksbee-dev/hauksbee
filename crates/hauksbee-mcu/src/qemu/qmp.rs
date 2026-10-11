@@ -119,6 +119,28 @@ impl Qmp {
         parse_xp_word(&out).with_context(|| format!("parsing xp output for 0x{addr:08x}: {out:?}"))
     }
 
+    /// Read `count` consecutive 32-bit words from guest physical memory in ONE
+    /// monitor round trip (`xp /<count>wx`). The GPIO-matrix output-select
+    /// block is 32+ words, so reading it word by word would cost as many
+    /// round trips; `xp` prints four words per line.
+    ///
+    /// # Errors
+    ///
+    /// The monitor command fails, or its output does not hold exactly `count`
+    /// words (a short read must never decode as "unrouted").
+    pub fn read_words(&mut self, addr: u32, count: usize) -> Result<Vec<u32>> {
+        let out = self.hmp(&format!("xp /{count}wx 0x{addr:08x}"))?;
+        let words = parse_xp_words(&out);
+        if words.len() == count {
+            Ok(words)
+        } else {
+            anyhow::bail!(
+                "xp /{count}wx 0x{addr:08x} returned {} words: {out:?}",
+                words.len()
+            )
+        }
+    }
+
     // NOTE on memory WRITES: the QEMU human monitor has no portable
     // physical-word poke, so [`Qmp`] exposes reads only. The backend writes GPIO
     // inputs through the gdbstub `M` packet (see `gdb.rs`). Keeping that split
@@ -338,9 +360,36 @@ fn parse_xp_word(out: &str) -> Option<u32> {
     u32::from_str_radix(&hex, 16).ok()
 }
 
+/// Parse every word out of a multi-word `xp /Nwx` reply. Each line is an
+/// address, a colon, then up to four `0x` words:
+/// `000000003ff44530: 0x00000100 0x00000100 0x00000100 0x00000100`.
+/// The address before the colon carries no `0x`, and text without the colon is
+/// ignored, so a stray prompt or error line contributes no words.
+fn parse_xp_words(out: &str) -> Vec<u32> {
+    out.lines()
+        .filter_map(|line| line.split_once(':').map(|(_, words)| words))
+        .flat_map(str::split_whitespace)
+        .filter_map(|tok| tok.strip_prefix("0x"))
+        .filter_map(|hex| u32::from_str_radix(hex, 16).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_multi_word_xp_replies() {
+        let out = "000000003ff44530: 0x00000100 0x00000047 0x00000100 0x00000400\r\n\
+                   000000003ff44540: 0x00000100 0xdeadbeef 0x00000100 0x00000100\r\n";
+        assert_eq!(
+            parse_xp_words(out),
+            [0x100, 0x47, 0x100, 0x400, 0x100, 0xdead_beef, 0x100, 0x100]
+        );
+        // A ragged last line and noise lines parse as what they hold.
+        assert_eq!(parse_xp_words("(qemu)\n3ff44530: 0x1 0x2\n"), [1, 2]);
+        assert!(parse_xp_words("no words here").is_empty());
+    }
 
     #[test]
     fn frames_one_object() {

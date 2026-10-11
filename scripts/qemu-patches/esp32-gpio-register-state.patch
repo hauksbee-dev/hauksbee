@@ -1,8 +1,29 @@
 diff --git a/hw/gpio/esp32_gpio.c b/hw/gpio/esp32_gpio.c
-index 4fea1f5..60a67da 100644
 --- a/hw/gpio/esp32_gpio.c
 +++ b/hw/gpio/esp32_gpio.c
-@@ -26,6 +26,18 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+@@ -21,16 +21,48 @@
+ 
+ 
+ 
++static void esp32_gpio_reset_func_out_sel(Esp32GpioState *s)
++{
++    int i;
++
++    for (i = 0; i < ESP32_GPIO_FUNC_OUT_SEL_COUNT; i++) {
++        s->func_out_sel[i] = ESP32_GPIO_FUNC_OUT_SEL_GPIO;
++    }
++}
++
++static bool esp32_gpio_is_func_out_sel(hwaddr addr, unsigned int size)
++{
++    return size == 4 && (addr & 3) == 0 &&
++           addr >= ESP32_GPIO_FUNC_OUT_SEL_OFFSET &&
++           addr < ESP32_GPIO_FUNC_OUT_SEL_OFFSET +
++                  4 * ESP32_GPIO_FUNC_OUT_SEL_COUNT;
++}
++
+ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+ {
      Esp32GpioState *s = ESP32_GPIO(opaque);
      uint64_t r = 0;
      switch (addr) {
@@ -21,7 +42,15 @@ index 4fea1f5..60a67da 100644
      case A_GPIO_STRAP:
          r = s->strap_mode;
          break;
-@@ -39,6 +51,49 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+ 
+     default:
++        if (esp32_gpio_is_func_out_sel(addr, size)) {
++            r = s->func_out_sel[(addr - ESP32_GPIO_FUNC_OUT_SEL_OFFSET) / 4];
++        }
+         break;
+     }
+     return r;
+@@ -39,6 +71,53 @@
  static void esp32_gpio_write(void *opaque, hwaddr addr,
                         uint64_t value, unsigned int size)
  {
@@ -66,12 +95,16 @@ index 4fea1f5..60a67da 100644
 +        s->gpio_enable[1] &= ~v;
 +        break;
 +    default:
++        if (esp32_gpio_is_func_out_sel(addr, size)) {
++            s->func_out_sel[(addr - ESP32_GPIO_FUNC_OUT_SEL_OFFSET) / 4] =
++                v & ESP32_GPIO_FUNC_OUT_SEL_MASK;
++        }
 +        break;
 +    }
  }
  
  static const MemoryRegionOps uart_ops = {
-@@ -49,6 +104,10 @@ static const MemoryRegionOps uart_ops = {
+@@ -49,6 +128,11 @@
  
  static void esp32_gpio_reset_hold(Object *obj, ResetType type)
  {
@@ -79,13 +112,15 @@ index 4fea1f5..60a67da 100644
 +
 +    memset(s->gpio_out, 0, sizeof(s->gpio_out));
 +    memset(s->gpio_enable, 0, sizeof(s->gpio_enable));
++    esp32_gpio_reset_func_out_sel(s);
  }
  
  static void esp32_gpio_realize(DeviceState *dev, Error **errp)
-@@ -67,6 +126,20 @@ static void esp32_gpio_init(Object *obj)
+@@ -67,6 +151,28 @@
                            TYPE_ESP32_GPIO, 0x1000);
      sysbus_init_mmio(sbd, &s->iomem);
      sysbus_init_irq(sbd, &s->irq);
++    esp32_gpio_reset_func_out_sel(s);
 +
 +    /*
 +     * Read-only QOM mirrors let a controller distinguish this stateful model
@@ -100,14 +135,20 @@ index 4fea1f5..60a67da 100644
 +                                   OBJ_PROP_FLAG_READ);
 +    object_property_add_uint32_ptr(obj, "gpio-enable1", &s->gpio_enable[1],
 +                                   OBJ_PROP_FLAG_READ);
++    /*
++     * Capability marker for the GPIO-matrix output-select words (pad 0's
++     * word; the rest are read over MMIO).  Present only when the model
++     * retains GPIO_FUNCn_OUT_SEL_CFG writes.
++     */
++    object_property_add_uint32_ptr(obj, "gpio-func-out-sel",
++                                   &s->func_out_sel[0], OBJ_PROP_FLAG_READ);
  }
  
  static Property esp32_gpio_properties[] = {
 diff --git a/include/hw/gpio/esp32_gpio.h b/include/hw/gpio/esp32_gpio.h
-index 163b41a..b95c777 100644
 --- a/include/hw/gpio/esp32_gpio.h
 +++ b/include/hw/gpio/esp32_gpio.h
-@@ -9,7 +9,25 @@
+@@ -9,8 +9,45 @@
  #define ESP32_GPIO_GET_CLASS(obj)   OBJECT_GET_CLASS(Esp32GpioClass, obj, TYPE_ESP32_GPIO)
  #define ESP32_GPIO_CLASS(klass)     OBJECT_CLASS_CHECK(Esp32GpioClass, klass, TYPE_ESP32_GPIO)
  
@@ -132,14 +173,35 @@ index 163b41a..b95c777 100644
 +REG32(GPIO_ENABLE1_W1TC, 0x0034)
 +REG32(GPIO_STRAP,        0x0038)
  
++/*
++ * GPIO_FUNCn_OUT_SEL_CFG_REG: one word per pad, pad n at 0x0530 + 4 * n
++ * (ESP32 TRM v5.8, "Register 6.32. GPIO_FUNCn_OUT_SEL_CFG_REG"; ESP-IDF
++ * components/soc/esp32/register/soc/gpio_reg.h, GPIO_FUNC0_OUT_SEL_CFG_REG =
++ * DR_REG_GPIO_BASE + 0x0530 .. GPIO_FUNC39_OUT_SEL_CFG_REG = + 0x05cc).
++ * Bits [8:0] OUT_SEL: peripheral output signal routed to the pad, or 256
++ * (0x100) for the plain GPIO_OUT/GPIO_ENABLE bit; bit 9 OUT_INV_SEL; bit 10
++ * OEN_SEL (1: output enable from GPIO_ENABLE, 0: from the peripheral); bit 11
++ * OEN_INV_SEL.  The classic ESP32 layout only: the ESP32-S3 and ESP32-C3
++ * blocks start at 0x0554, so a host must read these words only for the
++ * classic part.
++ */
++#define ESP32_GPIO_FUNC_OUT_SEL_OFFSET 0x0530
++#define ESP32_GPIO_FUNC_OUT_SEL_COUNT  40
++#define ESP32_GPIO_FUNC_OUT_SEL_MASK   0x00000fff
++/* The TRM gives the reset value as undefined (x); the model resets to the
++ * "plain GPIO" selection so an untouched pad reads as not peripheral-routed. */
++#define ESP32_GPIO_FUNC_OUT_SEL_GPIO   0x100
++
  #define ESP32_STRAP_MODE_FLASH_BOOT 0x12
  #define ESP32_STRAP_MODE_UART_BOOT  0x0f
-@@ -20,6 +38,8 @@ typedef struct Esp32GpioState {
+ 
+@@ -20,6 +57,9 @@
      MemoryRegion iomem;
      qemu_irq irq;
      uint32_t strap_mode;
 +    uint32_t gpio_out[2];
 +    uint32_t gpio_enable[2];
++    uint32_t func_out_sel[ESP32_GPIO_FUNC_OUT_SEL_COUNT];
  } Esp32GpioState;
  
  typedef struct Esp32GpioClass {

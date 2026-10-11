@@ -511,6 +511,22 @@ pub trait Mcu {
         false
     }
 
+    /// GPIO pins the firmware has routed a peripheral's output signal onto
+    /// (a PWM, timer, RMT or other block's waveform through a pin-mux or GPIO
+    /// matrix), as opposed to the plain GPIO output latch. Such a pad is
+    /// driven by the peripheral, so neither [`Mcu::pins_configured_output`] nor
+    /// the GPIO edges a poll synthesises describe its waveform, yet it is
+    /// firmware-driven all the same. Latched: a pin stays listed once seen.
+    ///
+    /// Observation metadata, never a drive: callers use it to classify a net
+    /// as firmware-driven and must not stamp a pin level from it.
+    ///
+    /// Default empty: a backend that cannot see the routing reports nothing,
+    /// which says nothing about whether any pin is routed.
+    fn pins_routed_to_peripheral(&self) -> Vec<PinId> {
+        Vec::new()
+    }
+
     // ---- Co-sim coverage honesty ----
 
     /// ADC channels whose [`Mcu::set_analog_in`] injections were DROPPED because

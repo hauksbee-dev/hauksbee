@@ -245,6 +245,15 @@ pub struct GpioBank {
     /// `peripheral_out_reg`. It makes drive direction authoritative on the
     /// patched model instead of treating an input pin's output latch as driven.
     pub peripheral_enable_reg: u32,
+    /// Address of this bank's `GPIO_FUNC0_OUT_SEL_CFG` (the first of one
+    /// output-select word per pad, 4 bytes apart), or `None` when the part's
+    /// matrix block is not described. It names the GPIO-matrix registers that
+    /// route a peripheral output (LEDC PWM, timers, RMT, ...) to a pad, which
+    /// the OUT/ENABLE words alone never show. Read only when the live QOM
+    /// capability probe finds the stateful matrix model (see
+    /// [`QemuBackend::pins_routed_to_peripheral`]).
+    #[serde(default)]
+    pub peripheral_func_out_sel_reg: Option<u32>,
     /// Address of this bank's input-injection word (host -> firmware).
     pub in_reg: u32,
     /// Number of valid bits in this bank.
@@ -490,6 +499,49 @@ fn run_window(seconds: f64, boot_complete: bool) -> Duration {
     Duration::from_secs_f64(s)
 }
 
+/// `GPIO_FUNCn_OUT_SEL_CFG` bits [8:0] (`OUT_SEL`) selecting the plain
+/// `GPIO_OUT`/`GPIO_ENABLE` bit as the pad's output. Any other value routes
+/// peripheral output signal `s` (0..=255) to the pad through the GPIO matrix.
+///
+/// Source: ESP32 Technical Reference Manual v5.8, Register 6.32
+/// `GPIO_FUNCn_OUT_SEL_CFG_REG` (address 0x3FF44530 + 4 * n): "A value of s
+/// (0<=s<256) connects peripheral output s to GPIO output n. A value of 256
+/// selects bit n of `GPIO_OUT_REG`/`GPIO_OUT1_REG` and `GPIO_ENABLE_REG`/
+/// `GPIO_ENABLE1_REG` as the output value and output enable." Matches ESP-IDF
+/// v5.4 `components/soc/esp32/register/soc/gpio_reg.h`
+/// (`GPIO_FUNC0_OUT_SEL_CFG_REG = DR_REG_GPIO_BASE + 0x0530`,
+/// `GPIO_FUNC0_OUT_SEL_V = 0x1FF`) and `soc/gpio_sig_map.h`
+/// (`SIG_GPIO_OUT_IDX = 256`).
+const FUNC_OUT_SEL_MASK: u32 = 0x1FF;
+/// The "plain GPIO" `OUT_SEL` value (see [`FUNC_OUT_SEL_MASK`]).
+const FUNC_OUT_SEL_GPIO: u32 = 0x100;
+/// `GPIO_FUNCn_OUT_SEL_CFG` bit 10 (`OEN_SEL`): 1 forces the output enable from
+/// `GPIO_ENABLE` bit n, 0 takes it from the peripheral (same TRM register).
+const FUNC_OEN_SEL: u32 = 1 << 10;
+
+/// The pads (bit n set for pad n) whose output is a peripheral's waveform
+/// rather than the plain `GPIO_OUT` latch: `OUT_SEL` is not 256, and the
+/// pad's output is not held off. The output enable comes from `GPIO_ENABLE`
+/// when `OEN_SEL` is set, so a pad whose enable bit is clear is high
+/// impedance whatever is routed to it; with `OEN_SEL` clear the peripheral
+/// owns the enable and the pad counts as driven (the safe direction: the
+/// caller treats a routed pad as firmware-driven, never as passive).
+///
+/// `words` is one `GPIO_FUNCn_OUT_SEL_CFG` word per pad starting at pad 0;
+/// only the first 32 pads fit the result and `enable` word.
+fn peripheral_routed_pads(words: &[u32], enable: u32) -> u32 {
+    words
+        .iter()
+        .take(32)
+        .enumerate()
+        .filter(|&(pad, &word)| {
+            let routed = word & FUNC_OUT_SEL_MASK != FUNC_OUT_SEL_GPIO;
+            let held_off = word & FUNC_OEN_SEL != 0 && enable & (1 << pad) == 0;
+            routed && !held_off
+        })
+        .fold(0, |mask, (pad, _)| mask | 1 << pad)
+}
+
 const fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
     ((new ^ prev) | (enable & !prev_enable)) & enable
 }
@@ -521,6 +573,15 @@ pub struct QemuBackend {
     /// Capability-probed GPIO observation source. Never inferred from a QEMU
     /// version string: only the live QOM property unlocks peripheral reads.
     gpio_output_observation: GpioOutputObservation,
+    /// Whether the live QOM object carries the GPIO-matrix output-select
+    /// capability (`gpio-func-out-sel`), probed like the OUT/ENABLE pair.
+    /// Without it the matrix registers read back as zero whatever the firmware
+    /// wrote, so they are never consulted.
+    func_out_sel_observable: bool,
+    /// Pads each bank has ever had a peripheral output routed onto while
+    /// enabled (bit n = pad n). Latched: a PWM waveform that ran during the run
+    /// stays a firmware-driven net after the firmware stops it.
+    routed_pads: HashMap<char, u32>,
     /// Current driven IN register per bank letter (what we poke for inputs).
     in_shadow: HashMap<char, u32>,
     /// True once mailbox-aware firmware raises [`mailbox::MAGIC`], or ordinary
@@ -721,6 +782,33 @@ impl QemuBackend {
             }
         };
 
+        // The matrix output-select words are trusted only when the live QOM
+        // object proves the model retains them (an older patched build keeps
+        // OUT/ENABLE but discards these writes, so they would read as zero, a
+        // signal-0 routing on every pad).
+        let wants_matrix = config
+            .banks
+            .iter()
+            .any(|b| b.peripheral_func_out_sel_reg.is_some());
+        let func_out_sel_observable = wants_matrix
+            && gpio_output_observation == GpioOutputObservation::PeripheralRegisters
+            && qmp
+                .qom_get(&config.gpio_qom_path, "gpio-func-out-sel")
+                .is_ok_and(|v| v.parse::<u32>().is_ok());
+        if wants_matrix
+            && gpio_output_observation == GpioOutputObservation::PeripheralRegisters
+            && !func_out_sel_observable
+        {
+            eprintln!(
+                "QEMU GPIO matrix limitation: '{}' retains GPIO OUT/ENABLE but not the \
+                 GPIO_FUNCn_OUT_SEL_CFG output-select words, so a PWM, timer or RMT output \
+                 routed to a pad through the GPIO matrix is not observed unless the \
+                 firmware also sets GPIO_ENABLE. Rebuild the patched QEMU with \
+                 scripts/install-sims.sh --qemu-patched-source.",
+                config.mcu_label,
+            );
+        }
+
         let last_out = config.banks.iter().map(|b| (b.letter, 0u32)).collect();
         let initial_enable =
             if gpio_output_observation == GpioOutputObservation::PeripheralRegisters {
@@ -753,6 +841,8 @@ impl QemuBackend {
             last_out,
             last_enable,
             gpio_output_observation,
+            func_out_sel_observable,
+            routed_pads: HashMap::new(),
             in_shadow,
             boot_complete: false,
             i2c_temp_paths: HashMap::new(),
@@ -843,8 +933,30 @@ impl QemuBackend {
                 self.last_out.insert(bank.letter, new);
                 self.last_enable.insert(bank.letter, enable);
             }
+            self.poll_matrix_routing(bank, enable)?;
         }
         Ok(observed_change)
+    }
+
+    /// Read the bank's GPIO-matrix output-select words (one `xp` round trip)
+    /// and latch the pads a peripheral output is routed onto. A PWM, timer or
+    /// RMT waveform reaches its pad through `GPIO_FUNCn_OUT_SEL_CFG` and never
+    /// touches `GPIO_OUT`, so without this a pad driven by LEDC alone looks
+    /// like an untouched input. No-op until the capability probe succeeded.
+    fn poll_matrix_routing(&mut self, bank: &GpioBank, enable: u32) -> Result<()> {
+        let Some(reg) = bank.peripheral_func_out_sel_reg else {
+            return Ok(());
+        };
+        if !self.func_out_sel_observable {
+            return Ok(());
+        }
+        let pads = usize::from(bank.width.min(32));
+        let words = self.qmp.read_words(reg, pads).with_context(|| {
+            format!("reading the GPIO matrix output-select block at {reg:#x} over QMP")
+        })?;
+        let routed = peripheral_routed_pads(&words, enable);
+        *self.routed_pads.entry(bank.letter).or_insert(0) |= routed;
+        Ok(())
     }
 
     /// Advance the guest by ~`seconds` of virtual time, then exchange state.
@@ -1184,6 +1296,14 @@ impl QemuBackend {
         self.gpio_output_observation
     }
 
+    /// Whether the running QEMU retains the GPIO-matrix output-select words,
+    /// so [`Mcu::pins_routed_to_peripheral`] is authoritative (an empty list
+    /// then means no peripheral output is routed, not "cannot tell").
+    #[must_use]
+    pub const fn func_out_sel_observable(&self) -> bool {
+        self.func_out_sel_observable
+    }
+
     /// Write a guest physical word (gdbstub `M` packet). See [`Self::debug_read_u32`].
     ///
     /// # Errors
@@ -1373,6 +1493,25 @@ impl Mcu for QemuBackend {
 
     fn drive_direction_observable(&self) -> bool {
         self.gpio_output_observation == GpioOutputObservation::PeripheralRegisters
+    }
+
+    /// Pads with a GPIO-matrix peripheral output routed to them and enabled,
+    /// from the polled `GPIO_FUNCn_OUT_SEL_CFG` words. Empty on a QEMU build
+    /// that does not retain those words (see `func_out_sel_observable`).
+    fn pins_routed_to_peripheral(&self) -> Vec<PinId> {
+        let mut pins = Vec::new();
+        for bank in &self.config.banks {
+            let routed = self.routed_pads.get(&bank.letter).copied().unwrap_or(0);
+            pins.extend(
+                (0..bank.width.min(32))
+                    .filter(|bit| routed & (1 << bit) != 0)
+                    .map(|bit| PinId {
+                        port: bank.letter,
+                        bit,
+                    }),
+            );
+        }
+        pins
     }
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
@@ -1589,9 +1728,75 @@ mod tests {
         assert_eq!(c.gpio_qom_path, "/machine/soc/gpio");
         assert_eq!(c.banks[0].peripheral_out_reg, 0x3ff4_4004);
         assert_eq!(c.banks[0].peripheral_enable_reg, 0x3ff4_4020);
+        // GPIO_FUNC0_OUT_SEL_CFG_REG: ESP32 TRM v5.8 table 6.12-1, ESP-IDF
+        // gpio_reg.h (DR_REG_GPIO_BASE 0x3FF44000 + 0x530).
+        assert_eq!(c.banks[0].peripheral_func_out_sel_reg, Some(0x3ff4_4530));
         // The old mailbox remains an explicit fallback for unpatched QEMU.
         assert_eq!(c.banks[0].out_reg, mailbox::GPIO_OUT);
         assert_eq!(c.banks[0].in_reg, mailbox::GPIO_IN);
+    }
+
+    /// The ESP32-S3 and ESP32-C3 matrix blocks start at 0x554, not 0x530, and
+    /// the patched model only retains the classic layout, so those parts name
+    /// no block and are never asked.
+    #[test]
+    fn only_the_classic_esp32_names_a_matrix_block() {
+        assert_eq!(
+            QemuConfig::esp32s3().banks[0].peripheral_func_out_sel_reg,
+            None
+        );
+        assert_eq!(
+            QemuConfig::esp32c3().banks[0].peripheral_func_out_sel_reg,
+            None
+        );
+    }
+
+    /// An LEDC-style routing: pad 5 carries peripheral signal 71 (the ESP-IDF
+    /// `LEDC_HS_SIG_OUT0_IDX`) with its enable taken from the peripheral
+    /// (`OEN_SEL` clear), and `GPIO_ENABLE` is never set. The pad is routed.
+    #[test]
+    fn a_peripheral_signal_routed_to_a_pad_is_reported_without_gpio_enable() {
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        words[5] = 71;
+        assert_eq!(peripheral_routed_pads(&words, 0), 1 << 5);
+    }
+
+    #[test]
+    fn plain_gpio_selections_are_not_routed() {
+        // Reset state and an IDF-configured plain output: OUT_SEL = 256, with
+        // and without the OEN_SEL / inversion bits.
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        words[2] = FUNC_OUT_SEL_GPIO | FUNC_OEN_SEL;
+        words[4] = FUNC_OUT_SEL_GPIO | (1 << 9) | (1 << 11);
+        assert_eq!(peripheral_routed_pads(&words, 1 << 2), 0);
+    }
+
+    #[test]
+    fn a_routed_pad_forced_to_the_gpio_enable_and_left_disabled_is_high_impedance() {
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        // Signal 14 routed, enable forced from GPIO_ENABLE (OEN_SEL set).
+        words[7] = 14 | FUNC_OEN_SEL;
+        assert_eq!(peripheral_routed_pads(&words, 0), 0, "enable bit clear");
+        assert_eq!(peripheral_routed_pads(&words, 1 << 7), 1 << 7, "enabled");
+        // Signal 14 routed with a peripheral-owned enable: driven regardless.
+        words[7] = 14;
+        assert_eq!(peripheral_routed_pads(&words, 0), 1 << 7);
+    }
+
+    #[test]
+    fn a_zero_out_sel_is_signal_zero_not_unrouted() {
+        // OUT_SEL 0 is peripheral signal 0 (SPICLK_out), not "no routing": a
+        // build that reads back zeros would mark every pad, which is why the
+        // capability probe gates the whole block.
+        let words = [0u32; 32];
+        assert_eq!(peripheral_routed_pads(&words, 0), u32::MAX);
+    }
+
+    #[test]
+    fn matrix_words_beyond_the_enable_word_are_ignored() {
+        let mut words = [FUNC_OUT_SEL_GPIO; 40];
+        words[33] = 71;
+        assert_eq!(peripheral_routed_pads(&words, 0), 0);
     }
 
     #[test]

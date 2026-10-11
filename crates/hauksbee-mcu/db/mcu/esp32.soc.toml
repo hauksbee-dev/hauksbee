@@ -19,6 +19,12 @@ letter = "0"
 out_reg = 0x5000_0000
 peripheral_out_reg = 0x3ff4_4004
 peripheral_enable_reg = 0x3ff4_4020
+# GPIO_FUNC0_OUT_SEL_CFG_REG (ESP32 TRM v5.8 table 6.12-1; ESP-IDF
+# soc/esp32/register/soc/gpio_reg.h, DR_REG_GPIO_BASE + 0x530): the GPIO-matrix
+# output-select words, pad n at +4n. Read only when the live object also
+# exposes gpio-func-out-sel, so a PWM/timer/RMT output routed to a pad is seen
+# as firmware-driven. (The S3/C3 blocks start at 0x554 and are not described.)
+peripheral_func_out_sel_reg = 0x3ff4_4530
 in_reg = 0x5000_0004
 width = 32
 

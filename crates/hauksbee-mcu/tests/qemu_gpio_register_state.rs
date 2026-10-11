@@ -105,3 +105,44 @@ fn unmodified_esp_idf_gpio_reaches_the_backend_without_a_mailbox() {
     assert_eq!(mcu.debug_read_u32(mailbox::GPIO_OUT).unwrap(), 0);
     assert_eq!(mcu.debug_read_u32(mailbox::MAGIC).unwrap(), 0);
 }
+
+/// The GPIO-matrix output-select words only mean something when the emulator
+/// retains them, and the fixture routes nothing but plain GPIO outputs
+/// (`OUT_SEL` 256), so on a matrix-capable build no pad may be reported as
+/// routed to a peripheral. Skips honestly on a build without the capability
+/// (the supported mailbox build, or a patched build older than the matrix
+/// words): there the backend must say it cannot see the matrix, and report
+/// nothing rather than a zero-filled block read as "signal 0 on every pad".
+#[test]
+fn plain_gpio_outputs_are_not_reported_as_routed_to_a_peripheral() {
+    let _guard = crate::support::qemu_lock();
+    if !is_available(QemuArch::Xtensa) {
+        eprintln!("SKIP: Espressif qemu-system-xtensa is not installed");
+        return;
+    }
+    let Some(flash) = fixture() else {
+        eprintln!("SKIP: build testdata/firmware/esp32_native_gpio/flash.bin with ./build.sh");
+        return;
+    };
+    let mut mcu = QemuBackend::esp32(&flash).expect("boot ordinary ESP-IDF fixture");
+    for _ in 0..50 {
+        mcu.run_micros(20_000).expect("advance QEMU");
+    }
+    if !mcu.func_out_sel_observable() {
+        assert!(
+            mcu.pins_routed_to_peripheral().is_empty(),
+            "an unobservable matrix must report no routed pads, not guesses"
+        );
+        eprintln!(
+            "SKIP: selected Espressif QEMU does not retain GPIO_FUNCn_OUT_SEL_CFG \
+             (rebuild with scripts/install-sims.sh --qemu-patched-source)"
+        );
+        return;
+    }
+    let routed = mcu.pins_routed_to_peripheral();
+    assert!(
+        routed.is_empty(),
+        "the fixture drives GPIO2/GPIO4 through the plain GPIO registers only, so \
+         no pad may read as peripheral-routed: {routed:?}"
+    );
+}

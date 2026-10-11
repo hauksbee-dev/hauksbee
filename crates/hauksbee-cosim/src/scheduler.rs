@@ -6164,14 +6164,31 @@ impl Scheduler {
     /// MCU GPIO nets the firmware drove to a *defined* level during the run:
     /// either it wrote the pin (a `last_levels` entry, high or low) or it
     /// configured the pin as an output (so an output-low-held pin counts as
-    /// driven LOW, not floating). A net NOT in this set was never driven by any
+    /// driven LOW, not floating), or the backend reports a peripheral output
+    /// (PWM, timer, RMT) routed onto the pad. A net NOT in this set was never driven by any
     /// MCU: it floats. Used by the boot-state panel to classify each gate as
     /// driven-high / driven-low / floating without enabling any circuit driver.
     #[must_use]
     pub fn firmware_driven_nets(&self) -> Vec<String> {
         let configured = self.configured_output_pins();
+        // Pads a peripheral output (PWM, timer, RMT) is routed onto through a
+        // pin-mux: driven by the peripheral, so no pin write or direction
+        // report need exist for them. Observation only, never a level.
+        let routed: Vec<std::collections::HashSet<(char, u8)>> = self
+            .mcus
+            .iter()
+            .map(|m| {
+                m.core
+                    .pins_routed_to_peripheral()
+                    .into_iter()
+                    .map(|p| (p.port, p.bit))
+                    .collect()
+            })
+            .collect();
         let mut out = self.gpio_nets_where(|mi, m, pin, _| {
-            m.last_levels.contains_key(&pin) || configured[mi].contains(&pin)
+            m.last_levels.contains_key(&pin)
+                || configured[mi].contains(&pin)
+                || routed[mi].contains(&pin)
         });
         out.extend(self.peripheral_driven_nets());
         out.sort();
@@ -8103,6 +8120,9 @@ missing = ["measurement_registers"]
         /// watchdog and timing limitation (the nRF52/ESP32 Renode/QEMU shape).
         bus_blind: bool,
         watchdog_resets: u64,
+        /// Pins the core reports as routed to a peripheral output (a PWM, timer
+        /// or RMT waveform through a pin matrix), latched.
+        routed: Vec<(char, u8)>,
         /// Implements the synchronous single-slot input responder hooks.
         legacy: bool,
         responder_installs: Arc<std::sync::atomic::AtomicUsize>,
@@ -8218,6 +8238,12 @@ missing = ["measurement_registers"]
         }
         fn drive_direction_observable(&self) -> bool {
             self.direction_observable
+        }
+        fn pins_routed_to_peripheral(&self) -> Vec<hauksbee_mcu::PinId> {
+            self.routed
+                .iter()
+                .map(|&(port, bit)| hauksbee_mcu::PinId { port, bit })
+                .collect()
         }
         fn i2c_bus_modeled(&self) -> bool {
             !self.bus_blind
@@ -10757,6 +10783,48 @@ data_out = ["io0"]
         let sched = peripheral_sched(&[("LINE_A", "pb1_sdaish"), ("LINE_B", "pd5_t1_oc0b")]);
         sched.mcus[0].i2c_events.store(4, Ordering::Relaxed);
         sched.mcus[0].spi_events.store(4, Ordering::Relaxed);
+        assert!(sched.firmware_driven_nets().is_empty());
+    }
+
+    /// A PWM, timer or RMT output reaches its pad through the pin matrix, not
+    /// the GPIO output latch, so a backend can report no write and no direction
+    /// for it although the firmware drove the pad. The core reporting the pad as
+    /// routed to a peripheral makes the net driven, and the RC filter behind it
+    /// follows; a pad it does not report stays out, and the routed list is
+    /// observation only (no driver is enabled or level stamped from it).
+    #[test]
+    fn a_pad_routed_to_a_peripheral_output_is_driven_and_seeds_the_walk() {
+        let mut sched = peripheral_sched(&[("LINE_A", "pb1"), ("LINE_B", "pb2")]);
+        assert!(sched.firmware_driven_nets().is_empty());
+        assert!(sched.firmware_influenced_nets().is_empty());
+
+        let routed_core = |routed: Vec<(char, u8)>| MockCore {
+            direction_observable: true,
+            routed,
+            ..Default::default()
+        };
+        sched.mcus[0].core = Box::new(routed_core(vec![('B', 1)]));
+        assert_eq!(sched.firmware_driven_nets(), ["LINE_A"]);
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            named(&[("FILT", "LINE_A")])
+        );
+        assert_eq!(
+            sched.level_provenance("LINE_A"),
+            LevelProvenance::FirmwareDriven
+        );
+        assert_eq!(
+            sched.level_provenance("LINE_B"),
+            LevelProvenance::Passive,
+            "an unrouted pad on a direction-observable core is passive"
+        );
+        assert!(
+            sched.mcus[0].last_levels.is_empty(),
+            "routing is not a level"
+        );
+
+        // A pin with no net on this board adds nothing.
+        sched.mcus[0].core = Box::new(routed_core(vec![('D', 7)]));
         assert!(sched.firmware_driven_nets().is_empty());
     }
 

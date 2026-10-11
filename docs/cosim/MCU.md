@@ -597,6 +597,13 @@ chunk over RSP runs far too slow).
   state for ESP32/S3/C3 and exposes paired read-only `gpio-out`/`gpio-enable`
   QOM properties. The backend probes both live properties and only then reads
   the real MMIO OUT and ENABLE words.
+  The classic ESP32 patch also retains the GPIO-matrix output-select words
+  (`GPIO_FUNCn_OUT_SEL_CFG`, 0x3FF44530 + 4n) behind a `gpio-func-out-sel`
+  property; with it the backend reads them once per poll and reports pads that a
+  PWM, timer or RMT output is routed to (`OUT_SEL` other than 256) through
+  `Mcu::pins_routed_to_peripheral`, which the scheduler counts as firmware-driven
+  although `GPIO_OUT` and `GPIO_ENABLE` never show that waveform. A patched
+  build without the property leaves the matrix unobserved and says so on stderr.
   Ordinary ESP-IDF firmware is therefore visible without any Hauksbee code.
   An unpatched binary fails closed to the compatibility RTC-RAM output mirror and
   prints that mailbox requirement; the edge-diff logic is identical.

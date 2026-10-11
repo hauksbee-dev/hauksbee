@@ -241,6 +241,7 @@ drive direction can use MMIO.
 | `frequency_hz` | yes | integer | Advisory clock |
 | `banks[].peripheral_out_reg` | yes | address | Real GPIO OUT word trusted only after the capability probe |
 | `banks[].peripheral_enable_reg` | yes | address | Real GPIO ENABLE word paired with OUT for drive direction |
+| `banks[].peripheral_func_out_sel_reg` | no | address | First GPIO-matrix output-select word (`GPIO_FUNC0_OUT_SEL_CFG`, one word per pad); read only when the object also exposes `gpio-func-out-sel`, so a peripheral output routed to a pad counts as firmware-driven |
 | `banks[].out_reg` / `in_reg` | yes | addresses | Firmware-mailbox fallback output and input contract |
 | `expected_e_machine` | yes | `EM_*` name | The ISA gate |
 | `mcu_label` | yes | string | The human name |
