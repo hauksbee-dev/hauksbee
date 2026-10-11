@@ -1483,6 +1483,74 @@ corner = true
 basis = "ASSUMED low-Vf corner: 1.9 V typ at 20 mA, Wurth WL-SMCW 150060SS75000"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Everlight IR333-A, 5 mm 940 nm infrared LED (Olimex value "LED/IR333-A/5mm").
+#
+# Source: Everlight IR333-A datasheet DIR-0000930 V5 (release 2016-12-19), p.3,
+# "Absolute Maximum Ratings" and "Electro-Optical Characteristics", copy fetched
+# from endrich, sha256 85c6960d2fa2efd253a36c51b6e10a9018014d63a24c4638e0c9172c2c357993.
+# Typical VF (pulse width <= 100 us, duty <= 1 %): 1.2 V at 20 mA, 1.4 V at
+# 100 mA, 2.6 V at 1 A. The diode equation is fitted to those three points
+# (n = 2, rs = 1.3 Ohm, is solved from 1.2 V at 20 mA); it reproduces 1.39 V at
+# 100 mA and 2.7 V at 1 A. Junction capacitance, transit time and the
+# temperature coefficient of VF are not printed and are left to binder defaults.
+[[models]]
+id = "ir333a_ir_led"
+kind = "diode"
+description = "Everlight IR333-A 5 mm 940 nm infrared LED, VF 1.2 V typ at 20 mA"
+
+[models.match]
+value_re = "(?i)^LED/IR333-A(/5mm)?$|^IR333-A$"
+
+[models.params]
+is  = 2.7e-12   # solved so VF = 1.2 V typ at IF = 20 mA with n = 2, rs = 1.3 Ohm
+n   = 2.0       # fitted to the 20 mA / 100 mA / 1 A typical VF points
+rs  = 1.3       # fitted to the 100 mA to 1 A rise (1.4 V to 2.6 V)
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
+
+[models.ratings]
+max_current_a = 0.1          # IF continuous, p.3
+max_surge_current_a = 1.0    # IFP, pulse width <= 100 us, duty <= 1 %, p.3
+max_voltage_v = 5.0          # VR, p.3
+max_power_w = 0.15           # Pd at or below 25 C free air, p.3
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.endrich.com/Datenbl%C3%A4tter/Sensoren/IR333-A.pdf"
+title = "Everlight IR333-A 5.0mm Infrared LED datasheet, DIR-0000930 V5 (2016-12-19)"
+locator = "p.3 Absolute Maximum Ratings and Electro-Optical Characteristics (VF rows)"
+sha256 = "85c6960d2fa2efd253a36c51b6e10a9018014d63a24c4638e0c9172c2c357993"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "VF is printed typical and maximum only (1.5 V max at 20 mA, 4.0 V max at 1 A); the fit is to the typical points and no unit-to-unit interval is published"
+[[models.source.characteristic]]
+parameter = "IF continuous forward current"
+rating = "max_current_a"
+max = 0.1
+unit = "A"
+conditions = "Ta = 25 °C"
+basis = "Everlight IR333-A DIR-0000930 V5, p.3 Absolute Maximum Ratings, IF 100 mA"
+[[models.source.characteristic]]
+parameter = "VR reverse voltage"
+rating = "max_voltage_v"
+max = 5.0
+unit = "V"
+conditions = "Ta = 25 °C"
+basis = "Everlight IR333-A DIR-0000930 V5, p.3 Absolute Maximum Ratings, VR 5 V"
+[[models.source.characteristic]]
+parameter = "Pd power dissipation"
+rating = "max_power_w"
+max = 0.15
+unit = "W"
+conditions = "TA = 25 °C, free air (at or below)"
+basis = "Everlight IR333-A DIR-0000930 V5, p.3 Absolute Maximum Ratings, Pd 150 mW"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Zener diodes, the 1N47xxA family: 1 W, DO-41 axial, Vz tolerance +/-5%.
 #
 # A Zener is an ordinary diode whose REVERSE breakdown is the point of the part,
