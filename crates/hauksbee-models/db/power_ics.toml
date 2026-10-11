@@ -1682,6 +1682,106 @@ unit = "°C/W"
 conditions = "DQA (USON) 10 pins"
 basis = "TI TPD4EUSB30 SLVSAC2G (June 2021), Section 6.4 Thermal Information, TPD4EUSB30 DQA (USON) 10 pins, RθJA 162.2 °C/W"
 
+# VBUS05L1-DD1, Vishay Semiconductors "Single-Line ESD Protection Diode in
+# LLP1006-2M", document 81188, Rev. 1.8, 04-Jan-2019 (wwwlegacy.vishay.com mirror;
+# the 2-page product sheet at vishay.com/docs/49984 carries no electrical table).
+# A symmetrical (bidirectional) single-line TVS: two terminals, either may be
+# the protected line. The behavioural law is one clamp between the two pads,
+# symmetric about zero, so unlike a unidirectional diode it blocks both polarities
+# up to the breakdown threshold and clamps both beyond it.
+# Fitted, not quoted: the sheet prints VBR 7 / 8.4 typ / 9.5 V at 1 mA and the
+# clamping voltage VC 11.5 V typ at 1 A, 14 V typ at 2 A (8/20 us pulse, page 2).
+# vbreak_v takes the VBR typ; rdyn_ohms = (14 - 8.4) V / (2 A - 1 mA) = 2.8 Ohm
+# gives 11.2 V at 1 A against the 11.5 V typ printed (3 percent low).
+[[models]]
+id = "vbus05l1_dd1"
+kind = "digital"
+description = "VBUS05L1-DD1 bidirectional single-line ESD clamp, 5.5 V standoff, LLP1006-2M"
+
+[models.match]
+value_re = "(?i)^VBUS05L1(-DD1)?[A-Z0-9_-]*$"
+
+[models.pins]
+# Two-terminal symmetrical part: the pads are interchangeable by construction.
+"1" = "p1"
+"2" = "p2"
+
+[models.params]
+vbreak_v = 8.4
+rdyn_ohms = 2.8
+warning = "source-bound symmetric piecewise-linear clamp model: conduction in both polarities above the typical 8.4 V breakdown is executable; the 0.33 pF capacitance, 0.05 uA leakage and the sub-breakdown knee between 5.5 V and 8.4 V, IEC pulse waveform, temperature dependence and package parasitics are not represented"
+
+[[models.behavioral.laws]]
+name = "p1_p2_clamp"
+kind = "current"
+a = "p1"
+b = "p2"
+expr = "max(0.0, (v_p1 - v_p2) - vbreak_v) / rdyn_ohms + min(0.0, (v_p1 - v_p2) + vbreak_v) / rdyn_ohms"
+
+[models.ratings]
+max_voltage_v = 5.5           # VRWM reverse stand-off voltage max, page 2
+max_junction_temp_c = 125.0   # TJ -40 to +125 C, Absolute Maximum Ratings, page 1
+
+[models.coverage]
+implements = ["esd_clamp", "bidirectional_positive_and_negative_breakdown"]
+missing = ["line_capacitance", "iec_pulse_waveform", "package_parasitics", "subthreshold_leakage", "temperature_dependence"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "VRWM reverse stand-off voltage"
+rating = "max_voltage_v"
+max = 5.5
+unit = "V"
+conditions = "TA = 25 °C (printed Tamb), either polarity"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Electrical Characteristics, VRWM max"
+[[models.source.characteristic]]
+parameter = "VBR breakdown voltage"
+min = 7.0
+typ = 8.4
+max = 9.5
+unit = "V"
+conditions = "IR = 1 mA"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Electrical Characteristics, VBR at IR = 1 mA"
+[[models.source.characteristic]]
+parameter = "VC clamping voltage"
+typ = 11.5
+max = 14.0
+unit = "V"
+conditions = "IPP = 1 A, 8/20 µs"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Electrical Characteristics, VC at IPP = 1 A"
+[[models.source.characteristic]]
+parameter = "VC clamping voltage"
+typ = 14.0
+max = 17.0
+unit = "V"
+conditions = "IPP = 2 A, 8/20 µs"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Electrical Characteristics, VC at IPP = 2 A"
+[[models.source.characteristic]]
+parameter = "IPPM peak pulse current"
+max = 2.0
+unit = "A"
+conditions = "8/20 µs"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Absolute Maximum Ratings, IPPM"
+[[models.source.characteristic]]
+parameter = "IR reverse leakage current"
+max = 5.0e-8
+unit = "A"
+conditions = "VR = 5.5 V"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Electrical Characteristics, IR at VR = 5.5 V"
+[[models.source.characteristic]]
+parameter = "CD diode capacitance"
+typ = 3.3e-13
+max = 4.0e-13
+unit = "F"
+conditions = "VR = 0 V, f = 1 MHz"
+basis = "Vishay VBUS05L1-DD1 doc. 81188 Rev. 1.8 (04-Jan-2019), Electrical Characteristics, CD at VR = 0 V"
+
 # ── BQ25185: 1-cell Li-ion linear charger with power path, WSON-10 (DLH) ──────
 #
 # Source: TI BQ25185 datasheet SLUSF65B (October 2023, revised August 2026),

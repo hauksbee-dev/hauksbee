@@ -548,6 +548,306 @@ basis = "Vishay 1N4001 thru 1N4007 doc. 88503 Revision 29-Apr-2020, Thermal Char
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
+id = "1n4007fl"
+kind = "diode"
+description = "1N4007FL general purpose rectifier, 1000 V, 1 A, SOD-123FL (SMC Diode Solutions)"
+
+[models.match]
+# SMC's SOD-123FL part only. The DO-41 1N4007 above is a different die and
+# package (RthJA 50 vs 75 C/W, different datasheet), so it keeps its own entry.
+value_re = "(?i)^1N4007FL$"
+
+[models.params]
+# Source: SMC Diode Solutions "1N4001FL THRU 1N4007FL General Purpose Plastic
+# Rectifier", Data Sheet N1646 Rev. A, page 1 (ratings and characteristics) and
+# page 2 (Fig. 3 "Typical Instantaneous Forward Characteristics", TJ = 25 C,
+# 300 us pulse). The sheet prints no SPICE model.
+# DC params: fitted, not quoted. Four points read off Fig. 3 (0.01 A at 0.647 V,
+# 0.1 A at 0.79 V, 1 A at 0.985 V, 10 A at 1.30 V; read uncertainty about 20 mV)
+# are reproduced by this triple to 12 mV (0.647 / 0.802 / 0.973 / 1.297 V). The
+# fitted n is high because the curve flattens above 1 A, which the fit absorbs
+# into n. The 1 A point sits under the printed VF max of 1.1 V at 1.0 A.
+# cjo: CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/1.0)^0.5. The sheet has no
+# CJ-vs-VR figure, so vj and m stay at the binder defaults. No trr row is
+# printed, so tt is left at the default (0).
+is  = 6.15e-7
+n   = 2.58
+rs  = 0.019
+cjo = 3.354e-11
+bv  = 1000.0  # 1N4007FL VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+# The sheet marks the cathode end with the colour band and does not number the
+# pads, so only the electrode names are mapped here.
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 1000.0
+theta_ja_c_per_w = 75.0
+max_junction_temp_c = 150.0
+
+# Printed rating rows (SMC Diode Solutions Data Sheet N1646 Rev. A, page 1,
+# 1N4007FL column; chipdip.ru mirror of the SMC PDF).
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "I(AV) maximum average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TA = 75 °C"
+basis = "SMC 1N4001FL thru 1N4007FL Data Sheet N1646 Rev. A, Maximum Ratings and Electrical Characteristics, I(AV) @ TA = 75 °C"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 30.0
+unit = "A"
+conditions = "TA = 25 °C, 8.3 ms single half sine-wave on rated load"
+basis = "SMC 1N4001FL thru 1N4007FL Data Sheet N1646 Rev. A, Maximum Ratings and Electrical Characteristics, IFSM"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 75.0
+unit = "°C/W"
+conditions = "9.5 mm (0.375 in) lead length, PCB mounted (Note 2)"
+mounting = "PCB mounted"
+basis = "SMC 1N4001FL thru 1N4007FL Data Sheet N1646 Rev. A, Maximum Ratings and Electrical Characteristics, RθJA, Note 2"
+[[models.source.characteristic]]
+parameter = "VF maximum instantaneous forward voltage"
+max = 1.1
+unit = "V"
+conditions = "IF = 1.0 A"
+basis = "SMC 1N4001FL thru 1N4007FL Data Sheet N1646 Rev. A, Maximum Ratings and Electrical Characteristics, VF at 1.0 A"
+[[models.source.characteristic]]
+parameter = "IR maximum DC reverse current"
+max = 5.0e-6
+unit = "A"
+conditions = "TA = 25 °C, rated DC blocking voltage"
+basis = "SMC 1N4001FL thru 1N4007FL Data Sheet N1646 Rev. A, Maximum Ratings and Electrical Characteristics, IR @ TA = 25 °C"
+[[models.source.characteristic]]
+parameter = "IR maximum DC reverse current"
+max = 5.0e-5
+unit = "A"
+conditions = "TA = 100 °C, rated DC blocking voltage"
+basis = "SMC 1N4001FL thru 1N4007FL Data Sheet N1646 Rev. A, Maximum Ratings and Electrical Characteristics, IR @ TA = 100 °C"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mmdl914"
+kind = "diode"
+description = "MMDL914 high-speed switching diode, 100 V, 200 mA, SOD-323 (onsemi)"
+
+[models.match]
+# onsemi's SOD-323 part only: MMDL914T1G / T3G, with the automotive S prefix.
+# Other vendors' bare "1N914"-class parts differ in package and ratings, so they
+# are not matched here.
+value_re = "(?i)^S?MMDL914(T[13]G?)?$"
+
+[models.params]
+# Source: onsemi "MMDL914 High-Speed Switching Diode", publication order number
+# MMDL914T1/D, Rev. 11, January 2025, ELECTRICAL CHARACTERISTICS (page 2) and
+# Figure 2 "Forward Voltage" (page 3). The sheet prints no SPICE model and no
+# typical column.
+# DC params: fitted, not quoted. Figure 2 at TA = 25 C read at three currents:
+# 1 mA at 0.601 V, 10 mA at 0.726 V, 100 mA at 0.928 V. This triple reproduces
+# them to 4 mV (0.600 / 0.729 / 0.929 V) and sits below the printed VF max of
+# 1.0 V at 10 mA.
+# cjo: CT max 4.0 pF at VR = 0 V, 1 MHz is already zero bias; as on the 1N4148
+# card it is the printed bound (Figure 4 shows about 0.6 pF typical), so this is
+# pessimistic for capacitance. vj and m stay at the binder defaults.
+# tt: trr max 4 ns at IF = IR = 10 mA, iR(rec) = 1 mA: tt = 4 ns / ln(1 + 10/10).
+is  = 9.0e-9
+n   = 2.0
+rs  = 0.9
+cjo = 4.0e-12
+tt  = 5.77e-9
+bv  = 100.0   # V(BR) min 100 V at IR = 100 uA (min is the only printed bound)
+ibv = 1.0e-4  # the V(BR) test current, IR = 100 uA
+
+[models.pins]
+# SOD-323 Style 1: pin 1 cathode (polarity band), pin 2 anode (onsemi Case 477).
+"1" = "cathode"
+"2" = "anode"
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.2
+max_surge_current_a = 1.8
+max_power_w = 0.2
+max_voltage_v = 100.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 635.0
+
+# Printed rating rows (onsemi MMDL914T1/D Rev. 11, January 2025, page 1,
+# fetched 2026-10-11 from onsemi's own mirror
+# https://www.onsemi.cn/download/data-sheet/pdf/mmdl914t1-d.pdf; www.onsemi.com
+# refuses automated fetches). PD derates 1.57 mW/C above 25 C. IFRM 1.0 A
+# (200 ns square wave, 40 kHz) is kept as data.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF forward current"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "no temperature printed in the Maximum Ratings table, read at TA = 25 °C"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Maximum Ratings, IF"
+[[models.source.characteristic]]
+parameter = "IFSM(surge) non-repetitive peak forward surge current"
+rating = "max_surge_current_a"
+max = 1.8
+unit = "A"
+conditions = "60 Hz; no temperature printed, read at TA = 25 °C"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Maximum Ratings, IFSM(surge) 60 Hz"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 0.2
+unit = "W"
+conditions = "TA = 25 °C, FR-5 board (Note 1: FR-4 minimum pad)"
+mounting = "FR-4 minimum pad"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Thermal Characteristics, PD @ TA = 25 °C, Note 1"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 635.0
+unit = "°C/W"
+conditions = "FR-4 minimum pad"
+mounting = "FR-4 minimum pad"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Thermal Characteristics, RθJA"
+[[models.source.characteristic]]
+parameter = "VF forward voltage"
+max = 1.0
+unit = "V"
+conditions = "IF = 10 mA"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Electrical Characteristics, VF"
+[[models.source.characteristic]]
+parameter = "IR reverse voltage leakage current"
+max = 2.5e-8
+unit = "A"
+conditions = "VR = 20 V, TA = 25 °C"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Electrical Characteristics, IR (VR = 20 Vdc)"
+[[models.source.characteristic]]
+parameter = "IR reverse voltage leakage current"
+max = 5.0e-6
+unit = "A"
+conditions = "VR = 75 V, TA = 25 °C"
+basis = "onsemi MMDL914 MMDL914T1/D Rev. 11 (January 2025), Electrical Characteristics, IR (VR = 75 Vdc)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "pmeg60t10elr"
+kind = "diode"
+description = "PMEG60T10ELR Schottky barrier rectifier, 60 V, 1 A, CFP3 / SOD123W (Nexperia)"
+
+[models.match]
+value_re = "(?i)^PMEG60T10ELR[A-Z0-9,/-]*$"
+
+[models.params]
+# Source: Nexperia "PMEG60T10ELR 60 V, 1 A low leakage current Schottky barrier
+# rectifier" product data sheet, v.3, 1 April 2023, Table 7 (Characteristics,
+# page 4) and Fig. 5 (diode capacitance, page 5). The sheet prints no SPICE model.
+# DC params: fitted, not quoted, to the three typical VF rows at Tj = 25 C
+# (410 mV at 0.1 A, 480 mV at 0.5 A, 525 mV at 1 A); residual about 0.1 mV.
+# Capacitance: cjo, vj, m fitted to Table 7 (245 pF at 1 V, 75 pF at 10 V) and
+# Fig. 5 read-offs (146 pF at 2 V, 100 pF at 5 V, 45 pF at 20 V, 30 pF at 60 V),
+# within about 10 percent across 1-60 V.
+# tt is left at the default (0) as on every Schottky card here (trr 7 ns typ is
+# not stored charge).
+is  = 3.55e-7
+n   = 1.25
+rs  = 0.045
+cjo = 4.2e-10
+vj  = 0.5
+m   = 0.57
+bv  = 60.0    # V(BR)R min 60 V at IR = 1 mA; min is the only printed bound
+ibv = 1.0e-3  # the V(BR)R test current, IR = 1 mA
+
+[models.pins]
+# CFP3 / SOD123W: pin 1 cathode (K), pin 2 anode (A) per the sheet's pinning table.
+"1" = "cathode"
+"2" = "anode"
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_power_w = 0.68
+max_voltage_v = 60.0
+max_junction_temp_c = 175.0
+theta_ja_c_per_w = 220.0
+
+# Printed rating rows (Nexperia PMEG60T10ELR v.3, 1 April 2023, Table 5 limiting
+# values and Table 6 thermal characteristics). IF 1.4 A at delta = 1, Tsp <= 165 C
+# is kept as data: the card rates DC current by IF(AV), a 1 A average at
+# Tsp <= 167 C. The IF(AV) and IFSM rows are untagged because the sheet gives
+# them a solder-point temperature and a pulse, not a TA row the derating reader
+# can place. Ptot and Rth(j-a) are for the standard footprint; a 1 cm2 pad gives
+# 1.15 W and 130 K/W.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward current"
+max = 1.0
+unit = "A"
+conditions = "δ = 0.5, f = 20 kHz, square wave, Tsp <= 167 °C"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Limiting values, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM non-repetitive peak forward current"
+max = 30.0
+unit = "A"
+conditions = "tp = 8 ms, square wave, Tj(init) = 25 °C"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Limiting values, IFSM"
+[[models.source.characteristic]]
+parameter = "Ptot total power dissipation"
+rating = "max_power_w"
+max = 0.68
+unit = "W"
+conditions = "TA = 25 °C (printed as Tamb ≤ 25 °C), standard footprint"
+mounting = "standard footprint"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Limiting values, Ptot"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 220.0
+unit = "K/W"
+conditions = "standard footprint"
+mounting = "standard footprint"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Thermal characteristics, Rth(j-a), standard footprint"
+[[models.source.characteristic]]
+parameter = "Rth(j-a) thermal resistance from junction to ambient"
+typ = 130.0
+unit = "K/W"
+conditions = "1 cm2 mounting pad"
+mounting = "1 cm2 mounting pad"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Thermal characteristics, Rth(j-a), 1 cm2 pad"
+[[models.source.characteristic]]
+parameter = "VF forward voltage"
+typ = 0.525
+max = 0.6
+unit = "V"
+conditions = "IF = 1 A, Tj = 25 °C"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Characteristics, VF at IF = 1 A"
+[[models.source.characteristic]]
+parameter = "IR reverse current"
+typ = 1.2e-7
+unit = "A"
+conditions = "VR = 60 V, Tj = 25 °C"
+basis = "Nexperia PMEG60T10ELR v.3 (1 April 2023), Characteristics, IR at VR = 60 V"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
 id = "bat43"
 kind = "diode"
 description = "BAT43 small-signal Schottky diode, 30 V, 200 mA, DO-35"

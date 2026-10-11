@@ -2124,6 +2124,19 @@ disable = [
 #     volts, VIH 3.4 V min / VIL 1.6 V max at VDD = 5 V. Not a transcription
 #     slip: the -E and the non-E sheets genuinely specify these differently.
 #
+# WHY AN `identity_only` PAD-MAP CARD DOES NOT HELP (checked 2026-10-11): the
+# validator states that an identity-only digital card exists "so binding leaves
+# the part open" (validation.rs, digital_has_behavior check), so such a card
+# would record the pinout and still leave all ~250 instances OPEN on a board.
+# It would add a second place to keep four non-interchangeable pin maps in step
+# with nothing that consumes them, so none is written. The pin maps above were
+# re-read on 2026-10-11 against the Opsco SK6812MINI Rev. 01 sheet (1=DOUT
+# 2=VSS 3=DIN 4=VDD), the Opsco SK6812MINI-E Rev. 04 sheet (1=VDD 2=DOUT 3=GND
+# 4=DIN; supply +3.7 to +5.5 V) and the Worldsemi WS2812B sheet (1=VDD 2=DOUT
+# 3=VSS 4=DIN; supply +3.5 to +5.3 V). The SK6805-EC15 sheet could not be
+# re-fetched in that pass (the Opsco mirrors found carried the EC10/SIDE parts,
+# not the EC15), so its map stays as recorded from the Rev. 04 sheet read earlier.
+#
 # WS2812-2020 additionally could not be sourced at all: every mirror of the
 # 2020-package datasheet either 403'd, sat behind a lead-capture form, or served
 # HTML instead of the PDF. A distributor spec table gives the timing and the

@@ -190,6 +190,122 @@ basis = "onsemi 2N3904/D Rev. 3 (October 2024), Thermal Characteristics, RθJA m
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
+id = "mmbt3904"
+kind = "bjt_npn"
+description = "MMBT3904 NPN general-purpose switching transistor SOT-23, 40V, 200mA (onsemi)"
+
+[models.match]
+# onsemi's SOT-23 part only: MMBT3904L / MMBT3904LT1 / MMBT3904LT3 (with the G
+# Pb-free suffix) and the automotive S prefix. The 2N3904 above is the TO-92
+# part with different ratings (PD 625 mW, RthJA 200 C/W), so it is not widened.
+# A bare "MMBT3904" is accepted here as onsemi's part; another vendor's SOT-23
+# MMBT3904 can print a different PD / RthJA.
+value_re = "(?i)^S?MMBT3904(L(T[13])?)?G?$"
+
+[models.params]
+# Source: onsemi "MMBT3904L, SMMBT3904L Switching Transistor NPN Silicon",
+# publication order number MMBT3904LT1/D, Rev. 14, August 2021, SOT-23 CASE 318
+# (electrical characteristics page 2, Figures 3 and 15). The sheet prints no
+# SPICE model.
+# bf: Figure 15 (DC current gain at 25 C, VCE = 1 V) is a plateau of about 190
+#   from 0.1 mA to about 30 mA; the table row is hFE 100 to 300 at 10 mA, 1 V.
+#   The model has no ISE / IKF, so bf is hFE across that range.
+# is: ASSUMED, not read from a curve. The sheet prints VBE(sat) as an interval,
+#   0.65 to 0.85 V at IC = 10 mA, IB = 1 mA, and no typical. is is set to the
+#   labelled midpoint, 0.75 V: Vt * ln(10 mA / 2.5e-15) = 0.75 V with nf = 1.
+#   The printed interval is kept as a characteristic row. Solving the
+#   Ebers-Moll transport equations at IC = 10 mA, IB = 1 mA with these params
+#   (br at the default 1) gives VBE = 0.753 V, VCE = 0.05 V: inside the interval
+#   and under the VCE(sat) max of 0.2 V.
+# cje: Figure 3 Cibo is about 4.05 pF at VEB = 0.5 V (table max 8.0 pF):
+#   4.05p * (1 + 0.5/0.75)^0.33 = 4.8 pF.
+# cjc: Figure 3 Cobo is about 3.5 pF at 0.1 V and about 2.0 pF at VCB = 5 V
+#   (table max 4.0 pF); 3.55 pF zero-bias reproduces the 5 V point to about 10%.
+# tf: fT min 300 MHz at IC = 10 mA, VCE = 20 V: 1/(2*pi*300e6). The sheet prints
+#   a minimum only, so tf is an upper bound.
+# DELIBERATELY OMITTED, because the sheet states none of them: vaf, br, rb, rc,
+#   re, tr (ts max 200 ns is a switching time, not a tr).
+is  = 2.5e-15
+bf  = 190.0
+nf  = 1.0
+cje = 4.8e-12
+cjc = 3.55e-12
+tf  = 5.305e-10
+
+[models.pins]
+# SOT-23 CASE 318 Style 6: pin 1 base, pin 2 emitter, pin 3 collector (MMBT3904LT1/D page 1).
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+[models.ratings]
+# Source: onsemi MMBT3904LT1/D Rev. 14 (August 2021), Maximum Ratings and Thermal
+# Characteristics, headed TA = 25 C. PD is the FR-5 board row (225 mW, RthJA
+# 556 C/W); the alumina-substrate rows (300 mW, 417 C/W) are kept as data.
+max_current_a = 0.2            # IC continuous (ICM 900 mA peak)
+max_power_w = 0.225            # PD, FR-5 board, TA = 25 C
+max_voltage_v = 40.0           # VCEO
+max_junction_temp_c = 150.0    # TJ, Tstg -55 to +150 C
+theta_ja_c_per_w = 556.0       # RθJA, FR-5 board
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "IC collector current, continuous"
+rating = "max_current_a"
+max = 0.2
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Maximum Ratings, IC continuous"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+rating = "max_power_w"
+max = 0.225
+unit = "W"
+conditions = "FR-5 board, TA = 25 °C (derate above 25 °C 1.8 mW/°C)"
+mounting = "FR-5 board"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Thermal Characteristics, PD, FR-5 board (Note 1)"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation"
+max = 0.3
+unit = "W"
+conditions = "alumina substrate, TA = 25 °C"
+mounting = "alumina substrate"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Thermal Characteristics, PD, alumina substrate (Note 2)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 556.0
+unit = "°C/W"
+conditions = "FR-5 board"
+mounting = "FR-5 board"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Thermal Characteristics, RθJA, FR-5 board (Note 1)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+max = 417.0
+unit = "°C/W"
+conditions = "alumina substrate"
+mounting = "alumina substrate"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Thermal Characteristics, RθJA, alumina substrate (Note 2)"
+[[models.source.characteristic]]
+parameter = "VBE(sat) base-emitter saturation voltage"
+min = 0.65
+max = 0.85
+unit = "V"
+conditions = "IC = 10 mA, IB = 1.0 mA"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Electrical Characteristics, VBE(sat) at IC = 10 mA, IB = 1.0 mA"
+[[models.source.characteristic]]
+parameter = "hFE DC current gain"
+min = 100.0
+max = 300.0
+unit = ""
+conditions = "IC = 10 mA, VCE = 1.0 V"
+basis = "onsemi MMBT3904LT1/D Rev. 14 (August 2021), Electrical Characteristics, hFE at IC = 10 mA, VCE = 1.0 V"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
 id = "bc237"
 kind = "bjt_npn"
 description = "BC237/BC547 NPN general-purpose TO-92, 45V, 100mA"
