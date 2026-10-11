@@ -252,7 +252,7 @@ pub enum CornerCover {
     #[default]
     Full,
     /// Past the cap: all weak, all strong, and each set alone against the rest
-    /// (see [`boundary_patterns`] for what that does and does not bound).
+    /// (see `boundary_patterns` for what that does and does not bound).
     Boundary,
     /// Past the cap even for [`Self::Boundary`]: every set at corner k together.
     Joint,
@@ -345,8 +345,8 @@ pub struct VariantSweep {
 ///   does not name, say) are ordered by construction: each member is an
 ///   assumed bound of one class, listed weak to strong, and the same index
 ///   is the same side across sets. They fall back to a linear cover instead
-///   of the product, and then only if that fits: [`boundary_patterns`], then
-///   [`joint_patterns`] (all sets at one corner together), then the stand-in
+///   of the product, and then only if that fits: `boundary_patterns`, then
+///   `joint_patterns` (all sets at one corner together), then the stand-in
 ///   alone. Each fallback is reported by [`VariantCoverage::conditions`].
 #[must_use]
 pub fn sweep_open_sets(runs: Vec<SeedPlan>, sets: &[OpenSet]) -> VariantSweep {
