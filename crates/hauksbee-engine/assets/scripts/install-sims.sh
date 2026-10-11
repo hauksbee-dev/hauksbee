@@ -1020,6 +1020,13 @@ install_qemu_patched_source() {
   cp "$xtensa_bin" "$candidate/qemu/bin/qemu-system-xtensa"
   cp "$riscv_bin" "$candidate/qemu/bin/qemu-system-riscv32"
   chmod +x "$candidate/qemu/bin/qemu-system-xtensa" "$candidate/qemu/bin/qemu-system-riscv32"
+  # The esp32 machines load their mask ROM from the data directory QEMU
+  # resolves beside its binary (../share/qemu); the build tree finds it in
+  # pc-bios, so a bare copy of the binaries cannot boot any machine.
+  mkdir -p "$candidate/qemu/share/qemu"
+  local roms=("$source_root"/qemu/pc-bios/esp32*rom*.bin)
+  [ -f "${roms[0]}" ] || die "patched QEMU source has no ESP32 ROM images in pc-bios"
+  cp "${roms[@]}" "$candidate/qemu/share/qemu/"
   printf 'tag=%s\ncommit=%s\npatch_sha256=%s\nxtensa_sha256=%s\nriscv32_sha256=%s\n' \
     "$QEMU_VERSION" \
     "$QEMU_COMMIT" \
