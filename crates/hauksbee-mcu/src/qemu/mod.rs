@@ -555,6 +555,18 @@ fn peripheral_routed_pads(words: &[u32], enable: u32) -> u32 {
         .fold(0, |mask, (pad, _)| mask | 1 << pad)
 }
 
+/// The pads (bit n for pad n) whose output is the plain `GPIO_OUT` latch,
+/// `OUT_SEL` 256; pads past the words read stay set, unseen rather than
+/// excluded.
+fn plain_gpio_pads(words: &[u32]) -> u32 {
+    words
+        .iter()
+        .take(32)
+        .enumerate()
+        .filter(|&(_, &word)| word & FUNC_OUT_SEL_MASK != FUNC_OUT_SEL_GPIO)
+        .fold(u32::MAX, |mask, (pad, _)| mask & !(1 << pad))
+}
+
 const fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
     ((new ^ prev) | (enable & !prev_enable)) & enable
 }
@@ -930,7 +942,11 @@ impl QemuBackend {
             let new = self.read_out(bank)?;
             let enable = match self.gpio_output_observation {
                 GpioOutputObservation::PeripheralRegisters => {
-                    self.read_gpio_word("enable", bank.peripheral_enable_reg)?
+                    let raw = self.read_gpio_word("enable", bank.peripheral_enable_reg)?;
+                    // GPIO_OUT drives only the pads whose matrix selects it;
+                    // the rest belong to a peripheral (the boot ROM leaves the
+                    // flash pads enabled on SPIQ..SPICS0, holding GPIO_OUT 0).
+                    raw & self.poll_matrix_routing(bank, raw)?
                 }
                 // Mailbox firmware publishes only levels. Preserve the old
                 // behavior while reporting direction as unobservable.
@@ -946,7 +962,6 @@ impl QemuBackend {
                 self.last_out.insert(bank.letter, new);
                 self.last_enable.insert(bank.letter, enable);
             }
-            self.poll_matrix_routing(bank, enable)?;
         }
         Ok(observed_change)
     }
@@ -955,13 +970,15 @@ impl QemuBackend {
     /// and latch the pads a peripheral output is routed onto. A PWM, timer or
     /// RMT waveform reaches its pad through `GPIO_FUNCn_OUT_SEL_CFG` and never
     /// touches `GPIO_OUT`, so without this a pad driven by LEDC alone looks
-    /// like an untouched input. No-op until the capability probe succeeded.
-    fn poll_matrix_routing(&mut self, bank: &GpioBank, enable: u32) -> Result<()> {
+    /// like an untouched input. Returns the pads whose output is the plain
+    /// `GPIO_OUT` latch (`OUT_SEL` 256); every pad until the capability probe
+    /// succeeded, since the matrix is then unseen.
+    fn poll_matrix_routing(&mut self, bank: &GpioBank, enable: u32) -> Result<u32> {
         let Some(reg) = bank.peripheral_func_out_sel_reg else {
-            return Ok(());
+            return Ok(u32::MAX);
         };
         if !self.func_out_sel_observable {
-            return Ok(());
+            return Ok(u32::MAX);
         }
         let pads = usize::from(bank.width.min(32));
         let words = self.qmp.read_words(reg, pads).with_context(|| {
@@ -969,7 +986,7 @@ impl QemuBackend {
         })?;
         let routed = peripheral_routed_pads(&words, enable);
         *self.routed_pads.entry(bank.letter).or_insert(0) |= routed;
-        Ok(())
+        Ok(plain_gpio_pads(&words))
     }
 
     /// Advance the guest by ~`seconds` of virtual time, then exchange state.
@@ -1787,6 +1804,20 @@ mod tests {
         assert_eq!(peripheral_routed_pads(&words, 0), 0);
         words[9] = 71;
         assert_eq!(peripheral_routed_pads(&words, 0), 1 << 9);
+    }
+
+    /// The boot ROM's flash attach state on the classic ESP32: pads 7-11 on
+    /// SPIQ..SPICS0 with `GPIO_ENABLE` set and `GPIO_OUT` 0. Only the
+    /// fixture's own pads (2, 4) may count as plain GPIO outputs.
+    #[test]
+    fn only_pads_selecting_gpio_out_are_plain_outputs() {
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        for (pad, sig) in [(7, 1), (8, 2), (9, 3), (10, 4), (11, 5)] {
+            words[pad] = sig;
+        }
+        let enable = 0xF94; // pads 2, 4 and 7-11, read from the live fixture
+        assert_eq!(enable & plain_gpio_pads(&words), 1 << 2 | 1 << 4);
+        assert_eq!(plain_gpio_pads(&words[..4]), u32::MAX);
     }
 
     #[test]
