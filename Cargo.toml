@@ -114,6 +114,21 @@ opt-level = 1
 [profile.dev.package.hauksbee-extract]
 opt-level = 1
 
+# The co-simulation hot path (scheduler and responders, the AVR port hook, the
+# bound-device stress monitor) runs inside every firmware port write and
+# solver step. At opt-level 0 an AVR host-serial session spent 1.6x the wall
+# time per simulated second, enough to miss the host program's wall-clock
+# serial timeouts on a loaded or efficiency-core machine. Costs ~7 s on a
+# clean rebuild of these three crates.
+[profile.dev.package.hauksbee-cosim]
+opt-level = 1
+
+[profile.dev.package.hauksbee-mcu]
+opt-level = 1
+
+[profile.dev.package.hauksbee-bind]
+opt-level = 1
+
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
