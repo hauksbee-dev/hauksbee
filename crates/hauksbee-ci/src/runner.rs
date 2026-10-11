@@ -884,6 +884,14 @@ pub fn run_spec_with_lib(
         variant: prepared.variant.as_ref(),
         firmware: firmware.as_deref(),
     };
+    // Members never share state: each re-derives its own board, binding and
+    // engine from `base`. Without a firmware the run is pure analog arithmetic,
+    // with no wall-clock pacing to disturb, so a fuzz or tolerance ensemble
+    // spreads over the cores like a `[search]` grid does. A firmware run keeps
+    // its members in order, one at a time: an emulator backend (QEMU/Renode)
+    // paces itself against the wall clock and a loaded machine would skew it.
+    let members_are_independent =
+        spec.search.is_some() || (firmware.is_none() && spec.firmware.is_none());
     let run_plans = |batch: &[SeedPlan]| {
         let one = |plan: &SeedPlan| {
             run_one(
@@ -896,7 +904,7 @@ pub fn run_spec_with_lib(
                 &run_inputs,
             )
         };
-        run_parallel(batch, spec.search.is_some(), one)
+        run_parallel(batch, members_are_independent, one)
     };
     let mut ran = run_plans(&plans)?;
     if spec.search.is_some() {
@@ -2435,10 +2443,11 @@ fn member_plans(
     Ok((sel, !tols.is_empty(), conditions))
 }
 
-/// Run every plan through `one`, in order. A `[search]` grid and its culprit
-/// reruns are independent members, so with `parallel` they spread over the
-/// machine's cores (at most four, the shared-machine build cap); otherwise
-/// they run one after another exactly as before.
+/// Run every plan through `one`, in order. Ensemble members (a `[search]` grid
+/// and its culprit reruns, fuzz seeds, tolerance draws) are independent, so
+/// with `parallel` they spread over the machine's cores (at most four, the
+/// shared-machine build cap) and the outcomes come back in plan order;
+/// otherwise they run one after another exactly as before.
 fn run_parallel(
     plans: &[SeedPlan],
     parallel: bool,
