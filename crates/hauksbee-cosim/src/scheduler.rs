@@ -6141,9 +6141,35 @@ impl Scheduler {
     #[must_use]
     pub fn firmware_driven_nets(&self) -> Vec<String> {
         let configured = self.configured_output_pins();
-        self.gpio_nets_where(|mi, m, pin, _| {
+        let mut out = self.gpio_nets_where(|mi, m, pin, _| {
             m.last_levels.contains_key(&pin) || configured[mi].contains(&pin)
-        })
+        });
+        out.extend(self.uart_tx_nets());
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The nets of MCU UART transmit pins on a core that sent UART bytes: the
+    /// UART block, not the GPIO output register, drives such a pin, so a
+    /// backend that reports no pin write or direction for it would otherwise
+    /// leave a line the firmware demonstrably drove out of the driven set, and
+    /// with it everything an RC or level shifter takes from that line. The
+    /// byte count is per core, not per UART, so a second, silent UART's TX net
+    /// is listed too, which errs toward judging a time bound there over the
+    /// whole run.
+    fn uart_tx_nets(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for m in self.mcus.iter().filter(|m| m.uart_bytes > 0) {
+            for (role, &node) in &m.binding.role_nets {
+                if is_uart_tx_role(role) && gpio_of_role(role, m.binding.module).is_some() {
+                    if let Some(name) = self.net_name_for(node) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Board nets no MCU pin drives whose level the firmware can still move,
@@ -7602,6 +7628,13 @@ const fn pin_drive(update: crate::responders::InputDrive) -> hauksbee_mcu::PinDr
         Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),
         None => hauksbee_mcu::PinDrive::release(pin),
     }
+}
+
+/// Whether a pin role names a UART transmit line. The binder tags a pin whose
+/// KiCad pin function is a UART/USART TX with a `_txd` suffix on its port-pin
+/// role (`pd1_txd`, `p01_txd`, `pd3_txd1`).
+fn is_uart_tx_role(role: &str) -> bool {
+    role.to_ascii_lowercase().contains("_txd")
 }
 
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
@@ -10535,6 +10568,59 @@ data_out = ["io0"]
             sched.firmware_influenced_nets().is_empty(),
             "a 0 V source to ground holds its node"
         );
+    }
+
+    /// A UART transmit pin is driven by the UART block, so a backend that never
+    /// reports a GPIO write or direction for it leaves the line out of the
+    /// driven set although the firmware sent bytes on it; an RC filter behind
+    /// it then moves with the firmware's timing. A transmit pin on a core that
+    /// sent nothing, and an unrelated net, stay out.
+    #[test]
+    fn a_uart_tx_line_the_firmware_sent_bytes_on_is_driven_and_seeds_the_walk() {
+        let mut circuit = Circuit::new();
+        let mut net_nodes = HashMap::new();
+        let mut net = |name: &str| {
+            let id = circuit.node(name);
+            net_nodes.insert(name.to_string(), id);
+            id
+        };
+        let [tx, filt, other, rail] = ["UART_TX", "FILT", "OTHER", "RAIL"].map(&mut net);
+        let gnd = NodeId::GROUND;
+        circuit.add(Device::vsource("Vrail", rail, gnd, SourceKind::Dc(3.3)));
+        circuit.add(Device::resistor("R_RC", tx, filt, 10e3));
+        circuit.add(Device::capacitor("C_RC", filt, gnd, 1e-6));
+        circuit.add(Device::resistor("R_PU", rail, other, 10e3));
+        circuit.add(Device::resistor("R_PD", other, gnd, 10e3));
+        let pins = [(('B', 1), "UART_TX")];
+        let mut sched = influence_sched(circuit, net_nodes, &pins, &[]);
+        // The binder's role for a pin whose function is a UART TX.
+        let node = sched.net_nodes["UART_TX"];
+        let roles = &mut sched.mcus[0].binding.role_nets;
+        roles.remove("pb1");
+        roles.insert("pb1_txd".to_string(), node);
+
+        // Nothing sent, nothing written: the line is not driven.
+        assert!(sched.firmware_driven_nets().is_empty());
+        assert!(sched.firmware_influenced_nets().is_empty());
+
+        // Bytes went out on a core with a transmit pin: the line is driven,
+        // and the filter behind it follows; the divider and the rail do not.
+        sched.mcus[0].uart_bytes = 12;
+        assert_eq!(sched.firmware_driven_nets(), ["UART_TX"]);
+        assert_eq!(
+            sched.firmware_influenced_nets(),
+            named(&[("FILT", "UART_TX")])
+        );
+        assert_eq!(
+            sched.level_provenance("UART_TX"),
+            LevelProvenance::FirmwareDriven
+        );
+
+        // A pin that is not a transmit line does not become driven by bytes.
+        let roles = &mut sched.mcus[0].binding.role_nets;
+        roles.remove("pb1_txd");
+        roles.insert("pb1".to_string(), node);
+        assert!(sched.firmware_driven_nets().is_empty());
     }
 
     // ── Thermal integration through the real march ───────────────────────────

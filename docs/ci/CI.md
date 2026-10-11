@@ -1158,7 +1158,8 @@ the host:
 A level asserted inside a simulated-time window on a firmware-driven net (a
 `voltage` with `after_ms`, a `rail_window` with a `scenario`) follows the same
 rule. "Firmware-driven" means an MCU pin net the firmware drove during the run,
-the same evidence the `toggle` and `pulse_width` rules use, or a net
+the same evidence the `toggle` and `pulse_width` rules use (a UART transmit
+pin counts once the core has sent bytes), or a net
 downstream of one: a net the firmware moves through the board without driving
 it (a MOSFET or load-switch output, a regulator's rail through an enable pin
 the firmware drives, a logic stage's output, an output a bus peripheral sets when

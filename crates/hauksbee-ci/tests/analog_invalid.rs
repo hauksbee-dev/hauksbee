@@ -502,3 +502,75 @@ fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refuse
     let results = evaluate(&spec, &[bare]);
     assert!(results[0].passed && results[0].host_paced.is_none());
 }
+
+/// [`firmware_level_run`] read on `FILT`, an RC filter behind `UART_TX`, a
+/// transmit line the firmware drove by sending UART bytes (no GPIO write is
+/// reported for it, and no other pin drives `FILT`).
+fn uart_filter_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
+    let mut out = firmware_level_run(whole, after, host_paced);
+    out.driven_nets.remove("EN");
+    out.driven_nets.insert("UART_TX".to_string());
+    for thr in [0.0_f64, 50.0] {
+        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
+        out.windows.insert(("FILT".to_string(), thr.to_bits()), win);
+    }
+    out.influenced_nets
+        .insert("FILT".to_string(), "UART_TX".to_string());
+    out
+}
+
+/// A windowed level behind a UART transmit line is as host-dependent as one
+/// behind a GPIO: a conditional GREEN naming the TX net on a host-paced clock,
+/// a refusal when only the window passes, and a hard verdict on a clock-exact
+/// backend.
+#[test]
+fn host_paced_windowed_level_behind_a_uart_tx_line_is_conditional_or_refused() {
+    let spec = load_spec(
+        "host_paced_uart_rc.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=200\n[[assert]]\nname=\"filtered\"\nkind=\"voltage\"\n\
+         net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
+    );
+    let results = evaluate(&spec, &[uart_filter_run((3.3, 3.3), (3.3, 3.3), true)]);
+    assert!(results[0].passed, "{}", results[0].detail);
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(
+        human.contains(
+            "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of \
+             firmware-driven 'UART_TX' was not judged"
+        ),
+        "{human}"
+    );
+
+    // The level holds only inside the window: refused, not passed.
+    let results = evaluate(&spec, &[uart_filter_run((0.0, 3.3), (3.3, 3.3), true)]);
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    assert!(
+        results[0]
+            .detail
+            .contains("'FILT' is downstream of firmware-driven 'UART_TX'"),
+        "{}",
+        results[0].detail
+    );
+    assert_eq!(ci_result(results, false).exit_code(), 3);
+
+    // A clock-exact backend orders the bytes in simulated time: hard.
+    let results = evaluate(&spec, &[uart_filter_run((0.0, 3.3), (3.3, 3.3), false)]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+
+    // Legal control: the same windowed claim on a net the walk did not reach
+    // keeps its hard verdict on a host-paced clock.
+    let mut other = uart_filter_run((0.0, 3.3), (3.3, 3.3), true);
+    other.influenced_nets.clear();
+    let results = evaluate(&spec, &[other]);
+    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+}
