@@ -4642,6 +4642,9 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "14-pin SOIC, SSOP, TVSOP, PDIP, SOP, TSSOP (D, DB, DGV, N, NS, PW)"
+pins = { "1" = "1A", "2" = "1Y", "3" = "2A", "4" = "2Y", "5" = "3A", "6" = "3Y", "7" = "GND", "8" = "4Y", "9" = "4A", "10" = "5Y", "11" = "5A", "12" = "6Y", "13" = "6A", "14" = "VCC" }
 
 [[models.source.uncertainty]]
 status = "interval"
@@ -9715,6 +9718,13 @@ high = 0.0015
 unit = "A"
 kind = "specification-limits"
 basis = "VS1838B datasheet Icc 0.4 mA typical, 1.5 mA maximum"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the typical supply current is modelled, the output stage (an internal pull-up of unpublished value) is not"
+[[models.source.pinout]]
+package = "3-pin through-hole module (leads printed OUT GND VCC, unnumbered)"
+pins = { "1" = "OUT", "2" = "GND", "3" = "VCC" }
 
 [models.coverage]
 implements = ["supply_current", "supply_range"]
@@ -9808,6 +9818,13 @@ high = 2.781
 unit = "V"
 kind = "specification-limits"
 basis = "HX70XX Ver 2.1 p.3 HX7027 VDET minimum and maximum at 25 C"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the open-drain output type is assumed (the sheet gives IOL only) and the typical 200 Ohm low-level output is a single-point fit"
+[[models.source.pinout]]
+package = "SOT23-3"
+pins = { "1" = "OUT", "2" = "GND", "3" = "VDD" }
 
 [models.coverage]
 implements = ["voltage_detection", "hysteresis", "low_level_output", "supply_current", "supply_range"]
@@ -9889,6 +9906,13 @@ high = 0.010
 unit = "A"
 kind = "specification-limits"
 basis = "SIT1050 REC V1.16 p.7 ICC recessive 6 mA typical, 10 mA maximum"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the bus-idle supply current and the recessive RXD level are modelled, and the RXD level law is a single-point fit to the typical VOH"
+[[models.source.pinout]]
+package = "SOP8"
+pins = { "1" = "TXD", "2" = "GND", "3" = "VCC", "4" = "RXD", "5" = "Vref", "6" = "CANL", "7" = "CANH", "8" = "S" }
 
 [models.coverage]
 implements = ["supply_current", "supply_range", "recessive_rxd_output"]
@@ -9958,6 +9982,13 @@ high = 0.020
 unit = "A"
 kind = "specification-limits"
 basis = "CH340 V3D Section 6.2 ICC 7 mA typical, 20 mA maximum at 5 V; Section 6.3 12 mA maximum at 3.3 V"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the supply current between the 3.3 V and 5 V rows is a linear interpolation and the UART, USB and modem-control behaviour is not modelled"
+[[models.source.pinout]]
+package = "ESSOP10"
+pins = { "1" = "UD+", "2" = "UD-", "3" = "GND", "4" = "DTR#", "5" = "CTS#", "6" = "RTS#", "7" = "VCC", "8" = "TXD", "9" = "RXD", "10" = "V3" }
 
 [models.coverage]
 implements = ["supply_current"]
@@ -10090,6 +10121,13 @@ high = 0.049
 unit = "A"
 kind = "specification-limits"
 basis = "DS00002164B Table 5-1 maximum VDDCR 21 mA plus half of the 28 mA maximum VDDA3.3 current, 100BASE-TX with traffic"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the A/B split of the VDDA3.3 current is assumed even, only one operating state (100BASE-TX with traffic) is modelled and link-down draw is lower"
+[[models.source.pinout]]
+package = "32-QFN"
+pins = { "1" = "VDD2A", "2" = "LED2/nINTSEL", "3" = "LED1/REGOFF", "4" = "XTAL2", "5" = "XTAL1/CLKIN", "6" = "VDDCR", "7" = "RXCLK/PHYAD1", "8" = "RXD3/PHYAD2", "9" = "RXD2/RMIISEL", "10" = "RXD1/MODE1", "11" = "RXD0/MODE0", "12" = "VDDIO", "13" = "RXER/RXD4/PHYAD0", "14" = "CRS", "15" = "COL/CRS_DV/MODE2", "16" = "MDIO", "17" = "MDC", "18" = "nINT/TXER/TXD4", "19" = "nRST", "20" = "TXCLK", "21" = "TXEN", "22" = "TXD0", "23" = "TXD1", "24" = "TXD2", "25" = "TXD3", "26" = "RXDV", "27" = "VDD1A", "28" = "TXN", "29" = "TXP", "30" = "RXN", "31" = "RXP", "32" = "RBIAS", "33" = "VSS" }
 
 [models.coverage]
 implements = ["supply_current", "supply_range"]
@@ -10179,6 +10217,10 @@ high = 75.9
 unit = "Ohm"
 kind = "specification-limits"
 basis = "Sun Hold RAS series catalogue p.24, 5 V coil 69 Ohm +-10 %"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "catalogue publishes no validated model error interval; the pull-in and drop-out voltages are taken as the percentage limits (75 percent maximum, 10 percent minimum) rather than measured switching points, and coil inductance, timing and bounce are not modelled"
 
 [models.coverage]
 implements = ["coil_resistance", "pull_in_drop_out", "spdt_contacts"]
@@ -10259,6 +10301,9 @@ sha256 = "dab78fc389d0d3cce51eeba2491c89f538f2042dd708f8189902ab06680ecbae"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval; the clamp rows are typical values"
+[[models.source.pinout]]
+package = "DBV (SOT-23, 5)"
+pins = { "1" = "I/O1", "2" = "GND", "3" = "I/O2", "4" = "I/O3", "5" = "I/O4" }
 
 [models.coverage]
 implements = ["esd_clamp", "negative_clamp", "positive_breakdown"]
