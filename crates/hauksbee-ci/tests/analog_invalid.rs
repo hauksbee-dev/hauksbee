@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use hauksbee_ci::assertions::evaluate;
 use hauksbee_ci::runner::{NetWindow, RunOutcome};
 
-use crate::support::{ci_result, load_spec};
+use crate::support::{assert_row_green, ci_result, load_spec, row_is_green};
 
 /// A minimal one-seed outcome carrying a single settled voltage window on `net`
 /// (a value that would PASS a `>= 3.0 V` check) plus a caller-supplied analog
@@ -116,7 +116,7 @@ fn assertion_clear_of_failed_window_passes_normally() {
         !r.invalid,
         "a non-overlapping failed window does not invalidate"
     );
-    assert!(r.passed, "5 V clears the >= 3 V bound: {}", r.detail);
+    assert_row_green(r, "5 V clears the >= 3 V bound");
 
     let result = ci_result(results, false);
     assert_eq!(result.exit_code(), 0, "a clean, passing assertion exits 0");
@@ -134,7 +134,7 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
     let mut out = outcome_with("n1", 5.0, 1.0, false, vec![(0.0, 0.0003)], true);
     out.uart.insert("U1".to_string(), "hi there".to_string());
     let results = evaluate(&spec, &[out]);
-    assert!(results[0].passed, "the UART assertion itself passes");
+    assert_row_green(&results[0], "the UART assertion itself passes");
     assert!(
         !results[0].invalid,
         "a UART assertion is not analog-invalidated"
@@ -328,7 +328,7 @@ fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
          net=\"EN\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[firmware_level_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert!(results[0].passed, "{}", results[0].detail);
+    assert_row_green(&results[0], "whole-run level");
     let mut result = ci_result(results, false);
     result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
     assert_eq!(result.exit_code(), 0);
@@ -371,7 +371,7 @@ fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
 
     // The same waveform on a clock-exact backend: the window is judged, PASS.
     let results = evaluate(&spec, &[firmware_level_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
 
@@ -400,7 +400,7 @@ fn host_paced_windowed_level_downstream_of_firmware_is_conditional_or_refused() 
          net=\"LOAD\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[load_switch_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert!(results[0].passed, "{}", results[0].detail);
+    assert_row_green(&results[0], "whole-run level");
     let mut result = ci_result(results, false);
     result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
     assert_eq!(result.exit_code(), 0);
@@ -430,7 +430,7 @@ fn host_paced_windowed_level_downstream_of_firmware_is_conditional_or_refused() 
     assert_eq!(ci_result(results, false).exit_code(), 3);
 
     let results = evaluate(&spec, &[load_switch_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
 
@@ -461,7 +461,7 @@ fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refuse
          net=\"VOUT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[dac_output_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert!(results[0].passed, "{}", results[0].detail);
+    assert_row_green(&results[0], "whole-run level");
     let mut result = ci_result(results, false);
     result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
     assert_eq!(result.exit_code(), 0);
@@ -494,7 +494,7 @@ fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refuse
 
     // A clock-exact backend orders the DAC write in simulated time: hard.
     let results = evaluate(&spec, &[dac_output_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 
     // Without the walk's attribution the same net keeps its hard verdict,
@@ -502,7 +502,7 @@ fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refuse
     let mut bare = dac_output_run((0.0, 3.3), (3.3, 3.3), true);
     bare.influenced_nets.clear();
     let results = evaluate(&spec, &[bare]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
 }
 
 /// [`firmware_level_run`] read on `FILT`, an RC filter behind `UART_TX`, a
@@ -533,7 +533,7 @@ fn host_paced_windowed_level_behind_a_uart_tx_line_is_conditional_or_refused() {
          net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[uart_filter_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert!(results[0].passed, "{}", results[0].detail);
+    assert_row_green(&results[0], "whole-run level");
     let mut result = ci_result(results, false);
     result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
     assert_eq!(result.exit_code(), 0);
@@ -565,7 +565,7 @@ fn host_paced_windowed_level_behind_a_uart_tx_line_is_conditional_or_refused() {
 
     // A clock-exact backend orders the bytes in simulated time: hard.
     let results = evaluate(&spec, &[uart_filter_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 
     // Legal control: the same windowed claim on a net the walk did not reach
@@ -573,7 +573,7 @@ fn host_paced_windowed_level_behind_a_uart_tx_line_is_conditional_or_refused() {
     let mut other = uart_filter_run((0.0, 3.3), (3.3, 3.3), true);
     other.influenced_nets.clear();
     let results = evaluate(&spec, &[other]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
 
@@ -602,7 +602,7 @@ fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
          net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[i2c_filter_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert!(results[0].passed, "{}", results[0].detail);
+    assert_row_green(&results[0], "whole-run level");
     let mut result = ci_result(results, false);
     result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
     assert_eq!(result.exit_code(), 0);
@@ -634,7 +634,7 @@ fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
 
     // A clock-exact backend orders the bus events in simulated time: hard.
     let results = evaluate(&spec, &[i2c_filter_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 
     // Legal control: the same windowed claim on a net the walk did not reach
@@ -642,7 +642,7 @@ fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
     let mut other = i2c_filter_run((0.0, 3.3), (3.3, 3.3), true);
     other.influenced_nets.clear();
     let results = evaluate(&spec, &[other]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }
 
@@ -687,7 +687,7 @@ fn host_paced_windowed_level_behind_an_unobserved_pad_is_conditional_or_refused(
          net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[unobserved_pad_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert!(results[0].passed, "{}", results[0].detail);
+    assert_row_green(&results[0], "whole-run level");
     let mut result = ci_result(results, false);
     result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
     assert_eq!(result.exit_code(), 0);
@@ -730,7 +730,7 @@ fn host_paced_windowed_level_behind_an_unobserved_pad_is_conditional_or_refused(
 
     // A clock-exact backend orders the pad's output in simulated time: hard.
     let results = evaluate(&spec, &[unobserved_pad_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 
     // An input-only pad has no output driver, so the scheduler lists nothing
@@ -738,6 +738,6 @@ fn host_paced_windowed_level_behind_an_unobserved_pad_is_conditional_or_refused(
     let mut input_only = unobserved_pad_run((0.0, 3.3), (3.3, 3.3), true);
     input_only.peripheral_pad_nets.clear();
     let results = evaluate(&spec, &[input_only]);
-    assert!(results[0].passed && results[0].host_paced.is_none());
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
     assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
 }

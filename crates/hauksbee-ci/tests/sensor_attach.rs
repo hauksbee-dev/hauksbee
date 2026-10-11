@@ -67,11 +67,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
     };
     // Specifically the boot-coverage assertion must be green.
     let bc = support::row(&result, "kind:boot_coverage");
-    assert!(
-        bc.passed,
-        "boot-coverage on FLAG must pass at 40 C: {}",
-        bc.detail
-    );
+    support::assert_row_green(bc, "boot-coverage on FLAG must pass at 40 C");
 }
 
 /// The cold run: declarative LM75 at 20 C, FLAG must stay LOW (voltage PASS).

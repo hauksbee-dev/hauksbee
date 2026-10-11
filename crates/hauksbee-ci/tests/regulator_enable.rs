@@ -192,12 +192,7 @@ fn input_current_run(
 /// The input window held: its row passed, else the detail says what it read.
 fn assert_input_current(result: &CiResult, why: &str) {
     let row = support::row(result, "IN current");
-    assert!(
-        row.passed,
-        "{why}: {}\n{}",
-        row.detail,
-        result.render_human()
-    );
+    support::assert_row_green(row, &format!("{why}\n{}", result.render_human()));
 }
 
 /// EN fed from the supply through a 100k/100k divider (2.5 V, past the 1.5 V on
@@ -278,12 +273,7 @@ fn a_regulator_with_no_enable_modelled_draws_its_iq_as_before() {
 /// The rail is up, and nothing calls it dead.
 fn assert_rail_up(result: &CiResult, why: &str) {
     let row = support::row(result, "VOUT regulated");
-    assert!(
-        row.passed,
-        "{why}: {}\n{}",
-        row.detail,
-        result.render_human()
-    );
+    support::assert_row_green(row, &format!("{why}\n{}", result.render_human()));
     assert!(
         result.dead_rails.is_empty(),
         "{why}, so no rail is dead: {:?}",
@@ -308,6 +298,7 @@ fn assert_rail_held_off(result: &CiResult, cause: &str) {
         result.dead_rail_causes
     );
     let row = support::row(result, "VOUT regulated");
+    // Deliberate negative: a held-off rail is a numeric red.
     assert!(
         !row.passed,
         "a check on a rail the board holds off must not pass: {}",
@@ -466,6 +457,7 @@ fn a_divider_on_en_is_read_through_the_solve() {
     // check fails on the 0 V it reads.
     let off = divider_run("150k", "10k");
     let row = support::row(&off, "VOUT regulated");
+    // Deliberate negative: the rail check reads 0 V.
     assert!(
         !row.passed,
         "0.31 V on EN leaves the regulator off: {}",
@@ -546,18 +538,11 @@ fn a_firmware_gpio_on_en_brings_the_rail_up_after_it_goes_high() {
         result.dead_rails
     );
     let up = support::row(&result, "up after the GPIO");
-    assert!(
-        up.passed,
-        "the rail comes up once PB5 is high: {}\n{human}",
-        up.detail
-    );
+    support::assert_row_green(up, &format!("the rail comes up once PB5 is high\n{human}"));
     let long = support::row(&result, "not off for long");
-    assert!(
-        long.passed,
-        "and it was not off for the whole run: {}\n{human}",
-        long.detail
-    );
+    support::assert_row_green(long, &format!("and it was not off for the whole run\n{human}"));
     let off = support::row(&result, "off until the GPIO");
+    // Deliberate negative: the rail is off for longer than the 115 ms window allows.
     assert!(
         !off.passed,
         "the rail stays off until the GPIO goes high, so it dips for more than \

@@ -42,7 +42,8 @@ fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
 }
 
 /// Run one board with one cathode-net voltage assertion, check what the report
-/// tells its reader about U1, and return whether the assertion passed.
+/// tells its reader about U1, and return whether the assertion passed
+/// numerically (INVALID is pinned inside: set on starved boards only).
 fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64), pkg: Pkg) -> bool {
     let path = support::write_tmp("tl431.board", &board(rs, div, refnet, pkg));
     let r = support::run_body(
@@ -70,10 +71,15 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
     assert_eq!(flag, rs != "1k", "{case}: min-current flag");
     // Not decoration: a MEASURED IKmin violation undermines (exit 3), while the
     // model's own documented omissions stay a qualified pass at exit 0.
+    let row = support::row(&r, "vka");
     if refnet != "GND" {
         assert_eq!(r.exit_code(), i32::from(flag) * 3, "{case}: exit code");
+        // The starved boards are honestly INVALID (the row's numbers can pass
+        // while the IKmin violation undermines them); every other board's row
+        // must be fully valid, so a pass below is a green one.
+        assert_eq!(row.invalid, flag, "{case}: INVALID exactly when starved: {}", row.detail);
     }
-    support::row(&r, "vka").passed
+    row.passed
 }
 
 /// The prediction challenge's frozen acceptance band for the 5 V setter.

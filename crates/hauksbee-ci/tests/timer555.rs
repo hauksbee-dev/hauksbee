@@ -54,7 +54,7 @@ fn board(c_nf: Option<f64>, reset_net: &str) -> String {
 }
 
 /// Run one spec that ends at `end_ms` with one assertion on OUT and report
-/// whether it passed. Whatever it answers, a bound 555 is never reported as an
+/// whether it was GREEN (passed, and not INVALID). Whatever it answers, a bound 555 is never reported as an
 /// unmodelled or open part: the composite drives OUT, so nothing may claim it
 /// does not.
 fn passes(case: &str, src: &str, end_ms: f64, assertion: &str) -> bool {
@@ -75,7 +75,7 @@ fn passes(case: &str, src: &str, end_ms: f64, assertion: &str) -> bool {
         "{case}: {:?}",
         r.coverage_warnings
     );
-    support::row(&r, "out").passed
+    support::row_is_green(support::row(&r, "out"))
 }
 
 /// OUT's level over `[after_ms, end_ms]`: at VOH when `high`, else at VOL.

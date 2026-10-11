@@ -143,6 +143,11 @@ fn schematic_and_pcb_agree() {
             "verdict for {:?} disagrees between schematic ({}) and PCB ({})\n  sch: {}\n  pcb: {}",
             s.label, s.passed, p.passed, s.detail, p.detail
         );
+        assert_eq!(
+            s.invalid, p.invalid,
+            "INVALID for {:?} disagrees between schematic and PCB\n  sch: {}\n  pcb: {}",
+            s.label, s.detail, p.detail
+        );
     }
 
     // And both must hold numerically (a vacuous agreement on two RED runs would

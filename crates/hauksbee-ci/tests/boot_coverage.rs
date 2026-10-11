@@ -87,7 +87,7 @@ fn gate_driven_promptly_passes() {
     );
     // The boot-coverage assertion is present and green.
     let bc = support::row(&result, "kind:boot_coverage");
-    assert!(bc.passed, "boot-coverage must pass: {}", bc.detail);
+    support::assert_row_green(bc, "boot-coverage must pass");
     assert!(
         bc.detail.contains("GATE_CTRL"),
         "names the control net: {}",
@@ -140,6 +140,7 @@ fn simavr_keeps_hard_boot_deadline_verdicts() {
     std::fs::write(&path, spec).expect("spec writes");
     let result = run(&support::run_config(path)).expect("spec runs");
     let bc = support::row(&result, "kind:boot_coverage");
+    // Deliberate negative: a late drive is a numeric FAIL, hard on simavr.
     assert!(
         !bc.passed && bc.detail.contains("boot deadline") && !bc.detail.contains("not judged"),
         "a drive later than the deadline is a hard FAIL on simavr: {}",
@@ -167,6 +168,7 @@ fn gate_left_floating_fails_naming_the_net() {
         result.render_human()
     );
     let bc = support::row(&result, "kind:boot_coverage");
+    // Deliberate negative: the gate is never driven.
     assert!(
         !bc.passed,
         "boot-coverage must fail for the never-driven gate"
@@ -304,10 +306,12 @@ fn watchy_v15_display_res_driven_passes() {
         return;
     };
     let bc = support::row(&result, "kind:boot_coverage");
-    assert!(
-        bc.passed,
-        "display-init firmware must drive RES in time on the real Watchy board:\n{}",
-        result.render_human()
+    support::assert_row_green(
+        bc,
+        &format!(
+            "display-init firmware must drive RES in time on the real Watchy board:\n{}",
+            result.render_human()
+        ),
     );
     assert!(
         bc.detail.contains("RES"),
@@ -355,6 +359,7 @@ fn watchy_v15_display_res_undriven_fails() {
         return;
     };
     let bc = support::row(&result, "kind:boot_coverage");
+    // Deliberate negative: RES is never driven.
     assert!(
         !bc.passed,
         "a firmware that never drives RES must make boot-coverage FAIL:\n{}",

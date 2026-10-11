@@ -60,10 +60,11 @@ fn run(gate: &str) -> hauksbee_ci::CiResult {
 fn a_stated_polarity_passes_the_inverter_and_fails_the_buffer() {
     let inverter = run("74LVC1G04");
     let row = support::row(&inverter, "lit when ready");
-    assert!(row.passed, "inverter: {}", inverter.render_human());
+    support::assert_row_green(row, &format!("inverter: {}", inverter.render_human()));
 
     let buffer = run("74LVC1G17");
     let row = support::row(&buffer, "lit when ready");
+    // Deliberate negative: the buffer has the wrong polarity.
     assert!(!row.passed, "buffer: {}", buffer.render_human());
     assert!(row.detail.contains("READY_N"), "{}", row.detail);
 }

@@ -12,13 +12,16 @@
 //! `RunOutcome` (same boundary as `analog_invalid.rs`): a unit exceeding the
 //! ceiling must FAIL the base-ref assertion, and per-unit overtemperature
 //! faults must match a base-ref `max_temp` with no explicit ceiling.
+//!
+//! The `!passed` checks here are deliberate numeric reds (a unit over its ceiling);
+//! every positive claim goes through `assert_row_green`.
 
 use std::collections::HashMap;
 
 use hauksbee_ci::assertions::evaluate;
 use hauksbee_ci::runner::{RunFault, RunOutcome};
 
-use crate::support::load_spec;
+use crate::support::{assert_row_green, load_spec};
 
 /// A minimal clean one-seed outcome carrying only the supplied thermal peaks
 /// and faults. Everything else is empty / valid.
@@ -76,7 +79,7 @@ fn max_temp_on_multi_unit_package_passes_on_the_hottest_unit_measurement() {
     let out = outcome_with(temps(&[("SW1_q1", 41.0), ("SW1_q2", 60.0)]), Vec::new());
     let results = evaluate(&spec, &[out]);
     let r = &results[0];
-    assert!(r.passed, "60C peak is within 85C: {}", r.detail);
+    assert_row_green(r, "60C peak is within 85C");
     assert!(
         r.detail.contains("60.0") && !r.detail.contains("no dissipation"),
         "the pass must be measured against the hottest unit, not skipped: {}",
@@ -105,10 +108,9 @@ fn max_temp_does_not_aggregate_other_components() {
     );
     let results = evaluate(&spec, &[out]);
     let r = &results[0];
-    assert!(
-        r.passed,
-        "no key belongs to SW1, so the (gate-approved) no-dissipation pass applies: {}",
-        r.detail
+    assert_row_green(
+        r,
+        "no key belongs to SW1, so the (gate-approved) no-dissipation pass applies",
     );
     assert!(r.detail.contains("no dissipation"), "got: {}", r.detail);
 }
@@ -156,5 +158,5 @@ fn max_temp_on_single_unit_device_is_unchanged() {
 
     let cool = outcome_with(temps(&[("Q7", 55.0)]), Vec::new());
     let results = evaluate(&spec, &[cool]);
-    assert!(results[0].passed, "got: {}", results[0].detail);
+    assert_row_green(&results[0], "55C is within 85C");
 }

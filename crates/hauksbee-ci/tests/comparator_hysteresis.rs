@@ -57,7 +57,7 @@ fn board(rf: Option<&str>) -> String {
 }
 
 /// Run one window of the ramp and report whether OUT held the expected level
-/// over it. The run ends AT the window, so `after_ms` makes the assertion read
+/// over it (the row passed and is not INVALID). The run ends AT the window, so `after_ms` makes the assertion read
 /// exactly `[after_ms, end_ms]`; the input there is `t` volts on the way up and
 /// `10 - t` on the way down.
 fn out_is(case: &str, rf: Option<&str>, after_ms: f64, end_ms: f64, high: bool) -> bool {
@@ -92,7 +92,7 @@ fn out_is(case: &str, rf: Option<&str>, after_ms: f64, end_ms: f64, high: bool) 
         human.contains("modelled only in part") && human.contains("response time"),
         "{case}: the LM393's unmodelled response time never reached the report"
     );
-    support::row(&r, "out").passed
+    support::row_is_green(support::row(&r, "out"))
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn opamp_out(case: &str, rail: f64, vsig: f64, band: (f64, f64)) -> bool {
         human.contains("modelled only in part") && human.contains("output current limit"),
         "{case}: the LM358's coverage note never reached the report"
     );
-    support::row(&r, "out").passed
+    support::row_is_green(support::row(&r, "out"))
 }
 
 #[test]

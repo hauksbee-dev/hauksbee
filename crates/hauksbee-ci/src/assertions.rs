@@ -2716,6 +2716,21 @@ mod tests {
     use crate::tolerance::Mode;
     use std::collections::HashMap;
 
+    /// Assert one row is GREEN as a user sees it: it passed AND is not INVALID
+    /// (`passed` alone is the numeric judgement; a row can be both `passed`
+    /// and `invalid`). Prints the row's detail, which carries the INVALID reason.
+    #[track_caller]
+    fn assert_row_green(r: &AssertResult) {
+        assert!(
+            r.passed && !r.invalid,
+            "row '{}' not green (passed={}, invalid={}): {}",
+            r.label,
+            r.passed,
+            r.invalid,
+            r.detail
+        );
+    }
+
     fn assertion(src: &str) -> Assertion {
         toml::from_str(src).expect("assertion shape")
     }
@@ -2941,7 +2956,7 @@ mod tests {
             vout_member(4, 3.40, true),
         ];
         let r = evaluate_one(&a, &outcomes, Some(Mode::Corners), 1.0);
-        assert!(r.passed, "{}", r.detail);
+        assert_row_green(&r);
         assert!(!r.detail.contains("NON-MONOTONIC"));
         assert!(
             r.detail.contains("2 min/max tolerance corners")
@@ -3273,7 +3288,8 @@ mod tests {
             let hit = uart_run("boot ok", false);
             assert_eq!(host_paced_time_bound(&a, &hit), None);
             let r = evaluate_one(&a, std::slice::from_ref(&hit), None, 1.0);
-            assert!(r.passed && !r.detail.contains("not judged"), "{}", r.detail);
+            assert_row_green(&r);
+            assert!(!r.detail.contains("not judged"), "{}", r.detail);
             let miss = uart_run("nothing yet", false);
             assert_eq!(member_invalid_reason(&a, &miss, 1.0), None);
             let r = evaluate_one(&a, std::slice::from_ref(&miss), None, 1.0);
@@ -3291,14 +3307,15 @@ mod tests {
         )
         .expect("spec shape");
         let hit = evaluate(&spec, &[uart_run("boot ok", true)]);
-        assert!(hit[0].passed);
+        assert_row_green(&hit[0]);
         let paced = hit[0].host_paced.as_ref().expect("the pass is qualified");
         assert_eq!(paced.mcus, ["U1"]);
         assert!(paced.bound.contains("200 ms window"), "{}", paced.bound);
         let miss = evaluate(&spec, &[uart_run("nope", true)]);
         assert!(miss[0].invalid && miss[0].host_paced.is_none());
         let control = evaluate(&spec, &[uart_run("boot ok", false)]);
-        assert!(control[0].passed && control[0].host_paced.is_none());
+        assert_row_green(&control[0]);
+        assert!(control[0].host_paced.is_none());
     }
 
     /// A 200 ms run with an EEPROM `ee` holding "Hi" and a sensor `s` reading
@@ -3388,7 +3405,8 @@ mod tests {
         let hit = assertion("kind = \"peripheral\"\nid = \"ee\"\nbytes = \"48 69\"");
         assert_eq!(host_paced_time_bound(&hit, &out), None);
         let r = evaluate_one(&hit, std::slice::from_ref(&out), None, 1.0);
-        assert!(r.passed && !r.detail.contains("not judged"), "{}", r.detail);
+        assert_row_green(&r);
+        assert!(!r.detail.contains("not judged"), "{}", r.detail);
         let miss = assertion("kind = \"peripheral\"\nid = \"ee\"\nbytes = \"de ad\"");
         let r = evaluate_one(&miss, std::slice::from_ref(&out), None, 1.0);
         assert!(!r.passed && !r.invalid, "{}", r.detail);
@@ -3613,7 +3631,8 @@ mod tests {
         assert_eq!(host_paced_time_bound(&a, &out), None);
         assert_eq!(member_invalid_reason(&a, &out, 1.0), None);
         let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
-        assert!(r.passed && !r.detail.contains("not judged"), "{}", r.detail);
+        assert_row_green(&r);
+        assert!(!r.detail.contains("not judged"), "{}", r.detail);
         assert!(r.detail.starts_with("EN after 50ms:"), "{}", r.detail);
         let out = level_run("EN", FALLS, FALLS, false, true);
         let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);

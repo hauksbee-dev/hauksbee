@@ -96,6 +96,34 @@ pub fn assert_green(result: &hauksbee_ci::CiResult, what: &str) {
     );
 }
 
+/// Whether one assertion row is GREEN as a user sees it: it passed AND its
+/// evidence is not undermined.
+///
+/// `AssertResult::passed` is only the numeric judgement. A row can be
+/// `invalid == true` while `passed == true` (the numbers are in range but the
+/// evidence under them is undermined, e.g. an open part on the path), and the
+/// run then exits 3. For use where a test needs a `bool` (a helper returning
+/// "did this hold"); prefer [`assert_row_green`] when asserting directly.
+pub fn row_is_green(row: &hauksbee_ci::assertions::AssertResult) -> bool {
+    row.passed && !row.invalid
+}
+
+/// Assert one assertion row is GREEN as a user sees it: `passed && !invalid`.
+///
+/// Row-level counterpart of [`assert_green`]. A bare `assert!(row.passed)`
+/// counts an INVALID row as a pass; this prints the row's label, both flags
+/// and its detail (which carries the INVALID reason) when it fails.
+pub fn assert_row_green(row: &hauksbee_ci::assertions::AssertResult, what: &str) {
+    assert!(
+        row_is_green(row),
+        "{what}: row '{}' is not green (passed={}, invalid={}): {}",
+        row.label,
+        row.passed,
+        row.invalid,
+        row.detail
+    );
+}
+
 /// Assert the run is INVALID (exit 3) *only* because parts with no model are
 /// open on the asserted paths, while the numeric judgement (`passed()`) holds.
 ///

@@ -74,10 +74,16 @@ fn hwtrace_corpus() {
         for r in &result.results {
             eprintln!(
                 "[{}] {scenario}: {}",
-                if r.passed { "PASS" } else { "FAIL" },
+                if r.invalid {
+                    "INVALID"
+                } else if r.passed {
+                    "PASS"
+                } else {
+                    "FAIL"
+                },
                 r.detail
             );
-            any_failed |= !r.passed;
+            any_failed |= !support::row_is_green(r);
         }
     }
     assert!(
@@ -162,6 +168,7 @@ trace = "trace.toml"
         .find(|r| r.label.contains("period"))
         .expect("a period feature result");
     eprintln!("mismatch detail: {}", period.detail);
+    // Deliberate negative: a 200-vs-300 ms mismatch is the red this test exists to catch.
     assert!(
         !period.passed,
         "a 200-vs-300 ms period must fail: {}",

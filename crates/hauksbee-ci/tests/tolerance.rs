@@ -349,6 +349,7 @@ fn corner_report_wording_claims_only_monotonic_bounds() {
     );
     // ...the tight [2.4, 2.6] assert fails naming a corner and its values.
     let tight = &result.results[0];
+    // Deliberate negative: the tight window is a numeric red.
     assert!(!tight.passed);
     assert!(
         tight.detail.contains("corner") && tight.detail.contains("(min)"),

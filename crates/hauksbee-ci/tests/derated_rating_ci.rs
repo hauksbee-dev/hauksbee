@@ -4,6 +4,7 @@
 //! the clean `no_faults` it produced. Rows printed per mounting are read at
 //! the least favourable one until the spec or the board names one.
 
+use crate::support::assert_row_green;
 use serde_json::Value;
 
 /// A diode rated 12 mA at TA = 25 °C and 8 mA at 70 °C (scalar: the 8 mA row).
@@ -91,14 +92,14 @@ fn ids(json: &Value, needle: &str) -> usize {
 fn the_rating_row_for_the_stated_ambient_decides_and_a_default_is_disclosed() {
     let ambient_ids = |json: &Value| ids(json, "ambient_c");
     let (cool, json) = run_with(CARD, "ambient_c = 25.0");
-    assert!(
-        cool.results[0].passed,
-        "11 mA is under the 12 mA row at 25 C: {}",
-        cool.render_human()
+    assert_row_green(
+        &cool.results[0],
+        &format!("11 mA is under the 12 mA row at 25 C: {}", cool.render_human()),
     );
     assert_eq!(ambient_ids(&json), 0, "a stated ambient is no assumption");
 
     let (hot, _) = run_with(CARD, "ambient_c = 70.0");
+    // Deliberate negative: the numeric red at 70 C.
     assert!(
         !hot.results[0].passed,
         "11 mA is over the 8 mA row at 70 C: {}",
@@ -106,7 +107,7 @@ fn the_rating_row_for_the_stated_ambient_decides_and_a_default_is_disclosed() {
     );
 
     let (defaulted, json) = run_with(CARD, "");
-    assert!(defaulted.results[0].passed, "{}", defaulted.render_human());
+    assert_row_green(&defaulted.results[0], &defaulted.render_human());
     assert_eq!(
         json["results"][0]["evidence"]["status"], "qualified",
         "{json:#}"
@@ -134,6 +135,9 @@ fn the_least_favourable_mounting_decides_until_the_spec_names_one() {
         let (result, json) = run_with(&mounted_card(), &tail);
         let why = result.render_human();
         assert_eq!(result.results[0].passed, passes, "{tail}: {why}");
+        if passes {
+            assert_row_green(&result.results[0], &format!("{tail}: {why}"));
+        }
         let got = json["results"][0]["evidence"]["status"].as_str();
         assert!(status.is_none_or(|s| got == Some(s)), "{tail}: {json:#}");
         assert_eq!(ids(&json, "mounting"), said, "{tail}: {json:#}");

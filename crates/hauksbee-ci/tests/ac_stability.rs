@@ -14,7 +14,7 @@ use hauksbee_ci::runner::{AcOutcome, RunOutcome};
 use hauksbee_ir::{Circuit, Device, NodeId, Rail, SourceKind};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
-use crate::support::{load_error, load_spec};
+use crate::support::{assert_row_green, load_error, load_spec};
 
 // --- spec validation --------------------------------------------------------
 
@@ -147,7 +147,7 @@ fn stable_loop_passes_phase_margin_45() {
     let out = outcome_for(&ckt, "out");
 
     let r = ac_result("stable.toml", LOOP_SWEEP, &phase_margin(45), out);
-    assert!(r.passed, "expected pass, detail: {}", r.detail);
+    assert_row_green(&r, "stable loop");
     assert!(r.detail.contains("phase margin"), "{}", r.detail);
 }
 
@@ -159,6 +159,7 @@ fn marginal_loop_fails_strict_phase_margin() {
     let out = outcome_for(&ckt, "out");
 
     let r = ac_result("marginal.toml", LOOP_SWEEP, &phase_margin(120), out);
+    // Deliberate negative: a single pole cannot reach 120 deg, a deliberate numeric red.
     assert!(!r.passed, "expected fail, detail: {}", r.detail);
 }
 
@@ -195,7 +196,8 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     let sweep = "fstart=10\nfstop=1e6\npoints=30";
     let gain = |bound: &str| format!("kind=\"ac_gain\"\nnet=\"out\"\n{bound}=-2.9\nfreq_hz=1000");
     let r = ac_result("acgain_pass.toml", sweep, &gain("max"), outcome.clone());
-    assert!(r.passed, "expected pass at corner, detail: {}", r.detail);
+    assert_row_green(&r, "ac_gain at the corner");
     let r = ac_result("acgain_fail.toml", sweep, &gain("min"), outcome);
+    // Deliberate negative: -3.01 dB is below the -2.9 dB floor, a deliberate numeric red.
     assert!(!r.passed, "expected fail at corner, detail: {}", r.detail);
 }

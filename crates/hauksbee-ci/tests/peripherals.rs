@@ -30,7 +30,7 @@ fn ci_button_press_drives_a_net() {
         result
             .results
             .iter()
-            .any(|r| r.kind == "toggle" && r.passed),
+            .any(|r| r.kind == "toggle" && support::row_is_green(r)),
         "the BTN toggle assertion must pass"
     );
 }

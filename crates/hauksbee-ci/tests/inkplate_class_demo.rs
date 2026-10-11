@@ -112,15 +112,12 @@ for_max_ms = 1.0
 
     // The protection_trip assertion must PASS (it DID trip): the headline.
     let trip = support::row(&result, "kind:protection_trip");
-    assert!(
-        trip.passed,
-        "expected the LiPo protection to TRIP on cold-boot inrush:\n  {}",
-        trip.detail
-    );
+    support::assert_row_green(trip, "expected the LiPo protection to TRIP on cold-boot inrush");
     // The rail_window asserts the rail must NOT stay below 3.0 V for > 1 ms.
     // On the battery side it collapses for far longer once protection latches,
     // so this assertion FAILS by design: that red is the brownout being caught.
     let window = support::row(&result, "kind:rail_window");
+    // Deliberate negative: the brownout is the red this test exists to catch.
     assert!(
         !window.passed,
         "battery-side rail_window should FAIL (rail collapses): {}",
@@ -159,10 +156,9 @@ scenario = "coldboot"
     let result = run_body("scoped_trip.toml", &body);
     eprintln!("SCOPED-TRIP side:\n{}", result.render_human());
     let trip = support::row(&result, "kind:protection_trip");
-    assert!(
-        trip.passed,
-        "a scenario-scoped protection_trip must be honored without a matching rail_window:\n  {}",
-        trip.detail
+    support::assert_row_green(
+        trip,
+        "a scenario-scoped protection_trip must be honored without a matching rail_window",
     );
     // And the detail must reflect a real TRIP inside the window, not the old
     // "nothing to trip" miss.

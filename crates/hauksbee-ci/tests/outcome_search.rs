@@ -65,6 +65,7 @@ fn run(case: &str, r2: &str, rb: &str) -> hauksbee_ci::CiResult {
 
 fn why(r: &hauksbee_ci::CiResult, name: &str) -> String {
     let row = support::row(r, name);
+    // Deliberate negative: callers name a row that must be red (or INVALID) for this reason.
     assert!(!row.passed, "{name} must fail: {}", r.render_human());
     format!("{} {}", row.detail, row.why.clone().unwrap_or_default())
 }
@@ -73,7 +74,7 @@ fn why(r: &hauksbee_ci::CiResult, name: &str) -> String {
 fn a_missed_threshold_names_its_worst_condition_culprits_and_repair() {
     let r = run("outcome threshold", "150k", "47k");
     assert_eq!(r.exit_code(), 1, "{}", r.render_human());
-    assert!(support::row(&r, "gate").passed, "{}", r.render_human());
+    support::assert_row_green(support::row(&r, "gate"), &r.render_human());
 
     // 5 V * 150/970 = 0.773 V; the worst corner is the higher supply, and the
     // divider's bottom leg solves toward 820k * 0.387 / 4.613 = 68.8k and stops
@@ -96,7 +97,7 @@ fn a_weak_logic_high_names_the_divider_that_starves_it() {
     // is INVALID rather than RED; the outcome row still carries the search.
     let r = run("outcome gate", "68k", "10k");
     assert!(!r.passed(), "{}", r.render_human());
-    assert!(support::row(&r, "trips").passed, "{}", r.render_human());
+    support::assert_row_green(support::row(&r, "trips"), &r.render_human());
     let gate = why(&r, "gate");
     assert!(gate.contains("X peaks at 2.4"), "{gate}");
     assert!(gate.contains("U2"), "{gate}");
@@ -209,7 +210,7 @@ fn a_pulse_must_be_high_enough_for_long_enough_at_the_input_it_drives() {
     };
     // tau 1 us: X sits near 5 V for ~50 us, so a 20 us need holds silently.
     let r = run("1n", 0.02);
-    assert!(support::row(&r, "held").passed, "{}", r.render_human());
+    support::assert_row_green(support::row(&r, "held"), &r.render_human());
     // tau 47 us: the pulse ends before X reaches VIH (too low). tau 10 us: X
     // is past VIH for ~41 us, short of a 45 us need (too short). Both name
     // the RC that sets it.
@@ -280,7 +281,7 @@ fn a_relation_across_conditions_names_the_pair_that_breaks_it() {
     for (name, _, _, says) in rows {
         let row = support::row(&r, name);
         match says {
-            None => assert!(row.passed, "{name}: {}", r.render_human()),
+            None => support::assert_row_green(row, &format!("{name}: {}", r.render_human())),
             Some(says) => {
                 let w = why(&r, name);
                 assert!(w.contains(says) && w.contains("inverted"), "{w}");
