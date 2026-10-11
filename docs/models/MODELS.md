@@ -213,8 +213,9 @@ forces the harness on or off. The default ladder is provisional until
 an API key (`ANTHROPIC_API_KEY`, or `claude auth status` / `codex login status`
 naming one) is metered and shown in list-price dollars; a subscription sign-in
 (claude.ai, ChatGPT) shows no dollars but the run's share of the plan: the
-weekly and 5-hour usage read before and after (`claude -p /usage`; codex's
-`account/rateLimits/read`), whole percents and account-wide. A failed reading is
+weekly and 5-hour usage read before and after (`claude -p /usage`; for codex,
+`account/rateLimits/read` before the run and the last `token_count` rate limits
+in its `--json` stream after it), account-wide. A failed reading is
 "usage unavailable", an unrecognised sign-in "billing unknown"; neither shows
 dollars.
 

@@ -156,19 +156,64 @@ fn read_codex(command: &str) -> Option<Value> {
     reply.map(|v| v["result"]["rateLimits"].clone())
 }
 
-/// codex `rateLimits`: the window of 300 minutes is the 5-hour one, 10080 the week.
+/// codex rate limits (app-server `rateLimits`, or a `--json` stream's
+/// `rate_limits`): the window of 300 minutes is the 5-hour one, 10080 the week.
 #[must_use]
 pub fn parse_codex_limits(limits: &Value) -> Reading {
     let mut r = Reading::default();
     for w in [&limits["primary"], &limits["secondary"]] {
-        let pct = w["usedPercent"].as_f64();
-        match w["windowDurationMins"].as_u64() {
+        let pct = w["usedPercent"]
+            .as_f64()
+            .or_else(|| w["used_percent"].as_f64());
+        let mins = w["windowDurationMins"]
+            .as_u64()
+            .or_else(|| w["window_minutes"].as_u64());
+        match mins {
             Some(300) => r.session = pct,
             Some(10080) => r.week = pct,
             _ => {}
         }
     }
     r
+}
+
+/// The first and last plan readings in a codex `--json` stream's `token_count`
+/// events (their `rate_limits`, at the top level or under `msg`/`payload`/`info`).
+#[must_use]
+pub fn codex_stream_limits(stdout: &str) -> Option<(Reading, Reading)> {
+    let found = |e: &Value| -> Option<Reading> {
+        let at = [
+            &e["rate_limits"],
+            &e["msg"]["rate_limits"],
+            &e["payload"]["rate_limits"],
+            &e["info"]["rate_limits"],
+        ];
+        let limits = at.into_iter().find(|v| v.is_object())?;
+        Some(parse_codex_limits(limits)).filter(|r| r.any())
+    };
+    let readings: Vec<Reading> = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter_map(|e| found(&e))
+        .collect();
+    Some((*readings.first()?, *readings.last()?))
+}
+
+static STREAMED: std::sync::Mutex<Option<(Reading, Reading)>> = std::sync::Mutex::new(None);
+
+fn streamed() -> std::sync::MutexGuard<'static, Option<(Reading, Reading)>> {
+    STREAMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Keeps a codex call's streamed readings: the run's first one and its latest.
+pub fn note_stream(stdout: &str) {
+    if let Some((first, last)) = codex_stream_limits(stdout) {
+        let mut s = streamed();
+        let first = s.map_or(first, |(f, _)| f);
+        *s = Some((first, last));
+    }
 }
 
 /// A plan run's tool, CLI command and the reading taken before its first call.
@@ -194,14 +239,22 @@ pub fn begin(tool: &str, command: &str) {
 /// Drops a reading left by an extraction that never reached [`end`].
 pub fn clear() {
     *pending() = None;
+    *streamed() = None;
 }
 
 /// After the extraction: read the plan again and report the change (`None`
 /// when no plan-billed call was made). Clears the pending reading.
+///
+/// A codex stream's own readings stand in for the after-read, and for a failed
+/// before-read (a first streamed reading already includes the first call).
 #[must_use]
 pub fn end() -> Option<String> {
     let (tool, command, before) = pending().take()?;
-    let after = read(&tool, &command);
+    let stream = streamed().take();
+    let before = before.or_else(|| stream.map(|(first, _)| first));
+    let after = stream
+        .map(|(_, last)| last)
+        .or_else(|| read(&tool, &command));
     Some(report(&tool, before, after))
 }
 
@@ -284,5 +337,30 @@ mod tests {
             line,
             "plan usage (Claude plan's limits): week 46% -> 47% (+1 points)"
         );
+    }
+
+    #[test]
+    fn a_codex_stream_gives_its_first_and_last_plan_readings() {
+        let event = |five: f64, week: f64| {
+            json!({"type": "token_count", "rate_limits": {
+                "primary": {"used_percent": five, "window_minutes": 300, "resets_at": 1},
+                "secondary": {"used_percent": week, "window_minutes": 10080}},
+                "plan_type": "plus"})
+            .to_string()
+        };
+        let nested = json!({"msg": {"type": "token_count", "rate_limits": {
+            "secondary": {"used_percent": 33.0, "window_minutes": 10080}}}});
+        let stream = [
+            "{\"type\":\"turn.started\"}".to_string(),
+            event(10.0, 30.0),
+            "garbage".into(),
+            event(12.0, 31.0),
+            nested.to_string(),
+        ]
+        .join("\n");
+        let (first, last) = codex_stream_limits(&stream).unwrap();
+        assert_eq!((first.session, first.week), (Some(10.0), Some(30.0)));
+        assert_eq!((last.session, last.week), (None, Some(33.0)));
+        assert!(codex_stream_limits("{\"type\":\"turn.completed\"}").is_none());
     }
 }

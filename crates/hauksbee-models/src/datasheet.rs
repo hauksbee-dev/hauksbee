@@ -2928,6 +2928,9 @@ fn run_and_record(
                 billing,
                 usage::from_codex_events(stdout),
             );
+            if billing == usage::Billing::Plan {
+                crate::extract_plan::note_stream(stdout);
+            }
             let last = std::fs::read_to_string(ws.path().join("last-message.txt"));
             ran.map(|_| last.unwrap_or_default())
         }
@@ -5425,6 +5428,53 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let spaced = Path::new("/tmp/a b/it's.toml");
         let tail = rejected_tail("", Some(&(spaced.into(), "/x.toml".into())));
         assert!(tail.contains(r"lint '/tmp/a b/it'\''s.toml'"), "{tail}");
+    }
+
+    /// A codex run on a `ChatGPT` plan shows no dollars: its share of the plan
+    /// comes from the `token_count` rate limits in its own `--json` stream, even
+    /// when the app-server reading fails.
+    #[cfg(unix)]
+    #[test]
+    fn a_codex_plan_run_reports_streamed_plan_usage_not_dollars() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let [pdf, agent, cfg] = ["a.pdf", "agent", "c"].map(|f| dir.path().join(f));
+        let limits = |five: u8, week: u8| {
+            format!(
+                r#"{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":{five},"window_minutes":300}},"secondary":{{"used_percent":{week},"window_minutes":10080}}}},"plan_type":"plus"}}"#
+            )
+        };
+        let turn = r#"{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100}}"#;
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = login ] && echo 'Logged in using ChatGPT' && exit 0\n[ \"$1\" = app-server ] && exit 0\ncat >/dev/null\necho '{}'\necho '{turn}'\necho '{}'\n",
+            limits(10, 30),
+            limits(12, 31)
+        );
+        for (path, text) in [(&pdf, "%PDF-1.4\n"), (&cfg, ""), (&agent, script.as_str())] {
+            std::fs::write(path, text).unwrap();
+        }
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [
+            (extract_config::ENV_CONFIG_PATH, cfg.to_str().unwrap()),
+            ("HAUKSBEE_CODEX_COMMAND", agent.to_str().unwrap()),
+            ("HAUKSBEE_CODEX_MODEL", "gpt-6-luna"),
+        ];
+        for (k, v) in env {
+            std::env::set_var(k, v);
+        }
+        let out = tempfile::tempdir_in(dir.path()).unwrap();
+        let args = Args::new(pdf, "TP".into(), "digital".into());
+        let _ = run(args
+            .backend(Some(Backend::Codex))
+            .out_dir(Some(out.path().into())));
+        for (k, _) in env {
+            std::env::remove_var(k);
+        }
+        let summary = crate::extract_usage::summary();
+        assert!(summary.contains("week 30% -> 31%"), "{summary}");
+        assert!(summary.contains("5-hour 10% -> 12%"), "{summary}");
+        assert!(!summary.contains('$'), "{summary}");
     }
 
     /// Fake Claude Code for the ladder: every call logs its `--model`, writes
