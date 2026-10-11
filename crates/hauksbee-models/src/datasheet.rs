@@ -4402,9 +4402,22 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         resolved.status(&ProcessHost, resolved.backend).available
     }
 
+    /// Paid-call opt-in for the `*_live` tests. They call external model APIs
+    /// that cost money, so they run only when `HAUKSBEE_PAID_LIVE_TESTS=1` is
+    /// set; otherwise this prints a SKIP line and the caller returns at once.
+    fn paid_live_tests_enabled(test: &str) -> bool {
+        if std::env::var("HAUKSBEE_PAID_LIVE_TESTS").as_deref() == Ok("1") {
+            return true;
+        }
+        eprintln!("SKIP {test}: paid live test; set HAUKSBEE_PAID_LIVE_TESTS=1 to run it");
+        false
+    }
+
     /// Live: the real backend against the BC846-series datasheet in testdata.
+    /// Paid: calls the external model API. Runs only with
+    /// `HAUKSBEE_PAID_LIVE_TESTS=1` set; otherwise it prints SKIP and returns.
     /// Run with
-    /// `cargo test -p hauksbee-models -- extract_bc846_live --ignored --nocapture`.
+    /// `HAUKSBEE_PAID_LIVE_TESTS=1 cargo test -p hauksbee-models -- extract_bc846_live --ignored --nocapture`.
     ///
     /// The part asked for is the part the sheet covers. Asking it for a BC847
     /// is the shape of request that produces a wrong number rather than no
@@ -4414,6 +4427,9 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
     #[test]
     #[ignore = "live: needs a signed-in extraction backend"]
     fn extract_bc846_live() {
+        if !paid_live_tests_enabled("extract_bc846_live") {
+            return;
+        }
         let pdf = testdata("datasheets/BC846.pdf");
         assert!(pdf.exists(), "BC846 datasheet not found at {pdf:?}");
         if !live_backend_available() {
@@ -4430,9 +4446,14 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
     }
 
     /// Live: `--kind charger` against the LTC4020 excerpt in testdata.
+    /// Paid: calls the external model API. Runs only with
+    /// `HAUKSBEE_PAID_LIVE_TESTS=1` set; otherwise it prints SKIP and returns.
     #[test]
     #[ignore = "live: needs a signed-in extraction backend"]
     fn extract_ltc4020_charger_live() {
+        if !paid_live_tests_enabled("extract_ltc4020_charger_live") {
+            return;
+        }
         let src = testdata("datasheets/LTC4020_excerpt.txt");
         if !src.exists() || !live_backend_available() {
             return;
