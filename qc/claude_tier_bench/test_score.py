@@ -87,6 +87,12 @@ class ScoreTests(unittest.TestCase):
         self.assertAlmostEqual(frac, 1 / 3)
         self.assertFalse(run.pin_score(ref, {**ref, "4": "nc"})[0])  # extra pad
         self.assertEqual(run.pin_score({}, ref), (False, 0.0))
+        # A lone channel index is a naming choice; a real second channel is not.
+        one = {"1": "vcca", "2": "gnd", "3": "a1", "4": "b1", "5": "dir", "6": "vccb"}
+        self.assertEqual(run.pin_score(one, {**one, "3": "a", "4": "b"}), (True, 1.0))
+        two = {"1": "a1", "2": "a2", "3": "gnd"}
+        self.assertEqual(run.pin_score(two, {"1": "a", "2": "a2", "3": "gnd"})[1], 2 / 3)
+        self.assertEqual(run.pin_score(two, {"1": "a2", "2": "a1", "3": "gnd"})[1], 1 / 3)
 
     def test_param_score(self):
         ref, draft = tomllib.loads(REF)["models"][0], tomllib.loads(GOOD)["models"][0]
@@ -134,6 +140,18 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(run.recommend(aggs, 0), "opus")
         self.assertEqual(run.recommend(aggs, 4), "haiku-single")
         self.assertIsNone(run.recommend({"opus": agg(0, 0, 0, None)}, 1))
+
+    def test_plan_tiers_rank_on_one_measurable_basis(self):
+        def plan(week_total, n, tokens):
+            return {"n": n, "pin_exact": n, "validator_pass": n, "mean_cost_usd": None,
+                    "week_total": week_total, "mean_week_delta": week_total / n, "mean_tokens": tokens}
+        # One reading rounded to +0% must not make Opus look free next to Sonnet.
+        coarse = {"sonnet": plan(1, 2, 800_000), "opus": plan(0, 1, 2_300_000)}
+        self.assertEqual(run.cost_basis(coarse), "mean_tokens")
+        self.assertEqual(run.recommend(coarse, 1), "sonnet")
+        sized = {"haiku-harnessed": plan(6, 12, 1_000_000), "sonnet": plan(12, 12, 800_000)}
+        self.assertEqual(run.cost_basis(sized), "mean_week_delta")
+        self.assertEqual(run.recommend(sized, 1), "haiku-harnessed")
 
     def test_luna_baseline_gates_the_default_and_the_lowest_tier(self):
         def res(tier, part, pins, valid):

@@ -144,11 +144,25 @@ def _role(v: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(v).lower())
 
 
+def _unindexed(roles: dict[str, str]) -> dict[str, str]:
+    """Drops a trailing "1" from a role whose stem has no other numbered sibling in
+    the same map, so a single-channel `a1` and `a` agree while `a1`/`a2` stay apart."""
+    stems = [m.group(1) for v in roles.values() if (m := re.fullmatch(r"(.*\D)\d+", v))]
+
+    def bare(v: str) -> str:
+        m = re.fullmatch(r"(.*\D)1", v)
+        lone = m and stems.count(m.group(1)) == 1 and m.group(1) not in roles.values()
+        return m.group(1) if lone else v
+
+    return {k: bare(v) for k, v in roles.items()}
+
+
 def pin_score(ref: dict[str, Any], draft: dict[str, Any]) -> tuple[bool, float]:
     """(exact, fraction of reference pads whose role matches). Pads and roles are
-    compared case- and punctuation-insensitively; extra draft pads break exactness."""
-    r = {str(k).strip().upper(): _role(v) for k, v in ref.items()}
-    d = {str(k).strip().upper(): _role(v) for k, v in draft.items()}
+    compared case- and punctuation-insensitively, and a lone channel index is
+    ignored (`a1` == `a`); extra draft pads break exactness."""
+    r = _unindexed({str(k).strip().upper(): _role(v) for k, v in ref.items()})
+    d = _unindexed({str(k).strip().upper(): _role(v) for k, v in draft.items()})
     if not r:
         return False, 0.0
     hit = sum(1 for k, v in r.items() if d.get(k) == v)
@@ -355,6 +369,8 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_wall_s": mean([r["wall_s"] for r in results if is_num(r.get("wall_s"))]),
         "billing": sorted({str(r.get("billing")) for r in results}),
         "mean_week_delta": mean([r["week_delta"] for r in results if is_num(r.get("week_delta"))]),
+        "week_total": sum(r["week_delta"] for r in results if is_num(r.get("week_delta")))
+        if any(is_num(r.get("week_delta")) for r in results) else None,
         "plan_unavailable": sum(r.get("plan_available") is False for r in results),
     }
 
@@ -372,12 +388,26 @@ def versus(results: list[dict[str, Any]], tier: str, base: str = BASELINE) -> di
     return v
 
 
-def cost_key(a: dict[str, Any]) -> tuple[int, float]:
-    """Rank by list price when metered, else plan weekly-% used, else tokens."""
-    for i, f in enumerate(("mean_cost_usd", "mean_week_delta", "mean_tokens")):
-        if is_num(a.get(f)):
-            return i, a[f]
-    return 3, 0.0
+# Plan readings are whole percent: below this many points a tier's total is rounding noise.
+PLAN_RESOLUTION = 3
+COST_LABEL = {"mean_cost_usd": "mean list-price $", "mean_week_delta": "mean plan week %",
+              "mean_tokens": "mean tokens (plan readings too coarse to rank on)"}
+
+
+def cost_basis(aggs: dict[str, dict[str, Any]]) -> str:
+    """One cost measure for every compared tier: metered $ when all are metered, else
+    the plan's weekly % when every tier used enough of it to measure, else tokens."""
+    if aggs and all(is_num(a.get("mean_cost_usd")) for a in aggs.values()):
+        return "mean_cost_usd"
+    if aggs and all(is_num(a.get("week_total")) and a["week_total"] >= PLAN_RESOLUTION for a in aggs.values()):
+        return "mean_week_delta"
+    return "mean_tokens"
+
+
+def live_tiers(aggs: dict[str, dict[str, Any]], results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Claude tiers with results that are not below the Luna baseline."""
+    return {t: a for t, a in aggs.items() if a["n"] and not t.startswith("luna")
+            and not (versus(results, t) or {}).get("below")}
 
 
 def recommend(aggs: dict[str, dict[str, Any]], margin: float, results: list[dict[str, Any]] | None = None) -> str | None:
@@ -386,8 +416,7 @@ def recommend(aggs: dict[str, dict[str, Any]], margin: float, results: list[dict
     and which is not below the Luna baseline on the parts both ran. Without a
     Luna baseline in `results` the pick is provisional (see `tables`)."""
     results = results or []
-    live = {t: a for t, a in aggs.items() if a["n"] and not t.startswith("luna")
-            and not (versus(results, t) or {}).get("below")}
+    live = live_tiers(aggs, results)
     if not live:
         return None
     top = max(a["n"] for a in live.values())
@@ -396,8 +425,8 @@ def recommend(aggs: dict[str, dict[str, Any]], margin: float, results: list[dict
     best_pin = max(scaled(t, "pin_exact") for t in live)
     best_val = max(scaled(t, "validator_pass") for t in live)
     ok = [t for t in live if best_pin - scaled(t, "pin_exact") <= margin and best_val - scaled(t, "validator_pass") <= margin]
-    order = list(TIERS)
-    return min(ok, key=lambda t: (*cost_key(live[t]), order.index(t)))
+    order, basis = list(TIERS), cost_basis(live)
+    return min(ok, key=lambda t: (live[t].get(basis) if is_num(live[t].get(basis)) else float("inf"), order.index(t)))
 
 
 def fmt(v: Any, spec: str = ".2f") -> str:
@@ -427,7 +456,8 @@ def tables(results: list[dict[str, Any]], aggs: dict[str, dict[str, Any]], pick:
                    f"| {fmt(a['mean_tokens'], ',.0f')} | {fmt(a['mean_wall_s'], '.0f')} |")
     has_base = any(r.get("tier") == BASELINE for r in results)
     out += ["", f"Recommended default: {pick or 'none (no tier had results)'} "
-                f"(cheapest Claude tier within {margin:g} sample(s) of the best pin-map exact count and validator "
+                f"(cheapest by {COST_LABEL[cost_basis(live_tiers(aggs, results))]} among Claude tiers "
+                f"within {margin:g} sample(s) of the best pin-map exact count and validator "
                 f"pass count, and not below the {BASELINE} baseline)"
                 + ("" if has_base else f"; PROVISIONAL: no {BASELINE} baseline was run, so no tier was checked against it")]
     out += [lowest_verdict(results) if has_base else

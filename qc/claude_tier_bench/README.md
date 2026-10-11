@@ -47,7 +47,10 @@ dominate) and 12 your codex sign-in. Real runs refuse to start without `--yes`. 
   for a metered (API-key) run; a plan run shows the weekly % before and after (and the
   5-hour window in `summary.json`), "usage unavailable" if the CLI could not be read,
   and "billing unknown" if the sign-in could not be told. Plan readings are
-  account-wide whole percents, so per-item deltas are only clean with `--jobs 1`.
+  account-wide whole percents, so per-item deltas are only clean with `--jobs 1` and
+  with no other Claude Code or codex sessions running on the account.
+- Pin roles are compared case- and punctuation-insensitively, and a lone channel index
+  is ignored (`a1` matches `a` on a single-channel part; `a1`/`a2` stay distinct).
 
 Each run uses an empty `HAUKSBEE_EXTRACT_CONFIG` and drops inherited `HAUKSBEE_CLAUDE_*`,
 `CODEX_*`, `EXTRACT_*` and `LLM_*` variables, so saved settings cannot leak in.
@@ -56,8 +59,11 @@ Each run uses an empty `HAUKSBEE_EXTRACT_CONFIG` and drops inherited `HAUKSBEE_C
 
 For each tier, count samples with an exact pin map and samples that pass the validator
 (scaled to the largest sample count). The recommended default is the cheapest Claude tier
-(metered dollars, else plan weekly %, else tokens) whose two counts are each within
-`--margin` samples (default 1) of the best tier and which is not below `luna`.
+whose two counts are each within `--margin` samples (default 1) of the best tier and which
+is not below `luna`. All compared tiers are ranked on one measure: metered dollars when
+every tier is metered, else the plan's weekly % when every tier used at least 3 points of
+it in total, else tokens (the summary line names the measure used). A plan reading under
+that size is rounding noise, and tokens understate how much cheaper Haiku is than Opus.
 
 ## Caching
 
