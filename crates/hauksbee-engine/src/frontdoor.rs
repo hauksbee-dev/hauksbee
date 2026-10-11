@@ -3878,6 +3878,7 @@ fn main {
         for key in [
             "assumptions",
             "evidence",
+            "glossary",
             "inventory",
             "import_diagnostics",
             "import_failure",
