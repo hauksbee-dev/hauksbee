@@ -250,6 +250,7 @@ fn lint_model_db(
         let draft_rules =
             drafted.then(|| hauksbee_models::validation::draft_pin_map_problems(entry));
         let pin_map = hauksbee_models::validation::unknown_pads_warning(entry).into_iter();
+        let pin_map = pin_map.chain(hauksbee_models::validation::pinout_package_warning(entry));
         for w in pin_map.chain(draft_rules.into_iter().flatten()) {
             entry_warnings += 1;
             say!(lines, "model '{}' [models.pins]: warning: {w}", entry.id);

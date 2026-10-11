@@ -115,6 +115,33 @@ pub fn package_body(name: &str) -> Option<Body> {
     })
 }
 
+/// The body to compare for a name: `VSSOP` is TI's name for the `MSOP` body,
+/// though the table reads it as `SSOP`.
+fn body_to_compare(name: &str) -> Option<Body> {
+    let vssop = name.to_ascii_uppercase().contains("VSSOP");
+    package_body(if vssop { "MSOP" } else { name })
+}
+
+/// Whether two names spell different package bodies.
+///
+/// A pin map read for one is not the other's. `None` when either body is unknown; a catch-all
+/// family row (`SOT`, `SOIC`) is compatible with any body of its family.
+#[must_use]
+pub fn bodies_differ(a: &str, b: &str) -> Option<bool> {
+    let (a, b) = (body_to_compare(a)?, body_to_compare(b)?);
+    let loose = |x: Body| matches!(x.name, "SOT" | "SOIC");
+    let family = a.family.is_some() && a.family == b.family;
+    // Sheets call a 5- or 6-lead SOT-23 plain `SOT-23`; the pin count is checked elsewhere.
+    let key = |x: Body| {
+        if x.name.starts_with("SOT-23") {
+            "SOT-23"
+        } else {
+            x.name
+        }
+    };
+    Some(key(a) != key(b) && !(family && (loose(a) || loose(b))))
+}
+
 /// The outline a package or footprint name spells.
 ///
 /// Two names with different outlines do not share a pin map, whatever their

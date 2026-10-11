@@ -1723,7 +1723,12 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       nothing. If the datasheet covers several packages, state which one
       this map is for in the description, and pick the package the value/
       footprint you were given implies (an ordering code's package letters
-      name it). Every numbered map records its package (P6): the checker
+      name it). A multi-variant datasheet takes the pin numbers from the
+      column or package drawing that matches the order code being carded,
+      and records that package in the pinout column: the CH340 sheet's
+      10-pin table column is the CH340K's ESSOP10 and swaps pads 4 and 6
+      against the CH340X's own MSOP-10 drawing. `models lint` warns when a
+      pinout column's package is not the card's. Every numbered map records its package (P6): the checker
       holds the map against that package's pin count, and the board binds it
       only to a footprint of that package.
   P5. Still unsure? Say so in a comment on the pins block, never present a

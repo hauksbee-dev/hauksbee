@@ -1575,6 +1575,38 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
     }
 }
 
+/// Package names a card spells for itself: `[models.variant] package`, the
+/// footprint rule's alternatives, and the digit-bearing words of its id and
+/// description (`MSOP-10`, `sot23`), where the package table knows them.
+fn card_packages(entry: &ModelEntry) -> Vec<String> {
+    let variant = entry.variant.as_ref().and_then(|v| v.package.clone());
+    let footprints = (entry.r#match.footprint_re.iter()).flat_map(|f| f.split('|'));
+    let words = format!("{} {}", entry.description, entry.id.replace('_', " "));
+    let words = words.split(|c: char| !c.is_alphanumeric() && c != '-');
+    let named = words.filter(|w| w.contains(|c: char| c.is_ascii_digit()));
+    let all = variant.into_iter().chain(footprints.map(str::to_owned));
+    let all = all.chain(named.map(str::to_owned));
+    all.filter(|name| crate::package::package_body(name).is_some())
+        .collect()
+}
+
+/// A warning when the pin-table column `[models.pins]` is read from is for another package.
+///
+/// It names a package body that none of the card's own package names spell: a sheet
+/// printing several order codes has one column per code, and a neighbour's
+/// (the CH340K's ESSOP10 for the CH340X's MSOP-10) swaps pads silently.
+/// Silent when either side's package is unknown.
+#[must_use]
+pub fn pinout_package_warning(entry: &ModelEntry) -> Option<String> {
+    let column = &own_pinout(entry).ok().flatten()?.package;
+    let card = card_packages(entry);
+    let other = |a: &str, b: &str| crate::package::bodies_differ(a, b) == Some(true);
+    let foreign = |part: &str| card.iter().all(|k| other(part, k));
+    (!card.is_empty() && column.split('/').all(foreign)).then(|| {
+        format!("[[models.source.pinout]] column '{column}' is a different package from the card's {}: a multi-variant sheet prints one column or drawing per order code, so read the pads from the column or drawing for this order code's package", card.join(", "))
+    })
+}
+
 /// A numbered pin map against the pin count its declared package spells: no
 /// pad past it (one more for an exposed pad), and an own column recording at
 /// least that many pads. A map that does not fit was read for another package.
@@ -2529,6 +2561,73 @@ high_offset = 1.3333333333333333
             checked += 1;
         }
         assert!(checked > 5, "the db directory was not scanned");
+    }
+
+    /// No shipped card reads its pads from a column for another package body.
+    #[test]
+    fn shipped_cards_read_pads_from_their_own_package() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
+        let (mut flagged, mut compared) = (Vec::new(), 0);
+        for file in std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()) {
+            if file.extension().is_none_or(|e| e != "toml") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).unwrap();
+            let Ok(db) = toml::from_str::<crate::schema::DbFile>(&text) else {
+                continue;
+            };
+            for entry in &db.models {
+                let column = own_pinout(entry).ok().flatten();
+                compared += usize::from(column.is_some() && !card_packages(entry).is_empty());
+                if let Some(why) = pinout_package_warning(entry) {
+                    flagged.push(format!("{} {}: {why}", file.display(), entry.id));
+                }
+            }
+        }
+        assert!(flagged.is_empty(), "{}", flagged.join("\n"));
+        assert!(compared >= 10, "only {compared} cards had both packages");
+    }
+
+    /// The CH340X card read its pads from the CH340K's ESSOP10 column: a column
+    /// for another package body than the card's must warn, a matching or
+    /// unrecognised one must not.
+    #[test]
+    fn a_pinout_column_for_another_package_than_the_card_warns() {
+        let card = |description: &str, column: &str| -> ModelEntry {
+            let text = LDO_FIXTURE.replace("LDO, SOT-23-5 package", description);
+            let text = text.replacen(
+                "package = \"SOT-23-5\"",
+                &format!("package = \"{column}\""),
+                1,
+            );
+            let cut = text.find("[[source.pinout]]\npackage = \"DFN").unwrap();
+            toml::from_str(&text[..cut]).unwrap()
+        };
+        let warns =
+            |description: &str, column: &str| pinout_package_warning(&card(description, column));
+        assert!(warns("LDO, SOT-223", "SOT-23-5").is_some());
+        let faulty = warns("CH340X bridge, MSOP-10", "ESSOP10").expect("ESSOP10 is not MSOP-10");
+        assert!(
+            faulty.contains("column or drawing for this order code's package"),
+            "{faulty}"
+        );
+        for (description, column) in [
+            ("CH340X bridge, MSOP-10", "MSOP-10 (CH340X)"),
+            ("bridge, MSOP-10", "VSSOP-10 (DGS)"),
+            ("LDO, SOT-23-5", "SOT-23-5 (DBV)"),
+            ("LDO, SOT-23 package", "SOT-23-5"),
+            ("LDO, SOIC-8", "SOIC / SOP-8"),
+            ("LDO, QFN-16", "QFN-16 EP"),
+            // An unknown package on either side never warns.
+            ("bridge, MSOP-10", "CH340K body"),
+            ("bridge, MSOP-10", "TI DGS"),
+            ("an LDO", "ESSOP10"),
+        ] {
+            assert!(
+                warns(description, column).is_none(),
+                "{description} vs {column}"
+            );
+        }
     }
 
     #[test]
